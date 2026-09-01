@@ -3,9 +3,9 @@
 //! Wraps the [`mrlap`] crate's full pipeline (cross-trait LDSC → IVW-MR →
 //! de-biasing correction) as a single DAG node with two GWAS sumstat inputs.
 //!
-//! Mirrors [`super::ldsc_rg::LdscRgNode`] for the LD-score-regression stage
-//! (3-way inner join of exposure × outcome × the VFS LD-score panel) and
-//! [`super::hdl_l::HdlLNode`] for the sumstat parsing + one-row result emission.
+//! Implements the MRlap-internal LD-score-regression stage
+//! (3-way inner join of exposure × outcome × the VFS LD-score panel) and emits
+//! the correction results as a one-row summary table.
 
 use std::sync::Arc;
 
@@ -83,7 +83,7 @@ pub struct MrlapSpec {
     #[serde(default = "default_seed")]
     pub seed: u64,
 }
-/// Hardcoded VFS LD-score panel table — same panel as ldsc_hsq / ldsc_rg.
+/// Hardcoded VFS LD-score panel table used by MRlap's internal regression.
 
 fn default_n_blocks() -> usize {
     200

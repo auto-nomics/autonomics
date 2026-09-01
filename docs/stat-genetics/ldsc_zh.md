@@ -17,8 +17,8 @@
 
 ## DAG 集成
 
-原生 Rust `ldsc` h² Factory 已不再注册到默认 DAG registry。库实现和测试仍保留，
-但生产 h² 分析改用 `nodes_io::ldsc_h2_container`。
+原生 Rust `ldsc` h² 节点 Factory 已删除。库实现仍供 S-LDSC、LCV、liability
+转换和 MRlap 内部使用；生产 h² 分析改用 `nodes_io::ldsc_h2_container`。
 
 `ldsc_h2_container` 接收一个 TAB 分隔的 LDSC sumstats File，必须包含
 `SNP`、`A1`、`A2`、`N`、`Z` 列。明文 `.tsv` 和 gzip 压缩 `.sumstats.gz`
@@ -32,4 +32,4 @@ File artifact。原始 GWAS 输入可以先经过 `ldsc_munge_container`。
 
 `ldsc_rg_container` 使用同一官方镜像和 EUR panel 契约执行官方
 `ldsc --rg` 分析。它接收两个 TAB 分隔的 LDSC sumstats File，并把原始 rg log
-发布为 VFS File artifact。原生 Rust `ldsc_rg` Factory 已不再默认注册。
+发布为 VFS File artifact。原生 Rust `ldsc_rg` 节点 Factory 已删除。

@@ -7,7 +7,7 @@
 Four pieces, usually kept separate, are integrated here:
 
 - **LLM SDK + agent runtime** (`agentik-*`) — an Anthropic-compatible client with multi-provider support, SSE streaming, and tool / function calling, on top of an agent loop that handles memory compaction, lifecycle management, and multi-agent orchestration.
-- **DataFusion DAG engine** (`data-engine`) — a typed, concurrently-scheduled node graph where each step transforms `DataFrame`s. The agent assembles and runs pipelines through tool calls; heavy computation — statistical genetics (MiXeR, LDSC, MR, LAVA) and epidemiology/clinical biostatistics (causal inference, mediation, survival, ROC, LASSO, WQS, …) — runs as pure-Rust node logic over [`faer`](https://github.com/sarah-ek/faer).
+- **DataFusion DAG engine** (`data-engine`) — a typed, concurrently-scheduled node graph where each step transforms `DataFrame`s. The agent assembles and runs pipelines through tool calls. Native statistical transforms use [`faer`](https://github.com/sarah-ek/faer), while external statistical-genetics runtimes execute in pinned OCI containers with cataloged panels.
 - **Bioinformatics I/O** (`biofusion`, `vfs`) — DataFusion readers for common genomic formats and mount-aware file access to reference panels and derived datasets.
 - **Scientific data clients** (`eutils`, `opengwas`, `gwascatalog-sdk`, `opentargets`) — fetch metadata and summary statistics from NCBI, OpenGWAS, the GWAS Catalog, and the Open Targets Platform without leaving the conversation.
 
@@ -48,7 +48,7 @@ Four pieces, usually kept separate, are integrated here:
                                                │  │ sql_node    │ │
                                                │  │ ldsc_h2_cont│ │
                                                │  │ univariate  │ │
-                                               │  │ _mixer      │ │
+│  │ mixer_cont  │ │
                                                │  │ two_sample  │ │
                                                │  │ _mr         │ │
                                                │  │ cox_regress │ │
@@ -70,8 +70,8 @@ Four pieces, usually kept separate, are integrated here:
         │                  Data Infrastructure           │          │
         │                                               ▼          │
         │  ┌──────────┐  ┌───────────┐  ┌─────────────┐           │
-        │  │ af.eur_af│  │ld_matrix. │  │ mixer.       │           │
-        │  │          │  │eur_chr{N} │  │ eur_tagsuff  │           │
+        │  │ af.eur_af│  │ld_matrix. │  │ catalog      │           │
+        │  │          │  │eur_chr{N} │  │ panels       │           │
         │  └──────────┘  └───────────┘  └─────────────┘           │
         │       ▲              ▲                ▲                   │
         │       │              │                │                   │
@@ -86,23 +86,9 @@ Four pieces, usually kept separate, are integrated here:
         └───────────────────────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────────────────────────────┐
-│              bio_crates (statistical genetics ports)              │
+│         Remaining native statistical-genetics crates             │
 │                                                                  │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────┐  ┌──────────┐ │
-│  │    mixer     │  │    ldsc      │  │    mr    │  │   lava   │ │
-│  │ fit1 / fit2  │  │ h² / rg / cts│  │ IVW, etc │  │ bivariate│ │
-│  │ spike & slab │  │ LDSC regress │  │ MR tests │  │ local rg │ │
-│  └──────┬───────┘  └──────┬───────┘  └────┬─────┘  └────┬─────┘ │
-│         │                 │               │              │       │
-│  ┌──────┴───────┐  ┌─────┴────┐                                  │
-│  │    hdl       │  │  mrlap   │  ┌──────────┐                    │
-│  │  HDL-L       │  │ overlap  │  │   lcv    │                    │
-│  │  local rg    │  │  MR      │  │ latent   │                    │
-│  └──────────────┘  └──────────┘  └──────────┘                    │
-│  ┌──────────────┐  ┌──────────────┐                               │
-│  │   cpassoc    │  │    magma     │                               │
-│  │ SHom / SHet  │  │ gene-set     │                               │
-│  └──────────────┘  └──────────────┘                               │
+│  ldsc · mr · lava · mrlap · lcv · cpassoc · magma                 │
 │                              │                                    │
 │                         faer (linear algebra)                     │
 └──────────────────────────────────────────────────────────────────┘
@@ -135,19 +121,16 @@ Four pieces, usually kept separate, are integrated here:
 └──────────────────────────────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────────────────────────────┐
-│                    Test Data (OSS archive)                        │
+│                    Reproducible test data                         │
 │                                                                  │
-│  aliyun://autonomics-data/mixer/test-data/                        │
-│  ├── fixtures/          (cross_validation.rs)                     │
-│  └── scz-chr22-repro/   (scz_chr22_repro.rs)                      │
-│                                                                  │
-│  Restore: rclone copy aliyun://autonomics-data/<path>/ <local>/   │
+│  Container fixtures: containers/<tool>/fixtures/                  │
+│  Published panels: data catalog with immutable digests            │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
 An agent receives tools from `agentik-core`. The data-engine tools communicate with one serialized `DataEngineServer` through channels, so a conversation can create, inspect, run, and clear a data-processing DAG without sharing mutable engine state directly. The DAG reads data into DataFusion `DataFrame`s, transforms it, and can persist file outputs.
 
-Heavy computation runs in pure Rust within DAG nodes. Statistical-genetics algorithms (MiXeR, LDSC, MR, LAVA, HDL, MTAG, …) and epidemiological/clinical-biostatistics methods (causal inference, mediation, survival analysis, regression, mixture models, …) are both built on `faer`. LD reference data and precomputed sufficient statistics are loaded from VFS mounts; the offline `precompute_tags` pipeline materializes per-tag summary scalars so that runtime fitting never scans the full LD matrix.
+Some computation remains in pure Rust DAG nodes, especially in-process statistical transforms and methods without an official runtime yet. External statistical-genetics tools run through pinned OCI container nodes with cataloged reference panels. Epidemiological/clinical-biostatistics methods remain built on `faer`.
 
 API clients for GWAS Catalog, OpenGWAS, NCBI E-utilities, and the Open Targets Platform let agents fetch metadata, summary statistics, and target–disease association scores without leaving the conversation. Large test fixtures (LD matrices, gold-standard outputs) are kept in a private OSS bucket and restored via `rclone`.
 
@@ -157,7 +140,7 @@ API clients for GWAS Catalog, OpenGWAS, NCBI E-utilities, and the Open Targets P
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Agent platform               | `agentik-types`, `agentik-sdk`, `agentik-proc`, `agentik-core`, `agentik-tools`, `runtime`                                                 | API types and clients, declarative tool schemas, agent lifecycle/memory, tool implementations, and sync-to-async hosting.                                          |
 | Data analysis                | `data-engine`, `data-engine-tools`, `vfs`, `biofusion`, `biofusion-cache`, `visualization`                    | DAG execution, Agent-exposed DAG operations, mount-aware OpenDAL files, biological-format ingestion, and R/ggplot2 visualization.             |
-| Statistical genetics         | `ldsc`, `mr`, `mixer`, `lava`, `hdl`, `mrlap`, `lcv`, `cpassoc`, `magma`                                                                   | Pure-Rust ports of LD Score Regression, TwoSampleMR, MiXeR (spike-and-slab causal mixture), LAVA (local genetic correlation), HDL-L, MRlap, LCV, CPASSOC, and MAGMA, built on `faer`. MTAG runs via an OCI container node. |
+| Statistical genetics         | `ldsc`, `mr`, `lava`, `mrlap`, `lcv`, `cpassoc`, `magma`                                                                                   | Remaining Rust ports plus OCI container nodes for LDSC h²/rg, HDL-L, MiXeR, SuSiE-RSS, MR-PRESSO, MVMR, MTAG, FUSION TWAS, and other external tools. |
 | Epidemiology & biostatistics | `statkit`, `epi`                                                                                                                           | Foundational statistics (OLS/WLS/logistic/Cox regression, descriptive stats) and higher-level epidemiological methods (causal inference, mediation, survival, ROC, RCS, LASSO, WQS, CLPM, GBTM, LCA, SEM, competing risks, multistate, Random Forest + SHAP), built on `faer`. |
 | Scientific data clients      | `eutils`, `opengwas`, `gwascatalog-sdk`, `opentargets`                                                                                     | Clients for NCBI E-utilities, OpenGWAS, the GWAS Catalog, and the Open Targets Platform.                                                                          |
 | User interface and rendering | `tui`                                                                                                                                      | Terminal Agent UI.                                                                                                                                                 |
@@ -195,7 +178,7 @@ For direct SDK use, copy `.env.example` to `.env` and provide only the credentia
 
 - [**LD Score Regression (`ldsc`)**](docs/stat-genetics/ldsc.md) — h², rg, cell-type-specific analysis, LD-score computation, sumstat munging.
 - [**TwoSampleMR (`mr`)**](docs/stat-genetics/mr.md) — Wald ratio, IVW, MR-Egger, median/mode, harmonisation, Steiger filtering.
-- [**MiXeR (`mixer`)**](docs/stat-genetics/mixer.md) — Univariate/bivariate spike-and-slab causal mixture, sufficient-statistics compression, DAG node pipeline.
+- [**MiXeR (`mixer_fit1_container` / `mixer_fit2_container`)**](docs/stat-genetics/mixer.md) — Official gsa-mixer fit1/fit2 runtime with a cataloged 1000G EUR panel.
 - [**LAVA (`lava`)**](docs/stat-genetics/lava.md) — Local genetic correlation from GWAS summary statistics.
 
 ### Epidemiology & Biostatistics
@@ -230,9 +213,7 @@ autonomics/
 ├── bio_crates/
 │   ├── ldsc/                # Pure-Rust LD Score Regression (h²/rg/cts) port
 │   ├── mr/                  # Pure-Rust TwoSampleMR (Mendelian randomization) port
-│   ├── mixer/               # Pure-Rust MiXeR univariate + bivariate (spike-and-slab) port
 │   ├── lava/                # Pure-Rust LAVA local genetic correlation port
-│   ├── hdl/                 # Pure-Rust HDL-L enhanced local genetic correlation port
 │   ├── mrlap/               # Pure-Rust MRlap (sample-overlap-aware MR) port
 │   ├── lcv/                 # Pure-Rust LCV (latent causal variable) port
 │   ├── cpassoc/             # Pure-Rust CPASSOC (cross-phenotype meta-analysis) port
@@ -260,19 +241,7 @@ CARGO_TARGET_DIR=/tmp/autonomics-target cargo test -p epi
 CARGO_TARGET_DIR=/tmp/autonomics-target cargo test -p statkit
 ```
 
-Some integration tests call external public APIs or require provider credentials. Treat those as opt-in when running in CI or offline environments.
-
-## Test data & reproducibility
-
-Large test data (LD matrices, GWAS sumstats, original-software gold-standard outputs) is **not committed to git**. It lives in a private OSS object storage bucket and is restored via `rclone`:
-
-```bash
-# Example: restore mixer cross-validation fixtures
-rclone copy aliyun://autonomics-data/mixer/test-data/fixtures/ \
-  bio_crates/mixer/tests/fixtures/
-```
-
-> **Note:** The bucket is currently private. Contact the repository owner for access credentials. Once provisioned, configure `rclone` with the provided endpoint, key, and secret — the `aliyun:` remote name in the examples above should point to that configuration.
+Some integration tests call external public APIs, require provider credentials, or depend on published catalog panels. Treat those as opt-in when running in CI or offline environments.
 
 
 ## Requirements

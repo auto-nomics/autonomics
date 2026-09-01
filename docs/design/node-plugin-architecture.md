@@ -27,7 +27,7 @@
 ### 1.3 有利因素
 
 - `ml/` 和 `hypothesize/` 已经用 `register_all(&mut registry)` 模式做了子目录拆分 — 这是天然的模板
-- 节点间跨域依赖极少（仅 `dataframe_to_file → file_to_dataframe::normalize_path` 和 `hdl_l_scan → hdl_l`）
+- 节点间跨域依赖极少（仅 `dataframe_to_file → file_to_dataframe::normalize_path`）
 - 外部消费者 (`data-engine-tools`, `runtime`) **几乎不直接引用节点类型**，只用 DAG/runtime API（唯一例外: `add_node_tool.rs` 引用 `SqlNodeSpec`）
 
 ## 2. 目标
@@ -120,9 +120,9 @@ impl NodeRegistry {
 | **nodes-regression** | linear_regression, logistic_regression, cox_regression, chi_square | statkit | 1,400 |
 | **nodes-causal** | mediation, causal, cmest (6 variants) | statkit, epi | 2,200 |
 | **nodes-survival** | survival, fine_gray, cuminc | cmprsk | 1,400 |
-| **nodes-ldsc** | ldsc_rg, ldsc_sldsc, liability, lcv | ldsc, lcv | 3,900 |
-| **nodes-genetics** | lava (6), hdl_l, hdl_l_scan, cpassoc, magma (4) | lava, hdl, cpassoc, susie, magma, mixer | 8,200 |
-| **nodes-mr** | two_sample_mr, mrlap, mrpresso, mvmr | mr, mrlap, mrpresso, mvmr | 4,000 |
+| **nodes-ldsc** | ldsc_sldsc, liability, lcv | ldsc, lcv | 3,900 |
+| **nodes-genetics** | cpassoc, magma (4) | cpassoc, magma, genomic_sem | 3,900 |
+| **nodes-mr** | two_sample_mr, mrlap | mr, mrlap | 4,000 |
 | **nodes-coloc** | coloc, bkmr | coloc, bkmr | 1,300 |
 | **nodes-epi** | epi_rcs, epi_roc, epi_lasso, epi_wqs, evalue | epi, evalue | 1,900 |
 | **nodes-lcmm** | hlme, hlme_predict, hlme_compare | lcmm | 2,100 |
@@ -135,13 +135,12 @@ impl NodeRegistry {
 每个 bundle crate 结构:
 ```
 crates/node-bundles/nodes-mr/
-├── Cargo.toml          # depends on dag-core + mr, mrlap, mrpresso, mvmr
+├── Cargo.toml          # depends on dag-core + mr, mrlap
 ├── src/
 │   ├── lib.rs          # pub struct Plugin; impl NodePlugin for Plugin
 │   ├── two_sample_mr.rs
 │   ├── mrlap.rs
-│   ├── mrpresso.rs
-│   └── mvmr.rs
+│   └── mrlap.rs
 └── tests/
 ```
 
@@ -284,7 +283,6 @@ pub fn assert_all_factories_build(registry: &NodeRegistry) {
 | 依赖 | 处理 |
 |------|------|
 | `dataframe_to_file → file_to_dataframe::normalize_path` | 提取到 `dag-core::arrow_util` 或 `nodes-io` 内部共享 |
-| `hdl_l_scan → hdl_l::*` (节点间) | 同属 `nodes-genetics`，bundle 内 `pub use` 解决 |
 | `nodes/ml/* → nodes/ml/common.rs` | 已在 bundle 内部，直接迁移 |
 | `nodes/hypothesize/* → nodes/hypothesize/common.rs` | 同上 |
 | `dataframe_to_file` 的路径规范化 helper | 随 `nodes-io` 迁移 |
@@ -339,7 +337,7 @@ pub fn assert_all_factories_build(registry: &NodeRegistry) {
 | 3a | nodes-io | 3 | 提取 `normalize_path` 到共享位置 |
 | 3b | nodes-causal | 8 | cmest 6 变体 |
 | 3c | nodes-lcmm | 3 | hlme 3 节点 |
-| 3d | nodes-mr | 4 | mr + mrlap + mrpresso + mvmr |
+| 3d | nodes-mr | 2 | mr + mrlap |
 | 3e | nodes-survey | 30 | survey_common 大量共享代码 |
 
 ### Phase 4: 迁移高复杂度 bundle (2 个)
@@ -347,7 +345,7 @@ pub fn assert_all_factories_build(registry: &NodeRegistry) {
 | 批次 | bundle | 节点数 | 特殊注意 |
 |------|--------|--------|----------|
 | 4a | nodes-ldsc | 5 | ldsc_common 共享; liability 节点 |
-| 4b | nodes-genetics | 16 | 最大 bundle; hdl_l_scan → hdl_l 跨节点引用; mixer 两个节点 |
+| 4b | nodes-genetics | 6 | cpassoc/magma/genomic-sem 迁移 |
 
 ### Phase 5: 清理收尾
 

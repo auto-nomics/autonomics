@@ -207,7 +207,7 @@ the pinned `autonomics/ldsc` manifest digest, with the ACR host supplied by
 - `ldsc.w_ld.1000g_eur_hm3_no_mhc` at `/panels/w_ld`
 
 It emits `ldsc_h2.log` as a VFS File artifact. The original Rust `ldsc` h²
-and `ldsc_rg` factories are unregistered. `ldsc_rg_container` follows the same
+and `ldsc_rg` node factories are removed. `ldsc_rg_container` follows the same
 two-File official command pattern and emits `ldsc_rg.log`; `sldsc` and the
 other analysis nodes remain unchanged during this staged migration.
 

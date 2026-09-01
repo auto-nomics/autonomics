@@ -1,10 +1,10 @@
 //! MAGMA gene-based GWAS analysis nodes (summary-stats pipeline).
 //!
-//! Four nodes covering the full summary-stats pipeline:
+//! Three nodes covering the retained summary-stats pipeline. Official MAGMA
+//! annotation runs through `nodes_io::magma_annotate_container`.
 //!
 //! | Node | Kind | Input | Output |
 //! |------|------|-------|--------|
-//! | [`MagmaAnnotateNode`] | `magma_annotate` | gene-loc + snp-loc files | gene annotation DataFrame |
 //! | [`MagmaGeneNode`] | `magma_gene` | GWAS pval DataFrame + panel bundle | gene results DataFrame |
 //! | [`MagmaSetNode`] | `magma_set` | gene results DataFrame + set/covar file | set analysis DataFrame |
 //! | [`MagmaMetaNode`] | `magma_meta` | ≥2 gene results DataFrames | combined gene results |
@@ -53,17 +53,6 @@ impl ::dag_core::dag::NodeError for MagmaNodeError {
 // Shared schemas
 // =====================================================================
 
-/// Gene annotation output schema (from annotate node, input to gene node).
-fn annot_schema() -> SchemaRef {
-    Arc::new(Schema::new(vec![
-        Field::new("gene_id", DataType::Utf8, false),
-        Field::new("chr", DataType::Int32, false),
-        Field::new("start", DataType::UInt64, false),
-        Field::new("end", DataType::UInt64, false),
-        Field::new("snps", DataType::Utf8, false), // semicolon-separated rsids
-    ]))
-}
-
 /// Gene analysis output schema (from gene node, input to set/meta node).
 fn gene_results_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
@@ -101,178 +90,12 @@ fn gwas_input_schema() -> SchemaRef {
     ]))
 }
 
-// =====================================================================
-// Node 1: MagmaAnnotateNode
-// =====================================================================
-
-/// Config for the annotation node.
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub struct MagmaAnnotateConfig {
-    /// VFS path to gene location file (gene_id chr start end [strand]).
-    pub gene_loc: String,
-    /// VFS path to SNP location file (.bim or rsid chr pos).
-    pub snp_loc: String,
-    /// Annotation window in kb (upstream and downstream). Default: 35.
-    #[serde(default = "default_window")]
-    pub window_kb: f64,
-}
-
 fn default_window() -> f64 {
     35.0
 }
 
-const ANNOTATE_KIND: &str = "magma_annotate";
-
-fn annotate_ports() -> NodePorts {
-    NodePorts::new().add_output_port(Some(annot_schema()))
-}
-
-/// Annotation node: maps SNPs to genes based on genomic location.
-#[derive(Clone)]
-pub struct MagmaAnnotateNode {
-    meta: NodePorts,
-    config: MagmaAnnotateConfig,
-}
-
-pub struct MagmaAnnotateNodeFactory;
-
-impl NodeFactory for MagmaAnnotateNodeFactory {
-    fn kind(&self) -> &'static str {
-        ANNOTATE_KIND
-    }
-    fn desc(&self) -> &'static str {
-        "MAGMA gene-SNP annotation: maps SNPs to genes by genomic location."
-    }
-    fn doc(&self) -> &'static str {
-        "Maps SNPs to genes based on genomic location ± window. Reads gene-loc \
-        and snp-loc files, outputs a DataFrame with gene_id, chr, start, end, \
-        and semicolon-separated SNP IDs per gene."
-    }
-    fn spec_schema(&self) -> schemars::Schema {
-        schema_for!(MagmaAnnotateConfig)
-    }
-    fn ports(&self) -> NodePorts {
-        annotate_ports()
-    }
-    fn build(
-        &self,
-        spec: serde_json::Value,
-        _node_ctx: NodeCtx,
-    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
-        let config = serde_json::from_value(spec)?;
-        Ok(Box::new(MagmaAnnotateNode::new(config)))
-    }
-
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        _ctx: &mut dag_core::codegen::CodegenCtx,
-    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
-        use dag_core::codegen::helpers::*;
-        let s = parse_spec::<MagmaAnnotateConfig>(spec, "magma_annotate")?;
-        let out = "magma_annotate_result";
-        let code = vec![
-            format!("# MAGMA gene annotation"),
-            format!("system2(\"magma\", c("),
-            format!(
-                "  \"--annotate\", \"--window\", \"--snp-loc\", \"{}\",",
-                s.snp_loc
-            ),
-            format!("  \"--gene-loc\", \"{}\",", s.gene_loc),
-            format!("  \"--out\", \"magma_annotation\""),
-            format!("))"),
-            format!("# NOTE: Output written to magma_annotation.genes.annot"),
-        ];
-        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
-    }
-}
-
-impl MagmaAnnotateNode {
-    pub fn new(config: MagmaAnnotateConfig) -> Self {
-        Self {
-            meta: annotate_ports(),
-            config,
-        }
-    }
-}
-
-#[async_trait]
-impl DagNode for MagmaAnnotateNode {
-    fn ports(&self) -> &NodePorts {
-        &self.meta
-    }
-    fn clone_box(&self) -> Box<dyn DagNode> {
-        Box::new((*self).clone())
-    }
-    fn kind(&self) -> &'static str {
-        ANNOTATE_KIND
-    }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-    async fn execute(
-        &mut self,
-        node_ctx: &NodeCtx,
-        _inputs: &[NodeInput],
-        _reporter: &dag_core::dag::node_event::NodeReporter,
-    ) -> Result<PortOutputs, DagError> {
-        let gene_path = stage_vfs_file(node_ctx, &self.config.gene_loc).await?;
-        let snp_path = stage_vfs_file(node_ctx, &self.config.snp_loc).await?;
-        let genes =
-            magma::annotation::read_gene_loc(gene_path.as_ref()).map_err(MagmaNodeError::from)?;
-        let snps =
-            magma::annotation::read_snp_loc(snp_path.as_ref()).map_err(MagmaNodeError::from)?;
-        let window_bp = (self.config.window_kb * 1000.0) as i64;
-        let annot = magma::annotation::annotate(&genes, &snps, window_bp, window_bp)
-            .map_err(MagmaNodeError::from)?;
-
-        let batch = build_annot_batch(&annot)?;
-        let df = node_ctx
-            .session()
-            .read_batch(batch)
-            .map_err(MagmaNodeError::from)?;
-        let mut res = PortOutputs::new();
-        res.insert(0, df);
-        Ok(res)
-    }
-}
-
-fn build_annot_batch(
-    annot: &magma::annotation::GeneAnnotation,
-) -> Result<RecordBatch, MagmaNodeError> {
-    let n = annot.genes.len();
-    let mut gene_ids = Vec::with_capacity(n);
-    let mut chrs = Vec::with_capacity(n);
-    let mut starts = Vec::with_capacity(n);
-    let mut ends = Vec::with_capacity(n);
-    let mut snps_str = Vec::with_capacity(n);
-
-    for g in &annot.genes {
-        if g.snps.is_empty() {
-            continue;
-        }
-        gene_ids.push(g.id.clone());
-        chrs.push(g.chr);
-        starts.push(g.start);
-        ends.push(g.end);
-        snps_str.push(g.snps.join(";"));
-    }
-
-    let batch = RecordBatch::try_new(
-        annot_schema(),
-        vec![
-            Arc::new(StringArray::from(gene_ids)),
-            Arc::new(Int32Array::from(chrs)),
-            Arc::new(arrow_array::UInt64Array::from(starts)), // u64 → Arrow uses u32 for UInt64? No.
-            Arc::new(arrow_array::UInt64Array::from(ends)),
-            Arc::new(StringArray::from(snps_str)),
-        ],
-    )?;
-    Ok(batch)
-}
-
 // =====================================================================
-// Node 2: MagmaGeneNode
+// MagmaGeneNode
 // =====================================================================
 
 /// Config for the gene analysis node.
@@ -1671,27 +1494,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn e2e_annotate_node() {
-        let mut node = MagmaAnnotateNode::new(MagmaAnnotateConfig {
-            gene_loc: vpath("gene_loc.txt"),
-            snp_loc: vpath("sim_geno.bim"),
-            window_kb: 35.0,
-        });
-        let res = node
-            .execute(
-                &node_ctx(),
-                &[],
-                &dag_core::dag::node_event::NodeReporter::noop(),
-            )
-            .await
-            .expect("annotate should succeed");
-
-        let df = res.dataframe(0).unwrap();
-        let count = df.clone().count().await.unwrap();
-        assert_eq!(count, 20, "should have 20 genes");
-    }
-
-    #[tokio::test]
     async fn e2e_gene_node() {
         let dir = magma_data_dir();
 
@@ -1842,23 +1644,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn e2e_full_pipeline() {
-        // Full pipeline: annotate → gene → set
+    async fn e2e_gene_set_pipeline() {
+        // Retained native pipeline: official annotation output → gene → set.
         let (bundle_ctx, _bundle, reference) = panel_bundle_ctx();
         let ctx = node_ctx();
 
-        // Step 1: Annotation
-        let mut annotate = MagmaAnnotateNode::new(MagmaAnnotateConfig {
-            gene_loc: vpath("gene_loc.txt"),
-            snp_loc: vpath("sim_geno.bim"),
-            window_kb: 35.0,
-        });
-        let _annot_res = annotate
-            .execute(&ctx, &[], &dag_core::dag::node_event::NodeReporter::noop())
-            .await
-            .expect("annotate should succeed");
-
-        // Step 2: Gene analysis (using pre-computed annot.genes.annot)
+        // Gene analysis consumes a precomputed official-layout annotation.
         let pval_data = magma::geneinput::SnpPvalData::read(
             &magma_data_dir().join("gwas_pval.txt"),
             "SNP",
@@ -1907,7 +1698,7 @@ mod tests {
         let gene_count = gene_df.clone().count().await.unwrap();
         assert_eq!(gene_count, 20);
 
-        // Step 3: Set analysis (using .genes.raw from golden for correlation matrix)
+        // Set analysis uses the golden `.genes.raw` correlation matrix.
         let mut set_node = MagmaSetNode::new(MagmaSetConfig {
             analysis_type: "set".into(),
             set_annot: Some(vpath("gene_sets.txt")),
@@ -1925,6 +1716,6 @@ mod tests {
         let set_count = set_df.clone().count().await.unwrap();
         assert_eq!(set_count, 6);
 
-        eprintln!("Full pipeline: annotate -> gene -> set completed successfully");
+        eprintln!("Retained pipeline: gene -> set completed successfully");
     }
 }

@@ -1,8 +1,6 @@
 //! Mendelian randomisation DAG node bundle.
 
 pub mod mrlap;
-pub mod mrpresso;
-pub mod mvmr;
 pub mod two_sample_mr;
 
 use dag_core::{NodePlugin, NodeRegistry};

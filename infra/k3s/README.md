@@ -46,6 +46,10 @@ export AUTONOMICS_K3S_PANEL_PVC_PREFIX=
 export ACR_ENDPOINT=<acr-registry-host>
 ```
 
+`ACR_ENDPOINT` is optional; official tool containers default to
+`crpi-isjkczwpadlvr9i3.cn-hongkong.personal.cr.aliyuncs.com` and use this
+variable only as an override.
+
 `AUTONOMICS_K3S_CONTEXT` optionally selects a kubeconfig context. Jobs never
 mount a service-account token and default to the `isolated` NetworkPolicy
 profile. `cluster` permits DNS only; unrestricted egress is an explicit node

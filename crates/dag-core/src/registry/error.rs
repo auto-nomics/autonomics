@@ -94,7 +94,7 @@ impl From<&str> for Error {
 /// a tool-calling agent reliably understands.
 ///
 /// serde reports the *expected Rust type* (`a sequence`, `floating point \`f64\``,
-/// `struct LdscRgConfig`) and the *received Rust shape* (`map`, `string`) —
+/// `struct ContainerSpec`) and the *received Rust shape* (`map`, `string`) —
 /// phrasing that a weak LLM may misread (e.g. "sequence" is not obviously
 /// "JSON array"). We restate each canonical phrase as its JSON equivalent so
 /// the "Why it failed" line is unambiguous. Unknown phrases pass through
@@ -178,11 +178,11 @@ mod tests {
             serde_err.to_string(),
             "invalid type: map, expected a sequence"
         );
-        let err = Error::spec_rejection_from("ldsc_rg", &schema, serde_err);
+        let err = Error::spec_rejection_from("ldsc_rg_container", &schema, serde_err);
         let msg = format!("{err}");
 
         assert!(
-            msg.contains("`ldsc_rg`"),
+            msg.contains("`ldsc_rg_container`"),
             "message must name the kind: {msg}"
         );
         assert!(

@@ -1,7 +1,7 @@
 //! Liability-scale heritability conversion node.
 //!
 //! A pure post-hoc transform that converts an **observed-scale** SNP-heritability
-//! estimate (produced by [`super::ldsc_hsq::LdscHsqNode`]) to the **liability
+//! estimate in the observed-scale h² summary contract) to the **liability
 //! scale** for an ascertained (case-control) binary phenotype, using the
 //! standard liability-threshold conversion of So et al. (2011) / Lee et al.
 //!
@@ -10,7 +10,7 @@
 //! conversion is a separate display-layer step applied only to `h²` and `h²_se`
 //! via a constant multiplier (see `ldscore/regressions.py: Hsq.summary` and
 //! `h2_obs_to_liab`). Keeping it in its own node — rather than folding `P`/`K`
-//! into [`LdscHsqConfig`] — means:
+//! into an LDSC fitting node — means:
 //!
 //! * the expensive LD score regression is not re-run when `P`/`K` change;
 //! * the conversion is reusable for any observed-scale h² summary; and
@@ -72,16 +72,28 @@ const H2_SE_LIAB_COL: &str = "h2_se_liab";
 const H2_COL: &str = "h2";
 const H2_SE_COL: &str = "h2_se";
 
-/// The output schema: the upstream h² summary schema (see
-/// [`super::ldsc_hsq::output_schema`]) with two added liability-scale columns
+/// The observed-scale h² summary contract consumed by this transform.
+pub fn observed_h2_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("h2", DataType::Float64, false),
+        Field::new("h2_se", DataType::Float64, false),
+        Field::new("intercept", DataType::Float64, true),
+        Field::new("intercept_se", DataType::Float64, true),
+        Field::new("ratio", DataType::Float64, true),
+        Field::new("ratio_se", DataType::Float64, true),
+        Field::new("mean_chisq", DataType::Float64, false),
+        Field::new("lambda_gc", DataType::Float64, false),
+        Field::new("n_snp", DataType::Float64, false),
+        Field::new("coef", DataType::Utf8, false),
+        Field::new("coef_se", DataType::Utf8, false),
+    ]))
+}
+
+/// The output schema: the upstream h² summary schema with two added liability-scale columns
 /// `h2_liab` and `h2_se_liab` (Float64, non-nullable — `h2`/`h2_se` are
 /// non-nullable upstream and the conversion factor is finite for valid `P`/`K`).
 pub fn output_schema() -> SchemaRef {
-    let mut fields: Vec<Arc<Field>> = super::ldsc_hsq::output_schema()
-        .fields()
-        .iter()
-        .cloned()
-        .collect();
+    let mut fields: Vec<Arc<Field>> = observed_h2_schema().fields().iter().cloned().collect();
     fields.push(Arc::new(Field::new(H2_LIAB_COL, DataType::Float64, false)));
     fields.push(Arc::new(Field::new(
         H2_SE_LIAB_COL,
@@ -93,11 +105,11 @@ pub fn output_schema() -> SchemaRef {
 
 /// Static port layout: one typed input (the `ldsc` h² summary) and one typed
 /// output (that summary + the two liability columns). Typing the input to
-/// [`super::ldsc_hsq::output_schema`] lets the DAG reject non-h² upstreams at
+/// [`observed_h2_schema`] lets the DAG reject non-h² upstreams at
 /// `add_edge` time.
 fn port_layout() -> NodePorts {
     NodePorts::new()
-        .add_input_port(Some(super::ldsc_hsq::output_schema()))
+        .add_input_port(Some(observed_h2_schema()))
         .add_output_port(Some(output_schema()))
 }
 
@@ -137,7 +149,7 @@ impl LiabilityConfig {
 
 /// Convert an observed-scale h² summary to the liability scale.
 ///
-/// Accepts the single-row output of [`super::ldsc_hsq::LdscHsqNode`] and emits
+/// Accepts a single-row observed-scale h² summary and emits
 /// it with two added columns, `h2_liab = c · h2` and `h2_se_liab = c · h2_se`,
 /// where `c` is the liability-threshold conversion factor
 /// `K²(1−K)² / [P(1−P)·φ(Φ⁻¹(1−K))²]`. All other columns pass through
@@ -351,9 +363,9 @@ mod tests {
     use arrow_array::{Float64Array, StringArray};
 
     /// Build a single-row h² summary `RecordBatch` matching
-    /// [`crate::ldsc_hsq::output_schema`] with the given h² / h²_se.
+    /// [`observed_h2_schema`] with the given h² / h²_se.
     fn h2_summary_batch(h2: f64, h2_se: f64) -> RecordBatch {
-        let schema = crate::ldsc_hsq::output_schema();
+        let schema = observed_h2_schema();
         RecordBatch::try_new(
             schema,
             vec![
@@ -452,7 +464,7 @@ mod tests {
     #[test]
     fn output_schema_is_h2_summary_plus_two_liability_cols() {
         let s = output_schema();
-        let base = crate::ldsc_hsq::output_schema();
+        let base = observed_h2_schema();
         assert_eq!(s.fields().len(), base.fields().len() + 2);
         // First len(base) fields identical to the upstream h² summary.
         for (i, f) in base.fields().iter().enumerate() {

@@ -10,9 +10,6 @@ description = "Mendelian randomisation DAG node bundle."
 dag-core = { path = "../../dag-core" }
 mr = { path = "../../../bio_crates/mr" }
 mrlap = { path = "../../../bio_crates/mrlap" }
-mrpresso = { path = "../../../bio_crates/mrpresso" }
-mvmr = { path = "../../../bio_crates/mvmr" }
-ldsc = { path = "../../../bio_crates/ldsc" }
 nodes-ldsc = { path = "../nodes-ldsc" }
 opengwas = { path = "../../opengwas" }
 arrow-array.workspace = true

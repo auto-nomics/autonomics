@@ -287,50 +287,12 @@ impl DagCompiler<'_> {
 
 ## Concrete codegen examples
 
-### `LdscHsqNodeFactory::codegen_r`
+### Official LDSC containers
 
-Spec: `LdscHsqConfig { n_blocks: 200, intercept: None }`
-Input port 0: DataFrame with columns `(z, n, rsid)`
-
-```rust
-fn codegen_r(
-    &self,
-    spec: &serde_json::Value,
-    ctx: &mut CodegenCtx,
-) -> Result<NodeCodegen, CodegenError> {
-    let cfg: LdscHsqConfig = serde_json::from_value(spec.clone())
-        .map_err(|e| CodegenError::BadSpec { kind: "ldsc".into(), source: e })?;
-
-    let input = &ctx.input_vars[0];
-    let out = ctx.output_var.to_string();
-    let mut code = Vec::new();
-
-    // Prepare sumstats in LDSC format
-    let ldsc_df = ctx.fresh_var("ldsc_input");
-    code.push(format!("{ldsc_df} <- data.frame("));
-    code.push(format!("  rsid = {input}$rsid,"));
-    code.push(format!("  Z = {input}$z,"));
-    code.push(format!("  N = {input}$n"));
-    code.push(format!(")"));
-
-    // Run h² estimation
-    code.push(format!("{out} <- ldsc::estimate_h2("));
-    code.push(format!("  sumstats = {ldsc_df},"));
-    code.push(format!("  n_blocks = {},", cfg.n_blocks));
-    if let Some(v) = cfg.intercept {
-        code.push(format!("  intercept = {v},"));
-    }
-    code.push(format!(")"));
-
-    Ok(NodeCodegen {
-        code,
-        output_vars: vec![out],
-        extra_packages: vec![],
-    })
-}
-
-fn r_packages(&self) -> Vec<String> { vec!["LDSC".into()] }
-```
+LDSC h² and rg reverse-compilation must preserve the pinned official OCI
+invocation, panel bindings, staged File paths, and declared VFS artifacts. It
+must not synthesize equivalent calls to an R/Python package or to the removed
+Rust factories.
 
 ### `TwoSampleMrNodeFactory::codegen_r`
 
@@ -555,8 +517,8 @@ Priority order (by scientific impact + R-package availability):
 - [ ] `file_to_dataframe` → `fread()` / `read_parquet()`
 - [ ] `sql` → `sqldf()` (pragmatic; full dplyr translation later)
 - [ ] `dataframe_to_file` → `fwrite()` / `write_parquet()`
-- [ ] `ldsc` (h²) → `LDSC::estimate_h2()` or Python `ldsc.py` CLI
-- [ ] `ldsc_rg` → `LDSC::estimate_rg()`
+- [ ] `ldsc_h2_container` → preserve the official container invocation
+- [ ] `ldsc_rg_container` → preserve the official container invocation
 - [ ] `two_sample_mr` → `TwoSampleMR::mr()` (full pipeline: clump → harmonise → dispatch)
 - [ ] `linear_regression` → `lm()`
 - [ ] `logistic_regression` → `glm(family = binomial)`

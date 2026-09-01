@@ -56,11 +56,6 @@ pub fn builtin_data_bundle_catalog() -> DataBundleCatalog {
             "/bundles/magma/g1000_eur",
         ),
         bundle(
-            "plink.1000g_eur",
-            "1000G EUR PLINK chromosome prefix template",
-            "/bundles/plink/1000g_eur/chr{N}/panel",
-        ),
-        bundle(
             "magma.gene_loc",
             "MAGMA NCBI gene-location table",
             "/bundles/magma/gene_loc.parquet",

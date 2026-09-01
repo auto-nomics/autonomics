@@ -8,8 +8,8 @@
 //! `DataFrame` with the posterior gcp, its z-score and p-value, the genetic
 //! correlation, and per-trait h² z-scores.
 //!
-//! This mirrors [`super::ldsc_rg::LdscRgNode`]; the structural difference is
-//! the algorithm called after the 3-way join (LCV vs LDSC bivariate).
+//! The joined inputs feed the native LCV estimator; official LDSC rg runs in
+//! `nodes_io::ldsc_rg_container`.
 
 use std::sync::Arc;
 

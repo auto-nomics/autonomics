@@ -375,6 +375,21 @@ The production wrapper pins the image repository and manifest digest, while
 the runtime resolves the ACR endpoint from `ACR_ENDPOINT`. This keeps the exact
 image immutable without embedding a deployment-specific registry host.
 
+LAVA also has the official multiple-locus scan case:
+
+```text
+crates/node-bundles/nodes-io/src/lava_scan_container.rs
+```
+
+`lava_scan_container` follows the upstream batch workflow: it calls
+`process.input()` once, reads the caller's loci table, iterates each selected
+locus with `process.locus()`, and invokes the official `run.univ.bivar()`
+workflow. `locus_ids` and `chr` subset the scan; process and analysis failures
+are logged and skipped per locus. The node emits combined univariate and
+bivariate TSVs, an RDS result object, and the complete log. It binds exactly
+the same `lava.ref.ukb_eur` or tutorial panel contract as `lava_container`.
+The local Podman baseline scans official tutorial loci `100` and `230`.
+
 SMR/HEIDI is the BESD eQTL plus PLINK LD-panel reference case:
 
 ```text
@@ -439,6 +454,7 @@ hdl.ref.ukb_eur
 containers/hdl-l/test_hdl_l_podman.sh
 scripts/build_hdl_ukb_panel.sh
 crates/node-bundles/nodes-io/src/hdl_l_container.rs
+crates/node-bundles/nodes-io/src/hdl_l_scan_container.rs
 ```
 
 The image installs official `HDL` 1.4.3 at commit `e6b055d` and runs through
@@ -447,12 +463,15 @@ k3s backend is required. The official Zenodo UKB EUR payload is normalized into
 one catalog package with `LD/*_LDSVD.rda`, `LD/HDLL_LOC_snps.RData`, and
 matching per-block BIM files. The wrapper takes two official-format GWAS
 summary Files plus `chr` and `piece`, invokes `HDL::HDL.L`, and emits TSV, RDS,
-and the official log. This panel is not interchangeable with
+and the official log. The registered `hdl_l_scan` runtime uses the same image
+and panel binding, reads `NEWLOC` from `HDLL_LOC_snps.RData`, iterates official
+`chr/piece` blocks, isolates per-block failures, and emits a combined TSV, an
+RDS result list, and the official log. This panel is not interchangeable with
 `lava.ref.ukb_eur`, `lava.ref.1000g_test`, `plink.1000g_eur`, or the native
 LAVA PLINK contract. The full official package is published as `hdl.ref.ukb_eur`
 v1.0 with digest `sha256:411c7ae1db876ec3e17941367a74567175ca151f8f93dc6e5e1d06bb8f3a3f54`;
-the Podman smoke uses a small official-layout local fixture. The native Rust
-nodes remain registered until the published panel has a recorded production run.
+the published panel has passed chr1/piece9 region and scan Podman baselines.
+The native Rust HDL-L crate and both native nodes are removed.
 
 MTAG is the official Python 2 plus single-prefix LD Score case:
 

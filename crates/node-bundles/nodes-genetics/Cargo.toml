@@ -4,18 +4,13 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Statistical genetics DAG node bundle (LAVA, HDL-L, CPASSOC, SuSiE, MAGMA, MiXeR)."
+description = "Statistical genetics DAG node bundle (CPASSOC, MAGMA, GenomicSEM)."
 
 [dependencies]
 dag-core = { path = "../../dag-core" }
 vfs = { path = "../../vfs" }
-lava = { path = "../../../bio_crates/lava" }
-hdl = { path = "../../../bio_crates/hdl" }
 cpassoc = { path = "../../../bio_crates/cpassoc" }
-susie = { path = "../../../bio_crates/susie" }
 magma = { path = "../../../bio_crates/magma" }
-mixer = { path = "../../../bio_crates/mixer" }
-ldsc = { path = "../../../bio_crates/ldsc" }
 genomic_sem = { path = "../../../bio_crates/genomic_sem" }
 nodes-ldsc = { path = "../nodes-ldsc" }
 libloading = "0.8"

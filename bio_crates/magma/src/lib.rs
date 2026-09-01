@@ -6,11 +6,11 @@
 //! analysis. It supports both raw genotype data (PLINK format) and
 //! summary statistics (SNP p-values + reference LD panel).
 //!
-//! # Summary-stats pipeline (fully covered)
+//! # Summary-stats pipeline
 //!
 //! | Step | CLI | Module | Status |
 //! |------|-----|--------|--------|
-//! | Annotation | `--annotate` | [`annotation`] | ✅ |
+//! | Annotation | `--annotate` | external `magma_annotate_container` | replaced by the official runtime |
 //! | Gene analysis (pval) | `--bfile --pval --gene-annot` | [`geneanalysis`] | ✅ |
 //! | Gene-set analysis | `--gene-results --set-annot` | [`setanalysis`] | ✅ |
 //! | Gene-property analysis | `--gene-results --gene-covar` | [`setanalysis`] | ✅ |
@@ -27,7 +27,7 @@
 
 #![allow(clippy::needless_range_loop)]
 
-pub mod annotation;
+pub(crate) mod chromosome;
 pub mod error;
 pub mod geneanalysis;
 pub mod geneinput;

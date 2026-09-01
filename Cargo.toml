@@ -40,8 +40,6 @@ members = [
   "crates/biofusion-cache",
   "bio_crates/ldsc",
   "bio_crates/lava",
-  "bio_crates/hdl",
-  "bio_crates/mixer",
   "bio_crates/mr",
   "bio_crates/lcv",
   "bio_crates/mrlap",
@@ -64,12 +62,9 @@ members = [
   "crates/europepmc",
   "crates/openalex",
   "crates/semantic-scholar",
-  "bio_crates/susie",
   "bio_crates/evalue",
-  "bio_crates/mrpresso",
   "bio_crates/coloc",
   "bio_crates/bkmr",
-  "bio_crates/mvmr",
   "crates/kms",
   "crates/kms-tools",
   "crates/agentik-network",
@@ -93,7 +88,6 @@ members = [
   "crates/workflow-editor",
   "stat_crates/dl",
   "crates/node-bundles/nodes-dl",
-  "bio_crates/twas",
 ]
 resolver = "3"
 

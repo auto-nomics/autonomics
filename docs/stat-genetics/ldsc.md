@@ -17,9 +17,9 @@ Numerics run on [`faer`](https://github.com/sarah-ek/faer) (no LAPACK/MKL). Poin
 
 ## DAG integration
 
-The original Rust `ldsc` h² factory is no longer registered in the default DAG
-registry. Its library implementation and tests remain available, but production
-h² analyses use `nodes_io::ldsc_h2_container`.
+The original Rust `ldsc` h² node factory is removed. The library implementation
+remains available for S-LDSC, LCV, liability conversion, and MRlap internals,
+but production h² analyses use `nodes_io::ldsc_h2_container`.
 
 `ldsc_h2_container` accepts one tab-separated LDSC sumstats File with
 `SNP`, `A1`, `A2`, `N`, and `Z` columns. Plain `.tsv` and gzip-compressed
@@ -38,4 +38,4 @@ raw munging log.
 `ldsc_rg_container` performs the corresponding official `ldsc --rg` analysis.
 It accepts two tab-separated LDSC sumstats Files, uses the same image and EUR
 panel contract, and emits the raw LDSC rg log as a VFS File artifact. The Rust
-`ldsc_rg` factory is no longer registered by default.
+`ldsc_rg` node factory is removed.

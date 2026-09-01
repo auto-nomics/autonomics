@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::annotation::parse_chr;
+use crate::chromosome::parse_chr;
 use crate::error::{MagmaError, Result};
 
 /// A gene definition from the `.genes.annot` file.

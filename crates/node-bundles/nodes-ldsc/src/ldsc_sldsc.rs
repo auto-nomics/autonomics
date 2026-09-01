@@ -87,12 +87,12 @@ pub fn output_schema() -> SchemaRef {
 }
 
 /// The fixed input column names for the upstream GWAS sumstats `DataFrame`
-/// (same convention as [`super::ldsc_hsq`]).
+/// (same convention as the historical native h² node).
 const INPUT_Z_COL: &str = "z";
 const INPUT_N_COL: &str = "n";
 const INPUT_RSID_COL: &str = "rsid";
 
-/// Build the input port schema (same as ldsc_hsq).
+/// Build the input port schema for the native S-LDSC node.
 fn input_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
         Field::new(INPUT_Z_COL, DataType::Float64, true),

@@ -8,9 +8,11 @@ pub mod file_reference;
 pub mod file_to_dataframe;
 pub mod gcta_container;
 pub mod hdl_l_container;
+pub mod hdl_l_scan_container;
 pub mod hyprcoloc_container;
 pub mod image_registry;
 pub mod lava_container;
+pub mod lava_scan_container;
 pub mod ldsc_h2_container;
 pub mod ldsc_munge_container;
 pub mod ldsc_rg_container;
@@ -199,10 +201,22 @@ impl NodePlugin for Plugin {
             Arc::clone(&self.container_execution.runtime),
             Arc::clone(&self.container_execution.panel_cache),
         )));
+        registry.register(Box::new(
+            hdl_l_scan_container::HdlLScanContainerNodeFactory::new(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
         registry.register(Box::new(lava_container::LavaContainerNodeFactory::new(
             Arc::clone(&self.container_execution.runtime),
             Arc::clone(&self.container_execution.panel_cache),
         )));
+        registry.register(Box::new(
+            lava_scan_container::LavaScanContainerNodeFactory::new(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
         registry.register(Box::new(mvmr_container::MvmrContainerNodeFactory::new(
             Arc::clone(&self.container_execution.runtime),
             Arc::clone(&self.container_execution.panel_cache),

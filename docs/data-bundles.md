@@ -6,7 +6,7 @@ and the runtime resolves those IDs through `state_dir/data_bundles.toml`.
 
 The data engine also installs a built-in catalog for factory-declared global
 reference bundles. Consequently registry-backed tests and embedded engines can
-build nodes such as `sldsc` and `ldsc_rg` without duplicating global entries. A
+build nodes such as `sldsc`, `lcv`, and MRlap without duplicating global entries. A
 bundle with the same `ident` in `data_bundles.toml` always overrides the
 built-in entry.
 
@@ -30,10 +30,6 @@ vpath = "/bundles/ldsc/1000g.parquet"
 - `ldscore.ukbb_eur`
 - `ldmatrix.1000g_eur`: vpath may contain `{N}` for chromosome-specific tables
 - `mixer.g1000_eur`: MiXeR signed-LD/engine bundle root
-- `plink.1000g_eur`: vpath must contain `{N}` for chromosome PLINK prefixes.
-   Native Rust HDL-L fallback nodes require this rsID panel; MiXeR's
-   `chr:pos:ref:alt` panels and the container HDL-L LD SVD contract are not
-   interchangeable with it.
 - MAGMA population panel IDs such as `g1000_eur`, `g1000_eas`, `g1000_afr`,
   `g1000_amr`, and `g1000_sas`
 - `magma.gene_loc`
@@ -63,6 +59,6 @@ For the GCTA summary-statistics nodes, the required current catalog IDs are:
 - `plink.ref.1000g_eur.binary`
 - `gcta.gene_list.hg19`
 
-For the HDL-L region container, the required current catalog ID is:
+For the HDL-L region and scan containers, the required current catalog ID is:
 
 - `hdl.ref.ukb_eur`

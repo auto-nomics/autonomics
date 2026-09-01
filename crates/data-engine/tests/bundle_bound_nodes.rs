@@ -82,7 +82,6 @@ fn catalog() -> DataBundleCatalog {
         ),
         bundle("ldmatrix.1000g_eur", "/bundles/ldmatrix/chr{N}"),
         bundle("g1000_eur", "/bundles/magma/g1000_eur"),
-        bundle("plink.1000g_eur", "/bundles/plink/chr{N}/panel"),
         bundle(
             nodes_genetics::magma_kegg::GENE_LOC_BUNDLE,
             "/bundles/magma/gene_loc.parquet",
@@ -169,6 +168,14 @@ fn all_bundle_bound_node_kinds_build_from_runtime_catalog() {
             }),
         ),
         (
+            "lava_scan_container",
+            serde_json::json!({
+                "panel_id": "lava.ref.ukb_eur",
+                "phenotypes": ["bmi", "depression"],
+                "locus_ids": ["100"]
+            }),
+        ),
+        (
             "hdl_l_container",
             serde_json::json!({
                 "chr": 1,
@@ -237,23 +244,10 @@ fn all_bundle_bound_node_kinds_build_from_runtime_catalog() {
             serde_json::json!({"max_maf": 0.05, "min_mac": 1}),
         ),
         (
-            "hdl_l",
-            serde_json::json!({
-                "chr": 1,
-                "start": 1,
-                "stop": 1000,
-                "trait1_name": "a",
-                "trait2_name": "b"
-            }),
-        ),
-        (
             "hdl_l_scan",
             serde_json::json!({
                 "chr": 1,
-                "scan_start": 1,
-                "scan_stop": 1000,
-                "window_size": 500,
-                "step": 500,
+                "pieces": [3],
                 "trait1_name": "a",
                 "trait2_name": "b"
             }),
@@ -329,4 +323,14 @@ fn node_listing_exposes_static_bundle_requirements() {
         .unwrap();
 
     assert_eq!(ldsc.data_bundles.len(), 2);
+}
+
+#[test]
+fn native_hdl_l_nodes_are_removed() {
+    let registry = registry();
+    let kinds = registry.list_nodes();
+
+    assert!(!kinds.iter().any(|node| node.kind == "hdl_l"));
+    assert!(kinds.iter().any(|node| node.kind == "hdl_l_container"));
+    assert!(kinds.iter().any(|node| node.kind == "hdl_l_scan"));
 }

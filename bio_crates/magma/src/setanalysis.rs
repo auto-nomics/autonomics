@@ -24,7 +24,7 @@ use std::path::Path;
 use faer::{Mat, prelude::Solve};
 use statrs::distribution::ContinuousCDF;
 
-use crate::annotation::parse_chr;
+use crate::chromosome::parse_chr;
 use crate::error::{MagmaError, Result};
 
 /// Gene-level data parsed from `.genes.raw`.

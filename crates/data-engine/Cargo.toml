@@ -22,7 +22,6 @@ tracing.workspace = true
 futures.workspace = true
 schemars.workspace = true
 turso.workspace = true
-mixer = { path = "../../bio_crates/mixer" }
 
 # ── Node bundle plugins (optional) ────────────────────────────────────────
 nodes-hypothesize = { path = "../node-bundles/nodes-hypothesize", optional = true }
@@ -76,6 +75,3 @@ arrow-buffer.workspace = true
 tempfile = "3"
 csv = "1"
 evalue = { path = "../../bio_crates/evalue" }
-mrpresso = { path = "../../bio_crates/mrpresso" }
-mvmr = { path = "../../bio_crates/mvmr" }
-mixer = { path = "../../bio_crates/mixer" }

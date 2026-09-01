@@ -38,10 +38,12 @@ use nodes_io::gcta_container::{
 use nodes_io::hdl_l_container::{
     HDL_L_CONTAINER_KIND, HDL_UKB_EUR_PANEL, HdlLContainerNodeFactory,
 };
+use nodes_io::hdl_l_scan_container::{HDL_L_SCAN_CONTAINER_KIND, HdlLScanContainerNodeFactory};
 use nodes_io::hyprcoloc_container::{HYPRCOLOC_CONTAINER_KIND, HyPrColocContainerNodeFactory};
 use nodes_io::lava_container::{
     LAVA_CONTAINER_KIND, LAVA_TUTORIAL_REF_PANEL, LAVA_UKB_EUR_PANEL, LavaContainerNodeFactory,
 };
+use nodes_io::lava_scan_container::{LAVA_SCAN_CONTAINER_KIND, LavaScanContainerNodeFactory};
 use nodes_io::ldsc_h2_container::{LDSC_H2_CONTAINER_KIND, LdscH2ContainerNodeFactory};
 use nodes_io::ldsc_munge_container::{LDSC_MUNGE_CONTAINER_KIND, LdscMungeContainerNodeFactory};
 use nodes_io::ldsc_rg_container::{LDSC_RG_CONTAINER_KIND, LdscRgContainerNodeFactory};
@@ -1259,6 +1261,291 @@ write.table(gwas2, "/work/gwas2.tsv", sep = "\t", quote = FALSE, row.names = FAL
 }
 
 #[tokio::test]
+#[ignore = "requires the published HDL UKB catalog panel, rootless Podman, the official HDL image, and HDL-L sumstats"]
+async fn real_catalog_backed_official_hdl_l_runs_in_podman_with_published_panel() {
+    let fixture = catalog_test_fixture().await;
+    let panel = fixture
+        .bundles
+        .get(HDL_UKB_EUR_PANEL)
+        .expect("published hdl.ref.ukb_eur panel must be current");
+    assert_eq!(
+        panel.digest.as_deref(),
+        Some("sha256:411c7ae1db876ec3e17941367a74567175ca151f8f93dc6e5e1d06bb8f3a3f54")
+    );
+
+    let input1 = std::env::var_os("AUTONOMICS_HDL_REAL_IT_SUMSTATS1")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| Path::new("/tmp/autonomics-hdl-real-e2e/gwas1.tsv").to_path_buf());
+    let input2 = std::env::var_os("AUTONOMICS_HDL_REAL_IT_SUMSTATS2")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| Path::new("/tmp/autonomics-hdl-real-e2e/gwas2.tsv").to_path_buf());
+    assert!(
+        input1.is_file() && input2.is_file(),
+        "missing official HDL-L sumstats: {} and {}",
+        input1.display(),
+        input2.display()
+    );
+
+    let scratch = tempfile::tempdir().unwrap();
+    let workspace_root = scratch.path().join("podman-workspace");
+    std::fs::create_dir_all(&workspace_root).unwrap();
+    let external_panel_cache =
+        std::env::var_os("AUTONOMICS_HDL_REAL_IT_PANEL_CACHE").map(PathBuf::from);
+    let panel_cache_root = external_panel_cache.unwrap_or_else(|| scratch.path().join("panels"));
+    std::fs::create_dir_all(&panel_cache_root).unwrap();
+
+    let podman_program =
+        std::env::var("AUTONOMICS_PODMAN_PROGRAM").unwrap_or_else(|_| "podman".into());
+    let runtime: Arc<dyn ContainerRuntime> = Arc::new(PodmanRuntime::new(PodmanConfig {
+        program: podman_program,
+        workspace_root,
+        panel_cache_root: panel_cache_root.clone(),
+    }));
+    let panel_cache = Arc::new(PanelCache::new(panel_cache_root.clone(), ""));
+    let registry_ctx = fixture
+        .ctx
+        .clone()
+        .with_data_bundle_catalog(Arc::new(fixture.bundles.clone()));
+    let mut registry = NodeRegistry::new(registry_ctx);
+    registry.register(Box::new(HdlLContainerNodeFactory::new(
+        runtime,
+        panel_cache,
+    )));
+    let hdl_l = registry
+        .build_node(
+            HDL_L_CONTAINER_KIND,
+            serde_json::json!({
+                "chr": 1,
+                "piece": 9,
+                "trait1_name": "trait1",
+                "trait2_name": "trait2"
+            }),
+        )
+        .unwrap();
+
+    let mut dag = dag_core::dag::DAG::default();
+    dag.add_node("hdl_l".into(), hdl_l).unwrap();
+    for (port, input) in [input1, input2].into_iter().enumerate() {
+        let source = format!("trait{}", port + 1);
+        dag.add_node(
+            source.clone(),
+            Box::new(FileReferenceNode::new(
+                input.to_string_lossy().into_owned(),
+                Some("hdl_l_sumstats".into()),
+            )),
+        )
+        .unwrap();
+        dag.add_edge(&source, "hdl_l", 0, u8::try_from(port).unwrap())
+            .unwrap();
+    }
+    let report = dag
+        .run(&SchedulerConfig::default(), &fixture.ctx, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        report.statuses.get("hdl_l"),
+        Some(&dag_core::dag::RuntimeStatus::Success),
+        "published-panel HDL-L node failed: {report:#?}"
+    );
+
+    let outputs = dag.output("hdl_l").unwrap();
+    let tsv = outputs.get(&0).unwrap().as_file().unwrap().clone();
+    let rds = outputs.get(&1).unwrap().as_file().unwrap().clone();
+    let log = outputs.get(&2).unwrap().as_file().unwrap().clone();
+    assert!(tsv.path.ends_with("/hdl_l.tsv"));
+    assert!(rds.path.ends_with("/hdl_l.RDS"));
+    assert!(log.path.ends_with("/hdl_l.log"));
+
+    let storage = fixture
+        .ctx
+        .opendal
+        .as_ref()
+        .expect("test storage is registered");
+    let tsv_text = read_published_text(storage, &tsv).await;
+    let log_text = read_published_text(storage, &log).await;
+    for expected in [
+        "Trait1",
+        "Trait2",
+        "Heritability_1",
+        "Heritability_2",
+        "Genetic_Correlation",
+    ] {
+        assert!(
+            tsv_text.contains(expected),
+            "published-panel HDL-L result is missing `{expected}`:\n{tsv_text}"
+        );
+    }
+    let result_fields = tsv_text
+        .lines()
+        .nth(1)
+        .unwrap_or_default()
+        .split('\t')
+        .collect::<Vec<_>>();
+    for (index, expected) in [
+        "trait1",
+        "trait2",
+        "1",
+        "9",
+        "0.99",
+        "0.000107249476351492",
+        "0.25964719975359",
+        "1.34562333962111e-05",
+        "0.954243705297244",
+        "-3.79891298321915e-05",
+        "-1",
+        "-1",
+        "1",
+        "0.328067237903238",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_eq!(
+            result_fields.get(index),
+            Some(&expected),
+            "official chr1:9 result baseline changed:\n{tsv_text}"
+        );
+    }
+    assert_eq!(
+        log_text
+            .matches("642 out of 642 (100%) SNPs in reference panel")
+            .count(),
+        2,
+        "official chr1:9 panel overlap changed:\n{log_text}"
+    );
+    assert!(log_text.contains("Analysis finished at"));
+
+    let cache_key = format!("{HDL_UKB_EUR_PANEL}@{}", panel.digest.as_deref().unwrap());
+    assert!(
+        panel_cache_root.join(cache_key).is_dir(),
+        "published HDL UKB panel should be cached"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires the published HDL UKB catalog panel, rootless Podman, the official HDL image, and HDL-L sumstats"]
+async fn real_catalog_backed_official_hdl_l_scan_runs_in_podman_with_published_panel() {
+    let fixture = catalog_test_fixture().await;
+    let panel = fixture
+        .bundles
+        .get(HDL_UKB_EUR_PANEL)
+        .expect("published hdl.ref.ukb_eur panel must be current");
+    assert_eq!(
+        panel.digest.as_deref(),
+        Some("sha256:411c7ae1db876ec3e17941367a74567175ca151f8f93dc6e5e1d06bb8f3a3f54")
+    );
+
+    let input1 = std::env::var_os("AUTONOMICS_HDL_REAL_IT_SUMSTATS1")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| Path::new("/tmp/autonomics-hdl-real-e2e/gwas1.tsv").to_path_buf());
+    let input2 = std::env::var_os("AUTONOMICS_HDL_REAL_IT_SUMSTATS2")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| Path::new("/tmp/autonomics-hdl-real-e2e/gwas2.tsv").to_path_buf());
+    assert!(
+        input1.is_file() && input2.is_file(),
+        "missing official HDL-L sumstats: {} and {}",
+        input1.display(),
+        input2.display()
+    );
+
+    let scratch = tempfile::tempdir().unwrap();
+    let workspace_root = scratch.path().join("podman-workspace");
+    std::fs::create_dir_all(&workspace_root).unwrap();
+    let panel_cache_root = std::env::var_os("AUTONOMICS_HDL_REAL_IT_PANEL_CACHE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| scratch.path().join("panels"));
+    std::fs::create_dir_all(&panel_cache_root).unwrap();
+
+    let runtime: Arc<dyn ContainerRuntime> = Arc::new(PodmanRuntime::new(PodmanConfig {
+        program: std::env::var("AUTONOMICS_PODMAN_PROGRAM").unwrap_or_else(|_| "podman".into()),
+        workspace_root,
+        panel_cache_root: panel_cache_root.clone(),
+    }));
+    let panel_cache = Arc::new(PanelCache::new(panel_cache_root.clone(), ""));
+    let registry_ctx = fixture
+        .ctx
+        .clone()
+        .with_data_bundle_catalog(Arc::new(fixture.bundles.clone()));
+    let mut registry = NodeRegistry::new(registry_ctx);
+    registry.register(Box::new(HdlLScanContainerNodeFactory::new(
+        runtime,
+        panel_cache,
+    )));
+    let scan = registry
+        .build_node(
+            HDL_L_SCAN_CONTAINER_KIND,
+            serde_json::json!({
+                "chr": 1,
+                "pieces": [9],
+                "trait1_name": "trait1",
+                "trait2_name": "trait2"
+            }),
+        )
+        .unwrap();
+
+    let mut dag = dag_core::dag::DAG::default();
+    dag.add_node("hdl_l_scan".into(), scan).unwrap();
+    for (port, input) in [input1, input2].into_iter().enumerate() {
+        let source = format!("trait{}", port + 1);
+        dag.add_node(
+            source.clone(),
+            Box::new(FileReferenceNode::new(
+                input.to_string_lossy().into_owned(),
+                Some("hdl_l_sumstats".into()),
+            )),
+        )
+        .unwrap();
+        dag.add_edge(&source, "hdl_l_scan", 0, u8::try_from(port).unwrap())
+            .unwrap();
+    }
+    let report = dag
+        .run(&SchedulerConfig::default(), &fixture.ctx, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        report.statuses.get("hdl_l_scan"),
+        Some(&dag_core::dag::RuntimeStatus::Success),
+        "published-panel HDL-L scan failed: {report:#?}"
+    );
+
+    let outputs = dag.output("hdl_l_scan").unwrap();
+    let tsv = outputs.get(&0).unwrap().as_file().unwrap().clone();
+    let rds = outputs.get(&1).unwrap().as_file().unwrap().clone();
+    let log = outputs.get(&2).unwrap().as_file().unwrap().clone();
+    assert!(tsv.path.ends_with("/hdl_l_scan.tsv"));
+    assert!(rds.path.ends_with("/hdl_l_scan.RDS"));
+    assert!(log.path.ends_with("/hdl_l_scan.log"));
+
+    let storage = fixture
+        .ctx
+        .opendal
+        .as_ref()
+        .expect("test storage is registered");
+    let tsv_text = read_published_text(storage, &tsv).await;
+    let log_text = read_published_text(storage, &log).await;
+    assert_eq!(tsv_text.lines().count(), 2, "scan TSV:\n{tsv_text}");
+    let result_fields = tsv_text
+        .lines()
+        .nth(1)
+        .unwrap()
+        .split('\t')
+        .collect::<Vec<_>>();
+    assert_eq!(result_fields.len(), 14);
+    assert_eq!(result_fields[2], "1");
+    assert_eq!(result_fields[3], "9");
+    assert_eq!(result_fields[5], "0.000107249476351492");
+    assert_eq!(result_fields[13], "0.328067237903238");
+    assert_eq!(
+        log_text
+            .matches("642 out of 642 (100%) SNPs in reference panel")
+            .count(),
+        2,
+        "official chr1:9 scan overlap changed:\n{log_text}"
+    );
+    assert!(log_text.contains("Processed 1 official blocks; 0 failed"));
+}
+
+#[tokio::test]
 #[ignore = "requires the Garage gene-location panel, k3s PVCs, kubeconfig, and the local MAGMA image"]
 async fn real_catalog_backed_official_magma_annotate_runs_in_k3s() {
     let fixture = catalog_test_fixture().await;
@@ -1487,6 +1774,133 @@ async fn real_catalog_backed_official_lava_univ_runs_in_k3s() {
     assert!(log.contains("98667 SNPs shared across data sets"));
 
     let cached_panel = std::fs::read_dir(&k3s_config.panel_cache_root)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .any(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(&format!("{LAVA_TUTORIAL_REF_PANEL}@"))
+        });
+    assert!(cached_panel, "LAVA tutorial panel should be cached");
+}
+
+#[tokio::test]
+#[ignore = "requires the Garage LAVA tutorial panel, rootless Podman, and the local official LAVA image"]
+async fn real_catalog_backed_official_lava_scan_runs_in_podman() {
+    let fixture = catalog_test_fixture().await;
+    assert!(fixture.bundles.get(LAVA_TUTORIAL_REF_PANEL).is_some());
+
+    let source = std::env::var_os("AUTONOMICS_LAVA_IT_SOURCE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../containers/lava/LAVA")
+        });
+    let fixture_data = source.join("vignettes/data");
+
+    let scratch = tempfile::tempdir().unwrap();
+    let workspace_root = scratch.path().join("podman-workspace");
+    let panel_cache_root = std::env::var_os("AUTONOMICS_LAVA_SCAN_IT_PANEL_CACHE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| scratch.path().join("panels"));
+    std::fs::create_dir_all(&workspace_root).unwrap();
+    std::fs::create_dir_all(&panel_cache_root).unwrap();
+
+    let runtime: Arc<dyn ContainerRuntime> = Arc::new(PodmanRuntime::new(PodmanConfig {
+        program: std::env::var("AUTONOMICS_PODMAN_PROGRAM").unwrap_or_else(|_| "podman".into()),
+        workspace_root,
+        panel_cache_root: panel_cache_root.clone(),
+    }));
+    let panel_cache = Arc::new(PanelCache::new(panel_cache_root.clone(), ""));
+    let registry_ctx = fixture
+        .ctx
+        .clone()
+        .with_data_bundle_catalog(Arc::new(fixture.bundles.clone()));
+    let mut registry = NodeRegistry::new(registry_ctx);
+    registry.register(Box::new(LavaScanContainerNodeFactory::new(
+        runtime,
+        panel_cache,
+    )));
+    let scan = registry
+        .build_node(
+            LAVA_SCAN_CONTAINER_KIND,
+            serde_json::json!({
+                "panel_id": LAVA_TUTORIAL_REF_PANEL,
+                "sample_overlap": true,
+                "phenotypes": ["depression", "neuro", "bmi"],
+                "locus_ids": ["100", "230"]
+            }),
+        )
+        .unwrap();
+
+    let mut dag = dag_core::dag::DAG::default();
+    for (name, filename, format) in [
+        ("input_info", "input.info.txt", "lava_input_info"),
+        ("loci", "test.loci", "lava_loci"),
+        ("overlap", "sample.overlap.txt", "lava_sample_overlap"),
+        ("depression", "depression.sumstats.txt", "lava_sumstats"),
+        ("neuro", "neuro.sumstats.txt", "lava_sumstats"),
+        ("bmi", "bmi.sumstats.txt", "lava_sumstats"),
+    ] {
+        dag.add_node(
+            name.into(),
+            Box::new(FileReferenceNode::new(
+                fixture_data.join(filename).to_string_lossy().into_owned(),
+                Some(format.into()),
+            )),
+        )
+        .unwrap();
+    }
+    dag.add_node("lava_scan".into(), scan).unwrap();
+    for (source, target_port) in [
+        ("input_info", 0),
+        ("loci", 1),
+        ("overlap", 2),
+        ("depression", 3),
+        ("neuro", 4),
+        ("bmi", 5),
+    ] {
+        dag.add_edge(source, "lava_scan", 0, target_port).unwrap();
+    }
+    let report = dag
+        .run(&SchedulerConfig::default(), &fixture.ctx, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        report.statuses.get("lava_scan"),
+        Some(&dag_core::dag::RuntimeStatus::Success),
+        "LAVA scan node failed: {report:#?}"
+    );
+
+    let outputs = dag.output("lava_scan").unwrap();
+    let univ = outputs.get(&0).unwrap().as_file().unwrap().clone();
+    let bivar = outputs.get(&1).unwrap().as_file().unwrap().clone();
+    let rds = outputs.get(&2).unwrap().as_file().unwrap().clone();
+    let log = outputs.get(&3).unwrap().as_file().unwrap().clone();
+    assert!(univ.path.ends_with("/lava_scan.univ.tsv"));
+    assert!(bivar.path.ends_with("/lava_scan.bivar.tsv"));
+    assert!(rds.path.ends_with("/lava_scan.RDS"));
+    assert!(log.path.ends_with("/lava_scan.log"));
+
+    let storage = fixture
+        .ctx
+        .opendal
+        .as_ref()
+        .expect("test storage is registered");
+    let univ_text = read_published_text(storage, &univ).await;
+    let bivar_text = read_published_text(storage, &bivar).await;
+    let log_text = read_published_text(storage, &log).await;
+    assert!(univ_text.contains("locus\tchr\tstart\tstop\tn.snps\tn.pcs\tphen\t"));
+    assert!(univ_text.contains("100\t1\t113418038"));
+    assert!(univ_text.contains("depression\t8.45733e-05"));
+    assert!(univ_text.contains("230\t2\t26894103"));
+    assert!(bivar_text.contains("locus\tchr\tstart\tstop\tn.snps\tn.pcs\tphen1\tphen2\t"));
+    assert!(bivar_text.contains("100\t1\t113418038"));
+    assert!(log_text.contains("Starting official LAVA scan for 2 loci"));
+    assert!(log_text.contains("Finished official LAVA scan: 2 requested;"));
+    assert!(log_text.contains("98667 SNPs shared across data sets"));
+
+    let cached_panel = std::fs::read_dir(&panel_cache_root)
         .unwrap()
         .filter_map(|entry| entry.ok())
         .any(|entry| {
@@ -2159,7 +2573,7 @@ async fn real_catalog_backed_original_ldsc_rg_runs_in_k3s() {
 async fn real_official_mrpresso_runs_in_k3s() {
     let scratch = tempfile::tempdir().unwrap();
     let csv_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../bio_crates/mrpresso/tests/summary_stats_headers.csv");
+        .join("../../../containers/mrpresso/fixtures/summary_stats_headers.csv");
     let csv = std::fs::read_to_string(csv_path).unwrap();
     let tsv = csv.replace(',', "\t");
     let input_path = scratch.path().join("mrpresso-summary.tsv");
@@ -2253,7 +2667,7 @@ async fn real_official_mrpresso_runs_in_k3s() {
 async fn real_official_mvmr_runs_in_k3s() {
     let scratch = tempfile::tempdir().unwrap();
     let csv_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../bio_crates/mvmr/tests/rawdat_mvmr.csv");
+        .join("../../../containers/mvmr/fixtures/rawdat_mvmr.csv");
     let csv = std::fs::read_to_string(csv_path).unwrap();
     let input_path = scratch.path().join("rawdat_mvmr.tsv");
     std::fs::write(&input_path, csv.replace(',', "\t")).unwrap();
@@ -2674,7 +3088,7 @@ async fn read_published_text(
 async fn real_official_coloc_abf_runs_in_k3s() {
     let scratch = tempfile::tempdir().unwrap();
     let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../bio_crates/coloc/tests/coloc_abf_fixture.tsv");
+        .join("../../../containers/coloc/fixtures/coloc_abf_fixture.tsv");
     let tsv = std::fs::read_to_string(&fixture_path).unwrap();
     let input_path = scratch.path().join("coloc-abf-input.tsv");
     std::fs::write(&input_path, tsv).unwrap();

@@ -2,8 +2,6 @@
 
 pub mod lcv;
 pub mod ldsc_common;
-pub mod ldsc_hsq;
-pub mod ldsc_rg;
 pub mod ldsc_sldsc;
 pub mod liability;
 

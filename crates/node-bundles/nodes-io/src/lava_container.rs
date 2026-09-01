@@ -573,7 +573,7 @@ fn panel_bindings_for(panel_id: &str) -> Vec<DataBundleBinding> {
     vec![DataBundleBinding::new("lava_ref", panel_id)]
 }
 
-fn default_panel_bindings() -> Vec<DataBundleBinding> {
+pub(crate) fn default_panel_bindings() -> Vec<DataBundleBinding> {
     panel_bindings_for(LAVA_UKB_EUR_PANEL)
 }
 

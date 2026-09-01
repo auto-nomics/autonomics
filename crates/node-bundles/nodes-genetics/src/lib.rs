@@ -2,11 +2,8 @@
 
 pub mod cpassoc;
 pub mod genomic_sem;
-pub mod hdl_l;
-pub mod hdl_l_scan;
 pub mod magma;
 pub mod magma_kegg;
-pub(crate) mod plink_reference;
 
 use dag_core::{NodePlugin, NodeRegistry};
 
@@ -16,8 +13,6 @@ impl NodePlugin for Plugin {
         "genetics"
     }
     fn register(&self, registry: &mut NodeRegistry) {
-        registry.register(Box::new(hdl_l::HdlLNodeFactory {}));
-        registry.register(Box::new(hdl_l_scan::HdlLScanNodeFactory {}));
         registry.register(Box::new(cpassoc::CpassocNodeFactory {}));
         registry.register(Box::new(magma::MagmaGeneNodeFactory {}));
         registry.register(Box::new(magma::MagmaSetNodeFactory {}));
