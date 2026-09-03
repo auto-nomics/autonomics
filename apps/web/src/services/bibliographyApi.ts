@@ -1,14 +1,18 @@
 /**
- * JayRead 题录导入 API 客户端
+ * 题录导入 API 客户端
  *
- * 提供与后端 /api/bibliography 端点通信的函数：
- * - importBibliography: 导入题录文件（BibTeX/RIS/NBIB/EndNote/XML/GB-T 7714）
- * - resolveDuplicates: 处理重复文献的去重选择
- * - attachPdf: 为元数据记录手动上传 PDF
- * - downloadPdf: 通过 DOI 自动下载开放获取 PDF
+ * stubbed: capability not present in autonomics backend (see plan Phase 3)
+ *
+ * autonomics 的批量导入端点（`POST /articles/import/batch`，BibTeX/RIS/CSL-JSON，
+ * hayagriva + RIS 解析）和 PDF 上传建档（`POST /articles/upload`）属于 Phase 3
+ * 导入管线，本阶段尚未实现。全部函数显式 reject，调用方走既有 catch → toast，
+ * UI 不崩；签名保持与 jayread 一致，Phase 3 落地时只换函数体。
+ *
+ * 注：`resolveDuplicates` 对应 jayread 的「导入去重解决」流程，autonomics 在
+ * 服务端直接 upsert 合并，前端该流程整体删除（plan §3.2），所以这个函数
+ * Phase 3 也不会复活，将在 Phase 5 随 UI 一起清扫。
  */
 
-import request, { invalidateCache } from './client'
 import type {
   ImportResult,
   DuplicateResolution,
@@ -20,93 +24,66 @@ import type {
 /**
  * 导入题录文件
  *
- * 将用户上传的题录文件发送到后端进行解析和导入。
- * 后端会自动检测文件格式、解析文献记录、检测重复，并创建论文元数据记录。
+ * ⚠️ 桩：autonomics 批量导入端点属 Phase 3。
  *
- * @param {File} file - 用户上传的题录文件对象（.bib/.ris/.nbib/.enw/.xml/.txt）
- * @param {string|null} [categoryId=null] - 可选的分类 ID，导入的论文将归入该分类
- * @param {string|null} [format=null] - 可选的格式提示，手动指定解析格式
+ * stubbed: capability not present in autonomics backend (see plan Phase 3)
+ *
+ * @param {File} file - 用户上传的题录文件对象
+ * @param {string|null} [categoryId=null] - 可选的分类 ID
+ * @param {string|null} [format=null] - 可选的格式提示
  * @returns {Promise<ImportResult>} 导入结果对象
  */
-export async function importBibliography(file: File, categoryId: string | null = null, format: string | null = null): Promise<ImportResult> {
-  const formData = new FormData()
-  formData.append('file', file)
-
-  if (categoryId !== null) {
-    formData.append('category_id', categoryId)
-  }
-
-  if (format) {
-    formData.append('format', format)
-  }
-
-  const result = await request<ImportResult>('/bibliography/import', {
-    method: 'POST',
-    body: formData,
-    headers: {},
-  })
-  invalidateCache('/papers')
-  return result
+export async function importBibliography(
+  _file: File,
+  _categoryId: string | null = null,
+  _format: string | null = null,
+): Promise<ImportResult> {
+  void _categoryId; void _format;
+  throw new Error('题录批量导入暂未开放（autonomics 导入管线尚未实现，见 plan Phase 3）');
 }
 
 /**
  * 处理重复文献的去重选择
  *
- * 当导入题录文件检测到重复时，前端将用户的去重选择发送到此函数。
- * 每个重复记录有三种处理方式：跳过（skip）、覆盖（replace）、保留两条（keep_both）。
+ * ⚠️ 桩：autonomics 在服务端 upsert 合并，无需前端解决重复。此函数将随
+ * resolveDuplicates 流程在 Phase 5 一并删除。
  *
- * @param {Array<DuplicateResolution>} resolutions - 去重解决方案列表
- * @param {string|null} [categoryId=null] - 可选的分类 ID，新创建的记录将归入该分类
- * @returns {Promise<ResolveDuplicatesResult>} 处理结果
+ * stubbed: capability not present in autonomics backend (see plan Phase 3/5)
  */
-export async function resolveDuplicates(resolutions: DuplicateResolution[], categoryId: string | null = null): Promise<ResolveDuplicatesResult> {
-  const result = await request<ResolveDuplicatesResult>('/bibliography/resolve-duplicates', {
-    method: 'POST',
-    body: {
-      resolutions,
-      category_id: categoryId,
-    },
-  })
-  invalidateCache('/papers')
-  return result
+export async function resolveDuplicates(
+  _resolutions: DuplicateResolution[],
+  _categoryId: string | null = null,
+): Promise<ResolveDuplicatesResult> {
+  void _categoryId;
+  throw new Error('去重解决流程已由服务端合并替代，不再需要');
 }
 
 /**
  * 为元数据记录手动上传 PDF 文件
  *
- * 当论文记录是通过题录导入创建的（没有 PDF），用户可以后续上传 PDF 文件。
- * 上传成功后，后端会自动触发 PDF 解析和元数据获取的后台任务。
+ * ⚠️ 桩：autonomics 的 fulltext 上传端点属 Phase 3。
+ *
+ * stubbed: capability not present in autonomics backend (see plan Phase 3)
  *
  * @param {string} paperId - 论文 ID
  * @param {File} file - 用户上传的附件文件对象
  * @returns {Promise<AttachPdfResponse>} 操作结果
  */
-export async function attachPdf(paperId: string, file: File): Promise<AttachPdfResponse> {
-  const formData = new FormData()
-  formData.append('file', file)
-
-  const result = await request<AttachPdfResponse>(`/bibliography/${paperId}/attach-pdf`, {
-    method: 'POST',
-    body: formData,
-    headers: {},
-  })
-  invalidateCache('/papers')
-  return result
+export async function attachPdf(_paperId: string, _file: File): Promise<AttachPdfResponse> {
+  void _file;
+  throw new Error('上传 PDF 暂未开放（autonomics 导入管线尚未实现，见 plan Phase 3）');
 }
 
 /**
  * 通过 DOI 自动下载开放获取 PDF
  *
- * 使用 Unpaywall API 查询论文的开放获取 PDF 链接并自动下载。
- * 约覆盖 50% 的 DOI 文献（取决于论文是否开放获取）。
+ * ⚠️ 桩：autonomics 无 Unpaywall 下载管线。
+ *
+ * stubbed: capability not present in autonomics backend (see plan Phase 5)
  *
  * @param {string} paperId - 论文 ID（该论文必须有 DOI）
  * @returns {Promise<DownloadPdfResponse>} 下载结果
  */
-export async function downloadPdf(paperId: string): Promise<DownloadPdfResponse> {
-  const result = await request<DownloadPdfResponse>(`/bibliography/${paperId}/download-pdf`, {
-    method: 'POST',
-  })
-  invalidateCache('/papers')
-  return result
+export async function downloadPdf(_paperId: string): Promise<DownloadPdfResponse> {
+  throw new Error('自动下载 PDF 暂不可用（autonomics 无开放获取下载管线）');
 }

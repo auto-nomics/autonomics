@@ -1,17 +1,20 @@
 /**
- * CSL 引用 API 客户端
+ * CSL 引用 API 客户端（autonomics）
  *
- * 对接后端 endpoint（`/api/citation/styles`、`/api/items/:id/csl-json`）：
- *   - `getStyles()`        → GET /api/citation/styles
- *   - `getStyle(id)`       → GET /api/citation/styles/{id}
- *   - `getCslJson(itemId)` → GET /api/items/{id}/csl-json
+ * - `getStyles()`        → 本地 `@autonomics/citation-engine` 内置注册表（**无网络**）。
+ *   autonomics 后端不提供样式存储，5 个 bundled 样式随包发布，id/locale/cslXml
+ *   本地全有 —— `getStyle()` 在引用渲染路径上从来不需要被调用。
+ * - `getCslJson(itemId)` → GET /api/v1/bib/articles/{enc}/csl-json
  *
- * 类型对齐后端 serde `#[serde(rename_all="camelCase")]` 输出。
+ * 类型对齐 jayread 前端的既有消费方（useCopyCitation、CitationBatchExportModal），
+ * 它们读 `isDefault` / `id` / `title` / `item`。
  *
- * 注：默认样式偏好（`setDefaultStyle` / `getDefaultStyle`，`/api/settings/citation-style`）
- * 已随 CitationSettings 删除于 2026-09-02 移除——导出弹窗内自选样式，无全局默认偏好。
+ * 注：默认样式偏好（setDefaultStyle / getDefaultStyle）已随 CitationSettings
+ * 于 2026-09-02 移除——导出弹窗内自选样式，无全局默认偏好。
  */
 import request from './client';
+import { BUNDLED_STYLES, DEFAULT_STYLE_ID } from '@autonomics/citation-engine/styles';
+import { fromSafeId, encodeIdSegment } from './mapping';
 
 /** CSL 样式列表项（不含 cslXml 大字段） */
 export interface CslStyleSummary {
@@ -30,7 +33,7 @@ export interface CslStyleDetail extends CslStyleSummary {
     updatedAt: string;
 }
 
-/** `GET /api/items/:id/csl-json` 响应包裹层（后端 `CslJsonResponse`） */
+/** `GET /articles/{enc}/csl-json` 响应（jayread `CslJsonResponse` 形状） */
 export interface CslJsonResponse {
     /** CSL 1.0.2 schema item，直接喂给 citeproc-js */
     item: Record<string, unknown>;
@@ -39,45 +42,76 @@ export interface CslJsonResponse {
 /**
  * 列出所有 CSL 样式（不含 XML 正文）
  *
- * 列表场景：Copy Citation / 批量导出 / Settings 的样式选择器。
- * 单条 XML 走 `getStyle(id)` 按需拉取（避免一次 list 膨胀 ~400KB）。
+ * 数据源是本地 bundled 注册表，同步可得，这里包一层 async 保持签名不变。
+ * `isDefault` 由 `DEFAULT_STYLE_ID` 推导 —— 后端没有「默认样式」概念，
+ * 引用引擎的 `getEngineForStyle()` 兜底也用同一个常量。
  *
- * @param signal 可选 AbortSignal
+ * @param signal 可选 AbortSignal（兼容签名，本地数据不需要取消）
  */
-export async function getStyles(signal?: AbortSignal): Promise<CslStyleSummary[]> {
-    return request<CslStyleSummary[]>('/citation/styles', { signal });
+export async function getStyles(_signal?: AbortSignal): Promise<CslStyleSummary[]> {
+    void _signal;
+    return BUNDLED_STYLES.map((s) => ({
+        id: s.id,
+        title: s.title,
+        locale: s.locale,
+        categories: s.categories,
+        isDefault: s.id === DEFAULT_STYLE_ID,
+    }));
 }
 
 /**
  * 取单个样式完整内容（含 cslXml）
  *
- * 仅在用户切样式 / 服务端渲染（P5）时拉取。前端 `@autonomics/citation-engine`
- * 默认打包 5 个 bundled 样式，不需要走这个接口；P3+ 引入按需下载未 bundled
- * 样式时才用。
+ * 从本地注册表读取。仅 bundled 的 5 个样式可查，未知的 id 抛错
+ * （与 `getBundledStyle` 的行为一致）。
  */
-export async function getStyle(id: string, signal?: AbortSignal): Promise<CslStyleDetail> {
-    return request<CslStyleDetail>(`/citation/styles/${encodeURIComponent(id)}`, { signal });
+export async function getStyle(id: string, _signal?: AbortSignal): Promise<CslStyleDetail> {
+    void _signal;
+    const style = BUNDLED_STYLES.find((s) => s.id === id);
+    if (!style) {
+        throw new Error(`CSL 样式 "${id}" 不在内置注册表中（autonomics 无自定义样式存储）`);
+    }
+    return {
+        id: style.id,
+        title: style.title,
+        locale: style.locale,
+        categories: style.categories,
+        isDefault: style.id === DEFAULT_STYLE_ID,
+        cslXml: style.cslXml,
+        createdAt: '',
+        updatedAt: '',
+    };
 }
 
 /**
  * 取单条文献的 CSL JSON（核心 endpoint）
  *
  * 前端 `@autonomics/citation-engine` 用返回的 `item` 喂给 citeproc-js 渲染
- * 引用 cluster 和参考文献表。后端从 EAV 拼出 CSL 1.0.2 兼容结构。
+ * 引用 cluster 和参考文献表。
+ *
+ * 后端信封是 `{"csl_json": {...}}`，jayread 消费方期待 `{item: {...}}`，这里换名。
  */
 export async function getCslJson(itemId: string, signal?: AbortSignal): Promise<CslJsonResponse> {
-    return request<CslJsonResponse>(`/items/${encodeURIComponent(itemId)}/csl-json`, { signal });
+    const data = await request<{ csl_json?: Record<string, unknown> }>(
+        `/articles/${encodeIdSegment(fromSafeId(itemId))}/csl-json`,
+        { signal },
+    );
+    const item = data?.csl_json;
+    if (!item || typeof item !== 'object') {
+        throw new Error('该文献缺少可用的 CSL 元数据');
+    }
+    return { item };
 }
 
 /** 上传自定义 CSL 样式的请求体 */
 export interface CreateStylePayload {
     /** CSL XML 原文（必填） */
     cslXml: string;
-    /** 可选 id（不传后端从 `<info><id>` 提取） */
+    /** 可选 id */
     id?: string;
-    /** 可选展示标题（不传后端从 `<info><title>` 提取） */
+    /** 可选展示标题 */
     title?: string;
-    /** 可选 locale（不传后端从 `<style default-locale>` 提取，再缺省 en-US） */
+    /** 可选 locale */
     locale?: string;
     /** 可选分类标签 */
     categories?: string[];
@@ -86,28 +120,24 @@ export interface CreateStylePayload {
 /**
  * 上传自定义 CSL 样式
  *
- * 后端 `validate_csl_xml` 会做基本格式校验 + 元数据提取，挡掉非 CSL XML 和
- * 过大输入（500KB 上限）。冲突（id 已存在）返回 400。
+ * ⚠️ 桩：autonomics 后端无样式存储，样式集合固定为 bundled 的 5 个。
  *
- * @returns 创建的样式完整资源（含 cslXml）
+ * stubbed: capability not present in autonomics backend (see plan Phase 5)
  */
-export async function uploadStyle(
-    payload: CreateStylePayload,
-): Promise<CslStyleDetail> {
-    return request<CslStyleDetail>('/citation/styles', {
-        method: 'POST',
-        body: payload,
-    });
+export async function uploadStyle(_payload: CreateStylePayload): Promise<CslStyleDetail> {
+    void _payload;
+    throw new Error('自定义 CSL 样式暂未开放（autonomics 无样式存储）');
 }
 
 /**
  * 删除自定义 CSL 样式
  *
- * 内置种子样式（`isDefault: true` 的 5 个）后端拒绝删除，返回 400。
- * 用户上传的样式删除时，关联的 CitationRender 由外键 CASCADE 自动清理。
+ * ⚠️ 桩：bundled 样式不可删除（与 jayread 后端对 isDefault 样式返回 400 的
+ * 行为一致，只是这里没有可删除的对象）。
+ *
+ * stubbed: capability not present in autonomics backend (see plan Phase 5)
  */
-export async function deleteStyle(id: string): Promise<void> {
-    await request<void>(`/citation/styles/${encodeURIComponent(id)}`, {
-        method: 'DELETE',
-    });
+export async function deleteStyle(_id: string): Promise<void> {
+    void _id;
+    throw new Error('CSL 样式不可删除（autonomics 仅内置只读样式集）');
 }

@@ -1,18 +1,22 @@
 /**
- * JayRead 分类管理 API 客户端
+ * 分类管理 API 客户端（autonomics collections）
  *
- * 封装所有文献分类相关的后端接口调用，包括：
- * - 获取分类树（扁平列表，前端自行构建树形结构）
- * - 分类 CRUD：创建、重命名、删除分类
- * - 论文分配：将论文归入/移出分类（多对多关系）
- * - 查询论文所属分类
+ * 前端概念「分类 / category」对应 autonomics 的「集合 / collection」。
+ * 后端 `/collections` 永远返回**扁平**列表（含 parent_id + sort_order），树形
+ * 结构在本层构建 —— 与 jayread 的既有契约（getCategoryTree 返回扁平列表 +
+ * 前端自行建树）完全一致，组件零改动。
  *
- * 为什么需要独立的 API 模块？
- * - 职责分离：分类管理与论文管理是不同的业务领域
- * - 便于维护：分类相关的接口集中在一个文件中
- * - 复用性：多个组件（侧边栏、论文列表）都可以使用同一套 API
+ * autonomics 后端没有的、需要在前端推导的：
+ * - `paper_count`（每分类的文献数）
+ * - `total_count` / `uncategorized_count`（两个虚拟节点「全部 / 未分类」用）
+ *
+ * 好消息：`GET /collections` 返回的每个 Collection 都带注水好的 `article_ids`
+ * （后端一次性批量查询），所以这三个数字都能从**同一次** /collections 请求推出：
+ * paper_count = article_ids.length，uncategorized = total − 出现过的文章数。
+ * 不需要再拉全量文章。
  */
-import request, { invalidateCache } from './client'; // 导入通用 API 客户端封装函数，自动处理 JSON 序列化和错误和缓存失效函数
+import request, { invalidateCache } from './client';
+import { fromSafeId, encodeIdSegment, collectionMembershipOf } from './mapping';
 import type {
   GetCategoryTreeResponse,
   CreateCategoryResponse,
@@ -22,25 +26,110 @@ import type {
   UnassignPapersResponse,
   GetPaperCategoriesResponse,
   MoveCategoryResponse,
+  Category,
 } from '@/types';
 
+// ============================================================
+// 后端契约类型
+// ============================================================
+
+/**
+ * autonomics Collection（扁平，无 children）。
+ *
+ * `article_ids` 由后端批量注水（见 bib-base collections.rs 的 list_collections），
+ * 前端不写它 —— 成员关系的增删只走 POST/DELETE /collections/{id}/articles。
+ */
+export interface BibCollection {
+  id: string;
+  name: string;
+  description: string | null;
+  tags: string[];
+  parent_id: string | null;
+  sort_order: number;
+  status?: string;
+  article_ids?: string[];
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+// ============================================================
+// 后端读取 + 树构建
+// ============================================================
+
+/** 拉取扁平集合列表（按 sort_order 稳定排序） */
+async function fetchFlatCollections(): Promise<BibCollection[]> {
+  const data = await request<{ collections?: BibCollection[] }>('/collections');
+  const flat = Array.isArray(data?.collections) ? data.collections : [];
+  return [...flat].sort((a, b) => {
+    if (a.sort_order !== b.sort_order) return a.sort_order - b.sort_order;
+    return String(a.name).localeCompare(String(b.name));
+  });
+}
+
+/**
+ * 从一次 `/collections` 请求推导 paper_count / total / unfiled。
+ *
+ * `total` 是全库文章数，得单独问一次 /articles（limit=1 只为拿 total，
+ * offset=0 的那一页内容直接丢掉）。集合成员数直接用 article_ids.length。
+ */
+async function fetchCountSnapshot(): Promise<{ byCollection: Map<string, number>; total: number; unfiled: number }> {
+  const [flat, pageRes] = await Promise.all([
+    fetchFlatCollections(),
+    request<{ total?: number }>('/articles?limit=1&offset=0').catch(() => null),
+  ]);
+
+  const total = typeof pageRes?.total === 'number' ? pageRes.total : 0;
+  const byCollection = new Map<string, number>();
+  const filed = new Set<string>();
+  for (const col of flat) {
+    const ids = col.article_ids ?? [];
+    byCollection.set(col.id, ids.length);
+    for (const id of ids) filed.add(id);
+  }
+
+  return { byCollection, total, unfiled: Math.max(0, total - filed.size) };
+}
+
+/** BibCollection → jayread Category */
+function toCategory(col: BibCollection, paperCount: number): Category {
+  return {
+    id: col.id,
+    name: col.name,
+    parent_id: col.parent_id ?? null,
+    sort_order: col.sort_order,
+    paper_count: paperCount,
+    created_at: col.created_at ?? new Date().toISOString(),
+    updated_at: col.updated_at ?? new Date().toISOString(),
+  };
+}
+
+// ============================================================
+// 导出 API（签名与 jayread 版本一致）
+// ============================================================
 
 /**
  * 获取分类树（扁平列表）
  *
- * 返回所有分类及其直接归属的论文数量。
- * 前端根据 parent_id 字段自行构建树形结构。
+ * 返回所有分类及其直接归属的文献数量，外加 total_count / uncategorized_count
+ * 供侧边栏的「全部 / 未分类」两个虚拟节点使用。前端根据 parent_id 自行建树。
  *
  * 为什么返回扁平列表而不是嵌套树？
- * - 后端逻辑更简单，不需要递归构建
- * - 分类数量通常较少（< 100），前端构建树性能完全够用
+ * - 与 jayread 契约一致，CategorySidebar 的 buildTreeData 已经这么用了
  * - Ant Design Tree 组件可以直接使用扁平数据
  *
  * @returns {Promise<GetCategoryTreeResponse>} 分类扁平列表
  */
-export async function getCategoryTree(): Promise<GetCategoryTreeResponse> { // 导出获取分类树函数
-  // GET 请求获取所有分类数据
-  return request<GetCategoryTreeResponse>('/categories/tree'); // 返回分类扁平列表
+export async function getCategoryTree(): Promise<GetCategoryTreeResponse> {
+  // 集合列表和文章快照相互独立，并行拉取
+  const [flat, snapshot] = await Promise.all([fetchFlatCollections(), fetchCountSnapshot()]);
+
+  const categories = flat.map((col) => toCategory(col, snapshot.byCollection.get(col.id) ?? 0));
+
+  return {
+    categories,
+    total_count: snapshot.total,
+    uncategorized_count: snapshot.unfiled,
+  };
 }
 
 
@@ -48,23 +137,26 @@ export async function getCategoryTree(): Promise<GetCategoryTreeResponse> { // �
  * 创建新分类
  *
  * 支持在根级别或某个分类下创建子分类。
- * 通过 parentId 参数指定父分类。
  *
- * @param {string} name - 分类名称，长度 1-100 字符
+ * @param {string} name - 分类名称
  * @param {string|null} [parentId=null] - 父分类 ID，null 表示顶级分类
  * @returns {Promise<CreateCategoryResponse>} 新创建的分类信息
  */
-export async function createCategory(name: string, parentId: string | null = null): Promise<CreateCategoryResponse> { // 导出创建分类函数
-  // POST 请求创建新分类
-  const result = await request<CreateCategoryResponse>('/categories', { // 发送 POST 请求到分类端点
-    method: 'POST', // HTTP 方法为 POST（创建资源）
-    body: { // 请求体
-      name: name, // 分类名称
-      parentId, // 父分类 ID（null 时为顶级分类，camelCase 匹配后端 serde rename）
+export async function createCategory(name: string, parentId: string | null = null): Promise<CreateCategoryResponse> {
+  // 新节点排到兄弟末尾：先数一下现有兄弟数作为 sort_order
+  const flat = await fetchFlatCollections();
+  const siblingCount = flat.filter((c) => (c.parent_id ?? null) === (parentId ?? null)).length;
+
+  const created = await request<{ collection: BibCollection }>('/collections', {
+    method: 'POST',
+    body: {
+      name,
+      ...(parentId ? { parent_id: parentId } : {}),
+      sort_order: siblingCount,
     },
   });
-  invalidateCache('/categories');
-  return result;
+  invalidateCache('/collections');
+  return toCategory(created.collection, 0);
 }
 
 
@@ -77,102 +169,103 @@ export async function createCategory(name: string, parentId: string | null = nul
  * @param {string} name - 新的分类名称
  * @returns {Promise<RenameCategoryResponse>} 更新后的分类信息
  */
-export async function renameCategory(id: string, name: string): Promise<RenameCategoryResponse> { // 导出重命名分类函数
-  // PUT 请求更新分类名称
-  const result = await request<RenameCategoryResponse>(`/categories/${id}`, { // 发送 PUT 请求到指定分类端点
-    method: 'PUT', // HTTP 方法为 PUT（更新资源）
-    body: { name: name }, // 请求体：只包含新名称
+export async function renameCategory(id: string, name: string): Promise<RenameCategoryResponse> {
+  const result = await request<{ collection: BibCollection }>(`/collections/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    body: { name },
   });
-  invalidateCache('/categories');
-  return result;
+  invalidateCache('/collections');
+  return toCategory(result.collection, 0);
 }
 
 
 /**
  * 删除分类
  *
- * 级联删除策略：
- * - 删除该分类本身
- * - 自动删除所有子分类（数据库外键 CASCADE）
- * - 自动删除所有论文-分类关联（数据库外键 CASCADE）
- * - 不会删除论文本身，只移除关联关系
+ * autonomics 后端决定子分类与成员关系的级联策略（删除集合不删除文章本身）。
+ * 前端只需要发一个 DELETE。
  *
  * @param {string} id - 要删除的分类 ID
  * @returns {Promise<DeleteCategoryResponse>} 操作结果消息
  */
-export async function deleteCategory(id: string): Promise<DeleteCategoryResponse> { // 导出删除分类函数
-  // DELETE 请求删除指定分类
-  const result = await request<DeleteCategoryResponse>(`/categories/${id}`, { // 发送 DELETE 请求到指定分类端点
-    method: 'DELETE', // HTTP 方法为 DELETE（删除资源）
-  });
-  invalidateCache('/categories');
-  return result;
+export async function deleteCategory(id: string): Promise<DeleteCategoryResponse> {
+  // 后端返回 200 + {"deleted":true,"id"}，不是 204；成败只看状态码
+  await request<{ deleted?: boolean }>(`/collections/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  invalidateCache('/collections');
+  return { message: '已删除' };
 }
 
 
 /**
  * 将论文分配到分类（批量操作）
  *
- * 支持将多篇论文一次性归入多个分类。
- * 使用交叉插入：paperIds × categoryIds 的所有组合。
- * 后端使用 INSERT OR IGNORE 保证幂等性（重复归入不报错）。
+ * 支持「论文 × 分类」的所有组合。autonomics 只有单篇端点
+ * `POST /collections/{id}/articles`，这里按组合循环展开。
+ * 后端对重复归入幂等（响应里 `inserted:false` 表示本来就在），所以无需前端去重。
  *
- * @param {string[]} paperIds - 论文 ID 列表
+ * 注意 body 的 `article_id` 必须是**真实 ID**：后端先按它查文章，查不到直接 404。
+ *
+ * @param {string[]} paperIds - 论文 ID 列表（safeId）
  * @param {string[]} categoryIds - 分类 ID 列表
  * @returns {Promise<AssignPapersResponse>} 操作结果消息
  */
-export async function assignPapers(paperIds: string[], categoryIds: string[]): Promise<AssignPapersResponse> { // 导出分配论文到分类函数
-  // POST 请求批量分配论文到分类
-  const result = await request<AssignPapersResponse>('/categories/assign', { // 发送 POST 请求到分配端点
-    method: 'POST', // HTTP 方法为 POST
-    body: { // 请求体
-      itemIds: paperIds, // 论文 ID 数组（camelCase 匹配后端 AssignItemsRequest.itemIds）
-      categoryIds, // 分类 ID 数组
-    },
-  });
-  invalidateCache('/categories');
-  invalidateCache('/papers');
-  return result;
+export async function assignPapers(paperIds: string[], categoryIds: string[]): Promise<AssignPapersResponse> {
+  for (const categoryId of categoryIds) {
+    for (const paperId of paperIds) {
+      await request<{ inserted?: boolean }>(`/collections/${encodeURIComponent(categoryId)}/articles`, {
+        method: 'POST',
+        body: { article_id: fromSafeId(paperId) },
+      });
+    }
+  }
+  invalidateCache('/collections');
+  return { message: '已分配' };
 }
 
 
 /**
  * 将论文从分类中移除（批量操作）
  *
- * 支持将多篇论文从多个分类中一次性移除。
- * 如果关联不存在，后端 DELETE 语句静默忽略（不报错）。
+ * 路径段同样是**真实 ID**（后端不做 base64 解码，直接进 SQL），所以这里用
+ * 百分号编码而不是 safeId。关联不存在时后端也返回 200 + removed:true，与
+ * jayread 的「静默忽略」语义一致。
  *
- * @param {string[]} paperIds - 论文 ID 列表
+ * @param {string[]} paperIds - 论文 ID 列表（safeId）
  * @param {string[]} categoryIds - 分类 ID 列表
  * @returns {Promise<UnassignPapersResponse>} 操作结果消息
  */
-export async function unassignPapers(paperIds: string[], categoryIds: string[]): Promise<UnassignPapersResponse> { // 导出从分类移除论文函数
-  // POST 请求批量从分类移除论文
-  const result = await request<UnassignPapersResponse>('/categories/unassign', { // 发送 POST 请求到取消分配端点
-    method: 'POST', // HTTP 方法为 POST
-    body: { // 请求体
-      itemIds: paperIds, // 论文 ID 数组（camelCase 匹配后端 UnassignItemsRequest.itemIds）
-      categoryIds, // 分类 ID 数组
-    },
-  });
-  invalidateCache('/categories');
-  invalidateCache('/papers');
-  return result;
+export async function unassignPapers(paperIds: string[], categoryIds: string[]): Promise<UnassignPapersResponse> {
+  for (const categoryId of categoryIds) {
+    for (const paperId of paperIds) {
+      await request<{ removed?: boolean }>(`/collections/${encodeURIComponent(categoryId)}/articles/${encodeIdSegment(fromSafeId(paperId))}`, {
+        method: 'DELETE',
+      });
+    }
+  }
+  invalidateCache('/collections');
+  return { message: '已移除' };
 }
 
 
 /**
  * 获取某篇论文所属的所有分类
  *
- * 用于在论文列表项上显示分类标签，
- * 或在分类管理弹窗中显示论文当前所属的分类。
+ * 当前无线上调用方（仅遗留导入）。Article 不携带集合成员关系，这里从
+ * `/collections` 的 article_ids 倒排 —— 与 getPapers 的做法一致。
  *
- * @param {string} paperId - 论文 ID
+ * @param {string} paperId - 论文 ID（safeId）
  * @returns {Promise<GetPaperCategoriesResponse>} 论文的分类 ID 列表
  */
-export async function getPaperCategories(paperId: string): Promise<GetPaperCategoriesResponse> { // 导出获取论文分类函数
-  // GET 请求获取指定论文的分类列表
-  return request<GetPaperCategoriesResponse>(`/categories/paper/${paperId}`); // 返回论文的分类 ID 数组
+export async function getPaperCategories(paperId: string): Promise<GetPaperCategoriesResponse> {
+  const realId = fromSafeId(paperId);
+  const data = await request<{ collections?: BibCollection[] }>('/collections');
+  const membership = collectionMembershipOf(data?.collections);
+  // jayread 的类型把这两个字段标成 number，autonomics 全是 string id —— 类型定义
+  // 本身已过期（Phase 5 清扫），这里用 cast 保持导出签名不变
+  return {
+    paper_id: paperId as unknown as GetPaperCategoriesResponse['paper_id'],
+    category_ids: (membership.get(realId) ?? []) as unknown as GetPaperCategoriesResponse['category_ids'],
+  };
 }
 
 
@@ -180,27 +273,61 @@ export async function getPaperCategories(paperId: string): Promise<GetPaperCateg
  * 移动分类（拖拽排序）
  *
  * 通过拖拽操作改变分类的父级关系和排序位置。
- * 后端会自动校验循环引用，并调整同级节点的排序。
  *
- * 使用场景：
- * - 在分类树中拖拽分类节点到新位置
- * - 将分类从一个父节点移动到另一个父节点
- * - 调整分类在同级节点中的排列顺序
+ * sortOrder 是「目标位置在新兄弟列表中的下标（0 起）」—— CategorySidebar 计算
+ * dropPosition 时已扣除虚拟节点数。autonomics 的 PUT 只接受绝对 sort_order，
+ * 不做兄弟重排，所以这里由前端负责把新父下的所有兄弟重新编号为 0..n-1。
+ *
+ * 顺序：先 PUT 目标节点（换父 + 落位），再按最终顺序 PUT 其余兄弟。
+ * sort_order 只是普通整数列，中间态允许重复，无需事务。
  *
  * @param {string} id - 要移动的分类 ID
  * @param {string|null} parentId - 新的父分类 ID，null 表示移动到根级别
- * @param {number} sortOrder - 目标排序位置，值越小越靠前（0 为第一个位置）
+ * @param {number} sortOrder - 目标排序位置（0 为第一个位置）
  * @returns {Promise<MoveCategoryResponse>} 移动后的分类信息
  */
-export async function moveCategory(id: string, parentId: string | null, sortOrder: number): Promise<MoveCategoryResponse> { // 导出移动分类函数
-  // PUT 请求更新分类的父级和排序位置
-  const result = await request<MoveCategoryResponse>(`/categories/${id}/move`, { // 发送 PUT 请求到移动端点
-    method: 'PUT', // HTTP 方法为 PUT（更新资源）
-    body: { // 请求体
-      parentId, // 新的父分类 ID（null 表示根级别，camelCase 匹配后端 serde rename）
-      sortOrder, // 目标排序位置（camelCase 匹配后端 serde rename）
+export async function moveCategory(id: string, parentId: string | null, sortOrder: number): Promise<MoveCategoryResponse> {
+  const flat = await fetchFlatCollections();
+  const target = flat.find((c) => c.id === id);
+
+  // 目标新父下的现有兄弟（不含自己），按 sort_order 排好
+  const siblings = flat
+    .filter((c) => c.id !== id && (c.parent_id ?? null) === (parentId ?? null))
+    .sort((a, b) => a.sort_order - b.sort_order);
+
+  // 插入目标，得到最终顺序
+  const insertAt = Math.max(0, Math.min(sortOrder, siblings.length));
+  const finalOrder = [...siblings.slice(0, insertAt), { id, name: target?.name ?? '' }, ...siblings.slice(insertAt)];
+
+  // 1) 换父 + 落位
+  await request<BibCollection>(`/collections/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    body: {
+      ...(parentId ? { parent_id: parentId } : { parent_id: null }),
+      sort_order: insertAt,
     },
   });
-  invalidateCache('/categories');
-  return result;
+
+  // 2) 重排其余兄弟（跳过目标，它已落位）
+  for (let i = 0; i < finalOrder.length; i++) {
+    const node = finalOrder[i];
+    if (node.id === id) continue;
+    if (siblings.find((s) => s.id === node.id)?.sort_order === i) continue; // 未变，跳过
+    await request(`/collections/${encodeURIComponent(node.id)}`, {
+      method: 'PUT',
+      body: { sort_order: i },
+    });
+  }
+
+  invalidateCache('/collections');
+
+  return {
+    id,
+    name: target?.name ?? '',
+    parent_id: parentId,
+    sort_order: insertAt,
+    paper_count: 0,
+    created_at: target?.created_at ?? new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  } as MoveCategoryResponse;
 }

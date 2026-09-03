@@ -1,13 +1,21 @@
 /**
  * BrowserService 单例
  *
- * 监听来自 Rust 后端的浏览器任务，执行操作后回传结果。
- * 支持 Tauri 桌面模式（事件驱动）和 Web 模式（轮询）。
+ * stubbed: capability not present in autonomics backend (see plan Phase 5)
+ *
+ * jayread 用这个服务接 Rust 侧的浏览器任务队列（Tauri 事件驱动 / Web 轮询
+ * 浏览器待办队列）抓取需要 JS 渲染的学术页面。autonomics 是纯浏览器
+ * 部署，没有浏览器自动化后端。
+ *
+ * 这里保留类的公共形状（getInstance / initTauri / initWeb / stop），但
+ * `initTauri` / `initWeb` 都变成 no-op —— 不挂事件监听、不起轮询定时器，
+ * `handleTask` 因此永远不会被触发，网络提交与轮询代码一并移除。
+ *
+ * `initBrowserService()`（见 ./index.ts）是唯一入口，且 Phase 0 已从 main.tsx
+ * 移除调用，本文件当前无任何运行时消费方；保留导出以维持签名，Phase 5 清扫。
  */
 
-import type { BrowserTask, BrowserResult, BrowserOp } from './types'
-import { fetchPage, extractFromHtml, extractText } from './operations'
-import { routeToExtractor, needsBrowserRendering } from './academicExtractors'
+import type { BrowserTask, BrowserResult } from './types'
 
 type ListenFn = (event: string, handler: (event: { payload: string }) => void) => void
 type InvokeFn = (cmd: string, args: Record<string, unknown>) => Promise<unknown>
@@ -15,11 +23,6 @@ type InvokeFn = (cmd: string, args: Record<string, unknown>) => Promise<unknown>
 let service: BrowserService | null = null
 
 export class BrowserService {
-  private listen: ListenFn | null = null
-  private invoke: InvokeFn | null = null
-  private pollInterval: ReturnType<typeof setInterval> | null = null
-  private baseUrl = ''
-
   private constructor() {}
 
   static getInstance(): BrowserService {
@@ -31,155 +34,44 @@ export class BrowserService {
 
   /**
    * 初始化 Tauri 模式
+   *
+   * ⚠️ 桩：autonomics 无 Tauri 壳、无浏览器任务队列。不挂任何监听。
    */
-  initTauri(listen: ListenFn, invoke: InvokeFn): void {
-    this.listen = listen
-    this.invoke = invoke
-
-    listen('browser-task', (event) => {
-      const task: BrowserTask = JSON.parse(event.payload)
-      this.handleTask(task)
-    })
-
-    console.log('[BrowserService] Tauri 模式已初始化')
+  initTauri(_listen: ListenFn, _invoke: InvokeFn): void {
+    void _listen
+    void _invoke
+    console.log('[BrowserService] stubbed: autonomics 无浏览器任务后端，跳过初始化')
   }
 
   /**
-   * 初始化 Web 模式（轮询后端获取待处理任务）
+   * 初始化 Web 模式（jayread 会在此起 2s 轮询）
+   *
+   * ⚠️ 桩：不起轮询，浏览器自动化端点不存在。
    */
-  initWeb(baseUrl: string): void {
-    this.baseUrl = baseUrl
-
-    this.pollInterval = setInterval(() => {
-      this.pollPendingTasks()
-    }, 2000)
-
-    console.log('[BrowserService] Web 模式已初始化')
+  initWeb(_baseUrl: string): void {
+    void _baseUrl
+    console.log('[BrowserService] stubbed: autonomics 无浏览器任务后端，跳过初始化')
   }
 
   /**
    * 停止服务
    */
   stop(): void {
-    if (this.pollInterval) {
-      clearInterval(this.pollInterval)
-      this.pollInterval = null
-    }
     service = null
   }
 
-  private async handleTask(task: BrowserTask): Promise<void> {
-    const start = performance.now()
-    let result: BrowserResult
-
-    try {
-      const data = await this.executeOperation(task)
-      result = {
-        request_id: task.request_id,
-        success: true,
-        data: data as Record<string, unknown>,
-        execution_time_ms: Math.round(performance.now() - start),
-      }
-    } catch (err) {
-      result = {
-        request_id: task.request_id,
-        success: false,
-        data: {},
-        error: err instanceof Error ? err.message : String(err),
-        execution_time_ms: Math.round(performance.now() - start),
-      }
-    }
-
-    this.submitResult(result)
-  }
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private async executeOperation(task: BrowserTask): Promise<any> {
-    const op = task.operation as BrowserOp
-
-    switch (op) {
-      case 'fetch_page': {
-        const result = await fetchPage(task.url)
-        // 尝试学术站点提取
-        const extractor = routeToExtractor(task.url)
-        if (extractor) {
-          const paper = extractor(result.text, task.url)
-          return { ...result, academic: paper }
-        }
-        return result
-      }
-
-      case 'extract_text': {
-        const html = task.html || (await fetch(task.url).then((r) => r.text()))
-        return { text: extractText(html!) }
-      }
-
-      case 'extract_metadata': {
-        const html = task.html || (await fetch(task.url).then((r) => r.text()))
-        const result = extractFromHtml(html!, task.url)
-        return { metadata: result.metadata, title: result.title }
-      }
-
-      case 'extract_academic': {
-        const extractor = routeToExtractor(task.url)
-        if (!extractor) {
-          throw new Error(`No academic extractor for: ${task.url}`)
-        }
-        const html = task.html || (await fetch(task.url).then((r) => r.text()))
-        return extractor(html!, task.url)
-      }
-
-      case 'render_and_extract': {
-        // 对于需要 JS 渲染的页面，尝试 fetch + DOMParser
-        // 如果站点已知需要 JS，标记为需要 fallback
-        if (needsBrowserRendering(task.url)) {
-          throw new Error(
-            '此页面需要完整的浏览器渲染，请使用 CDP 方式（Layer 3）',
-          )
-        }
-        return fetchPage(task.url)
-      }
-
-      default:
-        throw new Error(`未知操作: ${op}`)
-    }
-  }
-
-  private async submitResult(result: BrowserResult): Promise<void> {
-    if (this.invoke) {
-      // Tauri 模式
-      try {
-        await this.invoke('submit_browser_result', { result })
-      } catch (err) {
-        console.error('[BrowserService] 提交结果失败:', err)
-      }
-    } else if (this.baseUrl) {
-      // Web 模式
-      try {
-        await fetch(`${this.baseUrl}/api/browser/submit`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(result),
-        })
-      } catch (err) {
-        console.error('[BrowserService] 提交结果失败:', err)
-      }
-    }
-  }
-
-  private async pollPendingTasks(): Promise<void> {
-    if (!this.baseUrl) return
-
-    try {
-      const resp = await fetch(`${this.baseUrl}/api/browser/pending`)
-      if (!resp.ok) return
-
-      const tasks: BrowserTask[] = await resp.json()
-      for (const task of tasks) {
-        this.handleTask(task)
-      }
-    } catch {
-      // 忽略轮询错误
+  /**
+   * 处理单个浏览器任务
+   *
+   * ⚠️ 桩：没有任务来源；即便被直接调用也返回失败结果而不是发起网络请求。
+   */
+  private async handleTask(task: BrowserTask): Promise<BrowserResult> {
+    return {
+      request_id: task.request_id,
+      success: false,
+      data: {},
+      error: '浏览器自动化暂不可用（autonomics 无浏览器任务后端）',
+      execution_time_ms: 0,
     }
   }
 }

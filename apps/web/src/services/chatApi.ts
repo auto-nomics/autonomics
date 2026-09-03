@@ -1,22 +1,30 @@
 /**
- * JayRead 聊天相关 API 客户端
+ * 聊天相关 API 客户端（autonomics chat blob）
  *
- * 封装与论文 AI 对话相关的数据持久化接口：
- * - 获取聊天记录：打开论文时加载历史对话
- * - 保存聊天记录：每次对话后保存完整消息列表
- * - 清空聊天记录：用户主动清空对话历史
+ * autonomics 的聊天持久化只有一个端点对：
+ *   GET  /chat?scope={token} → {"payload": <JSON|null>}
+ *   POST /chat {scope, payload}   （整体覆盖，POST 使 navigator.sendBeacon 可用）
  *
- * 为什么只负责存储而不处理 AI 对话？
- * - AI 对话需要流式响应（SSE），与普通 RESTful API 处理方式不同
- * - 将存储和流式对话分离，职责更清晰
- * - 聊天记录存储作为独立的持久化层，可被多种对话实现复用
+ * jayread 前端则有一整套「每篇论文多个会话」的模型（getMessages /
+ * getConversations / createConversation / activateConversation / deleteConversation）。
+ * 本模块在单个 JSON blob 之上**模拟**这套模型：
  *
- * 为什么采用全量覆盖而非增量保存？
- * - 简化后端逻辑，无需处理并发写入
- * - 聊天记录通常不大，全量传输开销可接受
- * - 便于实现"编辑历史消息"等高级功能
+ *   payload = {
+ *     conversations: [{ id, title, created_at, updated_at, messages: [...] }],
+ *     active_conversation_id: string | null
+ *   }
+ *
+ * 关键约束：`messages[]` 里的对象是**不透明的**，必须原样往返。jayread 的
+ * ChatMessage 带开放索引签名，运行时会塞进 `threads`（递归的追问线程）、
+ * `agentType`、`blocks`、`quotedMessage` 等任意键，读回路径直接依赖这些键。
+ * 后端对 payload 做 JSON 透传存储，所以这里绝不能对 message 做字段挑选或归一化。
+ *
+ * 为什么每次写都要先 GET 一次？blob 是整体覆盖，必须基于最新值做增量修改，
+ * 否则两个标签页会互相覆盖丢消息。GET 用 `_t` cache-bust 绕开 client 的
+ * 响应缓存（聊天状态绝不能读旧值）。
  */
-import request, { invalidateCache } from './client'; // 导入通用 API 客户端封装函数
+import request from './client';
+import { toSafeId, fromSafeId } from './mapping';
 import type {
   Message,
   GetMessagesResponse,
@@ -27,179 +35,337 @@ import type {
   ActivateConversationResponse,
   DeleteConversationResponse,
   ConversationSummary,
+  Conversation,
 } from '@/types';
 
+// ============================================================
+// blob 模型
+// ============================================================
+
+/** blob 内的单个会话。messages 项不透明，原样往返。 */
+interface BlobConversation {
+  id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  messages: unknown[];
+}
+
+/** autonomics `/chat` 端点里存的 payload 形状 */
+interface ChatBlob {
+  conversations: BlobConversation[];
+  active_conversation_id: string | null;
+}
+
+/** 空会话兜底标题 */
+function defaultConversationTitle(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `新对话 ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function newConversationId(): string {
+  return `conv-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+// ============================================================
+// scope
+// ============================================================
+
 /**
- * 获取指定论文的聊天历史记录
+ * 构造 autonomics 的 scope token。
  *
- * 使用场景：
- * - 用户打开论文阅读器时，自动加载历史对话
- * - 刷新页面后恢复之前的对话状态
+ * - `standalone`：首页（无论文）的全局对话
+ * - `article:{safeId}`：某篇论文的对话
  *
- * @param {string} paperId - 论文 ID，用于关联聊天记录与具体论文
- * @param {AbortSignal} [signal] - 可选的 AbortSignal，用于取消请求
+ * safeId 只含 [A-Za-z0-9_-]，不会与 scope 的 `article:` 前缀或分隔符冲突。
+ * jayread 的 useChatInit 会传 `String(paperId)`，paperId 缺省时得到字面量
+ * "undefined" —— 这里一并归到 standalone。
+ */
+function scopeFor(paperId: string | null | undefined): string {
+  const id = paperId === null || paperId === undefined ? '' : String(paperId).trim();
+  if (!id || id === 'undefined' || id === 'null') return 'standalone';
+  // toSafeId(fromSafeId(id)) 把「真实 ID」和「safeId」两种输入归一到同一个 scope ——
+  // getMessages 可能拿到 safeId（组件持有）而别处拿到真实 ID，两者必须命中同一条记录
+  return `article:${toSafeId(fromSafeId(id))}`;
+}
+
+// ============================================================
+// blob 读写
+// ============================================================
+
+/** 读取 scope 的 payload；无记录返回 null。`_t` 绕开 client 缓存。 */
+async function loadBlob(scope: string, signal?: AbortSignal): Promise<ChatBlob | null> {
+  const data = await request<{ payload: ChatBlob | null }>(
+    `/chat?scope=${encodeURIComponent(scope)}&_t=${Date.now()}`,
+    { signal },
+  );
+  const payload = data?.payload;
+  if (!payload || typeof payload !== 'object') return null;
+  // 结构兜底：后端只做 JSON 透传，畸形/空对象都归一成合法 blob
+  return {
+    conversations: Array.isArray(payload.conversations) ? payload.conversations : [],
+    active_conversation_id:
+      typeof payload.active_conversation_id === 'string' ? payload.active_conversation_id : null,
+  };
+}
+
+/** 整体覆盖写回 payload */
+async function saveBlob(scope: string, payload: ChatBlob, signal?: AbortSignal): Promise<void> {
+  await request('/chat', { method: 'POST', body: { scope, payload }, signal });
+}
+
+/** 取活跃会话；没有会话或 active 指向不存在的 id 时，落到最近更新的那个。 */
+function activeConversationOf(blob: ChatBlob): BlobConversation | null {
+  if (blob.conversations.length === 0) return null;
+  const byId = blob.conversations.find((c) => c.id === blob.active_conversation_id);
+  if (byId) return byId;
+  return [...blob.conversations].sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)))[0];
+}
+
+// ============================================================
+// 消息
+// ============================================================
+
+/**
+ * 获取指定论文的聊天历史记录（活跃会话的消息）
+ *
+ * @param {string} paperId - 论文 ID（safeId）；空/undefined 走 standalone scope
+ * @param {AbortSignal} [signal] - 可选的 AbortSignal
  * @returns {Promise<GetMessagesResponse>} 历史消息数组
  */
-export async function getMessages(paperId: string, signal?: AbortSignal): Promise<GetMessagesResponse> { // 导出获取聊天记录函数
-  return request<GetMessagesResponse>(`/papers/${paperId}/chat`, { signal }); // GET 请求获取指定论文的聊天记录
+export async function getMessages(paperId: string, signal?: AbortSignal): Promise<GetMessagesResponse> {
+  const blob = await loadBlob(scopeFor(paperId), signal);
+  const active = blob ? activeConversationOf(blob) : null;
+  // messages 项不做任何归一化 —— jayread 的 ensureThreadStructure 会在 UI 侧补
+  // threads 字段，这里补反而会丢掉运行时塞进来的其他键
+  return { messages: ((active?.messages ?? []) as unknown) as Message[] };
 }
 
 /**
- * 保存聊天记录（全量覆盖模式）
+ * 保存聊天记录（全量覆盖当前活跃会话的消息列表）
  *
- * 为什么是 POST 而不是 PUT？
- * - 从语义上讲，POST 用于"提交数据供服务器处理"
- * - 这里是"保存消息列表"这一动作，而非"替换资源"
- * - RESTful 规范中 POST 更适合这种"命令式"操作
+ * 为什么是「读-改-写」三步？后端是整体覆盖，没有按会话写消息的端点，
+ * 这里先读最新 blob、只改活跃会话的 messages、再整体写回。
  *
- * 为什么全量保存而不是只保存新消息？
- * - 支持用户编辑/删除历史消息的场景
- * - 避免增量同步带来的版本冲突问题
- * - 简化客户端逻辑，无需维护本地同步状态
- *
- * @param {string} paperId - 论文 ID
- * @param {Array<Message>} messages - 完整的消息数组
+ * @param {string} paperId - 论文 ID（safeId）
+ * @param {Array<Message>} messages - 完整的消息数组（含 threads 等运行时键，原样存储）
  * @returns {Promise<SaveMessagesResponse>} 保存确认消息
  */
-export async function saveMessages(paperId: string, messages: Message[], signal?: AbortSignal): Promise<SaveMessagesResponse> { // 导出保存聊天记录函数
-  return request<SaveMessagesResponse>(`/papers/${paperId}/chat`, { // POST 请求保存聊天记录
-    method: 'POST', // HTTP 方法为 POST
-    body: { messages },  // 将完整消息列表作为请求体发送
-    signal,
-  });
+export async function saveMessages(paperId: string, messages: Message[], signal?: AbortSignal): Promise<SaveMessagesResponse> {
+  const scope = scopeFor(paperId);
+  const blob = (await loadBlob(scope, signal)) ?? {
+    conversations: [],
+    active_conversation_id: null,
+  };
+
+  const now = new Date().toISOString();
+  let active = activeConversationOf(blob);
+
+  if (!active) {
+    // 首次保存：blob 为空或没有任何会话，建一个
+    active = {
+      id: newConversationId(),
+      title: defaultConversationTitle(),
+      created_at: now,
+      updated_at: now,
+      messages: messages as unknown as unknown[],
+    };
+    blob.conversations.push(active);
+    blob.active_conversation_id = active.id;
+  } else {
+    active.messages = messages as unknown as unknown[];
+    active.updated_at = now;
+    blob.active_conversation_id = active.id;
+  }
+
+  await saveBlob(scope, blob, signal);
+  return { message: '已保存' };
 }
 
 /**
- * 清空指定论文的聊天记录
+ * 清空指定论文当前会话的聊天记录
  *
- * 使用场景：
- * - 用户点击"清空对话"按钮
- * - 开始新的对话话题时清空历史
+ * 当前无线上调用方（保留以对齐签名）。后端没有「删除 scope」端点，
+ * 等价实现是写入空消息数组。
  *
- * 为什么使用 DELETE 而不是 POST + empty array？
- * - DELETE 语义更明确：删除资源
- * - 后端可以真正释放存储空间
- * - 符合 RESTful API 设计规范
- *
- * @param {string} paperId - 论文 ID
+ * @param {string} paperId - 论文 ID（safeId）
  * @returns {Promise<ClearMessagesResponse>} 清空确认消息
  */
-export async function clearMessages(paperId: string): Promise<ClearMessagesResponse> { // 导出清空聊天记录函数
-  return request<ClearMessagesResponse>(`/papers/${paperId}/chat`, { method: 'DELETE' }); // DELETE 请求清空指定论文的聊天记录
+export async function clearMessages(paperId: string): Promise<ClearMessagesResponse> {
+  await saveMessages(paperId, []);
+  return { message: '已清空' };
 }
 
-// ========== 对话会话管理 API ==========
-// 以下函数用于支持前端的 /new 和 /resume 斜杠命令
-// 每篇论文可以有多个独立的对话会话，用户可以创建新对话或恢复历史对话
+// ============================================================
+// 会话管理
+// ============================================================
 
 /**
  * 获取论文的所有对话会话列表
  *
- * 使用场景：
- * - /resume 命令：弹出对话历史列表，展示该论文的所有对话
- * - 每个对话包含标题、消息数量、创建时间等摘要信息
- * - 按更新时间倒序排列（最近活跃的对话排在最前面）
+ * 按更新时间倒序（最近活跃在前），`is_active` 标出当前活跃会话。
  *
- * @param {string} paperId - 论文 ID
- * @param {AbortSignal} [signal] - 可选的 AbortSignal，用于取消请求
+ * @param {string} paperId - 论文 ID（safeId）
+ * @param {AbortSignal} [signal] - 可选的 AbortSignal
  * @returns {Promise<GetConversationsResponse>} 对话列表
  */
-export async function getConversations(paperId: string, signal?: AbortSignal): Promise<GetConversationsResponse> { // 导出获取对话列表函数
-  return request<GetConversationsResponse>(`/papers/${paperId}/conversations`, { signal }); // GET 请求获取论文的所有对话会话列表
+export async function getConversations(paperId: string, signal?: AbortSignal): Promise<GetConversationsResponse> {
+  const blob = await loadBlob(scopeFor(paperId), signal);
+  const conversations = blob?.conversations ?? [];
+  const active = blob ? activeConversationOf(blob) : null;
+
+  const mapped: Conversation[] = conversations
+    .map((c) => ({
+      id: c.id,
+      title: c.title || defaultConversationTitle(),
+      // jayread 的 Conversation.paper_id 在弹窗里没人读，填 safeId 便于调试
+      paper_id: paperId,
+      is_active: !!active && c.id === active.id,
+      message_count: Array.isArray(c.messages) ? c.messages.length : 0,
+      created_at: c.created_at,
+      updated_at: c.updated_at,
+    }))
+    // 最近活跃在前，与 jayread 后端的排序一致。
+    // 活跃会话强制排最前：同一毫秒内建的两个会话 updated_at 相同，纯按时间排
+    // 会不稳定，弹窗里「当前会话」可能跑到第二行。
+    .sort((a, b) => {
+      if (a.is_active !== b.is_active) return a.is_active ? -1 : 1;
+      return String(b.updated_at).localeCompare(String(a.updated_at));
+    });
+
+  return { conversations: mapped };
 }
 
 /**
  * 创建新的对话会话
  *
- * 使用场景：
- * - /new 命令：将当前活跃对话归档，创建一个全新的空对话
- * - 用户可以在新对话中开始全新的讨论，旧对话通过 /resume 随时可恢复
+ * 旧会话保留（可通过 /resume 恢复），新会话置为活跃并设为空消息。
  *
- * 后端行为：
- * - 将当前活跃对话设为非活跃（归档）
- * - 创建新的空对话并设为活跃状态
- * - 返回新对话的 ID
- *
- * @param {string} paperId - 论文 ID
+ * @param {string} paperId - 论文 ID（safeId）
  * @returns {Promise<CreateConversationResponse>} 新对话 ID
  */
-export async function createConversation(paperId: string): Promise<CreateConversationResponse> { // 导出创建新对话函数
-  const result = await request<CreateConversationResponse>(`/papers/${paperId}/conversations/new`, { method: 'POST' }); // POST 请求创建新对话
-  invalidateCache(`/papers/${paperId}/chat`);
-  invalidateCache(`/papers/${paperId}/conversations`);
-  return result;
+export async function createConversation(paperId: string): Promise<CreateConversationResponse> {
+  const scope = scopeFor(paperId);
+  const blob = (await loadBlob(scope)) ?? { conversations: [], active_conversation_id: null };
+
+  const now = new Date().toISOString();
+  const created: BlobConversation = {
+    id: newConversationId(),
+    title: defaultConversationTitle(),
+    created_at: now,
+    updated_at: now,
+    messages: [],
+  };
+
+  blob.conversations.push(created);
+  blob.active_conversation_id = created.id;
+  await saveBlob(scope, blob);
+
+  // jayread 类型把 conversation_id 标成 number（自增主键时代），autonomics 是字符串 id。
+  // 类型定义待 Phase 5 清扫，这里 cast 保持导出签名不变。
+  return { conversation_id: created.id as unknown as number, message: '已创建' };
 }
 
 /**
  * 切换到指定的历史对话
  *
- * 使用场景：
- * - /resume 弹窗中点击某个历史对话时，切换到该对话
- * - 前端收到响应后需要重新调用 getMessages 加载新对话的消息内容
+ * 只改 active_conversation_id 指针，消息内容不动。
  *
- * 后端行为：
- * - 将当前活跃对话设为非活跃
- * - 将目标对话设为活跃
- *
- * @param {string} paperId - 论文 ID
+ * @param {string} paperId - 论文 ID（safeId）
  * @param {string} conversationId - 要切换到的对话会话 ID
  * @returns {Promise<ActivateConversationResponse>} 切换结果
  */
-export async function activateConversation(paperId: string, conversationId: string): Promise<ActivateConversationResponse> { // 导出切换对话函数
-  const result = await request<ActivateConversationResponse>(`/papers/${paperId}/conversations/${conversationId}/activate`, { method: 'POST' }); // POST 请求切换到指定对话
-  invalidateCache(`/papers/${paperId}/chat`);
-  return result;
+export async function activateConversation(paperId: string, conversationId: string): Promise<ActivateConversationResponse> {
+  const scope = scopeFor(paperId);
+  const blob = await loadBlob(scope);
+
+  if (!blob || !blob.conversations.some((c) => c.id === conversationId)) {
+    // 目标不存在：静默当作无操作，调用方随后 getMessages 会得到空列表
+    return { conversation_id: conversationId as unknown as number, message: '会话不存在' };
+  }
+
+  blob.active_conversation_id = conversationId;
+  await saveBlob(scope, blob);
+  return { conversation_id: conversationId as unknown as number, message: '已切换' };
 }
 
 /**
  * 删除指定的对话会话
  *
- * 使用场景：
- * - /resume 弹窗中点击删除按钮，删除不再需要的历史对话
- * - 删除后对话及其所有消息将永久丢失（物理删除）
+ * jayread 后端保证「删完至少剩一个活跃会话」，这里复刻该不变式：
+ * 删掉的是活跃会话时切到最近更新的剩余会话，一个不剩时新建空会话。
  *
- * 后端行为：
- * - 删除对话记录及其所有消息（外键级联删除）
- * - 如果删除的是活跃对话，自动激活最近的历史对话
- * - 如果没有任何剩余对话，创建一个新的空对话
- *
- * @param {string} paperId - 论文 ID
+ * @param {string} paperId - 论文 ID（safeId）
  * @param {string} conversationId - 要删除的对话会话 ID
  * @returns {Promise<DeleteConversationResponse>} 删除结果
  */
-export async function deleteConversation(paperId: string, conversationId: string): Promise<DeleteConversationResponse> { // 导出删除对话函数
-  const result = await request<DeleteConversationResponse>(`/papers/${paperId}/conversations/${conversationId}`, { method: 'DELETE' }); // DELETE 请求删除指定对话
-  invalidateCache(`/papers/${paperId}/chat`);
-  invalidateCache(`/papers/${paperId}/conversations`);
-  return result;
+export async function deleteConversation(paperId: string, conversationId: string): Promise<DeleteConversationResponse> {
+  const scope = scopeFor(paperId);
+  const blob = await loadBlob(scope);
+  if (!blob) return { message: '已删除' };
+
+  blob.conversations = blob.conversations.filter((c) => c.id !== conversationId);
+
+  if (blob.conversations.length === 0) {
+    const now = new Date().toISOString();
+    const fresh: BlobConversation = {
+      id: newConversationId(),
+      title: defaultConversationTitle(),
+      created_at: now,
+      updated_at: now,
+      messages: [],
+    };
+    blob.conversations.push(fresh);
+    blob.active_conversation_id = fresh.id;
+  } else if (blob.active_conversation_id === conversationId) {
+    const next = [...blob.conversations].sort((a, b) =>
+      String(b.updated_at).localeCompare(String(a.updated_at)))[0];
+    blob.active_conversation_id = next.id;
+  }
+
+  await saveBlob(scope, blob);
+  return { message: '已删除' };
 }
+
+// ============================================================
+// 摘要（桩）
+// ============================================================
 
 /**
  * 生成对话历史的渐进式摘要
  *
- * 使用场景：
- * - 对话历史过长时，自动压缩为结构化摘要
- * - 保留最近消息，将旧消息压缩为摘要
- * - 降低 token 消耗，提升对话响应速度
+ * ⚠️ 桩：autonomics 无独立的摘要端点。这里退化为**本地摘要**——把被压缩的
+ * 旧消息截取成一段纯文本，塞回 `[上下文摘要]` 消息里。
  *
- * 请求体格式：
- * - messages: 完整的消息列表（需摘要的对话历史）
- * - paper_title: 论文标题（用于摘要上下文）
+ * 为什么不做纯 reject？唯一调用方 messageCompaction 对失败直接 throw
+ *（`对话压缩失败`），会把整条消息发送打断。本地摘要在功能上是降级
+ *（不是 AI 语义摘要）但链路不断：旧上下文仍以前缀形式保留，只是更粗糙。
  *
- * 响应格式：
- * - summary: AI 生成的结构化摘要文本
- * - summarized_count: 被摘要的消消息数量
+ * 当前主对话链路 `compactHistory(..., isAgentMode=true)` 会整体跳过压缩，
+ * 此函数实际不会被调用，是给未来切换留的兜底。
  *
- * @param {string} paperId - 论文 ID
- * @param {Array<Message>} messages - 需要摘要的消息列表
- * @param {string} paperTitle - 论文标题（用于摘要上下文）
- * @returns {Promise<ConversationSummary>} 摘要结果
+ * stubbed: capability not present in autonomics backend (see plan Phase 4/5)
  */
-export async function summarizeConversation(paperId: string, messages: Message[], paperTitle: string, signal?: AbortSignal): Promise<ConversationSummary> { // 导出生成对话摘要函数
-  return request<ConversationSummary>(`/papers/${paperId}/chat/summarize`, { // POST 请求生成对话摘要
-    method: 'POST', // HTTP 方法为 POST
-    body: { messages, paper_title: paperTitle },  // 请求体：消息列表和论文标题
-    signal,
-    timeout: 60000, // Summarization may take longer
-  });
+export async function summarizeConversation(
+  paperId: string,
+  messages: Message[],
+  _paperTitle: string,
+  _signal?: AbortSignal,
+): Promise<ConversationSummary> {
+  void paperId; void _paperTitle; void _signal;
+
+  const lines: string[] = [];
+  for (const m of messages) {
+    const text = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
+    if (!text) continue;
+    // 每条截 200 字符，整段封顶 4000 字符，避免摘要本身膨胀到需要再次压缩
+    lines.push(`${m.role}: ${text.length > 200 ? `${text.slice(0, 200)}…` : text}`);
+    if (lines.join('\n').length > 4000) break;
+  }
+
+  return {
+    summary: `（本地截断摘要，autonomics 暂无 AI 摘要能力）\n\n${lines.join('\n')}`,
+    summarized_count: messages.length,
+  };
 }

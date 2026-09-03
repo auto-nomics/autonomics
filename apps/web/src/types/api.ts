@@ -43,7 +43,9 @@ export interface GetMarkdownResponse {
 }
 
 export interface UploadPaperResponse {
-  id: number;
+  // autonomics 文章 ID 是 `doi:10.1000/x` 形态的字符串，service 出口转成 base64url
+  // safeId（见 services/mapping.ts）。jayread 时代的自增数字主键已不存在。
+  id: string;
   parse_status: string;
   title: string;
 }

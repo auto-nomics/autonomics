@@ -1,7 +1,13 @@
 /**
  * 浏览器基础操作
  *
- * 利用 WebView 内置的 fetch + DOMParser 执行网页抓取和内容提取
+ * stubbed: capability not present in autonomics backend (see plan Phase 5)
+ *
+ * 利用 WebView 内置的 fetch + DOMParser 执行网页抓取和内容提取。
+ *
+ * `fetchPage` 是唯一发起网络请求的导出（autonomics 无浏览器抓取后端，桩化）；
+ * `extractFromHtml` / `extractText` 是纯本地 DOM 解析，保留原样 —— 不依赖任何
+ * 后端能力，若 Phase 4 的 agentik 聊天工具需要解析 HTML 仍可复用。
  */
 
 import type { FetchPageResult } from './types'
@@ -10,21 +16,13 @@ const NOISE_TAGS = ['SCRIPT', 'STYLE', 'NAV', 'FOOTER', 'HEADER', 'NOSCRIPT', 'S
 
 /**
  * 抓取页面并提取结构化内容
+ *
+ * ⚠️ 桩：autonomics 无浏览器抓取后端，不允许从前端任意抓取第三方页面。
+ *
+ * stubbed: capability not present in autonomics backend (see plan Phase 5)
  */
 export async function fetchPage(url: string): Promise<FetchPageResult> {
-  const resp = await fetch(url, {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (compatible; JayRead/1.0)',
-      Accept: 'text/html,application/xhtml+xml',
-    },
-    redirect: 'follow',
-  })
-
-  const finalUrl = resp.url
-  const status = resp.status
-  const html = await resp.text()
-
-  return extractFromHtml(html, finalUrl, status)
+  throw new Error(`网页抓取暂不可用（autonomics 无浏览器抓取后端）：${url}`)
 }
 
 /**

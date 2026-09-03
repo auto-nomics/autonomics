@@ -1,190 +1,131 @@
 /**
- * Settings API 测试
+ * Settings API 测试（autonomics /settings 契约）
  *
- * 测试设置相关的后端接口调用，包括：
- * - 获取所有用户设置
- * - 更新用户设置（支持部分更新）
- * - 获取 Token 预算配置
+ * - GET  /settings → {"settings": {...}}
+ * - PUT  /settings body {"settings": {...}}（后端逐键 upsert）
+ * - getTokenBudgets 桩化（autonomics 模型归服务端所有）
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import type { Settings, TokenBudgets } from '@/types';
-import {
-  getSettings,
-  updateSettings,
-  getTokenBudgets,
-} from '../settingsApi';
+import type { Settings } from '@/types';
+import { getSettings, updateSettings, getTokenBudgets } from '../settingsApi';
+import { invalidateCache } from '../client';
 
-// 使用工厂函数创建 mock，避免变量提升问题
-const requestMocks = vi.hoisted(() => ({
-  mockRequest: vi.fn(),
-}));
+function jsonResponse(body: unknown, ok = true, status = 200) {
+  return {
+    ok,
+    status,
+    statusText: ok ? 'OK' : 'Error',
+    headers: { get: () => 'application/json' },
+    json: () => Promise.resolve(body),
+  };
+}
 
-vi.mock('../client', () => ({
-  default: requestMocks.mockRequest,
-}));
+/** 带参数签名的 fetch mock，让 f.mock.calls 的解构有正确的元组类型 */
+function makeFetch(impl?: (url: string, init?: RequestInit) => unknown) {
+  const f = vi.fn(impl ?? ((url: string, init?: RequestInit) => jsonResponse({})));
+  global.fetch = f as unknown as typeof fetch;
+  return f;
+}
 
-// ============================================================================
-// 测试环境设置
-// ============================================================================
-
-// beforeEach 钩子：每个测试前重置 mock
 beforeEach(() => {
-  requestMocks.mockRequest.mockClear();
-  requestMocks.mockRequest.mockResolvedValue({});
+  vi.clearAllMocks();
+  invalidateCache();
 });
 
-// 重置全局 mock
 afterEach(() => {
   vi.restoreAllMocks();
+  invalidateCache();
 });
 
 // ============================================================================
-// getSettings 测试
+// getSettings
 // ============================================================================
 
 describe('getSettings — 获取所有用户设置', () => {
-  it('发送 GET 请求获取所有用户设置', async () => {
-    const expectedSettings = {
+  it('GET /settings，并解出 {settings} 信封', async () => {
+    const settings = {
       model_provider: 'openai',
-      api_key: 'sk-test123',
-      temperature: 0.7,
-      parse_engine: 'mineru',
+      custom_model_configs: '[]',
+      web_search_enabled: 'false',
     };
-    requestMocks.mockRequest.mockResolvedValueOnce(expectedSettings);
+    const f = makeFetch(() => Promise.resolve(jsonResponse({ settings })));
 
     const result = await getSettings();
 
-    expect(requestMocks.mockRequest).toHaveBeenCalledTimes(1);
-    // GET 带 ?_t= 时间戳防 Tauri WebView 缓存（d2a360f1），只断言路径主体
-    expect(requestMocks.mockRequest.mock.calls[0][0]).toMatch(/^\/settings\?_t=\d+$/);
-    expect(result).toEqual(expectedSettings);
+    // GET 带 ?_t= 时间戳：绕开 WebView 磁盘缓存与 client 响应缓存
+    const url = f.mock.calls[0][0] as string;
+    expect(url).toMatch(/^\/api\/v1\/bib\/settings\?_t=\d+$/);
+    expect(result).toEqual({ settings });
   });
 
-  it('返回键值对格式的设置数据', async () => {
-    requestMocks.mockRequest.mockResolvedValueOnce({
-      model_provider: 'anthropic',
-      max_tokens: 4000,
-      theme: 'dark',
-    });
+  it('返回值直接可用作 settingsData.settings（useChatInit 的消费形状）', async () => {
+    const settings = {
+      selected_custom_model_config_id: 'cfg-1',
+      custom_prompt_templates: '{"a":1}',
+      model_config: '{"provider":"anthropic"}',
+    } as unknown as Settings;
+    makeFetch(() => Promise.resolve(jsonResponse({ settings })));
 
-    const result = await getSettings() as unknown as Settings;
-
-    expect(typeof result).toBe('object');
-    expect(result.model_provider).toBe('anthropic');
+    const { settings: out } = (await getSettings()) as unknown as { settings: Record<string, unknown> };
+    expect(out.selected_custom_model_config_id).toBe('cfg-1');
+    expect(out.custom_prompt_templates).toBe('{"a":1}');
   });
 
-  it('返回空对象当用户没有设置时', async () => {
-    requestMocks.mockRequest.mockResolvedValueOnce({});
+  it('autonomics 键集合是开放的（未知键照常往返）', async () => {
+    const settings = { some_future_key: 'value' } as unknown as Settings;
+    global.fetch = vi.fn(() => Promise.resolve(jsonResponse({ settings }))) as unknown as typeof fetch;
 
-    const result = await getSettings();
-
-    expect(result).toEqual({});
+    const { settings: out } = await getSettings();
+    expect(out).toEqual({ some_future_key: 'value' });
   });
 });
 
 // ============================================================================
-// updateSettings 测试
+// updateSettings
 // ============================================================================
 
 describe('updateSettings — 更新用户设置', () => {
-  it('发送 PUT 请求更新用户设置', async () => {
-    const newSettings = { model_provider: 'claude' } as any;
-    requestMocks.mockRequest.mockResolvedValueOnce({ message: 'Settings updated' });
+  it('PUT /settings，body 包裹在 settings 字段中', async () => {
+    const f = makeFetch(() => Promise.resolve(jsonResponse({ settings: {} })));
 
-    await updateSettings(newSettings);
+    await updateSettings({ model_provider: 'claude' } as never);
 
-    expect(requestMocks.mockRequest).toHaveBeenCalledTimes(1);
-    expect(requestMocks.mockRequest.mock.calls[0][0]).toBe('/settings');
-    expect(requestMocks.mockRequest.mock.calls[0][1].method).toBe('PUT');
+    const [url, init] = f.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/v1/bib/settings');
+    expect(init.method).toBe('PUT');
+    expect(JSON.parse(init.body as string)).toEqual({ settings: { model_provider: 'claude' } });
   });
 
-  it('请求体包含在 settings 字段中', async () => {
-    const newSettings = { temperature: 0.5, max_tokens: 2000 } as any;
-    requestMocks.mockRequest.mockResolvedValueOnce({ message: 'Settings updated' });
+  it('支持部分更新（只传需要修改的键，后端逐键 upsert）', async () => {
+    const f = makeFetch(() => Promise.resolve(jsonResponse({ settings: {} })));
 
-    await updateSettings(newSettings);
+    await updateSettings({ web_search_enabled: 'true' } as never);
 
-    expect(requestMocks.mockRequest.mock.calls[0][1].body).toEqual({ settings: newSettings });
+    const [, init] = f.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({ settings: { web_search_enabled: 'true' } });
   });
 
-  it('支持部分更新（只传需要修改的字段）', async () => {
-    const partialUpdate = { model_provider: 'openai' } as any;
-    requestMocks.mockRequest.mockResolvedValueOnce({ message: 'Settings updated' });
+  it('返回 {message} 确认形状（调用方只关心成功与否）', async () => {
+    makeFetch(() => Promise.resolve(jsonResponse({ settings: {} })));
 
-    await updateSettings(partialUpdate);
-
-    expect(requestMocks.mockRequest.mock.calls[0][1].body).toEqual({ settings: partialUpdate });
-  });
-
-  it('支持批量更新多个设置项', async () => {
-    const batchUpdate = {
-      model_provider: 'anthropic',
-      temperature: 0.8,
-      max_tokens: 8000,
-      parse_engine: 'mineru',
-    } as any;
-    requestMocks.mockRequest.mockResolvedValueOnce({ message: 'Settings updated' });
-
-    await updateSettings(batchUpdate);
-
-    expect(requestMocks.mockRequest.mock.calls[0][1].body).toEqual({ settings: batchUpdate });
-  });
-
-  it('返回更新确认消息', async () => {
-    const expectedMessage = '设置已更新';
-    requestMocks.mockRequest.mockResolvedValueOnce({ message: expectedMessage });
-
-    const result = await updateSettings({ theme: 'light' } as any) as unknown as { message: string };
-
-    expect(result.message).toBeTruthy();
+    const res = await updateSettings({} as never);
+    expect(res.message).toBeTruthy();
   });
 });
 
 // ============================================================================
-// getTokenBudgets 测试
+// getTokenBudgets（桩）
 // ============================================================================
 
-describe('getTokenBudgets — 获取 Token 预算配置', () => {
-  it('发送 GET 请求获取各模型的 Token 预算', async () => {
-    const expectedBudgets = {
-      'gpt-4o': 100000,
-      'claude-3.5-sonnet': 180000,
-      'claude-3.5-haiku': 200000,
-    };
-    requestMocks.mockRequest.mockResolvedValueOnce(expectedBudgets);
+describe('getTokenBudgets — 桩', () => {
+  it('返回空对象且不发网络请求（消费方有 || 150000 兜底）', async () => {
+    const f = vi.fn(() => Promise.resolve(jsonResponse({})));
+    global.fetch = f as unknown as typeof fetch;
 
-    const result = await getTokenBudgets();
+    const res = await getTokenBudgets();
 
-    expect(requestMocks.mockRequest).toHaveBeenCalledTimes(1);
-    expect(requestMocks.mockRequest.mock.calls[0][0]).toBe('/settings/token-budgets');
-    expect(result).toEqual(expectedBudgets);
-  });
-
-  it('返回的预算值是数字类型', async () => {
-    requestMocks.mockRequest.mockResolvedValueOnce({
-      'gpt-4o': 100000,
-      'claude-3.5-sonnet': 180000,
-    });
-
-    const result = await getTokenBudgets() as unknown as Record<string, number>;
-
-    for (const model in result) {
-      expect(typeof result[model]).toBe('number');
-    }
-  });
-
-  it('返回包含多个模型配置的对象', async () => {
-    requestMocks.mockRequest.mockResolvedValueOnce({
-      'gpt-4o': 100000,
-      'gpt-4o-mini': 50000,
-      'claude-3.5-sonnet': 180000,
-      'claude-3.5-haiku': 200000,
-      'claude-3-opus': 150000,
-    });
-
-    const result = await getTokenBudgets() as unknown as Record<string, number>;
-
-    expect(Object.keys(result).length).toBeGreaterThan(1);
+    expect(res).toEqual({});
+    expect(f).not.toHaveBeenCalled();
   });
 });

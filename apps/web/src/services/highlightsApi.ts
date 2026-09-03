@@ -1,115 +1,179 @@
 /**
- * JayRead 高亮标注 API 客户端
+ * 高亮标注 API 客户端（autonomics annotations）
  *
- * 封装所有 PDF 高亮标注相关的后端接口调用，包括：
- * - 获取论文的高亮列表（支持按页码过滤）
- * - 创建新的高亮标注
- * - 更新高亮的颜色和备注
- * - 删除指定的高亮标注
+ * jayread 的高亮（Highlight）映射到 autonomics 的 annotation：
+ *   kind = 'highlight'
+ *   content = 选中的文字
+ *   page = 1 起页码
+ *   data = { rects: [{x,y,w,h}...], color: '#...', note?: '...' }
  *
- * 为什么需要这个封装层？
- * 1. 统一管理所有高亮相关的 API 端点，便于后续维护
- * 2. 隐藏具体的请求格式细节，调用方只需关注业务逻辑
- * 3. 便于添加统一的错误处理和日志记录
- * 4. 与其他 API 模块保持一致的代码风格
+ * 反向（annotation → Highlight）时 `note` 不落回 Highlight —— jayread 的
+ * Highlight 模型没有 note 字段，颜色和矩形才是阅读器渲染所需。
  */
-import request from './client'; // 导入通用 API 客户端封装函数
+import request from './client';
+import { fromSafeId, encodeIdSegment } from './mapping';
 import type {
   Highlight,
   FetchHighlightsResponse,
   CreateHighlightRequest,
   UpdateHighlightRequest,
+  HighlightRect,
 } from '@/types';
+
+// ============================================================
+// 后端契约类型
+// ============================================================
+
+export interface BibAnnotation {
+  id: string;
+  kind: 'note' | 'highlight' | 'comment';
+  content: string;
+  /** 1 起页码；null = 未锚定到页 */
+  page: number | null;
+  /** 自由 JSON；高亮存 {rects, color, note} */
+  data: Record<string, unknown> | null;
+  created_at: string | null;
+}
+
+// ============================================================
+// 映射
+// ============================================================
+
+/** annotation → Highlight。`paperSafeId` 是调用方持有的论文 safeId。 */
+function annotationToHighlight(a: BibAnnotation, paperSafeId: string): Highlight {
+  const data = (a.data ?? {}) as { rects?: HighlightRect[]; color?: string };
+  return {
+    id: a.id,
+    // jayread 的 Highlight.paper_id 是组件持有的论文 id（safeId）。后端的
+    // Annotation 没有 article_id 字段（标注靠挂载路径 /articles/{enc}/annotations
+    // 关联到文章），所以论文归属只能由调用方带进来。
+    paper_id: paperSafeId,
+    page: typeof a.page === 'number' ? a.page : 1,
+    text: a.content ?? '',
+    color: data.color || '#ffeb3b',
+    rects: Array.isArray(data.rects) ? data.rects : [],
+    created_at: a.created_at ?? new Date().toISOString(),
+  };
+}
+
+// ============================================================
+// 导出 API（签名与 jayread 版本一致）
+// ============================================================
 
 /**
  * 获取指定论文的高亮标注列表
  *
- * 支持按页码过滤，只获取特定页面的高亮，减少数据传输量。
+ * 支持按页码过滤（只取该页），减少数据传输量。
  *
  * 为什么 page 参数是可选的？
  * - 有些场景需要获取全部高亮（如高亮管理面板）
  * - 有些场景只需要当前页的高亮（如 PDF 阅读器渲染）
- * - 通过可选参数支持两种使用模式，避免创建两个接口
  *
- * @param {string} paperId - 论文 ID
- * @param {number|null} [page=null] - 可选的页码过滤，只返回该页的高亮
+ * @param {string} paperId - 论文 ID（safeId）
+ * @param {number|null} [page=null] - 可选的页码过滤
  * @returns {Promise<FetchHighlightsResponse>} 高亮列表数据
  */
-export async function fetchHighlights(paperId: string, page: number | null = null): Promise<FetchHighlightsResponse> { // 导出获取高亮列表函数，page 默认为 null（获取全部）
-  // 构建请求路径，如果指定了页码则添加查询参数
-  // 例如：/papers/123/highlights?page=2 只获取第 2 页的高亮
+export async function fetchHighlights(paperId: string, page: number | null = null): Promise<FetchHighlightsResponse> {
+  const enc = encodeIdSegment(fromSafeId(paperId));
   const path = page !== null
-    ? `/papers/${paperId}/highlights?page=${page}` // 带页码过滤的路径
-    : `/papers/${paperId}/highlights`;             // 不带过滤，获取所有高亮
+    ? `/articles/${enc}/annotations?page=${page}`
+    : `/articles/${enc}/annotations`;
 
-  // 发送 GET 请求获取高亮列表
-  return request<FetchHighlightsResponse>(path); // GET 请求（request 默认方法为 GET）
+  const data = await request<{ annotations?: BibAnnotation[] }>(path);
+  const annotations = Array.isArray(data?.annotations) ? data.annotations : [];
+  const highlights = annotations.map((a) => annotationToHighlight(a, paperId));
+
+  return { highlights, total: highlights.length };
 }
 
 /**
  * 创建新的高亮标注
  *
- * 用途：用户在 PDF 上选择文本后，将选区保存为高亮标注。
- *
  * 高亮数据结构说明：
  * - page: PDF 页码（从 1 开始）
- * - text: 选中的文本内容，用于显示和管理
- * - rects: 选区的矩形坐标数组，用于渲染高亮覆盖层
- *   - 为什么是数组？一个选区可能包含多个不连续的矩形
- *   - 例如：选中的文本跨行时，每行是一个独立的矩形
- * - color: 高亮颜色，默认黄色
+ * - text: 选中的文本内容 → annotation.content
+ * - rects: 选区的矩形坐标数组（跨行选区会有多个矩形）→ annotation.data.rects
+ * - color: 高亮颜色，默认黄色 → annotation.data.color
  *
- * @param {string} paperId - 论文 ID
+ * @param {string} paperId - 论文 ID（safeId）
  * @param {CreateHighlightRequest} data - 高亮数据对象
  * @returns {Promise<Highlight>} 创建成功的高亮对象
  */
-export async function createHighlight(paperId: string, data: CreateHighlightRequest): Promise<Highlight> { // 导出创建高亮函数
-  return request<Highlight>(`/papers/${paperId}/highlights`, { // POST 请求创建高亮
-    method: 'POST', // HTTP 方法为 POST（创建资源）
-    body: data,     // 请求体：高亮数据对象
+export async function createHighlight(paperId: string, data: CreateHighlightRequest): Promise<Highlight> {
+  const enc = encodeIdSegment(fromSafeId(paperId));
+  // 响应是 {"annotation": {...}}（201），需要解包
+  const res = await request<{ annotation: BibAnnotation }>(`/articles/${enc}/annotations`, {
+    method: 'POST',
+    body: {
+      kind: 'highlight',
+      content: data.text,
+      page: data.page,
+      data: {
+        rects: data.rects,
+        color: data.color || '#ffeb3b',
+      },
+    },
   });
+  return annotationToHighlight(res.annotation, paperId);
 }
 
 /**
- * 更新指定高亮的颜色或备注
+ * 更新指定高亮的颜色
  *
- * 用途：
- * - 用户修改高亮颜色（如将黄色改为绿色表示"已理解"）
- * - 部分更新：只传需要修改的字段
+ * autonomics 的 `PUT /annotations/{id}` 收 `{content?, page?, data?}`，是**三态**
+ * 语义：省略字段 = 不动；`data: null` = 清空载荷。而 `data` 一旦给出就是整体
+ * 覆盖，所以先取回现值、把新颜色合并进 rects 所在的那个对象再写回，避免把
+ * 矩形坐标冲掉。
  *
- * 为什么使用 PUT 而不是 PATCH？
- * - 虽然 RESTful 规范推荐部分更新用 PATCH，
- * - 但 FastAPI 的 PUT 更新实现同样支持部分字段更新
- * - 与后端 API 保持一致的实现方式
- *
- * @param {string} paperId - 论文 ID
+ * @param {string} paperId - 论文 ID（safeId）
  * @param {string} highlightId - 高亮 ID
  * @param {UpdateHighlightRequest} data - 需要更新的字段
  * @returns {Promise<Highlight>} 更新后的高亮对象
  */
-export async function updateHighlight(paperId: string, highlightId: string, data: UpdateHighlightRequest): Promise<Highlight> { // 导出更新高亮函数
-  return request<Highlight>(`/papers/${paperId}/highlights/${highlightId}`, { // PUT 请求更新高亮
-    method: 'PUT', // HTTP 方法为 PUT（更新资源）
-    body: data,    // 请求体：需要更新的字段对象
+export async function updateHighlight(paperId: string, highlightId: string, data: UpdateHighlightRequest): Promise<Highlight> {
+  const enc = encodeIdSegment(fromSafeId(paperId));
+
+  // 先取现值（PUT 的 data 是覆盖语义，不能只发增量）
+  const list = await request<{ annotations?: BibAnnotation[] }>(`/articles/${enc}/annotations`);
+  const existing = (list?.annotations ?? []).find((a) => a.id === highlightId);
+  const existingData = (existing?.data ?? {}) as Record<string, unknown>;
+
+  const mergedData = {
+    ...existingData,
+    ...(data.color !== undefined ? { color: data.color } : {}),
+  };
+
+  // 响应是 {"annotation": {...}}；后端对缺 id 返回 404
+  const res = await request<{ annotation: BibAnnotation }>(`/annotations/${encodeURIComponent(highlightId)}`, {
+    method: 'PUT',
+    body: { data: mergedData },
   });
+
+  // 兜底：万一后端没把 data 回显全，用本地合并结果补上，调用方拿到的形状不变
+  const annotation = res?.annotation ?? existing;
+  return annotationToHighlight(
+    {
+      ...(annotation as BibAnnotation),
+      id: highlightId,
+      data: { ...((annotation?.data ?? {}) as Record<string, unknown>), ...mergedData },
+    },
+    paperId,
+  );
 }
 
 /**
  * 删除指定的高亮标注
  *
- * 用途：用户删除不需要的高亮。
+ * 注意：删除操作不可逆。后端返回 200 + `{"deleted":true,"id"}`（不是 204），
+ * 前端仍需要从本地状态移除。
  *
- * 注意事项：
- * - 删除操作不可逆，请确保用户已确认
- * - 后端返回 204 状态码，无响应体
- * - 前端需要从本地状态中移除已删除的高亮
- *
- * @param {string} paperId - 论文 ID
+ * @param {string} paperId - 论文 ID（safeId）
  * @param {string} highlightId - 高亮 ID
- * @returns {Promise<void>} 成功时无返回内容（204 状态码）
+ * @returns {Promise<void>} 成功时无返回内容
  */
-export async function deleteHighlight(paperId: string, highlightId: string): Promise<void> { // 导出删除高亮函数
-  return request<void>(`/papers/${paperId}/highlights/${highlightId}`, { // DELETE 请求删除高亮
-    method: 'DELETE', // HTTP 方法为 DELETE（删除资源）
+export async function deleteHighlight(paperId: string, highlightId: string): Promise<void> {
+  void paperId; // 删除端点挂在 /annotations/{id} 下，不需要论文 id
+  await request<{ deleted?: boolean }>(`/annotations/${encodeURIComponent(highlightId)}`, {
+    method: 'DELETE',
   });
 }
