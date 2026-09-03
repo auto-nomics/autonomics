@@ -7,7 +7,12 @@ use axum::http::{Request, StatusCode};
 use bib_base::BibShared;
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
+use std::sync::Arc;
 use tower::ServiceExt;
+use vfs::{
+    BackendConfig, BackendDefinition, MountDefinition, MountedObjectStore, OpendalFileStorage,
+    VfsManifest,
+};
 
 /// Percent-encode an article ID for use as a path segment. Article IDs look
 /// like `doi:10.1000/foo`, and the slash must stay escaped or it ends the
@@ -50,6 +55,40 @@ async fn send(
 
 async fn app() -> axum::Router {
     let shared = BibShared::open_in_memory().await.unwrap();
+    tui_http::api_router(shared)
+}
+
+/// App whose uploads can actually persist: the VFS storage is mounted on a
+/// temp directory, like the TUI's literature mount.
+async fn app_with_storage() -> axum::Router {
+    let directory = tempfile::tempdir().unwrap();
+    let manifest = VfsManifest {
+        backend: vec![BackendDefinition {
+            id: "literature".to_owned(),
+            config: BackendConfig::local(
+                directory
+                    .path()
+                    .join("literature")
+                    .to_string_lossy()
+                    .to_string(),
+            ),
+        }],
+        mount: vec![MountDefinition {
+            path: "/literature".to_owned(),
+            backend: "literature".to_owned(),
+            source: "/".to_owned(),
+            read_only: false,
+        }],
+    };
+    let vfs = Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap());
+    let file_storage = Arc::new(OpendalFileStorage::with_mounts(directory.path(), vfs));
+    let shared = BibShared::open_in_memory()
+        .await
+        .unwrap()
+        .with_file_storage(file_storage);
+    // Keep the temp directory alive for the router's lifetime by leaking it —
+    // the test process is short-lived.
+    std::mem::forget(directory);
     tui_http::api_router(shared)
 }
 
@@ -640,4 +679,334 @@ async fn article_csl_json_and_missing_article() {
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert!(body["error"].as_str().unwrap().contains("absent"));
+}
+
+// --- Upload & batch import (Phase 3) ---------------------------------------
+
+/// Build a `multipart/form-data` request; the file part is omitted when
+/// `filename` is empty, covering the missing-field rejection path.
+fn multipart_request(
+    uri: &str,
+    filename: &str,
+    content: &str,
+    extra_fields: &[(&str, &str)],
+) -> Request<Body> {
+    let boundary = "autonomics-test-boundary";
+    let mut body = Vec::new();
+    for (name, value) in extra_fields {
+        body.extend_from_slice(
+            format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n"
+            )
+            .as_bytes(),
+        );
+    }
+    if !filename.is_empty() {
+        body.extend_from_slice(
+            format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; \
+                 filename=\"{filename}\"\r\nContent-Type: text/plain\r\n\r\n{content}\r\n\
+                 --{boundary}--\r\n"
+            )
+            .as_bytes(),
+        );
+    } else {
+        body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+    }
+    Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(Body::from(body))
+        .unwrap()
+}
+
+async fn send_multipart(
+    app: &axum::Router,
+    filename: &str,
+    content: &str,
+    extra_fields: &[(&str, &str)],
+) -> (StatusCode, Value) {
+    let response = app
+        .clone()
+        .oneshot(multipart_request(
+            "/api/v1/bib/articles/upload",
+            filename,
+            content,
+            extra_fields,
+        ))
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+}
+
+#[tokio::test]
+async fn upload_without_identifiers_creates_a_manual_article() {
+    let app = app_with_storage().await;
+
+    let (status, body) =
+        send_multipart(&app, "field-notes.txt", "Plain prose with no identifiers.", &[]).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["created"], true);
+    assert!(body["identifier"].is_null());
+
+    let article = &body["article"];
+    assert!(article["id"].as_str().unwrap().starts_with("local:"));
+    assert_eq!(article["title"], "field-notes");
+    // The document itself is retrievable as extracted text.
+    let encoded = encode_id(article["id"].as_str().unwrap());
+    let (status, body) = send(
+        &app,
+        "GET",
+        &format!("/api/v1/bib/articles/{encoded}/fulltext"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["fulltext"]["text_content"], "Plain prose with no identifiers.");
+}
+
+#[tokio::test]
+async fn upload_with_a_doi_keys_the_article_by_the_identifier() {
+    let app = app_with_storage().await;
+
+    // The gateway cannot resolve this made-up prefix, so the stub path runs.
+    let (status, body) = send_multipart(
+        &app,
+        "paper.pdf.txt",
+        "Preprint title.\nDOI: 10.9999/offline-doi-test.",
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["created"], true);
+    assert_eq!(body["identifier"]["kind"], "doi");
+    assert_eq!(
+        body["article"]["id"].as_str().unwrap(),
+        "doi:10.9999/offline-doi-test"
+    );
+
+    // Re-uploading attaches to the existing article instead of duplicating.
+    let (status, body) = send_multipart(
+        &app,
+        "paper-again.pdf.txt",
+        "DOI: 10.9999/offline-doi-test repeated.",
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["created"], false);
+    assert_eq!(
+        body["article"]["id"].as_str().unwrap(),
+        "doi:10.9999/offline-doi-test"
+    );
+}
+
+#[tokio::test]
+async fn upload_annotates_a_missing_category_and_requires_a_file() {
+    let app = app().await;
+
+    let (status, body) = send_multipart(&app, "x.txt", "text", &[("category_id", "nope")]).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(body["error"].as_str().unwrap().contains("nope"));
+
+    let response = app
+        .clone()
+        .oneshot(multipart_request(
+            "/api/v1/bib/articles/upload",
+            "", // no file part at all
+            "",
+            &[("category_id", "")],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn upload_files_into_a_category() {
+    let app = app_with_storage().await;
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/api/v1/bib/collections",
+        Some(json!({"name": "Uploads"}).to_string()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let collection = body["collection"]["id"].as_str().unwrap().to_owned();
+
+    let (status, body) = send_multipart(
+        &app,
+        "categorized.txt",
+        "No identifiers here either.",
+        &[("category_id", collection.as_str())],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let article_id = body["article"]["id"].as_str().unwrap().to_owned();
+
+    let (status, body) = send(
+        &app,
+        "GET",
+        &format!("/api/v1/bib/collections/{collection}/articles"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let articles = body["articles"].as_array().unwrap();
+    assert_eq!(articles.len(), 1);
+    assert_eq!(articles[0]["id"].as_str().unwrap(), article_id);
+}
+
+#[tokio::test]
+async fn batch_import_merges_duplicates_and_reports_failures() {
+    let app = app().await;
+    // Pre-store one of the entries' DOIs so the batch hits a real duplicate.
+    create_article(&app, "Stored original", "10.1000/already-here", 2020).await;
+
+    let bibtex = "\
+@article{dup1, title = {The same paper}, doi = {10.1000/already-here}}
+@article{fresh1, title = {A new paper}, doi = {10.1000/batch-fresh}, year = {2024}}
+@article{twice1, title = {Also new}, doi = {10.1000/batch-fresh}}
+@article{empty1, author = {Nobody}}
+";
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/api/v1/bib/articles/import/batch",
+        Some(json!({"format": "bibtex", "content": bibtex}).to_string()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    // fresh1 imported, twice1 merged into it (batch-internal duplicate),
+    // dup1 merged into the stored article, empty1 failed.
+    assert_eq!(body["imported"], 1);
+    assert_eq!(body["duplicates"], 2);
+    assert_eq!(body["failed"].as_array().unwrap().len(), 1);
+    assert_eq!(body["failed"][0]["key"], "empty1");
+    assert_eq!(
+        body["articles"][0]["id"].as_str().unwrap(),
+        "doi:10.1000/batch-fresh"
+    );
+
+    let details = body["duplicate_details"].as_array().unwrap();
+    assert!(details
+        .iter()
+        .any(|detail| detail["existing_id"].as_str().unwrap() == "doi:10.1000/already-here"));
+
+    // A second identical run now reports everything with a title as a
+    // duplicate — including fresh1, imported by the first run.
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/api/v1/bib/articles/import/batch",
+        Some(json!({"format": "bibtex", "content": bibtex}).to_string()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["imported"], 0);
+    assert_eq!(body["duplicates"], 3);
+}
+
+#[tokio::test]
+async fn batch_import_accepts_ris_and_csl_json_and_auto() {
+    let app = app().await;
+
+    let ris = "TY  - JOUR\nTI  - RIS item\nDO  - 10.2000/ris-import\nER  - \n";
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/api/v1/bib/articles/import/batch",
+        Some(json!({"format": "ris", "content": ris}).to_string()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["imported"], 1);
+    assert_eq!(
+        body["articles"][0]["id"].as_str().unwrap(),
+        "doi:10.2000/ris-import"
+    );
+
+    let csl = r#"[{"id": "doi:10.3000/csl-import", "title": "CSL item", "DOI": "10.3000/csl-import", "issued": {"date-parts": [[2025]]}}]"#;
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/api/v1/bib/articles/import/batch",
+        Some(json!({"format": "auto", "content": csl}).to_string()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["imported"], 1);
+    assert_eq!(body["articles"][0]["year"], 2025);
+
+    // Unknown format names and undetectable content are 400s.
+    let (status, _) = send(
+        &app,
+        "POST",
+        "/api/v1/bib/articles/import/batch",
+        Some(json!({"format": "endnote-xml", "content": "<xml/>"}).to_string()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let (status, _) = send(
+        &app,
+        "POST",
+        "/api/v1/bib/articles/import/batch",
+        Some(json!({"format": "auto", "content": "not a bibliography"}).to_string()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn batch_import_files_into_a_category() {
+    let app = app().await;
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/api/v1/bib/collections",
+        Some(json!({"name": "Imported"}).to_string()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let collection = body["collection"]["id"].as_str().unwrap().to_owned();
+
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/api/v1/bib/articles/import/batch",
+        Some(
+            json!({
+                "format": "auto",
+                "content": "@article{k1, title = {Filed one}}\n@article{k2, title = {Filed two}}",
+                "category_id": collection,
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["imported"], 2);
+
+    let (status, body) = send(
+        &app,
+        "GET",
+        &format!("/api/v1/bib/collections/{collection}/articles"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["articles"].as_array().unwrap().len(), 2);
 }

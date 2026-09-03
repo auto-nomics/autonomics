@@ -10,6 +10,7 @@ description = "Bibliography management: Turso storage + unified literature query
 bib-types = { path = "../bib-types" }
 turso.workspace = true
 serde = { workspace = true }
+biblatex.workspace = true
 serde_json = { workspace = true }
 chrono = { workspace = true }
 thiserror.workspace = true

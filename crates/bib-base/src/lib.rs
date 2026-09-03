@@ -22,6 +22,7 @@ pub mod export;
 pub mod extract;
 pub mod fulltext;
 pub mod http_options;
+pub mod import;
 pub mod library_tools;
 pub mod oa_fetch;
 pub mod query;

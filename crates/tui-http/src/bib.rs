@@ -1,8 +1,9 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use axum::{
     Json, Router,
+    body::Bytes,
     extract::{DefaultBodyLimit, Multipart, Path, Query, State},
     http::header,
     http::{HeaderMap, Method, StatusCode},
@@ -11,6 +12,7 @@ use axum::{
 };
 use bib_base::{
     BibShared, ListParams, OcrFallbackExtractor, SortField, SortOrder, TextExtractor,
+    import::{ImportFormat, parse_import},
     stored_fulltext, try_fetch_fulltext_with, vfs_virtual_path,
 };
 use bib_types::{
@@ -21,6 +23,7 @@ use bib_types::{
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use uuid::Uuid;
 
 const MAX_UPLOAD_BYTES: usize = 50 * 1024 * 1024;
 const DEFAULT_FULLTEXT_CHARS: usize = 100_000;
@@ -85,7 +88,9 @@ pub(crate) fn router(shared: BibShared) -> Router {
         .route("/health", get(health))
         .route("/articles", get(list_articles).post(create_article))
         .route("/articles/unfiled", get(list_unfiled_articles))
+        .route("/articles/upload", post(upload_article))
         .route("/articles/import", post(import_article))
+        .route("/articles/import/batch", post(import_batch))
         .route(
             "/articles/{id}",
             get(get_article).put(update_article).delete(delete_article),
@@ -571,6 +576,416 @@ fn parse_id_kind(value: &str) -> Option<IdKind> {
     }
 }
 
+/// How much of the extracted text is scanned for a DOI / arXiv id. Covers a
+/// paper's first page, where both are printed.
+const IDENTIFIER_SCAN_CHARS: usize = 4000;
+
+/// Upload a document file and create the article for it in one step.
+///
+/// The extracted text is scanned for a DOI or arXiv id: a hit fetches real
+/// metadata from the gateway (falling back to an identifier-keyed stub when
+/// no source answers), a miss creates a manual `local:{uuid}` record named
+/// after the file. Re-uploading a paper that is already in the library
+/// attaches the file to the existing article instead of duplicating it.
+async fn upload_article(
+    State(shared): State<Arc<BibShared>>,
+    mut multipart: Multipart,
+) -> ApiResult {
+    let mut filename = None;
+    let mut content = None;
+    let mut category_id = None;
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|multipart_error| error(StatusCode::BAD_REQUEST, multipart_error.to_string()))?
+    {
+        match field.name() {
+            Some("file") => {
+                filename = field
+                    .file_name()
+                    .map(str::to_owned)
+                    .or_else(|| field.content_type().map(str::to_owned));
+                let bytes = field.bytes().await.map_err(|multipart_error| {
+                    error(StatusCode::BAD_REQUEST, multipart_error.to_string())
+                })?;
+                if bytes.len() > MAX_UPLOAD_BYTES {
+                    return Err(error(
+                        StatusCode::PAYLOAD_TOO_LARGE,
+                        format!("upload exceeds {} byte limit", MAX_UPLOAD_BYTES),
+                    ));
+                }
+                content = Some(bytes);
+            }
+            Some("category_id") => {
+                category_id = Some(field.text().await.map_err(|multipart_error| {
+                    error(StatusCode::BAD_REQUEST, multipart_error.to_string())
+                })?);
+            }
+            _ => {}
+        }
+    }
+
+    let Some(content) = content else {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "multipart field 'file' is required",
+        ));
+    };
+    let filename = filename.unwrap_or_else(|| "upload.txt".to_owned());
+
+    // Validate the category before any extraction work so a typo fails fast.
+    if let Some(category) = category_id.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
+        shared
+            .bib
+            .get_collection(category)
+            .await
+            .map_err(internal)?
+            .ok_or_else(|| {
+                error(
+                    StatusCode::NOT_FOUND,
+                    format!("collection {category} not found"),
+                )
+            })?;
+    }
+
+    let extension = filename
+        .rsplit_once('.')
+        .map(|(_, extension)| extension)
+        .unwrap_or("txt");
+    let format = FileFormat::from_extension(extension);
+    let extracted_text = match OcrFallbackExtractor::new().extract(&content, format).await {
+        Ok(text) => Some(text.text),
+        Err(extract_error) => {
+            tracing::warn!(
+                filename = %filename,
+                error = %extract_error,
+                "failed to extract upload content; storing the original bytes only"
+            );
+            None
+        }
+    };
+
+    let matched = extracted_text
+        .as_deref()
+        .and_then(find_identifier_in_text);
+
+    let (article, created) = match &matched {
+        Some(identifier) => {
+            if let Some(existing) = shared
+                .bib
+                .find_by_identifier(identifier.kind, &identifier.value)
+                .await
+                .map_err(internal)?
+            {
+                (existing, false)
+            } else if let Some((_source, mut fetched)) = shared.gateway.fetch(identifier).await {
+                fetched.updated_at = Some(Utc::now());
+                (fetched, true)
+            } else {
+                // No source answered (offline, or unknown id): key the stub by
+                // the identifier so a later metadata refresh can upsert it.
+                (stub_from_identifier(identifier, &filename), true)
+            }
+        }
+        None => {
+            let mut article =
+                Article::new(format!("local:{}", Uuid::new_v4()), filename_stem(&filename));
+            article.source = ArticleSource::Manual;
+            (article, true)
+        }
+    };
+
+    if created {
+        shared
+            .bib
+            .upsert_article(&article)
+            .await
+            .map_err(internal)?;
+    }
+    let fulltext = store_fulltext_file(
+        &shared,
+        &article.id,
+        &filename,
+        &content,
+        format,
+        extracted_text.clone(),
+    )
+    .await?;
+
+    if let Some(category) = category_id.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
+        shared
+            .bib
+            .add_to_collection(
+                category,
+                &article.id,
+                ArticleRole::Referenced,
+                AddedBy::User,
+                None,
+            )
+            .await
+            .map_err(internal)?;
+    }
+
+    Ok(Json(json!({
+        "created": created,
+        "article": article,
+        "fulltext": fulltext,
+        "identifier": matched.map(|identifier| json!({
+            "kind": identifier.kind.as_str(),
+            "value": identifier.value,
+        })),
+        "text_chars": extracted_text.map(|text| text.chars().count()).unwrap_or(0),
+    })))
+}
+
+/// Minimal article for an upload whose identifier no gateway source could
+/// resolve. The title is just the filename until metadata arrives.
+fn stub_from_identifier(identifier: &Identifier, filename: &str) -> Article {
+    let mut article = Article::new(
+        format!("{}:{}", identifier.kind.as_str(), identifier.value),
+        filename_stem(filename),
+    );
+    article.identifiers.push(identifier.clone());
+    article.source = ArticleSource::Manual;
+    article
+}
+
+/// Human-ish title for an uploaded file: the name without its extension.
+fn filename_stem(filename: &str) -> String {
+    let stem = filename
+        .rsplit_once('.')
+        .map(|(stem, _)| stem)
+        .unwrap_or(filename)
+        .trim();
+    if stem.is_empty() {
+        "Untitled upload".to_owned()
+    } else {
+        stem.to_owned()
+    }
+}
+
+/// Find a DOI (`10.NNNN/…`) or arXiv id in the head of the extracted text.
+fn find_identifier_in_text(text: &str) -> Option<Identifier> {
+    let head: String = text.chars().take(IDENTIFIER_SCAN_CHARS).collect();
+    find_doi(&head)
+        .map(Identifier::doi)
+        .or_else(|| find_arxiv(&head).map(|id| Identifier::new(IdKind::Arxiv, id)))
+}
+
+/// Scan for `10.\d{4,9}/suffix`, hand-rolled to stay dependency-free.
+fn find_doi(head: &str) -> Option<String> {
+    let bytes = head.as_bytes();
+    let mut cursor = 0;
+    while let Some(offset) = head[cursor..].find("10.") {
+        let start = cursor + offset;
+        // `210.12345` or `A10.1` are not DOIs: require a word boundary.
+        let boundary_ok = start == 0 || !bytes[start - 1].is_ascii_alphanumeric();
+        let mut rest = start + 3;
+        let mut digits = 0;
+        while rest < bytes.len() && bytes[rest].is_ascii_digit() {
+            digits += 1;
+            rest += 1;
+        }
+        if boundary_ok && (4..=9).contains(&digits) && rest < bytes.len() && bytes[rest] == b'/' {
+            let suffix_start = rest + 1;
+            let mut end = suffix_start;
+            // The suffix is printable ASCII without whitespace.
+            while end < bytes.len() && (0x21..=0x7e).contains(&bytes[end]) {
+                end += 1;
+            }
+            // Sentence punctuation after a DOI is prose, not part of it.
+            while suffix_start < end
+                && matches!(
+                    bytes[end - 1],
+                    b'.' | b',' | b';' | b':' | b')' | b']' | b'}' | b'"' | b'\''
+                )
+            {
+                end -= 1;
+            }
+            if end > suffix_start {
+                // The whole DOI includes the `10.NNNN/` prefix.
+                return Some(head[start..end].to_owned());
+            }
+        }
+        cursor = start + 3;
+    }
+    None
+}
+
+/// Scan for an arXiv reference: `arXiv:2401.12345`, `arXiv/…`,
+/// `arxiv.org/abs/2401.12345v2`.
+fn find_arxiv(head: &str) -> Option<String> {
+    let lowered = head.to_lowercase();
+    let mut cursor = 0;
+    while let Some(offset) = lowered[cursor..].find("arxiv") {
+        let after = cursor + offset + "arxiv".len();
+        // The id sits within the next few dozen characters of the mention.
+        let window: String = lowered[after..].chars().take(40).collect();
+        if let Some(id_start) = window.find(|c: char| c.is_ascii_digit()) {
+            if let Some(id) = take_arxiv_id(&window[id_start..]) {
+                return Some(id);
+            }
+        }
+        cursor = after;
+    }
+    None
+}
+
+/// `dddd.ddddd` (4–5 digit sequence), with an optional `vN` suffix.
+fn take_arxiv_id(rest: &str) -> Option<String> {
+    let bytes = rest.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() && bytes[index].is_ascii_digit() {
+        index += 1;
+    }
+    if index != 4 || index >= bytes.len() || bytes[index] != b'.' {
+        return None;
+    }
+    index += 1;
+    let sequence_start = index;
+    while index < bytes.len() && bytes[index].is_ascii_digit() {
+        index += 1;
+    }
+    if !(4..=5).contains(&(index - sequence_start)) {
+        return None;
+    }
+    let mut end = index;
+    if end + 1 < bytes.len() && bytes[end] == b'v' && bytes[end + 1].is_ascii_digit() {
+        end += 2;
+    }
+    Some(rest[..end].to_owned())
+}
+
+#[derive(Deserialize)]
+struct ImportBatchRequest {
+    /// `bibtex` | `ris` | `csl_json` | `auto`.
+    format: String,
+    content: String,
+    category_id: Option<String>,
+}
+
+/// Import a bibliography file (BibTeX / RIS / CSL-JSON) in one request.
+///
+/// Entries whose identifiers are already stored — or appear twice in the
+/// batch — are reported as duplicates rather than re-imported; entries that
+/// cannot yield an article (no title) come back in `failed` with a reason.
+async fn import_batch(
+    State(shared): State<Arc<BibShared>>,
+    Json(input): Json<ImportBatchRequest>,
+) -> ApiResult {
+    let format = match input.format.as_str() {
+        "auto" => ImportFormat::sniff(&input.content).ok_or_else(|| {
+            error(
+                StatusCode::BAD_REQUEST,
+                "could not detect the import format; pass format explicitly",
+            )
+        })?,
+        name => ImportFormat::from_name(name).ok_or_else(|| {
+            error(
+                StatusCode::BAD_REQUEST,
+                "format must be bibtex, ris, csl_json, or auto",
+            )
+        })?,
+    };
+
+    if let Some(category) = input.category_id.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
+        shared
+            .bib
+            .get_collection(category)
+            .await
+            .map_err(internal)?
+            .ok_or_else(|| {
+                error(StatusCode::NOT_FOUND, format!("collection {category} not found"))
+            })?;
+    }
+
+    let (candidates, failures) = parse_import(format, &input.content);
+
+    // Dedup against stored identifiers and within the batch itself. The
+    // batch map keys identifiers of freshly accepted entries so a later
+    // duplicate points at the id it was merged into.
+    let mut fresh: Vec<Article> = Vec::new();
+    let mut duplicates: Vec<Value> = Vec::new();
+    let mut batch_identifiers: HashMap<(String, String), String> = HashMap::new();
+    for article in candidates {
+        let mut duplicate_of: Option<String> = None;
+        for identifier in &article.identifiers {
+            if let Some(existing) = shared
+                .bib
+                .find_by_identifier(identifier.kind, &identifier.value)
+                .await
+                .map_err(internal)?
+            {
+                duplicate_of = Some(existing.id);
+                break;
+            }
+        }
+        if duplicate_of.is_none() {
+            for identifier in &article.identifiers {
+                let key = (
+                    identifier.kind.as_str().to_owned(),
+                    identifier.value.clone(),
+                );
+                if let Some(earlier) = batch_identifiers.get(&key) {
+                    duplicate_of = Some(earlier.clone());
+                    break;
+                }
+            }
+        }
+
+        match duplicate_of {
+            Some(existing_id) => duplicates.push(json!({
+                "title": article.title,
+                "identifiers": article.identifiers,
+                "existing_id": existing_id,
+            })),
+            None => {
+                for identifier in &article.identifiers {
+                    batch_identifiers.insert(
+                        (identifier.kind.as_str().to_owned(), identifier.value.clone()),
+                        article.id.clone(),
+                    );
+                }
+                fresh.push(article);
+            }
+        }
+    }
+
+    if !fresh.is_empty() {
+        shared
+            .bib
+            .upsert_articles(&fresh)
+            .await
+            .map_err(internal)?;
+    }
+    if let Some(category) = input.category_id.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
+        for article in &fresh {
+            shared
+                .bib
+                .add_to_collection(
+                    category,
+                    &article.id,
+                    ArticleRole::Referenced,
+                    AddedBy::User,
+                    None,
+                )
+                .await
+                .map_err(internal)?;
+        }
+    }
+
+    Ok(Json(json!({
+        "imported": fresh.len(),
+        "duplicates": duplicates.len(),
+        "failed": failures
+            .iter()
+            .map(|failure| json!({ "key": failure.key, "reason": failure.reason }))
+            .collect::<Vec<_>>(),
+        "duplicate_details": duplicates,
+        "articles": fresh,
+    })))
+}
+
 async fn get_article(
     State(shared): State<Arc<BibShared>>,
     Path(id): Path<String>,
@@ -748,27 +1163,55 @@ async fn upload_fulltext(
         }
     };
 
-    let stored = stored_fulltext(&article.id, &filename, &content);
+    let fulltext = store_fulltext_file(
+        &shared,
+        &article.id,
+        &filename,
+        &content,
+        format,
+        extracted.map(|text| text.text),
+    )
+    .await?;
+    Ok(Json(json!({ "fulltext": fulltext })))
+}
+
+/// Write uploaded bytes into the VFS and record the full-text row.
+///
+/// Split out of the article-scoped upload endpoint so `POST /articles/upload`
+/// (which creates the article itself) shares the same storage path. On a
+/// database rejection the freshly written object is removed again — unless it
+/// occupies the path the previous row still references, in which case the old
+/// object must survive. A replaced row's old object is cleaned up on success.
+async fn store_fulltext_file(
+    shared: &Arc<BibShared>,
+    article_id: &str,
+    filename: &str,
+    content: &Bytes,
+    format: FileFormat,
+    extracted_text: Option<String>,
+) -> Result<FullText, (StatusCode, Json<ApiError>)> {
+    let previous = shared
+        .bib
+        .get_fulltext(article_id)
+        .await
+        .map_err(internal)?;
+    let stored = stored_fulltext(article_id, filename, content);
     let path = vfs_virtual_path(&stored.path).expect("stored fulltext uses a VFS path");
-    write_stored_file(&shared, &path, content.to_vec()).await?;
+    write_stored_file(shared, &path, content.to_vec()).await?;
     let fulltext = FullText {
-        article_id: article.id.clone(),
+        article_id: article_id.to_owned(),
         file_path: stored.path,
         file_format: format,
-        text_content: extracted.map(|text| text.text),
+        text_content: extracted_text,
         source: FullTextSource::UserUpload,
         file_hash: Some(stored.file_hash),
         file_size: Some(content.len() as i64),
         uploaded_at: Some(Utc::now()),
     };
-    let previous = shared
-        .bib
-        .get_fulltext(&article.id)
-        .await
-        .map_err(internal)?;
     if let Err(db_error) = shared.bib.upsert_fulltext(&fulltext).await {
-        if previous.as_ref().map(|old| old.file_path.clone()) != Some(fulltext.file_path.clone()) {
-            if let Err(cleanup_error) = delete_stored_file(&shared, &path).await {
+        if previous.as_ref().map(|old| old.file_path.as_str()) != Some(fulltext.file_path.as_str())
+        {
+            if let Err(cleanup_error) = delete_stored_file(shared, &path).await {
                 tracing::warn!(
                     path = %path,
                     error = %cleanup_error.1.error,
@@ -781,7 +1224,7 @@ async fn upload_fulltext(
     if let Some(previous) = previous {
         if previous.file_path != fulltext.file_path {
             if let Some(path) = vfs_virtual_path(&previous.file_path) {
-                if let Err(cleanup_error) = delete_stored_file(&shared, &path).await {
+                if let Err(cleanup_error) = delete_stored_file(shared, &path).await {
                     tracing::warn!(
                         path = %path,
                         error = %cleanup_error.1.error,
@@ -791,7 +1234,7 @@ async fn upload_fulltext(
             }
         }
     }
-    Ok(Json(json!({ "fulltext": fulltext })))
+    Ok(fulltext)
 }
 
 async fn download_fulltext(
@@ -1695,4 +2138,37 @@ async fn delete_stored_file(
     let storage = file_storage(shared)?;
     storage.delete_object(path).await.map_err(storage_error)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn doi_scan_keeps_the_prefix_and_trims_prose() {
+        assert_eq!(
+            find_doi("see 10.1038/s41586-024-07666-x, for details"),
+            Some("10.1038/s41586-024-07666-x".to_owned())
+        );
+        assert_eq!(
+            find_doi("DOI: 10.9999/offline-doi-test."),
+            Some("10.9999/offline-doi-test".to_owned())
+        );
+        // A version number is not a DOI: word boundary + digit width matter.
+        assert_eq!(find_doi("version 210.12345 shipped"), None);
+        assert_eq!(find_doi("see 10.99/x"), None);
+    }
+
+    #[test]
+    fn arxiv_scan_accepts_common_citation_shapes() {
+        assert_eq!(
+            find_arxiv("arXiv:2401.12345v2 preprint"),
+            Some("2401.12345v2".to_owned())
+        );
+        assert_eq!(
+            find_arxiv("fetched from https://arxiv.org/abs/2401.12345 today"),
+            Some("2401.12345".to_owned())
+        );
+        assert_eq!(find_arxiv("no mention at all"), None);
+    }
 }
