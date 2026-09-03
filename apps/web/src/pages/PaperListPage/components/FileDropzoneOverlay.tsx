@@ -50,7 +50,7 @@ export default function FileDropzoneOverlay({ visible }: { visible: boolean }) {
           fontSize: '13px',
           color: 'var(--text-tertiary)',
         }}>
-          支持 PDF、BibTeX (.bib)、RIS (.ris)、NBIB (.nbib)、EndNote (.enw)、XML、GB/T 7714 格式
+          支持 PDF、BibTeX (.bib)、RIS (.ris)、CSL-JSON (.json) 格式
         </div>
       </div>
     </div>

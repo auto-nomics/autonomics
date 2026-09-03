@@ -325,6 +325,20 @@ export function paperTypeToPubTypes(paperType: string | null | undefined): strin
  * 下划线前缀表示「非显示字段」：MetadataView 只按 getTypeFields(paper_type) 的
  * 白名单取 extra_metadata，永远不会渲染这个键。它存在的唯一目的是让
  * GET→PUT 往返（updatePaper）能把 pub_types 原样带回去。
+ *
+ * 只活在客户端：后端 Article 结构体没有 extra_metadata 字段且 serde 忽略未知
+ * 字段，PUT 带上去会被静默丢弃、下次 GET 也不回来。它之所以闭环，是因为每次
+ * 读（articleToPaper / detailToPaper）都会用服务端的 pub_types 重新填它 ——
+ * 真正持久化的只有 pub_types 本身。因此任何 extra_metadata 键都不能当成
+ * 「写进去就还在」的状态用，回显一律重新从 Article 顶层字段推导。
+ *
+ * 盲区与解除条件：paperToArticle 优先取这个键，所以它会遮蔽 paper_type 上的
+ * 改动。服务端兜不住 —— PUT 收的是完整 Article JSON，无从分辨 body 里的
+ * pub_types 是「用户本意」还是「缓存原样带回」，任何服务器侧校验都只能二选一
+ * （拒掉合法往返，或放行静默还原）。正解在调用侧：将来放开类型编辑时，让编辑器
+ * 在改 paper_type 的同时经 paperTypeToPubTypes 反向生成新数组写进这个键（或
+ * 干脆清掉它），遮蔽条件就不成立，paperToArticle 一行不用动。不要改成
+ * 「以 paper_type 为准」—— 那会把多标签记录塌缩成单标签，丢掉往返不失真。
  */
 export const PRIVATE_PUB_TYPES_KEY = '_pub_types';
 
@@ -572,7 +586,11 @@ export function paperToArticle(paper: Paper, realId?: string): BibArticle {
     ? extra.keywords.split(/\s*,\s*/).filter(Boolean)
     : [];
 
-  // 类型：优先还原原始 pub_types（编辑往返不失真），否则从 paper_type 规范化
+  // 类型：优先还原原始 pub_types（编辑往返不失真），否则从 paper_type 规范化。
+  // 优先级会遮蔽 paper_type 上的改动；今天够不着（updatePaper 只写
+  // hoverTranslationEnabled，paper_type 不可编辑）。将来放开类型编辑时，让编辑器
+  // 经 paperTypeToPubTypes 把新类型同步写进 _pub_types（做法与原因见
+  // PRIVATE_PUB_TYPES_KEY 的 docblock），不要调整这里的优先级。
   const carriedPubTypes = extra[PRIVATE_PUB_TYPES_KEY];
   const pubTypes = Array.isArray(carriedPubTypes) && carriedPubTypes.length > 0
     ? carriedPubTypes.map(String)

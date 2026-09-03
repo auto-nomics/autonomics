@@ -519,14 +519,53 @@ describe('getMarkdown — 字符分页循环', () => {
 });
 
 // ============================================================================
+// uploadPaper：multipart 一步建档
+// ============================================================================
+
+describe('uploadPaper — POST /articles/upload', () => {
+  it('multipart 携带 file 与 category_id，返回终态 Paper（safeId + created）', async () => {
+    const article = makeArticle();
+    const f = makeFetch(() =>
+      Promise.resolve(jsonResponse({ created: true, article, fulltext: makeFulltext(), text_chars: 12000 })),
+    );
+
+    const res = await uploadPaper(new File(['%PDF-1.4 fake'], 'paper.pdf'), 'col-7');
+
+    const { url, init } = callOf(f);
+    expect(url).toBe('/api/v1/bib/articles/upload');
+    expect(init.method).toBe('POST');
+    expect(init.body).toBeInstanceOf(FormData);
+    expect((init.body as FormData).get('file')).toBeInstanceOf(File);
+    expect((init.body as FormData).get('category_id')).toBe('col-7');
+
+    // 返回完整 Paper：safeId 主键、全文在场 → parse_status done、带归类
+    expect(res.id).toBe(SAFE_ID);
+    expect(res.title).toBe(article.title);
+    expect(res.parse_status).toBe('done');
+    expect(res.created).toBe(true);
+    expect(res.category_ids).toEqual(['col-7']);
+  });
+
+  it('无分类时不携带 category_id 字段；标识符命中已有文献时 created=false 且 parse_status none', async () => {
+    const f = makeFetch(() =>
+      Promise.resolve(jsonResponse({ created: false, article: makeArticle(), fulltext: null, text_chars: 0 })),
+    );
+
+    const res = await uploadPaper(new File(['%PDF-1.4 fake'], 'paper.pdf'));
+
+    const { init } = callOf(f);
+    expect((init.body as FormData).get('category_id')).toBeNull();
+    expect(res.created).toBe(false);
+    // fulltext 缺席 → 无全文，parse_status 不是 done
+    expect(res.parse_status).not.toBe('done');
+  });
+});
+
+// ============================================================================
 // 桩
 // ============================================================================
 
 describe('桩化函数（autonomics 不提供的能力）', () => {
-  it('uploadPaper reject（Phase 3 导入管线）', async () => {
-    await expect(uploadPaper(new File(['x'], 'a.pdf'))).rejects.toThrow(/Phase 3/);
-  });
-
   it('reparsePaper reject', async () => {
     await expect(reparsePaper(SAFE_ID)).rejects.toThrow(/解析管线/);
   });

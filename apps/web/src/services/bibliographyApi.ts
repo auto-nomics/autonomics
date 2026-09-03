@@ -1,18 +1,18 @@
 /**
- * 题录导入 API 客户端
+ * 题录导入 API 客户端（autonomics 导入管线）
  *
- * stubbed: capability not present in autonomics backend (see plan Phase 3)
- *
- * autonomics 的批量导入端点（`POST /articles/import/batch`，BibTeX/RIS/CSL-JSON，
- * hayagriva + RIS 解析）和 PDF 上传建档（`POST /articles/upload`）属于 Phase 3
- * 导入管线，本阶段尚未实现。全部函数显式 reject，调用方走既有 catch → toast，
- * UI 不崩；签名保持与 jayread 一致，Phase 3 落地时只换函数体。
- *
- * 注：`resolveDuplicates` 对应 jayread 的「导入去重解决」流程，autonomics 在
- * 服务端直接 upsert 合并，前端该流程整体删除（plan §3.2），所以这个函数
- * Phase 3 也不会复活，将在 Phase 5 随 UI 一起清扫。
+ * - `importBibliography` → POST /articles/import/batch：服务端解析
+ *   BibTeX / RIS / CSL-JSON（format=auto 按内容嗅探）、按标识符 upsert
+ *   合并重复条目，响应携带 `{imported, duplicates, failed[], duplicate_details[], articles}`。
+ * - `attachPdf` → POST /articles/{enc}/fulltext：multipart 上传原始文件，
+ *   服务端按 SHA-256 内容寻址落盘并抽取纯文本。
+ * - `resolveDuplicates` / `downloadPdf`：autonomics 无对应能力（服务端合并
+ *   取代了前端去重；无 Unpaywall 下载管线），保留 jayread 签名的显式 reject，
+ *   UI 入口在死代码清扫阶段移除。
  */
 
+import request from './client';
+import { fromSafeId, encodeIdSegment, encodeSafeId, type BibArticle } from './mapping';
 import type {
   ImportResult,
   DuplicateResolution,
@@ -21,32 +21,71 @@ import type {
   DownloadPdfResponse,
 } from '@/types';
 
+/** import/batch 响应（服务端原始形状；failed/duplicate_details 为数组） */
+interface ImportBatchResponse {
+  imported: number;
+  duplicates: number;
+  failed: Array<{ key: string; reason: string }>;
+  duplicate_details: Array<{ title: string | null; identifiers: unknown; existing_id: string }>;
+  articles: BibArticle[];
+}
+
+/** 扩展名 → 后端 format；无法判断返回 'auto'（服务端按内容嗅探） */
+function formatForFile(file: File): string {
+  const name = file.name.toLowerCase();
+  if (name.endsWith('.bib')) return 'bibtex';
+  if (name.endsWith('.ris')) return 'ris';
+  if (name.endsWith('.json')) return 'csl_json';
+  return 'auto'; // .txt 等交给服务端嗅探
+}
+
 /**
  * 导入题录文件
  *
- * ⚠️ 桩：autonomics 批量导入端点属 Phase 3。
- *
- * stubbed: capability not present in autonomics backend (see plan Phase 3)
+ * 读文件为文本后 POST /articles/import/batch。重复条目由服务端按标识符
+ * upsert 合并（重复数体现在 `duplicates`），**前端没有去重解决步骤**，
+ * 因此返回的 `duplicate_details` 恒为空数组；`imported_paper_ids` 是实际
+ * 入库（含合并落位）文章的 safeId 列表。
  *
  * @param {File} file - 用户上传的题录文件对象
- * @param {string|null} [categoryId=null] - 可选的分类 ID
- * @param {string|null} [format=null] - 可选的格式提示
+ * @param {string|null} [categoryId=null] - 可选的分类 ID（导入后自动归入）
+ * @param {string|null} [format=null] - 可选的格式提示（bibtex|ris|csl_json|auto）
  * @returns {Promise<ImportResult>} 导入结果对象
  */
 export async function importBibliography(
-  _file: File,
-  _categoryId: string | null = null,
-  _format: string | null = null,
+  file: File,
+  categoryId: string | null = null,
+  format: string | null = null,
 ): Promise<ImportResult> {
-  void _categoryId; void _format;
-  throw new Error('题录批量导入暂未开放（autonomics 导入管线尚未实现，见 plan Phase 3）');
+  const content = await file.text();
+  const body: Record<string, unknown> = {
+    format: format || formatForFile(file),
+    content,
+  };
+  if (categoryId !== null && categoryId !== undefined && categoryId !== '') {
+    body.category_id = String(categoryId);
+  }
+
+  const res = await request<ImportBatchResponse>('/articles/import/batch', {
+    method: 'POST',
+    body,
+  });
+
+  return {
+    imported: res.imported,
+    duplicates: res.duplicates,
+    failed: res.failed.length,
+    // 服务端已合并重复条目，无需前端解决 → 恒为空
+    duplicate_details: [],
+    imported_paper_ids: (res.articles ?? []).map((article) => encodeSafeId(article.id)),
+  };
 }
 
 /**
  * 处理重复文献的去重选择
  *
  * ⚠️ 桩：autonomics 在服务端 upsert 合并，无需前端解决重复。此函数将随
- * resolveDuplicates 流程在 Phase 5 一并删除。
+ * resolveDuplicates 流程在死代码清扫阶段一并删除。
  *
  * stubbed: capability not present in autonomics backend (see plan Phase 3/5)
  */
@@ -61,17 +100,26 @@ export async function resolveDuplicates(
 /**
  * 为元数据记录手动上传 PDF 文件
  *
- * ⚠️ 桩：autonomics 的 fulltext 上传端点属 Phase 3。
+ * POST /articles/{enc}/fulltext（multipart `file`）：服务端按内容寻址保存
+ * 原始文件并抽取纯文本，返回 `{"fulltext": {...}}`。
  *
- * stubbed: capability not present in autonomics backend (see plan Phase 3)
- *
- * @param {string} paperId - 论文 ID
+ * @param {string} paperId - 论文 ID（safeId）
  * @param {File} file - 用户上传的附件文件对象
  * @returns {Promise<AttachPdfResponse>} 操作结果
  */
-export async function attachPdf(_paperId: string, _file: File): Promise<AttachPdfResponse> {
-  void _file;
-  throw new Error('上传 PDF 暂未开放（autonomics 导入管线尚未实现，见 plan Phase 3）');
+export async function attachPdf(paperId: string, file: File): Promise<AttachPdfResponse> {
+  const realId = fromSafeId(paperId);
+  const form = new FormData();
+  form.append('file', file, file.name);
+
+  // 服务端同步抽取文本（含 OCR 回退），放宽超时
+  await request('/articles/' + encodeIdSegment(realId) + '/fulltext', {
+    method: 'POST',
+    body: form,
+    timeout: 300000,
+  });
+
+  return { message: 'PDF 已关联', paper_id: paperId };
 }
 
 /**

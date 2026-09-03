@@ -16,12 +16,13 @@
  * - 使用 ref 存储最新消息列表，避免闭包陷阱
  * - debounce 计时器可清除，支持立即保存绕过防抖
  * - sendBeacon 截断策略保留最近 30 条主消息 + 每线程 3 条消息
- * - 持久化 API 路径：POST /api/papers/{paperId}/chat
+ * - 持久化 API 路径：POST /api/v1/bib/chat（chat blob，body 由 chatApi 构造）
  *
  * @module ai-chat/hooks/useMessagePersistence
  */
 
 import { useCallback, useRef, useEffect } from 'react'; // 导入 React 核心钩子
+import { buildChatBeaconSave, postChatBeaconBody } from '../../../services/chatApi'; // beacon 兜底保存（构造 + 重发均收口在 chatApi）
 
 /**
  * 消息持久化 Hook
@@ -151,18 +152,21 @@ export function useMessagePersistence({ messagesRef, persistMessages, paperId }:
       // 无消息时不发送请求
       if (!msgs || msgs.length === 0) return;
 
-      // 构建请求 payload
-      let payload;
+      // 构造 {scope, payload} 请求体：chatApi 用 blob 镜像同步拼装，
+      // 形状与 saveMessages 的写回完全一致（绝不能直接发 {messages}，
+      // 那会覆盖掉 blob 里的多会话结构）
+      let save: { url: string; body: string } | null;
       try {
-        payload = JSON.stringify({ messages: msgs });
+        save = buildChatBeaconSave(paperId, msgs);
       } catch (e) {
         console.error('[beforeunload] 序列化消息失败:', e);
         return; // 序列化失败，放弃发送
       }
+      if (!save) return;
 
       // 如果 payload 超过 60KB，进行渐进截断
       // 60KB 是安全阈值，确保不超出 sendBeacon 的 64KB 限制
-      if (payload.length > 60000) {
+      if (save.body.length > 60000) {
         // 第 1 步：截断至最近 30 条主消息
         let truncated = msgs.slice(-30);
 
@@ -180,13 +184,14 @@ export function useMessagePersistence({ messagesRef, persistMessages, paperId }:
           };
         });
 
-        // 重新序列化截断后的消息
+        // 用截断后的消息重新构造请求体
         try {
-          payload = JSON.stringify({ messages: truncated });
+          save = buildChatBeaconSave(paperId, truncated);
         } catch (e) {
           console.error('[beforeunload] 截断后序列化失败:', e);
           return; // 序列化失败，放弃发送
         }
+        if (!save) return;
 
         console.warn(`[beforeunload] 消息过大，已截断至最近 30 条主消息 + 每线程 3 条消息`);
       }
@@ -194,18 +199,18 @@ export function useMessagePersistence({ messagesRef, persistMessages, paperId }:
       // 使用 sendBeacon 发送请求（不会被页面卸载取消）
       // 注意：sendBeacon 只支持 POST，且无法设置自定义 headers
       // Content-Type 会自动设为 text/plain，后端需要兼容处理
-      const apiUrl = `/api/papers/${paperId}/chat`;
-      const blob = new Blob([payload], { type: 'application/json' });
+      const blob = new Blob([save.body], { type: 'application/json' });
 
       // 发送请求（Fire and Forget，无法获取响应）
-      const sent = navigator.sendBeacon(apiUrl, blob);
+      const sent = navigator.sendBeacon(save.url, blob);
 
       if (!sent) {
         console.warn('[beforeunload] sendBeacon 发送失败（可能是浏览器限制或请求被取消）');
         // Fallback: store in sessionStorage for later retry
         const fallbackKey = `pending_messages_${paperId}`;
         try {
-          sessionStorage.setItem(fallbackKey, JSON.stringify(payload));
+          // save.body 本身就是可重发的 JSON 请求体，原样存储（不再二次序列化）
+          sessionStorage.setItem(fallbackKey, save.body);
           console.info('[beforeunload] 消息已保存到 sessionStorage，下次访问时将重试发送');
         } catch (err) {
           console.error('[beforeunload] sessionStorage 保存失败:', err);
@@ -240,27 +245,20 @@ export function useMessagePersistence({ messagesRef, persistMessages, paperId }:
 
     console.info(`[useMessagePersistence] mount retry: ${key} 有 pending payload, 重新发送`);
 
-    // 直接 fetch (非 sendBeacon), 失败保留 key 等下次 mount 再试。
-    fetch(`/api/papers/${paperId}/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: pending,
-    })
-      .then((res) => {
-        if (res.ok) {
-          try {
-            sessionStorage.removeItem(key);
-            console.info(`[useMessagePersistence] retry 成功, 清除 ${key}`);
-          } catch {
-            // ignore
-          }
-        } else {
-          console.warn(`[useMessagePersistence] retry 失败 (HTTP ${res.status}), 保留 sessionStorage 等下次重试`);
+    // 直接重发存储的请求体 (非 sendBeacon), 失败保留 key 等下次 mount 再试。
+    // body 自带 scope，postChatBeaconBody 内部走统一的 request 客户端。
+    postChatBeaconBody(pending).then((ok) => {
+      if (ok) {
+        try {
+          sessionStorage.removeItem(key);
+          console.info(`[useMessagePersistence] retry 成功, 清除 ${key}`);
+        } catch {
+          // ignore
         }
-      })
-      .catch((err) => {
-        console.warn(`[useMessagePersistence] retry 网络错误, 保留 sessionStorage:`, err);
-      });
+      } else {
+        console.warn(`[useMessagePersistence] retry 失败, 保留 sessionStorage 等下次重试`);
+      }
+    });
   }, [paperId]);
 
   // ========== 返回接口 ==========

@@ -19,12 +19,10 @@ import {
 } from '../utils/chatMessageUtils';
 import {
   resolveModelConfig as resolveModelConfigUtil,
-  buildTargetUrl as buildTargetUrlUtil,
-  buildRequestBody as buildRequestBodyUtil,
   type ResolvedModelConfig,
   type ModelConfig,
 } from '../utils/chatUtils';
-import { parseStreamResponse, parseAgentStream } from '../utils/streamParser';
+import { parseAgentStream } from '../utils/streamParser';
 import {
   prepareThreadContext as prepareThreadContextUtil,
   DEFAULT_TOKEN_BUDGET,
@@ -367,9 +365,11 @@ export function useChatSender({
           finalApiMessages.push({ role: 'system', content: flattenBlocks(finalSystemPrompt as any) });
         }
 
-        // 渐进式历史压缩（Agent 模式下跳过，由后端处理）
+        // 渐进式历史压缩（Agent 模式下跳过，由后端处理）。
+        // 压缩的是「本轮之前」的 messages（不含刚拼好的用户消息）——
+        // 新输入由 body.message 注入，若混进历史种子，模型会看到同一条消息两遍
         const { messages: compMessages, fallbackReason, errorMessage } = await compactHistory(
-          newMessages as any[],
+          messages as any[],
           tokenBudget,
           paperInfo?.title || '未知论文',
           paperInfo?.id as any,
@@ -384,9 +384,6 @@ export function useChatSender({
 
         finalApiMessages.push(...compressedMessages.map((m: any) => ({ role: m.role, content: m.content })));
       }
-
-      // 构建目标 URL
-      const targetUrl = buildTargetUrlUtil(provider, baseUrl);
 
       // 发起请求
       const abortController = isThreadMode && threadOptions?.abortController
@@ -419,15 +416,19 @@ export function useChatSender({
         // content 直接透传(String 或 parts 数组都接受),不再剥图片:
         // 后端 assembly.rs 用 content_parse::parse_user_content 解析 parts 数组,
         // 把 image_url part 转成 Content::Image block 喂给 LLM。
-        const agentMessages: Array<{ role: string; content: string | any[] }> = compressedMessages
+        // content 一律压平成纯文本：后端 HistoryMessage.content 是 String，
+        // 多模态 parts 数组（图片附件）会让整个请求 422
+        const agentMessages: Array<{ role: string; content: string }> = compressedMessages
           .filter((m: any) => m.role !== 'system')
           .map((m: any) => ({
             role: m.role,
-            content: m.content,
+            content: stripAttachmentsForPersistence(m.content),
           }));
 
         const body = {
-          message: userMessage,
+          // 注入的新输入用压平后的完整文本（保留引用消息/文件引用的拼接）；
+          // 图片无法走 String 字段，只剩文本部分
+          message: (stripAttachmentsForPersistence(userContent) as string) || userMessage,
           model_config: { provider, api_key: apiKey, model, base_url: baseUrl, supports_vision: customConfig?.supportsVision === true },
           tools: tools ?? [],
           system_prompt: finalSystemPrompt || undefined,
@@ -517,24 +518,44 @@ export function useChatSender({
         return;
       }
 
-      // ========== Thread mode: direct API proxy (unchanged) ==========
-      const headers = { 'Content-Type': 'application/json' };
-      const proxyMeta = { targetUrl, apiKey, provider };
-      const body = buildRequestBodyUtil(provider, model, modelConfig, finalApiMessages, proxyMeta);
+      // ========== Thread mode: same agent endpoint as main chat ==========
+      // 线程追问不再直连提供商代理（那条路要浏览器持有 apiKey，且
+      // /api/ai/proxy 在 autonomics 后端不存在）——与主对话共用
+      // /api/v1/agent/chat，模型与密钥都留在服务端。
+      const threadEntries = finalApiMessages.filter((m: any) => m.role !== 'system');
+      // threadApiMessages 的最后一条就是本轮新输入：拆出来走 message 注入，
+      // 其余作为历史种子（与主对话同样的去重约定）
+      const lastThreadEntry = threadEntries[threadEntries.length - 1];
+      const threadHistory = threadEntries.slice(0, -1).map((m: any) => ({
+        role: m.role,
+        content: stripAttachmentsForPersistence(m.content),
+      }));
+      const threadInput = lastThreadEntry
+        ? stripAttachmentsForPersistence(lastThreadEntry.content)
+        : userMessage;
 
-      const response = await fetch('/api/ai/proxy', {
+      const threadBody = {
+        message: threadInput || userMessage,
+        system_prompt: finalSystemPrompt || undefined,
+        messages: threadHistory,
+        agent_type: agentType,
+      };
+      const threadToken = localStorage.getItem('autonomics_token');
+      const response = await fetch('/api/v1/agent/chat', {
         method: 'POST',
-        headers,
-        body,
+        headers: {
+          'Content-Type': 'application/json',
+          ...(threadToken ? { Authorization: `Bearer ${threadToken}` } : {}),
+        },
+        body: JSON.stringify(threadBody),
         signal: abortController.signal,
       });
 
       if (!response.ok) {
-        let errorMsg = `API 请求失败 (${response.status})`;
+        let errorMsg = `Agent API 请求失败 (${response.status})`;
         try {
-          const errText = await response.text();
-          const errData = JSON.parse(errText);
-          errorMsg = errData.error?.message || errData.error || errData.message || errData.detail || errorMsg;
+          const errData = await response.json();
+          errorMsg = errData.error?.message || errData.error || errData.message || errorMsg;
         } catch {}
 
         if (threadOptions?.onStreamError) {
@@ -549,12 +570,12 @@ export function useChatSender({
 
       const isRequestStillActive = () => true;
 
-      const { content: assistantContent, error: streamError } = await parseStreamResponse({
+      const { content: assistantContent, error: streamError } = await parseAgentStream({
         response,
-        provider: provider as 'openai' | 'anthropic',
         newMessages: [],
         setMessages: (threadOptions?.onStreamUpdate || setMessages) as any,
         isRequestStillActive,
+        onActivity: resetIdleTimer,
       });
 
       if (timeoutId) clearTimeout(timeoutId);

@@ -11,17 +11,15 @@
 export const BIBLIOGRAPHY_EXTENSIONS = [
   '.bib',   // BibTeX 格式
   '.ris',   // RIS 格式
-  '.nbib',  // PubMed/MEDLINE 格式
-  '.enw',   // EndNote 格式
-  '.xml',   // 通用 XML 格式
-  '.txt',   // 纯文本格式
+  '.json',  // CSL-JSON 格式
+  '.txt',   // 纯文本（RIS 导出常见扩展名，服务端按内容嗅探）
 ] as const;
 
 /**
  * 文件输入框的 accept 属性值
  * 包含 PDF 和参考文献格式
  */
-export const FILE_INPUT_ACCEPT = '.pdf,.bib,.ris,.nbib,.enw,.xml,.txt';
+export const FILE_INPUT_ACCEPT = '.pdf,.bib,.ris,.json,.txt';
 
 /**
  * 分类树中使用的虚拟节点键名

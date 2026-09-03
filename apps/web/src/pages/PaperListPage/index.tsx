@@ -462,13 +462,9 @@ function PaperListPageInner() {
   // 使用提取的 useBibliographyImport hook 替代原来的内联题录导入代码（约 200 行）
   const {
     importingBib,                // 题录导入中状态
-    duplicateData,               // 重复记录详情
-    pendingCategoryId,           // 待定分类 ID
     downloadingPdfIds,           // 正在下载 PDF 的论文 ID 集合
     uploadingPdfIds,             // 正在上传 PDF 的论文 ID 集合
     handleImportBibliography,    // 处理题录文件导入
-    handleResolveDuplicates,     // 处理重复文献去重选择
-    handleCancelDuplicates,      // 取消重复文献解决
     handleAttachPdf,             // 为元数据记录手动上传 PDF（注意：hook 的签名是 (paperId, file, listenToParseStatus)）
     handleDownloadPdf,           // 通过 DOI 自动下载 PDF（注意：hook 的签名是 (paperId, listenToParseStatus)）
   } = useBibliographyImport(loadPapers, startMetadataPolling as any); // 传入 loadPapers 和 startMetadataPolling

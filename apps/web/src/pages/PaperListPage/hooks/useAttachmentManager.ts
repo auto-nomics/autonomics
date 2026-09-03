@@ -154,8 +154,8 @@ export function useAttachmentManager({ navigate, tableWrapperRef, onSetPrimary }
     const getPaperIdFromRow = (e: any) => {
       const tr = (e.target as HTMLElement).closest('tr[data-row-key]');
       if (!tr) return null;
-      const key = tr.getAttribute('data-row-key');
-      return key ? parseInt(key, 10) : null;
+      // data-row-key 是 Paper.id（safeId，base64url 字符串）——绝不能 parseInt
+      return tr.getAttribute('data-row-key') || null;
     };
 
     const onDragOver = (e: any) => {

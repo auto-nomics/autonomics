@@ -48,6 +48,10 @@ export interface UploadPaperResponse {
   id: string;
   parse_status: string;
   title: string;
+  /** 服务端建档结果：false = 标识符命中已有文献，文件挂到了原条目（勿重复插入列表） */
+  created?: boolean;
+  /** service 实际返回完整 Paper（展开字段，列表行直接可用） */
+  [key: string]: unknown;
 }
 
 export interface ReparsePaperResponse {
@@ -218,7 +222,8 @@ export interface AttachPdfParams {
 
 export interface AttachPdfResponse {
   message: string;
-  paper_id: number;
+  /** 论文 ID（safeId 字符串；autonomics 无自增数字主键） */
+  paper_id: string;
 }
 
 export interface DownloadPdfResponse {

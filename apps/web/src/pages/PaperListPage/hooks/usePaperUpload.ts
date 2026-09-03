@@ -6,15 +6,14 @@
  * - 上传到指定分类（右键菜单触发，上传后自动归入该分类）
  * - 文件类型校验（仅支持 PDF 格式）
  * - 上传状态管理（防止重复上传）
- * - 上传成功后自动启动 SSE 监听解析进度
+ * - 上传返回即终态（autonomics 服务端同步完成抽取+建档，无后续解析流水线）
  *
  * 上传流程：
  * 1. 用户选择 PDF 文件（拖拽或点击）
  * 2. 前端校验文件类型（.pdf 后缀）
  * 3. 调用后端 API 上传文件
  * 4. 后端返回新论文对象（包含论文 ID 和初始状态）
- * 5. 前端将新论文添加到列表顶部
- * 6. 启动 SSE 监听解析进度
+ * 5. 前端将新论文按 id 去重插入列表（命中已有文献则更新原行）
  *
  * 为什么需要两个上传函数？
  * - handleUpload: 由 Ant Design Dragger 的 beforeUpload 触发，返回值必须是 false
@@ -25,16 +24,15 @@ import { useState, useCallback } from 'react'; // 导入 React 核心钩子
 import { App } from 'antd'; // 导入 Ant Design App 组件
 import { uploadPaper } from '../../../services/papersApi'; // 导入上传论文 API 函数
 import { FILE_UPLOAD } from '../../../config/constants'; // 导入文件上传常量
-import { bridgePaperAdded } from '../../../bus/sseBridge';
 
 /**
  * PDF 文件上传钩子
  *
  * @param {Function} setPapers - 更新论文列表的 setState 函数
- * @param {Function} listenToParseStatus - SSE 监听函数，上传成功后开始监听解析状态
+ * @param {Function} listenToParseStatus - （保留参数兼容调用方）autonomics 无解析流水线，已桩化不使用
  * @returns {Object} 返回状态和上传处理函数的对象
  */
-export function usePaperUpload(setPapers: any, listenToParseStatus: any) {
+export function usePaperUpload(setPapers: any, _listenToParseStatus: any) {
   const { message } = App.useApp();
   // ========== 状态定义 ==========
 
@@ -71,20 +69,28 @@ export function usePaperUpload(setPapers: any, listenToParseStatus: any) {
     setUploading(true); // 将上传状态设为 true
 
     try { // 开始 try-catch
-      // 调用 API 上传文件（不指定分类，用户后续手动分配）
-      const paper = await uploadPaper(file); // 调用上传接口，返回新论文对象
+      // 调用 API 上传文件（不指定分类，用户后续手动分配）。
+      // autonomics 端同步完成抽取+建档，返回即终态（无后续解析流水线）
+      const paper = await uploadPaper(file); // 调用上传接口，返回完整 Paper
 
-      // 将新论文添加到列表顶部（最新的在前）
-      setPapers((prev: any) => [paper, ...prev]); // 将新论文插入列表头部
+      // 按 id 去重插入：标识符命中已有文献时（created=false）更新原行，
+      // 新文献则插到列表顶部
+      setPapers((prev: any) => {
+        const idx = prev.findIndex((p: any) => String(p.id) === String(paper.id));
+        if (idx >= 0) {
+          const next = [...prev];
+          next[idx] = { ...next[idx], ...paper };
+          return next;
+        }
+        return [paper, ...prev];
+      });
 
-      // 通知其他模块：新论文已添加
-      bridgePaperAdded(paper.id, { source: 'upload' });
-
-      // 显示成功提示
-      message.success('上传成功，正在解析...'); // 弹出成功提示
-
-      // 启动 SSE 监听，实时更新解析进度
-      listenToParseStatus(paper.id); // 开始监听该论文的解析状态
+      // 显示成功提示（重复上传时告知已并入原条目）
+      if (paper.created === false) {
+        message.info('该文献已在库中，文件已挂到原条目');
+      } else {
+        message.success('上传成功');
+      }
     } catch (err: any) { // 捕获上传错误
       // 上传失败，显示错误信息
       message.error('上传失败: ' + err.message); // 弹出错误提示
@@ -95,7 +101,7 @@ export function usePaperUpload(setPapers: any, listenToParseStatus: any) {
 
     // 阻止 Ant Design 的默认上传行为（我们已手动处理）
     return false; // 返回 false 阻止 Ant Design Upload 的默认上传流程
-  }, [setPapers, listenToParseStatus]); // 依赖项：更新论文列表函数和 SSE 监听函数
+  }, [setPapers, message]); // 依赖项：更新论文列表函数与 toast（SSE 监听已桩化）
 
   /**
    * 上传文件到指定分类的处理函数
@@ -132,17 +138,23 @@ export function usePaperUpload(setPapers: any, listenToParseStatus: any) {
       // 后端会同时完成文件保存和分类关联，无需二次调用 assignPapers
       const paper = await uploadPaper(file, categoryId); // 上传文件并指定目标分类
 
-      // 将新论文添加到列表头部（最新的在最前面）
-      setPapers((prev: any) => [paper, ...prev]); // 将新论文插入列表头部
+      // 按 id 去重插入（与 handleUpload 同一策略）：命中已有文献时更新原行
+      setPapers((prev: any) => {
+        const idx = prev.findIndex((p: any) => String(p.id) === String(paper.id));
+        if (idx >= 0) {
+          const next = [...prev];
+          next[idx] = { ...next[idx], ...paper };
+          return next;
+        }
+        return [paper, ...prev];
+      });
 
-      // 通知其他模块：新论文已添加
-      bridgePaperAdded(paper.id, { source: 'upload', categoryId });
-
-      // 显示上传成功提示
-      message.success('上传成功，正在解析...'); // 弹出成功提示
-
-      // 启动 SSE 监听该论文的解析进度（与主上传区域逻辑一致）
-      listenToParseStatus(paper.id); // 开始监听解析状态推送
+      // 显示成功提示（重复上传时告知已并入原条目）
+      if (paper.created === false) {
+        message.info('该文献已在库中，文件已挂到原条目');
+      } else {
+        message.success('上传成功');
+      }
     } catch (err: any) { // 捕获上传或解析过程中的错误
       // 上传失败，显示错误信息
       message.error('上传失败: ' + err.message); // 弹出错误提示
@@ -150,7 +162,7 @@ export function usePaperUpload(setPapers: any, listenToParseStatus: any) {
       // 恢复上传状态，允许后续上传操作
       setUploading(false); // 恢复上传状态为 false
     }
-  }, [setPapers, listenToParseStatus]); // 依赖项：更新论文列表函数和 SSE 监听函数
+  }, [setPapers, message]); // 依赖项：更新论文列表函数与 toast（SSE 监听已桩化）
 
   // 返回公共接口
   return {

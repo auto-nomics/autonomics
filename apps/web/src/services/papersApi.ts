@@ -24,6 +24,7 @@ import {
   type BibArticleListResponse,
   type BibArticleDetail,
   type BibCollectionLike,
+  type BibFullText,
 } from './mapping';
 import type {
   UploadPaperResponse,
@@ -139,14 +140,25 @@ function sortPapersLocally(papers: Paper[], sortField: string, order: 'asc' | 'd
 // CRUD
 // ============================================================
 
+/** POST /articles/upload 的响应（服务端同步完成抽取 + 建档 + 归类） */
+interface UploadArticleResponse {
+  created: boolean;
+  article: BibArticle;
+  fulltext: BibFullText | null;
+  text_chars: number | null;
+}
+
 /**
  * 上传 PDF 文件创建论文记录
  *
- * ⚠️ 桩：autonomics 的 `POST /articles/upload`（multipart + 标识符抽取 + 建档）
- * 属 Phase 3 导入管线，本阶段尚未实现。这里显式拒绝，调用方
- * （usePaperUpload）走既有 catch → toast 提示，UI 不崩。
+ * POST /articles/upload（multipart）：服务端抽取文本、扫描 DOI / arXiv
+ * 标识符、命中则经 gateway 拉真实元数据（离线落按标识符索引的存根）、
+ * 未命中建 `local:{uuid}` 手工条目，并可选挂进分类——一步到位，**没有
+ * 后续解析流水线**，返回即终态。
  *
- * Phase 3 落地后此函数改为 multipart 上传，签名不变。
+ * 返回完整 Paper（含 id/parse_status/title 等），列表行可直接渲染；
+ * `created: false` 表示标识符命中已有文献、文件挂到了原条目上（调用方
+ * 据此更新而非重复插入）。
  *
  * @param {File} file - PDF 文件对象
  * @param {string|null} [categoryId=null] - 可选的分类 ID
@@ -154,12 +166,31 @@ function sortPapersLocally(papers: Paper[], sortField: string, order: 'asc' | 'd
  * @returns {Promise<UploadPaperResponse>} 上传结果（`id` 为 safeId）
  */
 export async function uploadPaper(
-  _file: File,
-  _categoryId: string | null = null,
+  file: File,
+  categoryId: string | null = null,
   signal?: AbortSignal,
 ): Promise<UploadPaperResponse> {
-  void signal;
-  throw new Error('PDF 上传建档暂未开放（autonomics 导入管线尚未实现，见 plan Phase 3）');
+  const form = new FormData();
+  form.append('file', file, file.name);
+  if (categoryId !== null && categoryId !== undefined && categoryId !== '') {
+    form.append('category_id', String(categoryId));
+  }
+
+  // 文本抽取（含 OCR 回退）在服务端同步完成，扫描件可能要跑 tesseract——
+  // 默认 30s 超时对大 PDF 太紧，放宽到 5 分钟
+  const res = await request<UploadArticleResponse>('/articles/upload', {
+    method: 'POST',
+    body: form,
+    timeout: 300000,
+    signal,
+  });
+
+  const paper = articleToPaper(res.article, res.fulltext);
+  return {
+    ...paper,
+    created: res.created,
+    ...(categoryId ? { category_ids: [String(categoryId)] } : {}),
+  } as UploadPaperResponse;
 }
 
 /**

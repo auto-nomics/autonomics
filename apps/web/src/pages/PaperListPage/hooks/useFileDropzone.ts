@@ -33,7 +33,7 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import { App } from 'antd';
 
 // 题录文件扩展名列表
-const BIB_EXTENSIONS = ['.bib', '.ris', '.nbib', '.enw', '.xml', '.txt'];
+const BIB_EXTENSIONS = ['.bib', '.ris', '.json', '.txt']; // autonomics：BibTeX / RIS / CSL-JSON（.txt 走服务端嗅探）
 
 // 看门狗超时时间（毫秒）：dragover 停止超过此时间即判定拖拽已结束
 const WATCHDOG_TIMEOUT = 500;

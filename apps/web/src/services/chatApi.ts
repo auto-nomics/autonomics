@@ -23,7 +23,7 @@
  * 否则两个标签页会互相覆盖丢消息。GET 用 `_t` cache-bust 绕开 client 的
  * 响应缓存（聊天状态绝不能读旧值）。
  */
-import request from './client';
+import request, { API_BASE } from './client';
 import { toSafeId, fromSafeId } from './mapping';
 import type {
   Message,
@@ -94,6 +94,17 @@ function scopeFor(paperId: string | null | undefined): string {
 // blob 读写
 // ============================================================
 
+/**
+ * 每个 scope 最近一次读/写看到的 blob 镜像。
+ *
+ * sendBeacon 是同步 fire-and-forget，没法像 saveMessages 那样先 GET
+ * 最新 blob 再改写；这里镜像 loadBlob/saveBlob 的结果，让 beacon 能
+ * 同步构造出保真的 `{scope, payload}`。chat UI 挂载必然先 getMessages
+ * （loadBlob）一次，镜像因此总是热的；未命中时退化为「只有一个会话」
+ * 的新 blob —— 可接受，总比丢消息强。
+ */
+const blobMirror = new Map<string, ChatBlob>();
+
 /** 读取 scope 的 payload；无记录返回 null。`_t` 绕开 client 缓存。 */
 async function loadBlob(scope: string, signal?: AbortSignal): Promise<ChatBlob | null> {
   const data = await request<{ payload: ChatBlob | null }>(
@@ -103,16 +114,76 @@ async function loadBlob(scope: string, signal?: AbortSignal): Promise<ChatBlob |
   const payload = data?.payload;
   if (!payload || typeof payload !== 'object') return null;
   // 结构兜底：后端只做 JSON 透传，畸形/空对象都归一成合法 blob
-  return {
+  const blob: ChatBlob = {
     conversations: Array.isArray(payload.conversations) ? payload.conversations : [],
     active_conversation_id:
       typeof payload.active_conversation_id === 'string' ? payload.active_conversation_id : null,
   };
+  blobMirror.set(scope, blob);
+  return blob;
 }
 
 /** 整体覆盖写回 payload */
 async function saveBlob(scope: string, payload: ChatBlob, signal?: AbortSignal): Promise<void> {
   await request('/chat', { method: 'POST', body: { scope, payload }, signal });
+  blobMirror.set(scope, payload);
+}
+
+// ============================================================
+// beforeunload sendBeacon 兜底
+// ============================================================
+
+/**
+ * 同步构造 beforeunload sendBeacon 用的请求（不实际发送）。
+ *
+ * body 与 saveMessages 的写回形状完全一致：镜像 blob + 活跃会话的
+ * messages 替换为传入值。拆出「构造」这一步是因为调用方
+ * （useMessagePersistence）还要拿同一份 body 写 sessionStorage 做
+ * 发送失败时的离线兜底。
+ *
+ * @returns null 表示消息为空，不值得发送
+ */
+export function buildChatBeaconSave(
+  paperId: string | number | null | undefined,
+  messages: unknown[],
+): { url: string; body: string } | null {
+  if (!messages || messages.length === 0) return null;
+  const scope = scopeFor(paperId == null ? undefined : String(paperId));
+  const base = blobMirror.get(scope) ?? { conversations: [], active_conversation_id: null };
+  // 深拷贝：beacon 构造绝不能改写镜像本身
+  const blob: ChatBlob = JSON.parse(JSON.stringify(base));
+  const now = new Date().toISOString();
+  let active = activeConversationOf(blob);
+  if (!active) {
+    active = {
+      id: newConversationId(),
+      title: defaultConversationTitle(),
+      created_at: now,
+      updated_at: now,
+      messages: [],
+    };
+    blob.conversations.push(active);
+  }
+  active.messages = messages;
+  active.updated_at = now;
+  blob.active_conversation_id = active.id;
+  return { url: `${API_BASE}/chat`, body: JSON.stringify({ scope, payload: blob }) };
+}
+
+/**
+ * 重发一条 sessionStorage 里兜底的 beacon body（组件 mount 时调用）。
+ * body 自带 scope，无需再传 paperId。
+ *
+ * @returns 是否发送成功（失败时调用方保留 sessionStorage 等下次重试）
+ */
+export async function postChatBeaconBody(body: string): Promise<boolean> {
+  try {
+    const parsed = JSON.parse(body) as { scope: string; payload: ChatBlob };
+    await request('/chat', { method: 'POST', body: parsed });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** 取活跃会话；没有会话或 active 指向不存在的 id 时，落到最近更新的那个。 */
