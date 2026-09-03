@@ -1,0 +1,39 @@
+[package]
+name = "autonomics-desktop"
+version = "0.1.0"
+description = "Autonomics 桌面壳：进程内嵌 tui-http，同源托管 web 前端"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+default-run = "autonomics-desktop"
+
+[lib]
+name = "autonomics_desktop_lib"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-clipboard-manager = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-single-instance = "2"
+
+tui-http = { path = "../../../crates/tui-http" }
+bib-base = { path = "../../../crates/bib-base" }
+app-config = { path = "../../../crates/app-config" }
+vfs = { path = "../../../crates/vfs" }
+agentik-sdk = { path = "../../../crates/agentik-sdk" }
+
+tokio = { workspace = true, features = ["time"] }
+arc-swap.workspace = true
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter", "time"] }
+tracing-appender = "0.2"
+
+[features]
+dev = ["tauri/devtools"]
+
+[lints]
+workspace = true

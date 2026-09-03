@@ -1,0 +1,19 @@
+{
+  "name": "@autonomics/desktop",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Autonomics 桌面壳（Tauri v2）：进程内嵌 tui-http 服务，webview 导航至同源地址",
+  "type": "module",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@tauri-apps/cli"
+    ]
+  }
+}
