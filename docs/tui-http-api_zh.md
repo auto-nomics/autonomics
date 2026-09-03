@@ -48,23 +48,27 @@ GET /api/v1
 
 ## 前端
 
-Rust 后端在根路径直接托管文献管理前端，无需另起前端服务：
+Rust 后端在根路径直接托管文献管理前端（autonomics-web，React 18 + Vite + antd），无需另起前端服务：
 
 ```text
 http://<本机IP>:8765/
 ```
 
-前端为 React + TypeScript，界面组件来自本地 `src/components/ui` 下的 shadcn/ui 组件；构建与测试由 Bun 执行：
+前端源码在 `apps/web`（pnpm workspace，含 `vendor/citation-engine` 与 `vendor/pdfium-viewer` 两个本地包）。构建：
 
 ```bash
-cd crates/tui-http/frontend
-bun install
-bun test
-bun run typecheck
-bun run build
+scripts/build-web.sh          # = pnpm --dir apps/web install && pnpm build
 ```
 
-开发时可保持 Rust TUI/HTTP 后端运行，然后执行 `bun run dev`。Bun 会在 `http://127.0.0.1:5173` 启动前端开发服务，并把 `/api/*` 代理到 Rust 后端；后端地址可用 `AUTONOMICS_API_BACKEND` 覆盖。
+构建产物 `apps/web/dist` 入 git（与旧惯例一致），由 `crates/tui-http/src/frontend.rs` 通过 rust-embed 托管：release 构建把 dist 嵌入二进制，debug 构建直接从磁盘读取（改前端只需重跑构建脚本，不必重编 Rust）。哈希化的 `/assets/*`、`/wasm/*` 返回 `Cache-Control: immutable`；未命中的非 API GET 回落 `index.html`（SPA 路由），未命中的 `/api/*` 保持 JSON 404。
+
+开发时保持 Rust TUI/HTTP 后端运行，然后：
+
+```bash
+pnpm --dir apps/web dev
+```
+
+Vite 在 `http://127.0.0.1:5173` 启动开发服务并把 `/api` 代理到 Rust 后端（SSE 不缓冲）；后端端口可用 `API_PORT` 覆盖（默认 8765）。
 
 ## 示例
 

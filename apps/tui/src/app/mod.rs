@@ -164,7 +164,7 @@ impl App {
 
         let (app_event_tx, app_event_rx) = tokio::sync::mpsc::unbounded_channel();
         let runtime_handle = runtime.handle().clone();
-        let http_server = Self::start_http_server(&runtime, host.as_ref());
+        let http_server = Self::start_http_server(&runtime, host.as_ref(), state.active_model.clone());
         if let Some(ref server) = http_server {
             state.toasts.info("HTTP API started", Some(server.url()));
         } else {

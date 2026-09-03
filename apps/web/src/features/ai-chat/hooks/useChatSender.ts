@@ -437,9 +437,8 @@ export function useChatSender({
           // 不再让 query classifier 启发式覆盖用户意图。
           agent_type: agentType,
         };
-        // DEBUG: 临时日志,验证 agent_type 真的直传后端
-        console.log('[useChatSender] POST /api/agent/chat body.agent_type =', body.agent_type, '(type:', typeof body.agent_type, ')');
-        const response = await fetch('/api/agent/chat', {
+        // autonomics 后端的 agentik 聊天入口（SSE 直连，不经过 services/client）
+        const response = await fetch('/api/v1/agent/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),

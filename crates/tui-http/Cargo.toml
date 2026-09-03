@@ -9,8 +9,13 @@ description = "Composable local HTTP API backend started alongside the Autonomic
 [dependencies]
 bib-base = { path = "../bib-base" }
 bib-types = { path = "../bib-types" }
+agentik-core = { path = "../agentik-core" }
+agentik-sdk = { path = "../agentik-sdk" }
+agentik-types = { path = "../agentik-types" }
+arc-swap.workspace = true
 axum = { version = "0.8", features = ["multipart"] }
 chrono.workspace = true
+futures.workspace = true
 mime_guess = "2"
 opendal = "0.57"
 rust-embed.workspace = true
@@ -24,6 +29,11 @@ uuid = { version = "1.23", features = ["v4"] }
 vfs = { path = "../vfs" }
 
 [dev-dependencies]
+agentik-core = { path = "../agentik-core" }
+agentik-sdk = { path = "../agentik-sdk" }
+agentik-types = { path = "../agentik-types" }
+arc-swap.workspace = true
+async-trait.workspace = true
 http-body-util = "0.1"
 tempfile = "3"
 tower = { version = "0.5", features = ["util"] }

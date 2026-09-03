@@ -5,11 +5,13 @@
 //! Bibliography management is the first module; future REST modules can be
 //! mounted without changing startup behavior.
 
+pub mod agent;
 pub mod bib;
 pub mod server;
 
 mod frontend;
 
 pub use server::{
-    DEFAULT_HTTP_API_ADDR, HttpServerHandle, api_router, api_router_with_auth, start,
+    ApiRouterBuilder, DEFAULT_HTTP_API_ADDR, HttpServerHandle, api_router, api_router_with_auth,
+    start,
 };

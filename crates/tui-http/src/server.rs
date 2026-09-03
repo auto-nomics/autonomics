@@ -90,23 +90,78 @@ pub fn api_router(shared: bib_base::BibShared) -> Router {
     api_router_with_auth(shared, None)
 }
 
-/// Build the aggregate router with an optional bearer token for `/api` routes.
-pub fn api_router_with_auth(shared: bib_base::BibShared, bearer_token: Option<String>) -> Router {
-    let auth_state = BearerAuthState {
-        token: Arc::new(bearer_token.filter(|token| !token.trim().is_empty())),
-    };
-    let api = Router::new()
-        .route("/api/v1", get(api_index))
-        .route("/api/health", get(health))
-        .nest("/api/v1/bib", crate::bib::router(shared))
-        .layer(axum::middleware::from_fn_with_state(
+/// Builder for the aggregate router.
+///
+/// The default constructors cover the classic bibliography-only host; the
+/// builder additionally wires the agentik model slot so `/api/v1/agent` can
+/// serve chat from the same process.
+pub struct ApiRouterBuilder {
+    shared: bib_base::BibShared,
+    bearer_token: Option<String>,
+    model: Option<Arc<arc_swap::ArcSwapOption<agentik_sdk::model::Model>>>,
+}
+
+impl ApiRouterBuilder {
+    #[must_use]
+    pub fn new(shared: bib_base::BibShared) -> Self {
+        Self {
+            shared,
+            bearer_token: None,
+            model: None,
+        }
+    }
+
+    #[must_use]
+    pub fn bearer_token(mut self, token: Option<String>) -> Self {
+        self.bearer_token = token;
+        self
+    }
+
+    /// Share the TUI's active-model slot with the chat endpoint. Without it
+    /// the agent module is not mounted and chat returns 404.
+    #[must_use]
+    pub fn model(mut self, model: Arc<arc_swap::ArcSwapOption<agentik_sdk::model::Model>>) -> Self {
+        self.model = Some(model);
+        self
+    }
+
+    pub fn build(self) -> Router {
+        let Self {
+            shared,
+            bearer_token,
+            model,
+        } = self;
+        let auth_state = BearerAuthState {
+            token: Arc::new(bearer_token.filter(|token| !token.trim().is_empty())),
+        };
+
+        let mut api = Router::new()
+            .route("/api/v1", get(api_index))
+            .route("/api/health", get(health))
+            .nest("/api/v1/bib", crate::bib::router(shared.clone()));
+        if let Some(model) = model {
+            api = api.nest(
+                "/api/v1/agent",
+                crate::agent::router(crate::agent::AgentState { shared, model }),
+            );
+        }
+
+        let api = api.layer(axum::middleware::from_fn_with_state(
             auth_state,
             bearer_auth,
         ));
 
-    // The SPA host mounts outside the auth layer: static assets carry no
-    // secrets and the shell has to load before it could prompt for a token.
-    api.merge(crate::frontend::router())
+        // The SPA host mounts outside the auth layer: static assets carry no
+        // secrets and the shell has to load before it could prompt for a token.
+        api.merge(crate::frontend::router())
+    }
+}
+
+/// Build the aggregate router with an optional bearer token for `/api` routes.
+pub fn api_router_with_auth(shared: bib_base::BibShared, bearer_token: Option<String>) -> Router {
+    ApiRouterBuilder::new(shared)
+        .bearer_token(bearer_token)
+        .build()
 }
 
 async fn bearer_auth(
@@ -162,7 +217,7 @@ async fn api_index() -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "name": "autonomics-tui",
         "version": 1,
-        "modules": ["bib"],
+        "modules": ["bib", "agent"],
     }))
 }
 

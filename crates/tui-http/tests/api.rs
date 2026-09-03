@@ -495,3 +495,128 @@ async fn build_app_with_vfs() -> (axum::Router, tempfile::TempDir) {
         .with_file_storage(file_storage);
     (tui_http::api_router(shared), directory)
 }
+
+// ── agent chat (SSE) ───────────────────────────────────────────────────────
+
+/// Scripted LLM client: fails every request with a *non-retryable* 4xx so
+/// the turn terminates immediately (agentik would otherwise burn its retry
+/// budget on retryable errors and slow the test down).
+struct FailingClient;
+
+#[async_trait::async_trait]
+impl agentik_sdk::provider::client::ApiClient for FailingClient {
+    async fn request(
+        &self,
+        _messages: Vec<agentik_types::Message>,
+        _tools: Vec<agentik_types::ToolDefinition>,
+        _model_info: &agentik_sdk::model::ModelInfo,
+    ) -> Result<agentik_types::Message, agentik_types::errors::AnthropicError> {
+        Err(agentik_types::errors::AnthropicError::HttpError {
+            status: 400,
+            message: "scripted failure".to_owned(),
+        })
+    }
+
+    async fn request_stream(
+        &self,
+        _messages: Vec<agentik_types::Message>,
+        _tools: Vec<agentik_types::ToolDefinition>,
+        _model_info: &agentik_sdk::model::ModelInfo,
+    ) -> Result<agentik_sdk::streaming::MessageStream, agentik_types::errors::AnthropicError>
+    {
+        Err(agentik_types::errors::AnthropicError::HttpError {
+            status: 400,
+            message: "scripted failure".to_owned(),
+        })
+    }
+
+    async fn test_connection(&self) -> Result<(), agentik_types::errors::AnthropicError> {
+        Ok(())
+    }
+}
+
+fn chat_body(message: &str) -> Option<String> {
+    Some(format!(r#"{{"message": "{message}"}}"#))
+}
+
+#[tokio::test]
+async fn agent_chat_is_absent_without_a_model_slot() {
+    let shared = BibShared::open_in_memory().await.unwrap();
+    let app = tui_http::api_router(shared);
+
+    let response = app
+        .oneshot(request("POST", "/api/v1/agent/chat", chat_body("hi")))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn agent_chat_returns_503_when_no_model_is_configured() {
+    let shared = BibShared::open_in_memory().await.unwrap();
+    let app = tui_http::ApiRouterBuilder::new(shared)
+        .model(Arc::new(arc_swap::ArcSwapOption::default()))
+        .build();
+
+    let response = app
+        .oneshot(request("POST", "/api/v1/agent/chat", chat_body("hi")))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(body["error"].is_string());
+}
+
+#[tokio::test]
+async fn agent_chat_rejects_an_empty_message() {
+    let shared = BibShared::open_in_memory().await.unwrap();
+    let model = agentik_sdk::model::Model::with_client(
+        agentik_core::testing::dummy_model_info("test-model"),
+        FailingClient,
+    );
+    let app = tui_http::ApiRouterBuilder::new(shared)
+        .model(Arc::new(arc_swap::ArcSwapOption::from(Some(Arc::new(
+            model,
+        )))))
+        .build();
+
+    let response = app
+        .clone()
+        .oneshot(request("POST", "/api/v1/agent/chat", chat_body("   ")))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn agent_chat_streams_model_errors_as_sse_events() {
+    let shared = BibShared::open_in_memory().await.unwrap();
+    let model = agentik_sdk::model::Model::with_client(
+        agentik_core::testing::dummy_model_info("test-model"),
+        FailingClient,
+    );
+    let app = tui_http::ApiRouterBuilder::new(shared)
+        .model(Arc::new(arc_swap::ArcSwapOption::from(Some(Arc::new(
+            model,
+        )))))
+        .build();
+
+    let response = app
+        .oneshot(request("POST", "/api/v1/agent/chat", chat_body("hi")))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .starts_with("text/event-stream"));
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let body = String::from_utf8_lossy(&body);
+    assert!(body.contains("event: error"), "stream: {body}");
+    assert!(body.contains("scripted failure"), "stream: {body}");
+}

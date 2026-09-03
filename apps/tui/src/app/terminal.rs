@@ -104,6 +104,7 @@ impl App {
     pub(super) fn start_http_server(
         runtime: &tokio::runtime::Runtime,
         host: Option<&RuntimeHost>,
+        model: std::sync::Arc<arc_swap::ArcSwapOption<agentik_sdk::model::Model>>,
     ) -> Option<tui_http::HttpServerHandle> {
         let Some(host) = host else {
             tracing::warn!("HTTP API disabled: runtime host unavailable");
@@ -120,7 +121,13 @@ impl App {
         let shared = host.infra().bib.as_ref().clone();
 
         match runtime.block_on(async {
-            tui_http::start(tui_http::api_router_with_auth(shared, bearer_token), &addr).await
+            let router = tui_http::ApiRouterBuilder::new(shared)
+                .bearer_token(bearer_token)
+                // The web chat endpoint rides the TUI's live model slot:
+                // swapping models in the TUI affects the next web request.
+                .model(model)
+                .build();
+            tui_http::start(router, &addr).await
         }) {
             Ok(server) => {
                 tracing::info!(

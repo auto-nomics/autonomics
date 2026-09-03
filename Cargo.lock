@@ -11841,10 +11841,16 @@ dependencies = [
 name = "tui-http"
 version = "0.1.0"
 dependencies = [
+ "agentik-core",
+ "agentik-sdk",
+ "agentik-types",
+ "arc-swap",
+ "async-trait",
  "axum",
  "bib-base",
  "bib-types",
  "chrono",
+ "futures",
  "http-body-util",
  "mime_guess",
  "opendal",
