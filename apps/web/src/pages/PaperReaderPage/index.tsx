@@ -31,15 +31,8 @@ import React, { useState, useEffect, useCallback, useRef, lazy, Suspense } from 
 import { useTranslation } from 'react-i18next';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { Button, Spin, App } from 'antd';
-import {
-  ArrowLeftOutlined,
-  MessageOutlined,
-  UploadOutlined,
-  CloudDownloadOutlined,
-} from '@ant-design/icons';
 import { getPaper, getPdfUrl, getMarkdown } from '../../services/papersApi';
 import { getAttachmentUrl, getAttachments } from '../../services/attachmentsApi';
-import { attachPdf, downloadPdf } from '../../services/bibliographyApi';
 import { isTauri, getTauriBaseUrl } from '../../services/client';
 
 const PdfViewer = lazy(() => import('../../features/pdf-viewer/components/WasmPdfViewer'));

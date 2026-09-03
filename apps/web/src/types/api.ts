@@ -4,10 +4,10 @@
 
 import type {
   Paper, Category, Conversation, Message, Highlight, Attachment, Settings,
-  GuideTree, GuideTreeNode, BlocksData, Block, ImportResult,
-  ResolveDuplicatesResult, WebSearchResponse, TavilyKeyCheck,
+  ImportResult,
+  ResolveDuplicatesResult,
   PaperTypesRegistry, TranslationStatus, TranslateTextResponse, TranslateParagraphResponse,
-  FileParseResult, MetadataPendingCheck, ConversationSummary, GuideNodeSearchResult,
+  MetadataPendingCheck, ConversationSummary,
   TokenBudgets,
 } from './models';
 
@@ -115,52 +115,6 @@ export interface DeleteConversationResponse {
 export interface SummarizeConversationRequest {
   messages: Message[];
   paper_title: string;
-}
-
-// Guide API
-export type GetGuideTreeResponse = GuideTree;
-
-export interface GenerateGuideV2Request {
-  strategy?: 'adaptive' | 'full' | 'section_only';
-  focus_sections?: string[];
-}
-
-export interface GenerateGuideV2Response {
-  task_id: string;
-  status: 'queued' | 'processing';
-  estimated_time?: number;
-}
-
-export interface CancelGuideResponse {
-  message: string;
-  task_id: string;
-}
-
-export type GetBlocksResponse = BlocksData;
-
-export interface GetNodeDetailResponse {
-  id: string;
-  title: string;
-  summary: string;
-  page_idx: number;
-  bboxes: number[][];
-  importance: number;
-  children: GuideTreeNode[];
-}
-
-export interface RegenerateNodeResponse {
-  task_id: string;
-  status: string;
-}
-
-export interface UpdateNodeImportanceResponse {
-  node: GuideTreeNode;
-}
-
-export interface SearchGuideNodesRequest {
-  query: string;
-  search_type?: 'keyword' | 'semantic';
-  limit?: number;
 }
 
 // Settings API
@@ -297,17 +251,6 @@ export interface MoveCategoryRequest {
 }
 
 export type MoveCategoryResponse = Category;
-
-// Search API
-export interface WebSearchRequest {
-  query: string;
-}
-
-export type WebSearchAPIResponse = WebSearchResponse;
-export type CheckTavilyKeyResponse = TavilyKeyCheck;
-
-// Files API
-export type ParseFileResponse = FileParseResult;
 
 // Common
 export interface ApiResponse {

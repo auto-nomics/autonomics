@@ -6,7 +6,6 @@
  * - 显示论文的完整元数据字段（标题、作者、摘要、DOI、期刊等）
  * - 根据文献类型（journal/conference/thesis 等）动态显示对应字段
  * - 上传 PDF 按钮：为题录记录手动关联 PDF 文件
- * - DOI 下载按钮：通过 DOI 自动下载开放获取 PDF
  * - 支持深色模式（通过 CSS 变量）
  *
  * @module PaperReaderPage/components/MetadataView
@@ -14,8 +13,8 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button, Tag, Space } from 'antd';
-import { UploadOutlined, CloudDownloadOutlined, CopyOutlined } from '@ant-design/icons';
-import { attachPdf, downloadPdf } from '../../../services/bibliographyApi';
+import { UploadOutlined, CopyOutlined } from '@ant-design/icons';
+import { attachPdf } from '../../../services/bibliographyApi';
 import { getTypeLabel, getTypeColor, getTypeFields, METADATA_FIELD_LABELS } from '../../../utils/literatureTypes';
 import { useCopyCitation } from '../../../hooks/useCopyCitation';
 import './MetadataView.css';
@@ -50,21 +49,6 @@ export default function MetadataView({ paper, paperId, reloadPaper, message }: a
       }
     };
     input.click();
-  };
-
-  // 处理自动下载 PDF
-  const handleDownloadPdf = async () => {
-    try {
-      const result = await downloadPdf(paperId);
-      if (result.success) {
-        message.success(result.message);
-        await reloadPaper();
-      } else {
-        message.warning(result.message);
-      }
-    } catch (err) {
-      message.error(t('metadata.downloadFailed', { error: (err as any).message }));
-    }
   };
 
   // 渲染额外元数据字段
@@ -209,16 +193,6 @@ export default function MetadataView({ paper, paperId, reloadPaper, message }: a
             >
               {t('metadata.copyCitation', { defaultValue: '复制引用' })}
             </Button>
-            {paper.doi && (
-              <Button
-                size="large"
-                icon={<CloudDownloadOutlined />}
-                onClick={handleDownloadPdf}
-                block
-              >
-                {t('metadata.autoDownloadPdf')}
-              </Button>
-            )}
           </Space>
         </div>
       </div>

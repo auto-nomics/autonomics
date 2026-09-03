@@ -422,7 +422,7 @@ export async function fetchMetadata(_id: string, signal?: AbortSignal): Promise<
 /**
  * 检查是否有论文正在等待元数据获取
  *
- * ⚠️ 桩：恒返回空列表 → useMetadataPolling 立即停止轮询并刷新列表。
+ * ⚠️ 桩：恒返回空列表（jayread 时代的轮询消费者已随死代码清扫移除）。
  * 这是「无事可做」的正确答案，不会产生任何网络请求。
  *
  * stubbed: capability not present in autonomics backend (see plan Phase 5)

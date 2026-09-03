@@ -93,6 +93,8 @@ interface UseThreadManagerParams {
     quotedMessage: unknown,
     setQuotedMessage: unknown,
     threadOptions: unknown,
+    fileRefs?: unknown,
+    contextSystemPrompt?: unknown,
   ) => void;
   persistMessages: ((msgs?: ChatMessage[]) => void) | undefined;
   paperInfo: Paper | null | undefined;
@@ -1036,7 +1038,6 @@ export function useThreadManager({
       text,
       [],
       [],
-      false,
       null,
       null,
       {

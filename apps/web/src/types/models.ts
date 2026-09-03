@@ -127,40 +127,6 @@ export interface TokenBudgets {
   default_budget?: number;
 }
 
-export interface GuideTreeNode {
-  id: string;
-  title: string;
-  summary: string | null;
-  parent_id: string | null;
-  page_idx: number;
-  bboxes?: number[][];
-  importance?: number;
-  type?: string;
-  depth?: number;
-  children?: GuideTreeNode[];
-}
-
-export interface GuideTree {
-  nodes: GuideTreeNode[];
-  total: number;
-  generated_at: string;
-}
-
-export interface Block {
-  block_id: number;
-  page_idx: number;
-  type: string;
-  text: string;
-  bbox: number[];
-  level?: number;
-}
-
-export interface BlocksData {
-  blocks: Block[];
-  page_idx: number;
-  total_pages: number;
-}
-
 export interface Summary {
   id: string;
   paper_id: string;
@@ -226,25 +192,6 @@ export interface ResolveDuplicatesResult {
   paper_ids: string[];
 }
 
-export interface SearchResult {
-  title: string;
-  url: string;
-  content: string;
-  score?: number;
-}
-
-export interface WebSearchResponse {
-  results: SearchResult[];
-  formatted_prompt: string;
-  error?: string;
-}
-
-export interface TavilyKeyCheck {
-  configured: boolean;
-  valid: boolean;
-  error?: string;
-}
-
 export interface PaperType {
   id: string;
   name: string;
@@ -286,12 +233,6 @@ export interface SentencePair {
   translated: string;
 }
 
-export interface FileParseResult {
-  filename: string;
-  content_type: string;
-  markdown: string;
-}
-
 export interface MetadataPendingCheck {
   pending_ids: string[];
 }
@@ -299,11 +240,6 @@ export interface MetadataPendingCheck {
 export interface ConversationSummary {
   summary: string;
   summarized_count: number;
-}
-
-export interface GuideNodeSearchResult {
-  matches: GuideTreeNode[];
-  total: number;
 }
 
 export interface SSEProgressEvent {
