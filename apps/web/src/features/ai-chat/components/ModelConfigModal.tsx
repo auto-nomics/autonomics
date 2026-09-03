@@ -25,8 +25,6 @@ interface ModelConfigModalProps {
   onSaveConfigs?: (configs: any[]) => Promise<boolean> | boolean | void;
   selectedConfigId?: string;
   onModelChange?: (model: any) => void;
-  webSearchEnabled?: boolean;
-  onWebSearchToggle?: (enabled: boolean) => void;
   threadContextInjection?: boolean;
   onThreadContextInjectionToggle?: (enabled: boolean) => void;
 }
@@ -36,8 +34,6 @@ const ModelConfigModal = NiceModal.create(({
   onSaveConfigs,
   selectedConfigId,
   onModelChange,
-  webSearchEnabled = false,
-  onWebSearchToggle,
   threadContextInjection = false,
   onThreadContextInjectionToggle,
 }: ModelConfigModalProps) => {
@@ -55,7 +51,6 @@ const ModelConfigModal = NiceModal.create(({
   // 用 useWatch 监听让 global-setting-row 风格的 div 能随表单数据切换 enabled 状态。
   const [supportsVision, setSupportsVision] = useState(false);
   const [rotationEnabled, setRotationEnabled] = useState(true);
-  const [localWebSearch, setLocalWebSearch] = useState(webSearchEnabled);
   const [localThreadInjection, setLocalThreadInjection] = useState(threadContextInjection);
 
   const cleanNonAscii = useCallback((value: string) => {
@@ -451,16 +446,6 @@ const ModelConfigModal = NiceModal.create(({
               >
                 <span className="global-setting-label">
                   模型轮转
-                </span>
-              </div>
-            </Tooltip>
-            <Tooltip title="启用后，AI 在回答时会先搜索网络获取最新信息。">
-              <div
-                className={`global-setting-row global-setting-clickable${localWebSearch ? ' model-toggle-active' : ''}`}
-                onClick={() => { const v = !localWebSearch; setLocalWebSearch(v); if (onWebSearchToggle) onWebSearchToggle(v); }}
-              >
-                <span className="global-setting-label">
-                  {t('webSearch')}
                 </span>
               </div>
             </Tooltip>

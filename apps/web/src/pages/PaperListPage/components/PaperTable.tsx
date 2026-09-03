@@ -11,14 +11,11 @@
  * - 正常模式：expandable 启用，点击标题展开附件
  * - 筛选模式：expandable 禁用，点击标题选中论文
  */
-import React, { useState, useLayoutEffect, useCallback, useMemo } from 'react';
-import { Table, Checkbox, Space, App } from 'antd';
+import React, { useState, useLayoutEffect } from 'react';
+import { Table, Checkbox, Space } from 'antd';
 import { ALL_COLUMNS } from '../paperListConstants';
 import ResizableTitle from '../ResizableTitle';
 import AttachmentList from './AttachmentList';
-import { usePreTranslation } from '../hooks/usePreTranslation';
-import usePaperStore from '../../../stores/usePaperStore';
-import { updatePaper } from '../../../services/papersApi';
 
 /**
  * 论文表格组件
@@ -34,7 +31,6 @@ import { updatePaper } from '../../../services/papersApi';
  * @param {Object} props.attachmentLoading - 附件加载状态
  * @param {Function} props.handleDeleteAttachment - 删除附件回调
  * @param {Function} props.handleOpenAttachment - 打开附件回调
- * @param {Function} props.handleReparse - 重解析回调
  * @param {Function} props.handleSetPrimary - 设置主 PDF 回调
  * @param {Function} props.TableRowWithDragAndContextMenu - 自定义表格行组件（virtual table 下返回 <div>）
  * @param {Object|null} props.headerContextMenu - 表头右键菜单位置
@@ -57,7 +53,6 @@ function PaperTable({
   attachmentLoading,
   handleDeleteAttachment,
   handleOpenAttachment,
-  handleReparse,
   handleSetPrimary,
   TableRowWithDragAndContextMenu,
   headerContextMenu,
@@ -70,56 +65,6 @@ function PaperTable({
   setLeftPanelView,
   containerRef,
 }: any) {
-  const setPapers = usePaperStore((s: any) => s.setPapers);
-  const { message } = App.useApp();
-
-  const patchPaperInStore = useCallback((paperId: string, patch: Record<string, unknown>) => {
-    setPapers((prev: any[]) => prev.map((p: any) => p.id === paperId ? { ...p, ...patch } : p));
-  }, [setPapers]);
-
-  // 从 store 派生正在生成翻译的论文 id，交给 usePreTranslation 自动轮询。
-  // 上传 PDF 后后端自动触发的预翻译不走手动 trigger，之前没有轮询，
-  // tag 会永远停在"翻译中 0/0"直到某次列表刷新。
-  const generatingIds = useMemo(
-    () => (papers as any[])
-      .filter((p: any) => p?.paragraphTranslationStatus === 'generating')
-      .map((p: any) => String(p.id)),
-    [papers],
-  );
-
-  const { isPreTranslating, progress: preTranslateProgressMap, triggerPreTranslate } = usePreTranslation({
-    autoWatchIds: generatingIds,
-    onStart: (paperId) => {
-      patchPaperInStore(paperId, { paragraphTranslationStatus: 'generating' });
-    },
-    onComplete: (paperId, failedCount) => {
-      patchPaperInStore(paperId, {
-        paragraphTranslationStatus: failedCount > 0 ? 'failed' : 'done',
-        // 失败时显式写 false, 而非 undefined。下游 AttachmentList/PaperReaderPage
-        // 都用严格 === true 判断, undefined 会被视为"未启用"——但 paper 对象上
-        // undefined 也可能是"字段未加载", 二者混淆。显式 false 让"预翻译失败"
-        // 的语义清晰。
-        hoverTranslationEnabled: failedCount > 0 ? false : true,
-      });
-    },
-  });
-
-  /**
-   * 切换悬浮翻译开关（乐观更新）
-   *
-   * 调 API 前先本地切 Tag 状态，失败回滚。详见 memory: feedback_tauri_caching
-   */
-  const handleToggleHoverTranslation = useCallback(async (paperId: string, next: boolean) => {
-    patchPaperInStore(paperId, { hoverTranslationEnabled: next });
-    try {
-      await updatePaper(paperId, { hoverTranslationEnabled: next });
-    } catch (err: any) {
-      // 回滚
-      patchPaperInStore(paperId, { hoverTranslationEnabled: !next });
-      message.error(`切换悬浮翻译失败: ${err?.message || err}`);
-    }
-  }, [patchPaperInStore, message]);
-
   // antd virtual table 要求 scroll.y 必须是数字。用 ResizeObserver 测父容器真实高度，
   // 别再用 window.innerHeight - 180 那种魔法数——桌面版 decorations:false 没有应用 chrome，
   // 而且分屏/抽屉开合/different DPI 都会让 innerHeight 跟实际可用高度脱节，
@@ -169,12 +114,7 @@ function PaperTable({
               loading={!!attachmentLoading[paper.id]}
               onDelete={(attId: any) => handleDeleteAttachment(paper.id, attId)}
               onOpenPdf={(attId: any) => handleOpenAttachment(paper.id, attId)}
-              onReparse={(engine: any) => handleReparse(paper.id, engine)}
               onSetPrimary={(attId: any) => handleSetPrimary(paper.id, attId)}
-              onPreTranslate={triggerPreTranslate}
-              preTranslating={isPreTranslating(paper.id)}
-              preTranslateProgress={preTranslateProgressMap[paper.id] ?? null}
-              onToggleHoverTranslation={handleToggleHoverTranslation}
             />
           ),
           rowExpandable: () => true,

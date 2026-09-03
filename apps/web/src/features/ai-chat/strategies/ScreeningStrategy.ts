@@ -5,11 +5,9 @@
  * - persona（screening persona，对比/筛选语调）
  * - paperInfo（用于多篇对比，但每条消息只附 1 篇元信息）
  * - threadContext（用户在筛选过程中的追问）
- * - webSearch（论文相关外部检索）
  * - additionalHigh/additionalLow（筛选用对比表等高层注入）
  *
  * 不启用：
- * - guideSections（筛选场景不看段落级导览，只看元信息）
  *
  * @module ai-chat/strategies/ScreeningStrategy
  */
@@ -22,7 +20,6 @@ export const ScreeningStrategy: PromptStrategy = {
     'persona',
     'paperInfo',
     'threadContext',
-    'webSearch',
     'additionalHigh',
     'additionalLow',
   ]),

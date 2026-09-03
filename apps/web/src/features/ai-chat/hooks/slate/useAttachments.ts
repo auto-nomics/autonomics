@@ -3,7 +3,7 @@
  *
  * 统一管理 SlateInputWithSender 的附件状态和处理逻辑：
  * - 状态：attachedFiles / isDragging / dragCounterRef
- * - handleFileSelect：根据 category 添加附件（image 直接 / text 直接 / binary 调 parseFile）
+ * - handleFileSelect：根据 category 添加附件（image / text 直接加入；binary 不支持）
  * - handleAttachmentRemove：按索引删除
  * - handlePaste：剪贴板文件收集 + 去重 + processFiles
  * - handleFileDrop：拖拽文件（不含 VibeCard 部分，VibeCard 在 SlateInputWithSender 处理）
@@ -20,7 +20,6 @@
 import { useCallback, useRef, useState } from 'react';
 import { App as AntApp } from 'antd';
 import { classifyFile } from '../../components/FileUploader';
-import { parseFile } from '../../../../services/filesApi';
 import { zoteroL10n } from '../../zoteroL10n';
 import type { ModelSelection } from '../useModelConfig';
 
@@ -77,7 +76,7 @@ export function useAttachments({ visionCapable, currentModel }: UseAttachmentsPa
      * 根据 category 执行不同逻辑：
      * - image：检查 visionCapable → 直接加入附件列表
      * - text：直接加入附件列表（前端已读取）
-     * - binary：先以 'converting' 占位 → 调 parseFile → 更新为 'ready' 或 'error'
+     * - binary：不支持（autonomics 无文档转换服务，见 filesApi 清扫说明）
      */
     const handleFileSelect = useCallback(async (fileData: AttachmentFile & { file?: File }) => {
         if (fileData.category === 'image') {
@@ -105,32 +104,11 @@ export function useAttachments({ visionCapable, currentModel }: UseAttachmentsPa
             }]);
             antMessage.success(`已添加文件: ${fileData.name}`);
         } else if (fileData.category === 'binary') {
-            // 先以 'converting' 占位，让用户立即看到加载卡片
-            const tempAttachment: AttachmentFile = {
-                category: 'binary',
-                name: fileData.name,
-                originalType: fileData.originalType,
-                markdown: '',
-                status: 'converting',
-            };
-            setAttachedFiles(prev => [...prev, tempAttachment]);
-            try {
-                const result = await parseFile(fileData.file!);
-                setAttachedFiles(prev => prev.map(a =>
-                    a === tempAttachment
-                        ? { ...a, markdown: result.markdown || '', status: 'ready' }
-                        : a
-                ));
-                antMessage.success(`文件解析完成: ${fileData.name}`);
-            } catch (err) {
-                console.error('[useAttachments] 文件解析失败:', err);
-                setAttachedFiles(prev => prev.map(a =>
-                    a === tempAttachment
-                        ? { ...a, status: 'error' as const, error: (err as Error)?.message || '文件解析失败' }
-                        : a
-                ));
-                antMessage.error(`文件解析失败: ${fileData.name}`);
-            }
+            // jayread 时代这里会调 filesApi.parseFile 把 PDF/Word 转 Markdown；
+            // autonomics 没有通用文档转换服务，二进制附件直接拒绝。
+            antMessage.warning(
+                `暂不支持该文件类型: ${fileData.name}（仅支持图片与文本文件）`
+            );
         }
     }, [visionCapable, currentModel?.label, currentModel?.key, antMessage]);
 
@@ -196,7 +174,7 @@ export function useAttachments({ visionCapable, currentModel }: UseAttachmentsPa
                     name: safeName,
                 });
             } else {
-                // 非图片：classifyFile 分类 → 文本前端读 / 二进制交给 handleFileSelect 调 parseFile
+                // 非图片：classifyFile 分类 → 文本前端读 / 二进制由 handleFileSelect 拒绝
                 const classification = classifyFile(file.name || '');
                 const fileData: AttachmentFile & { file?: File; category: 'text' | 'binary'; language?: string; textContent?: string; originalType?: string } = {
                     name: file.name,

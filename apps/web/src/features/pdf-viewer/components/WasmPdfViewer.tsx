@@ -40,9 +40,6 @@ import { useSearch } from '@autonomics/pdfium-viewer/plugin-search/react';
 import { useSelectionCapability } from '@autonomics/pdfium-viewer/plugin-selection/react';
 import { useThumbnailCapability } from '@autonomics/pdfium-viewer/plugin-thumbnail/react';
 
-import useQuickTranslate from '../hooks/useQuickTranslate';
-import useDoubleClickTerm from '../hooks/useDoubleClickTerm';
-import { useWasmHoverTranslation } from '../hooks/useWasmHoverTranslation';
 import { isTauri } from '../../../services/client';
 import type { PdfEngine } from '@autonomics/pdfium-viewer';
 
@@ -52,8 +49,6 @@ const THUMB_ASPECT_RATIO = 1.414;
 
 interface PdfViewerProps {
   paperId?: string;
-  /** 是否启用悬浮翻译（外层根据 paper.paragraphTranslationStatus==='done' && paper.hoverTranslationEnabled 决定） */
-  hoverTranslationEnabled?: boolean;
   pdfUrl?: string;
   onContextInject?: (content: string, sourcePage: number) => void;
   onTextClick?: (text: string) => void;
@@ -80,7 +75,6 @@ const INITIAL_TEMPLATE_MENU: TemplateMenuState = { visible: false, x: 0, y: 0, c
 
 const PdfViewer = forwardRef<HTMLDivElement, PdfViewerProps>(function PdfViewer({
   paperId,
-  hoverTranslationEnabled,
   pdfUrl,
   onContextInject,
   onSearchChange,
@@ -156,7 +150,6 @@ const PdfViewer = forwardRef<HTMLDivElement, PdfViewerProps>(function PdfViewer(
             <WasmPdfContent
               engine={engine}
               paperId={paperId}
-              hoverTranslationEnabled={hoverTranslationEnabled}
               onContextInject={onContextInject}
               onSearchChange={onSearchChange}
               navigation={navigation}
@@ -178,7 +171,6 @@ export default React.memo(PdfViewer);
 function WasmPdfContent({
   engine,
   paperId,
-  hoverTranslationEnabled,
   onContextInject,
   onSearchChange,
   navigation,
@@ -186,7 +178,6 @@ function WasmPdfContent({
 }: {
   engine: PdfEngine | null;
   paperId?: string;
-  hoverTranslationEnabled?: boolean;
   onContextInject?: (content: string, sourcePage: number) => void;
   onSearchChange?: (e: React.ChangeEvent<HTMLInputElement>) => void;
   navigation?: any;
@@ -283,14 +274,6 @@ function WasmPdfContent({
     [annotations]
   );
 
-  // Quick translate
-  const { tooltip: quickTranslateTooltip, translate: quickTranslate } = useQuickTranslate();
-
-  // Double-click term translation
-  const { termTooltip, handleDoubleClick: handleDoubleClickTerm, hideTermTooltip } = useDoubleClickTerm({
-    pdfAreaRef, pageNumber: 1,
-  });
-
   // Context menu — 始终阻止 WebKitGTK 原生右键菜单，有缓存选区时显示模板菜单
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     // 先阻止默认菜单（WebKitGTK 的 back/forward/reload 等），再决定是否显示自定义菜单
@@ -324,13 +307,6 @@ function WasmPdfContent({
   }, [pdfAreaRef, selectionCap]);
 
   const handleTemplateItemClick = useCallback((templateKey: string) => {
-    if (templateKey === 'quick_translate') {
-      if (templateMenu.context?.content) {
-        quickTranslate(templateMenu.context.content, templateMenu.x, templateMenu.y);
-      }
-      setTemplateMenu(INITIAL_TEMPLATE_MENU);
-      return;
-    }
     handleTemplateSelect(
       templateKey,
       templateMenu.context,
@@ -338,7 +314,7 @@ function WasmPdfContent({
       () => setTemplateMenu(INITIAL_TEMPLATE_MENU),
       message,
     );
-  }, [templateMenu.context, onContextInject, quickTranslate, message]);
+  }, [templateMenu.context, onContextInject, message]);
 
   const handleCreateHighlight = useCallback(async () => {
     // 优先从缓存获取选区（plugin-based PDFium 无 DOM 文本层，window.getSelection() 为空）
@@ -425,14 +401,12 @@ function WasmPdfContent({
                 engine={engine}
                 docId={docId}
                 paperId={paperId}
-                hoverTranslationEnabled={hoverTranslationEnabled}
                 docLoading={docLoading}
                 isLoaded={isLoaded}
                 pdfDarkMode={pdfDarkMode}
                 thumbVisible={thumbVisible}
                 pdfAreaRef={pdfAreaRef}
                 onContextMenu={handleContextMenu}
-                onDoubleClick={handleDoubleClickTerm}
                 annotations={annotations}
                 activeHighlight={activeHighlight}
                 popoverPosition={popoverPosition}
@@ -443,9 +417,6 @@ function WasmPdfContent({
                 onCloseTemplateMenu={handleCloseTemplateMenu}
                 onTemplateSelect={handleTemplateItemClick}
                 onCreateHighlight={handleCreateHighlight}
-                quickTranslateTooltip={quickTranslateTooltip}
-                termTooltip={termTooltip}
-                hideTermTooltip={hideTermTooltip}
                 thumbnailCap={thumbnailCap}
                 searchTarget={searchTarget}
                 setSearchTarget={setSearchTarget}
@@ -468,15 +439,12 @@ interface InnerDocumentProps {
   engine: PdfEngine | null;
   docId: string;
   paperId?: string;
-  /** 是否启用悬浮翻译（paper 已预翻译 done 且用户开启悬浮） */
-  hoverTranslationEnabled?: boolean;
   docLoading: boolean;
   isLoaded: boolean;
   pdfDarkMode: boolean;
   thumbVisible: boolean;
   pdfAreaRef: React.RefObject<HTMLDivElement>;
   onContextMenu: (e: React.MouseEvent) => void;
-  onDoubleClick: (e: React.MouseEvent) => void;
   annotations: ReturnType<typeof useAnnotations>;
   activeHighlight: any;
   popoverPosition: { x: number; y: number };
@@ -487,9 +455,6 @@ interface InnerDocumentProps {
   onCloseTemplateMenu: () => void;
   onTemplateSelect: (key: string) => void;
   onCreateHighlight: () => void;
-  quickTranslateTooltip: any;
-  termTooltip: any;
-  hideTermTooltip: () => void;
   thumbnailCap: any;
   searchTarget: 'outline' | 'chat' | 'pdf';
   setSearchTarget: (target: 'outline' | 'chat' | 'pdf') => void;
@@ -502,12 +467,11 @@ interface InnerDocumentProps {
 }
 
 function InnerDocument({
-  engine, docId, paperId, hoverTranslationEnabled, docLoading, isLoaded, pdfDarkMode, thumbVisible, pdfAreaRef,
-  onContextMenu, onDoubleClick,
+  engine, docId, paperId, docLoading, isLoaded, pdfDarkMode, thumbVisible, pdfAreaRef,
+  onContextMenu,
   annotations, activeHighlight, popoverPosition,
   onDeleteHighlight, onCloseHighlightPopover, onHighlightClick,
   templateMenu, onCloseTemplateMenu, onTemplateSelect, onCreateHighlight,
-  quickTranslateTooltip, termTooltip, hideTermTooltip,
   thumbnailCap,
   searchTarget, setSearchTarget, searchKeyword, setSearchKeyword, searchDebounceRef,
   onSearchChange,
@@ -520,24 +484,6 @@ function InnerDocument({
 
   const { provides: docManagerCap } = useDocumentManagerCapability();
   const currentPage = scrollState.currentPage;
-
-  // ========== 悬停翻译 ==========
-  const {
-    tooltip: translationTooltip,
-    highlight: hoverHighlight,
-    handleTooltipMouseEnter,
-    handleTooltipMouseLeave,
-  } = useWasmHoverTranslation({
-    pdfAreaRef,
-    engine,
-    docId,
-    docManagerCap: docManagerCap ?? null,
-    paperId,
-    enabled: hoverTranslationEnabled,
-    currentPage,
-    zoomLevel: zoomState.currentZoomLevel ?? 1,
-    isLoaded,
-  });
 
   // PDF text copy: Ctrl+C → selection plugin extracts text → Tauri clipboard API writes it
   // The selection plugin uses glyph-based selection (no DOM text layer),
@@ -840,7 +786,6 @@ function InnerDocument({
           ref={pdfAreaRef}
           className={`auto-scrollbar ${styles.pdfArea} ${pdfDarkMode ? 'pdf-dark-invert' : ''}`}
           onContextMenu={onContextMenu}
-          onDoubleClick={onDoubleClick}
           style={{ flex: 1 }}
         >
           {docLoading && (
@@ -866,21 +811,6 @@ function InnerDocument({
                             <SearchLayer documentId={docId} pageIndex={pageIndex} />
                             <SelectionLayer documentId={docId} pageIndex={pageIndex} />
                             <AnnotationLayer documentId={docId} pageIndex={pageIndex} />
-                            {hoverHighlight && hoverHighlight.pageIndex === pageIndex &&
-                              hoverHighlight.rects.map((r, i) => (
-                                <div key={i} style={{
-                                  position: 'absolute',
-                                  left: r.x,
-                                  top: r.y,
-                                  width: r.w,
-                                  height: r.h,
-                                  backgroundColor: 'rgba(59, 130, 246, 0.15)',
-                                  pointerEvents: 'none',
-                                  zIndex: 10,
-                                  borderRadius: 2,
-                                }} />
-                              ))
-                            }
                             {/* 用户保存的高亮：rects 按页 DOM 元素归一化，渲染时直接当百分比 */}
                             {annotations.getPageHighlights(pageIndex + 1).map((h: any) => {
                               if (!h.rects || h.rects.length === 0) return null;
@@ -920,12 +850,6 @@ function InnerDocument({
       <PdfFloatingLayers
         imagePreviewUrl={null}
         onCloseImagePreview={() => {}}
-        translationTooltip={translationTooltip}
-        onTooltipMouseEnter={handleTooltipMouseEnter}
-        onTooltipMouseLeave={handleTooltipMouseLeave}
-        termTooltip={termTooltip}
-        onHideTermTooltip={hideTermTooltip}
-        quickTranslateTooltip={quickTranslateTooltip}
         templateMenu={templateMenu}
         onCloseTemplateMenu={onCloseTemplateMenu}
         onTemplateSelect={onTemplateSelect}

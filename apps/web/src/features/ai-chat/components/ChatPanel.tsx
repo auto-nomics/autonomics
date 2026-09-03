@@ -84,7 +84,6 @@ import { MAX_THREAD_MESSAGES, MAX_SUBTHREAD_MESSAGES } from '../utils/threadUtil
 
 // ===== 搜索与导览相关导入 =====
 import { useChatSearch } from '../hooks/useChatSearch'; // 导入聊天搜索 hook（处理搜索、过滤、高亮）
-import { useGuideData } from '../hooks/useGuideData'; // 导入导览数据 hook（加载段落导览、章节语义、图片上下文）
 import { useChatSettings } from '../hooks/useChatSettings'; // 导入聊天设置 hook（加载用户设置、开关状态、token 预算）
 import { useTemplateManager } from '../hooks/useTemplateManager'; // 导入模板管理 hook（模板数据加载、保存、弹窗状态）
 import { useActiveThread } from '../hooks/useActiveThread'; // 导入追问线程激活状态管理 hook（管理当前激活的追问线程/子线程信息）
@@ -160,18 +159,11 @@ const ChatPanel = forwardRef(function ChatPanel({
   const setStreaming = useCallback((s: boolean) => {
     useChatStore.getState().setStreamingForPaper(paperId, s);
   }, [paperId]);
-  const [webSearching, setWebSearching] = useState(false); // 网络搜索是否进行中（用于显示搜索指示器）
   const [systemPrompt, setSystemPrompt] = useState(''); // 系统提示词（包含论文上下文）
   // embeddingStatus / embedTriggeredRef 已抽出到 useEmbeddingStatus hook
 
   // ===== 追问线程激活状态（已移至 useActiveThread hook）=====
   // activeThread 状态和激活/取消/创建回调由 hook 管理
-
-  // ===== 网络搜索来源指示器相关状态 =====
-  // 存储最近一次网络搜索的来源列表（用于在 AI 回复底部显示搜索来源引用）
-  // 数据结构：[{ title: string, url: string }] 或 null（表示最近一次回复未使用网络搜索）
-  // 每次新的 handleSend 调用时重置，仅在 webSearchEnabled 且搜索成功时赋值
-  const [lastWebSearchSources, setLastWebSearchSources] = useState<any>(null);
 
   // ========================================================================
   // ===== 多 Agent 团队模式状态 =====
@@ -214,15 +206,14 @@ const ChatPanel = forwardRef(function ChatPanel({
   // ========================================================================
 
   // ----- 1. 聊天设置 hook -----
-  // 加载并管理用户偏好设置，包括：语义搜索开关、网络搜索开关、线程上下文注入开关、
+  // 加载并管理用户偏好设置，包括：线程上下文注入开关、
   // token 预算配置、自定义系统提示词等
+  // （联网搜索开关已随 searchApi 移除 —— autonomics 后端无联网搜索能力）
   const {
     settings,                   // 用户设置对象（从后端加载，包含 API Key、模型偏好等）
     setSettings,                // 更新用户设置对象的函数
-    webSearchEnabled,           // 网络搜索是否开启（发送消息时自动搜索互联网）
     threadContextInjection,     // 线程上下文注入是否开启（将追问线程历史注入系统提示词）
     tokenBudgets,               // Token 预算配置（各模型的上下文窗口限制）
-    handleWebSearchToggle,      // 切换网络搜索开关的函数
     handleThreadContextInjectionToggle, // 切换线程上下文注入开关的函数
     currentCustomPrompt: customSystemPrompt, // 当前 agentType 对应的自定义系统提示词（覆盖该 agent 的默认 persona）
     handleCustomSystemPromptSave, // 保存自定义系统提示词的函数（内部按 agentType 分桶写入）
@@ -231,20 +222,9 @@ const ChatPanel = forwardRef(function ChatPanel({
     agentType,                  // 当前面板的 agent 类型（决定 persona 字典取哪一份）
   });
 
-  // ----- 2. 导览数据 hook -----
-  // 加载论文的段落导览、章节语义元数据、图片系统上下文等数据
-  // 这些数据用于构建分层系统提示词（Layer 3: 段落导览）
-  const {
-    guideSections,              // 段落导览数据：[{ title, paragraphs: [{ text, summary }] }] 结构的章节/段落数组
-    sectionSemantics,           // 章节语义元数据：用于 Layer 4 相关性增强匹配
-    imageSystemContext,         // 图片系统上下文：论文中图片的描述和说明，用于构建视觉相关的系统提示词
-    transformV2TreeToV1Sections, // 将 V2 版本的树形导览数据转换为 V1 版本的扁平数组（兼容性处理）
-  } = useGuideData({
-    paperId,                    // 论文 ID，用于加载该论文的导览数据
-    paper,                      // 论文完整对象，包含解析状态等信息
-  });
-
   // ========== 使用提取的 Hooks ==========
+  // 注：原「2. 导览数据 hook」（useGuideData，提供 guideSections / imageSystemContext）
+  // 已随 guideApi 移除 —— autonomics 后端没有导览与图片上下文数据源。
 
   // ----- 3. 斜杠命令处理 hook -----
   // 处理用户在输入框中输入的斜杠命令（如 /new, /resume, /prompt 等）
@@ -346,8 +326,9 @@ const ChatPanel = forwardRef(function ChatPanel({
   }, [paperId]); // 依赖 paperId
 
   // ========================================================================
-  // 将本地加载的图片上下文整合为 additionalSystemContext 传给 useChatSender
-  const mergedAdditionalContext = useMemo(() => imageSystemContext, [imageSystemContext]);
+  // additionalSystemContext 注入源。jayread 时代这里透传 useGuideData 的
+  // imageSystemContext（论文图片描述）；autonomics 无该数据源，恒为空数组。
+  const mergedAdditionalContext = useMemo(() => [] as any[], []);
 
   // ========================================================================
   // ===== 上下文预览数据（只读，用于 TemplateManagerModal 的"上下文预览"标签页）=====
@@ -395,14 +376,6 @@ const ChatPanel = forwardRef(function ChatPanel({
       ],
     });
 
-    // Layer 2.5: 网络搜索
-    layers.push({
-      key: 'L2.5',
-      label: '网络搜索',
-      active: webSearchEnabled,
-      details: [webSearchEnabled ? '已开启（发送时自动搜索）' : '未开启'],
-    });
-
     // Layer 2.7: 高优先级上下文
     // 额外系统上下文中优先级为 'high' 的条目（如图片描述等）
     const highPriority = (mergedAdditionalContext || []).filter((c: any) => c.priority === 'high');
@@ -411,19 +384,6 @@ const ChatPanel = forwardRef(function ChatPanel({
       label: '高优先级上下文',
       active: highPriority.length > 0,
       details: [highPriority.length > 0 ? `${highPriority.length} 条注入` : '无'],
-    });
-
-    // Layer 3: 段落导览
-    // 论文章节和段落的摘要信息，帮助 AI 理解论文结构
-    const guideSectionCount = guideSections?.length || 0; // 章节数量
-    const guideParaCount = guideSections?.reduce((sum: number, s: any) => sum + (s.paragraphs?.length || 0), 0) || 0; // 段落总数
-    layers.push({
-      key: 'L3',
-      label: '段落导览',
-      active: guideSectionCount > 0,
-      details: [guideSectionCount > 0
-        ? `${guideSectionCount} 个章节，${guideParaCount} 个段落`
-        : '无导览数据'],
     });
 
     // Layer 4: RAG 语义检索
@@ -449,7 +409,7 @@ const ChatPanel = forwardRef(function ChatPanel({
     });
 
     return layers; // 返回构建好的上下文层列表
-  }, [paperInfo, threadContextInjection, messages, webSearchEnabled, mergedAdditionalContext, guideSections, paperId, paper?.parse_status]);
+  }, [paperInfo, threadContextInjection, messages, mergedAdditionalContext, paperId, paper?.parse_status]);
 
   // ========================================================================
   // ===== 调用 useChatSender hook 获取 sendMessages 函数 =====
@@ -459,8 +419,6 @@ const ChatPanel = forwardRef(function ChatPanel({
   const { sendMessages } = useChatSender({ // 解构获取 sendMessages 发送函数
     setMessages,               // 设置消息列表的函数（用于 hook 内部更新消息状态）
     setStreaming,               // 设置流式状态的函数（用于 hook 内部控制发送中状态）
-    setWebSearching,            // 设置搜索状态的函数（用于 hook 内部控制网络搜索 UI）
-    setLastWebSearchSources,    // 设置搜索来源的函数（用于 hook 内部保存搜索结果来源）
     persistMessages,            // 持久化消息的函数（用于 hook 内部保存对话到后端）
     abortControllerRef,         // AbortController 引用（用于 hook 内部管理请求中断）
     activeRequestIdRef,         // 活跃请求 ID 引用（用于防止旧流式响应覆盖新消息）
@@ -469,7 +427,6 @@ const ChatPanel = forwardRef(function ChatPanel({
     tokenBudgets,               // Token 预算配置（各模型的 token 限制）
     paperInfo,                  // 论文基础信息（标题、作者、摘要，用于 Layer 1）
     paper,                      // 论文完整信息（包含 parse_status，用于判断是否注入全文）
-    guideSections,              // 段落导览数据（用于 Layer 3 段落摘要注入）
     messages,                   // 当前消息列表（用于 hook 内部构建完整消息历史）
     streaming,                  // 是否正在流式回复中（用于 hook 内部防重复发送校验）
     additionalSystemContext: mergedAdditionalContext as any, // 合并后的额外系统上下文（含图片信息）
@@ -722,15 +679,14 @@ const ChatPanel = forwardRef(function ChatPanel({
    * 追问线程模式：
    * - 当 activeThread 不为 null 时，输入框处于追问线程模式
    * - 发送消息时路由到 handleThreadSendMessage 而非主对话的 sendMessages
-   * - 追问不支持附件、网络搜索等高级功能，仅纯文本
+   * - 追问不支持附件等高级功能，仅纯文本
    *
    * @param {string} text - 用户输入的文本内容
    * @param {Array} vibeCardRefs - VibeCard 引用列表（可选，暂未使用）
    * @param {Array} attachments - 附件列表（可选，图片/文件等）
-   * @param {boolean} webSearchEnabled - 是否开启网络搜索（可选，默认 false）
    * @param {Array} fileRefs - 文件引用列表（可选，用于文件附件）
    */
-  const handleSend = useCallback(async (text: string, vibeCardRefs: any[] = [], attachments: any[] = [], webSearchEnabled: boolean = false, fileRefs: any[] = [], contextSystemPrompt?: string) => {
+  const handleSend = useCallback(async (text: string, vibeCardRefs: any[] = [], attachments: any[] = [], fileRefs: any[] = [], contextSystemPrompt?: string) => {
     // 校验：流式回复中不允许重复发送（Phase 4: 从 store 读最新值，替代 streamingRef.current）
     if (getStreamingForPaper(paperId)) return;
 
@@ -797,7 +753,6 @@ const ChatPanel = forwardRef(function ChatPanel({
       text,                    // 用户输入的原始文本
       vibeCardRefs,            // VibeCard 引用列表
       attachments,             // 附件列表
-      webSearchEnabled,        // 是否开启网络搜索
       quotedMessage,           // 引用的消息对象
       setQuotedMessage as any,        // 清除引用状态的函数（发送后清除引用）
       null,                    // 预留参数
@@ -842,7 +797,7 @@ const ChatPanel = forwardRef(function ChatPanel({
      */
     sendMessage: (text: string, opts?: { systemPrompt?: string }) => {
       if (collapsed || !text?.trim() || streaming) return; // 校验条件
-      handleSend(text, [], [], false, [], opts?.systemPrompt); // 调用发送函数，透传可选 system 段
+      handleSend(text, [], [], [], opts?.systemPrompt); // 调用发送函数，透传可选 system 段
     },
     /**
      * 注入上下文 prompt 并发送到对话（两段式：system + user）
@@ -859,7 +814,7 @@ const ChatPanel = forwardRef(function ChatPanel({
     injectContext: ({ prompt, userPrompt, systemPrompt }: { prompt?: string; userPrompt?: string; systemPrompt?: string }) => {
       const text = userPrompt ?? prompt; // 兼容：优先 userPrompt，回退到老字段 prompt
       if (collapsed || !text?.trim() || streaming) return; // 校验条件
-      handleSend(text, [], [], false, [], systemPrompt); // 调用发送函数，透传可选 system 段
+      handleSend(text, [], [], [], systemPrompt); // 调用发送函数，透传可选 system 段
     },
   }), [collapsed, streaming, handleSend]);
 
@@ -1069,7 +1024,6 @@ const ChatPanel = forwardRef(function ChatPanel({
                 originalIdx={originalIdx} // 消息在原始数组中的索引
                 streaming={streaming} // 是否正在流式回复中
                 isLastMessage={originalIdx === messages.length - 1} // 是否是最后一条消息（用于流式输出效果）
-                lastWebSearchSources={lastWebSearchSources} // 最近一次网络搜索的来源列表
                 chatSearchKeyword={chatSearchKeyword} // 搜索关键词（用于高亮匹配文本）
                 paperId={paperId} // 论文 ID
                 onQuoteMessage={handleQuoteMessage} // 引用消息回调
@@ -1372,8 +1326,6 @@ const ChatPanel = forwardRef(function ChatPanel({
             customConfigs={customConfigs} // 自定义模型配置列表
             onSaveConfigs={handleSaveConfigs as any} // 保存配置回调
             selectedConfigId={selectedConfigId} // 当前选中的配置 ID
-            webSearchEnabled={activeThread ? false : webSearchEnabled} // 追问模式下禁用网络搜索
-            onWebSearchToggle={handleWebSearchToggle} // Web 搜索开关切换回调
             threadContextInjection={threadContextInjection} // 线程上下文注入开关状态
             onThreadContextInjectionToggle={handleThreadContextInjectionToggle} // 线程注入切换回调
             slashCommands={slashCommandList} // 斜杠命令列表（用于输入框的自动补全提示展示）

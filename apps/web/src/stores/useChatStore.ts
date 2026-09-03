@@ -32,12 +32,12 @@ function paperKey(paperId: string | number | undefined | null): string {
   return String(paperId);
 }
 
-/** settingsSlice 状态 + actions（global） */
+/** settingsSlice 状态 + actions（global）
+ *
+ * 注：jayread 时代的 webSearchEnabled 开关已随 searchApi 移除（plan Phase 5 清扫）。 */
 interface SettingsSlice {
   /** 用户设置原始对象（从后端 /api/settings 加载，含 api_key/model_config 等） */
   settings: Record<string, any>;
-  /** Web 搜索开关（持久化到 settings.web_search_enabled） */
-  webSearchEnabled: boolean;
   /** 线程上下文注入开关（持久化到 settings.thread_context_injection） */
   threadContextInjection: boolean;
   /** Token 预算字典（按 model 名映射 context window 大小） */
@@ -46,7 +46,6 @@ interface SettingsSlice {
   customSystemPrompts: Record<AgentType, string>;
 
   setSettings: (s: Record<string, any>) => void;
-  setWebSearchEnabled: (b: boolean) => void;
   setThreadContextInjection: (b: boolean) => void;
   setTokenBudgets: (b: typeof DEFAULT_TOKEN_BUDGETS) => void;
   setCustomSystemPrompts: (p: Record<AgentType, string>) => void;
@@ -129,13 +128,11 @@ export interface ChatState extends SettingsSlice, ModelConfigSlice, MessagesSlic
 export const useChatStore = create<ChatState>()((set, get) => ({
   // ===== settingsSlice =====
   settings: {},
-  webSearchEnabled: false,
   threadContextInjection: false,
   tokenBudgets: DEFAULT_TOKEN_BUDGETS,
   customSystemPrompts: {} as Record<AgentType, string>,
 
   setSettings: (s) => set({ settings: s }),
-  setWebSearchEnabled: (b) => set({ webSearchEnabled: b }),
   setThreadContextInjection: (b) => set({ threadContextInjection: b }),
   setTokenBudgets: (b) => set({ tokenBudgets: b }),
   setCustomSystemPrompts: (p) => set({ customSystemPrompts: p }),

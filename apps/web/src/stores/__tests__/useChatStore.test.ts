@@ -7,7 +7,6 @@ describe('useChatStore — settingsSlice + modelConfigSlice', () => {
     // 每个用例前重置 store 到初始状态，避免用例间串话
     useChatStore.setState({
       settings: {},
-      webSearchEnabled: false,
       threadContextInjection: false,
       tokenBudgets: DEFAULT_TOKEN_BUDGETS,
       customSystemPrompts: {} as Record<string, string>,
@@ -24,9 +23,8 @@ describe('useChatStore — settingsSlice + modelConfigSlice', () => {
       expect(useChatStore.getState().settings).toEqual({});
     });
 
-    it('webSearchEnabled / threadContextInjection 默认 false', () => {
+    it('threadContextInjection 默认 false', () => {
       const s = useChatStore.getState();
-      expect(s.webSearchEnabled).toBe(false);
       expect(s.threadContextInjection).toBe(false);
     });
 
@@ -46,11 +44,6 @@ describe('useChatStore — settingsSlice + modelConfigSlice', () => {
     it('setSettings 替换整个 settings 对象', () => {
       useChatStore.getState().setSettings({ api_key: 'xxx', model: 'gpt-4o' });
       expect(useChatStore.getState().settings).toEqual({ api_key: 'xxx', model: 'gpt-4o' });
-    });
-
-    it('setWebSearchEnabled 切换 boolean', () => {
-      useChatStore.getState().setWebSearchEnabled(true);
-      expect(useChatStore.getState().webSearchEnabled).toBe(true);
     });
 
     it('setThreadContextInjection 切换 boolean', () => {

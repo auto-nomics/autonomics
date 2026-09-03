@@ -5,21 +5,21 @@
  * 按 PLAN.md 定义的分层上下文注入策略构建 system prompt：
  * - Layer 1: 论文基础信息（固定注入）
  * - Layer 1.5: 线程上下文注入（Phase 6，按需注入）
- * - Layer 2.5: 网络搜索结果（按需注入）
  * - Layer 2.7: 额外系统上下文高优先级（按需注入）
- * - Layer 3: 段落导览上下文（按需注入）
  * - Layer 5: 额外系统上下文低优先级（按需注入）
  *
  * Prompt Caching (Phase 2-P3):
  * - Tier 1 (stable, cache): Layer 1 (core prompt)
- * - Tier 2 (semi-stable, cache): Layer 1.5 (thread context), Layer 2.7 (high priority), Layer 3 (paragraph guide)
- * - Tier 3 (dynamic, no cache): Layer 2.5 (search results), Layer 5 (low priority)
+ * - Tier 2 (semi-stable, cache): Layer 1.5 (thread context), Layer 2.7 (high priority)
+ * - Tier 3 (dynamic, no cache): Layer 5 (low priority)
+ *
+ * 注：Layer 2.5（网络搜索，searchApi）与 Layer 3（段落导览，guideApi）已随对应
+ * stub service 一并移除 —— autonomics 后端没有联网搜索与导览管线
+ * （plan Phase 5 清扫）。
  *
  * @module ai-chat/utils/systemPromptBuilder
  */
 
-import type { WebSearchResponse, SearchResult } from '@/types';
-import { webSearch } from '../../../services/searchApi';
 import { estimateTokens } from '../../../utils/markdownUtils';
 import { extractTextFromContent } from '../utils/chatMessageUtils';
 import type { AgentType } from '../agentTypes';
@@ -42,14 +42,10 @@ import {
  * @param {object} params.paperInfo - 论文基础信息（标题、作者、摘要）
  * @param {string|number} params.paperId - 论文 ID（用于 RAG 检索）
  * @param {object} params.paper - 论文完整信息（包含 parse_status）
- * @param {Array} params.guideSections - 段落导览数据
  * @param {Array} params.messages - 当前消息列表（用于线程上下文）
  * @param {Array|null} params.additionalSystemContext - 额外系统上下文注入
  * @param {boolean} params.threadContextInjection - 线程上下文注入开关
  * @param {Function} params.setMessages - 设置消息列表的函数
- * @param {Function} params.setWebSearching - 设置搜索状态的函数
- * @param {Function} params.setLastWebSearchSources - 设置搜索来源的函数
- * @param {boolean} params.webSearchEnabled - 是否开启网络搜索
  * @param {any} params.userContent - 用户消息内容
  * @param {Array} params.newMessages - 新消息列表
  * @param {number} params.tokenBudget - token 预算
@@ -60,14 +56,10 @@ export async function buildSystemPromptBlocks({
   paperInfo,
   paperId,
   paper,
-  guideSections,
   messages,
   additionalSystemContext = null,
   threadContextInjection = false,
   setMessages,
-  setWebSearching,
-  setLastWebSearchSources,
-  webSearchEnabled = false,
   userContent,
   newMessages,
   tokenBudget,
@@ -77,14 +69,10 @@ export async function buildSystemPromptBlocks({
   paperInfo: { title?: string; authors?: string | string[]; abstract?: string } | null;
   paperId: string | number | null;
   paper: { parse_status?: string } | null;
-  guideSections: Array<{ section_title: string; paragraphs: Array<{ importance?: number; summary: string }> }>;
   messages: Array<Record<string, any>>;
   additionalSystemContext: Array<{ text: string; priority: string }> | null;
   threadContextInjection: boolean;
   setMessages: React.Dispatch<React.SetStateAction<any[]>>;
-  setWebSearching: React.Dispatch<React.SetStateAction<boolean>>;
-  setLastWebSearchSources: React.Dispatch<React.SetStateAction<Array<{ title: string; url: string }>>>;
-  webSearchEnabled: boolean;
   userContent: string | Array<Record<string, any>>;
   newMessages: Array<Record<string, any>>;
   tokenBudget: number;
@@ -176,49 +164,6 @@ export async function buildSystemPromptBlocks({
     }
   }
 
-  // ===== Tier 3: Layer 2.5 - 网络搜索结果（动态，不缓存）=====
-  if (strategy.enabledLayers.has('webSearch') && webSearchEnabled) {
-    setWebSearching(true);
-
-    try {
-      const searchQuery = extractTextFromContent(userContent);
-
-      setMessages(prev => [
-        ...prev,
-        { role: 'assistant', content: '__WEB_SEARCHING__' },
-      ]);
-
-      const searchResult = await webSearch(searchQuery) as WebSearchResponse;
-
-      if (searchResult.formatted_prompt) {
-        tier3Blocks.push(createBlock(searchResult.formatted_prompt, CacheStrategy.DYNAMIC));
-
-        setLastWebSearchSources(
-          (searchResult.results || []).map((r: SearchResult) => ({
-            title: r.title || '无标题',
-            url: r.url || '',
-          }))
-        );
-      } else if (searchResult.error) {
-        console.warn('网络搜索失败:', searchResult.error);
-
-        if (searchResult.error.includes('未配置') || searchResult.error.includes('API Key')) {
-          return { systemPrompt: '', error: 'API_KEY_MISSING' };
-        }
-      }
-    } catch (err: any) {
-      console.warn('网络搜索请求失败:', err.message);
-
-      if (err.message && err.message.includes('未配置')) {
-        return { systemPrompt: '', error: 'API_KEY_MISSING' };
-      }
-    } finally {
-      // Always remove the placeholder and reset webSearching state
-      setMessages(prev => prev.filter(m => m.content !== '__WEB_SEARCHING__'));
-      setWebSearching(false);
-    }
-  }
-
   // ===== 计算剩余预算 =====
   const estimateBlocksTokens = (blocks: Array<{ text: string }>): number => {
     return blocks.reduce((sum, b) => sum + estimateTokens(b.text), 0);
@@ -240,43 +185,6 @@ export async function buildSystemPromptBlocks({
         remainingBudget -= tokens;
       }
     }
-  }
-
-  // ===== Tier 2: Layer 3 - 段落导览上下文（半稳定，缓存）=====
-  if (strategy.enabledLayers.has('guideSections') && guideSections.length > 0 && remainingBudget > 0) {
-    const guideLines = [];
-    for (const section of guideSections) {
-      guideLines.push(`### ${section.section_title}`);
-      for (const para of section.paragraphs) {
-        const imp = para.importance || 3;
-        const stars = '★'.repeat(imp);
-        guideLines.push(`- [${stars}] ${para.summary}`);
-      }
-    }
-    const guideText = guideLines.join('\n');
-    const guideTokens = estimateTokens(guideText);
-
-    if (guideTokens <= remainingBudget) {
-      tier2Blocks.push(createBlock(`## 论文段落导览\n${guideText}`, CacheStrategy.SEMI_STABLE));
-    } else {
-      const importantLines = [];
-      for (const section of guideSections) {
-        const importantParas = section.paragraphs.filter(p => (p.importance || 0) >= 4);
-        if (importantParas.length > 0) {
-          importantLines.push(`### ${section.section_title}`);
-          for (const para of importantParas) {
-            importantLines.push(`- [★★★★] ${para.summary}`);
-          }
-        }
-      }
-      if (importantLines.length > 0) {
-        tier2Blocks.push(createBlock(`## 论文段落导览（仅重要段落）\n${importantLines.join('\n')}`, CacheStrategy.SEMI_STABLE));
-      }
-    }
-
-    // 重新计算剩余预算（包含新增的 Tier 2 内容）
-    const updatedTier2Tokens = estimateBlocksTokens(tier2Blocks);
-    remainingBudget = tokenBudget - tier1Tokens - updatedTier2Tokens - tier3Tokens - 2000;
   }
 
   // Tier 3 之前的 RAG 语义检索层已移除（向量嵌入 RAG 已下线）。
@@ -311,14 +219,10 @@ export interface BuildSystemPromptParams {
   paperInfo: { title?: string; authors?: string | string[]; abstract?: string } | null;
   paperId: string | number | null;
   paper: { parse_status?: string } | null;
-  guideSections: Array<{ section_title: string; paragraphs: Array<{ importance?: number; summary: string }> }>;
   messages: Array<Record<string, any>>;
   additionalSystemContext: Array<{ text: string; priority: string }> | null;
   threadContextInjection: boolean;
   setMessages: React.Dispatch<React.SetStateAction<any[]>>;
-  setWebSearching: React.Dispatch<React.SetStateAction<boolean>>;
-  setLastWebSearchSources: React.Dispatch<React.SetStateAction<Array<{ title: string; url: string }>>>;
-  webSearchEnabled: boolean;
   userContent: string | Array<Record<string, any>>;
   newMessages: Array<Record<string, any>>;
   tokenBudget: number;

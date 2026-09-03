@@ -21,7 +21,6 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { Dropdown, Spin, Button, App } from 'antd';
 import { DeleteOutlined, CopyOutlined, MessageOutlined } from '@ant-design/icons';
-import WebSearchSources from './WebSearchSources';
 import ToolCallCard from './ToolCallCard';
 import MarkdownRenderer from './MarkdownRenderer';
 import { extractTextFromContent, extractImageUrlsFromContent, createKeywordHighlighter } from '../utils/chatMessageUtils';
@@ -54,7 +53,6 @@ const STREAMING_END_DELAY = 200;
  * @param {number} props.originalIdx - 消息在原始 messages 数组中的索引
  * @param {boolean} props.streaming - 是否正在流式回复中（主对话）
  * @param {boolean} props.isLastMessage - 是否是最后一条消息
- * @param {Object|null} props.lastWebSearchSources - 网络搜索来源数据
  * @param {string} props.chatSearchKeyword - 搜索关键词（用于高亮）
  * @param {number} props.paperId - 论文 ID
  * @param {Function} props.onQuoteMessage - 引用消息的回调
@@ -80,7 +78,6 @@ const ChatMessageItem = ({
     originalIdx,
     streaming,
     isLastMessage,
-    lastWebSearchSources,
     chatSearchKeyword,
     paperId,
     onQuoteMessage,
@@ -117,7 +114,6 @@ const ChatMessageItem = ({
     originalIdx: number;
     streaming?: any;
     isLastMessage?: boolean;
-    lastWebSearchSources?: any;
     chatSearchKeyword?: string;
     paperId?: number;
     onQuoteMessage?: (msg: any) => void;
@@ -780,11 +776,6 @@ const ChatMessageItem = ({
                           <ToolCallCard key={tc.id || i} toolCall={tc} />
                         ))}
                       </>
-                    )}
-
-                    {/* 网络搜索来源指示器 */}
-                    {msg.role === 'assistant' && lastWebSearchSources && lastWebSearchSources.length > 0 && isLastMessage && (
-                        <WebSearchSources sources={lastWebSearchSources} />
                     )}
 
                     {/* 浮动按钮容器（追问按钮） */}

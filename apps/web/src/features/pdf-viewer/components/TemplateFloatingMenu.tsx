@@ -107,36 +107,6 @@ export function TemplateFloatingMenu({
         minWidth: 120,                        // 最小宽度 120px，确保文字不被截断
       }}
     >
-      {/* ==================== 快捷翻译（直接调用翻译 API） ==================== */}
-      <div
-        onClick={() => onTemplateSelect('quick_translate')}
-        onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); }}
-        style={{
-          padding: '6px 16px',
-          cursor: 'pointer',
-          fontSize: 13,
-          color: 'var(--text-primary)',
-          transition: 'background 0.2s',
-          whiteSpace: 'nowrap',
-          fontWeight: 500,
-        }}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.background = 'var(--overlay-hover)';
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.background = 'transparent';
-        }}
-      >
-        快捷翻译
-      </div>
-
-      {/* 分隔线 */}
-      <div style={{
-        height: 1,
-        margin: '4px 0',
-        background: 'var(--border-color)',
-      }} />
-
       {/* ==================== AI 模板选项 ==================== */}
       {/* 遍历 pdf_selection 类型可用的所有模板，渲染菜单项 */}
       {getAvailableTemplates('pdf_selection').map((key) => (

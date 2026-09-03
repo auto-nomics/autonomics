@@ -51,3 +51,4 @@ infra/docker/garage/snapshots/
 apps/web/**/node_modules/
 apps/web/coverage/
 apps/web/**/.vite/
+.serena/

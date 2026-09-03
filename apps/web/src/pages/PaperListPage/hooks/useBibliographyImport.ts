@@ -20,17 +20,15 @@ import type { ImportResult } from '@/types';
 import {
   importBibliography,    // 导入题录文件（BibTeX/RIS/CSL-JSON）
   attachPdf,             // 为元数据记录手动上传 PDF
-  downloadPdf,           // 通过 DOI 自动下载开放获取 PDF（桩，UI 入口待清扫）
 } from '../../../services/bibliographyApi'; // 导入题录导入 API 函数
 
 /**
  * 题录导入钩子
  *
  * @param {Function} loadPapers - 刷新论文列表的回调函数
- * @param {Function} startMetadataPolling - （保留参数兼容调用方）autonomics 无异步元数据获取，不再使用
  * @returns {Object} 返回状态和处理函数的对象
  */
-export function useBibliographyImport(loadPapers: () => void, _startMetadataPolling: (ids: string[]) => void) {
+export function useBibliographyImport(loadPapers: () => void) {
   const { t } = useTranslation('paperList');
   const { message } = App.useApp();
   // ========== 状态定义 ==========
@@ -39,7 +37,6 @@ export function useBibliographyImport(loadPapers: () => void, _startMetadataPoll
   const [importingBib, setImportingBib] = useState(false); // 题录导入中状态，默认 false
 
   // 正在下载 PDF 的论文 ID 集合：用于控制"自动下载PDF"按钮的加载状态
-  const [downloadingPdfIds, setDownloadingPdfIds] = useState<Set<string>>(new Set()); // 正在下载的论文 ID 集合
 
   // 正在上传 PDF 的论文 ID 集合：用于控制"上传PDF"按钮的加载状态
   const [uploadingPdfIds, setUploadingPdfIds] = useState<Set<string>>(new Set()); // 正在上传的论文 ID 集合
@@ -126,50 +123,10 @@ export function useBibliographyImport(loadPapers: () => void, _startMetadataPoll
     }
   }, [loadPapers]); // 依赖项：loadPapers
 
-  /**
-   * 通过 DOI 自动下载开放获取 PDF
-   *
-   * 使用 Unpaywall API 查询论文的开放获取 PDF 链接并自动下载。
-   * 如果论文没有 DOI 或没有开放获取版本，下载会失败。
-   *
-   * @param {number} paperId - 论文 ID
-   * @param {Function} listenToParseStatus - SSE 监听函数，下载成功后开始监听解析状态
-   */
-  const handleDownloadPdf = useCallback(async (paperId: string, listenToParseStatus?: (paperId: string) => void) => {
-    // 添加到下载中集合，显示加载状态
-    setDownloadingPdfIds(prev => new Set(prev).add(String(paperId)));
-
-    try {
-      // 调用后端自动下载 PDF API
-      const result = await downloadPdf(paperId);
-      if (result.success) {
-        // 下载成功
-        message.success(result.message || t('message.pdfDownloadSuccess'));
-        // 开始监听解析状态
-        listenToParseStatus?.(paperId); // 如果提供了监听函数，开始监听
-        // 刷新论文列表
-        loadPapers(); // 刷新列表
-      } else {
-        // 下载失败（没有开放获取 PDF）
-        message.warning(result.message || t('message.pdfNotFound'));
-      }
-    } catch (err: any) {
-      message.error(t('message.pdfDownloadFailed', { error: err.message }));
-    } finally {
-      // 从下载中集合移除
-      setDownloadingPdfIds(prev => {
-        const next = new Set(prev);
-        next.delete(String(paperId));
-        return next;
-      });
-    }
-  }, [loadPapers]); // 依赖项：loadPapers
-
   // 返回公共接口
   return {
     // 状态
     importingBib,           // 题录导入中状态
-    downloadingPdfIds,      // 正在下载 PDF 的论文 ID 集合
     uploadingPdfIds,        // 正在上传 PDF 的论文 ID 集合
 
     // 题录导入相关
@@ -177,7 +134,6 @@ export function useBibliographyImport(loadPapers: () => void, _startMetadataPoll
 
     // PDF 操作相关
     handleAttachPdf,         // 为元数据记录手动上传 PDF
-    handleDownloadPdf,       // 通过 DOI 自动下载 PDF
   };
 }
 

@@ -5,7 +5,6 @@
  * - withVibeCardMentions：扩展编辑器，让 vibecard-mention / file-mention 元素被识别为
  *   inline + void（行内不可编辑的胶囊标签）
  * - insertVibeCardMention：插入 VibeCard mention，可选先删除触发 mention 的搜索文本
- * - insertFileMention：插入文件 mention，同上
  *
  * 类型 CustomEditor / VibeCardData 也在此处导出，因为插件函数依赖它们，
  * 集中放置避免类型分散。
@@ -70,42 +69,6 @@ export const insertVibeCardMention = (editor: CustomEditor, vibeCardData: VibeCa
         type: 'vibecard-mention' as const,
         vibeCardId: vibeCardData.id,
         vibeCardName: vibeCardData.name,
-        children: [{ text: '' }],
-    };
-
-    if (targetRange) {
-        try {
-            const endPoint = Range.end(targetRange);
-            const distance = (searchText?.length || 0) + 1;
-            const anchorPoint = Editor.before(editor, endPoint, { distance, unit: 'character' });
-            if (anchorPoint) {
-                const exactRange = { anchor: anchorPoint, focus: endPoint };
-                Transforms.select(editor, exactRange);
-                Transforms.delete(editor);
-            } else {
-                Transforms.select(editor, targetRange);
-                Transforms.delete(editor);
-            }
-        } catch {
-            Transforms.select(editor, targetRange);
-            Transforms.delete(editor);
-        }
-    }
-
-    Transforms.insertNodes(editor, mention);
-    Transforms.move(editor);
-};
-
-/**
- * 插入文件 mention 到编辑器
- * 在当前光标位置（或指定范围）插入一个文件路径 mention 元素
- * 如果提供了 targetRange 和 searchText，会先删除搜索文本（如 "@readme"），再插入 mention
- */
-export const insertFileMention = (editor: CustomEditor, fileData: { path: string; name: string }, targetRange: Range | null = null, searchText: string = ''): void => {
-    const mention = {
-        type: 'file-mention' as const,
-        filePath: fileData.path,
-        fileName: fileData.name,
         children: [{ text: '' }],
     };
 

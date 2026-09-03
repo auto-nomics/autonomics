@@ -35,7 +35,7 @@ import { // 从 Ant Design Icons 导入图标组件
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom'; // 导入路由导航钩子，用于编程式跳转
 import { // 从论文 API 模块导入接口函数
-  getPapers, reparsePaper, fetchMetadata, // getPapers 获取列表、reparsePaper 重解析、fetchMetadata 获取期刊元数据（deletePaper 已移至 usePaperContextMenu hook）
+  getPapers, // 获取列表（deletePaper 已移至 usePaperContextMenu hook）
 } from '../../services/papersApi';
 import type { GetPapersParams } from '../../types';
 // 附件 API 已移至 useAttachmentManager hook 内部导入
@@ -63,7 +63,6 @@ import ResizableTitle from './ResizableTitle';
 import { useSSEProgress } from './hooks/useSSEProgress';
 // 导入元数据获取轮询钩子：检测后台元数据获取是否完成，完成后自动刷新列表
 // 从共享 hooks 目录导入，供多个页面复用
-import { useMetadataPolling } from '../../hooks/useMetadataPolling';
 // 导入键盘快捷键钩子
 import useKeyboardShortcut from '../../hooks/useKeyboardShortcut';
 // 导入题录导入和去重钩子
@@ -398,10 +397,6 @@ function PaperListPageInner() {
     loadPapers(); // 调用加载论文列表函数
   }, [loadPapers]); // 依赖 loadPapers
 
-  // ========== 元数据获取轮询钩子 ==========
-  // 检测后台元数据获取（IF、被引、分区）是否完成，完成后自动刷新列表
-  const { startMetadataPolling, cleanup: cleanupMetadataPolling } = useMetadataPolling(loadPapers);
-
   // ========== SSE 进度监听钩子 ==========
   // 使用提取的 useSSEProgress hook 替代原来的内联 SSE 管理代码（约 200 行）
   // 传入的回调函数保持与原内联代码相同的行为
@@ -431,13 +426,7 @@ function PaperListPageInner() {
         ));
       }, 400); // 延迟 400 毫秒
       timeoutRefs.current.push(timerId1); // 存储 timeout ID，用于 cleanup
-      // 解析完成后自动触发元数据获取（期刊名、年份、IF、分区等）
-      fetchMetadata(paperId).then(() => {
-        startMetadataPolling([paperId]);
-      }).catch((err: any) => {
-        console.warn('[AutoMetadata] fetch failed:', err.message);
-      });
-    }, [loadPapers, startMetadataPolling]), // 依赖 loadPapers 和 startMetadataPolling
+    }, [loadPapers]), // 依赖 loadPapers
     // 解析失败回调：更新论文状态为 failed 并保存错误信息
     onError: useCallback(({ paperId, message: errMsg }: any) => { // useCallback 缓存回调，重命名避免与 antd message 冲突
       setPapers((prev: any) => prev.map((p: any) => // 遍历论文列表
@@ -462,24 +451,19 @@ function PaperListPageInner() {
   // 使用提取的 useBibliographyImport hook 替代原来的内联题录导入代码（约 200 行）
   const {
     importingBib,                // 题录导入中状态
-    downloadingPdfIds,           // 正在下载 PDF 的论文 ID 集合
     uploadingPdfIds,             // 正在上传 PDF 的论文 ID 集合
     handleImportBibliography,    // 处理题录文件导入
     handleAttachPdf,             // 为元数据记录手动上传 PDF（注意：hook 的签名是 (paperId, file, listenToParseStatus)）
-    handleDownloadPdf,           // 通过 DOI 自动下载 PDF（注意：hook 的签名是 (paperId, listenToParseStatus)）
-  } = useBibliographyImport(loadPapers, startMetadataPolling as any); // 传入 loadPapers 和 startMetadataPolling
+  } = useBibliographyImport(loadPapers);
 
   // 包装题录导入 hook 中的 PDF 操作函数，自动补充 listenToParseStatus 参数
-  // 原因：useBibliographyImport hook 中的 handleAttachPdf / handleDownloadPdf 签名
-  //   需要 (paperId, file, listenToParseStatus) / (paperId, listenToParseStatus)
-  // 但右键菜单的 onClick 只关心 (paperId, file) / (paperId)，不需要了解 SSE 细节
+  // 原因：useBibliographyImport hook 中的 handleAttachPdf 签名是
+  //   (paperId, file, listenToParseStatus)
+  // 但右键菜单的 onClick 只关心 (paperId, file)，不需要了解 SSE 细节
   // 所以用 useCallback 包装一层，在内部自动注入 listenToParseStatus
   const wrappedHandleAttachPdf = useCallback((paperId: any, file: any) => { // 包装函数：隐藏 listenToParseStatus 参数
     return handleAttachPdf(paperId, file, listenToParseStatus); // 调用 hook 原函数，自动补充第三个参数
   }, [handleAttachPdf, listenToParseStatus]); // 依赖：hook 导出的上传函数（状态变化时更新）、SSE 监听函数（连接变化时更新）
-  const wrappedHandleDownloadPdf = useCallback((paperId: any) => { // 包装函数：隐藏 listenToParseStatus 参数
-    return handleDownloadPdf(paperId, listenToParseStatus); // 调用 hook 原函数，自动补充第二个参数
-  }, [handleDownloadPdf, listenToParseStatus]); // 依赖：hook 导出的下载函数（状态变化时更新）、SSE 监听函数（连接变化时更新）
 
   // ========== 全局文件拖拽导入钩子 ==========
   // 支持从文件管理器或 Chrome 下载气泡直接拖入文件导入（题录文件或 PDF）
@@ -591,20 +575,6 @@ function PaperListPageInner() {
     }
   }, []); // 空依赖，categorySidebarRef 是 ref 不会变化
 
-  // ========== 手动获取论文的期刊元数据 ==========
-  // 移至此处，确保在 usePaperContextMenu hook 调用之前定义
-  const handleFetchMetadata = useCallback(async (paperId: any) => { // 获取期刊元数据处理函数
-    try {
-      await fetchMetadata(paperId); // 调用 API 触发元数据获取（后台异步执行）
-      messageApi.info(t('message.fetchJournalInfo')); // 提示用户任务已提交
-      // 启动轮询，每 3 秒检查一次元数据获取状态
-      // 当后端获取完成后（_metadata_fetching 集合中该 ID 被移除），自动刷新列表
-      startMetadataPolling([paperId]);
-    } catch (err) {
-      messageApi.error(t('message.fetchJournalFailed', { error: (err as any).message })); // 弹出错误提示
-    }
-  }, [startMetadataPolling]); // 依赖 startMetadataPolling
-
   // ========== 右键菜单和分类分配钩子 ==========
   // 使用提取的 usePaperContextMenu hook 管理右键菜单和分类相关操作
   // 仅传递 hook 特定的参数，共享参数从 context 读取
@@ -620,13 +590,10 @@ function PaperListPageInner() {
     buildContextMenuItems, // 构建右键菜单项数组
     getCategoryPath, // 获取分类完整路径
   } = usePaperContextMenu({
-    handleFetchMetadata, // 获取元数据回调
     wrappedHandleAttachPdf, // 包装后的上传 PDF 回调
-    wrappedHandleDownloadPdf, // 包装后的下载 PDF 回调
     loadAttachments, // 加载附件回调
     attachmentCacheRef, // 附件缓存 ref
     uploadingPdfIds, // 上传中 PDF 集合
-    downloadingPdfIds, // 下载中 PDF 集合
   });
 
   // 点击页面其他区域时关闭表格行右键菜单 - 已移至 usePaperContextMenu hook
@@ -634,34 +601,6 @@ function PaperListPageInner() {
   // handleDelete 已移至 usePaperContextMenu hook
   // hook 中的 handleDelete 通过右键菜单调用，包含删除论文 + 关闭菜单 + 刷新列表逻辑
   // 此处不再需要独立的 handleDelete 函数
-
-  /**
-   * 重新解析论文
-   *
-   * 为什么需要重解析功能？
-   * - 首次解析可能失败
-   * - 用户想尝试不同的解析引擎
-   * - PDF 内容可能有更新
-   *
-   * @param {number} paperId - 要重解析的论文 ID
-   */
-  const handleReparse = async (paperId: any, engine: any) => { // 重解析处理函数
-    try { // 开始 try-catch
-      // 调用 API 触发重解析，传入用户选择的解析引擎
-      await reparsePaper(paperId, engine); // 异步调用重解析接口
-      // 先将状态更新为"解析中"，给予用户即时反馈（后端 reparse 直接设为 processing）
-      setPapers((prev: any) => prev.map((p: any) => // 遍历论文列表
-        p.id === paperId ? { ...p, parse_status: 'processing', parse_progress: undefined, parse_stage: undefined } : p // 更新目标论文状态为 processing，清除旧进度（避免重解析时显示上次的进度条）
-      ));
-      // 显示提示信息
-      messageApi.info(t('message.reparseStarted')); // 弹出信息提示
-      // 启动 SSE 监听新的解析进度
-      listenToParseStatus(paperId); // 开始监听该论文的解析进度
-    } catch (err) { // 捕获重解析错误
-      // 重解析失败
-      messageApi.error(t('message.reparseFailed', { error: (err as any).message })); // 弹出错误提示
-    }
-  };
 
   /**
    * 处理分类选择事件
@@ -791,7 +730,6 @@ function PaperListPageInner() {
       attachmentLoading={attachmentLoading}
       handleDeleteAttachment={handleDeleteAttachment}
       handleOpenAttachment={handleOpenAttachment}
-      handleReparse={handleReparse}
       handleSetPrimary={handleSetPrimary}
       TableRowWithDragAndContextMenu={TableRowWithDragAndContextMenu}
       headerContextMenu={headerContextMenu}

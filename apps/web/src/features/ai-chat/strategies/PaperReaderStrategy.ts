@@ -5,9 +5,7 @@
  * - persona（paperReader persona，4 件套严格约束）
  * - paperInfo（论文标题/作者/摘要）
  * - threadContext（用户针对段落的追问历史）
- * - webSearch（论文相关问题触发外部检索）
  * - additionalHigh/additionalLow（图片系统上下文等高层注入）
- * - guideSections（Layer 3 段落导览，仅 paperReader 启用）
  *
  * @module ai-chat/strategies/PaperReaderStrategy
  */
@@ -20,10 +18,8 @@ export const PaperReaderStrategy: PromptStrategy = {
     'persona',
     'paperInfo',
     'threadContext',
-    'webSearch',
     'additionalHigh',
-    'guideSections',
     'additionalLow',
   ]),
-  description: '论文阅读：完整论文上下文 + 段落导览 + 追问 + web search',
+  description: '论文阅读：完整论文上下文 + 追问历史',
 };

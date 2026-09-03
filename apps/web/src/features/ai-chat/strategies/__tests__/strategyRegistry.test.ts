@@ -44,37 +44,31 @@ describe('strategyRegistry', () => {
 });
 
 describe('各 strategy 的 enabledLayers（设计意图锁定）', () => {
-  it('HomepageStrategy: 不含 paperInfo/guideSections', () => {
+  it('HomepageStrategy: 不含 paperInfo', () => {
     const layers = HomepageStrategy.enabledLayers;
     expect(layers.has('persona')).toBe(true);
     expect(layers.has('paperInfo')).toBe(false);
-    expect(layers.has('guideSections')).toBe(false);
     expect(layers.has('threadContext')).toBe(true);
-    expect(layers.has('webSearch')).toBe(true);
   });
 
-  it('PaperReaderStrategy: 启用所有 layer（最重）', () => {
+  it('PaperReaderStrategy: 启用论文上下文相关 layer（最重）', () => {
     const layers = PaperReaderStrategy.enabledLayers;
     expect(layers.has('persona')).toBe(true);
     expect(layers.has('paperInfo')).toBe(true);
-    expect(layers.has('guideSections')).toBe(true);
     expect(layers.has('threadContext')).toBe(true);
-    expect(layers.has('webSearch')).toBe(true);
     expect(layers.has('additionalHigh')).toBe(true);
     expect(layers.has('additionalLow')).toBe(true);
   });
 
-  it('ScreeningStrategy: paperInfo ✓ / guideSections ✗', () => {
+  it('ScreeningStrategy: paperInfo ✓', () => {
     const layers = ScreeningStrategy.enabledLayers;
     expect(layers.has('paperInfo')).toBe(true);
-    expect(layers.has('guideSections')).toBe(false);
   });
 
   it('ThreadStrategy: 启用 threadContext（其他 strategy 都不启用作为独立层）', () => {
     const layers = ThreadStrategy.enabledLayers;
     expect(layers.has('threadContext')).toBe(true);
     expect(layers.has('paperInfo')).toBe(false);
-    expect(layers.has('guideSections')).toBe(false);
   });
 });
 

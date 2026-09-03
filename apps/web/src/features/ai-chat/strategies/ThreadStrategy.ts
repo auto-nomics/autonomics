@@ -15,8 +15,7 @@
  *
  * 与其他 strategy 的差异（设计意图）：
  * - 启用 threadContext layer（其他 strategy 都没这个）
- * - 不启用 paperInfo / guideSections（线程聚焦单段原文，不重渲染论文元信息）
- * - webSearch 默认开启（线程内允许触发外部检索 —— plan 的 Phase 6 可选目标）
+ * - 不启用 paperInfo（线程聚焦单段原文，不重渲染论文元信息）
  *
  * @module ai-chat/strategies/ThreadStrategy
  */
@@ -30,7 +29,6 @@ export const ThreadStrategy: PromptStrategy = {
   enabledLayers: new Set([
     'persona',
     'threadContext',
-    'webSearch',
     'additionalHigh',
     'additionalLow',
   ]),

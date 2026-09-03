@@ -38,10 +38,7 @@ import NiceModal from '@ebay/nice-modal-react';
 // 国际化工具函数：获取翻译文本
 // 附件预览组件（显示在输入框上方，展示待发送的图片缩略图和文件卡片）
 import AttachmentPreview from './AttachmentPreview';
-// 文件搜索 API（仅类型；searchFiles 调用收敛在 useFileSearch 内部）
-import { type FileSearchResult } from '../../../services/fileSearchApi';
 // 文件搜索弹出组件
-import FileSearchPopup from './FileSearchPopup';
 import type { CustomModelConfig, ModelSelection } from '../hooks/useModelConfig';
 // Slate 编辑器错误边界（捕获 Slate DOM 同步错误，静默重建编辑器）
 import SlateErrorBoundary from './slate/SlateErrorBoundary';
@@ -56,12 +53,9 @@ import {
 import {
     withVibeCardMentions,
     insertVibeCardMention,
-    insertFileMention,
     type CustomEditor,
     type VibeCardData,
 } from './slate/slatePlugins';
-// @ 文件搜索 hook（替代原 3 对 twin state/ref，单一 useReducer + stateRef）
-import { useFileSearch } from '../hooks/slate/useFileSearch';
 // 输入历史 hook（localStorage 持久化 + 键盘导航 + Modal UI 状态）
 import { useInputHistory } from '../hooks/slate/useInputHistory';
 // 附件管理 hook（消除 paste/drop 内部 verbatim 重复；导出 AttachmentFile 类型）
@@ -82,7 +76,6 @@ interface SlateInputWithSenderProps {
         text: string,
         vibeCardRefs: Array<{ id: string; name: string }>,
         attachments: AttachmentFile[],
-        webSearchEnabled: boolean,
         fileRefs?: Array<{ path: string; name: string }>,
     ) => void;
     loading: boolean;
@@ -94,8 +87,6 @@ interface SlateInputWithSenderProps {
     onSaveConfigs?: (configs: CustomModelConfig[]) => void;
     selectedConfigId?: string | null;
     onInsertTextReady?: (insertFn: (text: string) => void) => void;
-    webSearchEnabled?: boolean;
-    onWebSearchToggle?: (enabled: boolean) => void;
     threadContextInjection?: boolean;
     onThreadContextInjectionToggle?: (enabled: boolean) => void;
     slashCommands?: SlashCommand[];
@@ -131,8 +122,6 @@ const SlateInputWithSender = forwardRef<unknown, SlateInputWithSenderProps>(({
     onSaveConfigs,         // 保存配置回调（由父组件传入）
     selectedConfigId,      // 当前选中的配置 ID（由父组件传入）
     onInsertTextReady,     // 文本插入方法注册回调（由父组件传入）
-    webSearchEnabled = false,        // Web 搜索开关状态（由父组件控制，默认关闭）
-    onWebSearchToggle,               // Web 搜索开关切换回调（由父组件传入，持久化到后端）
     threadContextInjection = false,  // 线程上下文注入开关状态
     onThreadContextInjectionToggle,  // 线程上下文注入开关切换回调
     slashCommands = [],              // 斜杠命令列表（由父组件传入，用于自动补全提示）
@@ -218,12 +207,6 @@ const SlateInputWithSender = forwardRef<unknown, SlateInputWithSenderProps>(({
         }
     }, [slashMenuIndex, filteredCommands.length]);
 
-    // ===== @ 文件搜索相关状态 =====
-    // 原 3 对 twin state/ref（visible/Ref、results/Ref、index/Ref）已合并到 useFileSearch 的 useReducer
-    // handleKeyDown 通过 fileSearch.stateRef 同步读最新状态，不再需要每帧手写 _set* 包装器
-    const fileSearch = useFileSearch();
-    const { state: fileSearchState, dispatch: fileSearchDispatch, stateRef: fileSearchStateRef, scheduleSearch } = fileSearch;
-
     // ===== 输入历史管理 =====
     // 历史 ref / Modal UI 状态 / extractContent / setEditorText / saveToHistory / navigateHistory
     // 已迁移到 useInputHistory（封装 localStorage + 键盘导航 + Modal UI）
@@ -247,9 +230,7 @@ const SlateInputWithSender = forwardRef<unknown, SlateInputWithSenderProps>(({
         setHistoryHoverIndex,
     } = useInputHistory({ editor, setValue });
 
-    // ===== 附件相关状态 =====
-
-    // ===== 附件管理（图片/文本/二进制统一）=====
+    // ===== 附件管理（图片/文本统一）=====
     // attachedFiles / isDragging / dragCounterRef / handleFileSelect / handlePaste / handleFileDrop
     // 已迁移到 useAttachments（消除原 handlePaste/handleDrop 内部 verbatim 重复）
     const {
@@ -352,8 +333,6 @@ const SlateInputWithSender = forwardRef<unknown, SlateInputWithSenderProps>(({
                     onSaveConfigs,
                     selectedConfigId,
                     onModelChange,
-                    webSearchEnabled,
-                    onWebSearchToggle,
                     threadContextInjection,
                     onThreadContextInjectionToggle,
                 });
@@ -419,10 +398,9 @@ const SlateInputWithSender = forwardRef<unknown, SlateInputWithSenderProps>(({
             // 父组件会设置 loading 状态并进行后续处理
             // 注意：这里不等待 onSubmit 的结果，让父组件自行处理后续逻辑
             // 第 3 个参数改为 attachments（统一的附件数组，包含图片/文本/二进制文件）
-            // 第 4 个参数 webSearchEnabled：网络搜索开关状态
             saveToHistory(text);
             resetHistoryIndex();
-            onSubmit(text, vibeCardRefs, filesToSend, webSearchEnabled, fileRefs);
+            onSubmit(text, vibeCardRefs, filesToSend, fileRefs);
 
         } catch (e) {
             console.error('[SlateInput] handleSubmit execution failed:', e);
@@ -431,7 +409,7 @@ const SlateInputWithSender = forwardRef<unknown, SlateInputWithSenderProps>(({
             // 无论成功或失败，都释放提交锁
             submittingRef.current = false;
         }
-    }, [loading, attachedFiles, editor, onSubmit, webSearchEnabled]);
+    }, [loading, attachedFiles, editor, onSubmit]);
 
     /**
      * 处理键盘事件
@@ -467,37 +445,6 @@ const SlateInputWithSender = forwardRef<unknown, SlateInputWithSenderProps>(({
                 }
             }
 
-            // ===== @ 文件搜索弹出框键盘交互 =====
-            {
-                const fs = fileSearchStateRef.current;
-                if (fs.visible && fs.results.length > 0) {
-                    if (event.key === 'ArrowDown') {
-                        event.preventDefault();
-                        fileSearchDispatch({ type: 'MOVE_INDEX', direction: 'down' });
-                        return;
-                    }
-                    if (event.key === 'ArrowUp') {
-                        event.preventDefault();
-                        fileSearchDispatch({ type: 'MOVE_INDEX', direction: 'up' });
-                        return;
-                    }
-                    if (event.key === 'Enter' && !event.shiftKey) {
-                        event.preventDefault();
-                        const selected = fs.results[fs.index];
-                        if (selected) {
-                            insertFileMention(editor, selected, fs.targetRange, fs.query);
-                            fileSearchDispatch({ type: 'CLOSE_AND_CLEAR' });
-                        }
-                        return;
-                    }
-                    if (event.key === 'Escape') {
-                        event.preventDefault();
-                        fileSearchDispatch({ type: 'CLOSE' });
-                        return;
-                    }
-                }
-            }
-
             // ===== 斜杠命令菜单键盘交互 =====
             if (slashMenuVisible && filteredCommands.length > 0) {
                 if (event.key === 'Tab') {
@@ -516,7 +463,7 @@ const SlateInputWithSender = forwardRef<unknown, SlateInputWithSenderProps>(({
                                 focus: Editor.end(editor, []),
                             },
                         });
-                        onSubmit(targetCmd.name, [], [], webSearchEnabled);
+                        onSubmit(targetCmd.name, [], []);
                     }
                     return;
                 }
@@ -556,7 +503,7 @@ const SlateInputWithSender = forwardRef<unknown, SlateInputWithSenderProps>(({
                                 focus: Editor.end(editor, []),
                             },
                         });
-                        onSubmit(targetCmd.name, [], [], webSearchEnabled);
+                        onSubmit(targetCmd.name, [], []);
                     }
                     return;
                 }
@@ -750,41 +697,6 @@ const SlateInputWithSender = forwardRef<unknown, SlateInputWithSenderProps>(({
             }
             setValue(newValue);
 
-            // ===== @ 文件搜索检测 =====
-            if (editor.selection) {
-                const { anchor } = editor.selection;
-                try {
-                    const currentNode = Editor.node(editor, anchor.path);
-                    const textNode = currentNode[0] as Node;
-                    if (textNode && (textNode as { text?: string }).text) {
-                        const textBefore = (textNode as { text: string }).text.slice(0, anchor.offset);
-                        const atIndex = textBefore.lastIndexOf('@');
-                        if (atIndex >= 0) {
-                            const searchText = textBefore.slice(atIndex + 1);
-                            const charBefore = atIndex > 0 ? textBefore[atIndex - 1] : ' ';
-                            if (!searchText.includes(' ') && /\s|^$/.test(charBefore)) {
-                                if (searchText.length > 0) {
-                                    const startPoint = { path: anchor.path, offset: atIndex };
-                                    const targetRange = { anchor: startPoint, focus: anchor } as Range;
-                                    fileSearchDispatch({ type: 'OPEN_WITH_QUERY', query: searchText, targetRange });
-                                    scheduleSearch(searchText);
-                                } else {
-                                    fileSearchDispatch({ type: 'OPEN_EMPTY' });
-                                }
-                            } else {
-                                fileSearchDispatch({ type: 'CLOSE' });
-                            }
-                        } else {
-                            fileSearchDispatch({ type: 'CLOSE' });
-                        }
-                    } else {
-                        fileSearchDispatch({ type: 'CLOSE' });
-                    }
-                } catch {
-                    fileSearchDispatch({ type: 'CLOSE' });
-                }
-            }
-
             // ===== 斜杠命令检测 =====
             // 只在编辑器第一个段落的文本以 '/' 开头时触发
             const firstNode = newValue[0];
@@ -898,7 +810,7 @@ const SlateInputWithSender = forwardRef<unknown, SlateInputWithSenderProps>(({
                                     focus: Editor.end(editor, []),
                                 },
                             });
-                            onSubmit(cmd.name, [], [], webSearchEnabled);
+                            onSubmit(cmd.name, [], []);
                         }}
                     >
                         <span className="slash-command-name">{cmd.name}</span>
@@ -906,22 +818,6 @@ const SlateInputWithSender = forwardRef<unknown, SlateInputWithSenderProps>(({
                     </div>
                 ))}
             </div>
-        )}
-
-        {/* @ 文件搜索弹出框 */}
-        {fileSearchState.visible && (
-            <FileSearchPopup
-                visible={fileSearchState.visible}
-                results={fileSearchState.results}
-                selectedIndex={fileSearchState.index}
-                loading={fileSearchState.loading}
-                onSelect={(result: FileSearchResult) => {
-                    insertFileMention(editor, result, fileSearchState.targetRange, fileSearchState.query);
-                    fileSearchDispatch({ type: 'CLOSE_AND_CLEAR' });
-                    try { ReactEditor.focus(editor); } catch {}
-                }}
-                onHover={(index: number) => fileSearchDispatch({ type: 'SET_INDEX', index })}
-            />
         )}
 
         {/* 输入历史弹窗（Ctrl+R 触发） */}

@@ -50,9 +50,7 @@ import {
   EyeOutlined,        // 预览（眼睛）图标
   CheckCircleOutlined, // 成功对勾图标
   LoadingOutlined,    // 加载中图标
-  ReloadOutlined,     // 重载/重解析图标（用于主 PDF 重解析按钮）
   StarOutlined,       // 星标图标（用于"设为主 PDF"菜单项）
-  TranslationOutlined, // 翻译图标（用于预翻译菜单项）
 } from '@ant-design/icons';
 
 // 导入附件工具函数
@@ -217,12 +215,7 @@ export default function AttachmentList({
   loading,        // 是否正在加载附件列表
   onDelete,       // 删除回调：onDelete(attachmentId: number)
   onOpenPdf,      // 打开 PDF 回调：onOpenPdf(attachmentId: number)
-  onReparse,      // 重解析回调：onReparse() —— 重新解析主 PDF 文件
   onSetPrimary,   // 设为主 PDF 回调：onSetPrimary(attachmentId: number) —— 将指定 PDF 附件切换为论文的主 PDF
-  onPreTranslate, // 预翻译回调：onPreTranslate(paperId: string)
-  preTranslating, // 是否正在预翻译
-  preTranslateProgress, // 预翻译进度 { translated, total } | null
-  onToggleHoverTranslation, // 切换悬浮翻译开关：onToggleHoverTranslation(paperId: string, next: boolean)
 }: any) {
   const { t } = useTranslation('paperList'); // i18n 翻译函数
 
@@ -305,25 +298,8 @@ export default function AttachmentList({
     const isParseDone = isPrimary && parseStatus === 'done';
 
     // ========== 右键上下文菜单配置 ==========
-    // 右键菜单选项：重解析（仅主 PDF）、预翻译（主 PDF 已解析）、设为主 PDF（非主 PDF）、删除（所有附件）
+    // 右键菜单选项：重解析（仅主 PDF）、设为主 PDF（非主 PDF）、删除（所有附件）
     const contextMenuItems = [
-      // 主 PDF 且不在解析中时：显示"重解析"选项（解析进行中不允许重解析，避免丢弃进度）
-      ...(isPrimary && (parseStatus === 'done' || parseStatus === 'failed' || parseStatus === 'pending') ? [{
-        key: 'reparse',
-        label: t('attachment.reparseMineru'),
-        icon: <ReloadOutlined />,
-        onClick: () => { if (onReparse) onReparse('mineru'); },
-      }] : []),
-      // 主 PDF 已解析完成时：显示"预翻译全文"选项
-      ...(isPrimary && parseStatus === 'done' ? [{
-        key: 'pre-translate',
-        label: preTranslating
-          ? t('attachment.preTranslateProgress', { translated: preTranslateProgress?.translated ?? 0, total: preTranslateProgress?.total ?? 0 })
-          : t('attachment.preTranslate'),
-        icon: <TranslationOutlined />,
-        disabled: preTranslating,
-        onClick: () => { if (onPreTranslate) onPreTranslate(paper.id); },
-      }] : []),
       // 非 primary 的 PDF 附件：显示"设为主 PDF"选项
       ...(!isPrimary && isPdf ? [{
         key: 'set-primary',
@@ -421,105 +397,6 @@ export default function AttachmentList({
             {statusConfig.text}
           </Tag>
         )}
-
-        {/* 主 PDF：翻译状态标签（解析完成后显示，4 种状态：未翻译/翻译中/已翻译/失败） */}
-        {isPrimary && parseStatus === 'done' && (() => {
-          // 从 paper 对象读取预翻译状态（后端 list/detail 接口已返回）
-          const translationStatus: string | null = paper?.paragraphTranslationStatus ?? null;
-          // 严格 === true, 与 PaperReaderPage 一致。预翻译失败时后端会写 undefined,
-          // 这里 `?? true` 会让 UI 显示"已翻译 + 悬浮开"绿勾但点开 PDF 实际不显示
-          // 悬浮翻译——状态不一致。改成严格判断, undefined 视为"未启用"。
-          const hoverEnabled: boolean = paper?.hoverTranslationEnabled === true;
-
-          // 状态判定优先级：preTranslating > failed > done > 其他
-          let tagConfig: {
-            text: string;
-            color: string;
-            icon?: React.ReactNode;
-            clickable: boolean;
-            onClick?: () => void;
-            tooltip?: string;
-            opacity?: number;
-          };
-
-          if (preTranslating || translationStatus === 'generating') {
-            // 翻译中：显示进度，不可点击
-            tagConfig = {
-              text: t('attachment.translationTagTranslating', {
-                translated: preTranslateProgress?.translated ?? 0,
-                total: preTranslateProgress?.total ?? 0,
-              }),
-              color: 'processing',
-              icon: <LoadingOutlined spin />,
-              clickable: false,
-            };
-          } else if (translationStatus === 'failed') {
-            // 翻译失败：点击触发重试
-            tagConfig = {
-              text: t('attachment.translationTagFailed'),
-              color: 'error',
-              clickable: true,
-              tooltip: t('attachment.translationTagRetryHint'),
-              onClick: () => { onPreTranslate?.(paper.id); },
-            };
-          } else if (translationStatus === 'done') {
-            if (hoverEnabled) {
-              // 已翻译 + 悬浮开：点击切换为关
-              tagConfig = {
-                text: t('attachment.translationTagDone'),
-                color: 'success',
-                icon: <CheckCircleOutlined />,
-                clickable: true,
-                tooltip: t('attachment.translationTagToggleHoverOffHint'),
-                onClick: () => { onToggleHoverTranslation?.(paper.id, false); },
-              };
-            } else {
-              // 已翻译 + 悬浮关：点击切换为开
-              tagConfig = {
-                text: t('attachment.translationTagDoneHoverOff'),
-                color: 'default',
-                clickable: true,
-                opacity: 0.6,
-                tooltip: t('attachment.translationTagToggleHoverOnHint'),
-                onClick: () => { onToggleHoverTranslation?.(paper.id, true); },
-              };
-            }
-          } else {
-            // 未翻译（null/pending/idle）：点击触发预翻译
-            tagConfig = {
-              text: t('attachment.translationTagUntranslated'),
-              color: 'default',
-              clickable: true,
-              tooltip: t('attachment.translationTagTriggerHint'),
-              onClick: () => { onPreTranslate?.(paper.id); },
-            };
-          }
-
-          const tagEl = (
-            <Tag
-              color={tagConfig.color}
-              icon={tagConfig.icon}
-              style={{
-                margin: 0,
-                fontSize: 11,
-                cursor: tagConfig.clickable ? 'pointer' : 'default',
-                opacity: tagConfig.opacity ?? 1,
-              }}
-              onClick={(e) => {
-                e.stopPropagation();
-                tagConfig.onClick?.();
-              }}
-            >
-              {tagConfig.text}
-            </Tag>
-          );
-
-          return tagConfig.tooltip ? (
-            <Tooltip title={tagConfig.tooltip} mouseEnterDelay={0.4}>
-              {tagEl}
-            </Tooltip>
-          ) : tagEl;
-        })()}
 
         {/* 非主 PDF 附件：显示文件大小 */}
         {!isPrimary && (

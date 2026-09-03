@@ -22,7 +22,6 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef } from 'react'; // 导入 React 核心钩子
-import { translatePaper } from '../../services/papersApi'; // 导入翻译 API
 import usePaperStore from '../../stores/usePaperStore'; // 导入论文列表 Store
 import CategorySidebar from './components/category-sidebar/CategorySidebar'; // 导入分类侧边栏组件
 import ScreeningPaperDetail from './ScreeningPaperDetail'; // 导入筛选模式论文详情组件

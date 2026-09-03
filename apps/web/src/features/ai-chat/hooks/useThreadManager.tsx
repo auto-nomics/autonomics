@@ -90,7 +90,6 @@ interface UseThreadManagerParams {
     text: string,
     vibeCardRefs: unknown[],
     attachments: unknown[],
-    webSearchEnabled: boolean,
     quotedMessage: unknown,
     setQuotedMessage: unknown,
     threadOptions: unknown,
@@ -579,7 +578,6 @@ export function useThreadManager({
       text, // 用户追问文本
       [], // vibeCardRefs（线程不支持）
       [], // attachments（线程不支持）
-      false, // webSearchEnabled（线程不支持）
       null, // quotedMessage（线程不支持）
       null, // setQuotedMessage（线程不支持）
       {

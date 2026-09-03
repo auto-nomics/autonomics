@@ -573,12 +573,10 @@ describe('useChatSender Hook', () => {
   });
 
   describe('API Contract', () => {
-    it('documents the complete parameter contract (13 required params)', () => {
+    it('documents the complete parameter contract', () => {
       const requiredParams = [
         'setMessages',
         'setStreaming',
-        'setWebSearching',
-        'setLastWebSearchSources',
         'persistMessages',
         'abortControllerRef',
         'settings',
@@ -591,7 +589,7 @@ describe('useChatSender Hook', () => {
         'streaming',
       ];
 
-      expect(requiredParams.length).toBe(14);
+      expect(requiredParams.length).toBe(12);
     });
 
     it('documents sendMessages function signature', () => {
@@ -633,11 +631,6 @@ describe('useChatSender Hook', () => {
       // 创建 fetch mock
       mockFetch = vi.fn();
       global.fetch = mockFetch;
-
-      // Mock webSearch API
-      vi.mock('../../../api/searchApi', () => ({
-        webSearch: vi.fn(),
-      }));
 
       // 清除所有 mocks
       vi.clearAllMocks();
@@ -684,8 +677,6 @@ describe('useChatSender Hook', () => {
       // 消息状态管理
       setMessages: vi.fn(),
       setStreaming: vi.fn(),
-      setWebSearching: vi.fn(),
-      setLastWebSearchSources: vi.fn(),
 
       // v2 (2026-06-28): agentType 必填，测试默认用 paperReader（覆盖学术研究助手 persona）
       agentType: 'paperReader',

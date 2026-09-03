@@ -12,7 +12,6 @@
 
 import { useCallback, useRef } from 'react';
 import type { Paper } from '@/types';
-import { selectSectionsByRelevance } from '../../../utils/markdownUtils';
 import {
   buildUserMessageContent,
   stripAttachmentsForPersistence,
@@ -61,8 +60,6 @@ interface FileRef {
 interface UseChatSenderParams {
   setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>> | ((msgs: ChatMessage[]) => void);
   setStreaming: (streaming: boolean) => void;
-  setWebSearching: (searching: boolean) => void;
-  setLastWebSearchSources: (sources: unknown) => void;
   persistMessages: () => Promise<void>;
   abortControllerRef: React.MutableRefObject<AbortController | null>;
   activeRequestIdRef?: React.MutableRefObject<string | null>;
@@ -71,7 +68,6 @@ interface UseChatSenderParams {
   tokenBudgets: TokenBudgets | Record<string, number> | null;
   paperInfo: Paper | null;
   paper: Paper | null;
-  guideSections: unknown[];
   messages: ChatMessage[];
   streaming: boolean;
   additionalSystemContext?: SystemContextItem[] | null;
@@ -103,8 +99,6 @@ const STREAM_IDLE_TIMEOUT_MS = 30_000;
  * @param {object} params - Hook 参数
  * @param {Function} params.setMessages - 设置消息列表的函数
  * @param {Function} params.setStreaming - 设置流式状态的函数
- * @param {Function} params.setWebSearching - 设置搜索状态的函数
- * @param {Function} params.setLastWebSearchSources - 设置搜索来源的函数
  * @param {Function} params.persistMessages - 持久化消息的函数
  * @param {object} params.abortControllerRef - AbortController 引用
  * @param {object} params.activeRequestIdRef - 活跃请求 ID 引用（用于防止旧流式响应覆盖新消息）
@@ -113,7 +107,6 @@ const STREAM_IDLE_TIMEOUT_MS = 30_000;
  * @param {object} params.tokenBudgets - Token 预算配置
  * @param {object} params.paperInfo - 论文基础信息
  * @param {object} params.paper - 论文完整信息
- * @param {Array} params.guideSections - 段落导览数据
  * @param {Array} params.messages - 当前消息列表
  * @param {boolean} params.streaming - 是否正在流式回复
  * @param {Array|null} params.additionalSystemContext - 额外系统上下文注入
@@ -130,8 +123,6 @@ const STREAM_IDLE_TIMEOUT_MS = 30_000;
 export function useChatSender({
   setMessages,
   setStreaming,
-  setWebSearching,
-  setLastWebSearchSources,
   persistMessages,
   abortControllerRef,
   activeRequestIdRef,
@@ -140,7 +131,6 @@ export function useChatSender({
   tokenBudgets,
   paperInfo,
   paper,
-  guideSections,
   messages,
   streaming,
   additionalSystemContext = null,
@@ -161,27 +151,21 @@ export function useChatSender({
       paperInfo: paperInfo as any,
       paperId: paperInfo?.id ?? null,
       paper: paper as any,
-      guideSections: guideSections as any,
       messages: messages as any,
       additionalSystemContext: additionalSystemContext as any,
       threadContextInjection,
       setMessages: setMessages as any,
-      setWebSearching: setWebSearching as any,
-      setLastWebSearchSources: setLastWebSearchSources as any,
       customSystemPrompt,
       ...params,
     } as any);
   }, [
     agentType,
     paperInfo,
-    guideSections,
     paper,
     additionalSystemContext,
     threadContextInjection,
     messages,
     setMessages,
-    setWebSearching,
-    setLastWebSearchSources,
     customSystemPrompt,
   ]);
 
@@ -237,7 +221,6 @@ export function useChatSender({
    * @param {string} text - 用户输入的文本
    * @param {Array} vibeCardRefs - VibeCard 引用列表（可选）
    * @param {Array} attachments - 附件列表（可选）
-   * @param {boolean} webSearchEnabled - 是否开启网络搜索
    * @param {object} quotedMessage - 引用的消息（可选）
    * @param {Function} setQuotedMessage - 设置引用消息的函数
    * @param {object} threadOptions - 线程选项（可选，Phase 5：线程模式）
@@ -251,7 +234,6 @@ export function useChatSender({
     text: string,
     vibeCardRefs: unknown[] = [],
     attachments: unknown[] = [],
-    webSearchEnabled: boolean = false,
     quotedMessage: ChatMessage | null = null,
     setQuotedMessage: ((msg: ChatMessage | null) => void) | null = null,
     threadOptions: ThreadOptions | null = null,
@@ -282,11 +264,6 @@ export function useChatSender({
       if (setQuotedMessage) {
         setQuotedMessage(null);
       }
-    }
-
-    // 重置网络搜索来源指示器
-    if (!isThreadMode) {
-      setLastWebSearchSources(null);
     }
 
     // 追加文件引用到消息末尾
@@ -342,18 +319,11 @@ export function useChatSender({
         const effectiveCustomSystemPrompt = contextSystemPrompt || customSystemPrompt;
 
         const { systemPrompt, error: promptError } = await buildSystemPrompt({
-          webSearchEnabled,
           userContent,
           newMessages,
           tokenBudget,
           customSystemPrompt: effectiveCustomSystemPrompt,
         });
-
-        if (promptError === 'API_KEY_MISSING') {
-          onError('网络搜索需要 Tavily API Key。请在服务器 .env 文件中配置 TAVILY_API_KEY。');
-          setStreaming(false);
-          return;
-        }
 
         finalSystemPrompt = systemPrompt;
 
@@ -638,7 +608,6 @@ export function useChatSender({
     prepareThreadContext,
     setMessages,
     setStreaming,
-    setLastWebSearchSources,
     persistMessages,
     abortControllerRef,
     activeRequestIdRef,

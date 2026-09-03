@@ -30,16 +30,13 @@ import type { Paper, Category } from '@/types';
 import { usePaperListConfig } from '../PaperListContext'; // 导入 PaperList 上下文
 import { // 导入图标组件
   DeleteOutlined, // 删除图标
-  SearchOutlined, // 搜索图标（获取元数据）
   UploadOutlined, // 上传图标（上传附件）
-  CloudDownloadOutlined, // 云下载图标（自动下载 PDF）
   FolderOutlined, // 文件夹图标（分类分配）
   FileTextOutlined, // 文件文本图标（题录导入记录标识）
   CopyOutlined, // 复制图标（复制引用）
 } from '@ant-design/icons';
 import { // 导入论文 API
   deletePaper, // 删除论文
-  fetchMetadata, // 获取期刊元数据
 } from '../../../services/papersApi';
 import { // 导入分类 API
   assignPapers, // 分配论文到分类
@@ -54,13 +51,10 @@ import { useCopyCitation } from '../../../hooks/useCopyCitation';
  * 论文右键菜单和分类分配钩子
  *
  * @param {Object} params - 参数对象
- * @param {Function} params.handleFetchMetadata - 获取期刊元数据的回调函数
  * @param {Function} params.wrappedHandleAttachPdf - 包装后的上传 PDF 回调
- * @param {Function} params.wrappedHandleDownloadPdf - 包装后的下载 PDF 回调
  * @param {Function} params.loadAttachments - 加载附件列表的回调函数
  * @param {React.MutableRefObject} params.attachmentCacheRef - 附件缓存 ref 引用
  * @param {Set} params.uploadingPdfIds - 正在上传 PDF 的论文 ID 集合
- * @param {Set} params.downloadingPdfIds - 正在下载 PDF 的论文 ID 集合
  * @returns {Object} 返回状态和处理函数的对象
  */
 
@@ -77,23 +71,17 @@ interface ContextMenuState {
 
 /** usePaperContextMenu 参数 */
 interface UsePaperContextMenuParams {
-  handleFetchMetadata: (paperId: string) => void;
   wrappedHandleAttachPdf: (paperId: string, file: File) => Promise<void>;
-  wrappedHandleDownloadPdf: (paperId: string) => Promise<void>;
   loadAttachments: (paperId: string) => Promise<void>;
   attachmentCacheRef: React.MutableRefObject<Record<string, unknown>>;
   uploadingPdfIds: Set<string>;
-  downloadingPdfIds: Set<string>;
 }
 
 export function usePaperContextMenu({
-  handleFetchMetadata,
   wrappedHandleAttachPdf,
-  wrappedHandleDownloadPdf,
   loadAttachments,
   attachmentCacheRef,
   uploadingPdfIds,
-  downloadingPdfIds,
 }: UsePaperContextMenuParams) {
   // Read shared config from context
   const configRef = usePaperListConfig();
@@ -364,14 +352,6 @@ export function usePaperContextMenu({
         icon: <FolderOutlined />, // 文件夹图标
         children: categorySubMenuItems, // 子菜单项数组
       },
-      // 获取期刊元数据：当论文没有期刊名、DOI、发表年份任何一项时显示
-      // 调用 OpenAlex API 异步获取期刊信息，完成后自动刷新列表
-      !(paper.journal_name || paper.doi || paper.publication_year) && {
-        key: 'fetch-metadata', // 菜单项唯一标识
-        label: t('menu.fetchMetadata'), // 菜单项显示文本
-        icon: <SearchOutlined />, // 搜索图标，暗示从外部数据源查询
-        onClick: () => handleFetchMetadata(paper.id), // 点击后调用 handleFetchMetadata 触发 OpenAlex 元数据获取
-      },
       // 上传附件：仅对题录导入记录显示
       isBibImport(paper.item_source) && {
         key: 'upload-pdf', // 菜单项唯一标识
@@ -394,21 +374,6 @@ export function usePaperContextMenu({
             }
           };
           input.click(); // 编程式触发文件选择对话框弹出
-        },
-      },
-      // 自动下载 PDF：仅对题录导入记录且拥有 DOI 时显示
-      // 通过 DOI 查找 Unpaywall 等开放获取数据源，尝试自动下载免费 PDF
-      // 没有 DOI 的题录记录无法通过此方式下载（DOI 是查找 PDF 的唯一标识）
-      isBibImport(paper.item_source) && paper.doi && {
-        key: 'download-pdf', // 菜单项唯一标识
-        label: t('menu.fetchPdf'), // 菜单项显示文本
-        icon: <CloudDownloadOutlined />, // 云下载图标，暗示从网络自动获取
-        disabled: downloadingPdfIds.has(paper.id), // 正在下载 PDF 时禁用此菜单项，防止重复下载
-        onClick: async () => { // 点击后调用包装后的下载函数
-          await wrappedHandleDownloadPdf(paper.id); // 调用包装后的下载函数
-          // 下载成功后清除附件缓存并重新加载，与上传附件逻辑一致
-          delete attachmentCacheRef.current[paper.id]; // 删除 ref 中的缓存
-          await loadAttachments(paper.id); // 重新加载附件
         },
       },
       // 复制引用（CSL 样式渲染）
@@ -446,11 +411,8 @@ export function usePaperContextMenu({
     handleAssignToCategory, // 分配函数，变化时需要重新绑定
     handleUnassignFromCategory, // 移除函数，变化时需要重新绑定
     handleDelete, // 删除函数，变化时需要重新绑定
-    handleFetchMetadata, // 获取元数据函数，变化时需要重新绑定
     uploadingPdfIds, // 上传中集合，变化时需要更新禁用状态
-    downloadingPdfIds, // 下载中集合，变化时需要更新禁用状态
     wrappedHandleAttachPdf, // 上传函数，变化时需要重新绑定
-    wrappedHandleDownloadPdf, // 下载函数，变化时需要重新绑定
     loadAttachments, // 加载附件函数，变化时需要重新绑定
     modal, // modal 实例，变化时需要重新绑定
     message, // message 实例，变化时需要重新绑定
