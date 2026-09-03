@@ -831,12 +831,12 @@ describe('useChatSender Hook', () => {
       it('应该正确发送消息并处理流式响应', async () => {
         const props = createDefaultProps();
 
-        // Mock fetch 返回成功的流式响应
+        // Mock fetch 返回 agent SSE 协议的流式响应
         mockFetch.mockResolvedValueOnce(
           createMockStreamResponse([
-            'data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n',
-            'data: {"choices":[{"delta":{"content":" World"}}]}\n\n',
-            'data: [DONE]\n\n',
+            'event: text_delta\ndata: {"text":"Hello"}\n\n',
+            'event: text_delta\ndata: {"text":" World"}\n\n',
+            'event: done\ndata: {}\n\n',
           ])
         );
 
@@ -850,17 +850,19 @@ describe('useChatSender Hook', () => {
         // 验证 fetch 被调用
         expect(mockFetch).toHaveBeenCalledTimes(1);
 
- // 验证请求配置（B6 重构后：主对话走后端 agent 端点）
+        // 验证请求配置（autonomics：主对话直连后端 agentik 端点）
         const fetchCall = mockFetch.mock.calls[0];
-        expect(fetchCall[0]).toBe('/api/agent/chat');
+        expect(fetchCall[0]).toBe('/api/v1/agent/chat');
         expect(fetchCall[1].method).toBe('POST');
 
-        // 验证请求体包含正确的结构（agent 端点契约）
+        // 验证请求体只携带后端 ChatRequest 读取的字段
+        // （模型与工具集归服务端所有，model_config/tools 不再上行）
         const requestBody = JSON.parse(fetchCall[1].body);
         expect(requestBody).toHaveProperty('message');
-        expect(requestBody).toHaveProperty('model_config');
-        expect(requestBody).toHaveProperty('tools');
         expect(requestBody).toHaveProperty('messages');
+        expect(requestBody).toHaveProperty('agent_type');
+        expect(requestBody).not.toHaveProperty('model_config');
+        expect(requestBody).not.toHaveProperty('tools');
       });
 
       it('应该正确构建 system prompt（Layer 1: 论文基础信息）', async () => {
@@ -922,12 +924,12 @@ describe('useChatSender Hook', () => {
         expect(systemContent).not.toContain('This is a test abstract');
       });
 
-      it('v2 (2026-06-28): 默认 tools 为空数组（paper 链路）', async () => {
+      it('autonomics: 请求体不携带 tools（工具集归服务端所有）', async () => {
         const props = createDefaultProps();
         mockFetch.mockResolvedValueOnce(
           createMockStreamResponse([
-            'data: {"choices":[{"delta":{"content":"r"}}]}\n\n',
-            'data: [DONE]\n\n',
+            'event: text_delta\ndata: {"text":"r"}\n\n',
+            'event: done\ndata: {}\n\n',
           ])
         );
         const { result } = renderHook(() => useChatSender(props as any));
@@ -935,7 +937,8 @@ describe('useChatSender Hook', () => {
           await result.current.sendMessages('test');
         });
         const requestBody = JSON.parse(mockFetch.mock.calls[0][1].body);
-        expect(requestBody.tools).toEqual([]);
+        // 后端恒注册 bib_all_registrations，前端不再声明工具集
+        expect(requestBody).not.toHaveProperty('tools');
       });
 
       it('应该正确构建用户消息并添加到消息列表', async () => {
@@ -1046,8 +1049,8 @@ describe('useChatSender Hook', () => {
 
         mockFetch.mockResolvedValueOnce(
           createMockStreamResponse([
-            'data: {"choices":[{"delta":{"content":"Response"}}]}\n\n',
-            'data: [DONE]\n\n',
+            'event: text_delta\ndata: {"text":"Response"}\n\n',
+            'event: done\ndata: {}\n\n',
           ])
         );
 
@@ -1057,10 +1060,11 @@ describe('useChatSender Hook', () => {
           await result.current.sendMessages('test');
         });
 
-        // B6 重构后：api_key 为空时仍发送请求，由后端从 OPENAI_API_KEY/ANTHROPIC_API_KEY 解析
+        // autonomics：api_key 归服务端持有（TUI config.db 的 providers 表），
+        // 前端设置里有没有 key 都不影响发送，请求体也不携带任何凭据
         expect(mockFetch).toHaveBeenCalledTimes(1);
         const requestBody = JSON.parse(mockFetch.mock.calls[0][1].body);
-        expect(requestBody.model_config.api_key).toBe('');
+        expect(requestBody).not.toHaveProperty('model_config');
         expect(props.onError).not.toHaveBeenCalled();
       });
 
@@ -1238,11 +1242,11 @@ describe('useChatSender Hook', () => {
         });
 
         const requestBody = JSON.parse(mockFetch.mock.calls[0][1].body);
-        const userMessage = requestBody.messages.find((m: any) => m.role === 'user');
 
-        // 纯文本消息应该是字符串格式
-        expect(typeof userMessage.content).toBe('string');
-        expect(userMessage.content).toBe('text only');
+        // 新输入走 body.message（服务端 MessageInject 注入）；
+        // messages 是不含本轮输入的历史种子，纯文本时 message 就是原始字符串
+        expect(typeof requestBody.message).toBe('string');
+        expect(requestBody.message).toBe('text only');
       });
     });
 
@@ -1298,7 +1302,6 @@ describe('useChatSender Hook', () => {
             'follow up question',
             [],
             [],
-            false,
             quotedMessage
           );
         });
@@ -1307,11 +1310,10 @@ describe('useChatSender Hook', () => {
         expect(mockFetch).toHaveBeenCalledTimes(1);
 
         const requestBody = JSON.parse(mockFetch.mock.calls[0][1].body);
-        const userMessage = requestBody.messages.find((m: any) => m.role === 'user');
 
-        // 验证消息包含引用格式
-        expect(userMessage.content).toContain('[引用了AI的消息]:');
-        expect(userMessage.content).toContain('follow up question');
+        // 引用前缀拼进新输入（body.message），服务端注入后模型可见
+        expect(requestBody.message).toContain('[引用了AI的消息]:');
+        expect(requestBody.message).toContain('follow up question');
       });
 
       it('应该正确格式化引用的用户消息', async () => {
@@ -1336,16 +1338,14 @@ describe('useChatSender Hook', () => {
             'response to quoted',
             [],
             [],
-            false,
             quotedMessage
           );
         });
 
         const requestBody = JSON.parse(mockFetch.mock.calls[0][1].body);
-        const userMessage = requestBody.messages.find((m: any) => m.role === 'user');
 
         // 验证消息包含引用格式
-        expect(userMessage.content).toContain('[引用了用户的消息]:');
+        expect(requestBody.message).toContain('[引用了用户的消息]:');
       });
 
       it('应该限制引用片段为 200 字符', async () => {
@@ -1372,16 +1372,14 @@ describe('useChatSender Hook', () => {
             'question',
             [],
             [],
-            false,
             quotedMessage
           );
         });
 
         const requestBody = JSON.parse(mockFetch.mock.calls[0][1].body);
-        const userMessage = requestBody.messages.find((m: any) => m.role === 'user');
 
         // 验证引用被截断
-        const quoteMatch = userMessage.content.match(/\[引用了AI的消息\]:\n([\s\S]+?)\n\n/);
+        const quoteMatch = requestBody.message.match(/\[引用了AI的消息\]:\n([\s\S]+?)\n\n/);
         expect(quoteMatch).toBeTruthy();
         // 引用内容应该不超过 200 字符加上引用符号
         expect(quoteMatch[1].length).toBeLessThan(250);
@@ -1413,11 +1411,10 @@ describe('useChatSender Hook', () => {
 
         const requestBody = JSON.parse(mockFetch.mock.calls[0][1].body);
 
-        // B6 后：所有 provider 统一走 agent body 形状（model_config.provider 区分）
+        // autonomics：provider 归服务端持有，请求体不携带 model_config；
+        // 无论前端配置哪个 provider，线上契约一致
         expect(requestBody).toHaveProperty('messages');
-        expect(requestBody).toHaveProperty('model_config');
-        expect(requestBody.model_config.provider).toBe('openai');
-        // agent body 不再带 temperature（由后端按 provider 解析）
+        expect(requestBody).not.toHaveProperty('model_config');
         expect(requestBody).not.toHaveProperty('temperature');
       });
 
@@ -1446,10 +1443,10 @@ describe('useChatSender Hook', () => {
         const fetchCall = mockFetch.mock.calls[0];
         const requestBody = JSON.parse(fetchCall[1].body);
 
-        // B6 后：主对话统一走 /api/agent/chat，Anthropic 通过 model_config.provider 区分
-        // （provider-specific URL 构造、system 字段、max_tokens 等都在后端 agent 服务里处理）
-        expect(fetchCall[0]).toBe('/api/agent/chat');
-        expect(requestBody.model_config.provider).toBe('anthropic');
+        // autonomics：主对话统一走 /api/v1/agent/chat，provider 差异由
+        // 服务端模型配置（TUI config.db）解析，请求体不带 model_config
+        expect(fetchCall[0]).toBe('/api/v1/agent/chat');
+        expect(requestBody).not.toHaveProperty('model_config');
         expect(requestBody).toHaveProperty('messages');
       });
     });

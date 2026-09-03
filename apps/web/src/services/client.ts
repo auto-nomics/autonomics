@@ -241,8 +241,11 @@ export async function getTauriBaseUrl(): Promise<string> {
  *
  * autonomics 的 tui-http 有 bearer 认证层（只拦 /api/）。本地部署通常不设 token，
  * 此时返回 null 且**不附带任何 Authorization 头**，请求行为与无鉴权完全一致。
+ *
+ * 导出供 useChatSender 复用：agent SSE 是裸 fetch（不经过本模块 request），
+ * 但鉴权约定一致。try/catch 同时兜住测试环境里 localStorage 缺 getItem 的情形。
  */
-function getAuthToken(): string | null {
+export function getAuthToken(): string | null {
   try {
     const token = localStorage.getItem('autonomics_token');
     return token && token.trim() ? token.trim() : null;

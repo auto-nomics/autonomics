@@ -33,6 +33,7 @@ import {
 import { compactHistory, stripThreadsForApi } from '../utils/messageCompaction';
 import { buildSystemPrompt as buildSystemPromptUtil } from '../utils/systemPromptBuilder';
 import { flattenBlocks } from '../utils/promptUtils';
+import { getAuthToken } from '../../../services/client';
 import type { AgentType } from '../agentTypes';
 import type { ChatMessageBase } from '@/types/chat';
 
@@ -296,8 +297,9 @@ export function useChatSender({
     let timedOut = false;
 
     try {
-      // 获取模型配置
-      const { provider, apiKey, model, baseUrl, modelConfig, customConfig } = resolveModelConfig();
+      // 获取模型配置（autonomics 后端持有模型与工具集，前端只需要 model 名
+      // 查 token 预算——model_config/api_key 不再上行）
+      const { model } = resolveModelConfig();
 
       let finalApiMessages = [];
       let finalSystemPrompt = '';
@@ -326,9 +328,6 @@ export function useChatSender({
         });
 
         finalSystemPrompt = systemPrompt;
-
-        // apiKey is optional: the backend resolves from server-side config
-        // (OPENAI_API_KEY / ANTHROPIC_API_KEY env vars) when not provided
 
         if (finalSystemPrompt) {
           // buildSystemPrompt 可能返回 string（向后兼容）或 CacheControlBlock[]（Anthropic prompt caching）
@@ -399,8 +398,9 @@ export function useChatSender({
           // 注入的新输入用压平后的完整文本（保留引用消息/文件引用的拼接）；
           // 图片无法走 String 字段，只剩文本部分
           message: (stripAttachmentsForPersistence(userContent) as string) || userMessage,
-          model_config: { provider, api_key: apiKey, model, base_url: baseUrl, supports_vision: customConfig?.supportsVision === true },
-          tools: tools ?? [],
+          // 后端 ChatRequest 只读 {message, agent_type, messages, system_prompt}：
+          // 模型由 TUI config 持有、工具集恒为 bib_all_registrations，
+          // jayread 时代的 model_config/tools 字段不再发送
           system_prompt: finalSystemPrompt || undefined,
           messages: agentMessages,
           // 显式意图直传后端：用户选了哪个面板就发哪个 agent_type。
@@ -410,7 +410,7 @@ export function useChatSender({
         };
         // autonomics 后端的 agentik 聊天入口（SSE 直连，不经过 services/client，
         // 但鉴权约定一致：设置了 autonomics_token 就带 Bearer 头）
-        const apiToken = localStorage.getItem('autonomics_token');
+        const apiToken = getAuthToken();
         const response = await fetch('/api/v1/agent/chat', {
           method: 'POST',
           headers: {
@@ -510,7 +510,7 @@ export function useChatSender({
         messages: threadHistory,
         agent_type: agentType,
       };
-      const threadToken = localStorage.getItem('autonomics_token');
+      const threadToken = getAuthToken();
       const response = await fetch('/api/v1/agent/chat', {
         method: 'POST',
         headers: {
