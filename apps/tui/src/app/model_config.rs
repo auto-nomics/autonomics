@@ -57,10 +57,18 @@ impl App {
             db_base_url
         };
         let auth_method = registry::default_auth_method(&provider_type);
-        let preset_models = registry::preset_models(&provider_type)?;
+        // Look up model info from the built-in catalog, falling back to the
+        // local `models` table for entries imported from a remote catalogue.
+        // `unwrap_or_default` (rather than `?`) so Custom providers whose
+        // models only exist in the DB also resolve.
+        let preset_models = registry::preset_models(&provider_type).unwrap_or_default();
         let mut model_info = preset_models
             .into_iter()
-            .find(|m| m.model_name == model_name)?;
+            .find(|m| m.model_name == model_name)
+            .or_else(|| {
+                crate::config_db::ModelRow::find(conn, provider_name, model_name)
+                    .map(|row| row.to_model_info())
+            })?;
 
         let provider_config = ProviderConfig {
             id: Uuid::nil(),
@@ -90,8 +98,10 @@ impl App {
             .map(|p| (p.provider_type, p.api_key, p.base_url))
             .collect();
 
-        // Build catalogue from SDK registry + DB credentials.
-        *state = crate::widgets::model_config_widget::build_catalog(&db_tuples);
+        // Build catalogue from SDK registry + DB credentials + DB-imported
+        // remote-catalogue models.
+        let db_models = crate::config_db::ModelRow::all(conn).unwrap_or_default();
+        *state = crate::widgets::model_config_widget::build_catalog(&db_tuples, &db_models);
 
         // Load active model name from settings.
         if let Ok(value) = conn.query_row(
@@ -194,6 +204,12 @@ impl App {
                 model_name,
             } => {
                 self.set_default_model_for_new_agents(&provider_name, &model_name);
+            }
+            ConfigCommand::FetchRemoteCatalog {
+                provider_name,
+                base_url,
+            } => {
+                self.fetch_remote_model_catalog(&provider_name, &base_url);
             }
             ConfigCommand::ReloadCatalog => {
                 Self::load_model_config(&self.conn, &mut self.state.model_config_state);
@@ -298,5 +314,83 @@ impl App {
             Ok(_) => tracing::info!("saved provider config: {provider_name}"),
             Err(e) => tracing::error!("failed to save provider config: {e}"),
         }
+    }
+
+    /// Kick off an async fetch of a provider's live remote model catalogue
+    /// (currently OpenRouter's public `/v1/models`). The result lands back
+    /// on the event loop as [`AppEvent::RemoteCatalogFetched`], which
+    /// persists the rows and reloads the catalogue widget.
+    fn fetch_remote_model_catalog(&self, provider_name: &str, base_url: &str) {
+        use agentik_sdk::provider::registry;
+
+        let provider_type = ProviderType::from(provider_name);
+        if !registry::supports_remote_catalog(&provider_type) {
+            tracing::warn!(provider = provider_name, "no remote catalogue support");
+            return;
+        }
+        let url = if base_url.is_empty() {
+            registry::default_base_url(&provider_type)
+                .unwrap_or("")
+                .to_string()
+        } else {
+            base_url.to_string()
+        };
+        tracing::info!(provider = provider_name, url = %url, "fetching remote catalogue");
+
+        let name = provider_name.to_string();
+        let tx = self.app_event_tx.clone();
+        agentik_core::supervise::spawn_safe_on_drop(
+            &self.runtime_handle,
+            "fetch_remote_catalog",
+            async move {
+                let result =
+                    agentik_sdk::provider::openrouter::OpenrouterProvider::fetch_remote_catalog(
+                        &url,
+                    )
+                    .await;
+                tx.send(crate::app_event::AppEvent::RemoteCatalogFetched {
+                    provider_name: name,
+                    result,
+                });
+            },
+        );
+    }
+
+    /// Replace the provider's rows in the `models` table with a freshly
+    /// fetched remote catalogue. Returns the persisted model count.
+    pub(super) fn persist_remote_models(
+        &self,
+        provider_name: &str,
+        models: &[agentik_sdk::model::ModelInfo],
+    ) -> rusqlite::Result<usize> {
+        let provider_id: i64 = self.conn.query_row(
+            "SELECT id FROM providers WHERE name = ?1",
+            [provider_name],
+            |r| r.get(0),
+        )?;
+        self.conn
+            .execute("DELETE FROM models WHERE provider_id = ?1", [provider_id])?;
+        for m in models {
+            self.conn.execute(
+                "INSERT OR REPLACE INTO models (model_name, provider_id, context_length,
+                 max_output_tokens, vision_ability, supports_function_calling, supports_streaming,
+                 supports_thinking, thinking_enabled, input_token_price, output_token_price)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+                rusqlite::params![
+                    m.model_name,
+                    provider_id,
+                    m.context_length as i64,
+                    m.max_output_tokens as i64,
+                    m.vision_ability as i64,
+                    m.supports_function_calling as i64,
+                    m.supports_streaming as i64,
+                    m.supports_thinking as i64,
+                    m.thinking_enabled as i64,
+                    m.input_token_price,
+                    m.output_token_price,
+                ],
+            )?;
+        }
+        Ok(models.len())
     }
 }

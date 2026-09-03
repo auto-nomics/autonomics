@@ -185,6 +185,7 @@ A **tree view** of the built-in provider catalogue (from
 | `Enter` | Activate the model under the cursor |
 | `Ctrl+D` | Set the model under the cursor as the default for new agents |
 | `Ctrl+E` | Add or edit the provider's API key (opens credential panel) |
+| `Ctrl+F` | Fetch the provider's live remote model catalogue (OpenRouter's public `/v1/models`; imported models persist in the DB) |
 | `Ctrl+R` | Reload the catalogue from DB + SDK registry |
 
 In the **credential panel** (right side), type the API key into the textarea:

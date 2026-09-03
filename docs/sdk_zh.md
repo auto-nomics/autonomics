@@ -22,6 +22,8 @@ LLM API 客户端与多服务商抽象层。
   - SenseNova
   - Mimo
   - ZAI
+  - OpenRouter（OpenAI 兼容协议；通过 `OpenrouterProvider::fetch_remote_catalog`
+    拉取公开 `GET /v1/models` 端点的实时模型目录）
 - **模型池** —— 跨服务商轮询选择模型，支持按名称粘性选择
 - **灵活认证** —— Anthropic `x-api-key`、Bearer token，或面向第三方网关的自定义 header
 - **Mock 支持** —— 通过 `mockall` 的 `MockApiClient`，用于测试

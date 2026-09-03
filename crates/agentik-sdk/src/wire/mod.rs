@@ -412,4 +412,12 @@ mod tests {
             WireProtocolKind::ZaiAnthropic
         );
     }
+
+    #[test]
+    fn openrouter_uses_openai_chat_wire() {
+        assert_eq!(
+            wire_protocol_for_provider(&ProviderType::Openrouter),
+            WireProtocolKind::OpenaiChat
+        );
+    }
 }

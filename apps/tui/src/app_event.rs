@@ -50,4 +50,11 @@ pub(crate) enum AppEvent {
         agent_id: uuid::Uuid,
         plan: agentik_types::AgentPlan,
     },
+    /// A provider's remote model catalogue finished loading (or failed).
+    /// The payload carries metadata-only `ModelInfo`s; the handler persists
+    /// them into the `models` table and reloads the catalogue widget.
+    RemoteCatalogFetched {
+        provider_name: String,
+        result: std::result::Result<Vec<agentik_sdk::model::ModelInfo>, String>,
+    },
 }

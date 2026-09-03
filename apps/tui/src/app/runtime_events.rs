@@ -100,6 +100,28 @@ impl App {
                     self.state.toasts.error("Agent creation failed", Some(e));
                 }
             },
+            crate::app_event::AppEvent::RemoteCatalogFetched {
+                provider_name,
+                result,
+            } => match result {
+                Ok(models) => match self.persist_remote_models(&provider_name, &models) {
+                    Ok(count) => {
+                        Self::load_model_config(&self.conn, &mut self.state.model_config_state);
+                        self.state.toasts.success(
+                            "Catalogue refreshed",
+                            Some(format!("{provider_name}: {count} models")),
+                        );
+                    }
+                    Err(e) => {
+                        tracing::error!(provider = %provider_name, error = %e, "remote catalogue persist failed");
+                        self.state.toasts.error("Save failed", Some(e.to_string()));
+                    }
+                },
+                Err(e) => {
+                    tracing::warn!(provider = %provider_name, error = %e, "remote catalogue fetch failed");
+                    self.state.toasts.error("Fetch failed", Some(e));
+                }
+            },
         }
     }
 

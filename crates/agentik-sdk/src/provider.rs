@@ -13,6 +13,7 @@ pub mod deepseek;
 pub mod mimo;
 pub mod minimax;
 pub mod moonshot;
+pub mod openrouter;
 pub mod registry;
 pub mod sensenova;
 pub mod zai;
@@ -65,5 +66,13 @@ pub trait ProviderPreset {
     /// matching adapter.
     fn wire_protocol() -> WireProtocolKind {
         WireProtocolKind::Anthropic
+    }
+
+    /// Whether this provider type exposes a public remote model catalogue
+    /// that can be polled for live model discovery (e.g. OpenRouter's
+    /// `GET /v1/models`). UIs offer a "refresh catalogue" action only for
+    /// providers answering `true`.
+    fn supports_remote_catalog() -> bool {
+        false
     }
 }
