@@ -69,6 +69,7 @@ CREATE TABLE IF NOT EXISTS annotations (
     kind        TEXT NOT NULL,
     content     TEXT NOT NULL,
     page        INTEGER,
+    data        TEXT,
     created_at  TEXT
 );
 
@@ -78,6 +79,8 @@ CREATE TABLE IF NOT EXISTS collections (
     description TEXT,
     tags        TEXT,
     status      TEXT NOT NULL DEFAULT 'active',
+    parent_id   TEXT,
+    sort_order  INTEGER NOT NULL DEFAULT 0,
     created_at  TEXT,
     updated_at  TEXT
 );
@@ -122,6 +125,103 @@ CREATE TABLE IF NOT EXISTS bib_meta (
     value TEXT NOT NULL
 );
 ";
+
+// ---------------------------------------------------------------------------
+// Paged listing — request types
+// ---------------------------------------------------------------------------
+
+/// How many matches a keyword query may contribute to a paged listing.
+///
+/// The HTTP layer caps `limit` well below this; the headroom exists so the
+/// reported `total` stays accurate for filtered pages instead of silently
+/// stopping at the page size.
+const PAGED_SEARCH_CANDIDATE_CAP: usize = 10_000;
+
+/// Whitelisted sort keys for [`BibBase::list_articles_paged`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortField {
+    /// `articles.created_at`.
+    CreatedAt,
+    /// `articles.updated_at`.
+    UpdatedAt,
+    /// Article title, case-insensitively.
+    Title,
+    /// Publication year.
+    Year,
+}
+
+impl SortField {
+    /// Parse the wire form used by the HTTP API.
+    ///
+    /// Unknown values return `None` so the caller can reject them: silently
+    /// falling back to a default sort would hide a client typo behind a
+    /// page that looks correct but is ordered differently than requested.
+    pub fn from_wire(value: &str) -> Option<Self> {
+        match value.to_ascii_lowercase().as_str() {
+            "created_at" => Some(Self::CreatedAt),
+            "updated_at" => Some(Self::UpdatedAt),
+            "title" => Some(Self::Title),
+            "year" => Some(Self::Year),
+            _ => None,
+        }
+    }
+}
+
+/// Sort direction for [`BibBase::list_articles_paged`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortOrder {
+    /// Smallest first.
+    Ascending,
+    /// Largest first.
+    Descending,
+}
+
+impl SortOrder {
+    /// Parse the wire form used by the HTTP API (see
+    /// [`SortField::from_wire`] for why this rejects rather than defaults).
+    pub fn from_wire(value: &str) -> Option<Self> {
+        match value.to_ascii_lowercase().as_str() {
+            "asc" | "ascending" => Some(Self::Ascending),
+            "desc" | "descending" => Some(Self::Descending),
+            _ => None,
+        }
+    }
+}
+
+/// Filters and pagination for [`BibBase::list_articles_paged`].
+#[derive(Debug, Clone)]
+pub struct ListParams {
+    /// Keyword query; empty means "no keyword filter".
+    pub query: String,
+    /// Number of articles to skip.
+    pub offset: usize,
+    /// Maximum number of articles to return.
+    pub limit: usize,
+    /// Sort key.
+    pub sort: SortField,
+    /// Sort direction.
+    pub order: SortOrder,
+    /// Only articles that are members of this collection.
+    ///
+    /// Takes precedence over `unfiled` when both are set.
+    pub collection_id: Option<String>,
+    /// Only articles that are not members of any collection.
+    pub unfiled: bool,
+}
+
+impl Default for ListParams {
+    fn default() -> Self {
+        Self {
+            query: String::new(),
+            offset: 0,
+            limit: 100,
+            sort: SortField::CreatedAt,
+            order: SortOrder::Descending,
+            collection_id: None,
+            unfiled: false,
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // BibBase
@@ -209,6 +309,20 @@ impl BibBase {
         let _write = self.write_gate.lock().await;
         let conn = self.write_conn();
         conn.execute_batch(SCHEMA_SQL).await?;
+
+        // `CREATE TABLE IF NOT EXISTS` never amends a table that already
+        // exists, so columns introduced after a database was created would
+        // stay missing forever. Backfill them here; the DDL strings match
+        // the definitions in [`SCHEMA_SQL`].
+        ensure_column(&conn, "collections", "parent_id", "parent_id TEXT").await?;
+        ensure_column(
+            &conn,
+            "collections",
+            "sort_order",
+            "sort_order INTEGER NOT NULL DEFAULT 0",
+        )
+        .await?;
+        ensure_column(&conn, "annotations", "data", "data TEXT").await?;
 
         let mut rows = conn
             .query(
@@ -578,6 +692,191 @@ impl BibBase {
     }
 
     // -----------------------------------------------------------------------
+    // Articles — paged listing
+    // -----------------------------------------------------------------------
+
+    /// List articles with offset/limit pagination, a whitelisted sort key,
+    /// and optional collection / "unfiled" filtering.
+    ///
+    /// Returns the requested page plus the **filtered** total (the count
+    /// before `offset`/`limit` are applied), which is what a paginated
+    /// client needs to render page controls. Callers that only want the
+    /// library size should keep using [`Self::article_count`].
+    ///
+    /// The sort column is mapped to a Rust comparator rather than to a SQL
+    /// fragment: the candidate sets below are already plain ID lists, and
+    /// sorting in Rust keeps every ordering decision out of string-built
+    /// SQL. Local libraries are small enough (the HTTP layer caps `limit`
+    /// at 2000) that the extra copy is not measurable.
+    pub async fn list_articles_paged(&self, params: &ListParams) -> Result<(Vec<Article>, usize)> {
+        // 1. Candidates — exactly one of three mutually exclusive ID sets.
+        //    `collection_id` wins over `unfiled` so a caller that sends both
+        //    gets a well-defined answer instead of a surprising empty page.
+        let mut ids = if let Some(collection_id) = params.collection_id.as_deref() {
+            let conn = self.conn();
+            let mut rows = conn
+                .query(
+                    "SELECT article_id FROM collection_articles \
+                     WHERE collection_id = ?1 ORDER BY position",
+                    turso::params![collection_id],
+                )
+                .await?;
+            let mut ids = Vec::new();
+            while let Some(row) = rows.next().await? {
+                ids.push(row.get::<String>(0)?);
+            }
+            ids
+        } else if params.unfiled {
+            // Everything that is not a member of any collection.
+            let conn = self.conn();
+            let mut rows = conn
+                .query(
+                    "SELECT id FROM articles \
+                     WHERE id NOT IN (SELECT article_id FROM collection_articles) \
+                     ORDER BY id",
+                    turso::params![],
+                )
+                .await?;
+            let mut ids = Vec::new();
+            while let Some(row) = rows.next().await? {
+                ids.push(row.get::<String>(0)?);
+            }
+            ids
+        } else {
+            self.list_article_ids().await?
+        };
+        // A collection membership list is already ordered by position, which
+        // is a meaningful default; the other two branches are ID-ordered.
+        // Either way the sort below makes the final order deterministic, so
+        // deduping here (a membership table can technically hold an article
+        // twice only if the PK were dropped) is just cheap insurance.
+        ids.dedup();
+
+        // 2. Load the candidates. Reusing `search_articles` keeps query
+        //    semantics identical to the dedicated search endpoint; its
+        //    relevance order is discarded by the sort below but its
+        //    *filtering* is what narrows the page.
+        let mut articles: Vec<Article> = Vec::new();
+        if params.query.trim().is_empty() {
+            for id in &ids {
+                if let Some(article) = self.get_article(id).await? {
+                    articles.push(article);
+                }
+            }
+        } else {
+            let hits = self
+                .search_articles(&params.query, PAGED_SEARCH_CANDIDATE_CAP)
+                .await?;
+            let allowed: std::collections::HashSet<&str> =
+                ids.iter().map(String::as_str).collect();
+            for hit in hits {
+                if !allowed.contains(hit.article_id.as_str()) {
+                    continue;
+                }
+                if let Some(article) = self.get_article(&hit.article_id).await? {
+                    articles.push(article);
+                }
+            }
+        }
+
+        // 3. Sort. `Option` keys compare with `None` first so a missing year
+        //    or timestamp sorts deterministically instead of being
+        //    implementation-defined.
+        articles.sort_by(|left, right| {
+            let ordering = match params.sort {
+                SortField::CreatedAt => left.created_at.cmp(&right.created_at),
+                SortField::UpdatedAt => left.updated_at.cmp(&right.updated_at),
+                // Case-folded so "alpha" and "Beta" interleave the way a
+                // reader expects rather than by code-point order.
+                SortField::Title => left.title.to_lowercase().cmp(&right.title.to_lowercase()),
+                SortField::Year => left.year.cmp(&right.year),
+            };
+            // Tiebreak on ID: without it, two articles sharing a key can be
+            // split across pages in a different order on every request.
+            let ordering = ordering.then_with(|| left.id.cmp(&right.id));
+            if params.order == SortOrder::Descending {
+                ordering.reverse()
+            } else {
+                ordering
+            }
+        });
+
+        let total = articles.len();
+        let page = articles
+            .into_iter()
+            .skip(params.offset)
+            .take(params.limit)
+            .collect::<Vec<_>>();
+        Ok((page, total))
+    }
+
+    // -----------------------------------------------------------------------
+    // Metadata — the `bib_meta` key/value store
+    // -----------------------------------------------------------------------
+
+    /// Read one value from the `bib_meta` key/value store.
+    pub async fn get_meta(&self, key: &str) -> Result<Option<String>> {
+        let conn = self.conn();
+        let mut rows = conn
+            .query(
+                "SELECT value FROM bib_meta WHERE key = ?1",
+                turso::params![key],
+            )
+            .await?;
+        match rows.next().await? {
+            Some(row) => Ok(Some(row.get::<String>(0)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Insert or update one value in the `bib_meta` key/value store.
+    pub async fn set_meta(&self, key: &str, value: &str) -> Result<()> {
+        let _write = self.write_gate.lock().await;
+        self.write_conn()
+            .execute(
+                "INSERT INTO bib_meta(key, value) VALUES (?1, ?2) \
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                turso::params![key, value],
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// List every `bib_meta` entry whose key starts with `prefix`.
+    ///
+    /// Uses a key range scan instead of `LIKE` so the caller's prefix needs
+    /// no escaping of `%`/`_`, and so large blobs under unrelated prefixes
+    /// (chat transcripts, caches) are never read just to be thrown away.
+    pub async fn list_meta_prefixed(&self, prefix: &str) -> Result<Vec<(String, String)>> {
+        let conn = self.conn();
+        // The exclusive upper bound is the prefix with its last character
+        // incremented; UTF-8 byte order matches code-point order, so no key
+        // under this prefix can sort at or after it. `char::from_u32` only
+        // fails on the surrogate gap, in which case the unbounded tail is
+        // scanned and filtered in Rust instead.
+        let upper = prefix_upper_bound(prefix);
+        let sql = match upper.as_ref() {
+            Some(_) => "SELECT key, value FROM bib_meta WHERE key >= ?1 AND key < ?2",
+            None => "SELECT key, value FROM bib_meta WHERE key >= ?1",
+        };
+        let mut rows = match upper.as_ref() {
+            Some(upper) => conn.query(sql, turso::params![prefix, upper.as_str()]).await?,
+            None => conn.query(sql, turso::params![prefix]).await?,
+        };
+
+        let mut out = Vec::new();
+        while let Some(row) = rows.next().await? {
+            let key = row.get::<String>(0)?;
+            // Re-check the prefix in Rust: the range scan is a superset
+            // whenever the upper bound could not be built.
+            if key.starts_with(prefix) {
+                out.push((key, row.get::<String>(1)?));
+            }
+        }
+        Ok(out)
+    }
+
+    // -----------------------------------------------------------------------
     // Search — indexed full-text search
     // -----------------------------------------------------------------------
 
@@ -694,6 +993,45 @@ impl BibBase {
     }
 }
 
+/// Add `column` to `table` when the database predates it.
+///
+/// `ddl` is the full column definition (name included) so this mirrors the
+/// `CREATE TABLE` text in [`SCHEMA_SQL`]. Both identifiers come from
+/// compile-time constants in this module — never from user input — so the
+/// `format!` here is not an injection vector.
+///
+/// Returns `true` when the column had to be added.
+///
+/// The column list comes from the `PRAGMA table_info` *statement*. It must
+/// not come from the equivalent table-valued form
+/// (`SELECT name FROM pragma_table_info(…)`, which SQLite also accepts):
+/// turso 0.7 answers that query correctly but leaves the connection pinned
+/// to the pre-write snapshot, so every later read on that connection sees a
+/// stale database. The statement form has no such side effect.
+async fn ensure_column(conn: &Connection, table: &str, column: &str, ddl: &str) -> Result<bool> {
+    let mut rows = conn
+        .query(&format!("PRAGMA table_info({table})"), turso::params![])
+        .await?;
+    let mut present = false;
+    while let Some(row) = rows.next().await? {
+        if row.get::<String>(1)? == column {
+            present = true;
+            break;
+        }
+    }
+    drop(rows);
+
+    if present {
+        return Ok(false);
+    }
+    conn.execute(
+        &format!("ALTER TABLE {table} ADD COLUMN {ddl}"),
+        turso::params![],
+    )
+    .await?;
+    Ok(true)
+}
+
 pub(crate) async fn sync_search_index(conn: &Connection, article_id: &str) -> Result<()> {
     conn.execute(
         "DELETE FROM search_terms WHERE article_id = ?1",
@@ -755,6 +1093,18 @@ pub(crate) async fn sync_search_index(conn: &Connection, article_id: &str) -> Re
         conn.execute(sql, turso::params_from_iter(params)).await?;
     }
     Ok(())
+}
+
+/// Smallest string that sorts after every key beginning with `prefix`.
+///
+/// Used to turn a prefix search into a bounded key range. Returns `None`
+/// when no such string exists (the last character sits just below the
+/// surrogate gap), signalling "scan the unbounded tail instead".
+fn prefix_upper_bound(prefix: &str) -> Option<String> {
+    let last = prefix.chars().last()?;
+    let next = char::from_u32(last as u32 + 1)?;
+    let head = &prefix[..prefix.len() - last.len_utf8()];
+    Some(format!("{head}{next}"))
 }
 
 fn tokenize(text: &str) -> Vec<String> {

@@ -64,18 +64,24 @@ impl CollectionAddOutcome {
 impl BibBase {
     /// Insert or update a collection. Child rows (`collection_articles`)
     /// are **not** touched — use [`Self::add_to_collection`] for that.
+    ///
+    /// The caller is responsible for `parent_id` consistency (a parent must
+    /// exist and the chain must stay acyclic); enforcing that here would
+    /// need a recursive check inside every metadata write.
     pub async fn upsert_collection(&self, collection: &Collection) -> Result<()> {
         let _write = self.write_gate.lock().await;
         let conn = self.write_conn();
         conn.execute(
             "INSERT INTO collections \
-             (id, name, description, tags, status, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
+             (id, name, description, tags, status, parent_id, sort_order, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) \
              ON CONFLICT(id) DO UPDATE SET \
                 name = excluded.name, \
                 description = excluded.description, \
                 tags = excluded.tags, \
                 status = excluded.status, \
+                parent_id = excluded.parent_id, \
+                sort_order = excluded.sort_order, \
                 created_at = COALESCE(collections.created_at, excluded.created_at), \
                 updated_at = excluded.updated_at",
             turso::params![
@@ -84,6 +90,8 @@ impl BibBase {
                 collection.description.clone(),
                 serde_json::to_string(&collection.tags)?,
                 collection.status.as_str(),
+                collection.parent_id.clone(),
+                collection.sort_order,
                 collection.created_at.map(|t| t.to_rfc3339()),
                 collection.updated_at.map(|t| t.to_rfc3339()),
             ],
@@ -98,7 +106,8 @@ impl BibBase {
         let conn = self.conn();
         let mut rows = conn
             .query(
-                "SELECT id, name, description, tags, status, created_at, updated_at \
+                "SELECT id, name, description, tags, status, created_at, updated_at, \
+                        parent_id, sort_order \
                  FROM collections WHERE id = ?1",
                 turso::params![id],
             )
@@ -109,13 +118,7 @@ impl BibBase {
             None => return Ok(None),
         };
 
-        let mut col = Collection::new(row.get::<String>(0)?, row.get::<String>(1)?);
-        col.description = opt_string(row.get_value(2)?);
-        col.tags = parse_json_col(&opt_string(row.get_value(3)?));
-        col.status = CollectionStatus::from_str(&opt_string(row.get_value(4)?).unwrap_or_default());
-        col.created_at = opt_string(row.get_value(5)?).as_deref().and_then(parse_dt);
-        col.updated_at = opt_string(row.get_value(6)?).as_deref().and_then(parse_dt);
-
+        let mut col = collection_from_row(&row)?;
         // Hydrate article_ids in position order.
         col.article_ids = self.collection_article_ids(id).await?;
 
@@ -134,11 +137,13 @@ impl BibBase {
         let conn = self.conn();
         let sql = match status {
             Some(_) => {
-                "SELECT id, name, description, tags, status, created_at, updated_at \
+                "SELECT id, name, description, tags, status, created_at, updated_at, \
+                        parent_id, sort_order \
                         FROM collections WHERE status = ?1 ORDER BY updated_at DESC"
             }
             None => {
-                "SELECT id, name, description, tags, status, created_at, updated_at \
+                "SELECT id, name, description, tags, status, created_at, updated_at, \
+                     parent_id, sort_order \
                      FROM collections ORDER BY updated_at DESC"
             }
         };
@@ -151,14 +156,7 @@ impl BibBase {
 
         let mut out = Vec::new();
         while let Some(row) = rows.next().await? {
-            let mut col = Collection::new(row.get::<String>(0)?, row.get::<String>(1)?);
-            col.description = opt_string(row.get_value(2)?);
-            col.tags = parse_json_col(&opt_string(row.get_value(3)?));
-            col.status =
-                CollectionStatus::from_str(&opt_string(row.get_value(4)?).unwrap_or_default());
-            col.created_at = opt_string(row.get_value(5)?).as_deref().and_then(parse_dt);
-            col.updated_at = opt_string(row.get_value(6)?).as_deref().and_then(parse_dt);
-            out.push(col);
+            out.push(collection_from_row(&row)?);
         }
         drop(rows);
 
@@ -521,6 +519,27 @@ impl BibBase {
 // Value extraction helpers — shared with bib_base.rs but duplicated here
 // to avoid visibility issues. (These are trivial functions.)
 // ---------------------------------------------------------------------------
+
+/// Column order shared by [`BibBase::get_collection`] and
+/// [`BibBase::list_collections`]: `id, name, description, tags, status,
+/// created_at, updated_at, parent_id, sort_order`.
+fn collection_from_row(row: &turso::Row) -> Result<Collection> {
+    let mut col = Collection::new(row.get::<String>(0)?, row.get::<String>(1)?);
+    col.description = opt_string(row.get_value(2)?);
+    col.tags = parse_json_col(&opt_string(row.get_value(3)?));
+    col.status = CollectionStatus::from_str(&opt_string(row.get_value(4)?).unwrap_or_default());
+    col.created_at = opt_string(row.get_value(5)?).as_deref().and_then(parse_dt);
+    col.updated_at = opt_string(row.get_value(6)?).as_deref().and_then(parse_dt);
+    col.parent_id = opt_string(row.get_value(7)?);
+    // `sort_order` is NOT NULL DEFAULT 0, so a NULL here can only come from
+    // a manually edited database; treat it as 0 rather than failing the
+    // whole listing.
+    col.sort_order = match row.get_value(8)? {
+        Value::Integer(n) => n,
+        _ => 0,
+    };
+    Ok(col)
+}
 
 fn opt_string(v: Value) -> Option<String> {
     match v {

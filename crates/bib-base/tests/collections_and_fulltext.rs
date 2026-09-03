@@ -295,7 +295,7 @@ async fn article_refresh_preserves_related_records() {
     let mut renamed_collection = Collection::new("c1", "Refreshed project");
     renamed_collection.status = CollectionStatus::Completed;
     db.upsert_collection(&renamed_collection).await.unwrap();
-    db.add_annotation("a1", AnnotationKind::Note, "Keep this note", None)
+    db.add_annotation("a1", AnnotationKind::Note, "Keep this note", None, None)
         .await
         .unwrap();
     db.upsert_fulltext(&FullText {
@@ -865,6 +865,7 @@ async fn search_finds_annotation_content() {
         "a1",
         AnnotationKind::Note,
         "This paper is relevant to polygenic risk score (PRS) benchmarking.",
+        None,
         None,
     )
     .await

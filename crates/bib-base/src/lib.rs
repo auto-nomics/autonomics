@@ -29,7 +29,7 @@ pub mod shared;
 pub mod stored_files;
 pub mod tools;
 
-pub use bib_base::BibBase;
+pub use bib_base::{BibBase, ListParams, SortField, SortOrder};
 pub use error::{Error, Result};
 pub use export::{cite_key, render, render_all, to_bibtex, to_csl_json, to_markdown, to_ris};
 pub use extract::{ExtractedText, OcrFallbackExtractor, SimpleExtractor, TextExtractor};

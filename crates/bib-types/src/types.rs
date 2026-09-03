@@ -375,6 +375,15 @@ pub struct Annotation {
     #[serde(default)]
     pub page: Option<u32>,
 
+    /// Source-specific payload for rendered annotations.
+    ///
+    /// For PDF highlights this is where the reading client keeps the
+    /// geometry needed to redraw the selection (target rectangles, selected
+    /// text, colour). Stored as an opaque JSON object so the schema can
+    /// evolve per annotation kind without a migration per field.
+    #[serde(default)]
+    pub data: Option<serde_json::Value>,
+
     /// Creation timestamp.
     #[serde(default)]
     pub created_at: Option<DateTime<Utc>>,
@@ -387,6 +396,7 @@ impl Annotation {
             kind,
             content: content.into(),
             page: None,
+            data: None,
             created_at: Some(Utc::now()),
         }
     }
@@ -458,6 +468,22 @@ pub struct Collection {
     #[serde(default)]
     pub tags: Vec<String>,
 
+    /// Parent collection ID, forming a taxonomy tree.
+    ///
+    /// `None` marks a root collection. Cycles (A → B → A) are rejected by
+    /// the API layer, so every consumer can walk `parent_id` upwards
+    /// without a loop guard — but note that databases written before this
+    /// field existed always hold `NULL` here.
+    #[serde(default)]
+    pub parent_id: Option<String>,
+
+    /// Position among siblings, for stable manual ordering in the tree.
+    ///
+    /// Sorting is `sort_order` first, then `name`, so ties stay
+    /// deterministic without the caller adding a tiebreaker.
+    #[serde(default)]
+    pub sort_order: i64,
+
     /// Lifecycle status.
     #[serde(default)]
     pub status: CollectionStatus,
@@ -477,6 +503,8 @@ impl Collection {
             description: None,
             article_ids: Vec::new(),
             tags: Vec::new(),
+            parent_id: None,
+            sort_order: 0,
             status: CollectionStatus::Active,
             created_at: Some(now),
             updated_at: Some(now),

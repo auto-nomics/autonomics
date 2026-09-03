@@ -1481,7 +1481,7 @@ impl ToolFunction for BibAddNoteTool {
 
         let ann = self
             .bib
-            .add_annotation(&input.article_id, kind, &input.content, input.page)
+            .add_annotation(&input.article_id, kind, &input.content, input.page, None)
             .await
             .map_err(box_error)?;
 
@@ -2621,7 +2621,7 @@ mod tests {
         art.identifiers
             .push(bib_types::Identifier::doi("10.1/cascade"));
         bib.upsert_article(&art).await.unwrap();
-        bib.add_annotation(&art.id, bib_types::AnnotationKind::Note, "stale note", None)
+        bib.add_annotation(&art.id, bib_types::AnnotationKind::Note, "stale note", None, None)
             .await
             .unwrap();
         let col = bib_types::Collection::new("col-junk", "junk-collection");

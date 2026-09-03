@@ -10,13 +10,13 @@ use axum::{
     routing::{delete, get, post, put},
 };
 use bib_base::{
-    BibShared, OcrFallbackExtractor, TextExtractor, stored_fulltext, try_fetch_fulltext_with,
-    vfs_virtual_path,
+    BibShared, ListParams, OcrFallbackExtractor, SortField, SortOrder, TextExtractor,
+    stored_fulltext, try_fetch_fulltext_with, vfs_virtual_path,
 };
 use bib_types::{
     AddedBy, AnnotationKind, Article, ArticleRole, ArticleSource, Author, Collection,
     CollectionStatus, ExportFormat, FileFormat, FullText, FullTextSource, IdKind, Identifier,
-    StructuredSearch,
+    SearchHit, StructuredSearch,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -25,6 +25,36 @@ use serde_json::{Value, json};
 const MAX_UPLOAD_BYTES: usize = 50 * 1024 * 1024;
 const DEFAULT_FULLTEXT_CHARS: usize = 100_000;
 const MAX_FULLTEXT_CHARS: usize = 500_000;
+/// Largest page the article listing will serve.
+///
+/// The library grid asks for a whole collection (or the whole library) in one
+/// request, which is a different access pattern from the search endpoints
+/// that stay on [`parse_limit`]'s 500-row ceiling.
+const MAX_LIST_ARTICLES: usize = 2000;
+/// Prefix under which every web-client setting is persisted in `bib_meta`.
+const SETTINGS_PREFIX: &str = "web:";
+/// Prefix under which chat transcripts are persisted in `bib_meta`.
+const CHAT_PREFIX: &str = "web:chat:";
+/// The slice of the `web:` namespace reserved for chat transcripts, relative
+/// to [`SETTINGS_PREFIX`].
+const CHAT_NAMESPACE: &str = "chat:";
+/// Longest accepted chat scope. Scopes are opaque client-chosen labels, so
+/// the only thing worth limiting is how much of the key space one can name.
+const MAX_CHAT_SCOPE_BYTES: usize = 512;
+/// Largest chat transcript accepted by `POST /chat`.
+///
+/// The chat client resends the whole conversation on every turn, so the
+/// ceiling must be generous — but each transcript lands in a single
+/// `bib_meta` row that is read back in full by the settings scan, so it
+/// cannot be unbounded.
+const MAX_CHAT_PAYLOAD_BYTES: usize = 5 * 1024 * 1024;
+/// Deepest `parent_id` chain the cycle check will follow.
+///
+/// Collections written before `parent_id` existed cannot contain a cycle, but
+/// a hand-edited database could; the cap turns that into a 400 instead of a
+/// request that never returns. Sixty-four levels is already far deeper than
+/// any usable taxonomy.
+const MAX_COLLECTION_DEPTH: usize = 64;
 
 #[derive(Deserialize, Default)]
 struct FulltextPageQuery {
@@ -74,14 +104,20 @@ pub(crate) fn router(shared: BibShared) -> Router {
             "/articles/{id}/annotations",
             get(list_annotations).post(add_annotation),
         )
-        .route("/annotations/{id}", delete(delete_annotation))
+        .route("/articles/{id}/csl-json", get(get_article_csl_json))
+        .route(
+            "/annotations/{id}",
+            put(update_annotation).delete(delete_annotation),
+        )
         .route(
             "/collections",
             get(list_collections).post(create_collection),
         )
         .route(
             "/collections/{id}",
-            get(get_collection).delete(delete_collection),
+            get(get_collection)
+                .put(update_collection)
+                .delete(delete_collection),
         )
         .route(
             "/collections/{id}/articles",
@@ -92,6 +128,8 @@ pub(crate) fn router(shared: BibShared) -> Router {
             delete(remove_from_collection),
         )
         .route("/collections/{id}/status", put(update_collection_status))
+        .route("/settings", get(get_settings).put(put_settings))
+        .route("/chat", get(get_chat).post(post_chat))
         .route("/requests", get(list_requests))
         .route("/export", get(export))
         .route("/search/external", get(search_external))
@@ -122,6 +160,19 @@ fn internal(message: impl std::fmt::Display) -> (StatusCode, Json<ApiError>) {
 }
 
 fn parse_limit(raw: Option<&str>, default: usize) -> Result<usize, (StatusCode, Json<ApiError>)> {
+    parse_limit_max(raw, default, 500)
+}
+
+/// Like [`parse_limit`] but with a caller-chosen ceiling.
+///
+/// The old body hard-coded `clamp(1, 500)`; the library listing needed a
+/// higher ceiling without changing the behaviour of every other endpoint
+/// that shares this helper.
+fn parse_limit_max(
+    raw: Option<&str>,
+    default: usize,
+    max: usize,
+) -> Result<usize, (StatusCode, Json<ApiError>)> {
     let value = raw
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(default);
@@ -131,35 +182,120 @@ fn parse_limit(raw: Option<&str>, default: usize) -> Result<usize, (StatusCode, 
             "limit must be greater than 0",
         ));
     }
-    Ok(value.clamp(1, 500))
+    Ok(value.clamp(1, max))
+}
+
+fn parse_offset(raw: Option<&str>) -> Result<usize, (StatusCode, Json<ApiError>)> {
+    match raw {
+        None => Ok(0),
+        // No upper bound: an offset past the end is a legitimate empty page,
+        // and clamping it would make two different requests indistinguishable.
+        Some(raw) => raw
+            .parse::<usize>()
+            .map_err(|_| error(StatusCode::BAD_REQUEST, "offset must be a whole number")),
+    }
+}
+
+/// Deserialize `Option<Option<T>>` so an absent JSON field means "leave
+/// unchanged" and an explicit `null` means "clear the value".
+///
+/// Serde maps both to `None` by default, which would make it impossible to
+/// unset `parent_id` or `page` through the partial-update endpoints. This is
+/// the well-known `serde_with::rust::double_option` behaviour, inlined to
+/// avoid a new dependency for eight lines.
+fn double_option<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    Deserialize::deserialize(deserializer).map(Some)
 }
 
 async fn list_articles(
     State(shared): State<Arc<BibShared>>,
     Query(params): Query<HashMap<String, String>>,
 ) -> ApiResult {
-    let query = params.get("query").map(String::as_str).unwrap_or("");
-    let limit = parse_limit(params.get("limit").map(String::as_str), 100)?;
-    let hits = shared
-        .bib
-        .search_articles(query, limit)
-        .await
-        .map_err(internal)?;
-    let total = shared.bib.article_count().await.map_err(internal)?;
-    let mut articles = Vec::with_capacity(hits.len());
-    for hit in &hits {
-        if let Some(article) = shared
+    let query = params.get("query").cloned().unwrap_or_default();
+    let limit = parse_limit_max(
+        params.get("limit").map(String::as_str),
+        100,
+        MAX_LIST_ARTICLES,
+    )?;
+    let offset = parse_offset(params.get("offset").map(String::as_str))?;
+    let sort = match params.get("sort").map(String::as_str) {
+        None => SortField::CreatedAt,
+        Some(raw) => SortField::from_wire(raw).ok_or_else(|| {
+            error(
+                StatusCode::BAD_REQUEST,
+                "sort must be one of created_at, updated_at, title, year",
+            )
+        })?,
+    };
+    let order = match params.get("order").map(String::as_str) {
+        None => SortOrder::Descending,
+        Some(raw) => SortOrder::from_wire(raw)
+            .ok_or_else(|| error(StatusCode::BAD_REQUEST, "order must be asc or desc"))?,
+    };
+    let collection_id = params
+        .get("collection_id")
+        .filter(|id| !id.is_empty())
+        .cloned();
+    if let Some(id) = &collection_id {
+        // 404 rather than a silent empty page: a stale collection ID in a
+        // saved view should look like a mistake, not like "nothing filed yet".
+        shared
             .bib
-            .get_article(&hit.article_id)
+            .get_collection(id)
             .await
             .map_err(internal)?
-        {
-            articles.push(article);
-        }
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, format!("collection {id} not found")))?;
     }
-    Ok(Json(
-        json!({ "total": total, "hits": hits, "articles": articles }),
-    ))
+    let unfiled = match params.get("unfiled").map(String::as_str) {
+        None | Some("") | Some("false") => false,
+        Some("true") => true,
+        Some(other) => {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                format!("unfiled must be true or false, got '{other}'"),
+            ));
+        }
+    };
+
+    let (articles, total) = shared
+        .bib
+        .list_articles_paged(&ListParams {
+            query,
+            offset,
+            limit,
+            sort,
+            order,
+            collection_id: collection_id.clone(),
+            unfiled,
+        })
+        .await
+        .map_err(internal)?;
+
+    // `hits` is kept for clients written against the pre-pagination shape.
+    // The page is now ordered by the caller's sort key, so the search
+    // relevance score no longer applies and the snippet degrades to the
+    // title (what an empty query already showed).
+    let hits = articles
+        .iter()
+        .map(|article| SearchHit {
+            article_id: article.id.clone(),
+            title: article.title.clone(),
+            score: 0.0,
+            snippet: article.title.clone(),
+        })
+        .collect::<Vec<_>>();
+
+    Ok(Json(json!({
+        "total": total,
+        "hits": hits,
+        "articles": articles,
+        "offset": offset,
+        "limit": limit,
+    })))
 }
 
 async fn list_unfiled_articles(
@@ -800,8 +936,19 @@ async fn delete_fulltext(
 async fn list_annotations(
     State(shared): State<Arc<BibShared>>,
     Path(id): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
 ) -> ApiResult {
-    let annotations = shared.bib.list_annotations(&id).await.map_err(internal)?;
+    let mut annotations = shared.bib.list_annotations(&id).await.map_err(internal)?;
+    // Filtered here rather than in SQL: an article has at most a few hundred
+    // annotations, and keeping `list_annotations` parameter-free keeps it
+    // usable from every other caller.
+    if let Some(raw) = params.get("page").map(String::as_str) {
+        let page: u32 = raw
+            .parse()
+            .map_err(|_| error(StatusCode::BAD_REQUEST, "page must be a whole number"))?;
+        // `Annotation.page` is 1-based, so the query parameter matches it.
+        annotations.retain(|annotation| annotation.page == Some(page));
+    }
     Ok(Json(json!({ "annotations": annotations })))
 }
 
@@ -810,6 +957,9 @@ struct AddAnnotationRequest {
     content: String,
     kind: Option<String>,
     page: Option<u32>,
+    /// Kind-specific payload, e.g. highlight rectangles and colour.
+    #[serde(default)]
+    data: Option<Value>,
 }
 
 async fn add_annotation(
@@ -827,13 +977,48 @@ async fn add_annotation(
     };
     let annotation = shared
         .bib
-        .add_annotation(&id, kind, input.content.trim(), input.page)
+        .add_annotation(&id, kind, input.content.trim(), input.page, input.data)
         .await
         .map_err(internal)?;
     Ok((
         StatusCode::CREATED,
         Json(json!({ "annotation": annotation })),
     ))
+}
+
+#[derive(Deserialize)]
+struct UpdateAnnotationRequest {
+    content: Option<String>,
+    /// `null` clears the page anchor; omitting the field leaves it alone.
+    #[serde(default, deserialize_with = "double_option")]
+    page: Option<Option<u32>>,
+    /// `null` clears the payload; omitting the field leaves it alone.
+    #[serde(default, deserialize_with = "double_option")]
+    data: Option<Option<Value>>,
+}
+
+async fn update_annotation(
+    State(shared): State<Arc<BibShared>>,
+    Path(id): Path<String>,
+    Json(input): Json<UpdateAnnotationRequest>,
+) -> ApiResult {
+    if let Some(content) = &input.content {
+        if content.trim().is_empty() {
+            return Err(error(StatusCode::BAD_REQUEST, "content cannot be empty"));
+        }
+    }
+    let annotation = shared
+        .bib
+        .update_annotation(
+            &id,
+            input.content.as_deref().map(str::trim),
+            input.page,
+            input.data,
+        )
+        .await
+        .map_err(internal)?
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, format!("annotation {id} not found")))?;
+    Ok(Json(json!({ "annotation": annotation })))
 }
 
 async fn delete_annotation(
@@ -855,6 +1040,11 @@ struct CreateCollectionRequest {
     description: Option<String>,
     #[serde(default)]
     tags: Vec<String>,
+    /// Parent collection, to nest this one in the taxonomy tree.
+    parent_id: Option<String>,
+    /// Position among siblings. Defaults to `0`; siblings then fall back to
+    /// name order.
+    sort_order: Option<i64>,
 }
 
 async fn create_collection(
@@ -864,10 +1054,19 @@ async fn create_collection(
     if input.name.trim().is_empty() {
         return Err(error(StatusCode::BAD_REQUEST, "name is required"));
     }
+    let parent_id = match input.parent_id.as_deref() {
+        None => None,
+        // A blank value is read as "no parent" so clients can send the field
+        // unconditionally instead of stripping empty strings.
+        Some(raw) if raw.trim().is_empty() => None,
+        Some(raw) => Some(ensure_collection_parent(&shared, None, raw).await?),
+    };
     let id = format!("col-{}", &uuid::Uuid::new_v4().to_string()[..8]);
     let mut collection = Collection::new(&id, input.name.trim());
     collection.description = clean_optional(input.description);
     collection.tags = input.tags;
+    collection.parent_id = parent_id;
+    collection.sort_order = input.sort_order.unwrap_or(0);
     shared
         .bib
         .upsert_collection(&collection)
@@ -877,6 +1076,122 @@ async fn create_collection(
         StatusCode::CREATED,
         Json(json!({ "collection": collection })),
     ))
+}
+
+#[derive(Deserialize)]
+struct UpdateCollectionRequest {
+    name: Option<String>,
+    /// `null` clears the description; omitting the field leaves it alone.
+    #[serde(default, deserialize_with = "double_option")]
+    description: Option<Option<String>>,
+    tags: Option<Vec<String>>,
+    /// `null` promotes the collection back to a root; omitting the field
+    /// leaves the parent untouched.
+    #[serde(default, deserialize_with = "double_option")]
+    parent_id: Option<Option<String>>,
+    sort_order: Option<i64>,
+}
+
+async fn update_collection(
+    State(shared): State<Arc<BibShared>>,
+    Path(id): Path<String>,
+    Json(input): Json<UpdateCollectionRequest>,
+) -> ApiResult {
+    let mut collection = shared
+        .bib
+        .get_collection(&id)
+        .await
+        .map_err(internal)?
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, format!("collection {id} not found")))?;
+
+    if let Some(name) = &input.name {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(error(StatusCode::BAD_REQUEST, "name cannot be empty"));
+        }
+        collection.name = name.to_owned();
+    }
+    if let Some(description) = input.description {
+        collection.description = clean_optional(description);
+    }
+    if let Some(tags) = input.tags {
+        collection.tags = tags;
+    }
+    if let Some(parent) = &input.parent_id {
+        collection.parent_id = match parent.as_deref() {
+            None => None,
+            Some(raw) if raw.trim().is_empty() => None,
+            Some(raw) => Some(ensure_collection_parent(&shared, Some(&id), raw).await?),
+        };
+    }
+    if let Some(sort_order) = input.sort_order {
+        collection.sort_order = sort_order;
+    }
+    collection.updated_at = Some(Utc::now());
+    shared
+        .bib
+        .upsert_collection(&collection)
+        .await
+        .map_err(internal)?;
+    Ok(Json(json!({ "collection": collection })))
+}
+
+/// Validate a `parent_id` coming from a create/update request.
+///
+/// `moving_id` is the collection being updated (`None` when creating). The
+/// trimmed parent ID is returned on success; anything that would make the
+/// collection a descendant of itself is rejected. Walking the existing chain
+/// is enough: the only edge this request adds points from `moving_id` to
+/// `parent_id`, so a cycle exists exactly when `parent_id`'s ancestors
+/// already reach `moving_id`.
+async fn ensure_collection_parent(
+    shared: &BibShared,
+    moving_id: Option<&str>,
+    parent_id: &str,
+) -> Result<String, (StatusCode, Json<ApiError>)> {
+    let parent_id = parent_id.trim();
+    if Some(parent_id) == moving_id {
+        return Err(collection_cycle_error());
+    }
+    // The immediate parent has to exist: pointing a collection at nothing
+    // would drop it out of every tree walk.
+    let parent = shared
+        .bib
+        .get_collection(parent_id)
+        .await
+        .map_err(internal)?
+        .ok_or_else(|| {
+            error(
+                StatusCode::BAD_REQUEST,
+                format!("parent collection {parent_id} not found"),
+            )
+        })?;
+
+    let mut cursor = parent.parent_id;
+    for _ in 0..MAX_COLLECTION_DEPTH {
+        let Some(id) = cursor else {
+            return Ok(parent_id.to_owned());
+        };
+        if Some(id.as_str()) == moving_id {
+            return Err(collection_cycle_error());
+        }
+        let Some(node) = shared
+            .bib
+            .get_collection(&id)
+            .await
+            .map_err(internal)?
+        else {
+            // A dangling ancestor cannot loop back to `moving_id`, so the
+            // chain simply ends here.
+            return Ok(parent_id.to_owned());
+        };
+        cursor = node.parent_id;
+    }
+    Err(collection_cycle_error())
+}
+
+fn collection_cycle_error() -> (StatusCode, Json<ApiError>) {
+    error(StatusCode::BAD_REQUEST, "collection cycle detected")
 }
 
 async fn get_collection(State(shared): State<Arc<BibShared>>, Path(id): Path<String>) -> ApiResult {
@@ -1036,6 +1351,149 @@ async fn update_collection_status(
         .await
         .map_err(internal)?;
     Ok(Json(json!({ "id": id, "status": input.status })))
+}
+
+/// Read every persisted web-client setting.
+///
+/// Settings live in the shared `bib_meta` key/value table under a `web:`
+/// prefix, so the TUI and the browser can share one store without either one
+/// having to know the other's key names. Prefixes are stripped on the way out
+/// and re-added on the way in.
+async fn get_settings(State(shared): State<Arc<BibShared>>) -> ApiResult {
+    let rows = shared
+        .bib
+        .list_meta_prefixed(SETTINGS_PREFIX)
+        .await
+        .map_err(internal)?;
+    let mut settings = serde_json::Map::new();
+    for (key, value) in rows {
+        let name = key.strip_prefix(SETTINGS_PREFIX).unwrap_or(&key);
+        // Values are always written back as JSON by `put_settings`; a
+        // hand-edited row is skipped rather than failing the whole read.
+        if let Ok(value) = serde_json::from_str::<Value>(&value) {
+            settings.insert(name.to_owned(), value);
+        }
+    }
+    Ok(Json(json!({ "settings": Value::Object(settings) })))
+}
+
+#[derive(Deserialize)]
+struct PutSettingsRequest {
+    settings: serde_json::Map<String, Value>,
+}
+
+/// Upsert the given settings without touching the ones left out.
+///
+/// A merge (rather than a replace) is deliberate: several browser tabs write
+/// different slices of their state — panel layout, filters, reading
+/// progress — and a full replace from one tab would silently drop the rest.
+async fn put_settings(
+    State(shared): State<Arc<BibShared>>,
+    Json(input): Json<PutSettingsRequest>,
+) -> ApiResult {
+    for (key, value) in &input.settings {
+        if key.is_empty() {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "setting keys must not be empty",
+            ));
+        }
+        // The `chat:` slice of the namespace belongs to chat transcripts, so
+        // a setting here can neither collide with one nor be clobbered by a
+        // later `POST /chat`.
+        if key.starts_with(CHAT_NAMESPACE) {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                format!("setting keys must not start with '{CHAT_NAMESPACE}'"),
+            ));
+        }
+        // Serialise rather than trusting `value.to_string()`: only valid JSON
+        // text can be read back by `get_settings`.
+        let stored = serde_json::to_string(value).map_err(internal)?;
+        shared
+            .bib
+            .set_meta(&format!("{SETTINGS_PREFIX}{key}"), &stored)
+            .await
+            .map_err(internal)?;
+    }
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// Resolve and validate the chat scope from a request.
+fn chat_scope(raw: Option<&str>) -> Result<String, (StatusCode, Json<ApiError>)> {
+    let Some(scope) = raw.filter(|scope| !scope.is_empty()) else {
+        return Err(error(StatusCode::BAD_REQUEST, "scope is required"));
+    };
+    // Scopes are opaque: any characters are accepted, only the key length is
+    // bounded so one client cannot grow `bib_meta` keys without limit.
+    if scope.len() > MAX_CHAT_SCOPE_BYTES {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            format!("scope must be at most {MAX_CHAT_SCOPE_BYTES} bytes"),
+        ));
+    }
+    Ok(scope.to_owned())
+}
+
+async fn get_chat(
+    State(shared): State<Arc<BibShared>>,
+    Query(params): Query<HashMap<String, String>>,
+) -> ApiResult {
+    let scope = chat_scope(params.get("scope").map(String::as_str))?;
+    let stored = shared
+        .bib
+        .get_meta(&format!("{CHAT_PREFIX}{scope}"))
+        .await
+        .map_err(internal)?;
+    // Unread scopes (and an unreadable leftover) are reported as `null` so a
+    // fresh conversation starts from an empty transcript instead of an error.
+    let payload = stored
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .unwrap_or(Value::Null);
+    Ok(Json(json!({ "scope": scope, "payload": payload })))
+}
+
+#[derive(Deserialize)]
+struct PostChatRequest {
+    scope: String,
+    payload: Value,
+}
+
+async fn post_chat(
+    State(shared): State<Arc<BibShared>>,
+    Json(input): Json<PostChatRequest>,
+) -> ApiResult {
+    let scope = chat_scope(Some(&input.scope))?;
+    let stored = serde_json::to_string(&input.payload).map_err(internal)?;
+    if stored.len() > MAX_CHAT_PAYLOAD_BYTES {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            format!("payload exceeds the {MAX_CHAT_PAYLOAD_BYTES} byte limit"),
+        ));
+    }
+    // Whole-payload overwrite: the client always sends the transcript it
+    // holds, so a merge would resurrect messages it just deleted.
+    shared
+        .bib
+        .set_meta(&format!("{CHAT_PREFIX}{scope}"), &stored)
+        .await
+        .map_err(internal)?;
+    Ok(Json(json!({ "ok": true, "scope": scope })))
+}
+
+/// Serve one article as CSL-JSON for citation pickers and reference
+/// managers, which speak that format rather than this API's `Article`.
+async fn get_article_csl_json(
+    State(shared): State<Arc<BibShared>>,
+    Path(id): Path<String>,
+) -> ApiResult {
+    let article = shared
+        .bib
+        .get_article(&id)
+        .await
+        .map_err(internal)?
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, format!("article {id} not found")))?;
+    Ok(Json(json!({ "csl_json": bib_base::to_csl_json(&article) })))
 }
 
 async fn list_requests(
