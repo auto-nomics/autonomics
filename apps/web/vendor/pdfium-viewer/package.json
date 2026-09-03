@@ -1,0 +1,56 @@
+{
+  "name": "@autonomics/pdfium-viewer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./pdfium": "./src/pdfium/index.esm.ts",
+    "./models": "./src/models/index.ts",
+    "./engines": "./src/engines/index.ts",
+    "./engines/react": "./src/engines/react/index.ts",
+    "./core": "./src/core/index.ts",
+    "./core/react": "./src/core/react/index.ts",
+    "./plugin-viewport/react": "./src/plugin-viewport/react/index.ts",
+    "./plugin-scroll/react": "./src/plugin-scroll/react/index.ts",
+    "./plugin-render/react": "./src/plugin-render/react/index.ts",
+    "./plugin-tiling/react": "./src/plugin-tiling/react/index.ts",
+    "./plugin-zoom/react": "./src/plugin-zoom/react/index.ts",
+    "./plugin-zoom/shared/hooks/use-zoom-gesture": "./src/plugin-zoom/shared/hooks/use-zoom-gesture.ts",
+    "./plugin-rotate/react": "./src/plugin-rotate/react/index.ts",
+    "./plugin-selection/react": "./src/plugin-selection/react/index.ts",
+    "./plugin-selection/utils": "./src/plugin-selection/utils.ts",
+    "./plugin-annotation/react": "./src/plugin-annotation/react/index.ts",
+    "./plugin-form/react": "./src/plugin-form/react/index.ts",
+    "./plugin-history/react": "./src/plugin-history/react/index.ts",
+    "./plugin-search/react": "./src/plugin-search/react/index.ts",
+    "./plugin-thumbnail/react": "./src/plugin-thumbnail/react/index.ts",
+    "./plugin-interaction-manager/react": "./src/plugin-interaction-manager/react/index.ts",
+    "./plugin-document-manager/react": "./src/plugin-document-manager/react/index.ts",
+    "./plugin-capture/react": "./src/plugin-capture/react/index.ts",
+    "./plugin-export/react": "./src/plugin-export/react/index.ts",
+    "./plugin-print/react": "./src/plugin-print/react/index.ts",
+    "./plugin-pan/react": "./src/plugin-pan/react/index.ts",
+    "./plugin-fullscreen/react": "./src/plugin-fullscreen/react/index.ts",
+    "./plugin-spread/react": "./src/plugin-spread/react/index.ts",
+    "./plugin-bookmark/react": "./src/plugin-bookmark/react/index.ts"
+  },
+  "peerDependencies": {
+    "react": ">=18.0.0",
+    "react-dom": ">=18.0.0"
+  },
+  "peerDependenciesMeta": {
+    "react-dom": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.1",
+    "@types/react-dom": "^18.3.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^5.0.0"
+  }
+}

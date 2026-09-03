@@ -1,0 +1,10 @@
+{
+  "loading": "Loading...",
+  "splitHint": "Split pane: press a/p to specify new pane · other keys clone current · Esc to cancel",
+  "shortcutHint": "Ctrl+B — h/l horizontal split · j/k vertical split · arrows switch · x close · a home · p papers",
+  "nav": {
+    "home": "Home",
+    "papers": "Papers",
+    "settings": "Settings"
+  }
+}

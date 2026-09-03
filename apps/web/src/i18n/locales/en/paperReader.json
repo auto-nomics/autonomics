@@ -1,0 +1,34 @@
+{
+  "loading": "Loading...",
+  "notFound": "Paper not found or failed to load",
+  "backToList": "Back to list",
+  "loadingReader": "Loading PDF reader...",
+  "loadingPdf": "Loading PDF...",
+  "viewingAttachment": "You are viewing an attachment PDF (paragraph guide and AI chat are still based on the paper's original PDF)",
+  "backToOriginal": "Back to original PDF",
+  "reloadFailed": "Failed to reload paper: {{error}}",
+  "loadFailed": "Failed to load paper: {{error}}",
+  "searchTarget": {
+    "outline": "Guide",
+    "chat": "Chat",
+    "pdf": "PDF"
+  },
+  "feature": {
+    "guide": "Paragraph Guide",
+    "pdfReader": "PDF Reader",
+    "aiChat": "AI Chat"
+  },
+  "dragHint": {
+    "guide": "Drag to resize guide panel",
+    "chat": "Drag to resize chat panel"
+  },
+  "metadata": {
+    "unnamed": "Untitled Paper",
+    "abstract": "Abstract",
+    "uploadAttachment": "Upload Attachment",
+    "autoDownloadPdf": "Auto Download PDF",
+    "uploadSuccess": "Attachment uploaded successfully",
+    "uploadFailed": "Attachment upload failed: {{error}}",
+    "downloadFailed": "PDF download failed: {{error}}"
+  }
+}

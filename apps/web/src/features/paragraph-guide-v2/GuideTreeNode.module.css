@@ -1,0 +1,379 @@
+/**
+ * GuideTreeNode 样式模块
+ * 用于层次化导览树节点的样式
+ */
+
+/* ========== 星星图标 ========== */
+.starIcon {
+  font-size: 12px;
+}
+
+/* ========== 节点容器 ========== */
+.nodeContainer {
+  display: flex;
+  flex-direction: column;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background-color 0.2s;
+  background-color: transparent;
+}
+
+.nodeContainer:hover {
+  background-color: var(--bg-secondary);
+}
+
+/* ========== 节点主行 ========== */
+.nodeMainRow {
+  display: flex;
+  align-items: center;
+  padding: 6px 8px;
+  min-height: 32px;
+}
+
+/* Keypoint 节点的样式 */
+.nodeMainRowKeypoint {
+  align-items: flex-start;
+  padding: 4px 8px;
+}
+
+/* ========== Keypoint 圆点标记 ========== */
+.keypointBullet {
+  margin-right: 6px;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+/* ========== 展开/折叠按钮 ========== */
+.toggleButton {
+  margin-right: 4px;
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+}
+
+/* ========== 角色图标 ========== */
+.roleIcon {
+  margin-right: 6px;
+  color: var(--text-tertiary);
+}
+
+/* ========== 节点标题 ========== */
+.nodeTitle {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  line-height: 1.4;
+}
+
+/* Heading 标题样式 */
+.nodeTitleHeading {
+  font-size: 13px;
+  color: var(--text-primary);
+  font-weight: 500;
+  -webkit-line-clamp: 2;
+}
+
+/* Keypoint 标题样式 */
+.nodeTitleKeypoint {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-weight: normal;
+  -webkit-line-clamp: 3;
+}
+
+/* ========== 阅读引导容器 ========== */
+.readingGuideContainer {
+  padding: 4px 8px 8px 32px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+/* ========== 论证位置 ========== */
+.argumentContext {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  margin-bottom: 4px;
+  color: var(--color-primary);
+  font-size: 11px;
+}
+
+.argumentContextIcon {
+  flex-shrink: 0;
+}
+
+.argumentContextText {
+  font-style: italic;
+}
+
+.argumentContextRole {
+  display: inline-block;
+  padding: 0 5px;
+  background: var(--ai-bg-soft);
+  border: 1px solid var(--ai-border);
+  border-radius: 3px;
+  font-size: 10px;
+  margin-right: 4px;
+  font-weight: 500;
+}
+
+.argumentContextDeps {
+  margin-top: 2px;
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+
+/* ========== 注意力锚点标签 ========== */
+.anchorTags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.anchorTag {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 6px;
+  background: var(--ai-bg-soft);
+  border: 1px solid var(--ai-border);
+  border-radius: 3px;
+  font-size: 10px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.anchorTagIcon {
+  font-size: 9px;
+}
+
+.anchorTagCount {
+  margin-left: 2px;
+  padding: 0 3px;
+  background: var(--color-primary);
+  color: #fff;
+  border-radius: 2px;
+  font-size: 9px;
+}
+
+.anchorMore {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  padding: 2px 4px;
+}
+
+/* ========== 可跳过提示 ========== */
+.skipHint {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  margin-top: 4px;
+  padding: 4px 6px;
+  background: var(--bg-tertiary);
+  border-radius: 3px;
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+
+.skipHintIcon {
+  font-size: 10px;
+  margin-top: 1px;
+}
+
+/* ========== 阅读引导详情面板 ========== */
+.guideDetailPanel {
+  padding: 8px 12px 12px 32px;
+  background: var(--bg-tertiary);
+  border-top: 1px solid var(--border-color);
+  font-size: 11px;
+}
+
+/* ========== 章节信息 ========== */
+.sectionInfo {
+  margin-bottom: 6px;
+}
+
+.sectionInfoLabel {
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.sectionInfoText {
+  color: var(--text-secondary);
+}
+
+/* ========== 为什么有这一节 ========== */
+.whyExistsSection {
+  margin-bottom: 8px;
+}
+
+.whyExistsHeader {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  margin-bottom: 2px;
+}
+
+.whyExistsIcon {
+  font-size: 10px;
+  opacity: 0.7;
+}
+
+.whyExistsLabel {
+  font-weight: 500;
+}
+
+.whyExistsContent {
+  color: var(--text-secondary);
+  padding-left: 16px;
+  line-height: 1.5;
+}
+
+/* ========== 阅读策略 ========== */
+.readingStrategySection {
+  margin-bottom: 8px;
+}
+
+.readingStrategyHeader {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  margin-bottom: 2px;
+}
+
+.readingStrategyIcon {
+  font-size: 10px;
+  margin-top: 1px;
+}
+
+.readingStrategyLabel {
+  font-weight: 500;
+}
+
+.readingStrategyContent {
+  color: var(--text-secondary);
+  padding-left: 16px;
+  line-height: 1.5;
+}
+
+/* ========== 注意力锚点详情 ========== */
+.anchorsDetailSection {
+  margin-bottom: 8px;
+}
+
+.anchorsDetailLabel {
+  font-weight: 500;
+  margin-bottom: 4px;
+  color: var(--text-primary);
+}
+
+.anchorDetailItem {
+  padding: 4px 6px;
+  margin-bottom: 3px;
+  background: var(--bg-secondary);
+  border-radius: 3px;
+  font-size: 10px;
+}
+
+.anchorDetailHeader {
+  font-weight: 500;
+  color: var(--color-primary);
+}
+
+.anchorDetailIcon {
+  font-size: 9px;
+  margin-right: 4px;
+}
+
+.anchorDetailCountBadge {
+  margin-left: 4px;
+  padding: 0 4px;
+  background: var(--color-primary);
+  color: #fff;
+  border-radius: 2px;
+  font-size: 9px;
+}
+
+.anchorDetailGuidance {
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
+
+.anchorDetailConnects {
+  color: var(--text-tertiary);
+  margin-top: 1px;
+}
+
+/* ========== 批判性思考 ========== */
+.criticalHintsSection {
+  margin-bottom: 6px;
+}
+
+.criticalHintsLabel {
+  font-weight: 500;
+  margin-bottom: 4px;
+  color: var(--text-primary);
+}
+
+.criticalHintItem {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 4px 6px;
+  background: var(--bg-warning-tint);
+  border: 1px solid var(--border-warning);
+  border-radius: 3px;
+  font-size: 10px;
+  color: var(--text-warning);
+  margin-bottom: 3px;
+}
+
+.criticalHintIcon {
+  font-size: 10px;
+  margin-top: 1px;
+}
+
+/* ========== 折叠/展开按钮 ========== */
+.collapseButton {
+  text-align: center;
+  padding: 4px;
+  font-size: 10px;
+  color: var(--color-primary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.expandButton {
+  padding: 4px 8px 4px 32px;
+  font-size: 10px;
+  color: var(--color-primary);
+  cursor: pointer;
+  text-align: center;
+  user-select: none;
+  background: transparent;
+  transition: background-color 0.2s;
+}
+
+.expandButton:hover {
+  background: var(--hover-overlay);
+}
+
+/* ========== 工具类 ========== */
+.divider {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.dividerSmallMargin {
+  margin-bottom: 6px;
+}
+
+.dividerNoMargin {
+  margin-bottom: 0;
+}

@@ -69,11 +69,8 @@ async fn server_serves_the_bibliography_frontend() {
     let shared = BibShared::open_in_memory().await.unwrap();
     let app = tui_http::api_router(shared);
 
-    for (path, marker) in [
-        ("/", "Autonomics Bibliography"),
-        ("/app.js", "Select a record to inspect"),
-        ("/styles.css", "--primary"),
-    ] {
+    // The SPA shell (rust-embed from apps/web/dist) with its hashed assets.
+    for (path, marker) in [("/", "<title>Autonomics</title>"), ("/paper/abc", "<div id=\"root\">")] {
         let response = app
             .clone()
             .oneshot(request("GET", path, None))
@@ -84,6 +81,30 @@ async fn server_serves_the_bibliography_frontend() {
         let body = String::from_utf8_lossy(&body).to_string();
         assert!(body.contains(marker), "missing marker for {path}");
     }
+
+    // The PDFium WASM engine must arrive with the correct MIME type or the
+    // browser refuses to instantiate it.
+    let response = app
+        .clone()
+        .oneshot(request("GET", "/wasm/pdfium.wasm", None))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get("content-type").unwrap(),
+        "application/wasm"
+    );
+
+    // Unmatched API routes stay JSON 404s even though the SPA fallback sees
+    // every unrouted request.
+    let response = app
+        .oneshot(request("GET", "/api/v1/bib/nope", None))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(body["error"].is_string());
 }
 
 #[tokio::test]

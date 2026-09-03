@@ -1,0 +1,219 @@
+/**
+ * PaperListPage 常量样式模块
+ * 用于 paperListConstants.jsx 中的表格列渲染样式
+ */
+
+/* ========== 文本颜色类 ========== */
+.textTertiary {
+  color: var(--text-tertiary);
+}
+
+.textPrimary {
+  color: var(--text-primary);
+}
+
+.textSecondary {
+  color: var(--text-secondary);
+}
+
+/* ========== 期刊名样式 ========== */
+.journalLink {
+  color: var(--color-primary);
+  font-weight: 500;
+}
+
+/* ========== 小号文本 ========== */
+.smallText {
+  font-size: 12px;
+}
+
+/* ========== DOI 文本 ========== */
+.doiText {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+/* ========== 徽章基础样式 ========== */
+.badge {
+  font-size: 11px;
+  line-height: 18px;
+  padding: 0 4px;
+  border-radius: 2px;
+  display: inline-block;
+  white-space: nowrap;
+}
+
+/* ========== 徽章文字颜色 ========== */
+.badgeWhiteText {
+  color: white;
+}
+
+.badgePrimaryText {
+  color: var(--text-primary);
+}
+
+.badgeSecondaryText {
+  color: var(--text-secondary);
+}
+
+/* ========== OA 状态徽章颜色 ========== */
+.badgeOaDefault {
+  background-color: var(--border-color);
+  color: var(--text-primary);
+}
+
+/* ========== 影响因子徽章 ========== */
+.badgeIf {
+  background-color: var(--badge-if);
+  color: white;
+}
+
+.badgeIf5 {
+  background-color: var(--badge-if5);
+  color: white;
+}
+
+/* ========== JCR 分区徽章 ========== */
+.badgeQ1 {
+  background-color: var(--quartile-q1);
+  color: white;
+}
+
+.badgeQ2 {
+  background-color: var(--quartile-q2);
+  color: white;
+}
+
+.badgeQ3 {
+  background-color: var(--quartile-q3);
+  color: white;
+}
+
+.badgeQ4 {
+  background-color: var(--quartile-q4);
+  color: white;
+}
+
+/* ========== CAS 分区徽章 ========== */
+.badgeCas1 {
+  background-color: var(--cas-1);
+  color: white;
+}
+
+.badgeCas2 {
+  background-color: var(--cas-2);
+  color: white;
+}
+
+.badgeCas3 {
+  background-color: var(--cas-3);
+  color: white;
+}
+
+.badgeCas4 {
+  background-color: var(--cas-4);
+  color: white;
+}
+
+/* ========== CAS 小类徽章 ========== */
+.badgeCasSmall {
+  background-color: var(--badge-cas-small);
+  color: white;
+}
+
+/* ========== Top 期刊徽章 ========== */
+.badgeTop {
+  background-color: var(--badge-top);
+  color: white;
+}
+
+/* ========== 预警期刊徽章 ========== */
+.badgeWarning {
+  background-color: var(--badge-warning);
+  color: white;
+}
+
+/* ========== SSCI 分区徽章 ========== */
+.badgeSsciQ1 {
+  background-color: var(--ssci-q1);
+  color: white;
+}
+
+.badgeSsciQ2 {
+  background-color: var(--ssci-q2);
+  color: white;
+}
+
+.badgeSsciQ3 {
+  background-color: var(--ssci-q3);
+  color: white;
+}
+
+/* ========== 动态类型徽章（使用 data 属性） ========== */
+/* 通过 data-color 属性动态设置背景色 */
+.badgeDynamic[data-color="default"] {
+  background-color: var(--border-color);
+  color: var(--text-secondary);
+}
+
+.badgeDynamic[data-color="blue"] {
+  background-color: var(--ant-color-blue, #1890ff);
+  color: white;
+}
+
+.badgeDynamic[data-color="cyan"] {
+  background-color: var(--ant-color-cyan, #13c2c2);
+  color: white;
+}
+
+.badgeDynamic[data-color="green"] {
+  background-color: var(--ant-color-green, #52c41a);
+  color: white;
+}
+
+.badgeDynamic[data-color="gold"] {
+  background-color: var(--ant-color-gold, #faad14);
+  color: white;
+}
+
+.badgeDynamic[data-color="lime"] {
+  background-color: var(--ant-color-lime, #a0d911);
+  color: white;
+}
+
+.badgeDynamic[data-color="orange"] {
+  background-color: var(--ant-color-orange, #fa8c16);
+  color: white;
+}
+
+.badgeDynamic[data-color="red"] {
+  background-color: var(--ant-color-red, #f5222d);
+  color: white;
+}
+
+.badgeDynamic[data-color="magenta"] {
+  background-color: var(--ant-color-magenta, #eb2f96);
+  color: white;
+}
+
+.badgeDynamic[data-color="purple"] {
+  background-color: var(--ant-color-purple, #722ed1);
+  color: white;
+}
+
+/* ========== Flex 容器（用于标签组） ========== */
+.flexContainer {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 4px;
+  align-items: center;
+  overflow: hidden;
+  max-width: 100%;
+}
+
+/* ========== 截断文本容器 ========== */
+.truncatedText {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

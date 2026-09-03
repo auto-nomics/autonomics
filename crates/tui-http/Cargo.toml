@@ -11,7 +11,9 @@ bib-base = { path = "../bib-base" }
 bib-types = { path = "../bib-types" }
 axum = { version = "0.8", features = ["multipart"] }
 chrono.workspace = true
+mime_guess = "2"
 opendal = "0.57"
+rust-embed.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.10"

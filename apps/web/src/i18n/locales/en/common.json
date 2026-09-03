@@ -1,0 +1,65 @@
+{
+  "loading": "Loading...",
+  "retry": "Retry",
+  "refresh": "Refresh Page",
+  "cancel": "Cancel",
+  "confirm": "Confirm",
+  "confirmAction": "Confirm",
+  "save": "Save",
+  "delete": "Delete",
+  "close": "Close",
+  "back": "Back",
+  "add": "Add",
+  "search": "Search",
+  "import": "Import",
+  "export": "Export",
+  "settings": "Settings",
+  "edit": "Edit",
+  "enabled": "Enabled",
+  "disabled": "Disabled",
+  "noData": "No data",
+  "operation": "Action",
+  "error": {
+    "title": "Something went wrong",
+    "subtitle": "Sorry, the application encountered an unexpected error. You can try again or refresh the page.",
+    "info": "Error details:",
+    "stack": "Component stack:"
+  },
+  "feature": {
+    "errorTitle": "{{name}} Error",
+    "errorDesc": "This feature module encountered an unexpected error. You can retry or refresh the page."
+  },
+  "paper": {
+    "notFound": "Paper not found or failed to load",
+    "backToList": "Back to list"
+  },
+  "api": {
+    "requestFailed": "Request failed: {{status}}",
+    "networkError": "Network error",
+    "uploadFailed": "Upload failed",
+    "uploadCancelled": "Upload cancelled",
+    "translationFailed": "Translation failed",
+    "unsupportedImageFormat": "Unsupported image format. Only PNG/JPEG/GIF/WebP/SVG are supported",
+    "imageSizeExceeded": "Image size cannot exceed 10MB",
+    "unsupportedVideoFormat": "Unsupported video format. Only MP4/WebM/OGG are supported"
+  },
+  "conversationHistory": {
+    "title": "Conversation History",
+    "noHistory": "No conversation history",
+    "untitled": "Untitled conversation",
+    "messageCount": "{{count}} message(s)",
+    "deleteConversation": "Delete this conversation"
+  },
+  "summary": {
+    "loadFailed": "Failed to load summary",
+    "generateTimeout": "Summary generation timed out. Please check back later.",
+    "generating": "Summary is being generated, please wait...",
+    "generateStarted": "Summary generation started, please wait...",
+    "generateFailed": "Failed to generate summary",
+    "generatingLabel": "Generating summary...",
+    "clickToGenerate": "Click to generate summary",
+    "errorTitle": "Summary generation failed",
+    "timeoutTitle": "Generation timed out",
+    "timeoutDesc": "Summary generation is taking longer than expected. Please check back later."
+  }
+}

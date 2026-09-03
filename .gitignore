@@ -46,3 +46,8 @@ infra/docker/.data/
 infra/docker/garage/data/
 infra/docker/garage/meta/
 infra/docker/garage/snapshots/
+
+# autonomics-web SPA (pnpm workspace under apps/web)
+apps/web/**/node_modules/
+apps/web/coverage/
+apps/web/**/.vite/

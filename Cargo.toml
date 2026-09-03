@@ -129,6 +129,7 @@ futures = "0.3"
 schemars = "1.2.1"
 arc-swap = "1.9.2"
 unicode-width = "0.2"
+rust-embed = "8"
 
 arrow = { version = "58.3.0", features = ["prettyprint"] }
 arrow-array = "58.3.0"

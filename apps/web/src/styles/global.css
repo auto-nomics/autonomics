@@ -1,0 +1,1176 @@
+/**
+ * JayRead 全局样式
+ * 定义 CSS 变量体系，统一所有组件的视觉风格
+ */
+
+:root { /* 根元素选择器，定义全局 CSS 变量（浅色模式） */
+
+  /* ===== 基础阅读色（高优先级，确保原文清晰可读）===== */
+  --pdf-bg: #f5f0e8; /* PDF 背景色：暖米色 */
+  --text-primary: #262626; /* 主文字颜色：深灰，用于标题和正文 */
+  --text-secondary: #595959; /* 次要文字颜色：中灰，用于描述文字 */
+  --text-tertiary: #767676; /* 辅助文字颜色：护眼优化灰，用于时间戳和标签（原值 #8c8c8c 在 #ffffff 背景上 WCAG 对比度仅 3.4:1 不通过 AA，新值 #767676 对比度 4.6:1 通过 WCAG AA 4.5:1 标准） */
+  --text-inverted: #ffffff; /* 反转文字颜色：白色，用于深色背景上的文字 */
+  --border-color: #e8e3db; /* 边框颜色：暖浅灰，用于分隔线 */
+
+  /* ===== 新增：背景层级（浅色模式）===== */
+  --bg-primary: #faf8f5; /* 主背景色：暖米白，用于页面主体 */
+  --bg-secondary: #f0ede8; /* 次级背景色：暖灰，用于侧边栏、卡片 */
+  --bg-tertiary: #e5e1da; /* 三级背景色：暖深灰，用于悬浮层、模态框 */
+  --bg-elevated: #faf8f5; /* 浮层背景色：暖米白，用于弹窗、下拉菜单 */
+
+  /* ===== 新增：阴影/叠加（浅色模式）===== */
+  --shadow-sm: 0 1px 2px rgba(60, 50, 40, 0.08); /* 小阴影：轻微浮起效果，暖色调 */
+  --shadow-md: 0 2px 8px rgba(60, 50, 40, 0.12); /* 中阴影：卡片浮起效果，暖色调 */
+  --overlay-hover: rgba(60, 50, 40, 0.04); /* 悬停叠加层：暖色半透明 */
+  --overlay-active: rgba(60, 50, 40, 0.08); /* 激活叠加层：暖色半透明 */
+
+  /* ===== 新增：浮层叠加（浅色模式）===== */
+  --bg-elevated-overlay: rgba(250, 248, 245, 0.8); /* 浮层叠加色：半透明暖米白，用于加载遮罩 */
+
+  --bg-row-hover: #e5e0d6; /* 表格行悬浮背景色 */
+
+  /* ===== 新增：选中状态（浅色模式）===== */
+  --bg-selected: #ebebeb; /* 选中背景色：浅灰色（中性色） */
+  --bg-selected-hover: #d6d6d6; /* 选中悬浮背景色：稍深灰色 */
+
+  /* ===== 新增：错误状态（浅色模式）===== */
+  --bg-error-tint: #fff2f0; /* 错误背景色：淡红色 */
+  --border-error: #ffccc7; /* 错误边框色：淡红色边框 */
+  --text-error: #f5222d; /* 错误文字颜色：红色 */
+
+  /* ===== 新增：边框层级（浅色模式）===== */
+  --border-color-secondary: #cccccc; /* 次级边框色：中灰，用于分隔线 */
+  --border-color-light: #d9d2c8; /* 浅色边框：暖浅灰，用于精细分隔 */
+
+  /* ===== AI 辅助层（低饱和度，不抢焦点）===== */
+  --ai-bg-soft: #f6ffed; /* AI 区域背景：浅绿色 */
+  --ai-border: #b7eb8f; /* AI 区域边框：绿色 */
+  --ai-text: #262626; /* AI 区域文字：深灰 */
+  --ai-accent: #52c41a; /* AI 强调色：绿色 */
+
+  /* ===== 重要度可视化（1-5 级颜色映射）===== */
+  --importance-5: #f5222d; /* 5 级：红色，核心内容 */
+  --importance-4: #fa8c16; /* 4 级：橙色，重要内容 */
+  --importance-3: #1890ff; /* 3 级：蓝色，一般内容 */
+  --importance-2: #13c2c2; /* 2 级：青色，次要内容 */
+  --importance-1: #d9d9d9; /* 1 级：灰色，参考内容 */
+
+  /* ===== 期刊分区色（浅色模式）===== */
+  --quartile-q1: #52c41a; /* JCR Q1 分区色：绿色，表示最高分区 */
+  --quartile-q2: #1890ff; /* JCR Q2 分区色：蓝色，表示第二分区 */
+  --quartile-q3: #fa8c16; /* JCR Q3 分区色：橙色，表示第三分区 */
+  --quartile-q4: #d9d9d9; /* JCR Q4 分区色：灰色，表示最低分区 */
+
+  --cas-1: #f5222d; /* CAS 一区色：红色 */
+  --cas-2: #fa541c; /* CAS 二区色：橙红 */
+  --cas-3: #1890ff; /* CAS 三区色：蓝色 */
+  --cas-4: #d9d9d9; /* CAS 四区色：灰色 */
+
+  --ssci-q1: #722ed1; /* SSCI Q1 分区色：紫色 */
+  --ssci-q2: #2f54eb; /* SSCI Q2 分区色：靛蓝 */
+  --ssci-q3: #fa8c16; /* SSCI Q3 分区色：橙色 */
+
+  /* ===== 特殊标签色（浅色模式）===== */
+  --badge-cas-small: #13c2c2; /* CAS 小类标签色：青色 */
+  --badge-top: #faad14; /* Top 期刊标签色：金色 */
+  --badge-warning: #ff4d4f; /* 预警期刊标签色：红色 */
+  --badge-if: #52c41a; /* 影响因子标签色：绿色 */
+  --badge-if5: #a0d911; /* 五年影响因子标签色：黄绿色 */
+
+  /* ===== 危险操作交互态色（浅色模式）===== */
+  --danger-text: #ef4444; /* 危险操作文字色：红色，用于删除按钮等危险操作 */
+  --danger-border: #fca5a5; /* 危险操作边框色：浅红色边框 */
+  --danger-bg-hover: #fef2f2; /* 危险操作悬停背景色：极浅红色，悬停时的柔和反馈 */
+  --danger-border-hover: #ef4444; /* 危险操作悬停边框色：红色，悬停时边框加深 */
+
+  /* ===== 警告状态（浅色模式）===== */
+  --bg-warning-tint: #fffbe6; /* 警告背景色：淡黄色 */
+  --border-warning: #ffe58f; /* 警告边框色：黄色 */
+  --text-warning: #ad6800; /* 警告文字颜色：深黄色 */
+
+  /* ===== 代码块（浅色模式）===== */
+  --bg-code: #f0ebe3; /* 代码块背景色：暖灰色 */
+
+  /* ===== 搜索高亮 ===== */
+  --bg-highlight: #ffe58f; /* 搜索高亮背景色：黄色 */
+  --border-highlight: #ffc53d; /* 搜索高亮边框色：深黄色 */
+
+  /* ===== 主题色 ===== */
+  --color-primary: #44403c; /* 主题色：暖石墨色，用于链接、按钮等交互元素（在 #faf8f5 背景上对比度 ~9.3:1） */
+  --color-primary-bg: #f0f0f0; /* 选中项浅背景：中性浅灰 */
+  --color-primary-shadow: rgba(0, 0, 0, 0.12); /* 选中项阴影：中性半透明黑 */
+
+  /* ===== 内容强调色（浅色模式：深炭灰）===== */
+  --accent-content: #242424; /* 内容强调色：深炭灰，用于聊天气泡、内容高亮等（在 #faf8f5 背景上对比度 ~13:1） */
+  --accent-content-text: #ffffff; /* 内容强调色上的文字：白色 */
+  --accent-content-bg: #f0f0f0; /* 内容强调色浅背景：用于选中状态 */
+  --accent-content-tag-bg: rgba(255, 255, 255, 0.2); /* 气泡内标签背景：半透明白色 */
+  --accent-content-tag-border: rgba(255, 255, 255, 0.3); /* 气泡内标签边框：半透明白色 */
+
+  /* ===== 交互反馈 ===== */
+  --hover-overlay: rgba(0, 0, 0, 0.04); /* 悬浮覆盖层：半透明黑色 */
+  --active-overlay: rgba(0, 0, 0, 0.08); /* 激活覆盖层：较深半透明黑色 */
+
+  /* ===== 动画 ===== */
+  --transition-fast: 0.2s ease; /* 快速过渡动画：0.2 秒缓动 */
+  --transition-normal: 0.3s ease; /* 标准过渡动画：0.3 秒缓动 */
+
+  /* ===== 状态和特殊颜色（浅色模式）===== */
+  --status-success: #52c41a;
+  --color-keypoint: #fa8c16;
+  --color-keypoint-bg: rgba(250, 140, 22, 0.08);
+
+  /* ===== 文件图标颜色 ===== */
+  --file-icon-pdf: #f5222d;       /* 红色 - PDF 文件 */
+  --file-icon-word: #1890ff;      /* 蓝色 - Word 文档 */
+  --file-icon-excel: #52c41a;     /* 绿色 - Excel 表格 */
+  --file-icon-ppt: #fa8c16;       /* 橙色 - PowerPoint */
+  --file-icon-image: #722ed1;     /* 紫色 - 图片文件 */
+  --file-icon-audio: #13c2c2;     /* 青色 - 音频文件 */
+  --file-icon-video: #eb2f96;     /* 品红 - 视频文件 */
+  --file-icon-archive: #8c8c8c;   /* 灰色 - 压缩包 */
+  --file-icon-code: #faad14;      /* 金色 - 代码文件 */
+  --file-icon-ebook: #2f54eb;     /* 靛蓝 - 电子书 */
+  --file-icon-data: #a0d911;      /* 黄绿 - 数据文件 */
+  --file-icon-text: #595959;      /* 深灰 - 纯文本 */
+  --file-icon-web: #1890ff;       /* 蓝色 - 网页文件 */
+  --file-icon-default: #8c8c8c;   /* 灰色 - 默认类型 */
+}
+
+/* ===== 全局重置 ===== */
+* { /* 通配符选择器，重置所有元素的默认样式 */
+  margin: 0; /* 清除默认外边距 */
+  padding: 0; /* 清除默认内边距 */
+  box-sizing: border-box; /* 盒模型设为 border-box，宽高包含 padding 和 border */
+}
+
+/* ===== 深色主题（Vantablack 风格）===== */
+/* 通过 data-theme 属性切换，而非 prefers-color-scheme 媒体查询 */
+[data-theme="dark"] {
+  color-scheme: dark; /* 告诉浏览器当前是深色模式，影响原生控件样式 */
+
+  /* ===== 基础阅读色（深色模式）===== */
+  --pdf-bg: #1a1a1a; /* PDF 背景色：护眼提亮灰（原值 #0d0d0d 简单亮度 5% 易致光晕效应，新值 #1a1a1a 简单亮度 10% 减少眼睛疲劳） */
+  --text-primary: #dcdcdc; /* 主文字颜色：护眼降亮灰（原值 #ececec 在新背景 #1a1a1a 上 WCAG 对比度 16.5:1 过高刺眼，新值 #dcdcdc 对比度 9.6:1 降至舒适阅读区间） */
+  --text-secondary: #b0b0b0; /* 次要文字颜色：护眼降亮灰（原值 #b6b6b6 在新背景 #1a1a1a 上 WCAG 对比度 7.0:1，新值 #b0b0b0 对比度 6.2:1 仍在 AA 范围且更柔和） */
+  --text-tertiary: #909090; /* 辅助文字颜色：护眼降亮灰（原值 #9b9b9b 在新背景 #1a1a1a 上 WCAG 对比度 5.2:1，新值 #909090 对比度 4.5:1 刚好通过 WCAG AA 4.5:1 标准） */
+  --text-inverted: #ffffff; /* 反转文字颜色：白色，用于深色背景上的文字（深色模式下保持白色） */
+  --border-color: #333333; /* 边框颜色：随背景提亮同步调整（原值 #2a2a2a 与旧背景 #0d0d0d 对比度过低，新值 #333333 与新背景 #1a1a1a 形成适度边框对比） */
+
+  /* ===== 背景层级（深色模式）===== */
+  --bg-primary: #1a1a1a; /* 主背景色：护眼提亮灰（原值 #0d0d0d 简单亮度 5%，新值 #1a1a1a 简单亮度 10% 减少与屏幕的亮度反差） */
+  --bg-secondary: #222222; /* 次级背景色：护眼提亮灰（原值 #141414 简单亮度 8%，新值 #222222 简单亮度 13% 与主背景形成适度层级） */
+  --bg-tertiary: #2a2a2a; /* 三级背景色：护眼提亮灰（原值 #1a1a1a 简单亮度 10%，新值 #2a2a2a 简单亮度 16% 与主背景、次级背景形成清晰层级） */
+  --bg-elevated: #333333; /* 浮层背景色：护眼提亮灰（原值 #222222 简单亮度 13%，新值 #333333 简单亮度 20% 在弹窗中提供足够层级区分） */
+
+  /* ===== 阴影/叠加（深色模式）===== */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5); /* 小阴影：护眼增强（原值 rgba(0, 0, 0, 0.4) 在提亮背景下阴影较弱，新值 0.5 增强浮层视觉分离） */
+  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.6); /* 中阴影：护眼增强（原值 rgba(0, 0, 0, 0.5) 在提亮背景下卡片浮起效果不足，新值 0.6 增强层次感） */
+  --overlay-hover: rgba(255, 255, 255, 0.04); /* 悬停叠加层：浅白半透明 */
+  --overlay-active: rgba(255, 255, 255, 0.08); /* 激活叠加层：中白半透明 */
+
+  /* ===== 浮层叠加（深色模式）===== */
+  --bg-elevated-overlay: rgba(34, 34, 34, 0.8); /* 浮层叠加色：半透明深灰，用于加载遮罩 */
+
+  --bg-row-hover: #383838; /* 表格行悬浮背景色：护眼提亮（原值 #262626 与旧主背景 #0d0d0d 的对比度计算，新值 #383838 在新主背景 #1a1a1a 上提供足够区分度） */
+
+  /* ===== 选中状态（深色模式）===== */
+  --bg-selected: #2a2a2a; /* 选中背景色：深灰色（中性色） */
+  --bg-selected-hover: #363636; /* 选中悬浮背景色：稍亮灰色 */
+
+  /* ===== 错误状态（深色模式）===== */
+  --bg-error-tint: #2a1215; /* 错误背景色：深红色 */
+  --border-error: #58181c; /* 错误边框色：深红色边框 */
+  --text-error: #ff7875; /* 错误文字颜色：浅红色，高对比度 */
+
+  /* ===== 边框层级（深色模式）===== */
+  --border-color-secondary: rgba(255, 255, 255, 0.15); /* 次级边框：护眼降透明度（原值 rgba(255, 255, 255, 0.18) 在新背景下对比度过高，新值 0.15 与提亮的背景更协调） */
+  --border-color-light: rgba(255, 255, 255, 0.08); /* 浅色边框：护眼微提透明度（原值 rgba(255, 255, 255, 0.06) 几乎不可见，新值 0.08 在提亮背景下提供细微分隔效果） */
+
+  /* ===== 主题色（深色模式）===== */
+  --color-primary: #c8c4be; /* 主题色：暖沙白色，用于链接、按钮等交互元素（在 #1a1a1a 背景上对比度 ~7.5:1） */
+  --color-primary-bg: #2a2a2a; /* 选中项浅背景：中性深灰 */
+  --color-primary-shadow: rgba(0, 0, 0, 0.3); /* 选中项阴影：中性半透明黑 */
+
+  /* ===== 内容强调色（深色模式：柔白）===== */
+  --accent-content: #e0e0e0; /* 内容强调色：柔白色，用于聊天气泡、内容高亮等（在 #1a1a1a 背景上对比度 ~11:1） */
+  --accent-content-text: #1a1a1a; /* 内容强调色上的文字：深色 */
+  --accent-content-bg: #2a2a2a; /* 内容强调色浅背景：用于选中状态 */
+  --accent-content-tag-bg: rgba(0, 0, 0, 0.08); /* 气泡内标签背景：半透明黑色（在浅色气泡上可见） */
+  --accent-content-tag-border: rgba(0, 0, 0, 0.12); /* 气泡内标签边框：半透明黑色 */
+
+  /* ===== 交互反馈（深色模式）===== */
+  --hover-overlay: rgba(255, 255, 255, 0.06); /* 悬浮覆盖层：半透明白色 */
+  --active-overlay: rgba(255, 255, 255, 0.1); /* 激活覆盖层：较深半透明白色 */
+
+  /* ===== 警告状态（深色模式）===== */
+  --bg-warning-tint: #2b2111; /* 警告背景色：深黄色 */
+  --border-warning: #594214; /* 警告边框色：暗黄色 */
+  --text-warning: #e8b339; /* 警告文字颜色：亮黄色 */
+
+  /* ===== 代码块（深色模式）===== */
+  --bg-code: #262626; /* 代码块背景色：护眼调整（原值 #1a1a1a 与新主背景 #1a1a1a 无区分，新值 #262626 在新背景层级中保持略深的代码块层级） */
+
+  /* ===== 搜索高亮 ===== */
+  --bg-highlight: #594214; /* 搜索高亮背景色：暗黄色 */
+  --border-highlight: #7a5a1e; /* 搜索高亮边框色：深黄色 */
+
+  /* ===== AI 辅助层（深色模式）===== */
+  --ai-bg-soft: #1e1e1e; /* AI 区域背景：护眼提亮（原值 #141414 简单亮度 8%，新值 #1e1e1e 简单亮度 12% 在新背景体系中保持低调层级） */
+  --ai-border: #3a3a3a; /* AI 区域边框：随背景提亮同步调整（原值 #333333 与旧背景 #141414 的对比度计算，新值 #3a3a3a 与新背景 #1e1e1e 保持适度边框对比） */
+  --ai-text: #ececec; /* AI 区域文字：浅灰白，保持可读性 */
+
+  /* ===== 期刊分区色（深色模式）===== */
+  /* 深色模式下降低饱和度并适当提亮，避免在深色背景上过于刺眼 */
+  --quartile-q1: #3e9412; /* JCR Q1 分区色：深色适配绿色（降低饱和度，减少在深色背景上的刺眼感） */
+  --quartile-q2: #177ddc; /* JCR Q2 分区色：深色适配蓝色 */
+  --quartile-q3: #d87a16; /* JCR Q3 分区色：深色适配橙色 */
+  --quartile-q4: #4a4a4a; /* JCR Q4 分区色：深色适配灰色（提亮以在深色背景上可见） */
+
+  --cas-1: #d32029; /* CAS 一区色：深色适配红色 */
+  --cas-2: #d84a1c; /* CAS 二区色：深色适配橙红 */
+  --cas-3: #177ddc; /* CAS 三区色：深色适配蓝色 */
+  --cas-4: #4a4a4a; /* CAS 四区色：深色适配灰色 */
+
+  --ssci-q1: #5b2c9e; /* SSCI Q1 分区色：深色适配紫色 */
+  --ssci-q2: #2a44b8; /* SSCI Q2 分区色：深色适配靛蓝 */
+  --ssci-q3: #d87a16; /* SSCI Q3 分区色：深色适配橙色 */
+
+  /* ===== 特殊标签色（深色模式）===== */
+  --badge-cas-small: #0e9e9e; /* CAS 小类标签色：深色适配青色 */
+  --badge-top: #d4930d; /* Top 期刊标签色：深色适配金色 */
+  --badge-warning: #d43030; /* 预警期刊标签色：深色适配红色 */
+  --badge-if: #3e9412; /* 影响因子标签色：深色适配绿色 */
+  --badge-if5: #8bb611; /* 五年影响因子标签色：深色适配黄绿色 */
+
+  /* ===== 危险操作交互态色（深色模式）===== */
+  /* 深色模式下危险操作的颜色适配：使用深红底色避免突兀的浅色背景 */
+  --danger-text: #f87171; /* 危险操作文字色：浅红色（在深色背景上保持醒目但不刺眼） */
+  --danger-border: #7f1d1d; /* 危险操作边框色：深红色（与深色背景协调，避免浅红边框不可见） */
+  --danger-bg-hover: #450a0a; /* 危险操作悬停背景色：极深红色（替代浅色模式的 #fef2f2 浅粉背景） */
+  --danger-border-hover: #f87171; /* 危险操作悬停边框色：浅红色（悬停时边框变亮，提供交互反馈） */
+
+  /* ===== 状态和特殊颜色（深色模式）===== */
+  --status-success: #3e9412;
+  --color-keypoint: #d87a16;
+  --color-keypoint-bg: rgba(216, 122, 22, 0.08);
+  --importance-5: #d32029;
+  --importance-4: #d87a16;
+  --importance-3: #177ddc;
+  --importance-2: #0e9e9e;
+  --importance-1: #4a4a4a;
+
+  /* ===== 文件图标颜色（深色模式）===== */
+  --file-icon-pdf: #ff7875;       /* 红色 - PDF 文件（深色模式提亮） */
+  --file-icon-word: #40a9ff;      /* 蓝色 - Word 文档（深色模式提亮） */
+  --file-icon-excel: #73d13d;     /* 绿色 - Excel 表格（深色模式提亮） */
+  --file-icon-ppt: #ffc53d;       /* 橙色 - PowerPoint（深色模式提亮） */
+  --file-icon-image: #b37feb;     /* 紫色 - 图片文件（深色模式提亮） */
+  --file-icon-audio: #36cfc9;     /* 青色 - 音频文件（深色模式提亮） */
+  --file-icon-video: #f759ab;     /* 品红 - 视频文件（深色模式提亮） */
+  --file-icon-archive: #bfbfbf;   /* 灰色 - 压缩包（深色模式提亮） */
+  --file-icon-code: #ffc53d;      /* 金色 - 代码文件（深色模式提亮） */
+  --file-icon-ebook: #597ef7;     /* 靛蓝 - 电子书（深色模式提亮） */
+  --file-icon-data: #b7eb8f;      /* 黄绿 - 数据文件（深色模式提亮） */
+  --file-icon-text: #b0b0b0;      /* 深灰 - 纯文本（深色模式提亮） */
+  --file-icon-web: #40a9ff;       /* 蓝色 - 网页文件（深色模式提亮） */
+  --file-icon-default: #bfbfbf;   /* 灰色 - 默认类型（深色模式提亮） */
+
+  /* ===== highlight.js 深色覆盖（用于覆盖 github.css 的浅色样式）===== */
+  --hljs-bg: #222222;
+  --hljs-color: #adbac7;
+  --hljs-keyword: #f47067;
+  --hljs-string: #96d0ff;
+  --hljs-comment: #768390;
+  --hljs-function: #dcbdfb;
+  --hljs-number: #ae7eff;
+  --hljs-variable: #6cb6ff;
+}
+
+/* ===== highlight.js 深色覆盖规则 ===== */
+/* 用于覆盖 highlight.js github.css 的浅色样式 */
+/* 使用 :where() 降低 highlight.js 默认样式的特异性，使我们的选择器优先级更高 */
+:where([data-theme="dark"]) .hljs { background: var(--hljs-bg); color: var(--hljs-color); }
+:where([data-theme="dark"]) .hljs-keyword, :where([data-theme="dark"]) .hljs-selector-tag { color: var(--hljs-keyword); }
+:where([data-theme="dark"]) .hljs-string, :where([data-theme="dark"]) .hljs-addition { color: var(--hljs-string); }
+:where([data-theme="dark"]) .hljs-comment, :where([data-theme="dark"]) .hljs-quote { color: var(--hljs-comment); font-style: italic; }
+:where([data-theme="dark"]) .hljs-title, :where([data-theme="dark"]) .hljs-function { color: var(--hljs-function); }
+:where([data-theme="dark"]) .hljs-number, :where([data-theme="dark"]) .hljs-literal { color: var(--hljs-number); }
+:where([data-theme="dark"]) .hljs-variable, :where([data-theme="dark"]) .hljs-template-variable { color: var(--hljs-variable); }
+
+body { /* 页面主体样式 */
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', /* 系统字体栈，优先使用各平台原生字体 */
+    Arial, 'Noto Sans', sans-serif; /* 回退字体：Arial、Noto Sans、无衬线 */
+  color: var(--text-primary); /* 使用 CSS 变量设置主文字颜色 */
+  background: var(--bg-primary); /* 使用与 html 相同的背景色，确保颜色一致 */
+  -webkit-font-smoothing: antialiased; /* WebKit 引擎字体抗锯齿，使文字更清晰 */
+  margin: 0; /* 重置默认 margin */
+  height: 100%; /* 确保 body 高度为 100% */
+  touch-action: none; /* 禁止浏览器原生的触摸缩放手势（双指捏合），由各组件自行处理缩放 */
+  overscroll-behavior: none; /* 禁止过度滚动连锁（如 Chromium 的 pinch-to-zoom overscroll） */
+}
+
+#root { /* React 应用根容器 */
+  min-height: 100vh; /* 最小高度为视口高度，确保页面至少占满一屏 */
+  height: 100%; /* 确保根容器高度为 100%，配合父元素 height:100% 形成完整高度链 */
+}
+
+/* ===== 减少动画效果偏好支持 ===== */
+/* 用户的系统设置为"减少动画"时，禁用主题切换过渡动画 */
+@media (prefers-reduced-motion: reduce) { /* 媒体查询：检测用户是否偏好减少动画 */
+  html { transition: none; } /* 禁用所有过渡动画，立即响应主题切换 */
+}
+
+/* ===== PDF 深色反色滤镜（默认关闭，通过 class 触发）===== */
+/* 用于 PDF 渲染模式切换：将白色 PDF 转为深色显示 */
+/* 通过在父容器添加 .pdf-dark-invert class 来启用 */
+/* PDFium rendered page image dark mode */
+.pdf-dark-invert img.pdfium-page-image {
+  filter: invert(0.92) hue-rotate(180deg) saturate(0.85);
+}
+.pdf-dark-invert img.pdfium-thumb-image {
+  filter: invert(0.92) hue-rotate(180deg) saturate(0.85);
+}
+
+:root {
+  --highlight-bg-color: rgba(180, 0, 170, 0.25);
+  --highlight-selected-bg-color: rgba(0, 100, 0, 0.25);
+}
+
+@media screen and (forced-colors: active) {
+  :root {
+    --highlight-bg-color: Highlight;
+    --highlight-selected-bg-color: ButtonText;
+  }
+}
+
+[data-main-rotation='90'] {
+  transform: rotate(90deg) translateY(-100%);
+}
+[data-main-rotation='180'] {
+  transform: rotate(180deg) translate(-100%, -100%);
+}
+[data-main-rotation='270'] {
+  transform: rotate(270deg) translateX(-100%);
+}
+
+.textLayer {
+  --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor, 1) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+
+  position: absolute;
+  text-align: initial;
+  left: 0;
+  top: 0;
+  overflow: clip;
+  opacity: 1;
+  line-height: 1;
+  -webkit-text-size-adjust: none;
+  -moz-text-size-adjust: none;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  caret-color: CanvasText;
+  z-index: 1;
+}
+
+.textLayer.highlighting {
+  touch-action: none;
+}
+
+.textLayer :is(span, br) {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+}
+
+.textLayer > :not(.markedContent),
+.textLayer .markedContent span:not(.markedContent) {
+  z-index: 1;
+  --font-height: 0;
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+  --scale-x: 1;
+  --rotate: 0deg;
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+
+.textLayer span.markedContent {
+  top: 0;
+  height: 0;
+}
+
+.textLayer span[role="img"] {
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  user-select: none;
+  cursor: default;
+}
+
+.textLayer .highlight {
+  --highlight-backdrop-filter: none;
+  --highlight-selected-backdrop-filter: none;
+  margin: -1px;
+  padding: 1px;
+  background-color: var(--highlight-bg-color);
+  -webkit-backdrop-filter: var(--highlight-backdrop-filter);
+  backdrop-filter: var(--highlight-backdrop-filter);
+  border-radius: 4px;
+}
+
+.appended:is(.textLayer .highlight) {
+  position: initial;
+}
+
+.begin:is(.textLayer .highlight) {
+  border-radius: 4px 0 0 4px;
+}
+
+.end:is(.textLayer .highlight) {
+  border-radius: 0 4px 4px 0;
+}
+
+.middle:is(.textLayer .highlight) {
+  border-radius: 0;
+}
+
+.selected:is(.textLayer .highlight) {
+  background-color: var(--highlight-selected-bg-color);
+  -webkit-backdrop-filter: var(--highlight-selected-backdrop-filter);
+  backdrop-filter: var(--highlight-selected-backdrop-filter);
+}
+
+.textLayer ::-moz-selection {
+  background: rgba(0, 0, 255, 0.25);
+}
+
+.textLayer ::selection {
+  background: rgba(0, 0, 255, 0.25);
+}
+
+.textLayer br::selection {
+  background: transparent;
+}
+
+.textLayer .endOfContent {
+  display: block;
+  position: absolute;
+  inset: 100% 0 0;
+  z-index: 0;
+  cursor: default;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  user-select: none;
+}
+
+.textLayer.selecting .endOfContent {
+  top: 0;
+}
+
+/* ===== 深色模式滚动条样式 ===== */
+/* 在深色主题下，滚动条颜色适配深色背景 */
+[data-theme="dark"] .auto-scrollbar::-webkit-scrollbar-track { /* 滚动条轨道 */
+  background: var(--bg-secondary); /* 使用次级背景色，与页面融合 */
+}
+[data-theme="dark"] .auto-scrollbar::-webkit-scrollbar-thumb { /* 滚动条滑块 */
+  background: rgba(255, 255, 255, 0.15); /* 浅白半透明，低对比度 */
+  border-radius: 4px; /* 圆角 4px，视觉柔和 */
+}
+[data-theme="dark"] .auto-scrollbar::-webkit-scrollbar-thumb:hover { /* 滚动条滑块悬停 */
+  background: rgba(255, 255, 255, 0.25); /* 悬停时增加不透明度，更明显 */
+}
+/* 使用 :where() 降低默认样式的特异性，使我们的选择器优先级更高 */
+:where([data-theme="dark"]) ::-webkit-scrollbar-thumb { /* 全局滚动条滑块（兜底规则） */
+  background: rgba(255, 255, 255, 0.15);
+}
+[data-theme="dark"] ::-webkit-scrollbar-track { /* 全局滚动条轨道（兜底规则） */
+  background: var(--bg-secondary); /* 使用次级背景色 */
+}
+
+/* ===== 滚动条美化（自动隐藏）===== */
+/* 默认隐藏滚动条，鼠标悬停在滚动内容区域时显示，让界面更简洁 */
+/* 使用 scrollbar-color 标准属性，比 ::-webkit-scrollbar-thumb 伪元素更可靠 */
+
+::-webkit-scrollbar { /* WebKit 内核浏览器滚动条整体样式 */
+  width: 6px; /* 垂直滚动条宽度 6px */
+  height: 6px; /* 水平滚动条高度 6px */
+}
+
+::-webkit-scrollbar-track { /* 滚动条轨道（背景部分） */
+  background: transparent; /* 透明背景，不显示轨道 */
+}
+
+::-webkit-scrollbar-thumb { /* 滚动条滑块（可拖动部分） */
+  background: #d9d9d9; /* 滑块颜色：浅灰色 */
+  border-radius: 3px; /* 滑块圆角 3px */
+}
+
+::-webkit-scrollbar-thumb:hover { /* 滚动条滑块悬浮状态 */
+  background: #bfbfbf; /* 悬浮时颜色变深：中灰色 */
+}
+
+/* 自动隐藏滚动条：默认透明，hover 时显示 */
+/* scrollbar-color 是标准 CSS 属性，作用于元素本身，浏览器必须渲染 */
+.auto-scrollbar {
+  scrollbar-color: transparent transparent; /* 滑块和轨道都透明 */
+  scrollbar-width: thin; /* 细滚动条 */
+}
+
+.auto-scrollbar:hover {
+  scrollbar-color: #d9d9d9 transparent; /* 悬停时显示滑块 */
+}
+
+/* SVG 覆盖层：Canvas 精确对齐的句子高亮（替代文本层 CSS 高亮） */
+.hover-sentence-svg-rect {
+  fill: rgba(250, 173, 20, 0.25);
+  mix-blend-mode: multiply;
+}
+:where([data-theme="dark"]) .hover-sentence-svg-rect {
+  fill: rgba(250, 173, 20, 0.35);
+  mix-blend-mode: screen;
+}
+
+/* ===== 导航高亮动画 ===== */
+
+/**
+ * PDF 文本层高亮动画（PdfViewer 使用）
+ *
+ * 时间线（总时长 5.2 秒）：
+ * - 0s ~ 4s（0% ~ 76.9%）：黄色高亮持续显示
+ * - 4s ~ 5.2s（76.9% ~ 100%）：1.2 秒内平滑淡出至透明
+ *
+ * 计算方式：76.9% = 4000ms / 5200ms × 100%
+ *
+ * 为什么不用 JS setTimeout 控制淡出？
+ * - CSS animation 由浏览器合成线程驱动，不会因主线程阻塞而卡顿
+ * - 不需要手动管理 setTimeout 清理和嵌套，避免定时器泄漏
+ * - animationend 事件精确通知动画结束时机，比 setTimeout(1200) 更可靠
+ */
+@keyframes pdf-highlight-fade {
+  /* 阶段一：高亮持续显示（0s ~ 4s） */
+  0%, 76.9% {
+    background-color: rgba(250, 173, 20, 0.4);  /* 黄色半透明背景，40% 不透明度 */
+    box-shadow: 0 0 0 2px rgba(250, 173, 20, 0.6);  /* 黄色外发光边框，2px 宽，60% 不透明度 */
+  }
+  /* 阶段二：淡出至透明（4s ~ 5.2s） */
+  100% {
+    background-color: transparent;  /* 完全透明，恢复原始背景 */
+    box-shadow: none;  /* 移除外发光边框 */
+  }
+}
+
+/**
+ * 段落导览高亮动画（ParagraphGuide 使用）
+ *
+ * 时间线（总时长 5.5 秒）：
+ * - 0s ~ 0.3s（0% ~ 5.5%）：从透明渐入黄色高亮
+ * - 0.3s ~ 4.3s（5.5% ~ 78.2%）：黄色高亮持续显示
+ * - 4.3s ~ 5.5s（78.2% ~ 100%）：平滑淡出至透明
+ *
+ * 与 PDF 高亮的区别：
+ * - PDF 高亮是即时出现的（用户已经等了页面渲染时间）
+ * - 导览高亮有 0.3s 渐入动画（从展开到可见需要平滑过渡感）
+ */
+@keyframes guide-highlight-fade {
+  /* 起始状态：透明（用于渐入动画的起点） */
+  0% {
+    background-color: transparent;
+    box-shadow: none;
+  }
+  /* 渐入完成：0.3s / 5.5s ≈ 5.5% */
+  5.5% {
+    background-color: rgba(250, 173, 20, 0.4);
+    box-shadow: 0 0 0 2px rgba(250, 173, 20, 0.6);
+  }
+  /* 高亮持续显示至 4.3s：4.3s / 5.5s ≈ 78.2% */
+  78.2% {
+    background-color: rgba(250, 173, 20, 0.4);
+    box-shadow: 0 0 0 2px rgba(250, 173, 20, 0.6);
+  }
+  /* 淡出完成：5.5s */
+  100% {
+    background-color: transparent;
+    box-shadow: none;
+  }
+}
+
+/**
+ * PDF 文本层高亮元素的样式规则
+ *
+ * 将 @keyframes 动画绑定到 CSS 类上：
+ * - JS 代码只需添加/移除 .pdf-search-highlight 类即可控制高亮
+ * - animation: 名称 时长 缓动 填充模式
+ *   - ease: 先快后慢的缓动曲线，让淡出看起来更自然
+ *   - forwards: 动画结束后保持最后一帧的状态（透明），防止回弹
+ *
+ * 为什么加 border-radius？
+ * - react-pdf 文本层的 span 默认没有圆角
+ * - 2px 圆角让高亮矩形的角不显得尖锐，视觉上更柔和
+ */
+.pdf-search-highlight {
+  animation: pdf-highlight-fade 5.2s ease forwards;  /* 5.2 秒高亮动画，结束后保持透明 */
+  border-radius: 2px;  /* 轻微圆角，视觉更柔和 */
+}
+
+/**
+ * 段落导览高亮元素的样式规则
+ *
+ * 与 .pdf-search-highlight 类似，但使用渐入版本动画：
+ * - 5.5 秒总时长（比 PDF 多 0.3s，因为包含了渐入阶段）
+ */
+.guide-reverse-highlight {
+  animation: guide-highlight-fade 5.5s ease forwards;  /* 5.5 秒渐入-持续-淡出动画 */
+}
+
+/**
+ * 悬停翻译句子高亮
+ *
+ * 鼠标悬停在 PDF 文本上时，高亮当前句子对应的文本。
+ * 使用半透明琥珀色背景，与搜索高亮的黄色系协调但可区分。
+ *
+ * 支持两种高亮方式：
+ * 1. CSS Custom Highlight API（::highlight）— 字符级精确高亮，
+ *    解决句子边界落在 PDF span 内部时整行被高亮的问题。
+ *    浏览器支持：Chrome 105+, Safari 17.2+, Firefox 129+。
+ * 2. CSS 类名高亮（.hover-sentence-highlight）— span 级别降级方案。
+ */
+
+/* CSS Custom Highlight API：字符级精确高亮 */
+::highlight(hover-sentence) {
+  background-color: rgba(250, 173, 20, 0.25);
+}
+
+/* CSS Custom Highlight API：持久化高亮标注 */
+::highlight(annotation-highlight) {
+  background-color: rgba(255, 224, 102, 0.35);
+}
+:where([data-theme="dark"]) ::highlight(annotation-highlight) {
+  background-color: rgba(255, 224, 102, 0.45);
+}
+
+/* ===== 文本层调试可视化（Ctrl+Shift+D 切换）===== */
+/* 让透明文本层变为可见，便于对比与 Canvas 的对齐情况 */
+.debug-text-layer :is(span, br) {
+  color: rgba(0, 0, 255, 0.3) !important;
+  background-color: rgba(255, 200, 0, 0.15) !important;
+  outline: 1px solid rgba(255, 0, 0, 0.2);
+}
+
+/* 降级方案：span 级别高亮（使用双重类选择器提升特异性） */
+.hover-sentence-highlight.hover-sentence-highlight {
+  background-color: rgba(250, 173, 20, 0.25);
+  border-radius: 2px;
+  transition: background-color 0.15s ease;
+}
+:where([data-theme="dark"]) .hover-sentence-highlight.hover-sentence-highlight {
+  background-color: rgba(250, 173, 20, 0.35);
+}
+
+/* ===== 导览生成进度条 ===== */
+/*
+ * 顶部细线进度条，样式参考 YouTube / GitHub 加载条：
+ * - 高度 2px，几乎不占空间
+ * - 使用 var(--color-primary) 主题色，随主题自动适配
+ * - indeterminate 动画：条纹从左向右持续滚动，直到生成完成
+ * - 父元素 .guide-progress-bar-wrapper 使用 overflow:hidden 裁剪
+ */
+@keyframes guide-progress-slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+.guide-progress-bar {
+  height: 2px;
+  background: var(--color-primary);
+  animation: guide-progress-slide 1.5s ease-in-out infinite;
+}
+
+/* ===== 章节过渡闪现动画 ===== */
+
+/**
+ * 章节过渡闪现动画：翻页进入新章节时短暂显示章节信息
+ * - 0-5%：淡入
+ * - 5-72%：保持可见
+ * - 72-100%：淡出
+ */
+@keyframes sectionFlash {
+  0% { opacity: 0; transform: translateY(-4px); }
+  5% { opacity: 1; transform: translateY(0); }
+  72% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* ===== 统一搜索栏相关样式 ===== */
+
+/**
+ * PDF 全文搜索：当前激活匹配项的持久高亮样式
+ *
+ * 与 .pdf-search-highlight（从导览导航触发的临时高亮）的区别：
+ * - 无动画：搜索结果需要持久显示，不会自动淡出
+ * - 更深的背景色：让用户一眼识别当前聚焦的匹配项
+ *
+ * 使用场景：用户在 PDF 搜索模式中按「上一个/下一个」导航时，
+ * 当前聚焦的匹配项使用此样式，其余匹配项使用 .pdf-search-inactive-match
+ */
+/* 使用双重类选择器提升特异性 */
+.pdf-search-active-match.pdf-search-active-match {
+  background-color: rgba(250, 173, 20, 0.5);
+  box-shadow: 0 0 0 2px rgba(250, 173, 20, 0.7);
+  border-radius: 2px;
+}
+
+/**
+ * PDF 全文搜索：非激活匹配项的浅色高亮样式
+ *
+ * 当前页面上的其他匹配项（不是用户当前聚焦的）使用此样式：
+ * - 浅黄色背景，与激活匹配项形成视觉层次
+ * - 无 box-shadow，降低视觉权重，让用户聚焦于激活项
+ *
+ * 当用户按「上一个/下一个」导航时：
+ * - 新的激活项从 .pdf-search-inactive-match 变为 .pdf-search-active-match
+ * - 旧的激活项从 .pdf-search-active-match 变为 .pdf-search-inactive-match
+ */
+/* 使用双重类选择器提升特异性 */
+.pdf-search-inactive-match.pdf-search-inactive-match {
+  background-color: rgba(250, 173, 20, 0.15);
+  border-radius: 2px;
+}
+
+/**
+ * 聊天消息搜索：关键词高亮样式
+ *
+ * 在 ChatPanel 的搜索过滤模式下，匹配消息中的关键词文本使用此样式：
+ * - 黄色背景与 PDF 搜索高亮色系一致（rgba(250, 173, 20, ...)）
+ * - 行内元素，不会打断文本流
+ * - 微小的 padding 让高亮条在文字间更清晰可辨
+ *
+ * 实现方式：通过 highlightChatKeyword() 函数将匹配文本拆分为
+ * <mark class="chat-search-highlight"> 片段，非匹配部分保持纯文本
+ */
+.chat-search-highlight {
+  background-color: rgba(250, 173, 20, 0.4);  /* 黄色半透明背景，40% 不透明度 */
+  border-radius: 2px;  /* 轻微圆角 */
+  padding: 0 1px;  /* 左右 1px 内边距，让高亮条在密集文字中更清晰 */
+}
+
+/* ===== 论文列表表格：隐藏水平滚动条（保留滚动功能）===== */
+/* scroll={{ x }} 时，水平滚动容器是 .ant-table-content（无 scroll.y 时无 .ant-table-body） */
+.paper-list-table .ant-table-content::-webkit-scrollbar {
+  height: 0;
+  display: none;
+}
+.paper-list-table .ant-table-content {
+  scrollbar-width: none;
+}
+
+/* ===== 论文列表表格：铺满右侧面板 ===== */
+/* 使用 table-layout:fixed 让列严格遵守指定宽度，不受内容影响 */
+/* 不设置 width:100%，避免按比例扩展列宽导致拖拽时其他列跳动 */
+/* 表格宽度由 scroll.x 的列宽之和决定，列多时自动滚动 */
+.paper-list-table .ant-table-content > table {
+  table-layout: fixed;
+}
+
+/* 隐藏可排序列表头的排序箭头图标（点击表头仍可排序） */
+.paper-list-table .ant-table-column-sorter {
+  display: none;
+}
+
+/* ===== 修复 Ant Design 5 表格在浅色模式下颜色异常 ===== */
+/* 根因：App.jsx 中 ConfigProvider 的 token 使用 CSS 变量（如 var(--bg-primary)），
+ * 但 Ant Design 5 的主题算法无法从 CSS 变量字符串派生颜色（表头、排序列、hover 等），
+ * 导致这些场景回退到算法内部默认值，在浅色模式下显示为深色。
+ * 解决方案：用 CSS 覆盖所有受影响的背景色。 */
+
+/* 表头背景 - 修复 Ant Design 5 在浅色模式下表头变黑的问题 */
+/* ConfigProvider token 使用 CSS 变量时，Ant Design 无法派生表头颜色，需 CSS 覆盖 */
+.ant-table-thead > tr > th.ant-table-cell {
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+}
+
+/* 取消表头栏左上角和右上角的圆角 */
+.paper-list-table .ant-table-thead > tr > th:first-child {
+  border-top-left-radius: 0;
+}
+.paper-list-table .ant-table-thead > tr > th:last-child {
+  border-top-right-radius: 0;
+}
+
+/* 排序列表头背景 */
+.paper-list-table .ant-table-thead > tr > th.ant-table-column-sort.ant-table-cell {
+  background: var(--bg-primary);
+}
+
+/* 表头 hover 背景 - 修复可排序列表头悬浮时变黑的问题 */
+.paper-list-table .ant-table-thead > tr > th.ant-table-cell:hover {
+  background: var(--bg-secondary) !important;
+}
+
+/* 表头列间竖线：antd 用 ::before 伪元素，但在两种状态下用 !important 把它设为透明： */
+/*   1. th.ant-table-column-has-sorters:hover —— 可排序列 hover 时 */
+/*   2. th.ant-table-column-sort —— 当前正在排序的列 */
+/* 设计本意是排序列背景变色时分隔线多余。但项目把排序列的 hover/sort 背景都改回了 var(--bg-*) */
+/* （见 814/819 行），结果排序列既无背景区分、又无分隔线，看起来像"缺失"。 */
+/* 这里强制让 ::before 在所有状态下都显示，颜色用对比度更高的 --border-color-secondary。 */
+.paper-list-table .ant-table-thead > tr > th.ant-table-cell:not(:last-child)::before {
+  background-color: var(--border-color-secondary) !important;
+}
+
+/* 排序列数据单元格默认背景（非 hover、非筛选选中行时） */
+/* 排除 .screening-selected-row，避免覆盖筛选模式选中行的蓝色背景 */
+/* 注意：virtual table 下行是 <div> 而非 <tr>，使用 .ant-table-row 类选择器 */
+.paper-list-table .ant-table-row:not(:hover):not(.screening-selected-row) > .ant-table-column-sort:not(.ant-table-cell-row-hover) {
+  background: var(--bg-primary);
+}
+
+/* 行 hover 背景色（CSS :hover + Ant Design JS 类，后者在鼠标移到 tooltip 时仍生效） */
+/* 注意：virtual table 下行是 <div> 而非 <tr>，必须用 .ant-table-row 类选择器而非 tr 元素选择器 */
+.ant-table-row:hover > .ant-table-cell,
+.ant-table-row .ant-table-cell-row-hover {
+  background: var(--bg-row-hover) !important;
+}
+
+/* 筛选模式选中行背景：覆盖排序列的背景色 */
+.paper-list-table .ant-table-row.screening-selected-row > .ant-table-cell {
+  background: var(--color-primary-bg);
+}
+
+/* 紧凑行高：减小单元格内边距，让表格行更紧凑 */
+/* 注意：thead 仍用 tr（非 virtual），tbody 行在 virtual table 下是 <div> 用 .ant-table-row */
+.paper-list-table .ant-table-thead > tr > th.ant-table-cell,
+.paper-list-table .ant-table-row .ant-table-cell {
+  padding-top: 4px;
+  padding-bottom: 4px;
+  line-height: 1.35;
+}
+
+/* ===== 展开行（附件列表）间距消除 ===== */
+
+/* 展开行 td：去掉 Ant Design 默认的 padding/border，背景色与附件列表容器一致 */
+.paper-list-table .ant-table-expanded-row > td.ant-table-cell {
+  padding: 0;
+  border-top: none;
+  border-bottom: none;
+  background: var(--bg-tertiary);
+}
+
+/* 展开行固定列包裹 div：去掉 Ant Design 自动添加的 padding 和负 margin */
+.paper-list-table .ant-table-expanded-row-fixed {
+  margin: 0;
+  padding: 0;
+}
+
+/* ===== 单元格内部水平滚动 ===== */
+/*
+ * 为什么需要这段 CSS？
+ * - Ant Design Table 设置 ellipsis: true 时，会给 <td> 添加 overflow:hidden + text-overflow:ellipsis
+ * - 这会导致超出单元格宽度的内容被截断，只显示 "..." 省略号
+ * - 用户无法直接查看到被隐藏的内容，只能通过 Tooltip（悬浮提示）查看
+ * - 本样式覆盖 Ant Design 的默认行为，将 overflow:hidden 改为 overflow-x:auto
+ * - 使得用户可以直接通过触摸板水平滑动来查看单元格内的完整内容
+ *
+ * 选择器说明：
+ * .paper-list-table    — 论文列表页表格的自定义 className（定义在 index.jsx 的 <Table> 组件上）
+ * .ant-table-tbody     — Ant Design Table 的表体容器（仅影响数据行，不影响表头行）
+ * tr .ant-table-cell   — 后代选择器（非直接子选择器），因为 virtual table 下
+ *                        tr 嵌套在 rc-virtual-list 的两层 <div> 中，不是 .ant-table-tbody 的直接子元素
+ *                        同时 virtual table 下单元格是 <div> 而非 <td>，不能用 td 元素选择器
+ */
+/* 使用更具体的选择器提升特异性，无需 !important */
+/* 注意：virtual table 下行是 <div>，使用 .ant-table-row 类选择器 */
+.paper-list-table .ant-table-row .ant-table-cell {
+  overflow-x: auto;
+  text-overflow: clip;
+  scrollbar-width: none;
+}
+
+/*
+ * WebKit 内核浏览器（Chrome / Safari / Edge）滚动条隐藏
+ *
+ * 为什么需要单独处理？
+ * - scrollbar-width: none 是 Firefox 专用的 CSS 属性，WebKit 内核浏览器不支持
+ * - WebKit 浏览器需要通过 ::-webkit-scrollbar 伪元素来隐藏滚动条
+ *
+ * 效果：隐藏滚动条的同时保留滚动功能（与 Firefox 行为一致）
+ */
+.paper-list-table .ant-table-row .ant-table-cell::-webkit-scrollbar {
+  display: none;  /* 隐藏滚动条的整个轨道和滑块，使其完全不可见 */
+  height: 0;      /* 将滚动条高度设为 0，双保险确保滚动条不占据任何空间，
+                       防止某些 WebKit 版本下 display:none 未完全生效的情况 */
+}
+
+/* ===== 拖拽调整手柄样式 ===== */
+/* 用于 PaperReaderPage 中侧栏宽度调整的拖拽手柄 */
+/* 默认状态下几乎不可见，鼠标悬停时显示高亮提示 */
+
+/* ===== 分类侧边栏：拖拽高亮 ===== */
+/*
+ * 【rc-tree 内置拖拽指示器覆盖】
+ *
+ * rc-tree（Ant Design Tree 底层库）在内部节点拖拽重排序时，会自动添加以下 CSS 类：
+ *   .drop-container  → 红色 box-shadow 内阴影（表示"放入此节点内部"）
+ *   .drop-target     → 黄绿色背景（表示"拖拽到此处"）
+ *   .dragging        → 蓝色半透明背景（表示"正在被拖拽的节点"）
+ *
+ * 这些样式在外部文件/论文拖入时也会被触发，与我们的自定义高亮冲突，导致抖动。
+ * 以下规则使用更高的特异性覆盖 rc-tree 的默认样式，使内置指示器完全透明不可见。
+ * rc-tree 内部节点重排序的拖拽效果由 rc-tree 自身的 dropPosition 机制处理，
+ * 不依赖这些 CSS 类的视觉效果。
+ */
+/* 使用双重类选择器和 :where() 降低默认样式的特异性，使我们的选择器优先级更高 */
+:where(.rc-tree) .rc-tree-treenode.drop-container.drop-container > .draggable::after {
+  box-shadow: none;
+}
+:where(.rc-tree) .rc-tree-treenode.drop-target.drop-target {
+  background-color: transparent;
+}
+:where(.rc-tree) .rc-tree-treenode.drop-container.drop-container ~ .rc-tree-treenode {
+  border-left: none;
+}
+:where(.rc-tree) .rc-tree-treenode.dragging.dragging {
+  background: transparent;
+}
+
+/*
+ * 【分类节点拖拽悬停高亮】
+ *
+ * 设计原则（学习自 Zotero 的 collectionTree 实现）：
+ * 1. 仅使用 background-color，不触碰 border/padding/margin 等盒模型属性
+ *    → 避免 CSS 属性变化触发浏览器 layout reflow（布局重排）
+ *    → reflow 是拖拽抖动的主要原因
+ * 2. 应用到整行元素（.ant-tree-treenode）而非内部 span
+ *    → 高亮覆盖完整的树节点行，视觉反馈更明显
+ * 3. 通过原生 DOM 操作（classList.add/remove）切换，不经过 React state
+ *    → 零 re-render 开销，性能最优
+ *
+ * 触发方式：
+ * - CategorySidebar 的 useEffect 中注册原生 capture 阶段 dragover 监听器
+ * - 当外部文件/论文被拖到树节点上方时，监听器直接在 DOM 元素上添加此类
+ * - 拖拽离开或放置完成后，监听器移除此类
+ */
+/* 使用双重类选择器提升特异性 */
+.category-drop-highlight.category-drop-highlight {
+  background-color: rgba(82, 196, 26, 0.15);
+}
+
+/*
+ * 【隐藏分类树展开/折叠箭头】
+ *
+ * 点击节点文本即可展开/折叠全部子文件夹，展开箭头已冗余。
+ * 隐藏 switcher 图标但保留缩进，保持层级视觉感。
+ */
+/* 使用更具体的选择器提升特异性（覆盖 Ant Design CSS-in-JS :where() 规则） */
+.category-tree-wrapper .ant-tree .ant-tree-switcher {
+  display: none;
+}
+
+/*
+ * 【缩小分类树缩进】
+ *
+ * 默认每级缩进 24px，层级深时占用过多横向空间。
+ * 缩小至 14px，保持层级区分的同时更紧凑。
+ */
+/* 使用更具体的选择器提升特异性（覆盖 Ant Design CSS-in-JS :where() 规则） */
+.category-tree-wrapper .ant-tree .ant-tree-indent-unit {
+  width: 14px;
+}
+
+/*
+ * 【分类树选中节点圆角取消】
+ *
+ * Ant Design Tree 默认给选中节点添加 border-radius: 6px 圆角背景，
+ * 与左侧面板的直角风格不一致，取消圆角使其更贴合面板边缘。
+ */
+/* 使用双重类选择器提升特异性 */
+.category-tree-wrapper .ant-tree-node-content-wrapper.ant-tree-node-selected.ant-tree-node-selected {
+  border-radius: 0;
+  background-color: var(--bg-row-hover);
+}
+
+.category-tree-wrapper .ant-tree-node-content-wrapper.ant-tree-node-content-wrapper:hover {
+  border-radius: 0;
+  background-color: var(--bg-row-hover);
+}
+
+/* ===== 修复 Ant Design 5 下拉菜单/弹层在浅色模式下颜色异常 ===== */
+/* 根因同表头：ConfigProvider token 使用 CSS 变量，主题算法无法派生 hover/active 背景 */
+
+/* Dropdown 菜单项 hover（排除 danger 项，让 Ant Design 自行处理红底白字）*/
+.ant-dropdown-menu-item:not(.ant-dropdown-menu-item-disabled):not(.ant-dropdown-menu-item-danger):hover,
+.ant-dropdown-menu-submenu-title:not(.ant-dropdown-menu-submenu-title-disabled):hover {
+  background-color: var(--bg-row-hover) !important;
+}
+
+/* Select 下拉弹层背景 */
+.ant-select-dropdown {
+  background: var(--bg-primary) !important;
+}
+
+/* Select 选项 hover */
+.ant-select-item-option:hover:not(.ant-select-item-option-disabled),
+.ant-select-item-option-active:not(.ant-select-item-option-disabled) {
+  background-color: var(--bg-row-hover) !important;
+}
+
+/* Popconfirm 弹层背景 */
+.ant-popover-inner {
+  background: var(--bg-elevated) !important;
+}
+
+/* Collapse 面板头 hover */
+.ant-collapse-header:hover {
+  background-color: var(--bg-secondary) !important;
+}
+
+/* ===== 高亮注释删除按钮样式 ===== */
+/* 使用 CSS class + :hover 伪类替代 inline style 操作，职责更清晰且可利用 CSS 伪类 */
+.highlight-delete-btn {
+  display: flex;                   /* 弹性布局：图标和文字水平排列 */
+  align-items: center;             /* 垂直居中对齐 */
+  gap: 4px;                        /* 图标和文字之间的间距 */
+  padding: 4px 10px;               /* 内边距 */
+  font-size: 12px;                 /* 字体大小 */
+  color: var(--danger-text);       /* 危险操作文字色：使用 CSS 变量，随主题自动适配 */
+  background: transparent;         /* 默认透明背景 */
+  border: 1px solid var(--danger-border); /* 危险操作边框色：使用 CSS 变量，随主题自动适配 */
+  border-radius: 4px;              /* 圆角 */
+  cursor: pointer;                 /* 鼠标指针变为手型，提示可点击 */
+  transition: all 0.2s;            /* 所有属性 0.2 秒平滑过渡 */
+}
+
+/* 删除按钮悬停状态：使用 CSS :hover 伪类替代 JS onMouseEnter/Leave 动态样式切换 */
+.highlight-delete-btn:hover {
+  background: var(--danger-bg-hover);       /* 悬停背景色：使用 CSS 变量，深色模式下为深红色 */
+  border-color: var(--danger-border-hover); /* 悬停边框色：使用 CSS 变量，深色模式下为浅红色 */
+}
+
+/*
+ * 【论文行拖拽悬停高亮】
+ *
+ * 当外部文件从桌面拖入到论文列表的某一行上方时，
+ * 由 PaperListPage 的 useEffect 原生事件监听器在 capture 阶段
+ * 直接在 <tr> DOM 元素上添加此 CSS 类。
+ * 使用 Ant Design 主题蓝色，与分类节点高亮（绿色）视觉区分。
+ */
+/* 使用双重类选择器提升特异性 */
+.paper-row-drop-highlight.paper-row-drop-highlight {
+  background-color: color-mix(in srgb, var(--color-primary) 10%, transparent);
+}
+
+.resize-handle { /* 拖拽手柄基础样式 */
+  position: relative; /* 相对定位，用于伪元素定位 */
+}
+.resize-handle::before { /* 手柄的可视区域（伪元素，比实际手柄更宽，方便点击） */
+  content: ''; /* 伪元素必须有 content */
+  position: absolute; /* 绝对定位，覆盖在手柄上 */
+  top: 0; /* 顶部对齐 */
+  bottom: 0; /* 底部对齐 */
+  left: -4px; /* 向左扩展 4px，增加可点击区域 */
+  right: -4px; /* 向右扩展 4px，增加可点击区域 */
+  z-index: 1; /* 确保在背景之上 */
+}
+.resize-handle:hover { /* 鼠标悬停时的样式 */
+  background-color: color-mix(in srgb, var(--color-primary) 30%, transparent); /* 半透明强调色高亮，提示用户可拖拽 */
+}
+.resize-handle-no-highlight:hover { /* 无高亮变体：仅靠鼠标形状提示可拖拽 */
+  background-color: transparent;
+}
+
+/* ===== Ant Design Tooltip 统一样式 ===== */
+.ant-tooltip-inner {
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+/* ===== Split Pane Styles ===== */
+
+.pane-active-border::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  box-shadow: inset 0 0 0 2px var(--color-primary);
+  pointer-events: none;
+  z-index: 9999;
+}
+
+.pane-inactive-border {
+  outline: 1px solid var(--border-color-light, #d9d2c8);
+  outline-offset: -1px;
+  transition: outline-color 0.15s ease;
+}
+
+.pane-resize-divider {
+  flex-shrink: 0;
+  background: transparent;
+  transition: background-color 0.2s;
+  z-index: 10;
+}
+.pane-resize-divider:hover {
+  background: color-mix(in srgb, var(--color-primary) 30%, transparent);
+}
+.pane-resize-divider-horizontal {
+  width: 4px;
+  cursor: col-resize;
+}
+.pane-resize-divider-vertical {
+  height: 4px;
+  cursor: row-resize;
+}
+
+.prefix-key-indicator {
+  position: fixed;
+  top: 0;
+  right: 12px;
+  padding: 2px 10px;
+  background: var(--accent-content, #242424);
+  color: var(--accent-content-text, #fff);
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 0 0 4px 4px;
+  z-index: 10000;
+  animation: prefix-indicator-in 0.15s ease;
+}
+@keyframes prefix-indicator-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ========== PDF Tooltip Keyframes ========== */
+@keyframes hover-tooltip-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes hover-tooltip-blink-cursor {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+/* ========== Coordinate Highlight Keyframes ========== */
+@keyframes coordinateHighlightFade {
+  0% {
+    opacity: 0;
+    fill: #ffec3d; /* 黄色高亮 */
+  }
+  10% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 0.5;
+    fill: #ffec3d;
+  }
+  80% {
+    opacity: 0.3;
+  }
+  100% {
+    opacity: 0;
+    fill: #ffec3d;
+  }
+}
+
+.coordinate-highlight-rect {
+  animation: coordinateHighlightFade 2000ms ease-in-out forwards;
+}

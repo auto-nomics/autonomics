@@ -1,0 +1,106 @@
+/**
+ * MetadataView 组件样式
+ *
+ * 题录导入记录的元数据视图（无 PDF 时显示）
+ * 支持深色模式
+ */
+
+/* ===== 容器 ===== */
+.metadata-view {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 40px;
+  background: var(--bg-primary);
+}
+
+/* ===== 卡片容器 ===== */
+.metadata-view__card {
+  max-width: 640px;
+  width: 100%;
+  text-align: left;
+}
+
+/* ===== 标题 ===== */
+.metadata-view__title {
+  font-size: 24px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+
+/* ===== 作者列表 ===== */
+.metadata-view__authors {
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin-bottom: 12px;
+}
+
+.metadata-view__author {
+  cursor: default;
+}
+
+/* ===== 期刊信息 ===== */
+.metadata-view__journal {
+  font-size: 14px;
+  color: var(--color-primary);
+  margin-bottom: 12px;
+}
+
+.metadata-view__journal-name {
+  font-weight: 500;
+}
+
+.metadata-view__doi {
+  color: var(--text-tertiary);
+  margin-left: 12px;
+}
+
+/* ===== 类型标签 ===== */
+.metadata-view__type-tag {
+  margin-bottom: 12px;
+}
+
+/* ===== 额外元数据区域 ===== */
+.metadata-view__extra-metadata {
+  margin-top: 12px;
+  padding: 8px 12px;
+  background: var(--bg-tertiary);
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.metadata-view__metadata-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+
+/* ===== 摘要 ===== */
+.metadata-view__abstract {
+  font-size: 14px;
+  color: var(--text-secondary);
+  line-height: 1.8;
+  margin-bottom: 24px;
+  padding: 16px 20px;
+  background: var(--bg-secondary);
+  border-radius: 8px;
+}
+
+.metadata-view__abstract-label {
+  display: block;
+  margin-bottom: 8px;
+}
+
+/* ===== 操作按钮区域 ===== */
+.metadata-view__actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 24px;
+  padding-top: 24px;
+  border-top: 1px solid var(--border-color);
+}

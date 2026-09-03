@@ -1,0 +1,156 @@
+/**
+ * PdfViewer 组件样式
+ *
+ * 使用 CSS Modules 避免样式冲突。
+ * 整体布局为纵向 flex：顶部固定工具栏 + 底部自适应的 PDF 渲染区域。
+ */
+
+/* ========== 最外层容器 ========== */
+/* 纵向 flex 布局：工具栏 + PDF 内容区域 */
+.container {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ========== 顶部工具栏 ========== */
+/* 固定高度 40px，横向 flex 布局，包含页码、搜索、缩放等控件 */
+.toolbar {
+  padding: 8px 12px;
+  height: 40px;
+  box-sizing: border-box;
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  gap: 8px; /* 控件之间的间距 */
+  background: var(--bg-secondary);
+  flex-shrink: 0; /* 不允许被压缩 */
+}
+
+/* ========== 搜索目标选择器 ========== */
+/* 搜索框前缀的下拉选择器，用于切换搜索模式（导览/聊天/PDF） */
+.searchTargetSelector {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--color-primary); /* 强调色表示可交互 */
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  user-select: none;
+  padding-right: 6px;
+  border-right: 1px solid var(--border-color, #e8e8e8); /* 右侧竖线分隔 */
+}
+
+/* ========== 搜索输入框 ========== */
+/* 占据工具栏剩余空间 */
+.searchInput {
+  flex: 1;
+  min-width: 80px;
+}
+
+/* ========== PDF 搜索导航控件 ========== */
+/* 包含匹配计数器和上/下一个按钮 */
+.pdfSearchNav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+/* ========== 搜索匹配计数器 ========== */
+/* 显示 "当前序号 / 总匹配数" */
+.matchCounter {
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap; /* 防止 "3 / 15" 被拆行 */
+  min-width: 40px;
+  text-align: center;
+}
+
+/* ========== 紧凑型图标按钮 ========== */
+/* 工具栏中各种小按钮的统一样式 */
+.iconButton {
+  padding: 0 4px;
+  min-width: 20px;
+  height: 20px;
+}
+
+/* ========== PDF 文档加载占位符 ========== */
+/* PDF 文件下载中时显示的居中提示文字 */
+.loadingPlaceholder {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-tertiary);
+}
+
+/* ========== PDF 主渲染区域 ========== */
+/* 包裹 PDF 页面内容的可滚动区域 */
+.pdfArea {
+  flex: 1;           /* 占据工具栏下方的所有剩余空间 */
+  overflow: auto;    /* 内容超出时显示滚动条 */
+  display: flex;
+  background: var(--bg-tertiary); /* 深色模式下自动切换 */
+  position: relative; /* 为快照覆盖层和定位元素提供定位上下文 */
+}
+
+/* ========== 缩放包裹层 ========== */
+/* 包裹 PDF 页面内容，通过 CSS transform 实现丝滑的缩放中间态。
+ * 使用 contain: layout style 优化渲染性能，避免缩放时触发全局布局重排。
+ * transform-origin 设为 center top，缩放时页面以顶部中心为锚点。 */
+.zoomWrapper {
+  contain: layout style;
+  transform-origin: center top;
+  align-self: flex-start; /* 防止被 flex 居中拉伸 */
+}
+
+/* ========== 页面坐标容器（单页模式） ========== */
+/* PDF 页面的直接容器，设置显式尺寸作为 canvas 和文本层的坐标基准。
+ * 不应用 CSS transform，确保所有子元素的坐标系一致。 */
+.pageWrapper {
+  position: relative;
+}
+
+/* ========== 连续滚动模式：页面容器 ========== */
+/* PDFium 模式下的纵向排列容器，所有页面按顺序纵向排列 */
+.pagesContainer {
+  display: flex;
+  flex-direction: column;
+  align-items: center; /* 每页居中对齐 */
+  gap: 12px;          /* 页面之间的间距 */
+  padding: 12px 0;
+}
+
+/* ========== 连续滚动模式：单页插槽 ========== */
+/* 每个页面的占位插槽，IntersectionObserver 监听此元素的可见性。
+ * 只有进入视口的页面才会渲染 PdfiumPageSlot 组件。 */
+.pageSlot {
+  position: relative;
+  background: var(--pdf-bg);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  flex-shrink: 0;
+}
+
+/* Native 模式下透明背景，让原生渲染表面透出 */
+.pageSlotNative {
+  background: transparent;
+  box-shadow: none;
+}
+
+/* ========== 图片预览按钮容器 ========== */
+/* 导航到含图片的区域时，在页面右上角显示"查看原图"按钮 */
+.imagePreviewButtonContainer {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 10; /* 在页面内容之上 */
+}
+
+/* ========== 图片预览模态框中的图片样式 ========== */
+.imagePreview {
+  width: 100%;
+  height: auto; /* 保持宽高比 */
+}
+
+

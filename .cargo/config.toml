@@ -3,6 +3,14 @@
 # of the hot gaussian2_pdf / binomial loops in the mixer crate.
 rustflags = ["-C", "target-cpu=generic"]
 
+# crates.io 直连在此网络环境下不可达；走 rsproxy 镜像（与 ~/.npmrc 的
+# npmmirror 同理）。已缓存的 crate 不受影响，只是索引与下载源换道。
+[source.crates-io]
+replace-with = 'rsproxy-sparse'
+
+[source.rsproxy-sparse]
+registry = "sparse+https://rsproxy.cn/index/"
+
 # [target.x86_64-unknown-linux-musl]
 # linker = "clang"
 #

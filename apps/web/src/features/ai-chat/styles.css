@@ -1,0 +1,1505 @@
+/* ================================================================
+ * styles.css - AI Chat 面板样式表
+ * ================================================================
+ * Vibero Zotero 插件的 AI Chat 模块全局样式
+ * 采用全局 CSS 变量实现浅色/暗色主题自适应（使用 global.css 中定义的变量）
+ * 视觉风格参考 Notion 的极简黑白设计
+ * ================================================================ */
+
+/* ========== AI Chat 主容器 ========== */
+.ai-chat-container {
+    display: flex;                    /* 弹性布局 */
+    flex-direction: column;           /* 垂直方向排列（头部、消息区、输入区） */
+    height: 100%;                     /* 占满父容器高度 */
+    background: var(--bg-primary);    /* 使用全局主背景色变量 */
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;  /* 系统字体栈 */
+    font-size: calc(14px * var(--panel-font-scale, 1));  /* 基础字号 14px，支持缩放 */
+}
+
+/* ========== Notion 风格按钮 ========== */
+/* 黑色实心按钮 - 使用双重类选择器提升特异性 */
+.btn-black.btn-black {
+    background: var(--text-primary);
+    border-color: var(--text-primary);
+    color: var(--bg-primary);
+}
+
+/* 黑色按钮悬停 */
+.btn-black.btn-black:hover {
+    background: var(--text-secondary);
+    border-color: var(--text-secondary);
+    color: var(--bg-primary);
+}
+
+/* 黑色按钮点击/激活 */
+.btn-black.btn-black:active,
+.btn-black.ant-btn:active.btn-black {
+    background: var(--text-secondary);
+    border-color: var(--text-secondary);
+}
+
+/* 黑色按钮禁用状态 */
+.btn-black.btn-black[disabled],
+.btn-black.ant-btn[disabled].btn-black {
+    background: var(--text-tertiary);
+    border-color: var(--text-tertiary);
+    color: var(--border-color-secondary);
+}
+
+/* 灰色边框按钮 - 使用双重类选择器提升特异性 */
+.btn-gray.btn-gray {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color-light);
+    color: var(--text-primary);
+}
+
+/* 灰色按钮悬停 */
+.btn-gray.btn-gray:hover {
+    background: var(--border-color-light);
+    border-color: var(--border-color-secondary);
+}
+
+/* 灰色按钮点击/激活 */
+.btn-gray.btn-gray:active,
+.btn-gray.btn-gray-active.btn-gray {
+    background: var(--border-color-secondary);
+    border-color: var(--text-tertiary);
+    color: var(--text-primary);
+}
+
+/* 灰色按钮禁用状态 */
+.btn-gray.btn-gray[disabled],
+.btn-gray.ant-btn[disabled].btn-gray {
+    background: var(--bg-secondary);
+    border-color: var(--border-color-light);
+    color: var(--text-tertiary);
+}
+
+/* ========== 颜色工具类 ========== */
+/* 链接/强调文字：蓝色 */
+.accent-link-text {
+    color: var(--color-primary);
+}
+
+/* 强调标题：蓝色 + 粗体 */
+.accent-title-text {
+    color: var(--color-primary);
+    font-weight: 600;
+}
+
+/* ========== 图标按钮激活状态 ========== */
+/* 使用双重类选择器提升特异性 */
+.icon-btn-active.ant-btn-text.icon-btn-active {
+    background: var(--border-color-light);
+}
+
+.icon-btn-active.ant-btn-text.icon-btn-active:hover {
+    background: var(--border-color-secondary);
+}
+
+/* ========== 模型选择下拉菜单（Notion 风格） ========== */
+/* 使用父容器 .ai-chat-container 提升特异性 */
+.ai-chat-container .model-dropdown-menu.ant-dropdown-menu {
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color-light);
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    /* 最小宽度：280px 但不超过视口的 92%（确保图标+标签+勾选标记都能显示） */
+    min-width: min(280px, 92vw);
+    max-width: min(320px, 96vw);
+    /* 最大高度：约半屏，超出后纵向滚动（避免列表过长占满窗口） */
+    max-height: min(240px, 38vh);
+    overflow-y: auto;
+    padding: 4px;
+}
+
+/* ========== GitHub 仓库下拉菜单 ========== */
+/* 使用父容器 .ai-chat-container 提升特异性 */
+.ai-chat-container .github-repo-dropdown-menu.ant-dropdown-menu {
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color-light);
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    max-height: 400px;             /* 仓库列表允许更长 */
+    overflow-y: auto;
+}
+
+/* GitHub 仓库菜单项 */
+.ai-chat-container .github-repo-dropdown-menu .ant-dropdown-menu-item {
+    padding: 8px 12px;
+    border-radius: 4px;
+}
+
+/* GitHub 仓库菜单项悬停 */
+.ai-chat-container .github-repo-dropdown-menu .ant-dropdown-menu-item:hover {
+    background: var(--bg-secondary);
+    padding: 4px;
+    min-width: 180px;
+}
+
+/* 模型菜单项基础样式 */
+.ai-chat-container .model-dropdown-menu .ant-dropdown-menu-item {
+    border-radius: 4px;
+    padding: 4px 8px;
+    margin: 0;
+    min-height: 28px;      /* 最小高度保证可点击区域 */
+    color: var(--text-primary);
+    font-size: 12px;
+}
+
+/* 键盘焦点项：不使用灰色背景，避免与已选中项混淆 */
+.ai-chat-container .model-dropdown-menu .ant-dropdown-menu-item-active:not(.ant-dropdown-menu-item-selected) {
+    background: transparent;
+}
+
+/* 模型菜单分组标题 */
+.ai-chat-container .model-dropdown-menu .ant-dropdown-menu-item-group-title {
+    padding: 4px 8px 2px;
+    font-size: 11px;       /* 分组标题字号更小 */
+    line-height: 1.2;
+}
+
+/* Advanced（高级模型）与 Standard（标准模型）分组之间的虚线分隔 */
+.ai-chat-container .model-dropdown-menu .ant-dropdown-menu-item-group:first-child .ant-dropdown-menu-item-group-list {
+    border-bottom: 1px dashed var(--border-color-light);
+    padding-bottom: 8px;
+    margin-bottom: 6px;
+}
+
+/* 非首个分组标题的上间距 */
+.ai-chat-container .model-dropdown-menu .ant-dropdown-menu-item-group:not(:first-child) .ant-dropdown-menu-item-group-title {
+    margin-top: 2px;
+}
+
+/* 模型菜单项悬停（非禁用状态） */
+.ai-chat-container .model-dropdown-menu .ant-dropdown-menu-item:hover:not(.ant-dropdown-menu-item-disabled) {
+    background: var(--bg-secondary);
+}
+
+/* 模型菜单禁用项 */
+.ai-chat-container .model-dropdown-menu .ant-dropdown-menu-item-disabled {
+    color: var(--text-tertiary);
+    cursor: not-allowed;    /* 禁止点击光标 */
+}
+
+/* 模型菜单已选中项 */
+.ai-chat-container .model-dropdown-menu .ant-dropdown-menu-item-selected {
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-weight: 500;       /* 半粗体 */
+}
+
+/* ========== 头部区域 ========== */
+.ai-chat-header {
+    padding: 12px 16px;                           /* 内边距 */
+    border-bottom: 1px solid var(--border-color-light); /* 底部分割线 */
+    background: var(--bg-secondary);              /* 次级背景色 */
+}
+
+/* 头部标题 */
+.ai-chat-header h3 {
+    margin: 0;                          /* 去除默认外边距 */
+    font-size: 1em;                     /* 继承容器字号 */
+    font-weight: 600;                   /* 半粗体 */
+    color: var(--text-primary);
+}
+
+/* ========== 消息区域 ========== */
+.ai-chat-messages {
+    flex: 1;                            /* 弹性填充剩余空间 */
+    overflow-y: auto;                   /* 纵向滚动 */
+    padding: 16px;                      /* 内边距 */
+    background: var(--bg-primary);
+}
+
+/* 消息区域滚动条（自动隐藏） */
+.ai-chat-messages::-webkit-scrollbar {
+    width: 8px;                         /* 滚动条宽度 */
+}
+
+.ai-chat-messages::-webkit-scrollbar-track {
+    background: transparent;            /* 滚动轨道透明 */
+}
+
+.ai-chat-messages::-webkit-scrollbar-thumb {
+    background: transparent;            /* 默认透明隐藏 */
+    border-radius: 4px;                 /* 圆角 */
+}
+
+.ai-chat-messages:hover::-webkit-scrollbar-thumb {
+    background: var(--border-color-light); /* 悬停时显示滑块 */
+}
+
+.ai-chat-messages::-webkit-scrollbar-thumb:hover {
+    background: var(--border-color-secondary); /* 直接悬停滑块时加深 */
+}
+
+/* ========== 输入区域 ========== */
+.ai-chat-input-area {
+    border-top: 1px solid var(--border-color-light); /* 顶部分割线 */
+    background: var(--bg-secondary);
+    padding: 12px;
+}
+
+/* 输入区域流式回复指示器 - 顶部线条脉冲动画 */
+.ai-chat-input-streaming {
+    animation: input-streaming-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes input-streaming-pulse {
+    0%, 100% {
+        border-color: var(--color-primary);
+        opacity: 1;
+    }
+    50% {
+        border-color: color-mix(in srgb, var(--color-primary) 50%, transparent);
+        opacity: 0.7;
+    }
+}
+
+/* ========== Slate 富文本输入框容器 ========== */
+.slate-input-container {
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color-light);
+    border-radius: 4px;
+    transition: border-color 0.2s, box-shadow 0.2s;  /* 边框过渡动画 */
+}
+
+/* 输入框聚焦状态 */
+.slate-input-container:focus-within {
+    border-color: var(--color-primary);   /* 聚焦时强调色边框 */
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 10%, transparent);  /* 强调色外发光 */
+}
+
+/* Slate 编辑器去除默认轮廓 */
+.slate-input-container [data-slate-editor] {
+    outline: none;
+}
+
+/* Slate 编辑器滚动条（自动隐藏） */
+.slate-input-container [data-slate-editor]::-webkit-scrollbar {
+    width: 6px;
+}
+
+.slate-input-container [data-slate-editor]::-webkit-scrollbar-thumb {
+    background: transparent;            /* 默认透明隐藏 */
+    border-radius: 3px;
+}
+
+.slate-input-container [data-slate-editor]:hover::-webkit-scrollbar-thumb {
+    background: var(--border-color-light);    /* 悬停时显示 */
+}
+
+/* Slate 占位符文字样式 */
+.slate-input-container [data-slate-placeholder] {
+    color: var(--text-tertiary);        /* 使用全局辅助文字颜色 */
+    opacity: 1;                         /* 完全不透明 */
+}
+
+/* ========== Slate Sender 组件（Ant Design X 风格） ========== */
+.slate-sender-container {
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color-light);
+    border-radius: 8px;
+    transition: border-color 0.2s, box-shadow 0.2s;
+    overflow: hidden;                   /* 隐藏溢出内容（配合圆角） */
+    display: flex;                      /* 弹性布局 */
+    flex-direction: column;             /* 垂直排列 */
+    min-width: 0;                       /* 允许 flex 子元素收缩 */
+}
+
+/* Sender 聚焦状态 */
+.slate-sender-container:focus-within {
+    border-color: var(--border-color-secondary);
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.06);
+}
+
+/* Sender 编辑器去除默认轮廓 */
+.slate-sender-container [data-slate-editor] {
+    outline: none;
+}
+
+/* Sender 编辑器滚动条（自动隐藏） */
+.slate-sender-container [data-slate-editor]::-webkit-scrollbar {
+    width: 6px;
+}
+
+.slate-sender-container [data-slate-editor]::-webkit-scrollbar-thumb {
+    background: transparent;            /* 默认透明隐藏 */
+    border-radius: 3px;
+}
+
+.slate-sender-container [data-slate-editor]:hover::-webkit-scrollbar-thumb {
+    background: var(--border-color-light);    /* 悬停时显示 */
+}
+
+/* Sender 占位符文字 */
+.slate-sender-container [data-slate-placeholder] {
+    color: var(--text-tertiary);
+    opacity: 1;
+}
+
+/* Sender 底部工具栏 */
+.slate-sender-container .ant-flex {
+    min-width: 0;                       /* 允许 flex 子元素收缩 */
+    flex-wrap: wrap;                    /* 窄屏时自动换行 */
+}
+
+.slate-sender-container .ant-btn {
+    flex-shrink: 0;                     /* 按钮不收缩 */
+}
+
+/* ========== 窄屏优化（小于 400px） ========== */
+@media (max-width: 400px) {
+    /* 使用更具体的选择器提升特异性 */
+    .slate-sender-container .ant-flex.slate-sender-container .ant-flex {
+        gap: 4px;            /* 缩小按钮间距 */
+    }
+
+    .slate-sender-container .ant-btn-sm {
+        padding: 0 8px;                 /* 缩小按钮内边距 */
+        font-size: 12px;
+    }
+}
+
+/* ========== Ant Design X 气泡列表样式覆盖 ========== */
+.ant-bubble-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;                          /* 消息间距 */
+}
+
+/* AI 消息（左侧）限制最大宽度为 80% */
+.ant-bubble[data-placement="start"] {
+    max-width: 80%;
+}
+
+/* 用户消息（右侧）宽度自适应内容 */
+.ant-bubble[data-placement="end"] {
+    max-width: fit-content;
+}
+
+/* 气泡内容通用样式 */
+.ai-chat-container .ant-bubble-content {
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-size: 1em;
+    line-height: 1.5;
+}
+
+/* 用户消息气泡：内容强调色背景 + 对应文字 */
+.ai-chat-container .ant-bubble[data-placement="end"] .ant-bubble-content {
+    background: var(--accent-content);
+    color: var(--accent-content-text);
+}
+
+/* 用户消息中的 VibeCard 标签：与气泡主题适配的半透明背景 */
+.ai-chat-container .ant-bubble[data-placement="end"] .ant-bubble-content span[style*="backgroundColor"] {
+    background: var(--accent-content-tag-bg);
+    border: 1px solid var(--accent-content-tag-border);
+    color: var(--accent-content-text);
+}
+
+/* AI 消息气泡：浅灰背景 */
+.ai-chat-container .ant-bubble[data-placement="start"] .ant-bubble-content {
+    background: var(--border-color-light);
+    color: var(--text-primary);
+}
+
+/* 强制所有气泡内容使用统一的字体缩放 - 使用更具体的父选择器提升特异性 */
+.ai-chat-container .ant-bubble[data-placement="start"] > .ant-bubble-content,
+.ai-chat-container .ant-bubble[data-placement="end"] > .ant-bubble-content {
+    font-size: calc(14px * var(--panel-font-scale, 1));
+}
+
+/* ========== Sender 输入框（Ant Design X 原生） ========== */
+.ant-sender {
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color-light);
+    border-radius: 4px;
+}
+
+.ant-sender:focus-within {
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 10%, transparent);
+}
+
+.ant-sender-input {
+    min-height: 36px;                   /* 最小高度 */
+    max-height: 120px;                  /* 最大高度（超出后滚动） */
+    padding: 8px 12px;
+    font-size: 1em;
+    color: var(--text-primary);
+}
+
+.ant-sender-input::placeholder {
+    color: var(--text-tertiary);
+}
+
+.ant-sender-actions {
+    padding: 4px 8px;                   /* 操作按钮区内边距 */
+}
+
+/* ========== 加载动画 ========== */
+/* AI 正在输入的呼吸动画 */
+.ant-bubble-typing {
+    animation: typing 1.5s infinite;    /* 1.5 秒循环 */
+}
+
+/* 呼吸动画关键帧 */
+@keyframes typing {
+    0%, 100% {
+        opacity: 0.5;                   /* 淡出 */
+    }
+    50% {
+        opacity: 1;                     /* 完全显示 */
+    }
+}
+
+/* ========== 单条消息项 ========== */
+.chat-message-item {
+    margin-bottom: 12px;                /* 消息之间的间距 */
+}
+
+/* ========== 错误消息样式 ========== */
+.ai-chat-container .error-message .ant-bubble-content {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color-secondary);
+    color: var(--text-error);          /* 错误红色文字 */
+}
+
+.error-message .ant-bubble-content p:first-child {
+    font-weight: 500;                   /* 错误标题半粗体 */
+}
+
+/* ========== 对话操作栏（如"继续"、"新对话"按钮） ========== */
+.conversation-action-bar {
+    margin: 4px 0 12px 0;
+    line-height: 1;
+    display: flex;
+    justify-content: center;            /* 水平居中 */
+    align-items: center;                /* 垂直居中 */
+}
+
+.conversation-action-bar .ant-btn {
+    max-width: 100%;
+    white-space: normal;                /* 允许按钮文字换行 */
+    height: auto;                       /* 自适应高度 */
+    line-height: 1.4;                   /* 多行更易读 */
+    padding: 4px 8px;
+    margin: 0;
+    display: block;                     /* 块级显示（覆盖 antd 的 inline-flex） */
+    text-align: center;                 /* 居中文案 */
+}
+
+/* 按钮内部文字容器：允许换行并在窄宽度时断词 */
+.conversation-action-bar .ant-btn>span {
+    display: inline;
+    white-space: normal;
+    word-break: break-word;
+}
+
+/* ========== 欢迎区域（静态文案，不可拖拽） ========== */
+.welcome-section {
+    position: relative;
+    padding: 12px 12px 0 12px;
+    border-radius: 8px;
+}
+
+/* 欢迎 Prompts 容器 */
+.welcome-prompts-container {
+    margin: 8px 0;
+}
+
+.welcome-prompts-container .ant-prompts {
+    background: transparent;            /* 透明背景 */
+}
+
+/* 欢迎提示项 */
+.welcome-prompts-container .ant-prompts-item {
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color-light);
+    border-radius: 6px;
+    padding: 12px;
+    margin-bottom: 8px;
+    transition: all 0.2s;               /* 过渡动画 */
+    cursor: pointer;
+}
+
+/* 欢迎提示项悬停 */
+.welcome-prompts-container .ant-prompts-item:hover {
+    background: var(--border-color-light);
+    border-color: var(--border-color-secondary);
+}
+
+/* 最后一个提示项去除底部间距 */
+.welcome-prompts-container .ant-prompts-item:last-child {
+    margin-bottom: 0;
+}
+
+/* 欢迎提示项标签文字 */
+.welcome-prompts-container .ant-prompts-item-label {
+    font-weight: 500;
+    color: var(--text-primary);
+    font-size: 1em;
+    margin-bottom: 4px;
+}
+
+/* 欢迎提示项描述文字 */
+.welcome-prompts-container .ant-prompts-item-description {
+    font-size: 0.93em;
+    color: var(--text-secondary);
+    line-height: 1.4;
+}
+
+/* ========== Markdown 内容样式 ========== */
+.ai-chat-container .markdown-content {
+    font-size: 1em;
+    line-height: 1.6;
+    color: var(--text-primary);
+}
+
+/* 去除首尾子元素的外边距 */
+.markdown-content>*:first-child {
+    margin-top: 0;
+}
+
+.markdown-content>*:last-child {
+    margin-bottom: 0;
+}
+
+/* 标题样式 */
+.markdown-content h1,
+.markdown-content h2,
+.markdown-content h3,
+.markdown-content h4,
+.markdown-content h5,
+.markdown-content h6 {
+    margin: 16px 0 8px 0;
+    font-weight: 600;
+    line-height: 1.3;
+    color: var(--text-primary);
+}
+
+/* H1 标题：加粗 + 底部边框 */
+.markdown-content h1 {
+    font-size: 16px;
+    font-weight: 700;
+    border-bottom: 1px solid var(--border-color-light);
+    padding-bottom: 6px;
+}
+
+/* H2 标题：加粗 + 底部边框 */
+.markdown-content h2 {
+    font-size: 15px;
+    font-weight: 700;
+    border-bottom: 1px solid var(--border-color-light);
+    padding-bottom: 4px;
+}
+
+.markdown-content h3 { font-size: 14px; font-weight: 600; }
+.markdown-content h4 { font-size: 14px; }
+.markdown-content h5,
+.markdown-content h6 { font-size: 14px; }
+
+/* 段落 */
+.markdown-content p {
+    margin: 8px 0;
+}
+
+/* 列表 */
+.markdown-content ul,
+.markdown-content ol {
+    margin: 8px 0;
+    padding-left: 24px;                /* 列表缩进 */
+}
+
+.markdown-content li {
+    margin: 4px 0;
+}
+
+/* 列表项内的段落去除间距 */
+.markdown-content li>p {
+    margin: 0;
+}
+
+/* 引用块 */
+.markdown-content blockquote {
+    margin: 8px 0;
+    padding: 8px 12px;
+    border-left: 4px solid var(--border-color-secondary);  /* 左侧竖线 */
+    background: var(--border-color-light);
+    color: var(--text-secondary);
+}
+
+/* 引用块首尾子元素去除间距 */
+.markdown-content blockquote>*:first-child {
+    margin-top: 0;
+}
+
+.markdown-content blockquote>*:last-child {
+    margin-bottom: 0;
+}
+
+/* 行内代码 */
+.markdown-content code.inline-code {
+    padding: 2px 6px;
+    border-radius: 3px;
+    background: var(--border-color-light);
+    color: var(--color-primary);         /* 蓝色文字 */
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;  /* 等宽字体 */
+    font-size: 0.9em;                  /* 略小于正文 */
+    border: 1px solid var(--border-color-secondary);
+}
+
+/* 代码块容器 */
+.markdown-content .code-block-wrapper {
+    position: relative;                /* 相对定位（为语言标签提供定位基准） */
+    margin: 12px 0;
+}
+
+/* 代码块语言标签（右上角） */
+.markdown-content .code-block-lang {
+    position: absolute;
+    top: 8px;
+    right: 12px;
+    padding: 2px 8px;
+    background: var(--border-color-light);
+    border-radius: 3px;
+    font-size: 11px;
+    color: var(--text-secondary);
+    font-weight: 500;
+    text-transform: uppercase;         /* 大写显示 */
+    z-index: 1;                        /* 确保在代码之上 */
+}
+
+/* 代码块 */
+.markdown-content pre {
+    margin: 0;
+    padding: 12px;
+    border-radius: 6px;
+    background: var(--bg-secondary);
+    overflow-x: auto;                  /* 横向滚动（代码过长时） */
+    border: 1px solid var(--border-color-light);
+}
+
+/* 代码块内的 code 元素 */
+.markdown-content pre code,
+.markdown-content pre code.inline-code {
+    background: none;                  /* 去除行内代码的背景 */
+    padding: 0;
+    border: none;
+    font-size: 13px;
+    line-height: 1.5;
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
+    color: var(--text-primary);
+}
+
+/* 代码块横向滚动条（自动隐藏） */
+.markdown-content pre::-webkit-scrollbar {
+    height: 8px;
+}
+
+.markdown-content pre::-webkit-scrollbar-track {
+    background: transparent;
+    border-radius: 4px;
+}
+
+.markdown-content pre::-webkit-scrollbar-thumb {
+    background: transparent;            /* 默认透明隐藏 */
+    border-radius: 4px;
+}
+
+.markdown-content pre:hover::-webkit-scrollbar-thumb {
+    background: var(--border-color-secondary); /* 悬停时显示 */
+}
+
+.markdown-content pre::-webkit-scrollbar-thumb:hover {
+    background: var(--text-tertiary);   /* 直接悬停滑块时加深 */
+}
+
+/* 水平分割线 */
+.markdown-content hr {
+    margin: 16px 0;
+    border: none;
+    border-top: 1px solid var(--border-color-light);
+}
+
+/* 链接 */
+.markdown-content a {
+    color: var(--color-primary);
+    text-decoration: none;
+}
+
+.markdown-content a:hover {
+    text-decoration: underline;        /* 悬停时显示下划线 */
+}
+
+/* 表格容器（支持横向滚动） */
+.markdown-content .table-wrapper {
+    overflow-x: auto;
+    margin: 12px 0;
+}
+
+/* 表格 */
+.markdown-content table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+/* 表格单元格 */
+.markdown-content table th,
+.markdown-content table td {
+    padding: 8px 12px;
+    border: 1px solid var(--border-color-light);
+    text-align: left;
+}
+
+/* 表头 */
+.markdown-content table th {
+    background: var(--bg-secondary);
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+/* 偶数行斑马纹 */
+.markdown-content table tr:nth-child(even) {
+    background: var(--border-color-light);
+}
+
+/* 行悬停高亮 */
+.markdown-content table tr:hover {
+    background: var(--bg-secondary);
+}
+
+/* ========== 数学公式样式 ========== */
+/* 行内数学公式 */
+.markdown-content .math.math-inline {
+    display: inline;
+    margin: 0 2px;
+}
+
+/* 块级数学公式 */
+.markdown-content .math.math-display {
+    display: block;
+    margin: 16px 0;
+    overflow-x: auto;                  /* 横向滚动（长公式时） */
+    overflow-y: hidden;
+    padding: 12px;
+    background: var(--bg-secondary);
+    border-radius: 4px;
+    border: 1px solid var(--border-color-light);
+}
+
+/* KaTeX 字体大小优化 */
+.markdown-content .katex {
+    font-size: 1.05em;                 /* 略大于正文 */
+}
+
+.markdown-content .katex-display {
+    margin: 0;
+}
+
+/* KaTeX 解析失败时的降级文本：使用次要颜色而非默认的鲜红色 */
+.ai-chat-container .markdown-content .katex-error {
+    color: var(--text-secondary);
+}
+
+/* 块级数学公式滚动条（自动隐藏） */
+.markdown-content .math.math-display::-webkit-scrollbar {
+    height: 6px;
+}
+
+.markdown-content .math.math-display::-webkit-scrollbar-track {
+    background: transparent;
+    border-radius: 3px;
+}
+
+.markdown-content .math.math-display::-webkit-scrollbar-thumb {
+    background: transparent;            /* 默认透明隐藏 */
+    border-radius: 3px;
+}
+
+.markdown-content .math.math-display:hover::-webkit-scrollbar-thumb {
+    background: var(--border-color-secondary); /* 悬停时显示 */
+}
+
+.markdown-content .math.math-display::-webkit-scrollbar-thumb:hover {
+    background: var(--text-tertiary);   /* 直接悬停滑块时加深 */
+}
+
+/* ========== 图片 ========== */
+.markdown-content img {
+    max-width: 100%;                   /* 不超出容器宽度 */
+    height: auto;                      /* 保持原始比例 */
+    border-radius: 4px;
+    margin: 8px 0;
+}
+
+/* 删除线 */
+.markdown-content del {
+    text-decoration: line-through;
+    color: var(--text-tertiary);
+}
+
+/* 强调 */
+.markdown-content strong {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.markdown-content em {
+    font-style: italic;
+}
+
+/* ========== 响应式布局（小于 600px） ========== */
+@media (max-width: 600px) {
+    .ai-chat-header {
+        padding: 10px 12px;            /* 缩小头部内边距 */
+    }
+
+    .ai-chat-messages {
+        padding: 12px;
+    }
+
+    .ai-chat-input-area {
+        padding: 10px;
+    }
+
+    .ant-bubble {
+        max-width: 90%;                /* 窄屏下气泡宽度更宽 */
+    }
+
+    .welcome-container {
+        margin: 10px;
+        padding: 16px;
+        max-width: 100%;
+    }
+
+    .markdown-content {
+        font-size: 13px;               /* 缩小 Markdown 字号 */
+    }
+
+    .markdown-content pre {
+        padding: 8px;                   /* 缩小代码块内边距 */
+    }
+
+    .markdown-content table {
+        font-size: 12px;               /* 缩小表格字号 */
+    }
+}
+
+
+/* ========== AI Chat Modal 弹窗（Notion 黑白风格） ========== */
+.ai-chat-modal .ant-modal-content {
+    background: var(--bg-primary);
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+}
+
+/* 隐藏 Modal 头部（通过其他方式提供标题） */
+.ai-chat-modal .ant-modal-header {
+    display: none;
+}
+
+/* Modal 主体 */
+.ai-chat-modal .ant-modal-body {
+    text-align: left;
+    font-size: 13px;
+    color: var(--text-primary);
+    line-height: 1.5;
+    margin-bottom: 5px;
+}
+
+/* Modal 底部 */
+.ai-chat-modal .ant-modal-footer {
+    border-top: none;
+    text-align: center;
+    padding: 8px 16px 12px;
+}
+
+/* Modal 主要按钮（黑色） - 使用更具体的选择器提升特异性 */
+.ai-chat-modal .ant-btn-primary.ant-btn-primary {
+    background-color: var(--text-primary);
+    border-color: var(--text-primary);
+    color: var(--bg-primary);
+    font-weight: 500;
+    height: 28px;
+    border-radius: 6px;
+    font-size: 13px;
+}
+
+.ai-chat-modal .ant-btn-primary.ant-btn-primary:hover {
+    background-color: var(--text-secondary);
+    border-color: var(--text-secondary);
+}
+
+.ai-chat-modal .ant-btn-primary.ant-btn-primary:active {
+    background-color: var(--text-secondary);
+    border-color: var(--text-secondary);
+}
+
+/* Modal 遮罩层 */
+.ai-chat-modal .ant-modal-mask {
+    background: rgba(0, 0, 0, 0.45);
+}
+
+/* 全局 message 组件层级提升 - 使用双重类选择器提升特异性 */
+.ant-message.ant-message {
+    z-index: 11000;
+}
+
+/* 删除确认弹窗中的红色删除按钮 - 使用双重类选择器提升特异性 */
+.ai-chat-modal .ant-btn-dangerous.ant-btn-dangerous {
+    background-color: #ff4d4f;
+    border-color: #ff4d4f;
+    color: #fff;
+}
+
+.ai-chat-modal .ant-btn-dangerous.ant-btn-dangerous:hover {
+    background-color: #ff7875;
+    border-color: #ff7875;
+    color: #fff;
+}
+
+/* 自定义配置列表的删除按钮：红色图标，无背景 */
+/* ========== 模型配置 Modal 布局 ========== */
+.model-config-content {
+    display: flex;
+    gap: 16px;
+    align-items: stretch;
+}
+
+/* 左栏：配置列表 */
+.model-config-list {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.model-config-list-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    margin-bottom: 2px;
+}
+
+.model-config-list-body {
+    border: 1px solid var(--border-color-light);
+    border-radius: 6px;
+    flex: 1;
+    overflow-y: auto;
+    background: var(--bg-primary);
+}
+
+.model-config-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 7px 10px;
+    cursor: pointer;
+    border-bottom: 1px solid var(--border-color-light);
+    transition: background 0.15s;
+}
+
+.model-config-item.last {
+    border-bottom: none;
+}
+
+.model-config-item:hover {
+    background: var(--bg-secondary);
+}
+
+.model-config-item.active {
+    background: var(--bg-tertiary);
+}
+
+.model-config-item-name {
+    font-size: 13px;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-primary);
+}
+
+/* 使用双重类选择器提升特异性 */
+.model-config-add-btn.model-config-add-btn {
+    width: 100%;
+    font-size: 12px;
+    height: 30px;
+    border-radius: 6px;
+}
+
+/* 右栏：配置表单 + 全局设置 */
+.model-config-form {
+    flex: 1.3;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+/* 紧凑表单项 */
+.model-config-modal .ant-form-item.compact-form-item {
+    margin-bottom: 12px;
+}
+
+.model-config-modal .compact-form-item .ant-form-item-label {
+    padding-bottom: 2px;
+}
+
+.model-config-modal .compact-form-item .ant-form-item-label > label {
+    font-size: 12px;
+    color: var(--text-secondary);
+    height: auto;
+}
+
+/* 使用更具体的选择器提升特异性 */
+.model-config-modal .compact-form-item .ant-input.compact-form-item .ant-input,
+.model-config-modal .compact-form-item .ant-input-password.compact-form-item .ant-input-password,
+.model-config-modal .compact-form-item .ant-select-selector.compact-form-item .ant-select-selector {
+    height: 30px;
+    font-size: 13px;
+    border-radius: 5px;
+}
+
+.model-config-modal .compact-form-item .ant-select {
+    height: 30px;
+}
+
+.model-config-modal .compact-form-item .ant-select-selection-item {
+    line-height: 28px;
+    font-size: 12px;
+}
+
+/* API Base URL 标签行内嵌的下拉框样式 - 使用更具体的选择器提升特异性 */
+.model-config-modal .compact-form-item .ant-form-item-label label .ant-select {
+    height: 22px;
+}
+.model-config-modal .compact-form-item .ant-form-item-label label .ant-select .ant-select-selector {
+    height: 22px;
+    font-size: 11px;
+    border-radius: 4px;
+    min-height: 22px;
+}
+.model-config-modal .compact-form-item .ant-form-item-label label .ant-select .ant-select-selection-item {
+    line-height: 20px;
+    font-size: 11px;
+}
+
+/* Base URL 行内布局：Select 和输入框在同一行 */
+.base-url-inline-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.base-url-inline-row .ant-input {
+    flex: 1;
+    min-width: 0;
+}
+
+/* API Key 行内布局：label 和输入框在同一行 */
+.api-key-inline-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.api-key-inline-label {
+    font-size: 12px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.api-key-inline-row .ant-input-password {
+    flex: 1;
+    min-width: 0;
+}
+
+/* Model Name 行内布局 */
+.model-name-inline-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.model-name-inline-label {
+    font-size: 12px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.model-name-inline-row .ant-input {
+    flex: 1;
+    min-width: 0;
+}
+
+/* 全局设置区 */
+.model-config-global-settings {
+    margin-top: 12px;
+    padding: 10px 12px;
+    background: var(--bg-secondary);
+    border-radius: 6px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    column-gap: 16px;
+    row-gap: 2px;
+}
+
+.global-setting-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 5px 0;
+    cursor: default;
+}
+
+.global-setting-label {
+    font-size: 13px;
+    color: var(--text-primary);
+}
+
+.global-setting-clickable {
+    cursor: pointer;
+    border-radius: 4px;
+    padding: 5px 6px;
+    margin: 0 -6px;
+    transition: background-color 0.2s, color 0.2s;
+    user-select: none;
+}
+
+.global-setting-clickable:hover {
+    background: var(--border-color-light);
+}
+
+.global-setting-clickable.enabled .global-setting-label {
+    color: var(--color-primary);
+}
+
+/* Model config toggle buttons - 选中态(主题自适应) */
+.model-toggle-active {
+    background-color: var(--bg-selected) !important;
+    border: 1px solid var(--color-primary);
+}
+
+.model-toggle-active .global-setting-label {
+    color: var(--color-primary) !important;
+    font-weight: 600;
+}
+
+/* 脉冲动画 */
+@keyframes custom-config-form-pulse {
+    0% {
+        box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-primary) 35%, transparent);
+    }
+    40% {
+        box-shadow: 0 0 0 6px color-mix(in srgb, var(--color-primary) 12%, transparent);
+    }
+    100% {
+        box-shadow: 0 0 0 0 transparent;
+    }
+}
+
+.model-config-form.custom-config-form-flash {
+    animation: custom-config-form-pulse 0.55s ease-out;
+    border-radius: 6px;
+}
+
+/* ========== 斜杠命令自动补全菜单 ========== */
+.slash-command-menu {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    transform: translateY(-100%);
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color-light);
+    border-radius: 8px;
+    box-shadow: 0 -2px 12px rgba(0, 0, 0, 0.08);
+    margin-bottom: 4px;
+    padding: 4px 0;
+    z-index: 1000;
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+.slash-command-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 12px;
+    cursor: pointer;
+    transition: background-color 0.15s;
+    gap: 12px;
+}
+
+.slash-command-item:hover,
+.slash-command-item.active {
+    background-color: var(--border-color-light);
+}
+
+.slash-command-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--color-primary);
+    white-space: nowrap;
+    font-family: 'SF Mono', 'Menlo', 'Monaco', 'Consolas', monospace;
+}
+
+.slash-command-desc {
+    font-size: 12px;
+    color: var(--text-tertiary);
+    white-space: nowrap;
+}
+
+/* ========== File Search @ Mention Popup ========== */
+.file-search-popup {
+    position: absolute;
+    bottom: 100%;
+    left: 0;
+    right: 0;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color-light);
+    border-radius: 8px;
+    box-shadow: 0 -2px 12px rgba(0, 0, 0, 0.08);
+    margin-bottom: 4px;
+    padding: 4px 0;
+    z-index: 1000;
+    max-height: 240px;
+    overflow-y: auto;
+}
+
+.file-search-item {
+    display: flex;
+    flex-direction: column;
+    padding: 6px 12px;
+    cursor: pointer;
+    transition: background-color 0.15s;
+}
+
+.file-search-item:hover,
+.file-search-item.active {
+    background-color: var(--border-color-light);
+}
+
+.file-search-name {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.file-search-path {
+    font-size: 11px;
+    color: var(--text-tertiary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-family: 'SF Mono', 'Menlo', 'Monaco', 'Consolas', monospace;
+}
+
+.file-search-loading,
+.file-search-empty {
+    padding: 12px;
+    text-align: center;
+    color: var(--text-tertiary);
+    font-size: 13px;
+}
+
+/* ============================================================
+ * Phase 5: Inline Threaded Replies 样式
+ * ============================================================
+ * 内联追问线程的样式定义，支持浅色/深色主题自动适配
+ */
+
+/* ========== Phase 6: ThreadGroupEntry 线程组合并入口样式 ========== */
+/**
+ * 线程组合并入口组件样式
+ * - 当同一段落有 3+ 线程时显示
+ * - 默认折叠态显示"查看 N 个追问"按钮
+ * - 展开态显示所有线程列表
+ */
+.thread-group-entry {
+  margin-left: 0;
+  margin-bottom: 8px;
+}
+
+/* 线程组合并入口按钮样式（折叠态） */
+.thread-group-entry button:first-child {
+  font-size: 12px;
+  color: var(--text-secondary, #595959);
+  border-radius: 6px;
+  transition: all 0.2s;
+}
+
+.thread-group-entry button:first-child:hover {
+  color: var(--text-primary, #262626);
+  background: var(--border-color-secondary, #d9d9d9);
+}
+
+/* ========== InlineThread 容器 ========== */
+/**
+ * 线程容器样式
+ * - 左侧 3px 琥珀色竖线（与主对话区分）
+ * - 缩进 12px（视觉层级低于主消息）
+ * - 使用 CSS 变量，自动适配深色模式
+ */
+.inline-thread-container {
+  border-left: 3px solid var(--color-keypoint); /* 左侧琥珀色竖线（区分线程） */
+  margin-left: 0;
+  padding-left: 8px; /* 左侧内边距，避免内容贴边框 */
+  margin-top: 8px; /* 与上方内容的间距 */
+}
+
+/* ========== 折叠动画 ========== */
+/**
+ * 线程折叠/展开动画
+ * - 使用 grid-template-rows 实现平滑动画（替代 max-height）
+ * - 0fr → 1fr 实现完全隐藏到完全展开的过渡
+ * - transition: grid-template-rows 0.2s ease 实现平滑动画
+ */
+.inline-thread-collapse-wrapper {
+  display: grid;
+  grid-template-rows: 1fr; /* 默认展开（1fr = 1个分片） */
+  transition: grid-template-rows 0.2s ease; /* 平滑过渡动画 */
+}
+
+.inline-thread-collapse-wrapper.collapsed {
+  grid-template-rows: 0fr; /* 折叠状态（0fr = 0分片，完全隐藏） */
+}
+
+.inline-thread-collapse-content {
+  overflow: hidden; /* 防止内容溢出 */
+}
+
+/* ========== 失效线程 ========== */
+/**
+ * 失效线程（orphaned: true）样式
+ * - 用户重新生成 AI 回复后，原线程标记为失效
+ * - 灰色虚线边框表示失效状态
+ * - 透明度降低，视觉降级
+ */
+.inline-thread-orphaned {
+  border-left: 3px dashed var(--border-color-secondary, #d9d9d9); /* 虚线边框 */
+  opacity: 0.6; /* 降低不透明度 */
+}
+
+/* ========== ThreadInput ========== */
+/**
+ * 线程输入框样式
+ * - 简洁 textarea，与主输入框风格一致
+ * - 使用 CSS 变量，自动适配深色模式
+ * - focus 时蓝色边框，与主输入框交互一致
+ */
+.thread-input textarea {
+  border: 1px solid var(--border-color, #d9d9d9); /* 默认边框颜色 */
+  border-radius: 4px; /* 圆角 */
+  padding: 8px; /* 内边距 */
+  font-size: 13px; /* 字号 */
+  font-family: inherit; /* 继承字体 */
+  resize: none; /* 禁止手动调整大小 */
+  min-height: 60px; /* 最小高度 */
+  max-height: 120px; /* 最大高度（超出滚动） */
+  width: 100%; /* 占满容器宽度 */
+  background: var(--bg-primary); /* 背景色 */
+  color: var(--text-primary); /* 文字颜色 */
+  transition: border-color 0.2s, box-shadow 0.2s; /* 边框过渡动画 */
+}
+
+.thread-input textarea:focus {
+  outline: none; /* 去除默认轮廓 */
+  border-color: var(--color-primary); /* 聚焦时强调色边框 */
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 10%, transparent); /* 强调色外发光 */
+}
+
+.thread-input textarea::placeholder {
+  color: var(--text-tertiary); /* 占位符文字颜色 */
+}
+
+/* ========== 线程指示器 ========== */
+/**
+ * 线程指示器（💬 N 徽标）
+ * - 显示在 AI 消息气泡上，提示该消息有追问线程
+ */
+.thread-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px; /* 图标与数字之间的间距 */
+  padding: 2px 6px;
+  background: var(--border-color-light);
+  border-radius: 10px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-left: 6px;
+}
+
+/* ========== 浮动按钮容器 ========== */
+/**
+ * 追问按钮的浮动容器
+ * - 水平排列两个按钮
+ * - 使用 flex 布局，按钮宽度各 ~60px
+ * - 位置溢出修正（窄气泡场景）
+ */
+.thread-floating-btn-container {
+  display: flex; /* 水平排列 */
+  gap: 4px; /* 按钮之间的间距 */
+  align-items: center; /* 垂直居中 */
+}
+
+/* ========== 追问线程流式回复流动动画 ========== */
+/**
+ * 流式回复时，左侧竖线呈现流动脉冲效果
+ * 与主输入框的 input-streaming-pulse 动画风格一致
+ * 顶层线程使用蓝色，子线程使用绿色
+ */
+.inline-thread-streaming {
+  animation: thread-streaming-pulse 1.5s ease-in-out infinite;
+}
+
+.inline-thread-streaming-green {
+  animation-name: thread-streaming-pulse-green;
+}
+
+@keyframes thread-streaming-pulse {
+  0%, 100% {
+    border-left-color: var(--color-primary);
+  }
+  50% {
+    border-left-color: color-mix(in srgb, var(--color-primary) 30%, transparent);
+  }
+}
+
+@keyframes thread-streaming-pulse-green {
+  0%, 100% {
+    border-left-color: var(--status-success);
+  }
+  50% {
+    border-left-color: color-mix(in srgb, var(--status-success) 30%, transparent);
+  }
+}
+
+/* ========== 响应式 ========== */
+/**
+ * 窄屏适配（<400px）
+ * - 缩小缩进和内边距，节省空间
+ */
+@media (max-width: 400px) {
+  .inline-thread-container {
+    margin-left: 6px; /* 缩进减半 */
+    padding-left: 4px; /* 左侧内边距减半 */
+  }
+}

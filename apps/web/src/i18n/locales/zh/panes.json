@@ -1,0 +1,10 @@
+{
+  "loading": "加载中...",
+  "splitHint": "分屏：按 a/p 指定新面板页面 · 其他键克隆当前页面 · Esc 取消",
+  "shortcutHint": "Ctrl+B — h/l 分屏 · j/k 竖分屏 · 方向键 切换 · x 关闭 · a 首页 · p 论文",
+  "nav": {
+    "home": "首页",
+    "papers": "论文",
+    "settings": "设置"
+  }
+}

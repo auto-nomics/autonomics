@@ -1,0 +1,40 @@
+<!DOCTYPE html> <!-- HTML5 文档类型声明 -->
+<html lang="zh-CN"> <!-- 语言设为简体中文，有利于 SEO 和屏幕阅读器 -->
+  <head> <!-- 头部元信息区域 -->
+    <meta charset="UTF-8" /> <!-- 字符编码设为 UTF-8，支持中文等多语言字符 -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /> <!-- 视口配置：适配移动设备，禁止缩放 -->
+    <title>Autonomics</title> <!-- 浏览器标签页标题 -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws://localhost:* http://localhost:*;" />
+
+    <!-- ===== 防止 FOUC（Flash of Unstyled Content）内联脚本 ===== -->
+    <!-- 在 React 应用加载前立即执行，从 localStorage 读取用户主题偏好 -->
+    <!-- 这样可以避免页面先显示浅色主题，然后切换到深色主题的闪烁效果 -->
+    <script>
+    try { // 使用 try-catch 防止 localStorage 访问失败（如隐私模式）
+      // 从 localStorage 读取 Zustand 持久化的应用状态
+      var stored = JSON.parse(localStorage.getItem('jayread-app-storage')); // 获取持久化存储
+      // 提取主题设置，默认为 'light'
+      var theme = (stored && stored.state && stored.state.theme) || 'light';
+      // 如果是 auto 模式，解析为系统主题偏好
+      if (theme === 'auto') {
+        theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      }
+      // 在 HTML 根元素上设置 data-theme 属性，使 CSS 变量立即生效
+      document.documentElement.setAttribute('data-theme', theme);
+    } catch(e) { // 如果 localStorage 不可用或解析失败
+      // 降级到浅色主题
+      document.documentElement.setAttribute('data-theme', 'light');
+    }
+    </script>
+    <script type="module" crossorigin src="/assets/js/index-X7gxWRtI.js"></script>
+    <link rel="modulepreload" crossorigin href="/assets/js/vendor-antd-DiGgUW-s.js">
+    <link rel="modulepreload" crossorigin href="/assets/js/vendor-katex-C_dPZd2n.js">
+    <link rel="modulepreload" crossorigin href="/assets/js/vendor-markdown-BazJDrs5.js">
+    <link rel="modulepreload" crossorigin href="/assets/js/vendor-pdfium-ChTGS6dn.js">
+    <link rel="modulepreload" crossorigin href="/assets/js/vendor-react-D9SCquFQ.js">
+    <link rel="stylesheet" crossorigin href="/assets/css/index-CRkmn0DP.css">
+  </head>
+  <body> <!-- 页面主体 -->
+    <div id="root"></div> <!-- React 应用的挂载点，React 会将组件树渲染到这个 DOM 节点内 --> <!-- 以 ES Module 方式加载应用入口文件，Vite 会处理 JSX 编译 -->
+  </body>
+</html>

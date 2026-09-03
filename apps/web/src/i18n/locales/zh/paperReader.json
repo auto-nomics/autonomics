@@ -1,0 +1,34 @@
+{
+  "loading": "加载中...",
+  "notFound": "论文不存在或加载失败",
+  "backToList": "返回列表",
+  "loadingReader": "加载 PDF 阅读器...",
+  "loadingPdf": "加载 PDF 中...",
+  "viewingAttachment": "正在查看附件 PDF（段落导览和 AI 对话仍基于论文的原始 PDF）",
+  "backToOriginal": "返回原始 PDF",
+  "reloadFailed": "重新加载论文失败: {{error}}",
+  "loadFailed": "加载论文失败: {{error}}",
+  "searchTarget": {
+    "outline": "导览",
+    "chat": "聊天",
+    "pdf": "PDF"
+  },
+  "feature": {
+    "guide": "段落导览",
+    "pdfReader": "PDF 阅读器",
+    "aiChat": "AI 对话"
+  },
+  "dragHint": {
+    "guide": "拖拽调整导览栏宽度",
+    "chat": "拖拽调整聊天面板宽度"
+  },
+  "metadata": {
+    "unnamed": "未命名论文",
+    "abstract": "摘要",
+    "uploadAttachment": "上传附件",
+    "autoDownloadPdf": "自动下载 PDF",
+    "uploadSuccess": "附件上传成功",
+    "uploadFailed": "附件上传失败: {{error}}",
+    "downloadFailed": "PDF 下载失败: {{error}}"
+  }
+}

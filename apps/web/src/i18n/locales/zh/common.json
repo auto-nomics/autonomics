@@ -1,0 +1,65 @@
+{
+  "loading": "加载中...",
+  "retry": "重试",
+  "refresh": "刷新页面",
+  "cancel": "取消",
+  "confirm": "确认",
+  "confirmAction": "确认处理",
+  "save": "保存",
+  "delete": "删除",
+  "close": "关闭",
+  "back": "返回",
+  "add": "添加",
+  "search": "搜索",
+  "import": "导入",
+  "export": "导出",
+  "settings": "设置",
+  "edit": "编辑",
+  "enabled": "已启用",
+  "disabled": "未启用",
+  "noData": "暂无数据",
+  "operation": "操作",
+  "error": {
+    "title": "页面出现了一些问题",
+    "subtitle": "抱歉，应用程序遇到了意外错误。您可以尝试重试或刷新页面。",
+    "info": "错误信息：",
+    "stack": "组件堆栈："
+  },
+  "feature": {
+    "errorTitle": "{{name}} 功能异常",
+    "errorDesc": "此功能模块遇到了意外错误，您可以尝试重试或刷新页面。"
+  },
+  "paper": {
+    "notFound": "论文不存在或加载失败",
+    "backToList": "返回列表"
+  },
+  "api": {
+    "requestFailed": "请求失败: {{status}}",
+    "networkError": "网络错误",
+    "uploadFailed": "上传失败",
+    "uploadCancelled": "上传已取消",
+    "translationFailed": "翻译失败",
+    "unsupportedImageFormat": "不支持的图片格式，仅支持 PNG/JPEG/GIF/WebP/SVG",
+    "imageSizeExceeded": "图片大小不能超过 10MB",
+    "unsupportedVideoFormat": "不支持的视频格式，仅支持 MP4/WebM/OGG"
+  },
+  "conversationHistory": {
+    "title": "对话历史",
+    "noHistory": "暂无历史对话",
+    "untitled": "无标题对话",
+    "messageCount": "{{count}} 条消息",
+    "deleteConversation": "删除此对话"
+  },
+  "summary": {
+    "loadFailed": "加载摘要失败",
+    "generateTimeout": "摘要生成超时，请稍后检查最新状态",
+    "generating": "摘要正在生成中，请稍候",
+    "generateStarted": "摘要生成已启动，请稍候",
+    "generateFailed": "生成摘要失败",
+    "generatingLabel": "摘要生成中...",
+    "clickToGenerate": "点击生成摘要",
+    "errorTitle": "摘要生成失败",
+    "timeoutTitle": "生成超时",
+    "timeoutDesc": "摘要生成时间较长，请稍后检查最新状态"
+  }
+}

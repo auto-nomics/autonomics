@@ -8,7 +8,7 @@ use axum::{
     http::StatusCode,
     http::header,
     middleware::Next,
-    response::{Html, IntoResponse, Response},
+    response::{IntoResponse, Response},
     routing::get,
 };
 use tokio::net::TcpListener;
@@ -95,17 +95,18 @@ pub fn api_router_with_auth(shared: bib_base::BibShared, bearer_token: Option<St
     let auth_state = BearerAuthState {
         token: Arc::new(bearer_token.filter(|token| !token.trim().is_empty())),
     };
-    Router::new()
-        .route("/", get(index))
-        .route("/app.js", get(app_javascript))
-        .route("/styles.css", get(styles))
+    let api = Router::new()
         .route("/api/v1", get(api_index))
         .route("/api/health", get(health))
         .nest("/api/v1/bib", crate::bib::router(shared))
         .layer(axum::middleware::from_fn_with_state(
             auth_state,
             bearer_auth,
-        ))
+        ));
+
+    // The SPA host mounts outside the auth layer: static assets carry no
+    // secrets and the shell has to load before it could prompt for a token.
+    api.merge(crate::frontend::router())
 }
 
 async fn bearer_auth(
@@ -151,24 +152,6 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
         .zip(right)
         .fold(0, |difference, (left, right)| difference | (left ^ right))
         == 0
-}
-
-async fn index() -> Html<&'static str> {
-    Html(include_str!("../frontend/dist/index.html"))
-}
-
-async fn app_javascript() -> impl IntoResponse {
-    (
-        [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
-        include_str!("../frontend/dist/app.js"),
-    )
-}
-
-async fn styles() -> impl IntoResponse {
-    (
-        [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
-        include_str!("../frontend/dist/styles.css"),
-    )
 }
 
 async fn health() -> Json<serde_json::Value> {
