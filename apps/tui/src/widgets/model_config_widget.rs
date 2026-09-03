@@ -60,6 +60,13 @@ pub enum ConfigCommand {
         provider_name: String,
         model_name: String,
     },
+    /// Fetch the provider's live remote catalogue (public `/v1/models`
+    /// endpoint; currently OpenRouter). Only emitted for configured
+    /// providers — the app layer re-checks catalogue support.
+    FetchRemoteCatalog {
+        provider_name: String,
+        base_url: String,
+    },
     /// Reload the provider catalogue from the DB and SDK registry.
     ReloadCatalog,
     /// Close the model config popup.
@@ -296,7 +303,8 @@ impl ModelConfigState {
     /// Handle keys and return any command the App should execute.
     ///
     /// - **Preview mode**: navigation, expand/collapse, select model, `Ctrl+E`
-    ///   to add or edit provider credentials, `Ctrl+R` to reload the catalogue,
+    ///   to add or edit provider credentials, `Ctrl+F` to fetch the
+    ///   provider's live remote catalogue, `Ctrl+R` to reload the catalogue,
     ///   and `Ctrl+D` to set the default model for new agents.
     /// - **Config mode**: typing into the focused field (API Key or Base URL),
     ///   `Tab` to switch focus, `Up`/`Down` on the Base URL field to cycle
@@ -518,6 +526,25 @@ impl ModelConfigState {
                         base_url_presets: provider.base_urls.clone(),
                         focused_field: ConfigField::ApiKey,
                     };
+                }
+                consumed(ConfigCommand::None)
+            }
+            // Fetch the provider's live remote catalogue. Only meaningful
+            // for providers with a public catalogue endpoint; the app layer
+            // re-checks support and toasts on failure.
+            KeyCode::Char('f') if ctrl => {
+                let flat = self.flat_items();
+                let pi = match flat.get(self.cursor) {
+                    Some(FlatItem::Provider(pi)) => *pi,
+                    Some(FlatItem::Model(pi, _)) => *pi,
+                    None => return consumed(ConfigCommand::None),
+                };
+                let provider = &self.providers[pi];
+                if provider.configured {
+                    return consumed(ConfigCommand::FetchRemoteCatalog {
+                        provider_name: provider.name.clone(),
+                        base_url: provider.selected_base_url.clone(),
+                    });
                 }
                 consumed(ConfigCommand::None)
             }
@@ -1007,6 +1034,10 @@ fn yn(b: bool) -> String {
 /// `(api_key, base_url_override)`. Providers present in this map with a
 /// non-empty `api_key` are "configured".
 ///
+/// `db_models` are rows persisted in the `models` table — entries imported
+/// from a provider's remote catalogue. They are merged into the provider's
+/// model list after the presets (presets first, imports sorted by name).
+///
 /// The selected base URL is the DB-stored override when present, otherwise
 /// the provider default. The full list of preset endpoints
 /// ([`registry::known_base_urls`]) is exposed for switching in the editor.
@@ -1015,6 +1046,7 @@ fn yn(b: bool) -> String {
 /// unconfigured (alphabetical). Configured providers start expanded.
 pub fn build_catalog(
     db_providers: &[(String, String, String)], // (provider_type, api_key, base_url)
+    db_models: &[crate::config_db::ModelRow],
 ) -> ModelConfigState {
     let types = registry::known_provider_types();
 
@@ -1022,7 +1054,17 @@ pub fn build_catalog(
         .into_iter()
         .map(|type_str| {
             let provider_type = ProviderType::from(type_str);
-            let models = registry::preset_models(&provider_type).unwrap_or_default();
+            let mut models = registry::preset_models(&provider_type).unwrap_or_default();
+            // Merge DB-persisted models (remote-catalogue imports) not
+            // already covered by the preset list.
+            let mut extras: Vec<ModelInfo> = db_models
+                .iter()
+                .filter(|m| m.provider_name == type_str)
+                .filter(|m| !models.iter().any(|p| p.model_name == m.model_name))
+                .map(|m| m.to_model_info())
+                .collect();
+            extras.sort_by(|a, b| a.model_name.cmp(&b.model_name));
+            models.extend(extras);
             let preset_urls: Vec<String> = registry::known_base_urls(&provider_type)
                 .into_iter()
                 .map(|s| s.to_string())
@@ -1097,7 +1139,7 @@ mod tests {
 
     #[test]
     fn provider_edit_uses_ctrl_e_even_while_filtering() {
-        let mut state = build_catalog(&[]);
+        let mut state = build_catalog(&[], &[]);
         state.handle_key(key('e', false));
 
         assert!(matches!(
@@ -1117,7 +1159,7 @@ mod tests {
 
     #[test]
     fn provider_reload_uses_ctrl_r() {
-        let mut state = build_catalog(&[]);
+        let mut state = build_catalog(&[], &[]);
         state.handle_key(key('r', false));
 
         assert!(matches!(
@@ -1134,7 +1176,7 @@ mod tests {
 
     #[test]
     fn default_model_uses_ctrl_d() {
-        let mut state = build_catalog(&[]);
+        let mut state = build_catalog(&[], &[]);
         state.providers[0].configured = true;
         state.providers[0].expanded = true;
 
@@ -1151,7 +1193,7 @@ mod tests {
 
     #[test]
     fn default_model_ctrl_d_ignores_unconfigured_models() {
-        let mut state = build_catalog(&[]);
+        let mut state = build_catalog(&[], &[]);
         assert!(matches!(
             state.handle_key(key('d', true)),
             ConfigCommand::None
@@ -1160,7 +1202,7 @@ mod tests {
 
     #[test]
     fn search_textarea_supports_cursor_editing_and_paste() {
-        let mut state = build_catalog(&[]);
+        let mut state = build_catalog(&[], &[]);
 
         state.handle_key(key('b', false));
         state.handle_key(key('a', false));
@@ -1176,7 +1218,7 @@ mod tests {
 
     #[test]
     fn bracketed_paste_targets_focused_credential_field() {
-        let mut state = build_catalog(&[]);
+        let mut state = build_catalog(&[], &[]);
         state.handle_key(key('e', true));
 
         state.insert_paste("secret");

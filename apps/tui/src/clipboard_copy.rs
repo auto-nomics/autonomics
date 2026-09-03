@@ -3,12 +3,18 @@
 //! The backend order depends on where the user's clipboard actually lives. In
 //! an SSH session, the native clipboard belongs to the user's local terminal,
 //! so terminal-mediated copy is used. In a local session, the native clipboard
-//! is tried first. Linux X11 and some Wayland compositors require the writer
-//! to retain clipboard ownership, so callers must keep the returned lease
-//! alive for the lifetime of the TUI.
+//! is tried first. In a local Wayland session the `wl-copy` CLI is preferred
+//! when present: its daemonized serving child keeps the selection alive after
+//! the TUI exits, whereas the in-process native backend serves from a thread
+//! inside this process, so its clipboard dies with the process — losing the
+//! content on the common "copy, quit, paste elsewhere" flow when no clipboard
+//! manager is running. Linux X11 and some Wayland compositors require the
+//! writer to retain clipboard ownership, so callers must keep the returned
+//! lease alive for the lifetime of the TUI.
 
 use base64::Engine;
 use std::io::Write;
+use std::sync::OnceLock;
 
 const OSC52_MAX_RAW_BYTES: usize = 100_000;
 
@@ -20,11 +26,13 @@ pub fn copy_to_clipboard(text: &str) -> Result<Option<ClipboardLease>, String> {
             ssh_session: is_ssh_session(),
             wsl_session: is_wsl_session(),
             tmux_session: is_tmux_session(),
+            wayland_session: is_wayland_session(),
         },
         tmux_clipboard_copy,
         osc52_copy,
         arboard_copy,
         wsl_clipboard_copy,
+        wl_clipboard_copy,
     )
 }
 
@@ -55,6 +63,7 @@ struct CopyEnvironment {
     ssh_session: bool,
     wsl_session: bool,
     tmux_session: bool,
+    wayland_session: bool,
 }
 
 fn copy_to_clipboard_with(
@@ -64,6 +73,7 @@ fn copy_to_clipboard_with(
     osc52_copy_fn: impl Fn(&str) -> Result<(), String>,
     arboard_copy_fn: impl Fn(&str) -> Result<Option<ClipboardLease>, String>,
     wsl_copy_fn: impl Fn(&str) -> Result<(), String>,
+    wl_copy_fn: impl Fn(&str) -> Result<(), String>,
 ) -> Result<Option<ClipboardLease>, String> {
     if environment.ssh_session {
         return terminal_clipboard_copy_with(
@@ -81,6 +91,20 @@ fn copy_to_clipboard_with(
             };
             format!("{path}: {terminal_error}")
         });
+    }
+
+    // Local Wayland: prefer `wl-copy`, whose daemonized serving child keeps
+    // the selection alive after this process exits. The in-process native
+    // backend serves from a thread inside the TUI, so its clipboard dies
+    // with the process — losing the content on the "copy, quit, paste
+    // elsewhere" flow when no clipboard manager is running.
+    if environment.wayland_session {
+        match wl_copy_fn(text) {
+            Ok(()) => return Ok(None),
+            Err(wl_error) => {
+                tracing::warn!("wl-copy failed: {wl_error}; trying native clipboard");
+            }
+        }
     }
 
     match arboard_copy_fn(text) {
@@ -170,6 +194,16 @@ fn is_wsl_session() -> bool {
     false
 }
 
+#[cfg(target_os = "linux")]
+fn is_wayland_session() -> bool {
+    std::env::var_os("WAYLAND_DISPLAY").is_some()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn is_wayland_session() -> bool {
+    false
+}
+
 #[cfg(all(not(target_os = "android"), not(target_os = "linux")))]
 fn arboard_copy(text: &str) -> Result<Option<ClipboardLease>, String> {
     let mut clipboard =
@@ -238,6 +272,81 @@ fn wsl_clipboard_copy(text: &str) -> Result<(), String> {
 #[cfg(not(target_os = "linux"))]
 fn wsl_clipboard_copy(_text: &str) -> Result<(), String> {
     Err("Windows clipboard fallback unavailable on this platform".to_string())
+}
+
+#[cfg(target_os = "linux")]
+fn wl_clipboard_copy(text: &str) -> Result<(), String> {
+    if !wl_copy_available() {
+        return Err("wl-copy not found on PATH".to_string());
+    }
+
+    let mut child = std::process::Command::new("wl-copy")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        // The daemonized serving child inherits stderr, so a piped stderr
+        // would never reach EOF — null keeps `wait` from blocking forever.
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| format!("failed to spawn wl-copy: {e}"))?;
+
+    let Some(mut stdin) = child.stdin.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err("failed to open wl-copy stdin".to_string());
+    };
+    if let Err(error) = stdin.write_all(text.as_bytes()) {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(format!("failed to write to wl-copy: {error}"));
+    }
+    drop(stdin);
+
+    let status = child
+        .wait()
+        .map_err(|e| format!("failed to wait for wl-copy: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(command_error("wl-copy", status, &[]))
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn wl_clipboard_copy(_text: &str) -> Result<(), String> {
+    Err("wl-copy unavailable on this platform".to_string())
+}
+
+/// Whether a `wl-copy` binary is reachable on PATH. Probed once per process:
+/// presence is a stable machine property, and caching it avoids re-scanning
+/// PATH (and re-logging) on every copy.
+#[cfg(target_os = "linux")]
+fn wl_copy_available() -> bool {
+    static AVAILABLE: OnceLock<bool> = OnceLock::new();
+    *AVAILABLE.get_or_init(|| {
+        let available = binary_available("wl-copy");
+        if !available {
+            tracing::info!(
+                "wl-copy not found on PATH; Wayland copies fall back to the in-process backend"
+            );
+        }
+        available
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn binary_available(name: &str) -> bool {
+    let Some(paths) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&paths).any(|dir| is_executable(&dir.join(name)))
+}
+
+#[cfg(target_os = "linux")]
+fn is_executable(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path)
+        .map(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
 }
 
 fn command_error(command: &str, status: std::process::ExitStatus, stderr: &[u8]) -> String {
@@ -364,6 +473,7 @@ mod tests {
             ssh_session: false,
             wsl_session: false,
             tmux_session: false,
+            wayland_session: false,
         }
     }
 
@@ -372,6 +482,16 @@ mod tests {
             ssh_session: true,
             wsl_session: false,
             tmux_session: true,
+            wayland_session: false,
+        }
+    }
+
+    fn local_wayland_environment() -> CopyEnvironment {
+        CopyEnvironment {
+            ssh_session: false,
+            wsl_session: false,
+            tmux_session: false,
+            wayland_session: true,
         }
     }
 
@@ -396,6 +516,7 @@ mod tests {
                 panic!("native clipboard must not run over SSH");
             },
             |_| panic!("Windows fallback must not run over SSH"),
+            |_| panic!("wl-copy must not run over SSH"),
         );
 
         assert!(result.is_ok());
@@ -421,6 +542,7 @@ mod tests {
             },
             |_| panic!("native clipboard must not run over SSH"),
             |_| panic!("Windows fallback must not run over SSH"),
+            |_| panic!("wl-copy must not run over SSH"),
         );
 
         assert!(result.is_ok());
@@ -441,6 +563,7 @@ mod tests {
             },
             |_| Ok(Some(ClipboardLease::test())),
             |_| panic!("Windows fallback must not run outside WSL"),
+            |_| panic!("wl-copy must not run outside Wayland"),
         );
 
         assert!(matches!(result, Ok(Some(_))));
@@ -460,10 +583,51 @@ mod tests {
             },
             |_| Err("no display".to_string()),
             |_| panic!("Windows fallback must not run outside WSL"),
+            |_| panic!("wl-copy must not run outside Wayland"),
         );
 
         assert!(result.is_ok());
         assert_eq!(osc52_calls.get(), 1);
+    }
+
+    #[test]
+    fn local_wayland_prefers_wl_copy() {
+        let wl_calls = Cell::new(0);
+        let result = copy_to_clipboard_with(
+            "hello",
+            local_wayland_environment(),
+            |_| panic!("tmux must not run outside tmux"),
+            |_| panic!("OSC 52 must not run when wl-copy succeeds"),
+            |_| panic!("native clipboard must not run when wl-copy succeeds"),
+            |_| panic!("Windows fallback must not run outside WSL"),
+            |_| {
+                wl_calls.set(wl_calls.get() + 1);
+                Ok(())
+            },
+        );
+
+        assert!(matches!(result, Ok(None)));
+        assert_eq!(wl_calls.get(), 1);
+    }
+
+    #[test]
+    fn local_wayland_falls_back_to_native_when_wl_copy_fails() {
+        let native_calls = Cell::new(0);
+        let result = copy_to_clipboard_with(
+            "hello",
+            local_wayland_environment(),
+            |_| panic!("tmux must not run outside tmux"),
+            |_| panic!("OSC 52 must not run after native succeeds"),
+            |_| {
+                native_calls.set(native_calls.get() + 1);
+                Ok(Some(ClipboardLease::test()))
+            },
+            |_| panic!("Windows fallback must not run outside WSL"),
+            |_| Err("wl-copy not found on PATH".to_string()),
+        );
+
+        assert!(matches!(result, Ok(Some(_))));
+        assert_eq!(native_calls.get(), 1);
     }
 
     #[test]

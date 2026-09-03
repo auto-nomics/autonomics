@@ -50,4 +50,6 @@ This adds:
 - `agent::sensenova::{SensenovaProvider, MODEL_SENSENOVA_6_7_FLASH_LITE, MODEL_DEEPSEEK_V4_FLASH}`
 - `agent::mimo::{MimoProvider, MimoEndpoint, TokenPlanRegion, MODEL_MIMO_V2_5_PRO, ...}`
 - `agent::zai::{ZaiProvider, ZaiEndpoint, MODEL_GLM_5_1, MODEL_GLM_4_6, ...}`
+- `agent::openrouter::{OpenrouterProvider, MODEL_CLAUDE_SONNET_5, MODEL_GPT_5_5, ...}` (plus
+  `OpenrouterProvider::fetch_remote_catalog` for the live `/v1/models` catalogue)
 - `agent::deepseek::{DeepseekProvider, MODEL_DEEPSEEK_V4_PRO, MODEL_DEEPSEEK_V4_FLASH, MODEL_DEEPSEEK_CHAT, MODEL_DEEPSEEK_REASONER}`

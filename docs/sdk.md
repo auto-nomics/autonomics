@@ -22,6 +22,9 @@ LLM API client with multi-provider abstraction.
   - SenseNova
   - Mimo
   - ZAI
+  - OpenRouter (OpenAI-compatible wire; live catalogue via
+    `OpenrouterProvider::fetch_remote_catalog` against the public
+    `GET /v1/models` endpoint)
 - **Model pool** — Round-robin model selection across providers, with sticky selection by name
 - **Flexible auth** — Anthropic `x-api-key`, Bearer token, or custom header for third-party gateways
 - **Mock support** — `MockApiClient` via `mockall` for testing

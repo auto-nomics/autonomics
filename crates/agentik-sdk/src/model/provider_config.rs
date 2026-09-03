@@ -15,6 +15,7 @@ pub enum ProviderType {
     Mimo,
     Minimax,
     Moonshot,
+    Openrouter,
     Zai,
     Sensenova,
     /// A user-defined or externally-registered provider type.
@@ -30,6 +31,7 @@ impl ProviderType {
             ProviderType::Mimo => "mimo",
             ProviderType::Minimax => "minimax",
             ProviderType::Moonshot => "moonshot",
+            ProviderType::Openrouter => "openrouter",
             ProviderType::Zai => "zai",
             ProviderType::Sensenova => "sensenova",
             ProviderType::Custom(s) => s.as_str(),
@@ -50,6 +52,7 @@ impl From<&str> for ProviderType {
             "mimo" => ProviderType::Mimo,
             "minimax" => ProviderType::Minimax,
             "moonshot" => ProviderType::Moonshot,
+            "openrouter" => ProviderType::Openrouter,
             "zai" => ProviderType::Zai,
             "sensenova" => ProviderType::Sensenova,
             custom => ProviderType::Custom(custom.to_string()),
