@@ -27,7 +27,7 @@
 | `POST` | `/api/v1/bib/articles/upload` | 上传文档文件一步建档：抽取文本后扫描 DOI / arXiv 标识符，命中则经 gateway 拉取真实元数据（离线时落为按标识符索引的存根），未命中创建 `local:{uuid}` 手工条目；重复上传会挂到已有文献上。multipart 字段：`file`（必需）、`category_id`（可选） |
 | `POST` | `/api/v1/bib/articles/import` | 按 DOI / PMID / arXiv 等标识符从外部源导入，并可自动获取 OA 全文 |
 | `POST` | `/api/v1/bib/articles/import/batch` | 批量导入文献文件：`{"format": "bibtex"\|"ris"\|"csl_json"\|"auto", "content", "category_id"?}`；标识符已存在或批内重复的条目合并进已有 id（`duplicate_details`），缺标题的条目进 `failed`；`auto` 按内容嗅探格式 |
-| `GET` / `PUT` / `DELETE` | `/api/v1/bib/articles/{id}` | 查看、更新、删除文献 |
+| `GET` / `PUT` / `DELETE` | `/api/v1/bib/articles/{id}` | 查看、更新、删除文献。详情响应为 `{"article", "fulltext", "fulltext_pagination", "annotations"}`——全文元信息在顶层 `fulltext` 字段，不在 Article 内；全文翻页用 `fulltext_pagination` 的 `offset`/`limit`/`next_offset`。所有 `DELETE` 一律 200 + JSON（无 204；删除不存在的文献返回 200 与 `"deleted": false`） |
 | `GET` / `POST` / `DELETE` | `/api/v1/bib/articles/{id}/fulltext` | 查看、上传、删除全文；`GET` 支持 `offset` / `limit` 字符分页（默认 100000，最大 500000）；上传为 multipart 字段 `file`，原始文件按 SHA-256 内容寻址保存到文献 VFS，并自动抽取纯文本 |
 | `GET` / `HEAD` | `/api/v1/bib/articles/{id}/fulltext/raw` | 流式返回 VFS 中的原始文件，支持单区间 HTTP Range；HTML/PDF 以安全下载语义响应 |
 | `GET` / `POST` | `/api/v1/bib/articles/{id}/annotations` | 查看（可选 `?page=N` 过滤）、新增注释；高亮几何放在 `data` JSON 列（`{"rects":[...],"color":...}`） |
