@@ -437,10 +437,15 @@ export function useChatSender({
           // 不再让 query classifier 启发式覆盖用户意图。
           agent_type: agentType,
         };
-        // autonomics 后端的 agentik 聊天入口（SSE 直连，不经过 services/client）
+        // autonomics 后端的 agentik 聊天入口（SSE 直连，不经过 services/client，
+        // 但鉴权约定一致：设置了 autonomics_token 就带 Bearer 头）
+        const apiToken = localStorage.getItem('autonomics_token');
         const response = await fetch('/api/v1/agent/chat', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            ...(apiToken ? { Authorization: `Bearer ${apiToken}` } : {}),
+          },
           body: JSON.stringify(body),
           signal: abortController.signal,
         });
