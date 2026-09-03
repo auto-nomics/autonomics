@@ -21,29 +21,51 @@
 | 方法 | 路径 | 功能 |
 |---|---|---|
 | `GET` | `/api/v1/bib/health` | 文献模块状态、文章数、启用的外部源 |
-| `GET` | `/api/v1/bib/articles` | 搜索本地库，支持 `query`、`limit` |
+| `GET` | `/api/v1/bib/articles` | 搜索/列出本地库：`query`、`limit`（上限 2000）、`offset`、`sort`（`created_at`\|`updated_at`\|`title`\|`year`）、`order`（`asc`\|`desc`）、`collection_id`、`unfiled=true`；响应含 `total`/`hits`/`articles`/`offset`/`limit` |
 | `GET` | `/api/v1/bib/articles/unfiled` | 列出所有未归入任何集合的文献，可选 `limit` |
 | `POST` | `/api/v1/bib/articles` | 手动创建文献元数据 |
+| `POST` | `/api/v1/bib/articles/upload` | 上传文档文件一步建档：抽取文本后扫描 DOI / arXiv 标识符，命中则经 gateway 拉取真实元数据（离线时落为按标识符索引的存根），未命中创建 `local:{uuid}` 手工条目；重复上传会挂到已有文献上。multipart 字段：`file`（必需）、`category_id`（可选） |
 | `POST` | `/api/v1/bib/articles/import` | 按 DOI / PMID / arXiv 等标识符从外部源导入，并可自动获取 OA 全文 |
+| `POST` | `/api/v1/bib/articles/import/batch` | 批量导入文献文件：`{"format": "bibtex"\|"ris"\|"csl_json"\|"auto", "content", "category_id"?}`；标识符已存在或批内重复的条目合并进已有 id（`duplicate_details`），缺标题的条目进 `failed`；`auto` 按内容嗅探格式 |
 | `GET` / `PUT` / `DELETE` | `/api/v1/bib/articles/{id}` | 查看、更新、删除文献 |
 | `GET` / `POST` / `DELETE` | `/api/v1/bib/articles/{id}/fulltext` | 查看、上传、删除全文；`GET` 支持 `offset` / `limit` 字符分页（默认 100000，最大 500000）；上传为 multipart 字段 `file`，原始文件按 SHA-256 内容寻址保存到文献 VFS，并自动抽取纯文本 |
 | `GET` / `HEAD` | `/api/v1/bib/articles/{id}/fulltext/raw` | 流式返回 VFS 中的原始文件，支持单区间 HTTP Range；HTML/PDF 以安全下载语义响应 |
-| `GET` / `POST` | `/api/v1/bib/articles/{id}/annotations` | 查看、新增注释 |
-| `DELETE` | `/api/v1/bib/annotations/{id}` | 删除注释 |
-| `GET` / `POST` | `/api/v1/bib/collections` | 列出、创建集合 |
-| `GET` / `DELETE` | `/api/v1/bib/collections/{id}` | 查看、删除集合 |
+| `GET` / `POST` | `/api/v1/bib/articles/{id}/annotations` | 查看（可选 `?page=N` 过滤）、新增注释；高亮几何放在 `data` JSON 列（`{"rects":[...],"color":...}`） |
+| `PUT` / `DELETE` | `/api/v1/bib/annotations/{id}` | 更新（部分更新，显式 `null` 清空字段）、删除注释 |
+| `GET` | `/api/v1/bib/articles/{id}/csl-json` | 单篇文献的 CSL JSON（引用引擎直接可用） |
+| `GET` / `POST` | `/api/v1/bib/collections` | 列出（扁平）、创建集合（支持 `parent_id` / `sort_order`；分类树由前端自建） |
+| `GET` / `PUT` / `DELETE` | `/api/v1/bib/collections/{id}` | 查看、更新（改名/移动/排序共用，`parent_id` 环拒绝 400）、删除集合 |
 | `GET` / `POST` | `/api/v1/bib/collections/{id}/articles` | 列出、添加集合成员 |
 | `DELETE` | `/api/v1/bib/collections/{id}/articles/{article_id}` | 移除集合成员 |
 | `PUT` | `/api/v1/bib/collections/{id}/status` | 更新集合状态 |
+| `GET` / `PUT` | `/api/v1/bib/settings` | Web 前端设置，存于 `bib_meta` 的 `web:` 命名空间；PUT 为逐键合并（不覆盖未提及的键） |
+| `GET` / `POST` | `/api/v1/bib/chat` | 聊天记录持久化：`?scope={token}` 读取 `{"scope","payload"}`，POST 整体覆盖（`navigator.sendBeacon` 友好；payload ≤ 5 MiB） |
 | `GET` | `/api/v1/bib/requests` | 列出待补全文请求 |
 | `GET` | `/api/v1/bib/export` | 导出 BibTeX / RIS / Markdown / CSL JSON |
 | `GET` | `/api/v1/bib/search/external` | 并发搜索 PubMed、arXiv、bioRxiv、OpenAlex、Crossref、Semantic Scholar |
+
+### Agent 聊天（SSE）
+
+`POST /api/v1/agent/chat` — agentik 引擎的 HTTP 入口。模型与工具集由服务端持有（TUI 配置的活动模型 + 文献工具 `bib_all_registrations`），请求体中的 `model_config` / `tools` 被忽略，**API key 永不出现在浏览器**。请求体：`{"message", "agent_type"?, "messages"?（历史), "system_prompt"?}`。未配置模型时返回 503。
+
+响应为 `text/event-stream`，事件与 jayread 前端协议一致：
+
+| 事件 | data | 说明 |
+|---|---|---|
+| `text_delta` | `{"text"}` | 增量回答文本 |
+| `tool_call_start` | `{"tool_use_id","name","input"}` | 工具调用开始（后台任务 id 为 `bg-{seq}`） |
+| `tool_call_result` | `{"tool_use_id","is_error","preview"}` | 工具结果预览（截断至 500 字符） |
+| `done` | `{}` | 回合结束，流关闭 |
+| `error` | `{"message","error_code"}` | 出错并关闭流 |
+| `ping` | `{}` | 每 10 秒一次的命名事件心跳（客户端靠解析事件重置空闲计时器） |
+
+客户端中断（关闭流）会自动取消 agent 回合。`agent_type` 取 `homepage`（文献库助手，默认）/ `paperReader`（围绕当前文献）/ `screening`（筛查向），决定系统提示身份；`system_prompt` 字段追加纸面上下文。
 
 全局端点：
 
 ```text
 GET /api/health
-GET /api/v1
+GET /api/v1        # 模块列表 ["bib","agent"]（未配置模型时 agent 不挂载）
 ```
 
 ## 前端
@@ -85,6 +107,20 @@ curl -X POST http://127.0.0.1:8765/api/v1/bib/articles/import \
 
 curl -X POST http://127.0.0.1:8765/api/v1/bib/articles/<article-id>/fulltext \
   -F file=@paper.pdf
+
+# 上传 PDF 一步建档（自动识别 DOI / arXiv，可指定归类）：
+curl -X POST http://127.0.0.1:8765/api/v1/bib/articles/upload \
+  -F file=@paper.pdf -F category_id=<collection-id>
+
+# 批量导入 .bib（format 亦可 ris / csl_json / auto）：
+curl -X POST http://127.0.0.1:8765/api/v1/bib/articles/import/batch \
+  -H 'Content-Type: application/json' \
+  -d '{"format":"bibtex","content":"@article{a, title={A}, doi={10.1/x}}"}'
+
+# agentik 聊天（SSE）：
+curl -N -X POST http://127.0.0.1:8765/api/v1/agent/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"帮我检索 CRISPR 筛选综述"}'
 ```
 
 注意：HTTP API 使用 runtime 配置的文献库路径，默认位于 `~/.autonomics/bib.db`，可用 `AUTONOMICS_BIB_DB` 覆盖。`autonomics-tui bib --db` CLI 子命令仍保持自己的显式路径参数。
