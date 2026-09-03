@@ -35,7 +35,6 @@ const FORCE_QUIT_WINDOW: Duration = Duration::from_secs(3);
 mod agents;
 mod chat;
 mod commands;
-mod database;
 mod event_loop;
 mod history;
 mod keyboard;
@@ -79,16 +78,12 @@ impl App {
             let _ = std::fs::create_dir_all(parent);
         }
 
-        let conn = Connection::open(&config.app_db_path)
-            .unwrap_or_else(|e| panic!("failed to open {}: {e}", config.app_db_path.display()));
-
-        conn.pragma_update(None, "foreign_keys", "ON")
-            .expect("failed to enable foreign_keys");
-
-        Self::init_database(&conn).expect("failed to initialize database schema");
+        let conn = app_config::open(&config.app_db_path).unwrap_or_else(|e| {
+            panic!("failed to open {}: {e}", config.app_db_path.display())
+        });
 
         let runtime = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
-        let model = Arc::new(ArcSwapOption::from_pointee(Self::build_model(&conn)));
+        let model = Arc::new(ArcSwapOption::from_pointee(app_config::build_model(&conn)));
 
         // ── Open RuntimeHost + load profiles ──────────────────────
         let (mut host, profiles) = runtime.block_on(async {

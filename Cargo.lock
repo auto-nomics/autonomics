@@ -320,6 +320,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
+name = "app-config"
+version = "0.1.0"
+dependencies = [
+ "agentik-sdk",
+ "rusqlite",
+ "uuid",
+]
+
+[[package]]
 name = "apply-patch"
 version = "0.1.0"
 dependencies = [
@@ -11839,6 +11848,7 @@ dependencies = [
  "agentik-core",
  "agentik-sdk",
  "agentik-types",
+ "app-config",
  "arboard",
  "arc-swap",
  "base64 0.22.1",

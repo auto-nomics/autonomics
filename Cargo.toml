@@ -55,6 +55,7 @@ members = [
   "stat_crates/survey",
   "crates/bib-types",
   "crates/bib-base",
+  "crates/app-config",
   "crates/tui-http",
   "crates/arxiv",
   "crates/embase",

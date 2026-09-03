@@ -25,6 +25,7 @@ dag-core = { path = "../../crates/dag-core" }
 opengwas = { path = "../../crates/opengwas" }
 bib-base = { path = "../../crates/bib-base" }
 tui-http = { path = "../../crates/tui-http" }
+app-config = { path = "../../crates/app-config" }
 vfs = { path = "../../crates/vfs" }
 chrono = { workspace = true }
 rusqlite = "0.40.1"

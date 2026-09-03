@@ -55,7 +55,7 @@ impl App {
         let model_override = profile
             .preferred_model
             .as_deref()
-            .and_then(|spec| Self::build_model_from_spec(&self.conn, spec));
+            .and_then(|spec| app_config::build_model_from_spec(&self.conn, spec));
         tracing::debug!(
             has_override = model_override.is_some(),
             "model resolution complete"

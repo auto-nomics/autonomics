@@ -1,95 +1,19 @@
 //! Model catalog loading, selection, and provider persistence.
+//!
+//! Model construction (`build_model`/`build_model_from_spec`) moved to the
+//! shared `app-config` crate; this module keeps the widget-facing state and
+//! persistence logic.
 
 use super::*;
 
 impl App {
-    /// Build a `Model` from the DB settings + built-in catalog.
-    ///
-    /// Reads `active_model` from the `settings` table (format:
-    /// `"provider_name:model_name"`), looks up the model in the SDK registry,
-    /// and joins it with provider credentials from the `providers` table.
-    /// Returns `None` if no model is configured, credentials are missing,
-    /// or any lookup fails — the caller treats that as "start without agent".
-    pub(super) fn build_model(conn: &Connection) -> Option<Model> {
-        // Read the active model setting.
-        let active: String = conn
-            .query_row(
-                "SELECT value FROM settings WHERE key = 'active_model'",
-                [],
-                |row| row.get(0),
-            )
-            .ok()?;
-
-        Self::build_model_from_spec(conn, &active)
-    }
-
-    /// Build a `Model` from a `"provider_name:model_name"` spec, using
-    /// provider credentials from the DB.
-    ///
-    /// Returns `None` if the spec is malformed, the provider is not
-    /// configured, or the model is not in the built-in catalog.
-    pub(super) fn build_model_from_spec(conn: &Connection, spec: &str) -> Option<Model> {
-        use agentik_sdk::provider::registry;
-
-        // Parse "provider_name:model_name"
-        let (provider_name, model_name) = spec.split_once(':')?;
-
-        // Look up provider credentials + selected base_url from the DB.
-        let (api_key, db_base_url): (String, String) = conn
-            .query_row(
-                "SELECT api_key, base_url FROM providers WHERE name = ?1",
-                [provider_name],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .ok()?;
-
-        if api_key.is_empty() {
-            return None;
-        }
-
-        // Look up model info from the built-in catalog.
-        let provider_type = ProviderType::from(provider_name);
-        let base_url = if db_base_url.is_empty() {
-            registry::default_base_url(&provider_type)
-                .unwrap_or("")
-                .to_string()
-        } else {
-            db_base_url
-        };
-        let auth_method = registry::default_auth_method(&provider_type);
-        // Look up model info from the built-in catalog, falling back to the
-        // local `models` table for entries imported from a remote catalogue.
-        // `unwrap_or_default` (rather than `?`) so Custom providers whose
-        // models only exist in the DB also resolve.
-        let preset_models = registry::preset_models(&provider_type).unwrap_or_default();
-        let mut model_info = preset_models
-            .into_iter()
-            .find(|m| m.model_name == model_name)
-            .or_else(|| {
-                crate::config_db::ModelRow::find(conn, provider_name, model_name)
-                    .map(|row| row.to_model_info())
-            })?;
-
-        let provider_config = ProviderConfig {
-            id: Uuid::nil(),
-            name: provider_name.to_string(),
-            provider_type,
-            base_url,
-            api_key,
-            auth_method,
-        };
-        model_info.provider_id = provider_config.id;
-
-        Model::new(model_info, &provider_config).ok()
-    }
-
     /// Load the built-in provider catalogue, augmented with DB credentials,
     /// into [`ModelConfigState`] for the model config widget to render.
     pub(super) fn load_model_config(
         conn: &Connection,
         state: &mut crate::widgets::model_config_widget::ModelConfigState,
     ) {
-        use crate::config_db::ProviderRow;
+        use app_config::ProviderRow;
 
         // Read configured providers from DB.
         let providers = ProviderRow::all(conn).unwrap_or_default();
@@ -100,7 +24,7 @@ impl App {
 
         // Build catalogue from SDK registry + DB credentials + DB-imported
         // remote-catalogue models.
-        let db_models = crate::config_db::ModelRow::all(conn).unwrap_or_default();
+        let db_models = app_config::ModelRow::all(conn).unwrap_or_default();
         *state = crate::widgets::model_config_widget::build_catalog(&db_tuples, &db_models);
 
         // Load active model name from settings.
@@ -179,7 +103,7 @@ impl App {
             } => {
                 // Build the model and apply to the active agent via host.
                 let spec = format!("{provider_name}:{model_name}");
-                if let Some(model) = Self::build_model_from_spec(&self.conn, &spec) {
+                if let Some(model) = app_config::build_model_from_spec(&self.conn, &spec) {
                     let agent_name = self
                         .state
                         .sessions
@@ -226,7 +150,7 @@ impl App {
         model_name: &str,
     ) {
         let spec = format!("{provider_name}:{model_name}");
-        let Some(model) = Self::build_model_from_spec(&self.conn, &spec) else {
+        let Some(model) = app_config::build_model_from_spec(&self.conn, &spec) else {
             tracing::warn!(model = %spec, "cannot set default model: model unavailable");
             self.state
                 .toasts
