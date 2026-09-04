@@ -68,6 +68,11 @@ pub fn run() {
                 .min_inner_size(960.0, 640.0)
                 .resizable(true)
                 .center()
+                // 对齐 jayread 桌面外观：无边框（无原生标题栏），
+                // 平铺 WM（Hyprland）下移窗/关窗由 WM 键位承担。
+                .decorations(false)
+                // 禁 Ctrl+滚轮缩放，避免 UI 比例被意外改动。
+                .zoom_hotkeys_enabled(false)
                 .build()?;
 
             *app.state::<Mutex<Option<DesktopState>>>().lock().unwrap() = Some(desktop);
