@@ -78,13 +78,30 @@ function PaperTable({
   // 未虚拟化的全表（scrollY=0 时 antd 会渲染全部行）再切到虚拟列表。
   const [scrollY, setScrollY] = useState(0);
   useLayoutEffect(() => {
-    const el = containerRef?.current;
-    if (!el) return;
-    const update = () => setScrollY(Math.max(0, el.clientHeight - 40));
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(el);
-    return () => ro.disconnect();
+    // 初次挂载时 containerRef 挂在祖先 wrapper div 上，React 先跑后代的 layout
+    // effect、后挂祖先 ref，此刻 .current 还是 null——不能就此放弃，否则 observer
+    // 永远建不起来、scrollY 恒 0，virtual 表会退化成普通 table 且丢掉自定义行
+    // （右键菜单/拖拽全部失效）。rAF 到下一帧重试，ref 必已挂上。
+    let ro: ResizeObserver | null = null;
+    let cancelled = false;
+    const attach = (): boolean => {
+      const el = containerRef?.current;
+      if (!el || cancelled) return false;
+      const update = () => setScrollY(Math.max(0, el.clientHeight - 40));
+      update();
+      ro = new ResizeObserver(update);
+      ro.observe(el);
+      return true;
+    };
+    let raf = 0;
+    if (!attach()) {
+      raf = requestAnimationFrame(() => { if (attach()) raf = 0; });
+    }
+    return () => {
+      cancelled = true;
+      if (raf) cancelAnimationFrame(raf);
+      ro?.disconnect();
+    };
   }, [containerRef]);
 
   // 无论文时不渲染表格（必须放在所有 hook 之后，避免 React 报
