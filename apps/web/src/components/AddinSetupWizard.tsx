@@ -27,7 +27,7 @@ const STEP_META: StepMeta[] = [
     {
         key: 'ca',
         titleKey: 'add Ca 生成',
-        descKey: 'rcgen 生成 JayRead Local CA 根证书 + localhost leaf 证书，落盘到 %LOCALAPPDATA%\\jayread\\ca\\',
+        descKey: 'rcgen 生成 Autonomics Local CA 根证书 + localhost leaf 证书，落盘到 %LOCALAPPDATA%\\autonomics\\ca\\',
     },
     {
         key: 'trust',
@@ -78,7 +78,7 @@ export default function AddinSetupWizard() {
 
     return (
         <Modal
-            title={t('addins.wizard.title', 'JayRead Word 加载项 —— 首次设置')}
+            title={t('addins.wizard.title', 'Autonomics Word 加载项 —— 首次设置')}
             open={open}
             onCancel={dismiss}
             maskClosable={false}
@@ -110,7 +110,7 @@ export default function AddinSetupWizard() {
                 <Paragraph type="secondary" style={{ marginBottom: 0 }}>
                     {t(
                         'addins.wizard.intro',
-                        'JayRead Word 加载项让你在 Word 里直接搜论文库并按 CSL 样式插引用。需要三步：生成证书、信任证书、注册到 Word。',
+                        'Autonomics Word 加载项让你在 Word 里直接搜论文库并按 CSL 样式插引用。需要三步：生成证书、信任证书、注册到 Word。',
                     )}
                 </Paragraph>
 
@@ -170,7 +170,7 @@ export default function AddinSetupWizard() {
                                 <Text>
                                     {t(
                                         'addins.wizard.doneDesc',
-                                        '请完全关闭所有 Word 窗口（含托盘进程），再重启 Word 以加载 JayRead 加载项。',
+                                        '请完全关闭所有 Word 窗口（含托盘进程），再重启 Word 以加载 Autonomics 加载项。',
                                     )}
                                 </Text>
                                 <Text type="secondary" code>

@@ -1,5 +1,5 @@
 /**
- * JayRead PDF 高亮标注管理 Hook
+ * Autonomics PDF 高亮标注管理 Hook
  *
  * 职责：管理 PDF 高亮标注的数据和状态
  *

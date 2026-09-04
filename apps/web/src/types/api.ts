@@ -1,5 +1,5 @@
 /**
- * JayRead API Request/Response Types
+ * Autonomics API Request/Response Types
  */
 
 import type {

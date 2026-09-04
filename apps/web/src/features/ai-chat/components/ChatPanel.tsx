@@ -1,5 +1,5 @@
 /**
- * JayRead AI 聊天面板组件
+ * Autonomics AI 聊天面板组件
  *
  * 这是论文阅读器的核心交互组件，负责：
  * 1. 与 AI 进行流式对话（支持 OpenAI 和 Anthropic 两种 API）

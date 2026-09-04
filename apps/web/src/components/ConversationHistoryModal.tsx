@@ -1,6 +1,6 @@
 /**
  * ConversationHistoryModal.jsx
- * JayRead 对话历史弹窗组件
+ * Autonomics 对话历史弹窗组件
  *
  * 用于 /resume 斜杠命令，展示当前论文的所有历史对话列表。
  * 使用 NiceModal 实现命令式调用。

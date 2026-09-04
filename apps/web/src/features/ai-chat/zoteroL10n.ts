@@ -1,7 +1,7 @@
 /**
  * zoteroL10n.js
  * ============================================================
- * JayRead AI Chat 面板国际化（Localization）模块
+ * Autonomics AI Chat 面板国际化（Localization）模块
  * 适配自原 Zotero 插件版本，移除 Zotero 依赖，改为独立运行
  * 使用内置翻译表实现中英文切换
  * 根据 navigator.language 在中文/英文之间自动选择
@@ -10,12 +10,12 @@
 
 /**
  * 获取 Zotero 全局对象
- * JayRead 不依赖 Zotero，始终返回 null
+ * Autonomics 不依赖 Zotero，始终返回 null
  *
  * @returns {null} 始终返回 null
  */
 export function getZotero() {
-    // JayRead 是独立应用，不依赖 Zotero
+    // Autonomics 是独立应用，不依赖 Zotero
     return null;
 }
 
@@ -38,8 +38,8 @@ export function isZhLocale() {
  * 用于实现类似 Fluent 国际化系统的变量替换功能
  *
  * 模板格式: "你好 { $name }，欢迎使用 { $product }"
- * 参数: { name: "张三", product: "JayRead" }
- * 结果: "你好 张三，欢迎使用 JayRead"
+ * 参数: { name: "张三", product: "Autonomics" }
+ * 结果: "你好 张三，欢迎使用 Autonomics"
  *
  * @param {string} template - 包含占位符的模板字符串
  * @param {Object|undefined} args - 参数键值对映射

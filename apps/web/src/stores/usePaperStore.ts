@@ -112,7 +112,7 @@ const usePaperStore = create<PaperState>()(
       }),
     })) as PaperStoreCreator,
     {
-      name: 'jayread-paper-storage',
+      name: 'autonomics-paper-storage',
       version: 2,
       migrate: (persistedState: unknown, version: number) => {
         // 数据版本迁移：从 v0 升级到 v2

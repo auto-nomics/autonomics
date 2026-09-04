@@ -17,7 +17,7 @@ const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 const isWindows =
     typeof navigator !== 'undefined' && /Win/i.test(navigator.userAgent);
 
-const DISMISS_KEY = 'jayread.addin-setup.dismissed';
+const DISMISS_KEY = 'autonomics.addin-setup.dismissed';
 
 export interface AddinStatus {
     /** 4 个 CA 文件齐全 */

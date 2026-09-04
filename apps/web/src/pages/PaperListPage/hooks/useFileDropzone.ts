@@ -50,7 +50,7 @@ function getFileExtension(filename: string) {
 
 /**
  * 判断拖拽事件是否携带外部文件
- * 内部表格行拖拽使用 'application/jayread-paper' 类型，不含 'Files'
+ * 内部表格行拖拽使用 'application/autonomics-paper' 类型，不含 'Files'
  * @param {DragEvent} e
  * @returns {boolean}
  */

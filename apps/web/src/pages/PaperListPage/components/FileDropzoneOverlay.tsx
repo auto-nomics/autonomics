@@ -43,7 +43,7 @@ export default function FileDropzoneOverlay({ visible }: { visible: boolean }) {
           color: 'var(--text-primary)',
           fontWeight: 500,
         }}>
-          释放文件以导入到 JayRead
+          释放文件以导入到 Autonomics
         </div>
         <div style={{
           marginTop: '8px',

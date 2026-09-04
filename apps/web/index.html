@@ -12,7 +12,7 @@
     <script>
     try { // 使用 try-catch 防止 localStorage 访问失败（如隐私模式）
       // 从 localStorage 读取 Zustand 持久化的应用状态
-      var stored = JSON.parse(localStorage.getItem('jayread-app-storage')); // 获取持久化存储
+      var stored = JSON.parse(localStorage.getItem('autonomics-app-storage')); // 获取持久化存储
       // 提取主题设置，默认为 'light'
       var theme = (stored && stored.state && stored.state.theme) || 'light';
       // 如果是 auto 模式，解析为系统主题偏好

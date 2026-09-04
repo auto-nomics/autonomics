@@ -1,5 +1,5 @@
 /**
- * JayRead Event Bus Store - React 集成层
+ * Autonomics Event Bus Store - React 集成层
  *
  * Zustand store 包装事件总线实例，使其可以通过 React 的 selector 模式访问。
  * 虽然事件总线本身是单例，但这个 store 提供：

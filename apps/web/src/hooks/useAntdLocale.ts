@@ -1,5 +1,5 @@
 /**
- * JayRead Antd 国际化语言包 Hook
+ * Autonomics Antd 国际化语言包 Hook
  *
  * 根据用户设置的语言（useAppStore.language）返回对应的 Ant Design 语言包。
  * 用于 ConfigProvider 的 locale 属性，使 Ant Design 组件（日期选择器、分页器、

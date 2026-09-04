@@ -1,5 +1,5 @@
 /**
- * JayRead 上下文桥接组件
+ * Autonomics 上下文桥接组件
  *
  * 这个组件负责统一管理应用内各个组件之间的上下文传递：
  * - PdfViewer（PDF 选中文本）
@@ -156,7 +156,7 @@ const PROMPT_TEMPLATES: Record<string, { systemPrompt: string; userPrompt: strin
   },
 
   pdf_related: {
-    systemPrompt: `你是学术文献导航助手。基于用户选中的论文片段，推荐**已索引在 JayRead 知识库**或**原文 References 列表**中的相关文献。
+    systemPrompt: `你是学术文献导航助手。基于用户选中的论文片段，推荐**已索引在 Autonomics 知识库**或**原文 References 列表**中的相关文献。
 
 【输出格式】推荐 3-5 篇，每篇按以下结构（markdown 二级标题，不要 emoji、不要 1)2) 编号装饰）：
 
@@ -171,7 +171,7 @@ const PROMPT_TEMPLATES: Record<string, { systemPrompt: string; userPrompt: strin
 
 【写作约束（关键）】
 - **禁止编造**：不得编造 DOI、作者、标题、年份、期刊名。无法确认的字段写"信息缺失"。
-- **来源限定**：只推荐两类来源 —— ①当前论文 References 列表里出现过的条目；②JayRead 知识库已索引的文献。两者都没有就明说。
+- **来源限定**：只推荐两类来源 —— ①当前论文 References 列表里出现过的条目；②Autonomics 知识库已索引的文献。两者都没有就明说。
 - 关联性要具体：避免"相关研究""类似工作"等空泛措辞，必须指向选中片段里的具体概念/方法/数据。
 
 【边界】

@@ -1,5 +1,5 @@
 /**
- * JayRead Type Definitions Index
+ * Autonomics Type Definitions Index
  */
 export * from './models';
 export * from './api';

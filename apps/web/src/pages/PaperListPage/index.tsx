@@ -1,5 +1,5 @@
 /**
- * JayRead 论文列表页组件
+ * Autonomics 论文列表页组件
  *
  * 这是应用的首页，功能包括：
  * 1. 左侧分类侧边栏：树形分类目录，分门别类管理文献
@@ -141,7 +141,7 @@ const TableRowWithDragAndContextMenu = React.memo(({
       {...restProps}
       draggable
       onDragStart={(e) => {
-        e.dataTransfer.setData('application/jayread-paper', String(paperId));
+        e.dataTransfer.setData('application/autonomics-paper', String(paperId));
         e.dataTransfer.effectAllowed = 'move';
         requestAnimationFrame(() => {
           e.currentTarget.style.opacity = '0.5';

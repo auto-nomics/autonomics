@@ -1,5 +1,5 @@
 /**
- * JayRead 通用面板拖拽调整宽度 Hook
+ * Autonomics 通用面板拖拽调整宽度 Hook
  *
  * 封装面板拖拽调整宽度的逻辑，支持左/右方向。
  * 基于 useResizableSidebar 的模式泛化而来。

@@ -1,5 +1,5 @@
 /**
- * JayRead Core Data Model Types
+ * Autonomics Core Data Model Types
  */
 
 export interface Paper {

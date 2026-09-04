@@ -1,5 +1,5 @@
 /**
- * JayRead 分类侧边栏组件
+ * Autonomics 分类侧边栏组件
  *
  * 左侧树形目录侧边栏，用于分门别类管理已导入的文献。
  * 类似 Zotero/Mendeley 的 Collections 面板。

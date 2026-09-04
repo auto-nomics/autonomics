@@ -1,7 +1,7 @@
 /**
  * ChatMessageItem.jsx
  * ============================================================
- * JayRead AI Chat 单条消息渲染组件
+ * Autonomics AI Chat 单条消息渲染组件
  * 从 ChatPanel 中提取的独立组件
  *
  * 核心功能：

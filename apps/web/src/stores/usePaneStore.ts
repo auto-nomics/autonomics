@@ -288,7 +288,7 @@ const usePaneStore = create<PaneStore>()(
       },
     }),
     {
-      name: 'jayread-pane-storage',
+      name: 'autonomics-pane-storage',
       version: 1,
       migrate: (persistedState, version) => {
         if (version < 1 && persistedState && typeof persistedState === 'object') {

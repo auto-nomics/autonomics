@@ -1,7 +1,7 @@
 /**
  * SlateInputWithSender.jsx
  * ============================================================
- * JayRead AI Chat 富文本输入编辑器组件
+ * Autonomics AI Chat 富文本输入编辑器组件
  * 基于 Slate.js 构建的聊天输入框，适配自 Zotero 插件版本
  * 移除了 Zotero 依赖，改为通过 props 接收配置数据和保存回调
  *
@@ -95,7 +95,7 @@ interface SlateInputWithSenderProps {
 
 /**
  * SlateInputWithSender 主组件
- * JayRead AI Chat 的富文本输入框组件，集成了编辑器、工具栏、模型选择和自定义模型管理功能
+ * Autonomics AI Chat 的富文本输入框组件，集成了编辑器、工具栏、模型选择和自定义模型管理功能
  * 样式参考 Ant Design X 的 Sender 组件，但使用 Slate.js 作为底层编辑器
  *
  * @param {Object} props - 组件属性
@@ -561,7 +561,7 @@ const SlateInputWithSender = forwardRef<unknown, SlateInputWithSenderProps>(({
             const dt = event.dataTransfer;
 
             // 1) VibeCard 拖拽：自定义 MIME，需要 editor 才能插入 mention（保留在此处）
-            const vibeCardData = dt.getData('application/x-jayread-vibecard-reference');
+            const vibeCardData = dt.getData('application/x-autonomics-vibecard-reference');
             if (vibeCardData) {
                 event.preventDefault();
                 event.stopPropagation();
@@ -617,7 +617,7 @@ const SlateInputWithSender = forwardRef<unknown, SlateInputWithSenderProps>(({
             const types = dt.types;
 
             // 检查是否为 VibeCard 引用拖拽（自定义 MIME 类型）
-            if (types.includes('application/x-jayread-vibecard-reference')) {
+            if (types.includes('application/x-autonomics-vibecard-reference')) {
                 // 必须调用 preventDefault，否则浏览器不会允许放置操作
                 event.preventDefault();
                 // 阻止事件冒泡，防止父元素的 dragover 处理器干扰
@@ -652,7 +652,7 @@ const SlateInputWithSender = forwardRef<unknown, SlateInputWithSenderProps>(({
             const types = dt.types;
 
             // 只响应文件拖拽或 VibeCard 拖拽
-            if (types.includes('Files') || types.includes('application/x-jayread-vibecard-reference')) {
+            if (types.includes('Files') || types.includes('application/x-autonomics-vibecard-reference')) {
                 event.preventDefault();
                 dragCounterRef.current++;
                 setIsDragging(true);

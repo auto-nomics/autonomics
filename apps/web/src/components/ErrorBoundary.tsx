@@ -1,5 +1,5 @@
 /**
- * JayRead 错误边界组件
+ * Autonomics 错误边界组件
  *
  * 这是一个 React 类组件，用于捕获子组件树中的 JavaScript 错误。
  * 错误边界是 React 组件，可以在子组件树任何地方捕获 JavaScript 错误，

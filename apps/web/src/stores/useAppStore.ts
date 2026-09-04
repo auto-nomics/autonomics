@@ -76,7 +76,7 @@ const useAppStore = create<AppState>()(
       }),
     }),
     {
-      name: 'jayread-app-storage',
+      name: 'autonomics-app-storage',
       partialize: (state: AppState) => ({
         sidebarCollapsed: state.sidebarCollapsed,
         theme: state.theme,

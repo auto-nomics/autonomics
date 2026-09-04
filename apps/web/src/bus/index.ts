@@ -1,5 +1,5 @@
 /**
- * JayRead Event Bus - 类型安全的事件总线系统
+ * Autonomics Event Bus - 类型安全的事件总线系统
  *
  * 提供发布/订阅机制，用于组件间的松耦合通信。
  * 使用 TypeScript 类型系统确保事件载荷的类型安全。
@@ -310,7 +310,7 @@ function createEventBus() {
 // ========== 单例导出 ==========
 
 /**
- * JayRead 事件总线单例
+ * Autonomics 事件总线单例
  *
  * 使用方式：
  * ```typescript

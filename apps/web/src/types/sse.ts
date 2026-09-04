@@ -1,7 +1,7 @@
 /**
- * SSE Event Types for JayRead Agent Chat
+ * SSE Event Types for Autonomics Agent Chat
  *
- * JayRead Agent 聊天的 SSE 事件类型定义
+ * Autonomics Agent 聊天的 SSE 事件类型定义
  *
  * 标准化的 SSE 事件协议，用于 Agent 流式响应。
  * 包含：

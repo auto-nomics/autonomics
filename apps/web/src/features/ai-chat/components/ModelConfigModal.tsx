@@ -1,6 +1,6 @@
 /**
  * ModelConfigModal.jsx
- * JayRead AI Chat 自定义模型配置弹窗组件
+ * Autonomics AI Chat 自定义模型配置弹窗组件
  *
  * 核心功能：
  * - 自定义模型配置管理（添加/编辑/删除配置）

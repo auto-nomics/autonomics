@@ -1,5 +1,5 @@
 /**
- * JayRead 模板管理弹窗组件（NiceModal 版）
+ * Autonomics 模板管理弹窗组件（NiceModal 版）
  *
  * 使用 NiceModal 实现命令式调用。
  * 提供 Tab 1: 动作模板, Tab 2: 系统提示词, Tab 3: 上下文预览

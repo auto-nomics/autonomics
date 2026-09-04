@@ -2,7 +2,7 @@
  * 输入历史 Hook（↑↓ 导航 + Ctrl+R 弹窗）
  *
  * 管理 Slate 编辑器输入历史的完整生命周期：
- * - localStorage 持久化（key: 'jayread-input-history'，最多 300 条）
+ * - localStorage 持久化（key: 'autonomics-input-history'，最多 300 条）
  * - ↑/↓ 键盘导航：在第一行按 ↑ 回到上一条历史，在最后一行按 ↓ 前进
  * - Ctrl+R 弹窗：模糊搜索 + 鼠标 hover + 点击选中
  *
@@ -27,7 +27,7 @@ import type { FileMentionElement as FileMentionElementType } from '../../compone
 /** 历史记录最大条数（超出后丢弃最旧的） */
 const MAX_HISTORY = 300;
 /** localStorage 持久化 key */
-const HISTORY_STORAGE_KEY = 'jayread-input-history';
+const HISTORY_STORAGE_KEY = 'autonomics-input-history';
 
 /** useInputHistory 参数 */
 interface UseInputHistoryParams {

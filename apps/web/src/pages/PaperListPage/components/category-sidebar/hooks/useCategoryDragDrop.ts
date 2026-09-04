@@ -71,7 +71,7 @@ export function useCategoryDragDrop({
       const types = e.dataTransfer?.types;
       if (!types) return false;
       const arr = Array.isArray(types) ? types : Array.from(types);
-      return arr.includes('Files') || arr.includes('application/jayread-paper');
+      return arr.includes('Files') || arr.includes('application/autonomics-paper');
     };
 
     const onDragOver = (e: Event) => {
@@ -122,7 +122,7 @@ export function useCategoryDragDrop({
       }
 
       // 处理论文拖放
-      const paperIdStr = dragEvent.dataTransfer?.getData('application/jayread-paper');
+      const paperIdStr = dragEvent.dataTransfer?.getData('application/autonomics-paper');
       if (!paperIdStr) return;
       const paperId = paperIdStr;
       const categoryId = key;

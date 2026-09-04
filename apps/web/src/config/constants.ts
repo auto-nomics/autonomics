@@ -1,5 +1,5 @@
 /**
- * JayRead Web 应用共享 UI 常量
+ * Autonomics Web 应用共享 UI 常量
  *
  * 本文件定义应用中使用的各种 UI 相关常量，包括：
  * - 面板默认宽度
@@ -33,7 +33,7 @@ export const PANEL_MAX_WIDTH = 480;
  */
 export const STORAGE_KEYS = {
   /** 左侧面板宽度存储键 */
-  LEFT_PANEL_WIDTH: 'jayread-left-panel-width',
+  LEFT_PANEL_WIDTH: 'autonomics-left-panel-width',
 } as const;
 
 // ============================================================================

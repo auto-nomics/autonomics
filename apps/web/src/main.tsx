@@ -1,5 +1,5 @@
 /**
- * JayRead React 应用入口文件
+ * Autonomics React 应用入口文件
  *
  * 路由由 PaneManager 的每个 pane 独立管理（各自持有 MemoryRouter），
  * 此处不再包裹顶层 Router，避免嵌套 Router 报错。

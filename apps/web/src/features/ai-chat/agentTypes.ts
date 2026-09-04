@@ -21,7 +21,7 @@ export const AGENT_TYPES: AgentType[] = ['homepage', 'paperReader', 'screening']
 /**
  * 所有 persona 共享的核心约束。
  *
- * 这 5 条是 JayRead 产品的"底线行为准则"，无论哪个面板都不能缺。
+ * 这 5 条是 Autonomics 产品的"底线行为准则"，无论哪个面板都不能缺。
  * v1 中只有 paperReader 完整具备，homepage/screening 都有缺失。
  */
 const CORE_PERSONA_RULES = [
@@ -35,7 +35,7 @@ const CORE_PERSONA_RULES = [
 
 export const DEFAULT_PERSONAS: Record<AgentType, string> = {
   homepage: [
-    '你是 JayRead 的 AI 助手，能够回答各类问题、进行写作、分析、整理资料。',
+    '你是 Autonomics 的 AI 助手，能够回答各类问题、进行写作、分析、整理资料。',
     '',
     '【场景能力】',
     '- 通用问答：技术、学术、写作、生活常识均可。',
