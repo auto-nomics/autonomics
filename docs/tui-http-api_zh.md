@@ -92,6 +92,22 @@ pnpm --dir apps/web dev
 
 Vite 在 `http://127.0.0.1:5173` 启动开发服务并把 `/api` 代理到 Rust 后端（SSE 不缓冲）；后端端口可用 `API_PORT` 覆盖（默认 8765）。
 
+## 桌面版
+
+`apps/desktop` 是同一套前端的 Tauri v2 壳（仅 Linux 打包）：壳进程内嵌 tui-http（`BibShared` + 模型槽 → `ApiRouterBuilder` → 随机端口），窗口直接导航到内嵌服务地址——前端与浏览器模式完全同一份代码（同源 fetch，SSE 无跨域）。模型槽启动时从共享 `config.db` 读一次（模型仍由 TUI 配置；改模型后桌面版需重启）。
+
+数据与 TUI 完全共享（`~/.autonomics`：bib.db / config.db / vfs.toml），尊重所有 `AUTONOMICS_*` 环境变量；唯一差异是 `AUTONOMICS_DATA_DIR` 未设置时默认 `state_dir/data`（TUI 默认是开发机路径）。与 TUI 同时运行是安全的（bib.db 多进程 WAL + busy_timeout），但建议避免长时间双开狂写。
+
+```bash
+# 开发（窗口弹出，Rust 改动需重启；前端改动只需重跑 build-web.sh 后 Ctrl+R）
+cargo build -p autonomics-desktop && ./target/debug/autonomics-desktop
+
+# 打包（前端 dist 新鲜化 → release 编译 → deb/appimage 产物在 target/release/bundle/）
+scripts/build-desktop.sh
+```
+
+注意：`tauri.conf.json` 故意不配 beforeBuildCommand，dist 新鲜化由 `build-desktop.sh` 保证；裸跑 `cargo tauri build` 会嵌入磁盘上现有的 dist（可能过期）。脚本会设置 `NO_STRIP=true`（Arch 上 linuxdeploy 自带的旧 strip 不认识新 binutils 的 `.relr.dyn` 段会致命失败）；appimage 打包最后一步需联网从 GitHub 下载 AppImage type2 runtime（已有缓存 `~/.cache/tauri/` 时跳过）。
+
 ## 示例
 
 ```bash

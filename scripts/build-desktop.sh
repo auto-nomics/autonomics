@@ -13,6 +13,11 @@ cd "$(dirname "$0")/.."
 
 ./scripts/build-web.sh
 
+# Arch 必须：linuxdeploy 自带的旧 strip 不认识新 binutils 产生的
+# .relr.dyn 段（SHT_RELR），对系统 webkit2gtk 等 so 全部报错后致命退出。
+# NO_STRIP 跳过 AppImage 内库的 strip（体积略增，不影响功能）。
+export NO_STRIP=true
+
 if command -v cargo-tauri >/dev/null 2>&1; then
   cd apps/desktop && exec cargo tauri build
 else
