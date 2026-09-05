@@ -26,6 +26,12 @@ import { useCallback, useRef } from 'react'; // 导入 React 核心钩子
 import { App } from 'antd'; // 导入 Ant Design 消息提示组件
 import { classifyFile } from '../components/FileUploader'; // 导入文件分类工具函数
 import { createConversation } from '../../../services/chatApi'; // 导入对话管理 API
+import {
+  clearStoredThreadId,
+  deleteThread,
+  getStoredThreadId,
+} from '../api/agentThreadsApi'; // P2: runtime thread 映射联动（/new、/clear 与服务端会话一致）
+import type { AgentType } from '../agentTypes';
 
 /**
  * 斜杠命令列表定义
@@ -64,6 +70,7 @@ export const SLASH_COMMANDS = [
  */
 export function useSlashCommands({
   paperId,
+  agentType,
   persistMessages,
   onToggleCollapse,
   slateInputRef,
@@ -71,6 +78,8 @@ export function useSlashCommands({
   onNavigateToPapers,
 }: {
   paperId?: string | number;
+  /** 当前面板的 agent 类型 —— runtime thread 映射键的组成部分 */
+  agentType?: AgentType;
   persistMessages?: any;
   onToggleCollapse?: () => void;
   slateInputRef?: any;
@@ -144,6 +153,16 @@ export function useSlashCommands({
     if (trimmed === '/clear') {
       setMessages([]);                 // 清空前端消息列表
       persistMessages([]);             // 持久化空消息列表到后端
+      // P2（web-agent-runtime）：彻底清空时也清掉服务端 session（尽力而为）。
+      // 否则 UI 已空、thread 映射还在，下一轮消息仍进旧 session，
+      // agent 会"记得"用户刚刚清掉的对话
+      if (agentType) {
+        const staleThreadId = getStoredThreadId(paperId, agentType);
+        if (staleThreadId) {
+          void deleteThread(staleThreadId, agentType);
+          clearStoredThreadId(paperId, agentType);
+        }
+      }
       message.success('已清空当前对话'); // 显示成功提示
       return true;                     // 返回 true，阻止消息正常发送
     }
@@ -201,6 +220,11 @@ export function useSlashCommands({
     try {
       // 调用后端 API 创建新对话
       await createConversation(String(paperId));
+      // P2（web-agent-runtime）：/new 的语义是"旧对话保留为历史"——服务端
+      // thread 留作历史不删，只解除映射；下次发送（UI 已空）会惰性建新 thread
+      if (agentType) {
+        clearStoredThreadId(paperId, agentType);
+      }
       // 清空前端消息列表（新对话从空开始）
       setMessages([]);
       // 显示成功提示
@@ -209,7 +233,7 @@ export function useSlashCommands({
       // 显示错误提示
       message.error('创建新对话失败: ' + err.message);
     }
-  }, [paperId, setMessages]); // 依赖论文 ID 和设置消息函数
+  }, [paperId, agentType, setMessages]); // 依赖论文 ID、agent 类型与设置消息函数
 
   /**
    * 处理 /attachment 命令选择的文件

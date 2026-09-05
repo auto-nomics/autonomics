@@ -237,6 +237,7 @@ const ChatPanel = forwardRef(function ChatPanel({
     slashCommandList,           // 斜杠命令列表（用于输入框的自动补全提示展示）
   } = useSlashCommands({
     paperId,             // 论文 ID
+    agentType,           // 当前面板的 agent 类型（runtime thread 映射键组成部分，/new、/clear 联动用）
     persistMessages: (msgs: any) => saveMessages(paperId, msgs), // 持久化消息的函数（包装 saveMessages）
     onToggleCollapse,    // 收起/展开对话面板的回调（/hide 命令使用）
     slateInputRef,       // SlateInputWithSender 组件的 ref（用于 /attachment 命令插入附件）
