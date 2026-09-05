@@ -26,6 +26,7 @@ import {
   convertToAnthropicContent,
 } from '../../utils/chatMessageUtils';
 import { useChatSender } from '../useChatSender';
+import { threadMappingKey } from '../../api/agentThreadsApi';
 
 describe('useChatSender Hook', () => {
   beforeEach(() => {
@@ -993,6 +994,158 @@ describe('useChatSender Hook', () => {
         expect(props.setStreaming).toHaveBeenCalledWith(true);
         // 最终应该设置为 false（请求完成后）
         expect(props.setStreaming).toHaveBeenCalledWith(false);
+      });
+    });
+
+    describe('Runtime 会话路径（P2 web-agent-runtime）', () => {
+      const THREAD_ID = '11111111-2222-3333-4444-555555555555';
+
+      /** POST /threads 成功响应 */
+      const createThreadResponse = () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ thread_id: THREAD_ID }),
+      });
+
+      /** thread chat 端点的 SSE 成功响应 */
+      const sseResponse = () =>
+        createMockStreamResponse([
+          'event: text_delta\ndata: {"text":"Hi"}\n\n',
+          'event: done\ndata: {}\n\n',
+        ]);
+
+      // happy-dom 暴露的 localStorage 缺 getItem/setItem/removeItem（client.test.ts
+      // 里同一问题的既定解法）：内存 shim 替换，thread 映射读写才能真正被验证
+      const storageStore = new Map<string, string>();
+      const localStorageShim = {
+        getItem: (k: string) => (storageStore.has(k) ? (storageStore.get(k) as string) : null),
+        setItem: (k: string, v: string) => { storageStore.set(k, String(v)); },
+        removeItem: (k: string) => { storageStore.delete(k); },
+        clear: () => storageStore.clear(),
+      };
+
+      beforeEach(() => {
+        globalThis.localStorage = localStorageShim as unknown as Storage;
+        storageStore.clear();
+      });
+
+      afterEach(() => {
+        storageStore.clear();
+      });
+
+      it('runtime + 全新对话：先建 thread 再走 /threads/:id/chat，历史与 persona 不上行', async () => {
+        const props = { ...createDefaultProps(), agentMode: 'runtime' };
+        mockFetch.mockResolvedValueOnce(createThreadResponse()).mockResolvedValueOnce(sseResponse());
+
+        const { result } = renderHook(() => useChatSender(props as any));
+        await act(async () => {
+          await result.current.sendMessages('hello');
+        });
+
+        expect(mockFetch).toHaveBeenCalledTimes(2);
+        // 第一跳：创建会话（默认 props 的 paperInfo 无 id → standalone scope）
+        expect(mockFetch.mock.calls[0][0]).toBe('/api/v1/agent/threads');
+        expect(JSON.parse(mockFetch.mock.calls[0][1].body)).toEqual({
+          agent_type: 'paperReader',
+          title: 'Test Paper Title',
+        });
+        // 第二跳：会话式聊天端点
+        expect(mockFetch.mock.calls[1][0]).toBe(`/api/v1/agent/threads/${THREAD_ID}/chat`);
+        const body = JSON.parse(mockFetch.mock.calls[1][1].body);
+        expect(body.message).toBe('hello');
+        expect(body.agent_type).toBe('paperReader');
+        // 历史在服务端 session、静态 persona 在服务端 profile，均不上行
+        expect(body).not.toHaveProperty('messages');
+        expect(body).not.toHaveProperty('system_prompt');
+        // 动态上下文（论文信息）仍按轮次上行，且不含默认 persona 文案
+        expect(body.context).toContain('Test Paper Title');
+        expect(body.context).not.toContain('你是一位严谨的学术研究助手');
+        // thread 映射落盘
+        expect(localStorage.getItem(threadMappingKey(undefined, 'paperReader'))).toBe(THREAD_ID);
+        // 双写：bib_meta 侧照常持久化
+        expect(props.persistMessages).toHaveBeenCalled();
+      });
+
+      it('runtime + 已有 UI 历史且无映射：仍走 legacy 端点（旧对话不迁移）', async () => {
+        const props = {
+          ...createDefaultProps(),
+          agentMode: 'runtime',
+          messages: [
+            { role: 'user', content: '旧问题', id: 'm1' },
+            { role: 'assistant', content: '旧回答', id: 'm2' },
+          ],
+        };
+        mockFetch.mockResolvedValueOnce(sseResponse());
+
+        const { result } = renderHook(() => useChatSender(props as any));
+        await act(async () => {
+          await result.current.sendMessages('继续');
+        });
+
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+        expect(mockFetch.mock.calls[0][0]).toBe('/api/v1/agent/chat');
+        // bib_meta 时代的旧历史照常上行，不凭空丢失
+        const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+        expect(body.messages).toHaveLength(2);
+        expect(body).toHaveProperty('system_prompt');
+      });
+
+      it('已有映射：即使 UI 有历史也走 runtime 端点（双写会话）', async () => {
+        localStorage.setItem(threadMappingKey(undefined, 'paperReader'), THREAD_ID);
+        const props = {
+          ...createDefaultProps(),
+          agentMode: 'runtime',
+          messages: [{ role: 'user', content: '历史消息', id: 'm1' }],
+        };
+        mockFetch.mockResolvedValueOnce(sseResponse());
+
+        const { result } = renderHook(() => useChatSender(props as any));
+        await act(async () => {
+          await result.current.sendMessages('继续');
+        });
+
+        // 映射已存在 → 不再创建 thread，直接会话式发送
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+        expect(mockFetch.mock.calls[0][0]).toBe(`/api/v1/agent/threads/${THREAD_ID}/chat`);
+        const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+        expect(body).not.toHaveProperty('messages');
+      });
+
+      it('建 thread 失败：本轮降级 legacy 端点全量重发', async () => {
+        const props = { ...createDefaultProps(), agentMode: 'runtime' };
+        mockFetch
+          .mockResolvedValueOnce({ ok: false, status: 500, json: async () => ({ error: 'boom' }) })
+          .mockResolvedValueOnce(sseResponse());
+
+        const { result } = renderHook(() => useChatSender(props as any));
+        await act(async () => {
+          await result.current.sendMessages('hello');
+        });
+
+        expect(mockFetch).toHaveBeenCalledTimes(2);
+        expect(mockFetch.mock.calls[1][0]).toBe('/api/v1/agent/chat');
+        const body = JSON.parse(mockFetch.mock.calls[1][1].body);
+        expect(body).toHaveProperty('messages');
+        expect(body).toHaveProperty('system_prompt');
+        // 失败的创建不留脏映射
+        expect(localStorage.getItem(threadMappingKey(undefined, 'paperReader'))).toBeNull();
+      });
+
+      it('409 agent_busy：给出可读的中文提示', async () => {
+        localStorage.setItem(threadMappingKey(undefined, 'paperReader'), THREAD_ID);
+        const props = { ...createDefaultProps(), agentMode: 'runtime' };
+        mockFetch.mockResolvedValueOnce({
+          ok: false,
+          status: 409,
+          json: async () => ({ error: 'agent busy: another turn is streaming for this assistant' }),
+        });
+
+        const { result } = renderHook(() => useChatSender(props as any));
+        await act(async () => {
+          await result.current.sendMessages('hello');
+        });
+
+        expect(props.onError).toHaveBeenCalledWith('该助手正在回复上一条消息，请等它完成后再发送');
       });
     });
 

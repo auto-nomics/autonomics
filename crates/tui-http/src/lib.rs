@@ -6,6 +6,8 @@
 //! mounted without changing startup behavior.
 
 pub mod agent;
+#[cfg(feature = "runtime-host")]
+pub mod agent_runtime;
 pub mod bib;
 pub mod server;
 

@@ -24,7 +24,7 @@ kms = { path = "../../crates/kms" }
 dag-core = { path = "../../crates/dag-core" }
 opengwas = { path = "../../crates/opengwas" }
 bib-base = { path = "../../crates/bib-base" }
-tui-http = { path = "../../crates/tui-http" }
+tui-http = { path = "../../crates/tui-http", features = ["runtime-host"] }
 app-config = { path = "../../crates/app-config" }
 vfs = { path = "../../crates/vfs" }
 chrono = { workspace = true }

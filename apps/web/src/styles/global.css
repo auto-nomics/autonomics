@@ -1053,7 +1053,7 @@ body { /* 页面主体样式 */
  *
  * 当外部文件从桌面拖入到论文列表的某一行上方时，
  * 由 PaperListPage 的 useEffect 原生事件监听器在 capture 阶段
- * 直接在 <tr> DOM 元素上添加此 CSS 类。
+ * 直接在表格行 DOM 元素上添加此 CSS 类（virtual 表的行是 <div>，退化路径是 <tr>）。
  * 使用 Ant Design 主题蓝色，与分类节点高亮（绿色）视觉区分。
  */
 /* 使用双重类选择器提升特异性 */

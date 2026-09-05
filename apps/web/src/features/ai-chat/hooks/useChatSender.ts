@@ -34,6 +34,12 @@ import { compactHistory, stripThreadsForApi } from '../utils/messageCompaction';
 import { buildSystemPrompt as buildSystemPromptUtil } from '../utils/systemPromptBuilder';
 import { flattenBlocks } from '../utils/promptUtils';
 import { getAuthToken } from '../../../services/client';
+import {
+  ensureMainThreadSession,
+  getStoredThreadId,
+  threadChatUrl,
+  type AgentMode,
+} from '../api/agentThreadsApi';
 import type { AgentType } from '../agentTypes';
 import type { ChatMessageBase } from '@/types/chat';
 
@@ -77,6 +83,13 @@ interface UseChatSenderParams {
   customSystemPrompt?: string;
   agentType: AgentType;
   tools?: string[];
+  /**
+   * 后端 agent 能力（useChatInit 探测、ChatPanel 传入）。
+   * 'runtime' 且满足采用条件（已有 thread 映射或全新对话）时主对话走
+   * /api/v1/agent/threads/:id/chat，会话转写由服务端持有；
+   * 其余情况（含未传）一律走 legacy /api/v1/agent/chat。
+   */
+  agentMode?: AgentMode;
 }
 
 // Constants
@@ -140,6 +153,7 @@ export function useChatSender({
   customSystemPrompt = '',
   agentType,
   tools = [],
+  agentMode = 'ephemeral',
 }: UseChatSenderParams) {
   /**
    * 构建分层系统提示词（薄包装函数）
@@ -306,6 +320,25 @@ export function useChatSender({
 
       let compressedMessages = [];
 
+      // ===== P2（web-agent-runtime）：主对话运行时会话模式判定 =====
+      // 仅主对话（追问线程 P2 仍走 legacy）；采用条件：
+      // - agentMode === 'runtime'（ChatPanel 探测后传入，desktop/旧后端自动降级）
+      // - 已有 thread 映射，或全新对话（UI 无历史）——bib_meta 时代的旧对话
+      //   继续走 ephemeral，避免历史凭空丢失（搬迁是 P4 迁移项）
+      // ensureMainThreadSession 失败（后端瞬时不可用）→ 本轮降级 legacy 全量重发
+      let runtimeThreadId: string | null = null;
+      if (!isThreadMode && agentMode === 'runtime') {
+        const scopePaperId = paperInfo?.id ?? null;
+        if (getStoredThreadId(scopePaperId, agentType) || messages.length === 0) {
+          runtimeThreadId = await ensureMainThreadSession(
+            scopePaperId,
+            agentType,
+            paperInfo?.title || undefined,
+          ).catch(() => null);
+        }
+      }
+      const useRuntimeSession = runtimeThreadId !== null;
+
       if (isThreadMode) {
         finalApiMessages = (threadContextData as any).threadApiMessages.map((m: any) => ({ role: m.role, content: m.content }));
         finalSystemPrompt = (threadContextData as any).threadSystemPrompt;
@@ -325,33 +358,41 @@ export function useChatSender({
           newMessages,
           tokenBudget,
           customSystemPrompt: effectiveCustomSystemPrompt,
+          // runtime 路径：静态 persona 已在服务端 agent profile，这里构建的
+          // 只是每轮动态上下文（论文信息 / 追问摘要 / 额外注入 / 自定义 persona）
+          excludePersona: useRuntimeSession,
         });
 
         finalSystemPrompt = systemPrompt;
 
-        if (finalSystemPrompt) {
+        if (!useRuntimeSession && finalSystemPrompt) {
           // buildSystemPrompt 可能返回 string（向后兼容）或 CacheControlBlock[]（Anthropic prompt caching）
           finalApiMessages.push({ role: 'system', content: flattenBlocks(finalSystemPrompt as any) });
         }
 
         // 渐进式历史压缩（Agent 模式下跳过，由后端处理）。
         // 压缩的是「本轮之前」的 messages（不含刚拼好的用户消息）——
-        // 新输入由 body.message 注入，若混进历史种子，模型会看到同一条消息两遍
-        const { messages: compMessages, fallbackReason, errorMessage } = await compactHistory(
-          messages as any[],
-          tokenBudget,
-          paperInfo?.title || '未知论文',
-          paperInfo?.id as any,
-          true // isAgentMode: 主对话使用 agent 端点，跳过前端压缩
-        );
-        compressedMessages = compMessages;
+        // 新输入由 body.message 注入，若混进历史种子，模型会看到同一条消息两遍。
+        // runtime 会话路径整段跳过：完整转写在服务端 session 里，历史不上行。
+        if (useRuntimeSession) {
+          compressedMessages = [];
+        } else {
+          const { messages: compMessages, fallbackReason, errorMessage } = await compactHistory(
+            messages as any[],
+            tokenBudget,
+            paperInfo?.title || '未知论文',
+            paperInfo?.id as any,
+            true // isAgentMode: 主对话使用 agent 端点，跳过前端压缩
+          );
+          compressedMessages = compMessages;
 
-        if (fallbackReason) {
-          const errorDetail = errorMessage ? `\n错误信息：${errorMessage}` : '';
-          onError(`⚠️ 对话历史摘要生成失败，部分早期对话已被截断，当前回复可能缺少部分早期上下文。${errorDetail}\n请检查后端摘要服务是否正常运行。`);
+          if (fallbackReason) {
+            const errorDetail = errorMessage ? `\n错误信息：${errorMessage}` : '';
+            onError(`⚠️ 对话历史摘要生成失败，部分早期对话已被截断，当前回复可能缺少部分早期上下文。${errorDetail}\n请检查后端摘要服务是否正常运行。`);
+          }
+
+          finalApiMessages.push(...compressedMessages.map((m: any) => ({ role: m.role, content: m.content })));
         }
-
-        finalApiMessages.push(...compressedMessages.map((m: any) => ({ role: m.role, content: m.content })));
       }
 
       // 发起请求
@@ -394,24 +435,34 @@ export function useChatSender({
             content: stripAttachmentsForPersistence(m.content),
           }));
 
-        const body = {
-          // 注入的新输入用压平后的完整文本（保留引用消息/文件引用的拼接）；
-          // 图片无法走 String 字段，只剩文本部分
-          message: (stripAttachmentsForPersistence(userContent) as string) || userMessage,
-          // 后端 ChatRequest 只读 {message, agent_type, messages, system_prompt}：
-          // 模型由 TUI config 持有、工具集恒为 bib_all_registrations，
-          // jayread 时代的 model_config/tools 字段不再发送
-          system_prompt: finalSystemPrompt || undefined,
-          messages: agentMessages,
-          // 显式意图直传后端：用户选了哪个面板就发哪个 agent_type。
-          // 后端按此分发 PersonaSpec（见 jayread-agent::agent::persona），
-          // 不再让 query classifier 启发式覆盖用户意图。
-          agent_type: agentType,
-        };
+        // runtime 会话路径：ThreadChatRequest 只读 {message, agent_type, context}；
+        // 静态 persona 在服务端 profile，历史在服务端 session，均不上行
+        const body = useRuntimeSession
+          ? {
+              message: (stripAttachmentsForPersistence(userContent) as string) || userMessage,
+              agent_type: agentType,
+              context: finalSystemPrompt || undefined,
+            }
+          : {
+              // 注入的新输入用压平后的完整文本（保留引用消息/文件引用的拼接）；
+              // 图片无法走 String 字段，只剩文本部分
+              message: (stripAttachmentsForPersistence(userContent) as string) || userMessage,
+              // 后端 ChatRequest 只读 {message, agent_type, messages, system_prompt}：
+              // 模型由 TUI config 持有、工具集恒为 bib_all_registrations，
+              // jayread 时代的 model_config/tools 字段不再发送
+              system_prompt: finalSystemPrompt || undefined,
+              messages: agentMessages,
+              // 显式意图直传后端：用户选了哪个面板就发哪个 agent_type。
+              // 后端按此分发 PersonaSpec（见 jayread-agent::agent::persona），
+              // 不再让 query classifier 启发式覆盖用户意图。
+              agent_type: agentType,
+            };
         // autonomics 后端的 agentik 聊天入口（SSE 直连，不经过 services/client，
-        // 但鉴权约定一致：设置了 autonomics_token 就带 Bearer 头）
+        // 但鉴权约定一致：设置了 autonomics_token 就带 Bearer 头）。
+        // 两条路径的 SSE 事件契约完全一致，解析/超时/中断逻辑共用
+        const chatUrl = useRuntimeSession ? threadChatUrl(runtimeThreadId!) : '/api/v1/agent/chat';
         const apiToken = getAuthToken();
-        const response = await fetch('/api/v1/agent/chat', {
+        const response = await fetch(chatUrl, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -427,6 +478,10 @@ export function useChatSender({
             const errData = await response.json();
             errorMsg = errData.error?.message || errData.error || errData.message || errorMsg;
           } catch {}
+          // runtime 路径的同智能体并发闸（后端同 type 串行、忙时 409）
+          if (response.status === 409) {
+            errorMsg = '该助手正在回复上一条消息，请等它完成后再发送';
+          }
           onError(errorMsg);
           setStreaming(false);
           if (timeoutId) clearTimeout(timeoutId);
@@ -613,6 +668,8 @@ export function useChatSender({
     activeRequestIdRef,
     paperInfo,
     onError,
+    agentMode,
+    agentType,
   ]);
 
   return { sendMessages };

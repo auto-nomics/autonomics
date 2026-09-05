@@ -82,7 +82,9 @@ function newConversationId(): string {
  * jayread 的 useChatInit 会传 `String(paperId)`，paperId 缺省时得到字面量
  * "undefined" —— 这里一并归到 standalone。
  */
-function scopeFor(paperId: string | null | undefined): string {
+// P2（web-agent-runtime）：scope 也被 agentThreadsApi 用作 thread↔conversation
+// 映射键（bib scope 与后端 session 一一对应），故导出并保持唯一拼写。
+export function scopeFor(paperId: string | null | undefined): string {
   const id = paperId === null || paperId === undefined ? '' : String(paperId).trim();
   if (!id || id === 'undefined' || id === 'null') return 'standalone';
   // toSafeId(fromSafeId(id)) 把「真实 ID」和「safeId」两种输入归一到同一个 scope ——

@@ -2027,6 +2027,22 @@ fn row_to_profile(row: &turso::Row) -> Result<AgentProfile, StorageError> {
             .get("enable_dag_history")
             .and_then(|v| v.as_bool())
             .unwrap_or(true),
+        enable_vfs_shell: config
+            .get("enable_vfs_shell")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true),
+        enable_container_dev: config
+            .get("enable_container_dev")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true),
+        enable_data_engine: config
+            .get("enable_data_engine")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true),
+        enable_host_tools: config
+            .get("enable_host_tools")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true),
         preferred_model: config
             .get("preferred_model")
             .and_then(|v| v.as_str())
@@ -2049,6 +2065,10 @@ fn profile_to_config_json(profile: &AgentProfile) -> serde_json::Value {
         "enable_opentargets": profile.enable_opentargets,
         "enable_gwascatalog": profile.enable_gwascatalog,
         "enable_dag_history": profile.enable_dag_history,
+        "enable_vfs_shell": profile.enable_vfs_shell,
+        "enable_container_dev": profile.enable_container_dev,
+        "enable_data_engine": profile.enable_data_engine,
+        "enable_host_tools": profile.enable_host_tools,
         "preferred_model": profile.preferred_model,
     })
 }
@@ -2775,6 +2795,10 @@ mod tests {
             enable_opentargets: true,
             enable_gwascatalog: false,
             enable_dag_history: false,
+            enable_vfs_shell: true,
+            enable_container_dev: true,
+            enable_data_engine: true,
+            enable_host_tools: true,
             preferred_model: Some("anthropic:claude-sonnet-5".into()),
             created_at: now_ms(),
             updated_at: now_ms(),

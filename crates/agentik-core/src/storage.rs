@@ -228,6 +228,20 @@ pub struct AgentProfile {
     pub enable_gwascatalog: bool,
     pub enable_dag_history: bool,
 
+    // ── Infrastructure tool gating ──
+    // These cover the tool families that `tools_from_profile` historically
+    // registered unconditionally. Defaults are `true` so profiles persisted
+    // before these flags existed keep their historical behavior; restricted
+    // surfaces (e.g. the web resident agents) opt out explicitly.
+    #[serde(default = "default_true")]
+    pub enable_vfs_shell: bool,
+    #[serde(default = "default_true")]
+    pub enable_container_dev: bool,
+    #[serde(default = "default_true")]
+    pub enable_data_engine: bool,
+    #[serde(default = "default_true")]
+    pub enable_host_tools: bool,
+
     // ── Model preference ──
     /// Preferred model in `"provider:model"` format, or `None` to use the
     /// global default.
@@ -270,6 +284,10 @@ impl AgentProfile {
             enable_opentargets: true,
             enable_gwascatalog: true,
             enable_dag_history: true,
+            enable_vfs_shell: true,
+            enable_container_dev: true,
+            enable_data_engine: true,
+            enable_host_tools: true,
             preferred_model: None,
             created_at: now,
             updated_at: now,
@@ -314,6 +332,12 @@ impl AgentProfile {
             enable_dag_history: overrides
                 .enable_dag_history
                 .unwrap_or(self.enable_dag_history),
+            // Infrastructure gating inherits wholesale; the child-override
+            // mechanism is for capability specialization, not restriction.
+            enable_vfs_shell: self.enable_vfs_shell,
+            enable_container_dev: self.enable_container_dev,
+            enable_data_engine: self.enable_data_engine,
+            enable_host_tools: self.enable_host_tools,
             preferred_model: overrides
                 .preferred_model
                 .unwrap_or_else(|| self.preferred_model.clone()),
@@ -340,6 +364,10 @@ impl AgentProfile {
                 enable_opentargets: true,
                 enable_gwascatalog: true,
                 enable_dag_history: true,
+                enable_vfs_shell: true,
+                enable_container_dev: true,
+                enable_data_engine: true,
+                enable_host_tools: true,
                 preferred_model: None,
                 created_at: now,
                 updated_at: now,
@@ -359,6 +387,10 @@ impl AgentProfile {
                 enable_opentargets: true,
                 enable_gwascatalog: false,
                 enable_dag_history: false,
+                enable_vfs_shell: true,
+                enable_container_dev: true,
+                enable_data_engine: true,
+                enable_host_tools: true,
                 preferred_model: None,
                 created_at: now,
                 updated_at: now,
@@ -378,6 +410,10 @@ impl AgentProfile {
                 enable_opentargets: true,
                 enable_gwascatalog: true,
                 enable_dag_history: true,
+                enable_vfs_shell: true,
+                enable_container_dev: true,
+                enable_data_engine: true,
+                enable_host_tools: true,
                 preferred_model: None,
                 created_at: now,
                 updated_at: now,
@@ -410,6 +446,10 @@ impl AgentProfile {
                 enable_opentargets: false,
                 enable_gwascatalog: false,
                 enable_dag_history: false,
+                enable_vfs_shell: true,
+                enable_container_dev: true,
+                enable_data_engine: true,
+                enable_host_tools: true,
                 preferred_model: None,
                 created_at: now,
                 updated_at: now,
@@ -420,6 +460,12 @@ impl AgentProfile {
 
 fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
+}
+
+/// Serde default for infrastructure tool flags: legacy payloads predate the
+/// flags and must deserialize to "enabled" to keep historical behavior.
+fn default_true() -> bool {
+    true
 }
 
 // ═══════════════════════════════════════════════════════════════════════

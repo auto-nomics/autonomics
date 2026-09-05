@@ -6,12 +6,19 @@ license.workspace = true
 rust-version.workspace = true
 description = "Composable local HTTP API backend started alongside the Autonomics TUI."
 
+[features]
+# Serve resident runtime-hosted agents (`/api/v1/agent/threads`) alongside
+# the ephemeral chat endpoint. Off by default: the minimal embeddable host
+# (e.g. the desktop shell) does not link the runtime crate.
+runtime-host = ["dep:runtime"]
+
 [dependencies]
 bib-base = { path = "../bib-base" }
 bib-types = { path = "../bib-types" }
 agentik-core = { path = "../agentik-core" }
 agentik-sdk = { path = "../agentik-sdk" }
 agentik-types = { path = "../agentik-types" }
+runtime = { path = "../runtime", optional = true }
 arc-swap.workspace = true
 axum = { version = "0.8", features = ["multipart"] }
 chrono.workspace = true

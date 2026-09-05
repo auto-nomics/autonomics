@@ -49,6 +49,9 @@ import {
  * @param {any} params.userContent - 用户消息内容
  * @param {Array} params.newMessages - 新消息列表
  * @param {number} params.tokenBudget - token 预算
+ * @param {boolean} [params.excludePersona=false] - runtime 会话路径置 true：静态
+ *   persona 已落在服务端 agent profile 的 system_prompt（单一事实源），前端
+ *   不再上行 DEFAULT_PERSONAS；customSystemPrompt 是用户级覆盖，仍按轮次注入
  * @returns {Promise<{systemPrompt: CacheControlBlock[], error: string|null}>} 系统提示词块和可能的错误信息
  */
 export async function buildSystemPromptBlocks({
@@ -64,6 +67,7 @@ export async function buildSystemPromptBlocks({
   newMessages,
   tokenBudget,
   customSystemPrompt = '',
+  excludePersona = false,
 }: {
   agentType: AgentType;
   paperInfo: { title?: string; authors?: string | string[]; abstract?: string } | null;
@@ -77,6 +81,7 @@ export async function buildSystemPromptBlocks({
   newMessages: Array<Record<string, any>>;
   tokenBudget: number;
   customSystemPrompt?: string;
+  excludePersona?: boolean;
 }): Promise<{ systemPrompt: CacheControlBlock[] | string; error: string | null }> {
   // 按缓存层级分组：Tier 1 -> Tier 2 -> Tier 3
   const tier1Blocks: CacheControlBlock[] = [];  // 稳定内容，强缓存
@@ -90,20 +95,27 @@ export async function buildSystemPromptBlocks({
   // ===== Tier 1: Layer 1 - 论文基础信息（固定注入，最稳定）=====
   // v2 (2026-06-28): persona 由 agentType 字典决定（homepage/paperReader/screening），
   // 用户可通过 customSystemPrompt 覆盖当前 agentType 的默认 persona。
-  const basePersona = customSystemPrompt?.trim() || DEFAULT_PERSONAS[agentType];
+  // P2（web-agent-runtime）：excludePersona 时静态 persona 留在服务端 agent
+  // profile 里，前端只发动态部分；用户自定义 persona 仍按轮次上行生效。
+  const customPersona = customSystemPrompt?.trim() || '';
+  const basePersona = customPersona || (excludePersona ? '' : DEFAULT_PERSONAS[agentType]);
+  const paperLead = '以下是当前论文的元信息，请基于此回答：';
 
   if (strategy.enabledLayers.has('paperInfo') && paperInfo) {
     const layer1Parts = [
-      customSystemPrompt?.trim()
+      customPersona
         ? basePersona
-        : `${basePersona}\n\n以下是当前论文的元信息，请基于此回答：`,
+        : basePersona
+          ? `${basePersona}\n\n${paperLead}`
+          : paperLead, // runtime 路径无自定义 persona：只有论文信息，引导语照发
       `## 论文信息`,
       `**标题**: ${paperInfo.title || '未知'}`,
       paperInfo.authors ? `**作者**: ${Array.isArray(paperInfo.authors) ? paperInfo.authors.join(', ') : paperInfo.authors}` : '',
       paperInfo.abstract ? `\n## 论文摘要\n${paperInfo.abstract}` : '',
     ].filter(Boolean).join('\n');
     tier1Blocks.push(createBlock(layer1Parts, CacheStrategy.STABLE));
-  } else {
+  } else if (basePersona) {
+    // excludePersona 且无自定义 persona 时无 Tier 1 内容，不发空块
     tier1Blocks.push(createBlock(basePersona, CacheStrategy.STABLE));
   }
 
@@ -227,6 +239,7 @@ export interface BuildSystemPromptParams {
   newMessages: Array<Record<string, any>>;
   tokenBudget: number;
   customSystemPrompt?: string;
+  excludePersona?: boolean;
 }
 
 /**

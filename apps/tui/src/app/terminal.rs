@@ -118,18 +118,22 @@ impl App {
         let bearer_token = std::env::var("AUTONOMICS_HTTP_API_TOKEN")
             .ok()
             .filter(|value| !value.trim().is_empty());
-        let shared = host.infra().bib.as_ref().clone();
+        let infra = host.infra();
 
         match runtime.block_on(async {
             // Settings-saved EasyScholar key survives restarts: load the
             // stored value before the router starts serving (`EASYSCHOLAR_KEY`
             // only bootstraps the first run).
-            tui_http::load_stored_easyscholar_key(&shared).await;
-            let router = tui_http::ApiRouterBuilder::new(shared)
+            tui_http::load_stored_easyscholar_key(infra.bib.as_ref()).await;
+            let router = tui_http::ApiRouterBuilder::new(infra.bib.as_ref().clone())
                 .bearer_token(bearer_token)
                 // The web chat endpoint rides the TUI's live model slot:
                 // swapping models in the TUI affects the next web request.
                 .model(model)
+                // The full runtime infra enables resident session-based
+                // agents (`/api/v1/agent/threads`, thread ≡ agent session —
+                // see docs/design/web-agent-runtime.md).
+                .host(infra)
                 .build();
             tui_http::start(router, &addr).await
         }) {

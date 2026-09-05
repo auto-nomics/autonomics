@@ -384,21 +384,21 @@ impl SharedInfra {
         use agentik_core::tools::ToolRegistration;
 
         let file_storage = self.file_storage.clone();
-        // Use the agent's unique hierarchical path (e.g. "/root/researcher/worker1")
-        // as the session key — NOT profile.path, which is shared by all agents
-        // spawned from the same profile blueprint. Using profile.path here was
-        // a multi-agent migration legacy bug: two agents with the same profile
-        // would silently share the same DAG graph, so add_node / add_edge /
-        // run_dag calls from one agent would mutate the other agent's DAG.
-        let engine_client = self.engine_manager.client_for_session(agent_path.as_str());
 
-        let mut tools: Vec<ToolRegistration> = vfs::vbash_registrations(file_storage.clone());
-        if let Some(catalog) = self.catalog.clone() {
-            tools.extend(crate::catalog_tools::catalog_registrations(catalog));
+        let mut tools: Vec<ToolRegistration> = Vec::new();
+        // VFS shell + catalog both browse the shared file storage; they form
+        // one surface and gate together.
+        if profile.enable_vfs_shell {
+            tools.extend(vfs::vbash_registrations(file_storage.clone()));
+            if let Some(catalog) = self.catalog.clone() {
+                tools.extend(crate::catalog_tools::catalog_registrations(catalog));
+            }
         }
-        tools.extend(crate::container_dev_tools::container_dev_registrations(
-            Arc::clone(&self.container_execution),
-        ));
+        if profile.enable_container_dev {
+            tools.extend(crate::container_dev_tools::container_dev_registrations(
+                Arc::clone(&self.container_execution),
+            ));
+        }
 
         if profile.enable_opengwas {
             match opengwas_tools_with_token(file_storage.clone(), None) {
@@ -415,7 +415,17 @@ impl SharedInfra {
             tools.extend(gwascatalog_tools(file_storage));
         }
 
-        tools.extend(data_engine_tools::registrations(Arc::new(engine_client)));
+        if profile.enable_data_engine {
+            // Use the agent's unique hierarchical path (e.g.
+            // "/root/researcher/worker1") as the session key — NOT profile.path,
+            // which is shared by all agents spawned from the same profile
+            // blueprint. Using profile.path here was a multi-agent migration
+            // legacy bug: two agents with the same profile would silently share
+            // the same DAG graph, so add_node / add_edge / run_dag calls from
+            // one agent would mutate the other agent's DAG.
+            let engine_client = self.engine_manager.client_for_session(agent_path.as_str());
+            tools.extend(data_engine_tools::registrations(Arc::new(engine_client)));
+        }
 
         if profile.enable_bibliography {
             let bib_shared = self.bib.clone();
@@ -454,11 +464,13 @@ impl SharedInfra {
 
         // Host control tools (spawn_agent, delegate_to, list_agents, etc.)
         // Pass the agent's own path so list_agents / route_task can exclude self.
-        tools.extend(crate::host_tools::host_tools(
-            self.host_control.clone(),
-            agent_path,
-            &profile.path,
-        ));
+        if profile.enable_host_tools {
+            tools.extend(crate::host_tools::host_tools(
+                self.host_control.clone(),
+                agent_path,
+                &profile.path,
+            ));
+        }
 
         Ok(tools)
     }

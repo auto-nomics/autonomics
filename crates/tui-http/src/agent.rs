@@ -33,7 +33,7 @@ use uuid::Uuid;
 /// How often the stream emits an explicit `ping` event. The frontend resets
 /// its 30 s idle timer on every *parsed event* — a `:`-comment keep-alive is
 /// invisible to its parser, so the ping must be a named event.
-const PING_INTERVAL: Duration = Duration::from_secs(10);
+pub(crate) const PING_INTERVAL: Duration = Duration::from_secs(10);
 
 /// Tool-result previews are capped so a chatty `lit_search` cannot flood the
 /// SSE stream; the frontend renders previews, not full payloads.
@@ -236,7 +236,7 @@ async fn chat(State(state): State<AgentState>, Json(request): Json<ChatRequest>)
     response
 }
 
-enum Mapped {
+pub(crate) enum Mapped {
     /// Forward an SSE event, or stay silent for events the frontend does not
     /// know about.
     Continue(Option<Frame>),
@@ -247,9 +247,9 @@ enum Mapped {
 /// A wire frame in the frontend's SSE protocol, kept as structured data so
 /// the mapping is unit-testable (axum `Event` cannot be rendered back to
 /// text).
-struct Frame {
-    event: &'static str,
-    data: serde_json::Value,
+pub(crate) struct Frame {
+    pub(crate) event: &'static str,
+    pub(crate) data: serde_json::Value,
 }
 
 /// Build an SSE frame with a JSON data payload (`Event::data` takes a string,
@@ -260,13 +260,13 @@ pub(crate) fn sse(event: &'static str, data: impl serde::Serialize) -> Event {
         .data(serde_json::to_string(&data).expect("SSE payloads serialize"))
 }
 
-fn frame_to_event(frame: Frame) -> Event {
+pub(crate) fn frame_to_event(frame: Frame) -> Event {
     sse(frame.event, frame.data)
 }
 
 /// Translate an agentik [`AgentEvent`] into the frontend's SSE protocol:
 /// `text_delta` / `tool_call_start` / `tool_call_result` / `done` / `error`.
-fn map_agent_event(event: AgentEvent, pending_tools: &mut VecDeque<String>) -> Mapped {
+pub(crate) fn map_agent_event(event: AgentEvent, pending_tools: &mut VecDeque<String>) -> Mapped {
     match event {
         AgentEvent::TextDelta(text) => Mapped::Continue(Some(Frame {
             event: "text_delta",

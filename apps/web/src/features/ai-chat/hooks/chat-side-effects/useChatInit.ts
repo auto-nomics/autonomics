@@ -4,8 +4,10 @@
  * 切换论文（paperId 变化）时：
  * 1. 中断上一个未完成的流式 fetch（abortControllerRef.current.abort()）
  * 2. 清除活跃请求 ID（任何延迟到达的旧流式响应都会被忽略）
- * 3. 并行加载聊天历史 + 用户设置（allSettled，互不影响）
+ * 3. 并行加载聊天历史 + 用户设置（allSettled，互不影响）+ 探测 agent 能力
  * 4. 桌面端启动时后端可能还在编译，getSettings 带重试（最多 10 次 × 1500ms）
+ * 5. P2（web-agent-runtime）：bib 为空但 localStorage 有 thread 映射且后端为
+ *    runtime 模式时，从服务端 session 转写水合 UI（对话的真身在 agent.db）
  *
  * 抽出原因：原 ChatPanel 的 init effect（~115 行）跟消息/UI 编排无关，
  * 独立成 hook 让 ChatPanel 专注于对话编排。
@@ -20,10 +22,18 @@ import { useEffect, useState } from 'react';
 import { getMessages } from '../../../../services/chatApi';
 import { getSettings } from '../../../../services/settingsApi';
 import { ensureThreadStructure } from '../../utils/threadUtils';
+import {
+  fetchThreadMessages,
+  getStoredThreadId,
+  probeAgentMode,
+} from '../../api/agentThreadsApi';
+import type { AgentType } from '../../agentTypes';
 
 /** useChatInit 参数 */
 interface UseChatInitParams {
   paperId: string | number;
+  /** 当前面板的 agent 类型 —— runtime thread 映射键的组成部分（reader/screening 不串会话） */
+  agentType: AgentType;
   /** 设置消息列表（聊天历史加载完成后调用） */
   setMessages: React.Dispatch<React.SetStateAction<any[]>>;
   /** 设置用户设置对象 */
@@ -45,10 +55,13 @@ interface UseChatInitParams {
 /**
  * 聊天初始化 Hook
  *
- * @returns loading 初始加载状态（true 期间 ChatPanel 渲染 Spin 占位）
+ * @returns loading 初始加载状态（true 期间 ChatPanel 渲染 Spin 占位）。
+ *   agent 能力探测不在此返回：ChatPanel 为 useChatSender 另行持有同源探测
+ *   状态（probeAgentMode 模块级缓存，两处共享一次 fetch）
  */
 export function useChatInit({
   paperId,
+  agentType,
   setMessages,
   setSettings,
   setStreaming,
@@ -92,18 +105,47 @@ export function useChatInit({
 
     async function init() {
       try {
-        // allSettled：聊天历史和设置互不依赖，一个失败不影响另一个
+        // allSettled：聊天历史和设置互不依赖，一个失败不影响另一个。
+        // 模式探测单飞（模块级缓存，多面板共享一次 fetch），自带降级
+        // （失败 → 'ephemeral'），不进 allSettled
+        const modePromise = probeAgentMode();
         const [msgResult, settingsResult] = await Promise.allSettled([
           getMessages(String(paperId), controller.signal),
           getSettingsWithRetry(controller.signal),
         ]);
+        const mode = await modePromise;
 
         if (controller.signal.aborted) return;
 
         if (msgResult.status === 'fulfilled') {
           // 套一层 ensureThreadStructure：旧数据可能没有 threads 字段，
           // threadUtils.updateThreadInMessages 等会直接 .map(threads)，undefined 会崩
-          setMessages(ensureThreadStructure(msgResult.value.messages || []));
+          const loaded = ensureThreadStructure(msgResult.value.messages || []);
+          setMessages(loaded);
+
+          // P2 水合兜底：bib_meta 里该 scope 还是空对话，但存在 thread 映射
+          // （对话真身在服务端 session）——拉服务端转写恢复 UI。只恢复主对话
+          // 转写；inline 追问线程 P2 不走 session，属已知降级。水合后首轮
+          // persistMessages 会把内容写回 bib_meta，此后走正常加载路径
+          if (mode === 'runtime' && loaded.length === 0) {
+            const storedThreadId = getStoredThreadId(paperId, agentType);
+            if (storedThreadId) {
+              const threadMessages = await fetchThreadMessages(storedThreadId);
+              if (!controller.signal.aborted && threadMessages && threadMessages.length > 0) {
+                // 与 bib 加载同一条约定：套 ensureThreadStructure 补 threads 字段，
+                // 否则追问线程相关操作 .map(threads) 会踩 undefined
+                setMessages(
+                  ensureThreadStructure(
+                    threadMessages.map((m, i) => ({
+                      role: m.role,
+                      content: m.text,
+                      id: `msg-thread-${storedThreadId.slice(0, 8)}-${i}`,
+                    })),
+                  ),
+                );
+              }
+            }
+          }
         } else {
           const err = msgResult.reason;
           if (err?.name !== 'AbortError') {
@@ -142,7 +184,7 @@ export function useChatInit({
       controller.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [paperId]);
+  }, [paperId, agentType]);
 
   return { loading };
 }

@@ -91,6 +91,7 @@ import { useEmbeddingStatus } from '../hooks/chat-side-effects/useEmbeddingStatu
 import { useSmartScroll } from '../hooks/chat-side-effects/useSmartScroll'; // 智能滚动 hook
 import { useChatInit } from '../hooks/chat-side-effects/useChatInit'; // 聊天初始化 hook
 import { useMessageActions } from '../hooks/chat-side-effects/useMessageActions'; // 消息级动作 hook
+import { probeAgentMode, type AgentMode } from '../api/agentThreadsApi'; // P2: 后端 agent 能力探测（runtime 会话模式）
 
 // ===== 会话恢复相关导入 =====
 // (removed) useSessionRecovery / RecoveryBanner 已随多 Agent team 模式移除
@@ -416,6 +417,20 @@ const ChatPanel = forwardRef(function ChatPanel({
   // ========================================================================
   // hook 内部封装了系统提示词构建、API 请求发送、SSE 流式响应解析等完整逻辑
   // 传入所有必要的状态和回调函数作为参数，hook 返回可直接调用的 sendMessages 方法
+
+  // P2（web-agent-runtime）：后端 agent 能力探测。模块级缓存，与 useChatInit
+  // 内部（水合兜底用）共享同一次 fetch；探测失败自动降级 'ephemeral' 走旧端点
+  const [agentMode, setAgentMode] = useState<AgentMode>('ephemeral');
+  useEffect(() => {
+    let cancelled = false;
+    probeAgentMode().then((mode) => {
+      if (!cancelled) setAgentMode(mode);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const { sendMessages } = useChatSender({ // 解构获取 sendMessages 发送函数
     setMessages,               // 设置消息列表的函数（用于 hook 内部更新消息状态）
     setStreaming,               // 设置流式状态的函数（用于 hook 内部控制发送中状态）
@@ -447,6 +462,7 @@ const ChatPanel = forwardRef(function ChatPanel({
     customSystemPrompt,         // 用户自定义系统提示词（覆盖默认人设）
     agentType,                  // 当前面板的 agent 类型（systemPromptBuilder 据此选 persona）
     tools: [], // 工具挂载由后端 persona 决定（web_search / smart_fetch / pubmed）
+    agentMode,                  // 'runtime' 时主对话走会话式 /threads/:id/chat（P2）
   });
 
   // ========================================================================
@@ -622,8 +638,11 @@ const ChatPanel = forwardRef(function ChatPanel({
    * paperId 变化时：中断上一个流式请求 → 并行加载聊天历史 + 用户设置
    * （桌面端启动时 sidecar 可能还在编译，getSettings 自动重试最多 15 秒）
    */
+  // agentType 参与 runtime thread 映射键；bib 为空且有映射时 useChatInit
+  // 还会从服务端转写水合（P2 web-agent-runtime）
   const { loading } = useChatInit({
     paperId,
+    agentType,
     setMessages,
     setSettings,
     setStreaming,

@@ -99,6 +99,9 @@ pub struct ApiRouterBuilder {
     shared: bib_base::BibShared,
     bearer_token: Option<String>,
     model: Option<Arc<arc_swap::ArcSwapOption<agentik_sdk::model::Model>>>,
+    /// Wiring for the resident-agent module (`/api/v1/agent/threads`).
+    #[cfg(feature = "runtime-host")]
+    infra: Option<runtime::host::SharedInfra>,
 }
 
 impl ApiRouterBuilder {
@@ -108,6 +111,8 @@ impl ApiRouterBuilder {
             shared,
             bearer_token: None,
             model: None,
+            #[cfg(feature = "runtime-host")]
+            infra: None,
         }
     }
 
@@ -125,11 +130,24 @@ impl ApiRouterBuilder {
         self
     }
 
+    /// Serve resident runtime-hosted agents (`/api/v1/agent/threads`)
+    /// alongside the ephemeral endpoint. Only exists with the
+    /// `runtime-host` feature; the minimal embeddable host stays
+    /// ephemeral-only.
+    #[cfg(feature = "runtime-host")]
+    #[must_use]
+    pub fn host(mut self, infra: runtime::host::SharedInfra) -> Self {
+        self.infra = Some(infra);
+        self
+    }
+
     pub fn build(self) -> Router {
         let Self {
             shared,
             bearer_token,
             model,
+            #[cfg(feature = "runtime-host")]
+            infra,
         } = self;
         let auth_state = BearerAuthState {
             token: Arc::new(bearer_token.filter(|token| !token.trim().is_empty())),
@@ -140,9 +158,28 @@ impl ApiRouterBuilder {
             .route("/api/health", get(health))
             .nest("/api/v1/bib", crate::bib::router(shared.clone()));
         if let Some(model) = model {
+            let agent_api =
+                crate::agent::router(crate::agent::AgentState { shared, model: model.clone() });
+            #[cfg(feature = "runtime-host")]
+            let (agent_api, runtime_mounted) = match infra {
+                Some(infra) => (
+                    agent_api.merge(crate::agent_runtime::router(
+                        crate::agent_runtime::RuntimeAgentState::new(infra, model),
+                    )),
+                    true,
+                ),
+                None => (agent_api, false),
+            };
+            #[cfg(not(feature = "runtime-host"))]
+            let runtime_mounted = false;
+            // Capability index: the frontend probes this to pick between the
+            // session-based (`/threads`) and legacy (`/chat`) protocols.
+            let mode = if runtime_mounted { "runtime" } else { "ephemeral" };
             api = api.nest(
                 "/api/v1/agent",
-                crate::agent::router(crate::agent::AgentState { shared, model }),
+                agent_api.route("/", get(move || async move {
+                    Json(serde_json::json!({ "mode": mode }))
+                })),
             );
         }
 
