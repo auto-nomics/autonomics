@@ -307,6 +307,9 @@ async fn article_refresh_preserves_related_records() {
         file_hash: None,
         file_size: None,
         uploaded_at: None,
+        parse_status: "done".to_owned(),
+        parse_engine: None,
+        parse_error: None,
     })
     .await
     .unwrap();
@@ -488,6 +491,9 @@ async fn fulltext_crud() {
         file_hash: Some("sha256:abc123".into()),
         file_size: Some(1048576),
         uploaded_at: Some(chrono::Utc::now()),
+        parse_status: "done".to_owned(),
+        parse_engine: None,
+        parse_error: None,
     };
     db.upsert_fulltext(&ft).await.unwrap();
 
@@ -541,6 +547,9 @@ async fn deleting_fulltext_reverts_collection_status() {
         file_hash: None,
         file_size: None,
         uploaded_at: None,
+        parse_status: "done".to_owned(),
+        parse_engine: None,
+        parse_error: None,
     })
     .await
     .unwrap();
@@ -596,6 +605,9 @@ async fn upsert_fulltext_syncs_collection_fetch_status() {
         file_hash: None,
         file_size: None,
         uploaded_at: None,
+        parse_status: "done".to_owned(),
+        parse_engine: None,
+        parse_error: None,
     };
     db.upsert_fulltext(&ft).await.unwrap();
 
@@ -799,6 +811,9 @@ async fn search_with_fulltext() {
         file_hash: None,
         file_size: None,
         uploaded_at: None,
+        parse_status: "done".to_owned(),
+        parse_engine: None,
+        parse_error: None,
     };
     db.upsert_fulltext(&ft).await.unwrap();
 

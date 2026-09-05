@@ -714,6 +714,25 @@ pub struct FullText {
 
     #[serde(default)]
     pub uploaded_at: Option<DateTime<Utc>>,
+
+    /// Parse pipeline state: pending / processing / done / failed. Defaults to
+    /// `done` so pre-existing rows (sync-extracted at upload) stay readable.
+    #[serde(default = "default_parse_status")]
+    pub parse_status: String,
+
+    /// Which parser produced `text_content`: `mineru` (async cloud parse) or
+    /// `builtin` (sync local extraction). `None` for legacy rows.
+    #[serde(default)]
+    pub parse_engine: Option<String>,
+
+    /// Human-readable failure reason when `parse_status` is `failed`.
+    #[serde(default)]
+    pub parse_error: Option<String>,
+}
+
+/// Serde default for [`FullText::parse_status`].
+fn default_parse_status() -> String {
+    "done".to_owned()
 }
 
 // ---------------------------------------------------------------------------

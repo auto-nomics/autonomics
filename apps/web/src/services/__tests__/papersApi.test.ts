@@ -100,16 +100,18 @@ function callOf(f: ReturnType<typeof makeFetch>, index = 0) {
 }
 
 /** 列表接口的默认路由：/articles 返回给定 body，/collections、/journals/metrics
- * 各自返回给定集合（getPapers 的 Promise.all 并行源） */
+ * 与 /fulltext-statuses 各自返回给定集合（getPapers 的 Promise.all 并行源） */
 function listFetch(
   articlesBody: unknown,
   collections: Array<Record<string, unknown>> = [],
   journals: Array<Record<string, unknown>> = [],
+  statuses: Array<Record<string, unknown>> = [],
 ) {
   return makeFetch((url: unknown) => {
     const u = String(url);
     if (u.includes('/collections')) return Promise.resolve(jsonResponse({ collections }));
     if (u.includes('/journals/metrics')) return Promise.resolve(jsonResponse({ journals }));
+    if (u.includes('/fulltext-statuses')) return Promise.resolve(jsonResponse({ statuses }));
     return Promise.resolve(jsonResponse(articlesBody));
   });
 }
@@ -298,6 +300,53 @@ describe('getPapers — 参数映射', () => {
     const res = await getPapers();
     expect(res.papers).toHaveLength(1);
     expect(res.papers[0].impact_factor).toBeNull();
+  });
+
+  it('解析状态由 /fulltext-statuses 按 article_id 倒排覆盖（MinerU 异步管线）', async () => {
+    const f = listFetch(
+      {
+        total: 3,
+        articles: [
+          makeArticle({ id: 'doi:10.1/a', has_fulltext: true }), // 解析中：pending 覆盖默认 done
+          makeArticle({ id: 'doi:10.1/b', has_fulltext: true }), // 失败：带 parse_error
+          makeArticle({ id: 'doi:10.1/c' }), // 无状态行 → 旧语义「有/无全文」推导
+        ],
+      },
+      [],
+      [],
+      [
+        { article_id: 'doi:10.1/a', parse_status: 'pending', parse_engine: null, parse_error: null },
+        { article_id: 'doi:10.1/b', parse_status: 'failed', parse_engine: null, parse_error: 'MinerU parse failed: quota' },
+      ],
+    );
+
+    const res = await getPapers();
+    // Promise.all 第四发是 /fulltext-statuses
+    expect(callOf(f, 3).url).toBe('/api/v1/bib/fulltext-statuses');
+
+    const [pending, failed, noRow] = res.papers;
+    expect(pending.parse_status).toBe('pending');
+    expect(pending.parse_engine).toBeNull();
+    expect(failed.parse_status).toBe('failed');
+    expect(failed.parse_error).toBe('MinerU parse failed: quota');
+    // 无倒排行的：has_fulltext 缺失 → none（有标记时会回落旧语义 done）
+    expect(noRow.parse_status).toBe('none');
+  });
+
+  it('/fulltext-statuses 请求失败时列表照常返回，解析状态退化为旧语义推导', async () => {
+    makeFetch((url: unknown) => {
+      const u = String(url);
+      if (u.includes('/fulltext-statuses')) {
+        return Promise.resolve(jsonResponse({ error: 'boom' }, false, 500));
+      }
+      return Promise.resolve(jsonResponse({
+        total: 1,
+        articles: [makeArticle({ has_fulltext: true })],
+      }));
+    });
+
+    const res = await getPapers();
+    expect(res.papers[0].parse_status).toBe('done'); // 有全文 → 旧语义 done
   });
 
   it('title 在后端白名单里 → 直接透传，返回顺序即后端顺序', async () => {
@@ -670,11 +719,47 @@ describe('fetchMetadata — 手动期刊指标获取', () => {
 // 桩
 // ============================================================================
 
-describe('桩化函数（autonomics 不提供的能力）', () => {
-  it('reparsePaper reject', async () => {
-    await expect(reparsePaper(SAFE_ID)).rejects.toThrow(/解析管线/);
+// ============================================================================
+// 解析管线（MinerU）
+// ============================================================================
+
+describe('reparsePaper — POST /articles/{id}/reparse', () => {
+  it('POST 到百分号编码的真实 ID，透传后端 message', async () => {
+    const f = makeFetch(() =>
+      Promise.resolve(jsonResponse({ id: REAL_ID, message: 're-parse started' })),
+    );
+
+    const res = await reparsePaper(SAFE_ID);
+
+    const { url, init } = callOf(f);
+    expect(url).toBe(`/api/v1/bib/articles/${ENC}/reparse`);
+    expect(init.method).toBe('POST');
+    expect(res.message).toBe('re-parse started');
   });
 
+  it('message 缺失时回落默认文案', async () => {
+    makeFetch(() => Promise.resolve(jsonResponse({})));
+
+    const res = await reparsePaper(SAFE_ID);
+    expect(res.message).toBe('重新解析已开始');
+  });
+});
+
+describe('getStreamUrl — SSE 进度端点', () => {
+  it('返回百分号编码真实 ID 的同源相对路径（fetch 读取器直接可用）', () => {
+    expect(getStreamUrl(SAFE_ID)).toBe(`/api/v1/bib/articles/${ENC}/parse/stream`);
+  });
+
+  it('接受真实 ID 输入（容错，不强制 safeId）', () => {
+    expect(getStreamUrl(REAL_ID)).toBe(`/api/v1/bib/articles/${ENC}/parse/stream`);
+  });
+});
+
+// ============================================================================
+// 桩
+// ============================================================================
+
+describe('桩化函数（autonomics 不提供的能力）', () => {
   it('translatePaper reject', async () => {
     await expect(translatePaper(SAFE_ID)).rejects.toThrow(/翻译/);
   });
@@ -700,9 +785,5 @@ describe('桩化函数（autonomics 不提供的能力）', () => {
     const res = await getPaperTypes();
     expect(Object.keys(res.types).length).toBeGreaterThan(0);
     expect(f).not.toHaveBeenCalled();
-  });
-
-  it('getStreamUrl 返回一个路径字符串（无解析进度流）', () => {
-    expect(getStreamUrl(SAFE_ID)).toMatch(/^\//);
   });
 });

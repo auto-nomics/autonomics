@@ -8,8 +8,9 @@
  * - 分页/排序：jayread 用 page/pageSize + camelCase 排序键，autonomics 用
  *   offset/limit + created_at|updated_at|title|year 白名单；后端不支持的排序键
  *   在前端本地排序补齐
- * - 期刊指标（fetchMetadata → fetch-metrics）已接通；reparse / stream /
- *   translate / download 仍桩化，UI 走既有的失败分支优雅降级
+ * - 解析管线：PDF 走 MinerU 异步解析（上传即返回 pending → SSE 推
+ *   progress/done/error），reparse / stream 已接通；translate / download 仍桩化，
+ *   UI 走既有的失败分支优雅降级；期刊指标（fetchMetadata → fetch-metrics）已接通
  */
 import request, { invalidateCache } from './client';
 import {
@@ -154,10 +155,11 @@ interface UploadArticleResponse {
 /**
  * 上传 PDF 文件创建论文记录
  *
- * POST /articles/upload（multipart）：服务端抽取文本、扫描 DOI / arXiv
- * 标识符、命中则经 gateway 拉真实元数据（离线落按标识符索引的存根）、
- * 未命中建 `local:{uuid}` 手工条目，并可选挂进分类——一步到位，**没有
- * 后续解析流水线**，返回即终态。
+ * POST /articles/upload（multipart）：服务端快速本地抽取只用于扫描
+ * DOI / arXiv 标识符（命中则经 gateway 拉真实元数据，离线落按标识符索引
+ * 的存根；未命中建 `local:{uuid}` 手工条目），可选挂进分类。**PDF 正文
+ * 由 MinerU 异步解析**：返回即 pending 终态，进度走 getStreamUrl 的
+ * SSE 流，done 后全文可读（txt/html 仍为同步抽取，返回即 done）。
  *
  * 返回完整 Paper（含 id/parse_status/title 等），列表行可直接渲染；
  * `created: false` 表示标识符命中已有文献、文件挂到了原条目上（调用方
@@ -179,8 +181,8 @@ export async function uploadPaper(
     form.append('category_id', String(categoryId));
   }
 
-  // 文本抽取（含 OCR 回退）在服务端同步完成，扫描件可能要跑 tesseract——
-  // 默认 30s 超时对大 PDF 太紧，放宽到 5 分钟
+  // PDF 上传本身即时返回（正文异步解析），但 txt/html 仍走服务端同步
+  // 抽取，扫描件场景已不存在——保留 5 分钟上限作为大文件传输的兜底
   const res = await request<UploadArticleResponse>('/articles/upload', {
     method: 'POST',
     body: form,
@@ -212,18 +214,22 @@ export async function getPapers(params: GetPapersParams = {}, signal?: AbortSign
   // （PaperListPage 用它建「论文 → 分类」映射）。并行多拉一次 /collections 在
   // 前端倒排，比按文章逐个查成员便宜一个数量级，且命中 client 的各自缓存。
   // 期刊指标（IF / 分区）同理：/journals/metrics 是期刊级缓存表，一次拉全量
-  // 在前端按规范化期刊名匹配注入。
-  const [res, collections, journals] = await Promise.all([
+  // 在前端按规范化期刊名匹配注入。解析状态（MinerU pending/processing/done/
+  // failed）同理：/fulltext-statuses 一次拉全量按 article_id 倒排覆盖。
+  const [res, collections, journals, parseStatuses] = await Promise.all([
     request<BibArticleListResponse>(`/articles?${query}`, { signal }),
     request<{ collections?: BibCollectionLike[] }>('/collections', { signal }).catch(() => null),
     request<{ journals?: BibJournalMetrics[] }>('/journals/metrics', { signal }).catch(() => null),
+    getFulltextStatuses(signal),
   ]);
 
   const membership = collectionMembershipOf(collections?.collections);
   const metrics = journalMetricsIndex(journals?.journals);
+  const parseIndex = new Map(parseStatuses.map((row) => [row.article_id, row]));
   const papers = articlesOf(res).map((article) => {
+    const parse = parseIndex.get(article.id);
     const paper = {
-      ...articleToPaper(article),
+      ...articleToPaper(article, undefined, undefined, parse),
       category_ids: membership.get(article.id) ?? [],
     };
     // 期刊指标注入：匹配不上（无期刊名 / 未缓存）时保持 articleToPaper
@@ -265,6 +271,9 @@ export async function getPapers(params: GetPapersParams = {}, signal?: AbortSign
  *
  * 同时把合成的附件数组挂在返回对象上：PaperReaderPage 会读
  * `(paper as any).attachments` 来判断是否显示「正在查看非主附件」横幅。
+ *
+ * 期刊指标（IF / 分区）与列表页同源：并行拉一次 /journals/metrics 按期刊名
+ * 匹配注入（client 有缓存，重复打开不会重复请求）。
  *
  * @param {string} id - 论文 ID（safeId）
  * @param {AbortSignal} [signal] - 可选的 AbortSignal
@@ -426,33 +435,57 @@ export async function getMarkdown(id: string, signal?: AbortSignal): Promise<Get
 }
 
 // ============================================================
-// 桩：autonomics 不提供的能力
+// 解析管线（MinerU）
 // ============================================================
+
+/** /fulltext-statuses 的行形状 */
+interface BibFulltextParseStatus {
+  article_id: string;
+  parse_status: string;
+  parse_engine: string | null;
+  parse_error: string | null;
+}
+
+/**
+ * 拉全量解析状态（article_id 索引）
+ *
+ * GET /fulltext-statuses → {statuses: [...]}。列表页与 getPapers 并行拉取后
+ * 在前端倒排（循 /collections + /journals/metrics 的既有模式）。
+ * 失败按空表处理：解析状态只是展示增强，不应拖垮列表。
+ */
+export async function getFulltextStatuses(signal?: AbortSignal): Promise<BibFulltextParseStatus[]> {
+  const res = await request<{ statuses?: BibFulltextParseStatus[] }>('/fulltext-statuses', { signal })
+    .catch(() => ({ statuses: [] as BibFulltextParseStatus[] }));
+  return res.statuses ?? [];
+}
 
 /**
  * 重新解析论文
  *
- * ⚠️ 桩：autonomics 无 PDF 解析管线（无 MinerU/OCR 后端任务）。
- * 保持签名不变，调用方（handleReparse）会 toast 失败提示。
- *
- * stubbed: capability not present in autonomics backend (see plan Phase 5)
+ * POST /articles/{enc}/reparse：把 fulltexts 行拨回 pending 并重新拉起
+ * MinerU 后台任务。409 = 已有解析在跑；400 = 无 VFS 源文件或未配 token。
+ * 进度经 getStreamUrl 的 SSE 流推送，调用方应在成功后订阅。
  */
-export async function reparsePaper(_id: string, _engine: string = 'mineru', signal?: AbortSignal): Promise<ReparsePaperResponse> {
-  void _id; void _engine; void signal;
-  throw new Error('重新解析暂不可用（autonomics 无解析管线）');
+export async function reparsePaper(id: string, _engine: string = 'mineru', signal?: AbortSignal): Promise<ReparsePaperResponse> {
+  void _engine; // 后端固定走 MinerU（vlm），engine 参数仅为签名兼容
+  const realId = fromSafeId(id);
+  const res = await request<{ id?: string; message?: string }>(
+    `/articles/${encodeIdSegment(realId)}/reparse`,
+    { method: 'POST', signal },
+  );
+  invalidateCache('/fulltext-statuses');
+  return { message: res?.message ?? '重新解析已开始' };
 }
 
 /**
- * 获取论文 SSE 实时状态推送端点 URL
+ * 获取论文解析进度的 SSE 端点 URL
  *
- * ⚠️ 桩：autonomics 无解析进度流。返回一个永不产生事件的 URL，
- * EventSource 会自行静默重试，进度条只是不更新（jayread 的既有降级行为）。
- *
- * stubbed: capability not present in autonomics backend (see plan Phase 5)
+ * 同源相对路径（同 jayread）。事件：progress{percent,stage} / done{parse_engine,
+ * markdown_length} / error{message}，另有 10s 心跳 ping。鉴权由 useSSEProgress
+ * 的 fetch 读取器带 Authorization 头（EventSource 设不了自定义头）。
  */
 export function getStreamUrl(id: string): string {
-  void id;
-  return `/api/v1/bib/no-parse-stream`;
+  return `/api/v1/bib/articles/${encodeIdSegment(fromSafeId(id))}/parse/stream`;
 }
 
 /**
@@ -475,6 +508,10 @@ export async function fetchMetadata(id: string, signal?: AbortSignal): Promise<F
     fetched: !!data?.metrics,
   };
 }
+
+// ============================================================
+// 桩：autonomics 不提供的能力
+// ============================================================
 
 /**
  * 检查是否有论文正在等待元数据获取

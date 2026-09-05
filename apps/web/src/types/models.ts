@@ -11,6 +11,10 @@ export interface Paper {
   doi: string | null;
   abstract: string | null;
   parse_status: string;
+  /** SSE progress 事件带来的实时进度（0-100）；仅解析期间存在 */
+  parse_progress?: number;
+  /** SSE progress 事件带来的阶段标签（如「解析中 3/12 页」） */
+  parse_stage?: string;
   title_zh: string | null;
   abstract_zh: string | null;
   category_ids: string[];

@@ -493,6 +493,19 @@ async fn build_app_with_vfs() -> (axum::Router, tempfile::TempDir) {
         .await
         .unwrap()
         .with_file_storage(file_storage);
+    // PDF 上传走 MinerU 异步管线，无 token 会被 400 拒绝。本文件的测试关心的是
+    // 文件托管语义（原始字节落 VFS、application/pdf mime 回源），不是解析本身：
+    // 配一个指向不可达 loopback 的假 key —— 上传闸门放行，后台解析任务在本地
+    // 立即连接失败，不会发出真实网络请求（解析管线的完整覆盖在 api_web.rs 的
+    // mock MinerU 测试）。
+    shared
+        .parse_hub
+        .mineru
+        .set_key(Some("unused-test-token".to_owned()));
+    shared
+        .parse_hub
+        .mineru
+        .set_base_url("http://127.0.0.1:1".to_owned());
     (tui_http::api_router(shared), directory)
 }
 

@@ -21,15 +21,18 @@
 | 方法 | 路径 | 功能 |
 |---|---|---|
 | `GET` | `/api/v1/bib/health` | 文献模块状态、文章数、启用的外部源 |
-| `GET` | `/api/v1/bib/articles` | 搜索/列出本地库：`query`、`limit`（上限 2000）、`offset`、`sort`（`created_at`\|`updated_at`\|`title`\|`year`）、`order`（`asc`\|`desc`）、`collection_id`、`unfiled=true`；响应含 `total`/`hits`/`articles`/`offset`/`limit` |
+| `GET` | `/api/v1/bib/articles` | 搜索/列出本地库：`query`、`limit`（上限 2000）、`offset`、`sort`（`created_at`\|`updated_at`\|`title`\|`year`）、`order`（`asc`\|`desc`）、`collection_id`、`unfiled=true`；响应含 `total`/`hits`/`articles`/`offset`/`limit`，`articles` 每行附带 `has_fulltext` 布尔标记（该文献是否已存全文） |
 | `GET` | `/api/v1/bib/articles/unfiled` | 列出所有未归入任何集合的文献，可选 `limit` |
 | `POST` | `/api/v1/bib/articles` | 手动创建文献元数据 |
-| `POST` | `/api/v1/bib/articles/upload` | 上传文档文件一步建档：抽取文本后扫描 DOI / arXiv 标识符，命中则经 gateway 拉取真实元数据（离线时落为按标识符索引的存根），未命中创建 `local:{uuid}` 手工条目；重复上传会挂到已有文献上。multipart 字段：`file`（必需）、`category_id`（可选） |
+| `POST` | `/api/v1/bib/articles/upload` | 上传文档文件一步建档：本地快速抽取只用于扫描 DOI / arXiv 标识符（不做 OCR），命中则经 gateway 拉取真实元数据（离线时落为按标识符索引的存根），未命中创建 `local:{uuid}` 手工条目；重复上传会挂到已有文献上。**PDF 正文走 MinerU 云 API 异步解析**（响应即回，`fulltext.parse_status="pending"`，进度订阅 `parse/stream`，未配 token 直接 400——见下节）；txt / html 仍为同步本地抽取（返回即 `done`/`builtin`）。multipart 字段：`file`（必需）、`category_id`（可选） |
 | `POST` | `/api/v1/bib/articles/import` | 按 DOI / PMID / arXiv 等标识符从外部源导入，并可自动获取 OA 全文 |
 | `POST` | `/api/v1/bib/articles/import/batch` | 批量导入文献文件：`{"format": "bibtex"\|"ris"\|"csl_json"\|"auto", "content", "category_id"?}`；标识符已存在或批内重复的条目合并进已有 id（`duplicate_details`），缺标题的条目进 `failed`；`auto` 按内容嗅探格式 |
 | `GET` / `PUT` / `DELETE` | `/api/v1/bib/articles/{id}` | 查看、更新、删除文献。详情响应为 `{"article", "fulltext", "fulltext_pagination", "annotations"}`——全文元信息在顶层 `fulltext` 字段，不在 Article 内；全文翻页用 `fulltext_pagination` 的 `offset`/`limit`/`next_offset`。所有 `DELETE` 一律 200 + JSON（无 204；删除不存在的文献返回 200 与 `"deleted": false`） |
-| `GET` / `POST` / `DELETE` | `/api/v1/bib/articles/{id}/fulltext` | 查看、上传、删除全文；`GET` 支持 `offset` / `limit` 字符分页（默认 100000，最大 500000）；上传为 multipart 字段 `file`，原始文件按 SHA-256 内容寻址保存到文献 VFS，并自动抽取纯文本 |
+| `GET` / `POST` / `DELETE` | `/api/v1/bib/articles/{id}/fulltext` | 查看、上传、删除全文；`GET` 支持 `offset` / `limit` 字符分页（默认 100000，最大 500000）；上传为 multipart 字段 `file`，原始文件按 SHA-256 内容寻址保存到文献 VFS。PDF 上传与 `/articles/upload` 同走 MinerU 异步管线（返回 pending），txt / html 同步抽取纯文本（返回即 done） |
 | `GET` / `HEAD` | `/api/v1/bib/articles/{id}/fulltext/raw` | 流式返回 VFS 中的原始文件，支持单区间 HTTP Range；HTML/PDF 以安全下载语义响应 |
+| `POST` | `/api/v1/bib/articles/{id}/reparse` | 重新解析已有全文（右键「重解析」入口）：fulltexts 行拨回 `pending` 并重新拉起 MinerU 后台任务，进度走 `parse/stream`。无全文 404；源文件不在 VFS（如 open-access 内联文本）400；已有解析在跑 409 |
+| `GET` | `/api/v1/bib/articles/{id}/parse/stream` | 解析进度 SSE 流（事件表与懒恢复语义见下方「全文解析」节） |
+| `GET` | `/api/v1/bib/fulltext-statuses` | 全量解析状态：`{"statuses":[{article_id, parse_status, parse_engine, parse_error}]}`——列表页并行拉取后在前端按 article_id 倒排 |
 | `GET` / `POST` | `/api/v1/bib/articles/{id}/annotations` | 查看（可选 `?page=N` 过滤）、新增注释；高亮几何放在 `data` JSON 列（`{"rects":[...],"color":...}`） |
 | `PUT` / `DELETE` | `/api/v1/bib/annotations/{id}` | 更新（部分更新，显式 `null` 清空字段）、删除注释 |
 | `GET` | `/api/v1/bib/articles/{id}/csl-json` | 单篇文献的 CSL JSON（引用引擎直接可用） |
@@ -41,11 +44,47 @@
 | `GET` / `POST` | `/api/v1/bib/collections/{id}/articles` | 列出、添加集合成员 |
 | `DELETE` | `/api/v1/bib/collections/{id}/articles/{article_id}` | 移除集合成员 |
 | `PUT` | `/api/v1/bib/collections/{id}/status` | 更新集合状态 |
-| `GET` / `PUT` | `/api/v1/bib/settings` | Web 前端设置，存于 `bib_meta` 的 `web:` 命名空间；PUT 为逐键合并（不覆盖未提及的键）。含服务端热换键 `easyscholar_key`（保存即生效，重启时由启动加载恢复） |
+| `GET` / `PUT` | `/api/v1/bib/settings` | Web 前端设置，存于 `bib_meta` 的 `web:` 命名空间；PUT 为逐键合并（不覆盖未提及的键）。含服务端热换键 `easyscholar_key`、`mineru_key`、`mineru_url`（见下节） |
 | `GET` / `POST` | `/api/v1/bib/chat` | 聊天记录持久化：`?scope={token}` 读取 `{"scope","payload"}`，POST 整体覆盖（`navigator.sendBeacon` 友好；payload ≤ 5 MiB） |
 | `GET` | `/api/v1/bib/requests` | 列出待补全文请求 |
 | `GET` | `/api/v1/bib/export` | 导出 BibTeX / RIS / Markdown / CSL JSON |
 | `GET` | `/api/v1/bib/search/external` | 并发搜索 PubMed、arXiv、bioRxiv、OpenAlex、Crossref、Semantic Scholar |
+
+### 全文解析（MinerU 云 API，异步）
+
+PDF 上传不在服务端同步抽取正文，而是走 MinerU（`model_version=vlm`）异步流水线，**失败不回退本地解析**：
+
+1. 上传（`/articles/upload` 或 `/articles/{id}/fulltext`）即返回，`fulltexts.parse_status = "pending"`；后台任务读 VFS 源文件 → 上传 MinerU → 轮询页进度 → markdown 落 `text_content`（`done` / `parse_engine="mineru"`）
+2. 客户端订阅 `GET /articles/{id}/parse/stream` 收进度；打开流会**懒恢复**重启后丢失的任务（行状态 pending/processing 且无活跃任务时重新拉起，重新上传 MinerU）
+3. 进程重启后刷新页面即可续上（同上懒恢复）；失败行 `failed` + `parse_error`，可 POST reparse 重试
+
+状态机：`pending → processing → done | failed`（旧库行缺省 `done`；txt/html 同步路径落 `done`/`builtin`）。
+
+`parse/stream` 事件（与 agent 聊天同一 SSE 序列化，data 为 snake_case、不含文章 id）：
+
+| 事件 | data | 说明 |
+|---|---|---|
+| `progress` | `{"percent","stage"}` | 上传 5%；页进度 10–90% 带「解析中 x/y 页」 |
+| `done` | `{"parse_engine","markdown_length"}` | 终态，流关闭 |
+| `error` | `{"message"}` | 业务失败终态（客户端不应重连），流关闭 |
+| `ping` | `{}` | 每 10 秒心跳 |
+
+流打开时解析已结束的，会从 DB 快照合成一个 done/error 终态事件再关流——晚到的订阅者不会只收到心跳。
+
+**Token 配置**（无 token 上传 PDF 直接 400）：
+
+```bash
+# 运行时热换（存 bib_meta `web:` KV，PUT /settings 逐键合并，优先生效）：
+curl -X PUT http://127.0.0.1:8765/api/v1/bib/settings \
+  -H 'Content-Type: application/json' \
+  -d '{"settings":{"mineru_key":"<token>","mineru_url":"https://mineru.net"}}'
+
+# 或进程环境变量（启动种子，settings 未覆盖时兜底）：
+export MINERU_API_TOKEN=<token>
+export ENDPOINT_MINERU_URL=https://mineru.net   # 缺省即此值
+```
+
+限制：文件 ≤ 50MiB（沿用 `MAX_UPLOAD_BYTES`）；MinerU 侧申请 5min / 上传 10min / 轮询 30s（5s 间隔）/ 下载 5min / 单任务总时限 10min。
 
 ### Agent 聊天（SSE）
 
@@ -127,9 +166,13 @@ curl -X POST http://127.0.0.1:8765/api/v1/bib/articles/import \
 curl -X POST http://127.0.0.1:8765/api/v1/bib/articles/<article-id>/fulltext \
   -F file=@paper.pdf
 
-# 上传 PDF 一步建档（自动识别 DOI / arXiv，可指定归类）：
+# 上传 PDF 一步建档（自动识别 DOI / arXiv，可指定归类；正文走 MinerU 异步）：
 curl -X POST http://127.0.0.1:8765/api/v1/bib/articles/upload \
   -F file=@paper.pdf -F category_id=<collection-id>
+
+# 重解析已有全文 + 订阅进度（SSE）：
+curl -X POST http://127.0.0.1:8765/api/v1/bib/articles/<article-id>/reparse
+curl -N http://127.0.0.1:8765/api/v1/bib/articles/<article-id>/parse/stream
 
 # 批量导入 .bib（format 亦可 ris / csl_json / auto）：
 curl -X POST http://127.0.0.1:8765/api/v1/bib/articles/import/batch \

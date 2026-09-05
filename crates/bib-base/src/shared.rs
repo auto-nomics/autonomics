@@ -24,6 +24,7 @@ use std::sync::Arc;
 
 use crate::Result;
 use crate::bib_base::BibBase;
+use crate::parse_hub::ParseHub;
 use crate::query::LiteratureGateway;
 
 /// Build the shared `reqwest::Client` from [`BibHttpOptions`]. Used by
@@ -126,6 +127,11 @@ pub struct BibShared {
     /// (optional; absent = metrics silently unavailable), hot-swappable at
     /// runtime via the settings endpoint without restarting the server.
     pub easyscholar: Arc<easyscholar::EasyscholarClient>,
+
+    /// Async MinerU parse pipeline for uploaded PDFs: background tasks plus
+    /// the per-article event channels the SSE endpoint subscribes to. Holds
+    /// the hot-swappable MinerU client (key / base URL via settings).
+    pub parse_hub: Arc<ParseHub>,
 }
 
 impl BibShared {
@@ -163,6 +169,7 @@ impl BibShared {
         let crossref = crossref_client_from_env();
         let s2 = s2_client_from_env();
         let easyscholar = Arc::new(easyscholar::EasyscholarClient::from_env());
+        let parse_hub = Arc::new(ParseHub::new(Arc::new(mineru::MineruClient::from_env())));
         let gateway = Arc::new(LiteratureGateway::with_all_shared_clients(
             eutils.clone(),
             arxiv.clone(),
@@ -183,6 +190,7 @@ impl BibShared {
             crossref,
             s2,
             easyscholar,
+            parse_hub,
         })
     }
 
@@ -204,6 +212,7 @@ impl BibShared {
         let crossref = crossref_client_from_env();
         let s2 = s2_client_from_env();
         let easyscholar = Arc::new(easyscholar::EasyscholarClient::from_env());
+        let parse_hub = Arc::new(ParseHub::new(Arc::new(mineru::MineruClient::from_env())));
         let gateway = Arc::new(LiteratureGateway::with_all_shared_clients(
             eutils.clone(),
             arxiv.clone(),
@@ -224,6 +233,7 @@ impl BibShared {
             crossref,
             s2,
             easyscholar,
+            parse_hub,
         })
     }
 

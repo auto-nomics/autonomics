@@ -254,7 +254,7 @@ struct Frame {
 
 /// Build an SSE frame with a JSON data payload (`Event::data` takes a string,
 /// not a `Value`).
-fn sse(event: &'static str, data: impl serde::Serialize) -> Event {
+pub(crate) fn sse(event: &'static str, data: impl serde::Serialize) -> Event {
     Event::default()
         .event(event)
         .data(serde_json::to_string(&data).expect("SSE payloads serialize"))

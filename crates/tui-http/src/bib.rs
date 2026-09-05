@@ -7,11 +7,12 @@ use axum::{
     extract::{DefaultBodyLimit, Multipart, Path, Query, State},
     http::header,
     http::{HeaderMap, Method, StatusCode},
-    response::{IntoResponse, Response},
+    response::{IntoResponse, Response, sse::Sse},
     routing::{delete, get, post, put},
 };
 use bib_base::{
-    BibShared, ListParams, OcrFallbackExtractor, SortField, SortOrder, TextExtractor,
+    BibShared, ListParams, OcrFallbackExtractor, ParseEvent, SimpleExtractor, SortField, SortOrder,
+    TextExtractor,
     import::{ImportFormat, parse_import},
     stored_fulltext, try_fetch_fulltext_with, vfs_virtual_path,
 };
@@ -114,6 +115,9 @@ pub(crate) fn router(shared: BibShared) -> Router {
             "/articles/{id}/fetch-metrics",
             post(fetch_article_metrics),
         )
+        .route("/articles/{id}/reparse", post(reparse_paper))
+        .route("/articles/{id}/parse/stream", get(parse_stream))
+        .route("/fulltext-statuses", get(get_fulltext_statuses))
         .route(
             "/annotations/{id}",
             put(update_annotation).delete(delete_annotation),
@@ -222,6 +226,17 @@ where
     Deserialize::deserialize(deserializer).map(Some)
 }
 
+/// One row of `GET /articles`: the stored [`Article`] flattened as-is, plus
+/// a list-only `has_fulltext` flag. The web client gates its per-row
+/// "attach file" context-menu action on it, while the Article model stays
+/// free of any full-text fields.
+#[derive(Serialize)]
+struct ArticleListEntry {
+    #[serde(flatten)]
+    article: Article,
+    has_fulltext: bool,
+}
+
 async fn list_articles(
     State(shared): State<Arc<BibShared>>,
     Query(params): Query<HashMap<String, String>>,
@@ -297,6 +312,19 @@ async fn list_articles(
             title: article.title.clone(),
             score: 0.0,
             snippet: article.title.clone(),
+        })
+        .collect::<Vec<_>>();
+
+    let fulltext_ids = shared
+        .bib
+        .list_fulltext_article_ids()
+        .await
+        .map_err(internal)?;
+    let articles = articles
+        .into_iter()
+        .map(|article| ArticleListEntry {
+            has_fulltext: fulltext_ids.contains(&article.id),
+            article,
         })
         .collect::<Vec<_>>();
 
@@ -665,15 +693,31 @@ async fn upload_article(
         .map(|(_, extension)| extension)
         .unwrap_or("txt");
     let format = FileFormat::from_extension(extension);
-    let extracted_text = match OcrFallbackExtractor::new().extract(&content, format).await {
-        Ok(text) => Some(text.text),
-        Err(extract_error) => {
-            tracing::warn!(
-                filename = %filename,
-                error = %extract_error,
-                "failed to extract upload content; storing the original bytes only"
-            );
-            None
+    let is_pdf = format == FileFormat::Pdf;
+
+    // PDFs parse asynchronously through MinerU: this request only needs a
+    // quick local extraction to look for a DOI / arXiv id (no OCR — a
+    // scanned first page simply falls back to a manual record), while the
+    // markdown itself arrives later over the parse stream. Without a token
+    // there is nothing to parse with, so fail up front rather than storing
+    // an unparseable PDF. Html/Txt stay on the synchronous local path.
+    let extracted_text = if is_pdf {
+        ensure_mineru_token(&shared)?;
+        match SimpleExtractor::new().extract(&content, format).await {
+            Ok(text) => Some(text.text),
+            Err(_) => None, // identifier matching is best-effort
+        }
+    } else {
+        match OcrFallbackExtractor::new().extract(&content, format).await {
+            Ok(text) => Some(text.text),
+            Err(extract_error) => {
+                tracing::warn!(
+                    filename = %filename,
+                    error = %extract_error,
+                    "failed to extract upload content; storing the original bytes only"
+                );
+                None
+            }
         }
     };
 
@@ -720,9 +764,18 @@ async fn upload_article(
         &filename,
         &content,
         format,
-        extracted_text.clone(),
+        if is_pdf {
+            None
+        } else {
+            extracted_text.clone()
+        },
+        if is_pdf { "pending" } else { "done" },
+        if is_pdf { None } else { Some("builtin") },
     )
     .await?;
+    if is_pdf {
+        shared.parse_hub.spawn((*shared).clone(), article.id.clone());
+    }
 
     if let Some(category) = category_id.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
         shared
@@ -746,7 +799,11 @@ async fn upload_article(
             "kind": identifier.kind.as_str(),
             "value": identifier.value,
         })),
-        "text_chars": extracted_text.map(|text| text.chars().count()).unwrap_or(0),
+        "text_chars": if is_pdf {
+            0
+        } else {
+            extracted_text.map(|text| text.chars().count()).unwrap_or(0)
+        },
     })))
 }
 
@@ -1174,16 +1231,27 @@ async fn upload_fulltext(
         .map(|(_, extension)| extension)
         .unwrap_or("txt");
     let format = FileFormat::from_extension(extension);
-    let extracted = match OcrFallbackExtractor::new().extract(&content, format).await {
-        Ok(text) => Some(text),
-        Err(extract_error) => {
-            tracing::warn!(
-                article_id = %article.id,
-                filename = %filename,
-                error = %extract_error,
-                "failed to extract full-text content; storing original bytes only"
-            );
-            None
+    let is_pdf = format == FileFormat::Pdf;
+
+    // Same split as `POST /articles/upload`: PDFs parse async via MinerU,
+    // everything else extracts synchronously and is readable immediately.
+    if is_pdf {
+        ensure_mineru_token(&shared)?;
+    }
+    let extracted_text = if is_pdf {
+        None
+    } else {
+        match OcrFallbackExtractor::new().extract(&content, format).await {
+            Ok(text) => Some(text.text),
+            Err(extract_error) => {
+                tracing::warn!(
+                    article_id = %article.id,
+                    filename = %filename,
+                    error = %extract_error,
+                    "failed to extract full-text content; storing original bytes only"
+                );
+                None
+            }
         }
     };
 
@@ -1193,10 +1261,31 @@ async fn upload_fulltext(
         &filename,
         &content,
         format,
-        extracted.map(|text| text.text),
+        extracted_text,
+        if is_pdf { "pending" } else { "done" },
+        if is_pdf { None } else { Some("builtin") },
     )
     .await?;
+    if is_pdf {
+        shared.parse_hub.spawn((*shared).clone(), article.id.clone());
+    }
     Ok(Json(json!({ "fulltext": fulltext })))
+}
+
+/// Reject a PDF upload before anything is stored when no MinerU token is
+/// configured. The async pipeline has no local fallback, so a stored-but-
+/// unparseable PDF would just sit at `pending` forever.
+fn ensure_mineru_token(
+    shared: &Arc<BibShared>,
+) -> Result<(), (StatusCode, Json<ApiError>)> {
+    if shared.parse_hub.mineru.has_key() {
+        return Ok(());
+    }
+    Err(error(
+        StatusCode::BAD_REQUEST,
+        "PDF parsing requires a MinerU API token — set mineru_key in settings \
+         (PUT /settings) or the MINERU_API_TOKEN environment variable",
+    ))
 }
 
 /// Write uploaded bytes into the VFS and record the full-text row.
@@ -1206,6 +1295,10 @@ async fn upload_fulltext(
 /// database rejection the freshly written object is removed again — unless it
 /// occupies the path the previous row still references, in which case the old
 /// object must survive. A replaced row's old object is cleaned up on success.
+///
+/// `parse_status` / `parse_engine` carry the async-pipeline state: `pending`
+/// for PDFs awaiting MinerU, `done` + `builtin` for synchronously extracted
+/// formats.
 async fn store_fulltext_file(
     shared: &Arc<BibShared>,
     article_id: &str,
@@ -1213,6 +1306,8 @@ async fn store_fulltext_file(
     content: &Bytes,
     format: FileFormat,
     extracted_text: Option<String>,
+    parse_status: &str,
+    parse_engine: Option<&str>,
 ) -> Result<FullText, (StatusCode, Json<ApiError>)> {
     let previous = shared
         .bib
@@ -1231,6 +1326,9 @@ async fn store_fulltext_file(
         file_hash: Some(stored.file_hash),
         file_size: Some(content.len() as i64),
         uploaded_at: Some(Utc::now()),
+        parse_status: parse_status.to_owned(),
+        parse_engine: parse_engine.map(str::to_owned),
+        parse_error: None,
     };
     if let Err(db_error) = shared.bib.upsert_fulltext(&fulltext).await {
         if previous.as_ref().map(|old| old.file_path.as_str()) != Some(fulltext.file_path.as_str())
@@ -1259,6 +1357,175 @@ async fn store_fulltext_file(
         }
     }
     Ok(fulltext)
+}
+
+/// Re-run the MinerU parse for a stored full text (the list view's
+/// "re-parse" menu entry). The row flips to `pending` and a background task
+/// takes over; progress arrives over `GET /articles/{id}/parse/stream`.
+async fn reparse_paper(
+    State(shared): State<Arc<BibShared>>,
+    Path(id): Path<String>,
+) -> ApiResult {
+    shared
+        .bib
+        .get_article(&id)
+        .await
+        .map_err(internal)?
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, format!("article {id} not found")))?;
+    let fulltext = shared
+        .bib
+        .get_fulltext(&id)
+        .await
+        .map_err(internal)?
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, format!("no full text for {id}")))?;
+    if vfs_virtual_path(&fulltext.file_path).is_none() {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "original file is not stored in the VFS; nothing to re-parse",
+        ));
+    }
+    ensure_mineru_token(&shared)?;
+    if shared.parse_hub.is_running(&id) {
+        return Err(error(
+            StatusCode::CONFLICT,
+            "a parse is already running for this article",
+        ));
+    }
+    shared
+        .bib
+        .set_parse_status(&id, "pending", None)
+        .await
+        .map_err(internal)?;
+    shared.parse_hub.spawn((*shared).clone(), id.clone());
+    Ok(Json(json!({ "id": id, "message": "re-parse started" })))
+}
+
+/// SSE stream of one article's parse pipeline: `progress` / `done` / `error`
+/// events with jayread's payload shapes (no paper id inside the data — the
+/// URL already names the article), plus 10 s pings to keep proxies open.
+///
+/// Opening the stream also lazily resumes a parse the DB claims is in flight
+/// but that lost its task to a restart.
+async fn parse_stream(State(shared): State<Arc<BibShared>>, Path(id): Path<String>) -> Response {
+    let mut receiver = shared.parse_hub.subscribe(&id);
+    shared.parse_hub.ensure_running(&shared, &id).await;
+
+    // Race cover: the parse may have finished between `subscribe` pruning
+    // the channel and this read. Synthesize the terminal event from the
+    // stored row so a late subscriber still learns the outcome.
+    let snapshot = shared.bib.get_fulltext(&id).await.ok().flatten();
+    let terminal = if shared.parse_hub.is_running(&id) {
+        None
+    } else {
+        snapshot.as_ref().and_then(|ft| match ft.parse_status.as_str() {
+            "done" => Some(ParseEvent::Done {
+                parse_engine: ft
+                    .parse_engine
+                    .clone()
+                    .unwrap_or_else(|| "builtin".to_owned()),
+                markdown_length: ft
+                    .text_content
+                    .as_deref()
+                    .map(|text| text.chars().count())
+                    .unwrap_or(0),
+            }),
+            "failed" => Some(ParseEvent::Error {
+                message: ft
+                    .parse_error
+                    .clone()
+                    .unwrap_or_else(|| "parse failed".to_owned()),
+            }),
+            _ => None,
+        })
+    };
+
+    let mut ping = tokio::time::interval(std::time::Duration::from_secs(10));
+    // `interval` fires its first tick immediately; consume it so the stream
+    // opens with real content (or silence), not a synthetic ping.
+    ping.tick().await;
+
+    let stream = futures::stream::unfold(
+        ParseStreamState {
+            receiver,
+            ping,
+            terminal,
+            finished: false,
+        },
+        |mut state| async move {
+            if state.finished {
+                return None;
+            }
+            if let Some(event) = state.terminal.take() {
+                state.finished = true;
+                return Some((Ok::<_, std::convert::Infallible>(parse_sse(&event)), state));
+            }
+            loop {
+                let event = tokio::select! {
+                    maybe = state.receiver.recv() => match maybe {
+                        Ok(event) => event,
+                        // Missed intermediate progress under a slow consumer;
+                        // the terminal event is what matters, keep listening.
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        // Every sender is gone (the hub pruned the channel):
+                        // end cleanly without inventing an outcome.
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            state.finished = true;
+                            return None;
+                        }
+                    },
+                    _ = state.ping.tick() => {
+                        return Some((
+                            Ok::<_, std::convert::Infallible>(crate::agent::sse("ping", json!({}))),
+                            state,
+                        ));
+                    }
+                };
+                if matches!(event, ParseEvent::Done { .. } | ParseEvent::Error { .. }) {
+                    state.finished = true;
+                }
+                return Some((Ok::<_, std::convert::Infallible>(parse_sse(&event)), state));
+            }
+        },
+    );
+
+    let mut response = Sse::new(stream)
+        .keep_alive(axum::response::sse::KeepAlive::default())
+        .into_response();
+    // Belt-and-braces alongside KeepAlive: an explicit no-cache so dev
+    // proxies do not buffer the stream.
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        header::HeaderValue::from_static("no-cache"),
+    );
+    response
+}
+
+/// unfold state for [`parse_stream`].
+struct ParseStreamState {
+    receiver: tokio::sync::broadcast::Receiver<ParseEvent>,
+    ping: tokio::time::Interval,
+    /// Terminal event synthesized from the DB when the stream opens after a
+    /// parse already settled.
+    terminal: Option<ParseEvent>,
+    finished: bool,
+}
+
+/// Render a [`ParseEvent`] as an SSE frame (reuses the agent endpoint's
+/// JSON-payload helper).
+fn parse_sse(event: &ParseEvent) -> axum::response::sse::Event {
+    crate::agent::sse(event.event_name(), event)
+}
+
+/// Parse status of every stored full text. The web list view joins this
+/// client-side over `/articles`, mirroring `/collections` and
+/// `/journals/metrics`.
+async fn get_fulltext_statuses(State(shared): State<Arc<BibShared>>) -> ApiResult {
+    let statuses = shared
+        .bib
+        .list_parse_statuses()
+        .await
+        .map_err(internal)?;
+    Ok(Json(json!({ "statuses": statuses })))
 }
 
 async fn download_fulltext(
@@ -1888,6 +2155,18 @@ async fn put_settings(
         if key == "easyscholar_key" {
             let api_key = value.as_str().map(str::to_owned).filter(|k| !k.is_empty());
             shared.easyscholar.set_key(api_key);
+        }
+        // MinerU: `mineru_key` arms the PDF parse pipeline, `mineru_url`
+        // points it at a self-hosted instance. Same hot-apply contract as
+        // the EasyScholar key — takes effect without a restart.
+        if key == "mineru_key" {
+            let token = value.as_str().map(str::to_owned).filter(|k| !k.is_empty());
+            shared.parse_hub.mineru.set_key(token);
+        }
+        if key == "mineru_url" {
+            if let Some(url) = value.as_str().map(str::to_owned).filter(|u| !u.trim().is_empty()) {
+                shared.parse_hub.mineru.set_base_url(url);
+            }
         }
     }
     Ok(Json(json!({ "ok": true })))

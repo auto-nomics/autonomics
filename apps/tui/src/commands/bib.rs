@@ -86,6 +86,10 @@ async fn run_bib_upload(
         file_hash: Some(stored.file_hash),
         file_size: Some(file_size),
         uploaded_at: Some(chrono::Utc::now()),
+        // TUI attach stays on the synchronous local-extract path.
+        parse_status: "done".to_owned(),
+        parse_engine: Some("builtin".to_owned()),
+        parse_error: None,
     };
     let previous = db.get_fulltext(&args.article_id).await?;
     if let Err(error) = db.upsert_fulltext(&ft).await {

@@ -6,7 +6,7 @@
  * - 上传到指定分类（右键菜单触发，上传后自动归入该分类）
  * - 文件类型校验（仅支持 PDF 格式）
  * - 上传状态管理（防止重复上传）
- * - 上传返回即终态（autonomics 服务端同步完成抽取+建档，无后续解析流水线）
+ * - PDF 上传返回 pending（MinerU 异步解析），随即订阅 SSE 进度流
  *
  * 上传流程：
  * 1. 用户选择 PDF 文件（拖拽或点击）
@@ -29,10 +29,11 @@ import { FILE_UPLOAD } from '../../../config/constants'; // 导入文件上传�
  * PDF 文件上传钩子
  *
  * @param {Function} setPapers - 更新论文列表的 setState 函数
- * @param {Function} listenToParseStatus - （保留参数兼容调用方）autonomics 无解析流水线，已桩化不使用
+ * @param {Function} listenToParseStatus - SSE 监听函数：PDF 上传返回 pending 后
+ *   立即订阅该论文的解析进度流（txt/html 同步解析返回即 done，不订阅）
  * @returns {Object} 返回状态和上传处理函数的对象
  */
-export function usePaperUpload(setPapers: any, _listenToParseStatus: any) {
+export function usePaperUpload(setPapers: any, listenToParseStatus: any) {
   const { message } = App.useApp();
   // ========== 状态定义 ==========
 
@@ -85,6 +86,12 @@ export function usePaperUpload(setPapers: any, _listenToParseStatus: any) {
         return [paper, ...prev];
       });
 
+      // PDF 走 MinerU 异步解析：立即订阅进度流。txt/html 返回即 done 不订阅
+      // （对 done 论文开流会立刻收到 DB 快照合成的 done 终态，误弹"解析完成"）
+      if (paper.parse_status === 'pending' || paper.parse_status === 'processing') {
+        listenToParseStatus(paper.id);
+      }
+
       // 显示成功提示（重复上传时告知已并入原条目）
       if (paper.created === false) {
         message.info('该文献已在库中，文件已挂到原条目');
@@ -101,7 +108,7 @@ export function usePaperUpload(setPapers: any, _listenToParseStatus: any) {
 
     // 阻止 Ant Design 的默认上传行为（我们已手动处理）
     return false; // 返回 false 阻止 Ant Design Upload 的默认上传流程
-  }, [setPapers, message]); // 依赖项：更新论文列表函数与 toast（SSE 监听已桩化）
+  }, [setPapers, message, listenToParseStatus]); // 依赖项：列表 setState、toast、SSE 监听
 
   /**
    * 上传文件到指定分类的处理函数
@@ -149,6 +156,11 @@ export function usePaperUpload(setPapers: any, _listenToParseStatus: any) {
         return [paper, ...prev];
       });
 
+      // PDF 走 MinerU 异步解析：立即订阅进度流（同 handleUpload 的门控理由）
+      if (paper.parse_status === 'pending' || paper.parse_status === 'processing') {
+        listenToParseStatus(paper.id);
+      }
+
       // 显示成功提示（重复上传时告知已并入原条目）
       if (paper.created === false) {
         message.info('该文献已在库中，文件已挂到原条目');
@@ -162,7 +174,7 @@ export function usePaperUpload(setPapers: any, _listenToParseStatus: any) {
       // 恢复上传状态，允许后续上传操作
       setUploading(false); // 恢复上传状态为 false
     }
-  }, [setPapers, message]); // 依赖项：更新论文列表函数与 toast（SSE 监听已桩化）
+  }, [setPapers, message, listenToParseStatus]); // 依赖项：列表 setState、toast、SSE 监听
 
   // 返回公共接口
   return {

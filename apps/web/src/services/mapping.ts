@@ -62,6 +62,12 @@ export interface BibFullText {
   file_hash?: string | null;
   file_size?: number | null;
   uploaded_at?: string | null;
+  /** 解析管线状态：pending | processing | done | failed（旧库行缺省 done） */
+  parse_status?: string | null;
+  /** mineru（异步云解析）| builtin（同步本地抽取）| null（旧库行） */
+  parse_engine?: string | null;
+  /** parse_status === failed 时的人类可读原因 */
+  parse_error?: string | null;
 }
 
 /** 全文分页信息（`/articles/{enc}/fulltext?offset=&limit=`） */
@@ -103,13 +109,15 @@ export interface BibArticle {
   source: string;
   created_at: string | null;
   updated_at: string | null;
+  /** 列表接口附带：该文献是否已存全文；详情/上传接口不返回此字段 */
+  has_fulltext?: boolean;
 }
 
 /**
  * `GET /articles/{enc}` 的响应信封。
  *
  * 全文元信息在**顶层**，不在 article 内部 —— Article 结构体没有任何全文字段。
- * 列表接口 `GET /articles` 不返回全文信息，所以列表行只能拿到题录。
+ * 列表接口 `GET /articles` 只附带 `has_fulltext` 布尔标记，不返回全文对象。
  */
 export interface BibArticleDetail {
   article: BibArticle;
@@ -419,22 +427,28 @@ function putIfPresentObj(key: string, value: unknown): Record<string, unknown> {
  * Article JSON → jayread Paper。
  *
  * @param article 后端题录
- * @param fulltext 详情接口顶层的全文对象；列表行没有全文信息，传省略的
- *   undefined。它决定 parse_status / storage_key / item_source 这三个
- *   「这篇有没有 PDF」的派生字段。
+ * @param fulltext 详情接口顶层的全文对象；列表行不传（undefined），此时
+ *   退回列表接口附带的 has_fulltext 标记。它决定 parse_status /
+ *   storage_key / item_source 这三个「这篇有没有 PDF」的派生字段。
  * @param fulltextPagination 全文分页信息（提供 total_chars → markdown_length）
+ * @param parseStatus /fulltext-statuses 的倒排行（列表路径专用）：优先于
+ *   fulltext 行自带的解析状态注入 paper 的 parse_* 三元组
  */
 export function articleToPaper(
   article: BibArticle,
   fulltext?: BibFullText | null,
   fulltextPagination?: BibFullTextPagination | null,
+  parseStatus?: Pick<BibFullText, 'parse_status' | 'parse_engine' | 'parse_error'> | null,
 ): Paper {
   const doi = identifierOf(article, 'doi');
   const pmid = identifierOf(article, 'pmid');
   const arxiv = identifierOf(article, 'arxiv');
   const pmcid = identifierOf(article, 'pmc');
   const openalex = identifierOf(article, 'openalex');
-  const hasFulltext = !!fulltext;
+  // 详情/上传路径显式传 fulltext（可为 null）；列表路径不传（undefined），
+  // 退回列表接口附带的 has_fulltext 标记——否则刷新后挂过 PDF 的行也会被
+  // 派生成 bib_import，「上传附件」菜单错误地重新出现。
+  const hasFulltext = fulltext !== undefined ? !!fulltext : !!article.has_fulltext;
   const pubTypes = article.pub_types ?? [];
   const paperType = pubTypesToPaperType(pubTypes);
 
@@ -501,20 +515,32 @@ export function articleToPaper(
     category_ids: [],
 
     // ---- 解析管线 ----
-    // autonomics 无解析管线：有 fulltext 文件即视为已解析完成，否则「无文件」。
-    parse_status: hasFulltext ? 'done' : 'none',
-    // 没有「抽取引擎」概念；file_format 说明的是文件而非抽取过程
-    parse_engine: null,
-    parse_error: null,
-    storage_key: hasFulltext ? fulltext!.file_path : null,
-    filename: hasFulltext ? basenameOf(fulltext!.file_path) : null,
+    // 解析状态三级来源：列表路径的 /fulltext-statuses 倒排行（parseStatus）
+    // > 详情/上传路径 fulltext 行自带的列 > 旧语义「有文件即 done」。
+    // PDF 走 MinerU 异步管线（pending/processing/done/failed），
+    // txt/html 同步抽取落库即为 done。
+    parse_status: parseStatus?.parse_status
+      ?? fulltext?.parse_status
+      ?? (hasFulltext ? 'done' : 'none'),
+    // engine/error 用「行在场即权威」而不是 ?? 链：倒排行里显式的 null 是
+    // 有效值（pending 时引擎未定），?? 会穿透它错拿 fulltext 行的旧值。
+    // mineru = 异步云解析；builtin = 同步本地抽取；null = 未定/旧库行
+    parse_engine: parseStatus ? (parseStatus.parse_engine ?? null) : (fulltext?.parse_engine ?? null),
+    parse_error: parseStatus ? (parseStatus.parse_error ?? null) : (fulltext?.parse_error ?? null),
+    // 文件元信息只能来自 fulltext 对象本身——列表行只有 has_fulltext 标记
+    //（对象缺席）时保持 null，不能拿标记当对象用（undefined.file_path 会炸）
+    storage_key: fulltext ? fulltext.file_path : null,
+    filename: fulltext ? basenameOf(fulltext.file_path) : null,
     markdown_length: fulltextPagination && typeof fulltextPagination.total_chars === 'number'
       ? fulltextPagination.total_chars
-      : (hasFulltext && typeof fulltext!.text_content === 'string'
-        ? fulltext!.text_content!.length
+      : (fulltext && typeof fulltext.text_content === 'string'
+        ? fulltext.text_content.length
         : null),
 
-    // ---- 翻译 / 摘要 / 引用指标（autonomics 不提供，中性默认值）----
+    // ---- 翻译 / 摘要 / 引用指标 ----
+    // 翻译与摘要 autonomics 后端不提供，保持中性默认值；期刊指标
+    // （impact_factor / jcr_quartile 等）由 getPapers / getPaper 的组装层
+    // 从 /journals/metrics 注入——Article 本身不携带期刊级数据。
     title_zh: null,
     abstract_zh: null,
     translation_status: null,

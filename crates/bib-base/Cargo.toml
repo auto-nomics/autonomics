@@ -30,6 +30,8 @@ reqwest = { version = "0.13", features = ["json"] }
 europepmc = { path = "../europepmc" }
 easyscholar = { path = "../easyscholar" }
 
+# MinerU cloud PDF-parse pipeline
+mineru = { path = "../mineru" }
 
 # Additional literature sources integrated into the LiteratureGateway.
 openalex = { path = "../openalex" }

@@ -382,20 +382,27 @@ export default function AttachmentList({
           {attachment.title || attachment.filename}
         </span>
 
-        {/* 主 PDF：显示解析状态标签（从 paper 对象读取状态） */}
+        {/* 主 PDF：显示解析状态标签（从 paper 对象读取状态）。 */}
+        {/* SSE 进度存在时附带百分比（如 "解析中... 42%"），stage 作悬停 tooltip */}
         {isPrimary && statusConfig && (
-          <Tag
-            color={statusConfig.color}
-            // 解析完成显示对勾图标，解析中显示旋转加载图标
-            icon={
-              parseStatus === 'done' ? <CheckCircleOutlined /> :
-              parseStatus === 'parsing' ? <LoadingOutlined spin /> :
-              null
-            }
-            style={{ margin: 0, fontSize: 11 }}
-          >
-            {statusConfig.text}
-          </Tag>
+          <Tooltip title={paper.parse_stage || undefined} placement="top">
+            <Tag
+              color={statusConfig.color}
+              // 解析完成显示对勾图标，解析中显示旋转加载图标
+              // （'parsing' 是前端 SSE 乐观态，'processing' 是后端存储值——
+              // 页面在解析中途刷新时列表行拿到的是后者）
+              icon={
+                parseStatus === 'done' ? <CheckCircleOutlined /> :
+                parseStatus === 'parsing' || parseStatus === 'processing' ? <LoadingOutlined spin /> :
+                null
+              }
+              style={{ margin: 0, fontSize: 11 }}
+            >
+              {paper.parse_progress != null && parseStatus !== 'done'
+                ? `${statusConfig.text} ${paper.parse_progress}%`
+                : statusConfig.text}
+            </Tag>
+          </Tooltip>
         )}
 
         {/* 非主 PDF 附件：显示文件大小 */}

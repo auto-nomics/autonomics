@@ -75,6 +75,10 @@ pub async fn try_fetch_fulltext_with(
         file_hash: None,
         file_size: Some(xml.len() as i64),
         uploaded_at: Some(Utc::now()),
+        // Extracted synchronously from JATS XML — no async parse pipeline.
+        parse_status: "done".to_owned(),
+        parse_engine: Some("builtin".to_owned()),
+        parse_error: None,
     })
 }
 

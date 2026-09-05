@@ -139,6 +139,7 @@ const TableRowWithDragAndContextMenu = React.memo(({
   return (
     <div
       {...restProps}
+      data-row-key={paperId}
       draggable
       onDragStart={(e) => {
         e.dataTransfer.setData('application/autonomics-paper', String(paperId));
@@ -400,7 +401,8 @@ function PaperListPageInner() {
   // ========== SSE 进度监听钩子 ==========
   // 使用提取的 useSSEProgress hook 替代原来的内联 SSE 管理代码（约 200 行）
   // 传入的回调函数保持与原内联代码相同的行为
-  const { listenToParseStatus, reconnectPendingPapers, cleanup: sseCleanup } = useSSEProgress({
+  // 卸载清理由 hook 内部的 useEffect 兜底（同 jayread 语义），这里不再解构 cleanup
+  const { listenToParseStatus, reconnectPendingPapers } = useSSEProgress({
     // 进度更新回调：更新论文列表中对应论文的解析进度和阶段
     onProgress: useCallback(({ paperId, percent, stage }: any) => { // useCallback 缓存回调
       setPapers((prev: any) => prev.map((p: any) => // 遍历论文列表
@@ -594,6 +596,7 @@ function PaperListPageInner() {
     loadAttachments, // 加载附件回调
     attachmentCacheRef, // 附件缓存 ref
     uploadingPdfIds, // 上传中 PDF 集合
+    listenToParseStatus, // SSE 监听函数（重解析后订阅进度流）
   });
 
   // 点击页面其他区域时关闭表格行右键菜单 - 已移至 usePaperContextMenu hook

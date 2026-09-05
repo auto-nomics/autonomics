@@ -43,8 +43,8 @@ impl BibBase {
             .execute(
                 "INSERT INTO fulltexts \
              (article_id, file_path, file_format, text_content, source, \
-              file_hash, file_size, uploaded_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
+              file_hash, file_size, uploaded_at, parse_status, parse_engine, parse_error) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11) \
              ON CONFLICT(article_id) DO UPDATE SET \
                 file_path = excluded.file_path, \
                 file_format = excluded.file_format, \
@@ -52,7 +52,10 @@ impl BibBase {
                 source = excluded.source, \
                 file_hash = excluded.file_hash, \
                 file_size = excluded.file_size, \
-                uploaded_at = excluded.uploaded_at",
+                uploaded_at = excluded.uploaded_at, \
+                parse_status = excluded.parse_status, \
+                parse_engine = excluded.parse_engine, \
+                parse_error = excluded.parse_error",
                 turso::params![
                     ft.article_id.clone(),
                     ft.file_path.clone(),
@@ -62,6 +65,9 @@ impl BibBase {
                     ft.file_hash.clone(),
                     ft.file_size,
                     ft.uploaded_at.map(|t| t.to_rfc3339()),
+                    ft.parse_status.clone(),
+                    ft.parse_engine.clone(),
+                    ft.parse_error.clone(),
                 ],
             )
             .await
@@ -102,7 +108,8 @@ impl BibBase {
         let mut rows = conn
             .query(
                 "SELECT article_id, file_path, file_format, text_content, \
-                        source, file_hash, file_size, uploaded_at \
+                        source, file_hash, file_size, uploaded_at, \
+                        parse_status, parse_engine, parse_error \
                  FROM fulltexts WHERE article_id = ?1",
                 turso::params![article_id],
             )
@@ -122,7 +129,27 @@ impl BibBase {
             file_hash: opt_string(row.get_value(5)?),
             file_size: opt_int(row.get_value(6)?),
             uploaded_at: opt_string(row.get_value(7)?).as_deref().and_then(parse_dt),
+            parse_status: parse_status_value(row.get_value(8)?),
+            parse_engine: opt_string(row.get_value(9)?),
+            parse_error: opt_string(row.get_value(10)?),
         }))
+    }
+
+    /// IDs of every article with a stored full text.
+    ///
+    /// Lets the HTTP list endpoint flag `has_fulltext` per row without
+    /// loading each `FullText` record. Local libraries are small, so one
+    /// scan beats N point lookups.
+    pub async fn list_fulltext_article_ids(&self) -> Result<std::collections::HashSet<String>> {
+        let conn = self.conn();
+        let mut rows = conn
+            .query("SELECT article_id FROM fulltexts", turso::params![])
+            .await?;
+        let mut ids = std::collections::HashSet::new();
+        while let Some(row) = rows.next().await? {
+            ids.insert(row.get::<String>(0)?);
+        }
+        Ok(ids)
     }
 
     /// Read one bounded character page of a full text.
@@ -139,7 +166,7 @@ impl BibBase {
         let mut rows = conn
             .query(
                 "SELECT article_id, file_path, file_format, text_content, source, \
-                        file_hash, file_size, uploaded_at, \
+                        file_hash, file_size, uploaded_at, parse_status, parse_engine, parse_error, \
                         COALESCE(LENGTH(text_content), 0), \
                         COALESCE(SUBSTR(text_content, ?2, ?3), '') \
                  FROM fulltexts WHERE article_id = ?1",
@@ -151,8 +178,8 @@ impl BibBase {
             Some(row) => row,
             None => return Ok(None),
         };
-        let total_chars = row.get::<i64>(8)? as usize;
-        let page_text = opt_string(row.get_value(9)?);
+        let total_chars = row.get::<i64>(11)? as usize;
+        let page_text = opt_string(row.get_value(12)?);
         let returned_chars = page_text.as_ref().map_or(0, |text| text.chars().count());
         let next_offset =
             (offset + returned_chars < total_chars).then_some(offset + returned_chars);
@@ -166,6 +193,9 @@ impl BibBase {
             file_hash: opt_string(row.get_value(5)?),
             file_size: opt_int(row.get_value(6)?),
             uploaded_at: opt_string(row.get_value(7)?).as_deref().and_then(parse_dt),
+            parse_status: parse_status_value(row.get_value(8)?),
+            parse_engine: opt_string(row.get_value(9)?),
+            parse_error: opt_string(row.get_value(10)?),
         };
 
         Ok(Some(FullTextPage {
@@ -211,6 +241,67 @@ impl BibBase {
             .await?;
         Ok(rows.next().await?.is_some())
     }
+
+    /// Update only the parse-pipeline columns of a full-text row.
+    ///
+    /// Used by the async MinerU pipeline for its pending → processing →
+    /// done/failed state machine; `text_content` and the FTS index are left
+    /// untouched so a previously parsed text stays readable (and searchable)
+    /// while a re-parse runs, and a failed first parse simply leaves the row
+    /// un-indexed.
+    pub async fn set_parse_status(
+        &self,
+        article_id: &str,
+        status: &str,
+        error: Option<&str>,
+    ) -> Result<()> {
+        let _write = self.write_gate.lock().await;
+        let conn = self.write_conn();
+        let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
+        tx.execute(
+            "UPDATE fulltexts \
+             SET parse_status = ?2, parse_error = ?3 \
+             WHERE article_id = ?1",
+            turso::params![article_id, status, error],
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Parse status of every stored full text (small table, full scan).
+    ///
+    /// The web list view joins this client-side over `/articles`, mirroring
+    /// `/collections` and `/journals/metrics`.
+    pub async fn list_parse_statuses(&self) -> Result<Vec<FullTextParseStatus>> {
+        let conn = self.conn();
+        let mut rows = conn
+            .query(
+                "SELECT article_id, parse_status, parse_engine, parse_error FROM fulltexts",
+                turso::params![],
+            )
+            .await?;
+
+        let mut statuses = Vec::new();
+        while let Some(row) = rows.next().await? {
+            statuses.push(FullTextParseStatus {
+                article_id: row.get::<String>(0)?,
+                parse_status: parse_status_value(row.get_value(1)?),
+                parse_engine: opt_string(row.get_value(2)?),
+                parse_error: opt_string(row.get_value(3)?),
+            });
+        }
+        Ok(statuses)
+    }
+}
+
+/// Parse-pipeline columns of one full-text row (list-view projection).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FullTextParseStatus {
+    pub article_id: String,
+    pub parse_status: String,
+    pub parse_engine: Option<String>,
+    pub parse_error: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -245,4 +336,13 @@ fn parse_dt(s: &str) -> Option<chrono::DateTime<Utc>> {
     chrono::DateTime::parse_from_rfc3339(s)
         .ok()
         .map(|dt| dt.with_timezone(&Utc))
+}
+
+/// `parse_status` column → struct field; NULL (legacy pre-migration rows)
+/// reads as `done`.
+fn parse_status_value(v: Value) -> String {
+    match v {
+        Value::Text(s) if !s.is_empty() => s,
+        _ => "done".to_owned(),
+    }
 }

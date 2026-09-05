@@ -283,6 +283,35 @@ describe('articleToPaper', () => {
     expect(withoutPdf.storage_key).toBeNull();
   });
 
+  it('fulltext 行自带的解析状态（MinerU 列）优先于旧语义回落', () => {
+    const paper = articleToPaper(makeArticle(), makeFulltext({
+      parse_status: 'processing',
+      parse_engine: null,
+      parse_error: null,
+    }));
+    expect(paper.parse_status).toBe('processing');
+
+    const failed = articleToPaper(makeArticle(), makeFulltext({
+      parse_status: 'failed',
+      parse_engine: 'mineru',
+      parse_error: 'MinerU parse failed: quota',
+    }));
+    expect(failed.parse_status).toBe('failed');
+    expect(failed.parse_engine).toBe('mineru');
+    expect(failed.parse_error).toBe('MinerU parse failed: quota');
+  });
+
+  it('/fulltext-statuses 的倒排行（第 4 参）优先级最高，覆盖 fulltext 行', () => {
+    const paper = articleToPaper(
+      makeArticle(),
+      makeFulltext({ parse_status: 'done', parse_engine: 'builtin' }),
+      undefined,
+      { parse_status: 'pending', parse_engine: null, parse_error: null },
+    );
+    expect(paper.parse_status).toBe('pending');
+    expect(paper.parse_engine).toBeNull(); // 覆盖为倒排行的值，不保留 fulltext 的 builtin
+  });
+
   it('autonomics 没有的产品字段填中性默认值', () => {
     const paper = articleToPaper(makeArticle());
     expect(paper.title_zh).toBeNull();

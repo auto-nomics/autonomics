@@ -107,7 +107,10 @@ CREATE TABLE IF NOT EXISTS fulltexts (
     source       TEXT NOT NULL,
     file_hash    TEXT,
     file_size    INTEGER,
-    uploaded_at  TEXT
+    uploaded_at  TEXT,
+    parse_status TEXT NOT NULL DEFAULT 'done',
+    parse_engine TEXT,
+    parse_error  TEXT
 );
 
 CREATE TABLE IF NOT EXISTS search_terms (
@@ -344,6 +347,17 @@ impl BibBase {
         )
         .await?;
         ensure_column(&conn, "annotations", "data", "data TEXT").await?;
+        // MinerU parse pipeline columns. `done` default keeps rows written by
+        // the old sync-extract-at-upload flow readable without backfill.
+        ensure_column(
+            &conn,
+            "fulltexts",
+            "parse_status",
+            "parse_status TEXT NOT NULL DEFAULT 'done'",
+        )
+        .await?;
+        ensure_column(&conn, "fulltexts", "parse_engine", "parse_engine TEXT").await?;
+        ensure_column(&conn, "fulltexts", "parse_error", "parse_error TEXT").await?;
 
         let mut rows = conn
             .query(

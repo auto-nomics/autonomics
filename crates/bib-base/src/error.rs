@@ -12,6 +12,10 @@ pub enum Error {
     Json(#[from] serde_json::Error),
     #[error("not found: {0}")]
     NotFound(String),
+    #[error("MinerU parse failed: {0}")]
+    Mineru(#[from] mineru::Error),
+    #[error("file storage error: {0}")]
+    Storage(#[from] vfs::opendal::Error),
 }
 
 impl From<&str> for Error {

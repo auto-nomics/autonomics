@@ -35,10 +35,12 @@ import { // 导入图标组件
   FileTextOutlined, // 文件文本图标（题录导入记录标识）
   CopyOutlined, // 复制图标（复制引用）
   SearchOutlined, // 搜索图标（获取期刊信息——从 EasyScholar 查询）
+  ReloadOutlined, // 重载图标（重解析——重跑 MinerU 云解析）
 } from '@ant-design/icons';
 import { // 导入论文 API
   deletePaper, // 删除论文
   fetchMetadata, // 获取期刊指标（EasyScholar）
+  reparsePaper, // 重新解析论文（MinerU）
 } from '../../../services/papersApi';
 import { // 导入分类 API
   assignPapers, // 分配论文到分类
@@ -57,6 +59,7 @@ import { useCopyCitation } from '../../../hooks/useCopyCitation';
  * @param {Function} params.loadAttachments - 加载附件列表的回调函数
  * @param {React.MutableRefObject} params.attachmentCacheRef - 附件缓存 ref 引用
  * @param {Set} params.uploadingPdfIds - 正在上传 PDF 的论文 ID 集合
+ * @param {Function} params.listenToParseStatus - SSE 监听函数（重解析启动后订阅进度流）
  * @returns {Object} 返回状态和处理函数的对象
  */
 
@@ -77,6 +80,8 @@ interface UsePaperContextMenuParams {
   loadAttachments: (paperId: string) => Promise<void>;
   attachmentCacheRef: React.MutableRefObject<Record<string, unknown>>;
   uploadingPdfIds: Set<string>;
+  /** SSE 监听函数：重解析启动后订阅该论文的进度流 */
+  listenToParseStatus: (paperId: string) => void;
 }
 
 export function usePaperContextMenu({
@@ -84,6 +89,7 @@ export function usePaperContextMenu({
   loadAttachments,
   attachmentCacheRef,
   uploadingPdfIds,
+  listenToParseStatus,
 }: UsePaperContextMenuParams) {
   // Read shared config from context
   const configRef = usePaperListConfig();
@@ -312,6 +318,31 @@ export function usePaperContextMenu({
     }
   }, [configRef, message, t]);
 
+  /**
+   * 重解析论文（右键菜单「重解析（MinerU）」）
+   *
+   * POST reparse 把 fulltexts 行拨回 pending 并拉起后台任务；成功后乐观
+   * 置 'parsing'（SSE progress 到来时覆盖为带百分比的实时进度），随即
+   * 订阅该论文的进度流。409（已有解析在跑）/ 400（无 VFS 源文件或未配
+   * token）走同一错误提示路径。
+   */
+  const handleReparse = useCallback(async (paperId: string) => {
+    try {
+      await reparsePaper(paperId);
+      // 乐观更新：与 handleDelete 同一 store 通道（页面 papers 即 store 状态）
+      const store = usePaperStore.getState();
+      store.setPapers(prev => prev.map(p =>
+        p.id === paperId
+          ? { ...p, parse_status: 'parsing', parse_progress: 0, parse_stage: '', parse_error: null }
+          : p,
+      ));
+      listenToParseStatus(paperId); // 订阅进度流（收 done 后切 done 并弹提示）
+      message.success(t('message.reparseStarted'));
+    } catch (err) {
+      message.error(t('message.reparseFailed', { error: (err as any).message }));
+    }
+  }, [listenToParseStatus, message, t]);
+
   // ========================================
   // 菜单构建函数
   // ========================================
@@ -418,6 +449,15 @@ export function usePaperContextMenu({
           copyCitation(paper.id);
         },
       },
+      // 重解析（MinerU）：有全文文件的论文显示；解析中隐藏（已有任务在跑，
+      // 后端也会以 409 拒绝）
+      !!paper.storage_key
+        && !['pending', 'processing', 'parsing'].includes(paper.parse_status) && {
+          key: 'reparse',
+          label: t('attachment.reparseMineru'),
+          icon: <ReloadOutlined />,
+          onClick: () => handleReparse(paper.id),
+        },
       // 分割线
       { type: 'divider' }, // Ant Design Menu 分割线类型
       // 删除论文（危险操作）
@@ -445,6 +485,7 @@ export function usePaperContextMenu({
     handleUnassignFromCategory, // 移除函数，变化时需要重新绑定
     handleDelete, // 删除函数，变化时需要重新绑定
     handleFetchMetadata, // 获取期刊指标函数，变化时需要重新绑定
+    handleReparse, // 重解析函数，变化时需要重新绑定
     uploadingPdfIds, // 上传中集合，变化时需要更新禁用状态
     wrappedHandleAttachPdf, // 上传函数，变化时需要重新绑定
     loadAttachments, // 加载附件函数，变化时需要重新绑定

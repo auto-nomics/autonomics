@@ -188,6 +188,11 @@ pub struct BibSaveTool {
     /// Defaults to [`EuropePmcClient::new`] when constructed via
     /// [`bib_library_registrations`].
     pub epmc: Arc<EuropePmcClient>,
+    /// EasyScholar client used for best-effort journal-metrics enrichment
+    /// (impact factor / quartiles). Constructed from `EASYSCHOLAR_KEY` by
+    /// [`bib_library_registrations`]; without a key the enrichment is
+    /// silently skipped.
+    pub easyscholar: Arc<easyscholar::EasyscholarClient>,
 }
 
 /// Result of saving a single article within a batch.
@@ -467,6 +472,24 @@ impl BibSaveTool {
                 } else {
                     false
                 };
+
+                // 5. Best-effort journal-metrics enrichment (EasyScholar).
+                // Inline rather than spawned: the tool's 300s timeout dwarfs
+                // the client's 10s cap, and returning with metrics already
+                // cached keeps the agent from observing a half-enriched save.
+                if let Some(journal) = article
+                    .journal
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|j| !j.is_empty())
+                {
+                    let _ = crate::journal_metrics::enrich_journal_metrics(
+                        &self.bib,
+                        &self.easyscholar,
+                        journal,
+                    )
+                    .await;
+                }
 
                 SaveResult {
                     id: raw_id.into(),
@@ -1837,6 +1860,7 @@ pub fn bib_library_registrations(
             bib: bib.clone(),
             gateway: gateway.clone(),
             epmc,
+            easyscholar: Arc::new(easyscholar::EasyscholarClient::from_env()),
         }),
         R::from(BibCreateCollectionTool { bib: bib.clone() }),
         R::from(BibAddToCollectionTool { bib: bib.clone() }),
@@ -2163,6 +2187,7 @@ mod tests {
             bib: bib.clone(),
             gateway,
             epmc,
+            easyscholar: Arc::new(easyscholar::EasyscholarClient::new(None)),
         };
 
         let input = BibSaveInput {
@@ -2216,6 +2241,9 @@ mod tests {
             file_hash: None,
             file_size: None,
             uploaded_at: None,
+            parse_status: "done".to_owned(),
+            parse_engine: None,
+            parse_error: None,
         })
         .await
         .unwrap();
@@ -2262,7 +2290,7 @@ mod tests {
         let bib = Arc::new(BibBase::open_in_memory().await.unwrap());
         let gateway = Arc::new(crate::default_gateway());
         let epmc = Arc::new(EuropePmcClient::new());
-        let tool = BibSaveTool { bib, gateway, epmc };
+        let tool = BibSaveTool { bib, gateway, epmc, easyscholar: Arc::new(easyscholar::EasyscholarClient::new(None)) };
 
         let article = ArticleInput {
             title: "Cached test".into(),
@@ -2312,7 +2340,7 @@ mod tests {
         let bib = Arc::new(BibBase::open_in_memory().await.unwrap());
         let gateway = Arc::new(crate::default_gateway());
         let epmc = Arc::new(EuropePmcClient::new());
-        let tool = BibSaveTool { bib, gateway, epmc };
+        let tool = BibSaveTool { bib, gateway, epmc, easyscholar: Arc::new(easyscholar::EasyscholarClient::new(None)) };
 
         let input = BibSaveInput {
             articles: Some(vec![
@@ -2396,7 +2424,7 @@ mod tests {
         let bib = Arc::new(BibBase::open_in_memory().await.unwrap());
         let gateway = Arc::new(crate::default_gateway());
         let epmc = Arc::new(EuropePmcClient::new());
-        let tool = BibSaveTool { bib, gateway, epmc };
+        let tool = BibSaveTool { bib, gateway, epmc, easyscholar: Arc::new(easyscholar::EasyscholarClient::new(None)) };
 
         let input = BibSaveInput {
             articles: None,
@@ -2413,7 +2441,7 @@ mod tests {
         let bib = Arc::new(BibBase::open_in_memory().await.unwrap());
         let gateway = Arc::new(crate::default_gateway());
         let epmc = Arc::new(EuropePmcClient::new());
-        let tool = BibSaveTool { bib, gateway, epmc };
+        let tool = BibSaveTool { bib, gateway, epmc, easyscholar: Arc::new(easyscholar::EasyscholarClient::new(None)) };
 
         let input = BibSaveInput {
             articles: Some(vec![ArticleInput {
