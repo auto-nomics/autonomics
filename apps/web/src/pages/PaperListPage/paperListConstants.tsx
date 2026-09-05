@@ -662,8 +662,11 @@ export const SORT_FIELD_MAP = {
 export function formatDate(timestamp: any) { // 日期格式化工具函数，供表格列和卡片视图共用
   // 防御性检查：如果时间戳为 null/undefined/0，返回空字符串
   if (!timestamp) return ''; // 时间戳为空时返回空字符串，避免显示 "Invalid Date"
-  // Unix 时间戳是秒，JS Date 需要毫秒，所以乘以 1000
-  const d = new Date(timestamp * 1000); // 创建 Date 对象，将秒转换为毫秒
+  // autonomics 的 created_at/updated_at 是 RFC3339 字符串；jayread 旧路径是 Unix 秒数字。
+  // 小数秒截到毫秒：后端可能回吐纳秒精度（9 位），WebKit 的 Date 解析器会拒收
+  const normalized = typeof timestamp === 'string' ? timestamp.replace(/(\.\d{3})\d+/, '$1') : timestamp;
+  const d = typeof normalized === 'number' ? new Date(normalized * 1000) : new Date(normalized);
+  if (Number.isNaN(d.getTime())) return ''; // 解析失败回落空串，不再显示 Invalid Date
   // 使用中文格式：月/日/时:分，不显示年份节省空间
   return d.toLocaleDateString(i18next.language === 'zh' ? 'zh-CN' : 'en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); // 使用 toLocaleDateString 按 i18n 语言格式化
 }
