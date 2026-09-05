@@ -60,6 +60,7 @@ const EMPTY_ARRAY: readonly never[] = Object.freeze([]) as readonly never[];
 // ===== UI 子组件导入 =====
 import ChatMessageItem from './ChatMessageItem'; // 导入单条消息渲染组件：负责渲染单条聊天气泡（用户/AI），包含 Markdown 渲染、代码高亮、操作菜单等
 import SlateInputWithSender from './SlateInputWithSender'; // 富文本输入框组件：基于 Slate.js 的富文本编辑器，支持斜杠命令提示、附件上传、发送按钮等
+import AgentActivityDrawer from './AgentActivityDrawer'; // P5a 代理活动抽屉：只读观测 host agent 全景与 delegation 台账（仅 runtime 模式渲染入口）
 
 // ===== 样式导入 =====
 import '../styles.css'; // 导入 AI Chat 面板样式（包含 Markdown 样式和主题变量）
@@ -431,6 +432,10 @@ const ChatPanel = forwardRef(function ChatPanel({
       cancelled = true;
     };
   }, []);
+
+  // P5a：代理活动抽屉（只读观测 host agent 全景 + delegation 台账），
+  // 入口仅在 runtime 模式渲染——ephemeral 宿主没有这些端点（404 即隐藏）
+  const [activityOpen, setActivityOpen] = useState(false);
 
   const { sendMessages } = useChatSender({ // 解构获取 sendMessages 发送函数
     setMessages,               // 设置消息列表的函数（用于 hook 内部更新消息状态）
@@ -925,7 +930,7 @@ const ChatPanel = forwardRef(function ChatPanel({
   // ===== 主 UI 渲染 =====
   // ========================================================================
   return ( // 返回主 UI
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}> {/* 纵向 flex 布局，全高 */}
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}> {/* 纵向 flex 布局，全高；relative 锚定活动入口悬浮按钮 */}
 
       {/* ===== 隐藏的文件选择 input ===== */}
       {/* 仅供 /attachment 斜杠命令触发，用户输入 /attachment 后触发此 input 的 click 事件 */}
@@ -1361,6 +1366,23 @@ const ChatPanel = forwardRef(function ChatPanel({
       {/* ===== 工具审批弹窗（通过 NiceModal 命令式调用） ===== */}
 
       {/* ===== 委派审批弹窗（通过 NiceModal 命令式调用） ===== */}
+
+      {/* ================================================================== */}
+      {/* ===== P5a 代理活动抽屉（只读观测，仅 runtime 模式） ===== */}
+      {/* ================================================================== */}
+      {/* 悬浮入口锚在面板外层（消息列表是滚动容器，放里面会随内容滚走） */}
+      {agentMode === 'runtime' && (
+        <>
+          <Button
+            size="small"
+            onClick={() => setActivityOpen(true)}
+            style={{ position: 'absolute', top: 8, right: 12, zIndex: 5 }}
+          >
+            代理活动
+          </Button>
+          <AgentActivityDrawer open={activityOpen} onClose={() => setActivityOpen(false)} />
+        </>
+      )}
     </div>
   );
 }); // forwardRef 结束
