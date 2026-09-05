@@ -8,8 +8,8 @@
  * - 分页/排序：jayread 用 page/pageSize + camelCase 排序键，autonomics 用
  *   offset/limit + created_at|updated_at|title|year 白名单；后端不支持的排序键
  *   在前端本地排序补齐
- * - 无解析管线：reparse / stream / metadata / translate / download 全部桩化，
- *   UI 走既有的失败分支优雅降级
+ * - 期刊指标（fetchMetadata → fetch-metrics）已接通；reparse / stream /
+ *   translate / download 仍桩化，UI 走既有的失败分支优雅降级
  */
 import request, { invalidateCache } from './client';
 import {
@@ -20,11 +20,14 @@ import {
   paperToArticle,
   articlesOf,
   collectionMembershipOf,
+  journalMetricsIndex,
+  journalKeyOfPaper,
   type BibArticle,
   type BibArticleListResponse,
   type BibArticleDetail,
   type BibCollectionLike,
   type BibFullText,
+  type BibJournalMetrics,
 } from './mapping';
 import type {
   UploadPaperResponse,
@@ -208,16 +211,41 @@ export async function getPapers(params: GetPapersParams = {}, signal?: AbortSign
   // Article 不携带集合成员关系，而 jayread 的列表行直接读 paper.category_ids
   // （PaperListPage 用它建「论文 → 分类」映射）。并行多拉一次 /collections 在
   // 前端倒排，比按文章逐个查成员便宜一个数量级，且命中 client 的各自缓存。
-  const [res, collections] = await Promise.all([
+  // 期刊指标（IF / 分区）同理：/journals/metrics 是期刊级缓存表，一次拉全量
+  // 在前端按规范化期刊名匹配注入。
+  const [res, collections, journals] = await Promise.all([
     request<BibArticleListResponse>(`/articles?${query}`, { signal }),
     request<{ collections?: BibCollectionLike[] }>('/collections', { signal }).catch(() => null),
+    request<{ journals?: BibJournalMetrics[] }>('/journals/metrics', { signal }).catch(() => null),
   ]);
 
   const membership = collectionMembershipOf(collections?.collections);
-  const papers = articlesOf(res).map((article) => ({
-    ...articleToPaper(article),
-    category_ids: membership.get(article.id) ?? [],
-  }));
+  const metrics = journalMetricsIndex(journals?.journals);
+  const papers = articlesOf(res).map((article) => {
+    const paper = {
+      ...articleToPaper(article),
+      category_ids: membership.get(article.id) ?? [],
+    };
+    // 期刊指标注入：匹配不上（无期刊名 / 未缓存）时保持 articleToPaper
+    // 的 null 默认值，列渲染为「-」。
+    const key = journalKeyOfPaper(paper);
+    const journal = key ? metrics.get(key) : undefined;
+    if (journal) {
+      return {
+        ...paper,
+        impact_factor: journal.impact_factor ?? null,
+        impact_factor_5: journal.impact_factor_5 ?? null,
+        jcr_quartile: journal.jcr_quartile ?? null,
+        ssci_quartile: journal.ssci_quartile ?? null,
+        cas_quartile: journal.cas_quartile ?? null,
+        cas_quartile_base: journal.cas_quartile_base ?? null,
+        cas_small: journal.cas_small ?? null,
+        cas_top: journal.cas_top ?? false,
+        cas_warning: journal.cas_warning ?? null,
+      };
+    }
+    return paper;
+  });
 
   return {
     papers: localSortField ? sortPapersLocally(papers, localSortField, params.order ?? 'desc') : papers,
@@ -244,14 +272,34 @@ export async function getPapers(params: GetPapersParams = {}, signal?: AbortSign
  */
 export async function getPaper(id: string, signal?: AbortSignal): Promise<GetPaperResponse> {
   const realId = fromSafeId(id);
-  const detail = await request<BibArticleDetail>(
-    `/articles/${encodeIdSegment(realId)}?offset=0&limit=1`,
-    { signal },
-  );
+  const [detail, journals] = await Promise.all([
+    request<BibArticleDetail>(
+      `/articles/${encodeIdSegment(realId)}?offset=0&limit=1`,
+      { signal },
+    ),
+    request<{ journals?: BibJournalMetrics[] }>('/journals/metrics', { signal }).catch(() => null),
+  ]);
 
   // jayread 的 Paper 类型没有 attachments 字段（PaperReaderPage 用 as any 读），
   // 这里以属性展开的方式挂上，避免改类型定义。
-  return detailToPaper(detail) as unknown as GetPaperResponse;
+  const paper = detailToPaper(detail) as unknown as GetPaperResponse;
+  const key = journalKeyOfPaper(paper as Paper);
+  const journal = key ? journalMetricsIndex(journals?.journals).get(key) : undefined;
+  if (journal) {
+    return {
+      ...(paper as object),
+      impact_factor: journal.impact_factor ?? null,
+      impact_factor_5: journal.impact_factor_5 ?? null,
+      jcr_quartile: journal.jcr_quartile ?? null,
+      ssci_quartile: journal.ssci_quartile ?? null,
+      cas_quartile: journal.cas_quartile ?? null,
+      cas_quartile_base: journal.cas_quartile_base ?? null,
+      cas_small: journal.cas_small ?? null,
+      cas_top: journal.cas_top ?? false,
+      cas_warning: journal.cas_warning ?? null,
+    } as GetPaperResponse;
+  }
+  return paper;
 }
 
 /**
@@ -408,15 +456,24 @@ export function getStreamUrl(id: string): string {
 }
 
 /**
- * 手动触发期刊元数据获取
+ * 手动触发期刊元数据获取（影响因子 / JCR / 中科院分区）
  *
- * ⚠️ 桩：autonomics 不做期刊抓取（影响因子 / JCR 分区等后端无数据源）。
- *
- * stubbed: capability not present in autonomics backend (see plan Phase 5)
+ * autonomics: POST /articles/{id}/fetch-metrics —— 按该文章的期刊名查
+ * EasyScholar 并写入 journal_metrics 缓存（期刊级缓存，同一期刊只查一次）。
+ * 阻塞式端点：返回时结果已落库，调用方刷新列表即可见。
+ * 未命中（无 key / 期刊不在库）不报错，metrics 为 null → `fetched: false`。
  */
-export async function fetchMetadata(_id: string, signal?: AbortSignal): Promise<FetchMetadataResponse> {
-  void _id; void signal;
-  throw new Error('获取期刊信息暂不可用（autonomics 无元数据抓取管线）');
+export async function fetchMetadata(id: string, signal?: AbortSignal): Promise<FetchMetadataResponse> {
+  const realId = fromSafeId(id);
+  const data = await request<{ journal?: string | null; metrics?: unknown }>(
+    `/articles/${encodeIdSegment(realId)}/fetch-metrics`,
+    { method: 'POST', signal },
+  );
+  return {
+    message: data?.journal ?? '',
+    journal: data?.journal ?? null,
+    fetched: !!data?.metrics,
+  };
 }
 
 /**

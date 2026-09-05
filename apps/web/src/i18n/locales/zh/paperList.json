@@ -42,6 +42,8 @@
     "dryRunFailed": "预演失败",
     "snapshotFailed": "创建快照失败",
     "fetchJournalInfo": "正在获取期刊信息...",
+    "fetchJournalDone": "已更新 {{journal}} 的期刊指标",
+    "fetchJournalMiss": "未查到该期刊的指标（EasyScholar 无数据或未配置密钥）",
     "fetchJournalFailed": "获取期刊信息失败: {{error}}",
     "reparseStarted": "已启动重解析...",
     "reparseFailed": "重解析失败: {{error}}",

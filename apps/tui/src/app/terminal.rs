@@ -121,6 +121,10 @@ impl App {
         let shared = host.infra().bib.as_ref().clone();
 
         match runtime.block_on(async {
+            // Settings-saved EasyScholar key survives restarts: load the
+            // stored value before the router starts serving (`EASYSCHOLAR_KEY`
+            // only bootstraps the first run).
+            tui_http::load_stored_easyscholar_key(&shared).await;
             let router = tui_http::ApiRouterBuilder::new(shared)
                 .bearer_token(bearer_token)
                 // The web chat endpoint rides the TUI's live model slot:

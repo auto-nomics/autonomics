@@ -11,6 +11,7 @@ pub mod server;
 
 mod frontend;
 
+pub use bib::load_stored_easyscholar_key;
 pub use server::{
     ApiRouterBuilder, DEFAULT_HTTP_API_ADDR, HttpServerHandle, api_router, api_router_with_auth,
     start,

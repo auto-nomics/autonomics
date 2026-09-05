@@ -23,6 +23,7 @@ pub mod extract;
 pub mod fulltext;
 pub mod http_options;
 pub mod import;
+pub mod journal_metrics;
 pub mod library_tools;
 pub mod oa_fetch;
 pub mod query;
@@ -36,6 +37,7 @@ pub use export::{cite_key, render, render_all, to_bibtex, to_csl_json, to_markdo
 pub use extract::{ExtractedText, OcrFallbackExtractor, SimpleExtractor, TextExtractor};
 pub use fulltext::FullTextPage;
 pub use http_options::BibHttpOptions;
+pub use journal_metrics::{JournalMetrics, enrich_journal_metrics, journal_key_of};
 pub use library_tools::bib_all_registrations;
 pub use library_tools::bib_extended_registrations;
 pub use oa_fetch::{try_fetch_fulltext, try_fetch_fulltext_with};

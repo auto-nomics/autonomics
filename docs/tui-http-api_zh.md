@@ -33,12 +33,15 @@
 | `GET` / `POST` | `/api/v1/bib/articles/{id}/annotations` | 查看（可选 `?page=N` 过滤）、新增注释；高亮几何放在 `data` JSON 列（`{"rects":[...],"color":...}`） |
 | `PUT` / `DELETE` | `/api/v1/bib/annotations/{id}` | 更新（部分更新，显式 `null` 清空字段）、删除注释 |
 | `GET` | `/api/v1/bib/articles/{id}/csl-json` | 单篇文献的 CSL JSON（引用引擎直接可用） |
+| `POST` | `/api/v1/bib/articles/{id}/fetch-metrics` | 手动获取该文献的期刊指标（IF / JCR / 中科院分区）：按期刊名查 EasyScholar 并写入期刊级缓存；阻塞式，响应 `{"journal", "metrics"}`（未命中 / 无 key 时 `metrics` 为 `null`，不报错）。无期刊名 400，文献不存在 404。导入 / 更新路径也会在后台自动富化 |
+| `GET` | `/api/v1/bib/journals/metrics` | 列出全部已缓存的期刊指标（`journal_metrics` 表按 `lower(trim(journal))` 键控；前端拉全量后按期刊名匹配注入列表/详情） |
+| `GET` | `/api/v1/bib/journals/validate-easyscholar` | 校验 EasyScholar API key：`?key=` 显式校验（设置页保存前预检），缺省校验当前生效的 key（env 或 `web:easyscholar_key` 设置项热替换）；响应 `{"valid", "message"}` |
 | `GET` / `POST` | `/api/v1/bib/collections` | 列出（扁平）、创建集合（支持 `parent_id` / `sort_order`；分类树由前端自建） |
 | `GET` / `PUT` / `DELETE` | `/api/v1/bib/collections/{id}` | 查看、更新（改名/移动/排序共用，`parent_id` 环拒绝 400）、删除集合 |
 | `GET` / `POST` | `/api/v1/bib/collections/{id}/articles` | 列出、添加集合成员 |
 | `DELETE` | `/api/v1/bib/collections/{id}/articles/{article_id}` | 移除集合成员 |
 | `PUT` | `/api/v1/bib/collections/{id}/status` | 更新集合状态 |
-| `GET` / `PUT` | `/api/v1/bib/settings` | Web 前端设置，存于 `bib_meta` 的 `web:` 命名空间；PUT 为逐键合并（不覆盖未提及的键） |
+| `GET` / `PUT` | `/api/v1/bib/settings` | Web 前端设置，存于 `bib_meta` 的 `web:` 命名空间；PUT 为逐键合并（不覆盖未提及的键）。含服务端热换键 `easyscholar_key`（保存即生效，重启时由启动加载恢复） |
 | `GET` / `POST` | `/api/v1/bib/chat` | 聊天记录持久化：`?scope={token}` 读取 `{"scope","payload"}`，POST 整体覆盖（`navigator.sendBeacon` 友好；payload ≤ 5 MiB） |
 | `GET` | `/api/v1/bib/requests` | 列出待补全文请求 |
 | `GET` | `/api/v1/bib/export` | 导出 BibTeX / RIS / Markdown / CSL JSON |

@@ -620,3 +620,118 @@ async fn agent_chat_streams_model_errors_as_sse_events() {
     assert!(body.contains("event: error"), "stream: {body}");
     assert!(body.contains("scripted failure"), "stream: {body}");
 }
+
+// --- journal metrics (EasyScholar) -----------------------------------------
+
+#[tokio::test]
+async fn journal_metrics_endpoints_round_trip() {
+    let shared = BibShared::open_in_memory().await.unwrap();
+    // Seed one cache row directly — no key is configured, so live fetching
+    // would be a no-op and the endpoints must still serve the cache.
+    shared
+        .bib
+        .upsert_journal_metrics(&bib_base::JournalMetrics {
+            journal_key: bib_base::journal_key_of("Nature Medicine"),
+            journal_name: "Nature Medicine".into(),
+            impact_factor: Some(82.9),
+            jcr_quartile: Some("Q1".into()),
+            cas_top: Some(true),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    let app = tui_http::api_router(shared);
+
+    // GET /journals/metrics serves every cached row.
+    let response = app
+        .clone()
+        .oneshot(request("GET", "/api/v1/bib/journals/metrics", None))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let journals = body["journals"].as_array().unwrap();
+    assert_eq!(journals.len(), 1);
+    assert_eq!(journals[0]["journal_key"], "nature medicine");
+    assert_eq!(journals[0]["impact_factor"], 82.9);
+    assert_eq!(journals[0]["jcr_quartile"], "Q1");
+    assert_eq!(journals[0]["cas_top"], true);
+
+    // Validation of a missing key reports invalid with a message, not 500.
+    let response = app
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/api/v1/bib/journals/validate-easyscholar",
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(body["valid"], false);
+    assert!(body["message"].as_str().unwrap().contains("not configured"));
+}
+
+#[tokio::test]
+async fn fetch_metrics_requires_a_journal_name() {
+    let shared = BibShared::open_in_memory().await.unwrap();
+    let mut article = bib_types::Article::new("test:no-journal", "Paper without journal");
+    article.journal = None;
+    shared.bib.upsert_article(&article).await.unwrap();
+
+    let app = tui_http::api_router(shared);
+    let response = app
+        .oneshot(request(
+            "POST",
+            "/api/v1/bib/articles/test:no-journal/fetch-metrics",
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    // Unknown article id → 404 rather than an enrichment attempt.
+    let shared = BibShared::open_in_memory().await.unwrap();
+    let app = tui_http::api_router(shared);
+    let response = app
+        .oneshot(request("POST", "/api/v1/bib/articles/missing/fetch-metrics", None))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn stored_easyscholar_key_loads_at_startup() {
+    let shared = BibShared::open_in_memory().await.unwrap();
+
+    // No stored row → nothing to load (the env-derived key, None in tests,
+    // stays untouched).
+    tui_http::load_stored_easyscholar_key(&shared).await;
+    assert_eq!(shared.easyscholar.api_key(), None);
+
+    // put_settings serialises values as JSON, so the row is a JSON string.
+    shared
+        .bib
+        .set_meta("web:easyscholar_key", "\"sk-live-1\"")
+        .await
+        .unwrap();
+    tui_http::load_stored_easyscholar_key(&shared).await;
+    assert_eq!(shared.easyscholar.api_key().as_deref(), Some("sk-live-1"));
+
+    // A stored empty string means "cleared" (mirrors the PUT hot-swap):
+    // it must not resurrect an older key on the next startup.
+    shared.bib.set_meta("web:easyscholar_key", "\"\"").await.unwrap();
+    tui_http::load_stored_easyscholar_key(&shared).await;
+    assert_eq!(shared.easyscholar.api_key(), None);
+
+    // A hand-edited non-string row is ignored rather than clobbering the
+    // client's current key.
+    shared.bib.set_meta("web:easyscholar_key", "123").await.unwrap();
+    shared.easyscholar.set_key(Some("sk-env".to_owned()));
+    tui_http::load_stored_easyscholar_key(&shared).await;
+    assert_eq!(shared.easyscholar.api_key().as_deref(), Some("sk-env"));
+}

@@ -12,7 +12,7 @@
  *
  * 菜单项类型：
  * - 分配到分类：弹出子菜单，显示所有分类，已归入的显示 ✓ 标记
- * - 获取期刊信息：仅对缺少元数据的论文显示
+ * - 获取期刊信息：有期刊名且尚无 IF/分区指标的论文显示（EasyScholar）
  * - 上传附件：仅对题录导入记录显示
  * - 获取PDF：仅对有 DOI 的题录导入记录显示
  * - 删除论文：危险操作，红色高亮
@@ -34,9 +34,11 @@ import { // 导入图标组件
   FolderOutlined, // 文件夹图标（分类分配）
   FileTextOutlined, // 文件文本图标（题录导入记录标识）
   CopyOutlined, // 复制图标（复制引用）
+  SearchOutlined, // 搜索图标（获取期刊信息——从 EasyScholar 查询）
 } from '@ant-design/icons';
 import { // 导入论文 API
   deletePaper, // 删除论文
+  fetchMetadata, // 获取期刊指标（EasyScholar）
 } from '../../../services/papersApi';
 import { // 导入分类 API
   assignPapers, // 分配论文到分类
@@ -287,6 +289,29 @@ export function usePaperContextMenu({
     }
   }, [configRef]);
 
+  /**
+   * 手动获取某篇论文的期刊指标（右键菜单「获取期刊信息」）
+   *
+   * 后端 fetch-metrics 是阻塞式端点：返回时 EasyScholar 结果已写入
+   * journal_metrics 期刊级缓存（同一期刊只查一次），因此不需要 jayread
+   * 时代的 3 秒轮询 —— 按命中与否提示，然后刷新列表（指标在组装层
+   * 注入，刷新即见；命中时整刊论文同时补齐）。
+   */
+  const handleFetchMetadata = useCallback(async (paperId: string) => {
+    message.info(t('message.fetchJournalInfo')); // 端点要等一次 EasyScholar 往返，先给即时反馈
+    try {
+      const res = await fetchMetadata(paperId);
+      if (res.fetched) {
+        message.success(t('message.fetchJournalDone', { journal: res.journal ?? '' }));
+      } else {
+        message.warning(t('message.fetchJournalMiss'));
+      }
+      configRef.current.loadPapers?.();
+    } catch (err) {
+      message.error(t('message.fetchJournalFailed', { error: (err as any).message }));
+    }
+  }, [configRef, message, t]);
+
   // ========================================
   // 菜单构建函数
   // ========================================
@@ -296,7 +321,7 @@ export function usePaperContextMenu({
    *
    * 菜单项根据论文状态动态生成：
    * - 分配到分类子菜单：始终显示，包含所有分类，已归入的显示 ✓ 标记
-   * - 获取期刊信息：仅对缺少元数据的论文显示
+   * - 获取期刊信息：有期刊名且尚无 IF/分区指标的论文显示
    * - 上传附件：仅对题录导入记录显示
    * - 获取PDF：仅对有 DOI 的题录导入记录显示
    * - 分割线
@@ -351,6 +376,14 @@ export function usePaperContextMenu({
         label: t('menu.assignToCategory'), // 菜单项显示文本
         icon: <FolderOutlined />, // 文件夹图标
         children: categorySubMenuItems, // 子菜单项数组
+      },
+      // 获取期刊信息：有期刊名但 IF/分区尚为空时显示。
+      // 指标是期刊级缓存：查一次 EasyScholar，刷新后整刊论文同时补齐。
+      !!paper.journal_name && paper.impact_factor == null && {
+        key: 'fetch-metadata', // 菜单项唯一标识
+        label: t('menu.fetchMetadata'), // 菜单项显示文本
+        icon: <SearchOutlined />, // 搜索图标，暗示从外部数据源查询
+        onClick: () => handleFetchMetadata(paper.id), // 查 EasyScholar 并刷新列表
       },
       // 上传附件：仅对题录导入记录显示
       isBibImport(paper.item_source) && {
@@ -411,6 +444,7 @@ export function usePaperContextMenu({
     handleAssignToCategory, // 分配函数，变化时需要重新绑定
     handleUnassignFromCategory, // 移除函数，变化时需要重新绑定
     handleDelete, // 删除函数，变化时需要重新绑定
+    handleFetchMetadata, // 获取期刊指标函数，变化时需要重新绑定
     uploadingPdfIds, // 上传中集合，变化时需要更新禁用状态
     wrappedHandleAttachPdf, // 上传函数，变化时需要重新绑定
     loadAttachments, // 加载附件函数，变化时需要重新绑定

@@ -675,3 +675,50 @@ export function collectionMembershipOf(
   }
   return membership;
 }
+
+/**
+ * `GET /journals/metrics` 的单行——后端 journal_metrics 表的直译
+ * （EasyScholar 期刊指标缓存：IF / JCR / 中科院分区）。
+ */
+export interface BibJournalMetrics {
+  journal_key: string;
+  journal_name: string;
+  impact_factor?: number | null;
+  impact_factor_5?: number | null;
+  jcr_quartile?: string | null;
+  ssci_quartile?: string | null;
+  cas_quartile?: string | null;
+  cas_quartile_base?: string | null;
+  cas_small?: string | null;
+  cas_top?: boolean | null;
+  cas_warning?: string | null;
+  fetched_at: string;
+}
+
+/**
+ * 期刊指标列表 → 「规范化期刊名 → 指标行」索引表。
+ *
+ * 期刊指标是期刊级属性：`GET /journals/metrics` 通常只有几十到几百行，
+ * 一次拉全量在前端按期刊名匹配，比后端往每篇文章 JSON 里 JOIN 一份
+ * 期刊数据便宜得多（与上面的 /collections 倒排完全同模式）。
+ *
+ * 规范化规则（trim + 小写）与后端 `journal_key_of` 一致——这是跨端契约。
+ */
+export function journalMetricsIndex(
+  journals: BibJournalMetrics[] | null | undefined,
+): Map<string, BibJournalMetrics> {
+  const index = new Map<string, BibJournalMetrics>();
+  for (const journal of journals ?? []) {
+    if (!journal?.journal_key) continue;
+    index.set(journal.journal_key, journal);
+  }
+  return index;
+}
+
+/**
+ * 取论文的规范化期刊名（与 `journalMetricsIndex` 的 key 同规则）。
+ */
+export function journalKeyOfPaper(paper: Pick<Paper, 'journal_name'>): string | null {
+  const name = paper.journal_name?.trim();
+  return name ? name.toLowerCase() : null;
+}

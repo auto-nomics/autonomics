@@ -111,6 +111,10 @@ pub(crate) fn router(shared: BibShared) -> Router {
         )
         .route("/articles/{id}/csl-json", get(get_article_csl_json))
         .route(
+            "/articles/{id}/fetch-metrics",
+            post(fetch_article_metrics),
+        )
+        .route(
             "/annotations/{id}",
             put(update_annotation).delete(delete_annotation),
         )
@@ -133,6 +137,8 @@ pub(crate) fn router(shared: BibShared) -> Router {
             delete(remove_from_collection),
         )
         .route("/collections/{id}/status", put(update_collection_status))
+        .route("/journals/metrics", get(list_journal_metrics))
+        .route("/journals/validate-easyscholar", get(validate_easyscholar))
         .route("/settings", get(get_settings).put(put_settings))
         .route("/chat", get(get_chat).post(post_chat))
         .route("/requests", get(list_requests))
@@ -532,6 +538,12 @@ async fn import_article(
         .upsert_article(&article)
         .await
         .map_err(internal)?;
+
+    // Journal-metrics enrichment is fire-and-forget — see
+    // [`spawn_journal_metrics_enrichment`].
+    if let Some(journal) = article_journal_name(&article) {
+        spawn_journal_metrics_enrichment(&shared, vec![journal]);
+    }
 
     let fulltext_fetched = if input.fetch_fulltext.unwrap_or(true) {
         match try_fetch_fulltext_with(&shared.europe_pmc, &article).await {
@@ -957,6 +969,13 @@ async fn import_batch(
             .upsert_articles(&fresh)
             .await
             .map_err(internal)?;
+        // Batch imports are the main source of new journals — enrich them
+        // all in one background pass (per-journal dedup happens inside).
+        let journals = fresh
+            .iter()
+            .filter_map(article_journal_name)
+            .collect::<Vec<_>>();
+        spawn_journal_metrics_enrichment(&shared, journals);
     }
     if let Some(category) = input.category_id.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
         for article in &fresh {
@@ -1046,6 +1065,11 @@ async fn update_article(
         .upsert_article(&article)
         .await
         .map_err(internal)?;
+    // A metadata edit may have introduced or corrected the journal name —
+    // enrich in the background if that journal is not cached yet.
+    if let Some(journal) = article_journal_name(&article) {
+        spawn_journal_metrics_enrichment(&shared, vec![journal]);
+    }
     Ok(Json(json!({ "article": article })))
 }
 
@@ -1858,8 +1882,159 @@ async fn put_settings(
             .set_meta(&format!("{SETTINGS_PREFIX}{key}"), &stored)
             .await
             .map_err(internal)?;
+        // The EasyScholar key also drives the live journal-metrics client —
+        // push it through so a settings save takes effect without a restart.
+        // Stored as a JSON string, so only that shape is hot-applied.
+        if key == "easyscholar_key" {
+            let api_key = value.as_str().map(str::to_owned).filter(|k| !k.is_empty());
+            shared.easyscholar.set_key(api_key);
+        }
     }
     Ok(Json(json!({ "ok": true })))
+}
+
+/// Load the persisted `easyscholar_key` setting into the shared client.
+///
+/// [`put_settings`] hot-swaps only the process that receives the PUT;
+/// without this read-back every fresh process would start key-less even
+/// though the row is still in `bib_meta`. Call once at startup — both the
+/// TUI HTTP assembly and the desktop shell do.
+///
+/// Precedence: a stored row always wins over `EASYSCHOLAR_KEY` (a saved key
+/// is the later, more explicit intent; env only bootstraps), and an empty
+/// stored string means "cleared", mirroring the PUT hot-swap — so the
+/// effective key survives restarts either way. An absent row or a
+/// hand-edited non-string value leaves the env-derived key untouched.
+pub async fn load_stored_easyscholar_key(shared: &BibShared) {
+    let Some(raw) = shared
+        .bib
+        .get_meta(&format!("{SETTINGS_PREFIX}easyscholar_key"))
+        .await
+        .ok()
+        .flatten()
+    else {
+        return;
+    };
+    match serde_json::from_str::<String>(&raw) {
+        // Empty mirrors the PUT hot-swap: an explicitly cleared key stays
+        // cleared across restarts instead of resurrecting the env value.
+        Ok(key) if key.is_empty() => shared.easyscholar.set_key(None),
+        Ok(key) => shared.easyscholar.set_key(Some(key)),
+        // A hand-edited non-string row is ignored rather than clobbering
+        // whatever key the client already holds.
+        Err(_) => {}
+    }
+}
+
+// ===========================================================================
+// Journal metrics (EasyScholar) — impact factor / quartiles cache
+// ===========================================================================
+
+/// Extract a non-empty trimmed journal name from an article, if any.
+fn article_journal_name(article: &Article) -> Option<String> {
+    article
+        .journal
+        .as_deref()
+        .map(str::trim)
+        .filter(|j| !j.is_empty())
+        .map(str::to_owned)
+}
+
+/// Fire-and-forget journal-metrics enrichment for a batch of journal names.
+///
+/// Spawned after imports land: the response must not wait on an external
+/// API, and a missing key / unknown journal / cache error must never fail
+/// the caller. Names are deduped by normalized key and filtered against
+/// the cache so each journal is fetched at most once per import.
+fn spawn_journal_metrics_enrichment(shared: &Arc<BibShared>, journals: Vec<String>) {
+    if journals.is_empty() {
+        return;
+    }
+    let shared = Arc::clone(shared);
+    tokio::spawn(async move {
+        // Dedupe by normalized key, keeping the first spelling seen.
+        let mut deduped: HashMap<String, String> = HashMap::new();
+        for journal in journals {
+            deduped
+                .entry(bib_base::journal_key_of(&journal))
+                .or_insert(journal);
+        }
+        let keys: Vec<String> = deduped.keys().cloned().collect();
+        let cached = match shared.bib.get_journal_metrics(&keys).await {
+            Ok(cached) => cached,
+            Err(err) => {
+                tracing::debug!(error = %err, "journal metrics cache read failed");
+                return;
+            }
+        };
+        for (key, journal) in deduped {
+            if cached.contains_key(&key) {
+                continue;
+            }
+            match bib_base::enrich_journal_metrics(&shared.bib, &shared.easyscholar, &journal)
+                .await
+            {
+                Some(_) => tracing::debug!(journal = %journal, "journal metrics cached"),
+                None => tracing::debug!(journal = %journal, "no journal metrics available"),
+            }
+        }
+    });
+}
+
+/// `GET /journals/metrics` — every cached journal-metrics row.
+///
+/// The frontend pulls this in parallel with `/articles` and joins by
+/// normalized journal name (mirroring the `/collections` membership join).
+async fn list_journal_metrics(State(shared): State<Arc<BibShared>>) -> ApiResult {
+    let journals = shared.bib.list_journal_metrics().await.map_err(internal)?;
+    Ok(Json(json!({ "journals": journals })))
+}
+
+#[derive(Deserialize)]
+struct ValidateEasyscholarQuery {
+    key: Option<String>,
+}
+
+/// `GET /journals/validate-easyscholar?key=...` — probe an EasyScholar key.
+///
+/// Without `key` the currently configured one is validated, letting the
+/// settings UI show status before the user saves anything.
+async fn validate_easyscholar(
+    State(shared): State<Arc<BibShared>>,
+    Query(query): Query<ValidateEasyscholarQuery>,
+) -> ApiResult {
+    let (valid, message) = match query.key.filter(|k| !k.trim().is_empty()) {
+        Some(key) => shared.easyscholar.validate(&key).await,
+        None => shared.easyscholar.validate_current().await,
+    };
+    Ok(Json(json!({ "valid": valid, "message": message })))
+}
+
+/// `POST /articles/{id}/fetch-metrics` — blocking single-article enrichment.
+///
+/// Used by the paper-list context menu (获取期刊信息). Distinguished from
+/// the spawned post-import enrichment by returning the fetched metrics (or
+/// `null` when the journal is unknown / no key is configured) so the caller
+/// can refresh the row immediately.
+async fn fetch_article_metrics(
+    State(shared): State<Arc<BibShared>>,
+    Path(id): Path<String>,
+) -> ApiResult {
+    let article = shared
+        .bib
+        .get_article(&id)
+        .await
+        .map_err(internal)?
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, format!("article {id} not found")))?;
+    let Some(journal) = article_journal_name(&article) else {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            format!("article {id} has no journal name to look up"),
+        ));
+    };
+    let metrics =
+        bib_base::enrich_journal_metrics(&shared.bib, &shared.easyscholar, &journal).await;
+    Ok(Json(json!({ "journal": journal, "metrics": metrics })))
 }
 
 /// Resolve and validate the chat scope from a request.

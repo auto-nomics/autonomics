@@ -120,6 +120,12 @@ pub struct BibShared {
     /// tools. API key read from `S2_API_KEY` (optional; absent = lower
     /// rate limit).
     pub s2: Arc<semantic_scholar::S2Client>,
+
+    /// Shared EasyScholar client for journal-metrics enrichment (impact
+    /// factor / JCR / CAS 分区). API key read from `EASYSCHOLAR_KEY`
+    /// (optional; absent = metrics silently unavailable), hot-swappable at
+    /// runtime via the settings endpoint without restarting the server.
+    pub easyscholar: Arc<easyscholar::EasyscholarClient>,
 }
 
 impl BibShared {
@@ -156,6 +162,7 @@ impl BibShared {
         let openalex = openalex_client_from_env();
         let crossref = crossref_client_from_env();
         let s2 = s2_client_from_env();
+        let easyscholar = Arc::new(easyscholar::EasyscholarClient::from_env());
         let gateway = Arc::new(LiteratureGateway::with_all_shared_clients(
             eutils.clone(),
             arxiv.clone(),
@@ -175,6 +182,7 @@ impl BibShared {
             openalex,
             crossref,
             s2,
+            easyscholar,
         })
     }
 
@@ -195,6 +203,7 @@ impl BibShared {
         let openalex = openalex_client_from_env();
         let crossref = crossref_client_from_env();
         let s2 = s2_client_from_env();
+        let easyscholar = Arc::new(easyscholar::EasyscholarClient::from_env());
         let gateway = Arc::new(LiteratureGateway::with_all_shared_clients(
             eutils.clone(),
             arxiv.clone(),
@@ -214,6 +223,7 @@ impl BibShared {
             openalex,
             crossref,
             s2,
+            easyscholar,
         })
     }
 
@@ -239,6 +249,7 @@ impl std::fmt::Debug for BibShared {
             .field("openalex", &"Arc<OpenAlexClient>")
             .field("crossref", &"Arc<CrossrefClient>")
             .field("s2", &"Arc<S2Client>")
+            .field("easyscholar", &"Arc<EasyscholarClient>")
             .finish()
     }
 }

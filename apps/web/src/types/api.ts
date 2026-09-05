@@ -64,6 +64,10 @@ export interface DeletePaperResponse {
 
 export interface FetchMetadataResponse {
   message: string;
+  /** 期刊名（fetch-metrics 回传，供 UI 组织本地化提示） */
+  journal?: string | null;
+  /** true = EasyScholar 命中且已写入期刊级缓存；false = 未命中（无 key / 期刊不在库） */
+  fetched?: boolean;
 }
 
 export interface TranslatePaperResponse {

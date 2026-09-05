@@ -42,6 +42,8 @@
     "dryRunFailed": "Dry run failed",
     "snapshotFailed": "Failed to create snapshot",
     "fetchJournalInfo": "Fetching journal info...",
+    "fetchJournalDone": "Updated journal metrics for {{journal}}",
+    "fetchJournalMiss": "No metrics found for this journal (unknown to EasyScholar, or no API key configured)",
     "fetchJournalFailed": "Failed to fetch journal info: {{error}}",
     "reparseStarted": "Reparsing started...",
     "reparseFailed": "Reparsing failed: {{error}}",

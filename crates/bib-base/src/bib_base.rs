@@ -123,6 +123,21 @@ CREATE TABLE IF NOT EXISTS bib_meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS journal_metrics (
+    journal_key       TEXT PRIMARY KEY,
+    journal_name      TEXT NOT NULL,
+    impact_factor     REAL,
+    impact_factor_5   REAL,
+    jcr_quartile      TEXT,
+    ssci_quartile     TEXT,
+    cas_quartile      TEXT,
+    cas_quartile_base TEXT,
+    cas_small         TEXT,
+    cas_top           INTEGER,
+    cas_warning       TEXT,
+    fetched_at        TEXT NOT NULL
+);
 ";
 
 // ---------------------------------------------------------------------------
@@ -1169,7 +1184,7 @@ fn extract_snippet(
 // we convert to Option<String> / Option<i64>.
 // ---------------------------------------------------------------------------
 
-fn opt_string(v: Value) -> Option<String> {
+pub(crate) fn opt_string(v: Value) -> Option<String> {
     match v {
         Value::Text(s) => Some(s),
         Value::Null => None,
@@ -1181,7 +1196,7 @@ fn opt_value(value: Option<String>) -> Value {
     value.map_or(Value::Null, Value::Text)
 }
 
-fn opt_int(v: Value) -> Option<i64> {
+pub(crate) fn opt_int(v: Value) -> Option<i64> {
     match v {
         Value::Integer(i) => Some(i),
         Value::Null => None,

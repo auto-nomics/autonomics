@@ -28,6 +28,11 @@ pub async fn start_server(paths: &Paths) -> Result<StartedServer, String> {
         .map_err(|e| format!("打开文献库 {} 失败：{e}", paths.bib_db.display()))?
         .with_file_storage(storage);
 
+    // Settings-saved EasyScholar key survives restarts (the settings PUT
+    // hot-swaps only the process that receives it). Load before the router
+    // starts serving; `EASYSCHOLAR_KEY` only bootstraps the first run.
+    tui_http::load_stored_easyscholar_key(&shared).await;
+
     // 模型槽：启动时读一次共享 config.db（TUI 是唯一写入方）。
     // 无模型 → 槽为 None → agent 路由 503 "no model configured"。
     let conn = app_config::open(&paths.app_db)

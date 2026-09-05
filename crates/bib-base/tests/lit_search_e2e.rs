@@ -203,7 +203,12 @@ async fn bib_save_batch_mixed_ids() {
     use europepmc::EuropePmcClient;
 
     let epmc = Arc::new(EuropePmcClient::new());
-    let tool = BibSaveTool { bib, gateway, epmc };
+    let tool = BibSaveTool {
+        bib,
+        gateway,
+        epmc,
+        easyscholar: Arc::new(easyscholar::EasyscholarClient::new(None)),
+    };
 
     // Mix of real PMIDs — these are stable PubMed records.
     let input = BibSaveInput {

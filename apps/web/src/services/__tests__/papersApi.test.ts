@@ -99,11 +99,17 @@ function callOf(f: ReturnType<typeof makeFetch>, index = 0) {
   return { url, init };
 }
 
-/** 列表接口的默认路由：/articles 返回给定 body，/collections 返回空集合 */
-function listFetch(articlesBody: unknown, collections: Array<Record<string, unknown>> = []) {
+/** 列表接口的默认路由：/articles 返回给定 body，/collections、/journals/metrics
+ * 各自返回给定集合（getPapers 的 Promise.all 并行源） */
+function listFetch(
+  articlesBody: unknown,
+  collections: Array<Record<string, unknown>> = [],
+  journals: Array<Record<string, unknown>> = [],
+) {
   return makeFetch((url: unknown) => {
     const u = String(url);
     if (u.includes('/collections')) return Promise.resolve(jsonResponse({ collections }));
+    if (u.includes('/journals/metrics')) return Promise.resolve(jsonResponse({ journals }));
     return Promise.resolve(jsonResponse(articlesBody));
   });
 }
@@ -236,6 +242,62 @@ describe('getPapers — 参数映射', () => {
     const res = await getPapers();
     expect(res.papers).toHaveLength(1);
     expect(res.papers[0].category_ids).toEqual([]);
+  });
+
+  it('期刊指标由 /journals/metrics 按规范化期刊名匹配注入；未缓存/无期刊名的行保持 null', async () => {
+    listFetch(
+      {
+        total: 3,
+        articles: [
+          makeArticle({ id: 'doi:10.1/a', journal: 'Journal of Interoperability' }), // 命中
+          makeArticle({ id: 'doi:10.1/b', journal: ' journal OF interoperability ' }), // 大小写/空格差异仍命中
+          makeArticle({ id: 'doi:10.1/c', journal: null }), // 无期刊名 → 保持 null
+        ],
+      },
+      [],
+      [
+        {
+          journal_key: 'journal of interoperability',
+          journal_name: 'Journal of Interoperability',
+          impact_factor: 3.2,
+          impact_factor_5: 4.1,
+          jcr_quartile: 'Q1',
+          ssci_quartile: null,
+          cas_quartile: '1区',
+          cas_quartile_base: null,
+          cas_small: null,
+          cas_top: true,
+          cas_warning: null,
+          fetched_at: '2026-09-01T00:00:00Z',
+        },
+      ],
+    );
+
+    const res = await getPapers();
+    const [hit, hitVariant, noJournal] = res.papers;
+    expect(hit.impact_factor).toBe(3.2);
+    expect(hit.impact_factor_5).toBe(4.1);
+    expect(hit.jcr_quartile).toBe('Q1');
+    expect(hit.cas_quartile).toBe('1区');
+    expect(hit.cas_top).toBe(true);
+    // 命中行其余维度缺数据时仍落到 null（不是 undefined）
+    expect(hit.ssci_quartile).toBeNull();
+    expect(hitVariant.impact_factor).toBe(3.2); // trim+lower 规范化后同键
+    expect(noJournal.impact_factor).toBeNull();
+  });
+
+  it('/journals/metrics 请求失败时列表照常返回，指标退化为 null', async () => {
+    makeFetch((url: unknown) => {
+      const u = String(url);
+      if (u.includes('/journals/metrics')) {
+        return Promise.resolve(jsonResponse({ error: 'boom' }, false, 500));
+      }
+      return Promise.resolve(jsonResponse({ total: 1, articles: [makeArticle()] }));
+    });
+
+    const res = await getPapers();
+    expect(res.papers).toHaveLength(1);
+    expect(res.papers[0].impact_factor).toBeNull();
   });
 
   it('title 在后端白名单里 → 直接透传，返回顺序即后端顺序', async () => {
@@ -378,9 +440,13 @@ describe('updatePaper', () => {
 
     const paper = await updatePaper(SAFE_ID, { hoverTranslationEnabled: true });
 
-    // 只有一次 GET（读现值），没有 PUT
-    expect(f).toHaveBeenCalledTimes(1);
-    expect(callOf(f).init.method).toBeUndefined();
+    // 只有 GET（详情 + getPaper 顺带的 /journals/metrics 指标旁路），没有 PUT
+    expect(f).toHaveBeenCalledTimes(2);
+    for (const [, init] of f.mock.calls as Array<[string, RequestInit]>) {
+      expect(init?.method).toBeUndefined();
+    }
+    expect(callOf(f).url).toContain(`/articles/${ENC}?`);
+    expect(callOf(f, 1).url).toContain('/journals/metrics');
     // 返回值带上 patch，调用方的乐观更新得到确认
     expect(paper.hoverTranslationEnabled).toBe(true);
   });
@@ -565,13 +631,48 @@ describe('uploadPaper — POST /articles/upload', () => {
 // 桩
 // ============================================================================
 
+// ============================================================================
+// fetchMetadata — POST /articles/{id}/fetch-metrics
+// ============================================================================
+
+describe('fetchMetadata — 手动期刊指标获取', () => {
+  it('POST 到百分号编码的真实 ID，命中时回传 journal + fetched=true', async () => {
+    const f = makeFetch(() =>
+      Promise.resolve(jsonResponse({
+        journal: 'Journal of Interoperability',
+        metrics: {
+          journal_key: 'journal of interoperability',
+          impact_factor: 3.2,
+          jcr_quartile: 'Q1',
+        },
+      })),
+    );
+
+    const res = await fetchMetadata(SAFE_ID);
+
+    const { url, init } = callOf(f);
+    expect(url).toBe(`/api/v1/bib/articles/${ENC}/fetch-metrics`);
+    expect(init.method).toBe('POST');
+    expect(res.fetched).toBe(true);
+    expect(res.journal).toBe('Journal of Interoperability');
+  });
+
+  it('未命中（无 key / 期刊不在库）不报错：metrics 为 null → fetched=false', async () => {
+    makeFetch(() => Promise.resolve(jsonResponse({ journal: 'Nowhere Journal', metrics: null })));
+
+    const res = await fetchMetadata(SAFE_ID);
+    expect(res.fetched).toBe(false);
+    expect(res.journal).toBe('Nowhere Journal');
+  });
+});
+
+// ============================================================================
+// 桩
+// ============================================================================
+
 describe('桩化函数（autonomics 不提供的能力）', () => {
   it('reparsePaper reject', async () => {
     await expect(reparsePaper(SAFE_ID)).rejects.toThrow(/解析管线/);
-  });
-
-  it('fetchMetadata reject', async () => {
-    await expect(fetchMetadata(SAFE_ID)).rejects.toThrow(/元数据抓取/);
   });
 
   it('translatePaper reject', async () => {

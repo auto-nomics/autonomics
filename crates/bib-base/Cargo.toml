@@ -28,6 +28,8 @@ reqwest = { version = "0.13", features = ["json"] }
 
 # Europe PMC open-access full-text auto-fetch
 europepmc = { path = "../europepmc" }
+easyscholar = { path = "../easyscholar" }
+
 
 # Additional literature sources integrated into the LiteratureGateway.
 openalex = { path = "../openalex" }
@@ -52,3 +54,4 @@ e2e = []
 [dev-dependencies]
 tokio = { workspace = true }
 lopdf = { version = "0.42", default-features = false }
+easyscholar = { path = "../easyscholar" }
