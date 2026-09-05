@@ -152,6 +152,7 @@ pub enable_kms_readonly: bool,   // kms_readonly（P4 补：最后一个无条�
 | P2 前端 | `useChatSender` 切 `/threads` API；删 messages 上行与静态 persona；thread 元数据附 session_id | 三种 pane 流式正常、刷新后 `GET /messages` 恢复 |
 | P3 Desktop + 收尾 | desktop `RuntimeHost::open` + 单写者锁 + 模型槽改造；旧 `POST /chat` 删除（→P4，见 §12 偏差 4） | desktop 与 TUI 互斥提示正确；模型热更生效 |
 | P4 迁移与退役（已落地） | 存量 thread 迁移导入（前端驱动）；inline 追问线程 session 化；旧 `POST /chat` 退役；`compact` 端点；`kms_readonly` 门控；delegation / 多智能体 web 化预研（→P5） | import→GET /messages 回环；追问线程 runtime 会话化；`/chat` 404 |
+| P5 delegation web 化 | 预研见 `docs/design/web-agent-delegation.md`：P5a 只读观测（/agents、/delegations、history）→ P5b 受限 delegation（子树/上限/profile 白名单三边界后开 `enable_host_tools`） | web 可见 agent 状态与 delegation 台账；越界派生被拒 |
 
 P1/P2 可并行开发（新端点与旧端点并存），P3 依赖 P1。
 
