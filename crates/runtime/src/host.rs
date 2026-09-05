@@ -1200,17 +1200,83 @@ impl RuntimeHost {
             }
             reg = self.registration_rx.recv() => {
                 if let Some((handle, info)) = reg {
-                    let path = handle.path.clone();
-                    let mut event_info = info;
-                    event_info.agent_id = Some(handle.agent_id);
-                    self.register_agent(handle, event_info.clone());
-                    self.emit_host_event(HostEvent::AgentRegistered {
-                        path: path.clone(),
-                        info: event_info,
-                    });
-                    tracing::info!(agent = %path, "background spawn completed and registered");
+                    self.process_registration(handle, info);
                 }
             }
+        }
+    }
+
+    /// Non-blocking drain of completed background spawns (the registration
+    /// half of [`recv_and_process_command`]). Embeddings without their own
+    /// event loop call this from their driver tick.
+    pub fn try_process_registrations(&mut self) {
+        while let Ok((handle, info)) = self.registration_rx.try_recv() {
+            self.process_registration(handle, info);
+        }
+    }
+
+    fn process_registration(&mut self, handle: AgentHandle, mut info: crate::control::AgentInfo) {
+        let path = handle.path.clone();
+        info.agent_id = Some(handle.agent_id);
+        self.register_agent(handle, info.clone());
+        self.emit_host_event(HostEvent::AgentRegistered {
+            path: path.clone(),
+            info,
+        });
+        tracing::info!(agent = %path, "background spawn completed and registered");
+    }
+
+    /// Drive this host on a background task until [`HostDriver::join`]
+    /// reclaims it.
+    ///
+    /// `RuntimeHost` is caller-driven: `HostCommand`s (the `HostControl`
+    /// surface), background-spawn registrations, and agent events are
+    /// only processed when somebody calls the driving methods — the TUI
+    /// does so inside its render loop. A process that opens a host but
+    /// never drives it starves every `HostControl` query (the oneshot
+    /// reply never fires), so embedding hosts (the desktop shell,
+    /// integration tests) must run this driver. The TUI must NOT — it
+    /// drives the loop itself, and a second driver would race it.
+    ///
+    /// The loop polls at a fixed cadence: each round drains commands,
+    /// registrations, and lifecycle notifications non-blockingly, then
+    /// waits up to one [`POLL`] interval for an agent event (whose
+    /// processing — delegation plumbing, status updates, persistence —
+    /// is fully synchronous once received, so the timeout can never cut
+    /// an event in half). Dropping the [`HostDriver`] without joining
+    /// also stops the loop.
+    pub fn spawn_driver(self) -> HostDriver {
+        const POLL: std::time::Duration = std::time::Duration::from_millis(100);
+        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+        let task = tokio::spawn(async move {
+            let mut host = self;
+            let mut stop = stop_rx;
+            loop {
+                match stop.try_recv() {
+                    Ok(()) | Err(tokio::sync::oneshot::error::TryRecvError::Closed) => break,
+                    Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
+                }
+                host.try_process_commands();
+                host.try_process_registrations();
+                // Embeddings have no UI consumer for lifecycle events; the
+                // unbounded notify channel would otherwise grow without
+                // bound across status transitions.
+                while host.try_recv_event().is_some() {}
+                match tokio::time::timeout(POLL, host.recv_any()).await {
+                    // Event processed; drain commands again immediately.
+                    Ok(Some(_)) => continue,
+                    // All agent event senders dropped; park briefly so the
+                    // loop cannot spin. Commands keep draining each round.
+                    Ok(None) => tokio::time::sleep(POLL).await,
+                    // Poll timeout: fall through, drain again.
+                    Err(_) => {}
+                }
+            }
+            host
+        });
+        HostDriver {
+            stop: Some(stop_tx),
+            task,
         }
     }
 
@@ -2834,7 +2900,11 @@ fn delegation_status_from_str(value: &str) -> DelegationStatus {
     }
 }
 
-async fn read_agent_history(
+/// Read an agent's recent transcript (latest session, last `limit`
+/// messages) straight from storage. Public for embeddings that hold
+/// agents outside the host registry (tui-http's resident web agents)
+/// and therefore cannot go through `HostControl::agent_history`.
+pub async fn read_agent_history(
     storage: Arc<dyn AgentStorage>,
     agent_id: uuid::Uuid,
     agent_path: String,
@@ -3762,6 +3832,34 @@ impl Drop for RuntimeHost {
     fn drop(&mut self) {
         for (_, entry) in self.agents.drain() {
             let _ = entry.cmd_tx.send(AgentCommand::Shutdown);
+        }
+    }
+}
+
+/// Background event-loop driver for a [`RuntimeHost`] owned by a process
+/// without its own UI loop (the desktop shell, integration tests). Created
+/// via [`RuntimeHost::spawn_driver`]; see its doc for why the TUI is the
+/// exception.
+pub struct HostDriver {
+    stop: Option<tokio::sync::oneshot::Sender<()>>,
+    task: tokio::task::JoinHandle<RuntimeHost>,
+}
+
+impl HostDriver {
+    /// Stop the driver loop and hand the host back for graceful shutdown
+    /// (`shutdown_all_agents_and_wait`, then drop to release the
+    /// single-writer lock). The loop parks at most one poll interval
+    /// before returning, so this completes promptly even on an idle host.
+    ///
+    /// Panics if the driver task itself failed — the host is lost at that
+    /// point and nothing graceful is possible.
+    pub async fn join(mut self) -> RuntimeHost {
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
+        match self.task.await {
+            Ok(host) => host,
+            Err(err) => panic!("host driver task failed: {err}"),
         }
     }
 }

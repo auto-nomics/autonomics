@@ -104,7 +104,7 @@ fn bootstrap(paths: &Paths) -> Result<DesktopState, String> {
 
     Ok(DesktopState::new(
         runtime,
-        started.host,
+        started.host_driver,
         started.handle,
         started.model_slot,
     ))

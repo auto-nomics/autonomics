@@ -23,7 +23,7 @@ use agentik_sdk::model::Model;
 use agentik_types::{AgentPath, ContentBlock, Message, Role};
 use arc_swap::ArcSwapOption;
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::sse::{KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
@@ -81,6 +81,17 @@ impl AgentRegistry {
             model,
             agents: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Snapshot of the resident agents currently held (P5a live rows for
+    /// `GET /agents`), as `(agent_type, entry)` pairs.
+    async fn resident_agents(&self) -> Vec<(String, Arc<ResidentAgent>)> {
+        self.agents
+            .lock()
+            .await
+            .iter()
+            .map(|(agent_type, entry)| (agent_type.clone(), entry.clone()))
+            .collect()
     }
 
     fn model_slot(&self) -> &Arc<ArcSwapOption<Model>> {
@@ -148,6 +159,10 @@ pub(crate) fn router(state: RuntimeAgentState) -> Router {
         .route("/threads/{id}/messages", get(thread_messages))
         .route("/threads/{id}/chat", post(thread_chat))
         .route("/threads/{id}/compact", post(thread_compact))
+        // P5a read-only observability (docs/design/web-agent-delegation.md §4)
+        .route("/agents", get(list_agents))
+        .route("/agents/history", get(agent_history))
+        .route("/delegations", get(list_delegations))
         .with_state(state)
 }
 
@@ -508,6 +523,228 @@ struct RelayState {
     finished: bool,
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// P5a read-only observability: agents / delegations / history
+// (docs/design/web-agent-delegation.md §4)
+// ─────────────────────────────────────────────────────────────────────────
+
+/// `GET /agents` — transparent host view from three sources: the host's
+/// live registry (TUI-side agents), this module's resident web agents,
+/// and the persisted agent graph; rows from previous runs (shut-down
+/// children, orphans) join as `live:false`. No subtree filtering — the
+/// web shell shares the host with the TUI and paths make the split
+/// visible.
+///
+/// Resident web agents never enter the host registry: registering them
+/// would move their event stream into the host's relay (the thread SSE
+/// driver owns it), so their live rows are synthesized here instead.
+async fn list_agents(State(state): State<RuntimeAgentState>) -> Response {
+    let Some(control) = state.registry.infra().host_control.clone() else {
+        return error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "host control unavailable",
+        );
+    };
+    let (Some(status), Some(persisted)) = (
+        control.get_status().await,
+        control.list_persisted_agents().await,
+    ) else {
+        return error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "host event loop unavailable",
+        );
+    };
+
+    let mut agents = Vec::with_capacity(status.agents.len() + persisted.len());
+    let mut live_paths = std::collections::HashSet::new();
+    for info in status.agents {
+        live_paths.insert(info.path.clone());
+        agents.push(json!({
+            "name": info.name,
+            "path": info.path,
+            "agent_id": info.agent_id,
+            "summary": info.summary,
+            "tags": info.tags,
+            "tools": info.tools,
+            "status": info.status.tag(),
+            "last_event": info.last_event,
+            "live": true,
+        }));
+    }
+    for (_, entry) in state.registry.resident_agents().await {
+        let handle = entry.handle.lock().await;
+        let path = handle.path.as_str().to_owned();
+        if !live_paths.insert(path.clone()) {
+            continue;
+        }
+        let name = path.rsplit('/').next().unwrap_or(&path).to_owned();
+        agents.push(json!({
+            "name": name,
+            "path": path,
+            "agent_id": handle.agent_id,
+            "status": if entry.busy.load(Ordering::SeqCst) { "running" } else { "idle" },
+            "last_event": serde_json::Value::Null,
+            "live": true,
+        }));
+    }
+    for row in persisted {
+        if live_paths.contains(&row.path) {
+            continue;
+        }
+        let name = row.path.rsplit('/').next().unwrap_or(&row.path).to_owned();
+        let status = serde_json::from_str::<runtime::control::AgentStatus>(&row.status_json)
+            .map(|status| status.tag().to_owned())
+            .unwrap_or_else(|_| "unknown".to_owned());
+        agents.push(json!({
+            "name": name,
+            "path": row.path,
+            "parent_path": row.parent_path,
+            "profile_path": row.profile_path,
+            "agent_id": row.agent_id,
+            "status": status,
+            "last_event": row.last_event,
+            "live": false,
+        }));
+    }
+    Json(json!({ "agents": agents })).into_response()
+}
+
+#[derive(Deserialize)]
+struct DelegationsQuery {
+    /// Optional terminal-state filter.
+    status: Option<String>,
+    /// Optional target-agent filter (full or short name).
+    target: Option<String>,
+    limit: Option<usize>,
+}
+
+/// `GET /delegations` — the delegation ledger, newest first. Host-wide view
+/// (no caller filter): the web drawer is an operator surface, not an agent.
+async fn list_delegations(
+    State(state): State<RuntimeAgentState>,
+    Query(query): Query<DelegationsQuery>,
+) -> Response {
+    const STATUSES: [&str; 5] = ["pending", "running", "completed", "interrupted", "failed"];
+    if let Some(status) = &query.status {
+        if !STATUSES.contains(&status.as_str()) {
+            return error(
+                StatusCode::BAD_REQUEST,
+                "status must be one of pending|running|completed|interrupted|failed",
+            );
+        }
+    }
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    let Some(control) = state.registry.infra().host_control.clone() else {
+        return error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "host control unavailable",
+        );
+    };
+    let Some(mut delegations) = control
+        .list_delegations(None, query.target.as_deref(), query.status.as_deref())
+        .await
+    else {
+        return error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "host event loop unavailable",
+        );
+    };
+    delegations.truncate(limit);
+    Json(json!({ "delegations": delegations })).into_response()
+}
+
+#[derive(Deserialize)]
+struct AgentHistoryQuery {
+    /// Full path (`/root/web/homepage`) or unique short name.
+    agent: String,
+    limit: Option<usize>,
+}
+
+/// `GET /agents/history?agent=…` — an agent's recent transcript. The agent
+/// is a query param (not a path segment) so full paths with slashes need no
+/// encoding games. Resident web agents are resolved through this module's
+/// registry and read straight from storage (they are invisible to the host
+/// registry; see [`list_agents`]); everything else goes through
+/// `HostControl::agent_history` (live TUI agents + persisted-graph
+/// fallback). Unknown agents resolve to an empty history, not an error.
+async fn agent_history(
+    State(state): State<RuntimeAgentState>,
+    Query(query): Query<AgentHistoryQuery>,
+) -> Response {
+    let limit = query.limit.unwrap_or(20).clamp(1, 100);
+
+    let requested = query.agent.trim().trim_start_matches('/').to_owned();
+    let mut resident = None;
+    for (agent_type, entry) in state.registry.resident_agents().await {
+        let handle = entry.handle.lock().await;
+        let path = handle.path.as_str().trim_start_matches('/');
+        // Full path (`root/web/homepage`), short path (`homepage`), or the
+        // frontend agent_type key (`paperReader`) all address the agent.
+        if path == requested
+            || path.rsplit('/').next() == Some(requested.as_str())
+            || agent_type == requested
+        {
+            resident = Some((handle.agent_id, handle.path.as_str().to_owned()));
+            break;
+        }
+    }
+
+    let history = if let Some((agent_id, path)) = resident {
+        runtime::host::read_agent_history(
+            state.registry.infra().storage.clone(),
+            agent_id,
+            path,
+            limit,
+        )
+        .await
+    } else {
+        let Some(control) = state.registry.infra().host_control.clone() else {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "host control unavailable",
+            );
+        };
+        let Some(history) = control.agent_history(&query.agent, limit).await else {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "host event loop unavailable",
+            );
+        };
+        history
+    };
+    // Same {role, text} shape as GET /threads/:id/messages so the drawer can
+    // reuse the transcript renderer.
+    let messages: Vec<_> = history
+        .messages
+        .iter()
+        .map(|message| {
+            let text = message
+                .content
+                .iter()
+                .filter_map(|block| match block {
+                    ContentBlock::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            json!({
+                "role": match message.role {
+                    Role::User => "user",
+                    Role::Assistant => "assistant",
+                },
+                "text": text,
+            })
+        })
+        .collect();
+    Json(json!({
+        "agent_path": history.agent_path,
+        "agent_id": history.agent_id,
+        "session_id": history.session_id,
+        "messages": messages,
+    }))
+    .into_response()
+}
+
 fn error(status: StatusCode, message: &str) -> Response {
     (status, Json(json!({ "error": message }))).into_response()
 }
@@ -732,11 +969,16 @@ mod http_tests {
         }
     }
 
+    /// All derived paths (agent.db / dag-history.db / …) must land under
+    /// the tempdir. Going through the builder matters: `Default` resolves
+    /// them eagerly from `$HOME` / env, and mutating `state_dir` on the
+    /// struct afterwards does NOT re-derive `agent_db` — tests written
+    /// that way silently open the user's real `~/.autonomics/agent.db`.
     fn config(dir: &tempfile::TempDir) -> runtime::RuntimeConfig {
-        let mut config = runtime::RuntimeConfig::default();
-        config.data_dir = dir.path().join("data");
-        config.state_dir = dir.path().join("state");
-        config
+        runtime::RuntimeConfig::builder()
+            .data_dir(dir.path().join("data"))
+            .state_dir(dir.path().join("state"))
+            .build()
     }
 
     fn json_request(method: &str, uri: &str, body: serde_json::Value) -> Request<Body> {
@@ -947,6 +1189,141 @@ mod http_tests {
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(body_json(response).await["ok"], true);
 
+        host.shutdown_all_agents_and_wait().await;
+    }
+
+    /// P5a observability: /agents merges the live registry with the
+    /// persisted graph (live wins, one row per path), /delegations exposes
+    /// the ledger plus filter validation, /agents/history reads transcripts.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn observability_endpoints_expose_agents_and_ledger() {
+        let dir = tempfile::tempdir().unwrap();
+        let host = runtime::RuntimeHost::open(&config(&dir)).await.unwrap();
+        let model: Arc<ArcSwapOption<Model>> = Arc::new(ArcSwapOption::from_pointee(
+            Model::with_client(
+                agentik_core::testing::dummy_model_info("test-model"),
+                FailingClient,
+            ),
+        ));
+        let app = router(RuntimeAgentState::new(host.infra(), model));
+        // The observability endpoints go through HostControl commands, which
+        // only a driven host processes (see RuntimeHost::spawn_driver) — the
+        // desktop shell runs the same driver.
+        let driver = host.spawn_driver();
+
+        // Untouched host: resident web agents spawn lazily, so both the
+        // registry and the persisted graph are empty.
+        let response = app
+            .clone()
+            .oneshot(Request::get("/agents").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = body_json(response).await;
+        assert_eq!(status, StatusCode::OK, "empty agents: {body:?}");
+        assert_eq!(
+            body["agents"].as_array().map(Vec::len),
+            Some(0),
+            "untouched host: {body:?}"
+        );
+
+        // Touching a thread spawns the resident agent; the graph row it
+        // writes must dedupe against the live row (one entry, live:true).
+        // Host-side registration is asynchronous (registration channel →
+        // driver tick), so poll until the view settles.
+        let response = app
+            .clone()
+            .oneshot(json_request(
+                "POST",
+                "/threads",
+                serde_json::json!({ "agent_type": "homepage" }),
+            ))
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = body_json(response).await;
+        assert_eq!(status, StatusCode::OK, "create thread: {body:?}");
+
+        let agents = {
+            let mut agents = Vec::new();
+            for _ in 0..40 {
+                let response = app
+                    .clone()
+                    .oneshot(Request::get("/agents").body(Body::empty()).unwrap())
+                    .await
+                    .unwrap();
+                let body = body_json(response).await;
+                agents = body["agents"].as_array().cloned().unwrap_or_default();
+                if !agents.is_empty() {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+            agents
+        };
+        assert_eq!(agents.len(), 1, "live + persisted dedup: {agents:?}");
+        assert_eq!(agents[0]["path"], "/root/web/homepage");
+        assert_eq!(agents[0]["live"], true);
+        assert_eq!(agents[0]["status"], "idle");
+        assert!(agents[0]["agent_id"].is_string());
+
+        // Ledger is empty (no delegation has run) but the view is valid.
+        let response = app
+            .clone()
+            .oneshot(Request::get("/delegations").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = body_json(response).await;
+        assert_eq!(status, StatusCode::OK, "empty ledger: {body:?}");
+        assert_eq!(body["delegations"].as_array().map(Vec::len), Some(0));
+
+        // Status filter is validated against the ledger's five states.
+        let response = app
+            .clone()
+            .oneshot(
+                Request::get("/delegations?status=bogus")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        // History by full path: the just-created session exists but holds
+        // no messages yet.
+        let response = app
+            .clone()
+            .oneshot(
+                Request::get("/agents/history?agent=/root/web/homepage")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = body_json(response).await;
+        assert_eq!(status, StatusCode::OK, "history by path: {body:?}");
+        assert_eq!(body["agent_path"], "/root/web/homepage");
+        assert_eq!(body["messages"].as_array().map(Vec::len), Some(0));
+
+        // Unknown agents fall back to the persisted-graph path: an empty
+        // history, not an error.
+        let response = app
+            .clone()
+            .oneshot(
+                Request::get("/agents/history?agent=nobody")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = body_json(response).await;
+        assert_eq!(status, StatusCode::OK, "unknown agent: {body:?}");
+        assert_eq!(body["messages"].as_array().map(Vec::len), Some(0));
+
+        let mut host = driver.join().await;
         host.shutdown_all_agents_and_wait().await;
     }
 }

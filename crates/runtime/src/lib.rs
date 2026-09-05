@@ -21,6 +21,7 @@ pub use config::{RuntimeConfig, RuntimeConfigBuilder};
 pub use control::{HostCommand, HostControl, HostStatus};
 pub use error::{Error, Result};
 pub use host::{
-    AgentHandle, HostEvent, RuntimeHost, SharedInfra, TaggedEvent, bibliography_file_storage,
+    AgentHandle, HostDriver, HostEvent, RuntimeHost, SharedInfra, TaggedEvent,
+    bibliography_file_storage,
 };
 pub use host_tools::host_tools;

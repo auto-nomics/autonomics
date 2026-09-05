@@ -16,9 +16,12 @@ use crate::paths::Paths;
 
 pub struct StartedServer {
     pub handle: tui_http::HttpServerHandle,
-    /// 进程生命周期存活的 RuntimeHost——持有单写者锁与共享基础设施，
-    /// drop 时先于 tokio runtime 才不会悬挂（见 `state::DesktopState`）。
-    pub host: runtime::RuntimeHost,
+    /// RuntimeHost 的后台驱动循环：桌面壳没有自己的事件循环，`HostControl`
+    /// 查询命令（P5a 的 /agents、/delegations 等）由驱动处理，否则命令
+    /// 饿死（oneshot 回复永不触发）。`join()` 收回 host 后仍按原退出序
+    /// 优雅停机（见 `state::DesktopState`）。持有单写者锁与共享基础设施，
+    /// drop 时先于 tokio runtime 才不会悬挂。
+    pub host_driver: runtime::HostDriver,
     /// 进程主模型槽：与 router / `host.set_model` 共享同一 Arc。
     pub model_slot: Arc<ArcSwapOption<Model>>,
 }
@@ -68,10 +71,14 @@ pub async fn start_server(paths: &Paths) -> Result<StartedServer, String> {
         .await
         .map_err(|e| format!("绑定 127.0.0.1:0 失败：{e}"))?;
 
+    // 服务起来之后再起驱动：start 失败的路径上直接 drop host 释放单写者
+    // 锁，不留一个还活着的驱动任务。
+    let host_driver = host.spawn_driver();
+
     tracing::info!(url = %handle.url(), "内嵌服务已启动");
     Ok(StartedServer {
         handle,
-        host,
+        host_driver,
         model_slot,
     })
 }

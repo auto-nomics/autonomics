@@ -243,10 +243,13 @@ async fn legacy_blob_migrates_into_runtime_thread_end_to_end() {
     let provider_addr = spawn_fake_anthropic(SCRIPTED_REPLY, provider_requests.clone()).await;
 
     // ── 真 RuntimeHost（tempdir agent.db）+ 真模型槽 + 真 TCP 服务 ──
+    // builder 构造让全部派生路径（agent.db 等）落 tempdir：`Default` 会
+    // 预先从 $HOME/env 解析，事后只改 state_dir 字段不会重派生 agent_db。
     let dir = tempfile::tempdir().unwrap();
-    let mut config = runtime::RuntimeConfig::default();
-    config.data_dir = dir.path().join("data");
-    config.state_dir = dir.path().join("state");
+    let config = runtime::RuntimeConfig::builder()
+        .data_dir(dir.path().join("data"))
+        .state_dir(dir.path().join("state"))
+        .build();
     let mut host = runtime::RuntimeHost::open(&config).await.unwrap();
 
     let anthropic = Anthropic::new(
