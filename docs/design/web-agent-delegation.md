@@ -1,6 +1,6 @@
 # Web 端 Delegation / 多智能体化设计稿（P5 预研）
 
-- 状态：草案（待评审；本文档是预研产出，不含已落地代码）
+- 状态：P5a 已落地（§9）；P5b 未开工
 - 日期：2026-09-05
 - 前置阅读：`docs/design/web-agent-runtime.md`（P1–P4：thread ≡ agent session、web profiles、runtime-host）
 - 范围：让 web 端**看到**并（受限地）**使用** agentik 的多智能体 delegation 机制
@@ -85,3 +85,13 @@
 - **delegation 台账无限增长**：`list_agent_delegations` 目前无分页参数，只 newest-first；P5a 端点先做 `limit` 钳制（默认 50），清理策略（保留 N 天）留开放问题。
 - **`agent_history` 依赖 agent 在册**：`HostCommand::GetAgentHistory` 只查 live agent；上次运行遗留的孤儿 agent（`agent_graph` 有、注册表无）拿不到 history——P5a 先在 `/agents` 响应里标记 `live: false`，读取留 P5b（需按 agent_id 直读存储）。
 - **profile 演进权耦合**：P5b 若给 `homepage` 开 host_tools，其 persona 文案需同步声明 delegation 能力（`build_system_prompt` 的 tool_guidance 已自动生成，风险低但要过目）。
+
+## 9. P5a 实现状态与偏差（已落地）
+
+代码：`crates/runtime/src/host.rs`（`spawn_driver` / `HostDriver` / `try_process_registrations` / `read_agent_history` 提 pub）、`crates/tui-http/src/agent_runtime.rs`（三端点 + 合成 live 行 + 测试）、`apps/desktop/src-tauri/src/{server,state,lib}.rs`（驱动接入）、前端 `agentActivityApi.ts` / `AgentActivityDrawer.tsx` / `ChatPanel.tsx`（runtime 门控入口）。与 §4/§6 的偏差：
+
+1. **补了设计稿没预见的驱动缺口（HostDriver）**：`RuntimeHost` 是调用方驱动的——`HostControl` 查询命令只在 `try_process_commands` / `recv_any` / `recv_and_process_command` 里被处理，TUI 事件循环在驱动，桌面壳与测试都没人驱动，命令直接饿死（oneshot 回复永不触发）。P1–P4 没踩到是因为线程端点全部走 `AgentHandle` 直连方法。新增 `RuntimeHost::spawn_driver() -> HostDriver`：后台轮询循环（非阻塞排空命令/后台注册/生命周期通知 + `timeout(100ms, recv_any)`——recv 后处理全程同步，超时不会截断半处理事件），`join()` 收回 host 保住桌面停机序（停 HTTP → 停驱动 → 优雅收 agent → drop 锁 → drop runtime）。桌面接入时顺带修复 `state.rs` 既有 bug：第二个 `runtime.take()` 永远拿到 None，agent 优雅停机从未执行过；无人消费的 `notify` unbounded 通道也由驱动排空（此前桌面进程长跑会无界增长）。
+2. **常驻 web agent 不进 host 注册表**：`register_agent` 会把 handle move 进 relay 任务（事件流归 host），而 web agent 的事件流归线程 SSE driver 所有，二者互斥。因此 `/agents` 的 live 行由 tui-http 合成（registry 快照 + busy → running/idle 粗粒度状态），`/agents/history` 对常驻 agent 经 registry 解析（全路径/短名/agent_type 键）后 `read_agent_history` 直读存储（该函数因此提为 pub），其余走 `HostControl::agent_history`。§8 第 3 条"孤儿 agent 拿不到 history"对常驻 agent 不再成立。
+3. **history 路径形态**：§4 写 `GET /agents/{name}/history`（路径段），实现为 `GET /agents/history?agent=…`——agent 引用是含斜杠的完整路径，路径段需要编码纠缠。
+4. **前端入口位置**：§6 建议"AI 面板头部"；三个宿主页面（homepage / screening / paper reader）没有共享头部组件，实现为 ChatPanel 面板右上角悬浮按钮（锚在外层容器——消息列表是滚动容器，放里面会随内容滚走），同样仅 `mode === 'runtime'` 渲染。转写展开是抽屉内的轻量 {role,text} 渲染而非复用完整消息渲染组件（依赖过重，v1 取舍）。
+5. **测试隔离事故（本阶段发现并修复）**：`RuntimeConfig::default()` 在构造时即从 `$HOME`/env 解析 `agent_db` 等派生路径，事后只改 `state_dir` 字段不会重派生——tui-http 的两处测试配置（P4 遗留写法）一直在读写用户真实 `~/.autonomics/agent.db`，留下单个测试 agent（`/root/web/homepage`）名下的会话/转写行与 `web/*` profile 种子行。已改用 builder 构造让全部派生路径落 tempdir；真实库的存量测试行待用户确认后清理。
