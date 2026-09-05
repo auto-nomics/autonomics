@@ -1,16 +1,15 @@
 //! SQLite (turso) storage layer for the bibliography library.
 //!
-//! [`BibBase`] owns a single [`Connection`] which is [`Clone`] (cheap —
-//! internally an `Arc`). All public methods take `&self` and clone the
-//! connection as needed. Reads use one connection while writes share a
-//! dedicated connection, a process-local write gate, and transactions for
-//! multi-statement updates.
+//! [`BibBase`] owns a [`Database`] handle. All public methods take `&self`;
+//! every read opens a fresh connection (independent WAL snapshot), while
+//! writes share a dedicated connection, a process-local write gate, and
+//! transactions for multi-statement updates.
 
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
 use turso::{
-    Builder, Connection, Value,
+    Builder, Connection, Database, Value,
     transaction::{Transaction, TransactionBehavior},
 };
 
@@ -229,12 +228,15 @@ impl Default for ListParams {
 
 /// Bibliography database handle.
 ///
-/// Wraps turso connections. Because [`Connection`] is cheaply cloneable
-/// (internally an `Arc`), every method takes `&self` — you can share
+/// Wraps a turso [`Database`]; every method takes `&self` — you can share
 /// `BibBase` behind `Arc<BibBase>`. Writes coordinate through the internal
-/// write gate; reads remain concurrently callable on a separate connection.
+/// write gate; reads open a fresh connection per call so they stay
+/// concurrently callable (turso connections forbid concurrent use).
 pub struct BibBase {
-    conn: Connection,
+    /// Database handle — [`Self::conn`] opens a fresh read connection per
+    /// call, because turso connections forbid concurrent use and the HTTP
+    /// layer fans out parallel requests on page load.
+    db: Database,
     write_conn: Connection,
     /// Serializes write operations started by this process handle.
     ///
@@ -259,10 +261,8 @@ impl BibBase {
             builder = builder.experimental_multiprocess_wal(true);
         }
         let db = builder.build().await?;
-        let conn = db.connect()?;
         let write_conn = db.connect()?;
         if path != ":memory:" {
-            conn.pragma_update("busy_timeout", 5000).await?;
             write_conn.pragma_update("busy_timeout", 5000).await?;
         }
         // Enable FK enforcement so the `ON DELETE CASCADE` clauses declared in
@@ -272,11 +272,9 @@ impl BibBase {
         // for [`Self::delete_article`] — callers expect the cascade to clean
         // up authors, identifiers, annotations, `collection_articles`
         // memberships, and `fulltexts` pointer rows.
-        for conn in [&conn, &write_conn] {
-            conn.pragma_update("foreign_keys", true).await?;
-        }
+        write_conn.pragma_update("foreign_keys", true).await?;
         let base = Self {
-            conn,
+            db,
             write_conn,
             write_gate: Arc::new(Mutex::new(())),
         };
@@ -289,9 +287,17 @@ impl BibBase {
         Self::open(":memory:").await
     }
 
-    /// Clone the underlying connection — cheap (Arc-based).
+    /// Open a fresh connection for a read.
+    ///
+    /// turso connections reject concurrent use ("concurrent use forbidden"),
+    /// and page load fires parallel requests (collections + journal metrics
+    /// + article list), so a single shared read connection races and 500s.
+    /// A per-call connection gives every read an independent WAL snapshot.
+    /// Reads never mutate, so they need neither the FK pragma nor
+    /// busy_timeout (WAL readers don't block). `connect()` on an
+    /// already-open local Database cannot realistically fail.
     pub(crate) fn conn(&self) -> Connection {
-        self.conn.clone()
+        self.db.connect().expect("connect on an open local database")
     }
 
     /// Clone the dedicated writer connection. All mutations use this
