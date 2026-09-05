@@ -1407,7 +1407,7 @@ async fn reparse_paper(
 /// Opening the stream also lazily resumes a parse the DB claims is in flight
 /// but that lost its task to a restart.
 async fn parse_stream(State(shared): State<Arc<BibShared>>, Path(id): Path<String>) -> Response {
-    let mut receiver = shared.parse_hub.subscribe(&id);
+    let receiver = shared.parse_hub.subscribe(&id);
     shared.parse_hub.ensure_running(&shared, &id).await;
 
     // Race cover: the parse may have finished between `subscribe` pruning
@@ -1467,9 +1467,10 @@ async fn parse_stream(State(shared): State<Arc<BibShared>>, Path(id): Path<Strin
                         // the terminal event is what matters, keep listening.
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                         // Every sender is gone (the hub pruned the channel):
-                        // end cleanly without inventing an outcome.
+                        // end cleanly without inventing an outcome. (No
+                        // `finished` flip needed — returning None already
+                        // terminates the stream and drops the state.)
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                            state.finished = true;
                             return None;
                         }
                     },

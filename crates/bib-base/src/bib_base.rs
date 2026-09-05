@@ -7,6 +7,7 @@
 
 use std::sync::Arc;
 
+use chrono::{SubsecRound, Utc};
 use tokio::sync::Mutex;
 use turso::{
     Builder, Connection, Database, Value,
@@ -592,6 +593,11 @@ impl BibBase {
             .as_deref()
             .and_then(|s| serde_json::from_str(s).ok())
             .unwrap_or_default();
+        // Columns 15/16. Without this the `Article::new` defaults (`Utc::now()`)
+        // leak out — every read would stamp fresh times and the paged list's
+        // created_at sort would degenerate to id order.
+        article.created_at = opt_string(row.get_value(15)?).as_deref().and_then(parse_dt);
+        article.updated_at = opt_string(row.get_value(16)?).as_deref().and_then(parse_dt);
 
         // Load authors.
         let mut author_rows = conn
@@ -1204,6 +1210,18 @@ pub(crate) fn opt_string(v: Value) -> Option<String> {
         Value::Null => None,
         _ => None,
     }
+}
+
+/// Parse a stored `created_at`/`updated_at` TEXT column back to UTC.
+///
+/// Sub-seconds are truncated to milliseconds on the way out: the stored
+/// RFC 3339 strings carry nanoseconds (`to_rfc3339()` on write), and
+/// chrono's serializer would echo all nine digits — which JavaScript Date
+/// parsers (notably WebKit's, the desktop webview) refuse.
+fn parse_dt(s: &str) -> Option<chrono::DateTime<Utc>> {
+    chrono::DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(|dt| dt.with_timezone(&Utc).trunc_subsecs(3))
 }
 
 fn opt_value(value: Option<String>) -> Value {
