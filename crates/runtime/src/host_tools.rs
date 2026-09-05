@@ -51,6 +51,7 @@ pub fn host_tools(
         }),
         ToolRegistration::from(SendMessageTool {
             control: ctrl.clone(),
+            caller_path: self_path.as_str().to_string(),
         }),
         ToolRegistration::from(RouteTaskTool {
             control: ctrl.clone(),
@@ -69,6 +70,7 @@ pub fn host_tools(
         }),
         ToolRegistration::from(GetAgentHistoryTool {
             control: ctrl.clone(),
+            caller_path: self_path.as_str().to_string(),
         }),
         // ── Topology-edge tools disabled ──
         // Multi-agent cooperation is now fully delegate-driven. Agents
@@ -84,9 +86,11 @@ pub fn host_tools(
         }),
         ToolRegistration::from(ShutdownAgentTool {
             control: ctrl.clone(),
+            caller_path: self_path.as_str().to_string(),
         }),
         ToolRegistration::from(InterruptAgentTool {
             control: ctrl.clone(),
+            caller_path: self_path.as_str().to_string(),
         }),
         // ToolRegistration::from(ResetNetworkTool { control: ctrl.clone() }),
         ToolRegistration::from(InjectPromptsTool { control: ctrl }),
@@ -103,8 +107,10 @@ pub fn host_tools(
                    The child's path is automatically derived from your path \
                    (e.g. spawning 'worker' becomes /root/you/worker). \
                    The agent will be created from a profile — either a child \
-                   of your own profile, a root-level profile, or your own \
-                   profile if no segment is specified."
+                   of your own profile or your own profile if no segment is \
+                   specified. Sandboxed (web) agents may only instantiate \
+                   their own profile subtree (derive_profile first for new \
+                   roles); a cap on concurrent agents per subtree applies."
 )]
 struct SpawnAgentInput {
     /// Short name for the new agent (a path segment, e.g. `worker`, `analyst`).
@@ -112,9 +118,9 @@ struct SpawnAgentInput {
     agent_name: String,
     /// Profile to instantiate. If omitted, reuses your own profile. \
     /// If a single segment (e.g. `genomics`), looks up a child profile \
-    /// relative to your profile, falling back to root-level. \
-    /// If a multi-segment path (e.g. `researcher/genomics`), treated as \
-    /// an absolute profile path.
+    /// relative to your profile. If a multi-segment path \
+    /// (e.g. `researcher/genomics`), treated as an absolute profile path. \
+    /// Sandboxed (web) callers are restricted to their own profile subtree.
     profile_segment: Option<String>,
 }
 
@@ -335,6 +341,9 @@ struct SendMessageInput {
 
 struct SendMessageTool {
     control: HostControl,
+    /// Caller's own path — the P5b sandbox boundary is enforced against
+    /// it host-side (web-subtree callers can only message their subtree).
+    caller_path: String,
 }
 
 #[async_trait]
@@ -356,7 +365,7 @@ impl ToolFunction for SendMessageTool {
     ) -> Result<ToolResult, agentik_core::tools::ToolError> {
         match self
             .control
-            .send_message(&input.agent_name, input.message)
+            .send_message(&input.agent_name, input.message, Some(&self.caller_path))
             .await
         {
             Some(Ok(())) => Ok(ToolResult::success(format!(
@@ -553,6 +562,9 @@ struct GetAgentHistoryInput {
 
 struct GetAgentHistoryTool {
     control: HostControl,
+    /// Caller's own path — the P5b sandbox boundary is enforced against
+    /// it host-side (web-subtree callers can only read their subtree).
+    caller_path: String,
 }
 
 #[async_trait]
@@ -564,10 +576,17 @@ impl ToolFunction for GetAgentHistoryTool {
         input: GetAgentHistoryInput,
     ) -> Result<ToolResult, agentik_core::tools::ToolError> {
         let limit = input.limit.unwrap_or(20).clamp(1, 100);
-        match self.control.agent_history(&input.agent_name, limit).await {
-            Some(history) => Ok(ToolResult::success_json(
+        match self
+            .control
+            .agent_history(&input.agent_name, limit, Some(&self.caller_path))
+            .await
+        {
+            Some(Ok(history)) => Ok(ToolResult::success_json(
                 serde_json::to_value(history).unwrap_or_default(),
             )),
+            Some(Err(e)) => Ok(ToolResult::success(format!(
+                "get_agent_history failed: {e}"
+            ))),
             None => Ok(ToolResult::success(
                 "Failed to read agent history — host unavailable.",
             )),
@@ -786,6 +805,9 @@ struct ShutdownAgentInput {
 
 struct ShutdownAgentTool {
     control: HostControl,
+    /// Caller's own path — the P5b sandbox boundary is enforced against
+    /// it host-side (web-subtree callers can only shut down their subtree).
+    caller_path: String,
 }
 
 #[async_trait]
@@ -796,11 +818,22 @@ impl ToolFunction for ShutdownAgentTool {
         &self,
         input: ShutdownAgentInput,
     ) -> Result<ToolResult, agentik_core::tools::ToolError> {
-        self.control.shutdown_agent(&input.agent_name);
-        Ok(ToolResult::success(format!(
-            "Agent '{}' shutdown requested.",
-            input.agent_name
-        )))
+        match self
+            .control
+            .shutdown_agent_scoped(&input.agent_name, Some(&self.caller_path))
+            .await
+        {
+            Some(Ok(())) => Ok(ToolResult::success(format!(
+                "Agent '{}' shut down and removed from the registry.",
+                input.agent_name
+            ))),
+            Some(Err(e)) => Ok(ToolResult::success(format!(
+                "shutdown_agent failed: {e}"
+            ))),
+            None => Ok(ToolResult::success(
+                "shutdown_agent: host command channel closed (runtime shut down)",
+            )),
+        }
     }
 }
 
@@ -834,19 +867,22 @@ struct InterruptAgentInput {
 
 struct InterruptAgentTool {
     control: HostControl,
+    /// Caller's own path — the P5b sandbox boundary is enforced against
+    /// it host-side (web-subtree callers can only interrupt their subtree).
+    caller_path: String,
 }
 
 #[async_trait]
 impl ToolFunction for InterruptAgentTool {
     type Input = InterruptAgentInput;
 
-    /// Synchronous — interrupt is a fast fire-and-forget operation.
-    /// The agent's cancel_token is cancelled, which propagates
-    /// immediately to any in-flight LLM request or tool execution.
+    /// Synchronous — interrupt is a fast operation: the agent's
+    /// cancel_token is cancelled, which propagates immediately to any
+    /// in-flight LLM request or tool execution.
     /// The agent then emits `LifecycleChanged(Cancelled)` through the
     /// event stream; if you're tracking the result, follow up with
     /// `view_task_results` to see the Cancelled status.
-    /// Sync (default) — fast fire-and-forget, returns near-instantly.
+    /// Sync (default) — fast, returns near-instantly.
     /// 1 hour cap — interrupt itself should be near-instant; the cap
     /// only matters if the host command channel is jammed.
     fn timeout_seconds(&self) -> u64 {
@@ -866,13 +902,24 @@ impl ToolFunction for InterruptAgentTool {
             reason = %reason,
             "interrupt_agent: cancelling current turn"
         );
-        self.control.cancel_agent(&input.agent_name);
-        Ok(ToolResult::success(format!(
-            "Interrupt requested for agent '{}'. \
-             The current turn will be cancelled; the agent remains \
-             available for new messages. Reason: {}",
-            input.agent_name, reason
-        )))
+        match self
+            .control
+            .interrupt_agent(&input.agent_name, Some(&self.caller_path))
+            .await
+        {
+            Some(Ok(())) => Ok(ToolResult::success(format!(
+                "Interrupt requested for agent '{}'. \
+                 The current turn will be cancelled; the agent remains \
+                 available for new messages. Reason: {}",
+                input.agent_name, reason
+            ))),
+            Some(Err(e)) => Ok(ToolResult::success(format!(
+                "interrupt_agent failed: {e}"
+            ))),
+            None => Ok(ToolResult::success(
+                "interrupt_agent: host command channel closed (runtime shut down)",
+            )),
+        }
     }
 }
 
@@ -950,7 +997,10 @@ mod tests {
         let (cmd_tx, _cmd_rx) = tokio::sync::mpsc::unbounded_channel::<HostCommand>();
         let (event_tx, _) = tokio::sync::broadcast::channel::<HostEvent>(1);
         let control = HostControl::new(cmd_tx, event_tx);
-        let tool = SendMessageTool { control };
+        let tool = SendMessageTool {
+            control,
+            caller_path: "/root/caller".into(),
+        };
 
         assert_eq!(tool.execution_mode(), ExecutionMode::Sync);
         assert_eq!(tool.timeout_seconds(), 3600);
@@ -969,7 +1019,10 @@ mod tests {
             control: control.clone(),
             caller_path: "/root/caller".into(),
         };
-        let sender = SendMessageTool { control };
+        let sender = SendMessageTool {
+            control,
+            caller_path: "/root/caller".into(),
+        };
 
         assert_eq!(delegate.execution_mode(), ExecutionMode::Async);
         assert_eq!(sender.execution_mode(), ExecutionMode::Sync);

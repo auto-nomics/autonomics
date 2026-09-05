@@ -95,3 +95,15 @@
 3. **history 路径形态**：§4 写 `GET /agents/{name}/history`（路径段），实现为 `GET /agents/history?agent=…`——agent 引用是含斜杠的完整路径，路径段需要编码纠缠。
 4. **前端入口位置**：§6 建议"AI 面板头部"；三个宿主页面（homepage / screening / paper reader）没有共享头部组件，实现为 ChatPanel 面板右上角悬浮按钮（锚在外层容器——消息列表是滚动容器，放里面会随内容滚走），同样仅 `mode === 'runtime'` 渲染。转写展开是抽屉内的轻量 {role,text} 渲染而非复用完整消息渲染组件（依赖过重，v1 取舍）。
 5. **测试隔离事故（本阶段发现并修复）**：`RuntimeConfig::default()` 在构造时即从 `$HOME`/env 解析 `agent_db` 等派生路径，事后只改 `state_dir` 字段不会重派生——tui-http 的两处测试配置（P4 遗留写法）一直在读写用户真实 `~/.autonomics/agent.db`，留下单个测试 agent（`/root/web/homepage`）名下的会话/转写行与 `web/*` profile 种子行。已改用 builder 构造让全部派生路径落 tempdir；真实库的存量测试行待用户确认后清理。
+
+## 10. P5b 实现状态与偏差（已落地）
+
+代码：`crates/runtime/src/host.rs` + `control.rs`（`resolve_agent_for_caller` 子树边界 / `check_spawn_caps` / `RegisterProfile` / spawn-注册顺序契约）、`crates/runtime/src/host_tools.rs`（工具带 caller_path）、`crates/tui-http/src/agent_runtime.rs`（homepage v3 persona + 迁移 + `POST /agents/interrupt`）、前端 `ChatPanel.tsx` 停止按钮 + `agentThreadsApi.ts` `interruptAgent`。e2e：`crates/tui-http/tests/delegation.rs`（真 TCP + 真 `AnthropicApiClient` + 标记脚本化假 provider，覆盖 §7 验收两条主线）。与设计的偏差与发现：
+
+1. **`host.profiles` 缓存缺口（RegisterProfile 补丁）**：Spawn 命令按 `profile_segment` 解析子代理 profile 时查的是 host 内存缓存（`set_profiles` 只在 TUI 启动时灌入），web 壳惰性播种 `web/*` profile 行后缓存里没有——工具驱动的 spawn 一律 "Spawn failed"，且新起 host 进程对着已有 config.db（行在、缓存空）同样失败。补 `HostCommand::RegisterProfile`（fire-and-forget upsert），`ensure_web_profile` 每条返回路径都镜像进缓存；行本身仍归 profile 存储，缓存只是 Spawn 时刻的查找面。
+2. **spawn→delegate 注册时序竞态（e2e 抓出的真 bug）**：后台 spawn 任务先回 Ok（工具结果随之回流，父代理下一轮全在进程内、亚毫秒）再把 handle 排进注册通道，而驱动循环每轮先排空命令再排空注册——快模型 spawn 后立刻 delegate_to 会撞上"not registered"。修复为顺序契约：spawn 任务先 `reg_tx` 后 `reply_tx`，驱动循环（含 `recv_and_process_command` 的命令分支）先排空注册再处理命令。因果链保证：依赖命令入队时，注册必已在通道里。
+3. **interrupt 的接线形态**：§5 只说"中断按钮"。常驻 web agent 不进 host 注册表（见 §9.2），`HostControl::interrupt_agent` 看不见它们——线程 SSE driver 每轮发布 per-turn `CancellationToken`（`current_cancel` 槽，轮终清除），`POST /agents/interrupt` 翻 token；端点不能排队等轮锁（会与被中断的轮自死锁），所以匹配走 registry 派生路径而非 handle 锁。host 在册 agent 仍走 `HostControl`（caller None，web 用户即宿主操作员）。前端仅 runtime 模式且流式中渲染"停止"；中断后流以终端帧自然收尾。
+4. **homepage v2→v3 迁移策略**：老库的 `web/homepage` 行要拿到 delegation 能力，但不能覆盖用户改过的 persona。以"系统提示词仍等于 v2 种子全文"为未编辑判据：命中则一次性刷新为 v3 文案 + `enable_host_tools`（幂等，落库）；用户改过的行保持内容且不开工具（日志提示可在 profile 编辑器手动 opt-in）。
+5. **并行工具的 tool_result 乱序（agentik 既有缺口，仅记录）**：同一助手消息里多个工具调用时，tool_result 按完成序回填，可能与 tool_use 顺序错位（Anthropic 协议要求两者对应）——e2e 曾以 `delegate_to + wait_task` 同轮捆绑触发（wait 抢先执行拿到 "no background task"）。真实模型看到 "Task #N" 后下一轮才 wait，脚本同构即可绕开；修复留待 agentik 侧统一（结果应按 tool_use 顺序配对）。
+6. **spawn 上限（§5.3）**：`check_spawn_caps` 在 Spawn / SpawnWithProfile 两处命令入口前置检查（总量 16 + 每 caller 子树 8，超限返回可读错误），因为 spawn 本身在后台任务里，事后拒绝只能走 reply 错误路径。
+

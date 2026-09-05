@@ -379,3 +379,25 @@ export async function ensureMainThreadSession(
 export function threadChatUrl(threadId: string): string {
   return `/api/v1/agent/threads/${encodeURIComponent(threadId)}/chat`;
 }
+
+/**
+ * P5b：请求中断 agent 的当前轮次（聊天「停止」按钮，
+ * docs/design/web-agent-delegation.md §5 行为性问题）。目标接受完整路径
+ * （/root/web/homepage）、短名（homepage）或 agent_type 键（paperReader）；
+ * TUI 侧注册的 agent 走 host 注册表同一条端点。
+ *
+ * 中断生效后由该轮 SSE 流的终端帧（done）自然收尾，本调用不等待——
+ * 按钮侧 fire-and-forget。409 = 目标没有进行中的轮次（按钮仅在 streaming
+ * 时渲染，竞态点击会落在这里，静默即可）。
+ */
+export async function interruptAgent(agent: string, reason?: string): Promise<void> {
+  try {
+    await fetch('/api/v1/agent/agents/interrupt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ agent, reason }),
+    });
+  } catch {
+    // 网络层失败静默：中断是尽力而为，流自身仍会按终端帧收尾
+  }
+}

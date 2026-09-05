@@ -92,7 +92,7 @@ import { useEmbeddingStatus } from '../hooks/chat-side-effects/useEmbeddingStatu
 import { useSmartScroll } from '../hooks/chat-side-effects/useSmartScroll'; // 智能滚动 hook
 import { useChatInit } from '../hooks/chat-side-effects/useChatInit'; // 聊天初始化 hook
 import { useMessageActions } from '../hooks/chat-side-effects/useMessageActions'; // 消息级动作 hook
-import { probeAgentMode, type AgentMode } from '../api/agentThreadsApi'; // P2: 后端 agent 能力探测（runtime 会话模式）
+import { probeAgentMode, interruptAgent, type AgentMode } from '../api/agentThreadsApi'; // P2: 后端 agent 能力探测（runtime 会话模式）；P5b: interruptAgent 停止按钮
 
 // ===== 会话恢复相关导入 =====
 // (removed) useSessionRecovery / RecoveryBanner 已随多 Agent team 模式移除
@@ -436,6 +436,13 @@ const ChatPanel = forwardRef(function ChatPanel({
   // P5a：代理活动抽屉（只读观测 host agent 全景 + delegation 台账），
   // 入口仅在 runtime 模式渲染——ephemeral 宿主没有这些端点（404 即隐藏）
   const [activityOpen, setActivityOpen] = useState(false);
+
+  // P5b：停止当前轮次。runtime 模式下常驻 agent 的轮次（含等待 delegation
+  // 的长轮）只能由后端中断——前端 abort fetch 只断开 SSE，agent 侧照跑。
+  // interruptAgent fire-and-forget：中断生效后流以终端帧（done）自然收尾。
+  const handleInterrupt = useCallback(() => {
+    void interruptAgent(agentType, '用户点击停止');
+  }, [agentType]);
 
   const { sendMessages } = useChatSender({ // 解构获取 sendMessages 发送函数
     setMessages,               // 设置消息列表的函数（用于 hook 内部更新消息状态）
@@ -1096,6 +1103,7 @@ const ChatPanel = forwardRef(function ChatPanel({
         className={streaming ? 'ai-chat-input-streaming' : undefined} // 流式回复时添加特殊样式类
         style={{
           padding: 12, // 内边距
+          position: 'relative', // P5b：锚定「停止」按钮（悬浮在输入区右上角）
           borderTop: streaming
             ? '2px solid var(--color-primary)' // 流式回复时：2px 主题色分隔线（视觉反馈）
             : '1px solid var(--border-color)', // 非流式时：1px 普通分隔线
@@ -1110,6 +1118,20 @@ const ChatPanel = forwardRef(function ChatPanel({
           setTimeout(() => { try { (slateInputRef.current as any)?.focus(); } catch {} }, 0); // 延迟聚焦输入框
         }}
       >
+
+        {/* ===== P5b 停止按钮 ===== */}
+        {/* 仅 runtime 模式且主对话流式期间渲染：中断常驻 agent 的当前轮次。 */}
+        {/* ephemeral 模式的轮次跑在浏览器 fetch 上，不在本按钮的职责内。 */}
+        {agentMode === 'runtime' && streaming && (
+          <Button
+            size="small"
+            danger
+            onClick={handleInterrupt}
+            style={{ position: 'absolute', top: -16, right: 12, zIndex: 5 }}
+          >
+            停止
+          </Button>
+        )}
 
         {/* ===== 引用消息预览条 ===== */}
         {/* 当用户右键某条消息并选择"引用消息"后，此预览条会显示在输入框上方 */}

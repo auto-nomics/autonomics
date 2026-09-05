@@ -35,6 +35,7 @@ use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 
 use crate::agent::{Frame, Mapped, PING_INTERVAL, frame_to_event, map_agent_event, sse};
 
@@ -72,6 +73,12 @@ struct ResidentAgent {
     /// Set while a turn is streaming; guards against concurrent turns on the
     /// same agent (its event stream has no per-turn demultiplexing).
     busy: AtomicBool,
+    /// The live turn's cancellation trigger (P5b). Published by the turn
+    /// driver (which owns the handle lock) and flipped by the interrupt
+    /// endpoint — the endpoint cannot queue behind the turn lock, or the
+    /// cancel would deadlock against the very turn it is cancelling.
+    /// `None` while the agent is idle.
+    current_cancel: ArcSwapOption<CancellationToken>,
 }
 
 impl AgentRegistry {
@@ -131,6 +138,7 @@ impl AgentRegistry {
         let entry = Arc::new(ResidentAgent {
             handle: Mutex::new(handle),
             busy: AtomicBool::new(false),
+            current_cancel: ArcSwapOption::from(None),
         });
         agents.insert(agent_type.to_owned(), entry.clone());
         Ok(entry)
@@ -163,6 +171,8 @@ pub(crate) fn router(state: RuntimeAgentState) -> Router {
         .route("/agents", get(list_agents))
         .route("/agents/history", get(agent_history))
         .route("/delegations", get(list_delegations))
+        // P5b: the user-facing 取消 button (§5 behavioral note)
+        .route("/agents/interrupt", post(interrupt_agent))
         .with_state(state)
 }
 
@@ -452,8 +462,32 @@ async fn thread_chat(
         handle.switch_session(thread_id);
         handle.send_message(text);
 
+        // P5b: publish this turn's cancellation trigger before the first
+        // await and clear it when the turn ends. The interrupt endpoint
+        // flips the token; this driver — the sole holder of the handle
+        // lock — performs the actual cancel and keeps draining until the
+        // agent's terminal event, so the SSE stream ends cleanly.
+        let turn_cancel = CancellationToken::new();
+        entry.current_cancel.store(Some(Arc::new(turn_cancel.clone())));
+        let mut cancel_dispatched = false;
+
         let mut pending_tools = VecDeque::new();
-        while let Some(event) = handle.recv_event().await {
+        loop {
+            // `recv_event` is a plain mpsc recv (cancel-safe), so the
+            // select! is sound; the guard stops re-dispatching after the
+            // first cancel (the token stays cancelled for the rest of the
+            // turn's drain).
+            let event = tokio::select! {
+                event = handle.recv_event() => match event {
+                    Some(event) => event,
+                    None => break,
+                },
+                _ = turn_cancel.cancelled(), if !cancel_dispatched => {
+                    cancel_dispatched = true;
+                    handle.cancel();
+                    continue;
+                }
+            };
             match map_agent_event(event, &mut pending_tools) {
                 Mapped::Continue(frame) => {
                     if let Some(frame) = frame {
@@ -469,6 +503,7 @@ async fn thread_chat(
                 }
             }
         }
+        entry.current_cancel.store(None);
         // `tx` and the handle guard drop here: the relay stream ends and the
         // turn lock releases only after the terminal event.
     });
@@ -704,13 +739,20 @@ async fn agent_history(
                 "host control unavailable",
             );
         };
-        let Some(history) = control.agent_history(&query.agent, limit).await else {
+        // Host-level read (caller None): the HTTP surface is the host
+        // operator's view, not a sandboxed agent's.
+        let Some(history) = control.agent_history(&query.agent, limit, None).await else {
             return error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "host event loop unavailable",
             );
         };
-        history
+        match history {
+            Ok(history) => history,
+            // Unreachable for a None caller (no boundary to violate) —
+            // still mapped rather than unwrapped so the shape is honest.
+            Err(msg) => return error(StatusCode::NOT_FOUND, &msg),
+        }
     };
     // Same {role, text} shape as GET /threads/:id/messages so the drawer can
     // reuse the transcript renderer.
@@ -750,6 +792,91 @@ fn error(status: StatusCode, message: &str) -> Response {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// P5b: interrupt (the chat 停止 button)
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Does `requested` address the resident agent of `agent_type`? Accepts
+/// the full path (`/root/web/homepage`), the profile's short name
+/// (`homepage`), or the frontend agent_type key (`paperReader`). The
+/// resident path is derived from the spec (the same derivation
+/// [`AgentRegistry::get`] uses), so matching needs no handle lock — the
+/// interrupt path must not wait on the turn it is cancelling.
+fn resident_matches(agent_type: &str, requested: &str) -> bool {
+    let requested = requested.trim().trim_start_matches('/');
+    let Some(spec) = WebProfileSpec::for_agent_type(agent_type) else {
+        return false;
+    };
+    let short = spec.path.rsplit('/').next().unwrap_or(spec.path);
+    requested == agent_type || requested == short || requested == format!("root/web/{short}")
+}
+
+#[derive(Deserialize)]
+struct InterruptRequest {
+    /// Full path (`/root/web/homepage`), profile short name
+    /// (`homepage`), or frontend agent_type key (`paperReader`) for
+    /// resident web agents; full/short name for host-registered agents.
+    agent: String,
+    /// Optional human-readable reason (logged).
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+/// `POST /agents/interrupt` — cancel the target agent's current turn
+/// (design §5 behavioral note: a streaming delegation turn makes the
+/// assistant look busy; the user needs a way out). Resident web agents
+/// cancel via the live turn token published by the thread driver;
+/// host-registered (TUI-side) agents go through
+/// [`HostControl::interrupt_agent`] with a host-level caller — the web
+/// user is the host operator. The interrupted thread's SSE stream ends
+/// when the agent emits its terminal event.
+async fn interrupt_agent(
+    State(state): State<RuntimeAgentState>,
+    Json(request): Json<InterruptRequest>,
+) -> Response {
+    let requested = request.agent.trim().to_owned();
+    if requested.is_empty() {
+        return error(StatusCode::BAD_REQUEST, "agent must not be empty");
+    }
+    if let Some(reason) = request.reason.as_deref() {
+        tracing::info!(agent = %requested, reason = reason, "interrupt requested");
+    }
+
+    // Resident web agents first (their events never pass through the host
+    // registry, so the host path cannot see them).
+    let matched = {
+        let agents = state.registry.agents.lock().await;
+        agents
+            .iter()
+            .find(|(agent_type, _)| resident_matches(agent_type, &requested))
+            .map(|(agent_type, entry)| (agent_type.clone(), entry.clone()))
+    };
+    if let Some((agent_type, entry)) = matched {
+        return match entry.current_cancel.load_full() {
+            Some(token) => {
+                token.cancel();
+                Json(json!({ "ok": true, "agent": agent_type })).into_response()
+            }
+            // Not streaming: the frontend only shows the button mid-turn,
+            // but a raced click (turn just ended) lands here.
+            None => error(
+                StatusCode::CONFLICT,
+                "agent is not currently running a turn",
+            ),
+        };
+    }
+
+    // Host-registered agents: host-level (unrestricted) interrupt.
+    let Some(control) = state.registry.infra().host_control.clone() else {
+        return error(StatusCode::INTERNAL_SERVER_ERROR, "host control unavailable");
+    };
+    match control.interrupt_agent(&requested, None).await {
+        Some(Ok(())) => Json(json!({ "ok": true, "agent": requested })).into_response(),
+        Some(Err(msg)) => error(StatusCode::NOT_FOUND, &msg),
+        None => error(StatusCode::INTERNAL_SERVER_ERROR, "host event loop unavailable"),
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // Web profiles
 // ─────────────────────────────────────────────────────────────────────────
 
@@ -764,6 +891,10 @@ struct WebProfileSpec {
     description: &'static str,
     identity: &'static str,
     system_prompt: &'static str,
+    /// P5b: host tools (spawn/delegate/interrupt) armed for this profile.
+    /// `homepage` is the chosen delegation surface; the boundary itself is
+    /// enforced host-side (design doc §5), this flag only arms the tools.
+    enable_host_tools: bool,
 }
 
 const CORE_PERSONA_RULES: &str = "\
@@ -773,6 +904,23 @@ const CORE_PERSONA_RULES: &str = "\
 - **客观语言**：用流畅的中文学术语言，避免夸张修辞（如\"里程碑式\"\"开创性\"），除非原文用了类似措辞。
 - **不确定时明确承认**（如\"原文未提及\"\"这一点我不确定\"），不要编造事实或数据。";
 
+/// v2 homepage persona (P4 seed). Kept verbatim ONLY as the seed-shape
+/// marker for the P5b migration in [`ensure_web_profile`]: a row whose
+/// system prompt still equals this text was never user-edited, so the
+/// server may refresh it (delegation capability + host tools) once.
+const LEGACY_HOMEPAGE_PROMPT_V2: &str = "\
+你是 Autonomics 的 AI 助手，能够回答各类问题、进行写作、分析、整理资料。
+
+【场景能力】
+- 通用问答：技术、学术、写作、生活常识均可。
+- 文档处理：整理、归纳、改写文本。
+- 资料查询：需要最新信息或外部资料时，主动调用当前会话可用的工具（如 PubMed 文献查询等），无需询问用户。具体可用工具见系统提示词的工具列表。
+
+";
+
+/// v3 homepage persona (P5b): declares the delegation capability. The
+/// generated tool guidance lists the actual tools; this copy only sets
+/// the expectation that parallel/sub-task work may be delegated.
 const HOMEPAGE_PROMPT: &str = "\
 你是 Autonomics 的 AI 助手，能够回答各类问题、进行写作、分析、整理资料。
 
@@ -780,6 +928,7 @@ const HOMEPAGE_PROMPT: &str = "\
 - 通用问答：技术、学术、写作、生活常识均可。
 - 文档处理：整理、归纳、改写文本。
 - 资料查询：需要最新信息或外部资料时，主动调用当前会话可用的工具（如 PubMed 文献查询等），无需询问用户。具体可用工具见系统提示词的工具列表。
+- 多智能体协作：遇到可并行拆解的子任务（如分头检索多个主题、批量处理文档）时，可用 spawn_agent 派生子代理、delegate_to 委派任务并等待结果。子代理只能创建在你自己的子树内（并发上限 8），完成任务的子代理记得用 shutdown_agent 释放额度。跨子树的操作会被宿主拒绝并返回错误说明。
 
 ";
 
@@ -808,21 +957,24 @@ impl WebProfileSpec {
         match agent_type {
             "homepage" => Some(Self {
                 path: "web/homepage",
-                description: "Web homepage assistant (bibliography tools only).",
-                identity: "Autonomics 文献库助手（Web）：帮用户检索、管理与研读文献，可用 lit_search / lit_fetch 检索 PubMed、arXiv、OpenAlex、Crossref、Semantic Scholar，用 bib_save 保存文献到本地文献库。",
+                description: "Web homepage assistant (bibliography tools + scoped delegation).",
+                identity: "Autonomics 文献库助手（Web）：帮用户检索、管理与研读文献，可用 lit_search / lit_fetch 检索 PubMed、arXiv、OpenAlex、Crossref、Semantic Scholar，用 bib_save 保存文献到本地文献库；可派生子代理并行处理子任务（spawn_agent / delegate_to，限自身子树）。",
                 system_prompt: HOMEPAGE_PROMPT,
+                enable_host_tools: true,
             }),
             "paperReader" => Some(Self {
                 path: "web/paper_reader",
                 description: "Web paper-reading assistant (bibliography tools only).",
                 identity: "Autonomics 阅读助手（Web）：围绕用户当前打开的文献回答与讨论，必要时可用文献工具检索补充资料。",
                 system_prompt: PAPER_READER_PROMPT,
+                enable_host_tools: false,
             }),
             "screening" => Some(Self {
                 path: "web/screening",
                 description: "Web screening assistant (bibliography tools only).",
                 identity: "Autonomics 筛查助手（Web）：帮助用户快速判断文献是否纳入，给出简明依据。",
                 system_prompt: SCREENING_PROMPT,
+                enable_host_tools: false,
             }),
             _ => None,
         }
@@ -833,10 +985,31 @@ impl WebProfileSpec {
     }
 }
 
-/// Seed the web profile for an agent type if missing, then return it. An
-/// existing row always wins — the profile registry is the single source of
-/// truth, and user edits to `web/*` profiles are honored.
+/// Seed the web profile for an agent type if missing, then return it.
+///
+/// An existing row wins for *content* (persona, identity) — the profile
+/// registry is the single source of truth and user edits to `web/*`
+/// profiles are honored. One exception, the P5b migration: a homepage row
+/// whose system prompt still equals the untouched v2 seed is refreshed
+/// once to the v3 persona + `enable_host_tools` (rows that were edited
+/// keep their content AND their flag — flip `enable_host_tools` manually
+/// in the profile editor to opt a customized row into delegation).
 async fn ensure_web_profile(infra: &SharedInfra, agent_type: &str) -> Result<AgentProfile, Response> {
+    let profile = ensure_web_profile_row(infra, agent_type).await?;
+    // P5b: mirror the row into the host's spawn-lookup cache. Only the TUI
+    // populates that cache at startup (`set_profiles` after
+    // `seed_defaults_if_empty`); the desktop/web shells seed `web/*`
+    // lazily here, so without this the Spawn command cannot resolve the
+    // caller's profile for tool-driven child spawns — including on a
+    // fresh host process over an existing config.db (row present, cache
+    // empty). Upsert on every call: idempotent and cheap.
+    if let Some(control) = infra.host_control.clone() {
+        control.register_profile(profile.clone());
+    }
+    Ok(profile)
+}
+
+async fn ensure_web_profile_row(infra: &SharedInfra, agent_type: &str) -> Result<AgentProfile, Response> {
     let Some(spec) = WebProfileSpec::for_agent_type(agent_type) else {
         return Err(error(
             StatusCode::BAD_REQUEST,
@@ -846,11 +1019,34 @@ async fn ensure_web_profile(infra: &SharedInfra, agent_type: &str) -> Result<Age
         ));
     };
     let registry = infra.profile_storage.clone();
-    if let Some(existing) = registry
+    if let Some(mut existing) = registry
         .get_profile_by_path(spec.path)
         .await
         .map_err(|e| internal(&format!("profile lookup failed: {e}")))?
     {
+        let legacy_seed_prompt = format!("{LEGACY_HOMEPAGE_PROMPT_V2}{CORE_PERSONA_RULES}");
+        if spec.enable_host_tools
+            && !existing.enable_host_tools
+            && existing.system_prompt.as_deref() == Some(legacy_seed_prompt.as_str())
+        {
+            existing.agent_identity = spec.identity.to_owned();
+            existing.system_prompt = Some(spec.system_prompt());
+            existing.enable_host_tools = true;
+            registry
+                .update_profile(existing.clone())
+                .await
+                .map_err(|e| internal(&format!("P5b profile migration failed: {e}")))?;
+            tracing::info!(
+                profile = spec.path,
+                "P5b migration: armed host tools on the seed-shaped web profile"
+            );
+        } else if spec.enable_host_tools && !existing.enable_host_tools {
+            tracing::warn!(
+                profile = spec.path,
+                "web profile was user-edited before P5b — host tools left off; \
+                 enable `enable_host_tools` in the profile editor to opt in"
+            );
+        }
         return Ok(existing);
     }
 
@@ -858,8 +1054,10 @@ async fn ensure_web_profile(infra: &SharedInfra, agent_type: &str) -> Result<Age
     profile.description = spec.description.to_owned();
     profile.agent_identity = spec.identity.to_owned();
     profile.system_prompt = Some(spec.system_prompt());
-    // Web surface: bibliography only. No shell, container, data-engine,
-    // host (spawn/delegate), or KMS memory tooling over HTTP.
+    // Web surface: bibliography always; host tools only where the spec
+    // arms them (P5b: homepage). No shell, container, data-engine, or
+    // KMS memory tooling over HTTP — the host-side sandbox (§5) bounds
+    // what the armed host tools can reach.
     profile.enable_bibliography = true;
     profile.enable_writing = false;
     profile.enable_opengwas = false;
@@ -869,7 +1067,7 @@ async fn ensure_web_profile(infra: &SharedInfra, agent_type: &str) -> Result<Age
     profile.enable_vfs_shell = false;
     profile.enable_container_dev = false;
     profile.enable_data_engine = false;
-    profile.enable_host_tools = false;
+    profile.enable_host_tools = spec.enable_host_tools;
     profile.enable_kms_readonly = false;
 
     registry
@@ -917,6 +1115,29 @@ mod tests {
             );
             assert!(!prompt.contains("网页搜索"), // homepage v2 persona dropped
                 "{agent_type} prompt must not advertise tools the web profile does not register");
+        }
+    }
+
+    /// P5b: only `homepage` arms host tools, and its persona declares the
+    /// delegation surface (the tools themselves are listed by generated
+    /// tool guidance host-side).
+    #[test]
+    fn homepage_spec_arms_host_tools_and_declares_delegation() {
+        let homepage = WebProfileSpec::for_agent_type("homepage").unwrap();
+        assert!(homepage.enable_host_tools);
+        for marker in ["spawn_agent", "delegate_to", "shutdown_agent"] {
+            assert!(
+                homepage.system_prompt.contains(marker),
+                "homepage persona must mention {marker}"
+            );
+        }
+        for agent_type in ["paperReader", "screening"] {
+            assert!(
+                !WebProfileSpec::for_agent_type(agent_type)
+                    .unwrap()
+                    .enable_host_tools,
+                "{agent_type} must stay read-only (no host tools)"
+            );
         }
     }
 }
@@ -1322,6 +1543,223 @@ mod http_tests {
         let body = body_json(response).await;
         assert_eq!(status, StatusCode::OK, "unknown agent: {body:?}");
         assert_eq!(body["messages"].as_array().map(Vec::len), Some(0));
+
+        let mut host = driver.join().await;
+        host.shutdown_all_agents_and_wait().await;
+    }
+
+    /// P5b migration: a `web/homepage` row still carrying the untouched v2
+    /// seed prompt is refreshed once (v3 persona + host tools) and the
+    /// change is persisted; a row the user edited keeps its content AND
+    /// its `enable_host_tools = false`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn p5b_migration_arms_seed_shaped_homepage_row_only() {
+        // ── Seed-shaped row (the pre-P5b install) ──
+        let dir = tempfile::tempdir().unwrap();
+        let mut host = runtime::RuntimeHost::open(&config(&dir)).await.unwrap();
+        let infra = host.infra();
+
+        let mut legacy = agentik_core::AgentProfile::new("web/homepage");
+        legacy.enable_host_tools = false;
+        legacy.system_prompt = Some(format!("{LEGACY_HOMEPAGE_PROMPT_V2}{CORE_PERSONA_RULES}"));
+        infra
+            .profile_storage
+            .create_profile(legacy)
+            .await
+            .unwrap();
+
+        let migrated = ensure_web_profile(&infra, "homepage")
+            .await
+            .expect("ensure succeeds");
+        assert!(migrated.enable_host_tools, "seed-shaped row migrates");
+        let expected_prompt =
+            WebProfileSpec::for_agent_type("homepage").unwrap().system_prompt();
+        assert_eq!(migrated.system_prompt.as_deref(), Some(expected_prompt.as_str()));
+
+        // The flag flip must be durable, and a second pass is a no-op.
+        let reread = infra
+            .profile_storage
+            .get_profile_by_path("web/homepage")
+            .await
+            .unwrap()
+            .expect("row persisted");
+        assert!(reread.enable_host_tools);
+        let again = ensure_web_profile(&infra, "homepage")
+            .await
+            .expect("second ensure succeeds");
+        assert!(again.enable_host_tools);
+        assert_eq!(
+            again.system_prompt.as_deref(),
+            Some(expected_prompt.as_str()),
+            "idempotent: no further rewrite"
+        );
+
+        host.shutdown_all_agents_and_wait().await;
+
+        // ── User-edited row (content wins, flag stays off) ──
+        let dir = tempfile::tempdir().unwrap();
+        let mut host = runtime::RuntimeHost::open(&config(&dir)).await.unwrap();
+        let mut edited = agentik_core::AgentProfile::new("web/homepage");
+        edited.enable_host_tools = false;
+        edited.system_prompt = Some("我的自定义提示词".into());
+        host.infra()
+            .profile_storage
+            .create_profile(edited)
+            .await
+            .unwrap();
+
+        let kept = ensure_web_profile(&host.infra(), "homepage")
+            .await
+            .expect("ensure succeeds");
+        assert!(
+            !kept.enable_host_tools,
+            "user-edited row is not force-migrated"
+        );
+        assert_eq!(kept.system_prompt.as_deref(), Some("我的自定义提示词"));
+
+        host.shutdown_all_agents_and_wait().await;
+    }
+
+    /// P5b: the interrupt endpoint cancels a streaming resident turn.
+    /// The turn's model request hangs forever (`HangingClient`); only the
+    /// published cancel token can end it — exactly the user-pressed 停止
+    /// scenario. Also covers the 409 (idle) and 404 (unknown agent)
+    /// contract.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn interrupt_endpoint_cancels_a_streaming_resident_turn() {
+        /// Model client whose requests never resolve: a turn awaiting it
+        /// can only end via cancellation (agentik selects the request
+        /// against the cancel token).
+        struct HangingClient;
+
+        #[async_trait::async_trait]
+        impl agentik_sdk::provider::client::ApiClient for HangingClient {
+            async fn request(
+                &self,
+                _messages: Vec<Message>,
+                _tools: Vec<agentik_types::ToolDefinition>,
+                _model_info: &agentik_sdk::model::ModelInfo,
+            ) -> Result<Message, agentik_types::errors::AnthropicError> {
+                std::future::pending().await
+            }
+
+            async fn request_stream(
+                &self,
+                _messages: Vec<Message>,
+                _tools: Vec<agentik_types::ToolDefinition>,
+                _model_info: &agentik_sdk::model::ModelInfo,
+            ) -> Result<agentik_sdk::streaming::MessageStream, agentik_types::errors::AnthropicError>
+            {
+                std::future::pending().await
+            }
+
+            async fn test_connection(&self) -> Result<(), agentik_types::errors::AnthropicError> {
+                Ok(())
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let host = runtime::RuntimeHost::open(&config(&dir)).await.unwrap();
+        let model: Arc<ArcSwapOption<Model>> = Arc::new(ArcSwapOption::from_pointee(
+            Model::with_client(
+                agentik_core::testing::dummy_model_info("hang-model"),
+                HangingClient,
+            ),
+        ));
+        let app = router(RuntimeAgentState::new(host.infra(), model));
+        let driver = host.spawn_driver();
+
+        let response = app
+            .clone()
+            .oneshot(json_request("POST", "/threads", serde_json::json!({ "agent_type": "homepage" })))
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = body_json(response).await;
+        assert_eq!(status, StatusCode::OK, "create thread: {body:?}");
+        let thread_id: String = body["thread_id"].as_str().expect("thread_id").to_owned();
+
+        // Idle agent: resident interrupt is a clean 409, and an unknown
+        // agent falls through to the host registry as a 404.
+        let response = app
+            .clone()
+            .oneshot(json_request(
+                "POST",
+                "/agents/interrupt",
+                serde_json::json!({ "agent": "homepage" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let response = app
+            .clone()
+            .oneshot(json_request(
+                "POST",
+                "/agents/interrupt",
+                serde_json::json!({ "agent": "nobody" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        // Start the hanging turn; the interrupt is accepted once the
+        // driver has published the turn token (409 until then).
+        let chat = app
+            .clone()
+            .oneshot(json_request(
+                "POST",
+                &format!("/threads/{thread_id}/chat"),
+                serde_json::json!({ "agent_type": "homepage", "message": "hang" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(chat.status(), StatusCode::OK);
+        let stream = tokio::spawn(async move { body_text(chat).await });
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let response = app
+                .clone()
+                .oneshot(json_request(
+                    "POST",
+                    "/agents/interrupt",
+                    serde_json::json!({ "agent": "/root/web/homepage", "reason": "test cancel" }),
+                ))
+                .await
+                .unwrap();
+            if response.status() == StatusCode::OK {
+                break;
+            }
+            assert_eq!(
+                response.status(),
+                StatusCode::CONFLICT,
+                "unexpected interrupt status while turn starts"
+            );
+            assert!(
+                std::time::Instant::now() < deadline,
+                "turn never became interruptible"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+
+        // The cancelled turn ends the SSE stream with the terminal frame.
+        let text = tokio::time::timeout(std::time::Duration::from_secs(10), stream)
+            .await
+            .expect("stream ends after interrupt")
+            .unwrap();
+        assert!(text.contains("event: done"), "stream: {text}");
+
+        // The token slot is cleared: the agent accepts a new turn.
+        let response = app
+            .clone()
+            .oneshot(json_request(
+                "POST",
+                "/agents/interrupt",
+                serde_json::json!({ "agent": "homepage" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
 
         let mut host = driver.join().await;
         host.shutdown_all_agents_and_wait().await;

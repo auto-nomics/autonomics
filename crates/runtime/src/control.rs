@@ -122,9 +122,12 @@ impl HostControl {
     /// Fire-and-forget inter-agent message (Phase 5). Delivers `message`
     /// to agent `to` without waiting for a response. Returns:
     /// - `Some(Ok(()))` — agent found, message enqueued
-    /// - `Some(Err(msg))` — agent not found or host resolved the name but
-    ///   the agent was unregistered concurrently
+    /// - `Some(Err(msg))` — agent not found, or the caller is sandboxed
+    ///   (web subtree) and the target is outside its own subtree
     /// - `None` — host command channel closed (host shutting down)
+    ///
+    /// `caller_path` is the sending agent's own path (tools pass theirs;
+    /// host-level callers pass `None` for unrestricted resolution).
     ///
     /// Unlike [`Self::delegate`], the caller continues immediately. If the
     /// target agent is mid-turn, the message is queued and processed on
@@ -133,17 +136,41 @@ impl HostControl {
         &self,
         to: &str,
         message: impl Into<String>,
+        caller_path: Option<&str>,
     ) -> Option<Result<(), String>> {
         self.ask(|tx| HostCommand::SendMessage {
             to: to.into(),
             message: message.into(),
+            caller_path: caller_path.map(str::to_string),
             reply_tx: tx,
         })
         .await
     }
 
+    /// Host-level (unrestricted) fire-and-forget shutdown — the TUI path.
+    /// The reply channel is dropped, so denials are only logged.
     pub fn shutdown_agent(&self, name: &str) {
-        self.fire(HostCommand::Shutdown { name: name.into() });
+        self.fire(HostCommand::Shutdown {
+            name: name.into(),
+            caller_path: None,
+            reply_tx: oneshot::channel().0,
+        });
+    }
+
+    /// Awaiting shutdown with the P5b sandbox boundary applied: a
+    /// sandboxed (web-subtree) `caller_path` may only shut down agents
+    /// under its own path. Used by the LLM-facing tool.
+    pub async fn shutdown_agent_scoped(
+        &self,
+        name: &str,
+        caller_path: Option<&str>,
+    ) -> Option<Result<(), String>> {
+        self.ask(|tx| HostCommand::Shutdown {
+            name: name.into(),
+            caller_path: caller_path.map(str::to_string),
+            reply_tx: tx,
+        })
+        .await
     }
 
     /// Trigger manual compaction on a named agent's active session.
@@ -200,8 +227,32 @@ impl HostControl {
 
     // ── Session management ──
 
+    /// Host-level (unrestricted) fire-and-forget cancel — the TUI path.
     pub fn cancel_agent(&self, name: &str) {
-        self.fire(HostCommand::CancelAgent { name: name.into() });
+        self.fire(HostCommand::CancelAgent {
+            name: name.into(),
+            caller_path: None,
+            reply_tx: oneshot::channel().0,
+        });
+    }
+
+    /// Awaiting interrupt with the P5b sandbox boundary applied: cancels
+    /// the target's current turn, keeping the agent registered. Reply:
+    /// `Ok(())` dispatched, `Err(msg)` not registered / out of the
+    /// sandboxed caller's subtree. Used by the LLM-facing tool and the
+    /// web interrupt endpoint (which passes `None` — the user is the
+    /// host operator).
+    pub async fn interrupt_agent(
+        &self,
+        name: &str,
+        caller_path: Option<&str>,
+    ) -> Option<Result<(), String>> {
+        self.ask(|tx| HostCommand::CancelAgent {
+            name: name.into(),
+            caller_path: caller_path.map(str::to_string),
+            reply_tx: tx,
+        })
+        .await
     }
 
     pub fn list_sessions(&self, name: &str) {
@@ -311,6 +362,14 @@ impl HostControl {
         .unwrap_or(Err("host command channel closed".into()))
     }
 
+    /// Upsert a profile into the host's spawn-lookup cache (see
+    /// [`HostCommand::RegisterProfile`]). Fire-and-forget.
+    pub fn register_profile(&self, profile: agentik_core::AgentProfile) {
+        self.fire(HostCommand::RegisterProfile {
+            profile: Box::new(profile),
+        });
+    }
+
     pub async fn get_status(&self) -> Option<HostStatus> {
         self.ask(|tx| HostCommand::GetStatus { reply_tx: tx }).await
     }
@@ -370,15 +429,19 @@ impl HostControl {
         .await
     }
 
-    /// Read the persisted execution history for a live agent.
+    /// Read the persisted execution history for a live agent. Sandboxed
+    /// (web-subtree) callers can only read agents under their own path —
+    /// violations come back as `Err(msg)`.
     pub async fn agent_history(
         &self,
         agent_name: &str,
         limit: usize,
-    ) -> Option<AgentExecutionHistory> {
+        caller_path: Option<&str>,
+    ) -> Option<Result<AgentExecutionHistory, String>> {
         self.ask(|tx| HostCommand::GetAgentHistory {
             agent_name: agent_name.into(),
             limit,
+            caller_path: caller_path.map(str::to_string),
             reply_tx: tx,
         })
         .await
@@ -413,8 +476,15 @@ pub enum HostCommand {
         reply_tx: oneshot::Sender<Result<String, String>>,
     },
 
-    /// Shut down a named agent and remove from registry.
-    Shutdown { name: String },
+    /// Shut down a named agent and remove from registry. `caller_path` is
+    /// the requesting agent's path (`None` = host-level, unrestricted);
+    /// sandboxed callers may only shut down their own subtree.
+    /// Reply: Ok(()) or Err(readable denial).
+    Shutdown {
+        name: String,
+        caller_path: Option<String>,
+        reply_tx: oneshot::Sender<Result<(), String>>,
+    },
 
     /// Derive a child profile from the caller's profile. Reply: Ok(profile_path) or Err(msg).
     DeriveProfile {
@@ -422,6 +492,15 @@ pub enum HostCommand {
         segment: String,
         overrides: Box<agentik_core::ProfileOverrides>,
         reply_tx: oneshot::Sender<Result<String, String>>,
+    },
+
+    /// Upsert a profile into the host's spawn-lookup cache (P5b). The
+    /// Spawn command resolves `profile_segment` against this cache;
+    /// embedders that seed profiles lazily (the web shell's
+    /// `ensure_web_profile`) register them here so tool-driven spawns
+    /// resolve without a host restart. Fire-and-forget.
+    RegisterProfile {
+        profile: Box<agentik_core::AgentProfile>,
     },
 
     /// Add a topology node.
@@ -451,10 +530,13 @@ pub enum HostCommand {
     /// Fire-and-forget inter-agent message (Phase 5). Unlike Delegate,
     /// the sender does NOT wait for the target's Done response — the
     /// message is enqueued and the caller continues immediately.
-    /// Reply: Ok(()) on successful delivery, Err(msg) if agent not found.
+    /// `caller_path` scopes resolution for sandboxed callers (P5b).
+    /// Reply: Ok(()) on successful delivery, Err(msg) if agent not found
+    /// or outside the sandboxed caller's subtree.
     SendMessage {
         to: String,
         message: String,
+        caller_path: Option<String>,
         reply_tx: oneshot::Sender<Result<(), String>>,
     },
 
@@ -477,11 +559,14 @@ pub enum HostCommand {
         reply_tx: oneshot::Sender<Vec<DelegationSnapshot>>,
     },
 
-    /// Read an agent's persisted conversation history.
+    /// Read an agent's persisted conversation history. `caller_path`
+    /// scopes resolution for sandboxed callers (P5b). Reply: Ok(history)
+    /// or Err(readable denial).
     GetAgentHistory {
         agent_name: String,
         limit: usize,
-        reply_tx: oneshot::Sender<AgentExecutionHistory>,
+        caller_path: Option<String>,
+        reply_tx: oneshot::Sender<Result<AgentExecutionHistory, String>>,
     },
 
     /// Query host + topology status.
@@ -525,8 +610,14 @@ pub enum HostCommand {
     },
 
     // ── Session management ──
-    /// Cancel the current turn of a named agent.
-    CancelAgent { name: String },
+    /// Cancel the current turn of a named agent. `caller_path` scopes
+    /// resolution for sandboxed callers (P5b). Reply: Ok(()) dispatched
+    /// or Err(readable denial).
+    CancelAgent {
+        name: String,
+        caller_path: Option<String>,
+        reply_tx: oneshot::Sender<Result<(), String>>,
+    },
 
     /// Trigger manual compaction on a named agent's active session.
     CompactAgent { name: String },

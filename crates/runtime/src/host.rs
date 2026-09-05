@@ -1191,10 +1191,17 @@ impl RuntimeHost {
     /// Await either a host command or a background spawn completion.
     /// Event-driven — wakes when either arrives. Use as a `select!`
     /// branch in the event loop.
+    ///
+    /// On the command branch, registrations drain first: spawns queue
+    /// their registration before their Ok reply, so a command that
+    /// follows a spawn tool-result (delegate_to on the fresh child)
+    /// must observe the registration (same ordering contract as the
+    /// [`spawn_driver`](Self::spawn_driver) loop).
     pub async fn recv_and_process_command(&mut self) {
         tokio::select! {
             cmd = self.cmd_rx.recv() => {
                 if let Some(cmd) = cmd {
+                    self.try_process_registrations();
                     self.process_command(cmd);
                 }
             }
@@ -1238,8 +1245,9 @@ impl RuntimeHost {
     /// integration tests) must run this driver. The TUI must NOT — it
     /// drives the loop itself, and a second driver would race it.
     ///
-    /// The loop polls at a fixed cadence: each round drains commands,
-    /// registrations, and lifecycle notifications non-blockingly, then
+    /// The loop polls at a fixed cadence: each round drains registrations,
+    /// commands, and lifecycle notifications non-blockingly (registrations
+    /// first — see the note in the loop body), then
     /// waits up to one [`POLL`] interval for an agent event (whose
     /// processing — delegation plumbing, status updates, persistence —
     /// is fully synchronous once received, so the timeout can never cut
@@ -1256,8 +1264,14 @@ impl RuntimeHost {
                     Ok(()) | Err(tokio::sync::oneshot::error::TryRecvError::Closed) => break,
                     Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
                 }
-                host.try_process_commands();
+                // Registrations drain BEFORE commands: a background spawn
+                // queues its registration before its Ok reply (see the
+                // Spawn arms), so by the time any follow-up command
+                // (delegate_to on a freshly spawned child) is queued, the
+                // registration is already in the channel — draining in this
+                // order makes the child resolvable to that command.
                 host.try_process_registrations();
+                host.try_process_commands();
                 // Embeddings have no UI consumer for lifecycle events; the
                 // unbounded notify channel would otherwise grow without
                 // bound across status transitions.
@@ -1305,13 +1319,42 @@ impl RuntimeHost {
                     return;
                 }
 
+                // ── P5b spawn caps (§5.3) ──
+                if let Err(msg) = self.check_spawn_caps(&caller_path) {
+                    let _ = reply_tx.send(Err(msg));
+                    return;
+                }
+
                 // ── Resolve profile ──
                 // 1. None → reuse caller's profile (by caller_profile_path).
                 // 2. Contains '/' → absolute profile path.
                 // 3. Single segment → relative: try "{caller}/{segment}",
                 //    fallback to root-level "{segment}".
+                //
+                // Sandbox (§5.2): web-subtree callers get no root fallback
+                // and no absolute profiles outside their own profile
+                // subtree — cross-tree instantiation would arm a spawned
+                // child with the TUI side's full tool surface.
+                let sandboxed = path_in_subtree(caller_path.as_str(), WEB_AGENT_SUBTREE);
                 let target_profile_path = match &profile_segment {
                     None => caller_profile_path.clone(),
+                    Some(seg) if sandboxed => {
+                        let candidate = if seg.contains('/') {
+                            seg.clone()
+                        } else {
+                            format!("{caller_profile_path}/{seg}")
+                        };
+                        if !path_in_subtree(&candidate, &caller_profile_path) {
+                            let _ = reply_tx.send(Err(format!(
+                                "Profile '{seg}' is outside your profile subtree \
+                                 '{caller_profile_path}' — sandboxed agents can only \
+                                 instantiate their own profile or children derived \
+                                 from it (see derive_profile)."
+                            )));
+                            return;
+                        }
+                        candidate
+                    }
                     Some(seg) if seg.contains('/') => seg.clone(),
                     Some(seg) => {
                         let relative = format!("{caller_profile_path}/{seg}");
@@ -1336,19 +1379,31 @@ impl RuntimeHost {
                         .filter(|p| p.parent_path() == Some(caller_profile_path.as_str()))
                         .map(|p| p.name().to_string())
                         .collect();
-                    let available_roots: Vec<_> = self
-                        .profiles
-                        .iter()
-                        .filter(|p| p.depth() == 0)
-                        .map(|p| p.name().to_string())
-                        .collect();
-                    let _ = reply_tx.send(Err(format!(
-                        "Profile '{target_profile_path}' not found. \
-                         Child profiles under '{caller_profile_path}': [{}]. \
-                         Root profiles: [{}].",
-                        available_children.join(", "),
-                        available_roots.join(", "),
-                    )));
+                    if sandboxed {
+                        // No root-profile listing for sandboxed callers —
+                        // root profiles are outside their reach anyway;
+                        // point them at derive_profile instead.
+                        let _ = reply_tx.send(Err(format!(
+                            "Profile '{target_profile_path}' not found. \
+                             Child profiles under '{caller_profile_path}': [{}]. \
+                             Derive a new one with derive_profile.",
+                            available_children.join(", "),
+                        )));
+                    } else {
+                        let available_roots: Vec<_> = self
+                            .profiles
+                            .iter()
+                            .filter(|p| p.depth() == 0)
+                            .map(|p| p.name().to_string())
+                            .collect();
+                        let _ = reply_tx.send(Err(format!(
+                            "Profile '{target_profile_path}' not found. \
+                             Child profiles under '{caller_profile_path}': [{}]. \
+                             Root profiles: [{}].",
+                            available_children.join(", "),
+                            available_roots.join(", "),
+                        )));
+                    }
                     return;
                 };
 
@@ -1377,8 +1432,16 @@ impl RuntimeHost {
                     match result {
                         Ok(Ok(handle)) => {
                             let registered_path = handle.path.as_str().to_string();
-                            let _ = reply_tx.send(Ok(registered_path));
+                            // Ordering contract: the registration is queued
+                            // BEFORE the Ok reply. The reply unblocks the
+                            // spawning tool, whose caller may issue a
+                            // follow-up command (delegate_to, send_message)
+                            // in the very next model round — the driver
+                            // drains registrations before commands, so
+                            // queueing here first guarantees the child is
+                            // resolvable by the time that command runs.
                             let _ = reg_tx.send((handle, info));
+                            let _ = reply_tx.send(Ok(registered_path));
                         }
                         Ok(Err(e)) => {
                             let _ = reply_tx.send(Err(e.to_string()));
@@ -1421,6 +1484,14 @@ impl RuntimeHost {
                         reply_tx.send(Err(format!("agent at path `{child_path}` already exists")));
                     return;
                 }
+                // Same P5b caps as Spawn. The inline profile itself is NOT
+                // subtree-scoped: this command is only reachable from
+                // trusted host-side code (TUI spawn/restore flows), never
+                // from LLM-facing tools.
+                if let Err(msg) = self.check_spawn_caps(&caller_path) {
+                    let _ = reply_tx.send(Err(msg));
+                    return;
+                }
                 // Resolve model: use override if provided, else global model.
                 let model = match (model_override, self.model.as_ref()) {
                     (Some(m), _) => Arc::new(ArcSwapOption::from_pointee(Some(m))),
@@ -1448,8 +1519,10 @@ impl RuntimeHost {
                     match result {
                         Ok(Ok(handle)) => {
                             let registered_path = handle.path.as_str().to_string();
-                            let _ = reply_tx.send(Ok(registered_path));
+                            // Same ordering contract as the Spawn arm above:
+                            // registration queued before the Ok reply.
                             let _ = reg_tx.send((handle, info));
+                            let _ = reply_tx.send(Ok(registered_path));
                         }
                         Ok(Err(e)) => {
                             let _ = reply_tx.send(Err(e.to_string()));
@@ -1471,9 +1544,25 @@ impl RuntimeHost {
                     }
                 });
             }
-            HostCommand::Shutdown { name } => {
-                let resolved = self.resolve_agent(&name).unwrap_or(name);
-                self.shutdown_agent(&resolved);
+            HostCommand::Shutdown {
+                name,
+                caller_path,
+                reply_tx,
+            } => {
+                match self.resolve_agent_for_caller(&name, caller_path.as_deref()) {
+                    Ok(Some(resolved)) => {
+                        self.shutdown_agent(&resolved);
+                        let _ = reply_tx.send(Ok(()));
+                    }
+                    Ok(None) => {
+                        let _ = reply_tx.send(Err(format!(
+                            "Agent '{name}' is not registered — nothing to shut down."
+                        )));
+                    }
+                    Err(boundary) => {
+                        let _ = reply_tx.send(Err(boundary));
+                    }
+                }
             }
             HostCommand::DeriveProfile {
                 caller_profile_path,
@@ -1543,6 +1632,13 @@ impl RuntimeHost {
                 // Add to in-memory cache immediately (non-async).
                 self.profiles.push(child);
             }
+            HostCommand::RegisterProfile { profile } => {
+                // Upsert by path (fire-and-forget; see the variant doc). The
+                // row itself is owned by whoever seeded it in storage — the
+                // host cache is only the Spawn-time lookup.
+                self.profiles.retain(|p| p.path != profile.path);
+                self.profiles.push(*profile);
+            }
             HostCommand::AddNode {
                 name,
                 profile,
@@ -1574,16 +1670,21 @@ impl RuntimeHost {
             HostCommand::SendMessage {
                 to,
                 message,
+                caller_path,
                 reply_tx,
             } => {
-                let resolved = match self.resolve_agent(&to) {
-                    Some(path) => path,
-                    None => {
+                let resolved = match self.resolve_agent_for_caller(&to, caller_path.as_deref()) {
+                    Ok(Some(path)) => path,
+                    Ok(None) => {
                         let _ = reply_tx.send(Err(format!(
                             "Agent '{to}' is not registered. \
                              Use list_agents to see available agents, \
                              or spawn_agent to create one first."
                         )));
+                        return;
+                    }
+                    Err(boundary) => {
+                        let _ = reply_tx.send(Err(boundary));
                         return;
                     }
                 };
@@ -1608,15 +1709,22 @@ impl RuntimeHost {
                 progress,
                 reply_tx,
             } => {
-                // Resolve target: full path or short name.
-                let resolved = match self.resolve_agent(&to) {
-                    Some(path) => path,
-                    None => {
+                // Resolve target: full path or short name. Sandboxed
+                // (web-subtree) callers are constrained to their own
+                // subtree — a cross-tree reference fails with a readable
+                // error instead of dispatching (P5b §5.1).
+                let resolved = match self.resolve_agent_for_caller(&to, caller_path.as_deref()) {
+                    Ok(Some(path)) => path,
+                    Ok(None) => {
                         let _ = reply_tx.send(format!(
                             "Error: agent '{to}' is not registered. \
                              Use list_agents to see available agents, \
                              or spawn_agent to create one first."
                         ));
+                        return;
+                    }
+                    Err(boundary) => {
+                        let _ = reply_tx.send(format!("Error: {boundary}"));
                         return;
                     }
                 };
@@ -1715,31 +1823,47 @@ impl RuntimeHost {
             HostCommand::GetAgentHistory {
                 agent_name,
                 limit,
+                caller_path,
                 reply_tx,
             } => {
-                let storage = self.infra.storage.clone();
-                let requested_path = agent_name.clone();
-                let live = self.resolve_agent(&agent_name).and_then(|path| {
-                    self.agents
-                        .get(&path)
-                        .and_then(|entry| entry.info.agent_id)
-                        .map(|id| (path, id))
-                });
-                agentik_core::supervise::spawn_safe_on(
-                    &self.infra.runtime_handle,
-                    "get_agent_history",
-                    async move {
-                        let response = match live {
-                            Some((path, agent_id)) => {
-                                read_agent_history(storage, agent_id, path, limit).await
-                            }
-                            None => {
-                                read_persisted_agent_history(storage, requested_path, limit).await
-                            }
-                        };
-                        let _ = reply_tx.send(response);
-                    },
-                );
+                // Boundary violations (sandboxed caller, cross-subtree
+                // target) reply Err; a resolved miss falls back to the
+                // persisted graph (agents of previous runs).
+                match self.resolve_agent_for_caller(&agent_name, caller_path.as_deref()) {
+                    Err(boundary) => {
+                        let _ = reply_tx.send(Err(boundary));
+                    }
+                    Ok(resolved) => {
+                        let storage = self.infra.storage.clone();
+                        let live = resolved.as_deref().and_then(|path| {
+                            self.agents
+                                .get(path)
+                                .and_then(|entry| entry.info.agent_id)
+                                .map(|id| (path.to_string(), id))
+                        });
+                        let requested_path = resolved.unwrap_or(agent_name);
+                        agentik_core::supervise::spawn_safe_on(
+                            &self.infra.runtime_handle,
+                            "get_agent_history",
+                            async move {
+                                let response = match live {
+                                    Some((path, agent_id)) => {
+                                        read_agent_history(storage, agent_id, path, limit).await
+                                    }
+                                    None => {
+                                        read_persisted_agent_history(
+                                            storage,
+                                            requested_path,
+                                            limit,
+                                        )
+                                        .await
+                                    }
+                                };
+                                let _ = reply_tx.send(Ok(response));
+                            },
+                        );
+                    }
+                }
             }
             HostCommand::GetStatus { reply_tx } => {
                 let g = self.network.graph();
@@ -1795,8 +1919,24 @@ impl RuntimeHost {
             }
 
             // ── Session management (forwarded to relay) ──
-            HostCommand::CancelAgent { name } => {
-                self.send_agent_command(&name, AgentCommand::Cancel);
+            HostCommand::CancelAgent {
+                name,
+                caller_path,
+                reply_tx,
+            } => {
+                let result = match self.resolve_agent_for_caller(&name, caller_path.as_deref()) {
+                    Ok(Some(resolved)) => {
+                        if let Some(entry) = self.agents.get(&resolved) {
+                            let _ = entry.cmd_tx.send(AgentCommand::Cancel);
+                        }
+                        Ok(())
+                    }
+                    Ok(None) => Err(format!(
+                        "Agent '{name}' is not registered — nothing to interrupt."
+                    )),
+                    Err(boundary) => Err(boundary),
+                };
+                let _ = reply_tx.send(result);
             }
             HostCommand::CompactAgent { name } => {
                 self.send_agent_command(&name, AgentCommand::Compact);
@@ -1903,6 +2043,10 @@ impl RuntimeHost {
     /// 2. **Short name** (`researcher`) — matches when unambiguous.
     ///
     /// Returns the HashMap key string, or `None` if no match / ambiguous.
+    ///
+    /// Unscoped — host-level callers only. Tool-originated commands must go
+    /// through [`resolve_agent_for_caller`](Self::resolve_agent_for_caller),
+    /// which enforces the P5b sandbox boundary.
     fn resolve_agent(&self, target: &str) -> Option<String> {
         // 1. Exact full-path match.
         if target.starts_with("/root") && self.agents.contains_key(target) {
@@ -1927,6 +2071,77 @@ impl RuntimeHost {
                 None
             }
         }
+    }
+
+    /// Resolve with the P5b sandbox boundary applied (design doc §5.1).
+    ///
+    /// `caller_path` is the *agent* that issued the command (set by tool
+    /// construction from its own spawn-time path — the LLM cannot forge it).
+    /// A caller living under [`WEB_AGENT_SUBTREE`] is constrained: whatever
+    /// `resolve_agent` resolves must live under the caller's own path, or
+    /// the resolution fails with a readable `Err` that the calling tool
+    /// hands back to the model for self-correction. Unconstrained callers
+    /// (TUI side, host-level `None`) keep the unrestricted behavior.
+    ///
+    /// Returns `Err` only for boundary violations; `Ok(None)` means "no
+    /// live match" so history-style commands can fall back to the persisted
+    /// graph.
+    fn resolve_agent_for_caller(
+        &self,
+        target: &str,
+        caller_path: Option<&str>,
+    ) -> std::result::Result<Option<String>, String> {
+        let resolved = self.resolve_agent(target);
+        if let (Some(caller), Some(path)) = (
+            caller_path.filter(|c| path_in_subtree(c, WEB_AGENT_SUBTREE)),
+            &resolved,
+        ) {
+            if !path_in_subtree(path, caller) {
+                tracing::warn!(
+                    target = %target,
+                    caller = %caller,
+                    resolved = %path,
+                    "sandbox boundary: cross-subtree agent reference rejected"
+                );
+                return Err(format!(
+                    "Agent '{target}' resolved to '{path}', which is outside your \
+                     sandbox '{caller}'. Web agents may only interact with agents \
+                     under their own path — use spawn_agent to create a helper in \
+                     your subtree instead."
+                ));
+            }
+        }
+        Ok(resolved)
+    }
+
+    /// P5b spawn caps (design §5.3): a hard total ceiling on the live
+    /// registry (TUI side included) plus a per-caller-subtree ceiling on
+    /// live descendants, checked before the background spawn task is
+    /// launched. Violations return a model-readable error so the caller
+    /// can self-correct (e.g. shut down an unused child).
+    fn check_spawn_caps(
+        &self,
+        caller_path: &agentik_types::AgentPath,
+    ) -> std::result::Result<(), String> {
+        if self.agents.len() >= MAX_AGENTS_TOTAL {
+            return Err(format!(
+                "Host agent limit ({MAX_AGENTS_TOTAL}) reached — shut down an \
+                 unused agent first (shutdown_agent)."
+            ));
+        }
+        let caller = caller_path.as_str();
+        let descendants = self
+            .agents
+            .keys()
+            .filter(|key| key.as_str() != caller && path_in_subtree(key, caller))
+            .count();
+        if descendants >= MAX_AGENTS_PER_SUBTREE {
+            return Err(format!(
+                "Subtree limit ({MAX_AGENTS_PER_SUBTREE}) reached for '{caller}' — \
+                 shut down an unused child agent first (shutdown_agent)."
+            ));
+        }
+        Ok(())
     }
 
     /// Forward a command to a named agent's relay task.
@@ -2812,6 +3027,31 @@ impl RuntimeHost {
 
 /// Build [`AgentInfo`] from an [`AgentProfile`], auto-extracting tags,
 /// expertise, and tool list from the profile's feature flags.
+// ─────────────────────────────────────────────────────────────────────────
+// P5b sandbox boundaries (docs/design/web-agent-delegation.md §5)
+//
+// Web resident agents (and everything they spawn) live under `/root/web`.
+// They are driven by web-user prompts rather than the TUI operator, so
+// host commands carrying their caller path are constrained to their own
+// subtree: delegation / messaging / interrupt / shutdown / history target
+// resolution and spawn profile resolution cannot cross into the TUI side.
+// Discovery stays transparent (list_agents shows the whole host) — the
+// boundary gates *acting* on agents, not seeing them.
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Agent-path subtree that marks sandboxed (web) callers.
+const WEB_AGENT_SUBTREE: &str = "/root/web";
+/// Max live agents one caller's subtree may hold (strict descendants).
+const MAX_AGENTS_PER_SUBTREE: usize = 8;
+/// Max live agents in the whole host registry (TUI side included).
+const MAX_AGENTS_TOTAL: usize = 16;
+
+/// Segment-aware prefix test: `path` equals `subtree` or extends it with a
+/// `/`-separated segment (`/root/web` does NOT match `/root/webfoo`).
+fn path_in_subtree(path: &str, subtree: &str) -> bool {
+    path == subtree || path.strip_prefix(subtree).is_some_and(|rest| rest.starts_with('/'))
+}
+
 fn capability_from_profile(
     name: &str,
     path: &str,
@@ -3491,6 +3731,7 @@ mod interrupt_agent_tests {
 
     use super::*;
     use crate::control::HostCommand;
+    use tokio::sync::oneshot;
 
     /// `interrupt` and `shutdown` MUST be distinct commands — the
     /// handler dispatches them to different paths:
@@ -3505,9 +3746,13 @@ mod interrupt_agent_tests {
     fn cancel_and_shutdown_are_distinct_commands() {
         let cancel = HostCommand::CancelAgent {
             name: "worker".into(),
+            caller_path: None,
+            reply_tx: oneshot::channel().0,
         };
         let shutdown = HostCommand::Shutdown {
             name: "worker".into(),
+            caller_path: None,
+            reply_tx: oneshot::channel().0,
         };
 
         // Different concrete types — pattern-match proves it.
@@ -3602,6 +3847,7 @@ mod send_message_tests {
         let send = HostCommand::SendMessage {
             to: "worker".into(),
             message: "hello".into(),
+            caller_path: None,
             reply_tx: oneshot::channel().0,
         };
         let deliver = HostCommand::DeliverMessage {
@@ -3647,6 +3893,7 @@ mod send_message_tests {
         let _cmd = HostCommand::SendMessage {
             to: "worker".into(),
             message: "hello".into(),
+            caller_path: None,
             reply_tx: tx,
         };
         // The type system already proved the channel type by compiling.
@@ -3681,8 +3928,9 @@ mod send_message_tests {
         let control = HostControl::new(cmd_tx, event_tx);
 
         // Spawn the "caller" — sends the message and awaits reply.
-        let caller =
-            tokio::spawn(async move { control.send_message("worker", "hello there").await });
+        let caller = tokio::spawn(async move {
+            control.send_message("worker", "hello there", None).await
+        });
 
         // "Host" side: receive the command and reply Ok(()).
         let cmd = cmd_rx.recv().await.expect("command received");
@@ -3690,8 +3938,10 @@ mod send_message_tests {
             HostCommand::SendMessage {
                 to,
                 message,
+                caller_path,
                 reply_tx,
             } => {
+                assert_eq!(caller_path, None);
                 assert_eq!(to, "worker");
                 assert_eq!(message, "hello there");
                 let _ = reply_tx.send(Ok(()));
@@ -3710,7 +3960,9 @@ mod send_message_tests {
         let (event_tx, _) = tokio::sync::broadcast::channel::<HostEvent>(1);
         let control = HostControl::new(cmd_tx, event_tx);
 
-        let caller = tokio::spawn(async move { control.send_message("nonexistent", "test").await });
+        let caller = tokio::spawn(async move {
+            control.send_message("nonexistent", "test", None).await
+        });
 
         let cmd = cmd_rx.recv().await.expect("command received");
         match cmd {
@@ -3736,7 +3988,7 @@ mod send_message_tests {
         // Drop the receiver → channel is closed.
         drop(cmd_rx);
 
-        let result = control.send_message("worker", "hello").await;
+        let result = control.send_message("worker", "hello", None).await;
         assert!(result.is_none(), "should return None on closed channel");
     }
 }
@@ -3916,7 +4168,7 @@ mod agent_persistence_tests {
         let delivery_path = path.clone();
         let delivery = tokio::spawn(async move {
             control
-                .send_message(delivery_path.as_str(), "persist child message")
+                .send_message(delivery_path.as_str(), "persist child message", None)
                 .await
                 .expect("host command channel should remain open")
                 .expect("child agent should be registered");
@@ -4194,5 +4446,407 @@ mod literature_mount_tests {
         assert!(!ensure_literature_mount(&mut manifest, &config));
         assert_eq!(manifest.mount.len(), mount_count);
         assert_eq!(manifest.backend.len(), backend_count);
+    }
+}
+
+#[cfg(test)]
+mod sandbox_tests {
+    //! P5b (docs/design/web-agent-delegation.md §5): host-layer sandbox.
+    //!
+    //! A caller living under `/root/web` is constrained to its own agent
+    //! subtree (delegate / send_message / shutdown / interrupt / history)
+    //! and its own profile subtree (spawn), with hard caps on live agents
+    //! (8 per caller subtree, 16 host-wide). Discovery stays unrestricted
+    //! and unconstrained callers (TUI side, host-level `None`) keep the
+    //! pre-P5b behavior — both asserted here. Tests run against a driven
+    //! host (the same `spawn_driver` the desktop shell uses) so replies
+    //! come from the real handler paths, not mocks.
+
+    use super::*;
+    use crate::control::HostCommand;
+    use std::time::Duration;
+
+    /// Builder, never `Default` + field mutation: `Default` resolves the
+    /// derived DB paths from `$HOME` eagerly and a post-hoc `state_dir`
+    /// write does not re-derive them (the P5a test-isolation finding:
+    /// tests written that way silently open the user's real agent.db).
+    fn config(dir: &tempfile::TempDir) -> RuntimeConfig {
+        RuntimeConfig::builder()
+            .data_dir(dir.path().join("data"))
+            .state_dir(dir.path().join("state"))
+            .build()
+    }
+
+    fn agent_path(segments: &str) -> agentik_types::AgentPath {
+        let mut path = agentik_types::AgentPath::root();
+        for segment in segments.split('/').filter(|s| !s.is_empty()) {
+            path = path.join(segment).expect("valid test segment");
+        }
+        path
+    }
+
+    /// Open a driven host with `profiles` cached and an empty model slot
+    /// (spawned agents idle — no LLM traffic in these tests), returning
+    /// the driver plus a control handle.
+    async fn driven_host(
+        dir: &tempfile::TempDir,
+        profiles: Vec<agentik_core::AgentProfile>,
+    ) -> (HostDriver, crate::control::HostControl) {
+        let mut host = RuntimeHost::open(&config(dir)).await.unwrap();
+        host.set_profiles(profiles);
+        host.set_model(Arc::new(ArcSwapOption::from_pointee(None)));
+        let control = host.control();
+        let driver = host.spawn_driver();
+        (driver, control)
+    }
+
+    /// `spawn_with_profile` + wait for the registration to land in the
+    /// live registry. The Spawn reply returns before the background
+    /// registration channel is drained, so later registry-dependent
+    /// checks (caps, boundary resolution) must observe the registered
+    /// state, not just the reply.
+    async fn spawn_and_wait(
+        control: &crate::control::HostControl,
+        name: &str,
+        parent: &agentik_types::AgentPath,
+        profile: agentik_core::AgentProfile,
+    ) -> String {
+        let path = control
+            .spawn_with_profile(name, parent, profile, None)
+            .await
+            .expect("spawn ok");
+        for _ in 0..200 {
+            if let Some(status) = control.get_status().await {
+                if status.agents.iter().any(|info| info.path == path) {
+                    return path;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("agent at {path} never registered");
+    }
+
+    /// §5.1 — a web-subtree caller can only act on agents under its own
+    /// path; cross-tree references (TUI side, web siblings) are denied
+    /// with a readable error, while unconstrained callers keep full reach.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn web_caller_boundary_scopes_acting_commands() {
+        let dir = tempfile::tempdir().unwrap();
+        let (driver, control) = driven_host(&dir, vec![]).await;
+        let homepage = "/root/web/homepage";
+
+        // TUI-side agent, web caller, web sibling, and the caller's child.
+        spawn_and_wait(
+            &control,
+            "researcher",
+            &agent_path(""),
+            agentik_core::AgentProfile::new("researcher"),
+        )
+        .await;
+        spawn_and_wait(
+            &control,
+            "homepage",
+            &agent_path("web"),
+            agentik_core::AgentProfile::new("web/homepage"),
+        )
+        .await;
+        spawn_and_wait(
+            &control,
+            "screening",
+            &agent_path("web"),
+            agentik_core::AgentProfile::new("web/screening"),
+        )
+        .await;
+        spawn_and_wait(
+            &control,
+            "worker",
+            &agent_path("web/homepage"),
+            agentik_core::AgentProfile::new("web/homepage"),
+        )
+        .await;
+
+        // send_message: cross-tree by full path AND by short name both hit
+        // the boundary (resolution happens first, the check sees the
+        // resolved path).
+        for target in ["/root/researcher", "researcher", "/root/web/screening"] {
+            match control.send_message(target, "hi", Some(homepage)).await {
+                Some(Err(msg)) => assert!(
+                    msg.contains("outside your sandbox") && msg.contains(homepage),
+                    "denial must name the sandbox: {msg}"
+                ),
+                other => panic!("send_message to {target} from web caller: {other:?}"),
+            }
+        }
+        // Own subtree (the caller's child) is deliverable.
+        assert_eq!(
+            control
+                .send_message("worker", "hi", Some(homepage))
+                .await
+                .expect("host alive"),
+            Ok(())
+        );
+        // Host-level (None) and TUI-side callers keep the old reach.
+        assert_eq!(
+            control
+                .send_message("/root/researcher", "hi", None)
+                .await
+                .expect("host alive"),
+            Ok(())
+        );
+        assert_eq!(
+            control
+                .send_message("/root/web/homepage", "hi", Some("/root/researcher"))
+                .await
+                .expect("host alive"),
+            Ok(())
+        );
+
+        // delegate_to relays the boundary as the task's error text.
+        let reply = control
+            .delegate_tracked(
+                "/root/researcher",
+                "task",
+                Some(homepage.to_owned()),
+                uuid::Uuid::new_v4(),
+                None,
+            )
+            .await
+            .expect("host alive");
+        assert!(
+            reply.contains("outside your sandbox"),
+            "delegate denial readable: {reply}"
+        );
+
+        // shutdown / interrupt / history share the same scoped resolution.
+        let denial = control
+            .shutdown_agent_scoped("researcher", Some(homepage))
+            .await
+            .expect("host alive")
+            .expect_err("cross-tree shutdown denied");
+        assert!(denial.contains("outside your sandbox"), "denial: {denial}");
+        let denial = control
+            .interrupt_agent("/root/web/screening", Some(homepage))
+            .await
+            .expect("host alive")
+            .expect_err("sibling interrupt denied");
+        assert!(denial.contains("outside your sandbox"), "denial: {denial}");
+        let denial = control
+            .agent_history("/root/researcher", 5, Some(homepage))
+            .await
+            .expect("host alive")
+            .expect_err("cross-tree history denied");
+        assert!(denial.contains("outside your sandbox"), "denial: {denial}");
+        // History of the caller's own child still resolves (empty, but Ok).
+        assert!(matches!(
+            control.agent_history("worker", 5, Some(homepage)).await,
+            Some(Ok(_))
+        ));
+
+        let mut host = driver.join().await;
+        host.shutdown_all_agents_and_wait().await;
+    }
+
+    /// §5.2 — sandboxed spawn_profile resolution: single segments resolve
+    /// only under the caller's profile (no root fallback), multi-segment
+    /// paths must stay inside the caller's profile subtree. Unconstrained
+    /// callers keep the root-fallback behavior.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn spawn_profile_resolution_is_scoped_for_web_callers() {
+        let profiles = vec![
+            agentik_core::AgentProfile::new("web/homepage"),
+            agentik_core::AgentProfile::new("web/homepage/helper"),
+            agentik_core::AgentProfile::new("researcher"),
+            agentik_core::AgentProfile::new("researcher/genomics"),
+            agentik_core::AgentProfile::new("writer"),
+        ];
+        let dir = tempfile::tempdir().unwrap();
+        let (driver, control) = driven_host(&dir, profiles).await;
+        let homepage = agent_path("web/homepage");
+        let researcher = agent_path("researcher");
+
+        spawn_and_wait(
+            &control,
+            "homepage",
+            &agent_path("web"),
+            agentik_core::AgentProfile::new("web/homepage"),
+        )
+        .await;
+        spawn_and_wait(
+            &control,
+            "researcher",
+            &agent_path(""),
+            agentik_core::AgentProfile::new("researcher"),
+        )
+        .await;
+
+        // Reuse own profile.
+        control
+            .spawn_agent("w1", &homepage, "web/homepage", None)
+            .await
+            .expect("own profile reuse");
+        // Derived child profile under the caller's profile subtree.
+        control
+            .spawn_agent("w2", &homepage, "web/homepage", Some("helper"))
+            .await
+            .expect("child profile");
+        // Absolute profile outside the subtree → readable rejection.
+        let err = control
+            .spawn_agent("w3", &homepage, "web/homepage", Some("researcher/genomics"))
+            .await
+            .expect_err("cross-tree profile rejected");
+        assert!(
+            err.contains("outside your profile subtree"),
+            "profile denial: {err}"
+        );
+        // Single segment never falls back to a same-named ROOT profile:
+        // "researcher" must resolve to web/homepage/researcher (missing),
+        // not the root "researcher" profile.
+        let err = control
+            .spawn_agent("w4", &homepage, "web/homepage", Some("researcher"))
+            .await
+            .expect_err("root fallback suppressed for sandboxed callers");
+        assert!(
+            err.contains("not found") && err.contains("derive_profile"),
+            "sandboxed not-found hints at derive_profile: {err}"
+        );
+        assert!(
+            !err.contains("Root profiles"),
+            "sandboxed error must not list root profiles: {err}"
+        );
+
+        // Unconstrained caller: relative segment prefers the child
+        // profile, and the root-level fallback still works.
+        control
+            .spawn_agent("g1", &researcher, "researcher", Some("genomics"))
+            .await
+            .expect("relative child profile for TUI caller");
+        control
+            .spawn_agent("g2", &researcher, "researcher", Some("writer"))
+            .await
+            .expect("root-level fallback retained for TUI caller");
+
+        let mut host = driver.join().await;
+        host.shutdown_all_agents_and_wait().await;
+    }
+
+    /// §5.3 — hard caps: 8 live descendants per caller subtree, 16 live
+    /// agents host-wide (TUI side included).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn spawn_caps_bound_subtree_and_host_totals() {
+        let dir = tempfile::tempdir().unwrap();
+        let (driver, control) = driven_host(
+            &dir,
+            vec![
+                agentik_core::AgentProfile::new("web/homepage"),
+                agentik_core::AgentProfile::new("web/screening"),
+            ],
+        )
+        .await;
+        let homepage = agent_path("web/homepage");
+        let screening = agent_path("web/screening");
+
+        spawn_and_wait(
+            &control,
+            "homepage",
+            &agent_path("web"),
+            agentik_core::AgentProfile::new("web/homepage"),
+        )
+        .await;
+        spawn_and_wait(
+            &control,
+            "screening",
+            &agent_path("web"),
+            agentik_core::AgentProfile::new("web/screening"),
+        )
+        .await;
+
+        // Fill the caller's subtree: 8 descendants allowed.
+        for index in 1..=8 {
+            let name = format!("w{index}");
+            let path = control
+                .spawn_agent(&name, &homepage, "web/homepage", None)
+                .await
+                .unwrap_or_else(|e| panic!("spawn {name} should fit the cap: {e}"));
+            // Wait for registration: the cap counts the live registry, and
+            // the Spawn reply races the background registration drain.
+            for _ in 0..200 {
+                if let Some(status) = control.get_status().await {
+                    if status.agents.iter().any(|info| info.path == path) {
+                        break;
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }
+        let err = control
+            .spawn_agent("w9", &homepage, "web/homepage", None)
+            .await
+            .expect_err("subtree cap");
+        assert!(
+            err.contains("Subtree limit (8)"),
+            "subtree cap denial: {err}"
+        );
+
+        // Another subtree is unaffected until the host total (16) hits:
+        // homepage + 8 children + screening = 10 live, so 6 more fit.
+        for index in 1..=6 {
+            let name = format!("s{index}");
+            control
+                .spawn_agent(&name, &screening, "web/screening", None)
+                .await
+                .unwrap_or_else(|e| panic!("spawn {name} should fit the host cap: {e}"));
+        }
+        // The registry count is what matters — wait for it to settle at
+        // the cap before asserting the denial (spawn replies arrive
+        // before their registrations drain).
+        for _ in 0..300 {
+            if let Some(status) = control.get_status().await {
+                if status.agents.len() >= 16 {
+                    break;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let err = control
+            .spawn_agent("s7", &screening, "web/screening", None)
+            .await
+            .expect_err("host total cap");
+        assert!(
+            err.contains("Host agent limit (16)"),
+            "host cap denial: {err}"
+        );
+
+        let mut host = driver.join().await;
+        host.shutdown_all_agents_and_wait().await;
+    }
+
+    /// The boundary keys on the caller's own path, and the WEB_AGENT_SUBTREE
+    /// prefix itself (`/root/web`) is not accidentally treated as a
+    /// sandboxed caller — host-level helpers spawned at `/root/web` (the
+    /// resident-agent parent) stay unconstrained.
+    #[test]
+    fn subtree_prefix_membership_is_precise() {
+        // path_in_subtree(path, subtree) — exact prefix on segment bounds.
+        assert!(path_in_subtree("/root/web", "/root/web"));
+        assert!(path_in_subtree("/root/web/homepage", "/root/web"));
+        assert!(path_in_subtree("/root/web/homepage/w", "/root/web/homepage"));
+        assert!(!path_in_subtree("/root/webx", "/root/web"));
+        assert!(!path_in_subtree("/root/web", "/root/web/homepage"));
+        assert!(!path_in_subtree("/root/researcher", "/root/web"));
+        // The resident-agent parent path itself is a web-subtree member
+        // (spawned agents under it are constrained), but a caller AT
+        // "/root/web" IS sandboxed by design — the constants doc.
+        assert!(path_in_subtree("/root/web", WEB_AGENT_SUBTREE));
+        // Spawn caps constants the docs promise.
+        assert_eq!(MAX_AGENTS_PER_SUBTREE, 8);
+        assert_eq!(MAX_AGENTS_TOTAL, 16);
+        // HostCommand variants compiled with the caller field — a
+        // regression guard for the channel contract.
+        let _ = HostCommand::SendMessage {
+            to: "x".into(),
+            message: "m".into(),
+            caller_path: None,
+            reply_tx: tokio::sync::oneshot::channel().0,
+        };
     }
 }
