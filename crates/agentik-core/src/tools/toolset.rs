@@ -212,13 +212,22 @@ impl Toolset {
         toolcalls: &[ToolUse],
         notify_tx: Option<super::task_runtime::BgTaskNotifyTx>,
     ) -> Result<Vec<ToolResult>, ToolError> {
-        let mut immediate_results: Vec<ToolResult> = Vec::new();
-        // Collect metadata for async tasks before they're moved into the store.
-        let mut async_meta: Vec<(u64, String, String)> = Vec::new(); // (seq, id, name)
-        let mut new_entries: Vec<TaskEntry> = Vec::with_capacity(toolcalls.len());
+        // Result slots keyed by the toolcall's position. The Anthropic
+        // protocol requires tool_result blocks to appear in the same order
+        // as their tool_use blocks — the sync / async / immediate-error
+        // partition below must not leak into the returned vector, so every
+        // outcome lands in its original slot before the final assembly.
+        let mut slots: Vec<Option<ToolResult>> = Vec::with_capacity(toolcalls.len());
+        slots.resize_with(toolcalls.len(), || None);
+        // Collect metadata for async tasks before they're moved into the
+        // store. (call_index, seq, id, name).
+        let mut async_meta: Vec<(usize, u64, String, String)> = Vec::new();
+        // Entries paired with their original call index (new_entries order
+        // skips immediate-error calls, so the index has to ride along).
+        let mut indexed_entries: Vec<(usize, TaskEntry)> = Vec::with_capacity(toolcalls.len());
 
         // ---- Spawn all tool tasks ----
-        for tc in toolcalls {
+        for (call_index, tc) in toolcalls.iter().enumerate() {
             let Some(registration) = self.registry.get(&tc.name) else {
                 // Unknown tool name. Don't silently skip — the LLM
                 // will not see a tool_result for this id and may
@@ -240,12 +249,12 @@ impl Toolset {
                     tc.name,
                     available.join(", ")
                 );
-                immediate_results.push(ToolResult::error_with_id(tc.id.clone(), msg));
+                slots[call_index] = Some(ToolResult::error_with_id(tc.id.clone(), msg));
                 continue;
             };
 
             if let Err(e) = registration.implementation.validate_input(&tc.input) {
-                immediate_results.push(ToolResult::error_with_id(tc.id.clone(), e.to_string()));
+                slots[call_index] = Some(ToolResult::error_with_id(tc.id.clone(), e.to_string()));
                 continue;
             }
 
@@ -325,7 +334,7 @@ impl Toolset {
             let notify_tx = match mode {
                 ExecutionMode::Sync => None,
                 ExecutionMode::Async => {
-                    async_meta.push((seq, tc.id.clone(), tc.name.clone()));
+                    async_meta.push((call_index, seq, tc.id.clone(), tc.name.clone()));
                     notify_tx.clone()
                 }
             };
@@ -339,7 +348,7 @@ impl Toolset {
                 output,
                 metadata,
             });
-            new_entries.push(entry);
+            indexed_entries.push((call_index, entry));
         }
 
         // ---- Partition new entries: sync → wait inline, async → store ----
@@ -349,14 +358,14 @@ impl Toolset {
         // async tasks from *previous* batches (which caused background tasks
         // to disappear when a subsequent execute() ran).
         let async_ids: std::collections::HashSet<&str> =
-            async_meta.iter().map(|(_, id, _)| id.as_str()).collect();
-        let mut to_wait: Vec<TaskEntry> = Vec::new();
+            async_meta.iter().map(|(_, _, id, _)| id.as_str()).collect();
+        let mut to_wait: Vec<(usize, TaskEntry)> = Vec::new();
         let mut to_store: Vec<TaskEntry> = Vec::new();
-        for entry in new_entries {
+        for (call_index, entry) in indexed_entries {
             if async_ids.contains(entry.id()) {
                 to_store.push(entry);
             } else {
-                to_wait.push(entry);
+                to_wait.push((call_index, entry));
             }
         }
 
@@ -367,21 +376,21 @@ impl Toolset {
         }
 
         // ---- Wait for sync tasks (block until done/timeout/cancel) ----
-        let sync_results = join_all(to_wait.iter_mut().map(|t| t.wait_for_result())).await;
+        let sync_results =
+            join_all(to_wait.iter_mut().map(|(_, entry)| entry.wait_for_result())).await;
+        for ((call_index, _), result) in to_wait.iter().zip(sync_results) {
+            slots[*call_index] = Some(result);
+        }
 
-        // ---- Build results vector ----
-        let mut results: Vec<ToolResult> = Vec::new();
-        results.extend(sync_results);
-
-        // Async tasks: emit ToolCallBackground + return placeholder.
-        for (seq, id, name) in &async_meta {
+        // Async tasks: emit ToolCallBackground + slot the placeholder.
+        for (call_index, seq, id, name) in &async_meta {
             if let Some(tx) = &self.agent_event_tx {
                 let _ = tx.send(AgentEvent::ToolCallBackground {
                     seq: *seq,
                     name: name.clone(),
                 });
             }
-            results.push(ToolResult::from_pending_task(id, *seq));
+            slots[*call_index] = Some(ToolResult::from_pending_task(id, *seq));
         }
 
         // ---- GC: remove consumed async tasks (marked read by ----
@@ -392,7 +401,13 @@ impl Toolset {
             tasks.retain(|t| !t.is_read());
         }
 
-        results.extend(immediate_results);
+        // ---- Assemble: one result per toolcall, in tool_use order ----
+        // Every call takes exactly one path above (immediate error, sync
+        // entry, or async placeholder), so no slot can be left empty.
+        let results: Vec<ToolResult> = slots
+            .into_iter()
+            .map(|slot| slot.expect("every toolcall produces exactly one result"))
+            .collect();
 
         Ok(results)
     }
@@ -703,6 +718,54 @@ mod tests {
         let sync_r = results.iter().find(|r| r.tool_use_id == "tc2").unwrap();
         assert!(sync_r.text_content().contains("sync"));
         assert!(async_r.text_content().contains("background"));
+    }
+
+    /// Regression (P5c-1): tool_result blocks must come back in tool_use
+    /// order even though the three outcome kinds resolve at different times
+    /// (immediate error during the spawn loop, async placeholder right away,
+    /// sync result only after join_all). The old implementation concatenated
+    /// [sync results] + [async placeholders] + [immediate errors], so a mixed
+    /// batch like [async, unknown, sync] returned
+    /// ["tc3_sync", "tc1_async", "tc2_unknown"] — violating the Anthropic
+    /// adjacency invariant (each tool_use must pair with its tool_result, in
+    /// order) and making the model see results attributed to the wrong calls.
+    #[tokio::test]
+    async fn results_preserve_tool_use_order_across_mixed_batch() {
+        let (tx, _rx) = mpsc::unbounded_channel::<AgentEvent>();
+        let registry = build_registry(vec![
+            MockAsyncTool::new("async").into(),
+            MockTool::new("sync").into(),
+        ]);
+        let toolset = Toolset::from_registry(registry, Some(tx));
+
+        let toolcalls = [
+            ToolUse {
+                id: "tc1_async".to_string(),
+                name: "test_async_tool".to_string(),
+                input: json!({ "reason": "a" }),
+            },
+            ToolUse {
+                id: "tc2_unknown".to_string(),
+                name: "no_such_tool".to_string(),
+                input: json!({}),
+            },
+            ToolUse {
+                id: "tc3_sync".to_string(),
+                name: "test_tool".to_string(),
+                input: json!({ "reason": "s" }),
+            },
+        ];
+        let results = toolset.execute(&toolcalls, None).await.unwrap();
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].tool_use_id, "tc1_async");
+        assert_eq!(results[1].tool_use_id, "tc2_unknown");
+        assert_eq!(results[2].tool_use_id, "tc3_sync");
+        // Slot content sanity: async → placeholder, unknown → stub error,
+        // sync → real result.
+        assert!(results[0].text_content().contains("background"));
+        assert_eq!(results[1].is_error, Some(true));
+        assert_eq!(results[2].text_content(), "sync");
     }
 
     /// Async tool with context pushes progress to its TaskEntry output.

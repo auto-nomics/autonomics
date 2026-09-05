@@ -666,6 +666,12 @@ pub trait AgentStorage: Send + Sync {
         status: Option<&str>,
         limit: u32,
     ) -> Result<Vec<AgentDelegationRecord>, StorageError>;
+
+    /// Delete terminal-state delegations (completed / interrupted / failed)
+    /// whose `updated_at` is older than `before_ms` (unix millis).
+    /// Pending/running rows are never touched — an in-flight delegation
+    /// must outlive retention. Returns the number of rows deleted.
+    async fn purge_agent_delegations(&self, before_ms: i64) -> Result<u64, StorageError>;
     // ── Cross-session memories ─────────────────────────────
 
     async fn get_memory_stage1_output(

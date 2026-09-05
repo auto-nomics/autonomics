@@ -1,6 +1,6 @@
 # Web 端 Delegation / 多智能体化设计稿（P5 预研）
 
-- 状态：P5a 已落地（§9）；P5b 未开工
+- 状态：P5a（§9）/ P5b（§10）/ P5c（§11）均已落地
 - 日期：2026-09-05
 - 前置阅读：`docs/design/web-agent-runtime.md`（P1–P4：thread ≡ agent session、web profiles、runtime-host）
 - 范围：让 web 端**看到**并（受限地）**使用** agentik 的多智能体 delegation 机制
@@ -34,7 +34,7 @@
 
 - Web 端 DAG / 拓扑面板（`agentik_network` 的 connect/termination 那套）——delegate 驱动已覆盖场景。
 - Web 端手动 spawn UI（用户点按钮选 profile 生 agent）——child 由模型经工具自行派生，web 只观测。
-- child agent 的 live SSE 订阅（delta 级实时流）——先靠台账 + 转写事后读，成本收益不成比例。
+- child agent 的 live SSE 订阅（delta 级实时流）——先靠台账 + 转写事后读，成本收益不成比例。（P5c-5 部分解除：轮粒度 live 输出已落地，delta 级仍非目标，见 §11.4。）
 
 ## 3. 已定决策（待评审）
 
@@ -77,13 +77,14 @@
 |---|---|---|
 | P5a 只读观测 | 上述 3 端点 + 前端活动抽屉 | TUI 侧起一个 delegation，web 抽屉可见状态流转与转写；`ephemeral` 宿主不渲染 |
 | P5b 受限 delegation | §5 三对策落地（host 层）+ 选定 profile（建议 `homepage`）开 `enable_host_tools` + interrupt 按钮 + e2e（复用 `tests/migration.rs` 假 provider 手法：fake provider 脚本化触发 delegate_to） | web 聊天内 spawn→delegate→结果回流全链；越界（跨子树/超限）被拒且模型收到可读错误 |
-| 非目标 | DAG 面板、手动 spawn UI、child live SSE | — |
+| P5c 收尾 + 补强 | §10.5 tool_result 乱序修复（agentik toolset）+ §8.2/8.3 收口（台账保留 / 孤儿 history 边界）+ spawn 上限 e2e + child live SSE（轮粒度，§11） | 混合工具批结果序单测；终态 14 天清扫单测；9 派第 9 拒全链 e2e；`/agents/events` 注册帧 HTTP 级测试 + 前端 SSE 流解析单测 |
+| 非目标 | DAG 面板、手动 spawn UI、child live SSE（delta 级；轮粒度已由 P5c 交付） | — |
 
 ## 8. 风险与开放问题
 
 - **`/root/web` 子树泄漏**：`GET /agents` 是宿主视角，会列出 TUI agent——桌面/TUI 与 web 同进程共享 host（D2 之后的既定事实）。web 前端要不要按子树过滤展示（建议：全列，路径可见即透明）。
-- **delegation 台账无限增长**：`list_agent_delegations` 目前无分页参数，只 newest-first；P5a 端点先做 `limit` 钳制（默认 50），清理策略（保留 N 天）留开放问题。
-- **`agent_history` 依赖 agent 在册**：`HostCommand::GetAgentHistory` 只查 live agent；上次运行遗留的孤儿 agent（`agent_graph` 有、注册表无）拿不到 history——P5a 先在 `/agents` 响应里标记 `live: false`，读取留 P5b（需按 agent_id 直读存储）。
+- **delegation 台账无限增长**：`list_agent_delegations` 目前无分页参数，只 newest-first；P5a 端点先做 `limit` 钳制（默认 50），清理策略（保留 N 天）留开放问题。（P5c-3 已落地：终态 14 天保留，见 §11.3。）
+- **`agent_history` 依赖 agent 在册**：`HostCommand::GetAgentHistory` 只查 live agent；上次运行遗留的孤儿 agent（`agent_graph` 有、注册表无）拿不到 history——P5a 先在 `/agents` 响应里标记 `live: false`，读取由 P5c-2 落地（持久化图回落 + 子树边界，见 §11.2）。
 - **profile 演进权耦合**：P5b 若给 `homepage` 开 host_tools，其 persona 文案需同步声明 delegation 能力（`build_system_prompt` 的 tool_guidance 已自动生成，风险低但要过目）。
 
 ## 9. P5a 实现状态与偏差（已落地）
@@ -106,4 +107,18 @@
 4. **homepage v2→v3 迁移策略**：老库的 `web/homepage` 行要拿到 delegation 能力，但不能覆盖用户改过的 persona。以"系统提示词仍等于 v2 种子全文"为未编辑判据：命中则一次性刷新为 v3 文案 + `enable_host_tools`（幂等，落库）；用户改过的行保持内容且不开工具（日志提示可在 profile 编辑器手动 opt-in）。
 5. **并行工具的 tool_result 乱序（agentik 既有缺口，仅记录）**：同一助手消息里多个工具调用时，tool_result 按完成序回填，可能与 tool_use 顺序错位（Anthropic 协议要求两者对应）——e2e 曾以 `delegate_to + wait_task` 同轮捆绑触发（wait 抢先执行拿到 "no background task"）。真实模型看到 "Task #N" 后下一轮才 wait，脚本同构即可绕开；修复留待 agentik 侧统一（结果应按 tool_use 顺序配对）。
 6. **spawn 上限（§5.3）**：`check_spawn_caps` 在 Spawn / SpawnWithProfile 两处命令入口前置检查（总量 16 + 每 caller 子树 8，超限返回可读错误），因为 spawn 本身在后台任务里，事后拒绝只能走 reply 错误路径。
+
+## 11. P5c 实现状态与偏差（已落地）
+
+P5b 开放问题收尾 + 三项补强。代码：`crates/agentik-core/src/tools/toolset.rs`（结果按 tool_use 顺序回填）、`crates/agentik-core/src/storage.rs` + `storage/turso_storage.rs`（`purge_agent_delegations`）、`crates/runtime/src/host.rs`（孤儿 history 子树边界 / 台账清扫 / `HostEvent::AgentOutput`）、`crates/tui-http/src/agent_runtime.rs`（`GET /agents/events` SSE 端点）、前端 `agentActivityApi.ts` / `AgentActivityDrawer.tsx`（订阅 + 行内实时更新）；e2e `tests/delegation.rs` 增 spawn 上限用例。与设计的偏差与决策：
+
+1. **tool_result 乱序修复落在 agentik toolset（关闭 §10.5）**：`Toolset::execute()` 改为按 tool_use 槽位回填——结果向量以调用序建槽，三类出口（同步等待完成、后台任务转 pending、未知工具/参数校验失败）都写回自己的原槽位，最后按槽序组装。混合批（async + unknown + sync）单测锚定顺序不变式；真实模型的并行工具批从此不再与协议错位。
+2. **孤儿 agent history 补齐（关闭 §8.3）**：`GetAgentHistory` 注册表未命中时回落持久化 agent 图，按 agent_id 直读存储。回落路径同样过子树边界：沙箱内 caller（`/root/web` 子树）读子树外孤儿返回可读错误（"outside your sandbox"），宿主级调用（HTTP 面 / TUI）不受限——与 §5.1 的 resolve 边界同构。
+3. **台账保留（关闭 §8.2）**：`purge_agent_delegations` 只清终态（completed/interrupted/failed）且 updated_at 早于 14 天的行；driver 启动即扫一次，之后每 6 小时。非终态行永不清——跨进程重启的 inflight 台账依赖它续状态。清扫 best-effort：失败只告警，不打断驱动循环。
+4. **child live SSE（部分解除 §2 非目标第 3 条）**：
+   - **粒度**：`AgentEvent::LlmResponse` 一帧 = 每模型轮完整文本，非 TextDelta 增量。host 中继本来就在轮粒度消费事件流，delta 级需要 per-agent 流分流（与 §9.2 的线程 SSE driver 所有权冲突），成本收益判断对 delta 级依然成立。
+   - **通道**：`HostEvent::AgentOutput` broadcast → `GET /agents/events` SSE（`registered`/`unregistered`/`status`/`output` 四帧 + keepalive）。慢消费者落后 broadcast 环只告警不断流，客户端靠重拉 `/agents` 重同步。
+   - **范围**：只有 host 在册 agent（TUI 侧 + 工具派生 child）。常驻 web agent 的事件流归线程 SSE driver（§9.2 的互斥不变），它们的输出本来就流经聊天流本身。
+   - **前端**：`subscribeAgentEvents` 用 fetch + ReadableStream 手解 SSE 线格式——EventSource 带不了 Authorization 头。断流 3s 退避重连；重连成功先发本地合成 `sync` 帧，抽屉收到后重拉快照补基线（增量流有缺口）。抽屉对 registered/unregistered/status 就地更新行，output 追加进展开行的实时输出缓冲（封顶 8000 字符防长会话膨胀）。台账无实时事件（HostEvent 不含台账变更），仍靠手动刷新。
+5. **spawn 上限 e2e（§5.3 验收）**：假 provider 脚本连派 9 个子代理，第 9 个被 per-caller 子树上限（8）拒绝，错误文本经 tool_result 回流模型后收敛终答；`/agents` 恰 8 个 live child、provider 净荷证明拒绝发生在 8 次成功之后。剧本编写陷阱（后来者免踩）：canned 回复的 tool_use id 必须每轮唯一——会话按 tool_use_id 全局去重 tool_result，复用 id 会让真实结果被当重复丢弃、留下未应答 tool_use 触发 sanitize 桩（"Tool execution has been interrupted"），模型陷入无限重派。
 

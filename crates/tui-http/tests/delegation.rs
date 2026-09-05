@@ -4,13 +4,15 @@
 //! 真 `AnthropicApiClient`，模型槽指向本地假 Anthropic provider。全程不触
 //! 用户真实 config.db / bib.db / API key。
 //!
-//! 覆盖验收两条主线：
+//! 覆盖验收两条主线 + P5c 的 spawn 上限：
 //! 1. **全链**：web 聊天 turn → spawn_agent（子代理落 `/root/web/homepage/`
 //!    子树）→ delegate_to + wait_task → 子代理假模型回话 → 结果回流父会话
 //!   （SSE tool 帧 + 最终文本 + /delegations completed 台账 + /agents live 行）。
 //! 2. **越界**：host 侧预置 `/root/researcher`，父代理 delegate_to 它 → 宿主
 //!    拒绝（deny-before-record，不落台账），可读错误经 tool_result 回到模型
 //!    上下文（假 provider 的下一个请求体里可见）。
+//! 3. **spawn 上限（P5c-4，§5.3）**：连派 9 个子代理，第 9 个被 per-caller
+//!    子树上限（8）拒绝，错误回流后模型收敛终答，/agents 恰 8 个 child。
 //!
 //! 假 provider 按**请求体标记**脚本化（不依赖到达顺序）：每个阶段的前一轮
 //! tool_result / 注入消息都携带唯一标记，分发函数据此挑 canned SSE 回复。
@@ -35,6 +37,9 @@ const CHILD_TASK_MARKER: &str = "E2E-P5B-CHILD-TASK";
 const CHILD_REPLY_MARKER: &str = "E2E-P5B-CHILD-REPLY";
 const PARENT_FINAL_MARKER: &str = "E2E-P5B-PARENT-FINAL";
 const BOUNDARY_FINAL_MARKER: &str = "E2E-P5B-BOUNDARY-FINAL";
+// P5c-4（spawn 上限 e2e）
+const CAPS_MSG_MARKER: &str = "E2E-P5C-CAPS-MSG";
+const CAPS_FINAL_MARKER: &str = "E2E-P5C-CAPS-FINAL";
 
 const CHILD_TASK: &str = "E2E-P5B-CHILD-TASK 请调研 RNA 结合蛋白的主流计算方法。";
 const CHILD_REPLY: &str = "E2E-P5B-CHILD-REPLY 子代理完成调研，共 3 类方法。";
@@ -261,11 +266,16 @@ fn last_message_is_user_with(body: &str, marker: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// 起 `POST /v1/messages` 假服务：读完整请求（记录净荷供断言），按
-/// `reply_for` 分发 canned SSE。
-async fn spawn_fake_anthropic(seen: Arc<Mutex<Vec<String>>>) -> SocketAddr {
+/// 起 `POST /v1/messages` 假服务：读完整请求（记录净荷供断言），交给
+/// `script` 分发——返回 (canned SSE, 应答前延迟)。延迟供 P5b 的慢子代理
+/// 剧本使用，其余传 `Duration::ZERO`。
+async fn spawn_fake_anthropic<F>(seen: Arc<Mutex<Vec<String>>>, script: F) -> SocketAddr
+where
+    F: Fn(&str) -> (String, Duration) + Send + Sync + 'static,
+{
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
+    let script = Arc::new(script);
     tokio::spawn(async move {
         loop {
             let (mut socket, _) = match listener.accept().await {
@@ -273,6 +283,7 @@ async fn spawn_fake_anthropic(seen: Arc<Mutex<Vec<String>>>) -> SocketAddr {
                 Err(_) => break,
             };
             let seen = seen.clone();
+            let script = script.clone();
             tokio::spawn(async move {
                 // 读完整请求（头 + content-length 净荷），供事后断言
                 let mut buf = Vec::new();
@@ -304,17 +315,16 @@ async fn spawn_fake_anthropic(seen: Arc<Mutex<Vec<String>>>) -> SocketAddr {
                     let mut seen = seen.lock().unwrap();
                     seen.push(body.clone());
                 }
-                // 慢子代理（见 `is_child_turn` 文档）：先让父代理的
-                // wait_task 在任务 running 时执行到 Waiting 暂停。
-                if is_child_turn(&body) {
-                    tokio::time::sleep(Duration::from_millis(400)).await;
+                let (canned, delay) = script(&body);
+                if !delay.is_zero() {
+                    tokio::time::sleep(delay).await;
                 }
                 let response = format!(
                     "HTTP/1.1 200 OK\r\n\
                      content-type: text/event-stream\r\n\
                      connection: close\r\n\
                      \r\n{}",
-                    reply_for(&body)
+                    canned
                 );
                 let _ = socket.write_all(response.as_bytes()).await;
             });
@@ -400,6 +410,190 @@ async fn get_json(addr: SocketAddr, path: &str) -> serde_json::Value {
 }
 
 // ---------------------------------------------------------------------------
+// P5c-4: spawn 上限（per-caller 子树 8）
+// ---------------------------------------------------------------------------
+
+/// 数请求体里 spawn 成功 tool_result 的个数（每次成功恰好出现一次
+/// "spawned and registered"）。
+fn count_spawn_successes(body: &str) -> usize {
+    body.matches("spawned and registered").count()
+}
+
+/// P5c-4 剧本分发：
+/// 1. 第 9 次 spawn 的 "Subtree limit" 错误已回流（spawn 工具以
+///    success-flag 文本携带宿主拒绝）→ 终答；
+/// 2. 剧本消息在场 → 按已成功数派下一个 helper{N}（8 次成功后第 9 次
+///    被宿主拒绝，回到分支 1）；
+/// 其余（KMS 后台整理等无标记请求）→ 空 JSON 数组。
+fn caps_reply_for(body: &str) -> String {
+    if body.contains("Subtree limit") {
+        return sse_text(
+            "msg_cap_final",
+            "E2E-P5C-CAPS-FINAL 子代理并发已达子树上限，第 9 个派生被宿主拒绝。",
+        );
+    }
+    if body.contains(CAPS_MSG_MARKER) {
+        let next = count_spawn_successes(body);
+        // msg_id 带轮次号 → tool_use id 每轮唯一：会话在 insert 时按
+        // tool_use_id 全局去重 tool_result（session.rs add_message），
+        // 复用 id 会让真实结果被当重复丢弃、留下未应答的 tool_use。
+        return sse_tools(
+            &format!("msg_cap_spawn_{next}"),
+            &[(
+                "spawn_agent",
+                serde_json::json!({ "agent_name": format!("helper{next}") }),
+            )],
+        );
+    }
+    sse_text("msg_other", "[]")
+}
+
+/// §5.3 的 spawn 上限走一遍全链：模型连派 9 个子代理，前 8 个落
+/// `/root/web/homepage/` 子树，第 9 个被宿主以可读错误拒绝，错误经
+/// tool_result 回流模型后收敛为终答；`/agents` 恰好 8 个 child 行。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn spawn_caps_deny_ninth_child_with_readable_error_end_to_end() {
+    let provider_requests: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let provider_addr = spawn_fake_anthropic(provider_requests.clone(), |body| {
+        (caps_reply_for(body), Duration::ZERO)
+    })
+    .await;
+
+    // 与全链用例同款：builder 构造让派生库全部落 tempdir。
+    let dir = tempfile::tempdir().unwrap();
+    let config = runtime::RuntimeConfig::builder()
+        .data_dir(dir.path().join("data"))
+        .state_dir(dir.path().join("state"))
+        .build();
+    let mut host = runtime::RuntimeHost::open(&config).await.unwrap();
+
+    let mut model_info = agentik_core::testing::dummy_model_info("e2e-model");
+    model_info.context_length = 200_000;
+    let anthropic = Anthropic::new(
+        "e2e-test-key",
+        format!("http://127.0.0.1:{}", provider_addr.port()),
+    )
+    .unwrap();
+    let model: Arc<ArcSwapOption<Model>> =
+        Arc::new(ArcSwapOption::from_pointee(Model::with_client(
+            model_info,
+            AnthropicApiClient::new(anthropic),
+        )));
+    host.set_model(model.clone());
+
+    let shared = BibShared::open_in_memory().await.unwrap();
+    let router = tui_http::ApiRouterBuilder::new(shared)
+        .model(model)
+        .host(host.infra())
+        .build();
+    let server = tui_http::start(router, "127.0.0.1:0").await.unwrap();
+    let addr = server.addr();
+    let driver = host.spawn_driver();
+
+    let (status, body) = http(
+        addr,
+        "POST",
+        "/api/v1/agent/threads",
+        Some(r#"{"agent_type": "homepage"}"#),
+    )
+    .await;
+    assert_eq!(status, 200, "create thread: {body}");
+    let thread_id = serde_json::from_str::<serde_json::Value>(&body).unwrap()["thread_id"]
+        .as_str()
+        .expect("thread_id")
+        .to_owned();
+
+    let (status, body) = http(
+        addr,
+        "POST",
+        &format!("/api/v1/agent/threads/{thread_id}/chat"),
+        Some(
+            r#"{
+                "agent_type": "homepage",
+                "message": "E2E-P5C-CAPS-MSG 请用 spawn_agent 连续派生 9 个子代理。"
+            }"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, 200, "caps turn: {body}");
+    // 9 次 spawn 的工具帧 + 拒绝文本 + 终答 + 终端帧都在流里
+    assert!(
+        body.contains("\"name\":\"spawn_agent\""),
+        "SSE 应含 spawn_agent 工具帧: {body}"
+    );
+    assert!(
+        body.contains("Subtree limit"),
+        "拒绝说明应随 tool_result 进流: {body}"
+    );
+    assert!(
+        body.contains("event: text_delta") && body.contains(CAPS_FINAL_MARKER),
+        "终答: {body}"
+    );
+    assert!(body.contains("event: done"), "终端帧: {body}");
+
+    // ── /agents：恰好 8 个 child（helper0..7 live），无 helper8 ──
+    let helpers = {
+        let mut helpers = Vec::new();
+        for _ in 0..100 {
+            let agents = get_json(addr, "/api/v1/agent/agents").await;
+            if let Some(list) = agents["agents"].as_array() {
+                helpers = list
+                    .iter()
+                    .filter(|row| {
+                        row["path"]
+                            .as_str()
+                            .is_some_and(|p| p.starts_with("/root/web/homepage/helper"))
+                    })
+                    .cloned()
+                    .collect();
+                if helpers.len() == 8
+                    && helpers.iter().all(|row| row["live"] == true)
+                    && helpers
+                        .iter()
+                        .any(|row| row["path"] == "/root/web/homepage/helper7")
+                {
+                    break;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        helpers
+    };
+    assert_eq!(helpers.len(), 8, "子树恰好 8 个 child: {helpers:?}");
+    assert!(
+        !helpers.iter().any(|row| row["path"] == "/root/web/homepage/helper8"),
+        "被拒的第 9 个不应出现在 /agents: {helpers:?}"
+    );
+
+    // ── 强证据（provider 净荷）：拒绝发生在 8 次成功之后 ──
+    let requests = provider_requests.lock().unwrap().clone();
+    let denied = requests
+        .iter()
+        .find(|body| body.contains("Subtree limit"))
+        .expect("cap 拒绝必须回流到模型上下文");
+    assert_eq!(
+        denied.matches("spawned and registered").count(),
+        8,
+        "拒绝到达时子树 8 个名额已用尽"
+    );
+    // 剧本收敛：带剧本标记的请求恰 10 个（9 轮 spawn + 1 轮终答），
+    // 说明拒绝后模型收敛、没有循环重试 spawn。
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|body| body.contains(CAPS_MSG_MARKER))
+            .count(),
+        10,
+        "剧本应收敛在终答（共 {} 个请求）",
+        requests.len()
+    );
+
+    server.shutdown().await.unwrap();
+    let mut host = driver.join().await;
+    host.shutdown_all_agents_and_wait().await;
+}
+
+// ---------------------------------------------------------------------------
 // 全链 + 越界
 // ---------------------------------------------------------------------------
 
@@ -407,7 +601,17 @@ async fn get_json(addr: SocketAddr, path: &str) -> serde_json::Value {
 async fn web_chat_delegates_within_subtree_and_denies_cross_tree_end_to_end() {
     // ── 假 provider：真 Anthropic SSE 线格式，走生产 AnthropicApiClient 解析 ──
     let provider_requests: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-    let provider_addr = spawn_fake_anthropic(provider_requests.clone()).await;
+    let provider_addr = spawn_fake_anthropic(provider_requests.clone(), |body| {
+        // 慢子代理（见 `is_child_turn` 文档）：先让父代理的 wait_task 在
+        // 任务 running 时执行到 Waiting 暂停。
+        let delay = if is_child_turn(body) {
+            Duration::from_millis(400)
+        } else {
+            Duration::ZERO
+        };
+        (reply_for(body), delay)
+    })
+    .await;
 
     // ── 真 RuntimeHost（tempdir 派生库）+ 驱动循环 + 真 TCP 服务 ──
     // builder 构造让全部派生路径（agent.db 等）落 tempdir：`Default` 会

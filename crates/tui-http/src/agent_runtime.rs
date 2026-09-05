@@ -171,6 +171,9 @@ pub(crate) fn router(state: RuntimeAgentState) -> Router {
         .route("/agents", get(list_agents))
         .route("/agents/history", get(agent_history))
         .route("/delegations", get(list_delegations))
+        // P5c-5: live host events (registered / unregistered / status /
+        // output) as SSE.
+        .route("/agents/events", get(agent_events))
         // P5b: the user-facing 取消 button (§5 behavioral note)
         .route("/agents/interrupt", post(interrupt_agent))
         .with_state(state)
@@ -789,6 +792,81 @@ async fn agent_history(
 
 fn error(status: StatusCode, message: &str) -> Response {
     (status, Json(json!({ "error": message }))).into_response()
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// P5c-5: live host events over SSE
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Map one [`runtime::HostEvent`] to a frontend SSE frame. Event names are
+/// the wire contract the drawer consumes (`registered` / `unregistered` /
+/// `status` / `output`).
+fn host_event_frame(event: runtime::host::HostEvent) -> axum::response::sse::Event {
+    use runtime::host::HostEvent;
+    match event {
+        HostEvent::AgentRegistered { path, info } => sse(
+            "registered",
+            json!({
+                "path": path.as_str(),
+                "name": info.name,
+                "status": info.status.tag(),
+            }),
+        ),
+        HostEvent::AgentUnregistered { path } => sse("unregistered", json!({ "path": path })),
+        HostEvent::AgentStatusChanged {
+            path,
+            status,
+            last_event,
+        } => sse(
+            "status",
+            json!({
+                "path": path,
+                "status": status.tag(),
+                "last_event": last_event,
+            }),
+        ),
+        HostEvent::AgentOutput { path, text } => sse("output", json!({ "path": path, "text": text })),
+    }
+}
+
+/// `GET /agents/events` — the host's live event broadcast as an SSE stream
+/// (`registered` / `unregistered` / `status` / `output` frames + keepalive).
+/// Host-registered agents only: resident web agents' event streams belong
+/// to the thread SSE drivers (see [`list_agents`]), so their live rows keep
+/// coming from the busy flag instead. The stream is a delta feed, not a
+/// snapshot — clients fetch `/agents` on open and apply frames on top.
+/// A slow consumer that falls behind the broadcast ring is logged and
+/// keeps streaming (lagged frames are dropped, the stream does not end).
+async fn agent_events(State(state): State<RuntimeAgentState>) -> Response {
+    let Some(control) = state.registry.infra().host_control.clone() else {
+        return error(StatusCode::INTERNAL_SERVER_ERROR, "host control unavailable");
+    };
+    let Some(events) = control.subscribe_events() else {
+        return error(StatusCode::INTERNAL_SERVER_ERROR, "host event loop unavailable");
+    };
+
+    let stream = futures::stream::unfold(events, |mut events| async move {
+        loop {
+            match events.recv().await {
+                Ok(event) => {
+                    return Some((Ok::<_, std::convert::Infallible>(host_event_frame(event)), events))
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                    tracing::warn!(skipped, "agent event subscriber lagged — resync via /agents");
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
+            }
+        }
+    });
+
+    let mut response = Sse::new(stream)
+        .keep_alive(KeepAlive::default())
+        .into_response();
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        header::HeaderValue::from_static("no-cache"),
+    );
+    response
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -1760,6 +1838,69 @@ mod http_tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::CONFLICT);
+
+        let mut host = driver.join().await;
+        host.shutdown_all_agents_and_wait().await;
+    }
+
+    /// P5c-5: `/agents/events` streams live host events — spawning an agent
+    /// host-side (the TUI entrance) delivers a `registered` frame over SSE.
+    /// The stream is opened before the spawn to prove it is a live feed,
+    /// not a replay of the current registry.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn agent_events_stream_carries_registration_frames() {
+        use futures::StreamExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut host = runtime::RuntimeHost::open(&config(&dir)).await.unwrap();
+        let model: Arc<ArcSwapOption<Model>> = Arc::new(ArcSwapOption::from_pointee(
+            Model::with_client(
+                agentik_core::testing::dummy_model_info("test-model"),
+                FailingClient,
+            ),
+        ));
+        // Host-side spawns (control.spawn_with_profile) take the model from
+        // the host's global slot — same wiring as the TUI entrance.
+        host.set_model(model.clone());
+        let app = router(RuntimeAgentState::new(host.infra(), model));
+        let control = host.control();
+        let driver = host.spawn_driver();
+
+        let response = app
+            .clone()
+            .oneshot(Request::get("/agents/events").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let mut stream = response.into_body().into_data_stream();
+
+        control
+            .spawn_with_profile(
+                "researcher",
+                &agentik_types::AgentPath::root(),
+                agentik_core::AgentProfile::new("researcher"),
+                None,
+            )
+            .await
+            .expect("spawn researcher host-side");
+
+        let mut seen = String::new();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "no registered frame within deadline, seen: {seen}"
+            );
+            match tokio::time::timeout(std::time::Duration::from_secs(5), stream.next()).await {
+                Ok(Some(Ok(chunk))) => {
+                    seen.push_str(&String::from_utf8_lossy(&chunk));
+                    if seen.contains("event: registered") && seen.contains("/root/researcher") {
+                        break;
+                    }
+                }
+                other => panic!("stream ended or errored ({other:?}), seen: {seen}"),
+            }
+        }
 
         let mut host = driver.join().await;
         host.shutdown_all_agents_and_wait().await;

@@ -9,8 +9,11 @@
  *   （/agents/history，{role,text} 同 thread messages 形状）
  * - Delegations：delegation 台账（五态、任务、目标、更新时间）
  *
- * 无 live 推送（D3 一期先无 live，刷新拉取）；所有请求失败显示错误态 +
- * 重试按钮，不打断聊天主链路。
+ * P5c-6 起打开期间订阅 /agents/events SSE（fetch 流式解析，带 bearer）：
+ * registered / unregistered / status 帧就地更新行，output 帧追加进展开行的
+ * 实时输出缓冲（逐模型轮一帧，见 §11）；断线重连后 sync 帧重拉快照。台账
+ * 无实时事件，仍靠手动刷新。所有请求失败显示错误态 + 重试按钮，不打断聊天
+ * 主链路。
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -20,6 +23,7 @@ import {
   fetchAgentHistory,
   fetchAgents,
   fetchDelegations,
+  subscribeAgentEvents,
   type AgentHistory,
   type AgentRow,
   type DelegationRow,
@@ -50,6 +54,10 @@ function relativeTime(ms: number): string {
   return `${Math.floor(diff / 86_400_000)} 天前`;
 }
 
+/** 单个 agent 的实时输出缓冲封顶（字符）：长会话下抽屉开着不无限膨胀，
+ * 只保留最近的输出（展开区是滚动阅读，不需要全文）。 */
+const LIVE_OUTPUT_CAP = 8000;
+
 interface AgentRowWithHistory {
   row: AgentRow;
   history: AgentHistory | null;
@@ -67,6 +75,8 @@ export default function AgentActivityDrawer({ open, onClose }: AgentActivityDraw
   const [loading, setLoading] = useState(false);
   /** path → 展开的转写（null = 加载失败或空） */
   const [expanded, setExpanded] = useState<Record<string, AgentRowWithHistory>>({});
+  /** path → 实时输出缓冲（output 帧追加；仅展开行渲染） */
+  const [liveOutput, setLiveOutput] = useState<Record<string, string>>({});
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -80,6 +90,58 @@ export default function AgentActivityDrawer({ open, onClose }: AgentActivityDraw
   // 打开时拉取（手动刷新兜底）；关闭不清数据，重开先显示旧数据再刷新
   useEffect(() => {
     if (open) void refresh();
+  }, [open, refresh]);
+
+  // P5c-6：打开期间订阅 host 实时事件（关闭即退订，数据保留）。帧语义：
+  // - registered：新行（或把已有行顶成 live）——快照失败时也能从空表起步
+  // - unregistered：行移除（shutdown 后服务端视图也没有它；孤儿行靠刷新带回）
+  // - status：就地更新状态 + last_event
+  // - output：追加进实时输出缓冲（封顶，见 LIVE_OUTPUT_CAP）
+  // - sync：断线重连成功——增量流已出现缺口，重拉快照补基线
+  useEffect(() => {
+    if (!open) return;
+    return subscribeAgentEvents((frame) => {
+      if (frame.type === 'sync') {
+        void refresh();
+        return;
+      }
+      if (frame.type === 'registered') {
+        setAgents((prev) => {
+          const rows = prev ?? [];
+          const idx = rows.findIndex((r) => r.path === frame.path);
+          if (idx === -1) {
+            return [
+              ...rows,
+              { name: frame.name, path: frame.path, agent_id: null, status: frame.status, live: true },
+            ];
+          }
+          const next = [...rows];
+          next[idx] = { ...next[idx], name: frame.name, status: frame.status, live: true };
+          return next;
+        });
+        return;
+      }
+      if (frame.type === 'unregistered') {
+        setAgents((prev) => (prev ? prev.filter((r) => r.path !== frame.path) : prev));
+        return;
+      }
+      if (frame.type === 'status') {
+        setAgents((prev) =>
+          prev
+            ? prev.map((r) =>
+                r.path === frame.path
+                  ? { ...r, status: frame.status, last_event: frame.last_event }
+                  : r,
+              )
+            : prev,
+        );
+        return;
+      }
+      setLiveOutput((prev) => {
+        const merged = (prev[frame.path] ?? '') + frame.text;
+        return { ...prev, [frame.path]: merged.slice(-LIVE_OUTPUT_CAP) };
+      });
+    });
   }, [open, refresh]);
 
   const toggleExpand = useCallback(
@@ -196,6 +258,14 @@ export default function AgentActivityDrawer({ open, onClose }: AgentActivityDraw
                             <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.text}</span>
                           </div>
                         ))}
+                      </div>
+                    )}
+                    {liveOutput[row.path] && (
+                      <div style={{ marginTop: 6, fontSize: 12 }}>
+                        <span style={{ fontWeight: 600, color: '#1677ff', marginRight: 6 }}>实时输出:</span>
+                        <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                          {liveOutput[row.path]}
+                        </span>
                       </div>
                     )}
                   </div>

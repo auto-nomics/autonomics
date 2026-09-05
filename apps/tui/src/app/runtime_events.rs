@@ -202,6 +202,17 @@ impl App {
                     "host observed agent status change"
                 );
             }
+            // P5c-5: per-round assistant text of host-registered agents,
+            // consumed by the web activity drawer over SSE. The TUI already
+            // renders these agents' turns from their own event streams, so
+            // this arm is log-only.
+            runtime::HostEvent::AgentOutput { path, text } => {
+                tracing::debug!(
+                    agent = %path,
+                    bytes = text.len(),
+                    "host observed agent output"
+                );
+            }
         }
     }
 

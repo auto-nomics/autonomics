@@ -1461,6 +1461,19 @@ impl AgentStorage for TursoAgentStorage {
         Ok(records)
     }
 
+    async fn purge_agent_delegations(&self, before_ms: i64) -> Result<u64, StorageError> {
+        let deleted = self
+            .conn
+            .execute(
+                "DELETE FROM agent_delegations
+                 WHERE status IN ('completed', 'interrupted', 'failed')
+                   AND updated_at < ?1",
+                params_from_iter([Value::Integer(before_ms)]),
+            )
+            .await?;
+        Ok(deleted)
+    }
+
     async fn get_memory_stage1_output(
         &self,
         scope_id: Uuid,
@@ -2476,6 +2489,57 @@ mod tests {
             .unwrap();
         assert_eq!(completed.len(), 1);
         assert_eq!(completed[0].response.as_deref(), Some("analysis complete"));
+    }
+
+    /// P5c-3 retention: purge deletes only terminal-state rows past the
+    /// cutoff. Pending/running rows and fresh terminal rows survive (an
+    /// in-flight delegation must outlive retention), and the deleted row
+    /// count is returned.
+    #[tokio::test]
+    async fn test_purge_agent_delegations_retention() {
+        let store = TursoAgentStorage::open_in_memory().await.unwrap();
+        let now = now_ms();
+        let day_ms: i64 = 24 * 3600 * 1000;
+        // Seeded 15 days old — past the 14-day retention cutoff.
+        let stale_updated_at = now - 15 * day_ms;
+
+        let row = |status: &str, updated_at: i64| crate::storage::AgentDelegationRecord {
+            delegation_id: Uuid::new_v4(),
+            caller_path: Some("/root/web/homepage".into()),
+            target_path: "/root/researcher".into(),
+            task: "t".into(),
+            status: status.into(),
+            turn_id: None,
+            session_id: None,
+            response: None,
+            created_at: updated_at,
+            updated_at,
+        };
+
+        // Terminal + stale → purged. Terminal statuses are three.
+        for status in ["completed", "interrupted", "failed"] {
+            store.upsert_agent_delegation(row(status, stale_updated_at)).await.unwrap();
+        }
+        // Non-terminal + stale → kept (in-flight work must outlive retention).
+        for status in ["pending", "running"] {
+            store.upsert_agent_delegation(row(status, stale_updated_at)).await.unwrap();
+        }
+        // Terminal + fresh → kept.
+        let fresh = row("completed", now);
+        store.upsert_agent_delegation(fresh).await.unwrap();
+
+        let purged = store
+            .purge_agent_delegations(now - 14 * day_ms)
+            .await
+            .unwrap();
+        assert_eq!(purged, 3, "only stale terminal rows are deleted");
+
+        let remaining = store.list_agent_delegations(None, None, None, 100).await.unwrap();
+        assert_eq!(remaining.len(), 3, "pending/running + fresh survive: {remaining:?}");
+        assert!(remaining.iter().all(|record| {
+            matches!(record.status.as_str(), "pending" | "running")
+                || record.updated_at == now
+        }));
     }
 
     #[tokio::test]

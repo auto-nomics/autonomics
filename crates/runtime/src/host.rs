@@ -1049,6 +1049,13 @@ pub enum HostEvent {
         status: crate::control::AgentStatus,
         last_event: Option<String>,
     },
+    /// Complete assistant text from one model round of a registered agent
+    /// (P5c-5). Emitted from [`RuntimeHost::recv_any`] on
+    /// `AgentEvent::LlmResponse` — one frame per round, never per delta, so
+    /// the volume stays proportional to turns (the live activity feed's
+    /// granularity). Resident web agents never appear here: their event
+    /// streams belong to the thread SSE drivers, not the host relay.
+    AgentOutput { path: String, text: String },
 }
 
 /// An `AgentEvent` tagged with the agent name that produced it.
@@ -1259,6 +1266,10 @@ impl RuntimeHost {
         let task = tokio::spawn(async move {
             let mut host = self;
             let mut stop = stop_rx;
+            // P5c-3: sweep at start (catches rows aged while the process was
+            // down), then every 6h — the loop below re-checks each round.
+            purge_delegation_ledger(&host.infra.storage).await;
+            let mut next_sweep = tokio::time::Instant::now() + DELEGATION_SWEEP_INTERVAL;
             loop {
                 match stop.try_recv() {
                     Ok(()) | Err(tokio::sync::oneshot::error::TryRecvError::Closed) => break,
@@ -1284,6 +1295,10 @@ impl RuntimeHost {
                     Ok(None) => tokio::time::sleep(POLL).await,
                     // Poll timeout: fall through, drain again.
                     Err(_) => {}
+                }
+                if tokio::time::Instant::now() >= next_sweep {
+                    purge_delegation_ledger(&host.infra.storage).await;
+                    next_sweep += DELEGATION_SWEEP_INTERVAL;
                 }
             }
             host
@@ -1842,6 +1857,7 @@ impl RuntimeHost {
                                 .map(|id| (path.to_string(), id))
                         });
                         let requested_path = resolved.unwrap_or(agent_name);
+                        let caller = caller_path.clone();
                         agentik_core::supervise::spawn_safe_on(
                             &self.infra.runtime_handle,
                             "get_agent_history",
@@ -1851,12 +1867,25 @@ impl RuntimeHost {
                                         read_agent_history(storage, agent_id, path, limit).await
                                     }
                                     None => {
-                                        read_persisted_agent_history(
+                                        // Orphan fallback: the persisted graph
+                                        // resolves agents the live boundary
+                                        // check cannot see (previous runs), so
+                                        // the same subtree rule applies to the
+                                        // matched row (P5c-2).
+                                        match read_persisted_agent_history(
                                             storage,
                                             requested_path,
                                             limit,
+                                            caller.as_deref(),
                                         )
                                         .await
+                                        {
+                                            Ok(history) => history,
+                                            Err(boundary) => {
+                                                let _ = reply_tx.send(Err(boundary));
+                                                return;
+                                            }
+                                        }
                                     }
                                 };
                                 let _ = reply_tx.send(Ok(response));
@@ -2869,6 +2898,17 @@ impl RuntimeHost {
         // fresh message arrives — which itself flips status again).
         self.observe_status(&name, &event);
 
+        // P5c-5: mirror complete assistant text (one frame per model round)
+        // to host event subscribers — the live activity feed. Emitted even
+        // when the status didn't transition (observe_status dedups), since
+        // the text itself is the payload.
+        if let AgentEvent::LlmResponse(text) = &event {
+            self.emit_host_event(HostEvent::AgentOutput {
+                path: name.clone(),
+                text: text.clone(),
+            });
+        }
+
         let (status, last_event) = derive_agent_status(&event);
         let status = status.tag();
         for record in self.delegations.values_mut() {
@@ -3045,6 +3085,33 @@ const WEB_AGENT_SUBTREE: &str = "/root/web";
 const MAX_AGENTS_PER_SUBTREE: usize = 8;
 /// Max live agents in the whole host registry (TUI side included).
 const MAX_AGENTS_TOTAL: usize = 16;
+/// P5c-3: terminal delegation ledger rows (completed / interrupted /
+/// failed) older than this are purged. Pending/running rows are exempt —
+/// an in-flight delegation must outlive retention.
+const DELEGATION_RETENTION_MS: i64 = 14 * 24 * 3600 * 1000;
+/// P5c-3: how often the driver re-sweeps the delegation ledger.
+const DELEGATION_SWEEP_INTERVAL: std::time::Duration =
+    std::time::Duration::from_secs(6 * 3600);
+
+/// P5c-3: delete terminal delegation rows past the retention window.
+/// Best-effort hygiene — storage errors are logged and retried on the next
+/// sweep, never propagated (the driver must keep serving commands).
+async fn purge_delegation_ledger(storage: &Arc<dyn AgentStorage>) {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    let cutoff = now_ms.saturating_sub(DELEGATION_RETENTION_MS);
+    match storage.purge_agent_delegations(cutoff).await {
+        Ok(0) => {}
+        Ok(purged) => tracing::info!(
+            purged,
+            cutoff_unix_ms = cutoff,
+            "delegation ledger retention sweep"
+        ),
+        Err(e) => tracing::warn!(error = %e, "delegation ledger retention sweep failed"),
+    }
+}
 
 /// Segment-aware prefix test: `path` equals `subtree` or extends it with a
 /// `/`-separated segment (`/root/web` does NOT match `/root/webfoo`).
@@ -3176,18 +3243,29 @@ pub async fn read_agent_history(
     }
 }
 
+/// Fallback history read through the persisted agent graph — for agents of
+/// previous runs that the live registry no longer holds (orphans). Matches
+/// the exact path or a unique short-name segment; zero or ambiguous matches
+/// return an empty history, not an error.
+///
+/// `caller_path` carries the same sandbox boundary as the live resolution
+/// (P5c-2): a sandboxed caller matching an orphan outside its own subtree
+/// gets a readable `Err` instead of the transcript.
 async fn read_persisted_agent_history(
     storage: Arc<dyn AgentStorage>,
     requested_path: String,
     limit: usize,
-) -> AgentExecutionHistory {
+    caller_path: Option<&str>,
+) -> std::result::Result<AgentExecutionHistory, String> {
+    let empty_history = || AgentExecutionHistory {
+        agent_path: requested_path.clone(),
+        agent_id: uuid::Uuid::nil(),
+        session_id: None,
+        messages: Vec::new(),
+    };
+
     let Ok(entries) = storage.list_persisted_agents().await else {
-        return AgentExecutionHistory {
-            agent_path: requested_path,
-            agent_id: uuid::Uuid::nil(),
-            session_id: None,
-            messages: Vec::new(),
-        };
+        return Ok(empty_history());
     };
 
     let matches: Vec<_> = entries
@@ -3202,15 +3280,26 @@ async fn read_persisted_agent_history(
         })
         .collect();
 
-    match matches.as_slice() {
-        [entry] => read_agent_history(storage, entry.agent_id, entry.path.clone(), limit).await,
-        _ => AgentExecutionHistory {
-            agent_path: requested_path,
-            agent_id: uuid::Uuid::nil(),
-            session_id: None,
-            messages: Vec::new(),
-        },
+    let [entry] = matches.as_slice() else {
+        return Ok(empty_history());
+    };
+    if let Some(caller) = caller_path.filter(|c| path_in_subtree(c, WEB_AGENT_SUBTREE)) {
+        if !path_in_subtree(&entry.path, caller) {
+            tracing::warn!(
+                target = %requested_path,
+                caller = %caller,
+                matched = %entry.path,
+                "sandbox boundary: orphan agent history outside caller subtree rejected"
+            );
+            return Err(format!(
+                "Agent '{requested_path}' resolved to '{}', which is outside your \
+                 sandbox '{caller}'. Web agents may only read the history of \
+                 agents under their own path.",
+                entry.path
+            ));
+        }
     }
+    Ok(read_agent_history(storage, entry.agent_id, entry.path.clone(), limit).await)
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -3714,6 +3803,8 @@ mod status_tests {
                 HostEvent::AgentRegistered { path, .. } => path.as_str(),
                 HostEvent::AgentUnregistered { path } => path,
                 HostEvent::AgentStatusChanged { path, .. } => path,
+                // P5c-5: output frames carry no path-vs-status assertion here.
+                HostEvent::AgentOutput { path, .. } => path,
             }
         }
     }
@@ -4458,7 +4549,9 @@ mod sandbox_tests {
     //! and its own profile subtree (spawn), with hard caps on live agents
     //! (8 per caller subtree, 16 host-wide). Discovery stays unrestricted
     //! and unconstrained callers (TUI side, host-level `None`) keep the
-    //! pre-P5b behavior — both asserted here. Tests run against a driven
+    //! pre-P5b behavior — both asserted here. The P5c open-question
+    //! closings that land in the host (orphan-history boundary, ledger
+    //! retention sweep) are tested here too. Tests run against a driven
     //! host (the same `spawn_driver` the desktop shell uses) so replies
     //! come from the real handler paths, not mocks.
 
@@ -4820,6 +4913,142 @@ mod sandbox_tests {
         host.shutdown_all_agents_and_wait().await;
     }
 
+    /// P5c-2 — orphan history: the persisted-graph fallback must enforce the
+    /// same subtree boundary as the live resolution. Orphans (graph row from
+    /// a previous run, nothing in the live registry) miss
+    /// `resolve_agent_for_caller` entirely, so before this fix a sandboxed
+    /// web caller could read any orphan's transcript. Rows are seeded
+    /// directly into `agent_graph` — exactly what a crashed previous process
+    /// leaves behind.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn orphan_history_fallback_honors_subtree_boundary() {
+        use agentik_core::storage::PersistedAgentGraph;
+
+        let dir = tempfile::tempdir().unwrap();
+        let host = RuntimeHost::open(&config(&dir)).await.unwrap();
+        let storage = host.infra().storage.clone();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        for (path, parent) in [
+            ("/root/researcher", None),
+            ("/root/web/homepage/worker", Some("/root/web/homepage")),
+        ] {
+            storage
+                .upsert_agent_graph_entry(PersistedAgentGraph {
+                    path: path.to_owned(),
+                    parent_path: parent.map(str::to_owned),
+                    profile_path: path.trim_start_matches("/root/").to_owned(),
+                    agent_id: uuid::Uuid::new_v4(),
+                    status_json: serde_json::to_string(
+                        &crate::control::AgentStatus::Idle,
+                    )
+                    .unwrap(),
+                    last_event: None,
+                    created_at: now,
+                    updated_at: now,
+                })
+                .await
+                .expect("seed orphan graph row");
+        }
+        let homepage = "/root/web/homepage";
+        let control = host.control();
+        let driver = host.spawn_driver();
+
+        // Cross-subtree orphan — by full path AND by unique short name (the
+        // fallback matches both) — denied with the same readable error.
+        for target in ["/root/researcher", "researcher"] {
+            let denial = control
+                .agent_history(target, 5, Some(homepage))
+                .await
+                .expect("host alive")
+                .expect_err("cross-subtree orphan history denied");
+            assert!(
+                denial.contains("outside your sandbox") && denial.contains(homepage),
+                "denial must name the sandbox: {denial}"
+            );
+        }
+
+        // Orphan inside the caller's subtree stays readable (an empty
+        // history — the agent_id has no sessions — but Ok, not a denial).
+        assert!(matches!(
+            control.agent_history("worker", 5, Some(homepage)).await,
+            Some(Ok(_))
+        ));
+
+        // The host-level view (HTTP surface, TUI) is unchanged: an
+        // unconstrained caller reads the outside orphan fine.
+        assert!(matches!(
+            control.agent_history("/root/researcher", 5, None).await,
+            Some(Ok(_))
+        ));
+
+        let mut host = driver.join().await;
+        host.shutdown_all_agents_and_wait().await;
+    }
+
+    /// P5c-3 — the driver sweeps the delegation ledger at startup: terminal
+    /// rows past retention (14 days) disappear, non-terminal and fresh rows
+    /// stay. This is the wiring test; the SQL semantics live in the turso
+    /// storage suite.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn driver_sweeps_stale_terminal_delegations_at_start() {
+        use agentik_core::storage::AgentDelegationRecord;
+
+        let dir = tempfile::tempdir().unwrap();
+        let host = RuntimeHost::open(&config(&dir)).await.unwrap();
+        let storage = host.infra().storage.clone();
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let day_ms: i64 = 24 * 3600 * 1000;
+        let row = |status: &str, updated_at: i64| AgentDelegationRecord {
+            delegation_id: uuid::Uuid::new_v4(),
+            caller_path: Some("/root/web/homepage".into()),
+            target_path: "/root/researcher".into(),
+            task: "t".into(),
+            status: status.into(),
+            turn_id: None,
+            session_id: None,
+            response: None,
+            created_at: updated_at,
+            updated_at,
+        };
+        let stale = row("completed", now_ms - 15 * day_ms);
+        let inflight = row("running", now_ms - 15 * day_ms);
+        let fresh = row("completed", now_ms);
+        for record in [stale.clone(), inflight.clone(), fresh.clone()] {
+            storage.upsert_agent_delegation(record).await.unwrap();
+        }
+
+        let control = host.control();
+        let driver = host.spawn_driver();
+
+        // The start sweep races the first list command; poll until the stale
+        // row vanishes (bounded — the sweep fires immediately).
+        let mut ledger = Vec::new();
+        for _ in 0..200 {
+            if let Some(rows) = control.list_delegations(None, None, None).await {
+                if !rows
+                    .iter()
+                    .any(|d| d.delegation_id == stale.delegation_id)
+                {
+                    ledger = rows;
+                    break;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let ids: Vec<_> = ledger.iter().map(|d| d.delegation_id).collect();
+        assert!(!ids.contains(&stale.delegation_id), "stale row purged");
+        assert!(ids.contains(&inflight.delegation_id), "in-flight kept");
+        assert!(ids.contains(&fresh.delegation_id), "fresh kept");
+
+        let mut host = driver.join().await;
+        host.shutdown_all_agents_and_wait().await;
+    }
     /// The boundary keys on the caller's own path, and the WEB_AGENT_SUBTREE
     /// prefix itself (`/root/web`) is not accidentally treated as a
     /// sandboxed caller — host-level helpers spawned at `/root/web` (the
