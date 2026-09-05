@@ -35,9 +35,13 @@ import { buildSystemPrompt as buildSystemPromptUtil } from '../utils/systemPromp
 import { flattenBlocks } from '../utils/promptUtils';
 import { getAuthToken } from '../../../services/client';
 import {
+  createThread,
   ensureMainThreadSession,
-  getStoredThreadId,
+  getInlineThreadSessionId,
+  importThread,
+  setInlineThreadSessionId,
   threadChatUrl,
+  toImportMessages,
   type AgentMode,
 } from '../api/agentThreadsApi';
 import type { AgentType } from '../agentTypes';
@@ -85,9 +89,9 @@ interface UseChatSenderParams {
   tools?: string[];
   /**
    * 后端 agent 能力（useChatInit 探测、ChatPanel 传入）。
-   * 'runtime' 且满足采用条件（已有 thread 映射或全新对话）时主对话走
-   * /api/v1/agent/threads/:id/chat，会话转写由服务端持有；
-   * 其余情况（含未传）一律走 legacy /api/v1/agent/chat。
+   * 'runtime'（P4）时主对话与追问线程都走 /api/v1/agent/threads/:id/chat，
+   * 会话转写由服务端持有——无映射的旧对话在首次发送时经 /threads/import
+   * 迁入；其余情况（含未传）一律走 legacy /api/v1/agent/chat（旧后端）。
    */
   agentMode?: AgentMode;
 }
@@ -320,21 +324,27 @@ export function useChatSender({
 
       let compressedMessages = [];
 
-      // ===== P2（web-agent-runtime）：主对话运行时会话模式判定 =====
-      // 仅主对话（追问线程 P2 仍走 legacy）；采用条件：
-      // - agentMode === 'runtime'（ChatPanel 探测后传入，desktop/旧后端自动降级）
-      // - 已有 thread 映射，或全新对话（UI 无历史）——bib_meta 时代的旧对话
-      //   继续走 ephemeral，避免历史凭空丢失（搬迁是 P4 迁移项）
-      // ensureMainThreadSession 失败（后端瞬时不可用）→ 本轮降级 legacy 全量重发
+      // ===== P4（web-agent-runtime）：主对话运行时会话模式 =====
+      // agentMode === 'runtime' 时无条件走会话路径（不再看 UI 是否有历史）：
+      // - 无映射且有历史 → ensureMainThreadSession 内部经 /threads/import
+      //   把 bib_meta 时代的对话迁入服务端（bib blob 保留作 UI 结构锚点）
+      // - ensure 失败 → 本轮报错中止。旧后端在 ChatPanel 探测时已是
+      //   'ephemeral'，不会走到这里；能到这里失败的是新后端的瞬时故障，
+      //   降级 legacy 只会 404（P4 已退役 /chat）
       let runtimeThreadId: string | null = null;
       if (!isThreadMode && agentMode === 'runtime') {
         const scopePaperId = paperInfo?.id ?? null;
-        if (getStoredThreadId(scopePaperId, agentType) || messages.length === 0) {
+        try {
           runtimeThreadId = await ensureMainThreadSession(
             scopePaperId,
             agentType,
             paperInfo?.title || undefined,
-          ).catch(() => null);
+            messages.length > 0 ? toImportMessages(messages) : undefined,
+          );
+        } catch (err: any) {
+          onError(`⚠️ ${err?.message || 'AI 会话建立失败，请稍后重试'}`);
+          setStreaming(false);
+          return;
         }
       }
       const useRuntimeSession = runtimeThreadId !== null;
@@ -545,8 +555,8 @@ export function useChatSender({
 
       // ========== Thread mode: same agent endpoint as main chat ==========
       // 线程追问不再直连提供商代理（那条路要浏览器持有 apiKey，且
-      // /api/ai/proxy 在 autonomics 后端不存在）——与主对话共用
-      // /api/v1/agent/chat，模型与密钥都留在服务端。
+      // /api/ai/proxy 在 autonomics 后端不存在）——与主对话共用后端 agent
+      // 端点，模型与密钥都留在服务端。
       const threadEntries = finalApiMessages.filter((m: any) => m.role !== 'system');
       // threadApiMessages 的最后一条就是本轮新输入：拆出来走 message 注入，
       // 其余作为历史种子（与主对话同样的去重约定）
@@ -559,14 +569,64 @@ export function useChatSender({
         ? stripAttachmentsForPersistence(lastThreadEntry.content)
         : userMessage;
 
-      const threadBody = {
-        message: threadInput || userMessage,
-        system_prompt: finalSystemPrompt || undefined,
-        messages: threadHistory,
-        agent_type: agentType,
-      };
+      let threadUrl: string;
+      let threadBody: Record<string, unknown>;
+      if (agentMode === 'runtime') {
+        // P4 追问线程 session 化：每条 inline 线程一个独立 session。
+        // 语义与 ephemeral 一致——上下文 = anchor 系统提示词（每轮走 context
+        // 字段）+ 线程自身历史，不是主对话前缀的 fork。
+        const uiThreadId = threadContext?.subThreadId ?? threadContext?.threadId ?? '';
+        const scopePaperId = paperInfo?.id ?? null;
+        let sessionId = uiThreadId
+          ? getInlineThreadSessionId(scopePaperId, agentType, uiThreadId)
+          : null;
+        if (!sessionId) {
+          // 无映射：有线程历史 → import（线程自身消息全量迁入）；空线程 → create
+          const history = toImportMessages(
+            ((threadContextData as any)?.contextMessages as Array<{ role?: string; content?: unknown }>) || [],
+          );
+          try {
+            sessionId = history.length > 0
+              ? await importThread({ agent_type: agentType, messages: history })
+              : await createThread({ agent_type: agentType });
+          } catch (err: any) {
+            // 仅「有历史 + 旧 runtime 后端无 import 路由（404）」降级空会话
+            // （线程历史留在客户端渲染）；其余失败本轮报错走错误契约
+            if (history.length > 0 && (err as { status?: number }).status === 404) {
+              sessionId = await createThread({ agent_type: agentType });
+            } else {
+              const msg = err?.message || '线程会话建立失败，请稍后重试';
+              if (threadOptions?.onStreamError) {
+                threadOptions.onStreamError(new Error(msg));
+              } else {
+                onError(`⚠️ ${msg}`);
+                setStreaming(false);
+              }
+              return;
+            }
+          }
+          if (uiThreadId && sessionId) {
+            setInlineThreadSessionId(scopePaperId, agentType, uiThreadId, sessionId);
+          }
+        }
+        threadUrl = threadChatUrl(sessionId);
+        threadBody = {
+          message: threadInput || userMessage,
+          agent_type: agentType,
+          context: finalSystemPrompt || undefined,
+        };
+      } else {
+        // legacy ephemeral：/api/v1/agent/chat（仅旧后端存在；P4 新后端已退役）
+        threadUrl = '/api/v1/agent/chat';
+        threadBody = {
+          message: threadInput || userMessage,
+          system_prompt: finalSystemPrompt || undefined,
+          messages: threadHistory,
+          agent_type: agentType,
+        };
+      }
       const threadToken = getAuthToken();
-      const response = await fetch('/api/v1/agent/chat', {
+      const response = await fetch(threadUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -582,6 +642,10 @@ export function useChatSender({
           const errData = await response.json();
           errorMsg = errData.error?.message || errData.error || errData.message || errorMsg;
         } catch {}
+        // runtime 路径的同智能体并发闸（后端同 type 串行、忙时 409）
+        if (response.status === 409) {
+          errorMsg = '该助手正在回复上一条消息，请等它完成后再发送';
+        }
 
         if (threadOptions?.onStreamError) {
           threadOptions.onStreamError(new Error(errorMsg));

@@ -241,6 +241,12 @@ pub struct AgentProfile {
     pub enable_data_engine: bool,
     #[serde(default = "default_true")]
     pub enable_host_tools: bool,
+    /// Read-only KMS (memory) query tools. Historically registered whenever
+    /// the infra had a KMS backend, regardless of profile — the last
+    /// unconditional registration; now gated so restricted surfaces (web
+    /// resident agents) can exclude memory tooling.
+    #[serde(default = "default_true")]
+    pub enable_kms_readonly: bool,
 
     // ── Model preference ──
     /// Preferred model in `"provider:model"` format, or `None` to use the
@@ -288,6 +294,7 @@ impl AgentProfile {
             enable_container_dev: true,
             enable_data_engine: true,
             enable_host_tools: true,
+            enable_kms_readonly: true,
             preferred_model: None,
             created_at: now,
             updated_at: now,
@@ -338,6 +345,7 @@ impl AgentProfile {
             enable_container_dev: self.enable_container_dev,
             enable_data_engine: self.enable_data_engine,
             enable_host_tools: self.enable_host_tools,
+            enable_kms_readonly: self.enable_kms_readonly,
             preferred_model: overrides
                 .preferred_model
                 .unwrap_or_else(|| self.preferred_model.clone()),
@@ -368,6 +376,7 @@ impl AgentProfile {
                 enable_container_dev: true,
                 enable_data_engine: true,
                 enable_host_tools: true,
+                enable_kms_readonly: true,
                 preferred_model: None,
                 created_at: now,
                 updated_at: now,
@@ -391,6 +400,7 @@ impl AgentProfile {
                 enable_container_dev: true,
                 enable_data_engine: true,
                 enable_host_tools: true,
+                enable_kms_readonly: true,
                 preferred_model: None,
                 created_at: now,
                 updated_at: now,
@@ -414,6 +424,7 @@ impl AgentProfile {
                 enable_container_dev: true,
                 enable_data_engine: true,
                 enable_host_tools: true,
+                enable_kms_readonly: true,
                 preferred_model: None,
                 created_at: now,
                 updated_at: now,
@@ -450,6 +461,7 @@ impl AgentProfile {
                 enable_container_dev: true,
                 enable_data_engine: true,
                 enable_host_tools: true,
+                enable_kms_readonly: true,
                 preferred_model: None,
                 created_at: now,
                 updated_at: now,

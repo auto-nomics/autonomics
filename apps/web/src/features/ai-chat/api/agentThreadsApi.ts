@@ -5,18 +5,21 @@
  * 后端（tui-http `runtime-host` feature，见 docs/design/web-agent-runtime.md）：
  *   GET    /api/v1/agent                  → { mode: "runtime" | "ephemeral" }
  *   POST   /api/v1/agent/threads          → { thread_id }（create_session）
+ *   POST   /api/v1/agent/threads/import   → { thread_id }（存量转写导入，P4）
  *   GET    /api/v1/agent/threads/:id/messages → 服务端转写（快照+WAL）
  *   POST   /api/v1/agent/threads/:id/chat → SSE（契约同 /agent/chat）
  *   PATCH  /api/v1/agent/threads/:id      → rename_session
  *   DELETE /api/v1/agent/threads/:id?agent_type=... → close_session
  *
- * 前端策略（P2）：
+ * 前端策略（P4）：
  * - 模式探测失败/非 runtime → 一律退回 ephemeral 旧路径（desktop P3 前依赖此降级）
  * - 主对话按 (scope, agent_type) 惰性建 thread，映射存 localStorage
  *   （bib blob 的 conversations 多会话是 jayread 遗产，当前 UI 无切换入口，
  *   scope 即活跃会话；agent_type 并入键避免 reader/screening 串会话）
- * - 旧 bib_meta 时代的对话（UI 已有历史且无映射）继续走 ephemeral，
- *   不做历史搬迁（P4 迁移项）
+ * - 旧 bib_meta 时代的对话（UI 已有历史且无映射）在 runtime 模式下经
+ *   /threads/import 迁入服务端 session（P4；bib blob 仍保留作 UI 结构锚点）
+ * - 追问（inline）线程 = 独立 session，映射键在主键上追加 `thread:{uiThreadId}`
+ *   （uiThreadId = subThreadId ?? threadId，子线程与一级线程各自独立）
  *
  * @module ai-chat/api/agentThreadsApi
  */
@@ -119,6 +122,84 @@ export function clearStoredThreadId(
   }
 }
 
+/**
+ * 追问（inline）线程的映射键 = 主键 + `|thread:{uiThreadId}`。
+ * uiThreadId = subThreadId ?? threadId：子线程与一级线程是不同的对话流，
+ * 各自独立 session；`thread:` 前缀把它们与主对话键区分开。
+ */
+export function inlineThreadMappingKey(
+  paperId: string | number | null | undefined,
+  agentType: AgentType,
+  uiThreadId: string,
+): string {
+  return `${threadMappingKey(paperId, agentType)}|thread:${uiThreadId}`;
+}
+
+export function getInlineThreadSessionId(
+  paperId: string | number | null | undefined,
+  agentType: AgentType,
+  uiThreadId: string,
+): string | null {
+  try {
+    return localStorage.getItem(inlineThreadMappingKey(paperId, agentType, uiThreadId));
+  } catch {
+    return null;
+  }
+}
+
+export function setInlineThreadSessionId(
+  paperId: string | number | null | undefined,
+  agentType: AgentType,
+  uiThreadId: string,
+  sessionId: string,
+): void {
+  try {
+    localStorage.setItem(inlineThreadMappingKey(paperId, agentType, uiThreadId), sessionId);
+  } catch {
+    // ignore
+  }
+}
+
+export function clearInlineThreadSessionId(
+  paperId: string | number | null | undefined,
+  agentType: AgentType,
+  uiThreadId: string,
+): void {
+  try {
+    localStorage.removeItem(inlineThreadMappingKey(paperId, agentType, uiThreadId));
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * 清掉该 scope 的全部 inline 线程映射（/clear 时消息列表连线程一起消失，
+ * 逐个 uiThreadId 清不可行——按键前缀扫描）。返回被清掉的 sessionId 列表
+ * （调用方可顺手 deleteThread 清服务端 session）。
+ */
+export function clearInlineThreadSessionIds(
+  paperId: string | number | null | undefined,
+  agentType: AgentType,
+): string[] {
+  const prefix = `${threadMappingKey(paperId, agentType)}|thread:`;
+  const removed: string[] = [];
+  try {
+    const keys: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith(prefix)) keys.push(key);
+    }
+    for (const key of keys) {
+      const sessionId = localStorage.getItem(key);
+      if (sessionId) removed.push(sessionId);
+      localStorage.removeItem(key);
+    }
+  } catch {
+    // ignore（localStorage 不可用 = 本来就没有映射）
+  }
+  return removed;
+}
+
 // ============================================================
 // /threads API
 // ============================================================
@@ -144,7 +225,7 @@ export interface CreateThreadParams {
   fork_from?: string;
 }
 
-/** 创建 thread（后端 create_session）。失败抛 Error（带服务端信息）。 */
+/** 创建 thread（后端 create_session）。失败抛带 `status` 的 Error。 */
 export async function createThread(params: CreateThreadParams): Promise<string> {
   const res = await fetch('/api/v1/agent/threads', {
     method: 'POST',
@@ -152,7 +233,73 @@ export async function createThread(params: CreateThreadParams): Promise<string> 
     body: JSON.stringify(params),
   });
   if (!res.ok) {
-    throw new Error(await errorMessageFrom(res, `创建会话失败 (${res.status})`));
+    throw Object.assign(new Error(await errorMessageFrom(res, `创建会话失败 (${res.status})`)), {
+      status: res.status,
+    });
+  }
+  const data = await res.json();
+  return data?.thread_id;
+}
+
+// ============================================================
+// 存量转写导入（P4 迁移）
+// ============================================================
+
+/** import 端点的单条消息（后端仅接受 user/assistant 文本轮次） */
+export interface ImportMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export interface ImportThreadParams {
+  agent_type: AgentType;
+  title?: string;
+  messages: ImportMessage[];
+}
+
+/**
+ * 把 UI 消息归一为 import 载荷：只留 user/assistant，content 取文本
+ * （数组形态拼接 text 块），无文本的轮次丢弃。主对话 store 消息与
+ * prepareThreadContext 的线程历史（字段更宽）都能传入。
+ */
+export function toImportMessages(
+  messages: Array<{ role?: string; content?: unknown }>,
+): ImportMessage[] {
+  const out: ImportMessage[] = [];
+  for (const m of messages) {
+    if (!m || (m.role !== 'user' && m.role !== 'assistant')) continue;
+    let text: string;
+    if (typeof m.content === 'string') {
+      text = m.content;
+    } else if (Array.isArray(m.content)) {
+      text = m.content
+        .map((block) =>
+          block && typeof block === 'object' && typeof (block as { text?: unknown }).text === 'string'
+            ? (block as { text: string }).text
+            : '',
+        )
+        .filter(Boolean)
+        .join('\n');
+    } else {
+      continue;
+    }
+    if (!text.trim()) continue;
+    out.push({ role: m.role, content: text });
+  }
+  return out;
+}
+
+/** 导入存量转写（后端先落库再让活 agent 收养）。失败抛带 `status` 的 Error。 */
+export async function importThread(params: ImportThreadParams): Promise<string> {
+  const res = await fetch('/api/v1/agent/threads/import', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) {
+    throw Object.assign(new Error(await errorMessageFrom(res, `导入会话失败 (${res.status})`)), {
+      status: res.status,
+    });
   }
   const data = await res.json();
   return data?.thread_id;
@@ -185,8 +332,13 @@ export async function deleteThread(threadId: string, agentType: AgentType): Prom
 }
 
 /**
- * 取当前对话的 thread_id；没有则创建并落映射。
- * 并发安全：同 scope 的并发请求共享同一个 in-flight Promise，避免双开会话。
+ * 取当前对话的 thread_id；没有则按需创建/导入并落映射。
+ * - 无 legacyMessages（或为空）→ createThread（空会话）
+ * - 有 legacyMessages → importThread（把 bib_meta 时代的历史迁入服务端；
+ *   404 = 旧 runtime 后端无 import 路由 → 降级空会话，旧历史仍由 bib blob
+ *   渲染，只是服务端上下文从本轮起算）
+ * 并发安全：同 scope 的并发请求共享同一个 in-flight Promise，避免
+ * useChatInit 预导入与首条发送双开会话（也会双写历史）。
  */
 const ensuring = new Map<string, Promise<string>>();
 
@@ -194,6 +346,7 @@ export async function ensureMainThreadSession(
   paperId: string | number | null | undefined,
   agentType: AgentType,
   title?: string,
+  legacyMessages?: ImportMessage[],
 ): Promise<string> {
   const key = threadMappingKey(paperId, agentType);
   const stored = getStoredThreadId(paperId, agentType);
@@ -202,7 +355,17 @@ export async function ensureMainThreadSession(
   const inflight = ensuring.get(key);
   if (inflight) return inflight;
 
-  const p = createThread({ agent_type: agentType, title })
+  const p = (async () => {
+    if (legacyMessages && legacyMessages.length > 0) {
+      try {
+        return await importThread({ agent_type: agentType, title, messages: legacyMessages });
+      } catch (err) {
+        if ((err as { status?: number }).status !== 404) throw err;
+        return await createThread({ agent_type: agentType, title });
+      }
+    }
+    return await createThread({ agent_type: agentType, title });
+  })()
     .then((threadId) => {
       setStoredThreadId(paperId, agentType, threadId);
       return threadId;

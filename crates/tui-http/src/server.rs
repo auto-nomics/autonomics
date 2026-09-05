@@ -122,8 +122,8 @@ impl ApiRouterBuilder {
         self
     }
 
-    /// Share the TUI's active-model slot with the chat endpoint. Without it
-    /// the agent module is not mounted and chat returns 404.
+    /// Share the TUI's active-model slot with the agent API. Without it the
+    /// agent module is not mounted at all (chat endpoints return 404).
     #[must_use]
     pub fn model(mut self, model: Arc<arc_swap::ArcSwapOption<agentik_sdk::model::Model>>) -> Self {
         self.model = Some(model);
@@ -158,20 +158,23 @@ impl ApiRouterBuilder {
             .route("/api/health", get(health))
             .nest("/api/v1/bib", crate::bib::router(shared.clone()));
         if let Some(model) = model {
-            let agent_api =
-                crate::agent::router(crate::agent::AgentState { shared, model: model.clone() });
+            // P4: the per-request ephemeral `POST /chat` is retired —
+            // resident-agent serving (`/threads`) is the only chat surface.
+            // Without runtime-host wiring the mount degrades to the
+            // capability index alone, reporting `ephemeral` so old frontends
+            // fail fast instead of talking to a ghost endpoint.
             #[cfg(feature = "runtime-host")]
             let (agent_api, runtime_mounted) = match infra {
                 Some(infra) => (
-                    agent_api.merge(crate::agent_runtime::router(
+                    crate::agent_runtime::router(
                         crate::agent_runtime::RuntimeAgentState::new(infra, model),
-                    )),
+                    ),
                     true,
                 ),
-                None => (agent_api, false),
+                None => (Router::new(), false),
             };
             #[cfg(not(feature = "runtime-host"))]
-            let runtime_mounted = false;
+            let (agent_api, runtime_mounted) = (Router::new(), false);
             // Capability index: the frontend probes this to pick between the
             // session-based (`/threads`) and legacy (`/chat`) protocols.
             let mode = if runtime_mounted { "runtime" } else { "ephemeral" };

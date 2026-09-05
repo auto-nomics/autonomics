@@ -951,6 +951,12 @@ export interface PreparedThreadContext {
   threadSystemPrompt: string;
   threadApiMessages: Array<{ role: string; content: unknown }>;
   threadTokenBudget: number;
+  /**
+   * 线程自身的完整消息历史（不含 system/本轮输入）。runtime 会话化（P4）
+   * 首次发送时用它作为 /threads/import 的载荷——与 threadApiMessages 的
+   * 区别：无 system 前缀、不截最近 10 条、不含本轮用户消息。
+   */
+  contextMessages: Array<{ role: string; content: unknown }>;
 }
 
 /**
@@ -1086,5 +1092,6 @@ export function prepareThreadContext({
     threadSystemPrompt,
     threadApiMessages,
     threadTokenBudget,
+    contextMessages,
   };
 }

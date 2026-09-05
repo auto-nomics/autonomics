@@ -968,6 +968,7 @@ impl Session {
             // a Session. Return true (no-op) defensively.
             InternalEvent::CreateSession { .. }
             | InternalEvent::SwitchSession { .. }
+            | InternalEvent::RegisterSession { .. }
             | InternalEvent::CloseSession { .. }
             | InternalEvent::ListSessions
             | InternalEvent::RenameSession { .. } => true,

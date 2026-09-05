@@ -1,12 +1,15 @@
 /**
  * agentThreadsApi 单元测试
  *
- * 覆盖三组契约：
+ * 覆盖的契约：
  * 1. 映射键归一：真实 ID / safeId / undefined 三种输入收敛到同一键，
  *    agentType 参与键（reader 与 screening 不串会话）
  * 2. 模式探测降级：任何失败（非 JSON / 无 mode / 网络错）都落 'ephemeral'，
  *    desktop 与旧后端因此永远走旧端点
- * 3. ensureMainThreadSession 并发去重：同键并发只发一次创建请求
+ * 3. ensureMainThreadSession 并发去重：同键并发只发一次创建请求；
+ *    P4 起 legacyMessages 触发 import 路径（含 404 降级 create）
+ * 4. P4 inline 线程映射：thread: 前缀键隔离 + 按前缀批量清理
+ * 5. P4 toImportMessages：UI 消息归一为 import 载荷
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -17,16 +20,26 @@ import {
   getStoredThreadId,
   setStoredThreadId,
   clearStoredThreadId,
+  inlineThreadMappingKey,
+  getInlineThreadSessionId,
+  setInlineThreadSessionId,
+  clearInlineThreadSessionId,
+  clearInlineThreadSessionIds,
+  importThread,
+  toImportMessages,
   ensureMainThreadSession,
 } from '../agentThreadsApi';
 
-// happy-dom 暴露的 localStorage 缺方法（client.test.ts 同款问题）：内存 shim
+// happy-dom 暴露的 localStorage 缺方法（client.test.ts 同款问题）：内存 shim。
+// length/key(i) 是 clearInlineThreadSessionIds 前缀扫描的依赖，一并补上
 const storageStore = new Map<string, string>();
 const localStorageShim = {
   getItem: (k: string) => (storageStore.has(k) ? (storageStore.get(k) as string) : null),
   setItem: (k: string, v: string) => { storageStore.set(k, String(v)); },
   removeItem: (k: string) => { storageStore.delete(k); },
   clear: () => storageStore.clear(),
+  get length() { return storageStore.size; },
+  key: (i: number) => Array.from(storageStore.keys())[i] ?? null,
 };
 
 describe('agentThreadsApi', () => {
@@ -144,6 +157,146 @@ describe('agentThreadsApi', () => {
       expect(await p1).toBe('t-once');
       expect(await p2).toBe('t-once');
       expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    });
+
+    describe('P4：legacyMessages 走 import 路径', () => {
+      const legacy = [
+        { role: 'user' as const, content: '旧问题' },
+        { role: 'assistant' as const, content: '旧回答' },
+      ];
+
+      it('有历史无映射 → /threads/import（带 title），成功后落映射', async () => {
+        (globalThis.fetch as any).mockResolvedValue({
+          ok: true,
+          json: async () => ({ thread_id: 't-imported' }),
+        });
+        const id = await ensureMainThreadSession('p1', 'paperReader', '论文标题', legacy);
+        expect(id).toBe('t-imported');
+        expect(getStoredThreadId('p1', 'paperReader')).toBe('t-imported');
+
+        const [url, init] = (globalThis.fetch as any).mock.calls[0];
+        expect(url).toBe('/api/v1/agent/threads/import');
+        expect(JSON.parse(init.body)).toEqual({
+          agent_type: 'paperReader',
+          title: '论文标题',
+          messages: legacy,
+        });
+      });
+
+      it('import 404（旧 runtime 后端无路由）→ 降级 create 空会话', async () => {
+        (globalThis.fetch as any)
+          .mockResolvedValueOnce({ ok: false, status: 404, json: async () => ({ error: 'no route' }) })
+          .mockResolvedValueOnce({ ok: true, json: async () => ({ thread_id: 't-fresh' }) });
+
+        const id = await ensureMainThreadSession('p1', 'paperReader', undefined, legacy);
+        expect(id).toBe('t-fresh');
+        expect(getStoredThreadId('p1', 'paperReader')).toBe('t-fresh');
+        const [secondUrl] = (globalThis.fetch as any).mock.calls[1];
+        expect(secondUrl).toBe('/api/v1/agent/threads');
+      });
+
+      it('import 非 404 失败 → 向上抛（调用方本轮报错）', async () => {
+        (globalThis.fetch as any).mockResolvedValue({
+          ok: false,
+          status: 500,
+          json: async () => ({ error: 'storage down' }),
+        });
+        await expect(ensureMainThreadSession('p1', 'paperReader', undefined, legacy)).rejects.toThrow(
+          'storage down',
+        );
+        expect(getStoredThreadId('p1', 'paperReader')).toBeNull();
+      });
+
+      it('legacyMessages 为空数组 → 直接 create（不打 import 端点）', async () => {
+        (globalThis.fetch as any).mockResolvedValue({
+          ok: true,
+          json: async () => ({ thread_id: 't-new' }),
+        });
+        await ensureMainThreadSession('p1', 'paperReader', undefined, []);
+        const [url] = (globalThis.fetch as any).mock.calls[0];
+        expect(url).toBe('/api/v1/agent/threads');
+      });
+    });
+  });
+
+  describe('P4：inline 线程映射', () => {
+    it('键 = 主键 + thread:{uiThreadId}（子线程与一级线程各自独立）', () => {
+      const main = threadMappingKey('p1', 'paperReader');
+      expect(inlineThreadMappingKey('p1', 'paperReader', 't1')).toBe(`${main}|thread:t1`);
+      expect(inlineThreadMappingKey('p1', 'paperReader', 't1')).not.toBe(
+        inlineThreadMappingKey('p1', 'paperReader', 'sub1'),
+      );
+    });
+
+    it('get/set/clear 往返，不影响主对话映射', () => {
+      setStoredThreadId('p1', 'paperReader', 't-main');
+      setInlineThreadSessionId('p1', 'paperReader', 't1', 's-1');
+      expect(getInlineThreadSessionId('p1', 'paperReader', 't1')).toBe('s-1');
+      expect(getStoredThreadId('p1', 'paperReader')).toBe('t-main');
+      clearInlineThreadSessionId('p1', 'paperReader', 't1');
+      expect(getInlineThreadSessionId('p1', 'paperReader', 't1')).toBeNull();
+      expect(getStoredThreadId('p1', 'paperReader')).toBe('t-main');
+    });
+
+    it('clearInlineThreadSessionIds：按前缀清空并返回 sessionId，别的 scope 不受影响', () => {
+      setInlineThreadSessionId('p1', 'paperReader', 't1', 's-1');
+      setInlineThreadSessionId('p1', 'paperReader', 't2', 's-2');
+      setInlineThreadSessionId('p2', 'paperReader', 't9', 's-other-paper');
+      setInlineThreadSessionId('p1', 'screening', 't1', 's-other-type');
+      setStoredThreadId('p1', 'paperReader', 't-main');
+
+      const removed = clearInlineThreadSessionIds('p1', 'paperReader');
+      expect(removed.sort()).toEqual(['s-1', 's-2']);
+      expect(getInlineThreadSessionId('p1', 'paperReader', 't1')).toBeNull();
+      expect(getInlineThreadSessionId('p1', 'paperReader', 't2')).toBeNull();
+      // 不同 scope / agentType / 主对话映射原样保留
+      expect(getInlineThreadSessionId('p2', 'paperReader', 't9')).toBe('s-other-paper');
+      expect(getInlineThreadSessionId('p1', 'screening', 't1')).toBe('s-other-type');
+      expect(getStoredThreadId('p1', 'paperReader')).toBe('t-main');
+    });
+  });
+
+  describe('P4：importThread / toImportMessages', () => {
+    it('importThread 成功返回 thread_id，失败抛带 status 的 Error', async () => {
+      (globalThis.fetch as any).mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ thread_id: 't-ok' }),
+      });
+      expect(
+        await importThread({
+          agent_type: 'homepage',
+          messages: [{ role: 'user', content: 'hi' }],
+        }),
+      ).toBe('t-ok');
+
+      (globalThis.fetch as any).mockResolvedValueOnce({
+        ok: false,
+        status: 400,
+        json: async () => ({ error: 'messages must contain at least one user/assistant turn' }),
+      });
+      const err = await importThread({
+        agent_type: 'homepage',
+        messages: [],
+      }).catch((e) => e);
+      expect(err).toBeInstanceOf(Error);
+      expect(err.message).toContain('user/assistant');
+      expect(err.status).toBe(400);
+    });
+
+    it('toImportMessages：留 user/assistant，拼数组 content，滤 system/空文本/异型', () => {
+      expect(
+        toImportMessages([
+          { role: 'system', content: 'persona' },
+          { role: 'user', content: '纯文本问题' },
+          { role: 'assistant', content: [{ type: 'text', text: '分段一' }, { type: 'text', text: '分段二' }] },
+          { role: 'user', content: '   ' },            // 空白文本丢弃
+          { role: 'user', content: [{ type: 'image_url' }] }, // 无 text 块 → 空串丢弃
+          { role: 'assistant', content: 42 },          // 异型丢弃
+        ]),
+      ).toEqual([
+        { role: 'user', content: '纯文本问题' },
+        { role: 'assistant', content: '分段一\n分段二' },
+      ]);
     });
   });
 });

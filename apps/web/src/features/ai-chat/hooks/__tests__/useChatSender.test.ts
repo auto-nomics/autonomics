@@ -26,7 +26,7 @@ import {
   convertToAnthropicContent,
 } from '../../utils/chatMessageUtils';
 import { useChatSender } from '../useChatSender';
-import { threadMappingKey } from '../../api/agentThreadsApi';
+import { inlineThreadMappingKey, threadMappingKey } from '../../api/agentThreadsApi';
 
 describe('useChatSender Hook', () => {
   beforeEach(() => {
@@ -1066,7 +1066,7 @@ describe('useChatSender Hook', () => {
         expect(props.persistMessages).toHaveBeenCalled();
       });
 
-      it('runtime + 已有 UI 历史且无映射：仍走 legacy 端点（旧对话不迁移）', async () => {
+      it('runtime + 已有 UI 历史且无映射：先 import 迁移旧对话再走会话端点（P4）', async () => {
         const props = {
           ...createDefaultProps(),
           agentMode: 'runtime',
@@ -1075,19 +1075,30 @@ describe('useChatSender Hook', () => {
             { role: 'assistant', content: '旧回答', id: 'm2' },
           ],
         };
-        mockFetch.mockResolvedValueOnce(sseResponse());
+        mockFetch.mockResolvedValueOnce(createThreadResponse()).mockResolvedValueOnce(sseResponse());
 
         const { result } = renderHook(() => useChatSender(props as any));
         await act(async () => {
           await result.current.sendMessages('继续');
         });
 
-        expect(mockFetch).toHaveBeenCalledTimes(1);
-        expect(mockFetch.mock.calls[0][0]).toBe('/api/v1/agent/chat');
-        // bib_meta 时代的旧历史照常上行，不凭空丢失
-        const body = JSON.parse(mockFetch.mock.calls[0][1].body);
-        expect(body.messages).toHaveLength(2);
-        expect(body).toHaveProperty('system_prompt');
+        expect(mockFetch).toHaveBeenCalledTimes(2);
+        // 第一跳：bib_meta 时代的旧对话经 /threads/import 迁入服务端 session
+        expect(mockFetch.mock.calls[0][0]).toBe('/api/v1/agent/threads/import');
+        expect(JSON.parse(mockFetch.mock.calls[0][1].body)).toMatchObject({
+          agent_type: 'paperReader',
+          messages: [
+            { role: 'user', content: '旧问题' },
+            { role: 'assistant', content: '旧回答' },
+          ],
+        });
+        // 第二跳：会话式聊天端点，历史不上行（真身已在服务端）
+        expect(mockFetch.mock.calls[1][0]).toBe(`/api/v1/agent/threads/${THREAD_ID}/chat`);
+        const body = JSON.parse(mockFetch.mock.calls[1][1].body);
+        expect(body.message).toBe('继续');
+        expect(body).not.toHaveProperty('messages');
+        // 迁移后映射落盘：刷新/重开面板不再重复 import
+        expect(localStorage.getItem(threadMappingKey(undefined, 'paperReader'))).toBe(THREAD_ID);
       });
 
       it('已有映射：即使 UI 有历史也走 runtime 端点（双写会话）', async () => {
@@ -1111,22 +1122,22 @@ describe('useChatSender Hook', () => {
         expect(body).not.toHaveProperty('messages');
       });
 
-      it('建 thread 失败：本轮降级 legacy 端点全量重发', async () => {
+      it('建会话失败：本轮报错中止（P4 已退役 /chat，无可降级端点）', async () => {
         const props = { ...createDefaultProps(), agentMode: 'runtime' };
-        mockFetch
-          .mockResolvedValueOnce({ ok: false, status: 500, json: async () => ({ error: 'boom' }) })
-          .mockResolvedValueOnce(sseResponse());
+        mockFetch.mockResolvedValueOnce({
+          ok: false,
+          status: 500,
+          json: async () => ({ error: 'boom' }),
+        });
 
         const { result } = renderHook(() => useChatSender(props as any));
         await act(async () => {
           await result.current.sendMessages('hello');
         });
 
-        expect(mockFetch).toHaveBeenCalledTimes(2);
-        expect(mockFetch.mock.calls[1][0]).toBe('/api/v1/agent/chat');
-        const body = JSON.parse(mockFetch.mock.calls[1][1].body);
-        expect(body).toHaveProperty('messages');
-        expect(body).toHaveProperty('system_prompt');
+        // 只有一次失败的 ensure 请求，没有聊天请求
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+        expect(props.onError).toHaveBeenCalledWith('⚠️ boom');
         // 失败的创建不留脏映射
         expect(localStorage.getItem(threadMappingKey(undefined, 'paperReader'))).toBeNull();
       });
@@ -1146,6 +1157,142 @@ describe('useChatSender Hook', () => {
         });
 
         expect(props.onError).toHaveBeenCalledWith('该助手正在回复上一条消息，请等它完成后再发送');
+      });
+
+      // ===== P4：追问（inline）线程 session 化 =====
+
+      /** 带一条既有追问历史的线程消息列表（父消息 0 挂线程 t1） */
+      const threadMessages = () => [
+        {
+          role: 'assistant',
+          content: '主对话回答',
+          id: 'p0',
+          threads: [
+            {
+              id: 't1',
+              messages: [
+                { role: 'user', content: '线索问题', id: 't1m1' },
+                { role: 'assistant', content: '线索回答', id: 't1m2' },
+              ],
+            },
+          ],
+        },
+      ];
+
+      const threadOptions = (onStreamUpdate: ReturnType<typeof vi.fn>) => ({
+        abortController: new AbortController(),
+        threadContext: {
+          msgIdx: 0,
+          threadId: 't1',
+          threadSystemPrompt: '围绕选段回答',
+          anchorText: '选段原文',
+        },
+        onStreamUpdate: onStreamUpdate as any,
+        onStreamComplete: vi.fn(),
+        onStreamError: vi.fn(),
+      });
+
+      it('追问线程 runtime + 无映射有历史：import 线程自身消息，再走会话端点带 context', async () => {
+        const onStreamUpdate = vi.fn();
+        const options = threadOptions(onStreamUpdate);
+        const props = {
+          ...createDefaultProps(),
+          agentMode: 'runtime',
+          messages: threadMessages(),
+        };
+        mockFetch.mockResolvedValueOnce(createThreadResponse()).mockResolvedValueOnce(sseResponse());
+
+        const { result } = renderHook(() => useChatSender(props as any));
+        await act(async () => {
+          await result.current.sendMessages('继续问', [], [], null, null, options as any);
+        });
+
+        expect(mockFetch).toHaveBeenCalledTimes(2);
+        // 第一跳：import 的载荷是线程自身消息（不是主对话前缀——追问语义
+        // = anchor 上下文 + 线程历史，与 ephemeral 行为一致，非 fork）
+        expect(mockFetch.mock.calls[0][0]).toBe('/api/v1/agent/threads/import');
+        expect(JSON.parse(mockFetch.mock.calls[0][1].body)).toMatchObject({
+          agent_type: 'paperReader',
+          messages: [
+            { role: 'user', content: '线索问题' },
+            { role: 'assistant', content: '线索回答' },
+          ],
+        });
+        // 第二跳：anchor 系统提示词走 context 字段（不是 system_prompt）
+        expect(mockFetch.mock.calls[1][0]).toBe(`/api/v1/agent/threads/${THREAD_ID}/chat`);
+        const body = JSON.parse(mockFetch.mock.calls[1][1].body);
+        expect(body.message).toBe('继续问');
+        expect(body.context).toBe('围绕选段回答');
+        expect(body).not.toHaveProperty('system_prompt');
+        expect(body).not.toHaveProperty('messages');
+        // inline 线程映射落盘（键含 thread: 前缀，与主对话键隔离）
+        expect(
+          localStorage.getItem(inlineThreadMappingKey(undefined, 'paperReader', 't1')),
+        ).toBe(THREAD_ID);
+        // 完成回调走线程契约
+        expect(options.onStreamComplete).toHaveBeenCalled();
+      });
+
+      it('追问线程 runtime + 已有映射：直接会话发送，不 import/create', async () => {
+        localStorage.setItem(inlineThreadMappingKey(undefined, 'paperReader', 't1'), THREAD_ID);
+        const onStreamUpdate = vi.fn();
+        const props = {
+          ...createDefaultProps(),
+          agentMode: 'runtime',
+          messages: threadMessages(),
+        };
+        mockFetch.mockResolvedValueOnce(sseResponse());
+
+        const { result } = renderHook(() => useChatSender(props as any));
+        await act(async () => {
+          await result.current.sendMessages('继续问', [], [], null, null, threadOptions(onStreamUpdate) as any);
+        });
+
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+        expect(mockFetch.mock.calls[0][0]).toBe(`/api/v1/agent/threads/${THREAD_ID}/chat`);
+      });
+
+      it('追问线程 runtime + 空线程：create 空会话（不 import）', async () => {
+        const onStreamUpdate = vi.fn();
+        const props = {
+          ...createDefaultProps(),
+          agentMode: 'runtime',
+          messages: [
+            { role: 'assistant', content: '主对话回答', id: 'p0', threads: [{ id: 't1', messages: [] }] },
+          ],
+        };
+        mockFetch.mockResolvedValueOnce(createThreadResponse()).mockResolvedValueOnce(sseResponse());
+
+        const { result } = renderHook(() => useChatSender(props as any));
+        await act(async () => {
+          await result.current.sendMessages('新线程第一问', [], [], null, null, threadOptions(onStreamUpdate) as any);
+        });
+
+        expect(mockFetch).toHaveBeenCalledTimes(2);
+        expect(mockFetch.mock.calls[0][0]).toBe('/api/v1/agent/threads');
+        expect(JSON.parse(mockFetch.mock.calls[0][1].body)).toEqual({ agent_type: 'paperReader' });
+        expect(mockFetch.mock.calls[1][0]).toBe(`/api/v1/agent/threads/${THREAD_ID}/chat`);
+      });
+
+      it('追问线程 legacy（agentMode ephemeral）：仍走 /chat 全量上行', async () => {
+        const onStreamUpdate = vi.fn();
+        const props = {
+          ...createDefaultProps(),
+          agentMode: 'ephemeral',
+          messages: threadMessages(),
+        };
+        mockFetch.mockResolvedValueOnce(sseResponse());
+
+        const { result } = renderHook(() => useChatSender(props as any));
+        await act(async () => {
+          await result.current.sendMessages('继续问', [], [], null, null, threadOptions(onStreamUpdate) as any);
+        });
+
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+        expect(mockFetch.mock.calls[0][0]).toBe('/api/v1/agent/chat');
+        const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+        expect(body.system_prompt).toBe('围绕选段回答');
+        expect(body.messages).toEqual([{ role: 'user', content: '线索问题' }, { role: 'assistant', content: '线索回答' }]);
       });
     });
 

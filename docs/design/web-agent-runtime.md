@@ -75,8 +75,10 @@ SSE 事件契约（`delta` / `tool` / `done` / `ping` / `error`，含 10 s ping 
 | 方法 & 路径 | 语义 | 映射 |
 |---|---|---|
 | `POST /threads` | 建 thread。body: `{ agent_type, title? }` → `{ thread_id }` | `AgentHandle::create_session` |
+| `POST /threads/import` | 存量转写导入（P4）。body: `{ agent_type, title?, messages: [{role, content}] }` | 直写存储（start/append×N/end）+ `RegisterSession` 收养 |
 | `GET /threads/:id/messages` | 拉全量转写（UI 重 hydration） | 读 session log（`SharedInfra.storage`） |
-| `POST /threads/:id/chat` | 发言并流式返回。body: `{ message, context? }` | turn 锁 → `switch_session` → `MessageInject` → SSE |
+| `POST /threads/:id/chat` | 发言并流式返回。body: `{ message, agent_type, context? }` | turn 锁 → `switch_session` → `MessageInject` → SSE |
+| `POST /threads/:id/compact` | 触发服务端压缩（P4，fire-and-forget） | `switch_session` + `AgentHandle::compact` |
 | `PATCH /threads/:id` | 改名 | `rename_session` |
 | `DELETE /threads/:id` | 关闭并删会话 | `close_session` |
 | `GET /agent` | 模块能力描述（`{ mode: "runtime" \| "ephemeral" }`） | 前端据此选路径 |
@@ -84,8 +86,8 @@ SSE 事件契约（`delta` / `tool` / `done` / `ping` / `error`，含 10 s ping 
 关键语义：
 
 - **前端不再上行 `messages[]` / `system_prompt`。** 历史由服务端 session 持有；静态 persona 归 profile（§6），动态上下文走 `context` 字段（§7）。
-- 旧 `POST /chat` 保留为兼容端点（ephemeral 路径），P2 前端切换完成后标记废弃，P3 删除。
-- `GET /threads/:id/messages` 需要在 `AgentStorage` 上补一个"按 session 列消息"的读接口（现 trait 有 snapshot / session-log 组件，缺面向 HTTP 的列表查询；实现于 turso_storage，走 WAL 表）。
+- 旧 `POST /chat` 已在 P4 删除（见 §12 P4 偏差 2）：`runtime-host` 挂载后 `/threads` 是唯一聊天面；无 runtime 接线的宿主只留能力探测（`mode:"ephemeral"`），旧前端探测后自动降级。
+- `GET /threads/:id/messages` 复用已有的 `get_transcript_messages`（transcript 表），未新增存储读接口。
 
 ## 6. Web profiles 与工具面裁剪
 
@@ -110,18 +112,21 @@ pub enable_container_dev: bool,  // container_dev_registrations
 pub enable_data_engine: bool,    // data_engine_tools::registrations
 #[serde(default = "default_true")]
 pub enable_host_tools: bool,     // host_tools（spawn_agent/delegate 等）
+#[serde(default = "default_true")]
+pub enable_kms_readonly: bool,   // kms_readonly（P4 补：最后一个无条件注册族）
 ```
 
 `default = true` 保证存量 TUI profile 反序列化后行为不变（默认全开）；web 三个 profile 显式置 false。这是把"工具面"从硬编码提升为 profile 可控，TUI 也因此获得细粒度配置能力。
 
 ## 7. 会话与持久化
 
-**真源转移**：转写唯一真源从前端 `bib_meta` 移到 `agent.db`（snapshot + WAL）。
+**真源转移**：转写读写的唯一真源从前端 `bib_meta` 移到 `agent.db`（snapshot + WAL）。P4 落地后的完整语义：
 
-- 前端 thread 元数据（id、标题、agent_type、创建时间）仍存前端现有位置，另附 `session_id`；不再整包写转写（`POST /api/v1/bib/chat` 的 chat 用途退役，端点保留给非 chat 的 meta 用途）。
-- 前端 `messageCompaction`（token 预算裁剪）在 session 模式下删除——服务端 `AgentHandle::compact` 才是权威；后续可加 `POST /threads/:id/compact` 端点（P4）。
-- **动态上下文**（paperReader 当前打开哪篇论文）：只有前端知道，改为每回合 `context` 字段，注入为该 turn 的上下文块（渲染进 user turn 前导，例如"【当前文献】…"），不再冒充 agent 级 system prompt——agent 级 prompt 现在是常驻的、跨 session 共享的。
-- **存量迁移（可选，P4）**：一次性导入——遍历 `bib_meta` 的 `web:chat:<scope>` 键，按 scope 归型建 session，把旧 payload 里的消息重放进 session log。不做也不阻塞上线：旧 thread 继续以只读旧格式展示，新对话走新链路。
+- **迁移导入（P4，前端驱动）**：runtime 模式下旧对话的迁移不由服务端扫 `bib_meta`（那需要把 `activeConversationOf` 等 UI 归型逻辑复制进后端），而是前端在两个时机驱动 `POST /threads/import`——打开面板预导入（`useChatInit`：bib 有历史且无映射）与首条发送兜底（`ensureMainThreadSession(legacyMessages)`，与预导入共享 in-flight 去重防双写）。后端先直写存储（start_session + append×N + end_session + title，响应返回前持久化完成），再发 `InternalEvent::RegisterSession` 让活 agent 把 session 收养进内存 map——`switch_session` 会忽略 map 外的 session，只写存储不足以让后续 turn 落进该 session。
+- **inline 追问线程 = 独立 session（P4）**：每条 inline 线程一个 session（localStorage 键 `agentThreadSession:{scope}|{agentType}|thread:{uiThreadId}`，uiThreadId = subThreadId ?? threadId）。语义与 ephemeral 追问一致——上下文 = anchor 系统提示词（每轮走 `context` 字段，服务端渲染成"【当前上下文】"前导）+ 线程自身历史，**不是**主对话前缀的 fork。首次发送：有线程历史 → import 线程自身消息；空线程 → create。`/clear` 按前缀清映射并删服务端 session。
+- **bib_meta UI blob 保留（"双写退役"的实际语义）**：`persistMessages` 照旧把 UI 全量 payload 写 `bib_meta`——追问线程树锚在 `messages[msgIdx]` 索引上，剥掉主消息会塌；blob 退化为 UI 结构锚点与降级备份，转写读写真源在 agent.db。legacy 分支（旧后端）仍以 blob 为转写源。
+- 前端 `messageCompaction` 在 session 模式下跳过——`POST /threads/:id/compact`（P4 已加）才是权威，fire-and-forget（compact 作用于 agent 的活跃 session，故先 switch）。
+- **动态上下文**（paperReader 当前打开哪篇论文）：只有前端知道，保持每回合 `context` 字段，注入为该 turn 的上下文块（渲染成"【当前上下文】"前导），不冒充 agent 级 system prompt。
 
 ## 8. 生命周期与并发
 
@@ -146,7 +151,7 @@ pub enable_host_tools: bool,     // host_tools（spawn_agent/delegate 等）
 | P1 后端 | `AgentProfile` 新 flags；web 三 profile 注册；`tui-http` feature `runtime-host` + 新端点 + AgentRegistry + turn 锁；TUI `start_http_server` 传 infra | curl 走通 thread 全生命周期；TUI 原功能回归（默认 flags 不改变其工具面） |
 | P2 前端 | `useChatSender` 切 `/threads` API；删 messages 上行与静态 persona；thread 元数据附 session_id | 三种 pane 流式正常、刷新后 `GET /messages` 恢复 |
 | P3 Desktop + 收尾 | desktop `RuntimeHost::open` + 单写者锁 + 模型槽改造；旧 `POST /chat` 删除（→P4，见 §12 偏差 4） | desktop 与 TUI 互斥提示正确；模型热更生效 |
-| P4 可选 | 存量 thread 迁移导入；inline 追问线程 session 化与旧 `POST /chat` 退役；`compact` 端点；delegation / 多智能体 web 化预研 | — |
+| P4 迁移与退役（已落地） | 存量 thread 迁移导入（前端驱动）；inline 追问线程 session 化；旧 `POST /chat` 退役；`compact` 端点；`kms_readonly` 门控；delegation / 多智能体 web 化预研（→P5） | import→GET /messages 回环；追问线程 runtime 会话化；`/chat` 404 |
 
 P1/P2 可并行开发（新端点与旧端点并存），P3 依赖 P1。
 
@@ -157,9 +162,9 @@ P1/P2 可并行开发（新端点与旧端点并存），P3 依赖 P1。
 - **锁的 UX**：单写者锁对"忘了 TUI 开着"的用户是新的失败模式，报错文案要指路（"关闭 TUI 后重开 desktop"）。未来若确有双开需求，再评估 desktop 只读模式。
 - **web profile 的演进权**：`web/*` profile 与前端 strategy 语义耦合（persona 文案、上下文格式），改其一要同步另一个。建议在这份文档落地后，把三个 persona 文案的唯一真源定为 profile registry，前端彻底不再内置文案。
 
-## 12. 实现状态与偏差记录（P1/P2 已落地）
+## 12. 实现状态与偏差记录（P1–P4 已落地）
 
-**P1（后端）**：`crates/agentik-core/src/storage.rs`（4 flags，`serde(default)` 兼容存量行，零 SQL 迁移）、`crates/runtime/src/host.rs::tools_from_profile`（按 flag 门控；kms_readonly 仍无条件注册——存量残留，待清理）、`crates/tui-http/src/agent_runtime.rs`（AgentRegistry + 线程端点 + turn 串行）、`crates/tui-http/src/server.rs`（`GET /api/v1/agent` 模式探测）。`GET /threads/:id/messages` 复用了已有的 `get_transcript_messages`，未新增存储读接口。
+**P1（后端）**：`crates/agentik-core/src/storage.rs`（flags，`serde(default)` 兼容存量行，零 SQL 迁移）、`crates/runtime/src/host.rs::tools_from_profile`（按 flag 门控；kms_readonly 的无条件注册是 P1 残留，P4 已门控，见下）、`crates/tui-http/src/agent_runtime.rs`（AgentRegistry + 线程端点 + turn 串行）、`crates/tui-http/src/server.rs`（`GET /api/v1/agent` 模式探测）。`GET /threads/:id/messages` 复用了已有的 `get_transcript_messages`，未新增存储读接口。
 
 **P2（前端）**：`apps/web/src/features/ai-chat/api/agentThreadsApi.ts`（探测/映射/CRUD）、`useChatSender`（runtime 分支）、`useChatInit`（水合兜底）、`ChatPanel`（模式状态接线）、`systemPromptBuilder`（`excludePersona`）。
 
@@ -175,6 +180,15 @@ P1/P2 可并行开发（新端点与旧端点并存），P3 依赖 P1。
 1. **同型并发**：§8 写"排队 1 位"；实现为**直接 409 `agent_busy`**（前端提示"该助手正在回复上一条消息"）。turn 锁由 handle mutex 担任，driver 任务在 SSE 客户端断开后仍排空到终态事件才释放——既防旧事件泄漏到下一 turn，也免掉排队状态机。前端输入框在 streaming 期间本就禁发，409 只兜并发窗口。
 2. **映射键**：§7 暗示 scope 单键；实现为 **`(scope, agent_type)` 二元组**（localStorage `agentThreadSession:{scope}|{agentType}`）——paperReader 与 screening 可能对同一篇论文各持会话，它们是不同 resident agent、transcript 分库存储，scope 单键会串会话。
 3. **双写保留**：§7 写"不再整包写转写"；P2 保留 `persistMessages`（bib_meta 照存 UI 全量 payload，含追问线程）。理由：水合兜底、旧端点降级、P4 迁移都以 bib_meta 为锚；双写让 runtime 模式随时可回退。退役留给 P3/P4。
-4. **采用规则**：仅**新对话（UI 无历史）或已有映射**的主对话走 runtime；bib_meta 存量对话（有历史、无映射）继续 ephemeral，历史不凭空丢。inline 追问线程 P2 一律 legacy（其转写依赖 UI 结构，session 化是 P4 课题）。
+4. **采用规则（P2）**：仅**新对话（UI 无历史）或已有映射**的主对话走 runtime；bib_meta 存量对话（有历史、无映射）继续 ephemeral，历史不凭空丢。inline 追问线程 P2 一律 legacy（其转写依赖 UI 结构，session 化是 P4 课题）。→ **P4 已废止**：runtime 模式无条件采用，存量对话经 `/threads/import` 迁移（见下方 P4 偏差 1）。
 5. **自定义 persona**：用户在 /prompt 弹窗设置的 persona 是会话级覆盖，走每轮 `context` 上行（`excludePersona` 只排除 agentType 默认文案），服务端 profile 恒为默认。
 6. **模式探测降级**：`probeAgentMode` 任何失败（网络/非 JSON/无 mode）→ `'ephemeral'` → 旧端点。desktop（P3 前）与旧 TUI 进程因此永远走旧链路，无需版本协商。
+
+**P4（迁移与退役）**：`crates/agentik-core/src/agent.rs`（`InternalEvent::RegisterSession` + `restore_session_from_storage` 抽取）、`crates/runtime/src/host.rs::AgentHandle::register_session`、`crates/tui-http/src/agent_runtime.rs`（`POST /threads/import`、`POST /threads/:id/compact`；`agent.rs` 退役为纯 SSE 映射工具模块）、`apps/web/src/features/ai-chat/`（`agentThreadsApi` import/inline 映射、`useChatSender` 无条件 runtime + 追问 session 化、`useChatInit` 预导入、`useSlashCommands` /clear 联动）。与 §7/§10 的偏差：
+
+1. **迁移由前端驱动**（§7 原设想服务端扫 `bib_meta`）：后端不持有"哪个 scope 的活跃会话是哪条"的 UI 归型逻辑（blob 里 conversations 多会话是 jayread 遗产），复制它等于双真源。前端在打开面板/首条发送时把旧消息 POST 给 `/threads/import`，归型仍在前端一处。副作用与对策：import 404（P1–P3 旧 runtime 后端无此路由）→ 降级 create 空会话（历史仍由 blob 渲染，服务端上下文从本轮起算）；import 成功但响应丢失 → 重试会另建 session，旧 session 成孤儿（无列表入口，不可见）。
+2. **旧 `POST /chat` 退役而非并存**（§5 原设想长期保留兼容端点）：前端探测 `mode` 后必然选边，两端点并存只留下"半迁移"状态。删除后的版本矩阵：新前端+新后端 = 全 runtime；新前端+旧后端 = 探测降级 ephemeral；旧前端+新后端 = 探测降级 ephemeral（旧前端同样实现探测）；唯一破口是"探测瞬时失败"在新后端上被误判 ephemeral → 旧前端打 `/chat` 得 404，刷新即愈。`runtime-host` 未接线（无 infra）的宿主只剩能力探测，报 `ephemeral` 让旧前端明确降级，不再有幽灵端点。
+3. **bib_meta blob 保留**（§7 原文"不再整包写转写"）：追问线程树锚在 `messages[msgIdx]` 索引上，剥主消息会塌 UI。"退役"的实际语义 = 转写读写真源在 agent.db，blob 只是 UI 结构锚点 + legacy 降级源。
+4. **`enable_kms_readonly` 门控的存量行残留**：flag 读取按"存量行缺字段 → 默认 true"（与 P1 四个 flag 同一约定），因此 P4 之前已种下的 `web/*` profile 行读出来仍是 true——尊重"existing row wins"语义不强制翻转，删掉 profile 行即可重播种为 false。TUI 侧 profile 不受影响（本就该 true）。
+5. **`POST /threads/:id/compact` 为 fire-and-forget**：compact 事件在 agent 串行事件循环里执行，端点先 `switch_session` 再投递，不等结果（200 ≠ 压缩完成）；turn 与 compact 竞争时由事件循环天然串行。
+6. **delegation / 多智能体 web 化预研**未随 P4 落地，顺延 P5。

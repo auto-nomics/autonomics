@@ -458,8 +458,12 @@ impl SharedInfra {
             tools.extend(writing_tools);
         }
 
-        if let Some(kms) = self.kms.clone() {
-            tools.extend(kms_tools::kms_readonly_registrations(kms));
+        // Read-only KMS queries were the last unconditionally-registered
+        // family; now behind the same profile flag system as the rest.
+        if profile.enable_kms_readonly {
+            if let Some(kms) = self.kms.clone() {
+                tools.extend(kms_tools::kms_readonly_registrations(kms));
+            }
         }
 
         // Host control tools (spawn_agent, delegate_to, list_agents, etc.)
@@ -929,6 +933,15 @@ impl AgentHandle {
     /// activates the target.
     pub fn switch_session(&self, id: uuid::Uuid) {
         let _ = self.internal_tx.send(InternalEvent::SwitchSession { id });
+    }
+
+    /// Adopt a session that exists in storage but not in the agent's
+    /// in-memory map — the tail of the HTTP import path, which writes the
+    /// session row + WAL directly and then registers it so a live agent
+    /// serves subsequent turns against the imported transcript. Does not
+    /// disturb the active session.
+    pub fn register_session(&self, id: uuid::Uuid) {
+        let _ = self.internal_tx.send(InternalEvent::RegisterSession { id });
     }
 
     /// Close and remove a session.

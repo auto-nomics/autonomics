@@ -84,6 +84,13 @@ pub enum InternalEvent {
     SwitchSession {
         id: Uuid,
     },
+    /// Adopt a session that already exists in storage but not in this
+    /// agent's in-memory map (e.g. one seeded over HTTP by replaying a
+    /// transcript into the WAL). Restores its state from storage; never
+    /// disturbs the active session.
+    RegisterSession {
+        id: Uuid,
+    },
     /// Close and remove a session.
     CloseSession {
         id: Uuid,
@@ -332,39 +339,7 @@ impl Agent {
                             }
                             continue;
                         }
-                        // Rebuild a session from storage using the unified
-                        // restore_session_state helper (snapshot + WAL).
-                        let mut s = Session::new(rec.session_id, self.shared.clone());
-                        s.cancel_token = self.cancel_token.clone();
-                        s.title = rec.title;
-                        s.created_at = rec.started_at;
-
-                        match crate::storage::restore_session_state(
-                            storage.as_ref(),
-                            self.shared.id,
-                            rec.session_id,
-                        )
-                        .await
-                        {
-                            Ok(state) => {
-                                s.messages = state.messages;
-                                s.summary = state.summary;
-                                s.ancestor_summaries = state.ancestor_summaries;
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    error = %e,
-                                    "failed to restore session state for {}", rec.session_id
-                                );
-                            }
-                        }
-
-                        tracing::info!(
-                            session_id = %rec.session_id,
-                            title = ?s.title,
-                            "restored session from storage"
-                        );
-                        self.sessions.insert(rec.session_id, s);
+                        self.restore_session_from_storage(&rec).await;
                     }
                 }
                 Err(e) => {
@@ -447,6 +422,10 @@ impl Agent {
                     self.handle_switch_session(*id).await;
                     false
                 }
+                InternalEvent::RegisterSession { id } => {
+                    self.handle_register_session(*id).await;
+                    false
+                }
                 InternalEvent::CloseSession { id } => {
                     self.handle_close_session(*id).await;
                     false
@@ -510,6 +489,84 @@ impl Agent {
     }
 
     // ── Session management handlers ───────────────────────
+
+    /// Rebuild a session from its storage record (snapshot + WAL) and insert
+    /// it into the in-memory map. Shared by the run()-start restore loop and
+    /// [`InternalEvent::RegisterSession`].
+    async fn restore_session_from_storage(&mut self, rec: &crate::storage::SessionRecord) {
+        let mut s = Session::new(rec.session_id, self.shared.clone());
+        s.cancel_token = self.cancel_token.clone();
+        s.title = rec.title.clone();
+        s.created_at = rec.started_at;
+
+        if let Some(storage) = self.shared.storage.clone() {
+            match crate::storage::restore_session_state(
+                storage.as_ref(),
+                self.shared.id,
+                rec.session_id,
+            )
+            .await
+            {
+                Ok(state) => {
+                    s.messages = state.messages;
+                    s.summary = state.summary;
+                    s.ancestor_summaries = state.ancestor_summaries;
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "failed to restore session state for {}", rec.session_id
+                    );
+                }
+            }
+        }
+
+        tracing::info!(
+            session_id = %rec.session_id,
+            title = ?s.title,
+            "restored session from storage"
+        );
+        self.sessions.insert(rec.session_id, s);
+    }
+
+    /// Adopt a storage-backed session into the in-memory map. No-op when the
+    /// session is already live; never changes which session is active.
+    async fn handle_register_session(&mut self, id: Uuid) {
+        if self.sessions.contains_key(&id) {
+            return;
+        }
+        let Some(storage) = self.shared.storage.clone() else {
+            tracing::warn!(session_id = %id, "register session without storage");
+            return;
+        };
+        // Fetch title/started_at from the sessions table — the HTTP import
+        // path wrote the row (and the WAL) before sending this event.
+        match storage.as_ref().list_session_records(self.shared.id).await {
+            Ok(records) => {
+                let rec = crate::storage::SessionRecord {
+                    session_id: id,
+                    title: records
+                        .iter()
+                        .find(|r| r.session_id == id)
+                        .and_then(|r| r.title.clone()),
+                    started_at: records
+                        .iter()
+                        .find(|r| r.session_id == id)
+                        .map(|r| r.started_at)
+                        .unwrap_or_else(|| chrono::Utc::now().timestamp_millis()),
+                    ended_at: None,
+                };
+                self.restore_session_from_storage(&rec).await;
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    session_id = %id,
+                    "register session: listing session records failed"
+                );
+            }
+        }
+    }
 
     async fn handle_create_session(
         &mut self,

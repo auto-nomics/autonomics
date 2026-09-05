@@ -8,6 +8,8 @@
  * 4. 桌面端启动时后端可能还在编译，getSettings 带重试（最多 10 次 × 1500ms）
  * 5. P2（web-agent-runtime）：bib 为空但 localStorage 有 thread 映射且后端为
  *    runtime 模式时，从服务端 session 转写水合 UI（对话的真身在 agent.db）
+ * 6. P4（web-agent-runtime）：bib 有历史但无映射且后端为 runtime 模式时，
+ *    打开面板即预导入旧对话到服务端 session（首条发送前完成迁移）
  *
  * 抽出原因：原 ChatPanel 的 init effect（~115 行）跟消息/UI 编排无关，
  * 独立成 hook 让 ChatPanel 专注于对话编排。
@@ -23,9 +25,11 @@ import { getMessages } from '../../../../services/chatApi';
 import { getSettings } from '../../../../services/settingsApi';
 import { ensureThreadStructure } from '../../utils/threadUtils';
 import {
+  ensureMainThreadSession,
   fetchThreadMessages,
   getStoredThreadId,
   probeAgentMode,
+  toImportMessages,
 } from '../../api/agentThreadsApi';
 import type { AgentType } from '../../agentTypes';
 
@@ -145,6 +149,20 @@ export function useChatInit({
                 );
               }
             }
+          }
+
+          // P4 预导入：bib_meta 里有历史但还没有 thread 映射（旧对话首次
+          // 遇到 runtime 后端）——打开面板即把转写迁入服务端 session，
+          // 不必等首条发送。与首条发送共用 ensureMainThreadSession 的
+          // in-flight 去重（同键并发共享一次请求，不会双开/双写历史）。
+          // 尽力而为：失败静默（首条发送会重试并在那里真正报错）
+          if (mode === 'runtime' && loaded.length > 0 && !getStoredThreadId(paperId, agentType)) {
+            void ensureMainThreadSession(
+              paperId,
+              agentType,
+              undefined,
+              toImportMessages(loaded),
+            ).catch(() => {});
           }
         } else {
           const err = msgResult.reason;

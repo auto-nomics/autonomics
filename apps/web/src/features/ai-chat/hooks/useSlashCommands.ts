@@ -27,6 +27,7 @@ import { App } from 'antd'; // 导入 Ant Design 消息提示组件
 import { classifyFile } from '../components/FileUploader'; // 导入文件分类工具函数
 import { createConversation } from '../../../services/chatApi'; // 导入对话管理 API
 import {
+  clearInlineThreadSessionIds,
   clearStoredThreadId,
   deleteThread,
   getStoredThreadId,
@@ -161,6 +162,11 @@ export function useSlashCommands({
         if (staleThreadId) {
           void deleteThread(staleThreadId, agentType);
           clearStoredThreadId(paperId, agentType);
+        }
+        // P4：inline 追问线程挂在消息上，随清空一起消失——按前缀清掉
+        // 它们的映射并顺手删服务端 session，避免孤儿会话
+        for (const sessionId of clearInlineThreadSessionIds(paperId, agentType)) {
+          void deleteThread(sessionId, agentType);
         }
       }
       message.success('已清空当前对话'); // 显示成功提示

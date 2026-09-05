@@ -2043,6 +2043,10 @@ fn row_to_profile(row: &turso::Row) -> Result<AgentProfile, StorageError> {
             .get("enable_host_tools")
             .and_then(|v| v.as_bool())
             .unwrap_or(true),
+        enable_kms_readonly: config
+            .get("enable_kms_readonly")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true),
         preferred_model: config
             .get("preferred_model")
             .and_then(|v| v.as_str())
@@ -2069,6 +2073,7 @@ fn profile_to_config_json(profile: &AgentProfile) -> serde_json::Value {
         "enable_container_dev": profile.enable_container_dev,
         "enable_data_engine": profile.enable_data_engine,
         "enable_host_tools": profile.enable_host_tools,
+        "enable_kms_readonly": profile.enable_kms_readonly,
         "preferred_model": profile.preferred_model,
     })
 }
@@ -2799,6 +2804,7 @@ mod tests {
             enable_container_dev: true,
             enable_data_engine: true,
             enable_host_tools: true,
+            enable_kms_readonly: true,
             preferred_model: Some("anthropic:claude-sonnet-5".into()),
             created_at: now_ms(),
             updated_at: now_ms(),

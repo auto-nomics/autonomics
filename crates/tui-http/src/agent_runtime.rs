@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use agentik_core::storage::{AgentProfileRegistry, AgentStorage, StorageError};
 use agentik_core::AgentProfile;
 use agentik_sdk::model::Model;
-use agentik_types::AgentPath;
+use agentik_types::{AgentPath, ContentBlock, Message, Role};
 use arc_swap::ArcSwapOption;
 use axum::Json;
 use axum::extract::{Path, State};
@@ -143,9 +143,11 @@ impl Drop for BusyGuard<'_> {
 pub(crate) fn router(state: RuntimeAgentState) -> Router {
     Router::new()
         .route("/threads", post(create_thread))
+        .route("/threads/import", post(import_thread))
         .route("/threads/{id}", patch(rename_thread).delete(delete_thread))
         .route("/threads/{id}/messages", get(thread_messages))
         .route("/threads/{id}/chat", post(thread_chat))
+        .route("/threads/{id}/compact", post(thread_compact))
         .with_state(state)
 }
 
@@ -177,6 +179,123 @@ struct RenameThreadRequest {
     agent_type: String,
     title: String,
 }
+
+// ── Import (legacy transcript migration) ─────────────────────────────────
+
+/// One replayed turn from a legacy `bib_meta` transcript.
+#[derive(Deserialize)]
+struct ImportMessage {
+    role: String,
+    content: String,
+}
+
+#[derive(Deserialize)]
+struct ImportThreadRequest {
+    agent_type: String,
+    #[serde(default)]
+    title: Option<String>,
+    messages: Vec<ImportMessage>,
+}
+
+/// Create a thread pre-seeded with an existing transcript.
+///
+/// The P4 migration path for conversations that lived in the frontend's
+/// `bib_meta` blob: write the session row + WAL directly (durable before the
+/// response returns, so an immediate `GET /messages` sees the transcript),
+/// then [`AgentHandle::register_session`] so a *live* agent adopts the
+/// session into its in-memory map — `switch_session` ignores sessions it
+/// doesn't know, so storage alone is not enough.
+async fn import_thread(
+    State(state): State<RuntimeAgentState>,
+    Json(request): Json<ImportThreadRequest>,
+) -> Response {
+    // Tolerant mapping, mirroring the retired ephemeral endpoint: only
+    // user/assistant turns exist in a transcript; anything else is dropped.
+    let messages: Vec<Message> = request
+        .messages
+        .iter()
+        .filter(|entry| matches!(entry.role.as_str(), "user" | "assistant"))
+        .map(|entry| Message {
+            id: uuid::Uuid::new_v4().to_string(),
+            type_: "message".to_owned(),
+            role: match entry.role.as_str() {
+                "user" => Role::User,
+                _ => Role::Assistant,
+            },
+            content: vec![ContentBlock::Text {
+                text: entry.content.clone(),
+            }],
+            model: None,
+            stop_reason: None,
+            stop_sequence: None,
+            usage: None,
+            request_id: None,
+        })
+        .collect();
+    if messages.is_empty() {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "messages must contain at least one user/assistant turn",
+        );
+    }
+
+    let entry = match state.registry.get(&request.agent_type).await {
+        Ok(entry) => entry,
+        Err(response) => return response,
+    };
+    let handle = entry.handle.lock().await;
+    let thread_id = uuid::Uuid::new_v4();
+    let storage = state.registry.infra().storage.clone();
+    let result: Result<(), StorageError> = async {
+        storage.start_session(handle.agent_id, thread_id).await?;
+        for message in &messages {
+            // Also writes the transcript table, so GET /messages serves the
+            // imported turns without any extra step.
+            storage.append_message(thread_id, message).await?;
+        }
+        storage.end_session(thread_id).await?;
+        if let Some(title) = request.title.as_deref() {
+            storage.update_session_title(thread_id, title).await?;
+        }
+        Ok(())
+    }
+    .await;
+    if let Err(e) = result {
+        return internal(&format!("import transcript failed: {e}"));
+    }
+    handle.register_session(thread_id);
+    Json(json!({ "thread_id": thread_id })).into_response()
+}
+
+// ── Compact ──────────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct ThreadCompactRequest {
+    agent_type: String,
+}
+
+/// Trigger server-side compaction on a thread (`AgentHandle::compact` acts
+/// on the agent's *active* session, so switch first). Fire-and-forget: the
+/// compaction itself runs inside the agent's serialized event loop — a turn
+/// racing this request simply queues behind it.
+async fn thread_compact(
+    State(state): State<RuntimeAgentState>,
+    Path(thread_id): Path<uuid::Uuid>,
+    Json(request): Json<ThreadCompactRequest>,
+) -> Response {
+    if state.registry.model_slot().load().as_ref().is_none() {
+        return error(StatusCode::SERVICE_UNAVAILABLE, "no model configured");
+    }
+    let entry = match state.registry.get(&request.agent_type).await {
+        Ok(entry) => entry,
+        Err(response) => return response,
+    };
+    let handle = entry.handle.lock().await;
+    handle.switch_session(thread_id);
+    handle.compact();
+    Json(json!({ "ok": true })).into_response()
+}
+
 
 async fn rename_thread(
     State(state): State<RuntimeAgentState>,
@@ -502,8 +621,8 @@ async fn ensure_web_profile(infra: &SharedInfra, agent_type: &str) -> Result<Age
     profile.description = spec.description.to_owned();
     profile.agent_identity = spec.identity.to_owned();
     profile.system_prompt = Some(spec.system_prompt());
-    // Web surface: bibliography only. No shell, container, data-engine, or
-    // host (spawn/delegate) tooling over HTTP.
+    // Web surface: bibliography only. No shell, container, data-engine,
+    // host (spawn/delegate), or KMS memory tooling over HTTP.
     profile.enable_bibliography = true;
     profile.enable_writing = false;
     profile.enable_opengwas = false;
@@ -514,6 +633,7 @@ async fn ensure_web_profile(infra: &SharedInfra, agent_type: &str) -> Result<Age
     profile.enable_container_dev = false;
     profile.enable_data_engine = false;
     profile.enable_host_tools = false;
+    profile.enable_kms_readonly = false;
 
     registry
         .create_profile(profile.clone())
@@ -561,5 +681,272 @@ mod tests {
             assert!(!prompt.contains("网页搜索"), // homepage v2 persona dropped
                 "{agent_type} prompt must not advertise tools the web profile does not register");
         }
+    }
+}
+
+/// HTTP-level integration tests against a real `SharedInfra` (tempdir-backed
+/// agent.db), covering the P4 surface: transcript import, per-thread chat
+/// routing, and compaction.
+#[cfg(test)]
+mod http_tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::Request;
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+
+    /// Scripted LLM client: fails every request with a *non-retryable* 4xx
+    /// so the turn terminates immediately (agentik would otherwise burn its
+    /// retry budget on retryable errors and slow the test down).
+    struct FailingClient;
+
+    #[async_trait::async_trait]
+    impl agentik_sdk::provider::client::ApiClient for FailingClient {
+        async fn request(
+            &self,
+            _messages: Vec<Message>,
+            _tools: Vec<agentik_types::ToolDefinition>,
+            _model_info: &agentik_sdk::model::ModelInfo,
+        ) -> Result<Message, agentik_types::errors::AnthropicError> {
+            Err(agentik_types::errors::AnthropicError::HttpError {
+                status: 400,
+                message: "scripted failure".to_owned(),
+            })
+        }
+
+        async fn request_stream(
+            &self,
+            _messages: Vec<Message>,
+            _tools: Vec<agentik_types::ToolDefinition>,
+            _model_info: &agentik_sdk::model::ModelInfo,
+        ) -> Result<agentik_sdk::streaming::MessageStream, agentik_types::errors::AnthropicError>
+        {
+            Err(agentik_types::errors::AnthropicError::HttpError {
+                status: 400,
+                message: "scripted failure".to_owned(),
+            })
+        }
+
+        async fn test_connection(&self) -> Result<(), agentik_types::errors::AnthropicError> {
+            Ok(())
+        }
+    }
+
+    fn config(dir: &tempfile::TempDir) -> runtime::RuntimeConfig {
+        let mut config = runtime::RuntimeConfig::default();
+        config.data_dir = dir.path().join("data");
+        config.state_dir = dir.path().join("state");
+        config
+    }
+
+    fn json_request(method: &str, uri: &str, body: serde_json::Value) -> Request<Body> {
+        Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    }
+
+    async fn body_json(response: axum::response::Response) -> serde_json::Value {
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    async fn body_text(response: axum::response::Response) -> String {
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn import_replays_transcript_and_routes_turns_to_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut host = runtime::RuntimeHost::open(&config(&dir)).await.unwrap();
+        let model: Arc<ArcSwapOption<Model>> = Arc::new(ArcSwapOption::from_pointee(
+            Model::with_client(
+                agentik_core::testing::dummy_model_info("test-model"),
+                FailingClient,
+            ),
+        ));
+        let app = router(RuntimeAgentState::new(host.infra(), model));
+
+        // Import a legacy transcript (the P4 migration path).
+        let response = app
+            .clone()
+            .oneshot(json_request(
+                "POST",
+                "/threads/import",
+                serde_json::json!({
+                    "agent_type": "homepage",
+                    "title": "migrated",
+                    "messages": [
+                        { "role": "user", "content": "旧问题" },
+                        { "role": "assistant", "content": "旧回答" },
+                    ],
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let thread_id: String = body_json(response).await["thread_id"]
+            .as_str()
+            .expect("thread_id")
+            .to_owned();
+
+        // The imported turns are immediately readable (durable before the
+        // import response returned).
+        let response = app
+            .clone()
+            .oneshot(Request::get(format!("/threads/{thread_id}/messages")).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let messages = body_json(response).await["messages"].as_array().unwrap().clone();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(messages[0]["text"], "旧问题");
+        assert_eq!(messages[1]["role"], "assistant");
+        assert_eq!(messages[1]["text"], "旧回答");
+
+        // A chat turn on the imported thread must land in THAT session —
+        // this is the RegisterSession contract (switch_session ignores
+        // sessions missing from the agent's in-memory map).
+        let response = app
+            .clone()
+            .oneshot(json_request(
+                "POST",
+                &format!("/threads/{thread_id}/chat"),
+                serde_json::json!({ "agent_type": "homepage", "message": "新消息" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let stream = body_text(response).await;
+        assert!(stream.contains("event: error"), "stream: {stream}");
+        assert!(stream.contains("scripted failure"), "stream: {stream}");
+
+        // The WAL append of the injected user message is asynchronous; give
+        // the persist worker a beat, then re-read.
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        let response = app
+            .clone()
+            .oneshot(Request::get(format!("/threads/{thread_id}/messages")).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let messages = body_json(response).await["messages"].as_array().unwrap().clone();
+        assert_eq!(
+            messages.len(),
+            3,
+            "injected turn must land in the imported session: {messages:?}"
+        );
+        assert_eq!(messages[2]["role"], "user");
+        assert_eq!(messages[2]["text"], "新消息");
+
+        host.shutdown_all_agents_and_wait().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn import_rejects_transcripts_without_replayable_turns() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut host = runtime::RuntimeHost::open(&config(&dir)).await.unwrap();
+        let model: Arc<ArcSwapOption<Model>> = Arc::new(ArcSwapOption::from_pointee(None));
+        let app = router(RuntimeAgentState::new(host.infra(), model));
+
+        for (label, messages) in [
+            ("empty", serde_json::json!([])),
+            ("system-only", serde_json::json!([{ "role": "system", "content": "x" }])),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(json_request(
+                    "POST",
+                    "/threads/import",
+                    serde_json::json!({ "agent_type": "homepage", "messages": messages }),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "case {label}");
+        }
+
+        host.shutdown_all_agents_and_wait().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn chat_and_compact_guard_on_missing_model_and_blank_message() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut host = runtime::RuntimeHost::open(&config(&dir)).await.unwrap();
+        // Empty model slot: every turn-bearing endpoint must refuse with 503.
+        let model: Arc<ArcSwapOption<Model>> = Arc::new(ArcSwapOption::from_pointee(None));
+        let app = router(RuntimeAgentState::new(host.infra(), model.clone()));
+
+        let response = app
+            .clone()
+            .oneshot(json_request(
+                "POST",
+                "/threads",
+                serde_json::json!({ "agent_type": "homepage" }),
+            ))
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = body_json(response).await;
+        assert_eq!(status, StatusCode::OK, "create_thread body: {body:?}");
+        let thread_id: String = body["thread_id"]
+            .as_str()
+            .expect("thread_id")
+            .to_owned();
+
+        let response = app
+            .clone()
+            .oneshot(json_request(
+                "POST",
+                &format!("/threads/{thread_id}/chat"),
+                serde_json::json!({ "agent_type": "homepage", "message": "hi" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+        let response = app
+            .clone()
+            .oneshot(json_request(
+                "POST",
+                &format!("/threads/{thread_id}/compact"),
+                serde_json::json!({ "agent_type": "homepage" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+        // With a model wired, a blank message is rejected before any turn
+        // starts, and compact answers ok.
+        model.store(Some(Arc::new(Model::with_client(
+            agentik_core::testing::dummy_model_info("test-model"),
+            FailingClient,
+        ))));
+        let response = app
+            .clone()
+            .oneshot(json_request(
+                "POST",
+                &format!("/threads/{thread_id}/chat"),
+                serde_json::json!({ "agent_type": "homepage", "message": "   " }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let response = app
+            .clone()
+            .oneshot(json_request(
+                "POST",
+                &format!("/threads/{thread_id}/compact"),
+                serde_json::json!({ "agent_type": "homepage" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(body_json(response).await["ok"], true);
+
+        host.shutdown_all_agents_and_wait().await;
     }
 }
