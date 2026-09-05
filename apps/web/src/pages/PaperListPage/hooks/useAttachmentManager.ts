@@ -152,20 +152,21 @@ export function useAttachmentManager({ navigate, tableWrapperRef, onSetPrimary }
     };
 
     const getPaperIdFromRow = (e: any) => {
-      const tr = (e.target as HTMLElement).closest('tr[data-row-key]');
-      if (!tr) return null;
+      // virtual 表的行是 <div>、退化路径是 <tr>，统一按属性匹配不限定标签
+      const row = (e.target as HTMLElement).closest('[data-row-key]');
+      if (!row) return null;
       // data-row-key 是 Paper.id（safeId，base64url 字符串）——绝不能 parseInt
-      return tr.getAttribute('data-row-key') || null;
+      return row.getAttribute('data-row-key') || null;
     };
 
     const onDragOver = (e: any) => {
       if (!isExternalFileDrag(e)) return;
       e.preventDefault();
-      const tr = (e.target as HTMLElement).closest('tr[data-row-key]');
-      if (tr && tr !== highlightedRow) {
+      const row = (e.target as HTMLElement).closest('[data-row-key]');
+      if (row && row !== highlightedRow) {
         clearHighlight();
-        tr.classList.add(HIGHLIGHT_CLASS);
-        highlightedRow = tr as HTMLElement;
+        row.classList.add(HIGHLIGHT_CLASS);
+        highlightedRow = row as HTMLElement;
       }
     };
 
