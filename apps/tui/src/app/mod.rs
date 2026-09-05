@@ -93,6 +93,20 @@ impl App {
                     tracing::info!("runtime host opened successfully");
                     Some(h)
                 }
+                Err(runtime::Error::InstanceLockHeld { path }) => {
+                    // Another Autonomics process (desktop shell, or a second
+                    // TUI) owns the state-dir single-writer lock. The
+                    // terminal is not in raw mode yet — App::start sets that
+                    // up later — so plain stderr + exit is safe. Design doc
+                    // §9: the second instance errors out instead of
+                    // double-writing agent.db / bib.db.
+                    eprintln!(
+                        "Autonomics 已在另一个实例中运行（{} 被占用）。\n\
+                         请先关闭正在运行的 TUI 或桌面版，再重新启动。",
+                        path.display()
+                    );
+                    std::process::exit(1);
+                }
                 Err(e) => {
                     tracing::error!(
                         error = %e,

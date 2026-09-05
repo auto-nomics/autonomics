@@ -145,8 +145,8 @@ pub enable_host_tools: bool,     // host_tools（spawn_agent/delegate 等）
 |---|---|---|
 | P1 后端 | `AgentProfile` 新 flags；web 三 profile 注册；`tui-http` feature `runtime-host` + 新端点 + AgentRegistry + turn 锁；TUI `start_http_server` 传 infra | curl 走通 thread 全生命周期；TUI 原功能回归（默认 flags 不改变其工具面） |
 | P2 前端 | `useChatSender` 切 `/threads` API；删 messages 上行与静态 persona；thread 元数据附 session_id | 三种 pane 流式正常、刷新后 `GET /messages` 恢复 |
-| P3 Desktop + 收尾 | desktop `RuntimeHost::open` + 单写者锁 + 模型槽改造；旧 `POST /chat` 删除 | desktop 与 TUI 互斥提示正确；模型热更生效 |
-| P4 可选 | 存量 thread 迁移导入；`compact` 端点；delegation / 多智能体 web 化预研 | — |
+| P3 Desktop + 收尾 | desktop `RuntimeHost::open` + 单写者锁 + 模型槽改造；旧 `POST /chat` 删除（→P4，见 §12 偏差 4） | desktop 与 TUI 互斥提示正确；模型热更生效 |
+| P4 可选 | 存量 thread 迁移导入；inline 追问线程 session 化与旧 `POST /chat` 退役；`compact` 端点；delegation / 多智能体 web 化预研 | — |
 
 P1/P2 可并行开发（新端点与旧端点并存），P3 依赖 P1。
 
@@ -162,6 +162,13 @@ P1/P2 可并行开发（新端点与旧端点并存），P3 依赖 P1。
 **P1（后端）**：`crates/agentik-core/src/storage.rs`（4 flags，`serde(default)` 兼容存量行，零 SQL 迁移）、`crates/runtime/src/host.rs::tools_from_profile`（按 flag 门控；kms_readonly 仍无条件注册——存量残留，待清理）、`crates/tui-http/src/agent_runtime.rs`（AgentRegistry + 线程端点 + turn 串行）、`crates/tui-http/src/server.rs`（`GET /api/v1/agent` 模式探测）。`GET /threads/:id/messages` 复用了已有的 `get_transcript_messages`，未新增存储读接口。
 
 **P2（前端）**：`apps/web/src/features/ai-chat/api/agentThreadsApi.ts`（探测/映射/CRUD）、`useChatSender`（runtime 分支）、`useChatInit`（水合兜底）、`ChatPanel`（模式状态接线）、`systemPromptBuilder`（`excludePersona`）。
+
+**P3（桌面接入）**：`crates/runtime/src/instance_lock.rs`（`flock` 单写者锁，`RuntimeHost::open` 最先获取，`Error::InstanceLockHeld` 专用变体）、`apps/desktop/src-tauri/src/server.rs`（`RuntimeHost::open` + `.host(infra)`，本地 BibShared / vfs_setup 复刻整体删除，改用 SharedInfra 全套）、`apps/tui/src/app/mod.rs`（TUI 作为第二实例时 stderr 提示 + 退出）。桌面壳自此与 TUI 后端能力一致（`mode:"runtime"`）。与 §9 的偏差：
+
+1. **锁先于重资源**：§9 说"`RuntimeHost::open` 时获取"；实现在 `SharedInfra::open` 之前获取——争锁时毫秒级失败，而不是先等引擎/DB 打开再报错。
+2. **TUI 作为第二实例**：§9 只写 desktop 弹窗退出；TUI 侧同样退出（`App::new` 在终端 raw mode 之前，stderr + exit(1) 安全），避免"半残 TUI"（无 host、无 HTTP）这一歧义状态。
+3. **模型槽**：§9 建议改用 `SharedInfra` / `AgentHandle::model_handle` 的槽——`SharedInfra` 实际不持有模型槽（TUI 也是 App 级槽传入）。实现为 TUI 同款**进程主槽**：config.db 提供启动初始值，同一 `Arc<ArcSwapOption<Model>>` 喂给 `host.set_model` 与 `router.model`，tui-http 每 turn 重同步进常驻 agent——"读一次"不再是假设而是初始值，槽上热替换下一轮生效。
+4. **旧 `POST /chat` 删除**：§10 把它排在 P3，但 inline 追问线程（P2 偏差 4）仍走旧端点，删除会砍掉追问功能——移入 P4，与追问线程 session 化同期。
 
 与 §7/§8 的偏差，均已按更简单的方案实现：
 

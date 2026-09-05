@@ -19,15 +19,13 @@ tauri-plugin-clipboard-manager = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-single-instance = "2"
 
-tui-http = { path = "../../../crates/tui-http" }
-bib-base = { path = "../../../crates/bib-base" }
+tui-http = { path = "../../../crates/tui-http", features = ["runtime-host"] }
+runtime = { path = "../../../crates/runtime" }
 app-config = { path = "../../../crates/app-config" }
-vfs = { path = "../../../crates/vfs" }
 agentik-sdk = { path = "../../../crates/agentik-sdk" }
 
 tokio = { workspace = true, features = ["time"] }
 arc-swap.workspace = true
-toml.workspace = true
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter", "time"] }
 tracing-appender = "0.2"

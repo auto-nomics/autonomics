@@ -1006,6 +1006,12 @@ pub struct RuntimeHost {
     /// Buffer of 256 should be plenty for in-flight status transitions;
     /// if it overflows, subscribers see `RecvError::Lagged` and skip ahead.
     event_broadcast: tokio::sync::broadcast::Sender<HostEvent>,
+    /// Exclusive `flock` on `<state_dir>/runtime.lock`, acquired in
+    /// [`RuntimeHost::open`] before any database is opened. Held for the
+    /// host's lifetime; dropping the host releases it. See
+    /// `instance_lock` for the single-writer rationale.
+    #[allow(dead_code)] // the field is the lock: never read, alive = held
+    instance_lock: std::fs::File,
 }
 
 /// Lifecycle events emitted by RuntimeHost. The TUI subscribes to keep
@@ -1099,7 +1105,15 @@ struct HostDelegation {
 
 impl RuntimeHost {
     /// Open shared infrastructure and create an empty agent network.
+    ///
+    /// Acquires the state-dir single-writer lock
+    /// (`<state_dir>/runtime.lock`) first — a second Autonomics process on
+    /// the same `state_dir` fails fast here with
+    /// [`Error::InstanceLockHeld`](crate::error::Error::InstanceLockHeld)
+    /// before any heavy infrastructure or database is opened.
     pub async fn open(config: &RuntimeConfig) -> Result<Self> {
+        tracing::info!("RuntimeHost::open: acquiring state-dir instance lock");
+        let instance_lock = crate::instance_lock::acquire(&config.state_dir)?;
         tracing::info!("RuntimeHost::open: delegating to SharedInfra::open");
         let mut infra = SharedInfra::open(config).await?;
         tracing::info!("RuntimeHost::open: infrastructure ready, creating channels");
@@ -1130,6 +1144,7 @@ impl RuntimeHost {
             notify_tx,
             notify_rx,
             event_broadcast,
+            instance_lock,
         })
     }
 

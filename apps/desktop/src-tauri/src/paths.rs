@@ -1,9 +1,10 @@
 //! 数据目录解析：与 TUI 共享 `~/.autonomics`（尊重既有 `AUTONOMICS_*` env）。
 //!
 //! 与 `runtime::RuntimeConfig`（crates/runtime/src/config.rs:247）的解析
-//! 语义对齐，但不依赖 runtime crate；唯一差异是 `data_dir` 的默认值——
-//! TUI 默认硬编码开发机路径 `/mnt/disk3/test`（config.rs:50），桌面版
-//! 默认落到共享 state dir 之下（env 已设置时两者一致）。
+//! 语义对齐；唯一差异是 `data_dir` 的默认值——TUI 默认硬编码开发机路径
+//! `/mnt/disk3/test`（config.rs:50），桌面版默认落到共享 state dir 之下
+//! （env 已设置时两者一致）。解析结果由 `server::runtime_config` 显式
+//! 钉进 RuntimeConfig，不再依赖两处默认值恰好相同。
 
 use std::path::PathBuf;
 
@@ -14,8 +15,8 @@ pub struct Paths {
     pub bib_db: PathBuf,
     pub app_db: PathBuf,
     pub data_dir: PathBuf,
+    /// VFS `/literature` 挂载的本地后端（上传原文的存放地）。
     pub literature_root: PathBuf,
-    pub vfs_manifest: PathBuf,
     pub logs_dir: PathBuf,
 }
 
@@ -41,7 +42,6 @@ pub fn resolve() -> Result<Paths, String> {
 
     Ok(Paths {
         literature_root: state_dir.join("literature"),
-        vfs_manifest: state_dir.join("vfs.toml"),
         logs_dir: state_dir.join("logs"),
         state_dir,
         bib_db,
@@ -51,7 +51,9 @@ pub fn resolve() -> Result<Paths, String> {
 }
 
 impl Paths {
-    /// 启动前确保目录存在（文件本身由各子系统创建）。
+    /// 启动前确保目录存在（文件本身由各子系统创建）。`literature_root`
+    /// 在此预建——vfs.toml 的 `/literature` 本地挂载后端指向它，opendal
+    /// 首次写入时目录必须可寻。
     pub fn ensure_dirs(&self) -> Result<(), String> {
         for dir in [
             &self.state_dir,

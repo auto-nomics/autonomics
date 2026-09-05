@@ -8,8 +8,9 @@ description = "Composable local HTTP API backend started alongside the Autonomic
 
 [features]
 # Serve resident runtime-hosted agents (`/api/v1/agent/threads`) alongside
-# the ephemeral chat endpoint. Off by default: the minimal embeddable host
-# (e.g. the desktop shell) does not link the runtime crate.
+# the ephemeral chat endpoint. Off by default so minimal embedders (tests,
+# bib-only hosts) stay light; the TUI and the desktop shell both opt in
+# (docs/design/web-agent-runtime.md §9).
 runtime-host = ["dep:runtime"]
 
 [dependencies]

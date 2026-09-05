@@ -1,13 +1,15 @@
-//! Autonomics 桌面壳：进程内嵌 tui-http，webview 导航至同源地址。
+//! Autonomics 桌面壳：进程内嵌 tui-http + RuntimeHost，webview 导航至同源地址。
 //!
-//! 前端零改动——SPA 由 rust-embed 嵌入服务同源托管，`isTauri` 保持
-//! false，agent SSE 裸 fetch 天然工作。Tauri 在这里只提供窗口、
-//! 单实例、剪贴板与错误对话框。
+//! P3（docs/design/web-agent-runtime.md §9）后桌面壳与 TUI 共用同一后端
+//! 装配：`RuntimeHost::open` 打开共享基础设施并持有单写者锁，router 挂
+//! `.host(infra)` 后 agent 走常驻会话端点（`GET /api/v1/agent` →
+//! `{"mode":"runtime"}`）。前端零改动——SPA 由 rust-embed 嵌入服务同源
+//! 托管，`isTauri` 保持 false，agent SSE 裸 fetch 天然工作。Tauri 在这里
+//! 只提供窗口、单实例、剪贴板与错误对话框。
 
 mod paths;
 mod server;
 mod state;
-mod vfs_setup;
 
 use std::sync::Mutex;
 
@@ -91,9 +93,9 @@ pub fn run() {
         });
 }
 
-/// 组装内嵌服务。顺序严格：VFS → BibShared → 模型槽 → router → start。
-/// `tui_http::start` bind 完成端口即定，窗口最后创建——webview 首次
-/// 导航时服务已可用，无需重试逻辑。
+/// 组装内嵌服务。顺序严格：RuntimeHost（含单写者锁）→ 模型槽 → router
+/// → start。`tui_http::start` bind 完成端口即定，窗口最后创建——webview
+/// 首次导航时服务已可用，无需重试逻辑。
 fn bootstrap(paths: &Paths) -> Result<DesktopState, String> {
     let runtime =
         tokio::runtime::Runtime::new().map_err(|e| format!("创建 tokio runtime 失败：{e}"))?;
@@ -102,6 +104,7 @@ fn bootstrap(paths: &Paths) -> Result<DesktopState, String> {
 
     Ok(DesktopState::new(
         runtime,
+        started.host,
         started.handle,
         started.model_slot,
     ))

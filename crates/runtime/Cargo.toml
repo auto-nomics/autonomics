@@ -29,6 +29,7 @@ bib-base = { path = "../bib-base" }
 writing-base = { path = "../writing-base" }
 kms = { path = "../kms" }
 kms-tools = { path = "../kms-tools" }
+libc = "0.2"
 tokio = { workspace = true }
 tokio-util = "0.7"
 thiserror = { workspace = true }

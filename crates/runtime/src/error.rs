@@ -27,6 +27,14 @@ pub enum Error {
     #[error("writing system init failed: {0}")]
     Writing(#[from] writing_base::Error),
 
+    /// Another Autonomics process holds the state-dir single-writer lock
+    /// (`<state_dir>/runtime.lock`, acquired in
+    /// [`RuntimeHost::open`](crate::RuntimeHost::open)). Callers should
+    /// surface a "close the other instance" message rather than a generic
+    /// init failure.
+    #[error("another Autonomics instance already holds the runtime lock at {path}")]
+    InstanceLockHeld { path: std::path::PathBuf },
+
     #[error("{0}")]
     Other(String),
 }

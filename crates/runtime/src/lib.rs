@@ -15,6 +15,8 @@ pub mod host_tools;
 pub mod memory_kms;
 pub mod tools;
 
+mod instance_lock;
+
 pub use config::{RuntimeConfig, RuntimeConfigBuilder};
 pub use control::{HostCommand, HostControl, HostStatus};
 pub use error::{Error, Result};
