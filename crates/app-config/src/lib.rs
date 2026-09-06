@@ -8,6 +8,7 @@
 //! unchanged.
 
 use agentik_sdk::model::{Model, ProviderConfig, ProviderType};
+use agentik_sdk::provider::openai::oauth::TokenBlob;
 use agentik_sdk::provider::registry;
 use rusqlite::Connection;
 use uuid::Uuid;
@@ -138,6 +139,16 @@ pub fn build_model_from_spec(conn: &Connection, spec: &str) -> Option<Model> {
         db_base_url
     };
     let auth_method = registry::default_auth_method(&provider_type);
+    // ChatGPT 订阅（openai）：api_key 存的是 token blob。exp 已过期 →
+    // 拒绝构建（上层负责 ensure_fresh 刷新或引导重新登录）；解析失败则
+    // 交给 `Model::new` 产出带指引的 Configuration 错误。
+    if provider_type == ProviderType::Openai {
+        if let Ok(blob) = TokenBlob::from_json(&api_key) {
+            if blob.access_token_expired() {
+                return None;
+            }
+        }
+    }
     // Look up model info from the built-in catalog, falling back to the
     // local `models` table for entries imported from a remote catalogue.
     // `unwrap_or_default` (rather than `?`) so Custom providers whose
@@ -161,6 +172,31 @@ pub fn build_model_from_spec(conn: &Connection, spec: &str) -> Option<Model> {
     model_info.provider_id = provider_config.id;
 
     Model::new(model_info, &provider_config).ok()
+}
+
+/// 读某 provider 行的 ChatGPT token blob（行存在且 api_key 可解析）。
+/// 供登录后刷新/展示摘要用；解析失败视为未登录 → `None`。
+pub fn chatgpt_token_blob(conn: &Connection, name: &str) -> Option<TokenBlob> {
+    let api_key: String = conn
+        .query_row(
+            "SELECT api_key FROM providers WHERE name = ?1",
+            [name],
+            |row| row.get(0),
+        )
+        .ok()?;
+    TokenBlob::from_json(&api_key).ok()
+}
+
+/// 覆写 provider 行的 api_key（token 刷新/重新登录后回写 blob JSON）。
+pub fn update_provider_api_key(
+    conn: &Connection,
+    name: &str,
+    api_key: &str,
+) -> rusqlite::Result<usize> {
+    conn.execute(
+        "UPDATE providers SET api_key = ?1 WHERE name = ?2",
+        rusqlite::params![api_key, name],
+    )
 }
 
 /// A row from the `providers` table.
@@ -366,5 +402,71 @@ mod tests {
         let model =
             build_model(&conn).expect("preset model should build via the registry catalog");
         assert_eq!(model.model_info.model_name, preset_name);
+    }
+
+    #[test]
+    fn openai_token_blob_lifecycle() {
+        use agentik_sdk::provider::openai::oauth::TokenBlob;
+        use agentik_sdk::provider::openai::{MODEL_GPT_6_ASTRA, OpenaiProvider};
+        use agentik_sdk::provider::ProviderPreset;
+
+        let conn = conn();
+
+        let blob_json = |exp_offset_secs: i64| {
+            // 合成 JWT access token（exp 可控）。
+            let enc = |v: &serde_json::Value| {
+                use base64::Engine as _;
+                base64::engine::general_purpose::URL_SAFE_NO_PAD
+                    .encode(serde_json::to_vec(v).unwrap())
+            };
+            let header = serde_json::json!({"alg": "none", "typ": "JWT"});
+            let exp = chrono::Utc::now().timestamp() + exp_offset_secs;
+            let payload = serde_json::json!({"exp": exp});
+            let access = format!("{}.{}.sig", enc(&header), enc(&payload));
+            TokenBlob {
+                access_token: access,
+                refresh_token: "refresh-token".into(),
+                account_id: "org-9".into(),
+                email: Some("user@example.com".into()),
+                plan_type: Some("plus".into()),
+                last_refresh: chrono::Utc::now(),
+            }
+            .to_json()
+            .unwrap()
+        };
+
+        let insert_openai = |api_key: &str| {
+            conn.execute(
+                "INSERT OR REPLACE INTO providers (name, provider_type, base_url, api_key, auth_method)
+                 VALUES ('openai', 'openai', '', ?1, 'chatgpt')",
+                rusqlite::params![api_key],
+            )
+            .unwrap();
+        };
+        let preset_name = || {
+            let _ = OpenaiProvider::preset_models();
+            MODEL_GPT_6_ASTRA.to_string()
+        };
+
+        // 新鲜 blob：可构建（OAuth 模型），可读回摘要。
+        insert_openai(&blob_json(3600));
+        assert!(chatgpt_token_blob(&conn, "openai").is_some());
+        let model = build_model_from_spec(&conn, &format!("openai:{}", preset_name()))
+            .expect("fresh blob builds an OAuth model");
+        assert!(model.is_chatgpt());
+
+        // 过期 blob：拒绝构建（上层走 ensure_fresh/重新登录）。
+        insert_openai(&blob_json(-3600));
+        assert!(build_model_from_spec(&conn, &format!("openai:{}", preset_name())).is_none());
+
+        // 垃圾 blob：Model::new Configuration → None。
+        insert_openai("garbage-not-json");
+        assert!(build_model_from_spec(&conn, &format!("openai:{}", preset_name())).is_none());
+        assert!(chatgpt_token_blob(&conn, "openai").is_none());
+
+        // api_key 回写往返。
+        insert_openai(&blob_json(3600));
+        update_provider_api_key(&conn, "openai", &blob_json(7200)).unwrap();
+        assert!(chatgpt_token_blob(&conn, "openai").is_some());
     }
 }

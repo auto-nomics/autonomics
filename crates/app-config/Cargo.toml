@@ -10,5 +10,10 @@ agentik-sdk = { path = "../../crates/agentik-sdk" }
 rusqlite = "0.40.1"
 uuid = "1.24"
 
+[dev-dependencies]
+base64 = "0.22"
+chrono = "0.4"
+serde_json = "1.0"
+
 [lints]
 workspace = true

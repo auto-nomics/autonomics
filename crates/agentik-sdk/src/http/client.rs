@@ -24,7 +24,10 @@ impl HttpClient {
                 message: e.to_string(),
             })?;
 
-        let auth = AuthHandler::with_method(config.api_key.clone(), config.auth_method.clone());
+        let mut auth = AuthHandler::with_method(config.api_key.clone(), config.auth_method.clone());
+        if let Some(slot) = &config.oauth_token_slot {
+            auth = auth.with_token_slot(slot.clone());
+        }
 
         Ok(Self {
             client,
@@ -48,6 +51,16 @@ impl HttpClient {
                 })?;
 
         self.handle_response_status(response).await
+    }
+
+    /// Build the auth header set (via the [`AuthHandler`]) without sending.
+    ///
+    /// Streaming callers snapshot this once and replay it on reconnect, so
+    /// auth is applied identically on the streaming and non-streaming paths.
+    pub fn auth_header_map(&self) -> Result<reqwest::header::HeaderMap> {
+        let mut headers = reqwest::header::HeaderMap::new();
+        self.auth.add_auth_headers(&mut headers)?;
+        Ok(headers)
     }
 
     /// Create a GET request builder

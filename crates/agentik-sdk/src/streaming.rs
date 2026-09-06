@@ -801,7 +801,21 @@ impl MessageStream {
                         u.cache_read_input_tokens = Some(cr);
                     }
                 }
-                MessageStreamEvent::MessageStop => {}
+                MessageStreamEvent::MessageStop => {
+                    // 安全网：适配器漏发 ContentBlockStop 时，终结前把
+                    // 仍是字符串缓冲的工具参数解析为对象（与
+                    // ContentBlockStop 的终结逻辑一致——字符串 input 不
+                    // 是合法字典，工具执行与消息回放都会失败）。
+                    for block in msg.content.iter_mut() {
+                        if let ContentBlock::ToolUse { input, .. } = block
+                            && let serde_json::Value::String(accumulated) = input
+                        {
+                            *input = serde_json::from_str(accumulated).unwrap_or_else(|_| {
+                                serde_json::Value::Object(serde_json::Map::new())
+                            });
+                        }
+                    }
+                }
             }
         }
 
@@ -1647,6 +1661,59 @@ data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":
                 let obj = input.as_object().expect("input should parse to an object");
                 assert_eq!(obj.get("city").and_then(|v| v.as_str()), Some("Beijing"));
                 assert_eq!(obj.get("unit").and_then(|v| v.as_str()), Some("c"));
+            }
+            other => panic!("expected ToolUse block, got {:?}", other),
+        }
+    }
+
+    /// 安全网回归：适配器漏发 ContentBlockStop 时（Responses wire 曾如此），
+    /// `MessageStop` 也必须把字符串缓冲的工具参数解析为对象——否则工具
+    /// 执行器收到 `invalid type: string` 的 input。
+    #[tokio::test]
+    async fn tool_use_input_json_parses_on_message_stop_safety_net() {
+        let final_message = sample_message(
+            "msg_tool_nostop",
+            0,
+            vec![ContentBlock::ToolUse {
+                id: "tool_1".into(),
+                name: "list_agents".into(),
+                input: serde_json::json!({}),
+            }],
+        );
+
+        // 事件流里没有 ContentBlockStop——直接从 InputJsonDelta 跳到
+        // MessageStop。
+        let stream = MessageStream::from_events(
+            vec![
+                MessageStreamEvent::MessageStart {
+                    message: sample_message("msg_tool_nostop", 0, vec![]),
+                },
+                MessageStreamEvent::ContentBlockStart {
+                    index: 0,
+                    content_block: ContentBlock::ToolUse {
+                        id: "tool_1".into(),
+                        name: "list_agents".into(),
+                        input: serde_json::Value::String(String::new()),
+                    },
+                },
+                MessageStreamEvent::ContentBlockDelta {
+                    index: 0,
+                    delta: ContentBlockDelta::InputJsonDelta {
+                        partial_json: "{}".into(),
+                    },
+                },
+                MessageStreamEvent::MessageStop,
+            ],
+            final_message,
+        );
+
+        let final_msg = stream.final_message().await.unwrap();
+        match &final_msg.content[0] {
+            ContentBlock::ToolUse { input, .. } => {
+                assert!(
+                    input.is_object(),
+                    "input must be parsed to an object, got {input}"
+                );
             }
             other => panic!("expected ToolUse block, got {:?}", other),
         }

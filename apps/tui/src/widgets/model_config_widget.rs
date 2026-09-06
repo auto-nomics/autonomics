@@ -69,6 +69,9 @@ pub enum ConfigCommand {
     },
     /// Reload the provider catalogue from the DB and SDK registry.
     ReloadCatalog,
+    /// 打开 ChatGPT 订阅 OAuth 浏览器登录（openai provider 专用面板发
+    /// 出）。App 层起回调服务器、复制授权 URL 并等待完成事件。
+    StartChatgptLogin { provider_name: String },
     /// Close the model config popup.
     Close,
     /// Nothing to do.
@@ -92,8 +95,12 @@ pub struct CatalogProvider {
     pub models: Vec<ModelInfo>,
     /// Whether the user has configured credentials for this provider.
     pub configured: bool,
-    /// The api_key stored in the DB (if configured).
+    /// The api_key stored in the DB (if configured). For the openai
+    /// provider this is the raw token-blob JSON — never rendered or echoed
+    /// into an editor; the dedicated ChatGPT panel shows [`Self::chatgpt`].
     pub api_key: Option<String>,
+    /// ChatGPT 订阅登录摘要（openai 行 api_key 为合法 token blob 时）。
+    pub chatgpt: Option<agentik_sdk::provider::openai::oauth::TokenBlob>,
     /// Whether the tree node is currently expanded (only meaningful if
     /// `configured` is true).
     pub expanded: bool,
@@ -132,6 +139,11 @@ pub enum ProviderPanelState {
         base_url_presets: Vec<String>,
         /// Which of the two fields is currently being typed into.
         focused_field: ConfigField,
+    },
+    /// ChatGPT 订阅登录面板（openai provider 专用，替代凭据编辑器：
+    /// 订阅模式没有 API key 输入）。
+    Chatgpt {
+        provider_name: String,
     },
 }
 
@@ -248,6 +260,8 @@ impl ModelConfigState {
                 ConfigField::ApiKey => api_key.insert_str(text),
                 ConfigField::BaseUrl => base_url.insert_str(text),
             }
+        } else if matches!(self.provider_panel_state, ProviderPanelState::Chatgpt { .. }) {
+            // 登录面板无可输入字段；粘贴落到搜索框反而干扰，直接忽略。
         } else {
             self.search_textarea.insert_str(text);
             self.sync_search_query();
@@ -322,6 +336,23 @@ impl ModelConfigState {
             // Mark as consumed by not returning None.
             cc
         };
+
+        // ── ChatGPT 登录面板 ──
+        if let ProviderPanelState::Chatgpt { provider_name } = &self.provider_panel_state {
+            let provider_name = provider_name.clone();
+            return match key.code {
+                KeyCode::Esc => {
+                    self.provider_panel_state = ProviderPanelState::Preview;
+                    consumed(ConfigCommand::None)
+                }
+                // L 开始登录 / R 重新登录（已登录时同一动作）。
+                KeyCode::Char('l') | KeyCode::Char('L') | KeyCode::Char('r') | KeyCode::Char('R') => {
+                    self.provider_panel_state = ProviderPanelState::Preview;
+                    consumed(ConfigCommand::StartChatgptLogin { provider_name })
+                }
+                _ => consumed(ConfigCommand::None),
+            };
+        }
 
         // ── Config mode ──
         if let ProviderPanelState::Config {
@@ -505,12 +536,20 @@ impl ModelConfigState {
                 consumed(ConfigCommand::None)
             }
             // Enter provider config mode when cursor is on a provider row
-            // (`Ctrl+E` also remains available while filtering).
+            // (`Ctrl+E` also remains available while filtering). The openai
+            // provider gets the dedicated ChatGPT login panel instead of
+            // the credential editor — subscription login has no API key.
             KeyCode::Char('e') if ctrl => {
                 let flat = self.flat_items();
                 if let Some(FlatItem::Provider(pi)) = flat.get(self.cursor) {
                     let pi = *pi;
                     let provider = &self.providers[pi];
+                    if provider.provider_type == ProviderType::Openai {
+                        self.provider_panel_state = ProviderPanelState::Chatgpt {
+                            provider_name: provider.name.clone(),
+                        };
+                        return consumed(ConfigCommand::None);
+                    }
                     let mut api_key_ta = TextArea::new();
                     if let Some(ref key) = provider.api_key {
                         api_key_ta.set_text(key);
@@ -600,6 +639,9 @@ impl StatefulWidgetRef for ModelConfigWidget {
         match &mut state.provider_panel_state {
             ProviderPanelState::Preview => {
                 render_detail(chunks[1], buf, state);
+            }
+            ProviderPanelState::Chatgpt { provider_name } => {
+                render_chatgpt_panel(chunks[1], buf, &state.providers, provider_name);
             }
             ProviderPanelState::Config {
                 provider_name,
@@ -816,6 +858,18 @@ fn render_detail(area: Rect, buf: &mut Buffer, state: &ModelConfigState) {
                     val(format!("{} (built-in)", p.models.len())),
                 ]),
             ]
+            .into_iter()
+            .chain(p.chatgpt.as_ref().map(|blob| {
+                Line::from(vec![
+                    label("Login"),
+                    green(format!(
+                        "{} ({})",
+                        blob.email.as_deref().unwrap_or("email unknown"),
+                        blob.plan_type.as_deref().unwrap_or("plan unknown"),
+                    )),
+                ])
+            }))
+            .collect::<Vec<_>>()
         }
         FlatItem::Model(pi, mi) => {
             let p = &state.providers[pi];
@@ -873,6 +927,95 @@ fn render_detail(area: Rect, buf: &mut Buffer, state: &ModelConfigState) {
 }
 
 // ── Config panel (provider credential editor) ──────────
+
+/// ChatGPT 订阅登录面板：只读展示登录状态与操作提示（无可输入字段，
+/// blob JSON 永不回显）。
+fn render_chatgpt_panel(
+    area: Rect,
+    buf: &mut Buffer,
+    providers: &[CatalogProvider],
+    provider_name: &str,
+) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Double)
+        .border_style(Style::default().fg(Color::Yellow))
+        .title(Line::from(vec![
+            Span::styled(" ChatGPT 登录 ", Style::default().fg(Color::Yellow)),
+            Span::raw(" "),
+            Span::styled(provider_name, Style::default().fg(Color::White)),
+        ]))
+        .title_bottom(
+            Line::from("[L] 登录/重新登录  [Esc] 关闭").alignment(Alignment::Center),
+        );
+    let inner = block.inner(area);
+    block.render(area, buf);
+
+    let provider = providers.iter().find(|p| p.name == provider_name);
+    let label = |k: &str| Span::styled(format!(" {:<10}: ", k), Style::default().fg(Color::Cyan));
+    let val = |v: String| Span::styled(v, Style::default().fg(Color::White));
+    let dim = |v: String| Span::styled(v, Style::default().fg(Color::DarkGray));
+    let green = |v: String| Span::styled(v, Style::default().fg(Color::Green));
+
+    let mut lines: Vec<Line> = vec![
+        Line::from(vec![
+            label("模式"),
+            val("ChatGPT 订阅（Plus/Pro）OAuth 登录".to_string()),
+        ]),
+        Line::from(vec![
+            label("说明"),
+            dim("无需 API key：按 L 后在浏览器完成 OpenAI 授权，".to_string()),
+        ]),
+        Line::from(vec![
+            Span::raw("            "),
+            dim("授权链接会自动复制到剪贴板。".to_string()),
+        ]),
+        Line::raw(""),
+    ];
+
+    match provider.and_then(|p| p.chatgpt.as_ref()) {
+        Some(blob) => {
+            lines.push(Line::from(vec![
+                label("状态"),
+                green("已登录".to_string()),
+            ]));
+            lines.push(Line::from(vec![
+                label("账号"),
+                val(blob.email.clone().unwrap_or_else(|| "email unknown".into())),
+            ]));
+            lines.push(Line::from(vec![
+                label("计划"),
+                val(blob.plan_type.clone().unwrap_or_else(|| "unknown".into())),
+            ]));
+            let tail: String = blob
+                .account_id
+                .chars()
+                .skip(blob.account_id.chars().count().saturating_sub(6))
+                .collect();
+            lines.push(Line::from(vec![
+                label("Account ID"),
+                dim(format!("…{tail}")),
+            ]));
+            lines.push(Line::from(vec![
+                label("上次刷新"),
+                dim(blob.last_refresh.format("%Y-%m-%d %H:%M UTC").to_string()),
+            ]));
+            lines.push(Line::raw(""));
+            lines.push(Line::from(dim("按 R/L 重新登录（切换账号或修复失效凭据）".to_string())));
+        }
+        None => {
+            lines.push(Line::from(vec![
+                label("状态"),
+                Span::styled("未登录", Style::default().fg(Color::Red)),
+            ]));
+            lines.push(Line::raw(""));
+            lines.push(Line::from(dim("按 L 开始 ChatGPT 登录".to_string())));
+        }
+    }
+
+    let p = Paragraph::new(lines).block(Block::default().padding(Padding::vertical(1)));
+    ratatui::widgets::Widget::render(p, inner, buf);
+}
 
 #[allow(clippy::too_many_arguments)]
 fn render_config_panel(
@@ -1083,6 +1226,17 @@ pub fn build_catalog(
                 Some((_, key, _)) if !key.is_empty() => (true, Some(key.clone())),
                 _ => (false, None),
             };
+            // openai 行的 api_key 是 token blob：解析成功记录登录摘要
+            // （脱敏渲染）；原始 JSON 不进任何编辑器。
+            let chatgpt = if provider_type == ProviderType::Openai {
+                api_key
+                    .as_deref()
+                    .and_then(|k| {
+                        agentik_sdk::provider::openai::oauth::TokenBlob::from_json(k).ok()
+                    })
+            } else {
+                None
+            };
             // Selected base URL: DB override if non-empty, else the default.
             let selected_base_url = db_match
                 .and_then(|(_, _, url)| {
@@ -1102,6 +1256,7 @@ pub fn build_catalog(
                 models,
                 configured,
                 api_key,
+                chatgpt,
                 // Configured providers start expanded.
                 expanded: configured,
             }
@@ -1226,5 +1381,104 @@ mod tests {
             panic!("credential editor should be open");
         };
         assert_eq!(api_key.text(), "secret");
+    }
+
+    fn blob_json() -> String {
+        use agentik_sdk::provider::openai::oauth::TokenBlob;
+        TokenBlob {
+            access_token: "access-token".into(),
+            refresh_token: "refresh-token".into(),
+            account_id: "org-123456".into(),
+            email: Some("user@example.com".into()),
+            plan_type: Some("plus".into()),
+            last_refresh: chrono::Utc::now(),
+        }
+        .to_json()
+        .unwrap()
+    }
+
+    /// 把游标移到指定 provider 头行（未配置 provider 无子节点，扁平索引
+    /// 即 provider 索引）。
+    fn cursor_on_provider(state: &mut ModelConfigState, name: &str) {
+        let pi = state
+            .providers
+            .iter()
+            .position(|p| p.name == name)
+            .unwrap_or_else(|| panic!("provider {name} in catalog"));
+        state.cursor = pi;
+    }
+
+    #[test]
+    fn ctrl_e_on_openai_opens_chatgpt_panel_not_credential_editor() {
+        let mut state = build_catalog(&[], &[]);
+        cursor_on_provider(&mut state, "openai");
+
+        state.handle_key(key('e', true));
+
+        let ProviderPanelState::Chatgpt { provider_name } = &state.provider_panel_state else {
+            panic!("Ctrl+E on openai should open the ChatGPT login panel");
+        };
+        assert_eq!(provider_name, "openai");
+    }
+
+    #[test]
+    fn chatgpt_panel_l_emits_login_and_esc_closes() {
+        let mut state = build_catalog(&[], &[]);
+        cursor_on_provider(&mut state, "openai");
+        state.handle_key(key('e', true));
+
+        // L → StartChatgptLogin，面板回 Preview。
+        let cmd = state.handle_key(key('l', false));
+        let ConfigCommand::StartChatgptLogin { provider_name } = cmd else {
+            panic!("L in the ChatGPT panel should emit StartChatgptLogin, got {cmd:?}");
+        };
+        assert_eq!(provider_name, "openai");
+        assert!(matches!(
+            state.provider_panel_state,
+            ProviderPanelState::Preview
+        ));
+
+        // R 同样触发；Esc 仅关闭。
+        state.handle_key(key('e', true));
+        assert!(matches!(
+            state.handle_key(key('R', false)),
+            ConfigCommand::StartChatgptLogin { .. }
+        ));
+        state.handle_key(key('e', true));
+        assert!(matches!(
+            state.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            ConfigCommand::None
+        ));
+        assert!(matches!(
+            state.provider_panel_state,
+            ProviderPanelState::Preview
+        ));
+    }
+
+    #[test]
+    fn catalog_marks_openai_logged_in_from_blob_without_echoing_it() {
+        let state = build_catalog(&[("openai".to_string(), blob_json(), String::new())], &[]);
+        let p = state
+            .providers
+            .iter()
+            .find(|p| p.name == "openai")
+            .expect("openai in catalog");
+        assert!(p.configured);
+        let blob = p.chatgpt.as_ref().expect("login summary parsed from blob");
+        assert_eq!(blob.email.as_deref(), Some("user@example.com"));
+        assert_eq!(blob.plan_type.as_deref(), Some("plus"));
+
+        // 垃圾 api_key（非 blob）：configured 仍可为真，但无登录摘要。
+        let state = build_catalog(
+            &[("openai".to_string(), "garbage-key".to_string(), String::new())],
+            &[],
+        );
+        let p = state
+            .providers
+            .iter()
+            .find(|p| p.name == "openai")
+            .unwrap();
+        assert!(p.configured);
+        assert!(p.chatgpt.is_none());
     }
 }

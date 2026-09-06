@@ -7,9 +7,11 @@
 //! reuse the helpers defined here.
 
 pub mod chat;
+pub mod chatgpt;
 pub mod responses;
 
 pub use chat::OpenAiChatWire;
+pub use chatgpt::ChatgptResponsesWire;
 pub use responses::OpenAiResponsesWire;
 
 use crate::types::ReasoningConfig;
