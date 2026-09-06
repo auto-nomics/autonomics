@@ -16,7 +16,7 @@ use crate::container_command::{
     ContainerPanelBundleSpec,
 };
 use crate::image_registry::acr_image;
-use container_runtime::{ContainerRuntime, PanelCache, PullPolicy};
+use container_runtime::{PanelCache, PodmanConnection, PullPolicy};
 
 pub const MTAG_CONTAINER_KIND: &str = "mtag_container";
 pub const MTAG_ORIGINAL_IMAGE_REPOSITORY: &str = "mtag";
@@ -80,12 +80,12 @@ fn default_tol() -> f64 {
 }
 
 pub struct MtagContainerNodeFactory {
-    pub(crate) runtime: Arc<dyn ContainerRuntime>,
+    pub(crate) runtime: Arc<dyn PodmanConnection>,
     pub(crate) panel_cache: Arc<PanelCache>,
 }
 
 impl MtagContainerNodeFactory {
-    pub fn new(runtime: Arc<dyn ContainerRuntime>, panel_cache: Arc<PanelCache>) -> Self {
+    pub fn new(runtime: Arc<dyn PodmanConnection>, panel_cache: Arc<PanelCache>) -> Self {
         Self {
             runtime,
             panel_cache,
@@ -273,7 +273,7 @@ impl NodeFactory for MtagContainerNodeFactory {
             .iter()
             .map(|binding| node_ctx.bound_data_bundle(&binding.binding).cloned())
             .collect::<dag_core::registry::error::Result<Vec<_>>>()?;
-        let runtime: Arc<dyn ContainerRuntime> = self.runtime.clone();
+        let runtime: Arc<dyn PodmanConnection> = self.runtime.clone();
         let node = ContainerCommandNode::new_with_catalog_panels(
             container_spec,
             runtime,

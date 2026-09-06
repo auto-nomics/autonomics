@@ -25,7 +25,7 @@ use crate::container_command::{
     ContainerPanelBundleSpec,
 };
 use crate::image_registry::acr_image;
-use container_runtime::{ContainerRuntime, PanelCache, PullPolicy};
+use container_runtime::{PanelCache, PodmanConnection, PullPolicy};
 
 pub const PLINK2_CLUMP_CONTAINER_KIND: &str = "plink2_clump_container";
 pub const PLINK2_ORIGINAL_IMAGE_REPOSITORY: &str = "plink2";
@@ -117,12 +117,12 @@ fn default_timeout_secs() -> u64 {
 }
 
 pub struct Plink2ClumpContainerNodeFactory {
-    pub(crate) runtime: Arc<dyn ContainerRuntime>,
+    pub(crate) runtime: Arc<dyn PodmanConnection>,
     pub(crate) panel_cache: Arc<PanelCache>,
 }
 
 impl Plink2ClumpContainerNodeFactory {
-    pub fn new(runtime: Arc<dyn ContainerRuntime>, panel_cache: Arc<PanelCache>) -> Self {
+    pub fn new(runtime: Arc<dyn PodmanConnection>, panel_cache: Arc<PanelCache>) -> Self {
         Self {
             runtime,
             panel_cache,
@@ -331,8 +331,8 @@ impl NodeFactory for Plink2ClumpContainerNodeFactory {
     }
 
     fn doc(&self) -> &'static str {
-        "Runs the official PLINK2 v2.0.0-a.6.26 binary in an ephemeral k3s \
-        Job against the offline 1000G EUR Phase3 PLINK reference panel \
+        "Runs the official PLINK2 v2.0.0-a.6.26 binary in an ephemeral Podman \
+        container against the offline 1000G EUR Phase3 PLINK reference panel \
         catalog package `plink.ref.1000g_eur.binary`. Input is one \
         tab-separated sumstats File carrying at least an SNP column and a \
         P column; the wrapper iterates over autosomes 1..=22 by default (or \
@@ -374,7 +374,7 @@ impl NodeFactory for Plink2ClumpContainerNodeFactory {
             .iter()
             .map(|binding| node_ctx.bound_data_bundle(&binding.binding).cloned())
             .collect::<dag_core::registry::error::Result<Vec<_>>>()?;
-        let runtime: Arc<dyn container_runtime::ContainerRuntime> = self.runtime.clone();
+        let runtime: Arc<dyn container_runtime::PodmanConnection> = self.runtime.clone();
         let node = ContainerCommandNode::new_with_catalog_panels(
             container_spec,
             runtime,

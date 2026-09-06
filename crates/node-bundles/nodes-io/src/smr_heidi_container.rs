@@ -23,7 +23,7 @@ use crate::container_command::{
     ContainerPanelBundleSpec,
 };
 use crate::image_registry::acr_image;
-use container_runtime::{ContainerRuntime, PanelCache, PullPolicy};
+use container_runtime::{PanelCache, PodmanConnection, PullPolicy};
 
 pub const SMR_HEIDI_CONTAINER_KIND: &str = "smr_heidi_container";
 pub const SMR_ORIGINAL_IMAGE_REPOSITORY: &str = "smr";
@@ -189,12 +189,12 @@ fn default_timeout_secs() -> u64 {
 }
 
 pub struct SmrHeidiContainerNodeFactory {
-    pub(crate) runtime: Arc<dyn ContainerRuntime>,
+    pub(crate) runtime: Arc<dyn PodmanConnection>,
     pub(crate) panel_cache: Arc<PanelCache>,
 }
 
 impl SmrHeidiContainerNodeFactory {
-    pub fn new(runtime: Arc<dyn ContainerRuntime>, panel_cache: Arc<PanelCache>) -> Self {
+    pub fn new(runtime: Arc<dyn PodmanConnection>, panel_cache: Arc<PanelCache>) -> Self {
         Self {
             runtime,
             panel_cache,
@@ -400,8 +400,8 @@ fn panel_bindings() -> Vec<DataBundleBinding> {
 
 const DESC: &str = "Runs official SMR and HEIDI testing against a selected eQTL dataset.";
 
-const DOC: &str = "Runs the official SMR v1.4.2 executable in an ephemeral k3s \
-Job. Input is one GCTA-COJO `.ma` GWAS summary File with columns SNP, A1, A2, \
+const DOC: &str = "Runs the official SMR v1.4.2 executable in an ephemeral Podman \
+container. Input is one GCTA-COJO `.ma` GWAS summary File with columns SNP, A1, A2, \
 freq, b, se, p, and n; A1/freq must refer to the same effect allele. The node \
 mounts an immutable GRCh37 cis-eQTL BESD package selected by `eqtl_source` \
 (`westra` by default, or `eqtlgen`) plus the 1000G EUR PLINK binary LD \
@@ -456,7 +456,7 @@ impl NodeFactory for SmrHeidiContainerNodeFactory {
             .iter()
             .map(|binding| node_ctx.bound_data_bundle(&binding.binding).cloned())
             .collect::<dag_core::registry::error::Result<Vec<_>>>()?;
-        let runtime: Arc<dyn container_runtime::ContainerRuntime> = self.runtime.clone();
+        let runtime: Arc<dyn container_runtime::PodmanConnection> = self.runtime.clone();
         let node = ContainerCommandNode::new_with_catalog_panels(
             container_spec,
             runtime,

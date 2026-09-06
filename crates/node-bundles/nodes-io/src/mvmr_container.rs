@@ -12,7 +12,7 @@ use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
 };
 use crate::image_registry::acr_image;
-use container_runtime::{ContainerRuntime, PanelCache, PullPolicy};
+use container_runtime::{PanelCache, PodmanConnection, PullPolicy};
 
 pub const MVMR_CONTAINER_KIND: &str = "mvmr_container";
 pub const MVMR_ORIGINAL_IMAGE_REPOSITORY: &str = "mvmr";
@@ -61,12 +61,12 @@ fn default_timeout_secs() -> u64 {
 }
 
 pub struct MvmrContainerNodeFactory {
-    pub(crate) runtime: Arc<dyn ContainerRuntime>,
+    pub(crate) runtime: Arc<dyn PodmanConnection>,
     pub(crate) panel_cache: Arc<PanelCache>,
 }
 
 impl MvmrContainerNodeFactory {
-    pub fn new(runtime: Arc<dyn ContainerRuntime>, panel_cache: Arc<PanelCache>) -> Self {
+    pub fn new(runtime: Arc<dyn PodmanConnection>, panel_cache: Arc<PanelCache>) -> Self {
         Self {
             runtime,
             panel_cache,
@@ -307,7 +307,7 @@ impl NodeFactory for MvmrContainerNodeFactory {
         let spec: MvmrContainerSpec = serde_json::from_value(spec)?;
         let container_spec =
             container_spec(&spec).map_err(dag_core::registry::error::Error::Unknown)?;
-        let runtime: Arc<dyn container_runtime::ContainerRuntime> = self.runtime.clone();
+        let runtime: Arc<dyn container_runtime::PodmanConnection> = self.runtime.clone();
         let node =
             ContainerCommandNode::new(container_spec, runtime, Arc::clone(&self.panel_cache))
                 .map_err(|error| dag_core::registry::error::Error::Unknown(error.to_string()))?;

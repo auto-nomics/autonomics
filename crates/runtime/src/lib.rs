@@ -7,7 +7,6 @@
 
 pub mod catalog_tools;
 pub mod config;
-pub mod container_dev_tools;
 pub mod control;
 pub mod error;
 pub mod host;

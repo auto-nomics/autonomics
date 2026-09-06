@@ -438,8 +438,8 @@ const PROMPT_DAG_ENGINE: &str = "\n\
 const PROMPT_DAG_SCRIPTS: &str = "\n\
 ### Container Commands (container_command)\n\
 - Use `container_command` for external bioinformatics tools. It runs a \
-k3s Job with no shell insertion, a read-only rootfs, `network: \"isolated\"` \
-by default, and `/work` as the writable workspace PVC subPath.\n\
+an ephemeral Podman container with no shell insertion, a read-only rootfs, `network: \"isolated\"` \
+by default, and `/work` as the writable workspace bind mount.\n\
 - Put the executable and arguments in `command`. Bind file paths only through \
 `$input0`, `$output0`, `$workdir`, `AUTONOMICS_INPUT0`, \
 `AUTONOMICS_OUTPUT0`, and `AUTONOMICS_WORKDIR`. Prefer image digests. \

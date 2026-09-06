@@ -13,7 +13,7 @@ use crate::container_command::{
 };
 use crate::image_registry::acr_image;
 use crate::ldsc_h2_container::{LDSC_ORIGINAL_IMAGE_DIGEST, LDSC_ORIGINAL_IMAGE_REPOSITORY};
-use container_runtime::{ContainerRuntime, PanelCache, PullPolicy};
+use container_runtime::{PanelCache, PodmanConnection, PullPolicy};
 
 pub const LDSC_MUNGE_CONTAINER_KIND: &str = "ldsc_munge_container";
 
@@ -143,12 +143,12 @@ fn default_timeout_secs() -> u64 {
 }
 
 pub struct LdscMungeContainerNodeFactory {
-    pub(crate) runtime: Arc<dyn ContainerRuntime>,
+    pub(crate) runtime: Arc<dyn PodmanConnection>,
     pub(crate) panel_cache: Arc<PanelCache>,
 }
 
 impl LdscMungeContainerNodeFactory {
-    pub fn new(runtime: Arc<dyn ContainerRuntime>, panel_cache: Arc<PanelCache>) -> Self {
+    pub fn new(runtime: Arc<dyn PodmanConnection>, panel_cache: Arc<PanelCache>) -> Self {
         Self {
             runtime,
             panel_cache,
@@ -453,7 +453,7 @@ impl NodeFactory for LdscMungeContainerNodeFactory {
         let spec: LdscMungeContainerSpec = serde_json::from_value(spec)?;
         let container_spec =
             container_spec(&spec).map_err(dag_core::registry::error::Error::Unknown)?;
-        let runtime: Arc<dyn container_runtime::ContainerRuntime> = self.runtime.clone();
+        let runtime: Arc<dyn container_runtime::PodmanConnection> = self.runtime.clone();
         let node =
             ContainerCommandNode::new(container_spec, runtime, Arc::clone(&self.panel_cache))
                 .map_err(|error| dag_core::registry::error::Error::Unknown(error.to_string()))?;
@@ -520,7 +520,7 @@ mod tests {
                 workspace_root,
                 panel_cache_root: state.path().join("panels"),
             })),
-            Arc::new(PanelCache::new(state.path().join("panels"), "")),
+            Arc::new(PanelCache::new(state.path().join("panels"))),
         )
         .unwrap();
 

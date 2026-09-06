@@ -21,7 +21,7 @@ use crate::container_command::{
     ContainerPanelBundleSpec,
 };
 use crate::image_registry::acr_image;
-use container_runtime::{ContainerRuntime, PanelCache, PullPolicy};
+use container_runtime::{PanelCache, PodmanConnection, PullPolicy};
 
 pub const LAVA_CONTAINER_KIND: &str = "lava_container";
 pub const LAVA_ORIGINAL_IMAGE_REPOSITORY: &str = "lava";
@@ -156,12 +156,12 @@ fn default_timeout_secs() -> u64 {
 }
 
 pub struct LavaContainerNodeFactory {
-    pub(crate) runtime: Arc<dyn ContainerRuntime>,
+    pub(crate) runtime: Arc<dyn PodmanConnection>,
     pub(crate) panel_cache: Arc<PanelCache>,
 }
 
 impl LavaContainerNodeFactory {
-    pub fn new(runtime: Arc<dyn ContainerRuntime>, panel_cache: Arc<PanelCache>) -> Self {
+    pub fn new(runtime: Arc<dyn PodmanConnection>, panel_cache: Arc<PanelCache>) -> Self {
         Self {
             runtime,
             panel_cache,
@@ -583,7 +583,7 @@ impl NodeFactory for LavaContainerNodeFactory {
     }
 
     fn desc(&self) -> &'static str {
-        "Runs the official LAVA R package for one locus in k3s."
+        "Runs the official LAVA R package for one locus in Podman."
     }
 
     fn doc(&self) -> &'static str {
@@ -632,7 +632,7 @@ impl NodeFactory for LavaContainerNodeFactory {
             .iter()
             .map(|_| node_ctx.bound_data_bundle("lava_ref").cloned())
             .collect::<dag_core::registry::error::Result<Vec<_>>>()?;
-        let runtime: Arc<dyn container_runtime::ContainerRuntime> = self.runtime.clone();
+        let runtime: Arc<dyn container_runtime::PodmanConnection> = self.runtime.clone();
         let node = ContainerCommandNode::new_with_catalog_panels(
             container_spec,
             runtime,

@@ -1,7 +1,7 @@
 # HyPrColoc container
 
 Official R `hyprcoloc` package (Foley and Staley, version 0.0.2, commit
-`0348bbd`) packaged for the k3s-backed DAG runtime.
+`0348bbd`) packaged for the Podman-backed DAG runtime.
 
 Reference: <https://jrs95.github.io/hyprcoloc/>
 
@@ -25,9 +25,8 @@ or user data are baked into the image.
 ./containers/hyprcoloc/test_hyprcoloc.sh
 ```
 
-The script builds `localhost/atc/hyprcoloc:0.0.2`, imports it into the local
-k3s cluster, and runs `real_official_hyprcoloc_runs_in_k3s` in
-`crates/node-bundles/nodes-io/tests/container_file_flow.rs`.
+The script builds `localhost/atc/hyprcoloc:0.0.2` and smoke-tests it with
+Podman.
 
 ## Thin Wrapper
 

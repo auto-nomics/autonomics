@@ -6,8 +6,8 @@ usage() {
 Usage: test_gcta_containers.sh
 
 Builds the official GCTA 1.95.3 image, verifies/downloads the required panel
-payloads, publishes missing catalog packages, imports the image into k3s, and
-runs the real catalog-backed COJO/SBLUP/fastBAT/ACAT-V baselines.
+payloads, publishes missing catalog packages, pushes the image to the local
+registry, and smoke-tests it.
 
 Environment:
   VFS_CONFIG                         Catalog VFS config
@@ -20,7 +20,6 @@ Environment:
   BUILD_IMAGE=1                      Build the image
   PUBLISH_PANEL=1                    Build/publish a missing panel package
   PUSH_IMAGE=1                       Push to the local registry
-  RUN_TEST=1                         Run ignored Rust integration tests
 
 Panel checksums are enforced. The 1000G payload source is the Broad ALKEs
 Group LDSCORE downloads directory; the gene list source is the official GCTA
@@ -41,7 +40,6 @@ download_panels=${DOWNLOAD_PANELS:-1}
 build_image=${BUILD_IMAGE:-1}
 publish_panel=${PUBLISH_PANEL:-1}
 push_image=${PUSH_IMAGE:-1}
-run_test=${RUN_TEST:-1}
 ref_url=https://alkesgroup.broadinstitute.org/downloads/LDSCORE/1000G_Phase3_plinkfiles.tgz
 gene_url=https://yanglab.westlake.edu.cn/software/gcta/res/glist-hg19.txt
 ref_sha256=18383e998035521270d158b0aa4e546d269fc938f6e8490ff6916b644330f5df
@@ -67,7 +65,6 @@ need podman
 need sha256sum
 need tar
 [[ "$push_image" == 1 ]] && need curl
-[[ "$run_test" == 1 ]] && need kubectl
 
 [[ -f "$config" ]] || {
   echo "VFS config does not exist: $config" >&2
@@ -198,25 +195,8 @@ grep -q "version v1.95.3 Linux" <<<"$version_text" || {
   exit 1
 }
 
-export KUBECONFIG=${KUBECONFIG:-"$HOME/.kube/autonomics-k3s.yaml"}
-export AUTONOMICS_K3S_NAMESPACE=${AUTONOMICS_K3S_NAMESPACE:-autonomics}
-export AUTONOMICS_K3S_WORKSPACE_PVC=${AUTONOMICS_K3S_WORKSPACE_PVC:-autonomics-workspace}
-export AUTONOMICS_K3S_WORKSPACE_ROOT=${AUTONOMICS_K3S_WORKSPACE_ROOT:-/var/lib/autonomics/k3s/workspace}
-export AUTONOMICS_K3S_PANEL_PVC=${AUTONOMICS_K3S_PANEL_PVC:-autonomics-panels}
 export AUTONOMICS_PANEL_CACHE_ROOT=${AUTONOMICS_PANEL_CACHE_ROOT:-$HOME/.autonomics/panels}
-export AUTONOMICS_K3S_PANEL_PVC_PREFIX=${AUTONOMICS_K3S_PANEL_PVC_PREFIX:-}
-export AUTONOMICS_K3S_POLL_INTERVAL_MS=${AUTONOMICS_K3S_POLL_INTERVAL_MS:-250}
 export AUTONOMICS_TEST_VFS_CONFIG=$config
 export AUTONOMICS_GCTA_IT_IMAGE=$image
-
-if [[ "$run_test" == 1 ]]; then
-  kubectl get node >/dev/null
-  kubectl get pvc -n "$AUTONOMICS_K3S_NAMESPACE" \
-    "$AUTONOMICS_K3S_WORKSPACE_PVC" >/dev/null
-  kubectl get pvc -n "$AUTONOMICS_K3S_NAMESPACE" \
-    "$AUTONOMICS_K3S_PANEL_PVC" >/dev/null
-  cargo test -p nodes-io --test container_file_flow \
-    real_catalog_backed_official_gcta -- --ignored --nocapture
-fi
 
 echo "Official GCTA container tests completed successfully."

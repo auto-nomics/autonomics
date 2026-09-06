@@ -1,6 +1,6 @@
 # coloc container
 
-Official R `coloc` package (Wallace, CRAN 5.2.3) packaged for the k3s-backed
+Official R `coloc` package (Wallace, CRAN 5.2.3) packaged for the Podman-backed
 DAG runtime.
 
 Reference: <https://chr1swallace.github.io/coloc/>
@@ -10,7 +10,7 @@ Reference: <https://chr1swallace.github.io/coloc/>
 ```
 containers/coloc/
   Dockerfile            # rocker/r-ver:4.5.1 + coloc 5.2.3 from CRAN Archive
-  test_coloc_abf.sh     # build -> k3s import -> e2e Cargo test
+  test_coloc_abf.sh     # build -> smoke test
 ```
 
 The image contains only the official R package and its runtime; no reference
@@ -22,9 +22,8 @@ panels, no LD matrices, no GWAS inputs are baked in.
 ./containers/coloc/test_coloc_abf.sh
 ```
 
-The script builds `localhost/atc/coloc:5.2.3`, imports it into the local
-k3s cluster, and runs `real_official_coloc_abf_runs_in_k3s` in
-`crates/node-bundles/nodes-io/tests/container_file_flow.rs`.
+The script builds `localhost/atc/coloc:5.2.3` and smoke-tests it with
+Podman.
 
 ## Thin wrapper
 

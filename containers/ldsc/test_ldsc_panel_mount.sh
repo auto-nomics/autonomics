@@ -5,8 +5,8 @@ usage() {
   cat >&2 <<'EOF'
 Usage: test_ldsc_panel_mount.sh
 
-Builds and publishes the native LDSC panels, imports the original LDSC image
-into k3s, and runs a real catalog-backed h2 integration test.
+Builds and publishes the native LDSC panels, builds the original LDSC image,
+and smoke-tests it.
 
 Environment:
   LDSC_SOURCE_ROOT     Reference data root
@@ -18,11 +18,8 @@ Environment:
   AUTONOMICS_LDSC_IT_SUMSTATS
                        Gzip LDSC input for h2; the test derives a plain .tsv copy
                        (default: /mnt/data/ldsc_data/sumstats_107/GBMI.Asthma.sumstats.gz)
-  KUBECONFIG           k3s kubeconfig
   BUILD_IMAGE=0        Skip podman build
   PUBLISH_PANELS=0     Skip package build/publish
-  IMPORT_IMAGE=0       Skip podman save and k3s ctr import
-  RUN_TEST=0           Skip the Rust integration test
 EOF
 }
 
@@ -33,8 +30,6 @@ image=${LDSC_IMAGE:-localhost/atc/ldsc:3.0}
 code_dir=${LDSC_CODE_DIR:-/mnt/disk3/ldsc3/ldsc}
 build_image=${BUILD_IMAGE:-1}
 publish_panels=${PUBLISH_PANELS:-1}
-import_image=${IMPORT_IMAGE:-1}
-run_test=${RUN_TEST:-1}
 sumstats=${AUTONOMICS_LDSC_IT_SUMSTATS:-/mnt/data/ldsc_data/sumstats_107/GBMI.Asthma.sumstats.gz}
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
@@ -51,10 +46,6 @@ need() {
 
 need cargo
 need podman
-need kubectl
-if [[ "$import_image" == 1 ]]; then
-  need sudo
-fi
 
 if [[ ! -f "$config" ]]; then
   echo "VFS config does not exist: $config" >&2
@@ -78,14 +69,7 @@ if [[ ! -f "$sumstats" ]]; then
   exit 1
 fi
 
-export KUBECONFIG=${KUBECONFIG:-"$HOME/.kube/autonomics-k3s.yaml"}
-export AUTONOMICS_K3S_NAMESPACE=${AUTONOMICS_K3S_NAMESPACE:-autonomics}
-export AUTONOMICS_K3S_WORKSPACE_PVC=${AUTONOMICS_K3S_WORKSPACE_PVC:-autonomics-workspace}
-export AUTONOMICS_K3S_WORKSPACE_ROOT=${AUTONOMICS_K3S_WORKSPACE_ROOT:-/var/lib/autonomics/k3s/workspace}
-export AUTONOMICS_K3S_PANEL_PVC=${AUTONOMICS_K3S_PANEL_PVC:-autonomics-panels}
 export AUTONOMICS_PANEL_CACHE_ROOT=${AUTONOMICS_PANEL_CACHE_ROOT:-$HOME/.autonomics/panels}
-export AUTONOMICS_K3S_PANEL_PVC_PREFIX=${AUTONOMICS_K3S_PANEL_PVC_PREFIX:-}
-export AUTONOMICS_K3S_POLL_INTERVAL_MS=${AUTONOMICS_K3S_POLL_INTERVAL_MS:-250}
 export AUTONOMICS_TEST_VFS_CONFIG=$config
 export AUTONOMICS_CONTAINER_IT_IMAGE=$image
 export AUTONOMICS_LDSC_IT_SUMSTATS=$sumstats
@@ -144,12 +128,6 @@ for panel_id in ldsc.ref_ld.1000g_eur.basic ldsc.w_ld.1000g_eur_hm3_no_mhc; do
   fi
 done
 
-kubectl get node >/dev/null
-kubectl get pvc -n "$AUTONOMICS_K3S_NAMESPACE" \
-  "$AUTONOMICS_K3S_WORKSPACE_PVC" >/dev/null
-kubectl get pvc -n "$AUTONOMICS_K3S_NAMESPACE" \
-  "$AUTONOMICS_K3S_PANEL_PVC" >/dev/null
-
 if [[ "$build_image" == 1 ]]; then
   podman build --layers -f "$root/containers/ldsc/Dockerfile" \
     -t "$image" "$code_dir"
@@ -157,19 +135,5 @@ fi
 
 podman run --rm "$image" --help >/dev/null
 podman run --rm --entrypoint munge_sumstats "$image" --help >/dev/null
-
-if [[ "$import_image" == 1 ]]; then
-  image_tar=$(mktemp --suffix=.tar)
-  cleanup_paths+=("$image_tar")
-  podman save -o "$image_tar" "$image"
-  sudo k3s ctr images import "$image_tar"
-fi
-
-if [[ "$run_test" == 1 ]]; then
-  cargo test -p nodes-io --test container_file_flow \
-    real_catalog_backed_original_ldsc_h2_accepts_tsv_and_gz_in_k3s -- --ignored --nocapture
-  cargo test -p nodes-io --test container_file_flow \
-    real_official_ldsc_munge_runs_in_k3s -- --ignored --nocapture
-fi
 
 echo "LDSC panel mount test completed successfully."

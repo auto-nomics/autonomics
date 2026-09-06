@@ -17,7 +17,7 @@ use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
 };
 use crate::image_registry::acr_image;
-use container_runtime::{ContainerRuntime, PanelCache, PullPolicy};
+use container_runtime::{PanelCache, PodmanConnection, PullPolicy};
 
 pub const HYPRCOLOC_CONTAINER_KIND: &str = "hyprcoloc_container";
 pub const HYPRCOLOC_ORIGINAL_IMAGE_REPOSITORY: &str = "hyprcoloc";
@@ -135,12 +135,12 @@ fn default_timeout_secs() -> u64 {
 }
 
 pub struct HyPrColocContainerNodeFactory {
-    runtime: Arc<dyn ContainerRuntime>,
+    runtime: Arc<dyn PodmanConnection>,
     panel_cache: Arc<PanelCache>,
 }
 
 impl HyPrColocContainerNodeFactory {
-    pub fn new(runtime: Arc<dyn ContainerRuntime>, panel_cache: Arc<PanelCache>) -> Self {
+    pub fn new(runtime: Arc<dyn PodmanConnection>, panel_cache: Arc<PanelCache>) -> Self {
         Self {
             runtime,
             panel_cache,
@@ -497,7 +497,7 @@ impl NodeFactory for HyPrColocContainerNodeFactory {
         let spec: HyPrColocContainerSpec = serde_json::from_value(spec)?;
         let container_spec =
             container_spec(&spec).map_err(dag_core::registry::error::Error::Unknown)?;
-        let runtime: Arc<dyn container_runtime::ContainerRuntime> = self.runtime.clone();
+        let runtime: Arc<dyn container_runtime::PodmanConnection> = self.runtime.clone();
         let node =
             ContainerCommandNode::new(container_spec, runtime, Arc::clone(&self.panel_cache))
                 .map_err(|error| dag_core::registry::error::Error::Unknown(error.to_string()))?;

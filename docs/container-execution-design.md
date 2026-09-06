@@ -8,10 +8,10 @@ container, uses object storage as the authoritative panel and artifact source,
 and keeps a shared POSIX data plane for tools that require ordinary file
 access.
 
-There are two execution backends: k3s and Podman. Podman is the default for
-single-host, rootless-friendly execution. K3s supports multi-node scheduling
-through PVCs and NetworkPolicies and remains fully available by setting the
-backend explicitly.
+Podman is the single execution backend: a rootless-friendly, single-host
+runtime driven through the local Podman CLI. The `PodmanConnection` trait in
+`crates/container-runtime/src/connection.rs` fixes the capability contract of
+the connection layer, and `PodmanRuntime` is its production implementation.
 
 ## Data Contract
 
@@ -37,9 +37,8 @@ directory to `<id>@<digest>`. A failed or partial download is never mounted.
 ### WorkspaceRef
 
 Each node receives a unique workspace directory. It is mounted at `/work` and
-remains execution scratch, not long-term state. The control process and runtime
-must resolve the same workspace root: `AUTONOMICS_K3S_WORKSPACE_ROOT` for k3s
-or `AUTONOMICS_PODMAN_WORKSPACE_ROOT` for Podman.
+remains execution scratch, not long-term state. The control process and Podman
+must resolve the same workspace root: `AUTONOMICS_PODMAN_WORKSPACE_ROOT`.
 
 ### ArtifactRef
 
@@ -63,76 +62,31 @@ container_command
   9. emit FileRef values on output ports
 ```
 
-## K3s Job Policy
-
-- `completions`, `parallelism`: 1
-- `backoffLimit`: 0
-- `restartPolicy`: Never
-- `activeDeadlineSeconds`: node timeout
-- `ttlSecondsAfterFinished`: 3600
-- no service-account token mount
-- non-privileged, no privilege escalation
-- read-only root filesystem by default
-- `RuntimeDefault` seccomp profile
-- control-process uid/gid by default, with non-root enforcement
-- `/tmp` emptyDir; optional sized `/dev/shm` emptyDir
-- workspace PVC mounted read-write at `/work`
-- panel PVC mounted read-only at each declared panel path
-
-Network profiles are labels interpreted by namespace NetworkPolicies:
-
-- `isolated`: deny ingress and egress; this is the default.
-- `cluster`: deny ingress and permit DNS only.
-- `egress`: explicit administrator-enabled egress profile.
-- `none`: accepted as a legacy spelling of `isolated`.
-
-No Job requests a `hostPath` volume. Cluster storage is provisioned as PVCs.
-`pids_limit` is carried as the `autonomics.io/pids-limit` annotation because the
-upstream Pod API does not expose a per-job PID cgroup field; an admission
-controller or kubelet-level `podPidsLimit` policy must enforce it.
-
 ## Configuration
 
 Container execution resources are process-level infrastructure. `SharedInfra`
 constructs one `ContainerExecutionInfra` from the environment, retains it in an
 `Arc`, and injects that same object into `DataEngineBuilder`. Every agent DAG
-session shares the selected runtime client and panel cache through the shared
+session shares the Podman connection and panel cache through the shared
 node registry.
 
 The `nodes-io` plugin receives that injected object when its node registry is
 built; it does not independently construct a second backend.
 
 ```text
-AUTONOMICS_CONTAINER_BACKEND=podman
 AUTONOMICS_PODMAN_PROGRAM=podman
 AUTONOMICS_PODMAN_WORKSPACE_ROOT=$HOME/.local/state/autonomics/podman/workspace
 AUTONOMICS_PANEL_CACHE_ROOT=$HOME/.autonomics/panels
 ```
 
-With `AUTONOMICS_CONTAINER_BACKEND=k3s`, these variables configure the shared
-cluster data plane:
-
-```text
-AUTONOMICS_K3S_NAMESPACE=autonomics
-AUTONOMICS_K3S_CONTEXT=
-AUTONOMICS_K3S_WORKSPACE_PVC=autonomics-workspace
-AUTONOMICS_K3S_WORKSPACE_ROOT=/var/lib/autonomics/k3s/workspace
-AUTONOMICS_K3S_PANEL_PVC=autonomics-panels
-AUTONOMICS_PANEL_CACHE_ROOT=$HOME/.autonomics/panels
-AUTONOMICS_K3S_PANEL_PVC_PREFIX=
-AUTONOMICS_K3S_SERVICE_ACCOUNT=
-AUTONOMICS_K3S_POLL_INTERVAL_MS=500
-```
-
-The single-node baseline in `infra/k3s/manifests.yaml` creates local PVs and
-PVCs plus the isolated and cluster NetworkPolicies. For multiple nodes, replace
-those PVs with an RWX distributed filesystem or CSI driver; the runtime and DAG
-contract remain unchanged.
+`AUTONOMICS_CONTAINER_BACKEND` no longer selects a backend. Setting it to
+anything other than `podman` (e.g. the removed `k3s`) fails startup with an
+explicit error.
 
 ## Podman Backend
 
-Set `AUTONOMICS_CONTAINER_BACKEND=podman` to execute one-shot
-`container_command` workloads through a local Podman runtime. The backend:
+One-shot `container_command` workloads execute through a local Podman
+runtime. The backend:
 
 - binds the workspace directory read-write at `/work`;
 - binds verified panel-cache directories read-only;
@@ -142,41 +96,26 @@ Set `AUTONOMICS_CONTAINER_BACKEND=podman` to execute one-shot
 - creates a named container, attaches to it, and force-removes it after
   success, failure, or timeout.
 
-Podman maps `isolated` and legacy `none` networking to `--network none`, and
-`egress` to Podman's default network. The Kubernetes-specific `cluster` profile
-is rejected explicitly. The control process must be able to execute the Podman
-CLI and directly resolve the configured host paths. Consequently, `start.sh`
-must be launched on the host or supplied with an explicitly configured remote
-Podman endpoint; the default TUI container does not mount a Podman socket.
-
-Persistent development workspaces remain K3s-only. The workspace tools are
-registered in Podman mode for configuration compatibility but return a clear
-validation error when invoked.
+Network profiles are `isolated` (default; `--network none`, legacy spelling
+`none` accepted) and `egress` (Podman's default network). The Kubernetes-style
+`cluster` profile was removed with the k3s backend and is rejected at spec
+validation. The control process must be able to execute the Podman CLI and
+directly resolve the configured host paths. Consequently, `start.sh` must be
+launched on the host or supplied with an explicitly configured remote Podman
+endpoint; the default TUI container does not mount a Podman socket.
 
 ## Failure Behavior
 
 - Invalid panel reference, missing manifest, checksum mismatch, or size change
   fails before container creation and leaves no public cache entry.
-- A k3s deadline or Podman attach timeout removes the named workload and
-  returns a timeout.
+- A Podman create/start deadline removes the named container and returns a
+  timeout.
 - Failed containers return backend status plus capped output.
 - A successful container exit does not complete the node until every declared
   output exists.
 - Output upload failure fails the node and does not publish a valid object.
 - Concurrent nodes use unique workspaces and container names; artifact paths
   include the run name so publications cannot overwrite each other.
-
-## K3s Distributed DAG Path
-
-For k3s, the current scheduler remains local while remote execution is per node.
-Because outputs already carry VFS addresses and content fingerprints, the next
-stage can move scheduler decisions without changing node specs:
-
-1. retain workspace and panel cache PVCs for POSIX data locality;
-2. add node-affinity labels for cached panels;
-3. make `FileRef` consumers always resolve through VFS;
-4. profile Job scheduling overhead before introducing a run-level controller
-   or workflow engine.
 
 ## Catalog-backed panels
 

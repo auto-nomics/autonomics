@@ -7,8 +7,8 @@ use arrow_array::{Float64Array, Int32Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 use async_trait::async_trait;
 use container_runtime::{
-    ContainerRunRequest, ContainerRunResult, ContainerRuntime, ContainerRuntimeError,
-    DEFAULT_CONTAINER_WORKDIR, PanelCache,
+    ContainerRunRequest, ContainerRunResult, ContainerRuntimeError, DEFAULT_CONTAINER_WORKDIR,
+    PanelCache, PodmanConnection,
 };
 use dag_core::dag::runtime::SchedulerConfig;
 use dag_core::node::{DagNode, NodeInput, NodePorts};
@@ -48,7 +48,7 @@ impl CopyPairsRuntime {
 }
 
 #[async_trait]
-impl ContainerRuntime for CopyPairsRuntime {
+impl PodmanConnection for CopyPairsRuntime {
     async fn run(
         &self,
         request: ContainerRunRequest,
@@ -217,7 +217,7 @@ async fn container_wrapper_accepts_multiple_upstream_file_edges() {
     std::fs::write(workspace.path().join("mask.mha"), b"mask").unwrap();
     let ctx = workspace_ctx(workspace.path());
     let runtime = Arc::new(CopyPairsRuntime::new(workspace.path()));
-    let panel_cache = Arc::new(PanelCache::new(workspace.path().join("panels"), ""));
+    let panel_cache = Arc::new(PanelCache::new(workspace.path().join("panels")));
     let node = RadiomicsContainerNodeFactory::pair_validate(runtime.clone(), panel_cache)
         .build(
             serde_json::json!({"extraction_id":"sts001_ct","mask_label":1,"minimum_mask_voxels":1}),
@@ -314,7 +314,7 @@ async fn mask_ingest_documents_and_stages_port_order() {
     std::fs::write(workspace.path().join("rtstruct.dcm"), b"rtstruct").unwrap();
     let ctx = workspace_ctx(workspace.path());
     let runtime = Arc::new(CopyPairsRuntime::new(workspace.path()));
-    let panel_cache = Arc::new(PanelCache::new(workspace.path().join("panels"), ""));
+    let panel_cache = Arc::new(PanelCache::new(workspace.path().join("panels")));
     let factory = RadiomicsContainerNodeFactory::mask_ingest(runtime.clone(), panel_cache);
     let node = factory
         .build(serde_json::json!({"roi_name":"GTV_Mass"}), ctx.clone())

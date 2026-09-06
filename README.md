@@ -171,7 +171,6 @@ For direct SDK use, copy `.env.example` to `.env` and provide only the credentia
 - [**SDK (`agentik-sdk`)**](docs/sdk.md) — Messages API, SSE streaming, multi-provider abstraction, model pool, token & cost tracking, quick-start examples, and configuration.
 - [**Agent Runtime (`agentik-core`)**](docs/agent-runtime.md) — Uniform agent loop, reactive context, memory compaction, toolset, lifecycle, multi-agent `ProcessManager`, and proc macros.
 - [**Tool Authoring**](docs/tool-authoring.md) — How to implement `ToolFunction` with strongly-typed inputs via `#[derive(ToolInput)]`.
-- [**Container Development**](docs/container-development.md) — Persistent k3s development workspaces, captured exec, and reproducible OCI packaging.
 - [**Container Node Migration**](docs/container-node-migration.md) — Standard workflow for moving analysis tools to OCI images, cataloged panels, and thin DAG wrappers.
 
 ### Statistical Genetics

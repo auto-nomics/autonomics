@@ -1,39 +1,30 @@
-//! Process-wide container backend configuration.
+//! Process-wide container execution configuration.
 
 use std::path::{Path, PathBuf};
 
-pub const CONTAINER_BACKEND_ENV: &str = "AUTONOMICS_CONTAINER_BACKEND";
+/// Env var that used to select the `k3s` or `podman` backend. The k3s
+/// backend has been removed; a set value other than `podman` is an error so
+/// stale deployments fail loudly instead of silently switching runtimes.
+pub const REMOVED_BACKEND_ENV: &str = "AUTONOMICS_CONTAINER_BACKEND";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ContainerBackend {
-    K3s,
-    Podman,
+/// Validate a `AUTONOMICS_CONTAINER_BACKEND` value: only unset/empty/`podman`
+/// is accepted now that the k3s backend is gone.
+pub fn parse_removed_backend_env(value: &str) -> Result<(), String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "" | "podman" => Ok(()),
+        other => Err(format!(
+            "container backend `{other}` is not supported anymore (the k3s backend was removed); \
+             unset {REMOVED_BACKEND_ENV} or set it to `podman`"
+        )),
+    }
 }
 
-impl ContainerBackend {
-    pub fn from_env() -> Result<Self, String> {
-        let value = std::env::var_os(CONTAINER_BACKEND_ENV)
-            .map(|value| value.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        Self::parse(&value)
-    }
-
-    fn parse(value: &str) -> Result<Self, String> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "" | "podman" => Ok(Self::Podman),
-            "k3s" => Ok(Self::K3s),
-            other => Err(format!(
-                "unsupported container backend `{other}`; expected `k3s` or `podman`"
-            )),
-        }
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::K3s => "k3s",
-            Self::Podman => "podman",
-        }
-    }
+/// Fail when the environment still asks for a removed container backend.
+pub fn ensure_backend_env_removed() -> Result<(), String> {
+    let value = std::env::var_os(REMOVED_BACKEND_ENV)
+        .map(|value| value.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    parse_removed_backend_env(&value)
 }
 
 pub fn podman_state_root() -> PathBuf {
@@ -62,20 +53,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn omitted_backend_selects_podman_and_explicit_values_are_case_insensitive() {
-        assert_eq!(
-            ContainerBackend::parse("").unwrap(),
-            ContainerBackend::Podman
-        );
-        assert_eq!(
-            ContainerBackend::parse(" Podman ").unwrap(),
-            ContainerBackend::Podman
-        );
-        assert_eq!(
-            ContainerBackend::parse("K3S").unwrap(),
-            ContainerBackend::K3s
-        );
-        assert!(ContainerBackend::parse("docker").is_err());
+    fn removed_backend_env_only_accepts_podman() {
+        assert!(parse_removed_backend_env("").is_ok());
+        assert!(parse_removed_backend_env(" PodMan ").is_ok());
+        let error = parse_removed_backend_env("k3s").unwrap_err();
+        assert!(error.contains("k3s backend was removed"));
+        assert!(parse_removed_backend_env("docker").is_err());
     }
 
     #[test]
