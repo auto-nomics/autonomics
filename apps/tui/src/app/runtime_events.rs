@@ -122,6 +122,79 @@ impl App {
                     self.state.toasts.error("Fetch failed", Some(e));
                 }
             },
+            crate::app_event::AppEvent::ChatgptTokenRefreshed(blob_json) => {
+                // token 轮转落库（Model 层刷新回调 / 启动 ensure_fresh 上报）。
+                match self.conn.execute(
+                    "UPDATE providers SET api_key = ?1 WHERE name = 'openai'",
+                    rusqlite::params![blob_json],
+                ) {
+                    Ok(_) => {
+                        tracing::info!("chatgpt token refreshed and persisted");
+                        // 过期 token 曾让默认模型不可构建；现在重建。
+                        self.rebuild_openai_default_model();
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "chatgpt token refresh persist failed");
+                    }
+                }
+            }
+            crate::app_event::AppEvent::ChatgptLoginUrl(url) => {
+                // 授权 URL：复制到剪贴板（保住 lease）+ 尽力开浏览器。
+                match crate::clipboard_copy::copy_to_clipboard(&url) {
+                    Ok(lease) => {
+                        self.clipboard_lease = lease;
+                        let opened = Self::open_in_browser(&url);
+                        let hint = if opened {
+                            "授权链接已复制；请在打开的浏览器中完成 OpenAI 授权"
+                        } else {
+                            "授权链接已复制到剪贴板，请粘贴到浏览器打开并完成授权"
+                        };
+                        tracing::info!("chatgpt login: authorize url dispatched (browser={opened})");
+                        self.state.toasts.info("ChatGPT 登录", Some(hint.to_string()));
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "chatgpt login url clipboard copy failed");
+                        self.state
+                            .toasts
+                            .error("复制失败", Some(format!("{e}；授权 URL 见日志")));
+                        tracing::info!(url = %url, "chatgpt login authorize url");
+                    }
+                }
+            }
+            crate::app_event::AppEvent::ChatgptLoginCompleted { result } => match result {
+                Ok(blob) => match self.save_chatgpt_provider(&blob) {
+                    Ok(()) => {
+                        tracing::info!(
+                            email = blob.email.as_deref().unwrap_or("unknown"),
+                            plan = blob.plan_type.as_deref().unwrap_or("unknown"),
+                            "chatgpt login persisted"
+                        );
+                        Self::load_model_config(&self.conn, &mut self.state.model_config_state);
+                        self.state.toasts.success(
+                            "ChatGPT 登录成功",
+                            Some(format!(
+                                "{}（{}）",
+                                blob.email.as_deref().unwrap_or("email unknown"),
+                                blob.plan_type.as_deref().unwrap_or("plan unknown"),
+                            )),
+                        );
+                        // 登录前 openai 模型不可构建；若默认模型指向 openai，
+                        // 现在重建默认模型槽。
+                        self.rebuild_openai_default_model();
+                        // 登录态就绪，顺手拉一次全量模型目录（结果经
+                        // RemoteCatalogFetched 落库并重载目录）。
+                        self.fetch_remote_model_catalog("openai", "");
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "chatgpt login persist failed");
+                        self.state.toasts.error("登录结果保存失败", Some(e));
+                    }
+                },
+                Err(e) => {
+                    tracing::warn!(error = %e, "chatgpt login failed");
+                    self.state.toasts.error("ChatGPT 登录失败", Some(e));
+                }
+            },
         }
     }
 

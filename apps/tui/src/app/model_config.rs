@@ -158,6 +158,22 @@ impl App {
         );
     }
 
+    /// 读 provider 行的 token blob（api_key 列存 blob JSON）。
+    /// main 分支无 app-config crate，此为 chatgpt_token_blob 的内联等价。
+    fn chatgpt_token_blob(
+        conn: &Connection,
+        provider: &str,
+    ) -> Option<agentik_sdk::provider::openai::oauth::TokenBlob> {
+        let api_key: String = conn
+            .query_row(
+                "SELECT api_key FROM providers WHERE name = ?1",
+                [provider],
+                |row| row.get(0),
+            )
+            .ok()?;
+        agentik_sdk::provider::openai::oauth::TokenBlob::from_json(&api_key).ok()
+    }
+
     pub(super) fn handle_model_config_key(&mut self, key: &KeyEvent) {
         use crate::widgets::model_config_widget::ConfigCommand;
 
@@ -180,6 +196,7 @@ impl App {
                 // Build the model and apply to the active agent via host.
                 let spec = format!("{provider_name}:{model_name}");
                 if let Some(model) = Self::build_model_from_spec(&self.conn, &spec) {
+                    let model = self.attach_chatgpt_refresh_callback(Arc::new(model));
                     let agent_name = self
                         .state
                         .sessions
@@ -187,7 +204,7 @@ impl App {
                         .map(|s| s.name.clone());
                     if let Some(an) = agent_name {
                         if let Some(host) = self.host.as_ref() {
-                            host.control().set_agent_model(&an, model);
+                            host.control().set_agent_model(&an, (*model).clone());
                             tracing::info!(
                                 agent = %an,
                                 model = %spec,
@@ -195,6 +212,22 @@ impl App {
                             );
                             self.persist_agent_model(&an, &spec);
                         }
+                    }
+                } else {
+                    // openai + 过期 token 是可恢复的失败：后台刷新，落地
+                    // 事件会重建默认槽；提示用户稍后重选。
+                    if provider_name == "openai"
+                        && Self::chatgpt_token_blob(&self.conn, "openai")
+                            .is_some_and(|blob| blob.access_token_expired())
+                    {
+                        tracing::info!("openai token expired at select time; refreshing");
+                        self.spawn_chatgpt_ensure_fresh();
+                        self.state.toasts.info(
+                            "ChatGPT token 已过期",
+                            Some("正在后台刷新，完成后请重新选择模型".into()),
+                        );
+                    } else {
+                        tracing::warn!(model = %spec, "model unbuildable at select time");
                     }
                 }
                 self.state.model_config_visible = false;
@@ -210,6 +243,9 @@ impl App {
                 base_url,
             } => {
                 self.fetch_remote_model_catalog(&provider_name, &base_url);
+            }
+            ConfigCommand::StartChatgptLogin { provider_name } => {
+                self.start_chatgpt_login(&provider_name);
             }
             ConfigCommand::ReloadCatalog => {
                 Self::load_model_config(&self.conn, &mut self.state.model_config_state);
@@ -281,11 +317,8 @@ impl App {
             base_url.to_string()
         };
         // Resolve the default auth method from the registry for this provider.
-        let auth_str =
-            match agentik_sdk::provider::registry::default_auth_method(&provider.provider_type) {
-                AuthMethod::Bearer => "Bearer",
-                AuthMethod::Anthropic => "Anthropic",
-            };
+        let auth_str = agentik_sdk::provider::registry::default_auth_method(&provider.provider_type)
+            .storage_tag();
 
         // Check if a row for this provider name already exists.
         let existing: Option<i64> = self
@@ -316,11 +349,184 @@ impl App {
         }
     }
 
+    /// 写入 ChatGPT 登录产物：openai 行 api_key = token blob JSON、
+    /// auth_method = "chatgpt"、base_url = 默认 ChatGPT 后端。
+    pub(super) fn save_chatgpt_provider(
+        &self,
+        blob: &agentik_sdk::provider::openai::oauth::TokenBlob,
+    ) -> Result<(), String> {
+        let json = blob.to_json()?;
+        let base_url = agentik_sdk::provider::registry::default_base_url(&ProviderType::Openai)
+            .unwrap_or_default()
+            .to_string();
+        let existing: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT id FROM providers WHERE name = 'openai'",
+                ["openai"],
+                |row| row.get(0),
+            )
+            .ok();
+        let result = if let Some(id) = existing {
+            self.conn.execute(
+                "UPDATE providers SET api_key = ?1, base_url = ?2, auth_method = 'chatgpt' WHERE id = ?3",
+                rusqlite::params![json, base_url, id],
+            )
+        } else {
+            self.conn.execute(
+                "INSERT INTO providers (name, provider_type, base_url, api_key, auth_method)
+                 VALUES ('openai', 'openai', ?1, ?2, 'chatgpt')",
+                rusqlite::params![base_url, json],
+            )
+        };
+        result.map(|_| ()).map_err(|e| e.to_string())
+    }
+
+    /// 发起 ChatGPT 订阅 OAuth 登录：绑定本机回调端口 → 发
+    /// [`AppEvent::ChatgptLoginUrl`]（剪贴板 + 浏览器）→ 后台等待浏览器
+    /// 授权并换 token → [`AppEvent::ChatgptLoginCompleted`] 写库重载。
+    /// 仿 `fetch_remote_model_catalog` 的异步派发模式。
+    fn start_chatgpt_login(&mut self, provider_name: &str) {
+        use agentik_sdk::provider::openai::oauth;
+
+        let (url, waiter) = match oauth::login_flow() {
+            Ok(pair) => pair,
+            Err(e) => {
+                tracing::warn!(provider = provider_name, error = %e, "chatgpt login failed to start");
+                self.state.toasts.error("登录启动失败", Some(e));
+                return;
+            }
+        };
+        tracing::info!(provider = provider_name, "chatgpt login flow started");
+        let tx = self.app_event_tx.clone();
+        tx.send(crate::app_event::AppEvent::ChatgptLoginUrl(url));
+        agentik_core::supervise::spawn_safe_on_drop(
+            &self.runtime_handle,
+            "chatgpt_login",
+            async move {
+                let result = waiter.wait().await;
+                tx.send(crate::app_event::AppEvent::ChatgptLoginCompleted { result });
+            },
+        );
+    }
+
+    /// 默认模型槽指向 openai 时重建之（登录/刷新前 openai 模型可能不可
+    /// 构建）。`RuntimeHost` 与 `AppState` 共享同一 `ArcSwapOption` 槽，
+    /// store 即对双方生效。
+    pub(super) fn rebuild_openai_default_model(&mut self) {
+        let Ok(spec) = self.conn.query_row(
+            "SELECT value FROM settings WHERE key = 'active_model'",
+            [],
+            |row| row.get::<_, String>(0),
+        ) else {
+            return;
+        };
+        if !spec.starts_with("openai:") {
+            return;
+        }
+        match Self::build_model_from_spec(&self.conn, &spec) {
+            Some(model) => {
+                let model = self.attach_chatgpt_refresh_callback(Arc::new(model));
+                self.state.active_model.store(Some(model));
+                tracing::info!(model = %spec, "openai default model rebuilt after login/refresh");
+            }
+            None => {
+                tracing::warn!(model = %spec, "openai default model still unbuildable");
+            }
+        }
+    }
+
+    /// 给 ChatGPT OAuth 模型挂 token 刷新回调（新 blob JSON → 事件 →
+    /// 主循环写库）。非 OAuth 模型原样返回。
+    pub(super) fn attach_chatgpt_refresh_callback(
+        &self,
+        model: Arc<agentik_sdk::model::Model>,
+    ) -> Arc<agentik_sdk::model::Model> {
+        let tx = self.app_event_tx.clone();
+        Arc::new(
+            (*model)
+                .clone()
+                .with_token_refreshed(move |blob_json| {
+                    tx.send(crate::app_event::AppEvent::ChatgptTokenRefreshed(blob_json));
+                }),
+        )
+    }
+
+    /// 启动收尾：openai 默认模型补挂 token 刷新回调（App::new 构建模型
+    /// 时事件通道尚未就绪），随后做启动期主动刷新检查。
+    pub(super) fn on_startup_chatgpt_setup(&mut self) {
+        if let Some(model) = self.state.active_model.load_full() {
+            if model.is_chatgpt() {
+                let model = self.attach_chatgpt_refresh_callback(model);
+                self.state.active_model.store(Some(model));
+            }
+        }
+        self.spawn_chatgpt_ensure_fresh();
+    }
+
+    /// 启动期/选择期主动刷新：读 openai blob，满足 8 天/24h 条件则后台
+    /// `refresh_blob` → [`AppEvent::ChatgptTokenRefreshed`] 落库并重建。
+    pub(super) fn spawn_chatgpt_ensure_fresh(&self) {
+        let Some(blob) = Self::chatgpt_token_blob(&self.conn, "openai") else {
+            return;
+        };
+        if !blob.should_refresh() {
+            return;
+        }
+        let tx = self.app_event_tx.clone();
+        agentik_core::supervise::spawn_safe_on_drop(
+            &self.runtime_handle,
+            "chatgpt_ensure_fresh",
+            async move {
+                match agentik_sdk::provider::openai::oauth::refresh_blob(&blob).await {
+                    Ok(refreshed) => match refreshed.to_json() {
+                        Ok(json) => {
+                            tx.send(crate::app_event::AppEvent::ChatgptTokenRefreshed(json));
+                        }
+                        Err(e) => tracing::warn!(error = %e, "chatgpt ensure-fresh serialize failed"),
+                    },
+                    Err(e) => {
+                        // 非致命：401 自愈与下次启动会再试。
+                        tracing::warn!(error = %e, "chatgpt ensure-fresh refresh failed");
+                    }
+                }
+            },
+        );
+    }
+
+    /// 尽力用系统默认浏览器打开 URL。失败仅返回 `false`（不报错——TUI
+    /// 全屏场景的主通路是剪贴板里的授权链接）。子进程 stdio 一律置
+    /// null：浏览器从终端拉起时会向继承的 stdout/stderr 狂刷输出，
+    /// 把全屏 TUI 刷成乱码。
+    pub(super) fn open_in_browser(url: &str) -> bool {
+        use std::process::{Command, Stdio};
+        #[cfg(target_os = "windows")]
+        let spawned = Command::new("cmd")
+            .args(["/c", "start", "", url])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+        #[cfg(target_os = "macos")]
+        let spawned = Command::new("open")
+            .arg(url)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+        #[cfg(all(unix, not(target_os = "macos")))]
+        let spawned = Command::new("xdg-open")
+            .arg(url)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+        spawned.is_ok()
+    }
+
     /// Kick off an async fetch of a provider's live remote model catalogue
-    /// (currently OpenRouter's public `/v1/models`). The result lands back
+    /// (OpenRouter's public `/v1/models`; openai 的 ChatGPT 后端
+    /// `/backend-api/codex/models`，需登录态). The result lands back
     /// on the event loop as [`AppEvent::RemoteCatalogFetched`], which
     /// persists the rows and reloads the catalogue widget.
-    fn fetch_remote_model_catalog(&self, provider_name: &str, base_url: &str) {
+    pub(super) fn fetch_remote_model_catalog(&mut self, provider_name: &str, base_url: &str) {
         use agentik_sdk::provider::registry;
 
         let provider_type = ProviderType::from(provider_name);
@@ -339,6 +545,35 @@ impl App {
 
         let name = provider_name.to_string();
         let tx = self.app_event_tx.clone();
+        // ChatGPT 订阅的目录端点需要登录态（Bearer + account id）；blob
+        // 从库里读，登录/401 自愈后总是最新。
+        if matches!(provider_type, ProviderType::Openai) {
+            let Some(blob) = Self::chatgpt_token_blob(&self.conn, &name) else {
+                self.state.toasts.error(
+                    "请先登录",
+                    Some("openai 模型目录需要 ChatGPT 登录态".into()),
+                );
+                return;
+            };
+            let token = blob.access_token.clone();
+            let account = blob.account_id.clone();
+            agentik_core::supervise::spawn_safe_on_drop(
+                &self.runtime_handle,
+                "fetch_remote_catalog",
+                async move {
+                    let result =
+                        agentik_sdk::provider::openai::OpenaiProvider::fetch_remote_catalog(
+                            &url, &token, &account,
+                        )
+                        .await;
+                    tx.send(crate::app_event::AppEvent::RemoteCatalogFetched {
+                        provider_name: name,
+                        result,
+                    });
+                },
+            );
+            return;
+        }
         agentik_core::supervise::spawn_safe_on_drop(
             &self.runtime_handle,
             "fetch_remote_catalog",

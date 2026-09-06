@@ -35,8 +35,8 @@ pub use resources::{BatchesResource, FilesResource, MessagesResource, ModelsReso
 pub use streaming::MessageStream;
 pub use tokens::{ModelPrice, ModelUsage, RequestUsage, TokenCounter, UsageStats, UsageSummary};
 pub use wire::{
-    AnthropicWire, OpenAiChatWire, OpenAiResponsesWire, ProtocolFeatures, StreamState,
-    ThinkingSupport, WireProtocol, WireProtocolKind, ZaiAnthropicWire, build_wire,
+    AnthropicWire, ChatgptResponsesWire, OpenAiChatWire, OpenAiResponsesWire, ProtocolFeatures,
+    StreamState, ThinkingSupport, WireProtocol, WireProtocolKind, ZaiAnthropicWire, build_wire,
     wire_protocol_for_provider,
 };
 
