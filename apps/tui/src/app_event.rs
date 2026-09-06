@@ -57,4 +57,15 @@ pub(crate) enum AppEvent {
         provider_name: String,
         result: std::result::Result<Vec<agentik_sdk::model::ModelInfo>, String>,
     },
+    /// ChatGPT 订阅登录：授权 URL 已就绪。处理器负责复制到剪贴板、
+    /// 尽力打开浏览器并提示用户。
+    ChatgptLoginUrl(String),
+    /// ChatGPT token 主动/自愈刷新产物：新 blob JSON。主循环覆写 openai
+    /// 行的 api_key（token 轮转落库，重启免重登）。
+    ChatgptTokenRefreshed(String),
+    /// ChatGPT 订阅登录结束。`Ok` 携带 token blob（处理器写库并重载目
+    /// 录）；`Err` 为可直接展示的失败原因（取消/超时/端口占用/交换失败）。
+    ChatgptLoginCompleted {
+        result: std::result::Result<agentik_sdk::provider::openai::oauth::TokenBlob, String>,
+    },
 }

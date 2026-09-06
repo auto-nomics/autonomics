@@ -1,5 +1,6 @@
 use crate::http::auth::AuthMethod;
 use crate::types::errors::{AnthropicError, Result};
+use std::sync::Arc;
 use std::time::Duration;
 
 #[derive(Debug, Clone)]
@@ -10,6 +11,10 @@ pub struct ClientConfig {
     pub max_retries: u32,
     pub log_level: LogLevel,
     pub auth_method: AuthMethod,
+    /// OAuth access-token 热更新槽（ChatGPT 订阅登录）。与 `Model` 的
+    /// OAuth 上下文共享同一 Arc；[`crate::http::auth::AuthHandler`] 取值
+    /// 优先于 `api_key` 快照，401 自愈刷新后无需重建客户端。
+    pub oauth_token_slot: Option<Arc<arc_swap::ArcSwap<String>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -31,6 +36,7 @@ impl ClientConfig {
             max_retries: 2,
             log_level: LogLevel::Warn,
             auth_method: AuthMethod::Anthropic,
+            oauth_token_slot: None,
         }
     }
 
@@ -61,6 +67,15 @@ impl ClientConfig {
     /// Set the authentication method
     pub fn with_auth_method(mut self, auth_method: AuthMethod) -> Self {
         self.auth_method = auth_method;
+        self
+    }
+
+    /// Attach the OAuth token hot-swap slot (ChatGPT subscription login).
+    pub fn with_oauth_token_slot(
+        mut self,
+        slot: Option<Arc<arc_swap::ArcSwap<String>>>,
+    ) -> Self {
+        self.oauth_token_slot = slot;
         self
     }
 

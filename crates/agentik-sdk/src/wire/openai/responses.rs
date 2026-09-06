@@ -393,11 +393,11 @@ impl WireProtocol for OpenAiResponsesWire {
                         }))
                     }
                     Some("message") => {
-                        // Open a text block at the next available index.
-                        if !state.text_block_open {
-                            state.text_block_open = true;
-                            state.next_block_index = 0;
-                        }
+                        // 不在此打开文本块：真实的 Responses 流在
+                        // output_item.added 之后逐个发 output_text.delta，
+                        // 若这里提前置 text_block_open，首个 delta 会走
+                        // Delta 分支而没有对应的 ContentBlockStart，文本
+                        // 会被组装端整段丢弃。让首个 delta 自行开块。
                         Ok(None)
                     }
                     _ => Ok(None),
@@ -417,11 +417,12 @@ impl WireProtocol for OpenAiResponsesWire {
                 if !state.text_block_open {
                     state.text_block_open = true;
                     state.next_block_index = 0;
-                    // We can only return one event; emit the start now and
-                    // the delta will be carried by the next event.
+                    // 开块事件直接携带本段文本——适配器每事件只能返回一个
+                    // 事件，若只发空 Start，这段 delta 的文本就丢了（某些
+                    // 网关不发 output_item.added，首段文本会落在这里）。
                     return Ok(Some(MessageStreamEvent::ContentBlockStart {
                         content_block: ContentBlock::Text {
-                            text: String::new(),
+                            text: text.to_string(),
                         },
                         index: 0,
                     }));
@@ -462,6 +463,26 @@ impl WireProtocol for OpenAiResponsesWire {
                     },
                     index: block_index,
                 }))
+            }
+
+            "response.output_item.done" => {
+                // 工具项参数流结束：发 ContentBlockStop——装配器只在此刻
+                // 把累积的参数字符串解析回对象（见 streaming.rs 的终结
+                // 逻辑）。不发的话 tool_use.input 停留在字符串，工具执行
+                // 器反序列化直接报 invalid type: string。
+                if let Ok(value) = serde_json::from_str::<Value>(data) {
+                    let item = &value["item"];
+                    if item.get("type").and_then(|t| t.as_str()) == Some("function_call") {
+                        let idx_key =
+                            item.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                        if let Some(slot) = state.tool_calls.get(&idx_key) {
+                            return Ok(Some(MessageStreamEvent::ContentBlockStop {
+                                index: slot.block_index,
+                            }));
+                        }
+                    }
+                }
+                Ok(None)
             }
 
             "response.completed" => {
@@ -664,12 +685,18 @@ mod tests {
         assert!(matches!(ev, MessageStreamEvent::MessageStart { .. }));
 
         let delta = r#"{"type":"response.output_text.delta","delta":"Hello"}"#;
-        // First delta triggers ContentBlockStart.
+        // First delta triggers ContentBlockStart — carrying its own text.
         let ev = wire
             .adapt_sse_event("response.output_text.delta", delta, &mut state)
             .unwrap()
             .unwrap();
-        assert!(matches!(ev, MessageStreamEvent::ContentBlockStart { .. }));
+        match ev {
+            MessageStreamEvent::ContentBlockStart { content_block, .. } => match content_block {
+                ContentBlock::Text { text } => assert_eq!(text, "Hello"),
+                other => panic!("{other:?}"),
+            },
+            other => panic!("{other:?}"),
+        }
 
         let delta2 = r#"{"type":"response.output_text.delta","delta":" world"}"#;
         let ev = wire
@@ -690,5 +717,92 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(ev, MessageStreamEvent::MessageStop);
+    }
+
+    #[test]
+    fn responses_stream_emits_block_stop_for_finished_tool_item() {
+        // 回归：output_item.done(function_call) 必须转成 ContentBlockStop，
+        // 装配器只在该事件上把累积的参数字符串解析回对象。
+        let wire = OpenAiResponsesWire;
+        let mut state = StreamState::default();
+
+        let created = r#"{"type":"response.created","response":{"id":"resp_x","model":"gpt-6-astra"}}"#;
+        wire.adapt_sse_event("response.created", created, &mut state)
+            .unwrap();
+        let added = r#"{"type":"response.output_item.added","item":{"type":"function_call","index":0,"call_id":"call_1","name":"lit_search"}}"#;
+        wire.adapt_sse_event("response.output_item.added", added, &mut state)
+            .unwrap();
+        let delta = r#"{"type":"response.function_call_arguments.delta","item_index":0,"delta":"{\"limit\":20}"}"#;
+        wire.adapt_sse_event("response.function_call_arguments.delta", delta, &mut state)
+            .unwrap();
+
+        let done = r#"{"type":"response.output_item.done","item":{"type":"function_call","index":0,"call_id":"call_1","name":"lit_search","arguments":"{\"limit\":20}"}}"#;
+        let ev = wire
+            .adapt_sse_event("response.output_item.done", done, &mut state)
+            .unwrap()
+            .expect("done must emit an event");
+        assert_eq!(
+            ev,
+            MessageStreamEvent::ContentBlockStop { index: 0 },
+            "tool block must be closed with ContentBlockStop"
+        );
+
+        // 非工具项的 done 不发事件。
+        let msg_done = r#"{"type":"response.output_item.done","item":{"type":"message","index":1}}"#;
+        assert!(
+            wire.adapt_sse_event("response.output_item.done", msg_done, &mut state)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn responses_stream_with_output_item_added_keeps_all_text() {
+        // 真实 Responses 事件序：output_item.added(message) 在文本 delta
+        // 之前。回归：added 不得提前置 text_block_open，否则所有 delta
+        // 都没有 ContentBlockStart 而被整段丢弃。
+        let wire = OpenAiResponsesWire;
+        let mut state = StreamState::default();
+
+        let created = r#"{"type":"response.created","response":{"id":"resp_x","model":"gpt-4o"}}"#;
+        wire.adapt_sse_event("response.created", created, &mut state)
+            .unwrap();
+        let added = r#"{"type":"response.output_item.added","item":{"type":"message","id":"msg_1"}}"#;
+        assert!(
+            wire.adapt_sse_event("response.output_item.added", added, &mut state)
+                .unwrap()
+                .is_none()
+        );
+
+        let ev = wire
+            .adapt_sse_event(
+                "response.output_text.delta",
+                r#"{"delta":"first"}"#,
+                &mut state,
+            )
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            &ev,
+            MessageStreamEvent::ContentBlockStart {
+                content_block: ContentBlock::Text { text },
+                ..
+            } if text == "first"
+        ));
+        let ev = wire
+            .adapt_sse_event(
+                "response.output_text.delta",
+                r#"{"delta":"-second"}"#,
+                &mut state,
+            )
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            &ev,
+            MessageStreamEvent::ContentBlockDelta {
+                delta: ContentBlockDelta::TextDelta { text },
+                index: 0,
+            } if text == "-second"
+        ));
     }
 }

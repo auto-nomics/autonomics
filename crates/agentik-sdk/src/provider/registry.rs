@@ -6,8 +6,8 @@ use crate::http::auth::AuthMethod;
 use crate::model::{ModelInfo, ProviderType};
 use crate::provider::{
     ProviderPreset, deepseek::DeepseekProvider, mimo::MimoProvider, minimax::MinimaxProvider,
-    moonshot::MoonshotProvider, openrouter::OpenrouterProvider, sensenova::SensenovaProvider,
-    zai::ZaiProvider,
+    moonshot::MoonshotProvider, openai::OpenaiProvider, openrouter::OpenrouterProvider,
+    sensenova::SensenovaProvider, zai::ZaiProvider,
 };
 use crate::wire::WireProtocolKind;
 
@@ -20,6 +20,7 @@ pub fn preset_models(provider_type: &ProviderType) -> Option<Vec<ModelInfo>> {
         ProviderType::Mimo => Some(MimoProvider::preset_models()),
         ProviderType::Minimax => Some(MinimaxProvider::preset_models()),
         ProviderType::Moonshot => Some(MoonshotProvider::preset_models()),
+        ProviderType::Openai => Some(OpenaiProvider::preset_models()),
         ProviderType::Openrouter => Some(OpenrouterProvider::preset_models()),
         ProviderType::Sensenova => Some(SensenovaProvider::preset_models()),
         ProviderType::Zai => Some(ZaiProvider::preset_models()),
@@ -35,6 +36,7 @@ pub fn default_base_url(provider_type: &ProviderType) -> Option<&'static str> {
         ProviderType::Mimo => Some(MimoProvider::default_base_url()),
         ProviderType::Minimax => Some(MinimaxProvider::default_base_url()),
         ProviderType::Moonshot => Some(MoonshotProvider::default_base_url()),
+        ProviderType::Openai => Some(OpenaiProvider::default_base_url()),
         ProviderType::Openrouter => Some(OpenrouterProvider::default_base_url()),
         ProviderType::Sensenova => Some(SensenovaProvider::default_base_url()),
         ProviderType::Zai => Some(ZaiProvider::default_base_url()),
@@ -50,6 +52,7 @@ pub fn known_base_urls(provider_type: &ProviderType) -> Vec<&'static str> {
         ProviderType::Mimo => MimoProvider::known_base_urls(),
         ProviderType::Minimax => MinimaxProvider::known_base_urls(),
         ProviderType::Moonshot => MoonshotProvider::known_base_urls(),
+        ProviderType::Openai => OpenaiProvider::known_base_urls(),
         ProviderType::Openrouter => OpenrouterProvider::known_base_urls(),
         ProviderType::Sensenova => SensenovaProvider::known_base_urls(),
         ProviderType::Zai => ZaiProvider::known_base_urls(),
@@ -65,6 +68,7 @@ pub fn default_auth_method(provider_type: &ProviderType) -> AuthMethod {
         ProviderType::Mimo => MimoProvider::default_auth_method(),
         ProviderType::Minimax => MinimaxProvider::default_auth_method(),
         ProviderType::Moonshot => MoonshotProvider::default_auth_method(),
+        ProviderType::Openai => OpenaiProvider::default_auth_method(),
         ProviderType::Openrouter => OpenrouterProvider::default_auth_method(),
         ProviderType::Sensenova => SensenovaProvider::default_auth_method(),
         ProviderType::Zai => ZaiProvider::default_auth_method(),
@@ -74,17 +78,18 @@ pub fn default_auth_method(provider_type: &ProviderType) -> AuthMethod {
 
 /// Returns the [`WireProtocolKind`] advertised by a known provider type.
 ///
-/// All built-in presets currently return [`WireProtocolKind::Anthropic`]; the
-/// hook exists so future OpenAI-native presets (OpenAI itself, Ollama,
-/// LMStudio, Groq, …) can declare [`WireProtocolKind::OpenaiChat`] or
-/// [`WireProtocolKind::OpenaiResponses`] without touching call sites. Custom
-/// providers fall back to the Anthropic-compatible wire.
+/// Most built-in presets speak an Anthropic-compatible wire; the OpenAI-native
+/// presets (openai via the ChatGPT backend, openrouter via the
+/// OpenAI-compatible gateway) declare [`WireProtocolKind::ChatgptResponses`]
+/// and [`WireProtocolKind::OpenaiChat`] respectively. Custom providers fall
+/// back to the Anthropic-compatible wire.
 pub fn wire_protocol(provider_type: &ProviderType) -> WireProtocolKind {
     match provider_type {
         ProviderType::Deepseek => DeepseekProvider::wire_protocol(),
         ProviderType::Mimo => MimoProvider::wire_protocol(),
         ProviderType::Minimax => MinimaxProvider::wire_protocol(),
         ProviderType::Moonshot => MoonshotProvider::wire_protocol(),
+        ProviderType::Openai => OpenaiProvider::wire_protocol(),
         ProviderType::Openrouter => OpenrouterProvider::wire_protocol(),
         ProviderType::Sensenova => SensenovaProvider::wire_protocol(),
         ProviderType::Zai => ZaiProvider::wire_protocol(),
@@ -98,6 +103,7 @@ pub fn wire_protocol(provider_type: &ProviderType) -> WireProtocolKind {
 pub fn supports_remote_catalog(provider_type: &ProviderType) -> bool {
     match provider_type {
         ProviderType::Openrouter => OpenrouterProvider::supports_remote_catalog(),
+        ProviderType::Openai => OpenaiProvider::supports_remote_catalog(),
         _ => false,
     }
 }
@@ -109,6 +115,7 @@ pub fn known_provider_types() -> Vec<&'static str> {
         "mimo",
         "minimax",
         "moonshot",
+        "openai",
         "openrouter",
         "sensenova",
         "zai",

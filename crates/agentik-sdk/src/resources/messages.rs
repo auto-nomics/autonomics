@@ -134,11 +134,13 @@ impl<'a> MessagesResource<'a> {
         let endpoint = wire_req.endpoint_path.trim_start_matches('/').to_string();
 
         // Snapshot everything we need to re-issue the request later from
-        // inside the background task.
+        // inside the background task. Auth headers come from the
+        // AuthHandler (not a hardcoded Bearer) so the streaming path
+        // matches the non-streaming one and carries any auth-method
+        // extras (e.g. `chatgpt-account-id`).
         let http_client = self.client.http_client().client().clone();
         let base_url = self.client.config().base_url.clone();
-        let api_key = self.client.config().api_key.clone();
-        let auth_header = format!("Bearer {}", api_key);
+        let auth_headers = self.client.http_client().auth_header_map()?;
         let wire_headers = wire_req.headers.clone();
         let body = wire_req.body.clone();
         let config = Arc::new(config);
@@ -147,10 +149,13 @@ impl<'a> MessagesResource<'a> {
         // Wire-supplied headers (e.g. `anthropic-version`) augment the auth
         // headers managed by the stream builder.
         let mut stream_builder = StreamRequestBuilder::new(http_client.clone(), base_url.clone())
-            .header("Authorization", &auth_header)
-            .header("Content-Type", "application/json")
             .wire(self.client.wire().clone())
             .config((*config).clone());
+        for (name, value) in &auth_headers {
+            if let Ok(v) = value.to_str() {
+                stream_builder = stream_builder.header(name.as_str(), v);
+            }
+        }
         for (name, value) in &wire_headers {
             stream_builder = stream_builder.header(name, value);
         }
@@ -172,7 +177,7 @@ impl<'a> MessagesResource<'a> {
         let reconnect = {
             let http_client = http_client.clone();
             let base_url = base_url.clone();
-            let auth_header = auth_header.clone();
+            let auth_headers = auth_headers.clone();
             let wire_headers = wire_headers.clone();
             let wire = self.client.wire().clone();
             let endpoint = endpoint.clone();
@@ -181,7 +186,7 @@ impl<'a> MessagesResource<'a> {
             move || {
                 let http_client = http_client.clone();
                 let base_url = base_url.clone();
-                let auth_header = auth_header.clone();
+                let auth_headers = auth_headers.clone();
                 let wire_headers = wire_headers.clone();
                 let wire = wire.clone();
                 let endpoint = endpoint.clone();
@@ -189,10 +194,13 @@ impl<'a> MessagesResource<'a> {
                 let config = config.clone();
                 async move {
                     let mut builder = StreamRequestBuilder::new(http_client, base_url)
-                        .header("Authorization", &auth_header)
-                        .header("Content-Type", "application/json")
                         .wire(wire)
                         .config((*config).clone());
+                    for (name, value) in &auth_headers {
+                        if let Ok(v) = value.to_str() {
+                            builder = builder.header(name.as_str(), v);
+                        }
+                    }
                     for (name, value) in &wire_headers {
                         builder = builder.header(name, value);
                     }

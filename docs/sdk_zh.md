@@ -24,6 +24,8 @@ LLM API 客户端与多服务商抽象层。
   - ZAI
   - OpenRouter（OpenAI 兼容协议；通过 `OpenrouterProvider::fetch_remote_catalog`
     拉取公开 `GET /v1/models` 端点的实时模型目录）
+  - OpenAI（ChatGPT 订阅 OAuth 登录——见
+    [通过 ChatGPT 订阅使用 OpenAI](#通过-chatgpt-订阅使用-openai)）
 - **模型池** —— 跨服务商轮询选择模型，支持按名称粘性选择
 - **灵活认证** —— Anthropic `x-api-key`、Bearer token，或面向第三方网关的自定义 header
 - **Mock 支持** —— 通过 `mockall` 的 `MockApiClient`，用于测试
@@ -71,6 +73,30 @@ let config = ClientConfig::new("your-api-key", "https://api.anthropic.com")
 
 let client = Anthropic::with_config(config)?;
 ```
+
+### 通过 ChatGPT 订阅使用 OpenAI
+
+`openai` provider **不填 API key**：走与 OpenAI Codex CLI 相同的 OAuth
+浏览器登录，用 ChatGPT 账号（Plus/Pro 订阅）授权，请求发往 ChatGPT 后端
+（`https://chatgpt.com/backend-api/codex/responses`，Responses 协议）。
+
+- **登录**（`provider::openai::oauth::login_flow`）：PKCE + 本机回调服务器
+  （`127.0.0.1:1455`，兜底 `1457`）→ 授权 URL → 换 token → `TokenBlob`
+  （access/refresh token、`chatgpt_account_id`、邮箱、订阅计划）。
+  TUI 操作：模型配置页 → `openai` → `Ctrl+E` → `L`。
+- **存储**（零 schema 迁移）：token blob JSON 存 `providers.api_key` 列；
+  `providers.auth_method` 列存标签 `chatgpt`。
+- **刷新**：距上次刷新超 8 天 / 距过期不足 24h 主动刷新；HTTP 401 自愈
+  （刷新 → 通过共享 `ArcSwap` 槽热替换 access token → 重试一次 → 轮转后
+  的 blob 回写落库）。
+- **模型目录实时拉取**：登录后自动请求
+  `GET /backend-api/codex/models?client_version=…`（Codex CLI 同源端点，
+  认证头与对话接口一致）；TUI 登录成功后自动刷新、`Ctrl+F` 手动刷新。
+  另内置一份实测 preset 作离线兜底。
+- ⚠️ **ToS 风险**：第三方客户端复用 Codex CLI 的公开 OAuth `client_id`
+  属灰色地带。请用个人订阅自担风险；有先例（Roo Code 等），但 OpenAI 可能
+  限流或封禁此类客户端。需要 API key 方式请配置 `openrouter` 或自定义
+  provider。
 
 ### 环境变量
 
