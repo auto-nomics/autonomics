@@ -389,7 +389,11 @@ impl WireProtocol for OpenAiChatWire {
                         .and_then(|v| v.as_u64())
                         .unwrap_or(0),
                     cache_creation_input_tokens: None,
-                    cache_read_input_tokens: None,
+                    // OpenAI 的 cached_tokens 语义上是缓存读，非缓存写。
+                    cache_read_input_tokens: usage
+                        .get("prompt_tokens_details")
+                        .and_then(|d| d.get("cached_tokens"))
+                        .and_then(|v| v.as_u64()),
                     server_tool_use: None,
                     service_tier: None,
                 });
@@ -431,25 +435,35 @@ impl OpenAiChatWire {
             }
         }
 
-        // Emit MessageDelta with stop_reason + usage, then mark for
-        // MessageStop on the next call. But since [DONE] is the last event,
-        // we emit MessageStop directly.
-        let _ = MessageDelta {
-            stop_reason: state.stop_reason.clone(),
-            stop_sequence: None,
-        };
-        let _usage = MessageDeltaUsage {
-            output_tokens: state.usage.as_ref().map(|u| u.output_tokens).unwrap_or(0),
-            input_tokens: state.usage.as_ref().map(|u| u.input_tokens),
-            cache_creation_input_tokens: None,
-            cache_read_input_tokens: None,
-            server_tool_use: None,
-        };
+        // 终结事件只能返回一个（MessageStop）；把带 stop_reason/usage 的
+        // MessageDelta 排进 pending，SSE 泵会在 MessageStop 之前发出——
+        // 运行时的 UsageUpdate 与流式装配出的最终 message 的 usage 都
+        // 依赖它（此前此处直接丢弃 usage，OpenAI 模型全程记 0）。
+        state.pending_events.push_back(MessageStreamEvent::MessageDelta {
+            delta: MessageDelta {
+                stop_reason: state.stop_reason.clone(),
+                stop_sequence: None,
+            },
+            usage: MessageDeltaUsage {
+                output_tokens: state
+                    .usage
+                    .as_ref()
+                    .map(|u| u.output_tokens)
+                    .unwrap_or(0),
+                input_tokens: state.usage.as_ref().map(|u| u.input_tokens),
+                cache_creation_input_tokens: state
+                    .usage
+                    .as_ref()
+                    .and_then(|u| u.cache_creation_input_tokens),
+                cache_read_input_tokens: state
+                    .usage
+                    .as_ref()
+                    .and_then(|u| u.cache_read_input_tokens),
+                server_tool_use: None,
+            },
+        });
 
         // Final: MessageStop terminates the consumer loop.
-        // (MessageDelta with usage is omitted for simplicity; the consumer
-        // doesn't require it for correctness — it only needs MessageStop.)
-        let _ = state;
         Some(MessageStreamEvent::MessageStop)
     }
 }
@@ -628,5 +642,37 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(ev, MessageStreamEvent::MessageStop);
+    }
+
+    #[test]
+    fn chat_stream_queues_usage_delta_before_message_stop() {
+        // 回归：终结时 usage 版 MessageDelta 必须排进 pending_events 由
+        // SSE 泵在 MessageStop 之前代发——此前 finalize_stream 构造了
+        // MessageDelta 后直接丢弃，OpenAI 模型全程 usage 记 0。
+        let wire = OpenAiChatWire;
+        let mut state = StreamState::default();
+
+        let chunk1 = r#"{"id":"chatcmpl-x","model":"gpt-4o","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}"#;
+        wire.adapt_sse_event("", chunk1, &mut state).unwrap();
+        assert!(state.pending_events.is_empty());
+
+        // Final chunk: finish_reason + usage（含 cached_tokens）。
+        let chunk2 = r#"{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":80,"completion_tokens":12,"prompt_tokens_details":{"cached_tokens":60}}}"#;
+        let ev = wire
+            .adapt_sse_event("", chunk2, &mut state)
+            .unwrap()
+            .unwrap();
+        assert_eq!(ev, MessageStreamEvent::MessageStop);
+        assert_eq!(state.pending_events.len(), 1);
+        match state.pending_events.pop_front().unwrap() {
+            MessageStreamEvent::MessageDelta { delta, usage } => {
+                assert_eq!(delta.stop_reason, Some(StopReason::EndTurn));
+                assert_eq!(usage.input_tokens, Some(80));
+                assert_eq!(usage.output_tokens, 12);
+                assert_eq!(usage.cache_read_input_tokens, Some(60));
+                assert_eq!(usage.cache_creation_input_tokens, None);
+            }
+            other => panic!("expected MessageDelta, got {other:?}"),
+        }
     }
 }

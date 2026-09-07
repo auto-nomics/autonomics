@@ -157,6 +157,11 @@ pub struct StreamState {
     pub stop_reason: Option<crate::types::StopReason>,
     /// Accumulated usage, emitted in the final `MessageDelta`.
     pub usage: Option<crate::types::Usage>,
+    /// 适配器随返回事件一并排出的规范事件（如终结 MessageStop 之前必须
+    /// 先到的 usage 版 MessageDelta）。SSE 泵在每次适配后、返回事件前
+    /// 先排空此队列——`adapt_sse_event` 每个 SSE 事件只能返回一个事件，
+    /// 而 Responses 的 `response.completed` 既是流终结又是 usage 载体。
+    pub pending_events: std::collections::VecDeque<crate::types::MessageStreamEvent>,
     /// Blocks accumulated by the adapter so the synthesised `MessageStop`
     /// / `MessageStart` can carry a consistent snapshot.
     pub blocks: Vec<crate::types::ContentBlock>,

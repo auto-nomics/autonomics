@@ -3,13 +3,12 @@
 //! This module handles the HTTP layer for streaming responses from the Anthropic API,
 //! parsing SSE events and converting them into MessageStreamEvent objects.
 
-use futures::{Stream, TryStreamExt};
+use futures::{Stream, StreamExt, TryStreamExt};
 use pin_project::pin_project;
 use reqwest::Response;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use tokio_stream::StreamExt;
 
 use crate::types::{AnthropicError, MessageStreamEvent, Result};
 use crate::wire::{AnthropicWire, StreamState, WireProtocol};
@@ -154,7 +153,7 @@ impl HttpStreamClient {
 
         let sse_stream = byte_stream
             .eventsource()
-            .map(move |result| -> Result<Option<MessageStreamEvent>> {
+            .flat_map(move |result| {
                 // The eventsource-stream crate wraps every body error as
                 // `Transport error: ...` — losing the original reqwest
                 // error type and source chain. Unwrap it here so we can
@@ -174,22 +173,32 @@ impl HttpStreamClient {
                     }
                     tracing::warn!(error = %chain, "create_event_stream: eventsource-stream error (with cause chain)");
                 }
-                match result {
+                let events: Vec<Result<MessageStreamEvent>> = match result {
                     Ok(event) => {
                         // Delegate parsing to the wire protocol adapter.
                         // `Ok(None)` means "skip this event"; `Ok(Some(_))`
                         // yields a canonical MessageStreamEvent.
-                        wire.adapt_sse_event(event.event.as_str(), &event.data, &mut state)
+                        match wire.adapt_sse_event(event.event.as_str(), &event.data, &mut state) {
+                            Ok(main) => {
+                                // Adapter-queued events go first (e.g. the
+                                // usage-carrying MessageDelta that must
+                                // precede a terminal MessageStop), then the
+                                // adapter's own event for this SSE event.
+                                let mut out: Vec<Result<MessageStreamEvent>> =
+                                    state.pending_events.drain(..).map(Ok).collect();
+                                if let Some(ev) = main {
+                                    out.push(Ok(ev));
+                                }
+                                out
+                            }
+                            Err(e) => vec![Err(e)],
+                        }
                     }
-                    Err(e) => Err(AnthropicError::StreamError(
+                    Err(e) => vec![Err(AnthropicError::StreamError(
                         format!("SSE stream error: {}", e)
-                    )),
-                }
-            })
-            .filter_map(|result| match result {
-                Ok(Some(event)) => Some(Ok(event)),
-                Ok(None) => None,
-                Err(e) => Some(Err(e)),
+                    ))],
+                };
+                futures::stream::iter(events)
             });
 
         Ok(sse_stream)

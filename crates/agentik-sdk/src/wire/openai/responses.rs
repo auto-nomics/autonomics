@@ -17,7 +17,9 @@
 use crate::types::errors::{AnthropicError, Result};
 use crate::types::messages::{Message, MessageCreateParams, Role};
 use crate::types::shared::{RequestId, Usage};
-use crate::types::streaming::{ContentBlockDelta, MessageStreamEvent};
+use crate::types::streaming::{
+    ContentBlockDelta, MessageDelta, MessageDeltaUsage, MessageStreamEvent,
+};
 use crate::types::{ContentBlock, StopReason};
 use crate::wire::openai::{
     OPENAI_FEATURES, function_descriptor, parse_json, reasoning_effort_value, translate_message,
@@ -286,11 +288,12 @@ impl WireProtocol for OpenAiResponsesWire {
         let usage = value.get("usage").map(|u| Usage {
             input_tokens: u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
             output_tokens: u.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
-            cache_creation_input_tokens: u
+            cache_creation_input_tokens: None,
+            // OpenAI 的 cached_tokens 语义上是缓存读，非缓存写。
+            cache_read_input_tokens: u
                 .get("input_tokens_details")
                 .and_then(|d| d.get("cached_tokens"))
                 .and_then(|v| v.as_u64()),
-            cache_read_input_tokens: None,
             server_tool_use: None,
             service_tier: None,
         });
@@ -480,7 +483,12 @@ impl WireProtocol for OpenAiResponsesWire {
                                 .and_then(|v| v.as_u64())
                                 .unwrap_or(0),
                             cache_creation_input_tokens: None,
-                            cache_read_input_tokens: None,
+                            // OpenAI 的 cached_tokens 是"从缓存读取的 prompt
+                            // token"——语义上对应 Anthropic 的 cache_read。
+                            cache_read_input_tokens: usage
+                                .get("input_tokens_details")
+                                .and_then(|d| d.get("cached_tokens"))
+                                .and_then(|v| v.as_u64()),
                             server_tool_use: None,
                             service_tier: None,
                         });
@@ -494,6 +502,34 @@ impl WireProtocol for OpenAiResponsesWire {
                                 _ => None,
                             });
                 }
+                // response.completed 是流上最后一个 SSE 事件，而适配器每个
+                // SSE 事件只能返回一个规范事件——把带 usage/stop_reason 的
+                // MessageDelta 排进 pending，由 SSE 泵在返回的 MessageStop
+                // 之前发出。没有它，运行时的 UsageUpdate 与流式装配出的
+                // 最终 message 的 usage 全为 0。
+                state.pending_events.push_back(MessageStreamEvent::MessageDelta {
+                    delta: MessageDelta {
+                        stop_reason: state.stop_reason.clone(),
+                        stop_sequence: None,
+                    },
+                    usage: MessageDeltaUsage {
+                        output_tokens: state
+                            .usage
+                            .as_ref()
+                            .map(|u| u.output_tokens)
+                            .unwrap_or(0),
+                        input_tokens: state.usage.as_ref().map(|u| u.input_tokens),
+                        cache_creation_input_tokens: state
+                            .usage
+                            .as_ref()
+                            .and_then(|u| u.cache_creation_input_tokens),
+                        cache_read_input_tokens: state
+                            .usage
+                            .as_ref()
+                            .and_then(|u| u.cache_read_input_tokens),
+                        server_tool_use: None,
+                    },
+                });
                 Ok(Some(MessageStreamEvent::MessageStop))
             }
 
@@ -691,4 +727,38 @@ mod tests {
             .unwrap();
         assert_eq!(ev, MessageStreamEvent::MessageStop);
     }
+
+    #[test]
+    fn responses_stream_queues_usage_delta_before_message_stop() {
+        // 回归：response.completed 是流上最后一个 SSE 事件且携带 usage，
+        // 适配器只能返回一个事件——usage 版 MessageDelta 必须排进
+        // pending_events 由 SSE 泵在 MessageStop 之前代发，否则运行时
+        // UsageUpdate 与流式装配的最终 message usage 全为 0。
+        let wire = OpenAiResponsesWire;
+        let mut state = StreamState::default();
+
+        let created = r#"{"type":"response.created","response":{"id":"resp_x","model":"gpt-4o"}}"#;
+        wire.adapt_sse_event("response.created", created, &mut state)
+            .unwrap();
+        assert!(state.pending_events.is_empty());
+
+        let completed = r#"{"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":120,"output_tokens":30,"input_tokens_details":{"cached_tokens":100}}}}"#;
+        let ev = wire
+            .adapt_sse_event("response.completed", completed, &mut state)
+            .unwrap()
+            .unwrap();
+        assert_eq!(ev, MessageStreamEvent::MessageStop);
+        assert_eq!(state.pending_events.len(), 1);
+        match state.pending_events.pop_front().unwrap() {
+            MessageStreamEvent::MessageDelta { delta, usage } => {
+                assert_eq!(delta.stop_reason, Some(StopReason::EndTurn));
+                assert_eq!(usage.input_tokens, Some(120));
+                assert_eq!(usage.output_tokens, 30);
+                assert_eq!(usage.cache_read_input_tokens, Some(100));
+                assert_eq!(usage.cache_creation_input_tokens, None);
+            }
+            other => panic!("expected MessageDelta, got {other:?}"),
+        }
+    }
+
 }
