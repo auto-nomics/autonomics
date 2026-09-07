@@ -529,20 +529,28 @@ impl WireProtocol for OpenAiResponsesWire {
 /// Convert a Chat-shaped content value into a Responses `message` input item.
 ///
 /// Responses uses `input_text` / `input_image` content part types rather than
-/// Chat's `text` / `image_url`.
+/// Chat's `text` / `image_url` — but only on the user role. Assistant-role
+/// message items must carry `output_text` parts; the API rejects `input_text`
+/// there ("Invalid value: 'input_text'. Supported values are: 'output_text'
+/// and 'refusal'.").
 fn responses_message_item(role: &str, content: &Value) -> Value {
+    let text_type = if role == "assistant" {
+        "output_text"
+    } else {
+        "input_text"
+    };
     match content {
         Value::String(s) => json!({
             "type": "message",
             "role": role,
-            "content": [{"type": "input_text", "text": s}],
+            "content": [{"type": text_type, "text": s}],
         }),
         Value::Array(parts) => {
             let mapped: Vec<Value> = parts
                 .iter()
                 .map(|p| match p.get("type").and_then(|t| t.as_str()) {
                     Some("text") => json!({
-                        "type": "input_text",
+                        "type": text_type,
                         "text": p.get("text").cloned().unwrap_or(json!("")),
                     }),
                     Some("image_url") => json!({
@@ -618,6 +626,25 @@ mod tests {
         // No nested `function` wrapper on Responses.
         assert!(body["tools"][0].get("function").is_none());
         assert_eq!(body["tool_choice"], "required");
+    }
+
+    #[test]
+    fn responses_wire_types_assistant_history_as_output_text() {
+        // 回归：回放 assistant 历史时，message 条目的文本 part 必须是
+        // `output_text`——Responses API 在 assistant 角色上拒绝 `input_text`。
+        let wire = OpenAiResponsesWire;
+        let params = MessageCreateBuilder::new("gpt-4o", 1024)
+            .user("hi")
+            .assistant("hello back")
+            .user("again")
+            .build();
+        let req = wire.encode_request(&params, false).unwrap();
+        let body: Value = serde_json::from_slice(&req.body).unwrap();
+        assert_eq!(body["input"][0]["role"], "user");
+        assert_eq!(body["input"][0]["content"][0]["type"], "input_text");
+        assert_eq!(body["input"][1]["role"], "assistant");
+        assert_eq!(body["input"][1]["content"][0]["type"], "output_text");
+        assert_eq!(body["input"][1]["content"][0]["text"], "hello back");
     }
 
     #[test]
