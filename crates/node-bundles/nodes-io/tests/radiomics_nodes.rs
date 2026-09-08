@@ -29,6 +29,10 @@ use vfs::{
 struct CopyPairsRuntime {
     workspace_root: Option<PathBuf>,
     requests: Mutex<Vec<ContainerRunRequest>>,
+    /// `(AUTONOMICS_INPUT*, contents)` snapshotted during the run: the real
+    /// node removes its scratch workspace after success, so staged inputs
+    /// cannot be inspected on disk afterwards.
+    input_contents: Mutex<Vec<(String, Vec<u8>)>>,
 }
 
 impl CopyPairsRuntime {
@@ -36,6 +40,7 @@ impl CopyPairsRuntime {
         Self {
             workspace_root: Some(workspace_root.to_path_buf()),
             requests: Mutex::new(Vec::new()),
+            input_contents: Mutex::new(Vec::new()),
         }
     }
 
@@ -70,6 +75,10 @@ impl PodmanConnection for CopyPairsRuntime {
                 Self::host_path(&request, &input),
                 Self::host_path(&request, &output),
             )?;
+            self.input_contents.lock().unwrap().push((
+                input.clone(),
+                std::fs::read(Self::host_path(&request, &input))?,
+            ));
         }
         self.requests.lock().unwrap().push(request);
         Ok(ContainerRunResult {
@@ -297,14 +306,16 @@ async fn container_wrapper_accepts_multiple_upstream_file_edges() {
         .map(|(_, value)| value.clone())
         .unwrap();
     assert_ne!(input0, input1);
-    assert_eq!(
-        std::fs::read(CopyPairsRuntime::host_path(request, &input0)).unwrap(),
-        b"image".as_slice()
-    );
-    assert_eq!(
-        std::fs::read(CopyPairsRuntime::host_path(request, &input1)).unwrap(),
-        b"mask".as_slice()
-    );
+    let snapshot = runtime.input_contents.lock().unwrap();
+    let staged_content = |container_path: &str| {
+        snapshot
+            .iter()
+            .find(|(path, _)| path == container_path)
+            .map(|(_, bytes)| bytes.as_slice())
+            .unwrap()
+    };
+    assert_eq!(staged_content(&input0), b"image".as_slice());
+    assert_eq!(staged_content(&input1), b"mask".as_slice());
 }
 
 #[tokio::test]

@@ -27,6 +27,7 @@ use agentik_sdk::model::Model;
 use agentik_sdk::types::{AgentEvent, ContentBlock};
 use arc_swap::ArcSwapOption;
 use container_runtime::ContainerExecutionInfra;
+use container_runtime::{PanelGcPolicy, WorkspaceGcPolicy, sweep_panels, sweep_workspace};
 use dag_core::{DataBundle, DataBundleCatalog};
 use data_catalog::{CatalogConfig, CatalogRuntime, CatalogService, catalog_mount_definitions};
 use data_engine::dag::DagHistory;
@@ -44,6 +45,62 @@ use crate::config::{PromptCapabilities, RuntimeConfig};
 use crate::control::{AgentExecutionHistory, AgentStatus, DelegationSnapshot, DelegationStatus};
 use crate::error::{Error, Result};
 use crate::memory_kms::KmsMemoryGrounding;
+
+/// Background garbage collector for the container data plane: one sweep when
+/// the host opens, then one per configured interval
+/// (`AUTONOMICS_WORKSPACE_GC_INTERVAL_SECS`, `0` disables the loop).
+///
+/// The sweeper never removes a directory a live run holds a lock on, a
+/// scratch owned by a live process younger than the GC age, user-declared
+/// workdirs, or panel entries beyond the configured byte budget
+/// (`AUTONOMICS_PANEL_CACHE_MAX_BYTES`, unset keeps panels forever).
+fn spawn_container_gc(infra: &Arc<ContainerExecutionInfra>) {
+    let config = infra.config.clone();
+    let workspace_policy = WorkspaceGcPolicy {
+        min_age: container_runtime::workspace_gc_age(),
+        dry_run: false,
+    };
+    let panel_policy = PanelGcPolicy {
+        max_bytes: container_runtime::panel_cache_max_bytes(),
+        min_age: container_runtime::workspace_gc_age(),
+        dry_run: false,
+    };
+    let interval = container_runtime::workspace_gc_interval();
+    tokio::spawn(async move {
+        loop {
+            let workspace = sweep_workspace(&config.workspace_root, &workspace_policy).await;
+            if !workspace.errors.is_empty() {
+                tracing::warn!(errors = ?workspace.errors, "container workspace GC errors");
+            }
+            tracing::info!(
+                removed = workspace.removed,
+                bytes_freed = workspace.bytes_freed,
+                in_use = workspace.retained_in_use,
+                recent = workspace.retained_recent,
+                foreign = workspace.foreign_entries,
+                pending_cleared = workspace.pending_cleared,
+                "container workspace GC"
+            );
+            let panels = sweep_panels(&config.panel_cache_root, &panel_policy).await;
+            if !panels.errors.is_empty() {
+                tracing::warn!(errors = ?panels.errors, "panel cache GC errors");
+            }
+            tracing::info!(
+                entries = panels.entries,
+                bytes_total = panels.bytes_total,
+                removed = panels.removed,
+                bytes_freed = panels.bytes_freed,
+                in_use = panels.retained_in_use,
+                recent = panels.retained_recent,
+                "panel cache GC"
+            );
+            let Some(interval) = interval else {
+                break;
+            };
+            tokio::time::sleep(interval).await;
+        }
+    });
+}
 
 // AgentProfile carries the same tool-capability flags as RuntimeConfig, so we
 // can build a dynamic system prompt that only mentions tools the profile
@@ -137,6 +194,10 @@ impl SharedInfra {
             panel_cache_root = %container_execution.config.panel_cache_root.display(),
             "SharedInfra::open: Podman execution infrastructure ready"
         );
+        // Reclaim crash residue and expired scratch from previous runs once at
+        // startup, then on the configured interval. Failures are logged and
+        // never block the host.
+        spawn_container_gc(&container_execution);
         tracing::info!(
             mounts = ?file_storage.mount_paths(),
             "SharedInfra::open: file storage ready (with VFS mounts)"
