@@ -895,7 +895,7 @@ mod tests {
     #[test]
     fn injected_container_execution_is_shared_by_sessions() {
         let infra = Arc::new(container_runtime::ContainerExecutionInfra::from_config(
-            container_runtime::K3sConfig::from_env(),
+            container_runtime::PodmanConfig::default(),
         ));
         let engine = DataEngine::builder()
             .with_container_execution(Arc::clone(&infra))

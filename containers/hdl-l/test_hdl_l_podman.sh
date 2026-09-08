@@ -6,7 +6,7 @@ usage() {
 Usage: test_hdl_l_podman.sh
 
 Builds the official HDL-L image and runs the rootless-Podman smoke baseline.
-No registry, k3s, kubeconfig, or full 1.8 GiB UKB panel is required.
+No registry, cluster, or full 1.8 GiB UKB panel is required.
 
 Environment:
   AUTONOMICS_HDL_IMAGE   Local OCI tag (default: localhost/atc/hdl:1.4.3)

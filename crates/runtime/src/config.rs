@@ -47,7 +47,8 @@ use bib_base::BibHttpOptions;
 /// summary stats, GWAS Catalog data, etc.) land here.
 ///
 /// Override via builder `.data_dir(…)` or env `AUTONOMICS_DATA_DIR`.
-const DEFAULT_DATA_DIR: &str = "/mnt/disk3/test";
+/// Defaults to `$HOME/.autonomics/data` (absolute, independent of CWD).
+const DEFAULT_DATA_DIR: &str = ".autonomics/data";
 
 /// Default directory for agent-internal databases (DAG history).
 ///
@@ -248,7 +249,12 @@ impl RuntimeConfig {
         let data_dir = base
             .and_then(|b| b.data_dir.clone())
             .or_else(|| env_path(ENV_DATA_DIR))
-            .unwrap_or_else(|| PathBuf::from(DEFAULT_DATA_DIR));
+            .unwrap_or_else(|| {
+                // Default: $HOME/.autonomics/data (absolute, independent of CWD).
+                std::env::var_os("HOME")
+                    .map(|h| PathBuf::from(h).join(DEFAULT_DATA_DIR))
+                    .unwrap_or_else(|| PathBuf::from(DEFAULT_DATA_DIR))
+            });
 
         let state_dir = base
             .and_then(|b| b.state_dir.clone())
@@ -438,8 +444,8 @@ const PROMPT_DAG_ENGINE: &str = "\n\
 const PROMPT_DAG_SCRIPTS: &str = "\n\
 ### Container Commands (container_command)\n\
 - Use `container_command` for external bioinformatics tools. It runs a \
-k3s Job with no shell insertion, a read-only rootfs, `network: \"isolated\"` \
-by default, and `/work` as the writable workspace PVC subPath.\n\
+an ephemeral Podman container with no shell insertion, a read-only rootfs, `network: \"isolated\"` \
+by default, and `/work` as the writable workspace bind mount.\n\
 - Put the executable and arguments in `command`. Bind file paths only through \
 `$input0`, `$output0`, `$workdir`, `AUTONOMICS_INPUT0`, \
 `AUTONOMICS_OUTPUT0`, and `AUTONOMICS_WORKDIR`. Prefer image digests. \
@@ -887,7 +893,11 @@ mod tests {
 
         let cfg = RuntimeConfig::default();
         assert_eq!(cfg.name, "default");
-        assert_eq!(cfg.data_dir, PathBuf::from(DEFAULT_DATA_DIR));
+        // data_dir resolves to $HOME/.autonomics/data when HOME is set.
+        let expected_data_dir = std::env::var_os("HOME")
+            .map(|h| PathBuf::from(h).join(DEFAULT_DATA_DIR))
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_DATA_DIR));
+        assert_eq!(cfg.data_dir, expected_data_dir);
 
         // state_dir resolves to $HOME/.autonomics when HOME is set.
         let expected_state_dir = std::env::var_os("HOME")

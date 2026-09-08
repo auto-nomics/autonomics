@@ -7,8 +7,8 @@ use arrow_array::{Float64Array, Int32Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 use async_trait::async_trait;
 use container_runtime::{
-    ContainerRunRequest, ContainerRunResult, ContainerRuntime, ContainerRuntimeError,
-    DEFAULT_CONTAINER_WORKDIR, PanelCache,
+    ContainerRunRequest, ContainerRunResult, ContainerRuntimeError, DEFAULT_CONTAINER_WORKDIR,
+    PanelCache, PodmanConnection,
 };
 use dag_core::dag::runtime::SchedulerConfig;
 use dag_core::node::{DagNode, NodeInput, NodePorts};
@@ -29,6 +29,10 @@ use vfs::{
 struct CopyPairsRuntime {
     workspace_root: Option<PathBuf>,
     requests: Mutex<Vec<ContainerRunRequest>>,
+    /// `(AUTONOMICS_INPUT*, contents)` snapshotted during the run: the real
+    /// node removes its scratch workspace after success, so staged inputs
+    /// cannot be inspected on disk afterwards.
+    input_contents: Mutex<Vec<(String, Vec<u8>)>>,
 }
 
 impl CopyPairsRuntime {
@@ -36,6 +40,7 @@ impl CopyPairsRuntime {
         Self {
             workspace_root: Some(workspace_root.to_path_buf()),
             requests: Mutex::new(Vec::new()),
+            input_contents: Mutex::new(Vec::new()),
         }
     }
 
@@ -48,7 +53,7 @@ impl CopyPairsRuntime {
 }
 
 #[async_trait]
-impl ContainerRuntime for CopyPairsRuntime {
+impl PodmanConnection for CopyPairsRuntime {
     async fn run(
         &self,
         request: ContainerRunRequest,
@@ -70,6 +75,10 @@ impl ContainerRuntime for CopyPairsRuntime {
                 Self::host_path(&request, &input),
                 Self::host_path(&request, &output),
             )?;
+            self.input_contents.lock().unwrap().push((
+                input.clone(),
+                std::fs::read(Self::host_path(&request, &input))?,
+            ));
         }
         self.requests.lock().unwrap().push(request);
         Ok(ContainerRunResult {
@@ -217,7 +226,7 @@ async fn container_wrapper_accepts_multiple_upstream_file_edges() {
     std::fs::write(workspace.path().join("mask.mha"), b"mask").unwrap();
     let ctx = workspace_ctx(workspace.path());
     let runtime = Arc::new(CopyPairsRuntime::new(workspace.path()));
-    let panel_cache = Arc::new(PanelCache::new(workspace.path().join("panels"), ""));
+    let panel_cache = Arc::new(PanelCache::new(workspace.path().join("panels")));
     let node = RadiomicsContainerNodeFactory::pair_validate(runtime.clone(), panel_cache)
         .build(
             serde_json::json!({"extraction_id":"sts001_ct","mask_label":1,"minimum_mask_voxels":1}),
@@ -297,14 +306,16 @@ async fn container_wrapper_accepts_multiple_upstream_file_edges() {
         .map(|(_, value)| value.clone())
         .unwrap();
     assert_ne!(input0, input1);
-    assert_eq!(
-        std::fs::read(CopyPairsRuntime::host_path(request, &input0)).unwrap(),
-        b"image".as_slice()
-    );
-    assert_eq!(
-        std::fs::read(CopyPairsRuntime::host_path(request, &input1)).unwrap(),
-        b"mask".as_slice()
-    );
+    let snapshot = runtime.input_contents.lock().unwrap();
+    let staged_content = |container_path: &str| {
+        snapshot
+            .iter()
+            .find(|(path, _)| path == container_path)
+            .map(|(_, bytes)| bytes.as_slice())
+            .unwrap()
+    };
+    assert_eq!(staged_content(&input0), b"image".as_slice());
+    assert_eq!(staged_content(&input1), b"mask".as_slice());
 }
 
 #[tokio::test]
@@ -314,7 +325,7 @@ async fn mask_ingest_documents_and_stages_port_order() {
     std::fs::write(workspace.path().join("rtstruct.dcm"), b"rtstruct").unwrap();
     let ctx = workspace_ctx(workspace.path());
     let runtime = Arc::new(CopyPairsRuntime::new(workspace.path()));
-    let panel_cache = Arc::new(PanelCache::new(workspace.path().join("panels"), ""));
+    let panel_cache = Arc::new(PanelCache::new(workspace.path().join("panels")));
     let factory = RadiomicsContainerNodeFactory::mask_ingest(runtime.clone(), panel_cache);
     let node = factory
         .build(serde_json::json!({"roi_name":"GTV_Mass"}), ctx.clone())

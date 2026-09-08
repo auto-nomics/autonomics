@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use agentik_sdk::AuthMethod;
 use agentik_sdk::model::{Model, ModelInfo, ProviderConfig, ProviderType};
 use agentik_sdk::types::AgentEvent;
 use agentik_sdk::types::messages::{ContentBlock, Message, Role};
@@ -174,7 +173,7 @@ impl App {
             );
         }
 
-        Self {
+        let mut app = Self {
             state,
             host,
             handles: Vec::new(),
@@ -188,7 +187,11 @@ impl App {
             should_quit: false,
             cancel_requested_at: None,
             dirty: true,
-        }
+        };
+        // ChatGPT 订阅：openai 默认模型挂 token 刷新回调（刷新落库），
+        // 并做启动期主动刷新检查（8 天/24h 条件，后台执行）。
+        app.on_startup_chatgpt_setup();
+        app
     }
 }
 

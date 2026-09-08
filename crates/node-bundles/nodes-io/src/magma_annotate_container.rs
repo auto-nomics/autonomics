@@ -16,7 +16,7 @@ use crate::container_command::{
     ContainerPanelBundleSpec,
 };
 use crate::image_registry::acr_image;
-use container_runtime::{ContainerRuntime, PanelCache, PullPolicy};
+use container_runtime::{PanelCache, PodmanConnection, PullPolicy};
 
 pub const MAGMA_ANNOTATE_CONTAINER_KIND: &str = "magma_annotate_container";
 pub const MAGMA_ORIGINAL_IMAGE_REPOSITORY: &str = "magma";
@@ -46,12 +46,12 @@ fn default_timeout_secs() -> u64 {
 }
 
 pub struct MagmaAnnotateContainerNodeFactory {
-    pub(crate) runtime: Arc<dyn ContainerRuntime>,
+    pub(crate) runtime: Arc<dyn PodmanConnection>,
     pub(crate) panel_cache: Arc<PanelCache>,
 }
 
 impl MagmaAnnotateContainerNodeFactory {
-    pub fn new(runtime: Arc<dyn ContainerRuntime>, panel_cache: Arc<PanelCache>) -> Self {
+    pub fn new(runtime: Arc<dyn PodmanConnection>, panel_cache: Arc<PanelCache>) -> Self {
         Self {
             runtime,
             panel_cache,
@@ -169,12 +169,12 @@ impl NodeFactory for MagmaAnnotateContainerNodeFactory {
     }
 
     fn desc(&self) -> &'static str {
-        "Runs official MAGMA v1.10 SNP-to-gene annotation in k3s."
+        "Runs official MAGMA v1.10 SNP-to-gene annotation in Podman."
     }
 
     fn doc(&self) -> &'static str {
-        "Runs the official MAGMA v1.10 static executable as an ephemeral k3s \
-        Job. Input is one whitespace/tab-delimited SNP location File with \
+        "Runs the official MAGMA v1.10 static executable as an ephemeral Podman \
+        container. Input is one whitespace/tab-delimited SNP location File with \
         SNP, chromosome, and base-pair columns. The node binds the official \
         NCBI37.3 gene-location catalog package, invokes `magma --annotate`, and \
         emits the raw MAGMA log plus `.genes.annot` as immutable VFS File \
@@ -213,7 +213,7 @@ impl NodeFactory for MagmaAnnotateContainerNodeFactory {
             .iter()
             .map(|binding| node_ctx.bound_data_bundle(&binding.binding).cloned())
             .collect::<dag_core::registry::error::Result<Vec<_>>>()?;
-        let runtime: Arc<dyn container_runtime::ContainerRuntime> = self.runtime.clone();
+        let runtime: Arc<dyn container_runtime::PodmanConnection> = self.runtime.clone();
         let node = ContainerCommandNode::new_with_catalog_panels(
             container_spec,
             runtime,

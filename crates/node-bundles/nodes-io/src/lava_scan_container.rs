@@ -21,7 +21,7 @@ use crate::container_command::{
 };
 use crate::lava_container;
 use crate::lava_container::{LAVA_TUTORIAL_REF_PANEL, LAVA_UKB_EUR_PANEL};
-use container_runtime::{ContainerRuntime, PanelCache, PullPolicy};
+use container_runtime::{PanelCache, PodmanConnection, PullPolicy};
 
 pub const LAVA_SCAN_CONTAINER_KIND: &str = "lava_scan_container";
 pub const LAVA_ORIGINAL_IMAGE: &str = "localhost/atc/lava:0.1.5";
@@ -127,12 +127,12 @@ fn default_timeout_secs() -> u64 {
 }
 
 pub struct LavaScanContainerNodeFactory {
-    pub(crate) runtime: Arc<dyn ContainerRuntime>,
+    pub(crate) runtime: Arc<dyn PodmanConnection>,
     pub(crate) panel_cache: Arc<PanelCache>,
 }
 
 impl LavaScanContainerNodeFactory {
-    pub fn new(runtime: Arc<dyn ContainerRuntime>, panel_cache: Arc<PanelCache>) -> Self {
+    pub fn new(runtime: Arc<dyn PodmanConnection>, panel_cache: Arc<PanelCache>) -> Self {
         Self {
             runtime,
             panel_cache,
@@ -635,7 +635,7 @@ skipped. The panel binding is identical to `lava_container`."
             .collect::<dag_core::registry::error::Result<Vec<_>>>()?;
         let node = ContainerCommandNode::new_with_catalog_panels(
             container_spec,
-            Arc::clone(&self.runtime) as Arc<dyn ContainerRuntime>,
+            Arc::clone(&self.runtime) as Arc<dyn PodmanConnection>,
             Arc::clone(&self.panel_cache),
             panel_bundles,
         )

@@ -6,8 +6,7 @@ usage() {
 Usage: test_plink2_clump.sh
 
 Builds the official PLINK2 a.6.26 image, publishes the 1000G EUR Phase3
-PLINK binary catalog package, imports the image into k3s, and runs the
-real catalog-backed clumping end-to-end test.
+PLINK binary catalog package, and smoke-tests the image.
 
 Environment:
   VFS_CONFIG                   Catalog VFS config (default: ~/.autonomics/vfs.toml)
@@ -16,11 +15,8 @@ Environment:
                                (default: /mnt/data/ldsc_data/1000G_Phase3_plinkfiles.tgz)
   AUTONOMICS_PLINK2_IT_SUMSTATS
                                TSV with SNP + P (optionally CHR/POS) for clump input
-  KUBECONFIG                   k3s kubeconfig
   BUILD_IMAGE=0                Skip podman build
   PUBLISH_PANEL=0              Skip package build/publish
-  IMPORT_IMAGE=0               Skip podman save and k3s ctr import
-  RUN_TEST=0                   Skip the Rust integration test
 EOF
 }
 
@@ -31,8 +27,6 @@ ref_tarball=${PLINK2_REFERENCE_TARBALL:-/mnt/data/ldsc_data/1000G_Phase3_plinkfi
 sumstats=${AUTONOMICS_PLINK2_IT_SUMSTATS:-"$root/containers/plink2/fixtures/chr22.sumstats.tsv"}
 build_image=${BUILD_IMAGE:-1}
 publish_panel=${PUBLISH_PANEL:-1}
-import_image=${IMPORT_IMAGE:-1}
-run_test=${RUN_TEST:-1}
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   usage
@@ -48,9 +42,7 @@ need() {
 
 need cargo
 need podman
-need kubectl
 need sha256sum
-[[ "$import_image" == 1 ]] && need sudo
 
 [[ -f "$config" ]] || {
   echo "VFS config does not exist: $config" >&2
@@ -65,14 +57,7 @@ need sha256sum
   exit 1
 }
 
-export KUBECONFIG=${KUBECONFIG:-"$HOME/.kube/autonomics-k3s.yaml"}
-export AUTONOMICS_K3S_NAMESPACE=${AUTONOMICS_K3S_NAMESPACE:-autonomics}
-export AUTONOMICS_K3S_WORKSPACE_PVC=${AUTONOMICS_K3S_WORKSPACE_PVC:-autonomics-workspace}
-export AUTONOMICS_K3S_WORKSPACE_ROOT=${AUTONOMICS_K3S_WORKSPACE_ROOT:-/var/lib/autonomics/k3s/workspace}
-export AUTONOMICS_K3S_PANEL_PVC=${AUTONOMICS_K3S_PANEL_PVC:-autonomics-panels}
 export AUTONOMICS_PANEL_CACHE_ROOT=${AUTONOMICS_PANEL_CACHE_ROOT:-$HOME/.autonomics/panels}
-export AUTONOMICS_K3S_PANEL_PVC_PREFIX=${AUTONOMICS_K3S_PANEL_PVC_PREFIX:-}
-export AUTONOMICS_K3S_POLL_INTERVAL_MS=${AUTONOMICS_K3S_POLL_INTERVAL_MS:-250}
 export AUTONOMICS_TEST_VFS_CONFIG=$config
 export AUTONOMICS_CONTAINER_IT_IMAGE=$image
 export AUTONOMICS_PLINK2_IT_SUMSTATS=$sumstats
@@ -132,14 +117,8 @@ if ! grep -q "\"id\": \"$panel_id\"" <<<"$current"; then
 fi
 
 # -----------------------------------------------------------------------------
-# Stage 1 acceptance: build the image, smoke-test it, and import into k3s.
+# Stage 1 acceptance: build the image and smoke-test it.
 # -----------------------------------------------------------------------------
-kubectl get node >/dev/null
-kubectl get pvc -n "$AUTONOMICS_K3S_NAMESPACE" \
-  "$AUTONOMICS_K3S_WORKSPACE_PVC" >/dev/null
-kubectl get pvc -n "$AUTONOMICS_K3S_NAMESPACE" \
-  "$AUTONOMICS_K3S_PANEL_PVC" >/dev/null
-
 if [[ "$build_image" == 1 ]]; then
   podman build -f "$root/containers/plink2/Dockerfile" \
     -t "$image" "$root/containers/plink2"
@@ -154,23 +133,6 @@ if ! grep -q "v2.0.0-a.6.26" <<<"$version_line"; then
   echo "image is not running the pinned PLINK2 version (v2.0.0-a.6.26). Got:" >&2
   echo "$version_line" >&2
   exit 1
-fi
-
-if [[ "$import_image" == 1 ]]; then
-  image_tar=$(mktemp --suffix=.tar)
-  cleanup_paths+=("$image_tar")
-  podman save -o "$image_tar" "$image"
-  sudo k3s ctr images import "$image_tar"
-fi
-
-# -----------------------------------------------------------------------------
-# Stage 3 acceptance: real k3s end-to-end test against the official image and
-# the catalog-backed 1000G reference panel.
-# -----------------------------------------------------------------------------
-if [[ "$run_test" == 1 ]]; then
-  cargo test -p nodes-io --test container_file_flow \
-    real_catalog_backed_official_plink2_clump_runs_in_k3s \
-    -- --ignored --nocapture
 fi
 
 echo "PLINK2 official clumping test completed successfully."

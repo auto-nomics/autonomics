@@ -16,7 +16,7 @@ use crate::container_command::{
     ContainerPanelBundleSpec,
 };
 use crate::image_registry::acr_image;
-use container_runtime::{ContainerRuntime, PanelCache, PullPolicy};
+use container_runtime::{PanelCache, PodmanConnection, PullPolicy};
 
 pub const MIXER_FIT1_CONTAINER_KIND: &str = "mixer_fit1_container";
 pub const MIXER_FIT2_CONTAINER_KIND: &str = "mixer_fit2_container";
@@ -308,7 +308,7 @@ fn panel_bindings() -> Vec<DataBundleBinding> {
 }
 
 struct MixerInfra {
-    runtime: Arc<dyn ContainerRuntime>,
+    runtime: Arc<dyn PodmanConnection>,
     panel_cache: Arc<PanelCache>,
 }
 
@@ -326,7 +326,7 @@ pub struct MixerContainerNode {
 }
 
 impl MixerFit1ContainerNodeFactory {
-    pub fn new(runtime: Arc<dyn ContainerRuntime>, panel_cache: Arc<PanelCache>) -> Self {
+    pub fn new(runtime: Arc<dyn PodmanConnection>, panel_cache: Arc<PanelCache>) -> Self {
         Self {
             infra: MixerInfra {
                 runtime,
@@ -337,7 +337,7 @@ impl MixerFit1ContainerNodeFactory {
 }
 
 impl MixerFit2ContainerNodeFactory {
-    pub fn new(runtime: Arc<dyn ContainerRuntime>, panel_cache: Arc<PanelCache>) -> Self {
+    pub fn new(runtime: Arc<dyn PodmanConnection>, panel_cache: Arc<PanelCache>) -> Self {
         Self {
             infra: MixerInfra {
                 runtime,
@@ -397,7 +397,7 @@ fn build_node(
         .iter()
         .map(|binding| node_ctx.bound_data_bundle(&binding.binding).cloned())
         .collect::<dag_core::registry::error::Result<Vec<_>>>()?;
-    let runtime: Arc<dyn container_runtime::ContainerRuntime> = infra.runtime.clone();
+    let runtime: Arc<dyn container_runtime::PodmanConnection> = infra.runtime.clone();
     let node = ContainerCommandNode::new_with_catalog_panels(
         value,
         runtime,

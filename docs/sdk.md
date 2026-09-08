@@ -25,6 +25,8 @@ LLM API client with multi-provider abstraction.
   - OpenRouter (OpenAI-compatible wire; live catalogue via
     `OpenrouterProvider::fetch_remote_catalog` against the public
     `GET /v1/models` endpoint)
+  - OpenAI (ChatGPT subscription OAuth login — see
+    [OpenAI via ChatGPT subscription](#openai-via-chatgpt-subscription))
 - **Model pool** — Round-robin model selection across providers, with sticky selection by name
 - **Flexible auth** — Anthropic `x-api-key`, Bearer token, or custom header for third-party gateways
 - **Mock support** — `MockApiClient` via `mockall` for testing
@@ -72,6 +74,33 @@ let config = ClientConfig::new("your-api-key", "https://api.anthropic.com")
 
 let client = Anthropic::with_config(config)?;
 ```
+
+### OpenAI via ChatGPT subscription
+
+The `openai` provider does **not** take an API key. Instead it logs in with a
+ChatGPT account (Plus/Pro subscription) through the same OAuth device flow the
+OpenAI Codex CLI uses, and sends requests to the ChatGPT backend
+(`https://chatgpt.com/backend-api/codex/responses`, Responses protocol).
+
+- **Login** (`provider::openai::oauth::login_flow`): PKCE + local callback
+  server on `127.0.0.1:1455` (fallback `1457`) → authorize URL → exchange →
+  `TokenBlob` (access/refresh token, `chatgpt_account_id`, email, plan).
+  In the TUI: model config → `openai` → `Ctrl+E` → `L`.
+- **Storage** (no schema migration): the token blob JSON lives in
+  `providers.api_key`; `providers.auth_method` stores the tag `chatgpt`.
+- **Refresh**: proactive refresh after 8 days / within 24h of expiry, plus
+  self-healing on HTTP 401 (refresh → hot-swap the access token via a shared
+  `ArcSwap` slot → retry once → persist the rotated blob).
+- **Live model catalogue**: after login the client fetches
+  `GET /backend-api/codex/models?client_version=…` (same endpoint family the
+  Codex CLI backend serves; auth headers identical to chat requests). The TUI
+  auto-refreshes right after login and on `Ctrl+F`; a small verified preset is
+  compiled in as the offline fallback.
+- ⚠️ **ToS risk**: this reuses the Codex CLI's public OAuth `client_id` in a
+  third-party client — a grey area. Use your personal subscription at your
+  own risk; there is prior art (Roo Code etc.), but OpenAI may throttle or
+  restrict such clients. For API-key usage, configure `openrouter` or a
+  custom provider instead.
 
 ### Environment variables
 

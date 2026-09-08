@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 
-use container_runtime::{ContainerRuntime, PanelCache, PullPolicy};
+use container_runtime::{PanelCache, PodmanConnection, PullPolicy};
 use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::registry::{NodeCtx, NodeFactory};
 use dag_core::value::PortType;
@@ -561,14 +561,14 @@ impl DagNode for RadiomicsContainerNode {
 
 pub struct RadiomicsContainerNodeFactory {
     kind: &'static str,
-    runtime: Arc<dyn ContainerRuntime>,
+    runtime: Arc<dyn PodmanConnection>,
     panel_cache: Arc<PanelCache>,
 }
 
 impl RadiomicsContainerNodeFactory {
     fn new(
         kind: &'static str,
-        runtime: Arc<dyn ContainerRuntime>,
+        runtime: Arc<dyn PodmanConnection>,
         panel_cache: Arc<PanelCache>,
     ) -> Self {
         Self {
@@ -1410,76 +1410,76 @@ impl NodeFactory for RadiomicsContainerNodeFactory {
 }
 
 impl RadiomicsContainerNodeFactory {
-    pub fn image_ingest(runtime: Arc<dyn ContainerRuntime>, panel_cache: Arc<PanelCache>) -> Self {
+    pub fn image_ingest(runtime: Arc<dyn PodmanConnection>, panel_cache: Arc<PanelCache>) -> Self {
         Self::new(RADIOMICS_IMAGE_INGEST_KIND, runtime, panel_cache)
     }
 
-    pub fn mask_ingest(runtime: Arc<dyn ContainerRuntime>, panel_cache: Arc<PanelCache>) -> Self {
+    pub fn mask_ingest(runtime: Arc<dyn PodmanConnection>, panel_cache: Arc<PanelCache>) -> Self {
         Self::new(RADIOMICS_MASK_INGEST_KIND, runtime, panel_cache)
     }
 
-    pub fn pair_validate(runtime: Arc<dyn ContainerRuntime>, panel_cache: Arc<PanelCache>) -> Self {
+    pub fn pair_validate(runtime: Arc<dyn PodmanConnection>, panel_cache: Arc<PanelCache>) -> Self {
         Self::new(RADIOMICS_PAIR_VALIDATE_KIND, runtime, panel_cache)
     }
 
-    pub fn preprocess(runtime: Arc<dyn ContainerRuntime>, panel_cache: Arc<PanelCache>) -> Self {
+    pub fn preprocess(runtime: Arc<dyn PodmanConnection>, panel_cache: Arc<PanelCache>) -> Self {
         Self::new(RADIOMICS_PREPROCESS_KIND, runtime, panel_cache)
     }
 
-    pub fn extract(runtime: Arc<dyn ContainerRuntime>, panel_cache: Arc<PanelCache>) -> Self {
+    pub fn extract(runtime: Arc<dyn PodmanConnection>, panel_cache: Arc<PanelCache>) -> Self {
         Self::new(PYRADIOMICS_EXTRACT_KIND, runtime, panel_cache)
     }
 
-    pub fn batch_extract(runtime: Arc<dyn ContainerRuntime>, panel_cache: Arc<PanelCache>) -> Self {
+    pub fn batch_extract(runtime: Arc<dyn PodmanConnection>, panel_cache: Arc<PanelCache>) -> Self {
         Self::new(PYRADIOMICS_BATCH_EXTRACT_KIND, runtime, panel_cache)
     }
 
     pub fn dicom_metadata(
-        runtime: Arc<dyn ContainerRuntime>,
+        runtime: Arc<dyn PodmanConnection>,
         panel_cache: Arc<PanelCache>,
     ) -> Self {
         Self::new(RADIOMICS_DICOM_METADATA_KIND, runtime, panel_cache)
     }
 
-    pub fn phi_scrub(runtime: Arc<dyn ContainerRuntime>, panel_cache: Arc<PanelCache>) -> Self {
+    pub fn phi_scrub(runtime: Arc<dyn PodmanConnection>, panel_cache: Arc<PanelCache>) -> Self {
         Self::new(RADIOMICS_PHI_SCRUB_KIND, runtime, panel_cache)
     }
 
     pub fn voi_similarity(
-        runtime: Arc<dyn ContainerRuntime>,
+        runtime: Arc<dyn PodmanConnection>,
         panel_cache: Arc<PanelCache>,
     ) -> Self {
         Self::new(RADIOMICS_VOI_SIMILARITY_KIND, runtime, panel_cache)
     }
 
-    pub fn image_qc(runtime: Arc<dyn ContainerRuntime>, panel_cache: Arc<PanelCache>) -> Self {
+    pub fn image_qc(runtime: Arc<dyn PodmanConnection>, panel_cache: Arc<PanelCache>) -> Self {
         Self::new(RADIOMICS_IMAGE_QC_KIND, runtime, panel_cache)
     }
 
     pub fn rtstruct_geometry(
-        runtime: Arc<dyn ContainerRuntime>,
+        runtime: Arc<dyn PodmanConnection>,
         panel_cache: Arc<PanelCache>,
     ) -> Self {
         Self::new(RADIOMICS_RTSTRUCT_GEOMETRY_KIND, runtime, panel_cache)
     }
 
-    pub fn ivh(runtime: Arc<dyn ContainerRuntime>, panel_cache: Arc<PanelCache>) -> Self {
+    pub fn ivh(runtime: Arc<dyn PodmanConnection>, panel_cache: Arc<PanelCache>) -> Self {
         Self::new(RADIOMICS_IVH_KIND, runtime, panel_cache)
     }
 
     pub fn shape_topology(
-        runtime: Arc<dyn ContainerRuntime>,
+        runtime: Arc<dyn PodmanConnection>,
         panel_cache: Arc<PanelCache>,
     ) -> Self {
         Self::new(RADIOMICS_SHAPE_TOPOLOGY_KIND, runtime, panel_cache)
     }
 
-    pub fn register(runtime: Arc<dyn ContainerRuntime>, panel_cache: Arc<PanelCache>) -> Self {
+    pub fn register(runtime: Arc<dyn PodmanConnection>, panel_cache: Arc<PanelCache>) -> Self {
         Self::new(RADIOMICS_REGISTER_KIND, runtime, panel_cache)
     }
 
     pub fn delta_features(
-        runtime: Arc<dyn ContainerRuntime>,
+        runtime: Arc<dyn PodmanConnection>,
         panel_cache: Arc<PanelCache>,
     ) -> Self {
         Self::new(RADIOMICS_DELTA_FEATURES_KIND, runtime, panel_cache)

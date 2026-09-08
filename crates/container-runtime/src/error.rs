@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-/// Errors raised while validating or invoking a container backend.
+/// Errors raised while validating or invoking the container runtime.
 #[derive(Debug, Error)]
 pub enum ContainerRuntimeError {
     #[error("invalid container request: {0}")]
@@ -11,8 +11,6 @@ pub enum ContainerRuntimeError {
     ObjectStorage(String),
     #[error("invalid panel manifest at `{path}`: {message}")]
     PanelManifest { path: String, message: String },
-    #[error("Kubernetes operation failed: {0}")]
-    Kubernetes(#[from] kube::Error),
     #[error("container exited with status {exit_code}: {stderr}")]
     ExitStatus { exit_code: i32, stderr: String },
     #[error("container was killed before completing within {timeout_secs}s")]

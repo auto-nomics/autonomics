@@ -229,5 +229,5 @@ IBSI numerical compliance for every feature.
   PyRadiomics feature implementations are not automatically IBSI-compliant.
 - Training-set normalization, batch-effect correction, feature selection, and
   predictive modeling remain Stage-B operations.
-- The published ACR image must be available to the k3s/containerd runtime; the
+- The published ACR image must be available to the local Podman runtime; the
   digest-pinned reference is intentional.

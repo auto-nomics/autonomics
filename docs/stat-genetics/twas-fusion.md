@@ -79,4 +79,4 @@ chromosome, and coordinates provide stable feature identity.
 ```
 
 Run `containers/fusion/test_fusion_twas.sh` to rebuild the image, verify the
-catalog panel and registry digest, and execute the real k3s regression.
+catalog panel and registry digest, and execute the real container regression.

@@ -17,11 +17,11 @@ use async_trait::async_trait;
 use tokio::process::Command;
 
 use crate::config::{default_panel_cache_root, podman_state_root};
-use crate::error::ContainerRuntimeError;
-use crate::runtime::{
-    ContainerRuntime, request_user_ids, truncate_captured_bytes, validate_run_request,
+use crate::connection::{
+    PodmanConnection, request_user_ids, truncate_captured_bytes, validate_run_request,
 };
-use crate::types::{ContainerRunRequest, ContainerRunResult, PullPolicy};
+use crate::error::ContainerRuntimeError;
+use crate::types::{ContainerNetwork, ContainerRunRequest, ContainerRunResult, PullPolicy};
 
 const CLEANUP_TIMEOUT_SECS: u64 = 30;
 
@@ -88,7 +88,7 @@ impl Default for PodmanRuntime {
 }
 
 #[async_trait]
-impl ContainerRuntime for PodmanRuntime {
+impl PodmanConnection for PodmanRuntime {
     async fn run(
         &self,
         request: ContainerRunRequest,
@@ -297,7 +297,7 @@ pub(crate) fn build_create_args(
         "--name".into(),
         request.name.clone(),
         "--network".into(),
-        podman_network(request)?,
+        podman_network(request).into(),
         "--security-opt".into(),
         "no-new-privileges".into(),
         "--tmpfs".into(),
@@ -403,11 +403,6 @@ fn podman_size(value: &str) -> Result<String, ContainerRuntimeError> {
 }
 
 fn validate_podman_request(request: &ContainerRunRequest) -> Result<(), ContainerRuntimeError> {
-    if matches!(request.network.as_str(), "cluster") {
-        return Err(ContainerRuntimeError::Invalid(
-            "network profile `cluster` is not supported by the Podman backend".into(),
-        ));
-    }
     let workspace_mount = Path::new(&request.workspace.container_workdir);
     if workspace_mount == Path::new("/") {
         return Err(ContainerRuntimeError::Invalid(
@@ -438,14 +433,10 @@ fn validate_podman_request(request: &ContainerRunRequest) -> Result<(), Containe
     Ok(())
 }
 
-fn podman_network(request: &ContainerRunRequest) -> Result<String, ContainerRuntimeError> {
-    match request.network.as_str() {
-        "isolated" | "none" => Ok("none".into()),
-        "egress" => Ok("default".into()),
-        _ => Err(ContainerRuntimeError::Invalid(format!(
-            "network profile `{}` is not supported by the Podman backend",
-            request.network
-        ))),
+fn podman_network(request: &ContainerRunRequest) -> &'static str {
+    match request.network {
+        ContainerNetwork::Isolated => "none",
+        ContainerNetwork::Egress => "default",
     }
 }
 
@@ -466,11 +457,11 @@ fn user_value(request: &ContainerRunRequest) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::unique_container_name;
+    use crate::connection::unique_container_name;
     use crate::types::{CachedPanel, WorkspaceRef};
     use std::path::PathBuf;
 
-    fn request(network: &str) -> ContainerRunRequest {
+    fn request(network: ContainerNetwork) -> ContainerRunRequest {
         let workspace = tempfile::tempdir().unwrap();
         let workspace_path = workspace.keep();
         ContainerRunRequest {
@@ -483,12 +474,11 @@ mod tests {
             ],
             workspace: WorkspaceRef {
                 host_path: workspace_path,
-                pvc_sub_path: "runs/test".into(),
                 container_workdir: "/work".into(),
             },
             env: vec![("EXAMPLE".into(), "value".into())],
             panels: Vec::new(),
-            network: network.into(),
+            network,
             read_only_rootfs: true,
             pull_policy: PullPolicy::Never,
             cpus: Some(2.0),
@@ -503,7 +493,7 @@ mod tests {
 
     #[test]
     fn create_args_map_security_data_plane_and_resources() {
-        let args = build_create_args(&request("isolated")).unwrap();
+        let args = build_create_args(&request(ContainerNetwork::Isolated)).unwrap();
         let expected = [
             "--name",
             "podman-test",
@@ -562,28 +552,34 @@ mod tests {
     }
 
     #[test]
-    fn cluster_network_is_rejected_and_egress_uses_default() {
-        assert!(build_create_args(&request("cluster")).is_err());
-        let args = build_create_args(&request("egress")).unwrap();
-        let network = args
+    fn isolated_disables_networking_and_egress_uses_default() {
+        let isolated = build_create_args(&request(ContainerNetwork::Isolated)).unwrap();
+        let isolated_network = isolated
             .windows(2)
             .find(|args| args[0] == "--network")
             .map(|args| args[1].clone())
             .unwrap();
-        assert_eq!(network, "default");
+        assert_eq!(isolated_network, "none");
+
+        let egress = build_create_args(&request(ContainerNetwork::Egress)).unwrap();
+        let egress_network = egress
+            .windows(2)
+            .find(|args| args[0] == "--network")
+            .map(|args| args[1].clone())
+            .unwrap();
+        assert_eq!(egress_network, "default");
     }
 
     #[test]
     fn panel_mounts_must_exist_and_not_overlap_workspace() {
         let panel = tempfile::tempdir().unwrap();
-        let mut valid = request("isolated");
+        let mut valid = request(ContainerNetwork::Isolated);
         let cache_path = panel.path().join("ldsc@sha256:a9efab57");
         std::fs::create_dir_all(&cache_path).unwrap();
         valid.panels.push(CachedPanel {
             id: "panel".into(),
             digest: format!("sha256:{}", "1".repeat(64)),
             host_path: cache_path,
-            pvc_sub_path: "panels/test".into(),
             mount_path: "/panels/test".into(),
         });
         let args = build_create_args(&valid).unwrap();
@@ -613,7 +609,7 @@ mod tests {
         let marker = root.path().join("fake-podman.removed");
         let workspace = root.path().join("workspace");
         std::fs::create_dir_all(&workspace).unwrap();
-        let mut request = request("isolated");
+        let mut request = request(ContainerNetwork::Isolated);
         request.workspace.host_path = workspace.clone();
         request.name = unique_container_name();
         request.timeout_secs = 1;
@@ -655,12 +651,11 @@ mod tests {
             ],
             workspace: WorkspaceRef {
                 host_path: workspace.clone(),
-                pvc_sub_path: "workspace".into(),
                 container_workdir: "/work".into(),
             },
             env: Vec::new(),
             panels: Vec::new(),
-            network: "isolated".into(),
+            network: ContainerNetwork::Isolated,
             read_only_rootfs: true,
             pull_policy: PullPolicy::Missing,
             cpus: None,

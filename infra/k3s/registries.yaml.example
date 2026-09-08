@@ -1,6 +1,0 @@
-# Copy to /etc/rancher/k3s/registries.yaml and replace the endpoint host with
-# the k3s node IP. This single-node baseline uses the NodePort registry below.
-mirrors:
-  "192.168.10.24:30500":
-    endpoint:
-      - "http://192.168.10.24:30500"

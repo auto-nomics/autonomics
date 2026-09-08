@@ -69,30 +69,17 @@ impl PanelManifest {
 #[derive(Debug, Clone)]
 pub struct PanelCache {
     pub root: PathBuf,
-    pub pvc_prefix: String,
 }
 
 impl Default for PanelCache {
     fn default() -> Self {
-        match crate::ContainerBackend::from_env().unwrap_or(crate::ContainerBackend::Podman) {
-            crate::ContainerBackend::K3s => {
-                let config = crate::K3sConfig::default();
-                Self::new(config.panel_cache_root, config.panel_pvc_prefix)
-            }
-            crate::ContainerBackend::Podman => {
-                let config = crate::PodmanConfig::default();
-                Self::new(config.panel_cache_root, "")
-            }
-        }
+        Self::new(crate::PodmanConfig::default().panel_cache_root)
     }
 }
 
 impl PanelCache {
-    pub fn new(root: impl Into<PathBuf>, pvc_prefix: impl Into<String>) -> Self {
-        Self {
-            root: root.into(),
-            pvc_prefix: pvc_prefix.into(),
-        }
+    pub fn new(root: impl Into<PathBuf>) -> Self {
+        Self { root: root.into() }
     }
 
     pub async fn ensure(
@@ -124,7 +111,10 @@ impl PanelCache {
         let destination = self.root.join(&cache_key);
         let marker = destination.join(PANEL_CACHE_COMPLETE_MARKER);
         if marker_is_valid(&marker, &panel.digest).await {
-            return Ok(self.cached_panel(panel, destination, cache_key));
+            // Record the hit so the LRU sweeper removes least-recently-used
+            // entries rather than least-recently-downloaded ones.
+            crate::gc::touch_dir_mtime(&destination);
+            return Ok(self.cached_panel(panel, destination));
         }
 
         let nanos = std::time::SystemTime::now()
@@ -167,20 +157,14 @@ impl PanelCache {
                 destination.display()
             )));
         }
-        Ok(self.cached_panel(panel, destination, cache_key))
+        Ok(self.cached_panel(panel, destination))
     }
 
-    fn cached_panel(&self, panel: &PanelRef, host_path: PathBuf, cache_key: String) -> CachedPanel {
-        let prefix = self.pvc_prefix.trim_matches('/');
+    fn cached_panel(&self, panel: &PanelRef, host_path: PathBuf) -> CachedPanel {
         CachedPanel {
             id: panel.id.clone(),
             digest: panel.digest.clone(),
             host_path,
-            pvc_sub_path: if prefix.is_empty() {
-                cache_key
-            } else {
-                format!("{prefix}/{cache_key}")
-            },
             mount_path: panel.mount_path.clone(),
         }
     }
@@ -366,7 +350,7 @@ mod tests {
             source: "/panels/1000g".into(),
             mount_path: "/panels/1000g_eur".into(),
         };
-        let cache = PanelCache::new(cache_root.path(), "panels");
+        let cache = PanelCache::new(cache_root.path());
         let cached = cache.ensure(&storage, &panel).await.unwrap();
 
         assert_eq!(
@@ -376,8 +360,8 @@ mod tests {
             content
         );
         assert_eq!(
-            cached.pvc_sub_path,
-            format!("panels/1000g_eur@{}", manifest.digest)
+            cached.host_path.file_name().unwrap().to_string_lossy(),
+            format!("1000g_eur@{}", manifest.digest)
         );
         assert!(cached.host_path.join(PANEL_CACHE_COMPLETE_MARKER).is_file());
     }
@@ -418,7 +402,7 @@ mod tests {
             mount_path: "/panel".into(),
         };
 
-        let error = PanelCache::new(cache_root.path(), "panels")
+        let error = PanelCache::new(cache_root.path())
             .ensure(&storage, &panel)
             .await
             .unwrap_err();

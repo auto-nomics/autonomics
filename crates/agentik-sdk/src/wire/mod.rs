@@ -26,7 +26,7 @@ pub mod openai;
 pub mod zai;
 
 pub use anthropic::AnthropicWire;
-pub use openai::{OpenAiChatWire, OpenAiResponsesWire};
+pub use openai::{ChatgptResponsesWire, OpenAiChatWire, OpenAiResponsesWire};
 pub use zai::ZaiAnthropicWire;
 
 use crate::model::ProviderType;
@@ -49,6 +49,10 @@ pub enum WireProtocolKind {
     OpenaiChat,
     /// OpenAI Responses API (`POST /v1/responses`).
     OpenaiResponses,
+    /// ChatGPT 订阅后端的 Codex Responses 端点
+    /// (`POST /backend-api/codex/responses`)。复用 OpenAI Responses 的
+    /// 请求/事件翻译，仅覆写端点路径并附加 ChatGPT 后端要求的静态头。
+    ChatgptResponses,
     /// Zhipu / BigModel's Anthropic-compatible Messages gateway.
     ///
     /// This keeps the Anthropic request and event shape but emits GLM's
@@ -64,6 +68,7 @@ impl WireProtocolKind {
             Self::Anthropic => "anthropic",
             Self::OpenaiChat => "openai_chat",
             Self::OpenaiResponses => "openai_responses",
+            Self::ChatgptResponses => "chatgpt_responses",
             Self::ZaiAnthropic => "zai_anthropic",
         }
     }
@@ -247,6 +252,7 @@ pub fn build_wire(kind: WireProtocolKind) -> Result<std::sync::Arc<dyn WireProto
         WireProtocolKind::Anthropic => Ok(std::sync::Arc::new(AnthropicWire)),
         WireProtocolKind::OpenaiChat => Ok(std::sync::Arc::new(OpenAiChatWire)),
         WireProtocolKind::OpenaiResponses => Ok(std::sync::Arc::new(OpenAiResponsesWire)),
+        WireProtocolKind::ChatgptResponses => Ok(std::sync::Arc::new(ChatgptResponsesWire)),
         WireProtocolKind::ZaiAnthropic => Ok(std::sync::Arc::new(ZaiAnthropicWire)),
     }
 }
@@ -375,6 +381,7 @@ mod tests {
             WireProtocolKind::Anthropic,
             WireProtocolKind::OpenaiChat,
             WireProtocolKind::OpenaiResponses,
+            WireProtocolKind::ChatgptResponses,
             WireProtocolKind::ZaiAnthropic,
         ] {
             assert_eq!(
@@ -383,6 +390,7 @@ mod tests {
                     WireProtocolKind::Anthropic => "anthropic",
                     WireProtocolKind::OpenaiChat => "openai_chat",
                     WireProtocolKind::OpenaiResponses => "openai_responses",
+                    WireProtocolKind::ChatgptResponses => "chatgpt_responses",
                     WireProtocolKind::ZaiAnthropic => "zai_anthropic",
                 }
             );
@@ -423,6 +431,14 @@ mod tests {
         assert_eq!(
             wire_protocol_for_provider(&ProviderType::Openrouter),
             WireProtocolKind::OpenaiChat
+        );
+    }
+
+    #[test]
+    fn chatgpt_uses_chatgpt_responses_wire() {
+        assert_eq!(
+            wire_protocol_for_provider(&ProviderType::Openai),
+            WireProtocolKind::ChatgptResponses
         );
     }
 }
