@@ -243,6 +243,15 @@ impl ContainerCommandNode {
         })
     }
 
+    /// Resolves the host scratch directory that will be mounted at `/work`.
+    ///
+    /// A spec-provided `workdir` is used as-is when absolute and joined onto
+    /// `workspace_root` when relative; when omitted, a unique scratch
+    /// directory keeps concurrent runs isolated. Missing directories are
+    /// created on demand, the path is canonicalized, and any candidate that
+    /// escapes `workspace_root` (an absolute path elsewhere, `..` traversal,
+    /// or a symlink pointing out) is rejected before it can be mounted into
+    /// the container.
     fn resolve_workdir(&self, workspace_root: &Path) -> Result<PathBuf, ContainerCommandError> {
         let workdir = match &self.workdir {
             Some(path) => {
@@ -267,6 +276,9 @@ impl ContainerCommandNode {
                 workdir.display()
             ))
         })?;
+        // Canonicalize before the containment check below: `workdir` comes
+        // from the DAG spec and is mounted into the container, so `..` or a
+        // symlink must not be able to place it outside the workspace root.
         let workdir = workdir.canonicalize().map_err(|e| {
             ContainerCommandError::Invalid(format!(
                 "cannot resolve workdir `{}`: {e}",

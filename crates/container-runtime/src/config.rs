@@ -27,16 +27,10 @@ pub fn ensure_backend_env_removed() -> Result<(), String> {
     parse_removed_backend_env(&value)
 }
 
+/// Directory for DAG container file flow
 pub fn podman_state_root() -> PathBuf {
-    if let Some(root) = std::env::var_os("XDG_STATE_HOME").filter(|value| !value.is_empty()) {
-        return Path::new(&root).join("autonomics").join("podman");
-    }
     if let Some(home) = std::env::var_os("HOME").filter(|value| !value.is_empty()) {
-        return Path::new(&home)
-            .join(".local")
-            .join("state")
-            .join("autonomics")
-            .join("podman");
+        return Path::new(&home).join(".autonomics").join("state");
     }
     std::env::temp_dir().join("autonomics").join("podman")
 }
