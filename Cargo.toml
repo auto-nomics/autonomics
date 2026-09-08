@@ -76,6 +76,7 @@ members = [
   "crates/writing-base",
   "crates/node-bundles/nodes-writing",
   "crates/crossref",
+  "crates/uniprot",
   "crates/grf-sys",
   "bio_crates/grf",
   "bio_crates/genomic_sem",
