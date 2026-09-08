@@ -6,7 +6,8 @@ usage() {
 Usage: test_smr_heidi.sh
 
 Builds and publishes the official SMR 1.4.2 image, verifies the Westra BESD
-catalog package, and runs the real catalog-backed chr22 baseline in k3s.
+catalog package, and runs the real catalog-backed chr22 baseline through the
+container backend.
 
 Environment:
   SMR_REGISTRY             Registry host (default 192.168.10.24:30500)
@@ -43,20 +44,8 @@ need() {
 need cargo
 need podman
 need curl
-need kubectl
 
-export KUBECONFIG=${KUBECONFIG:-"$HOME/.kube/autonomics-k3s.yaml"}
-export AUTONOMICS_K3S_NAMESPACE=${AUTONOMICS_K3S_NAMESPACE:-autonomics}
-export AUTONOMICS_K3S_WORKSPACE_PVC=${AUTONOMICS_K3S_WORKSPACE_PVC:-autonomics-workspace}
-export AUTONOMICS_K3S_WORKSPACE_ROOT=${AUTONOMICS_K3S_WORKSPACE_ROOT:-/var/lib/autonomics/k3s/workspace}
-export AUTONOMICS_K3S_PANEL_PVC=${AUTONOMICS_K3S_PANEL_PVC:-autonomics-panels}
 export AUTONOMICS_PANEL_CACHE_ROOT=${AUTONOMICS_PANEL_CACHE_ROOT:-$HOME/.autonomics/panels}
-export AUTONOMICS_K3S_PANEL_PVC_PREFIX=${AUTONOMICS_K3S_PANEL_PVC_PREFIX:-}
-export AUTONOMICS_K3S_POLL_INTERVAL_MS=${AUTONOMICS_K3S_POLL_INTERVAL_MS:-250}
-
-kubectl get node >/dev/null
-kubectl get pvc -n "$AUTONOMICS_K3S_NAMESPACE" \
-  "$AUTONOMICS_K3S_WORKSPACE_PVC" >/dev/null
 
 catalog_json=$(cargo run -p data-catalog --bin autonomics-catalog -- \
   list --config ~/.autonomics/vfs.toml)
@@ -100,7 +89,8 @@ grep -q 'Version 1.4.2 Linux' <<<"$help_text" || {
 
 if [[ "$run_test" == 1 ]]; then
   cargo test -p nodes-io --test container_file_flow \
-    real_catalog_backed_official_smr_heidi_runs_in_k3s -- --ignored --nocapture
+    real_catalog_backed_official_smr_heidi_eqtlgen_runs_with_container_backend \
+    -- --ignored --nocapture
 fi
 
 echo "Official SMR container test completed successfully."

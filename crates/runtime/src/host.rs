@@ -85,8 +85,8 @@ pub struct SharedInfra {
     /// Refreshable searchable view over the object-storage catalog. `None`
     /// when the catalog is absent or disabled.
     pub catalog: Option<Arc<CatalogService>>,
-    /// Process-wide k3s client and immutable panel cache shared by all DAG
-    /// sessions.
+    /// Process-wide Podman connection and immutable panel cache shared by
+    /// all DAG sessions.
     pub container_execution: Arc<ContainerExecutionInfra>,
     pub storage: Arc<dyn AgentStorage>,
     /// Profile registry (same DB connection, separate trait object).
@@ -133,10 +133,9 @@ impl SharedInfra {
         let container_execution =
             Arc::new(ContainerExecutionInfra::try_from_env().map_err(crate::error::Error::Other)?);
         tracing::info!(
-            backend = container_execution.config.backend().as_str(),
-            workspace_root = %container_execution.config.workspace_root().display(),
-            panel_cache_root = %container_execution.config.panel_cache_root().display(),
-            "SharedInfra::open: container execution infrastructure ready"
+            workspace_root = %container_execution.config.workspace_root.display(),
+            panel_cache_root = %container_execution.config.panel_cache_root.display(),
+            "SharedInfra::open: Podman execution infrastructure ready"
         );
         tracing::info!(
             mounts = ?file_storage.mount_paths(),
@@ -396,9 +395,6 @@ impl SharedInfra {
         if let Some(catalog) = self.catalog.clone() {
             tools.extend(crate::catalog_tools::catalog_registrations(catalog));
         }
-        tools.extend(crate::container_dev_tools::container_dev_registrations(
-            Arc::clone(&self.container_execution),
-        ));
 
         if profile.enable_opengwas {
             match opengwas_tools_with_token(file_storage.clone(), None) {

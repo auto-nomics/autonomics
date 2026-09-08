@@ -153,7 +153,7 @@ object-store prefix:
 
 The runtime resolves the panel through DataBundle metadata, reads
 `manifest.json` through `/catalog`, verifies every listed file, and mounts the
-resulting shared-cache directory read-only in the k3s Job. The older inline
+resulting shared-cache directory read-only in the ephemeral container. The older inline
 `panels` form remains supported for transition and tests.
 
 ## Migration policy

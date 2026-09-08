@@ -21,9 +21,9 @@ use dag_core::{DataBundle, DataBundleBinding};
 use dag_core::{NodeCtx, NodeFactory};
 
 use container_runtime::{
-    CachedPanel, ContainerRunRequest, ContainerRuntime, ContainerRuntimeError,
-    DEFAULT_CONTAINER_WORKDIR, DEFAULT_TIMEOUT_SECS, K3sConfig, K3sRuntime, PanelCache, PanelRef,
-    PodmanConfig, PodmanRuntime, PullPolicy, unique_container_name, workspace_ref,
+    CachedPanel, ContainerNetwork, ContainerRunRequest, ContainerRuntimeError,
+    DEFAULT_CONTAINER_WORKDIR, DEFAULT_TIMEOUT_SECS, PanelCache, PanelRef, PodmanConfig,
+    PodmanConnection, PodmanRuntime, PullPolicy, unique_container_name, workspace_ref,
 };
 
 pub const CONTAINER_COMMAND_KIND: &str = "container_command";
@@ -114,12 +114,14 @@ pub struct ContainerCommandSpec {
     /// This path is used by containerized tooling without exposing object keys in DAG specs.
     #[serde(default)]
     pub panel_bundles: Vec<ContainerPanelBundleSpec>,
-    /// Network profile enforced by cluster NetworkPolicies. The default is
-    /// `isolated`; `cluster` and `egress` must be justified by the tool.
+    /// Network profile of the ephemeral container. The default is `isolated`
+    /// (no network devices); `egress` must be justified by the tool. The
+    /// legacy spelling `none` is accepted as `isolated`.
     #[serde(default = "default_network")]
     pub network: String,
     /// Whether the container root filesystem is read-only. `/work` remains
-    /// writable, and k3s supplies tmpfs mounts for `/tmp` and `/dev/shm`.
+    /// writable, and the runtime supplies tmpfs mounts for `/tmp` and
+    /// `/dev/shm`.
     #[serde(default = "default_true")]
     pub read_only_rootfs: bool,
     #[serde(default)]
@@ -173,7 +175,7 @@ pub struct ContainerCommandNode {
     timeout_secs: u64,
     panels: Vec<PanelRef>,
     panel_bundles: Vec<ResolvedPanelBundle>,
-    network: String,
+    network: ContainerNetwork,
     read_only_rootfs: bool,
     pull_policy: PullPolicy,
     cpus: Option<f64>,
@@ -181,7 +183,7 @@ pub struct ContainerCommandNode {
     pids_limit: Option<i64>,
     shm_size: Option<String>,
     user: Option<String>,
-    runtime: Arc<dyn ContainerRuntime>,
+    runtime: Arc<dyn PodmanConnection>,
     panel_cache: Arc<PanelCache>,
 }
 
@@ -194,7 +196,7 @@ struct ResolvedPanelBundle {
 impl ContainerCommandNode {
     pub fn new(
         spec: ContainerCommandSpec,
-        runtime: Arc<dyn ContainerRuntime>,
+        runtime: Arc<dyn PodmanConnection>,
         panel_cache: Arc<PanelCache>,
     ) -> Result<Self, ContainerCommandError> {
         Self::new_with_catalog_panels(spec, runtime, panel_cache, Vec::new())
@@ -202,7 +204,7 @@ impl ContainerCommandNode {
 
     pub fn new_with_catalog_panels(
         spec: ContainerCommandSpec,
-        runtime: Arc<dyn ContainerRuntime>,
+        runtime: Arc<dyn PodmanConnection>,
         panel_cache: Arc<PanelCache>,
         panel_bundles: Vec<DataBundle>,
     ) -> Result<Self, ContainerCommandError> {
@@ -227,7 +229,8 @@ impl ContainerCommandNode {
             timeout_secs: spec.timeout_secs,
             panels: spec.panels,
             panel_bundles: resolved_panel_bundles,
-            network: spec.network,
+            network: ContainerNetwork::parse(&spec.network)
+                .map_err(ContainerCommandError::Invalid)?,
             read_only_rootfs: spec.read_only_rootfs,
             pull_policy: spec.pull_policy,
             cpus: spec.cpus,
@@ -240,6 +243,15 @@ impl ContainerCommandNode {
         })
     }
 
+    /// Resolves the host scratch directory that will be mounted at `/work`.
+    ///
+    /// A spec-provided `workdir` is used as-is when absolute and joined onto
+    /// `workspace_root` when relative; when omitted, a unique scratch
+    /// directory keeps concurrent runs isolated. Missing directories are
+    /// created on demand, the path is canonicalized, and any candidate that
+    /// escapes `workspace_root` (an absolute path elsewhere, `..` traversal,
+    /// or a symlink pointing out) is rejected before it can be mounted into
+    /// the container.
     fn resolve_workdir(&self, workspace_root: &Path) -> Result<PathBuf, ContainerCommandError> {
         let workdir = match &self.workdir {
             Some(path) => {
@@ -264,6 +276,9 @@ impl ContainerCommandNode {
                 workdir.display()
             ))
         })?;
+        // Canonicalize before the containment check below: `workdir` comes
+        // from the DAG spec and is mounted into the container, so `..` or a
+        // symlink must not be able to place it outside the workspace root.
         let workdir = workdir.canonicalize().map_err(|e| {
             ContainerCommandError::Invalid(format!(
                 "cannot resolve workdir `{}`: {e}",
@@ -521,14 +536,8 @@ fn validate(spec: &ContainerCommandSpec) -> Result<(), ContainerCommandError> {
             "at least one output must be declared".into(),
         ));
     }
-    if !matches!(
-        spec.network.as_str(),
-        "isolated" | "none" | "cluster" | "egress"
-    ) {
-        return Err(ContainerCommandError::Invalid(format!(
-            "network must be `isolated`, `cluster`, or `egress`; got `{}`",
-            spec.network
-        )));
+    if let Err(error) = ContainerNetwork::parse(&spec.network) {
+        return Err(ContainerCommandError::Invalid(error));
     }
     for output in &spec.outputs {
         validate_workspace_relative_path(&output.path).map_err(|e| {
@@ -663,7 +672,7 @@ impl DagNode for ContainerCommandNode {
             timeout_secs: self.timeout_secs,
             panels: self.panels.clone(),
             panel_bundles: self.panel_bundles.clone(),
-            network: self.network.clone(),
+            network: self.network,
             read_only_rootfs: self.read_only_rootfs,
             pull_policy: self.pull_policy,
             cpus: self.cpus,
@@ -842,7 +851,7 @@ impl DagNode for ContainerCommandNode {
                 .map_err(ContainerCommandError::into_dag_error)?,
             env,
             panels,
-            network: self.network.clone(),
+            network: self.network,
             read_only_rootfs: self.read_only_rootfs,
             pull_policy: self.pull_policy,
             cpus: self.cpus,
@@ -1044,7 +1053,7 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 pub struct ContainerCommandNodeFactory {
-    pub(crate) runtime: Arc<dyn ContainerRuntime>,
+    pub(crate) runtime: Arc<dyn PodmanConnection>,
     pub(crate) panel_cache: Arc<PanelCache>,
 }
 
@@ -1123,7 +1132,7 @@ impl NodeFactory for ContainerCommandNodeFactory {
             .collect::<dag_core::registry::error::Result<Vec<_>>>()?;
         let node = ContainerCommandNode::new_with_catalog_panels(
             node_spec,
-            Arc::clone(&self.runtime) as Arc<dyn ContainerRuntime>,
+            Arc::clone(&self.runtime) as Arc<dyn PodmanConnection>,
             Arc::clone(&self.panel_cache),
             panel_bundles,
         )
@@ -1205,7 +1214,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl ContainerRuntime for FakeRuntime {
+    impl PodmanConnection for FakeRuntime {
         async fn run(
             &self,
             request: ContainerRunRequest,
@@ -1396,10 +1405,7 @@ mod tests {
         let mut node = ContainerCommandNode::new(
             node_spec,
             runtime.clone(),
-            Arc::new(PanelCache::new(
-                env.workspace.path().join("cache"),
-                "panels",
-            )),
+            Arc::new(PanelCache::new(env.workspace.path().join("cache"))),
         )
         .unwrap();
 
@@ -1422,7 +1428,7 @@ mod tests {
                 .command
                 .contains(&format!("{DEFAULT_CONTAINER_WORKDIR}/result.txt"))
         );
-        assert_eq!(request.network, "isolated");
+        assert_eq!(request.network, ContainerNetwork::Isolated);
         assert!(request.read_only_rootfs);
         assert!(
             request
@@ -1479,10 +1485,7 @@ mod tests {
         let mut node = ContainerCommandNode::new(
             node_spec,
             runtime.clone(),
-            Arc::new(PanelCache::new(
-                env.workspace.path().join("cache"),
-                "panels",
-            )),
+            Arc::new(PanelCache::new(env.workspace.path().join("cache"))),
         )
         .unwrap();
 
@@ -1511,7 +1514,7 @@ mod tests {
         let error = match ContainerCommandNode::new(
             spec("tool", vec!["tool".into()], "../escape.txt"),
             Arc::new(FakeRuntime::default()),
-            Arc::new(PanelCache::new("/tmp/autonomics-cache", "panels")),
+            Arc::new(PanelCache::new("/tmp/autonomics-cache")),
         ) {
             Ok(_) => panic!("output path escape must be rejected"),
             Err(error) => error,
@@ -1550,10 +1553,7 @@ mod tests {
                 ContainerCommandNode::new(
                     node_spec,
                     runtime.clone(),
-                    Arc::new(PanelCache::new(
-                        env.workspace.path().join("cache"),
-                        "panels",
-                    )),
+                    Arc::new(PanelCache::new(env.workspace.path().join("cache"))),
                 )
                 .unwrap(),
             );
@@ -1623,10 +1623,7 @@ mod tests {
         let mut node = ContainerCommandNode::new_with_catalog_panels(
             node_spec,
             runtime.clone(),
-            Arc::new(PanelCache::new(
-                env.workspace.path().join("cache"),
-                "panels",
-            )),
+            Arc::new(PanelCache::new(env.workspace.path().join("cache"))),
             vec![bundle],
         )
         .unwrap();
@@ -1652,7 +1649,10 @@ mod tests {
                 .unwrap()
                 .panels
                 .iter()
-                .all(|candidate| candidate.pvc_sub_path.contains('@'))
+                .all(|candidate| candidate
+                    .host_path
+                    .file_name()
+                    .is_some_and(|name| name.to_string_lossy().contains('@')))
         );
     }
 
@@ -1662,7 +1662,7 @@ mod tests {
             workspace_root: PathBuf,
         }
         #[async_trait]
-        impl ContainerRuntime for MissingOutputRuntime {
+        impl PodmanConnection for MissingOutputRuntime {
             async fn run(
                 &self,
                 _request: ContainerRunRequest,
@@ -1688,10 +1688,7 @@ mod tests {
             Arc::new(MissingOutputRuntime {
                 workspace_root: env.workspace.path().to_path_buf(),
             }),
-            Arc::new(PanelCache::new(
-                env.workspace.path().join("cache"),
-                "panels",
-            )),
+            Arc::new(PanelCache::new(env.workspace.path().join("cache"))),
         )
         .unwrap();
         let error = node
@@ -1704,51 +1701,6 @@ mod tests {
             .unwrap_err();
 
         assert!(error.to_string().contains("missing.txt"));
-    }
-
-    #[tokio::test]
-    #[ignore = "requires a configured k3s cluster and a local OCI image"]
-    async fn real_k3s_copies_input_to_declared_output() {
-        let image = std::env::var("AUTONOMICS_CONTAINER_IT_IMAGE")
-            .unwrap_or_else(|_| "docker.io/library/debian:bookworm-slim".into());
-        let env = test_env();
-        let mut config = K3sConfig::default();
-        let dir = config
-            .workspace_root
-            .join(format!("k3s-it-{}", unique_scratch_suffix()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let input = env.workspace.path().join("input.txt");
-        std::fs::write(&input, "rootless-container").unwrap();
-        let mut node_spec = spec(
-            &image,
-            vec![
-                "cp".into(),
-                "--".into(),
-                "$input0".into(),
-                "$output0".into(),
-            ],
-            "result.txt",
-        );
-        node_spec.workdir = Some(dir.to_string_lossy().into_owned());
-        node_spec.pull_policy = PullPolicy::Never;
-        config.panel_cache_root = env.workspace.path().join("cache");
-        let runtime = K3sRuntime::new(config);
-        let cache = PanelCache::new(runtime.config().panel_cache_root.clone(), "panels");
-        let mut node =
-            ContainerCommandNode::new(node_spec, Arc::new(runtime), Arc::new(cache)).unwrap();
-
-        node.execute(
-            &env.ctx,
-            &[input_file(&input)],
-            &dag_core::dag::node_event::NodeReporter::noop(),
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(
-            std::fs::read_to_string(dir.join("result.txt")).unwrap(),
-            "rootless-container"
-        );
     }
 
     #[tokio::test]
@@ -1783,7 +1735,7 @@ mod tests {
         let mut node = ContainerCommandNode::new(
             node_spec,
             Arc::new(runtime),
-            Arc::new(PanelCache::new(state.path().join("panels"), "")),
+            Arc::new(PanelCache::new(state.path().join("panels"))),
         )
         .unwrap();
 
@@ -1802,226 +1754,5 @@ mod tests {
         );
         let file = outputs.get(&0).unwrap().as_file().unwrap();
         assert!(file.path.starts_with("vfs:///artifacts/test/"));
-    }
-
-    #[derive(Clone)]
-    struct CatalogSumstatsNode {
-        ports: NodePorts,
-        panel: String,
-    }
-
-    #[async_trait]
-    impl DagNode for CatalogSumstatsNode {
-        fn ports(&self) -> &NodePorts {
-            &self.ports
-        }
-
-        fn clone_box(&self) -> Box<dyn DagNode> {
-            Box::new(self.clone())
-        }
-
-        fn kind(&self) -> &'static str {
-            "ldsc_catalog_sumstats_test_source"
-        }
-
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
-        async fn execute(
-            &mut self,
-            ctx: &NodeCtx,
-            _inputs: &[NodeInput],
-            _reporter: &dag_core::dag::node_event::NodeReporter,
-        ) -> Result<PortOutputs, DagError> {
-            let session = ctx.session();
-            use datafusion::prelude::{ParquetReadOptions, col, lit};
-            let df = session
-                .read_parquet(&self.panel, ParquetReadOptions::default())
-                .await?
-                .select(vec![
-                    col("rsid"),
-                    lit(1.5_f64).alias("z"),
-                    lit(100_000_f64).alias("n"),
-                ])?
-                .limit(0, Some(5000))?;
-            let mut outputs = PortOutputs::new();
-            outputs.insert(0, df);
-            Ok(outputs)
-        }
-    }
-
-    #[tokio::test]
-    #[ignore = "requires Garage catalog data, k3s PVCs, kubeconfig, and a local Debian image"]
-    async fn real_catalog_backed_containerized_ldsc_runs_through_dag() {
-        let vfs_config_path = std::env::var_os("AUTONOMICS_TEST_VFS_CONFIG")
-            .map(PathBuf::from)
-            .or_else(|| {
-                std::env::var_os("HOME").map(|home| Path::new(&home).join(".autonomics/vfs.toml"))
-            })
-            .expect("HOME or AUTONOMICS_TEST_VFS_CONFIG is required");
-        let source = std::fs::read_to_string(vfs_config_path).unwrap();
-        let mut manifest = vfs::VfsManifest::from_toml(&source).unwrap();
-        let catalog_config = data_catalog::CatalogConfig::from_vfs_toml(&source).unwrap();
-        let catalog_runtime = data_catalog::CatalogRuntime::load(&manifest, &catalog_config)
-            .await
-            .unwrap();
-        manifest.mount.extend(
-            data_catalog::catalog_mount_definitions(
-                &manifest,
-                &catalog_runtime.index,
-                &catalog_config,
-            )
-            .unwrap(),
-        );
-        let mounted = Arc::new(vfs::MountedObjectStore::from_manifest(&manifest).unwrap());
-        let scratch = tempfile::tempdir().unwrap();
-        let storage = Arc::new(vfs::OpendalFileStorage::with_mounts(
-            scratch.path(),
-            mounted.clone(),
-        ));
-        let session = datafusion::prelude::SessionContext::new();
-        session.runtime_env().register_object_store(
-            datafusion::execution::object_store::ObjectStoreUrl::parse("vfs://")
-                .unwrap()
-                .as_ref(),
-            mounted,
-        );
-        let bundles = catalog_runtime.data_bundles();
-        let ctx = NodeCtx::new(session.runtime_env(), Some(storage))
-            .with_data_bundle_catalog(Arc::new(bundles.clone()));
-
-        let k3s_config = K3sConfig::from_env();
-        let run_suffix = unique_scratch_suffix();
-        let workspace = k3s_config
-            .workspace_root
-            .join(format!("ldsc-catalog-{run_suffix}"));
-        std::fs::create_dir_all(&workspace).unwrap();
-        let runtime = Arc::new(K3sRuntime::new(k3s_config.clone()));
-        let panel_cache = Arc::new(PanelCache::new(
-            k3s_config.panel_cache_root.clone(),
-            k3s_config.panel_pvc_prefix.clone(),
-        ));
-        let panel_ids = ["ldsc.hsq.cli", "ldscore.1000g_eur", "ldscore.1000g_eur_m"];
-        let panel_bundles = panel_ids
-            .iter()
-            .map(|id| bundles.get(id).cloned().unwrap())
-            .collect::<Vec<_>>();
-
-        let mut node_spec = spec(
-            &std::env::var("AUTONOMICS_CONTAINER_IT_IMAGE")
-                .unwrap_or_else(|_| "docker.io/library/debian:bookworm-slim".into()),
-            vec!["bash".into(), "-e".into()],
-            "ldsc-result.csv",
-        );
-        node_spec.script = Some(
-            r#"cp -- /panels/cli/ldsc-hsq-container "$AUTONOMICS_WORKDIR/ldsc-hsq-container"
-chmod 700 "$AUTONOMICS_WORKDIR/ldsc-hsq-container"
-"$AUTONOMICS_WORKDIR/ldsc-hsq-container" \
-  --input "$AUTONOMICS_INPUT0" \
-  --output "$AUTONOMICS_OUTPUT0" \
-  --ld-panel /panels/ldscore \
-  --m-panel /panels/ldscore_m \
-  --n-blocks 20"#
-                .into(),
-        );
-        node_spec.workdir = Some(workspace.to_string_lossy().into_owned());
-        node_spec.artifact_prefix = format!("/artifacts/ldsc-catalog-e2e/{run_suffix}");
-        node_spec.timeout_secs = 900;
-        node_spec.pull_policy = PullPolicy::Never;
-        node_spec.panel_bundles = vec![
-            ContainerPanelBundleSpec {
-                panel_id: "ldsc.hsq.cli".into(),
-                mount_path: "/panels/cli".into(),
-            },
-            ContainerPanelBundleSpec {
-                panel_id: "ldscore.1000g_eur".into(),
-                mount_path: "/panels/ldscore".into(),
-            },
-            ContainerPanelBundleSpec {
-                panel_id: "ldscore.1000g_eur_m".into(),
-                mount_path: "/panels/ldscore_m".into(),
-            },
-        ];
-
-        let sumstats_source = CatalogSumstatsNode {
-            ports: NodePorts::new().add_output_port(None),
-            panel: "vfs:///bundles/ldscore.1000g_eur/1000g_eur.parquet".into(),
-        };
-        let sink = crate::dataframe_to_file::DataFrameToFileNode::new(
-            format!("vfs:///var/lib/autonomics/k3s/workspace/ldsc-catalog-input-{run_suffix}.csv"),
-            crate::dataframe_to_file::WriteFormat::Csv,
-            dag_core::SinkMode::Overwrite,
-        );
-        let result_reader = crate::file_to_dataframe::FileToDataFrameNode::new(None, None);
-
-        let container = ContainerCommandNode::new_with_catalog_panels(
-            node_spec,
-            runtime,
-            panel_cache,
-            panel_bundles,
-        )
-        .unwrap();
-        let result_reader = result_reader;
-
-        let mut dag = dag_core::dag::DAG::default();
-        dag.add_node("sumstats".into(), Box::new(sumstats_source))
-            .unwrap();
-        dag.add_node("write_input".into(), sink.clone_box())
-            .unwrap();
-        dag.add_node("container_ldsc".into(), container.clone_box())
-            .unwrap();
-        dag.add_node("read_result".into(), result_reader.clone_box())
-            .unwrap();
-        dag.add_edge("sumstats", "write_input", 0, 0).unwrap();
-        dag.add_edge("write_input", "container_ldsc", 0, 0).unwrap();
-        dag.add_edge("container_ldsc", "read_result", 0, 0).unwrap();
-        let report = dag
-            .run(
-                &dag_core::dag::runtime::SchedulerConfig::default(),
-                &ctx,
-                None,
-            )
-            .await
-            .unwrap();
-        println!("LDSC catalog DAG statuses: {:?}", report.statuses);
-        for node in &report.nodes {
-            println!(
-                "LDSC catalog DAG node {}: {:?}, error={:?}",
-                node.id, node.status, node.error
-            );
-        }
-
-        let output = dag.output("read_result").unwrap();
-        let rows = output
-            .get(&0)
-            .unwrap()
-            .as_dataframe()
-            .unwrap()
-            .clone()
-            .collect()
-            .await
-            .unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].num_rows(), 1);
-        let names = rows[0]
-            .schema()
-            .fields()
-            .iter()
-            .map(|field| field.name().clone())
-            .collect::<Vec<_>>();
-        for name in [
-            "h2",
-            "h2_se",
-            "intercept",
-            "mean_chisq",
-            "lambda_gc",
-            "n_snp",
-        ] {
-            assert!(
-                names.contains(&name.to_string()),
-                "missing result column {name}"
-            );
-        }
     }
 }

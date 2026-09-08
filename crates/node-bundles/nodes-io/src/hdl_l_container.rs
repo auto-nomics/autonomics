@@ -19,7 +19,7 @@ use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
     ContainerPanelBundleSpec,
 };
-use container_runtime::{ContainerRuntime, PanelCache, PullPolicy};
+use container_runtime::{PanelCache, PodmanConnection, PullPolicy};
 
 pub const HDL_L_CONTAINER_KIND: &str = "hdl_l_container";
 pub const HDL_ORIGINAL_IMAGE: &str = "localhost/atc/hdl:1.4.3";
@@ -116,12 +116,12 @@ fn default_timeout_secs() -> u64 {
 }
 
 pub struct HdlLContainerNodeFactory {
-    pub(crate) runtime: Arc<dyn ContainerRuntime>,
+    pub(crate) runtime: Arc<dyn PodmanConnection>,
     pub(crate) panel_cache: Arc<PanelCache>,
 }
 
 impl HdlLContainerNodeFactory {
-    pub fn new(runtime: Arc<dyn ContainerRuntime>, panel_cache: Arc<PanelCache>) -> Self {
+    pub fn new(runtime: Arc<dyn PodmanConnection>, panel_cache: Arc<PanelCache>) -> Self {
         Self {
             runtime,
             panel_cache,
@@ -399,7 +399,7 @@ impl NodeFactory for HdlLContainerNodeFactory {
             .iter()
             .map(|binding| node_ctx.bound_data_bundle(&binding.binding).cloned())
             .collect::<dag_core::registry::error::Result<Vec<_>>>()?;
-        let runtime: Arc<dyn container_runtime::ContainerRuntime> = self.runtime.clone();
+        let runtime: Arc<dyn container_runtime::PodmanConnection> = self.runtime.clone();
         let node = ContainerCommandNode::new_with_catalog_panels(
             container_spec,
             runtime,

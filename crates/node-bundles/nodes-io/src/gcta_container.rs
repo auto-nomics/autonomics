@@ -20,7 +20,7 @@ use crate::container_command::{
     ContainerPanelBundleSpec,
 };
 use crate::image_registry::acr_image;
-use container_runtime::{ContainerRuntime, PanelCache, PullPolicy};
+use container_runtime::{PanelCache, PodmanConnection, PullPolicy};
 
 pub const GCTA_COJO_SELECT_CONTAINER_KIND: &str = "gcta_cojo_select_container";
 pub const GCTA_SBLUP_CONTAINER_KIND: &str = "gcta_sblup_container";
@@ -506,30 +506,30 @@ fn gene_binding() -> DataBundleBinding {
 
 pub struct GctaContainerNodeFactory {
     analysis: GctaAnalysis,
-    pub(crate) runtime: Arc<dyn ContainerRuntime>,
+    pub(crate) runtime: Arc<dyn PodmanConnection>,
     pub(crate) panel_cache: Arc<PanelCache>,
 }
 
 impl GctaContainerNodeFactory {
-    pub fn cojo_select(runtime: Arc<dyn ContainerRuntime>, panel_cache: Arc<PanelCache>) -> Self {
+    pub fn cojo_select(runtime: Arc<dyn PodmanConnection>, panel_cache: Arc<PanelCache>) -> Self {
         Self::new(GctaAnalysis::CojoSelect, runtime, panel_cache)
     }
 
-    pub fn sblup(runtime: Arc<dyn ContainerRuntime>, panel_cache: Arc<PanelCache>) -> Self {
+    pub fn sblup(runtime: Arc<dyn PodmanConnection>, panel_cache: Arc<PanelCache>) -> Self {
         Self::new(GctaAnalysis::Sblup, runtime, panel_cache)
     }
 
-    pub fn fastbat(runtime: Arc<dyn ContainerRuntime>, panel_cache: Arc<PanelCache>) -> Self {
+    pub fn fastbat(runtime: Arc<dyn PodmanConnection>, panel_cache: Arc<PanelCache>) -> Self {
         Self::new(GctaAnalysis::Fastbat, runtime, panel_cache)
     }
 
-    pub fn acat(runtime: Arc<dyn ContainerRuntime>, panel_cache: Arc<PanelCache>) -> Self {
+    pub fn acat(runtime: Arc<dyn PodmanConnection>, panel_cache: Arc<PanelCache>) -> Self {
         Self::new(GctaAnalysis::Acat, runtime, panel_cache)
     }
 
     fn new(
         analysis: GctaAnalysis,
-        runtime: Arc<dyn ContainerRuntime>,
+        runtime: Arc<dyn PodmanConnection>,
         panel_cache: Arc<PanelCache>,
     ) -> Self {
         Self {
@@ -760,7 +760,7 @@ impl NodeFactory for GctaContainerNodeFactory {
             .iter()
             .map(|binding| node_ctx.bound_data_bundle(&binding.binding).cloned())
             .collect::<dag_core::registry::error::Result<Vec<_>>>()?;
-        let runtime: Arc<dyn container_runtime::ContainerRuntime> = self.runtime.clone();
+        let runtime: Arc<dyn container_runtime::PodmanConnection> = self.runtime.clone();
         let node = ContainerCommandNode::new_with_catalog_panels(
             container_spec,
             runtime,

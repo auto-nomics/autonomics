@@ -6,7 +6,7 @@ usage() {
 Usage: test_magma_annotate.sh
 
 Builds the official MAGMA image, validates the gene-location catalog package,
-imports the image into k3s, and runs the real catalog-backed annotation test.
+and smoke-tests the image.
 
 Environment:
   VFS_CONFIG                 Catalog VFS config (default: ~/.autonomics/vfs.toml)
@@ -15,11 +15,8 @@ Environment:
                              (default: /mnt/data/magma)
   AUTONOMICS_MAGMA_IT_SNP_LOC
                              Three-column SNP location smoke input
-  KUBECONFIG                 k3s kubeconfig
   BUILD_IMAGE=0              Skip podman build
   PUBLISH_PANEL=0            Skip package build/publish
-  IMPORT_IMAGE=0             Skip podman save and k3s ctr import
-  RUN_TEST=0                 Skip the Rust integration test
 EOF
 }
 
@@ -30,8 +27,6 @@ source_root=${MAGMA_SOURCE_ROOT:-/mnt/data/magma}
 snp_loc=${AUTONOMICS_MAGMA_IT_SNP_LOC:-$source_root/results/smoke_test.annotation.snp.loc}
 build_image=${BUILD_IMAGE:-1}
 publish_panel=${PUBLISH_PANEL:-1}
-import_image=${IMPORT_IMAGE:-1}
-run_test=${RUN_TEST:-1}
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   usage
@@ -47,10 +42,6 @@ need() {
 
 need cargo
 need podman
-need kubectl
-if [[ "$import_image" == 1 ]]; then
-  need sudo
-fi
 
 [[ -f "$config" ]] || {
   echo "VFS config does not exist: $config" >&2
@@ -65,14 +56,7 @@ fi
   exit 1
 }
 
-export KUBECONFIG=${KUBECONFIG:-"$HOME/.kube/autonomics-k3s.yaml"}
-export AUTONOMICS_K3S_NAMESPACE=${AUTONOMICS_K3S_NAMESPACE:-autonomics}
-export AUTONOMICS_K3S_WORKSPACE_PVC=${AUTONOMICS_K3S_WORKSPACE_PVC:-autonomics-workspace}
-export AUTONOMICS_K3S_WORKSPACE_ROOT=${AUTONOMICS_K3S_WORKSPACE_ROOT:-/var/lib/autonomics/k3s/workspace}
-export AUTONOMICS_K3S_PANEL_PVC=${AUTONOMICS_K3S_PANEL_PVC:-autonomics-panels}
 export AUTONOMICS_PANEL_CACHE_ROOT=${AUTONOMICS_PANEL_CACHE_ROOT:-$HOME/.autonomics/panels}
-export AUTONOMICS_K3S_PANEL_PVC_PREFIX=${AUTONOMICS_K3S_PANEL_PVC_PREFIX:-}
-export AUTONOMICS_K3S_POLL_INTERVAL_MS=${AUTONOMICS_K3S_POLL_INTERVAL_MS:-250}
 export AUTONOMICS_TEST_VFS_CONFIG=$config
 export AUTONOMICS_MAGMA_IT_SNP_LOC=$snp_loc
 
@@ -115,29 +99,10 @@ grep -q '"id": "magma.gene_loc.ncbi37_3"' <<<"$current" || {
   exit 1
 }
 
-kubectl get node >/dev/null
-kubectl get pvc -n "$AUTONOMICS_K3S_NAMESPACE" \
-  "$AUTONOMICS_K3S_WORKSPACE_PVC" >/dev/null
-kubectl get pvc -n "$AUTONOMICS_K3S_NAMESPACE" \
-  "$AUTONOMICS_K3S_PANEL_PVC" >/dev/null
-
 if [[ "$build_image" == 1 ]]; then
   podman build -f "$root/containers/magma/Dockerfile" \
     -t "$image" "$source_root"
 fi
 podman run --rm "$image" --version >/dev/null
-
-if [[ "$import_image" == 1 ]]; then
-  image_tar=$(mktemp --suffix=.tar)
-  cleanup_paths+=("$image_tar")
-  podman save -o "$image_tar" "$image"
-  sudo k3s ctr images import "$image_tar"
-fi
-
-if [[ "$run_test" == 1 ]]; then
-  cargo test -p nodes-io --test container_file_flow \
-    real_catalog_backed_official_magma_annotate_runs_in_k3s \
-    -- --ignored --nocapture
-fi
 
 echo "MAGMA official annotation test completed successfully."

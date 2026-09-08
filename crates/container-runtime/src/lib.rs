@@ -1,31 +1,28 @@
-//! Runtime-neutral execution primitives for ephemeral analysis containers.
+//! Execution primitives for ephemeral analysis containers on Podman.
 //!
-//! K3s and Podman implement the same ephemeral-container contract. Object
-//! storage is authoritative, while shared workspace and panel directories
-//! provide the POSIX data plane required by analysis tools.
+//! [`PodmanConnection`] fixes the capability contract of the connection
+//! layer; the CLI implementation in [`podman`] is the production connection.
+//! Object storage is authoritative, while shared workspace and panel
+//! directories provide the POSIX data plane required by analysis tools.
 
 pub mod config;
-pub mod dev;
+pub mod connection;
 pub mod error;
 pub mod execution;
-pub mod k3s;
 pub mod panel;
 pub mod podman;
-pub mod runtime;
 pub mod types;
 
-pub use config::{CONTAINER_BACKEND_ENV, ContainerBackend};
+pub use config::{REMOVED_BACKEND_ENV, ensure_backend_env_removed, parse_removed_backend_env};
+pub use connection::{
+    DEFAULT_CONTAINER_WORKDIR, DEFAULT_TIMEOUT_SECS, MAX_CAPTURED_OUTPUT_BYTES, PodmanConnection,
+    unique_container_name, workspace_ref,
+};
 pub use error::ContainerRuntimeError;
-pub use execution::{ContainerExecutionConfig, ContainerExecutionInfra};
-pub use k3s::{K3sConfig, K3sRuntime};
+pub use execution::ContainerExecutionInfra;
 pub use panel::{PanelCache, PanelFile, PanelManifest};
 pub use podman::{PodmanConfig, PodmanRuntime};
-pub use runtime::{
-    ContainerRuntime, DEFAULT_CONTAINER_WORKDIR, DEFAULT_TIMEOUT_SECS, MAX_CAPTURED_OUTPUT_BYTES,
-    SharedContainerRuntime, unique_container_name, workspace_ref,
-};
 pub use types::{
-    CachedPanel, ContainerRunRequest, ContainerRunResult, DevExecRequest, DevImageBuildRequest,
-    DevImageBuildResult, DevWorkspaceCreate, DevWorkspaceStatus, PanelRef, PullPolicy,
+    CachedPanel, ContainerNetwork, ContainerRunRequest, ContainerRunResult, PanelRef, PullPolicy,
     WorkspaceRef,
 };

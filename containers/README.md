@@ -1,7 +1,7 @@
 # Container assets
 
 This directory stores OCI build definitions and integration scripts for
-analysis tools executed by the k3s-backed DAG runtime.
+analysis tools executed by the Podman-backed DAG runtime.
 
 ## Layout
 

@@ -4,19 +4,16 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Object-storage-backed container execution on k3s or Podman."
+description = "Object-storage-backed ephemeral container execution on Podman."
 
 [dependencies]
 async-trait.workspace = true
-k8s-openapi.workspace = true
-kube.workspace = true
 schemars.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["process", "io-util", "time"] }
-uuid = { workspace = true, features = ["v4"] }
 vfs = { path = "../vfs" }
 libc = "0.2"
 

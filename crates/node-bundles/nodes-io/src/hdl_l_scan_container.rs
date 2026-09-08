@@ -19,7 +19,7 @@ use crate::container_command::{
     ContainerPanelBundleSpec,
 };
 use crate::hdl_l_container::{HDL_ORIGINAL_IMAGE, HDL_UKB_EUR_PANEL, MissingSampleSizePolicy};
-use container_runtime::{ContainerRuntime, PanelCache, PullPolicy};
+use container_runtime::{PanelCache, PodmanConnection, PullPolicy};
 
 pub const HDL_L_SCAN_CONTAINER_KIND: &str = "hdl_l_scan";
 
@@ -96,12 +96,12 @@ fn default_timeout_secs() -> u64 {
 }
 
 pub struct HdlLScanContainerNodeFactory {
-    pub(crate) runtime: Arc<dyn ContainerRuntime>,
+    pub(crate) runtime: Arc<dyn PodmanConnection>,
     pub(crate) panel_cache: Arc<PanelCache>,
 }
 
 impl HdlLScanContainerNodeFactory {
-    pub fn new(runtime: Arc<dyn ContainerRuntime>, panel_cache: Arc<PanelCache>) -> Self {
+    pub fn new(runtime: Arc<dyn PodmanConnection>, panel_cache: Arc<PanelCache>) -> Self {
         Self {
             runtime,
             panel_cache,
@@ -464,7 +464,7 @@ impl NodeFactory for HdlLScanContainerNodeFactory {
             .collect::<dag_core::registry::error::Result<Vec<_>>>()?;
         let node = ContainerCommandNode::new_with_catalog_panels(
             container_spec,
-            Arc::clone(&self.runtime) as Arc<dyn ContainerRuntime>,
+            Arc::clone(&self.runtime) as Arc<dyn PodmanConnection>,
             Arc::clone(&self.panel_cache),
             panel_bundles,
         )

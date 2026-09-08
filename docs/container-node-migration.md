@@ -86,7 +86,7 @@ cluster configuration.
 
 - Prefer a minimal, pinned base image.
 - Pin dependency versions.
-- Keep the image small enough for local import into k3s.
+- Keep the image small enough for fast local pulls.
 - Run as a non-root user where practical.
 - Make the primary entrypoint deterministic.
 - Include only files required at runtime.
@@ -105,22 +105,15 @@ podman build \
 podman run --rm localhost/atc/<tool>:<version> --help
 ```
 
-Then import the image into k3s:
-
-```bash
-podman save \
-  -o /tmp/atc-<tool>-<version>.tar \
-  localhost/atc/<tool>:<version>
-
-sudo k3s ctr images import /tmp/atc-<tool>-<version>.tar
-```
+Images built with `podman build` are immediately visible to the local Podman
+runtime that executes `container_command` nodes; no import step is required.
 
 Acceptance for this stage:
 
 - image builds reproducibly;
 - tool help or equivalent smoke command succeeds;
 - image does not embed data panels;
-- k3s can run the image;
+- Podman can run the image;
 - a small local command produces the expected baseline.
 
 ## Stage 2: Build and publish data packages
@@ -233,7 +226,7 @@ A migration is not complete until:
 
 1. unit tests validate the generated `ContainerCommandSpec`;
 2. registry tests prove the node builds with its required catalog bundles;
-3. a real k3s test runs the tool image;
+3. a real Podman end-to-end test runs the tool image;
 4. PanelCache verifies and mounts the catalog package;
 5. input staging reaches the container;
 6. declared outputs are uploaded to VFS;
@@ -245,7 +238,7 @@ A migration is not complete until:
 
 - [ ] Record tool, version, license, source, and baseline command.
 - [ ] Build a minimal OCI image without reference data.
-- [ ] Run image smoke tests locally and inside k3s.
+- [ ] Run image smoke tests locally through Podman.
 - [ ] Stage one logical data package per panel role.
 - [ ] Validate and publish the catalog package.
 - [ ] Record the package ID, version, and digest.
@@ -254,7 +247,7 @@ A migration is not complete until:
 - [ ] Register the wrapper in the IO plugin.
 - [ ] Add unit tests for the generated container spec.
 - [ ] Add a registry build test.
-- [ ] Add a real k3s end-to-end test.
+- [ ] Add a real Podman end-to-end test.
 - [ ] Compare the result against the recorded baseline.
 - [ ] Document the migration and remove the old node registration only when
       the replacement is ready.
@@ -266,7 +259,7 @@ A migration is not complete until:
 | OCI image | tool binary, runtime, dependencies | panels, user data |
 | data catalog | immutable payloads and metadata | execution semantics |
 | PanelCache | verification and materialization | tool logic |
-| `ContainerCommandNode` | k3s execution, staging, mounts, outputs | analysis contract |
+| `ContainerCommandNode` | Podman execution, staging, mounts, outputs | analysis contract |
 | specialized wrapper | analysis contract and compatibility | second runtime |
 | Agent | analysis selection and inputs | mount plumbing |
 
@@ -289,7 +282,7 @@ Its flow is:
 file_reference
   -> ldsc_h2_container
   -> ContainerCommandNode
-  -> k3s Job
+  -> ephemeral Podman container
   -> VFS ldsc_h2.log
 ```
 
@@ -353,7 +346,7 @@ crates/node-bundles/nodes-io/src/plink2_clump_container.rs
 
 The image carries only the official v2.0.0-a.6.26 binary. The 1000G EUR
 Phase3 BED/BIM/FAM panel stays in the catalog, and the wrapper fixes the panel
-binding plus PLINK2 column selectors. The k3s smoke test runs chr22 against
+binding plus PLINK2 column selectors. The Podman smoke test runs chr22 against
 the committed fixture and verifies deterministic `.clumps` output in VFS.
 
 SuSiE-RSS is the R + signed-LD panel reference case:
@@ -406,7 +399,7 @@ runtime libraries. The default Westra BESD, the optional eQTLGen BESD selected
 by `eqtl_source=eqtlgen`, and the 1000G EUR LD reference stay in catalog
 packages. The wrapper accepts one GCTA-COJO `.ma` File, fixes the verified
 image/data compatibility contract, and emits the official `.smr` result and
-execution log. A chr22 Westra k3s baseline verifies both the output row and SMR
+execution log. A chr22 Westra container baseline verifies both the output row and SMR
 p-value; a chr22 eQTLGen baseline verifies the alternate panel binding.
 
 HyPrColoc is the no-panel beta/SE matrix case:
@@ -441,7 +434,7 @@ The 1000G EUR PLINK reference and official hg19 gene list stay in catalog
 packages. Four File-to-File factories expose the verified summary-statistics
 surface: COJO stepwise selection, SBLUP SNP-effect prediction, gene-based
 fastBAT, and ACAT-V rare-variant aggregation. The committed official chr22
-sample verifies all four output contracts in k3s. GREML, MLMA, fastGWA, GSMR,
+sample verifies all four output contracts in Podman. GREML, MLMA, fastGWA, GSMR,
 and mtCOJO require cohort genotypes, phenotypes, GRMs, or additional LD-score
 panels and remain separate migrations rather than unsafe bindings to the
 1000G panel.
@@ -459,7 +452,7 @@ crates/node-bundles/nodes-io/src/hdl_l_scan_container.rs
 
 The image installs official `HDL` 1.4.3 at commit `e6b055d` and runs through
 rootless Podman under the local `localhost/atc/hdl:1.4.3` tag. No registry or
-k3s backend is required. The official Zenodo UKB EUR payload is normalized into
+Podman backend is required. The official Zenodo UKB EUR payload is normalized into
 one catalog package with `LD/*_LDSVD.rda`, `LD/HDLL_LOC_snps.RData`, and
 matching per-block BIM files. The wrapper takes two official-format GWAS
 summary Files plus `chr` and `piece`, invokes `HDL::HDL.L`, and emits TSV, RDS,

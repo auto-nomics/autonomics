@@ -1,7 +1,7 @@
 # SuSiE-RSS
 
 `susie_rss_container` 使用官方 `susieR` R 包对 GWAS 汇总统计执行贝叶斯
-精细定位。注册节点在临时 k3s Job 中运行 `susieR` 0.16.6，并挂载目录化的
+精细定位。注册节点在临时 Podman 容器中运行 `susieR` 0.16.6，并挂载目录化的
 `mixer.g1000_eur` signed-LD 面板。
 
 ## 运行时与参考面板

@@ -23,7 +23,7 @@
 `ldsc_h2_container` 接收一个 TAB 分隔的 LDSC sumstats File，必须包含
 `SNP`、`A1`、`A2`、`N`、`Z` 列。明文 `.tsv` 和 gzip 压缩 `.sumstats.gz`
 均可；LDSC 会忽略额外列，但 CSV 不被接受。该节点固定绑定原版 LDSC 镜像及兼容
-的 EUR 参考 panel，在隔离的 k3s Job 中运行，并把原始 LDSC log 发布为 VFS
+的 EUR 参考 panel，在隔离的 Podman 容器中运行，并把原始 LDSC log 发布为 VFS
 File artifact。原始 GWAS 输入可以先经过 `ldsc_munge_container`。
 
 `ldsc_munge_container` 调用同一官方镜像中的原版 `munge_sumstats.py`。它接收

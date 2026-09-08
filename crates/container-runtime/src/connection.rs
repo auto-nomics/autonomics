@@ -1,5 +1,12 @@
+//! The capability contract of the Podman connection layer.
+//!
+//! [`PodmanConnection`] declares every capability consumers may rely on: the
+//! control process and Podman must resolve workspace and panel paths on the
+//! same host, and one request maps to one ephemeral container. The CLI
+//! implementation lives in [`crate::podman`]; tests substitute fakes that
+//! implement the same trait.
+
 use std::path::Path;
-use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
@@ -11,25 +18,31 @@ pub const DEFAULT_CONTAINER_WORKDIR: &str = "/work";
 pub const DEFAULT_TIMEOUT_SECS: u64 = 3600;
 pub const MAX_CAPTURED_OUTPUT_BYTES: usize = 64 * 1024;
 
-/// Runtime-neutral execution of one ephemeral container.
+/// One connection to a Podman runtime on the local host.
+///
+/// The trait fixes the full capability surface of the connection layer: every
+/// consumer-visible operation goes through [`PodmanConnection::run`], and the
+/// shared workspace root is the single piece of host state both sides must
+/// agree on.
 #[async_trait]
-pub trait ContainerRuntime: Send + Sync {
+pub trait PodmanConnection: Send + Sync {
+    /// Run one ephemeral container: create it, attach to its start, and
+    /// force-remove it after success, failure, or timeout.
     async fn run(
         &self,
         request: ContainerRunRequest,
     ) -> Result<ContainerRunResult, ContainerRuntimeError>;
 
-    fn name(&self) -> &'static str {
-        "container"
-    }
+    /// Root of the shared workspace directory tree as seen by this control
+    /// process. Container workspaces are created below it and bind-mounted
+    /// into each container.
+    fn workspace_root(&self) -> &Path;
 
-    /// Root of the shared workspace volume as seen by this control process.
-    fn workspace_root(&self) -> &Path {
-        Path::new("/")
+    /// Connection implementation name, used for diagnostics only.
+    fn name(&self) -> &'static str {
+        "podman"
     }
 }
-
-pub type SharedContainerRuntime = Arc<dyn ContainerRuntime>;
 
 pub fn unique_container_name() -> String {
     let nanos = SystemTime::now()
@@ -63,21 +76,10 @@ pub(crate) fn validate_run_request(
     if !request.workspace.host_path.is_absolute()
         || !request.workspace.host_path.is_dir()
         || !Path::new(&request.workspace.container_workdir).is_absolute()
-        || request.workspace.pvc_sub_path.contains("..")
-        || request.workspace.pvc_sub_path.starts_with('/')
     {
         return Err(ContainerRuntimeError::Invalid(
-            "workspace must be an existing directory mapped to a safe volume subPath".into(),
+            "workspace must be an existing directory mapped to an absolute container path".into(),
         ));
-    }
-    if !matches!(
-        request.network.as_str(),
-        "isolated" | "none" | "cluster" | "egress"
-    ) {
-        return Err(ContainerRuntimeError::Invalid(format!(
-            "unsupported network profile `{}`",
-            request.network
-        )));
     }
     if let Some(cpus) = request.cpus
         && cpus <= 0.0
@@ -99,12 +101,6 @@ pub(crate) fn validate_run_request(
             .host_path
             .file_name()
             .ok_or_else(|| ContainerRuntimeError::Invalid("invalid panel cache path".into()))?;
-        if panel.pvc_sub_path.contains("..") || panel.pvc_sub_path.starts_with('/') {
-            return Err(ContainerRuntimeError::Invalid(format!(
-                "panel `{}` has an unsafe volume subPath",
-                panel.id
-            )));
-        }
     }
     Ok(())
 }
@@ -128,6 +124,10 @@ fn validate_user(user: &Option<String>) -> Result<(), ContainerRuntimeError> {
     Ok(())
 }
 
+/// Bind a host directory below `workspace_root` to a container workdir.
+///
+/// Fails when the directory is outside the configured root or maps to the
+/// volume root itself.
 pub fn workspace_ref(
     workspace_root: &Path,
     host_path: &Path,
@@ -140,22 +140,13 @@ pub fn workspace_ref(
             workspace_root.display()
         ))
     })?;
-    let volume_sub_path = relative
-        .components()
-        .map(|component| component.as_os_str().to_string_lossy().into_owned())
-        .collect::<Vec<_>>()
-        .join("/");
-    if volume_sub_path.is_empty()
-        || volume_sub_path.contains("..")
-        || volume_sub_path.starts_with('/')
-    {
+    if relative.as_os_str().is_empty() {
         return Err(ContainerRuntimeError::Invalid(
             "workspace cannot map to the volume root".into(),
         ));
     }
     Ok(WorkspaceRef {
         host_path: host_path.to_path_buf(),
-        pvc_sub_path: volume_sub_path,
         container_workdir: container_workdir.to_string(),
     })
 }
@@ -193,4 +184,23 @@ pub(crate) fn truncate_captured_bytes(bytes: &[u8]) -> String {
         String::from_utf8_lossy(&bytes[..MAX_CAPTURED_OUTPUT_BYTES]),
         MAX_CAPTURED_OUTPUT_BYTES
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn workspace_must_be_inside_configured_root() {
+        let ok = workspace_ref(
+            Path::new("/workspace"),
+            Path::new("/workspace/runs/x"),
+            "/work",
+        )
+        .unwrap();
+        assert_eq!(ok.host_path, Path::new("/workspace/runs/x"));
+        assert_eq!(ok.container_workdir, "/work");
+        assert!(workspace_ref(Path::new("/workspace"), Path::new("/tmp/x"), "/work").is_err());
+        assert!(workspace_ref(Path::new("/workspace"), Path::new("/workspace"), "/work").is_err());
+    }
 }
