@@ -20,10 +20,12 @@ use dag_core::value::{FileRef, NodeValue, PortType};
 use dag_core::{DataBundle, DataBundleBinding};
 use dag_core::{NodeCtx, NodeFactory};
 
+use container_runtime::gc::{acquire_panel_lock_shared, acquire_scratch_lock_shared};
 use container_runtime::{
     CachedPanel, ContainerNetwork, ContainerRunRequest, ContainerRuntimeError,
     DEFAULT_CONTAINER_WORKDIR, DEFAULT_TIMEOUT_SECS, PanelCache, PanelRef, PodmanConfig,
-    PodmanConnection, PodmanRuntime, PullPolicy, unique_container_name, workspace_ref,
+    PodmanConnection, PodmanRuntime, PullPolicy, keep_workspace_enabled, unique_container_name,
+    workspace_ref,
 };
 
 pub const CONTAINER_COMMAND_KIND: &str = "container_command";
@@ -703,6 +705,17 @@ impl DagNode for ContainerCommandNode {
         let workspace_path = self
             .resolve_workdir(&workspace_root)
             .map_err(ContainerCommandError::into_dag_error)?;
+        // Hold the scratch lock for the whole run: the GC sweeper takes the
+        // same lock exclusively and therefore never reclaims a live run's
+        // workspace. Released on drop, on every early return below.
+        let scratch_lock = acquire_scratch_lock_shared(&workspace_path)
+            .map_err(|error| {
+                ContainerCommandError::Invalid(format!(
+                    "cannot lock container workspace `{}`: {error}",
+                    workspace_path.display()
+                ))
+            })
+            .map_err(ContainerCommandError::into_dag_error)?;
         let mut panel_refs = self.panels.clone();
         panel_refs.extend(self.panel_bundles.iter().map(|panel| {
             PanelRef {
@@ -720,10 +733,11 @@ impl DagNode for ContainerCommandNode {
                 mount_path: panel.spec.mount_path.clone(),
             }
         }));
-        let panels = materialize_panels(ctx, self.panel_cache.as_ref(), &panel_refs)
-            .await
-            .map_err(ContainerCommandError::Invalid)
-            .map_err(ContainerCommandError::into_dag_error)?;
+        let (panels, _panel_locks) =
+            materialize_panels(ctx, self.panel_cache.as_ref(), &panel_refs)
+                .await
+                .map_err(ContainerCommandError::Invalid)
+                .map_err(ContainerCommandError::into_dag_error)?;
 
         let mut staged_inputs = stage_inputs(ctx, &workspace_path, inputs)
             .await
@@ -896,6 +910,28 @@ impl DagNode for ContainerCommandNode {
                 .map_err(ContainerCommandError::into_dag_error)?;
             outputs.insert_file(index as u8, file);
         }
+
+        // Every declared output now lives in object storage, so a unique
+        // scratch directory has no remaining value. User-declared workdirs
+        // are persistent by contract; AUTONOMICS_KEEP_WORKSPACE=1 keeps
+        // scratch for debugging until the sweeper's age window expires.
+        // Failed runs above return early and keep their scratch the same way.
+        if self.workdir.is_none() && !keep_workspace_enabled() {
+            drop(scratch_lock);
+            drop(_panel_locks);
+            let scratch = workspace_path.clone();
+            let removed = tokio::task::spawn_blocking(move || {
+                std::fs::remove_dir_all(&scratch).map_err(|error| error.to_string())
+            })
+            .await
+            .map_err(|error| error.to_string());
+            if let Err(error) = removed.and_then(|result| result) {
+                reporter.warn(format!(
+                    "cannot remove container scratch `{}`: {error}",
+                    workspace_path.display()
+                ));
+            }
+        }
         Ok(outputs)
     }
 }
@@ -926,28 +962,47 @@ fn unique_scratch_suffix() -> String {
     )
 }
 
+/// Materialize panels into the shared cache and lock each entry for the
+/// duration of the run. The returned lock files must stay alive until
+/// `PodmanConnection::run` has returned; dropping them releases the locks and
+/// makes the entries eligible for the panel-cache sweeper again.
 async fn materialize_panels(
     ctx: &NodeCtx,
     cache: &PanelCache,
     panels: &[PanelRef],
-) -> Result<Vec<CachedPanel>, String> {
+) -> Result<(Vec<CachedPanel>, Vec<std::fs::File>), String> {
     if panels.is_empty() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     }
     let storage = ctx
         .opendal
         .as_ref()
         .ok_or("container panels require registered object storage")?;
     let mut cached = Vec::with_capacity(panels.len());
+    let mut locks = Vec::with_capacity(panels.len());
     for panel in panels {
-        cached.push(
-            cache
-                .ensure(storage, panel)
-                .await
-                .map_err(|error| error.to_string())?,
-        );
+        let materialized = cache
+            .ensure(storage, panel)
+            .await
+            .map_err(|error| error.to_string())?;
+        let entry_name = materialized
+            .host_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| {
+                format!(
+                    "panel `{}` cache path `{}` has no entry name",
+                    panel.id,
+                    materialized.host_path.display()
+                )
+            })?
+            .to_string();
+        let lock = acquire_panel_lock_shared(&cache.root, &entry_name)
+            .map_err(|error| format!("cannot lock panel `{}`: {error}", panel.id))?;
+        locks.push(lock);
+        cached.push(materialized);
     }
-    Ok(cached)
+    Ok((cached, locks))
 }
 
 async fn publish_output(
@@ -1507,6 +1562,82 @@ mod tests {
                 .command
                 .contains(&format!("{DEFAULT_CONTAINER_WORKDIR}/.autonomics/script"))
         );
+    }
+
+    /// Serializes tests that mutate `AUTONOMICS_KEEP_WORKSPACE`, so a parallel
+    /// run cannot observe the transient value and skip its own cleanup.
+    /// Async-aware because the guarded section spans an `.await`.
+    static GC_ENV_LOCK: std::sync::LazyLock<tokio::sync::Mutex<()>> =
+        std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
+
+    struct EnvReset(&'static str);
+    impl Drop for EnvReset {
+        fn drop(&mut self) {
+            // SAFETY: process-global env mutation in a single-threaded test
+            // section guarded by `GC_ENV_LOCK`.
+            unsafe { std::env::remove_var(self.0) };
+        }
+    }
+
+    #[tokio::test]
+    async fn successful_unique_scratch_run_removes_workspace() {
+        let _guard = GC_ENV_LOCK.lock().await;
+        let env = test_env();
+        let runtime = Arc::new(FakeRuntime::new(env.workspace.path()));
+        let mut node = ContainerCommandNode::new(
+            spec("quay.io/example/tool", vec!["tool".into()], "out.txt"),
+            runtime,
+            Arc::new(PanelCache::new(env.workspace.path().join("cache"))),
+        )
+        .unwrap();
+
+        node.execute(
+            &env.ctx,
+            &[],
+            &dag_core::dag::node_event::NodeReporter::noop(),
+        )
+        .await
+        .unwrap();
+
+        let leftovers: Vec<_> = std::fs::read_dir(env.workspace.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "unique scratch must be removed after success, found {leftovers:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn keep_workspace_env_retains_scratch_for_debugging() {
+        let _guard = GC_ENV_LOCK.lock().await;
+        let _reset = EnvReset(container_runtime::KEEP_WORKSPACE_ENV);
+        // SAFETY: guarded by `GC_ENV_LOCK`; restored on drop.
+        unsafe { std::env::set_var(container_runtime::KEEP_WORKSPACE_ENV, "1") };
+        let env = test_env();
+        let runtime = Arc::new(FakeRuntime::new(env.workspace.path()));
+        let mut node = ContainerCommandNode::new(
+            spec("quay.io/example/tool", vec!["tool".into()], "out.txt"),
+            runtime,
+            Arc::new(PanelCache::new(env.workspace.path().join("cache"))),
+        )
+        .unwrap();
+
+        node.execute(
+            &env.ctx,
+            &[],
+            &dag_core::dag::node_event::NodeReporter::noop(),
+        )
+        .await
+        .unwrap();
+
+        let scratch: Vec<_> = std::fs::read_dir(env.workspace.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        assert_eq!(scratch.len(), 1, "exactly one scratch directory expected");
+        assert!(scratch[0].join("out.txt").is_file());
     }
 
     #[test]

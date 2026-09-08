@@ -9,17 +9,26 @@ pub mod config;
 pub mod connection;
 pub mod error;
 pub mod execution;
+pub mod gc;
 pub mod panel;
 pub mod podman;
 pub mod types;
 
-pub use config::{REMOVED_BACKEND_ENV, ensure_backend_env_removed, parse_removed_backend_env};
+pub use config::{
+    KEEP_WORKSPACE_ENV, PANEL_CACHE_MAX_BYTES_ENV, REMOVED_BACKEND_ENV, WORKSPACE_GC_AGE_ENV,
+    WORKSPACE_GC_INTERVAL_ENV, ensure_backend_env_removed, keep_workspace_enabled,
+    panel_cache_max_bytes, parse_removed_backend_env, workspace_gc_age, workspace_gc_interval,
+};
 pub use connection::{
     DEFAULT_CONTAINER_WORKDIR, DEFAULT_TIMEOUT_SECS, MAX_CAPTURED_OUTPUT_BYTES, PodmanConnection,
     unique_container_name, workspace_ref,
 };
 pub use error::ContainerRuntimeError;
 pub use execution::ContainerExecutionInfra;
+pub use gc::{
+    PanelGcPolicy, PanelGcReport, WorkspaceGcPolicy, WorkspaceGcReport, sweep_panels,
+    sweep_workspace,
+};
 pub use panel::{PanelCache, PanelFile, PanelManifest};
 pub use podman::{PodmanConfig, PodmanRuntime};
 pub use types::{

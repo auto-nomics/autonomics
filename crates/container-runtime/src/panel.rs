@@ -111,6 +111,9 @@ impl PanelCache {
         let destination = self.root.join(&cache_key);
         let marker = destination.join(PANEL_CACHE_COMPLETE_MARKER);
         if marker_is_valid(&marker, &panel.digest).await {
+            // Record the hit so the LRU sweeper removes least-recently-used
+            // entries rather than least-recently-downloaded ones.
+            crate::gc::touch_dir_mtime(&destination);
             return Ok(self.cached_panel(panel, destination));
         }
 
