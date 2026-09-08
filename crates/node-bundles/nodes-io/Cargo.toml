@@ -15,6 +15,7 @@ opentargets = { path = "../../opentargets" }
 openalex = { path = "../../openalex" }
 semantic-scholar = { path = "../../semantic-scholar" }
 crossref = { path = "../../crossref" }
+uniprot = { path = "../../uniprot" }
 mr = { path = "../../../bio_crates/mr" }
 arrow-array.workspace = true
 arrow.workspace = true

@@ -31,6 +31,9 @@ pub mod source_semantic_scholar;
 pub mod susie_rss_container;
 pub mod twas_fusion_container;
 pub use crossref::nodes::works::{CrossrefWorksNode, CrossrefWorksNodeFactory};
+pub use uniprot::nodes::idmap::{UniprotIdmapNode, UniprotIdmapNodeFactory};
+pub use uniprot::nodes::search::{UniprotSearchNode, UniprotSearchNodeFactory};
+pub use uniprot::nodes::stream::{UniprotStreamNode, UniprotStreamNodeFactory};
 
 use dag_core::{NodePlugin, NodeRegistry};
 use std::sync::Arc;
@@ -300,5 +303,8 @@ impl NodePlugin for Plugin {
             source_opentargets::OpentargetsSearchNodeFactory {},
         ));
         registry.register(Box::new(CrossrefWorksNodeFactory {}));
+        registry.register(Box::new(UniprotSearchNodeFactory {}));
+        registry.register(Box::new(UniprotStreamNodeFactory {}));
+        registry.register(Box::new(UniprotIdmapNodeFactory {}));
     }
 }
