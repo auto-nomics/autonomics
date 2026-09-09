@@ -11,7 +11,10 @@ fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
         s.to_string()
     } else {
-        format!("{}…", &s[..s.char_indices().take(max).last().map_or(0, |(i, _)| i)])
+        format!(
+            "{}…",
+            &s[..s.char_indices().take(max).last().map_or(0, |(i, _)| i)]
+        )
     }
 }
 
@@ -84,7 +87,9 @@ pub fn format_species(species: &[Species]) -> String {
     for s in species.iter().take(20) {
         out.push_str(&format!(
             "- `{}` {} (taxId {})\n",
-            s.display_name, s.abbreviation.as_deref().unwrap_or("-"), s.tax_id,
+            s.display_name,
+            s.abbreviation.as_deref().unwrap_or("-"),
+            s.tax_id,
         ));
     }
     if species.len() > 20 {

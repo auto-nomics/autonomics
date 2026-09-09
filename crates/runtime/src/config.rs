@@ -218,6 +218,11 @@ pub struct RuntimeConfig {
     /// Whether to enable STRING protein-association tools.
     #[serde(default = "default_true")]
     pub enable_string: bool,
+
+    /// Whether to enable KEGG tools.
+    #[serde(default = "default_true")]
+    /// Whether to enable KEGG tools.
+    pub enable_kegg: bool,
     /// Inject persistent memory and expose memory read/search tools.
     #[serde(default = "default_true")]
     pub use_memory: bool,
@@ -357,6 +362,7 @@ impl RuntimeConfig {
             enable_chembl: resolve_flag(base, |b| b.enable_chembl, true),
             enable_rcsb: resolve_flag(base, |b| b.enable_rcsb, true),
             enable_string: resolve_flag(base, |b| b.enable_string, true),
+            enable_kegg: resolve_flag(base, |b| b.enable_kegg, true),
             use_memory: resolve_env_flag(base.and_then(|b| b.use_memory), ENV_USE_MEMORY)
                 .unwrap_or(true),
             generate_memory: resolve_env_flag(
@@ -447,6 +453,13 @@ const PROMPT_STRING: &str = "\n\
   one-protein neighborhood.\n\
 - Use `string_network_image` only when the user needs visual preview. For pipeline calculations, \
   prefer the `source_string_*` DAG nodes.";
+const PROMPT_KEGG: &str = "\n\
+### KEGG (Academic Use)\n\
+- Use `kegg_info`, `kegg_find`, and `kegg_entry_preview` to inspect pathways, genes, \
+  orthologs, compounds, drugs, and diseases.\n\
+- Use `kegg_link` and `kegg_convert` for biological relationships and identifier mapping; \
+  prefer one database-level request or cached results over per-gene calls.\n\
+- Keep outputs concise and remember that KEGG API access is limited to academic use.";
 
 const PROMPT_DAG_ENGINE: &str = "\n\
 ### Data Pipeline (DAG Engine)\n\
@@ -577,6 +590,7 @@ pub trait PromptCapabilities {
     fn enable_chembl(&self) -> bool;
     fn enable_rcsb(&self) -> bool;
     fn enable_string(&self) -> bool;
+    fn enable_kegg(&self) -> bool;
     fn enable_dag_history(&self) -> bool;
 }
 
@@ -606,6 +620,9 @@ pub fn build_system_prompt<C: PromptCapabilities>(caps: &C) -> String {
     }
     if caps.enable_string() {
         s.push_str(PROMPT_STRING);
+    }
+    if caps.enable_kegg() {
+        s.push_str(PROMPT_KEGG);
     }
 
     // DAG engine, SQL conventions, and general sections are always included —
@@ -651,6 +668,9 @@ pub fn default_system_prompt() -> String {
         fn enable_string(&self) -> bool {
             true
         }
+        fn enable_kegg(&self) -> bool {
+            true
+        }
         fn enable_dag_history(&self) -> bool {
             true
         }
@@ -680,6 +700,9 @@ impl PromptCapabilities for RuntimeConfig {
     fn enable_string(&self) -> bool {
         self.enable_string
     }
+    fn enable_kegg(&self) -> bool {
+        self.enable_kegg
+    }
     fn enable_dag_history(&self) -> bool {
         self.enable_dag_history
     }
@@ -699,7 +722,7 @@ impl RuntimeConfig {
             "RuntimeConfig {{ name: {:?}, data_dir: {}, state_dir: {}, \
              dag_history_db: {}, bib_db: {}, app_db: {}, \
              dag_history: {}, bib: {}, opengwas: {}, \
-             opentargets: {}, gwascatalog: {}, chembl: {}, rcsb: {}, string: {} }}",
+             opentargets: {}, gwascatalog: {}, chembl: {}, rcsb: {}, string: {}, kegg: {} }}",
             self.name,
             self.data_dir.display(),
             self.state_dir.display(),
@@ -714,6 +737,7 @@ impl RuntimeConfig {
             self.enable_chembl,
             self.enable_rcsb,
             self.enable_string,
+            self.enable_kegg,
         )
     }
 }
@@ -752,6 +776,8 @@ pub struct RuntimeConfigBuilder {
     #[serde(default)]
     pub(crate) enable_rcsb: Option<bool>,
     pub(crate) enable_string: Option<bool>,
+    #[serde(default)]
+    pub(crate) enable_kegg: Option<bool>,
     pub(crate) use_memory: Option<bool>,
     pub(crate) generate_memory: Option<bool>,
     pub(crate) enable_kms: Option<bool>,
@@ -887,6 +913,12 @@ impl RuntimeConfigBuilder {
     /// Enable or disable STRING protein-association tools.
     pub fn enable_string(mut self, enabled: bool) -> Self {
         self.enable_string = Some(enabled);
+        self
+    }
+
+    /// Enable or disable KEGG tools.
+    pub fn enable_kegg(mut self, enabled: bool) -> Self {
+        self.enable_kegg = Some(enabled);
         self
     }
 

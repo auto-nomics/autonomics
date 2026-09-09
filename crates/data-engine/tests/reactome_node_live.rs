@@ -81,7 +81,10 @@ async fn pathways_node_executes_from_full_registry() {
         .expect("node execute");
     let df = outputs.dataframe(0).expect("dataframe output");
     let batches = df.clone().collect().await.expect("collect");
-    assert!(batches[0].num_rows() > 0, "Homo sapiens should have pathways");
+    assert!(
+        batches[0].num_rows() > 0,
+        "Homo sapiens should have pathways"
+    );
 }
 
 #[tokio::test]
@@ -99,5 +102,8 @@ async fn analysis_node_executes_from_full_registry() {
         .expect("node execute");
     let df = outputs.dataframe(0).expect("dataframe output");
     let batches = df.clone().collect().await.expect("collect");
-    assert!(batches[0].num_rows() > 0, "analysis should return enriched pathways");
+    assert!(
+        batches[0].num_rows() > 0,
+        "analysis should return enriched pathways"
+    );
 }

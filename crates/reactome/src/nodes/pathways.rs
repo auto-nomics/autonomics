@@ -112,9 +112,9 @@ impl DagNode for ReactomePathwaysNode {
 
         let session = ctx.session();
         let batch = build_pathways_batch(&pathways)?;
-        let df = session
-            .read_batch(batch)
-            .map_err(|e| DagError::Schedule(format!("failed to read Reactome pathways batch: {e}")))?;
+        let df = session.read_batch(batch).map_err(|e| {
+            DagError::Schedule(format!("failed to read Reactome pathways batch: {e}"))
+        })?;
         let mut res: PortOutputs = PortOutputs::new();
         res.insert(0, df);
         Ok(res)
@@ -137,15 +137,25 @@ pub fn build_pathways_batch(rows: &[Pathway]) -> Result<RecordBatch, DagError> {
     RecordBatch::try_new(
         schema,
         vec![
-            Arc::new(UInt64Array::from(rows.iter().map(|p| p.db_id).collect::<Vec<_>>())),
+            Arc::new(UInt64Array::from(
+                rows.iter().map(|p| p.db_id).collect::<Vec<_>>(),
+            )),
             str_array(rows.iter().map(|p| p.stable_id.clone()).collect()),
             str_array(rows.iter().map(|p| Some(p.display_name.clone())).collect()),
             str_array(rows.iter().map(|p| p.schema_class.clone()).collect()),
             str_array(rows.iter().map(|p| p.species_name.clone()).collect()),
-            Arc::new(BooleanArray::from(rows.iter().map(|p| p.is_in_disease).collect::<Vec<_>>())),
-            Arc::new(BooleanArray::from(rows.iter().map(|p| p.is_inferred).collect::<Vec<_>>())),
-            Arc::new(BooleanArray::from(rows.iter().map(|p| p.has_diagram).collect::<Vec<_>>())),
-            Arc::new(BooleanArray::from(rows.iter().map(|p| p.has_ehld).collect::<Vec<_>>())),
+            Arc::new(BooleanArray::from(
+                rows.iter().map(|p| p.is_in_disease).collect::<Vec<_>>(),
+            )),
+            Arc::new(BooleanArray::from(
+                rows.iter().map(|p| p.is_inferred).collect::<Vec<_>>(),
+            )),
+            Arc::new(BooleanArray::from(
+                rows.iter().map(|p| p.has_diagram).collect::<Vec<_>>(),
+            )),
+            Arc::new(BooleanArray::from(
+                rows.iter().map(|p| p.has_ehld).collect::<Vec<_>>(),
+            )),
         ],
     )
     .map_err(|e| DagError::Schedule(format!("failed to build Reactome pathways batch: {e}")))

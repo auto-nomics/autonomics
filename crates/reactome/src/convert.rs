@@ -66,12 +66,12 @@ impl Table {
 /// Reduce a JSON value to a scalar or a compact JSON string.
 fn scalarize(value: Value) -> Value {
     match value {
-        Value::Array(items) => Value::String(
-            serde_json::to_string(&items).unwrap_or_else(|_| "[]".to_string()),
-        ),
-        Value::Object(_) => Value::String(
-            serde_json::to_string(&value).unwrap_or_else(|_| "{}".to_string()),
-        ),
+        Value::Array(items) => {
+            Value::String(serde_json::to_string(&items).unwrap_or_else(|_| "[]".to_string()))
+        }
+        Value::Object(_) => {
+            Value::String(serde_json::to_string(&value).unwrap_or_else(|_| "{}".to_string()))
+        }
         other => other,
     }
 }

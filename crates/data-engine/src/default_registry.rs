@@ -156,4 +156,41 @@ mod tests {
             assert_eq!(ports.output_ports().len(), 1);
         }
     }
+
+    #[test]
+    fn kegg_source_factories_are_registered() {
+        let runtime_env = datafusion::prelude::SessionContext::new().runtime_env();
+        let container_execution =
+            Arc::new(container_runtime::ContainerExecutionInfra::from_config(
+                container_runtime::PodmanConfig {
+                    program: "podman".into(),
+                    workspace_root: "/tmp/autonomics-kegg-registry-workspace".into(),
+                    panel_cache_root: "/tmp/autonomics-kegg-registry-panels".into(),
+                },
+            ));
+        let registry = build_default_registry_with_container_execution(
+            runtime_env,
+            None,
+            Arc::new(DataBundleCatalog::new()),
+            container_execution,
+        );
+
+        let search = registry
+            .get_node_ports("source_kegg_search")
+            .expect("source_kegg_search is registered");
+        assert_eq!(search.input_ports().len(), 0);
+        assert_eq!(search.output_ports().len(), 1);
+
+        let relations = registry
+            .get_node_ports("source_kegg_relations")
+            .expect("source_kegg_relations is registered");
+        assert_eq!(relations.input_ports().len(), 1);
+        assert_eq!(relations.output_ports().len(), 1);
+
+        let pathways = registry
+            .get_node_ports("source_kegg_gene_pathways")
+            .expect("source_kegg_gene_pathways is registered");
+        assert_eq!(pathways.input_ports().len(), 1);
+        assert_eq!(pathways.output_ports().len(), 2);
+    }
 }

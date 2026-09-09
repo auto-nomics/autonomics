@@ -12,9 +12,9 @@ use serde::Deserialize;
 use dag_core::dag::{DagError, DagNode, NodePorts, graph::PortOutputs};
 use dag_core::registry::{NodeCtx, NodeFactory};
 
+use super::pathways::str_array;
 use crate::ReactomeClient;
 use crate::types::AnalysisResult;
-use super::pathways::str_array;
 
 /// Spec for [`ReactomeAnalysisNode`].
 #[derive(Debug, Clone, Default, JsonSchema, Deserialize)]
@@ -105,9 +105,7 @@ impl DagNode for ReactomeAnalysisNode {
         _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let ids = self.spec.identifiers.clone().ok_or_else(|| {
-            DagError::Schedule(
-                "source_reactome_analysis: `identifiers` list is required".into(),
-            )
+            DagError::Schedule("source_reactome_analysis: `identifiers` list is required".into())
         })?;
         if ids.is_empty() {
             return Err(DagError::Schedule(
@@ -123,9 +121,9 @@ impl DagNode for ReactomeAnalysisNode {
 
         let session = ctx.session();
         let batch = build_analysis_batch(&result)?;
-        let df = session
-            .read_batch(batch)
-            .map_err(|e| DagError::Schedule(format!("failed to read Reactome analysis batch: {e}")))?;
+        let df = session.read_batch(batch).map_err(|e| {
+            DagError::Schedule(format!("failed to read Reactome analysis batch: {e}"))
+        })?;
         let mut res: PortOutputs = PortOutputs::new();
         res.insert(0, df);
         Ok(res)

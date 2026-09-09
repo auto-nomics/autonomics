@@ -128,6 +128,9 @@ impl PromptCapabilities for agentik_core::AgentProfile {
     fn enable_string(&self) -> bool {
         self.enable_string
     }
+    fn enable_kegg(&self) -> bool {
+        self.enable_kegg
+    }
     fn enable_dag_history(&self) -> bool {
         self.enable_dag_history
     }
@@ -495,6 +498,10 @@ impl SharedInfra {
         }
         if profile.enable_string {
             tools.extend(string_tools());
+        }
+
+        if profile.enable_kegg {
+            tools.extend(kegg_tools());
         }
 
         tools.extend(data_engine_tools::registrations(Arc::new(engine_client)));
@@ -2845,6 +2852,10 @@ fn capability_from_profile(
     if profile.enable_string {
         tags.push("protein-networks".into());
         expertise.push("string-analysis".into());
+    }
+    if profile.enable_kegg {
+        tags.push("kegg".into());
+        expertise.push("pathway-analysis".into());
     }
     if profile.enable_dag_history {
         tags.push("pipeline".into());

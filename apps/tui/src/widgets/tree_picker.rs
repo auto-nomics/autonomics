@@ -259,6 +259,7 @@ pub fn profile_preview_lines(
         ("gwascatalog", profile.enable_gwascatalog),
         ("chembl", profile.enable_chembl),
         ("rcsb", profile.enable_rcsb),
+        ("kegg", profile.enable_kegg),
         ("dag-history", profile.enable_dag_history),
     ] {
         lines.push(flag_line(name, enabled));

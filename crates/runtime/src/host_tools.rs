@@ -181,6 +181,8 @@ struct DeriveProfileInput {
     enable_rcsb: Option<bool>,
     #[desc = "Enable STRING identifier resolution, interactions, enrichment, summaries, and previews."]
     enable_string: Option<bool>,
+    #[desc = "Enable KEGG metadata, search, entry previews, biological links, ID mapping, and DDI queries."]
+    enable_kegg: Option<bool>,
     enable_dag_history: Option<bool>,
 }
 
@@ -208,6 +210,7 @@ impl ToolFunction for DeriveProfileTool {
             enable_chembl: input.enable_chembl,
             enable_rcsb: input.enable_rcsb,
             enable_string: input.enable_string,
+            enable_kegg: input.enable_kegg,
             enable_dag_history: input.enable_dag_history,
             ..Default::default()
         };

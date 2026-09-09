@@ -12,9 +12,9 @@ use serde::Deserialize;
 use dag_core::dag::{DagError, DagNode, NodePorts, graph::PortOutputs};
 use dag_core::registry::{NodeCtx, NodeFactory};
 
+use super::pathways::str_array;
 use crate::ReactomeClient;
 use crate::types::Participant;
-use super::pathways::str_array;
 
 /// Spec for [`ReactomeParticipantsNode`].
 #[derive(Debug, Clone, Default, JsonSchema, Deserialize)]
@@ -105,16 +105,15 @@ impl DagNode for ReactomeParticipantsNode {
         }
 
         let client = ReactomeClient::new();
-        let participants = client
-            .participants(&self.spec.id)
-            .await
-            .map_err(|e| DagError::Schedule(format!("Reactome participants request failed: {e}")))?;
+        let participants = client.participants(&self.spec.id).await.map_err(|e| {
+            DagError::Schedule(format!("Reactome participants request failed: {e}"))
+        })?;
 
         let session = ctx.session();
         let batch = build_participants_batch(&participants)?;
-        let df = session
-            .read_batch(batch)
-            .map_err(|e| DagError::Schedule(format!("failed to read Reactome participants batch: {e}")))?;
+        let df = session.read_batch(batch).map_err(|e| {
+            DagError::Schedule(format!("failed to read Reactome participants batch: {e}"))
+        })?;
         let mut res: PortOutputs = PortOutputs::new();
         res.insert(0, df);
         Ok(res)
@@ -134,18 +133,28 @@ pub fn build_participants_batch(rows: &[Participant]) -> Result<RecordBatch, Dag
     RecordBatch::try_new(
         schema,
         vec![
-            Arc::new(UInt64Array::from(rows.iter().map(|p| p.db_id).collect::<Vec<_>>())),
+            Arc::new(UInt64Array::from(
+                rows.iter().map(|p| p.db_id).collect::<Vec<_>>(),
+            )),
             str_array(rows.iter().map(|p| p.display_name.clone()).collect()),
             str_array(rows.iter().map(|p| p.stable_id.clone()).collect()),
             str_array(rows.iter().map(|p| p.schema_class.clone()).collect()),
             str_array(
                 rows.iter()
-                    .map(|p| p.reference_entity.as_ref().and_then(|r| r.identifier.clone()))
+                    .map(|p| {
+                        p.reference_entity
+                            .as_ref()
+                            .and_then(|r| r.identifier.clone())
+                    })
                     .collect(),
             ),
             str_array(
                 rows.iter()
-                    .map(|p| p.reference_entity.as_ref().and_then(|r| r.database_name.clone()))
+                    .map(|p| {
+                        p.reference_entity
+                            .as_ref()
+                            .and_then(|r| r.database_name.clone())
+                    })
                     .collect(),
             ),
         ],
