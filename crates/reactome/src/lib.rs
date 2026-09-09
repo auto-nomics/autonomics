@@ -57,6 +57,7 @@ pub mod client;
 pub mod convert;
 pub mod error;
 pub mod format;
+pub mod nodes;
 pub mod tools;
 pub mod types;
 

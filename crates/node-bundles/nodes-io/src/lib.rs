@@ -35,6 +35,10 @@ pub use crossref::nodes::works::{CrossrefWorksNode, CrossrefWorksNodeFactory};
 pub use uniprot::nodes::idmap::{UniprotIdmapNode, UniprotIdmapNodeFactory};
 pub use uniprot::nodes::search::{UniprotSearchNode, UniprotSearchNodeFactory};
 pub use uniprot::nodes::stream::{UniprotStreamNode, UniprotStreamNodeFactory};
+pub use reactome::nodes::analysis::{ReactomeAnalysisNode, ReactomeAnalysisNodeFactory};
+pub use reactome::nodes::mapping::{ReactomeMappingNode, ReactomeMappingNodeFactory};
+pub use reactome::nodes::participants::{ReactomeParticipantsNode, ReactomeParticipantsNodeFactory};
+pub use reactome::nodes::pathways::{ReactomePathwaysNode, ReactomePathwaysNodeFactory};
 
 use dag_core::{NodePlugin, NodeRegistry};
 use std::sync::Arc;
@@ -313,5 +317,9 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(UniprotSearchNodeFactory {}));
         registry.register(Box::new(UniprotStreamNodeFactory {}));
         registry.register(Box::new(UniprotIdmapNodeFactory {}));
+        registry.register(Box::new(ReactomePathwaysNodeFactory {}));
+        registry.register(Box::new(ReactomeMappingNodeFactory {}));
+        registry.register(Box::new(ReactomeAnalysisNodeFactory {}));
+        registry.register(Box::new(ReactomeParticipantsNodeFactory {}));
     }
 }

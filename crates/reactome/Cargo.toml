@@ -18,6 +18,12 @@ thiserror = { workspace = true }
 urlencoding = "2"
 schemars.workspace = true
 
+# DAG node dependencies
+dag-core = { path = "../dag-core" }
+arrow-array.workspace = true
+arrow-schema.workspace = true
+datafusion.workspace = true
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 
