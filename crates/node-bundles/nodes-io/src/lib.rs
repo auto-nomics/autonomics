@@ -26,6 +26,7 @@ pub mod radiomics;
 pub mod radiomics_container;
 pub mod smr_heidi_container;
 pub mod source_chembl;
+pub mod source_kegg;
 pub mod source_openalex;
 pub mod source_opentargets;
 pub mod source_semantic_scholar;
@@ -315,6 +316,9 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(source_chembl::ChemblActivitiesNodeFactory));
         registry.register(Box::new(source_chembl::ChemblMoleculesNodeFactory));
         registry.register(Box::new(source_openalex::OpenAlexWorksNodeFactory {}));
+        registry.register(Box::new(source_kegg::KeggSearchNodeFactory));
+        registry.register(Box::new(source_kegg::KeggRelationsNodeFactory));
+        registry.register(Box::new(source_kegg::KeggGenePathwaysNodeFactory));
         registry.register(Box::new(source_openalex::OpenAlexGroupByNodeFactory {}));
         registry.register(Box::new(
             source_semantic_scholar::S2PaperSearchNodeFactory {},

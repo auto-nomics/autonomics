@@ -100,7 +100,11 @@ impl ReactomeClient {
     }
 
     /// Override both endpoints after construction.
-    pub fn with_endpoints(mut self, content: impl Into<String>, analysis: impl Into<String>) -> Self {
+    pub fn with_endpoints(
+        mut self,
+        content: impl Into<String>,
+        analysis: impl Into<String>,
+    ) -> Self {
         self.content_base = content.into();
         self.analysis_base = analysis.into();
         self
@@ -182,20 +186,14 @@ impl ReactomeClient {
     /// Top-level pathways for a species (e.g. `"Homo sapiens"`).
     pub async fn top_level_pathways(&self, species: &str) -> Result<Vec<Pathway>> {
         let species = require_id(species)?;
-        let path = format!(
-            "/data/pathways/top/{}",
-            urlencoding::encode(species)
-        );
+        let path = format!("/data/pathways/top/{}", urlencoding::encode(species));
         self.get(&path, &[]).await
     }
 
     /// Full event hierarchy tree for a species.
     pub async fn events_hierarchy(&self, species: &str) -> Result<Vec<EventAncestor>> {
         let species = require_id(species)?;
-        let path = format!(
-            "/data/eventsHierarchy/{}",
-            urlencoding::encode(species)
-        );
+        let path = format!("/data/eventsHierarchy/{}", urlencoding::encode(species));
         self.get(&path, &[]).await
     }
 
@@ -208,13 +206,15 @@ impl ReactomeClient {
     /// Low-level pathways containing a given physical entity.
     pub async fn entity_pathways(&self, id: &str) -> Result<Vec<Pathway>> {
         let id = require_id(id)?;
-        self.get(&format!("/data/pathways/low/entity/{id}"), &[]).await
+        self.get(&format!("/data/pathways/low/entity/{id}"), &[])
+            .await
     }
 
     /// All events contained within a pathway.
     pub async fn contained_events(&self, id: &str) -> Result<Vec<Pathway>> {
         let id = require_id(id)?;
-        self.get(&format!("/data/pathway/{id}/containedEvents"), &[]).await
+        self.get(&format!("/data/pathway/{id}/containedEvents"), &[])
+            .await
     }
 
     // -----------------------------------------------------------------------
@@ -234,7 +234,11 @@ impl ReactomeClient {
     /// Map an external identifier (e.g. UniProt accession) to Reactome pathways.
     ///
     /// Resource examples: `UniProt`, `Ensembl`, `EntrezGene`, `ChEBI`.
-    pub async fn map_to_pathways(&self, resource: &str, identifier: &str) -> Result<Vec<MappedPathway>> {
+    pub async fn map_to_pathways(
+        &self,
+        resource: &str,
+        identifier: &str,
+    ) -> Result<Vec<MappedPathway>> {
         let resource = require_id(resource)?;
         let identifier = require_id(identifier)?;
         let path = format!(
@@ -246,7 +250,11 @@ impl ReactomeClient {
     }
 
     /// Map an external identifier to Reactome reactions.
-    pub async fn map_to_reactions(&self, resource: &str, identifier: &str) -> Result<Vec<MappedPathway>> {
+    pub async fn map_to_reactions(
+        &self,
+        resource: &str,
+        identifier: &str,
+    ) -> Result<Vec<MappedPathway>> {
         let resource = require_id(resource)?;
         let identifier = require_id(identifier)?;
         let path = format!(
@@ -270,7 +278,8 @@ impl ReactomeClient {
     /// Reference entities (cross-referenced IDs) of participants.
     pub async fn reference_entities(&self, id: &str) -> Result<Vec<Participant>> {
         let id = require_id(id)?;
-        self.get(&format!("/data/participants/{id}/referenceEntities"), &[]).await
+        self.get(&format!("/data/participants/{id}/referenceEntities"), &[])
+            .await
     }
 
     // -----------------------------------------------------------------------
@@ -360,11 +369,7 @@ impl ReactomeClient {
         }
         let body = identifiers.join("\n");
         let suffix = if project_to_human { "/projection" } else { "" };
-        let url = format!(
-            "{}{}",
-            self.analysis_base,
-            format!("/identifiers{suffix}")
-        );
+        let url = format!("{}{}", self.analysis_base, format!("/identifiers{suffix}"));
         let response = self
             .http
             .post(&url)

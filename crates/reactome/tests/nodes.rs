@@ -15,7 +15,9 @@ fn build(factory: &dyn dag_core::registry::NodeFactory) -> Box<dyn dag_core::dag
     let schema = factory.spec_schema();
     let spec = match kind {
         "source_reactome_pathways" => serde_json::json!({"species": "Homo sapiens"}),
-        "source_reactome_mapping" => serde_json::json!({"resource": "UniProt", "identifier": "P04637"}),
+        "source_reactome_mapping" => {
+            serde_json::json!({"resource": "UniProt", "identifier": "P04637"})
+        }
         "source_reactome_analysis" => serde_json::json!({"identifiers": ["TP53"]}),
         "source_reactome_participants" => serde_json::json!({"id": "R-HSA-1640170"}),
         _ => panic!("unknown kind: {kind}"),
@@ -75,8 +77,15 @@ fn pathways_batch_has_expected_schema() {
     assert_eq!(
         names,
         vec![
-            "db_id", "stable_id", "display_name", "schema_class", "species_name",
-            "is_in_disease", "is_inferred", "has_diagram", "has_ehld",
+            "db_id",
+            "stable_id",
+            "display_name",
+            "schema_class",
+            "species_name",
+            "is_in_disease",
+            "is_inferred",
+            "has_diagram",
+            "has_ehld",
         ]
     );
 }

@@ -12,9 +12,9 @@ use serde::Deserialize;
 use dag_core::dag::{DagError, DagNode, NodePorts, graph::PortOutputs};
 use dag_core::registry::{NodeCtx, NodeFactory};
 
+use super::pathways::str_array;
 use crate::ReactomeClient;
 use crate::types::MappedPathway;
-use super::pathways::str_array;
 
 /// Spec for [`ReactomeMappingNode`].
 #[derive(Debug, Clone, Default, JsonSchema, Deserialize)]
@@ -126,9 +126,9 @@ impl DagNode for ReactomeMappingNode {
 
         let session = ctx.session();
         let batch = build_mapping_batch(&pathways)?;
-        let df = session
-            .read_batch(batch)
-            .map_err(|e| DagError::Schedule(format!("failed to read Reactome mapping batch: {e}")))?;
+        let df = session.read_batch(batch).map_err(|e| {
+            DagError::Schedule(format!("failed to read Reactome mapping batch: {e}"))
+        })?;
         let mut res: PortOutputs = PortOutputs::new();
         res.insert(0, df);
         Ok(res)

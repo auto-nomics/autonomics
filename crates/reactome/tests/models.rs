@@ -1,5 +1,5 @@
-use reactome::types::*;
 use reactome::convert::{analysis_to_table, pathways_to_table};
+use reactome::types::*;
 
 #[test]
 fn decodes_species() {
@@ -101,7 +101,10 @@ fn decodes_analysis_result() {
         "warnings": ["Missing header. Using a default one."]
     });
     let result: AnalysisResult = serde_json::from_value(raw).unwrap();
-    assert_eq!(result.summary.analysis_type.as_deref(), Some("OVERREPRESENTATION"));
+    assert_eq!(
+        result.summary.analysis_type.as_deref(),
+        Some("OVERREPRESENTATION")
+    );
     assert!(result.summary.projection);
     assert_eq!(result.pathways_found, 2);
     assert_eq!(result.pathways.len(), 1);

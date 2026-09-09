@@ -15,14 +15,10 @@ fn registrations_have_unique_nonempty_schemas() {
     assert_eq!(names.len(), registrations.len());
     // `reactome_database` is intentionally parameterless; all others must
     // expose at least one input field.
-    assert!(
-        registrations
-            .iter()
-            .all(|registration| {
-                registration.definition.name == "reactome_database"
-                    || !registration.definition.input_schema.properties.is_empty()
-            })
-    );
+    assert!(registrations.iter().all(|registration| {
+        registration.definition.name == "reactome_database"
+            || !registration.definition.input_schema.properties.is_empty()
+    }));
 }
 
 #[test]

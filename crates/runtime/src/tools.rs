@@ -14,6 +14,7 @@ use bib_base::{BibBase, LiteratureGateway};
 use chembl::ChEMBLClient;
 use data_engine::runtime::DataEngineClient;
 use gwascatalog_sdk::GwasCatalogClient;
+use kegg::KeggClient;
 use opengwas::OpengwasClient;
 use opentargets::OpenTargetsClient;
 use rcsb::RcsbClient;
@@ -74,6 +75,14 @@ pub fn string_tools() -> Vec<ToolRegistration> {
             .expect("default STRING client"),
     );
     string_sdk::string_registrations(string)
+}
+
+/// KEGG tools (database metadata, entry search/preview, links, ID conversion,
+/// and drug interactions). The SDK client enforces KEGG's 3 request/second
+/// academic-use limit.
+pub fn kegg_tools() -> Vec<ToolRegistration> {
+    let client = Arc::new(KeggClient::new());
+    kegg::kegg_registrations(client)
 }
 
 /// GWAS Catalog tools (curated studies, associations, EFO traits, SNPs,
@@ -197,6 +206,10 @@ pub async fn tool_set_from_config(
         tools.extend(chembl_tools());
     }
 
+    if config.enable_kegg {
+        tools.extend(kegg_tools());
+    }
+
     tools.extend(data_engine_tools::registrations(data_engine_client));
 
     if config.enable_bibliography {
@@ -298,5 +311,30 @@ mod tests {
         ] {
             assert!(names.contains(&name), "missing tool: {name}");
         }
+    }
+
+    #[test]
+    fn kegg_tools_are_registered_with_nonempty_schemas() {
+        let registrations = kegg_tools();
+        let names: Vec<_> = registrations
+            .iter()
+            .map(|registration| registration.definition.name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "kegg_info",
+                "kegg_find",
+                "kegg_entry_preview",
+                "kegg_link",
+                "kegg_convert",
+                "kegg_ddi"
+            ]
+        );
+        assert!(
+            registrations.iter().all(|registration| {
+                !registration.definition.input_schema.properties.is_empty()
+            })
+        );
     }
 }

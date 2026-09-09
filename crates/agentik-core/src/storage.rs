@@ -186,6 +186,7 @@ pub struct ProfileOverrides {
     pub enable_chembl: Option<bool>,
     pub enable_rcsb: Option<bool>,
     pub enable_string: Option<bool>,
+    pub enable_kegg: Option<bool>,
     pub enable_dag_history: Option<bool>,
 }
 
@@ -235,6 +236,8 @@ pub struct AgentProfile {
     pub enable_rcsb: bool,
     #[serde(default = "default_enable_string")]
     pub enable_string: bool,
+    #[serde(default = "default_true")]
+    pub enable_kegg: bool,
     pub enable_dag_history: bool,
 
     // ── Model preference ──
@@ -285,6 +288,7 @@ impl AgentProfile {
             enable_chembl: true,
             enable_rcsb: true,
             enable_string: true,
+            enable_kegg: true,
             enable_dag_history: true,
             preferred_model: None,
             created_at: now,
@@ -330,6 +334,7 @@ impl AgentProfile {
             enable_chembl: overrides.enable_chembl.unwrap_or(self.enable_chembl),
             enable_rcsb: overrides.enable_rcsb.unwrap_or(self.enable_rcsb),
             enable_string: overrides.enable_string.unwrap_or(self.enable_string),
+            enable_kegg: overrides.enable_kegg.unwrap_or(self.enable_kegg),
             enable_dag_history: overrides
                 .enable_dag_history
                 .unwrap_or(self.enable_dag_history),
@@ -361,6 +366,7 @@ impl AgentProfile {
                 enable_chembl: true,
                 enable_rcsb: true,
                 enable_string: true,
+                enable_kegg: true,
                 enable_dag_history: true,
                 preferred_model: None,
                 created_at: now,
@@ -383,6 +389,7 @@ impl AgentProfile {
                 enable_chembl: true,
                 enable_rcsb: false,
                 enable_string: true,
+                enable_kegg: false,
                 enable_dag_history: false,
                 preferred_model: None,
                 created_at: now,
@@ -405,6 +412,7 @@ impl AgentProfile {
                 enable_chembl: true,
                 enable_rcsb: false,
                 enable_string: true,
+                enable_kegg: true,
                 enable_dag_history: true,
                 preferred_model: None,
                 created_at: now,
@@ -428,6 +436,7 @@ impl AgentProfile {
                 enable_chembl: false,
                 enable_rcsb: true,
                 enable_string: true,
+                enable_kegg: true,
                 enable_dag_history: true,
                 preferred_model: None,
                 created_at: now,
@@ -463,6 +472,7 @@ impl AgentProfile {
                 enable_chembl: false,
                 enable_rcsb: false,
                 enable_string: false,
+                enable_kegg: false,
                 enable_dag_history: false,
                 preferred_model: None,
                 created_at: now,

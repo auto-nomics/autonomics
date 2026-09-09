@@ -39,10 +39,7 @@ impl ToolFunction for ReactomeAnalysisTool {
     async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
         let result = self
             .client
-            .analyse_identifiers(
-                &input.identifiers,
-                input.project_to_human.unwrap_or(true),
-            )
+            .analyse_identifiers(&input.identifiers, input.project_to_human.unwrap_or(true))
             .await
             .map_err(json_err)?;
         Ok(AgentToolResult::success(format_analysis(&result)))
