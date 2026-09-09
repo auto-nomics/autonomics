@@ -867,6 +867,14 @@ pub struct AppState {
     pub pending_profile: Option<agentik_core::AgentProfile>,
     /// Model config popup visibility.
     pub model_config_visible: bool,
+    /// Interactive DAG view visibility.
+    pub dag_view_visible: bool,
+    /// Latest structured DAG snapshot. `None` while the first load is running.
+    pub dag_snapshot: Option<dag_core::dag::DagTuiSnapshot>,
+    /// Selection/viewport state for [`crate::widgets::dag_view::DagTuiWidget`].
+    pub dag_view_state: crate::widgets::dag_view::DagViewState,
+    /// Last DAG snapshot load error, shown inside the DAG overlay.
+    pub dag_view_error: Option<String>,
     /// Global display preferences (collapse thinking/tool blocks).
     pub display_settings: DisplaySettings,
     pub active_model: Arc<ArcSwapOption<Model>>,
@@ -902,6 +910,10 @@ impl Default for AppState {
             pending_session_rename_id: None,
             pending_profile: None,
             model_config_visible: false,
+            dag_view_visible: false,
+            dag_snapshot: None,
+            dag_view_state: crate::widgets::dag_view::DagViewState::default(),
+            dag_view_error: None,
             display_settings: DisplaySettings::default(),
             active_model: Arc::new(ArcSwapOption::default()),
             delete_agent_confirm: false,

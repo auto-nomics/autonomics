@@ -63,6 +63,8 @@ pub(crate) enum AppEvent {
     /// ChatGPT token 主动/自愈刷新产物：新 blob JSON。主循环覆写 openai
     /// 行的 api_key（token 轮转落库，重启免重登）。
     ChatgptTokenRefreshed(String),
+    /// A structured DAG snapshot arrived for the interactive TUI view.
+    DagSnapshotLoaded(Result<dag_core::dag::DagTuiSnapshot, String>),
     /// ChatGPT 订阅登录结束。`Ok` 携带 token blob（处理器写库并重载目
     /// 录）；`Err` 为可直接展示的失败原因（取消/超时/端口占用/交换失败）。
     ChatgptLoginCompleted {

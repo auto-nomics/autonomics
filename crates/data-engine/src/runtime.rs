@@ -314,6 +314,19 @@ impl SessionServer {
                     .expect("uncontended: running flag is false");
                 let _ = reply.send(engine.view_dag());
             }
+            DataEngineCmd::GetDagTuiSnapshot { reply } => {
+                if self.running.load(Ordering::SeqCst) {
+                    let _ = reply.send(Err(crate::error::Error::Custom(
+                        "DAG is currently running; view it after completion".to_string(),
+                    )));
+                    return;
+                }
+                let engine = self
+                    .engine
+                    .try_lock()
+                    .expect("uncontended: running flag is false");
+                let _ = reply.send(engine.dag_tui_snapshot());
+            }
             DataEngineCmd::CompileDag { target, reply } => {
                 if self.running.load(Ordering::SeqCst) {
                     let _ = reply.send(Err(crate::error::Error::Custom(
@@ -789,6 +802,16 @@ impl DataEngineClient {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         self.request(DataEngineCmd::ViewDag { reply: reply_tx }, reply_rx)
             .await
+    }
+
+    /// Return the structured snapshot consumed by interactive DAG rendering.
+    pub async fn dag_tui_snapshot(&self) -> Result<crate::dag::DagTuiSnapshot> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.request(
+            DataEngineCmd::GetDagTuiSnapshot { reply: reply_tx },
+            reply_rx,
+        )
+        .await
     }
 
     pub async fn clear_dag(&self) -> Result<()> {

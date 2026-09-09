@@ -2755,6 +2755,15 @@ impl RuntimeHost {
     pub fn spawner(&self) -> SharedInfra {
         self.infra.clone()
     }
+
+    /// Get a client for the named agent's isolated DataEngine session.
+    ///
+    /// Interactive UI views share the same session identity as the agent, so
+    /// this is a read-only projection of exactly the DAG that agent's tools
+    /// mutate—not a separate global graph.
+    pub fn data_engine_client(&self, session_id: &str) -> DataEngineClient {
+        self.infra.engine_manager.client_for_session(session_id)
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════

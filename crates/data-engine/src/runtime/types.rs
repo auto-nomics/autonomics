@@ -1,10 +1,10 @@
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
-use crate::dag::RunReport;
 use crate::dag::graph::PortOutputs;
 use crate::dag::node_event::NodeEvent;
 use crate::dag::runtime::RuntimeStatus;
+use crate::dag::{DagTuiSnapshot, RunReport};
 use crate::error::Result as EngineResult;
 
 /// Envelope that routes a [`DataEngineCmd`] to a session's actor.
@@ -83,6 +83,10 @@ pub enum DataEngineCmd {
     },
     ViewDag {
         reply: oneshot::Sender<EngineResult<String>>,
+    },
+    /// Return the structured topology/runtime snapshot used by TUI rendering.
+    GetDagTuiSnapshot {
+        reply: oneshot::Sender<EngineResult<DagTuiSnapshot>>,
     },
     ClearDag {
         reply: oneshot::Sender<EngineResult<()>>,

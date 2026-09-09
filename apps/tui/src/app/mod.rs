@@ -34,6 +34,7 @@ const FORCE_QUIT_WINDOW: Duration = Duration::from_secs(3);
 mod agents;
 mod chat;
 mod commands;
+mod dag_view;
 mod database;
 mod event_loop;
 mod history;

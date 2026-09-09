@@ -86,9 +86,14 @@ impl std::ops::Index<&u8> for PortOutputs {
 }
 
 pub struct DagEdge {
+    #[allow(dead_code)]
     pub from_node: NodeId,
+    #[allow(dead_code)]
     pub to_node: NodeId,
+    #[allow(dead_code)]
     pub from_port: u8,
+    #[allow(dead_code)]
+    pub to_port: u8,
 }
 
 /// Metadata attached to every edge in the graph: which output port of the
@@ -1131,6 +1136,22 @@ impl DAG {
             .collect()
     }
 
+    /// All edges in graph insertion order.
+    ///
+    /// This is the stable topology view needed by exporters and UI snapshots;
+    /// per-node predecessor/successor queries do not expose edge ports.
+    pub fn edges(&self) -> Vec<DagEdge> {
+        self.graph
+            .edge_references()
+            .map(|edge| DagEdge {
+                from_node: self.graph[edge.source()].clone(),
+                to_node: self.graph[edge.target()].clone(),
+                from_port: edge.weight().from_port,
+                to_port: edge.weight().to_port,
+            })
+            .collect()
+    }
+
     /// Validate the graph: cycles, port wiring, payload types, and schemas.
     ///
     /// Checks (in order):
@@ -1274,6 +1295,58 @@ impl DAG {
     /// ownership).
     pub fn get_node(&self, id: &str) -> Option<&dyn DagNode> {
         self.nodes.get(id).map(|b| b.as_ref())
+    }
+
+    /// Build an owned snapshot for interactive DAG consumers.
+    ///
+    /// Node order is id-sorted so repeated snapshots have stable selection and
+    /// layout, independent of the graph payload HashMap's iteration order.
+    pub fn tui_snapshot(&self) -> super::view::DagTuiSnapshot {
+        let mut nodes = Vec::with_capacity(self.nodes.len());
+        for id in self.node_ids() {
+            let Some(node) = self.nodes.get(&id) else {
+                continue;
+            };
+            let ports = node.ports();
+            nodes.push(super::view::DagNodeView {
+                kind: node.kind().to_string(),
+                status: self.status(&id).unwrap_or_default(),
+                dirty: self.is_dirty(&id),
+                inputs: ports
+                    .input_ports()
+                    .iter()
+                    .map(|port| super::view::DagPortView {
+                        index: port.index,
+                        label: port.label.clone(),
+                        data_type: port.data_type.to_string(),
+                    })
+                    .collect(),
+                outputs: ports
+                    .output_ports()
+                    .iter()
+                    .map(|port| super::view::DagPortView {
+                        index: port.index,
+                        label: port.label.clone(),
+                        data_type: port.data_type.to_string(),
+                    })
+                    .collect(),
+                id,
+            });
+        }
+        nodes.sort_unstable_by(|a, b| a.id.cmp(&b.id));
+
+        let edges = self
+            .edges()
+            .into_iter()
+            .map(|edge| super::view::DagEdgeView {
+                from: edge.from_node,
+                from_port: edge.from_port,
+                to: edge.to_node,
+                to_port: edge.to_port,
+            })
+            .collect();
+
+        super::view::DagTuiSnapshot { nodes, edges }
     }
 
     /// Build a human-readable cycle path like `A → B → C → A` from the first
@@ -1548,6 +1621,66 @@ mod tests {
         fn as_any(&self) -> &dyn std::any::Any {
             self
         }
+    }
+
+    #[test]
+    fn tui_snapshot_is_stable_and_ports_are_preserved() {
+        let mut dag = DAG::default();
+        dag.add_node_with_spec(
+            "b".to_string(),
+            Box::new(EchoNode::from_ports(
+                NodePorts::new()
+                    .set_fixed_input(false)
+                    .add_input_port_of_type_with_label(None, PortType::DataFrame, "frame"),
+            )),
+            "echo".into(),
+            serde_json::json!({}),
+        )
+        .unwrap();
+        dag.add_node_with_spec(
+            "a".to_string(),
+            Box::new(EchoNode::from_ports(
+                NodePorts::new().add_output_port_of_type(None, PortType::DataFrame),
+            )),
+            "echo".into(),
+            serde_json::json!({}),
+        )
+        .unwrap();
+        dag.add_edge("a", "b", 0, 0).unwrap();
+
+        let snapshot = dag.tui_snapshot();
+        assert_eq!(
+            snapshot
+                .nodes
+                .iter()
+                .map(|node| node.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a", "b"]
+        );
+        assert!(snapshot.nodes.iter().all(|node| node.kind == "echo"));
+        assert!(snapshot.nodes.iter().all(|node| node.dirty));
+        assert_eq!(snapshot.nodes[1].inputs[0].label.as_deref(), Some("frame"));
+        assert_eq!(
+            snapshot.nodes[0].outputs[0].data_type,
+            PortType::DataFrame.to_string()
+        );
+        assert_eq!(
+            snapshot
+                .edges
+                .iter()
+                .map(|edge| (
+                    edge.from.as_str(),
+                    edge.from_port,
+                    edge.to.as_str(),
+                    edge.to_port
+                ))
+                .collect::<Vec<_>>(),
+            vec![("a", 0, "b", 0)]
+        );
+        assert_eq!(
+            snapshot.status_count(RuntimeStatus::Pending),
+            snapshot.nodes.len()
+        );
     }
 
     fn get_diamond_dag() -> DAG {

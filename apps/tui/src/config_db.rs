@@ -87,8 +87,7 @@ impl ModelRow {
              FROM models m JOIN providers p ON p.id = m.provider_id
              ORDER BY m.model_name",
         )?;
-        stmt.query_map([], row_to_model)?
-            .collect()
+        stmt.query_map([], row_to_model)?.collect()
     }
 
     /// Look up a single model by (provider name, model name).

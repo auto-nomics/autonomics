@@ -256,6 +256,11 @@ impl App {
             }
         }
 
+        // ── DAG view overlay ──
+        if self.state.dag_view_visible {
+            self.render_dag_view(frame.area(), frame.buffer_mut());
+        }
+
         // ── Toast notifications (top-most overlay, bottom-right corner) ──
         self.state.toasts.tick();
         self.state.toasts.render(frame.area(), frame.buffer_mut());

@@ -138,6 +138,15 @@ impl App {
                     }
                 }
             }
+            crate::app_event::AppEvent::DagSnapshotLoaded(result) => match result {
+                Ok(snapshot) => {
+                    self.state.dag_snapshot = Some(snapshot);
+                    self.state.dag_view_error = None;
+                }
+                Err(error) => {
+                    self.state.dag_view_error = Some(error);
+                }
+            },
             crate::app_event::AppEvent::ChatgptLoginUrl(url) => {
                 // 授权 URL：复制到剪贴板（保住 lease）+ 尽力开浏览器。
                 match crate::clipboard_copy::copy_to_clipboard(&url) {
@@ -149,8 +158,12 @@ impl App {
                         } else {
                             "授权链接已复制到剪贴板，请粘贴到浏览器打开并完成授权"
                         };
-                        tracing::info!("chatgpt login: authorize url dispatched (browser={opened})");
-                        self.state.toasts.info("ChatGPT 登录", Some(hint.to_string()));
+                        tracing::info!(
+                            "chatgpt login: authorize url dispatched (browser={opened})"
+                        );
+                        self.state
+                            .toasts
+                            .info("ChatGPT 登录", Some(hint.to_string()));
                     }
                     Err(e) => {
                         tracing::warn!(error = %e, "chatgpt login url clipboard copy failed");

@@ -3,6 +3,7 @@ pub mod agent_picker;
 pub mod agent_workspace;
 pub mod chat_widget;
 pub mod command_palette;
+pub mod dag_view;
 pub mod input_area;
 pub mod message_picker;
 pub mod model_config_widget;

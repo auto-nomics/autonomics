@@ -104,6 +104,14 @@ impl App {
             return;
         }
 
+        // Ctrl+O opens a read-only view of the active agent's data DAG. This
+        // is intentionally global: the overlay is useful while an agent is
+        // composing or executing pipeline changes.
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('o') {
+            self.open_dag_view();
+            return;
+        }
+
         // While the command palette is open it captures all remaining keys
         // (navigation, filtering, execution, dismissal) — tab handlers never
         // see them.
@@ -151,6 +159,14 @@ impl App {
         // a higher-level picker is also open.
         if self.state.message_picker.is_visible() {
             self.handle_message_picker_key(key);
+            return;
+        }
+
+        // The DAG overlay captures keys after all high-level pickers so it can
+        // be closed from beneath them, but before the agent composer sees
+        // navigation keys as text.
+        if self.state.dag_view_visible {
+            self.handle_dag_view_key(key);
             return;
         }
 

@@ -14,6 +14,7 @@ pub mod history;
 pub mod node_event;
 pub mod runtime;
 pub mod utils;
+pub mod view;
 
 // Re-export node abstractions from the node module for backward compatibility
 // and so that dag internals (graph.rs, runtime.rs) can use `super::DagNode` etc.
@@ -23,3 +24,4 @@ pub use error::{DagError, NodeError};
 pub use graph::DAG;
 pub use history::{DagHistory, DagManifest, Snapshot};
 pub use runtime::{DirtyState, RunReport, RuntimeStatus, SchedulerConfig};
+pub use view::{DagEdgeView, DagNodeView, DagPortView, DagTuiSnapshot};

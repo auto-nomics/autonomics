@@ -38,6 +38,8 @@ pub enum CommandAction {
     NewAgent,
     /// Open the model config popup for the active agent.
     ModelConfig,
+    /// Open the active agent's data-engine DAG view.
+    ViewDag,
     /// Open the agent resume picker.
     ResumeAgent,
     /// Close the active agent leaf and terminate its background process.
@@ -331,6 +333,12 @@ fn default_commands() -> Vec<Command> {
             keywords: "model config provider api key switch agent".into(),
             category: "agent".into(),
             action: CommandAction::ModelConfig,
+        },
+        Command {
+            title: "View DAG".into(),
+            keywords: "dag graph pipeline topology data engine node edges ctrl o".into(),
+            category: "data".into(),
+            action: CommandAction::ViewDag,
         },
         Command {
             title: "New session".into(),

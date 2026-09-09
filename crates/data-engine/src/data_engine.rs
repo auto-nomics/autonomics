@@ -204,6 +204,11 @@ impl DataEngine {
         Ok(self.dag.to_dot())
     }
 
+    /// Return the stable, owned snapshot used by interactive DAG consumers.
+    pub fn dag_tui_snapshot(&self) -> Result<crate::dag::DagTuiSnapshot> {
+        Ok(self.dag.tui_snapshot())
+    }
+
     /// Get the retained `(kind, spec)` of an existing node instance.
     ///
     /// Returns `None` when `id` does not exist in the DAG, or when the node
@@ -1358,6 +1363,35 @@ mod tests {
         assert!(
             matches!(err, Error::Dag(DagError::PortNotFound { ref node, direction: "output", .. }) if node == "a"),
             "expected PortNotFound(output) at add_edge, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn tui_snapshot_exposes_topology_and_state() {
+        let mut engine = DataEngine::builder().build();
+        engine
+            .add_node_from_registry("b", "sql", serde_json::json!({"sql_query": "SELECT 1"}))
+            .unwrap();
+        engine
+            .add_node_from_registry("a", "sql", serde_json::json!({"sql_query": "SELECT 1"}))
+            .unwrap();
+        engine.add_edge("a", "b", 0, 0).unwrap();
+
+        let snapshot = engine.dag_tui_snapshot().unwrap();
+        assert_eq!(
+            snapshot
+                .nodes
+                .iter()
+                .map(|node| node.id.as_str())
+                .collect::<Vec<_>>(),
+            ["a", "b"]
+        );
+        assert_eq!(snapshot.edges.len(), 1);
+        assert_eq!(snapshot.edges[0].from, "a");
+        assert_eq!(snapshot.edges[0].to, "b");
+        assert_eq!(
+            snapshot.status_count(RuntimeStatus::Pending),
+            snapshot.nodes.len()
         );
     }
 
