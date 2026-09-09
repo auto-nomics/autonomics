@@ -11,6 +11,7 @@ use crate::model::ModelInfo;
 use crate::model::ProviderType;
 use crate::model::model_info::ModelInfoBuilder;
 use crate::provider::ProviderPreset;
+use crate::types::ReasoningEffort;
 use crate::wire::WireProtocolKind;
 
 // ─── Model IDs ──────────────────────────────────────────────────────────────
@@ -18,6 +19,8 @@ use crate::wire::WireProtocolKind;
 // 兜底目录；登录后由 [`OpenaiProvider::fetch_remote_catalog`] 自动拉全量。
 pub const MODEL_GPT_6_ASTRA: &str = "gpt-6-astra"; // 旗舰
 pub const MODEL_GPT_5_5: &str = "gpt-5.5";
+const LARGE_CONTEXT_WINDOW: u64 = 1_050_000;
+const MAX_OUTPUT_TOKENS: u64 = 128_000;
 
 /// ChatGPT 后端根地址。`ChatgptResponsesWire` 追加
 /// `/backend-api/codex/responses`，得到完整端点
@@ -60,29 +63,30 @@ impl OpenaiProvider {
     }
 
     fn model_definitions() -> Vec<ModelInfo> {
-        // 实测目录（2026-09）：全部 text+image 输入、272k 上下文、支持
-        // 工具调用与多档 reasoning。目录端点不暴露输出上限，统一按
-        // 128k 填（服务器按模型实际上限收敛）。
+        // Official OpenAI model metadata (checked 2026-09). The ChatGPT
+        // catalogue reports the subscription routing cap (272k) rather than
+        // each model's full context window, so presets use the model maximum.
         vec![
             // GPT-6-Astra — 最强旗舰（官方描述 "most capable"）。
             ModelInfoBuilder::new(MODEL_GPT_6_ASTRA)
-                .context(272_000, 128_000)
+                .context(LARGE_CONTEXT_WINDOW, MAX_OUTPUT_TOKENS)
                 .capabilities(true, true, true, true)
                 .thinking_enabled(None)
+                .max_reasoning_effort(ReasoningEffort::Max)
                 .pricing(0.0, 0.0)
                 .build(),
             // GPT-5.6-Sol — 可靠的日常 agentic 主力。
-            entry("gpt-5.6-sol"),
+            entry("gpt-5.6-sol", LARGE_CONTEXT_WINDOW, ReasoningEffort::Max),
             // GPT-5.6-Terra — 均衡的 agentic 编码模型。
-            entry("gpt-5.6-terra"),
+            entry("gpt-5.6-terra", LARGE_CONTEXT_WINDOW, ReasoningEffort::Max),
             // GPT-5.6-Luna — 快且便宜的 agentic 编码模型。
-            entry("gpt-5.6-luna"),
+            entry("gpt-5.6-luna", LARGE_CONTEXT_WINDOW, ReasoningEffort::Max),
             // GPT-5.5 — 上代通用模型。
-            entry(MODEL_GPT_5_5),
+            entry(MODEL_GPT_5_5, LARGE_CONTEXT_WINDOW, ReasoningEffort::Xhigh),
             // GPT-5.4-Mini — 小型快速模型。
-            entry("gpt-5.4-mini"),
+            entry("gpt-5.4-mini", 400_000, ReasoningEffort::Xhigh),
             // GPT-Reserve — 备用容量档。
-            entry("gpt-reserve"),
+            entry("gpt-reserve", 272_000, ReasoningEffort::Max),
             // 注：codex-auto-review 为后端内部审查模型，不进用户目录。
         ]
     }
@@ -153,25 +157,55 @@ fn map_remote(models: Vec<RemoteModel>) -> Vec<ModelInfo> {
         .filter(|m| !INTERNAL_MODEL_SLUGS.contains(&m.slug.as_str()))
         .map(|m| {
             let vision = m.input_modalities.iter().any(|x| x == "image");
-            let thinking = !m.supported_reasoning_levels.is_empty();
+            let max_effort = strongest_reasoning_effort(&m.supported_reasoning_levels);
+            let thinking = max_effort.is_some();
             let mut builder = ModelInfoBuilder::new(m.slug)
                 .context(m.context_window, 128_000)
                 .capabilities(vision, m.supports_parallel_tool_calls, true, thinking)
                 .pricing(0.0, 0.0);
             if thinking {
                 builder = builder.thinking_enabled(None);
+                if let Some(effort) = max_effort {
+                    builder = builder.max_reasoning_effort(effort);
+                }
             }
             builder.build()
         })
         .collect()
 }
 
-/// 同款 preset 条目的简写（七个非旗舰条目元数据一致）。
-fn entry(name: &str) -> ModelInfo {
+/// Parse the strongest effort advertised by the ChatGPT catalogue.
+fn strongest_reasoning_effort(levels: &[serde_json::Value]) -> Option<ReasoningEffort> {
+    for (effort, wire_value) in [
+        (ReasoningEffort::Max, "max"),
+        (ReasoningEffort::Xhigh, "xhigh"),
+        (ReasoningEffort::High, "high"),
+        (ReasoningEffort::Medium, "medium"),
+        (ReasoningEffort::Low, "low"),
+        (ReasoningEffort::Minimal, "minimal"),
+        (ReasoningEffort::None, "none"),
+    ] {
+        let matches = levels.iter().any(|level| {
+            level
+                .get("effort")
+                .and_then(serde_json::Value::as_str)
+                .or_else(|| level.as_str())
+                == Some(wire_value)
+        });
+        if matches {
+            return Some(effort);
+        }
+    }
+    None
+}
+
+/// Shared preset entry; only context and the maximum effort differ by model.
+fn entry(name: &str, context_length: u64, max_effort: ReasoningEffort) -> ModelInfo {
     ModelInfoBuilder::new(name)
-        .context(272_000, 128_000)
+        .context(context_length, MAX_OUTPUT_TOKENS)
         .capabilities(true, true, true, true)
         .thinking_enabled(None)
+        .max_reasoning_effort(max_effort)
         .pricing(0.0, 0.0)
         .build()
 }
@@ -187,6 +221,22 @@ mod tests {
         assert!(models.len() >= 7);
         assert!(models.iter().any(|m| m.model_name == MODEL_GPT_6_ASTRA));
         assert!(models.iter().any(|m| m.model_name == MODEL_GPT_5_5));
+        for (name, context_length) in [
+            (MODEL_GPT_6_ASTRA, 1_050_000),
+            ("gpt-5.6-sol", 1_050_000),
+            ("gpt-5.6-terra", 1_050_000),
+            ("gpt-5.6-luna", 1_050_000),
+            (MODEL_GPT_5_5, 1_050_000),
+            ("gpt-5.4-mini", 400_000),
+            ("gpt-reserve", 272_000),
+        ] {
+            let model = models
+                .iter()
+                .find(|m| m.model_name == name)
+                .unwrap_or_else(|| panic!("preset contains {name}"));
+            assert_eq!(model.context_length, context_length, "{name}");
+            assert_eq!(model.max_output_tokens, 128_000, "{name}");
+        }
         // 内部审查模型不进 preset。
         assert!(!models.iter().any(|m| m.model_name == "codex-auto-review"));
         assert!(models.iter().all(|m| m.provider_id == Uuid::nil()));
@@ -223,6 +273,7 @@ mod tests {
         assert!(astra.supports_function_calling);
         assert!(astra.supports_thinking);
         assert!(astra.thinking_enabled);
+        assert_eq!(astra.max_reasoning_effort, Some(ReasoningEffort::High));
 
         // 退化条目：缺 modalities / reasoning 字段走默认值。
         let plain = &models[1];

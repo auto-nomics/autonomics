@@ -27,6 +27,13 @@ pub struct ModelInfo {
     /// request.
     #[serde(default)]
     pub thinking_enabled: bool,
+    /// The strongest reasoning-effort level accepted by this model.
+    ///
+    /// `None` preserves the legacy request-layer default of
+    /// [`ReasoningEffort::Max`](agentik_types::ReasoningEffort::Max). Provider
+    /// presets should set this when the provider documents a lower maximum.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_reasoning_effort: Option<agentik_types::ReasoningEffort>,
     /// Whether the provider requires extended thinking for this model.
     ///
     /// Some models (notably GLM-5.3) reject `thinking.type: "disabled"`. When
@@ -55,6 +62,7 @@ impl Default for ModelInfo {
             supports_streaming: false,
             supports_thinking: false,
             thinking_enabled: false,
+            max_reasoning_effort: None,
             thinking_required: false,
             thinking_budget: None,
             input_token_price: 0.0,
@@ -75,6 +83,7 @@ impl std::fmt::Debug for ModelInfo {
             .field("supports_streaming", &self.supports_streaming)
             .field("supports_thinking", &self.supports_thinking)
             .field("thinking_enabled", &self.thinking_enabled)
+            .field("max_reasoning_effort", &self.max_reasoning_effort)
             .field("thinking_required", &self.thinking_required)
             .field("thinking_budget", &self.thinking_budget)
             .field("input_token_price", &self.input_token_price)
@@ -100,6 +109,7 @@ impl PartialEq for ModelInfo {
             && self.supports_streaming == other.supports_streaming
             && self.supports_thinking == other.supports_thinking
             && self.thinking_enabled == other.thinking_enabled
+            && self.max_reasoning_effort == other.max_reasoning_effort
             && self.thinking_required == other.thinking_required
             && self.thinking_budget == other.thinking_budget
             && self.input_token_price == other.input_token_price
@@ -136,6 +146,7 @@ pub struct ModelInfoBuilder {
     supports_streaming: bool,
     supports_thinking: bool,
     thinking_enabled: bool,
+    max_reasoning_effort: Option<agentik_types::ReasoningEffort>,
     thinking_required: bool,
     thinking_budget: Option<u32>,
     input_token_price: f64,
@@ -154,6 +165,7 @@ impl ModelInfoBuilder {
             supports_streaming: false,
             supports_thinking: false,
             thinking_enabled: false,
+            max_reasoning_effort: None,
             thinking_required: false,
             thinking_budget: None,
             input_token_price: 0.0,
@@ -190,6 +202,12 @@ impl ModelInfoBuilder {
         self
     }
 
+    /// Set the strongest reasoning effort accepted by this model preset.
+    pub fn max_reasoning_effort(mut self, effort: agentik_types::ReasoningEffort) -> Self {
+        self.max_reasoning_effort = Some(effort);
+        self
+    }
+
     /// Mark thinking as required. This overrides a caller-side disable and
     /// keeps the provider-compatible enabled request shape.
     pub fn thinking_required(mut self) -> Self {
@@ -220,6 +238,7 @@ impl ModelInfoBuilder {
             supports_streaming: self.supports_streaming,
             supports_thinking: self.supports_thinking,
             thinking_enabled: self.thinking_enabled,
+            max_reasoning_effort: self.max_reasoning_effort,
             thinking_required: self.thinking_required,
             thinking_budget: self.thinking_budget,
             input_token_price: self.input_token_price,

@@ -117,11 +117,13 @@ mod tests {
     fn strips_max_output_tokens_for_chatgpt_backend() {
         let wire = ChatgptResponsesWire;
         let params = MessageCreateBuilder::new("gpt-6-astra", 128_000)
+            .reasoning_effort(crate::types::ReasoningEffort::Max)
             .user("hi")
             .build();
         let req = wire.encode_request(&params, false).unwrap();
         let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap();
         assert!(body.get("max_output_tokens").is_none(), "body: {body}");
+        assert_eq!(body["reasoning"]["effort"], "max");
         assert_eq!(body["input"][0]["content"][0]["text"], "hi");
     }
 }

@@ -255,7 +255,9 @@ fn inject_thinking(builder: MessageCreateBuilder, model_info: &ModelInfo) -> Mes
     let effort = if model_info.thinking_required && !model_info.thinking_enabled {
         agentik_types::ReasoningEffort::Low
     } else {
-        agentik_types::ReasoningEffort::Max
+        model_info
+            .max_reasoning_effort
+            .unwrap_or(agentik_types::ReasoningEffort::Max)
     };
     // GLM-5.3 accepts the enabled thinking type but does not document a token
     // budget. Preserve output capacity and send only the supported fields.
@@ -280,6 +282,7 @@ fn inject_thinking(builder: MessageCreateBuilder, model_info: &ModelInfo) -> Mes
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::provider::openai::OpenaiProvider;
     use crate::provider::zai::{MODEL_GLM_5_3, ZaiProvider};
     use agentik_types::ReasoningConfig;
 
@@ -288,6 +291,28 @@ mod tests {
             .into_iter()
             .find(|model| model.model_name == MODEL_GLM_5_3)
             .expect("GLM-5.3 preset exists")
+    }
+
+    #[test]
+    fn openai_presets_enable_strongest_supported_reasoning() {
+        for model in OpenaiProvider::preset_models() {
+            assert!(model.supports_thinking, "{}", model.model_name);
+            assert!(model.thinking_enabled, "{}", model.model_name);
+
+            let params = inject_thinking(
+                MessageCreateBuilder::new(model.model_name.clone(), 1024),
+                &model,
+            )
+            .build();
+            let expected = model
+                .max_reasoning_effort
+                .unwrap_or(agentik_types::ReasoningEffort::Max);
+            assert!(
+                matches!(params.reasoning, Some(ReasoningConfig::Effort(effort)) if effort == expected),
+                "{} should default to its strongest reasoning effort",
+                model.model_name
+            );
+        }
     }
 
     #[test]
