@@ -137,4 +137,23 @@ mod tests {
         assert_eq!(ports.input_ports().len(), 2);
         assert_eq!(ports.output_ports().len(), 1);
     }
+
+    #[test]
+    fn string_source_factories_are_registered() {
+        let runtime_env = datafusion::prelude::SessionContext::new().runtime_env();
+        let registry =
+            build_default_registry(runtime_env, None, Arc::new(DataBundleCatalog::new()));
+
+        for kind in [
+            "source_string_id_map",
+            "source_string_network",
+            "source_string_enrichment",
+            "source_string_ppi_enrichment",
+        ] {
+            let ports = registry
+                .get_node_ports(kind)
+                .unwrap_or_else(|error| panic!("{kind} must be registered: {error}"));
+            assert_eq!(ports.output_ports().len(), 1);
+        }
+    }
 }

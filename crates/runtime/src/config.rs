@@ -206,6 +206,7 @@ pub struct RuntimeConfig {
     /// Whether to enable GWAS Catalog tools.
     #[serde(default = "default_true")]
     pub enable_gwascatalog: bool,
+
     /// Whether to enable ChEMBL tools.
     #[serde(default = "default_true")]
     pub enable_chembl: bool,
@@ -213,6 +214,10 @@ pub struct RuntimeConfig {
     /// Whether to enable RCSB PDB structure tools.
     #[serde(default = "default_true")]
     pub enable_rcsb: bool,
+
+    /// Whether to enable STRING protein-association tools.
+    #[serde(default = "default_true")]
+    pub enable_string: bool,
     /// Inject persistent memory and expose memory read/search tools.
     #[serde(default = "default_true")]
     pub use_memory: bool,
@@ -351,6 +356,7 @@ impl RuntimeConfig {
             enable_gwascatalog: resolve_flag(base, |b| b.enable_gwascatalog, true),
             enable_chembl: resolve_flag(base, |b| b.enable_chembl, true),
             enable_rcsb: resolve_flag(base, |b| b.enable_rcsb, true),
+            enable_string: resolve_flag(base, |b| b.enable_string, true),
             use_memory: resolve_env_flag(base.and_then(|b| b.use_memory), ENV_USE_MEMORY)
                 .unwrap_or(true),
             generate_memory: resolve_env_flag(
@@ -432,6 +438,15 @@ deposition dates, and primary citation.\n\
 genes, and polymer copy count.\n\
 - Use `rcsb_structure_preview` for a bounded mmCIF/PDB/FASTA preview. For complete \
 structure files or downstream computation, prefer the `source_rcsb_*` DAG nodes.";
+
+const PROMPT_STRING: &str = "\n\
+### Protein Association (STRING)\n\
+- Resolve ambiguous genes or proteins with `string_resolve_identifiers` before querying networks.\n\
+- Use `string_network_summary` for compact interaction, PPI-enrichment, and functional-enrichment \
+  evidence; require at least two proteins so enrichment is not computed on an auto-expanded \
+  one-protein neighborhood.\n\
+- Use `string_network_image` only when the user needs visual preview. For pipeline calculations, \
+  prefer the `source_string_*` DAG nodes.";
 
 const PROMPT_DAG_ENGINE: &str = "\n\
 ### Data Pipeline (DAG Engine)\n\
@@ -561,6 +576,7 @@ pub trait PromptCapabilities {
     fn enable_gwascatalog(&self) -> bool;
     fn enable_chembl(&self) -> bool;
     fn enable_rcsb(&self) -> bool;
+    fn enable_string(&self) -> bool;
     fn enable_dag_history(&self) -> bool;
 }
 
@@ -587,6 +603,9 @@ pub fn build_system_prompt<C: PromptCapabilities>(caps: &C) -> String {
     }
     if caps.enable_rcsb() {
         s.push_str(PROMPT_RCSB);
+    }
+    if caps.enable_string() {
+        s.push_str(PROMPT_STRING);
     }
 
     // DAG engine, SQL conventions, and general sections are always included —
@@ -629,6 +648,9 @@ pub fn default_system_prompt() -> String {
         fn enable_rcsb(&self) -> bool {
             true
         }
+        fn enable_string(&self) -> bool {
+            true
+        }
         fn enable_dag_history(&self) -> bool {
             true
         }
@@ -655,6 +677,9 @@ impl PromptCapabilities for RuntimeConfig {
     fn enable_rcsb(&self) -> bool {
         self.enable_rcsb
     }
+    fn enable_string(&self) -> bool {
+        self.enable_string
+    }
     fn enable_dag_history(&self) -> bool {
         self.enable_dag_history
     }
@@ -674,7 +699,7 @@ impl RuntimeConfig {
             "RuntimeConfig {{ name: {:?}, data_dir: {}, state_dir: {}, \
              dag_history_db: {}, bib_db: {}, app_db: {}, \
              dag_history: {}, bib: {}, opengwas: {}, \
-             opentargets: {}, gwascatalog: {}, chembl: {}, rcsb: {} }}",
+             opentargets: {}, gwascatalog: {}, chembl: {}, rcsb: {}, string: {} }}",
             self.name,
             self.data_dir.display(),
             self.state_dir.display(),
@@ -688,6 +713,7 @@ impl RuntimeConfig {
             self.enable_gwascatalog,
             self.enable_chembl,
             self.enable_rcsb,
+            self.enable_string,
         )
     }
 }
@@ -725,6 +751,7 @@ pub struct RuntimeConfigBuilder {
     pub(crate) enable_chembl: Option<bool>,
     #[serde(default)]
     pub(crate) enable_rcsb: Option<bool>,
+    pub(crate) enable_string: Option<bool>,
     pub(crate) use_memory: Option<bool>,
     pub(crate) generate_memory: Option<bool>,
     pub(crate) enable_kms: Option<bool>,
@@ -857,6 +884,12 @@ impl RuntimeConfigBuilder {
         self
     }
 
+    /// Enable or disable STRING protein-association tools.
+    pub fn enable_string(mut self, enabled: bool) -> Self {
+        self.enable_string = Some(enabled);
+        self
+    }
+
     /// Enable or disable memory read/injection.
     pub fn use_memory(mut self, enabled: bool) -> Self {
         self.use_memory = Some(enabled);
@@ -984,6 +1017,7 @@ mod tests {
         assert!(cfg.enable_gwascatalog);
         assert!(cfg.enable_chembl);
         assert!(cfg.enable_rcsb);
+        assert!(cfg.enable_string);
         assert!(cfg.use_memory);
         assert!(cfg.generate_memory);
         assert!(!cfg.enable_kms);
@@ -1037,6 +1071,7 @@ mod tests {
         assert!(cfg.enable_gwascatalog);
         assert!(cfg.enable_chembl);
         assert!(!cfg.enable_rcsb);
+        assert!(cfg.enable_string);
         assert!(!cfg.use_memory);
         assert!(cfg.generate_memory);
         assert!(cfg.enable_kms);
@@ -1052,6 +1087,18 @@ mod tests {
             .system_prompt(Some("short".to_string()))
             .build();
         assert_eq!(cfg.system_prompt_or_default(), "short");
+
+        let cfg = RuntimeConfig::builder().build();
+        assert!(
+            cfg.system_prompt_or_default()
+                .contains("Protein Association (STRING)")
+        );
+
+        let cfg = RuntimeConfig::builder().enable_string(false).build();
+        assert!(
+            !cfg.system_prompt_or_default()
+                .contains("Protein Association (STRING)")
+        );
     }
 
     #[test]
@@ -1064,6 +1111,7 @@ mod tests {
         assert!(prompt.contains("Open Targets Platform"));
         assert!(prompt.contains("GWAS Catalog (EBI)"));
         assert!(prompt.contains("Structural Biology (RCSB PDB)"));
+        assert!(prompt.contains("Protein Association (STRING)"));
         assert!(prompt.contains("DAG Version Control"));
         // Minimal config — no external service tools.
         let cfg = RuntimeConfig::builder()
@@ -1071,6 +1119,7 @@ mod tests {
             .enable_opengwas(false)
             .enable_opentargets(false)
             .enable_gwascatalog(false)
+            .enable_string(false)
             .enable_chembl(false)
             .enable_rcsb(false)
             .enable_dag_history(false)
@@ -1082,6 +1131,7 @@ mod tests {
         assert!(!prompt.contains("GWAS Catalog (EBI)"));
         assert!(!prompt.contains("Drug & Bioactivity Data (ChEMBL)"));
         assert!(!prompt.contains("Structural Biology (RCSB PDB)"));
+        assert!(!prompt.contains("Protein Association (STRING)"));
         assert!(!prompt.contains("DAG Version Control"));
         // These are always present:
         assert!(prompt.contains("Core Competencies"));

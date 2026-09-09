@@ -197,6 +197,11 @@ impl NetworkQuery {
         self
     }
 
+    pub fn species_opt(mut self, species: Option<String>) -> Self {
+        self.species = species;
+        self
+    }
+
     pub fn required_score(mut self, score: u16) -> Self {
         self.required_score = Some(score);
         self
@@ -245,6 +250,11 @@ impl StringIdQuery {
 
     pub fn species(mut self, species: impl Into<String>) -> Self {
         self.species = Some(species.into());
+        self
+    }
+
+    pub fn species_opt(mut self, species: Option<String>) -> Self {
+        self.species = species;
         self
     }
 
@@ -319,6 +329,11 @@ impl EnrichmentQuery {
 
     pub fn species(mut self, species: impl Into<String>) -> Self {
         self.species = Some(species.into());
+        self
+    }
+
+    pub fn species_opt(mut self, species: Option<String>) -> Self {
+        self.species = species;
         self
     }
 

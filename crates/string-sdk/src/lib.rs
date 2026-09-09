@@ -12,7 +12,9 @@
 pub mod client;
 pub mod error;
 pub mod format;
+pub mod nodes;
 pub mod request;
+pub mod tools;
 pub mod types;
 
 pub use client::{DEFAULT_STRING_ENDPOINT, Image, StringDbClient, StringDbClientBuilder};
@@ -21,4 +23,5 @@ pub use request::{
     AnnotationQuery, EnrichmentQuery, HomologyQuery, ImageFormat, InteractionPartnerQuery,
     NetworkFlavor, NetworkImageQuery, NetworkQuery, NetworkType, OutputFormat, StringIdQuery,
 };
+pub use tools::string_registrations;
 pub use types::*;

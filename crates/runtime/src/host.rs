@@ -125,6 +125,9 @@ impl PromptCapabilities for agentik_core::AgentProfile {
     fn enable_rcsb(&self) -> bool {
         self.enable_rcsb
     }
+    fn enable_string(&self) -> bool {
+        self.enable_string
+    }
     fn enable_dag_history(&self) -> bool {
         self.enable_dag_history
     }
@@ -489,6 +492,9 @@ impl SharedInfra {
 
         if profile.enable_rcsb {
             tools.extend(rcsb_tools_with_client(self.rcsb.clone()));
+        }
+        if profile.enable_string {
+            tools.extend(string_tools());
         }
 
         tools.extend(data_engine_tools::registrations(Arc::new(engine_client)));
@@ -2835,6 +2841,10 @@ fn capability_from_profile(
         tags.push("structural-biology".into());
         expertise.push("protein-structure-lookup".into());
         expertise.push("structural-biology-analysis".into());
+    }
+    if profile.enable_string {
+        tags.push("protein-networks".into());
+        expertise.push("string-analysis".into());
     }
     if profile.enable_dag_history {
         tags.push("pipeline".into());

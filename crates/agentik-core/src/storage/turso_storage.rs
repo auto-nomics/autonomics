@@ -2031,6 +2031,10 @@ fn row_to_profile(row: &turso::Row) -> Result<AgentProfile, StorageError> {
             .get("enable_rcsb")
             .and_then(|v| v.as_bool())
             .unwrap_or(true),
+        enable_string: config
+            .get("enable_string")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true),
         enable_dag_history: config
             .get("enable_dag_history")
             .and_then(|v| v.as_bool())
@@ -2058,6 +2062,7 @@ fn profile_to_config_json(profile: &AgentProfile) -> serde_json::Value {
         "enable_gwascatalog": profile.enable_gwascatalog,
         "enable_chembl": profile.enable_chembl,
         "enable_rcsb": profile.enable_rcsb,
+        "enable_string": profile.enable_string,
         "enable_dag_history": profile.enable_dag_history,
         "preferred_model": profile.preferred_model,
     })
@@ -2786,6 +2791,7 @@ mod tests {
             enable_gwascatalog: false,
             enable_chembl: true,
             enable_rcsb: true,
+            enable_string: true,
             enable_dag_history: false,
             preferred_model: Some("anthropic:claude-sonnet-5".into()),
             created_at: now_ms(),
@@ -3020,6 +3026,7 @@ mod tests {
         assert!(child.enable_opengwas);
         // Explicitly overridden.
         assert!(!child.enable_rcsb);
+        assert!(child.enable_string);
         // Overridden.
         assert!(child.enable_writing);
         assert!(!child.enable_dag_history);

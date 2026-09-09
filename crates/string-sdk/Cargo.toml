@@ -7,9 +7,19 @@ rust-version.workspace = true
 description = "Async Rust SDK for the STRING protein association API."
 
 [dependencies]
+agentik-core = { path = "../agentik-core" }
+agentik-proc = { path = "../agentik-proc" }
+agentik-sdk = { path = "../agentik-sdk" }
+arrow-array.workspace = true
+arrow-schema.workspace = true
+async-trait = { workspace = true }
+base64 = "0.22"
+dag-core = { path = "../dag-core" }
+datafusion.workspace = true
 reqwest = { version = "0.13", features = ["form", "json"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+schemars.workspace = true
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["time"] }
 

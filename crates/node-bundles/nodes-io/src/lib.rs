@@ -38,13 +38,20 @@ pub use rcsb::nodes::entry::{RcsbEntryNode, RcsbEntryNodeFactory};
 pub use rcsb::nodes::polymer_entity::{RcsbPolymerEntityNode, RcsbPolymerEntityNodeFactory};
 pub use rcsb::nodes::search::{RcsbSearchNode, RcsbSearchNodeFactory};
 pub use rcsb::nodes::structure::{RcsbStructureNode, RcsbStructureNodeFactory};
+pub use reactome::nodes::analysis::{ReactomeAnalysisNode, ReactomeAnalysisNodeFactory};
+pub use reactome::nodes::mapping::{ReactomeMappingNode, ReactomeMappingNodeFactory};
+pub use reactome::nodes::participants::{
+    ReactomeParticipantsNode, ReactomeParticipantsNodeFactory,
+};
+pub use reactome::nodes::pathways::{ReactomePathwaysNode, ReactomePathwaysNodeFactory};
+pub use string_sdk::nodes::{Plugin as StringPlugin, StringIdMapNode, StringIdMapNodeFactory};
+pub use string_sdk::nodes::{
+    StringEnrichmentNode, StringEnrichmentNodeFactory, StringNetworkNode, StringNetworkNodeFactory,
+};
+pub use string_sdk::nodes::{StringPpiEnrichmentNode, StringPpiEnrichmentNodeFactory};
 pub use uniprot::nodes::idmap::{UniprotIdmapNode, UniprotIdmapNodeFactory};
 pub use uniprot::nodes::search::{UniprotSearchNode, UniprotSearchNodeFactory};
 pub use uniprot::nodes::stream::{UniprotStreamNode, UniprotStreamNodeFactory};
-pub use reactome::nodes::analysis::{ReactomeAnalysisNode, ReactomeAnalysisNodeFactory};
-pub use reactome::nodes::mapping::{ReactomeMappingNode, ReactomeMappingNodeFactory};
-pub use reactome::nodes::participants::{ReactomeParticipantsNode, ReactomeParticipantsNodeFactory};
-pub use reactome::nodes::pathways::{ReactomePathwaysNode, ReactomePathwaysNodeFactory};
 
 use dag_core::{NodePlugin, NodeRegistry};
 use std::sync::Arc;
@@ -334,5 +341,6 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(ReactomeMappingNodeFactory {}));
         registry.register(Box::new(ReactomeAnalysisNodeFactory {}));
         registry.register(Box::new(ReactomeParticipantsNodeFactory {}));
+        registry.register_plugin(&StringPlugin);
     }
 }

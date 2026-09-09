@@ -40,6 +40,26 @@ let mappings = client
 For reproducible integrations, call `version`, then rebuild the client with
 the returned stable address instead of the floating default endpoint.
 
+## Agent and DAG integration
+
+`string_registrations` exposes five Agent tools:
+
+- `string_resolve_identifiers`
+- `string_network_interactions`
+- `string_functional_enrichment`
+- `string_network_summary`
+- `string_network_image`
+
+`nodes::Plugin` registers four DAG sources:
+
+- `source_string_id_map`
+- `source_string_network`
+- `source_string_enrichment`
+- `source_string_ppi_enrichment`
+
+The runtime `enable_string` capability controls tool registration; `nodes-io`
+registers the DAG plugin in the default data-engine registry.
+
 The client sends a polite caller identity and spaces public requests by one
 second by default. Disable pacing only for local tests or a transport that
 already enforces a stricter policy.
@@ -56,4 +76,10 @@ Run the small network smoke test explicitly with:
 
 ```bash
 cargo test -p string-sdk --test live -- --ignored
+```
+
+Run Agent-tool and DAG-node live E2E checks with:
+
+```bash
+cargo test -p string-sdk --test e2e -- --ignored
 ```

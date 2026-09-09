@@ -7177,6 +7177,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "string-sdk",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
@@ -9760,6 +9761,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "string-sdk",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
@@ -10649,7 +10651,17 @@ dependencies = [
 name = "string-sdk"
 version = "0.1.0"
 dependencies = [
+ "agentik-core",
+ "agentik-proc",
+ "agentik-sdk",
+ "arrow-array",
+ "arrow-schema",
+ "async-trait",
+ "base64 0.22.1",
+ "dag-core",
+ "datafusion",
  "reqwest",
+ "schemars",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
