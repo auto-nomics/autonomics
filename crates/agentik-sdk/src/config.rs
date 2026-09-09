@@ -71,10 +71,7 @@ impl ClientConfig {
     }
 
     /// Attach the OAuth token hot-swap slot (ChatGPT subscription login).
-    pub fn with_oauth_token_slot(
-        mut self,
-        slot: Option<Arc<arc_swap::ArcSwap<String>>>,
-    ) -> Self {
+    pub fn with_oauth_token_slot(mut self, slot: Option<Arc<arc_swap::ArcSwap<String>>>) -> Self {
         self.oauth_token_slot = slot;
         self
     }

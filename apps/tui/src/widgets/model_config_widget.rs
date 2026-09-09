@@ -142,9 +142,7 @@ pub enum ProviderPanelState {
     },
     /// ChatGPT 订阅登录面板（openai provider 专用，替代凭据编辑器：
     /// 订阅模式没有 API key 输入）。
-    Chatgpt {
-        provider_name: String,
-    },
+    Chatgpt { provider_name: String },
 }
 
 /// In-memory state for the model config widget.
@@ -260,7 +258,10 @@ impl ModelConfigState {
                 ConfigField::ApiKey => api_key.insert_str(text),
                 ConfigField::BaseUrl => base_url.insert_str(text),
             }
-        } else if matches!(self.provider_panel_state, ProviderPanelState::Chatgpt { .. }) {
+        } else if matches!(
+            self.provider_panel_state,
+            ProviderPanelState::Chatgpt { .. }
+        ) {
             // 登录面板无可输入字段；粘贴落到搜索框反而干扰，直接忽略。
         } else {
             self.search_textarea.insert_str(text);
@@ -346,7 +347,10 @@ impl ModelConfigState {
                     consumed(ConfigCommand::None)
                 }
                 // L 开始登录 / R 重新登录（已登录时同一动作）。
-                KeyCode::Char('l') | KeyCode::Char('L') | KeyCode::Char('r') | KeyCode::Char('R') => {
+                KeyCode::Char('l')
+                | KeyCode::Char('L')
+                | KeyCode::Char('r')
+                | KeyCode::Char('R') => {
                     self.provider_panel_state = ProviderPanelState::Preview;
                     consumed(ConfigCommand::StartChatgptLogin { provider_name })
                 }
@@ -945,9 +949,7 @@ fn render_chatgpt_panel(
             Span::raw(" "),
             Span::styled(provider_name, Style::default().fg(Color::White)),
         ]))
-        .title_bottom(
-            Line::from("[L] 登录/重新登录  [Esc] 关闭").alignment(Alignment::Center),
-        );
+        .title_bottom(Line::from("[L] 登录/重新登录  [Esc] 关闭").alignment(Alignment::Center));
     let inner = block.inner(area);
     block.render(area, buf);
 
@@ -975,10 +977,7 @@ fn render_chatgpt_panel(
 
     match provider.and_then(|p| p.chatgpt.as_ref()) {
         Some(blob) => {
-            lines.push(Line::from(vec![
-                label("状态"),
-                green("已登录".to_string()),
-            ]));
+            lines.push(Line::from(vec![label("状态"), green("已登录".to_string())]));
             lines.push(Line::from(vec![
                 label("账号"),
                 val(blob.email.clone().unwrap_or_else(|| "email unknown".into())),
@@ -1001,7 +1000,9 @@ fn render_chatgpt_panel(
                 dim(blob.last_refresh.format("%Y-%m-%d %H:%M UTC").to_string()),
             ]));
             lines.push(Line::raw(""));
-            lines.push(Line::from(dim("按 R/L 重新登录（切换账号或修复失效凭据）".to_string())));
+            lines.push(Line::from(dim(
+                "按 R/L 重新登录（切换账号或修复失效凭据）".to_string()
+            )));
         }
         None => {
             lines.push(Line::from(vec![
@@ -1229,11 +1230,9 @@ pub fn build_catalog(
             // openai 行的 api_key 是 token blob：解析成功记录登录摘要
             // （脱敏渲染）；原始 JSON 不进任何编辑器。
             let chatgpt = if provider_type == ProviderType::Openai {
-                api_key
-                    .as_deref()
-                    .and_then(|k| {
-                        agentik_sdk::provider::openai::oauth::TokenBlob::from_json(k).ok()
-                    })
+                api_key.as_deref().and_then(|k| {
+                    agentik_sdk::provider::openai::oauth::TokenBlob::from_json(k).ok()
+                })
             } else {
                 None
             };
@@ -1470,14 +1469,14 @@ mod tests {
 
         // 垃圾 api_key（非 blob）：configured 仍可为真，但无登录摘要。
         let state = build_catalog(
-            &[("openai".to_string(), "garbage-key".to_string(), String::new())],
+            &[(
+                "openai".to_string(),
+                "garbage-key".to_string(),
+                String::new(),
+            )],
             &[],
         );
-        let p = state
-            .providers
-            .iter()
-            .find(|p| p.name == "openai")
-            .unwrap();
+        let p = state.providers.iter().find(|p| p.name == "openai").unwrap();
         assert!(p.configured);
         assert!(p.chatgpt.is_none());
     }

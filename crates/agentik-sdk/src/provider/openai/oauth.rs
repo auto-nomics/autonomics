@@ -48,7 +48,10 @@ pub struct Pkce {
 pub fn generate_pkce() -> Result<Pkce, String> {
     let verifier = random_base64url(32)?;
     let challenge = pkce_challenge(&verifier);
-    Ok(Pkce { verifier, challenge })
+    Ok(Pkce {
+        verifier,
+        challenge,
+    })
 }
 
 /// 由 verifier 计算 S256 challenge（纯函数，便于用 RFC 7636 向量测试）。
@@ -164,7 +167,9 @@ impl TokenBlob {
     /// access_token（JWT）的 `exp` 剩余有效期。已过期或无 `exp` → `None`。
     #[must_use]
     pub fn access_token_expires_in(&self) -> Option<Duration> {
-        (self.access_token_exp()? - chrono::Utc::now()).to_std().ok()
+        (self.access_token_exp()? - chrono::Utc::now())
+            .to_std()
+            .ok()
     }
 
     /// access token 的 `exp` 时间点。非 JWT / 无 `exp` → `None`。
@@ -185,7 +190,8 @@ impl TokenBlob {
     /// 是否应主动刷新：距上次刷新超过 8 天，或将在 24h 内过期。
     #[must_use]
     pub fn should_refresh(&self) -> bool {
-        let stale = chrono::Utc::now() - self.last_refresh > chrono::Duration::days(REFRESH_INTERVAL_DAYS);
+        let stale =
+            chrono::Utc::now() - self.last_refresh > chrono::Duration::days(REFRESH_INTERVAL_DAYS);
         let expiring = self
             .access_token_expires_in()
             .is_some_and(|d| d < REFRESH_AHEAD);
@@ -309,11 +315,7 @@ pub fn merge_refresh(blob: &TokenBlob, resp: RefreshResponse) -> TokenBlob {
     {
         out.email = claims.email.or(out.email);
         out.plan_type = claims.auth.chatgpt_plan_type.or(out.plan_type);
-        if let Some(acc) = claims
-            .auth
-            .chatgpt_account_id
-            .filter(|acc| !acc.is_empty())
-        {
+        if let Some(acc) = claims.auth.chatgpt_account_id.filter(|acc| !acc.is_empty()) {
             out.account_id = acc;
         }
     }
@@ -401,8 +403,7 @@ fn callback_loop(
             // state 不符（陈旧标签页/串扰回调）：拒绝但不退出，继续等。
             if params.get("state").map(String::as_str) != Some(state.as_str()) {
                 let _ = request.respond(
-                    tiny_http::Response::from_string("state mismatch")
-                        .with_status_code(400),
+                    tiny_http::Response::from_string("state mismatch").with_status_code(400),
                 );
                 continue;
             }
@@ -425,7 +426,8 @@ fn callback_loop(
             let _ = request.respond(tiny_http::Response::from_string("已取消登录。"));
             break Err("登录已取消".to_string());
         } else {
-            let _ = request.respond(tiny_http::Response::from_string("Not Found").with_status_code(404));
+            let _ = request
+                .respond(tiny_http::Response::from_string("Not Found").with_status_code(404));
         }
     };
     let _ = tx.send(outcome);
@@ -499,9 +501,7 @@ impl LoginWaiter {
                     send_cancel(cancel_port);
                     "登录超时（10 分钟）未完成授权".to_string()
                 }
-                std::sync::mpsc::RecvTimeoutError::Disconnected => {
-                    "回调服务器异常退出".to_string()
-                }
+                std::sync::mpsc::RecvTimeoutError::Disconnected => "回调服务器异常退出".to_string(),
             })??;
         let exchange = exchange_code(&issuer, port, &code, &pkce.verifier).await?;
         blob_from_exchange(exchange)
@@ -587,8 +587,7 @@ mod tests {
 
     fn synthetic_jwt(payload: &serde_json::Value) -> String {
         let enc = |v: &serde_json::Value| {
-            base64::engine::general_purpose::URL_SAFE_NO_PAD
-                .encode(serde_json::to_vec(v).unwrap())
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(v).unwrap())
         };
         let header = serde_json::json!({"alg": "none", "typ": "JWT"});
         format!("{}.{}.sig", enc(&header), enc(payload))
@@ -702,12 +701,14 @@ mod tests {
         assert_eq!(blob.email.as_deref(), Some("u@x.y"));
 
         let without = synthetic_jwt(&serde_json::json!({"email": "u@x.y"}));
-        assert!(blob_from_exchange(TokenExchange {
-            id_token: without,
-            access_token: "acc".into(),
-            refresh_token: "ref".into(),
-        })
-        .is_err());
+        assert!(
+            blob_from_exchange(TokenExchange {
+                id_token: without,
+                access_token: "acc".into(),
+                refresh_token: "ref".into(),
+            })
+            .is_err()
+        );
     }
 
     #[test]
@@ -721,10 +722,12 @@ mod tests {
         std::thread::spawn(move || callback_loop(server, "expected-state".into(), tx));
 
         let http_get = |port: u16, path: &str| -> u16 {
-            let mut stream =
-                TcpStream::connect(format!("127.0.0.1:{port}")).expect("connect");
+            let mut stream = TcpStream::connect(format!("127.0.0.1:{port}")).expect("connect");
             stream
-                .write_all(format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").as_bytes())
+                .write_all(
+                    format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+                        .as_bytes(),
+                )
                 .unwrap();
             let mut buf = String::new();
             stream.read_to_string(&mut buf).unwrap();
@@ -756,7 +759,9 @@ mod tests {
         assert_eq!(http_get(port, "/cancel"), 200);
         // 取消 → Err("登录已取消")。
         assert_eq!(
-            rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap_err(),
+            rx.recv_timeout(Duration::from_secs(5))
+                .unwrap()
+                .unwrap_err(),
             "登录已取消"
         );
 
@@ -765,11 +770,18 @@ mod tests {
         let port = server.server_addr().to_ip().unwrap().port();
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || callback_loop(server, "expected-state".into(), tx));
-        assert_eq!(http_get(port, "/auth/callback?error=access_denied&state=expected-state"), 400);
-        assert!(rx
-            .recv_timeout(Duration::from_secs(5))
-            .unwrap()
-            .unwrap_err()
-            .contains("access_denied"));
+        assert_eq!(
+            http_get(
+                port,
+                "/auth/callback?error=access_denied&state=expected-state"
+            ),
+            400
+        );
+        assert!(
+            rx.recv_timeout(Duration::from_secs(5))
+                .unwrap()
+                .unwrap_err()
+                .contains("access_denied")
+        );
     }
 }

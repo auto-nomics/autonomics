@@ -27,6 +27,7 @@ members = [
   "apps/tui",
   "crates/opengwas",
   "crates/eutils",
+  "crates/chembl",
   "crates/opentargets",
   "crates/runtime",
   "crates/vfs",

@@ -317,8 +317,9 @@ impl App {
             base_url.to_string()
         };
         // Resolve the default auth method from the registry for this provider.
-        let auth_str = agentik_sdk::provider::registry::default_auth_method(&provider.provider_type)
-            .storage_tag();
+        let auth_str =
+            agentik_sdk::provider::registry::default_auth_method(&provider.provider_type)
+                .storage_tag();
 
         // Check if a row for this provider name already exists.
         let existing: Option<i64> = self
@@ -443,13 +444,9 @@ impl App {
         model: Arc<agentik_sdk::model::Model>,
     ) -> Arc<agentik_sdk::model::Model> {
         let tx = self.app_event_tx.clone();
-        Arc::new(
-            (*model)
-                .clone()
-                .with_token_refreshed(move |blob_json| {
-                    tx.send(crate::app_event::AppEvent::ChatgptTokenRefreshed(blob_json));
-                }),
-        )
+        Arc::new((*model).clone().with_token_refreshed(move |blob_json| {
+            tx.send(crate::app_event::AppEvent::ChatgptTokenRefreshed(blob_json));
+        }))
     }
 
     /// 启动收尾：openai 默认模型补挂 token 刷新回调（App::new 构建模型
@@ -483,7 +480,9 @@ impl App {
                         Ok(json) => {
                             tx.send(crate::app_event::AppEvent::ChatgptTokenRefreshed(json));
                         }
-                        Err(e) => tracing::warn!(error = %e, "chatgpt ensure-fresh serialize failed"),
+                        Err(e) => {
+                            tracing::warn!(error = %e, "chatgpt ensure-fresh serialize failed")
+                        }
                     },
                     Err(e) => {
                         // 非致命：401 自愈与下次启动会再试。

@@ -439,29 +439,27 @@ impl OpenAiChatWire {
         // MessageDelta 排进 pending，SSE 泵会在 MessageStop 之前发出——
         // 运行时的 UsageUpdate 与流式装配出的最终 message 的 usage 都
         // 依赖它（此前此处直接丢弃 usage，OpenAI 模型全程记 0）。
-        state.pending_events.push_back(MessageStreamEvent::MessageDelta {
-            delta: MessageDelta {
-                stop_reason: state.stop_reason.clone(),
-                stop_sequence: None,
-            },
-            usage: MessageDeltaUsage {
-                output_tokens: state
-                    .usage
-                    .as_ref()
-                    .map(|u| u.output_tokens)
-                    .unwrap_or(0),
-                input_tokens: state.usage.as_ref().map(|u| u.input_tokens),
-                cache_creation_input_tokens: state
-                    .usage
-                    .as_ref()
-                    .and_then(|u| u.cache_creation_input_tokens),
-                cache_read_input_tokens: state
-                    .usage
-                    .as_ref()
-                    .and_then(|u| u.cache_read_input_tokens),
-                server_tool_use: None,
-            },
-        });
+        state
+            .pending_events
+            .push_back(MessageStreamEvent::MessageDelta {
+                delta: MessageDelta {
+                    stop_reason: state.stop_reason.clone(),
+                    stop_sequence: None,
+                },
+                usage: MessageDeltaUsage {
+                    output_tokens: state.usage.as_ref().map(|u| u.output_tokens).unwrap_or(0),
+                    input_tokens: state.usage.as_ref().map(|u| u.input_tokens),
+                    cache_creation_input_tokens: state
+                        .usage
+                        .as_ref()
+                        .and_then(|u| u.cache_creation_input_tokens),
+                    cache_read_input_tokens: state
+                        .usage
+                        .as_ref()
+                        .and_then(|u| u.cache_read_input_tokens),
+                    server_tool_use: None,
+                },
+            });
 
         // Final: MessageStop terminates the consumer loop.
         Some(MessageStreamEvent::MessageStop)

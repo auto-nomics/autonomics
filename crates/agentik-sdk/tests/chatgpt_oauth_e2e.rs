@@ -150,7 +150,8 @@ fn read_request(stream: &mut TcpStream) -> Option<Recorded> {
         }
         buf.extend_from_slice(&chunk[..n]);
     }
-    let body = String::from_utf8_lossy(&buf[header_end + 4..header_end + 4 + content_length]).to_string();
+    let body =
+        String::from_utf8_lossy(&buf[header_end + 4..header_end + 4 + content_length]).to_string();
     Some(Recorded {
         method,
         path,
@@ -233,7 +234,11 @@ fn spawn_issuer() -> IssuerMock {
                         ),
                     )
                 }
-                _ => (400, "application/json".into(), r#"{"error":"unsupported_grant_type"}"#.into()),
+                _ => (
+                    400,
+                    "application/json".into(),
+                    r#"{"error":"unsupported_grant_type"}"#.into(),
+                ),
             }
         }),
     );
@@ -336,11 +341,16 @@ fn text_of(msg: &Message) -> String {
 /// `send_cancel` 同款裸 TcpStream 手法）。
 fn browser_callback(port: u16, code: &str, state: &str) {
     let mut stream = TcpStream::connect(format!("127.0.0.1:{port}")).expect("connect callback");
-    let req = format!("GET /auth/callback?code={code}&state={state} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    let req = format!(
+        "GET /auth/callback?code={code}&state={state} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+    );
     stream.write_all(req.as_bytes()).unwrap();
     let mut buf = String::new();
     let _ = stream.read_to_string(&mut buf);
-    assert!(buf.starts_with("HTTP/1.1 200"), "callback must accept: {buf}");
+    assert!(
+        buf.starts_with("HTTP/1.1 200"),
+        "callback must accept: {buf}"
+    );
 }
 
 // ─── 测试 1：登录全流程 → blob ──────────────────────────────────────────────
@@ -348,7 +358,8 @@ fn browser_callback(port: u16, code: &str, state: &str) {
 #[tokio::test]
 async fn login_flow_produces_blob_from_mock_issuer() {
     let issuer = spawn_issuer();
-    let (authorize_url, waiter) = login_flow_with_issuer(&issuer.server.url).expect("login flow starts");
+    let (authorize_url, waiter) =
+        login_flow_with_issuer(&issuer.server.url).expect("login flow starts");
 
     // 授权 URL 形态：指向 mock issuer，state 可解析。
     let parsed = url::Url::parse(&authorize_url).unwrap();
@@ -383,7 +394,10 @@ async fn login_flow_produces_blob_from_mock_issuer() {
     let ex = &exchange[0];
     assert_eq!(form_get(&ex.body, "grant_type"), "authorization_code");
     assert_eq!(form_get(&ex.body, "code"), "e2e-auth-code");
-    assert_eq!(form_get(&ex.body, "client_id"), "app_EMoamEEZ73f0CkXaXp7hrann");
+    assert_eq!(
+        form_get(&ex.body, "client_id"),
+        "app_EMoamEEZ73f0CkXaXp7hrann"
+    );
     let verifier = form_get(&ex.body, "code_verifier");
     assert!(!verifier.is_empty());
     // challenge 与 verifier 对应（S256）。
@@ -472,11 +486,18 @@ fn assert_heal_common(
     // 后端先见 expired（401），再见 fresh（成功）。
     let reqs = backend.requests(BACKEND_PATH);
     assert_eq!(reqs.len(), 2);
-    assert_eq!(reqs[0].header("authorization"), Some("Bearer expired-access"));
+    assert_eq!(
+        reqs[0].header("authorization"),
+        Some("Bearer expired-access")
+    );
     assert_eq!(reqs[1].header("authorization"), Some("Bearer fresh-access"));
 
     // 回调上报了新 blob JSON（含轮转后的 refresh_token）。
-    let json = callback_json.lock().unwrap().clone().expect("callback fired");
+    let json = callback_json
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("callback fired");
     let reported = TokenBlob::from_json(&json).unwrap();
     assert_eq!(reported.access_token, FRESH_ACCESS);
     assert_eq!(reported.refresh_token, "rotated-refresh-2");
@@ -504,11 +525,7 @@ async fn request_heals_401_via_refresh_and_slot() {
         build_wire(WireProtocolKind::ChatgptResponses).unwrap(),
     )
     .unwrap();
-    let model = Model::with_client_and_oauth(
-        model_info(),
-        AnthropicApiClient::new(anthropic),
-        ctx,
-    );
+    let model = Model::with_client_and_oauth(model_info(), AnthropicApiClient::new(anthropic), ctx);
 
     let resp = model
         .request(vec![user_msg("heal-me")], &[])
@@ -540,11 +557,7 @@ async fn stream_heals_401_via_refresh_and_slot() {
         build_wire(WireProtocolKind::ChatgptResponses).unwrap(),
     )
     .unwrap();
-    let model = Model::with_client_and_oauth(
-        model_info(),
-        AnthropicApiClient::new(anthropic),
-        ctx,
-    );
+    let model = Model::with_client_and_oauth(model_info(), AnthropicApiClient::new(anthropic), ctx);
 
     let final_msg = model
         .request_stream(vec![user_msg("heal-me-streaming")], &[])

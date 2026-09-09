@@ -149,8 +149,12 @@ impl App {
                         } else {
                             "授权链接已复制到剪贴板，请粘贴到浏览器打开并完成授权"
                         };
-                        tracing::info!("chatgpt login: authorize url dispatched (browser={opened})");
-                        self.state.toasts.info("ChatGPT 登录", Some(hint.to_string()));
+                        tracing::info!(
+                            "chatgpt login: authorize url dispatched (browser={opened})"
+                        );
+                        self.state
+                            .toasts
+                            .info("ChatGPT 登录", Some(hint.to_string()));
                     }
                     Err(e) => {
                         tracing::warn!(error = %e, "chatgpt login url clipboard copy failed");
