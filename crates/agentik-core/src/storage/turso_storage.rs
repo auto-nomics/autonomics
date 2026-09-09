@@ -2027,6 +2027,10 @@ fn row_to_profile(row: &turso::Row) -> Result<AgentProfile, StorageError> {
             .get("enable_chembl")
             .and_then(|v| v.as_bool())
             .unwrap_or(true),
+        enable_rcsb: config
+            .get("enable_rcsb")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true),
         enable_dag_history: config
             .get("enable_dag_history")
             .and_then(|v| v.as_bool())
@@ -2053,6 +2057,7 @@ fn profile_to_config_json(profile: &AgentProfile) -> serde_json::Value {
         "enable_opentargets": profile.enable_opentargets,
         "enable_gwascatalog": profile.enable_gwascatalog,
         "enable_chembl": profile.enable_chembl,
+        "enable_rcsb": profile.enable_rcsb,
         "enable_dag_history": profile.enable_dag_history,
         "preferred_model": profile.preferred_model,
     })
@@ -2780,6 +2785,7 @@ mod tests {
             enable_opentargets: true,
             enable_gwascatalog: false,
             enable_chembl: true,
+            enable_rcsb: true,
             enable_dag_history: false,
             preferred_model: Some("anthropic:claude-sonnet-5".into()),
             created_at: now_ms(),
@@ -2801,6 +2807,7 @@ mod tests {
         assert_eq!(fetched.system_prompt.as_deref(), Some("Custom prompt."));
         assert!(fetched.enable_bibliography);
         assert!(!fetched.enable_opengwas);
+        assert!(fetched.enable_rcsb);
         assert_eq!(
             fetched.preferred_model.as_deref(),
             Some("anthropic:claude-sonnet-5")
@@ -2877,7 +2884,7 @@ mod tests {
         assert!(seeded, "should seed on empty table");
 
         let profiles = store.list_profiles().await.unwrap();
-        assert_eq!(profiles.len(), 4, "should have 4 default profiles");
+        assert_eq!(profiles.len(), 5, "should have 5 default profiles");
         assert!(profiles.iter().any(|p| p.path == "researcher"));
         assert!(profiles.iter().any(|p| p.path == "literature"));
         assert!(profiles.iter().any(|p| p.path == "gwas-analysis"));
@@ -2887,7 +2894,7 @@ mod tests {
         assert!(!seeded_again, "should not seed when table has data");
 
         let profiles2 = store.list_profiles().await.unwrap();
-        assert_eq!(profiles2.len(), 4, "should still have 4 profiles");
+        assert_eq!(profiles2.len(), 5, "should still have 5 profiles");
     }
 
     #[tokio::test]
@@ -2908,8 +2915,8 @@ mod tests {
         assert!(changed, "migration should make a change");
 
         let profiles = store.list_profiles().await.unwrap();
-        // researcher (migrated from default) + literature + gwas-analysis + writer.
-        assert_eq!(profiles.len(), 4);
+        // researcher + literature + gwas-analysis + structural-biology + writer.
+        assert_eq!(profiles.len(), 5);
         assert!(
             profiles.iter().any(|p| p.path == "researcher"),
             "legacy 'default' should be renamed to 'researcher'"
@@ -2999,6 +3006,7 @@ mod tests {
             description: Some("Genomics specialist".into()),
             agent_identity: Some("You are a genomics expert.".into()),
             enable_writing: Some(true),
+            enable_rcsb: Some(false),
             enable_dag_history: Some(false),
             ..Default::default()
         };
@@ -3010,6 +3018,8 @@ mod tests {
         // Inherited.
         assert!(child.enable_bibliography);
         assert!(child.enable_opengwas);
+        // Explicitly overridden.
+        assert!(!child.enable_rcsb);
         // Overridden.
         assert!(child.enable_writing);
         assert!(!child.enable_dag_history);

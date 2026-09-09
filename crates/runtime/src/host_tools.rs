@@ -177,6 +177,8 @@ struct DeriveProfileInput {
     enable_opentargets: Option<bool>,
     enable_gwascatalog: Option<bool>,
     enable_chembl: Option<bool>,
+    #[desc = "Enable RCSB PDB search, summaries, polymer entities, and structure previews."]
+    enable_rcsb: Option<bool>,
     enable_dag_history: Option<bool>,
 }
 
@@ -202,6 +204,7 @@ impl ToolFunction for DeriveProfileTool {
             enable_opentargets: input.enable_opentargets,
             enable_gwascatalog: input.enable_gwascatalog,
             enable_chembl: input.enable_chembl,
+            enable_rcsb: input.enable_rcsb,
             enable_dag_history: input.enable_dag_history,
             ..Default::default()
         };

@@ -7170,6 +7170,7 @@ dependencies = [
  "openalex",
  "opentargets",
  "parquet",
+ "rcsb",
  "reactome",
  "schemars",
  "semantic-scholar",
@@ -9343,6 +9344,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "rcsb"
+version = "0.1.0"
+dependencies = [
+ "agentik-core",
+ "agentik-proc",
+ "agentik-sdk",
+ "arrow-array",
+ "arrow-schema",
+ "async-trait",
+ "dag-core",
+ "datafusion",
+ "reqwest",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+]
+
+[[package]]
 name = "rddensity"
 version = "0.1.0"
 dependencies = [
@@ -9733,6 +9756,7 @@ dependencies = [
  "kms-tools",
  "opengwas",
  "opentargets",
+ "rcsb",
  "schemars",
  "serde",
  "serde_json",

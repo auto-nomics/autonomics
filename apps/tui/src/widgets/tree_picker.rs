@@ -258,6 +258,7 @@ pub fn profile_preview_lines(
         ("opentargets", profile.enable_opentargets),
         ("gwascatalog", profile.enable_gwascatalog),
         ("chembl", profile.enable_chembl),
+        ("rcsb", profile.enable_rcsb),
         ("dag-history", profile.enable_dag_history),
     ] {
         lines.push(flag_line(name, enabled));

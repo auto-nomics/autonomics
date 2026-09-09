@@ -18,6 +18,7 @@ semantic-scholar = { path = "../../semantic-scholar" }
 crossref = { path = "../../crossref" }
 uniprot = { path = "../../uniprot" }
 reactome = { path = "../../reactome" }
+rcsb = { path = "../../rcsb" }
 mr = { path = "../../../bio_crates/mr" }
 arrow-array.workspace = true
 arrow.workspace = true

@@ -78,6 +78,7 @@ members = [
   "crates/uniprot",
   "crates/reactome",
   "crates/ensembl",
+  "crates/rcsb",
   "crates/grf-sys",
   "bio_crates/grf",
   "bio_crates/genomic_sem",

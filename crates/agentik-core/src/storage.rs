@@ -184,6 +184,7 @@ pub struct ProfileOverrides {
     pub enable_opentargets: Option<bool>,
     pub enable_gwascatalog: Option<bool>,
     pub enable_chembl: Option<bool>,
+    pub enable_rcsb: Option<bool>,
     pub enable_dag_history: Option<bool>,
 }
 
@@ -229,6 +230,8 @@ pub struct AgentProfile {
     pub enable_gwascatalog: bool,
     #[serde(default = "default_true")]
     pub enable_chembl: bool,
+    #[serde(default = "default_true")]
+    pub enable_rcsb: bool,
     pub enable_dag_history: bool,
 
     // ── Model preference ──
@@ -273,6 +276,7 @@ impl AgentProfile {
             enable_opentargets: true,
             enable_gwascatalog: true,
             enable_chembl: true,
+            enable_rcsb: true,
             enable_dag_history: true,
             preferred_model: None,
             created_at: now,
@@ -316,6 +320,7 @@ impl AgentProfile {
                 .enable_gwascatalog
                 .unwrap_or(self.enable_gwascatalog),
             enable_chembl: overrides.enable_chembl.unwrap_or(self.enable_chembl),
+            enable_rcsb: overrides.enable_rcsb.unwrap_or(self.enable_rcsb),
             enable_dag_history: overrides
                 .enable_dag_history
                 .unwrap_or(self.enable_dag_history),
@@ -345,6 +350,7 @@ impl AgentProfile {
                 enable_opentargets: true,
                 enable_gwascatalog: true,
                 enable_chembl: true,
+                enable_rcsb: true,
                 enable_dag_history: true,
                 preferred_model: None,
                 created_at: now,
@@ -365,6 +371,7 @@ impl AgentProfile {
                 enable_opentargets: true,
                 enable_gwascatalog: false,
                 enable_chembl: true,
+                enable_rcsb: false,
                 enable_dag_history: false,
                 preferred_model: None,
                 created_at: now,
@@ -385,6 +392,29 @@ impl AgentProfile {
                 enable_opentargets: true,
                 enable_gwascatalog: true,
                 enable_chembl: true,
+                enable_rcsb: false,
+                enable_dag_history: true,
+                preferred_model: None,
+                created_at: now,
+                updated_at: now,
+            },
+            AgentProfile {
+                id: Uuid::new_v4(),
+                path: "structural-biology".into(),
+                description: "Protein structure retrieval and analysis expert.".into(),
+                agent_identity: "You are a structural biology expert specializing in \
+                    protein structures, polymer entities, and RCSB PDB data. \
+                    Use RCSB tools and DAG source nodes to inspect structures \
+                    and prepare computational inputs."
+                    .into(),
+                system_prompt: None,
+                enable_bibliography: false,
+                enable_writing: false,
+                enable_opengwas: false,
+                enable_opentargets: false,
+                enable_gwascatalog: false,
+                enable_chembl: false,
+                enable_rcsb: true,
                 enable_dag_history: true,
                 preferred_model: None,
                 created_at: now,
@@ -418,6 +448,7 @@ impl AgentProfile {
                 enable_opentargets: false,
                 enable_gwascatalog: false,
                 enable_chembl: false,
+                enable_rcsb: false,
                 enable_dag_history: false,
                 preferred_model: None,
                 created_at: now,
@@ -427,12 +458,12 @@ impl AgentProfile {
     }
 }
 
-fn now_ms() -> i64 {
-    chrono::Utc::now().timestamp_millis()
-}
-
 fn default_true() -> bool {
     true
+}
+
+fn now_ms() -> i64 {
+    chrono::Utc::now().timestamp_millis()
 }
 
 // ═══════════════════════════════════════════════════════════════════════

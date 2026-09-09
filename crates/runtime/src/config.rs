@@ -209,6 +209,10 @@ pub struct RuntimeConfig {
     /// Whether to enable ChEMBL tools.
     #[serde(default = "default_true")]
     pub enable_chembl: bool,
+
+    /// Whether to enable RCSB PDB structure tools.
+    #[serde(default = "default_true")]
+    pub enable_rcsb: bool,
     /// Inject persistent memory and expose memory read/search tools.
     #[serde(default = "default_true")]
     pub use_memory: bool,
@@ -346,6 +350,7 @@ impl RuntimeConfig {
             enable_opentargets: resolve_flag(base, |b| b.enable_opentargets, true),
             enable_gwascatalog: resolve_flag(base, |b| b.enable_gwascatalog, true),
             enable_chembl: resolve_flag(base, |b| b.enable_chembl, true),
+            enable_rcsb: resolve_flag(base, |b| b.enable_rcsb, true),
             use_memory: resolve_env_flag(base.and_then(|b| b.use_memory), ENV_USE_MEMORY)
                 .unwrap_or(true),
             generate_memory: resolve_env_flag(
@@ -417,6 +422,16 @@ const PROMPT_CHEMBL: &str = "\n\
 - Use `chembl_mechanisms` and `chembl_indications` for mechanisms of action and drug \
   indications. In pipelines, use `source_chembl_activities` or \
   `source_chembl_molecules` to obtain typed tables for SQL and analysis nodes.";
+
+const PROMPT_RCSB: &str = "\
+### Structural Biology (RCSB PDB)\n\
+- Use `rcsb_search` to discover PDB entries by free text or an expert RCSB query.\n\
+- Use `rcsb_entry` to summarize an entry's experiment, resolution, composition, \
+deposition dates, and primary citation.\n\
+- Use `rcsb_polymer` to inspect sequence length, UniProt mapping, source organism, \
+genes, and polymer copy count.\n\
+- Use `rcsb_structure_preview` for a bounded mmCIF/PDB/FASTA preview. For complete \
+structure files or downstream computation, prefer the `source_rcsb_*` DAG nodes.";
 
 const PROMPT_DAG_ENGINE: &str = "\n\
 ### Data Pipeline (DAG Engine)\n\
@@ -545,6 +560,7 @@ pub trait PromptCapabilities {
     fn enable_opentargets(&self) -> bool;
     fn enable_gwascatalog(&self) -> bool;
     fn enable_chembl(&self) -> bool;
+    fn enable_rcsb(&self) -> bool;
     fn enable_dag_history(&self) -> bool;
 }
 
@@ -568,6 +584,9 @@ pub fn build_system_prompt<C: PromptCapabilities>(caps: &C) -> String {
     }
     if caps.enable_chembl() {
         s.push_str(PROMPT_CHEMBL);
+    }
+    if caps.enable_rcsb() {
+        s.push_str(PROMPT_RCSB);
     }
 
     // DAG engine, SQL conventions, and general sections are always included —
@@ -607,6 +626,9 @@ pub fn default_system_prompt() -> String {
         fn enable_chembl(&self) -> bool {
             true
         }
+        fn enable_rcsb(&self) -> bool {
+            true
+        }
         fn enable_dag_history(&self) -> bool {
             true
         }
@@ -630,6 +652,9 @@ impl PromptCapabilities for RuntimeConfig {
     fn enable_chembl(&self) -> bool {
         self.enable_chembl
     }
+    fn enable_rcsb(&self) -> bool {
+        self.enable_rcsb
+    }
     fn enable_dag_history(&self) -> bool {
         self.enable_dag_history
     }
@@ -649,7 +674,7 @@ impl RuntimeConfig {
             "RuntimeConfig {{ name: {:?}, data_dir: {}, state_dir: {}, \
              dag_history_db: {}, bib_db: {}, app_db: {}, \
              dag_history: {}, bib: {}, opengwas: {}, \
-             opentargets: {}, gwascatalog: {}, chembl: {} }}",
+             opentargets: {}, gwascatalog: {}, chembl: {}, rcsb: {} }}",
             self.name,
             self.data_dir.display(),
             self.state_dir.display(),
@@ -662,6 +687,7 @@ impl RuntimeConfig {
             self.enable_opentargets,
             self.enable_gwascatalog,
             self.enable_chembl,
+            self.enable_rcsb,
         )
     }
 }
@@ -697,6 +723,8 @@ pub struct RuntimeConfigBuilder {
     pub(crate) enable_gwascatalog: Option<bool>,
     #[serde(default)]
     pub(crate) enable_chembl: Option<bool>,
+    #[serde(default)]
+    pub(crate) enable_rcsb: Option<bool>,
     pub(crate) use_memory: Option<bool>,
     pub(crate) generate_memory: Option<bool>,
     pub(crate) enable_kms: Option<bool>,
@@ -820,6 +848,12 @@ impl RuntimeConfigBuilder {
     /// Enable or disable ChEMBL tools.
     pub fn enable_chembl(mut self, enabled: bool) -> Self {
         self.enable_chembl = Some(enabled);
+        self
+    }
+
+    /// Enable or disable RCSB PDB tools.
+    pub fn enable_rcsb(mut self, enabled: bool) -> Self {
+        self.enable_rcsb = Some(enabled);
         self
     }
 
@@ -949,6 +983,7 @@ mod tests {
         assert!(cfg.enable_opentargets);
         assert!(cfg.enable_gwascatalog);
         assert!(cfg.enable_chembl);
+        assert!(cfg.enable_rcsb);
         assert!(cfg.use_memory);
         assert!(cfg.generate_memory);
         assert!(!cfg.enable_kms);
@@ -979,6 +1014,7 @@ mod tests {
             .system_prompt(Some("Custom prompt".to_string()))
             .enable_dag_history(false)
             .enable_opengwas(false)
+            .enable_rcsb(false)
             .use_memory(false)
             .generate_memory(true)
             .enable_kms(true)
@@ -1000,6 +1036,7 @@ mod tests {
         assert!(cfg.enable_opentargets);
         assert!(cfg.enable_gwascatalog);
         assert!(cfg.enable_chembl);
+        assert!(!cfg.enable_rcsb);
         assert!(!cfg.use_memory);
         assert!(cfg.generate_memory);
         assert!(cfg.enable_kms);
@@ -1026,6 +1063,7 @@ mod tests {
         assert!(prompt.contains("OpenGWAS API"));
         assert!(prompt.contains("Open Targets Platform"));
         assert!(prompt.contains("GWAS Catalog (EBI)"));
+        assert!(prompt.contains("Structural Biology (RCSB PDB)"));
         assert!(prompt.contains("DAG Version Control"));
         // Minimal config — no external service tools.
         let cfg = RuntimeConfig::builder()
@@ -1034,6 +1072,7 @@ mod tests {
             .enable_opentargets(false)
             .enable_gwascatalog(false)
             .enable_chembl(false)
+            .enable_rcsb(false)
             .enable_dag_history(false)
             .build();
         let prompt = build_system_prompt(&cfg);
@@ -1042,6 +1081,7 @@ mod tests {
         assert!(!prompt.contains("Open Targets Platform"));
         assert!(!prompt.contains("GWAS Catalog (EBI)"));
         assert!(!prompt.contains("Drug & Bioactivity Data (ChEMBL)"));
+        assert!(!prompt.contains("Structural Biology (RCSB PDB)"));
         assert!(!prompt.contains("DAG Version Control"));
         // These are always present:
         assert!(prompt.contains("Core Competencies"));
