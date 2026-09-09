@@ -764,6 +764,9 @@ impl Session {
     /// progress. Does **not** start a new LLM turn — the caller can inject a
     /// follow-up message if it wants the agent to resume work.
     async fn do_manual_compact(&mut self) {
+        // A compact command may be queued while a turn is active. Restore
+        // that lifecycle afterward so an in-flight stream keeps driving the UI.
+        let lifecycle_before_compact = *self.lifecycle.status();
         let model = match self.shared.model.load_full() {
             Some(m) => m,
             None => {
@@ -798,7 +801,7 @@ impl Session {
         self.shared.send_event(AgentEvent::Compact {
             event: CompactEvent::CompactFinish { ts: Utc::now() },
         });
-        self.set_lifecycle(agentik_types::AgentLifecycleStatus::Idle);
+        self.set_lifecycle(lifecycle_before_compact);
     }
 
     // ── Pause / Resume ────────────────────────────────────
