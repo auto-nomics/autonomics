@@ -1,11 +1,10 @@
-//! Integration tests hitting the live Reactome API.
-//!
-//! These are lightweight: they exercise one read endpoint per major service
-//! area to confirm that the SDK models match the current API shape.
+//! Live endpoint checks. Run explicitly with:
+//! `cargo test -p reactome --test live -- --ignored`
 
 use reactome::ReactomeClient;
 
 #[tokio::test]
+#[ignore = "live Reactome API test"]
 async fn database_info() {
     let client = ReactomeClient::new();
     let info = client.database_info().await.unwrap();
@@ -14,6 +13,7 @@ async fn database_info() {
 }
 
 #[tokio::test]
+#[ignore = "live Reactome API test"]
 async fn top_level_pathways() {
     let client = ReactomeClient::new();
     let pathways = client.top_level_pathways("Homo sapiens").await.unwrap();
@@ -24,6 +24,7 @@ async fn top_level_pathways() {
 }
 
 #[tokio::test]
+#[ignore = "live Reactome API test"]
 async fn map_uniprot_to_pathways() {
     let client = ReactomeClient::new();
     let mapped = client.map_to_pathways("UniProt", "P04637").await.unwrap();
@@ -32,6 +33,7 @@ async fn map_uniprot_to_pathways() {
 }
 
 #[tokio::test]
+#[ignore = "live Reactome API test"]
 async fn overrepresentation_analysis() {
     let client = ReactomeClient::new();
     let result = client

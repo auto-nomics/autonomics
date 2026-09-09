@@ -25,6 +25,7 @@ pub struct DatabaseInfo {
 /// One Reactome species.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Species {
+    #[serde(rename = "dbId")]
     pub db_id: u64,
     #[serde(rename = "displayName")]
     pub display_name: String,
