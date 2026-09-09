@@ -744,7 +744,7 @@ impl DataEngineBuilder {
             .map_err(|e| Error::Custom(format!("cannot parse datafusion url: {e}")))?;
         self.runtime_env
             .register_object_store(object_url.as_ref(), file_session.clone());
-        // Keep the handle so artifact-producing nodes (e.g. VizNode) can write
+        // Keep the handle so artifact-producing nodes can write
         // into the virtualized filesystem instead of the host filesystem.
         Ok(Self {
             opendal: Some(file_session),

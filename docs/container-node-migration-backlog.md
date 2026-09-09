@@ -26,7 +26,7 @@ the official replacement passes a reproducible end-to-end baseline.
 | MTAG | `mtag_container` implemented and Podman-tested | official MTAG 1.0.8 at commit `9e17f3c` | `mtag.ld_ref.1000g_eur_w_ld` catalog package | publish the image to the selected deployment registry when this contract leaves the local Podman workflow |
 | HDL-L region and chromosome scan | `hdl_l_container` and the container-backed `hdl_l_scan` are the registered runtimes; the native Rust HDL-L crate and nodes are removed | official R `HDL` 1.4.3 at commit `e6b055d` | both bind published `hdl.ref.ukb_eur` v1.0 | none for the committed chr1/piece9 Podman baselines; a full all-chromosome production scan remains an operational runbook item |
 
-| Visualization | `visualization_container` implemented with a File-to-File PNG contract while the native DataFrame `visualization` node remains registered | pinned R 4.5.3 runtime with Arrow 23.0.1.2 and ggplot2 4.0.3 | no reference panel | replace the native node only after callers migrate to explicit file staging |
+| Visualization | `visualization_container` is the registered runtime; the legacy host-R DataFrame `visualization` node is removed | pinned R 4.5.3 runtime with Arrow 23.0.1.2 and ggplot2 4.0.3 | no reference panel | none for the local File-to-File PNG baseline |
 | COLOC `coloc.abf` | `coloc_abf_container` implemented; unit tests passing; wrapper unit tests build the official contract | official R `coloc` 5.2.3 (CRAN Archive) | no reference panel | pin image digest by promoting the local tag to an internal registry and re-running the Podman e2e baseline |
 
 ### Verified local provenance

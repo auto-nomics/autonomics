@@ -114,7 +114,7 @@ pub struct NodeCtx {
     /// builder are reachable.
     pub runtime_env: Arc<RuntimeEnv>,
     /// The opendal-backed file storage registered with the engine, used by
-    /// artifact-producing nodes (e.g. `VizNode`) to write outputs into the
+    /// artifact-producing nodes to write outputs into the
     /// engine's virtualized filesystem rather than the host filesystem.
     /// `None` when no opendal fs was registered.
     pub opendal: Option<Arc<vfs::OpendalFileStorage>>,

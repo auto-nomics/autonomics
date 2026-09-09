@@ -114,7 +114,7 @@ impl NodeRegistry {
 
 | crate | 节点 | 依赖的算法 crate | LOC (≈) |
 |-------|------|-----------------|---------|
-| **nodes-io** | file_to_dataframe, dataframe_to_file, container_command, ldsc_h2_container | opentargets, container-runtime, vfs | ~2,100 |
+| **nodes-io** | file_to_dataframe, dataframe_to_file, container_command, visualization_container, ldsc_h2_container | opentargets, container-runtime, vfs | ~2,100 |
 | **nodes-opengwas** | source_opengwas_associations, source_opengwas_phewas, source_opengwas_gwasinfo, source_opengwas_gwasinfo_search, source_opengwas_variants_rsid, source_opengwas_variants_chrpos, source_opengwas_ld_clump, source_opengwas_tophits | opengwas | ~1,000 |
 | **nodes-sql** | sql_node, echo_node | — | 700 |
 | **nodes-regression** | linear_regression, logistic_regression, cox_regression, chi_square | statkit | 1,400 |
@@ -129,7 +129,6 @@ impl NodeRegistry {
 | **nodes-survey** | survey_* (30 nodes) | survey | 6,000 |
 | **nodes-hypothesize** | hypothesize.* (24 nodes) | hypothesize | *(已有子模块)* |
 | **nodes-ml** | ml.* (50+ nodes) | ml | *(已有子模块)* |
-| **nodes-viz** | viz | visualization | 360 |
 | 合计 | | | ~38,400 |
 
 每个 bundle crate 结构:
@@ -211,7 +210,7 @@ all-bundles = [
     "bundle-regression", "bundle-causal", "bundle-survival",
     "bundle-ldsc", "bundle-genetics", "bundle-mr", "bundle-coloc",
     "bundle-epi", "bundle-lcmm", "bundle-survey",
-    "bundle-hypothesize", "bundle-ml", "bundle-viz",
+    "bundle-hypothesize", "bundle-ml",
 ]
 
 # 核心 bundle — 不可选 (总是编译)
@@ -230,7 +229,6 @@ bundle-lcmm        = ["dep:nodes-lcmm"]
 bundle-survey      = ["dep:nodes-survey"]
 bundle-hypothesize = ["dep:nodes-hypothesize"]
 bundle-ml          = ["dep:nodes-ml"]
-bundle-viz         = ["dep:nodes-viz"]
 
 [dependencies]
 dag-core = { path = "../dag-core" }
@@ -249,7 +247,7 @@ data-engine = { path = "...", default-features = false, features = ["bundle-mr"]
 data-engine = { path = "...", default-features = false, features = [
     "bundle-regression", "bundle-causal", "bundle-survival",
     "bundle-ldsc", "bundle-genetics", "bundle-mr", "bundle-coloc",
-    "bundle-epi", "bundle-lcmm", "bundle-hypothesize", "bundle-viz",
+    "bundle-epi", "bundle-lcmm", "bundle-hypothesize",
 ]}
 ```
 
@@ -321,12 +319,11 @@ pub fn assert_all_factories_build(registry: &NodeRegistry) {
 
 | 批次 | bundle | 原因 |
 |------|--------|------|
-| 2a | nodes-viz | 最小 (360 LOC, 1节点) |
-| 2b | nodes-sql | 无算法依赖 (700 LOC) |
-| 2c | nodes-regression | 只依赖 statkit (1400 LOC) |
-| 2d | nodes-survival | 只依赖 cmprsk (1400 LOC) |
-| 2e | nodes-coloc | coloc + bkmr (1300 LOC) |
-| 2f | nodes-epi | epi + evalue (1900 LOC) |
+| 2a | nodes-sql | 无算法依赖 (700 LOC) |
+| 2b | nodes-regression | 只依赖 statkit (1400 LOC) |
+| 2c | nodes-survival | 只依赖 cmprsk (1400 LOC) |
+| 2d | nodes-coloc | coloc + bkmr (1300 LOC) |
+| 2e | nodes-epi | epi + evalue (1900 LOC) |
 
 每批: 创建 crate → 搬代码 → `Plugin` impl → data-engine feature gate → test
 
@@ -410,9 +407,8 @@ crates/
 │   ├── nodes-lcmm/
 │   ├── nodes-survey/
 │   ├── nodes-hypothesize/
-│   ├── nodes-ml/
-│   └── nodes-viz/
-│
+│   └── nodes-ml/
+
 ├── data-engine-tools/             # 不变 (只用 dag-core + data-engine runtime API)
 ├── runtime/                       # 不变
 └── ... 其他 crate

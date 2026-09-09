@@ -80,7 +80,7 @@ pub fn build_default_registry_with_container_execution(
     #[cfg(feature = "bundle-survey")]
     registry.register_plugin(&nodes_survey::Plugin);
 
-    // ── Phase 2: regression, survival, coloc, epi, viz, sql bundles ────
+    // ── Phase 2: regression, survival, coloc, epi, sql bundles ────────
     #[cfg(feature = "bundle-regression")]
     registry.register_plugin(&nodes_regression::Plugin);
     #[cfg(feature = "bundle-survival")]
@@ -89,8 +89,6 @@ pub fn build_default_registry_with_container_execution(
     registry.register_plugin(&nodes_coloc::Plugin);
     #[cfg(feature = "bundle-epi")]
     registry.register_plugin(&nodes_epi::Plugin);
-    #[cfg(feature = "bundle-viz")]
-    registry.register_plugin(&nodes_viz::Plugin);
     #[cfg(feature = "bundle-sql")]
     registry.register_plugin(&nodes_sql::Plugin);
 
@@ -132,6 +130,10 @@ mod tests {
         let ports = registry
             .get_node_ports("visualization_container")
             .expect("visualization_container is registered");
+        assert!(
+            registry.get_node_ports("visualization").is_err(),
+            "the legacy host-R visualization node must not be registered"
+        );
         assert_eq!(ports.input_ports().len(), 2);
         assert_eq!(ports.output_ports().len(), 1);
     }

@@ -2650,7 +2650,6 @@ dependencies = [
  "nodes-sql",
  "nodes-survey",
  "nodes-survival",
- "nodes-viz",
  "nodes-writing",
  "parquet",
  "schemars",
@@ -7357,26 +7356,6 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.20",
  "tokio",
-]
-
-[[package]]
-name = "nodes-viz"
-version = "0.1.0"
-dependencies = [
- "arrow-array",
- "arrow-schema",
- "async-trait",
- "dag-core",
- "datafusion",
- "schemars",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.20",
- "tokio",
- "tracing",
- "vfs",
- "visualization",
 ]
 
 [[package]]
@@ -12153,19 +12132,6 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "toml 1.1.4+spec-1.1.0",
-]
-
-[[package]]
-name = "visualization"
-version = "0.1.0"
-dependencies = [
- "arrow",
- "datafusion",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.20",
- "tokio",
 ]
 
 [[package]]

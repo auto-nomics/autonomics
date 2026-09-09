@@ -63,7 +63,7 @@
                                                │  │ epi_lasso   │ │
                                                │  │ epi_wqs     │ │
                                                │  │ df → file    │ │
-                                               │  │ viz         │ │
+                                               │  │ viz_cont    │ │
                                                │  │ ...         │ │
                                                │  └─────────────┘ │
                                                └────────┬────────┘
@@ -141,7 +141,7 @@ GWAS Catalog、OpenGWAS、NCBI E-utilities 和 Open Targets Platform 的 API 客
 | 领域               | 成员                                                                                                                    | 职责                                                                                                                                                                                                  |
 | ------------------ | ----------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 智能体平台         | `agentik-types`、`agentik-sdk`、`agentik-proc`、`agentik-core`、`agentik-tools`、`runtime`                              | API 类型和客户端、声明式工具 schema、智能体生命周期/记忆、工具实现，以及同步到异步的托管。                                                                                                            |
-| 数据分析           | `data-engine`、`data-engine-tools`、`vfs`、`biofusion`、`biofusion-cache`、`visualization` | DAG 执行、智能体暴露的 DAG 操作、挂载感知 OpenDAL 文件、生物格式导入，以及 R/ggplot2 可视化。                                                                                          |
+| 数据分析           | `data-engine`、`data-engine-tools`、`vfs`、`biofusion`、`biofusion-cache`                         | DAG 执行、智能体暴露的 DAG 操作、挂载感知 OpenDAL 文件、生物格式导入，以及 OCI 容器化 R/ggplot2 可视化。                                                                               |
 | 统计遗传学         | `ldsc`、`mr`、`lava`、`mrlap`、`lcv`、`cpassoc`、`magma`                                                                | 保留的 Rust 移植，以及 LDSC h²/rg、HDL-L、MiXeR、SuSiE-RSS、MR-PRESSO、MVMR、MTAG、FUSION TWAS 等外部工具的 OCI 容器节点。 |
 | 流行病学与生物统计 | `statkit`、`epi`                                                                                                        | 基础统计（OLS/WLS/logistic/Cox 回归、描述性统计）与高层流行病学方法（因果推断、中介分析、生存分析、ROC、RCS、LASSO、WQS、CLPM、GBTM、LCA、SEM、竞争风险、多状态模型、随机森林 + SHAP），基于 `faer`。 |
 | 科学数据客户端     | `eutils`、`opengwas`、`gwascatalog-sdk`、`opentargets`                                                                  | NCBI E-utilities、OpenGWAS、GWAS Catalog 和 Open Targets Platform 的客户端。                                                                                                                          |
@@ -190,7 +190,7 @@ CARGO_TARGET_DIR=/tmp/autonomics-target cargo run -p tui
 
 ### 可视化
 
-- [**可视化（`visualization`）**](docs/visualization_zh.md) — 通过 R/ggplot2 将 DataFusion 渲染为 PNG（Arrow IPC 桥接、opendal 输出）。
+- [**可视化（`visualization_container`）**](docs/visualization_zh.md) — 通过隔离的 R/ggplot2 OCI 容器完成 File-to-File PNG 渲染。
 
 ## 工作空间结构
 
@@ -205,7 +205,6 @@ autonomics/
 │   ├── biofusion/           # 基因组文件格式的 DataFusion 读取器
 │   ├── biofusion-cache/     # biofusion 读取器的缓存层
 │   ├── vfs/                 # 基于 OpenDAL 的挂载感知文件存储和工具
-│   ├── visualization/       # 通过 R/ggplot2 将 DataFusion 渲染为 PNG (VizNode)
 │   ├── eutils/              # NCBI E-utilities 客户端
 │   ├── opengwas/            # OpenGWAS 客户端
 │   ├── gwascatalog-sdk/     # GWAS Catalog 客户端
@@ -248,7 +247,7 @@ CARGO_TARGET_DIR=/tmp/autonomics-target cargo test -p statkit
 ## 环境要求
 
 - Rust 1.85+（edition 2024）
-- **R（可选）** —— 仅 `visualization` 节点需要。安装 R 及 `arrow` 和 `ggplot2` 包，并确保 `Rscript` 在 `PATH` 上（或设置 `VISUALIZATION_RSCRIPT`）。在没有 R 的情况下，工作空间的其余部分可正常编译和运行。
+- **Podman** —— OCI 容器 DAG 节点需要，包括 `visualization_container`。可视化不再要求宿主机安装 R 或 `Rscript`。
 
 ## 许可证
 

@@ -9,7 +9,6 @@ members = [
   "crates/data-engine",
   "crates/node-bundles/nodes-hypothesize",
   "crates/node-bundles/nodes-ml",
-  "crates/node-bundles/nodes-viz",
   "crates/node-bundles/nodes-sql",
   "crates/node-bundles/nodes-regression",
   "crates/node-bundles/nodes-survival",
@@ -43,7 +42,6 @@ members = [
   "bio_crates/mr",
   "bio_crates/lcv",
   "bio_crates/mrlap",
-  "crates/visualization",
 
   "bio_crates/cpassoc",
   "bio_crates/magma",

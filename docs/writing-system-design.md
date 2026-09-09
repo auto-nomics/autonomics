@@ -18,7 +18,7 @@
 | **结构化标引** | 文档内部不是平铺文本，而是语义块树（段落/公式/图表/声明）；声明可挂载证据链（引文 + 数据） |
 | **引文自动管理** | 引用风格切换 (natbib / biblatex)；断引检测；引文图谱（哪段话引了哪篇文） |
 | **Agent 优化编辑** | AST 级语义操作（插入段落 / 移动章节 / 插入引文），而非文本 diff；稳定 block ID；可组合编辑脚本 |
-| **数据 & 图表插入** | DAG DataFrame → LaTeX tabular；VizNode 产物 → `\includegraphics`；VFS 查询 → 内联表格 |
+| **数据 & 图表插入** | DAG DataFrame → LaTeX tabular；可视化 artifact → `\includegraphics`；VFS 查询 → 内联表格 |
 | **LaTeX 编译** | 可插拔引擎（Tectonic 内嵌 / XeLaTeX 子进程），模板系统，实时编译反馈 |
 
 ### 非目标
@@ -383,7 +383,7 @@ pub struct FigureBlock {
 pub enum FigureSource {
     /// 文件路径（OpendalFileStorage 内）。
     FilePath(String),
-    /// DAG artifact 产物路径（VizNode 输出）。
+    /// DAG artifact 产物路径。
     DagArtifact { dag_id: String, node_id: String },
     /// TikZ 代码（内联绘图）。
     Tikz(String),
@@ -1222,7 +1222,7 @@ pub struct FigureEmbedNodeSpec {
 
 impl DagNode for FigureEmbedNode {
     async fn execute(...) -> Result<PortOutputs, DagError> {
-        // 输入 port_0 = 包含 "path" 列的 DataFrame（通常来自 VizNode 的 artifact_path）
+        // 输入 port_0 = 包含 "path" 列的 DataFrame（通常来自可视化 artifact）
         let path = extract_path(&inputs[0].data)?;
         let figure_json = serde_json::json!({
             "source": { "FilePath": path },

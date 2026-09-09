@@ -26,7 +26,6 @@ turso.workspace = true
 # ── Node bundle plugins (optional) ────────────────────────────────────────
 nodes-hypothesize = { path = "../node-bundles/nodes-hypothesize", optional = true }
 nodes-ml = { path = "../node-bundles/nodes-ml", optional = true }
-nodes-viz = { path = "../node-bundles/nodes-viz", optional = true }
 nodes-sql = { path = "../node-bundles/nodes-sql", optional = true }
 nodes-regression = { path = "../node-bundles/nodes-regression", optional = true }
 nodes-survival = { path = "../node-bundles/nodes-survival", optional = true }
@@ -47,10 +46,9 @@ nodes-rd = { path = "../node-bundles/nodes-rd", optional = true }
 nodes-dl = { path = "../node-bundles/nodes-dl", optional = true }
 
 [features]
-default = ["bundle-hypothesize", "bundle-ml", "bundle-viz", "bundle-sql", "bundle-regression", "bundle-survival", "bundle-coloc", "bundle-epi", "bundle-io", "bundle-opengwas", "bundle-causal", "bundle-lcmm", "bundle-mr", "bundle-survey", "bundle-ldsc", "bundle-genetics", "bundle-mice", "bundle-writing", "bundle-grf", "bundle-rd", "bundle-dl"]
+default = ["bundle-hypothesize", "bundle-ml", "bundle-sql", "bundle-regression", "bundle-survival", "bundle-coloc", "bundle-epi", "bundle-io", "bundle-opengwas", "bundle-causal", "bundle-lcmm", "bundle-mr", "bundle-survey", "bundle-ldsc", "bundle-genetics", "bundle-mice", "bundle-writing", "bundle-grf", "bundle-rd", "bundle-dl"]
 bundle-hypothesize = ["dep:nodes-hypothesize"]
 bundle-ml = ["dep:nodes-ml"]
-bundle-viz = ["dep:nodes-viz"]
 bundle-sql = ["dep:nodes-sql"]
 bundle-regression = ["dep:nodes-regression"]
 bundle-survival = ["dep:nodes-survival"]

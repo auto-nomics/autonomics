@@ -61,7 +61,7 @@ Four pieces, usually kept separate, are integrated here:
                                                │  │ epi_lasso   │ │
                                                │  │ epi_wqs     │ │
                                                │  │ df → file    │ │
-                                               │  │ viz         │ │
+                                               │  │ viz_cont    │ │
                                                │  │ ...         │ │
                                                │  └─────────────┘ │
                                                └────────┬────────┘
@@ -139,7 +139,7 @@ API clients for GWAS Catalog, OpenGWAS, NCBI E-utilities, and the Open Targets P
 | Area                         | Members                                                                                                                                    | Responsibility                                                                                                                                                     |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Agent platform               | `agentik-types`, `agentik-sdk`, `agentik-proc`, `agentik-core`, `agentik-tools`, `runtime`                                                 | API types and clients, declarative tool schemas, agent lifecycle/memory, tool implementations, and sync-to-async hosting.                                          |
-| Data analysis                | `data-engine`, `data-engine-tools`, `vfs`, `biofusion`, `biofusion-cache`, `visualization`                    | DAG execution, Agent-exposed DAG operations, mount-aware OpenDAL files, biological-format ingestion, and R/ggplot2 visualization.             |
+| Data analysis                | `data-engine`, `data-engine-tools`, `vfs`, `biofusion`, `biofusion-cache`                                      | DAG execution, Agent-exposed DAG operations, mount-aware OpenDAL files, biological-format ingestion, and OCI-backed R/ggplot2 visualization. |
 | Statistical genetics         | `ldsc`, `mr`, `lava`, `mrlap`, `lcv`, `cpassoc`, `magma`                                                                                   | Remaining Rust ports plus OCI container nodes for LDSC h²/rg, HDL-L, MiXeR, SuSiE-RSS, MR-PRESSO, MVMR, MTAG, FUSION TWAS, and other external tools. |
 | Epidemiology & biostatistics | `statkit`, `epi`                                                                                                                           | Foundational statistics (OLS/WLS/logistic/Cox regression, descriptive stats) and higher-level epidemiological methods (causal inference, mediation, survival, ROC, RCS, LASSO, WQS, CLPM, GBTM, LCA, SEM, competing risks, multistate, Random Forest + SHAP), built on `faer`. |
 | Scientific data clients      | `eutils`, `opengwas`, `gwascatalog-sdk`, `opentargets`                                                                                     | Clients for NCBI E-utilities, OpenGWAS, the GWAS Catalog, and the Open Targets Platform.                                                                          |
@@ -188,7 +188,7 @@ For direct SDK use, copy `.env.example` to `.env` and provide only the credentia
 
 ### Visualization
 
-- [**Visualization (`visualization`)**](docs/visualization.md) — DataFusion → PNG rendering via R/ggplot2 (Arrow IPC bridge, opendal output).
+- [**Visualization (`visualization_container`)**](docs/visualization.md) — File-to-File PNG rendering via isolated R/ggplot2 OCI containers.
 
 ## Workspace structure
 
@@ -203,7 +203,6 @@ autonomics/
 │   ├── biofusion/           # DataFusion readers for genomics file formats
 │   ├── biofusion-cache/     # Caching layer for biofusion readers
 │   ├── vfs/                 # OpenDAL-backed mount-aware file storage and tools
-│   ├── visualization/       # DataFusion → PNG rendering via R/ggplot2 (VizNode)
 │   ├── eutils/              # NCBI E-utilities client
 │   ├── opengwas/            # OpenGWAS client
 │   ├── gwascatalog-sdk/     # GWAS Catalog client
@@ -246,7 +245,7 @@ Some integration tests call external public APIs, require provider credentials, 
 ## Requirements
 
 - Rust 1.85+ (edition 2024)
-- **R (optional)** — only needed for the `visualization` node. Install R with the `arrow` and `ggplot2` packages and ensure `Rscript` is on `PATH` (or set `VISUALIZATION_RSCRIPT`). Without R, the rest of the workspace builds and runs unchanged.
+- **Podman** — required by OCI-backed DAG nodes, including `visualization_container`. Visualization no longer requires R or `Rscript` on the host.
 
 ## License
 

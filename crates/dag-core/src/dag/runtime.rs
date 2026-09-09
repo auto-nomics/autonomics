@@ -189,7 +189,7 @@ pub struct NodeReport {
     /// Milliseconds spent in `execute()`.
     pub elapsed_ms: Option<u64>,
 
-    /// For `VizNode` (and future artifact-producing nodes): the path of the
+    /// For artifact-producing nodes: the path of the
     /// rendered/produced artifact (e.g. a PNG).
     pub artifact_path: Option<String>,
     /// For `dataframe_to_file` nodes: the file path data was written to.
