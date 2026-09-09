@@ -17,6 +17,7 @@ use gwascatalog_sdk::GwasCatalogClient;
 use opengwas::OpengwasClient;
 use opentargets::OpenTargetsClient;
 use rcsb::RcsbClient;
+use string_sdk::StringDbClient;
 use vfs::OpendalFileStorage;
 
 use crate::config::RuntimeConfig;
@@ -62,6 +63,17 @@ pub fn rcsb_tools() -> Vec<ToolRegistration> {
 /// RCSB PDB tools backed by a process-shared client.
 pub fn rcsb_tools_with_client(client: Arc<RcsbClient>) -> Vec<ToolRegistration> {
     rcsb::rcsb_registrations(client)
+}
+
+/// STRING protein-association tools (identifier resolution, interactions,
+/// enrichment, biological summary, and network image preview).
+pub fn string_tools() -> Vec<ToolRegistration> {
+    let string = Arc::new(
+        StringDbClient::builder()
+            .build()
+            .expect("default STRING client"),
+    );
+    string_sdk::string_registrations(string)
 }
 
 /// GWAS Catalog tools (curated studies, associations, EFO traits, SNPs,
@@ -131,7 +143,7 @@ pub fn resolve_writing_db_path() -> String {
 }
 
 /// The complete default tool set: File + OpenGWAS + Open Targets
-/// + GWAS Catalog + RCSB PDB + DataEngine + Bibliography.
+/// + GWAS Catalog + ChEMBL + RCSB PDB + STRING + DataEngine + Bibliography.
 ///
 /// Pass a shared [`OpendalFileStorage`] used by both the fs tools
 /// and the OpenGWAS download tool.
@@ -176,6 +188,9 @@ pub async fn tool_set_from_config(
 
     if config.enable_gwascatalog {
         tools.extend(gwascatalog_tools(file_storage));
+    }
+    if config.enable_string {
+        tools.extend(string_tools());
     }
 
     if config.enable_chembl {
@@ -264,6 +279,24 @@ mod tests {
                 assert!(markdown.contains("X-RAY DIFFRACTION"));
             }
             other => panic!("expected text result, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn string_tool_registrations_are_wired() {
+        let registrations = string_tools();
+        let names: Vec<_> = registrations
+            .iter()
+            .map(|registration| registration.definition.name.as_str())
+            .collect();
+        for name in [
+            "string_resolve_identifiers",
+            "string_network_interactions",
+            "string_functional_enrichment",
+            "string_network_summary",
+            "string_network_image",
+        ] {
+            assert!(names.contains(&name), "missing tool: {name}");
         }
     }
 }

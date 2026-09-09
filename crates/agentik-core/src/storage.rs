@@ -185,6 +185,7 @@ pub struct ProfileOverrides {
     pub enable_gwascatalog: Option<bool>,
     pub enable_chembl: Option<bool>,
     pub enable_rcsb: Option<bool>,
+    pub enable_string: Option<bool>,
     pub enable_dag_history: Option<bool>,
 }
 
@@ -232,6 +233,8 @@ pub struct AgentProfile {
     pub enable_chembl: bool,
     #[serde(default = "default_true")]
     pub enable_rcsb: bool,
+    #[serde(default = "default_enable_string")]
+    pub enable_string: bool,
     pub enable_dag_history: bool,
 
     // ── Model preference ──
@@ -242,6 +245,10 @@ pub struct AgentProfile {
 
     pub created_at: i64,
     pub updated_at: i64,
+}
+
+fn default_enable_string() -> bool {
+    true
 }
 
 impl AgentProfile {
@@ -277,6 +284,7 @@ impl AgentProfile {
             enable_gwascatalog: true,
             enable_chembl: true,
             enable_rcsb: true,
+            enable_string: true,
             enable_dag_history: true,
             preferred_model: None,
             created_at: now,
@@ -321,6 +329,7 @@ impl AgentProfile {
                 .unwrap_or(self.enable_gwascatalog),
             enable_chembl: overrides.enable_chembl.unwrap_or(self.enable_chembl),
             enable_rcsb: overrides.enable_rcsb.unwrap_or(self.enable_rcsb),
+            enable_string: overrides.enable_string.unwrap_or(self.enable_string),
             enable_dag_history: overrides
                 .enable_dag_history
                 .unwrap_or(self.enable_dag_history),
@@ -351,6 +360,7 @@ impl AgentProfile {
                 enable_gwascatalog: true,
                 enable_chembl: true,
                 enable_rcsb: true,
+                enable_string: true,
                 enable_dag_history: true,
                 preferred_model: None,
                 created_at: now,
@@ -372,6 +382,7 @@ impl AgentProfile {
                 enable_gwascatalog: false,
                 enable_chembl: true,
                 enable_rcsb: false,
+                enable_string: true,
                 enable_dag_history: false,
                 preferred_model: None,
                 created_at: now,
@@ -393,6 +404,7 @@ impl AgentProfile {
                 enable_gwascatalog: true,
                 enable_chembl: true,
                 enable_rcsb: false,
+                enable_string: true,
                 enable_dag_history: true,
                 preferred_model: None,
                 created_at: now,
@@ -415,6 +427,7 @@ impl AgentProfile {
                 enable_gwascatalog: false,
                 enable_chembl: false,
                 enable_rcsb: true,
+                enable_string: true,
                 enable_dag_history: true,
                 preferred_model: None,
                 created_at: now,
@@ -449,6 +462,7 @@ impl AgentProfile {
                 enable_gwascatalog: false,
                 enable_chembl: false,
                 enable_rcsb: false,
+                enable_string: false,
                 enable_dag_history: false,
                 preferred_model: None,
                 created_at: now,
@@ -828,4 +842,18 @@ pub async fn restore_session_state(
         .await?;
     state.messages.extend(messages);
     Ok(state)
+}
+
+#[cfg(test)]
+mod profile_compat_tests {
+    use super::*;
+
+    #[test]
+    fn legacy_profile_without_string_flag_defaults_to_enabled() {
+        let profile = AgentProfile::new("legacy");
+        let mut value = serde_json::to_value(&profile).unwrap();
+        value.as_object_mut().unwrap().remove("enable_string");
+        let restored: AgentProfile = serde_json::from_value(value).unwrap();
+        assert!(restored.enable_string);
+    }
 }
