@@ -1,0 +1,20 @@
+[package]
+name = "string-sdk"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Async Rust SDK for the STRING protein association API."
+
+[dependencies]
+reqwest = { version = "0.13", features = ["form", "json"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["time"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+
+[lints]
+workspace = true
