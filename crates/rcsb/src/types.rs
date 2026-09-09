@@ -404,11 +404,62 @@ pub struct StructAssembly {
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct AssemblyInfo {
     #[serde(default)]
-    pub polymer_entity_instance_count: Option<u64>,
+    pub assembly_id: Option<String>,
     #[serde(default)]
-    pub modeled_atom_count: Option<u64>,
+    pub entry_id: Option<String>,
+    #[serde(default)]
+    pub atom_count: Option<u64>,
+    #[serde(default)]
+    pub formula_weight: Option<f64>,
     #[serde(default)]
     pub modeled_polymer_monomer_count: Option<u64>,
+    #[serde(default)]
+    pub num_interfaces: Option<u64>,
+    #[serde(default)]
+    pub polymer_entity_instance_count: Option<u64>,
+    #[serde(default)]
+    pub polymer_entity_count: Option<u64>,
+    #[serde(default)]
+    pub polymer_composition: Option<String>,
+    #[serde(default)]
+    pub total_assembly_buried_surface_area: Option<f64>,
+}
+
+impl Assembly {
+    pub fn to_record(&self) -> AssemblyRecord {
+        let info = self.rcsb_assembly_info.clone().unwrap_or_default();
+        AssemblyRecord {
+            assembly_id: self.pdbx_struct_assembly.id.clone(),
+            entry_id: info.entry_id.clone(),
+            oligomeric_count: self.pdbx_struct_assembly.oligomeric_count,
+            oligomeric_details: self.pdbx_struct_assembly.oligomeric_details.clone(),
+            atom_count: info.atom_count,
+            polymer_entity_count: info.polymer_entity_count,
+            polymer_entity_instance_count: info.polymer_entity_instance_count,
+            modeled_polymer_monomer_count: info.modeled_polymer_monomer_count,
+            polymer_composition: info.polymer_composition.clone(),
+            formula_weight: info.formula_weight,
+            num_interfaces: info.num_interfaces,
+            buried_surface_area: info.total_assembly_buried_surface_area,
+        }
+    }
+}
+
+/// Flat row emitted by assembly DAG nodes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssemblyRecord {
+    pub assembly_id: String,
+    pub entry_id: Option<String>,
+    pub oligomeric_count: Option<u64>,
+    pub oligomeric_details: Option<String>,
+    pub atom_count: Option<u64>,
+    pub polymer_entity_count: Option<u64>,
+    pub polymer_entity_instance_count: Option<u64>,
+    pub modeled_polymer_monomer_count: Option<u64>,
+    pub polymer_composition: Option<String>,
+    pub formula_weight: Option<f64>,
+    pub num_interfaces: Option<u64>,
+    pub buried_surface_area: Option<f64>,
 }
 
 #[cfg(test)]

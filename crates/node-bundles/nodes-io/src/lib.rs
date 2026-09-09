@@ -32,6 +32,7 @@ pub mod susie_rss_container;
 pub mod twas_fusion_container;
 pub mod visualization_container;
 pub use crossref::nodes::works::{CrossrefWorksNode, CrossrefWorksNodeFactory};
+pub use rcsb::nodes::assembly::{RcsbAssemblyNode, RcsbAssemblyNodeFactory};
 pub use rcsb::nodes::entry::{RcsbEntryNode, RcsbEntryNodeFactory};
 pub use rcsb::nodes::polymer_entity::{RcsbPolymerEntityNode, RcsbPolymerEntityNodeFactory};
 pub use rcsb::nodes::search::{RcsbSearchNode, RcsbSearchNodeFactory};
@@ -317,6 +318,7 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(RcsbSearchNodeFactory {}));
         registry.register(Box::new(RcsbEntryNodeFactory {}));
         registry.register(Box::new(RcsbPolymerEntityNodeFactory {}));
+        registry.register(Box::new(RcsbAssemblyNodeFactory {}));
         registry.register(Box::new(RcsbStructureNodeFactory {}));
         registry.register(Box::new(UniprotSearchNodeFactory {}));
         registry.register(Box::new(UniprotStreamNodeFactory {}));

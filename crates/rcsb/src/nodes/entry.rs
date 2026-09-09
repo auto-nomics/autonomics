@@ -7,8 +7,9 @@ use datafusion::dataframe::DataFrame;
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 
-use dag_core::dag::{DagError, DagNode, NodePorts, graph::PortOutputs};
+use dag_core::dag::{DagError, DagNode, NodeInput, NodePorts, graph::PortOutputs};
 use dag_core::registry::{NodeCtx, NodeFactory};
+use dag_core::value::PortType;
 
 use crate::RcsbClient;
 use crate::types::{Entry, EntryRecord};
@@ -18,6 +19,11 @@ pub struct RcsbEntrySpec {
     /// Four-character PDB entry IDs, e.g. `["4HHB", "2HHB"]`.
     #[serde(default)]
     pub entry_ids: Vec<String>,
+
+    /// Column containing four-character PDB entry IDs when an input table is
+    /// connected. Defaults to `identifier`, matching `source_rcsb_search`.
+    #[serde(default)]
+    pub identifier_column: Option<String>,
 }
 
 #[derive(Clone)]
@@ -29,7 +35,9 @@ pub struct RcsbEntryNode {
 pub struct RcsbEntryNodeFactory;
 
 fn port_layout() -> NodePorts {
-    NodePorts::new().add_output_port(None)
+    NodePorts::new()
+        .add_optional_input_port_of_type(PortType::DataFrame)
+        .add_output_port(None)
 }
 
 impl NodeFactory for RcsbEntryNodeFactory {
@@ -45,7 +53,10 @@ impl NodeFactory for RcsbEntryNodeFactory {
         "Calls the RCSB Data API once per requested entry and emits a flat \
         Arrow/DataFrame row with experimental method, resolution, atom and \
         entity counts, dates, identifiers, and primary-citation metadata. \
-        No input ports; one DataFrame output."
+        One optional DataFrame input; one DataFrame output.\n\n\
+        With no input connected, use `entry_ids`. When connected to \
+        `source_rcsb_search`, read IDs from `identifier_column` (default: \
+        `identifier`)."
     }
 
     fn spec_schema(&self) -> schemars::Schema {
@@ -90,17 +101,30 @@ impl DagNode for RcsbEntryNode {
     async fn execute(
         &mut self,
         ctx: &NodeCtx,
-        _inputs: &[dag_core::dag::NodeInput],
+        inputs: &[NodeInput],
         _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
-        if self.spec.entry_ids.is_empty() {
+        let entry_ids = match inputs.first() {
+            Some(input) => {
+                let column = self
+                    .spec
+                    .identifier_column
+                    .as_deref()
+                    .unwrap_or("identifier");
+                strings_from_column(input.dataframe()?, column).await?
+            }
+            None => self.spec.entry_ids.clone(),
+        };
+        if entry_ids.is_empty() {
             return Err(DagError::Schedule(
-                "source_rcsb_entry requires at least one `entry_ids` item".into(),
+                "source_rcsb_entry requires `entry_ids` or a non-empty input \
+                 identifier column"
+                    .into(),
             ));
         }
 
         let entries = RcsbClient::new()
-            .entries(&self.spec.entry_ids)
+            .entries(&entry_ids)
             .await
             .map_err(|e| DagError::Schedule(format!("RCSB entry request failed: {e}")))?;
         let records = entries.iter().map(Entry::to_record).collect::<Vec<_>>();
@@ -194,6 +218,42 @@ pub(crate) fn build_entry_batch(records: &[EntryRecord]) -> Result<RecordBatch, 
         ],
     )
     .map_err(|e| DagError::Schedule(format!("failed to build RCSB entry batch: {e}")))
+}
+
+/// Collect non-null string values from an upstream DataFrame column.
+async fn strings_from_column(dataframe: &DataFrame, column: &str) -> Result<Vec<String>, DagError> {
+    let index = dataframe
+        .schema()
+        .index_of_column_by_name(None, column)
+        .ok_or_else(|| {
+            DagError::Schedule(format!(
+                "source_rcsb_entry: input table has no column named {column:?}"
+            ))
+        })?;
+    let batches = dataframe
+        .clone()
+        .collect()
+        .await
+        .map_err(|e| DagError::Schedule(format!("failed to collect RCSB entry IDs: {e}")))?;
+
+    let mut values = Vec::new();
+    for batch in &batches {
+        let array = batch
+            .column(index)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .ok_or_else(|| {
+                DagError::Schedule(format!(
+                    "source_rcsb_entry: column {column:?} must be a string column"
+                ))
+            })?;
+        for row in 0..array.len() {
+            if !array.is_null(row) {
+                values.push(array.value(row).to_owned());
+            }
+        }
+    }
+    Ok(values)
 }
 
 #[cfg(test)]
