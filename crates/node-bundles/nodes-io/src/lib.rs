@@ -32,6 +32,10 @@ pub mod susie_rss_container;
 pub mod twas_fusion_container;
 pub mod visualization_container;
 pub use crossref::nodes::works::{CrossrefWorksNode, CrossrefWorksNodeFactory};
+pub use rcsb::nodes::entry::{RcsbEntryNode, RcsbEntryNodeFactory};
+pub use rcsb::nodes::polymer_entity::{RcsbPolymerEntityNode, RcsbPolymerEntityNodeFactory};
+pub use rcsb::nodes::search::{RcsbSearchNode, RcsbSearchNodeFactory};
+pub use rcsb::nodes::structure::{RcsbStructureNode, RcsbStructureNodeFactory};
 pub use uniprot::nodes::idmap::{UniprotIdmapNode, UniprotIdmapNodeFactory};
 pub use uniprot::nodes::search::{UniprotSearchNode, UniprotSearchNodeFactory};
 pub use uniprot::nodes::stream::{UniprotStreamNode, UniprotStreamNodeFactory};
@@ -310,6 +314,10 @@ impl NodePlugin for Plugin {
             source_opentargets::OpentargetsSearchNodeFactory {},
         ));
         registry.register(Box::new(CrossrefWorksNodeFactory {}));
+        registry.register(Box::new(RcsbSearchNodeFactory {}));
+        registry.register(Box::new(RcsbEntryNodeFactory {}));
+        registry.register(Box::new(RcsbPolymerEntityNodeFactory {}));
+        registry.register(Box::new(RcsbStructureNodeFactory {}));
         registry.register(Box::new(UniprotSearchNodeFactory {}));
         registry.register(Box::new(UniprotStreamNodeFactory {}));
         registry.register(Box::new(UniprotIdmapNodeFactory {}));
