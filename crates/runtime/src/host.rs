@@ -34,6 +34,7 @@ use data_engine::dag::DagHistory;
 use data_engine::data_engine::DataEngine;
 use data_engine::runtime::{DataEngineClient, DataEngineManager};
 use futures::FutureExt;
+use rcsb::RcsbClient;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -118,6 +119,9 @@ impl PromptCapabilities for agentik_core::AgentProfile {
     fn enable_gwascatalog(&self) -> bool {
         self.enable_gwascatalog
     }
+    fn enable_rcsb(&self) -> bool {
+        self.enable_rcsb
+    }
     fn enable_dag_history(&self) -> bool {
         self.enable_dag_history
     }
@@ -149,6 +153,8 @@ pub struct SharedInfra {
     /// Profile registry (same DB connection, separate trait object).
     /// Used by RuntimeHost for dynamic profile derivation.
     pub profile_storage: Arc<dyn AgentProfileRegistry>,
+    /// Process-wide RCSB PDB HTTP client shared by every enabled agent.
+    pub rcsb: Arc<RcsbClient>,
     /// Bibliography storage + literature gateway, opened **once** per
     /// process and shared by every spawned agent.
     pub bib: Arc<bib_base::BibShared>,
@@ -272,6 +278,7 @@ impl SharedInfra {
         let storage: Arc<dyn AgentStorage> = turso_store.clone();
         // Profile registry — clone of the same storage (shares one connection).
         let profile_storage: Arc<dyn AgentProfileRegistry> = turso_store.clone();
+        let rcsb = Arc::new(RcsbClient::new());
         // Initialize the KMS schema in agent.db unconditionally; expose tools
         // and semantic grounding only when the runtime feature is enabled.
         let kms_storage =
@@ -332,6 +339,7 @@ impl SharedInfra {
             catalog: catalog_service,
             storage,
             profile_storage,
+            rcsb,
             bib,
             writing,
             memory,
@@ -470,6 +478,10 @@ impl SharedInfra {
 
         if profile.enable_gwascatalog {
             tools.extend(gwascatalog_tools(file_storage));
+        }
+
+        if profile.enable_rcsb {
+            tools.extend(rcsb_tools_with_client(self.rcsb.clone()));
         }
 
         tools.extend(data_engine_tools::registrations(Arc::new(engine_client)));
@@ -2797,6 +2809,12 @@ fn capability_from_profile(
     if profile.enable_gwascatalog {
         tags.push("gwas-catalog".into());
         expertise.push("variant-lookup".into());
+    }
+    if profile.enable_rcsb {
+        tags.push("pdb".into());
+        tags.push("structural-biology".into());
+        expertise.push("protein-structure-lookup".into());
+        expertise.push("structural-biology-analysis".into());
     }
     if profile.enable_dag_history {
         tags.push("pipeline".into());

@@ -15,6 +15,7 @@ use data_engine::runtime::DataEngineClient;
 use gwascatalog_sdk::GwasCatalogClient;
 use opengwas::OpengwasClient;
 use opentargets::OpenTargetsClient;
+use rcsb::RcsbClient;
 use vfs::OpendalFileStorage;
 
 use crate::config::RuntimeConfig;
@@ -42,6 +43,17 @@ pub fn opengwas_tools_with_token(
 pub fn opentargets_tools() -> Vec<ToolRegistration> {
     let opentargets = Arc::new(OpenTargetsClient::new());
     opentargets::opentargets_registrations(opentargets)
+}
+
+/// RCSB PDB tools (structure search, metadata summaries, polymer entities,
+/// and bounded structure-file previews).
+pub fn rcsb_tools() -> Vec<ToolRegistration> {
+    rcsb_tools_with_client(Arc::new(RcsbClient::new()))
+}
+
+/// RCSB PDB tools backed by a process-shared client.
+pub fn rcsb_tools_with_client(client: Arc<RcsbClient>) -> Vec<ToolRegistration> {
+    rcsb::rcsb_registrations(client)
 }
 
 /// GWAS Catalog tools (curated studies, associations, EFO traits, SNPs,
@@ -111,7 +123,7 @@ pub fn resolve_writing_db_path() -> String {
 }
 
 /// The complete default tool set: File + OpenGWAS + Open Targets
-/// + GWAS Catalog + DataEngine + Bibliography.
+/// + GWAS Catalog + RCSB PDB + DataEngine + Bibliography.
 ///
 /// Pass a shared [`OpendalFileStorage`] used by both the fs tools
 /// and the OpenGWAS download tool.
@@ -150,6 +162,10 @@ pub async fn tool_set_from_config(
         tools.extend(opentargets_tools());
     }
 
+    if config.enable_rcsb {
+        tools.extend(rcsb_tools());
+    }
+
     if config.enable_gwascatalog {
         tools.extend(gwascatalog_tools(file_storage));
     }
@@ -175,4 +191,49 @@ pub async fn tool_set_from_config(
     }
 
     Ok(tools)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rcsb_tools_register_preview_and_summary_tools() {
+        let tools = rcsb_tools();
+        let names = tools
+            .iter()
+            .map(|tool| tool.definition.name.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(names.contains(&"rcsb_search"));
+        assert!(names.contains(&"rcsb_entry"));
+        assert!(names.contains(&"rcsb_polymer"));
+        assert!(names.contains(&"rcsb_structure_preview"));
+        assert_eq!(tools.len(), 4);
+    }
+
+    #[tokio::test]
+    #[ignore = "live RCSB API test"]
+    async fn rcsb_entry_tool_executes_through_registration() {
+        let tools = rcsb_tools();
+        let tool = tools
+            .into_iter()
+            .find(|tool| tool.definition.name == "rcsb_entry")
+            .expect("rcsb_entry registration");
+
+        let result = tool
+            .implementation
+            .execute(serde_json::json!({ "entry_id": "4HHB" }))
+            .await
+            .expect("RCSB entry tool should execute");
+
+        assert!(result.is_error.is_none());
+        match result.content {
+            agentik_sdk::types::ToolResultContent::Text(markdown) => {
+                assert!(markdown.contains("4HHB"));
+                assert!(markdown.contains("X-RAY DIFFRACTION"));
+            }
+            other => panic!("expected text result, got {other:?}"),
+        }
+    }
 }
