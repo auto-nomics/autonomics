@@ -240,10 +240,13 @@ impl App {
             use ratatui::widgets::StatefulWidgetRef as _;
             let popup_width = frame.area().width * 9 / 10;
             let popup_height = frame.area().height * 9 / 10;
-            let popup = crate::widgets::popup::Popup::new(" Model Config ")
-                .width(popup_width)
-                .height(popup_height)
-                .accent(ratatui::style::Color::Magenta);
+            let popup = crate::widgets::popup::Popup::new(
+                " Model Config ",
+                crate::widgets::popup::PopupControls::default(),
+            )
+            .width(popup_width)
+            .height(popup_height)
+            .accent(ratatui::style::Color::Magenta);
             let inner = popup.render(frame.area(), frame.buffer_mut());
             let widget = crate::widgets::model_config_widget::ModelConfigWidget;
             widget.render_ref(

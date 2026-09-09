@@ -16,7 +16,7 @@ use ratatui::{
     widgets::{List, ListItem, ListState, Widget},
 };
 
-use crate::widgets::popup::Popup;
+use crate::widgets::popup::{Popup, PopupControls};
 
 // ═══════════════════════════════════════════════════════════════════════
 // Trait
@@ -235,7 +235,7 @@ impl<'a> SearchablePicker<'a> {
             return;
         }
 
-        let popup = Popup::new(self.title).accent(self.accent);
+        let popup = Popup::new(self.title, PopupControls::default()).accent(self.accent);
         let inner = popup.render(frame_area, buf);
 
         let regions = Layout::default()

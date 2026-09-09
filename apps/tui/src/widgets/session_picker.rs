@@ -15,7 +15,7 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, StatefulWidget, Widget},
 };
 
-use crate::widgets::popup::Popup;
+use crate::widgets::popup::{Popup, PopupControls};
 
 const PREVIEW_MAX_CHARS: usize = 1024;
 
@@ -314,7 +314,7 @@ impl StatefulWidget for SessionPicker {
             return;
         }
 
-        let popup = Popup::new(" Sessions ")
+        let popup = Popup::new(" Sessions ", PopupControls::default())
             .accent(self.accent)
             .width(self.popup_width)
             .height(self.popup_height);

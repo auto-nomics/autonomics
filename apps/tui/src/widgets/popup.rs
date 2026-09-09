@@ -6,9 +6,8 @@
 //! # Usage
 //!
 //! ```ignore
-//! let popup = Popup::new(" Select Profile ");
-//! let inner = popup.compute_inner(frame.area());
-//! popup.render_frame(frame.area(), buf);
+//! let popup = Popup::new(" Select Profile ", PopupControls::default());
+//! let inner = popup.render(frame.area(), buf);
 //! // Render your widget inside `inner`…
 //! ```
 
@@ -20,7 +19,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Widget},
 };
 
-/// A centered popup with a titled border.
+/// A centered popup container whose title and border are configurable.
 pub struct Popup<'a> {
     pub title: &'a str,
     /// Fixed width; 0 = auto (60% of frame, clamped 40–80).
@@ -29,15 +28,52 @@ pub struct Popup<'a> {
     pub height: u16,
     /// Accent color for the title / border.
     pub accent: Color,
+    /// Whether the title and border are rendered.
+    pub controls: PopupControls,
+}
+
+/// Chrome controls for [`Popup`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PopupControls {
+    /// Render the title text.
+    pub show_title: bool,
+    /// Render the border.
+    pub show_border: bool,
+}
+
+impl PopupControls {
+    pub const fn new(show_title: bool, show_border: bool) -> Self {
+        Self {
+            show_title,
+            show_border,
+        }
+    }
+
+    /// No title and no border; the entire popup area is available to content.
+    pub const fn borderless() -> Self {
+        Self::new(false, false)
+    }
+
+    /// A border without a title.
+    pub const fn untitled() -> Self {
+        Self::new(false, true)
+    }
+}
+
+impl Default for PopupControls {
+    fn default() -> Self {
+        Self::new(true, true)
+    }
 }
 
 impl<'a> Popup<'a> {
-    pub fn new(title: &'a str) -> Self {
+    pub fn new(title: &'a str, controls: PopupControls) -> Self {
         Self {
             title,
             width: 0,
             height: 0,
             accent: Color::Cyan,
+            controls,
         }
     }
 
@@ -76,12 +112,20 @@ impl<'a> Popup<'a> {
     /// Compute the inner content area (inside the border).
     pub fn inner_rect(&self, frame_area: Rect) -> Rect {
         let outer = self.outer_rect(frame_area);
-        // Borders take 1 row/col on each side.
+        // A border takes 1 row/col on each side. Without a border, still
+        // reserve the title row when the caller asks for one.
+        let (top, sides, bottom) = if self.controls.show_border {
+            (1, 1, 1)
+        } else if self.controls.show_title {
+            (1, 0, 0)
+        } else {
+            (0, 0, 0)
+        };
         Rect::new(
-            outer.x + 1,
-            outer.y + 1,
-            outer.width.saturating_sub(2),
-            outer.height.saturating_sub(2),
+            outer.x + sides,
+            outer.y + top,
+            outer.width.saturating_sub(sides * 2),
+            outer.height.saturating_sub(top + bottom),
         )
     }
 
@@ -94,17 +138,57 @@ impl<'a> Popup<'a> {
         // Backdrop clears underlying content.
         Clear.render(outer, buf);
 
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title(Span::styled(
+        let mut block = Block::default();
+        if self.controls.show_border {
+            block = block
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::DarkGray));
+        }
+        if self.controls.show_title {
+            block = block.title(Span::styled(
                 self.title,
                 Style::default()
                     .fg(self.accent)
                     .add_modifier(Modifier::BOLD),
-            ))
-            .border_style(Style::default().fg(Color::DarkGray));
+            ));
+        }
         block.render(outer, buf);
 
         inner
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inner_rect_reserves_border_chrome() {
+        let popup = Popup::new("Test", PopupControls::default())
+            .width(70)
+            .height(10);
+        let area = Rect::new(0, 0, 70, 10);
+
+        assert_eq!(popup.inner_rect(area), Rect::new(1, 1, 68, 8));
+    }
+
+    #[test]
+    fn inner_rect_reserves_title_without_border() {
+        let popup = Popup::new("Test", PopupControls::new(true, false))
+            .width(70)
+            .height(10);
+        let area = Rect::new(0, 0, 70, 10);
+
+        assert_eq!(popup.inner_rect(area), Rect::new(0, 1, 70, 9));
+    }
+
+    #[test]
+    fn borderless_inner_rect_uses_full_area() {
+        let popup = Popup::new("Test", PopupControls::borderless())
+            .width(70)
+            .height(10);
+        let area = Rect::new(0, 0, 70, 10);
+
+        assert_eq!(popup.inner_rect(area), area);
     }
 }

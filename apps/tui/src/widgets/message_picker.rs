@@ -23,7 +23,7 @@ use ratatui::{
 };
 
 use crate::state::ChatLine;
-use crate::widgets::popup::Popup;
+use crate::widgets::popup::{Popup, PopupControls};
 use crate::widgets::searchable_picker::{PickerItem, PickerState};
 use crate::xai_textarea::{TextArea, TextAreaState};
 
@@ -338,7 +338,9 @@ pub fn render_message_picker(frame_area: Rect, buf: &mut Buffer, state: &mut Mes
 
     // Wide popup: 80% of frame width, auto height.
     let popup_w = (frame_area.width * 8 / 10).max(60);
-    let popup = Popup::new(" Copy Message ").accent(ACCENT).width(popup_w);
+    let popup = Popup::new(" Copy Message ", PopupControls::default())
+        .accent(ACCENT)
+        .width(popup_w);
     let inner = popup.render(frame_area, buf);
 
     // Vertical: search input (1) + separator (1) + content (rest) + footer (1).

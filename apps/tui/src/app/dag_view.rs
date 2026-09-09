@@ -82,10 +82,13 @@ impl App {
     pub(super) fn render_dag_view(&mut self, area: Rect, buf: &mut Buffer) {
         let popup_width = area.width.saturating_sub(4).max(60).min(area.width);
         let popup_height = area.height.saturating_sub(4).max(16).min(area.height);
-        let popup = crate::widgets::popup::Popup::new(" Data DAG ")
-            .width(popup_width)
-            .height(popup_height)
-            .accent(Color::Cyan);
+        let popup = crate::widgets::popup::Popup::new(
+            " Data DAG ",
+            crate::widgets::popup::PopupControls::new(false, false),
+        )
+        .width(popup_width)
+        .height(popup_height)
+        .accent(Color::Cyan);
         let inner = popup.render(area, buf);
 
         let Some(snapshot) = self.state.dag_snapshot.as_ref() else {

@@ -13,7 +13,7 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, StatefulWidget, Widget},
 };
 
-use crate::widgets::popup::Popup;
+use crate::widgets::popup::{Popup, PopupControls};
 
 /// Vertical regions inside a picker popup.
 #[derive(Clone, Copy, Debug)]
@@ -46,7 +46,7 @@ pub fn render_chrome(
     accent: Color,
     popup_width: u16,
 ) -> PickerLayout {
-    let inner = Popup::new(title)
+    let inner = Popup::new(title, PopupControls::default())
         .accent(accent)
         .width(popup_width)
         .render(area, buf);

@@ -449,6 +449,7 @@ fn render_node(
     draw_hline(buf, canvas, rect.x, rect.bottom(), rect.width, border);
     draw_vline(buf, canvas, rect.x, rect.y, rect.height, border);
     draw_vline(buf, canvas, rect.right(), rect.y, rect.height, border);
+    draw_node_corners(buf, canvas, state, virtual_node, border);
 
     let title_width = rect.width.saturating_sub(4) as usize;
     let title = format!("{icon} {}", node.id);
@@ -495,7 +496,7 @@ fn render_node(
             buf,
             canvas,
             state,
-            virtual_node.x + NODE_WIDTH - 1,
+            virtual_node.x + NODE_WIDTH - 2,
             virtual_node.y,
             "*",
             Style::default().fg(Color::Yellow),
@@ -547,6 +548,13 @@ fn render_edge(
             to.y.saturating_sub(1),
             style,
         );
+        if target_x > x {
+            set_virtual(buf, canvas, state, x, bend_y, "└", style);
+            set_virtual(buf, canvas, state, target_x, bend_y, "┐", style);
+        } else if target_x < x {
+            set_virtual(buf, canvas, state, x, bend_y, "┘", style);
+            set_virtual(buf, canvas, state, target_x, bend_y, "┌", style);
+        }
         return;
     }
 
@@ -578,6 +586,24 @@ fn render_edge(
     );
     draw_virtual_v(buf, canvas, state, channel_x, entry_y, exit_y, style);
     draw_virtual_h(buf, canvas, state, exit_y, channel_x, to.center_x(), style);
+    set_virtual(buf, canvas, state, from.center_x(), entry_y, "└", style);
+    set_virtual(buf, canvas, state, channel_x, entry_y, "┌", style);
+    set_virtual(buf, canvas, state, channel_x, exit_y, "┘", style);
+}
+
+fn draw_node_corners(
+    buf: &mut ratatui::buffer::Buffer,
+    canvas: Rect,
+    state: &DagViewState,
+    node: &VirtualNode,
+    style: Style,
+) {
+    let right = node.x + NODE_WIDTH - 1;
+    let bottom = node.y + NODE_HEIGHT - 1;
+    set_virtual(buf, canvas, state, node.x, node.y, "╭", style);
+    set_virtual(buf, canvas, state, right, node.y, "╮", style);
+    set_virtual(buf, canvas, state, node.x, bottom, "╰", style);
+    set_virtual(buf, canvas, state, right, bottom, "╯", style);
 }
 
 fn channel_origin(layout: &DagLayout) -> u16 {
@@ -830,6 +856,7 @@ fn truncate(value: &str, max_cells: usize) -> String {
 mod tests {
     use super::*;
     use dag_core::dag::{DagEdgeView, DagNodeView};
+    use ratatui::buffer::Buffer;
 
     fn snapshot() -> DagTuiSnapshot {
         let node = |id: &str| DagNodeView {
@@ -887,5 +914,48 @@ mod tests {
         assert_eq!(state.selected().unwrap(), "b");
         state.select_previous(&graph);
         assert_eq!(state.selected().unwrap(), "a");
+    }
+
+    #[test]
+    fn node_border_uses_rounded_corners() {
+        let graph = snapshot();
+        let node = &graph.nodes[0];
+        let virtual_node = VirtualNode {
+            x: 4,
+            y: 2,
+            level: 0,
+        };
+        let mut state = DagViewState::default();
+        state.select(node.id.as_str());
+        let area = Rect::new(0, 0, 48, 12);
+        let mut buf = Buffer::empty(area);
+
+        render_node(&mut buf, area, &state, &virtual_node, node, true);
+
+        let right = virtual_node.x + NODE_WIDTH - 1;
+        let bottom = virtual_node.y + NODE_HEIGHT - 1;
+        assert_eq!(buf[(virtual_node.x, virtual_node.y)].symbol(), "╭");
+        assert_eq!(buf[(right, virtual_node.y)].symbol(), "╮");
+        assert_eq!(buf[(virtual_node.x, bottom)].symbol(), "╰");
+        assert_eq!(buf[(right, bottom)].symbol(), "╯");
+        assert_eq!(buf[(right - 1, virtual_node.y)].symbol(), "*");
+    }
+
+    #[test]
+    fn adjacent_edge_uses_turn_corners() {
+        let graph = snapshot();
+        let mut layout = dag_layout(&graph);
+        layout.nodes.get_mut("b").unwrap().x = NODE_WIDTH + NODE_GAP;
+        let state = DagViewState::default();
+        let area = Rect::new(0, 0, 96, 20);
+        let mut buf = Buffer::empty(area);
+
+        render_edge(&mut buf, area, &state, &layout, &graph, &graph.edges[0]);
+
+        let source = layout.nodes["a"].center_x();
+        let target = layout.nodes["b"].center_x();
+        let bend_y = layout.nodes["a"].bottom() + LEVEL_GAP / 2;
+        assert_eq!(buf[(source, bend_y)].symbol(), "└");
+        assert_eq!(buf[(target, bend_y)].symbol(), "┐");
     }
 }

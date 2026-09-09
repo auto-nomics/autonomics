@@ -15,7 +15,7 @@ use ratatui::{
     widgets::StatefulWidgetRef,
 };
 
-use crate::widgets::popup::Popup;
+use crate::widgets::popup::{Popup, PopupControls};
 use crate::widgets::searchable_picker::{PickerItem, PickerState, SearchablePicker};
 use crate::xai_textarea::{TextArea, TextAreaState};
 
@@ -238,7 +238,7 @@ pub fn render_command_palette(
         return;
     }
 
-    let popup = Popup::new(" Command Palette ").accent(Color::Cyan);
+    let popup = Popup::new(" Command Palette ", PopupControls::default()).accent(Color::Cyan);
     let inner = popup.render(frame_area, buf);
     let regions = Layout::default()
         .direction(Direction::Vertical)

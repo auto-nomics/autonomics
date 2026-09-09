@@ -12,7 +12,7 @@ use ratatui::{
     widgets::{Paragraph, Widget},
 };
 
-use crate::widgets::popup::Popup;
+use crate::widgets::popup::{Popup, PopupControls};
 
 /// State for the name input popup.
 #[derive(Default)]
@@ -57,7 +57,7 @@ pub fn render_name_input(area: Rect, buf: &mut Buffer, state: &NameInputState) {
         return;
     }
 
-    let popup = Popup::new(&state.title).accent(Color::Yellow);
+    let popup = Popup::new(&state.title, PopupControls::default()).accent(Color::Yellow);
     let inner = popup.render(area, buf);
 
     // Input line: "  Name: <text><cursor>"
