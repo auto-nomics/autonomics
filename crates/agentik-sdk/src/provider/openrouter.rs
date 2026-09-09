@@ -280,9 +280,11 @@ mod tests {
     fn preset_catalogue_has_cross_vendor_entries() {
         let models = OpenrouterProvider::preset_models();
         assert!(models.len() >= 10);
-        assert!(models
-            .iter()
-            .any(|m| m.model_name == "anthropic/claude-sonnet-5"));
+        assert!(
+            models
+                .iter()
+                .any(|m| m.model_name == "anthropic/claude-sonnet-5")
+        );
         assert!(models.iter().any(|m| m.model_name == "z-ai/glm-5"));
         // Every preset entry keeps a nil provider_id for the caller to bind.
         assert!(models.iter().all(|m| m.provider_id == Uuid::nil()));

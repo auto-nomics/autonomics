@@ -118,6 +118,9 @@ impl PromptCapabilities for agentik_core::AgentProfile {
     fn enable_gwascatalog(&self) -> bool {
         self.enable_gwascatalog
     }
+    fn enable_chembl(&self) -> bool {
+        self.enable_chembl
+    }
     fn enable_dag_history(&self) -> bool {
         self.enable_dag_history
     }
@@ -470,6 +473,10 @@ impl SharedInfra {
 
         if profile.enable_gwascatalog {
             tools.extend(gwascatalog_tools(file_storage));
+        }
+
+        if profile.enable_chembl {
+            tools.extend(chembl_tools());
         }
 
         tools.extend(data_engine_tools::registrations(Arc::new(engine_client)));
@@ -2806,6 +2813,10 @@ fn capability_from_profile(
     if profile.enable_gwascatalog {
         tags.push("gwas-catalog".into());
         expertise.push("variant-lookup".into());
+    }
+    if profile.enable_chembl {
+        tags.push("chembl".into());
+        expertise.push("bioactivity-data".into());
     }
     if profile.enable_dag_history {
         tags.push("pipeline".into());

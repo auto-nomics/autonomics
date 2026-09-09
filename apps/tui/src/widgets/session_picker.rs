@@ -820,6 +820,7 @@ mod tests {
     }
 }
 
+#[allow(clippy::items_after_test_module)]
 /// Format a token count with thousands separators (e.g. "12,345").
 fn format_tokens(n: u64) -> String {
     let s = n.to_string();

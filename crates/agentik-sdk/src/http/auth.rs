@@ -187,9 +187,7 @@ mod tests {
 
     #[test]
     fn chatgpt_token_slot_overrides_snapshot() {
-        let slot = std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(
-            "fresh-token".to_string(),
-        ));
+        let slot = std::sync::Arc::new(arc_swap::ArcSwap::from_pointee("fresh-token".to_string()));
         let auth = AuthHandler::with_method(
             "stale-token".to_string(),
             AuthMethod::Chatgpt {

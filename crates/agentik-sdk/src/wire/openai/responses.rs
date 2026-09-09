@@ -528,29 +528,31 @@ impl WireProtocol for OpenAiResponsesWire {
                 // MessageDelta 排进 pending，由 SSE 泵在返回的 MessageStop
                 // 之前发出。没有它，运行时的 UsageUpdate 与流式装配出的
                 // 最终 message 的 usage 全为 0。
-                state.pending_events.push_back(MessageStreamEvent::MessageDelta {
-                    delta: MessageDelta {
-                        stop_reason: state.stop_reason.clone(),
-                        stop_sequence: None,
-                    },
-                    usage: MessageDeltaUsage {
-                        output_tokens: state
-                            .usage
-                            .as_ref()
-                            .map(|u| u.output_tokens)
-                            .unwrap_or(0),
-                        input_tokens: state.usage.as_ref().map(|u| u.input_tokens),
-                        cache_creation_input_tokens: state
-                            .usage
-                            .as_ref()
-                            .and_then(|u| u.cache_creation_input_tokens),
-                        cache_read_input_tokens: state
-                            .usage
-                            .as_ref()
-                            .and_then(|u| u.cache_read_input_tokens),
-                        server_tool_use: None,
-                    },
-                });
+                state
+                    .pending_events
+                    .push_back(MessageStreamEvent::MessageDelta {
+                        delta: MessageDelta {
+                            stop_reason: state.stop_reason.clone(),
+                            stop_sequence: None,
+                        },
+                        usage: MessageDeltaUsage {
+                            output_tokens: state
+                                .usage
+                                .as_ref()
+                                .map(|u| u.output_tokens)
+                                .unwrap_or(0),
+                            input_tokens: state.usage.as_ref().map(|u| u.input_tokens),
+                            cache_creation_input_tokens: state
+                                .usage
+                                .as_ref()
+                                .and_then(|u| u.cache_creation_input_tokens),
+                            cache_read_input_tokens: state
+                                .usage
+                                .as_ref()
+                                .and_then(|u| u.cache_read_input_tokens),
+                            server_tool_use: None,
+                        },
+                    });
                 Ok(Some(MessageStreamEvent::MessageStop))
             }
 
@@ -822,7 +824,8 @@ mod tests {
         let wire = OpenAiResponsesWire;
         let mut state = StreamState::default();
 
-        let created = r#"{"type":"response.created","response":{"id":"resp_x","model":"gpt-6-astra"}}"#;
+        let created =
+            r#"{"type":"response.created","response":{"id":"resp_x","model":"gpt-6-astra"}}"#;
         wire.adapt_sse_event("response.created", created, &mut state)
             .unwrap();
         let added = r#"{"type":"response.output_item.added","item":{"type":"function_call","index":0,"call_id":"call_1","name":"lit_search"}}"#;
@@ -844,7 +847,8 @@ mod tests {
         );
 
         // 非工具项的 done 不发事件。
-        let msg_done = r#"{"type":"response.output_item.done","item":{"type":"message","index":1}}"#;
+        let msg_done =
+            r#"{"type":"response.output_item.done","item":{"type":"message","index":1}}"#;
         assert!(
             wire.adapt_sse_event("response.output_item.done", msg_done, &mut state)
                 .unwrap()
@@ -863,7 +867,8 @@ mod tests {
         let created = r#"{"type":"response.created","response":{"id":"resp_x","model":"gpt-4o"}}"#;
         wire.adapt_sse_event("response.created", created, &mut state)
             .unwrap();
-        let added = r#"{"type":"response.output_item.added","item":{"type":"message","id":"msg_1"}}"#;
+        let added =
+            r#"{"type":"response.output_item.added","item":{"type":"message","id":"msg_1"}}"#;
         assert!(
             wire.adapt_sse_event("response.output_item.added", added, &mut state)
                 .unwrap()

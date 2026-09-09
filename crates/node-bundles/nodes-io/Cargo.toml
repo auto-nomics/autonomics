@@ -12,6 +12,7 @@ biofusion = { path = "../../biofusion" }
 container-runtime = { path = "../../container-runtime" }
 vfs = { path = "../../vfs" }
 opentargets = { path = "../../opentargets" }
+chembl = { path = "../../chembl" }
 openalex = { path = "../../openalex" }
 semantic-scholar = { path = "../../semantic-scholar" }
 crossref = { path = "../../crossref" }

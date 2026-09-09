@@ -44,11 +44,7 @@ impl WireProtocol for ChatgptResponsesWire {
         OpenAiResponsesWire.features()
     }
 
-    fn encode_request(
-        &self,
-        params: &MessageCreateParams,
-        streaming: bool,
-    ) -> Result<WireRequest> {
+    fn encode_request(&self, params: &MessageCreateParams, streaming: bool) -> Result<WireRequest> {
         let mut req = OpenAiResponsesWire.encode_request(params, streaming)?;
         req.endpoint_path = ENDPOINT_PATH.to_string();
         req.headers.push(("OpenAI-Beta", OPENAI_BETA));
@@ -99,14 +95,16 @@ mod tests {
             .build();
         let req = wire.encode_request(&params, false).unwrap();
         assert_eq!(req.endpoint_path, "/backend-api/codex/responses");
-        assert!(req
-            .headers
-            .iter()
-            .any(|(k, v)| (*k, *v) == ("OpenAI-Beta", "responses=experimental")));
-        assert!(req
-            .headers
-            .iter()
-            .any(|(k, v)| (*k, *v) == ("originator", ORIGINATOR)));
+        assert!(
+            req.headers
+                .iter()
+                .any(|(k, v)| (*k, *v) == ("OpenAI-Beta", "responses=experimental"))
+        );
+        assert!(
+            req.headers
+                .iter()
+                .any(|(k, v)| (*k, *v) == ("originator", ORIGINATOR))
+        );
     }
 
     #[test]

@@ -90,10 +90,7 @@ impl Model {
     /// 设置 token 刷新回调（参数 = 新 blob JSON，写库用）。仅 OAuth 模型
     /// 生效；其他 provider 原样返回。
     #[must_use]
-    pub fn with_token_refreshed(
-        mut self,
-        cb: impl Fn(String) + Send + Sync + 'static,
-    ) -> Self {
+    pub fn with_token_refreshed(mut self, cb: impl Fn(String) + Send + Sync + 'static) -> Self {
         self.oauth = self
             .oauth
             .take()
@@ -223,9 +220,9 @@ mod tests {
     use super::*;
     use crate::http::auth::AuthMethod;
     use crate::model::provider_config::ProviderType;
+    use crate::provider::ProviderPreset;
     use crate::provider::openai::MODEL_GPT_6_ASTRA;
     use crate::provider::openai::OpenaiProvider;
-    use crate::provider::ProviderPreset;
 
     fn openai_provider(api_key: &str) -> ProviderConfig {
         ProviderConfig {
