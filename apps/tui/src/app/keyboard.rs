@@ -212,14 +212,6 @@ impl App {
             // Mark the active agent's tab as "cancel pending" so the UI
             // can show a "cancelling…" indicator.
             self.state.active_tab_state_mut().cancel_pending = true;
-            // Clear any pending queued messages — the user cancelled, so
-            // we don't want queued messages to immediately re-trigger
-            // the agent when the TurnAborted event arrives.
-            let cleared = self.state.active_tab_state_mut().pending_queue.len();
-            if cleared > 0 {
-                self.state.active_tab_state_mut().pending_queue.clear();
-                tracing::info!(cleared, "cleared pending queue on user cancel");
-            }
             return;
         }
 

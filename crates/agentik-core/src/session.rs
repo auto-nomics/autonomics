@@ -419,22 +419,22 @@ impl Session {
         user_content: Vec<ContentBlock>,
         from_user: bool,
     ) -> Result<()> {
-        // Emit a display event only for externally-sourced messages
-        // (delegate_to / send_message / background-task notice). User-typed
-        // messages are already shown locally by the TUI before being sent,
-        // so emitting here would cause a duplicate display.
-        if !from_user {
-            let preview: String = user_content
-                .iter()
-                .filter_map(|cb| match cb {
-                    ContentBlock::Text { text } => Some(text.as_str()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            if !preview.is_empty() {
-                self.shared.send_event(AgentEvent::MessageInjected(preview));
-            }
+        // Emit before `remember` so the UI can distinguish an external display
+        // event from the acknowledgement of a runtime-bound TUI prompt.
+        let preview: String = user_content
+            .iter()
+            .filter_map(|cb| match cb {
+                ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !preview.is_empty() {
+            self.shared.send_event(if from_user {
+                AgentEvent::UserMessageAcknowledged(preview)
+            } else {
+                AgentEvent::MessageInjected(preview)
+            });
         }
 
         let message = Message {

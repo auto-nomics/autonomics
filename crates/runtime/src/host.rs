@@ -3090,6 +3090,10 @@ fn derive_agent_status(event: &AgentEvent) -> (AgentStatus, Option<String>) {
         //    change by itself; the agent will start processing on its own ──
         AgentEvent::MessageInjected(_) => (AgentStatus::Idle, None),
 
+        // TUI acknowledgement happens mid-run when a steering prompt reaches
+        // conversation memory; it does not change the active status.
+        AgentEvent::UserMessageAcknowledged(_) => (AgentStatus::Running, None),
+
         // ── Session lifecycle events — out of scope for runtime status ──
         AgentEvent::SessionActivated { .. }
         | AgentEvent::SessionPaused { .. }

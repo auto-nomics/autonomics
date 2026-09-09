@@ -30,6 +30,7 @@ pub mod source_opentargets;
 pub mod source_semantic_scholar;
 pub mod susie_rss_container;
 pub mod twas_fusion_container;
+pub mod visualization_container;
 pub use crossref::nodes::works::{CrossrefWorksNode, CrossrefWorksNodeFactory};
 pub use uniprot::nodes::idmap::{UniprotIdmapNode, UniprotIdmapNodeFactory};
 pub use uniprot::nodes::search::{UniprotSearchNode, UniprotSearchNodeFactory};
@@ -282,6 +283,12 @@ impl NodePlugin for Plugin {
             Arc::clone(&self.container_execution.runtime),
             Arc::clone(&self.container_execution.panel_cache),
         )));
+        registry.register(Box::new(
+            visualization_container::VisualizationContainerNodeFactory::new(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
         registry.register(Box::new(
             source_opentargets::OpentargetsAssociationsNodeFactory {},
         ));

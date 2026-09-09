@@ -2,7 +2,9 @@
 
 [English](visualization.md) | [中文](visualization_zh.md)
 
-A DAG node that renders a DataFusion `DataFrame` to PNG via R/ggplot2.
+DAG nodes that render data to PNG with R/ggplot2. The original
+`visualization` node consumes a DataFusion `DataFrame`; the containerized
+`visualization_container` variant consumes staged `File` inputs.
 
 ## R/ggplot2 rendering
 
@@ -41,3 +43,40 @@ Dimensions (`width`/`height`/`dpi`) are optional.
 ## R requirement (optional)
 
 Rendering needs `Rscript` on `PATH` with the `arrow` and `ggplot2` packages installed. Override the binary with the `VISUALIZATION_RSCRIPT` env var. The engine does **not** detect or pin an R version — whichever `Rscript` the launching process resolves wins. A conda env is the cleanest way to provision a known-good R (see the crate's tests for the expected packages).
+
+## Containerized File-to-File node
+
+`visualization_container` uses the standard container file data plane. Port 0 is
+the data File and port 1 is the user's R script File. The node loads the data as
+`df`, sources the script, requires a plot assigned to `p`, and publishes
+`plot.png` as an immutable VFS File artifact.
+
+Supported `data_format` values are `csv`, `tsv`, `parquet`, `arrow_stream`, and
+`arrow_file`. Optional dimensions, resource limits, timeout, and artifact prefix
+are controlled by the node spec:
+
+```json
+{
+  "data_format": "parquet",
+  "width": 8,
+  "height": 6,
+  "dpi": 150
+}
+```
+
+The container runs with no network, a read-only root filesystem, and default
+limits of 2 CPUs, 2 GiB memory, 256 PIDs, and 300 seconds. Build the local image
+with:
+
+```bash
+podman build \
+  --network host \
+  -f containers/visualization/Dockerfile \
+  -t localhost/atc/visualization:0.1.0 \
+  containers/visualization
+```
+
+Run `containers/visualization/test_visualization.sh` for the package-version and
+PNG smoke baseline. The node binds the published immutable ACR manifest
+`autonomics/visualization@sha256:ee9592b77bc5ea0cebfafafbe39550c377204019f451d7a37e13e4ce2e884f15`;
+`ACR_ENDPOINT` may override the registry host.

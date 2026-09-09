@@ -70,9 +70,9 @@ impl App {
 
     /// Key handling in input mode: typing goes to input, Enter sends, Esc exits.
     ///
-    /// When the agent is busy, Enter enqueues the message into a pending
-    /// queue instead of sending immediately — the queue is drained when
-    /// the agent finishes its current response cycle.
+    /// When the agent is busy, Enter sends immediately into the runtime's
+    /// internal queue. The Session commits it at the next safe iteration
+    /// boundary, and the TUI keeps an unacknowledged preview until then.
     pub(super) fn handle_input_key(&mut self, key: &KeyEvent) {
         use crate::widgets::input_area::{history_clear_recall, history_down, history_up};
 
@@ -101,10 +101,8 @@ impl App {
             return;
         }
 
-        // Pre-extract data needed after the `ts` borrow ends.
-        // `send_text` is delivered to the agent after the `ts` borrow ends.
-        // Enqueued messages are stored in `pending_queue` directly inside
-        // the match arm — no post-borrow dispatch needed for them.
+        // Every submitted message is delivered after the `ts` borrow ends. For
+        // busy agents the pending queue tracks acknowledgement/rendering only.
         let mut send_text: Option<String> = None;
 
         match key.code {
@@ -136,10 +134,12 @@ impl App {
                     history_clear_recall(&mut ts.input_draft, &mut ts.input_recall);
 
                     ts.push_user_message(text.clone());
+                    ts.enqueue_pending(text.clone(), true);
                     send_text = Some(text);
                     ts.scroll_to_bottom();
                 } else if ts.can_enqueue() {
-                    // Agent busy — push to pending queue for deferred delivery.
+                    // Agent busy — deliver now, but render only after the
+                    // Session commits it to conversation memory.
                     let text = ts.take_input();
                     crate::widgets::input_area::history_push(
                         &mut ts.input_history,
@@ -148,9 +148,8 @@ impl App {
                     );
                     history_clear_recall(&mut ts.input_draft, &mut ts.input_recall);
 
-                    ts.push_user_message(text.clone());
-                    ts.enqueue_pending(text);
-                    ts.scroll_to_bottom();
+                    ts.enqueue_pending(text.clone(), false);
+                    send_text = Some(text);
                 }
                 ts.input_mode = InputMode::Browse;
             }

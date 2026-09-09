@@ -106,3 +106,33 @@ pub fn build_default_registry_with_container_execution(
 
     registry
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn visualization_container_factory_is_registered() {
+        let runtime_env = datafusion::prelude::SessionContext::new().runtime_env();
+        let container_execution =
+            Arc::new(container_runtime::ContainerExecutionInfra::from_config(
+                container_runtime::PodmanConfig {
+                    program: "podman".into(),
+                    workspace_root: "/tmp/autonomics-visualization-workspace".into(),
+                    panel_cache_root: "/tmp/autonomics-visualization-panels".into(),
+                },
+            ));
+        let registry = build_default_registry_with_container_execution(
+            runtime_env,
+            None,
+            Arc::new(DataBundleCatalog::new()),
+            container_execution,
+        );
+
+        let ports = registry
+            .get_node_ports("visualization_container")
+            .expect("visualization_container is registered");
+        assert_eq!(ports.input_ports().len(), 2);
+        assert_eq!(ports.output_ports().len(), 1);
+    }
+}

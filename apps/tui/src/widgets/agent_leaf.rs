@@ -5,6 +5,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Padding, Paragraph, StatefulWidgetRef},
 };
+use unicode_width::{UnicodeWidthChar as _, UnicodeWidthStr};
 
 use crate::state::{AgentStatus, AgentTabState, DisplaySettings, InputMode};
 use crate::widgets::{
@@ -63,6 +64,12 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
             ts.input.display_height(text_width)
         };
         let input_constraint = Constraint::Length(input_text_rows + 2);
+        let pending_texts = ts.pending_queue_preview_texts();
+        let pending_constraint = Constraint::Length(pending_queue_height(
+            pending_texts.len(),
+            area.width,
+            area.height,
+        ));
 
         // ── Top-level vertical split ──
         let layout = Layout::default()
@@ -70,6 +77,7 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
             .constraints([
                 Constraint::Length(1), // StatusBar (full width)
                 Constraint::Min(3),    // Middle: Chat + Sidebar (horizontal split)
+                pending_constraint,    // Runtime-bound input awaiting commit
                 input_constraint,      // Input (full width)
                 Constraint::Length(1), // Footer hints
             ])
@@ -170,14 +178,20 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
             sidebar.render(sb_area, buf);
         }
 
+        // Runtime-bound prompts stay out of the transcript until the Session
+        // commits them; show a compact preview immediately above the composer.
+        if !pending_texts.is_empty() {
+            render_pending_queue(layout[2], buf, &pending_texts);
+        }
+
         // ── Input area (boxed composer, ❯ prompt) ──
         let queued = ts.pending_queue_len();
         let placeholder: &str = if running {
             match ts.input_mode {
-                InputMode::Input => "Type to queue a message… (Ctrl+C to cancel)",
+                InputMode::Input => "Type to queue a message… (Ctrl+C cancels turn)",
                 InputMode::Browse => {
                     if queued > 0 {
-                        "Agent running — message queued. Enter to compose…"
+                        "Agent running — pending input waits for next request…"
                     } else {
                         "Agent running… (Ctrl+C to cancel)"
                     }
@@ -210,7 +224,7 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
                 }
             };
             if queued > 0 {
-                format!("{base} ({queued} queued)")
+                format!("{base} ({queued} pending)")
             } else {
                 base
             }
@@ -233,16 +247,16 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
         let mut input_state = InputWidgetState {
             input: &mut ts.input,
         };
-        input_widget.render(layout[2], buf, &mut input_state);
+        input_widget.render(layout[3], buf, &mut input_state);
 
         // ── Animated loading bar on the input box bottom border ──
         if running {
-            render_loading_bar(layout[2], buf, ts.frame);
+            render_loading_bar(layout[3], buf, ts.frame);
         }
 
         // ── Footer hint line ──
         render_footer_hint(
-            layout[3],
+            layout[4],
             buf,
             ts.input_mode,
             running,
@@ -257,6 +271,80 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
 
 /// Braille spinner frames for the loading indicator.
 const BRAILLE_SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+const PENDING_PREVIEW_LIMIT: usize = 3;
+
+/// Height used for the compact pending-input band above the composer.
+fn pending_queue_height(count: usize, width: u16, height: u16) -> u16 {
+    if count == 0 || width < 8 || height < 7 {
+        return 0;
+    }
+
+    let mut height = 1 + count.min(PENDING_PREVIEW_LIMIT);
+    if count > PENDING_PREVIEW_LIMIT {
+        height += 1;
+    }
+    u16::try_from(height).unwrap_or(u16::MAX)
+}
+
+/// Render submitted-but-uncommitted input without placing it in the transcript.
+fn render_pending_queue(area: Rect, buf: &mut Buffer, messages: &[String]) {
+    if area.width < 8 {
+        return;
+    }
+
+    let header_style = Style::default()
+        .fg(Color::Gray)
+        .add_modifier(Modifier::BOLD);
+    let message_style = Style::default()
+        .fg(Color::DarkGray)
+        .add_modifier(Modifier::ITALIC);
+    let mut lines = vec![Line::styled(
+        format!("Pending input ({})", messages.len()),
+        header_style,
+    )];
+    lines.extend(
+        messages
+            .iter()
+            .take(PENDING_PREVIEW_LIMIT)
+            .map(|message| Line::styled(preview_line(message, area.width), message_style)),
+    );
+
+    if messages.len() > PENDING_PREVIEW_LIMIT {
+        lines.push(Line::styled(
+            format!("  + {} more", messages.len() - PENDING_PREVIEW_LIMIT),
+            message_style,
+        ));
+    }
+
+    Paragraph::new(lines).render(area, buf);
+}
+
+/// Collapse a multiline prompt and fit it on one terminal row.
+fn preview_line(message: &str, width: u16) -> String {
+    let collapsed = message.split_whitespace().collect::<Vec<_>>().join(" ");
+    let prefix = "  > ";
+    let available = usize::from(width).saturating_sub(UnicodeWidthStr::width(prefix));
+    if available == 0 {
+        return String::new();
+    }
+    if UnicodeWidthStr::width(collapsed.as_str()) <= available {
+        return format!("{prefix}{collapsed}");
+    }
+
+    let keep = available.saturating_sub(1);
+    let mut truncated = String::new();
+    let mut used = 0;
+    for ch in collapsed.chars() {
+        let ch_width = ch.width().unwrap_or(0);
+        if used + ch_width > keep {
+            break;
+        }
+        truncated.push(ch);
+        used += ch_width;
+    }
+    format!("{prefix}{truncated}…")
+}
 
 /// Draw an animated loading bar on the bottom border of the input box.
 fn render_loading_bar(area: Rect, buf: &mut Buffer, frame: u64) {
@@ -317,13 +405,13 @@ fn render_footer_hint(
     } else if running {
         match mode {
             InputMode::Input => {
-                " Enter queue  Shift+Enter newline  Esc exit  Ctrl+C cancel ".to_string()
+                " Enter queue  Shift+Enter newline  Esc exit  Ctrl+C cancel turn ".to_string()
             }
             InputMode::Browse => {
                 if queued > 0 {
-                    format!(" {queued} queued  Enter compose  Ctrl+C cancel ")
+                    format!(" {queued} pending  Enter compose  Ctrl+C cancel turn ")
                 } else {
-                    " Enter compose  Ctrl+C cancel  Ctrl+R history ".to_string()
+                    " Enter compose  Ctrl+C cancel turn  Ctrl+R history ".to_string()
                 }
             }
         }
@@ -346,4 +434,25 @@ fn render_footer_hint(
         .style(style)
         .alignment(Alignment::Right)
         .render(area, buf);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pending_preview_has_bounded_height() {
+        assert_eq!(pending_queue_height(0, 80, 24), 0);
+        assert_eq!(pending_queue_height(2, 80, 24), 3);
+        assert_eq!(pending_queue_height(5, 80, 24), 5);
+        assert_eq!(pending_queue_height(2, 4, 24), 0);
+        assert_eq!(pending_queue_height(2, 80, 6), 0);
+    }
+
+    #[test]
+    fn pending_preview_collapses_and_truncates() {
+        assert_eq!(preview_line("  hello\n  world  ", 40), "  > hello world");
+        assert_eq!(preview_line("abcdefghij", 12), "  > abcdefg…");
+        assert_eq!(preview_line("中文消息", 10), "  > 中文…");
+    }
 }

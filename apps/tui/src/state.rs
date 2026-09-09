@@ -118,6 +118,16 @@ pub enum InputMode {
     Input,
 }
 
+/// A runtime-bound user message awaiting commit to the agent context.
+///
+/// Locally rendered idle messages also use this bookkeeping so their
+/// acknowledgement does not create a duplicate transcript row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingUserMessage {
+    pub text: String,
+    pub rendered: bool,
+}
+
 /// Mutable state for the Agent tab.
 pub struct AgentTabState {
     pub messages: Vec<ChatLine>,
@@ -155,12 +165,10 @@ pub struct AgentTabState {
     /// context-window progress bar.
     pub latest_turn_context_used: u64,
     pub input_mode: InputMode,
-    /// Messages the user typed while the agent was busy. Each entry is
-    /// delivered to the agent when the current response cycle finishes
-    /// (on `AgentEvent::Done` / `AgentEvent::Error`). The chat view
-    /// already shows them as user messages (pushed at enqueue time) —
-    /// the queue only tracks what still needs to reach the agent.
-    pub pending_queue: VecDeque<String>,
+    /// Runtime-bound user messages awaiting acknowledgement. During an active
+    /// turn, the Session commits them at its next safe iteration boundary,
+    /// before another model request is built.
+    pub pending_queue: VecDeque<PendingUserMessage>,
     /// When true, `clamp_scroll` forces offset to the bottom each frame.
     pub auto_scroll: bool,
     /// True while an incremental Ctrl+R history search is in progress.
@@ -268,10 +276,10 @@ impl AgentTabState {
         !self.status.is_active() && !self.input.is_empty()
     }
 
-    /// Returns true when the composer has text that can be enqueued for
-    /// later delivery (agent is actively processing). When Waiting the
-    /// agent loop has exited, so messages go through immediately via
-    /// `can_send` instead.
+    /// Returns true when the composer has text that can be sent into the
+    /// runtime's pending-input flow while the agent is actively processing.
+    /// When Waiting, the agent loop has exited, so messages go through
+    /// immediately via `can_send` instead.
     pub fn can_enqueue(&self) -> bool {
         self.status.is_active() && !self.input.is_empty()
     }
@@ -281,15 +289,40 @@ impl AgentTabState {
         self.pending_queue.len()
     }
 
-    /// Push a message onto the pending queue (to be delivered when the
-    /// agent goes idle).
-    pub fn enqueue_pending(&mut self, text: String) {
-        self.pending_queue.push_back(text);
+    /// Track a runtime-bound user message until the Session acknowledges it.
+    pub fn enqueue_pending(&mut self, text: String, rendered: bool) {
+        self.pending_queue
+            .push_back(PendingUserMessage { text, rendered });
     }
 
-    /// Drain all pending messages, returning them in FIFO order.
-    pub fn drain_pending_queue(&mut self) -> Vec<String> {
-        self.pending_queue.drain(..).collect()
+    /// Text for messages that still need to be promoted into the transcript.
+    pub fn pending_queue_preview_texts(&self) -> Vec<String> {
+        self.pending_queue
+            .iter()
+            .filter(|message| !message.rendered)
+            .map(|message| message.text.clone())
+            .collect()
+    }
+
+    /// Match a `UserMessageAcknowledged` event against a locally submitted
+    /// message. Returns `false` for messages this tab did not submit.
+    pub fn acknowledge_pending_message(&mut self, text: &str) -> bool {
+        let Some(index) = self
+            .pending_queue
+            .iter()
+            .position(|message| message.text == text)
+        else {
+            return false;
+        };
+
+        let message = self.pending_queue.remove(index).expect("index found above");
+        if !message.rendered {
+            self.push_user_message(message.text);
+            if self.auto_scroll {
+                self.scroll_to_bottom();
+            }
+        }
+        true
     }
 
     /// Take the current input text and clear the input field.
@@ -568,6 +601,9 @@ pub fn apply_event(state: &mut AgentTabState, event: AgentEvent) {
             if state.auto_scroll {
                 state.scroll_to_bottom();
             }
+        }
+        AgentEvent::UserMessageAcknowledged(text) => {
+            state.acknowledge_pending_message(&text);
         }
         // Streaming protocol events — not surfaced directly to the chat view
         AgentEvent::TurnStarted { .. }
@@ -913,18 +949,41 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pending_queue_enqueue_and_drain() {
+    fn pending_queue_tracks_runtime_acknowledgements() {
         let mut ts = AgentTabState::default();
         assert_eq!(ts.pending_queue_len(), 0);
-        assert!(ts.drain_pending_queue().is_empty());
+        assert!(ts.pending_queue_preview_texts().is_empty());
 
-        ts.enqueue_pending("hello".into());
-        ts.enqueue_pending("world".into());
+        ts.enqueue_pending("hello".into(), false);
+        ts.enqueue_pending("rendered".into(), true);
         assert_eq!(ts.pending_queue_len(), 2);
+        assert_eq!(ts.pending_queue_preview_texts(), vec!["hello"]);
 
-        let drained = ts.drain_pending_queue();
-        assert_eq!(drained, vec!["hello", "world"]);
+        apply_event(&mut ts, AgentEvent::UserMessageAcknowledged("hello".into()));
+        assert_eq!(ts.pending_queue_len(), 1);
+        assert!(matches!(
+            ts.messages.last(),
+            Some(ChatLine::User(text)) if text == "hello"
+        ));
+
+        apply_event(
+            &mut ts,
+            AgentEvent::UserMessageAcknowledged("rendered".into()),
+        );
         assert_eq!(ts.pending_queue_len(), 0);
+        assert_eq!(ts.messages.len(), 1);
+    }
+
+    #[test]
+    fn external_injected_message_still_renders() {
+        let mut ts = AgentTabState::default();
+        apply_event(&mut ts, AgentEvent::MessageInjected("external".into()));
+
+        assert_eq!(ts.pending_queue_len(), 0);
+        assert!(matches!(
+            ts.messages.last(),
+            Some(ChatLine::User(text)) if text == "external"
+        ));
     }
 
     #[test]

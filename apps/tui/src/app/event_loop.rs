@@ -203,18 +203,6 @@ impl App {
                         };
 
                         let is_session_list = matches!(event, AgentEvent::SessionList { .. });
-                        // Done / TurnAborted / Error all signal the end of a
-                        // turn — after applying, check for pending queued
-                        // messages the user typed while the agent was busy.
-                        let may_have_pending = matches!(
-                            event,
-                            AgentEvent::Done
-                                | AgentEvent::TurnAborted
-                                | AgentEvent::Error(_)
-                        ) || matches!(
-                            event,
-                            AgentEvent::LifecycleChanged(AgentStatus::Waiting)
-                        );
                         if matches!(
                             event,
                             AgentEvent::SessionActivated { .. }
@@ -245,46 +233,6 @@ impl App {
                         // loads for sessions that have empty tab_state.messages.
                         if is_session_list {
                             self.spawn_session_history_loads();
-                        }
-
-                        // ── Drain pending message queue ──
-                        // When the agent finishes a response cycle (Done /
-                        // Error → Idle), deliver any messages the user typed
-                        // while it was busy. Each message triggers a new turn;
-                        // the agent processes them sequentially.
-                        if may_have_pending {
-                            let agent_name = self
-                                .state
-                                .sessions
-                                .get(target_idx)
-                                .map(|s| s.name.clone());
-                            let pending: Vec<String> = self
-                                .state
-                                .sessions
-                                .get_mut(target_idx)
-                                .map(|s| {
-                                    if s.active_sub_session_idx < s.sub_sessions.len() {
-                                        s.sub_sessions[s.active_sub_session_idx]
-                                            .tab_state
-                                            .drain_pending_queue()
-                                    } else {
-                                        s.pending_tab_state.drain_pending_queue()
-                                    }
-                                })
-                                .unwrap_or_default();
-                            if !pending.is_empty() {
-                                tracing::info!(
-                                    count = pending.len(),
-                                    "draining pending message queue after agent idle"
-                                );
-                                if let Some(name) = agent_name {
-                                    if let Some(host) = self.host.as_ref() {
-                                        for msg in pending {
-                                            host.control().deliver_message(&name, msg);
-                                        }
-                                    }
-                                }
-                            }
                         }
 
                         self.dirty = true;

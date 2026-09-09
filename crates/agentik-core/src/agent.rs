@@ -52,11 +52,10 @@ impl Default for AgentConfig {
 pub enum InternalEvent {
     /// User injected a new message.
     ///
-    /// `from_user` is `true` when the message originated from the TUI user
-    /// input (already shown locally — no display event needed). It is `false`
-    /// when the message was injected by an external source such as
-    /// `delegate_to` / `send_message` (caller hasn't shown it — TUI must
-    /// render it via `AgentEvent::MessageInjected`).
+    /// `from_user` distinguishes TUI-originated prompts from external
+    /// injections. A committed TUI prompt emits
+    /// `AgentEvent::UserMessageAcknowledged`; external messages emit
+    /// `AgentEvent::MessageInjected`.
     MessageInject {
         content: Vec<ContentBlock>,
         from_user: bool,
