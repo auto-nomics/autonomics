@@ -11,6 +11,7 @@ use writing_base::LatexEngine;
 
 use agentik_core::tools::ToolRegistration;
 use bib_base::{BibBase, LiteratureGateway};
+use chembl::ChEMBLClient;
 use data_engine::runtime::DataEngineClient;
 use gwascatalog_sdk::GwasCatalogClient;
 use opengwas::OpengwasClient;
@@ -42,6 +43,13 @@ pub fn opengwas_tools_with_token(
 pub fn opentargets_tools() -> Vec<ToolRegistration> {
     let opentargets = Arc::new(OpenTargetsClient::new());
     opentargets::opentargets_registrations(opentargets)
+}
+
+/// ChEMBL tools (molecule/target search, bioactivity previews, and
+/// mechanism/indication summaries).
+pub fn chembl_tools() -> Vec<ToolRegistration> {
+    let chembl = Arc::new(ChEMBLClient::new());
+    chembl::chembl_registrations(chembl)
 }
 
 /// GWAS Catalog tools (curated studies, associations, EFO traits, SNPs,
@@ -154,6 +162,10 @@ pub async fn tool_set_from_config(
         tools.extend(gwascatalog_tools(file_storage));
     }
 
+    if config.enable_chembl {
+        tools.extend(chembl_tools());
+    }
+
     tools.extend(data_engine_tools::registrations(data_engine_client));
 
     if config.enable_bibliography {
@@ -175,4 +187,27 @@ pub async fn tool_set_from_config(
     }
 
     Ok(tools)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chembl_tools_expose_expected_registrations() {
+        let names: Vec<_> = chembl_tools()
+            .into_iter()
+            .map(|tool| tool.definition.name)
+            .collect();
+        for name in [
+            "chembl_search",
+            "chembl_molecule_summary",
+            "chembl_target_summary",
+            "chembl_activities",
+            "chembl_mechanisms",
+            "chembl_indications",
+        ] {
+            assert!(names.contains(&name.to_string()), "missing tool: {name}");
+        }
+    }
 }

@@ -80,10 +80,10 @@ fn json_listing_extension(url: &ListingTableUrl, explicit: Option<&str>) -> Stri
 
 async fn read_json_prefix(ctx: &SessionContext, url: &ListingTableUrl) -> Result<Bytes> {
     let store: Arc<dyn ObjectStore> = ctx.runtime_env().object_store(url)?;
-    let meta = match store.head(&url.prefix()).await {
+    let meta = match store.head(url.prefix()).await {
         Ok(meta) => meta,
         Err(head_error) => {
-            let mut objects = store.list(Some(&url.prefix()));
+            let mut objects = store.list(Some(url.prefix()));
             let Some(first) = objects.next().await else {
                 return Err(DataFusionError::External(Box::new(head_error)));
             };
@@ -94,7 +94,7 @@ async fn read_json_prefix(ctx: &SessionContext, url: &ListingTableUrl) -> Result
     if length == 0 {
         return Ok(Bytes::new());
     }
-    Ok(store.get_range(&url.prefix(), 0..length).await?)
+    Ok(store.get_range(url.prefix(), 0..length).await?)
 }
 
 fn decode_prefix(bytes: &[u8], compression: FileCompressionType) -> Result<Vec<u8>> {

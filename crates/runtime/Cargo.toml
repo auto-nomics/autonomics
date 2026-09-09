@@ -16,6 +16,7 @@ async-trait = { workspace = true }
 serde = { workspace = true }
 opengwas = { path = "../opengwas" }
 opentargets = { path = "../opentargets" }
+chembl = { path = "../chembl" }
 gwascatalog-sdk = { path = "../gwascatalog-sdk" }
 data-engine = { path = "../data-engine" }
 data-engine-tools = { path = "../data-engine-tools" }

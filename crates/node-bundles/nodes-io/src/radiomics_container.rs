@@ -640,7 +640,7 @@ pub fn mask_ingest_container_spec(
     }
     let mut container = base_spec("ingest-mask", &spec.artifact_prefix, spec.timeout_secs)?;
     let mut mask_settings =
-        serde_json::to_value(&spec.dicom_order).map_err(|error| error.to_string())?;
+        serde_json::to_value(spec.dicom_order).map_err(|error| error.to_string())?;
     if let Some(settings) = mask_settings.as_object_mut() {
         settings.insert("roi_name".into(), serde_json::json!(spec.roi_name));
     }

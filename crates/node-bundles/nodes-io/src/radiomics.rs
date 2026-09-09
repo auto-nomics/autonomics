@@ -1468,19 +1468,16 @@ fn extract_manifest_rows(
                 .and_then(|values| values.get(row).copied().flatten())
                 .or_else(|| get(&columns.mask_label).and_then(|value| value.parse::<f64>().ok()));
             rows.push(SourceRow {
-                extraction_id: columns
-                    .extraction_id
-                    .as_deref()
-                    .and_then(|column| get(column)),
+                extraction_id: columns.extraction_id.as_deref().and_then(&get),
                 patient_id: get(&columns.patient_id),
                 image_id: get(&columns.image_id),
                 image: get(&columns.image),
                 mask: get(&columns.mask),
                 modality: get(&columns.modality),
                 roi_id: get(&columns.roi_id),
-                roi_name: columns.roi_name.as_deref().and_then(|column| get(column)),
+                roi_name: columns.roi_name.as_deref().and_then(&get),
                 mask_label,
-                timepoint: columns.timepoint.as_deref().and_then(|column| get(column)),
+                timepoint: columns.timepoint.as_deref().and_then(&get),
                 preset_id: get(&columns.preset_id),
             });
         }

@@ -286,10 +286,11 @@ fn build_script(spec: &LavaScanContainerSpec) -> String {
         .chr
         .map(|value| value.to_string())
         .unwrap_or_else(|| "NULL".into());
-    let sample_overlap = spec
-        .sample_overlap
-        .then(|| "Sys.getenv(\"AUTONOMICS_INPUT2\")".to_string())
-        .unwrap_or_else(|| "NULL".into());
+    let sample_overlap = if spec.sample_overlap {
+        "Sys.getenv(\"AUTONOMICS_INPUT2\")".to_string()
+    } else {
+        "NULL".into()
+    };
     let sumstats_base = if spec.sample_overlap { 3 } else { 2 };
     let sumstats = spec
         .phenotypes

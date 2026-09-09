@@ -183,6 +183,7 @@ pub struct ProfileOverrides {
     pub enable_opengwas: Option<bool>,
     pub enable_opentargets: Option<bool>,
     pub enable_gwascatalog: Option<bool>,
+    pub enable_chembl: Option<bool>,
     pub enable_dag_history: Option<bool>,
 }
 
@@ -226,6 +227,8 @@ pub struct AgentProfile {
     pub enable_opengwas: bool,
     pub enable_opentargets: bool,
     pub enable_gwascatalog: bool,
+    #[serde(default = "default_true")]
+    pub enable_chembl: bool,
     pub enable_dag_history: bool,
 
     // ── Model preference ──
@@ -269,6 +272,7 @@ impl AgentProfile {
             enable_opengwas: true,
             enable_opentargets: true,
             enable_gwascatalog: true,
+            enable_chembl: true,
             enable_dag_history: true,
             preferred_model: None,
             created_at: now,
@@ -311,6 +315,7 @@ impl AgentProfile {
             enable_gwascatalog: overrides
                 .enable_gwascatalog
                 .unwrap_or(self.enable_gwascatalog),
+            enable_chembl: overrides.enable_chembl.unwrap_or(self.enable_chembl),
             enable_dag_history: overrides
                 .enable_dag_history
                 .unwrap_or(self.enable_dag_history),
@@ -339,6 +344,7 @@ impl AgentProfile {
                 enable_opengwas: true,
                 enable_opentargets: true,
                 enable_gwascatalog: true,
+                enable_chembl: true,
                 enable_dag_history: true,
                 preferred_model: None,
                 created_at: now,
@@ -358,6 +364,7 @@ impl AgentProfile {
                 enable_opengwas: false,
                 enable_opentargets: true,
                 enable_gwascatalog: false,
+                enable_chembl: true,
                 enable_dag_history: false,
                 preferred_model: None,
                 created_at: now,
@@ -377,6 +384,7 @@ impl AgentProfile {
                 enable_opengwas: true,
                 enable_opentargets: true,
                 enable_gwascatalog: true,
+                enable_chembl: true,
                 enable_dag_history: true,
                 preferred_model: None,
                 created_at: now,
@@ -409,6 +417,7 @@ impl AgentProfile {
                 enable_opengwas: false,
                 enable_opentargets: false,
                 enable_gwascatalog: false,
+                enable_chembl: false,
                 enable_dag_history: false,
                 preferred_model: None,
                 created_at: now,
@@ -420,6 +429,10 @@ impl AgentProfile {
 
 fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
+}
+
+fn default_true() -> bool {
+    true
 }
 
 // ═══════════════════════════════════════════════════════════════════════

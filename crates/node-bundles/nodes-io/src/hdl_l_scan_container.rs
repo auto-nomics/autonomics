@@ -165,7 +165,7 @@ pub fn validate(spec: &HdlLScanContainerSpec) -> Result<(), String> {
         if pieces.is_empty() {
             return Err("pieces cannot be empty when provided".into());
         }
-        if pieces.iter().any(|piece| *piece == 0) {
+        if pieces.contains(&0) {
             return Err("piece values must be positive one-based LD blocks".into());
         }
         let unique = pieces

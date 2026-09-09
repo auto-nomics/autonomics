@@ -76,6 +76,7 @@ use vfs::{
     VfsManifest,
 };
 
+#[allow(dead_code)]
 async fn run_ldsc_h2_dag(
     ctx: &NodeCtx,
     registry: &NodeRegistry,
@@ -1831,6 +1832,7 @@ async fn real_catalog_backed_official_smr_heidi_eqtlgen_runs_with_container_back
     }
 }
 
+#[allow(dead_code)]
 async fn run_gcta_dag(
     ctx: &NodeCtx,
     registry: &NodeRegistry,
