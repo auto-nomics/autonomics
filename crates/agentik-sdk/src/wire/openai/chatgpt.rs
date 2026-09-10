@@ -13,6 +13,7 @@ use crate::types::shared::RequestId;
 use crate::types::streaming::MessageStreamEvent;
 use crate::wire::openai::responses::OpenAiResponsesWire;
 use crate::wire::{ProtocolFeatures, StreamState, WireProtocol, WireRequest};
+use sha2::{Digest, Sha256};
 
 /// ChatGPT 后端的 Codex Responses 端点路径。
 pub const ENDPOINT_PATH: &str = "/backend-api/codex/responses";
@@ -53,11 +54,18 @@ impl WireProtocol for ChatgptResponsesWire {
         // 实测 400 "Unsupported parameter: max_output_tokens"）。上游
         // 参数层恒定携带（max(1) 兜底），在此剥除，让服务器用默认上限。
         if let Ok(mut body) = serde_json::from_slice::<serde_json::Value>(&req.body)
-            && body
-                .as_object_mut()
-                .is_some_and(|o| o.remove("max_output_tokens").is_some())
-            && let Ok(bytes) = serde_json::to_vec(&body)
+            && let Some(object) = body.as_object_mut()
         {
+            object.remove("max_output_tokens");
+            // Codex keeps routing stable with a session/thread-scoped cache
+            // key. The HTTP adapter has no session handle, so hash the stable
+            // request prefix (model, instructions, tools, and first history
+            // item) instead of changing it on every appended turn.
+            object.insert(
+                "prompt_cache_key".to_string(),
+                serde_json::Value::String(prompt_cache_key(params)),
+            );
+            let bytes = serde_json::to_vec(&body)?;
             req.body = bytes;
         }
         Ok(req)
@@ -82,6 +90,36 @@ impl WireProtocol for ChatgptResponsesWire {
     }
 }
 
+fn prompt_cache_key(params: &MessageCreateParams) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"agentik-chatgpt-responses-v1\0");
+    hasher.update(params.model.as_bytes());
+    hasher.update([0]);
+    hasher.update(params.system.as_deref().unwrap_or_default().as_bytes());
+    hasher.update([0]);
+
+    if let Some(tools) = &params.tools
+        && let Ok(bytes) = serde_json::to_vec(tools)
+    {
+        hasher.update(bytes);
+    }
+    hasher.update([0]);
+
+    if let Some(first_message) = params.messages.first()
+        && let Ok(bytes) = serde_json::to_vec(first_message)
+    {
+        hasher.update(bytes);
+    }
+
+    let digest = hasher.finalize();
+    let hash: String = digest
+        .iter()
+        .take(24)
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    format!("agk-{hash}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -95,6 +133,10 @@ mod tests {
             .build();
         let req = wire.encode_request(&params, false).unwrap();
         assert_eq!(req.endpoint_path, "/backend-api/codex/responses");
+        let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap();
+        let key = body["prompt_cache_key"].as_str().unwrap();
+        assert!(key.starts_with("agk-"));
+        assert!(key.len() <= 64);
         assert!(
             req.headers
                 .iter()
@@ -125,5 +167,35 @@ mod tests {
         assert!(body.get("max_output_tokens").is_none(), "body: {body}");
         assert_eq!(body["reasoning"]["effort"], "max");
         assert_eq!(body["input"][0]["content"][0]["text"], "hi");
+    }
+
+    #[test]
+    fn prompt_cache_key_stays_stable_as_history_grows() {
+        let first = MessageCreateBuilder::new("gpt-6-astra", 1024)
+            .system("Be helpful.")
+            .user("Start here")
+            .build();
+        let next = MessageCreateBuilder::new("gpt-6-astra", 1024)
+            .system("Be helpful.")
+            .user("Start here")
+            .assistant("Done")
+            .user("Continue")
+            .build();
+
+        assert_eq!(prompt_cache_key(&first), prompt_cache_key(&next));
+    }
+
+    #[test]
+    fn prompt_cache_key_splits_stable_prefix_groups() {
+        let first = MessageCreateBuilder::new("gpt-6-astra", 1024)
+            .system("Be helpful.")
+            .user("first session")
+            .build();
+        let second = MessageCreateBuilder::new("gpt-6-astra", 1024)
+            .system("Be helpful.")
+            .user("second session")
+            .build();
+
+        assert_ne!(prompt_cache_key(&first), prompt_cache_key(&second));
     }
 }

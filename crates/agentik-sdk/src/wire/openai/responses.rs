@@ -16,14 +16,14 @@
 
 use crate::types::errors::{AnthropicError, Result};
 use crate::types::messages::{Message, MessageCreateParams, Role};
-use crate::types::shared::{RequestId, Usage};
+use crate::types::shared::RequestId;
 use crate::types::streaming::{
     ContentBlockDelta, MessageDelta, MessageDeltaUsage, MessageStreamEvent,
 };
 use crate::types::{ContentBlock, StopReason};
 use crate::wire::openai::{
     OPENAI_FEATURES, function_descriptor, parse_json, reasoning_effort_value, translate_message,
-    translate_tool_choice,
+    translate_tool_choice, usage_from_openai_input,
 };
 use crate::wire::{ProtocolFeatures, StreamState, WireProtocol, WireRequest};
 use serde_json::{Value, json};
@@ -285,17 +285,10 @@ impl WireProtocol for OpenAiResponsesWire {
             };
         }
 
-        let usage = value.get("usage").map(|u| Usage {
-            input_tokens: u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
-            output_tokens: u.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
-            cache_creation_input_tokens: None,
-            // OpenAI 的 cached_tokens 语义上是缓存读，非缓存写。
-            cache_read_input_tokens: u
-                .get("input_tokens_details")
-                .and_then(|d| d.get("cached_tokens"))
-                .and_then(|v| v.as_u64()),
-            server_tool_use: None,
-            service_tier: None,
+        let usage = value.get("usage").map(|u| {
+            let mut usage = usage_from_openai_input(u, "input_tokens");
+            usage.output_tokens = u.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+            usage
         });
 
         Ok(Message {
@@ -494,25 +487,12 @@ impl WireProtocol for OpenAiResponsesWire {
                 if let Ok(value) = serde_json::from_str::<Value>(data) {
                     let resp = &value["response"];
                     if let Some(usage) = resp.get("usage") {
-                        state.usage = Some(Usage {
-                            input_tokens: usage
-                                .get("input_tokens")
-                                .and_then(|v| v.as_u64())
-                                .unwrap_or(0),
-                            output_tokens: usage
-                                .get("output_tokens")
-                                .and_then(|v| v.as_u64())
-                                .unwrap_or(0),
-                            cache_creation_input_tokens: None,
-                            // OpenAI 的 cached_tokens 是"从缓存读取的 prompt
-                            // token"——语义上对应 Anthropic 的 cache_read。
-                            cache_read_input_tokens: usage
-                                .get("input_tokens_details")
-                                .and_then(|d| d.get("cached_tokens"))
-                                .and_then(|v| v.as_u64()),
-                            server_tool_use: None,
-                            service_tier: None,
-                        });
+                        let mut decoded = usage_from_openai_input(usage, "input_tokens");
+                        decoded.output_tokens = usage
+                            .get("output_tokens")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0);
+                        state.usage = Some(decoded);
                     }
                     state.stop_reason =
                         resp.get("status")
@@ -698,7 +678,14 @@ mod tests {
                     {"type": "output_text", "text": "Hi there"}
                 ]}
             ],
-            "usage": {"input_tokens": 3, "output_tokens": 2}
+            "usage": {
+                "input_tokens": 80,
+                "output_tokens": 2,
+                "input_tokens_details": {
+                    "cached_tokens": 60,
+                    "cache_write_tokens": 5
+                }
+            }
         }"#;
         let msg = wire.decode_response(200, body, None).unwrap();
         assert_eq!(msg.id, "resp_1");
@@ -709,8 +696,10 @@ mod tests {
         }
         assert_eq!(msg.stop_reason, Some(StopReason::EndTurn));
         let usage = msg.usage.unwrap();
-        assert_eq!(usage.input_tokens, 3);
+        assert_eq!(usage.input_tokens, 15);
         assert_eq!(usage.output_tokens, 2);
+        assert_eq!(usage.cache_read_input_tokens, Some(60));
+        assert_eq!(usage.cache_creation_input_tokens, Some(5));
     }
 
     #[test]
@@ -798,7 +787,7 @@ mod tests {
             .unwrap();
         assert!(state.pending_events.is_empty());
 
-        let completed = r#"{"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":120,"output_tokens":30,"input_tokens_details":{"cached_tokens":100}}}}"#;
+        let completed = r#"{"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":120,"output_tokens":30,"input_tokens_details":{"cached_tokens":100,"cache_write_tokens":5}}}}"#;
         let ev = wire
             .adapt_sse_event("response.completed", completed, &mut state)
             .unwrap()
@@ -808,10 +797,10 @@ mod tests {
         match state.pending_events.pop_front().unwrap() {
             MessageStreamEvent::MessageDelta { delta, usage } => {
                 assert_eq!(delta.stop_reason, Some(StopReason::EndTurn));
-                assert_eq!(usage.input_tokens, Some(120));
+                assert_eq!(usage.input_tokens, Some(15));
                 assert_eq!(usage.output_tokens, 30);
                 assert_eq!(usage.cache_read_input_tokens, Some(100));
-                assert_eq!(usage.cache_creation_input_tokens, None);
+                assert_eq!(usage.cache_creation_input_tokens, Some(5));
             }
             other => panic!("expected MessageDelta, got {other:?}"),
         }

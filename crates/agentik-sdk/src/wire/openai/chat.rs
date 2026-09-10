@@ -10,13 +10,13 @@
 use crate::types::ContentBlock;
 use crate::types::errors::{AnthropicError, Result};
 use crate::types::messages::{Message, MessageCreateParams, Role};
-use crate::types::shared::{RequestId, Usage};
+use crate::types::shared::RequestId;
 use crate::types::streaming::{
     ContentBlockDelta, MessageDelta, MessageDeltaUsage, MessageStreamEvent,
 };
 use crate::wire::openai::{
     OPENAI_FEATURES, function_descriptor, parse_json, reasoning_effort_value,
-    translate_finish_reason, translate_message, translate_tool_choice,
+    translate_finish_reason, translate_message, translate_tool_choice, usage_from_openai_input,
 };
 use crate::wire::{ProtocolFeatures, StreamState, WireProtocol, WireRequest};
 use serde_json::{Value, json};
@@ -190,19 +190,13 @@ impl WireProtocol for OpenAiChatWire {
             .and_then(|v| v.as_str())
             .and_then(translate_finish_reason);
 
-        let usage = value.get("usage").map(|u| Usage {
-            input_tokens: u.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
-            output_tokens: u
+        let usage = value.get("usage").map(|u| {
+            let mut usage = usage_from_openai_input(u, "prompt_tokens");
+            usage.output_tokens = u
                 .get("completion_tokens")
                 .and_then(|v| v.as_u64())
-                .unwrap_or(0),
-            cache_creation_input_tokens: None,
-            cache_read_input_tokens: u
-                .get("prompt_tokens_details")
-                .and_then(|d| d.get("cached_tokens"))
-                .and_then(|v| v.as_u64()),
-            server_tool_use: None,
-            service_tier: None,
+                .unwrap_or(0);
+            usage
         });
 
         Ok(Message {
@@ -379,24 +373,12 @@ impl WireProtocol for OpenAiChatWire {
 
             // Capture usage if present on the final chunk.
             if let Some(usage) = chunk.get("usage") {
-                state.usage = Some(Usage {
-                    input_tokens: usage
-                        .get("prompt_tokens")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0),
-                    output_tokens: usage
-                        .get("completion_tokens")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0),
-                    cache_creation_input_tokens: None,
-                    // OpenAI 的 cached_tokens 语义上是缓存读，非缓存写。
-                    cache_read_input_tokens: usage
-                        .get("prompt_tokens_details")
-                        .and_then(|d| d.get("cached_tokens"))
-                        .and_then(|v| v.as_u64()),
-                    server_tool_use: None,
-                    service_tier: None,
-                });
+                let mut decoded = usage_from_openai_input(usage, "prompt_tokens");
+                decoded.output_tokens = usage
+                    .get("completion_tokens")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                state.usage = Some(decoded);
             }
 
             return Ok(self.finalize_stream(state));
@@ -655,7 +637,7 @@ mod tests {
         assert!(state.pending_events.is_empty());
 
         // Final chunk: finish_reason + usage（含 cached_tokens）。
-        let chunk2 = r#"{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":80,"completion_tokens":12,"prompt_tokens_details":{"cached_tokens":60}}}"#;
+        let chunk2 = r#"{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":80,"completion_tokens":12,"prompt_tokens_details":{"cached_tokens":60,"cache_write_tokens":5}}}"#;
         let ev = wire
             .adapt_sse_event("", chunk2, &mut state)
             .unwrap()
@@ -665,10 +647,10 @@ mod tests {
         match state.pending_events.pop_front().unwrap() {
             MessageStreamEvent::MessageDelta { delta, usage } => {
                 assert_eq!(delta.stop_reason, Some(StopReason::EndTurn));
-                assert_eq!(usage.input_tokens, Some(80));
+                assert_eq!(usage.input_tokens, Some(15));
                 assert_eq!(usage.output_tokens, 12);
                 assert_eq!(usage.cache_read_input_tokens, Some(60));
-                assert_eq!(usage.cache_creation_input_tokens, None);
+                assert_eq!(usage.cache_creation_input_tokens, Some(5));
             }
             other => panic!("expected MessageDelta, got {other:?}"),
         }
