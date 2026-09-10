@@ -1,0 +1,2 @@
+"""TimesFM inference service package."""
+
