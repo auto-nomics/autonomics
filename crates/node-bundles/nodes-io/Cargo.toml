@@ -21,6 +21,10 @@ reactome = { path = "../../reactome" }
 rcsb = { path = "../../rcsb" }
 string-sdk = { path = "../../string-sdk" }
 kegg = { path = "../../kegg" }
+alphafold = { path = "../../alphafold" }
+interpro = { path = "../../interpro" }
+pubchem = { path = "../../pubchem" }
+clinicaltrials = { path = "../../clinicaltrials" }
 mr = { path = "../../../bio_crates/mr" }
 arrow-array.workspace = true
 arrow.workspace = true

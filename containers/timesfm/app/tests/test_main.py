@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 from fastapi.testclient import TestClient
 
 from timesfm_service.config import ServiceConfig
@@ -9,12 +7,10 @@ from timesfm_service.main import create_app
 
 
 class FakeModel:
-    def predict(self, target, **kwargs):
-        assert kwargs["horizon"] == 2
-        return SimpleNamespace(
-            forecast=[[1.0, 2.0]],
-            quantiles=[[0.5, 0.6], [1.5, 1.6]],
-        )
+    def forecast(self, horizon, inputs):
+        assert horizon == 2
+        assert len(inputs) == 1
+        return ([[1.0, 2.0]], [[[0.5, 0.6], [1.5, 1.6]]])
 
 
 def test_health_and_forecast(monkeypatch):
@@ -35,6 +31,7 @@ def test_health_and_forecast(monkeypatch):
     body = response.json()
     assert body["forecast"] == [[1.0, 2.0]]
     assert body["quantiles"] == [[[0.5, 0.6], [1.5, 1.6]]]
+    assert body["model"] == "google/timesfm-2.5-200m-pytorch"
 
 
 def test_past_future_covariate_length_is_rejected():

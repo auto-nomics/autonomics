@@ -31,9 +31,14 @@ pub mod source_openalex;
 pub mod source_opentargets;
 pub mod source_semantic_scholar;
 pub mod susie_rss_container;
+pub mod timesfm_container;
 pub mod twas_fusion_container;
 pub mod visualization_container;
+pub use alphafold::nodes::prediction::{AlphaFoldPredictionNode, AlphaFoldPredictionNodeFactory};
+pub use clinicaltrials::nodes::study::{ClinicalTrialsStudyNode, ClinicalTrialsStudyNodeFactory};
 pub use crossref::nodes::works::{CrossrefWorksNode, CrossrefWorksNodeFactory};
+pub use interpro::nodes::entry::{InterProEntryNode, InterProEntryNodeFactory};
+pub use pubchem::nodes::compound::{PubChemCompoundNode, PubChemCompoundNodeFactory};
 pub use rcsb::nodes::assembly::{RcsbAssemblyNode, RcsbAssemblyNodeFactory};
 pub use rcsb::nodes::entry::{RcsbEntryNode, RcsbEntryNodeFactory};
 pub use rcsb::nodes::polymer_entity::{RcsbPolymerEntityNode, RcsbPolymerEntityNodeFactory};
@@ -284,6 +289,12 @@ impl NodePlugin for Plugin {
             ),
         ));
         registry.register(Box::new(
+            timesfm_container::TimesfmForecastContainerNodeFactory::new(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
+        registry.register(Box::new(
             gcta_container::GctaContainerNodeFactory::cojo_select(
                 Arc::clone(&self.container_execution.runtime),
                 Arc::clone(&self.container_execution.panel_cache),
@@ -333,6 +344,10 @@ impl NodePlugin for Plugin {
             source_opentargets::OpentargetsSearchNodeFactory {},
         ));
         registry.register(Box::new(CrossrefWorksNodeFactory {}));
+        registry.register(Box::new(AlphaFoldPredictionNodeFactory));
+        registry.register(Box::new(InterProEntryNodeFactory));
+        registry.register(Box::new(PubChemCompoundNodeFactory));
+        registry.register(Box::new(ClinicalTrialsStudyNodeFactory));
         registry.register(Box::new(RcsbSearchNodeFactory {}));
         registry.register(Box::new(RcsbEntryNodeFactory {}));
         registry.register(Box::new(RcsbPolymerEntityNodeFactory {}));

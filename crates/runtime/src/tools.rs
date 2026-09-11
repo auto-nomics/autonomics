@@ -10,13 +10,17 @@ use std::sync::Arc;
 use writing_base::LatexEngine;
 
 use agentik_core::tools::ToolRegistration;
+use alphafold::AlphaFoldClient;
 use bib_base::{BibBase, LiteratureGateway};
 use chembl::ChEMBLClient;
+use clinicaltrials::ClinicalTrialsClient;
 use data_engine::runtime::DataEngineClient;
 use gwascatalog_sdk::GwasCatalogClient;
+use interpro::InterProClient;
 use kegg::KeggClient;
 use opengwas::OpengwasClient;
 use opentargets::OpenTargetsClient;
+use pubchem::PubChemClient;
 use rcsb::RcsbClient;
 use string_sdk::StringDbClient;
 use vfs::OpendalFileStorage;
@@ -83,6 +87,19 @@ pub fn string_tools() -> Vec<ToolRegistration> {
 pub fn kegg_tools() -> Vec<ToolRegistration> {
     let client = Arc::new(KeggClient::new());
     kegg::kegg_registrations(client)
+}
+
+/// Public biomedical reference APIs in the first resource-expansion batch.
+/// None of these clients require credentials or provider-specific SDK setup.
+pub fn biomedical_resources_tools() -> Vec<ToolRegistration> {
+    let mut tools = Vec::new();
+    tools.extend(alphafold::registrations(Arc::new(AlphaFoldClient::new())));
+    tools.extend(interpro::registrations(Arc::new(InterProClient::new())));
+    tools.extend(pubchem::registrations(Arc::new(PubChemClient::new())));
+    tools.extend(clinicaltrials::registrations(Arc::new(
+        ClinicalTrialsClient::new(),
+    )));
+    tools
 }
 
 /// GWAS Catalog tools (curated studies, associations, EFO traits, SNPs,
@@ -210,6 +227,8 @@ pub async fn tool_set_from_config(
         tools.extend(kegg_tools());
     }
 
+    tools.extend(biomedical_resources_tools());
+
     tools.extend(data_engine_tools::registrations(data_engine_client));
 
     if config.enable_bibliography {
@@ -335,6 +354,31 @@ mod tests {
             registrations.iter().all(|registration| {
                 !registration.definition.input_schema.properties.is_empty()
             })
+        );
+    }
+
+    #[test]
+    fn biomedical_resources_tools_are_registered_with_nonempty_schemas() {
+        let registrations = biomedical_resources_tools();
+        let names = registrations
+            .iter()
+            .map(|registration| registration.definition.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            [
+                "alphafold_lookup",
+                "interpro_lookup",
+                "pubchem_compound_lookup",
+                "clinicaltrials_study_lookup"
+            ]
+        );
+        assert!(
+            registrations.iter().all(|registration| !registration
+                .definition
+                .input_schema
+                .properties
+                .is_empty())
         );
     }
 }

@@ -25,6 +25,7 @@ class ForecastResponse(BaseModel):
     forecast: list[list[float]]
     quantiles: list[list[list[float]]] | None
     model: str
+    checkpoint_revision: str
 
 
 class HealthResponse(BaseModel):

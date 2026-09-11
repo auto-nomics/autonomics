@@ -69,6 +69,15 @@ def create_app(config: ServiceConfig | None = None) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+        if request.past_only_covariates is not None or request.past_future_covariates is not None:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "TimesFM 2.5 service does not support covariates; "
+                    "use the TimesFM 3 service with an externally mounted checkpoint"
+                ),
+            )
+
         if past_only is not None and past_only.shape[-1] != target.shape[-1]:
             raise HTTPException(
                 status_code=422,
@@ -91,31 +100,27 @@ def create_app(config: ServiceConfig | None = None) -> FastAPI:
                 pool.predict,
                 target,
                 horizon=request.horizon,
-                past_only_covariates=past_only,
-                past_future_covariates=past_future,
                 return_quantiles=request.return_quantiles,
             )
         except Exception:
             logger.exception("TimesFM forecast failed")
             raise HTTPException(status_code=502, detail="forecast failed") from None
 
-        forecast = np.asarray(output.forecast, dtype=float)
+        forecast = np.asarray(output[0], dtype=float)
         if forecast.ndim == 1:
             forecast = forecast[None, :]
 
         quantiles = None
-        if request.return_quantiles and output.quantiles is not None:
-            quantile_array = np.asarray(output.quantiles, dtype=float)
-            if quantile_array.ndim == 2:
-                quantile_array = quantile_array[None, :, :]
-            quantiles = quantile_array.tolist()
+        if request.return_quantiles:
+            quantiles = np.asarray(output[1], dtype=float).tolist()
 
         return ForecastResponse(
             ts_id=request.ts_id,
             horizon=request.horizon,
             forecast=forecast.tolist(),
             quantiles=quantiles,
-            model=service_config.checkpoint,
+            model="google/timesfm-2.5-200m-pytorch",
+            checkpoint_revision=service_config.revision,
         )
 
     app.state.model_pool = pool

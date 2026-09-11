@@ -13,12 +13,15 @@ def _bool_env(name: str, default: bool) -> bool:
 
 @dataclass(frozen=True)
 class ServiceConfig:
-    checkpoint: str = os.getenv("TIMESFM_CHECKPOINT", "google/timesfm-3.0-pytorch")
+    checkpoint: str = os.getenv("TIMESFM_CHECKPOINT", "/opt/timesfm/checkpoint")
+    revision: str = os.getenv(
+        "TIMESFM_REVISION",
+        "1d952420fba87f3c6dee4f240de0f1a0fbc790e3",
+    )
     device: str | None = os.getenv("TIMESFM_DEVICE") or None
     batch_size: int = int(os.getenv("TIMESFM_BATCH_SIZE", "4"))
     eager_load: bool = _bool_env("TIMESFM_EAGER_LOAD", False)
     local_files_only: bool = _bool_env("TIMESFM_LOCAL_FILES_ONLY", False)
-    revision: str | None = os.getenv("TIMESFM_REVISION") or None
 
 
 def load_config() -> ServiceConfig:
@@ -26,10 +29,13 @@ def load_config() -> ServiceConfig:
     if batch_size < 1:
         raise ValueError("TIMESFM_BATCH_SIZE must be at least 1")
     return ServiceConfig(
-        checkpoint=os.getenv("TIMESFM_CHECKPOINT", "google/timesfm-3.0-pytorch"),
+        checkpoint=os.getenv("TIMESFM_CHECKPOINT", "/opt/timesfm/checkpoint"),
+        revision=os.getenv(
+            "TIMESFM_REVISION",
+            "1d952420fba87f3c6dee4f240de0f1a0fbc790e3",
+        ),
         device=os.getenv("TIMESFM_DEVICE") or None,
         batch_size=batch_size,
         eager_load=_bool_env("TIMESFM_EAGER_LOAD", False),
         local_files_only=_bool_env("TIMESFM_LOCAL_FILES_ONLY", False),
-        revision=os.getenv("TIMESFM_REVISION") or None,
     )

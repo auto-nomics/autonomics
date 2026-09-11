@@ -7,3 +7,4 @@ app/tests
 README.md
 docker-compose.yml
 test_timesfm_service.sh
+test_timesfm_container.sh
