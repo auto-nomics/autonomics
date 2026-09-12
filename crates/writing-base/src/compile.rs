@@ -539,18 +539,6 @@ fn extract_line_number(s: &str) -> Option<usize> {
     }
 }
 
-/// Extract a filename from a LaTeX log line (unused — reserved for future enrichment).
-#[allow(dead_code)]
-fn extract_filename(s: &str) -> Option<String> {
-    if s.contains(".tex") {
-        let start = s.find("./").or_else(|| s.find("/"))?;
-        let end = s.find(".tex")?;
-        Some(s[start..=end + 3].trim().to_string())
-    } else {
-        None
-    }
-}
-
 /// Parse the total page count from the log.
 fn parse_page_count(log: &str) -> Option<usize> {
     // Look for "Output written on main.pdf (5 pages, ...)".

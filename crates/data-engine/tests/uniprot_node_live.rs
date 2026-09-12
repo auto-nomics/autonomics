@@ -8,7 +8,7 @@
 //! cargo test -p data-engine --test uniprot_node_live -- --ignored
 //! ```
 
-use data_engine::node_registry::{NodeCtx, NodeFactory};
+use data_engine::node_registry::NodeCtx;
 use datafusion::prelude::SessionContext;
 
 fn build_node(kind: &str, spec: serde_json::Value) -> Box<dyn data_engine::dag::DagNode> {

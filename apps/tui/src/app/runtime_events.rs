@@ -11,16 +11,6 @@ impl App {
     /// Apply an internal [`AppEvent`] to state.
     pub(super) fn handle_app_event(&mut self, event: crate::app_event::AppEvent) {
         match event {
-            crate::app_event::AppEvent::Agent(e) => {
-                let ts = self.state.active_tab_state_mut();
-                state::apply_event(ts, *e);
-            }
-            crate::app_event::AppEvent::Quit => {
-                self.should_quit = true;
-            }
-            crate::app_event::AppEvent::ConfigReload => {
-                Self::load_model_config(&self.conn, &mut self.state.model_config_state);
-            }
             crate::app_event::AppEvent::AgentRecordsLoaded(records) => {
                 self.state.agent_picker.set_records(&records);
                 self.state.agent_picker.open();

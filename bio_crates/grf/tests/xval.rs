@@ -166,25 +166,6 @@ fn build_float_batches(rows: &[Vec<f64>], names: &[&str]) -> Vec<RecordBatch> {
     vec![RecordBatch::try_new(schema, cols).unwrap()]
 }
 
-#[allow(dead_code)] // Shared helper for integer-column golden cases.
-fn build_int_batches(rows: &[Vec<f64>], names: &[&str]) -> Vec<RecordBatch> {
-    use arrow_schema::FieldRef;
-    let fields: Vec<FieldRef> = names
-        .iter()
-        .map(|n| Arc::new(Field::new(*n, DataType::Int64, false)) as FieldRef)
-        .collect();
-    let schema = Arc::new(Schema::new(fields));
-    let cols: Vec<Arc<dyn Array>> = names
-        .iter()
-        .enumerate()
-        .map(|(j, _)| {
-            let v: Vec<i64> = rows.iter().map(|r| r[j] as i64).collect();
-            Arc::new(Int64Array::from(v)) as Arc<dyn Array>
-        })
-        .collect();
-    vec![RecordBatch::try_new(schema, cols).unwrap()]
-}
-
 fn node_opts(num_trees: u32, seed: u32) -> NodeTrainOptions {
     NodeTrainOptions {
         num_trees,

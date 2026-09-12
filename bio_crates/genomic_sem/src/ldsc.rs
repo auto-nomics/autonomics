@@ -102,16 +102,6 @@ impl LdscOutput {
 // Core LDSC regression (block jackknife)
 // =====================================================================
 
-/// Per-trait / per-trait-pair regression data.
-#[allow(dead_code)] // Placeholder for the blocked jackknife regression API.
-struct MergedData {
-    /// SNP, CHR, BP, N, Z, A1, L2 (LD score), wLD, intercept.
-    pub n: Vec<f64>,
-    pub z: Vec<f64>,
-    pub l2: Vec<f64>,
-    pub wld: Vec<f64>,
-}
-
 /// Run the weighted least squares regression with block jackknife on a
 /// single pair of traits (or a single trait for heritability).
 ///

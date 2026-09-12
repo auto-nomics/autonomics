@@ -18,5 +18,4 @@ pub mod sidebar;
 pub mod status_bar;
 pub mod toast;
 pub mod todo_widget;
-pub mod tool_exec_widget;
 pub mod tree_picker;

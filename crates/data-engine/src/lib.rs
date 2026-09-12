@@ -16,7 +16,6 @@ pub use dag_core::node;
 pub use dag_core::sink;
 // Registry under its original `node_registry` path for backward compat.
 pub use dag_core::registry as node_registry;
-pub use dag_core::types;
 pub use dag_core::value;
 
 pub mod data_bundles;

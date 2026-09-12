@@ -605,49 +605,6 @@ fn optimize_gbtm1() {
     );
 }
 
-/// Build the init parameter vector for an ng>1 model from a prior ng=1 fit.
-/// (Port of R hlme.R lines 957–994, Brandom=FALSE deterministic path.)
-/// Currently unused in tests but retained for future ng>1 optimization tests.
-#[allow(dead_code)]
-fn init_from_prior(
-    prior_best: &[f64],
-    prior_v: &[f64],
-    prior_conv: i32,
-    spec: &ModelSpec,
-) -> Vec<f64> {
-    let layout = spec.layout();
-    let ng = spec.ng;
-    let mut b = vec![0.0; layout.npm];
-    let mut l = 0_usize;
-    let mut t = 0_usize;
-    for i in 0..layout.nv {
-        match spec.idg[i] {
-            1 => {
-                b[layout.nprob + t] = prior_best[l];
-                l += 1;
-                t += 1;
-            }
-            2 => {
-                let v_idx = l * (l + 1) / 2;
-                let spread = if prior_conv == 1 {
-                    prior_v[v_idx].max(0.0).sqrt()
-                } else {
-                    prior_best[l].abs()
-                };
-                for g in 1..=ng {
-                    let offset = (g as f64) - (ng as f64 + 1.0) / 2.0;
-                    b[layout.nprob + t] = prior_best[l] + offset * spread;
-                    t += 1;
-                }
-                l += 1;
-            }
-            _ => {}
-        }
-    }
-    b[layout.i_stderr] = prior_best[prior_best.len() - 1];
-    b
-}
-
 #[test]
 fn optimize_gbtm2() {
     let golden = load_golden();

@@ -1134,14 +1134,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "biofusion-cache"
-version = "0.1.0"
-dependencies = [
- "biofusion",
- "derive_more",
-]
-
-[[package]]
 name = "biorxiv"
 version = "0.1.0"
 dependencies = [

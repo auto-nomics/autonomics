@@ -76,67 +76,6 @@ use vfs::{
     VfsManifest,
 };
 
-#[allow(dead_code)]
-async fn run_ldsc_h2_dag(
-    ctx: &NodeCtx,
-    registry: &NodeRegistry,
-    input_path: &Path,
-    format: &str,
-) -> String {
-    let ldsc = registry
-        .build_node(LDSC_H2_CONTAINER_KIND, serde_json::json!({}))
-        .unwrap();
-    let mut dag = dag_core::dag::DAG::default();
-    dag.add_node(
-        "sumstats".into(),
-        Box::new(FileReferenceNode::new(
-            input_path.to_string_lossy().into_owned(),
-            Some(format.into()),
-        )),
-    )
-    .unwrap();
-    dag.add_node("ldsc_h2".into(), ldsc).unwrap();
-    dag.add_edge("sumstats", "ldsc_h2", 0, 0).unwrap();
-    let report = dag
-        .run(&SchedulerConfig::default(), ctx, None)
-        .await
-        .unwrap();
-    assert_eq!(
-        report.statuses.get("sumstats"),
-        Some(&dag_core::dag::RuntimeStatus::Success)
-    );
-    assert_eq!(
-        report.statuses.get("ldsc_h2"),
-        Some(&dag_core::dag::RuntimeStatus::Success)
-    );
-
-    let output = dag
-        .output("ldsc_h2")
-        .unwrap()
-        .get(&0)
-        .unwrap()
-        .as_file()
-        .unwrap()
-        .clone();
-    assert!(
-        output
-            .path
-            .starts_with("vfs:///artifacts/ldsc_h2_container/")
-    );
-    assert!(output.path.ends_with("/ldsc_h2.log"));
-    let virtual_path = output
-        .path
-        .strip_prefix("vfs://")
-        .expect("LDSC h2 artifact is a VFS URI");
-    let storage = ctx.opendal.as_ref().expect("test storage is registered");
-    let published = storage
-        .resolve(virtual_path)
-        .read(&storage.resolve_path(virtual_path))
-        .await
-        .unwrap();
-    String::from_utf8_lossy(&published.to_vec()).into_owned()
-}
-
 #[derive(Clone)]
 struct DataFrameSourceNode {
     ports: NodePorts,
@@ -1830,43 +1769,4 @@ async fn real_catalog_backed_official_smr_heidi_eqtlgen_runs_with_container_back
             "SMR panel `{panel}` should be cached"
         );
     }
-}
-
-#[allow(dead_code)]
-async fn run_gcta_dag(
-    ctx: &NodeCtx,
-    registry: &NodeRegistry,
-    kind: &str,
-    spec: serde_json::Value,
-    input_path: &Path,
-) -> Vec<dag_core::value::FileRef> {
-    let node = registry.build_node(kind, spec).unwrap();
-    let mut dag = dag_core::dag::DAG::default();
-    dag.add_node(
-        "gwas".into(),
-        Box::new(FileReferenceNode::new(
-            input_path.to_string_lossy().into_owned(),
-            Some("tsv".into()),
-        )),
-    )
-    .unwrap();
-    dag.add_node("gcta".into(), node).unwrap();
-    dag.add_edge("gwas", "gcta", 0, 0).unwrap();
-    let report = dag
-        .run(&SchedulerConfig::default(), ctx, None)
-        .await
-        .unwrap();
-    assert_eq!(
-        report.statuses.get("gwas"),
-        Some(&dag_core::dag::RuntimeStatus::Success)
-    );
-    assert_eq!(
-        report.statuses.get("gcta"),
-        Some(&dag_core::dag::RuntimeStatus::Success),
-        "official GCTA `{kind}` node failed: {report:#?}"
-    );
-    let outputs = dag.output("gcta").unwrap();
-    (0..u8::try_from(outputs.len()).expect("GCTA output port count fits u8"))
-        .map(|index: u8| outputs.get(&index).unwrap().as_file().unwrap().clone())
-        .collect()
 }

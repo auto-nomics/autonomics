@@ -2,13 +2,13 @@
 //!
 //! Each call dispatches a [`WorkflowCmd`] over an `mpsc` channel to the
 //! per-session actor; the actor replies on a `oneshot` channel. The actor
-//! itself is a tokio task spawned by [`WorkflowManager::new_session`].
+//! itself is a tokio task spawned by
+//! [`WorkflowManager::new_session`](crate::api::manager::WorkflowManager::new_session).
 //!
 //! Cancellation tokens are passed per-command; a `Drop` on the client does
 //! **not** cancel an in-flight `Run`.
 
 use crate::api::commands::WorkflowCmd;
-use crate::api::manager::WorkflowManager;
 use crate::error::{ApiError, Result};
 use crate::executor::{Scheduler, ValidationReport, WorkflowResult};
 use crate::model::{EdgeEntry, NodeEntry, Skill, SkillInfo, SnapshotInfo, WorkflowManifest};
@@ -587,8 +587,3 @@ async fn actor_loop(
         }
     }
 }
-
-/// `WorkflowManager` is referenced by the API surface docs; silence the
-/// unused-import warning in this module.
-#[allow(dead_code)]
-fn _mgr_ref(_: &WorkflowManager) {}

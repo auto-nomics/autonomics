@@ -13,7 +13,6 @@ pub mod node;
 pub mod plugin;
 pub mod registry;
 pub mod sink;
-pub mod types;
 pub mod value;
 
 pub use node::{

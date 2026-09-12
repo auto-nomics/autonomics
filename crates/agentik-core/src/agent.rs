@@ -770,33 +770,10 @@ mod tests {
     use agentik_sdk::model::model_info::ModelInfo;
     use agentik_sdk::provider::client::MockApiClient;
     use agentik_sdk::types::errors::AnthropicError;
-    use agentik_sdk::types::messages::{ContentBlock, Message, Role};
-    use agentik_sdk::types::shared::Usage;
+    use agentik_sdk::types::messages::{ContentBlock, Message};
 
     fn test_model_info() -> ModelInfo {
         dummy_model_info("test-model")
-    }
-
-    #[allow(dead_code)]
-    fn test_final_message(text: &str) -> Message {
-        Message {
-            id: "msg_test".into(),
-            type_: "message".into(),
-            role: Role::Assistant,
-            content: vec![ContentBlock::Text { text: text.into() }],
-            model: Some("test-model".into()),
-            stop_reason: None,
-            stop_sequence: None,
-            usage: Some(Usage {
-                input_tokens: 10,
-                output_tokens: 20,
-                cache_creation_input_tokens: None,
-                cache_read_input_tokens: None,
-                server_tool_use: None,
-                service_tier: None,
-            }),
-            request_id: None,
-        }
     }
 
     /// Build a minimal agent with an event receiver wired up.

@@ -6,19 +6,6 @@
 //! an `AppEventSender` which the main loop drains each tick.
 
 pub(crate) enum AppEvent {
-    /// An event from the agent runtime (text delta, tool call, etc.).
-    ///
-    /// Boxed because `AgentEvent` is large (it carries a full `Message`),
-    /// which would otherwise dominate the enum size — see
-    /// `clippy::large_enum_variant`.
-    #[allow(dead_code)]
-    Agent(Box<agentik_sdk::types::AgentEvent>),
-    /// Request to exit the application.
-    #[allow(dead_code)]
-    Quit,
-    /// Config data changed; the Config tab should reload from the database.
-    #[allow(dead_code)]
-    ConfigReload,
     /// A new agent was spawned (or failed to spawn) from a profile.
     AgentSpawned {
         profile_name: String,

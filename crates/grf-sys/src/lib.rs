@@ -24,9 +24,9 @@
 //! should use the safe wrappers exclusively; the `ffi` module is `pub`
 //! only so they can reach into edge cases not yet covered.
 
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
 use std::marker::PhantomData;
-use std::os::raw::{c_char, c_double, c_uint, c_ulonglong};
+use std::os::raw::{c_double, c_uint, c_ulonglong};
 use std::ptr::NonNull;
 use thiserror::Error;
 
@@ -452,19 +452,6 @@ pub fn check_error() -> GrfError {
     } else {
         GrfError::Cpp(s)
     }
-}
-
-#[allow(dead_code)] // used by grf-sys callers (grf crate)
-fn ptr_to_string(p: *const c_char) -> String {
-    if p.is_null() {
-        return String::new();
-    }
-    unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned()
-}
-
-#[allow(dead_code)]
-fn cstring(s: &str) -> Result<CString> {
-    CString::new(s).map_err(|e| GrfError::InvalidArgument(format!("non-utf8: {e}")))
 }
 
 // Re-export of c_double/c_uint types for callers building buffers.
