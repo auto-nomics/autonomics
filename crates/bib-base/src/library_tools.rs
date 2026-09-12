@@ -18,7 +18,7 @@
 //! | `bib_get_article`      | Batch metadata plus bounded full-text pages.             |
 //! | `bib_request_fulltext` | Mark an article as needing full-text upload.            |
 //! | `bib_add_note`         | Append a note / highlight / comment to an article.       |
-//! | `bib_export`           | Render citation formats (BibTeX / RIS / Markdown / CSL). |
+//! | `bib_export`           | Render citation formats and write them to the agent VFS. |
 
 use std::sync::Arc;
 
@@ -1736,9 +1736,12 @@ impl ToolFunction for BibDeleteTool {
     name = "bib_export",
     description = "Export articles from a collection (or the entire library) in a standard \
                   citation format: BibTeX, RIS, Markdown, or CSL-JSON. \
-                  Useful for generating reference lists for manuscripts or reports."
+                  The rendered output is written directly to `output_path` in the \
+                  agent-visible VFS. Existing files are replaced."
 )]
 pub struct BibExportInput {
+    #[desc = "Destination path in the agent VFS, e.g. \"/outputs/references.bib\""]
+    pub output_path: String,
     #[desc = "Collection ID to export. If omitted, exports entire library."]
     pub collection_id: Option<String>,
     #[desc = "Output format: \"bibtex\", \"ris\", \"markdown\", or \"csl_json\". Default: bibtex"]
@@ -1749,6 +1752,7 @@ pub struct BibExportInput {
 
 pub struct BibExportTool {
     pub bib: Arc<BibBase>,
+    pub storage: Arc<vfs::OpendalFileStorage>,
 }
 
 #[async_trait]
@@ -1756,6 +1760,13 @@ impl ToolFunction for BibExportTool {
     type Input = BibExportInput;
 
     async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
+        let output_path = input.output_path.trim().to_string();
+        if output_path.is_empty() {
+            return Err(ToolError::ExecutionFailed {
+                source: "output_path must not be empty".into(),
+            });
+        }
+
         let format = parse_export_format(input.format.as_deref());
         let limit = input.limit.unwrap_or(100).clamp(1, 500);
 
@@ -1802,11 +1813,19 @@ impl ToolFunction for BibExportTool {
 
         let rendered = crate::export::render_all(&articles, format);
         let count = articles.len();
+        let bytes = rendered.into_bytes();
+        let size = bytes.len() as u64;
+
+        self.storage
+            .write_bytes(&output_path, bytes)
+            .await
+            .map_err(box_error)?;
 
         Ok(AgentToolResult::success_json(serde_json::json!({
             "format": format_extension(format),
             "count": count,
-            "export": rendered,
+            "path": output_path,
+            "size": size,
         })))
     }
 }
@@ -1829,6 +1848,7 @@ pub fn bib_library_registrations(
     bib: Arc<BibBase>,
     gateway: Arc<LiteratureGateway>,
     epmc: Option<Arc<EuropePmcClient>>,
+    file_storage: Arc<vfs::OpendalFileStorage>,
 ) -> Vec<ToolRegistration> {
     use agentik_core::tools::ToolRegistration as R;
     let epmc = epmc.unwrap_or_else(|| Arc::new(EuropePmcClient::new()));
@@ -1846,7 +1866,10 @@ pub fn bib_library_registrations(
         R::from(BibRequestFulltextTool { bib: bib.clone() }),
         R::from(BibAddNoteTool { bib: bib.clone() }),
         R::from(BibDeleteTool { bib: bib.clone() }),
-        R::from(BibExportTool { bib }),
+        R::from(BibExportTool {
+            bib,
+            storage: file_storage,
+        }),
     ]
 }
 
@@ -1865,10 +1888,12 @@ pub fn bib_library_registrations(
 /// # use bib_base::{BibBase, BibShared, bib_all_registrations};
 /// # async fn example() {
 /// let shared = BibShared::open_in_memory().await.unwrap();
+/// let file_storage = Arc::new(vfs::OpendalFileStorage::new_temp());
 /// let tools = bib_all_registrations(
 ///     shared.bib.clone(),
 ///     shared.gateway.clone(),
 ///     Some(shared.europe_pmc.clone()),
+///     file_storage,
 /// );
 /// # }
 /// ```
@@ -1876,9 +1901,10 @@ pub fn bib_all_registrations(
     bib: Arc<BibBase>,
     gateway: Arc<LiteratureGateway>,
     epmc: Option<Arc<europepmc::EuropePmcClient>>,
+    file_storage: Arc<vfs::OpendalFileStorage>,
 ) -> Vec<ToolRegistration> {
     let mut tools = crate::tools::bib_query_registrations(gateway.clone());
-    tools.extend(bib_library_registrations(bib, gateway, epmc));
+    tools.extend(bib_library_registrations(bib, gateway, epmc, file_storage));
     tools
 }
 
@@ -2445,6 +2471,64 @@ mod tests {
 
         assert_eq!(json["failed"].as_u64(), Some(1));
         assert!(json["results"][0]["error"].as_str().is_some());
+    }
+
+    // ── bib_export ────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_export_writes_bibtex_to_vfs() {
+        let (bib, _) = seed_one_article().await;
+        let storage = Arc::new(vfs::OpendalFileStorage::new_temp());
+        let tool = BibExportTool {
+            bib,
+            storage: storage.clone(),
+        };
+
+        let input = BibExportInput {
+            output_path: "/references.bib".into(),
+            collection_id: None,
+            format: Some("bibtex".into()),
+            limit: Some(100),
+        };
+
+        let result = tool.run(input).await.unwrap();
+        let json = match result.content {
+            ToolResultContent::Json(v) => v,
+            _ => panic!("expected JSON"),
+        };
+
+        assert_eq!(json["count"].as_u64(), Some(1));
+        assert_eq!(json["format"].as_str(), Some("bib"));
+        assert_eq!(json["path"].as_str(), Some("/references.bib"));
+        assert!(json.get("export").is_none());
+
+        let size = json["size"].as_u64().unwrap();
+        let bytes = storage
+            .read_range("/references.bib", 0..size)
+            .await
+            .unwrap();
+        let text = String::from_utf8(bytes.to_vec()).unwrap();
+        assert!(text.starts_with("@article{"));
+        assert!(text.contains("Test paper"));
+        assert!(text.contains("10.1038/ng.2024.999"));
+    }
+
+    #[tokio::test]
+    async fn test_export_rejects_blank_output_path() {
+        let bib = Arc::new(BibBase::open_in_memory().await.unwrap());
+        let tool = BibExportTool {
+            bib,
+            storage: Arc::new(vfs::OpendalFileStorage::new_temp()),
+        };
+
+        let input = BibExportInput {
+            output_path: "   ".into(),
+            collection_id: None,
+            format: None,
+            limit: None,
+        };
+
+        assert!(tool.run(input).await.is_err());
     }
 
     // ── bib_delete ────────────────────────────────────────────────────────
