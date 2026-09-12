@@ -375,6 +375,7 @@ const PROMPT_BIBLIOGRAPHY: &str = "\n\
 - Use `lit_fetch` to retrieve a full article record by DOI / PMID / arXiv ID.\n\
 - Use `bib_save` to store articles in your personal library, `bib_search_library` \
   to find saved articles, and `bib_export` to export collections.\n\
+- `bib_export` writes rendered citation files directly to a VFS `output_path`.\n\
 - Always verify claims against primary literature when possible.";
 
 const PROMPT_OPENGWAS: &str = "\n\

@@ -408,7 +408,7 @@ impl SharedInfra {
         }
 
         if profile.enable_gwascatalog {
-            tools.extend(gwascatalog_tools(file_storage));
+            tools.extend(gwascatalog_tools(file_storage.clone()));
         }
 
         tools.extend(data_engine_tools::registrations(Arc::new(engine_client)));
@@ -419,6 +419,7 @@ impl SharedInfra {
                 bib_shared.bib.clone(),
                 bib_shared.gateway.clone(),
                 Some(bib_shared.europe_pmc.clone()),
+                file_storage.clone(),
             );
             tools.extend(bib_tools);
 

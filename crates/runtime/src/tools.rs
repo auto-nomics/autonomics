@@ -69,10 +69,18 @@ pub const DEFAULT_BIB_DB: &str = "bib.db";
 /// `EutilsClient`, `ArxivClient`, `reqwest::Client` and
 /// `EuropePmcClient`, which is fine for one agent but wasteful for
 /// many.
-pub async fn bib_tools(db_path: &str) -> Result<Vec<ToolRegistration>> {
+pub async fn bib_tools(
+    db_path: &str,
+    file_storage: Arc<OpendalFileStorage>,
+) -> Result<Vec<ToolRegistration>> {
     let bib = Arc::new(BibBase::open(db_path).await?);
     let gateway = Arc::new(LiteratureGateway::with_default_sources());
-    Ok(bib_base::bib_all_registrations(bib, gateway, None))
+    Ok(bib_base::bib_all_registrations(
+        bib,
+        gateway,
+        None,
+        file_storage,
+    ))
 }
 
 /// Resolves the bibliography DB path: the `AUTONOMICS_BIB_DB` env var if set,
@@ -151,13 +159,13 @@ pub async fn tool_set_from_config(
     }
 
     if config.enable_gwascatalog {
-        tools.extend(gwascatalog_tools(file_storage));
+        tools.extend(gwascatalog_tools(file_storage.clone()));
     }
 
     tools.extend(data_engine_tools::registrations(data_engine_client));
 
     if config.enable_bibliography {
-        match bib_tools(&config.bib_db_path.to_string_lossy()).await {
+        match bib_tools(&config.bib_db_path.to_string_lossy(), file_storage.clone()).await {
             Ok(bib) => tools.extend(bib),
             Err(e) => {
                 eprintln!("[runtime] WARNING: bibliography tools disabled: {e}");
