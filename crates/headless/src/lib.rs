@@ -186,11 +186,10 @@ pub async fn run_task<P: OutputProcessor>(
     let profile_storage = host.infra().profile_storage.clone();
     let _ = profile_storage.seed_defaults_if_empty().await;
     let profiles = profile_storage.list_profiles().await.unwrap_or_default();
-    let profile = pick_profile(&profiles, config.profile.as_deref()).ok_or(
-        RunError::NoProfile {
+    let profile =
+        pick_profile(&profiles, config.profile.as_deref()).ok_or(RunError::NoProfile {
             requested: config.profile.clone(),
-        },
-    )?;
+        })?;
     host.set_profiles(profiles);
     host.set_model(Arc::new(ArcSwapOption::from_pointee(config.model)));
 
@@ -203,7 +202,12 @@ pub async fn run_task<P: OutputProcessor>(
     let agent_name = config.agent_name.clone();
     let mut spawn = tokio::spawn(async move {
         control
-            .spawn_with_profile(&agent_name, &agentik_types::AgentPath::root(), profile_for_spawn, None)
+            .spawn_with_profile(
+                &agent_name,
+                &agentik_types::AgentPath::root(),
+                profile_for_spawn,
+                None,
+            )
             .await
     });
     let agent_path = loop {
@@ -457,7 +461,8 @@ impl TranslationState {
 
             AgentEvent::ToolCall { name, input } => {
                 let id = self.next_id("tool");
-                self.pending_tools.push_back((id.clone(), name.clone(), input.clone()));
+                self.pending_tools
+                    .push_back((id.clone(), name.clone(), input.clone()));
                 vec![RunEvent::ItemStarted(ItemEvent {
                     item: RunItem {
                         id,
@@ -556,10 +561,7 @@ impl TranslationState {
                             .clone()
                             .unwrap_or_else(|| "turn failed".to_string());
                         self.terminal = Some(Terminal::Failed);
-                        vec![RunEvent::TurnFailed(TurnFailedEvent {
-                            turn_id,
-                            message,
-                        })]
+                        vec![RunEvent::TurnFailed(TurnFailedEvent { turn_id, message })]
                     }
                     TurnExecutionStatus::Interrupted => {
                         self.terminal = Some(Terminal::Cancelled);
@@ -580,10 +582,7 @@ impl TranslationState {
                 match self.terminal.take() {
                     Some(Terminal::Failed) => {
                         self.terminal = Some(Terminal::Failed);
-                        vec![RunEvent::TurnFailed(TurnFailedEvent {
-                            turn_id,
-                            message,
-                        })]
+                        vec![RunEvent::TurnFailed(TurnFailedEvent { turn_id, message })]
                     }
                     Some(other) => {
                         self.terminal = Some(other);
@@ -593,10 +592,7 @@ impl TranslationState {
                         self.turns += 1;
                         self.fold_turn_usage();
                         self.terminal = Some(Terminal::Failed);
-                        vec![RunEvent::TurnFailed(TurnFailedEvent {
-                            turn_id,
-                            message,
-                        })]
+                        vec![RunEvent::TurnFailed(TurnFailedEvent { turn_id, message })]
                     }
                 }
             }
@@ -645,7 +641,8 @@ impl TranslationState {
             self.run_usage.input_tokens = self.turn_usage.input_tokens;
         }
         if self.turn_usage.cache_creation_input_tokens.is_some() {
-            self.run_usage.cache_creation_input_tokens = self.turn_usage.cache_creation_input_tokens;
+            self.run_usage.cache_creation_input_tokens =
+                self.turn_usage.cache_creation_input_tokens;
         }
         if self.turn_usage.cache_read_input_tokens.is_some() {
             self.run_usage.cache_read_input_tokens = self.turn_usage.cache_read_input_tokens;

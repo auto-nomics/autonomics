@@ -393,7 +393,6 @@ impl AgentTabState {
             self.scroll_offset = self.scroll_offset.min(max_offset);
         }
     }
-
 }
 
 // ── Event → State mapping ──────────────────────────────

@@ -12,8 +12,8 @@ use serde::Serialize;
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::processor::Outcome;
 use crate::RunSummary;
+use crate::processor::Outcome;
 
 /// Identifying metadata the caller contributes (things `run_task` does
 /// not know, like the prompt hash).

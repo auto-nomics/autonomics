@@ -14,7 +14,7 @@ use std::io::{IsTerminal, Read, Write};
 use std::path::Path;
 
 use headless::processor::{HumanProcessor, JsonlProcessor, OutputProcessor};
-use headless::{run_task, RunTaskConfig};
+use headless::{RunTaskConfig, run_task};
 use rusqlite::Connection;
 
 use crate::cli::RunArgs;
@@ -75,12 +75,18 @@ pub fn run_headless(args: RunArgs) -> color_eyre::Result<()> {
         let summary = if args.json {
             let mut processor = JsonlProcessor::new(std::io::stdout());
             let result = run_task(config, &mut processor).await;
-            write_last_message(args.output_last_message.as_deref(), processor.last_message());
+            write_last_message(
+                args.output_last_message.as_deref(),
+                processor.last_message(),
+            );
             result
         } else {
             let mut processor = HumanProcessor::new(std::io::stderr(), std::io::stdout());
             let result = run_task(config, &mut processor).await;
-            write_last_message(args.output_last_message.as_deref(), processor.last_message());
+            write_last_message(
+                args.output_last_message.as_deref(),
+                processor.last_message(),
+            );
             result
         };
 
@@ -93,9 +99,9 @@ pub fn run_headless(args: RunArgs) -> color_eyre::Result<()> {
                     }
                 }
                 std::process::exit(match summary.outcome {
-                headless::processor::Outcome::Completed => EXIT_COMPLETED,
-                headless::processor::Outcome::Failed => EXIT_TURN_FAILED,
-                headless::processor::Outcome::Cancelled => EXIT_CANCELLED,
+                    headless::processor::Outcome::Completed => EXIT_COMPLETED,
+                    headless::processor::Outcome::Failed => EXIT_TURN_FAILED,
+                    headless::processor::Outcome::Cancelled => EXIT_CANCELLED,
                     headless::processor::Outcome::Unknown => EXIT_TURN_FAILED,
                 })
             }

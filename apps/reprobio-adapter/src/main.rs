@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use clap::Parser;
 use headless::processor::{JsonlProcessor, OutputProcessor};
-use headless::{run_task, RunSummary, RunTaskConfig};
+use headless::{RunSummary, RunTaskConfig, run_task};
 use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -211,7 +211,9 @@ fn prepare_state(run_dir: &Path) -> Result<PathBuf, Box<dyn Error>> {
 
 /// Resolve the run's model from `--model`, `$AUTONOMICS_MODEL`, or the
 /// app database's active model. Returns (model, display name, provider).
-fn resolve_model(spec: Option<String>) -> Result<(agentik_sdk::model::Model, String, String), String> {
+fn resolve_model(
+    spec: Option<String>,
+) -> Result<(agentik_sdk::model::Model, String, String), String> {
     let spec = match spec.or_else(|| std::env::var("AUTONOMICS_MODEL").ok()) {
         Some(spec) => spec,
         None => {
@@ -319,7 +321,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let prompt = build_prompt(&visible, &staged);
     let started = Instant::now();
-    let summary = execute(prompt.clone(), &args.run_dir, model, model_name.clone(), args.timeout).await?;
+    let summary = execute(
+        prompt.clone(),
+        &args.run_dir,
+        model,
+        model_name.clone(),
+        args.timeout,
+    )
+    .await?;
 
     // Post-run audit: what did the agent actually produce?
     let answer_path = args.run_dir.join("answer.json");
@@ -494,7 +503,10 @@ mod tests {
         mock.expect_request_stream_with_system()
             .times(1)
             .returning(move |_, _, _, _| {
-                Ok(MessageStream::from_events(events.clone(), final_message.clone()))
+                Ok(MessageStream::from_events(
+                    events.clone(),
+                    final_message.clone(),
+                ))
             });
         agentik_sdk::model::Model::with_client(mock_model_info(), mock)
     }
@@ -596,6 +608,4 @@ mod tests {
         assert!(prompt.contains("/input/data.csv"));
         assert!(prompt.contains("/answer.json"));
     }
-
 }
-

@@ -126,23 +126,33 @@ impl<P: Write, O: Write> OutputProcessor for HumanProcessor<P, O> {
     fn process(&mut self, event: &RunEvent) {
         self.tracker.observe(event);
         match event {
-            RunEvent::RunStarted(RunStartedEvent {
-                profile, model, ..
-            }) => {
+            RunEvent::RunStarted(RunStartedEvent { profile, model, .. }) => {
                 let model = model.as_deref().unwrap_or("unknown model");
                 self.say(&format!("▸ run started — profile {profile}, {model}"));
             }
             RunEvent::ItemStarted(ItemEvent {
-                item: RunItem { details: RunItemDetails::ToolCall(tool), .. },
+                item:
+                    RunItem {
+                        details: RunItemDetails::ToolCall(tool),
+                        ..
+                    },
                 ..
             }) => {
                 self.say(&format!("▶ {}", tool.tool));
             }
             RunEvent::ItemCompleted(ItemEvent {
-                item: RunItem { details: RunItemDetails::ToolCall(tool), .. },
+                item:
+                    RunItem {
+                        details: RunItemDetails::ToolCall(tool),
+                        ..
+                    },
                 ..
             }) => {
-                let mark = if tool.ok.unwrap_or(false) { "✓" } else { "✗" };
+                let mark = if tool.ok.unwrap_or(false) {
+                    "✓"
+                } else {
+                    "✗"
+                };
                 let line = match one_line_preview(tool.result.as_deref(), 72) {
                     preview if preview.is_empty() => format!("{mark} {}", tool.tool),
                     preview => format!("{mark} {} {preview}", tool.tool),
@@ -268,9 +278,7 @@ mod tests {
         RunEvent::ItemCompleted(ItemEvent {
             item: RunItem {
                 id: "m1".into(),
-                details: RunItemDetails::AgentMessage(AgentMessageItem {
-                    text: text.into(),
-                }),
+                details: RunItemDetails::AgentMessage(AgentMessageItem { text: text.into() }),
             },
         })
     }

@@ -287,7 +287,6 @@ impl SessionPicker {
         self.popup_height = h;
         self
     }
-
 }
 
 impl Default for SessionPicker {

@@ -280,9 +280,7 @@ mod tests {
             RunEvent::ItemCompleted(ItemEvent {
                 item: RunItem {
                     id: "r1".into(),
-                    details: RunItemDetails::Reasoning(ReasoningItem {
-                        text: "hmm".into(),
-                    }),
+                    details: RunItemDetails::Reasoning(ReasoningItem { text: "hmm".into() }),
                 },
             }),
             RunEvent::TurnCompleted(TurnCompletedEvent {

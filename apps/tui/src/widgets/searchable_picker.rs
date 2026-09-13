@@ -124,7 +124,6 @@ impl<T: PickerItem> PickerState<T> {
         }
     }
 
-
     /// Replace the query and re-run the filter. Used by callers that
     /// manage their own text input (e.g. an embedded `TextArea`) and
     /// need to sync external edits into the picker state.
@@ -179,7 +178,6 @@ impl<'a> SearchablePicker<'a> {
             footer_hint: " Enter select  ↑↓ navigate  Esc cancel",
         }
     }
-
 
     pub fn accent(mut self, c: Color) -> Self {
         self.accent = c;

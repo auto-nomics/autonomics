@@ -125,7 +125,6 @@ impl Default for ToastManager {
 }
 
 impl ToastManager {
-
     /// Number of currently active toasts.
 
     /// Whether there are no active toasts.

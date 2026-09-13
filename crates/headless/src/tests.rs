@@ -10,7 +10,9 @@ use agentik_sdk::provider::client::MockApiClient;
 use agentik_sdk::streaming::MessageStream;
 use agentik_types::errors::AnthropicError;
 use agentik_types::messages::{ContentBlock, Message, Role, StopReason};
-use agentik_types::streaming::{ContentBlockDelta, MessageDelta, MessageDeltaUsage, MessageStreamEvent};
+use agentik_types::streaming::{
+    ContentBlockDelta, MessageDelta, MessageDeltaUsage, MessageStreamEvent,
+};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -19,7 +21,11 @@ const TEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn test_config(dir: &tempfile::TempDir) -> RunTaskConfig {
     let mut runtime_config = RuntimeConfig::default();
-    isolate_runtime_paths(&mut runtime_config, dir.path().join("data"), dir.path().join("state"));
+    isolate_runtime_paths(
+        &mut runtime_config,
+        dir.path().join("data"),
+        dir.path().join("state"),
+    );
     RunTaskConfig::new("What is 1+1?", runtime_config)
 }
 
@@ -125,7 +131,10 @@ fn scripted_text_model(text: &str, output_tokens: u64, input_tokens: u64) -> Mod
     mock.expect_request_stream_with_system()
         .times(1)
         .returning(move |_, _, _, _| {
-            Ok(MessageStream::from_events(events.clone(), final_message.clone()))
+            Ok(MessageStream::from_events(
+                events.clone(),
+                final_message.clone(),
+            ))
         });
     mock.expect_request_stream()
         .returning(|_, _, _| Err(AnthropicError::StreamError("unexpected plain call".into())));
@@ -136,12 +145,13 @@ fn scripted_text_model(text: &str, output_tokens: u64, input_tokens: u64) -> Mod
 /// A mock model that fails immediately with a non-retryable error.
 fn auth_failure_model() -> Model {
     let mut mock = MockApiClient::new();
-    mock.expect_request_stream_with_system().returning(|_, _, _, _| {
-        Err(AnthropicError::Authentication {
-            message: "bad key".into(),
-            status: 401,
-        })
-    });
+    mock.expect_request_stream_with_system()
+        .returning(|_, _, _, _| {
+            Err(AnthropicError::Authentication {
+                message: "bad key".into(),
+                status: 401,
+            })
+        });
     Model::with_client(mock_model_info(), mock)
 }
 
@@ -209,7 +219,10 @@ async fn human_mode_stdout_receives_only_final_message() {
     let output = String::from_utf8(output).unwrap();
     assert_eq!(output, "The answer is 2.\n");
     let progress = String::from_utf8(progress).unwrap();
-    assert!(progress.contains("run started"), "progress shows start: {progress}");
+    assert!(
+        progress.contains("run started"),
+        "progress shows start: {progress}"
+    );
     assert!(
         !progress.contains("The answer is 2."),
         "final message never leaks to progress: {progress}"
@@ -263,9 +276,8 @@ async fn unknown_profile_is_a_startup_error() {
 /// to fire mid-turn.
 fn always_retrying_model() -> Model {
     let mut mock = MockApiClient::new();
-    mock.expect_request_stream_with_system().returning(|_, _, _, _| {
-        Err(AnthropicError::StreamError("transient".into()))
-    });
+    mock.expect_request_stream_with_system()
+        .returning(|_, _, _, _| Err(AnthropicError::StreamError("transient".into())));
     Model::with_client(mock_model_info(), mock)
 }
 
@@ -285,9 +297,11 @@ async fn timeout_cancels_mid_turn() {
 
     assert_eq!(summary.outcome, Outcome::Cancelled);
     let jsonl = String::from_utf8(processor.into_parts()).unwrap();
-    assert!(jsonl.contains("run timed out after"), "timeout surfaced: {jsonl}");
-    let ended: serde_json::Value =
-        serde_json::from_str(jsonl.lines().last().unwrap()).unwrap();
+    assert!(
+        jsonl.contains("run timed out after"),
+        "timeout surfaced: {jsonl}"
+    );
+    let ended: serde_json::Value = serde_json::from_str(jsonl.lines().last().unwrap()).unwrap();
     assert_eq!(ended["status"], "cancelled");
 }
 

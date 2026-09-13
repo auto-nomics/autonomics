@@ -48,7 +48,6 @@ impl PopupControls {
             show_border,
         }
     }
-
 }
 
 impl Default for PopupControls {
@@ -172,5 +171,4 @@ mod tests {
 
         assert_eq!(popup.inner_rect(area), Rect::new(0, 1, 70, 9));
     }
-
 }
