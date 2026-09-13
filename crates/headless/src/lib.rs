@@ -109,9 +109,18 @@ impl RunTaskConfig {
     pub fn ephemeral(prompt: impl Into<String>) -> (Self, EphemeralState) {
         let dir = tempfile::tempdir().expect("create ephemeral dir");
         let mut runtime_config = RuntimeConfig::default();
+        // Every persistent path must move under the temp dir —
+        // `RuntimeConfig::default()` bakes absolute `~/.autonomics`
+        // paths for the databases at resolution time, and an ephemeral
+        // run that still writes sessions to the real agent DB is not
+        // ephemeral.
         runtime_config.data_dir = dir.path().join("data");
         runtime_config.state_dir = dir.path().join("state");
-        runtime_config.app_db_path = dir.path().join("app.db");
+        runtime_config.agent_db = dir.path().join("state/agents.db");
+        runtime_config.dag_history_db = dir.path().join("state/dag_history.db");
+        runtime_config.bib_db_path = dir.path().join("state/bib.db");
+        runtime_config.writing_db_path = dir.path().join("state/writing.db");
+        runtime_config.app_db_path = dir.path().join("state/app.db");
         let config = Self::new(prompt, runtime_config);
         (config, EphemeralState { _dir: dir })
     }
@@ -224,12 +233,33 @@ pub async fn run_task<P: OutputProcessor>(
     };
 
     // ── Optional session resume ──────────────────────────────────────
-    // Applied before the prompt so the message lands in the resumed
-    // session. Fire-and-forget, so dispatch it synchronously (same
-    // lesson as the timeout cancel).
+    // The switch is fire-and-forget and the agent applies it
+    // asynchronously, so wait for its `SessionActivated` confirmation
+    // before delivering the prompt — otherwise a fast prompt can beat
+    // the switch and land in a fresh session. Events observed while
+    // waiting are buffered and replayed into the translation loop.
+    let mut pre_events: VecDeque<(String, AgentEvent)> = VecDeque::new();
     if let Some(session) = config.session {
         host.control().switch_session(&agent_path, session);
         host.try_process_commands();
+        let switch_deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < switch_deadline {
+            host.try_process_commands();
+            match tokio::time::timeout(Duration::from_millis(20), host.recv_any()).await {
+                Ok(Some(tagged)) => {
+                    let activated = matches!(
+                        &tagged.1,
+                        AgentEvent::SessionActivated { id, .. } if *id == session
+                    );
+                    if activated {
+                        break;
+                    }
+                    pre_events.push_back(tagged);
+                }
+                Ok(None) => break,
+                Err(_) => {}
+            }
+        }
     }
 
     // ── Prompt delivery ──────────────────────────────────────────────
@@ -285,7 +315,11 @@ pub async fn run_task<P: OutputProcessor>(
             break Terminal::Cancelled;
         }
         host.try_process_commands();
-        match tokio::time::timeout(COMMAND_PUMP_INTERVAL, host.recv_any()).await {
+        let tagged = match pre_events.pop_front() {
+            Some(tagged) => Ok(Some(tagged)),
+            None => tokio::time::timeout(COMMAND_PUMP_INTERVAL, host.recv_any()).await,
+        };
+        match tagged {
             Ok(Some((name, event))) => {
                 for run_event in translation.translate(&name, event) {
                     processor.process(&run_event);
@@ -303,12 +337,10 @@ pub async fn run_task<P: OutputProcessor>(
             }
             // Every agent task has ended and its event channel closed.
             Ok(None) => {
-                break translation
-                    .terminal
-                    .take()
-                    .unwrap_or(Terminal::Failed);
+                break translation.terminal.take().unwrap_or(Terminal::Failed);
             }
-            // Timeout: loop back around to pump host commands.
+            // Poll timeout with no event pending: loop back around to
+            // pump host commands and re-check the deadline.
             Err(_) => continue,
         }
     };

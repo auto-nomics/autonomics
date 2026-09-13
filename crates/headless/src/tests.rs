@@ -11,6 +11,7 @@ use agentik_sdk::streaming::MessageStream;
 use agentik_types::errors::AnthropicError;
 use agentik_types::messages::{ContentBlock, Message, Role, StopReason};
 use agentik_types::streaming::{ContentBlockDelta, MessageDelta, MessageDeltaUsage, MessageStreamEvent};
+use std::path::PathBuf;
 use std::time::Duration;
 
 /// Wall-clock guard: a hung run fails the test instead of the suite.
@@ -18,9 +19,23 @@ const TEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn test_config(dir: &tempfile::TempDir) -> RunTaskConfig {
     let mut runtime_config = RuntimeConfig::default();
-    runtime_config.data_dir = dir.path().join("data");
-    runtime_config.state_dir = dir.path().join("state");
+    isolate_runtime_paths(&mut runtime_config, dir.path().join("data"), dir.path().join("state"));
     RunTaskConfig::new("What is 1+1?", runtime_config)
+}
+
+/// Redirect EVERY persistent path (databases included) under the test
+/// temp dir. `RuntimeConfig::default()` bakes absolute paths
+/// (`~/.autonomics/...`) for agent/bib/writing/app DBs at resolution
+/// time, so overriding only `state_dir` after the fact silently leaks
+/// test agents and sessions into the real installation.
+fn isolate_runtime_paths(config: &mut RuntimeConfig, data_dir: PathBuf, state_dir: PathBuf) {
+    config.data_dir = data_dir;
+    config.state_dir = state_dir.clone();
+    config.agent_db = state_dir.join("agents.db");
+    config.dag_history_db = state_dir.join("dag_history.db");
+    config.bib_db_path = state_dir.join("bib.db");
+    config.writing_db_path = state_dir.join("writing.db");
+    config.app_db_path = state_dir.join("app.db");
 }
 
 fn mock_model_info() -> ModelInfo {
@@ -384,7 +399,10 @@ async fn session_resume_continues_the_same_session() {
         .and_then(|v| v["session_id"].as_str().map(String::from))
         .and_then(|s| s.parse().ok())
         .expect("turn.started carries a session id");
-    assert_eq!(resumed_id, session_id, "run 2 resumed run 1's session");
+    assert_eq!(
+        resumed_id, session_id,
+        "run 2 resumed run 1's session; events:\n{jsonl}"
+    );
 }
 
 #[tokio::test]

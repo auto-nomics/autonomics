@@ -9665,13 +9665,20 @@ checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
 name = "reprobio-adapter"
 version = "0.1.0"
 dependencies = [
+ "agentik-sdk",
+ "agentik-types",
  "clap",
- "csv",
- "data-engine",
+ "headless",
+ "runtime",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "tempfile",
  "tokio",
+ "toml 0.8.23",
+ "uuid",
+ "vfs",
 ]
 
 [[package]]
