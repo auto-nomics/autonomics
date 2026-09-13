@@ -1,7 +1,6 @@
 pub mod agent_leaf;
 pub mod agent_picker;
 pub mod agent_workspace;
-pub mod bibliography_widget;
 pub mod chat_widget;
 pub mod command_palette;
 pub mod dag_view;
@@ -17,5 +16,4 @@ pub mod session_picker;
 pub mod sidebar;
 pub mod status_bar;
 pub mod toast;
-pub mod todo_widget;
 pub mod tree_picker;

@@ -138,7 +138,7 @@ impl MessageStream {
     /// broadcast channel (after routing it through the same `accumulate_event`
     /// and `dispatch_event` helpers the production path uses), then delivers
     /// the accumulated final message through the oneshot completion channel.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     pub fn from_events(events: Vec<MessageStreamEvent>, final_message: Message) -> Self {
         let (event_sender, event_receiver) = broadcast::channel(events.len().max(1));
         let (completion_sender, completion_receiver) = oneshot::channel();

@@ -60,7 +60,6 @@ impl App {
                 if plan.revision > ts.plan.revision {
                     ts.plan = state::PlanState {
                         steps: plan.update.plan,
-                        explanation: plan.update.explanation,
                         revision: plan.revision,
                     };
                     self.dirty = true;

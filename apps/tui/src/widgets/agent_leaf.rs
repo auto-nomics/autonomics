@@ -40,7 +40,6 @@ const SIDEBAR_MIN_WIDTH: u16 = 24;
 /// ```
 pub struct AgentLeaf<'a> {
     pub active_model: Option<&'a str>,
-    pub agent_name: Option<&'a str>,
     pub context_window: Option<u64>,
     pub sessions: &'a [SessionSummary],
     pub display: &'a DisplaySettings,
@@ -93,7 +92,6 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
             context_used: ts.latest_turn_context_used,
             context_window: self.context_window,
             model_name: self.active_model,
-            is_compacting: ts.compact_state.is_compacting,
         };
         status_bar.render(layout[0], buf);
 

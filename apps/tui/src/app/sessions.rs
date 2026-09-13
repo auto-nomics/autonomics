@@ -172,7 +172,6 @@ impl App {
                 crate::widgets::session_picker::PickerSession {
                     id: s.id,
                     title: s.title.clone(),
-                    message_count: s.tab_state.messages.len(),
                     last_active: s.last_active,
                     created_at: 0,
                     user_message_count: stats.user_message_count,

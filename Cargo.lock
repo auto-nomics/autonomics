@@ -5032,6 +5032,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "headless"
+version = "0.1.0"
+dependencies = [
+ "agentik-core",
+ "agentik-sdk",
+ "agentik-types",
+ "arc-swap",
+ "runtime",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "heck"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9643,19 +9662,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
 
 [[package]]
-name = "reprobio-adapter"
-version = "0.1.0"
-dependencies = [
- "clap",
- "csv",
- "data-engine",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tokio",
-]
-
-[[package]]
 name = "reqsign-aliyun-oss"
 version = "3.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9871,6 +9877,7 @@ dependencies = [
  "opentargets",
  "pubchem",
  "rcsb",
+ "rusqlite",
  "schemars",
  "serde",
  "serde_json",
@@ -11768,6 +11775,7 @@ dependencies = [
  "crossterm",
  "dag-core",
  "fuzzy-matcher",
+ "headless",
  "ignore",
  "itertools 0.14.0",
  "kms",

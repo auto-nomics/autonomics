@@ -80,26 +80,6 @@ impl<T: PickerItem> PickerState<T> {
         self.visible = false;
     }
 
-    pub fn toggle(&mut self) {
-        if self.visible {
-            self.close();
-        } else {
-            self.open();
-        }
-    }
-
-    // ── Search input ──
-
-    pub fn push_char(&mut self, c: char) {
-        self.query.push(c);
-        self.refilter();
-    }
-
-    pub fn pop_char(&mut self) {
-        self.query.pop();
-        self.refilter();
-    }
-
     // ── Navigation ──
 
     pub fn move_up(&mut self) {
@@ -144,10 +124,6 @@ impl<T: PickerItem> PickerState<T> {
         }
     }
 
-    pub fn item_count(&self) -> usize {
-        self.items.len()
-    }
-
     /// Replace the query and re-run the filter. Used by callers that
     /// manage their own text input (e.g. an embedded `TextArea`) and
     /// need to sync external edits into the picker state.
@@ -189,22 +165,16 @@ impl<T: PickerItem> PickerState<T> {
 /// Pass `frame_area` (the full terminal area) for centering. The popup
 /// auto-sizes to ~60% width, content-driven height.
 pub struct SearchablePicker<'a> {
-    /// Popup title.
-    pub title: &'a str,
     /// Accent color for title/border.
     pub accent: Color,
-    /// Placeholder shown when the search query is empty.
-    pub placeholder: &'a str,
     /// Footer hint line.
     pub footer_hint: &'a str,
 }
 
 impl<'a> SearchablePicker<'a> {
-    pub fn new(title: &'a str) -> Self {
+    pub fn new(_title: &'a str) -> Self {
         Self {
-            title,
             accent: Color::Cyan,
-            placeholder: " search…",
             footer_hint: " Enter select  ↑↓ navigate  Esc cancel",
         }
     }
@@ -214,67 +184,11 @@ impl<'a> SearchablePicker<'a> {
         self
     }
 
-    pub fn placeholder(mut self, p: &'a str) -> Self {
-        self.placeholder = p;
-        self
-    }
-
     pub fn footer_hint(mut self, h: &'a str) -> Self {
         self.footer_hint = h;
         self
     }
 
-    /// Render the popup within `frame_area`. No-op when `state.visible` is false.
-    pub fn render<T: PickerItem>(
-        &self,
-        frame_area: Rect,
-        buf: &mut Buffer,
-        state: &mut PickerState<T>,
-    ) {
-        if !state.visible {
-            return;
-        }
-
-        let popup = Popup::new(self.title, PopupControls::default()).accent(self.accent);
-        let inner = popup.render(frame_area, buf);
-
-        let regions = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(1), // Search input
-                Constraint::Min(3),    // List
-                Constraint::Length(1), // Footer
-            ])
-            .split(inner);
-
-        // ── Search input ──
-        let input_line = if state.query.is_empty() {
-            Line::from(vec![
-                Span::styled("> ", Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    self.placeholder,
-                    Style::default()
-                        .fg(Color::DarkGray)
-                        .add_modifier(Modifier::DIM),
-                ),
-            ])
-        } else {
-            Line::from(vec![
-                Span::styled("> ", Style::default().fg(self.accent)),
-                Span::styled(state.query.clone(), Style::default().fg(Color::White)),
-            ])
-        };
-        Widget::render(
-            ratatui::widgets::Paragraph::new(input_line),
-            regions[0],
-            buf,
-        );
-
-        self.render_list_and_footer(regions[1], regions[2], buf, state);
-    }
-
-    /// Render the filtered list and footer for a picker whose search input is
-    /// owned by the caller.
     pub fn render_list_and_footer<T: PickerItem>(
         &self,
         list_area: Rect,

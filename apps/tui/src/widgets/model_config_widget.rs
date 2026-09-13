@@ -307,13 +307,6 @@ impl ModelConfigState {
     }
 
     /// The model info at the cursor position, if the cursor is on a model row.
-    pub fn model_at_cursor(&self) -> Option<&ModelInfo> {
-        let items = self.flat_items();
-        match items.get(self.cursor)? {
-            FlatItem::Model(pi, mi) => self.providers.get(*pi)?.models.get(*mi),
-            _ => None,
-        }
-    }
 
     /// Handle keys and return any command the App should execute.
     ///
@@ -1190,7 +1183,7 @@ fn yn(b: bool) -> String {
 /// unconfigured (alphabetical). Configured providers start expanded.
 pub fn build_catalog(
     db_providers: &[(String, String, String)], // (provider_type, api_key, base_url)
-    db_models: &[crate::config_db::ModelRow],
+    db_models: &[runtime::model_bootstrap::ModelRow],
 ) -> ModelConfigState {
     let types = registry::known_provider_types();
 

@@ -35,7 +35,6 @@ mod agents;
 mod chat;
 mod commands;
 mod dag_view;
-mod database;
 mod event_loop;
 mod history;
 mod keyboard;
@@ -52,7 +51,7 @@ pub struct App {
     /// Per-agent handles, parallel to `state.sessions`.
     handles: Vec<AgentHandle>,
     /// Kept alive to drive the agent's background event loop task.
-    _runtime: Option<tokio::runtime::Runtime>,
+    runtime: Option<tokio::runtime::Runtime>,
     /// Handle for spawning background tasks from within the sync event loop.
     runtime_handle: tokio::runtime::Handle,
     /// Local HTTP API backend, shut down with the TUI process.
@@ -63,7 +62,6 @@ pub struct App {
     /// Internal event channel for decoupled communication.
     app_event_rx: tokio::sync::mpsc::UnboundedReceiver<crate::app_event::AppEvent>,
     /// Sender half exposed for subsystems (file search, plugins, etc.)
-    #[allow(dead_code)]
     pub(crate) app_event_tx: crate::app_event_sender::AppEventSender,
     should_quit: bool,
     cancel_requested_at: Option<Instant>,
@@ -85,10 +83,13 @@ impl App {
         conn.pragma_update(None, "foreign_keys", "ON")
             .expect("failed to enable foreign_keys");
 
-        Self::init_database(&conn).expect("failed to initialize database schema");
+        runtime::model_bootstrap::ensure_app_schema(&conn)
+            .expect("failed to initialize app database schema");
 
         let runtime = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
-        let model = Arc::new(ArcSwapOption::from_pointee(Self::build_model(&conn)));
+        let model = Arc::new(ArcSwapOption::from_pointee(
+            runtime::model_bootstrap::resolve_active_model(&conn),
+        ));
 
         // ── Open RuntimeHost + load profiles ──────────────────────
         let (mut host, profiles) = runtime.block_on(async {
@@ -178,7 +179,7 @@ impl App {
             state,
             host,
             handles: Vec::new(),
-            _runtime: Some(runtime),
+            runtime: Some(runtime),
             runtime_handle: runtime_handle.clone(),
             http_server,
             conn,

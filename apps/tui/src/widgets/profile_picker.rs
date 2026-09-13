@@ -27,15 +27,6 @@ pub struct ProfileItem {
     pub profile: AgentProfile,
 }
 
-impl ProfileItem {
-    pub fn name(&self) -> &str {
-        self.profile.name()
-    }
-    pub fn description(&self) -> &str {
-        &self.profile.description
-    }
-}
-
 /// One visible row in the tree — either a collapsible folder or a leaf profile.
 #[derive(Clone, Debug)]
 struct TreeNode {
@@ -150,9 +141,6 @@ impl ProfilePickerState {
     }
 
     /// Number of rows currently displayed.
-    pub fn filtered_len(&self) -> usize {
-        self.rows.len()
-    }
 
     /// Populate the picker from profiles.
     pub fn set_profiles(&mut self, profiles: Vec<AgentProfile>) {
@@ -329,11 +317,6 @@ impl ProfilePicker {
             popup_width: 0,
             list_width: 28,
         }
-    }
-
-    pub fn accent(mut self, c: Color) -> Self {
-        self.accent = c;
-        self
     }
 
     pub fn popup_width(mut self, w: u16) -> Self {

@@ -51,11 +51,6 @@ impl App {
                     self.state.active_tab_state_mut().cancel_pending = true;
                 }
             }
-            CommandAction::EnterInput => {
-                if true {
-                    self.state.active_tab_state_mut().input_mode = InputMode::Input;
-                }
-            }
             CommandAction::ToggleAutoScroll => {
                 if true {
                     let ts = self.state.active_tab_state_mut();
@@ -94,32 +89,8 @@ impl App {
                     load_selected_history_match(ts);
                 }
             }
-            CommandAction::ClearTranscript => {
-                let ts = self.state.active_tab_state_mut();
-                ts.messages.clear();
-                ts.msg_versions.clear();
-                ts.cached_msg_lines.clear();
-                ts.cached_msg_versions.clear();
-                ts.scroll_offset = 0;
-                ts.scroll_to_bottom();
-            }
             CommandAction::ReloadConfig => {
                 Self::load_model_config(&self.conn, &mut self.state.model_config_state);
-            }
-            CommandAction::SpawnAgent(profile_name) => {
-                if let Some(profile) = self
-                    .state
-                    .profiles
-                    .iter()
-                    .find(|p| p.path == profile_name)
-                    .cloned()
-                {
-                    // Stash the profile; name input prompts for the agent name.
-                    self.state.pending_profile = Some(profile.clone());
-                    self.state
-                        .name_input
-                        .open(format!(" New Agent ({}) ", profile.name()), profile.name());
-                }
             }
             CommandAction::NewAgent => {
                 self.state.profile_picker.open();

@@ -168,6 +168,11 @@ impl<'a> RtOptions<'a> {
     }
 }
 
+// Vendored from the xAI textarea together with `RtOptions` /
+// `slice_line_spans` / `wrap_ranges_trim` and their unit tests below.
+// Not wired into the chat input yet (`textarea.rs` uses `wrap_ranges`);
+// kept as a unit so a future upstream re-sync stays diffable.
+#[allow(dead_code)]
 #[must_use]
 pub fn word_wrap_line<'a, O>(line: &'a Line<'a>, width_or_options: O) -> Vec<Line<'a>>
 where
