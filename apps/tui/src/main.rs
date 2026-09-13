@@ -106,5 +106,6 @@ fn main() -> color_eyre::Result<()> {
                 .map_err(|e| color_eyre::eyre::eyre!("failed to build tokio runtime: {e}"))?;
             runtime.block_on(commands::bib::run_bib(bib))
         }
+        Command::Run(run_args) => todo!(),
     }
 }
