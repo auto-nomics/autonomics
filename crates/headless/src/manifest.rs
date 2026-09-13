@@ -3,7 +3,7 @@
 //! Aligned with the project's "typed, auditable harness" claim: every
 //! run can leave a manifest recording what was asked, which model
 //! answered, and what it cost — independent of any specific benchmark's
-//! schema (adapters like reprobio map this onto their own contract).
+//! schema (future benchmark adapters map this onto their own contracts).
 
 use std::io::Write;
 use std::path::Path;

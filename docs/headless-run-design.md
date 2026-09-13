@@ -1,6 +1,6 @@
 # Headless 运行模式设计(初步)
 
-状态:**P0/P1 已实现,reprobio-adapter 已换芯**(feat/headless-mode 分支)。CLI:`tui run`(--json / -o / --profile / --model / --timeout / --session / --ephemeral / --manifest);库:`crates/headless::run_task`,退出码 0/1/2/3。剩余:P2 的 --output-schema、多 turn stdin 脚本,P3 的多 agent 网络运行。参考实现:codex-rs `exec` 子命令(`/mnt/disk3/codex/codex-rs/exec`)。
+状态:**P0/P1 已实现**(feat/headless-mode 分支)。CLI:`tui run`(--json / -o / --profile / --model / --timeout / --session / --ephemeral / --manifest);库:`crates/headless::run_task`,退出码 0/1/2/3。剩余:P2 的 --output-schema、多 turn stdin 脚本,P3 的多 agent 网络运行。参考实现:codex-rs `exec` 子命令(`/mnt/disk3/codex/codex-rs/exec`)。
 
 ## 0. 背景与目标
 
@@ -181,8 +181,8 @@ agentik-core storage 已按 agent name 自动恢复并做 WAL replay
 
 ## 8. Run manifest
 
-对齐 BioMNI "auditable harness" 主张,提供通用 run manifest,与 reprobio-adapter
-的 `audit_manifest.json` 同构但更通用:
+对齐 BioMNI "auditable harness" 主张,提供通用 run manifest(任何 run 都产出审计元数据,
+未来 benchmark adapter 在其上映射自己的契约):
 
 ```json
 {
@@ -197,18 +197,15 @@ agentik-core storage 已按 agent name 自动恢复并做 WAL replay
 }
 ```
 
-reprobio-adapter 后续改造为库消费者(前一轮讨论的"库 + 薄 adapter"形态):
-adapter 保留 task 包解析 / 校验 / 防泄漏边界与 ReproBioBench schema 映射,
-执行核心替换为 `headless::run_task()`,删除硬编码 DAG。
-
 ## 9. 分阶段实施
+
+(原 Step 7"reprobio-adapter 换芯"已完成后随 adapter 一并移除;`crates/headless` 现为唯一评测入口,未来的 benchmark adapter 作为它的库消费者另行开发。)
 
 - **P0(骨架)**:`build_model` / profile 引导下沉 runtime;`crates/headless`
   库 + `run` 子命令;单 agent 单 turn;人读 + `--json`;退出码;`--timeout`。
 - **P1(可用性)**:`--output-last-message`、`--session` 恢复、
   `--ephemeral`(临时 state_dir)、`--manifest`、`sessions list`。
-- **P2(评测)**:`--output-schema`(依赖 agentik-sdk 结构化输出能力,见 §10.3);
-  reprobio-adapter 改造;多 turn stdin 脚本(每行一条 user 消息的 JSONL)。
+- **P2(评测)**:`--output-schema`(依赖 agentik-sdk 结构化输出能力,见 §10.3);多 turn stdin 脚本(每行一条 user 消息的 JSONL)。
 - **P3(编排)**:多 agent 网络运行——`NetworkSpec`(nodes/edges/termination)
   以 JSON 文件输入,run 至 `TerminationSpec` 满足;复用
   `host.add_node`/`connect`/`set_termination`/`inject_initial_prompts` 现有 API。
