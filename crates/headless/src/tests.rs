@@ -242,3 +242,36 @@ async fn unknown_profile_is_a_startup_error() {
         .expect("resolves within timeout");
     assert!(matches!(result, Err(RunError::NoProfile { .. })));
 }
+
+/// A mock model whose requests always fail with a retryable error — the
+/// agent backs off (first sleep: 1s), giving a short run timeout a window
+/// to fire mid-turn.
+fn always_retrying_model() -> Model {
+    let mut mock = MockApiClient::new();
+    mock.expect_request_stream_with_system().returning(|_, _, _, _| {
+        Err(AnthropicError::StreamError("transient".into()))
+    });
+    Model::with_client(mock_model_info(), mock)
+}
+
+#[tokio::test]
+async fn timeout_cancels_mid_turn() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = test_config(&dir);
+    config.model = Some(always_retrying_model());
+    config.model_name = Some("mock-model".into());
+    config.timeout = Some(Duration::from_millis(300));
+
+    let mut processor = JsonlProcessor::new(Vec::new());
+    let summary = tokio::time::timeout(TEST_TIMEOUT, run_task(config, &mut processor))
+        .await
+        .expect("run completes within timeout")
+        .expect("startup succeeds");
+
+    assert_eq!(summary.outcome, Outcome::Cancelled);
+    let jsonl = String::from_utf8(processor.into_parts()).unwrap();
+    assert!(jsonl.contains("run timed out after"), "timeout surfaced: {jsonl}");
+    let ended: serde_json::Value =
+        serde_json::from_str(jsonl.lines().last().unwrap()).unwrap();
+    assert_eq!(ended["status"], "cancelled");
+}

@@ -29,4 +29,9 @@ pub struct RunArgs {
     /// installation's active model from the app database).
     #[arg(long, value_name = "SPEC")]
     pub model: Option<String>,
+
+    /// Wall-clock budget in seconds for the whole run. On expiry the run
+    /// is cancelled (exit code 2).
+    #[arg(long, value_name = "SECS")]
+    pub timeout: Option<u64>,
 }

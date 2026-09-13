@@ -55,6 +55,7 @@ pub fn run_headless(args: RunArgs) -> color_eyre::Result<()> {
         config.profile = args.profile.clone();
         config.model = Some(model);
         config.model_name = Some(model_name);
+        config.timeout = args.timeout.map(std::time::Duration::from_secs);
 
         let summary = if args.json {
             let mut processor = JsonlProcessor::new(std::io::stdout());

@@ -59,6 +59,10 @@ use event::{
 /// never starve.
 const COMMAND_PUMP_INTERVAL: Duration = Duration::from_millis(50);
 
+/// Upper bound on the final agent shutdown wait before the host is
+/// dropped regardless.
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(30);
+
 /// Everything `run_task` needs to execute one prompt.
 #[derive(Clone)]
 pub struct RunTaskConfig {
@@ -76,6 +80,11 @@ pub struct RunTaskConfig {
     /// accessor, so the caller passes the name it resolved (or a hint
     /// like `"mock"` in tests).
     pub model_name: Option<String>,
+    /// Wall-clock budget for the whole run. When it elapses the run is
+    /// abandoned as cancelled (exit code 2 territory): a
+    /// `turn.failed` event with the timeout message is emitted, then
+    /// `run.ended{status: cancelled}`, and the agent is shut down.
+    pub timeout: Option<Duration>,
     /// Fully resolved runtime configuration (state dir, feature flags, …).
     pub runtime_config: RuntimeConfig,
 }
@@ -88,6 +97,7 @@ impl RunTaskConfig {
             agent_name: "headless".to_string(),
             model: None,
             model_name: None,
+            timeout: None,
             runtime_config,
         }
     }
@@ -214,7 +224,26 @@ pub async fn run_task<P: OutputProcessor>(
     }));
 
     let mut translation = TranslationState::default();
+    let deadline = config.timeout.map(|budget| started + budget);
     let terminal = loop {
+        if let Some(deadline) = deadline
+            && Instant::now() >= deadline
+        {
+            let budget = config.timeout.expect("deadline implies timeout");
+            // Cooperative cancel first: aborts the in-flight turn —
+            // interrupts retry backoff and running tools — so the
+            // shutdown below doesn't wait on them. `cancel_agent` is
+            // fire-and-forget, so drain the host command queue here to
+            // actually dispatch it.
+            host.control().cancel_agent(&agent_path);
+            host.try_process_commands();
+            translation.terminal = Some(Terminal::Cancelled);
+            processor.process(&RunEvent::TurnFailed(TurnFailedEvent {
+                turn_id: translation.current_turn_id,
+                message: format!("run timed out after {:.1}s", budget.as_secs_f64()),
+            }));
+            break Terminal::Cancelled;
+        }
         host.try_process_commands();
         match tokio::time::timeout(COMMAND_PUMP_INTERVAL, host.recv_any()).await {
             Ok(Some((name, event))) => {
@@ -260,7 +289,15 @@ pub async fn run_task<P: OutputProcessor>(
     }));
     processor.finish();
 
-    host.shutdown_all_agents_and_wait().await;
+    // Belt and braces: the cooperative cancel (timeout path) and the
+    // terminal turn state (normal path) should make shutdown prompt, but
+    // a wedged tool must not hang the process — drop the host instead.
+    if tokio::time::timeout(SHUTDOWN_GRACE, host.shutdown_all_agents_and_wait())
+        .await
+        .is_err()
+    {
+        tracing::warn!("agents did not shut down within grace; dropping host");
+    }
 
     Ok(RunSummary {
         outcome: match terminal {
