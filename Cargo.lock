@@ -11786,6 +11786,7 @@ dependencies = [
  "crossterm",
  "dag-core",
  "fuzzy-matcher",
+ "headless",
  "ignore",
  "itertools 0.14.0",
  "kms",

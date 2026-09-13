@@ -217,14 +217,19 @@ fn row_to_model(row: &rusqlite::Row<'_>) -> rusqlite::Result<ModelRow> {
 /// credentials are missing, or any lookup fails — callers treat that as
 /// "run without a model".
 pub fn resolve_active_model(conn: &Connection) -> Option<Model> {
-    let active: String = conn
-        .query_row(
-            "SELECT value FROM settings WHERE key = 'active_model'",
-            [],
-            |row| row.get(0),
-        )
-        .ok()?;
+    let active = active_model_spec(conn)?;
     resolve_model_spec(conn, &active)
+}
+
+/// The `active_model` setting's raw `"provider_name:model_name"` spec,
+/// when one is configured.
+pub fn active_model_spec(conn: &Connection) -> Option<String> {
+    conn.query_row(
+        "SELECT value FROM settings WHERE key = 'active_model'",
+        [],
+        |row| row.get(0),
+    )
+    .ok()
 }
 
 /// Build a [`Model`] from a `"provider_name:model_name"` spec, using
@@ -339,6 +344,10 @@ mod tests {
             (),
         )
         .unwrap();
+        assert_eq!(
+            active_model_spec(&conn).as_deref(),
+            Some("Custom:db-only-model")
+        );
         assert!(resolve_active_model(&conn).is_some());
     }
 

@@ -1,8 +1,32 @@
 //! Arguments for the headless run subcommand.
 
+use std::path::PathBuf;
+
 use clap::Args;
 
 #[derive(Debug, Args)]
 pub struct RunArgs {
-    pub prompt: String,
+    /// Task prompt. If omitted (or `-`), read from stdin; piped stdin
+    /// alongside a positional prompt is appended as a `<stdin>` block.
+    #[arg(value_name = "PROMPT")]
+    pub prompt: Option<String>,
+
+    /// Print events to stdout as JSONL, one per line. Progress and
+    /// warnings still go to stderr.
+    #[arg(long)]
+    pub json: bool,
+
+    /// Write the agent's final message to FILE (empty content when the
+    /// turn produced no message).
+    #[arg(long, short = 'o', value_name = "FILE")]
+    pub output_last_message: Option<PathBuf>,
+
+    /// Spawn from this profile path (default: first stored profile).
+    #[arg(long, value_name = "PATH")]
+    pub profile: Option<String>,
+
+    /// Model override as `provider_name:model_name` (default: the
+    /// installation's active model from the app database).
+    #[arg(long, value_name = "SPEC")]
+    pub model: Option<String>,
 }
