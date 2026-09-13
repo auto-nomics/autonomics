@@ -7,9 +7,20 @@ license.workspace = true
 description = "Headless (non-interactive) execution of agentik agents"
 
 [dependencies]
+agentik-core = { path = "../agentik-core" }
+agentik-sdk = { path = "../agentik-sdk" }
+agentik-types = { path = "../agentik-types" }
+arc-swap.workspace = true
+runtime = { path = "../runtime" }
 serde.workspace = true
 serde_json.workspace = true
+thiserror = { workspace = true }
+tokio = { workspace = true }
 uuid = { version = "1.12", features = ["v4", "serde"] }
+
+[dev-dependencies]
+agentik-sdk = { path = "../agentik-sdk", features = ["test-util"] }
+tempfile = "3"
 
 [lints]
 workspace = true

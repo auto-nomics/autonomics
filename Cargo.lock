@@ -5035,8 +5035,16 @@ dependencies = [
 name = "headless"
 version = "0.1.0"
 dependencies = [
+ "agentik-core",
+ "agentik-sdk",
+ "agentik-types",
+ "arc-swap",
+ "runtime",
  "serde",
  "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
  "uuid",
 ]
 
