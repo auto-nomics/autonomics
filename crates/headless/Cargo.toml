@@ -1,0 +1,15 @@
+[package]
+name = "headless"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Headless (non-interactive) execution of agentik agents"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+uuid = { version = "1.12", features = ["v4", "serde"] }
+
+[lints]
+workspace = true
