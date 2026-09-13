@@ -32,6 +32,7 @@
 #![deny(clippy::print_stdout)]
 
 pub mod event;
+pub mod manifest;
 pub mod processor;
 
 use std::collections::VecDeque;
@@ -80,6 +81,10 @@ pub struct RunTaskConfig {
     /// accessor, so the caller passes the name it resolved (or a hint
     /// like `"mock"` in tests).
     pub model_name: Option<String>,
+    /// Resume this session instead of continuing the agent's active
+    /// one. The agent must already know it (same agent path, persisted
+    /// in the state dir); scripts obtain the id from `turn.started`.
+    pub session: Option<Uuid>,
     /// Wall-clock budget for the whole run. When it elapses the run is
     /// abandoned as cancelled (exit code 2 territory): a
     /// `turn.failed` event with the timeout message is emitted, then
@@ -89,7 +94,28 @@ pub struct RunTaskConfig {
     pub runtime_config: RuntimeConfig,
 }
 
+/// Keeps the ephemeral scratch directories alive for the duration of a
+/// run; dropping it removes them.
+pub struct EphemeralState {
+    _dir: tempfile::TempDir,
+}
+
 impl RunTaskConfig {
+    /// A run whose data/state directories live under a fresh temp dir,
+    /// removed when the returned [`EphemeralState`] drops. The model is
+    /// still resolved by the caller (normally from the real app DB) and
+    /// set afterwards — ephemerality scopes *conversation state*, not
+    /// credentials.
+    pub fn ephemeral(prompt: impl Into<String>) -> (Self, EphemeralState) {
+        let dir = tempfile::tempdir().expect("create ephemeral dir");
+        let mut runtime_config = RuntimeConfig::default();
+        runtime_config.data_dir = dir.path().join("data");
+        runtime_config.state_dir = dir.path().join("state");
+        runtime_config.app_db_path = dir.path().join("app.db");
+        let config = Self::new(prompt, runtime_config);
+        (config, EphemeralState { _dir: dir })
+    }
+
     pub fn new(prompt: impl Into<String>, runtime_config: RuntimeConfig) -> Self {
         Self {
             prompt: prompt.into(),
@@ -97,6 +123,7 @@ impl RunTaskConfig {
             agent_name: "headless".to_string(),
             model: None,
             model_name: None,
+            session: None,
             timeout: None,
             runtime_config,
         }
@@ -108,11 +135,15 @@ impl RunTaskConfig {
 pub struct RunSummary {
     pub outcome: processor::Outcome,
     pub agent_path: String,
+    /// Resolved profile path the agent ran with.
+    pub profile: String,
     pub last_message: Option<String>,
     pub wall_time_secs: f64,
     /// Cumulative usage across all turns, when any was reported.
     pub usage: Option<Usage>,
     pub turns: u64,
+    /// Tool calls that completed during the run.
+    pub tool_calls: u64,
 }
 
 /// Startup-phase failures — distinct from a failed *turn*, which is a
@@ -191,6 +222,15 @@ pub async fn run_task<P: OutputProcessor>(
         Ok(id) => id,
         Err(_) => Uuid::nil(),
     };
+
+    // ── Optional session resume ──────────────────────────────────────
+    // Applied before the prompt so the message lands in the resumed
+    // session. Fire-and-forget, so dispatch it synchronously (same
+    // lesson as the timeout cancel).
+    if let Some(session) = config.session {
+        host.control().switch_session(&agent_path, session);
+        host.try_process_commands();
+    }
 
     // ── Prompt delivery ──────────────────────────────────────────────
     let control = host.control();
@@ -281,11 +321,13 @@ pub async fn run_task<P: OutputProcessor>(
     };
     let usage = (translation.turns > 0).then_some(translation.run_usage);
     let turns = translation.turns;
+    let tool_calls = translation.tool_calls;
     processor.process(&RunEvent::RunEnded(RunEndedEvent {
         status,
         wall_time_secs,
         usage,
         turns,
+        tool_calls,
     }));
     processor.finish();
 
@@ -300,6 +342,7 @@ pub async fn run_task<P: OutputProcessor>(
     }
 
     Ok(RunSummary {
+        profile: profile.path.clone(),
         outcome: match terminal {
             Terminal::Completed => processor::Outcome::Completed,
             Terminal::Failed => processor::Outcome::Failed,
@@ -310,6 +353,7 @@ pub async fn run_task<P: OutputProcessor>(
         wall_time_secs,
         usage,
         turns,
+        tool_calls,
     })
 }
 
@@ -345,6 +389,7 @@ struct TranslationState {
     turn_usage: Usage,
     run_usage: Usage,
     turns: u64,
+    tool_calls: u64,
     terminal: Option<Terminal>,
     /// Turn id of the in-flight top-level turn, from `TurnStarted`.
     current_turn_id: Uuid,
@@ -366,13 +411,16 @@ impl TranslationState {
         match event {
             AgentEvent::TurnStarted {
                 turn_id,
+                session_id,
                 delegation_id: None,
-                ..
             } => {
                 // A fresh top-level turn: reset per-turn usage.
                 self.turn_usage = Usage::default();
                 self.current_turn_id = turn_id;
-                vec![RunEvent::TurnStarted(TurnStartedEvent { turn_id })]
+                vec![RunEvent::TurnStarted(TurnStartedEvent {
+                    turn_id,
+                    session_id,
+                })]
             }
 
             AgentEvent::ToolCall { name, input } => {
@@ -398,6 +446,7 @@ impl TranslationState {
                 let Some((id, tool, input)) = self.pending_tools.pop_front() else {
                     return vec![];
                 };
+                self.tool_calls += 1;
                 vec![RunEvent::ItemCompleted(ItemEvent {
                     item: RunItem {
                         id,

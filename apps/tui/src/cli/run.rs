@@ -34,4 +34,19 @@ pub struct RunArgs {
     /// is cancelled (exit code 2).
     #[arg(long, value_name = "SECS")]
     pub timeout: Option<u64>,
+
+    /// Resume this session (id comes from a previous run's
+    /// `turn.started` event) instead of the agent's active one.
+    #[arg(long, value_name = "UUID")]
+    pub session: Option<uuid::Uuid>,
+
+    /// Keep conversation state in a throwaway temp dir instead of the
+    /// installation's state dir. Credentials still come from the app DB.
+    #[arg(long)]
+    pub ephemeral: bool,
+
+    /// Write a JSON run manifest (prompt hash, model, usage, status) to
+    /// this file after the run, whatever the outcome.
+    #[arg(long, value_name = "FILE")]
+    pub manifest: Option<PathBuf>,
 }

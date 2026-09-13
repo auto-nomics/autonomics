@@ -281,6 +281,7 @@ mod tests {
             wall_time_secs: 0.1,
             usage: None,
             turns: 1,
+            tool_calls: 1,
         })
     }
 
@@ -295,6 +296,7 @@ mod tests {
             }),
             RunEvent::TurnStarted(TurnStartedEvent {
                 turn_id: Uuid::nil(),
+                session_id: Uuid::nil(),
             }),
             RunEvent::ItemStarted(ItemEvent {
                 item: RunItem {
@@ -350,6 +352,7 @@ mod tests {
         let mut processor = HumanProcessor::new(Vec::new(), Vec::new());
         processor.process(&RunEvent::TurnStarted(TurnStartedEvent {
             turn_id: Uuid::nil(),
+            session_id: Uuid::nil(),
         }));
         processor.process(&RunEvent::TurnFailed(TurnFailedEvent {
             turn_id: Uuid::nil(),

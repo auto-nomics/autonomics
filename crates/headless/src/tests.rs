@@ -275,3 +275,135 @@ async fn timeout_cancels_mid_turn() {
         serde_json::from_str(jsonl.lines().last().unwrap()).unwrap();
     assert_eq!(ended["status"], "cancelled");
 }
+
+#[test]
+fn translation_pairs_tools_and_counts_them() {
+    let mut state = TranslationState::default();
+    let input = vec![
+        AgentEvent::TurnStarted {
+            turn_id: Uuid::nil(),
+            session_id: Uuid::nil(),
+            delegation_id: None,
+        },
+        AgentEvent::ToolCall {
+            name: "run_bash".into(),
+            input: Value::Null,
+        },
+        AgentEvent::ToolCall {
+            name: "lit_search".into(),
+            input: Value::Null,
+        },
+        AgentEvent::ToolResult {
+            ok: true,
+            content: "first".into(),
+        },
+        AgentEvent::ToolResult {
+            ok: false,
+            content: "second".into(),
+        },
+        AgentEvent::TurnCompleted {
+            turn_id: Uuid::nil(),
+            session_id: Uuid::nil(),
+            delegation_id: None,
+            status: TurnExecutionStatus::Completed,
+        },
+    ];
+    let mut out = vec![];
+    for event in input {
+        out.extend(state.translate("agent", event));
+    }
+    assert_eq!(state.tool_calls, 2);
+    assert_eq!(
+        out.iter()
+            .filter(|e| matches!(e, RunEvent::ItemStarted(_)))
+            .count(),
+        2
+    );
+    // FIFO pairing: the first completed tool is run_bash with ok=true.
+    let completed: Vec<&RunEvent> = out
+        .iter()
+        .filter(|e| matches!(e, RunEvent::ItemCompleted(_)))
+        .collect();
+    let RunEvent::ItemCompleted(ItemEvent {
+        item:
+            RunItem {
+                details: RunItemDetails::ToolCall(tool),
+                ..
+            },
+        ..
+    }) = completed[0]
+    else {
+        panic!("expected tool item");
+    };
+    assert_eq!(tool.tool, "run_bash");
+    assert_eq!(tool.result.as_deref(), Some("first"));
+    assert_eq!(tool.ok, Some(true));
+}
+
+#[tokio::test]
+async fn session_resume_continues_the_same_session() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // Run 1: capture the session id from turn.started.
+    let mut config = test_config(&dir);
+    config.model = Some(scripted_text_model("first answer", 3, 5));
+    config.model_name = Some("mock-model".into());
+    let mut processor = JsonlProcessor::new(Vec::new());
+    let first = tokio::time::timeout(TEST_TIMEOUT, run_task(config, &mut processor))
+        .await
+        .expect("first run completes")
+        .expect("startup succeeds");
+    assert_eq!(first.outcome, Outcome::Completed);
+    let jsonl = String::from_utf8(processor.into_parts()).unwrap();
+    let session_id: Uuid = jsonl
+        .lines()
+        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+        .find(|v| v["type"] == "turn.started")
+        .and_then(|v| v["session_id"].as_str().map(String::from))
+        .and_then(|s| s.parse().ok())
+        .expect("turn.started carries a session id");
+
+    // Run 2: same state dir (agent restored by path), resumed session.
+    let mut config = test_config(&dir);
+    config.model = Some(scripted_text_model("second answer", 4, 7));
+    config.model_name = Some("mock-model".into());
+    config.session = Some(session_id);
+    let mut processor = JsonlProcessor::new(Vec::new());
+    let second = tokio::time::timeout(TEST_TIMEOUT, run_task(config, &mut processor))
+        .await
+        .expect("second run completes")
+        .expect("startup succeeds");
+    assert_eq!(second.outcome, Outcome::Completed);
+    assert_eq!(second.profile, first.profile, "same stored profile picked");
+
+    let jsonl = String::from_utf8(processor.into_parts()).unwrap();
+    let resumed_id: Uuid = jsonl
+        .lines()
+        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+        .find(|v| v["type"] == "turn.started")
+        .and_then(|v| v["session_id"].as_str().map(String::from))
+        .and_then(|s| s.parse().ok())
+        .expect("turn.started carries a session id");
+    assert_eq!(resumed_id, session_id, "run 2 resumed run 1's session");
+}
+
+#[tokio::test]
+async fn ephemeral_run_uses_throwaway_state() {
+    let (mut config, _guard) = RunTaskConfig::ephemeral("ephemeral prompt");
+    config.model = Some(scripted_text_model("ephemeral answer", 2, 3));
+    config.model_name = Some("mock-model".into());
+
+    let state_root = config.runtime_config.state_dir.clone();
+    let mut processor = JsonlProcessor::new(Vec::new());
+    let summary = tokio::time::timeout(TEST_TIMEOUT, run_task(config, &mut processor))
+        .await
+        .expect("run completes")
+        .expect("startup succeeds");
+    assert_eq!(summary.outcome, Outcome::Completed);
+    assert!(
+        state_root.starts_with(std::env::temp_dir()),
+        "state lives under the temp root: {}",
+        state_root.display()
+    );
+    assert!(state_root.exists(), "state dir was used during the run");
+}

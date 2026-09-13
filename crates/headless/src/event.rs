@@ -71,6 +71,9 @@ pub struct RunStartedEvent {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TurnStartedEvent {
     pub turn_id: Uuid,
+    /// The session the turn runs in — the handle scripts use to resume
+    /// later via `--session`.
+    pub session_id: Uuid,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -95,6 +98,8 @@ pub struct RunEndedEvent {
     pub usage: Option<Usage>,
     /// Number of completed/failed turns in this run.
     pub turns: u64,
+    /// Number of tool calls that completed during the run.
+    pub tool_calls: u64,
 }
 
 /// Terminal status of the whole run.
@@ -198,7 +203,10 @@ mod tests {
     #[test]
     fn event_tags_are_dot_namespaced() {
         let turn_id = Uuid::nil();
-        let event = RunEvent::TurnStarted(TurnStartedEvent { turn_id });
+        let event = RunEvent::TurnStarted(TurnStartedEvent {
+            turn_id,
+            session_id: Uuid::nil(),
+        });
         let json = serde_json::to_value(&event).unwrap();
         assert_eq!(json["type"], "turn.started");
         assert_eq!(json["turn_id"], turn_id.to_string());
@@ -237,6 +245,7 @@ mod tests {
             }),
             RunEvent::TurnStarted(TurnStartedEvent {
                 turn_id: Uuid::nil(),
+                session_id: Uuid::nil(),
             }),
             RunEvent::ItemStarted(ItemEvent {
                 item: RunItem {
@@ -297,6 +306,7 @@ mod tests {
                     ..Default::default()
                 }),
                 turns: 1,
+                tool_calls: 2,
             }),
         ];
         for event in events {

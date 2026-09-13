@@ -51,11 +51,26 @@ pub fn run_headless(args: RunArgs) -> color_eyre::Result<()> {
             }
         };
 
-        let mut config = RunTaskConfig::new(prompt, runtime_config);
+        // Ephemeral runs redirect data/state to a throwaway dir that must
+        // outlive the block_on below; the model stays resolved from the
+        // real app DB either way.
+        let (_ephemeral_guard, mut config) = if args.ephemeral {
+            let (config, guard) = RunTaskConfig::ephemeral(prompt);
+            (Some(guard), config)
+        } else {
+            (None, RunTaskConfig::new(prompt, runtime_config))
+        };
         config.profile = args.profile.clone();
         config.model = Some(model);
         config.model_name = Some(model_name);
         config.timeout = args.timeout.map(std::time::Duration::from_secs);
+        config.session = args.session;
+        let meta = headless::manifest::ManifestMeta {
+            run_id: uuid::Uuid::new_v4(),
+            prompt_hash: headless::manifest::prompt_hash(&config.prompt),
+            profile: config.profile.clone().unwrap_or_default(),
+            model: config.model_name.clone().unwrap_or_default(),
+        };
 
         let summary = if args.json {
             let mut processor = JsonlProcessor::new(std::io::stdout());
@@ -70,12 +85,20 @@ pub fn run_headless(args: RunArgs) -> color_eyre::Result<()> {
         };
 
         match summary {
-            Ok(summary) => std::process::exit(match summary.outcome {
+            Ok(summary) => {
+                if let Some(path) = args.manifest.as_deref() {
+                    let manifest = headless::manifest::RunManifest::new(meta, &summary);
+                    if let Err(e) = manifest.write_to(path) {
+                        eprintln!("Failed to write manifest {}: {e}", path.display());
+                    }
+                }
+                std::process::exit(match summary.outcome {
                 headless::processor::Outcome::Completed => EXIT_COMPLETED,
                 headless::processor::Outcome::Failed => EXIT_TURN_FAILED,
                 headless::processor::Outcome::Cancelled => EXIT_CANCELLED,
-                headless::processor::Outcome::Unknown => EXIT_TURN_FAILED,
-            }),
+                    headless::processor::Outcome::Unknown => EXIT_TURN_FAILED,
+                })
+            }
             Err(error) => {
                 eprintln!("error: {error}");
                 std::process::exit(EXIT_STARTUP);
