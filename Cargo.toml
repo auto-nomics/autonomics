@@ -25,6 +25,7 @@ members = [
   "crates/node-bundles/nodes-mice",
   "crates/node-bundles/nodes-grf",
   "apps/tui",
+  "apps/reprobio-adapter",
   "crates/opengwas",
   "crates/eutils",
   "crates/chembl",

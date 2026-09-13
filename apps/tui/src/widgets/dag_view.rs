@@ -695,7 +695,7 @@ fn fit_viewport(state: &mut DagViewState, canvas: Rect, layout: &DagLayout) {
             .selected
             .as_deref()
             .and_then(|id| layout.nodes.get(id))
-            .map(|node| u16::from(node.center_x())),
+            .map(|node| node.center_x()),
     );
     state.scroll.1 = fit_axis(
         state.scroll.1,
@@ -715,7 +715,7 @@ fn fit_axis(current: u16, viewport: u16, virtual_size: u16, focus: Option<u16>) 
     }
     let max = virtual_size - viewport;
     let desired = focus
-        .map(|position| u16::from(position.saturating_sub(viewport / 2)))
+        .map(|position| position.saturating_sub(viewport / 2))
         .unwrap_or(current);
     desired.min(max)
 }
@@ -838,7 +838,7 @@ fn truncate(value: &str, max_cells: usize) -> String {
     let mut result = String::new();
     let mut width = 0usize;
     for grapheme in unicode_segmentation::UnicodeSegmentation::graphemes(value, true) {
-        let grapheme_width = UnicodeWidthStr::width(grapheme).max(0);
+        let grapheme_width = UnicodeWidthStr::width(grapheme);
         if width + grapheme_width > max_cells.saturating_sub(1) && width > 0 {
             result.push('…');
             break;
