@@ -42,6 +42,7 @@ tokio-util = "0.7"
 thiserror = { workspace = true }
 toml = "0.8"
 tracing = { workspace = true }
+rusqlite = "0.40.1"
 arc-swap.workspace = true
 serde_json = { workspace = true }
 uuid = { version = "1.12", features = ["v4", "serde"] }

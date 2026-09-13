@@ -1183,7 +1183,7 @@ fn yn(b: bool) -> String {
 /// unconfigured (alphabetical). Configured providers start expanded.
 pub fn build_catalog(
     db_providers: &[(String, String, String)], // (provider_type, api_key, base_url)
-    db_models: &[crate::config_db::ModelRow],
+    db_models: &[runtime::model_bootstrap::ModelRow],
 ) -> ModelConfigState {
     let types = registry::known_provider_types();
 

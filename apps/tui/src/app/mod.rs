@@ -35,7 +35,6 @@ mod agents;
 mod chat;
 mod commands;
 mod dag_view;
-mod database;
 mod event_loop;
 mod history;
 mod keyboard;
@@ -84,10 +83,13 @@ impl App {
         conn.pragma_update(None, "foreign_keys", "ON")
             .expect("failed to enable foreign_keys");
 
-        Self::init_database(&conn).expect("failed to initialize database schema");
+        runtime::model_bootstrap::ensure_app_schema(&conn)
+            .expect("failed to initialize app database schema");
 
         let runtime = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
-        let model = Arc::new(ArcSwapOption::from_pointee(Self::build_model(&conn)));
+        let model = Arc::new(ArcSwapOption::from_pointee(
+            runtime::model_bootstrap::resolve_active_model(&conn),
+        ));
 
         // ── Open RuntimeHost + load profiles ──────────────────────
         let (mut host, profiles) = runtime.block_on(async {

@@ -9871,6 +9871,7 @@ dependencies = [
  "opentargets",
  "pubchem",
  "rcsb",
+ "rusqlite",
  "schemars",
  "serde",
  "serde_json",

@@ -19,7 +19,6 @@ mod app_event_sender;
 mod cli;
 mod clipboard_copy;
 mod commands;
-mod config_db;
 mod kms_tui;
 mod state;
 mod widgets;
