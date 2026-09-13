@@ -6,7 +6,9 @@
 use rusqlite::Connection;
 
 /// A row from the `providers` table.
+// Mirrors the `providers` table schema; not every column is consumed by the app yet.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ProviderRow {
     pub id: i64,
     pub name: String,
@@ -32,27 +34,6 @@ impl ProviderRow {
             })
         })?
         .collect()
-    }
-}
-
-/// Flattened, stringly-typed provider values used by the edit form.
-pub struct ProviderInput {
-    pub name: String,
-    pub provider_type: String,
-    pub base_url: String,
-    pub api_key: String,
-    pub auth_method: String,
-}
-
-impl ProviderInput {
-    pub fn empty() -> Self {
-        Self {
-            name: String::new(),
-            provider_type: "Anthropic".to_string(),
-            base_url: String::new(),
-            api_key: String::new(),
-            auth_method: "Anthropic".to_string(),
-        }
     }
 }
 

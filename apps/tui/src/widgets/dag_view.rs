@@ -29,18 +29,8 @@ pub struct DagViewState {
 }
 
 impl DagViewState {
-    pub fn selected(&self) -> Option<&str> {
-        self.selected.as_deref()
-    }
 
-    pub fn select(&mut self, id: impl Into<String>) {
-        self.selected = Some(id.into());
-    }
 
-    pub fn clear(&mut self) {
-        self.selected = None;
-        self.scroll = (0, 0);
-    }
 
     /// Select the first predecessor, preferring the closest column.
     pub fn select_up(&mut self, snapshot: &DagTuiSnapshot) {
@@ -905,15 +895,15 @@ mod tests {
         let graph = snapshot();
         let mut state = DagViewState::default();
         state.select_next(&graph);
-        assert_eq!(state.selected().unwrap(), "a");
+        assert_eq!(state.selected.as_deref().unwrap(), "a");
         state.select_down(&graph);
-        assert_eq!(state.selected().unwrap(), "b");
+        assert_eq!(state.selected.as_deref().unwrap(), "b");
         state.select_down(&graph);
-        assert_eq!(state.selected().unwrap(), "c");
+        assert_eq!(state.selected.as_deref().unwrap(), "c");
         state.select_up(&graph);
-        assert_eq!(state.selected().unwrap(), "b");
+        assert_eq!(state.selected.as_deref().unwrap(), "b");
         state.select_previous(&graph);
-        assert_eq!(state.selected().unwrap(), "a");
+        assert_eq!(state.selected.as_deref().unwrap(), "a");
     }
 
     #[test]
@@ -926,7 +916,7 @@ mod tests {
             level: 0,
         };
         let mut state = DagViewState::default();
-        state.select(node.id.as_str());
+        state.select_next(&graph);
         let area = Rect::new(0, 0, 48, 12);
         let mut buf = Buffer::empty(area);
 

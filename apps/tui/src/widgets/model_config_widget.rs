@@ -307,13 +307,6 @@ impl ModelConfigState {
     }
 
     /// The model info at the cursor position, if the cursor is on a model row.
-    pub fn model_at_cursor(&self) -> Option<&ModelInfo> {
-        let items = self.flat_items();
-        match items.get(self.cursor)? {
-            FlatItem::Model(pi, mi) => self.providers.get(*pi)?.models.get(*mi),
-            _ => None,
-        }
-    }
 
     /// Handle keys and return any command the App should execute.
     ///

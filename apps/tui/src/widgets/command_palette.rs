@@ -27,14 +27,11 @@ use crate::xai_textarea::{TextArea, TextAreaState};
 pub enum CommandAction {
     Quit,
     CancelAgent,
-    EnterInput,
     ToggleAutoScroll,
     ScrollToBottom,
     ScrollToTop,
     HistorySearch,
-    ClearTranscript,
     ReloadConfig,
-    SpawnAgent(String),
     NewAgent,
     /// Open the model config popup for the active agent.
     ModelConfig,

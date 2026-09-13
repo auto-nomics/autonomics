@@ -29,7 +29,6 @@ const PREVIEW_MAX_CHARS: usize = 1024;
 pub struct PickerSession {
     pub id: uuid::Uuid,
     pub title: Option<String>,
-    pub message_count: usize,
     pub last_active: i64,
     // ── Enriched fields ──
     /// Epoch-millis creation timestamp (from `SessionInfo::created_at` or
@@ -279,11 +278,6 @@ impl SessionPicker {
         }
     }
 
-    pub fn accent(mut self, c: Color) -> Self {
-        self.accent = c;
-        self
-    }
-
     pub fn popup_width(mut self, w: u16) -> Self {
         self.popup_width = w;
         self
@@ -294,10 +288,6 @@ impl SessionPicker {
         self
     }
 
-    pub fn list_width(mut self, w: u16) -> Self {
-        self.list_width = w;
-        self
-    }
 }
 
 impl Default for SessionPicker {
@@ -796,7 +786,6 @@ mod tests {
         let session = PickerSession {
             id: uuid::Uuid::new_v4(),
             title: Some("results".into()),
-            message_count: 2,
             last_active: 0,
             created_at: 0,
             user_message_count: 1,

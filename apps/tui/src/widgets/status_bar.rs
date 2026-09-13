@@ -25,7 +25,6 @@ pub struct StatusBar<'a> {
     /// The active model's context window size, when known.
     pub context_window: Option<u64>,
     pub model_name: Option<&'a str>,
-    pub is_compacting: bool,
 }
 
 impl Widget for StatusBar<'_> {

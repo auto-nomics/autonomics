@@ -52,7 +52,7 @@ pub struct App {
     /// Per-agent handles, parallel to `state.sessions`.
     handles: Vec<AgentHandle>,
     /// Kept alive to drive the agent's background event loop task.
-    _runtime: Option<tokio::runtime::Runtime>,
+    runtime: Option<tokio::runtime::Runtime>,
     /// Handle for spawning background tasks from within the sync event loop.
     runtime_handle: tokio::runtime::Handle,
     /// Local HTTP API backend, shut down with the TUI process.
@@ -63,7 +63,6 @@ pub struct App {
     /// Internal event channel for decoupled communication.
     app_event_rx: tokio::sync::mpsc::UnboundedReceiver<crate::app_event::AppEvent>,
     /// Sender half exposed for subsystems (file search, plugins, etc.)
-    #[allow(dead_code)]
     pub(crate) app_event_tx: crate::app_event_sender::AppEventSender,
     should_quit: bool,
     cancel_requested_at: Option<Instant>,
@@ -178,7 +177,7 @@ impl App {
             state,
             host,
             handles: Vec::new(),
-            _runtime: Some(runtime),
+            runtime: Some(runtime),
             runtime_handle: runtime_handle.clone(),
             http_server,
             conn,

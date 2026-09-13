@@ -43,7 +43,6 @@ pub enum ToastVariant {
     Success,
     Error,
     Info,
-    Warning,
 }
 
 impl ToastVariant {
@@ -53,7 +52,6 @@ impl ToastVariant {
             Self::Success => "✓",
             Self::Error => "✗",
             Self::Info => "ℹ",
-            Self::Warning => "⚠",
         }
     }
 
@@ -63,7 +61,6 @@ impl ToastVariant {
             Self::Success => Color::Green,
             Self::Error => Color::Red,
             Self::Info => Color::Cyan,
-            Self::Warning => Color::Yellow,
         }
     }
 }
@@ -76,7 +73,6 @@ impl ToastVariant {
 #[derive(Debug, Clone)]
 pub struct Toast {
     /// Monotonic id (assigned by the manager).
-    pub id: u64,
     pub variant: ToastVariant,
     /// Short one-line title (e.g. "Copied to clipboard").
     pub title: String,
@@ -129,24 +125,12 @@ impl Default for ToastManager {
 }
 
 impl ToastManager {
-    pub fn new() -> Self {
-        Self::default()
-    }
 
     /// Number of currently active toasts.
-    pub fn len(&self) -> usize {
-        self.toasts.len()
-    }
 
     /// Whether there are no active toasts.
-    pub fn is_empty(&self) -> bool {
-        self.toasts.is_empty()
-    }
 
     /// Override the on-screen duration for all future toasts.
-    pub fn set_duration_ms(&mut self, ms: u64) {
-        self.duration_ms = ms;
-    }
 
     // ── Push helpers ──
 
@@ -161,7 +145,6 @@ impl ToastManager {
         let id = self.next_id;
         self.next_id += 1;
         self.toasts.push_back(Toast {
-            id,
             variant,
             title: title.into(),
             description,
@@ -208,14 +191,8 @@ impl ToastManager {
     }
 
     /// Dismiss a specific toast by id.
-    pub fn dismiss(&mut self, id: u64) {
-        self.toasts.retain(|t| t.id != id);
-    }
 
     /// Dismiss all toasts immediately.
-    pub fn clear(&mut self) {
-        self.toasts.clear();
-    }
 
     // ── Render ──
 
@@ -309,74 +286,47 @@ mod tests {
     use super::*;
 
     #[test]
-    fn push_and_dismiss() {
-        let mut mgr = ToastManager::new();
-        assert!(mgr.is_empty());
-
-        let id1 = mgr.success("Done", Some("file saved".into()));
-        assert_eq!(mgr.len(), 1);
-
-        let id2 = mgr.error("Failed", None);
-        assert_eq!(mgr.len(), 2);
-
-        mgr.dismiss(id1);
-        assert_eq!(mgr.len(), 1);
-        assert_eq!(mgr.toasts[0].id, id2);
-
-        mgr.clear();
-        assert!(mgr.is_empty());
-    }
-
-    #[test]
     fn push_evicts_oldest_when_over_capacity() {
-        let mut mgr = ToastManager::new();
+        let mut mgr = ToastManager::default();
         for i in 0..(MAX_VISIBLE + 3) {
             mgr.info(format!("toast {i}"), None);
         }
-        assert_eq!(mgr.len(), MAX_VISIBLE);
+        assert_eq!(mgr.toasts.len(), MAX_VISIBLE);
         // Oldest evicted — first remaining toast is toast 3.
         assert_eq!(mgr.toasts[0].title, "toast 3");
     }
 
     #[test]
     fn tick_expires_old_toasts() {
-        let mut mgr = ToastManager::new();
+        let mut mgr = ToastManager::default();
         mgr.push(ToastVariant::Info, "short-lived", None);
         // Manually back-date the toast's created_at so it's already expired.
         if let Some(t) = mgr.toasts.front_mut() {
             t.created_at = Instant::now() - std::time::Duration::from_secs(5);
         }
-        assert_eq!(mgr.len(), 1);
+        assert_eq!(mgr.toasts.len(), 1);
         mgr.tick();
-        assert!(mgr.is_empty());
+        assert!(mgr.toasts.is_empty());
     }
 
     #[test]
     fn tick_keeps_fresh_toasts() {
-        let mut mgr = ToastManager::new();
+        let mut mgr = ToastManager::default();
         mgr.push(ToastVariant::Success, "fresh", None);
         mgr.tick();
-        assert_eq!(mgr.len(), 1);
+        assert_eq!(mgr.toasts.len(), 1);
     }
 
     #[test]
     fn all_toasts_expire_after_default_2_seconds() {
-        let mgr = ToastManager::new();
+        let mgr = ToastManager::default();
         assert_eq!(mgr.duration_ms, DEFAULT_DURATION_MS);
         assert_eq!(DEFAULT_DURATION_MS, 2000);
     }
 
     #[test]
-    fn set_duration_ms_changes_future_toast_lifetime() {
-        let mut mgr = ToastManager::new();
-        mgr.set_duration_ms(5000);
-        mgr.success("test", None);
-        assert_eq!(mgr.toasts[0].duration_ms, 5000);
-    }
-
-    #[test]
     fn next_id_is_monotonic() {
-        let mut mgr = ToastManager::new();
+        let mut mgr = ToastManager::default();
         let id1 = mgr.info("a", None);
         let id2 = mgr.info("b", None);
         assert!(id2 > id1);

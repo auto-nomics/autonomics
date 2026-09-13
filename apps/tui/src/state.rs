@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, RwLock};
 
-use crate::widgets::input_area::{InputArea, InputState};
+use crate::widgets::input_area::InputArea;
 use agentik_sdk::model::Model;
 use agentik_sdk::types::{AgentEvent, CompactEvent};
 use arc_swap::ArcSwapOption;
@@ -31,7 +31,6 @@ pub struct ToolTaskInfo {
 pub struct TurnUsage {
     pub input_tokens: Option<u64>,
     pub output_tokens: u64,
-    pub cache_creation_input_tokens: Option<u64>,
     pub cache_read_input_tokens: Option<u64>,
 }
 
@@ -42,7 +41,6 @@ pub struct PlanState {
     /// The latest plan snapshot. Empty when no plan has been set.
     pub steps: Vec<agentik_types::PlanStep>,
     /// Optional explanation from the last update.
-    pub explanation: Option<String>,
     /// Revision counter from the agent.
     pub revision: u64,
 }
@@ -396,13 +394,6 @@ impl AgentTabState {
         }
     }
 
-    /// Returns true when the viewport is showing the bottom of the content.
-    pub fn is_at_bottom(&self, viewport_height: u16) -> bool {
-        let max_offset = self
-            .content_line_count
-            .saturating_sub(viewport_height as usize);
-        self.scroll_offset >= max_offset
-    }
 }
 
 // ── Event → State mapping ──────────────────────────────
@@ -479,7 +470,6 @@ pub fn apply_event(state: &mut AgentTabState, event: AgentEvent) {
                     *usage = Some(TurnUsage {
                         input_tokens,
                         output_tokens,
-                        cache_creation_input_tokens,
                         cache_read_input_tokens,
                     });
                 }
@@ -625,7 +615,6 @@ pub fn apply_event(state: &mut AgentTabState, event: AgentEvent) {
         AgentEvent::PlanUpdate { revision, update } => {
             state.plan = PlanState {
                 steps: update.plan,
-                explanation: update.explanation,
                 revision,
             };
             if state.auto_scroll {
@@ -689,7 +678,6 @@ pub fn apply_session_event(state: &mut AppState, event: AgentEvent, agent_idx: u
                         crate::widgets::session_picker::PickerSession {
                             id: s.id,
                             title: s.title.clone(),
-                            message_count: s.tab_state.messages.len(),
                             last_active: s.last_active,
                             created_at: 0, // not tracked on SubSession
                             user_message_count: stats.user_message_count,
@@ -837,8 +825,6 @@ pub struct AppState {
     pub active_agent_idx: usize,
     /// Available profiles (loaded from storage at startup).
     pub profiles: Vec<agentik_core::AgentProfile>,
-    /// Selected index in the profile list within the sidebar.
-    pub profile_selected: usize,
     /// Legacy single-agent tab state — kept for backward-compat with
     /// existing code that hasn't been migrated yet. When `sessions` is
     /// non-empty, the active session's `tab_state` is used instead.
@@ -896,7 +882,6 @@ impl Default for AppState {
             sessions: Vec::new(),
             active_agent_idx: 0,
             profiles: Vec::new(),
-            profile_selected: 0,
             agent_tab_state: AgentTabState::default(),
             model_config_state: Default::default(),
             command_palette: Default::default(),

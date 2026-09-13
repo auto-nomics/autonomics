@@ -209,14 +209,8 @@ impl MessagePickerState {
     }
 
     /// Move the list selection up by one row.
-    pub fn move_up(&mut self) {
-        self.picker.move_up();
-    }
 
     /// Move the list selection down by one row.
-    pub fn move_down(&mut self) {
-        self.picker.move_down();
-    }
 
     /// Clone of the currently selected item, if any.
     pub fn selected_item(&self) -> Option<MessageItem> {

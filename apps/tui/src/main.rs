@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use clap::Parser;
+use cli::{CacheAction, Cli, Command, TuiArgs};
 use time::macros::format_description;
 use tracing::Level;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
@@ -8,8 +9,21 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::fmt::time::OffsetTime;
 use tracing_subscriber::fmt::writer::MakeWriterExt;
-use tui::cli::{CacheAction, Cli, Command, TuiArgs};
-use tui::commands;
+
+// Pure binary layout: all application modules are declared here. There is no
+// library target — reusable logic belongs in crates/ (e.g. `runtime`,
+// `agentik-core`), not in this app.
+mod app;
+mod app_event;
+mod app_event_sender;
+mod cli;
+mod clipboard_copy;
+mod commands;
+mod config_db;
+mod kms_tui;
+mod state;
+mod widgets;
+mod xai_textarea;
 
 fn init_logging(nocapture: bool) -> color_eyre::Result<()> {
     color_eyre::install()?;
@@ -106,6 +120,6 @@ fn main() -> color_eyre::Result<()> {
                 .map_err(|e| color_eyre::eyre::eyre!("failed to build tokio runtime: {e}"))?;
             runtime.block_on(commands::bib::run_bib(bib))
         }
-        Command::Run(run_args) => todo!(),
+        Command::Run(_run_args) => todo!(),
     }
 }

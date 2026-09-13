@@ -277,9 +277,6 @@ impl AgentPickerState {
     }
 
     /// Number of rows currently displayed.
-    pub fn filtered_len(&self) -> usize {
-        self.rows.len()
-    }
 
     // ── Data ──
 
@@ -488,11 +485,6 @@ impl AgentPicker {
             popup_width: 0,
             list_width: 28,
         }
-    }
-
-    pub fn accent(mut self, c: Color) -> Self {
-        self.accent = c;
-        self
     }
 
     pub fn popup_width(mut self, w: u16) -> Self {

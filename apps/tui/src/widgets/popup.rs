@@ -49,15 +49,6 @@ impl PopupControls {
         }
     }
 
-    /// No title and no border; the entire popup area is available to content.
-    pub const fn borderless() -> Self {
-        Self::new(false, false)
-    }
-
-    /// A border without a title.
-    pub const fn untitled() -> Self {
-        Self::new(false, true)
-    }
 }
 
 impl Default for PopupControls {
@@ -182,13 +173,4 @@ mod tests {
         assert_eq!(popup.inner_rect(area), Rect::new(0, 1, 70, 9));
     }
 
-    #[test]
-    fn borderless_inner_rect_uses_full_area() {
-        let popup = Popup::new("Test", PopupControls::borderless())
-            .width(70)
-            .height(10);
-        let area = Rect::new(0, 0, 70, 10);
-
-        assert_eq!(popup.inner_rect(area), area);
-    }
 }
