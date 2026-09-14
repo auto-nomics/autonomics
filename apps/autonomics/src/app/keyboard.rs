@@ -2,11 +2,6 @@
 
 use super::*;
 
-/// Mouse-wheel chat scrolling kill-switch — disabled pending scroll/jump
-/// interaction fixes. (Replaces a bare `!true` debug toggle that tripped
-/// clippy's `nonminimal_bool` on toolchains that still flag it.)
-const MOUSE_SCROLL_ENABLED: bool = false;
-
 impl App {
     pub(super) fn handle_event(&mut self, event: &Event) -> i32 {
         match event {
@@ -60,7 +55,19 @@ impl App {
     /// Handle mouse events: scroll wheel scrolls the chat in Agent tab.
     /// Returns the scroll delta to be batched with other scroll events.
     fn handle_mouse(&mut self, mouse: &MouseEvent) -> i32 {
-        if !MOUSE_SCROLL_ENABLED {
+        // Mouse input is not routed by screen area yet. While an overlay is
+        // visible, ignore wheel events instead of moving the hidden chat.
+        let state = &self.state;
+        if state.delete_agent_confirm
+            || state.command_palette.is_visible()
+            || state.profile_picker.visible
+            || state.agent_picker.visible
+            || state.name_input.visible
+            || state.session_picker.visible
+            || state.message_picker.is_visible()
+            || state.dag_view_visible
+            || state.model_config_visible
+        {
             return 0;
         }
 
@@ -83,9 +90,6 @@ impl App {
 
     /// Apply a batched scroll delta to the agent tab.
     pub(super) fn apply_scroll_delta(&mut self, delta: i32) {
-        if !MOUSE_SCROLL_ENABLED {
-            return;
-        }
         let ts = self.state.active_tab_state_mut();
         if delta > 0 {
             ts.scroll_offset = ts.scroll_offset.saturating_add(delta as usize);
