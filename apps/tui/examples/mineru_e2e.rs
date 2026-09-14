@@ -9,6 +9,13 @@
 //! vision model is `glm-5.3-flash` (vision + function calling — the
 //! smaller vision flashes ignore tools) and the text control `glm-5-turbo`.
 //!
+//! `E2E_LLM=openai` switches the vision step to ChatGPT-subscription
+//! models: the OAuth token blob is read (read-only) from the TUI config
+//! DB (`~/.autonomics/config.db`, override with `AUTONOMICS_APP_DB`),
+//! models selectable via `E2E_MODELS="a,b"` (default: the gpt-5.6 series).
+//! In this mode only steps 1–5 run — replace-upload and the zai text
+//! control are zai-run territory and skipped to save an extraction.
+//!
 //! Verified steps:
 //! 1. upload a multi-figure PDF (arXiv 1706.03762) → MinerU cloud extraction
 //! 2. figures land in VFS, markdown references them (`images/<hash>.jpg`)
@@ -36,6 +43,14 @@ const PDF_ATTENTION: &str = "https://arxiv.org/pdf/1706.03762";
 const PDF_BERT: &str = "https://arxiv.org/pdf/1810.04805";
 const ARTICLE_ID: &str = "doi:10.1000/mineru-e2e";
 
+/// Which LLM the vision step drives.
+enum Llm {
+    /// Zhipu Anthropic-compatible endpoint, key from the environment.
+    Zai(String),
+    /// ChatGPT subscription model, OAuth blob from the TUI config DB.
+    Openai,
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Load .env and scrub tool-image overrides BEFORE the async runtime
     // spawns worker threads — env mutation is only sound while the process
@@ -61,16 +76,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     // The MinerU key is cloud-mineru-only; the Zhipu LLM key (glm-5.3-flash /
     // glm-5-turbo on the Anthropic-compatible endpoint) is exported separately.
-    let llm_key = std::env::var("ANTHROPIC_AUTH_TOKEN")
-        .map_err(|_| "ANTHROPIC_AUTH_TOKEN not set (Zhipu LLM key)")?;
+    let llm = if std::env::var("E2E_LLM").as_deref() == Ok("openai") {
+        Llm::Openai
+    } else {
+        Llm::Zai(
+            std::env::var("ANTHROPIC_AUTH_TOKEN")
+                .map_err(|_| "ANTHROPIC_AUTH_TOKEN not set (Zhipu LLM key)")?,
+        )
+    };
 
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?
-        .block_on(run(llm_key))
+        .block_on(run(llm))
 }
 
-async fn run(key: String) -> Result<(), Box<dyn std::error::Error>> {
+async fn run(llm: Llm) -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
@@ -156,79 +177,98 @@ async fn run(key: String) -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // ── 5. vision agent reads the figure ──
-    let (vision_answer, vision_tools, vision_errors) = run_agent(
-        &shared,
-        &storage,
-        &key,
-        agentik_sdk::provider::zai::MODEL_GLM_5_3_FLASH,
-        ARTICLE_ID,
-        &refs1[0],
-    )
-    .await?;
-    println!("[vision] tools called: {vision_tools:?}");
-    println!("[vision] answer: {vision_answer}");
-    assert!(
-        vision_tools.iter().any(|t| t == "bib_read_figure"),
-        "vision agent should call bib_read_figure"
-    );
-    assert!(
-        vision_errors.is_empty(),
-        "vision agent errors: {vision_errors:?}"
-    );
-    assert!(
-        !vision_answer.trim().is_empty(),
-        "vision agent should describe the figure"
-    );
-
-    // ── 6. replace upload → old figures deleted, new ones served ──
-    upload_fulltext(&shared, &base, ARTICLE_ID, "bert.pdf", &pdf2).await?;
-    let ft2 = poll_extraction(&shared, &base, ARTICLE_ID, Duration::from_secs(600)).await?;
-    let markdown2 = ft2["text_content"].as_str().expect("markdown body 2");
-    let refs2: Vec<String> = scan_image_refs(markdown2);
-    println!(
-        "[reextract] second markdown {} chars, {} figure refs",
-        markdown2.len(),
-        refs2.len()
-    );
-    assert!(!refs2.is_empty(), "second PDF also has figures");
-    let stale: Vec<&String> = refs1.iter().filter(|r| !refs2.contains(r)).collect();
-    assert!(
-        !stale.is_empty(),
-        "the two PDFs should reference different figures"
-    );
-    for old in &stale {
-        let old_name = sanitize_figure_name(old).expect("old ref sanitizes");
-        let (status, _, _) = get_image(&shared, &base, ARTICLE_ID, &old_name).await?;
-        assert_eq!(
-            status, 404,
-            "replaced figure {old_name} should be gone, got {status}"
-        );
+    let openai_creds = match &llm {
+        Llm::Openai => Some(load_openai_creds()?),
+        Llm::Zai(_) => None,
+    };
+    let model_ids: Vec<String> = match &llm {
+        Llm::Zai(_) => vec![agentik_sdk::provider::zai::MODEL_GLM_5_3_FLASH.to_string()],
+        Llm::Openai => std::env::var("E2E_MODELS")
+            .unwrap_or_else(|_| "gpt-5.6-sol,gpt-5.6-terra,gpt-5.6-luna".to_string())
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect(),
+    };
+    let mut failures: Vec<String> = Vec::new();
+    for model_id in &model_ids {
+        let model = match (&llm, openai_creds.as_ref()) {
+            (Llm::Zai(key), _) => zai_model(key, model_id)?,
+            (Llm::Openai, Some(creds)) => openai_model(creds, model_id)?,
+            (Llm::Openai, None) => unreachable!("creds loaded above"),
+        };
+        println!("── vision agent: {model_id} ──");
+        let (answer, tools, errors) =
+            run_agent(&shared, &storage, model, ARTICLE_ID, &refs1[0]).await?;
+        println!("[vision:{model_id}] tools called: {tools:?}");
+        println!("[vision:{model_id}] answer: {answer}");
+        if tools.iter().any(|t| t == "bib_read_figure")
+            && errors.is_empty()
+            && !answer.trim().is_empty()
+        {
+            println!("[vision:{model_id}] PASS");
+        } else {
+            failures.push(format!(
+                "{model_id}: bib_read_figure called={}, errors={errors:?}, answer_empty={}",
+                !tools.iter().any(|t| t == "bib_read_figure"),
+                answer.trim().is_empty()
+            ));
+        }
     }
-    println!(
-        "[reextract] {} replaced figure object(s) removed from VFS",
-        stale.len()
-    );
+    if !failures.is_empty() {
+        return Err(format!("vision step failures: {failures:?}").into());
+    }
 
-    // ── 7. text-only control on the new figures ──
-    let (text_answer, text_tools, text_errors) = run_agent(
-        &shared,
-        &storage,
-        &key,
-        "glm-5-turbo",
-        ARTICLE_ID,
-        &refs2[0],
-    )
-    .await?;
-    println!("[text]   tools called: {text_tools:?}");
-    println!("[text]   answer: {text_answer}");
-    assert!(
-        text_tools.iter().any(|t| t == "bib_read_figure"),
-        "text agent should still call bib_read_figure (text summary path)"
-    );
-    assert!(
-        text_errors.is_empty(),
-        "text control errors: {text_errors:?}"
-    );
+    // Steps 6–7 exercise the replace/cleanup path and the zai text control —
+    // zai-run territory; the openai probe stops after the vision step.
+    if let Llm::Zai(key) = &llm {
+        // ── 6. replace upload → old figures deleted, new ones served ──
+        upload_fulltext(&shared, &base, ARTICLE_ID, "bert.pdf", &pdf2).await?;
+        let ft2 = poll_extraction(&shared, &base, ARTICLE_ID, Duration::from_secs(600)).await?;
+        let markdown2 = ft2["text_content"].as_str().expect("markdown body 2");
+        let refs2: Vec<String> = scan_image_refs(markdown2);
+        println!(
+            "[reextract] second markdown {} chars, {} figure refs",
+            markdown2.len(),
+            refs2.len()
+        );
+        assert!(!refs2.is_empty(), "second PDF also has figures");
+        let stale: Vec<&String> = refs1.iter().filter(|r| !refs2.contains(r)).collect();
+        assert!(
+            !stale.is_empty(),
+            "the two PDFs should reference different figures"
+        );
+        for old in &stale {
+            let old_name = sanitize_figure_name(old).expect("old ref sanitizes");
+            let (status, _, _) = get_image(&shared, &base, ARTICLE_ID, &old_name).await?;
+            assert_eq!(
+                status, 404,
+                "replaced figure {old_name} should be gone, got {status}"
+            );
+        }
+        println!(
+            "[reextract] {} replaced figure object(s) removed from VFS",
+            stale.len()
+        );
+
+        // ── 7. text-only control on the new figures ──
+        let text_model = zai_model(key, "glm-5-turbo")?;
+        let (text_answer, text_tools, text_errors) =
+            run_agent(&shared, &storage, text_model, ARTICLE_ID, &refs2[0]).await?;
+        println!("[text]   tools called: {text_tools:?}");
+        println!("[text]   answer: {text_answer}");
+        assert!(
+            text_tools.iter().any(|t| t == "bib_read_figure"),
+            "text agent should still call bib_read_figure (text summary path)"
+        );
+        assert!(
+            text_errors.is_empty(),
+            "text control errors: {text_errors:?}"
+        );
+    } else {
+        println!("[openai] replace-upload + zai text-control steps skipped");
+    }
 
     println!(
         "\n=== e2e OK === everything checked; scratch dir left at {}",
@@ -390,16 +430,8 @@ async fn get_image(
     Ok((status, content_type, resp.bytes().await?.to_vec()))
 }
 
-/// Run one agent turn against `model_id` and collect its answer, tool calls,
-/// and error events. The agent shares the scratch bib DB + VFS storage.
-async fn run_agent(
-    shared: &BibShared,
-    storage: &Arc<vfs::OpendalFileStorage>,
-    key: &str,
-    model_id: &str,
-    article_id: &str,
-    figure_ref: &str,
-) -> Result<(String, Vec<String>, Vec<String>), Box<dyn std::error::Error>> {
+/// Build a Zhipu model from the shell key (Anthropic-compatible endpoint).
+fn zai_model(key: &str, model_id: &str) -> Result<Model, Box<dyn std::error::Error>> {
     let provider = ProviderConfig::new(
         "zai",
         ProviderType::Zai,
@@ -418,8 +450,67 @@ async fn run_agent(
     if model_id == agentik_sdk::provider::zai::MODEL_GLM_4V_FLASH {
         info.max_output_tokens = 1024;
     }
-    let model = Model::new(info, &provider)?;
+    Ok(Model::new(info, &provider)?)
+}
 
+/// Load the ChatGPT OAuth blob from the app config DB (read-only —
+/// the harness must never mutate the user's real config).
+fn load_openai_creds() -> Result<(String, String), Box<dyn std::error::Error>> {
+    let db_path = match std::env::var_os("AUTONOMICS_APP_DB") {
+        Some(p) => std::path::PathBuf::from(p),
+        None => {
+            let home = std::env::var_os("HOME").ok_or("HOME not set (cannot find config.db)")?;
+            std::path::PathBuf::from(home)
+                .join(".autonomics")
+                .join("config.db")
+        }
+    };
+    let conn =
+        rusqlite::Connection::open_with_flags(&db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|e| format!("open {}: {e}", db_path.display()))?;
+    let (api_key, base_url): (String, String) = conn
+        .query_row(
+            "SELECT api_key, base_url FROM providers WHERE name = 'openai'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|e| format!("openai provider row in {}: {e}", db_path.display()))?;
+    if api_key.is_empty() {
+        return Err("openai provider has no credentials — log in via the TUI first".into());
+    }
+    Ok((api_key, base_url))
+}
+
+/// Join the ChatGPT blob with an openai preset model — the example-level
+/// mirror of `App::build_model_from_spec`.
+fn openai_model(
+    creds: &(String, String),
+    model_id: &str,
+) -> Result<Model, Box<dyn std::error::Error>> {
+    let provider = ProviderConfig::new(
+        "openai",
+        ProviderType::Openai,
+        &creds.1,
+        &creds.0,
+        agentik_sdk::provider::openai::OpenaiProvider::default_auth_method(),
+    );
+    let mut info = agentik_sdk::provider::openai::OpenaiProvider::preset_models()
+        .into_iter()
+        .find(|m| m.model_name == model_id)
+        .ok_or_else(|| format!("model {model_id} not in openai preset catalogue"))?;
+    info.provider_id = provider.id;
+    Ok(Model::new(info, &provider)?)
+}
+
+/// Run one agent turn against `model` and collect its answer, tool calls,
+/// and error events. The agent shares the scratch bib DB + VFS storage.
+async fn run_agent(
+    shared: &BibShared,
+    storage: &Arc<vfs::OpendalFileStorage>,
+    model: Model,
+    article_id: &str,
+    figure_ref: &str,
+) -> Result<(String, Vec<String>, Vec<String>), Box<dyn std::error::Error>> {
     let tools = bib_all_registrations(
         shared.bib.clone(),
         shared.gateway.clone(),
