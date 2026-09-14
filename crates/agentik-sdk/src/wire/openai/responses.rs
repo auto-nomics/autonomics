@@ -571,10 +571,21 @@ fn responses_message_item(role: &str, content: &Value) -> Value {
                         "type": text_type,
                         "text": p.get("text").cloned().unwrap_or(json!("")),
                     }),
-                    Some("image_url") => json!({
-                        "type": "input_image",
-                        "image_url": p.get("image_url").cloned().unwrap_or(json!("")),
-                    }),
+                    Some("image_url") => {
+                        // The Chat-shaped part carries `image_url` as an
+                        // object ({"url": …}); the Responses API expects the
+                        // bare URL / data-URI string (sending the object is a
+                        // 400: "expected an image URL, but got an object").
+                        let url = p
+                            .get("image_url")
+                            .and_then(|v| v.get("url"))
+                            .and_then(Value::as_str)
+                            .unwrap_or_default();
+                        json!({
+                            "type": "input_image",
+                            "image_url": url,
+                        })
+                    }
                     _ => p.clone(),
                 })
                 .collect();
@@ -593,6 +604,22 @@ mod tests {
     use super::*;
     use crate::types::messages::MessageCreateBuilder;
     use crate::types::tools::{ToolChoice, ToolDefinitionBuilder};
+
+    #[test]
+    fn responses_image_part_flattens_url_object_to_string() {
+        let item = responses_message_item(
+            "user",
+            &json!([
+                {"type": "text", "text": "look"},
+                {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,QUJD"}},
+            ]),
+        );
+        assert_eq!(
+            item["content"][1],
+            json!({"type": "input_image", "image_url": "data:image/jpeg;base64,QUJD"}),
+            "Responses expects image_url as a plain string, not an object"
+        );
+    }
 
     #[test]
     fn responses_wire_encodes_basic_request() {
