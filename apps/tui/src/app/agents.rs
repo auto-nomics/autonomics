@@ -35,15 +35,7 @@ impl App {
         // (Host-spawned agents don't set this and remain non-stealing.)
         self.state.pending_focus_agent_name = Some(agent_name.to_string());
 
-        let Some(host) = self.host.as_ref() else {
-            tracing::warn!("no runtime host available");
-            self.state.toasts.error(
-                "Agent creation failed",
-                Some("Runtime host is unavailable".into()),
-            );
-            return;
-        };
-        if self.state.active_model.load_full().is_none() {
+        if self.state.active_model_spec.is_none() {
             tracing::warn!("no model configured — configure one in Config tab first");
             self.state.toasts.error(
                 "Agent creation failed",
@@ -52,44 +44,41 @@ impl App {
             return;
         }
 
-        let model_override = profile
-            .preferred_model
-            .as_deref()
-            .and_then(|spec| runtime::model_bootstrap::resolve_model_spec(&self.conn, spec));
-        tracing::debug!(
-            has_override = model_override.is_some(),
-            "model resolution complete"
-        );
-
-        let control = host.control();
+        let client = self.client.clone();
         let profile_clone = profile.clone();
         let agent_name_owned = agent_name.to_string();
         let parent_path = target_path
             .parent()
             .unwrap_or_else(agentik_types::AgentPath::root);
+        let model_spec = profile.preferred_model.clone();
         let profile_name_owned = profile.path.clone();
         let tx = self.app_event_tx.clone();
 
-        agentik_core::supervise::spawn_safe_on_drop(
-            &self.runtime_handle,
+        tracing::debug!(has_override = model_spec.is_some(), "model spec passed");
+        self.spawn_client_task(
             &format!("spawn_agent::{agent_name_owned}"),
-            async move {
+            move || async move {
                 tracing::debug!(
                     profile = %profile_clone.path,
                     agent = %agent_name_owned,
                     "async spawn task started"
                 );
-                let result = control
-                    .spawn_with_profile(
+                // The daemon resolves the spec (falling back to its
+                // default model when unresolvable) and registers the
+                // agent; the AgentRegistered host frame follows on the
+                // event stream.
+                let result = client
+                    .spawn_agent(
                         &agent_name_owned,
-                        &parent_path,
-                        profile_clone,
-                        model_override,
+                        parent_path.as_str(),
+                        &profile_clone,
+                        model_spec.as_deref(),
                     )
-                    .await;
+                    .await
+                    .map_err(|e| e.to_string());
                 let event = match result {
                     Ok(name) => {
-                        tracing::info!(profile = %profile_name_owned, agent = %name, "agent spawned and registered with host");
+                        tracing::info!(profile = %profile_name_owned, agent = %name, "agent spawned and registered with daemon");
                         crate::app_event::AppEvent::AgentSpawned {
                             profile_name: profile_name_owned,
                             result: Ok(name),
@@ -113,29 +102,20 @@ impl App {
     /// Query stored agents and open the resume picker.
     pub(super) fn open_agent_picker(&mut self) {
         tracing::info!("open_agent_picker called");
-        let Some(storage) = self.host.as_ref().map(|h| h.storage().clone()) else {
-            tracing::warn!(
-                "no host available for agent listing — RuntimeHost::open likely failed at startup"
-            );
-            return;
-        };
+        let client = self.client.clone();
         let tx = self.app_event_tx.clone();
-        agentik_core::supervise::spawn_safe_on_drop(
-            &self.runtime_handle,
-            "list_agents",
-            async move {
-                tracing::debug!("querying list_agents from storage");
-                match storage.list_agents().await {
-                    Ok(records) => {
-                        tracing::info!(count = records.len(), "list_agents succeeded");
-                        tx.send(crate::app_event::AppEvent::AgentRecordsLoaded(records));
-                    }
-                    Err(e) => {
-                        tracing::error!(error = %e, "failed to list agents");
-                    }
+        self.spawn_client_task("list_agents", move || async move {
+            tracing::debug!("querying list_agents from the daemon's storage");
+            match client.list_storage_agents().await {
+                Ok(records) => {
+                    tracing::info!(count = records.len(), "list_agents succeeded");
+                    tx.send(crate::app_event::AppEvent::AgentRecordsLoaded(records));
                 }
-            },
-        );
+                Err(e) => {
+                    tracing::error!(error = %e, "failed to list agents");
+                }
+            }
+        });
     }
 
     /// Key handling while the agent resume picker popup is open.
@@ -262,26 +242,19 @@ impl App {
     /// Delete an agent record from storage and update the picker list.
     pub(super) fn delete_agent_record(&mut self, agent_id: uuid::Uuid) {
         tracing::info!(%agent_id, "deleting agent record");
-        let Some(storage) = self.host.as_ref().map(|h| h.storage().clone()) else {
-            tracing::warn!("no host available for deletion");
-            return;
-        };
+        let client = self.client.clone();
         let tx = self.app_event_tx.clone();
-        agentik_core::supervise::spawn_safe_on_drop(
-            &self.runtime_handle,
-            "delete_agent_record",
-            async move {
-                match storage.delete_agent(agent_id).await {
-                    Ok(()) => {
-                        tracing::info!(%agent_id, "agent deleted from storage");
-                        tx.send(crate::app_event::AppEvent::AgentDeleted(agent_id));
-                    }
-                    Err(e) => {
-                        tracing::error!(%agent_id, error = %e, "failed to delete agent");
-                    }
+        self.spawn_client_task("delete_agent_record", move || async move {
+            match client.delete_agent_record(agent_id).await {
+                Ok(()) => {
+                    tracing::info!(%agent_id, "agent deleted from storage");
+                    tx.send(crate::app_event::AppEvent::AgentDeleted(agent_id));
                 }
-            },
-        );
+                Err(e) => {
+                    tracing::error!(%agent_id, error = %e, "failed to delete agent");
+                }
+            }
+        });
     }
 
     /// Rename an agent record in storage: updates `agents.name` to the new
@@ -293,31 +266,17 @@ impl App {
         new_path: agentik_types::AgentPath,
     ) {
         tracing::info!(%agent_id, new_path = %new_path, "renaming agent record");
-        let Some(storage) = self.host.as_ref().map(|h| h.storage().clone()) else {
-            tracing::warn!("no host available for rename");
-            return;
-        };
+        let client = self.client.clone();
         let new_name = new_path.as_str().to_string();
         let tx = self.app_event_tx.clone();
-        agentik_core::supervise::spawn_safe_on_drop(
-            &self.runtime_handle,
-            "rename_agent_record",
-            async move {
-                // Read the current record, update its name, and upsert.
-                let Some(mut record) = storage.get_agent(agent_id).await.ok().flatten() else {
-                    tracing::error!(%agent_id, "agent record not found for rename");
-                    return;
-                };
-                record.name = new_name;
-                record.last_active = chrono::Utc::now().timestamp_millis();
-                if let Err(e) = storage.upsert_agent(record).await {
-                    tracing::error!(%agent_id, error = %e, "failed to rename agent");
-                    return;
-                }
-                tracing::info!(%agent_id, new_path = %new_path, "agent renamed in storage");
-                tx.send(crate::app_event::AppEvent::AgentRenamed { agent_id, new_path });
-            },
-        );
+        self.spawn_client_task("rename_agent_record", move || async move {
+            if let Err(e) = client.rename_agent_record(agent_id, &new_name).await {
+                tracing::error!(%agent_id, error = %e, "failed to rename agent");
+                return;
+            }
+            tracing::info!(%agent_id, new_path = %new_path, "agent renamed in storage");
+            tx.send(crate::app_event::AppEvent::AgentRenamed { agent_id, new_path });
+        });
     }
     /// Key handling while the profile picker popup is open.
     pub(super) fn handle_profile_picker_key(&mut self, key: &KeyEvent) {
@@ -406,13 +365,9 @@ impl App {
         };
         let name = session.name.clone();
 
-        // Shutdown the agent via the host (relay task handles cleanup).
-        if let Some(host) = self.host.as_mut() {
-            host.shutdown_agent(&name);
-        } else {
-            tracing::warn!("close_active_agent: no host available");
-        }
-        tracing::info!(agent = %name, idx, "agent leaf closed — background process terminated");
+        // Shutdown the agent via the daemon (relay task handles cleanup).
+        self.shutdown_agent_remotely(&name);
+        tracing::info!(agent = %name, idx, "agent leaf closed — daemon agent shut down");
 
         // Remove UI session.
         self.state.sessions.remove(idx);
@@ -444,11 +399,9 @@ impl App {
 
         let name = self.state.sessions[idx].name.clone();
 
-        // Shutdown the agent via the host (relay task handles cleanup).
-        if let Some(host) = self.host.as_mut() {
-            host.shutdown_agent(&name);
-        }
-        tracing::info!(agent = %name, %agent_id, "agent leaf closed by id — background process terminated");
+        // Shutdown the agent via the daemon (relay task handles cleanup).
+        self.shutdown_agent_remotely(&name);
+        tracing::info!(agent = %name, %agent_id, "agent leaf closed by id — daemon agent shut down");
 
         // Remove UI session.
         self.state.sessions.remove(idx);
@@ -464,5 +417,18 @@ impl App {
         }
 
         self.dirty = true;
+    }
+}
+
+impl App {
+    /// Fire-and-forget agent shutdown on the daemon (leaf close).
+    pub(super) fn shutdown_agent_remotely(&self, name: &str) {
+        let client = self.client.clone();
+        let name = name.to_string();
+        self.spawn_client_task("shutdown_agent", move || async move {
+            if let Err(e) = client.shutdown_agent(&name).await {
+                tracing::warn!(agent = %name, error = %e, "daemon agent shutdown request failed");
+            }
+        });
     }
 }

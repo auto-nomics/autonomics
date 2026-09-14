@@ -52,6 +52,8 @@ autonomics-tui [OPTIONS] [COMMAND]
 
 Commands:
   tui     Launch the interactive TUI (default when no subcommand is given)
+  serve   Run the resident backend gateway daemon (see below)
+  run     Headless one-shot agent run (docs/headless-run-design.md)
   kms     Launch the dedicated KMS tree browser
   cache   Local cache management helpers (refresh, inspect, purge)
   bib     Bibliography management — upload full-text PDFs, list pending requests
@@ -61,6 +63,23 @@ Options:
   -h, --help     Print help
   -V, --version  Print version
 ```
+
+## Architecture: thin client + resident gateway
+
+The TUI is a thin client. A single resident daemon — `tui serve` — owns the
+`RuntimeHost`, the app/model databases, and the local HTTP API; every
+frontend (the TUI today; web/desktop later) connects to it over
+REST + SSE. Quitting the TUI does **not** stop agents: they keep running in
+the daemon, and reopening the TUI rehydrates sessions and transcripts.
+
+```bash
+autonomics-tui serve          # run the daemon in the foreground
+autonomics-tui serve status   # is it running? (pid, uptime, agent count)
+autonomics-tui serve stop     # graceful shutdown (stops agents)
+```
+
+Launching the TUI auto-spawns `tui serve --daemon` when no daemon is
+running. Full protocol and design: `docs/design/gateway-architecture.md`.
 
 ## KMS TUI
 

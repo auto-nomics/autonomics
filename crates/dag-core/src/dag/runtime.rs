@@ -4,7 +4,7 @@
 //! defines the types it produces and accepts.
 
 use datafusion::common::HashMap;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::NodeId;
 use super::error::DagError;
@@ -81,7 +81,7 @@ impl SchemaReport {
 }
 
 /// Per-node runtime lifecycle state tracked by the scheduler.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeStatus {
     #[default]

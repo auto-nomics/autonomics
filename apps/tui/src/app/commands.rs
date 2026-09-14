@@ -43,9 +43,10 @@ impl App {
                         .get(self.state.active_agent_idx)
                         .map(|s| s.name.clone());
                     if let Some(an) = agent_name {
-                        if let Some(host) = self.host.as_ref() {
-                            host.control().cancel_agent(&an);
-                        }
+                        let client = self.client.clone();
+                        self.spawn_client_task("cancel_agent", move || async move {
+                            let _ = client.cancel_agent(&an).await;
+                        });
                     }
                     self.cancel_requested_at = Some(Instant::now());
                     self.state.active_tab_state_mut().cancel_pending = true;
@@ -90,7 +91,7 @@ impl App {
                 }
             }
             CommandAction::ReloadConfig => {
-                Self::load_model_config(&self.conn, &mut self.state.model_config_state);
+                self.spawn_catalog_reload();
             }
             CommandAction::NewAgent => {
                 self.state.profile_picker.open();
@@ -159,9 +160,10 @@ impl App {
                     .get(self.state.active_agent_idx)
                     .map(|s| s.name.clone());
                 if let Some(an) = agent_name {
-                    if let Some(host) = self.host.as_ref() {
-                        host.control().compact_agent(&an);
-                    }
+                    let client = self.client.clone();
+                    self.spawn_client_task("compact_agent", move || async move {
+                        let _ = client.compact_agent(&an).await;
+                    });
                 }
             }
         }

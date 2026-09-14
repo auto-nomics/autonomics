@@ -32,14 +32,10 @@ impl App {
                 Some("No active agent. The DAG view is scoped to an agent session.".to_string());
             return;
         };
-        let Some(host) = self.host.as_ref() else {
-            self.state.dag_view_error = Some("Runtime host unavailable.".to_string());
-            return;
-        };
-        let client = host.data_engine_client(&session_id);
+        let client = self.client.clone();
         let event_tx = self.app_event_tx.clone();
-        self.runtime_handle.spawn(async move {
-            let result = client.dag_tui_snapshot().await;
+        self.spawn_client_task("dag_snapshot", move || async move {
+            let result = client.dag_snapshot(&session_id).await;
             event_tx.send(crate::app_event::AppEvent::DagSnapshotLoaded(
                 result.map_err(|error| error.to_string()),
             ));

@@ -49,7 +49,7 @@ struct ApiError {
 
 type ApiResult = Result<Json<Value>, (StatusCode, Json<ApiError>)>;
 
-pub(crate) fn router(shared: BibShared) -> Router {
+pub fn router(shared: BibShared) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/articles", get(list_articles).post(create_article))

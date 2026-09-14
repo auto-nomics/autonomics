@@ -19,13 +19,13 @@ textwrap = "0.16"
 agentik-core = { path = "../../crates/agentik-core" }
 agentik-sdk = { path = "../../crates/agentik-sdk" }
 agentik-types = { path = "../../crates/agentik-types" }
-runtime = { path = "../../crates/runtime" }
+gateway = { path = "../../crates/gateway" }
+tokio-util = { version = "0.7", features = ["rt"] }
 headless = { path = "../../crates/headless" }
 kms = { path = "../../crates/kms" }
 dag-core = { path = "../../crates/dag-core" }
 opengwas = { path = "../../crates/opengwas" }
 bib-base = { path = "../../crates/bib-base" }
-tui-http = { path = "../../crates/tui-http" }
 vfs = { path = "../../crates/vfs" }
 chrono = { workspace = true }
 rusqlite = "0.40.1"
@@ -38,7 +38,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "time"] }
 tracing-appender = "0.2"
 time = { version = "0.3", features = ["macros"] }
 uuid = "1.23.3"
-tokio.workspace = true
+tokio = { workspace = true, features = ["signal"] }
 tokio-stream = "0.1"
 unicode-width = "0.2"
 unicode-segmentation = "1.12"

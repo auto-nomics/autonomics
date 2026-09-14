@@ -61,17 +61,17 @@ impl App {
     ///
     /// **Design**: state mutation and rendering are strictly separated.
     ///
-    /// - **Event branches** (terminal, agent, app) only mutate state and set
-    ///   the `dirty` flag. They never render.
+    /// - **Event branches** (terminal, gateway, app) only mutate state and
+    ///   set the `dirty` flag. They never render.
     /// - **Render tick** fires at a fixed interval (~60 fps) from a
     ///   dedicated OS thread (independent of tokio worker availability) and
     ///   only redraws when `dirty` is true *or* the agent is active
     ///   (animation frames). When idle and no events arrive, the loop parks
     ///   on `select!` and consumes zero CPU.
     ///
-    /// Ratatui's internal buffer-diff ensures only changed cells are written
-    /// to the terminal. The first tick completes immediately, so the
-    /// initial frame is drawn right away (the constructor sets `dirty = true`).
+    /// The gateway branch replaces the three in-process host channels of
+    /// the fat-client loop (agent events, host commands, host events):
+    /// the daemon owns the host; the TUI sees the same events over SSE.
     pub(super) async fn run_loop(
         &mut self,
         terminal: &mut Terminal<CrosstermBackend<Stdout>>,
@@ -88,21 +88,6 @@ impl App {
             if self.should_quit {
                 break Ok(());
             }
-
-            // Pre-extract host to avoid multiple `&mut self.host` borrows
-            // in the select! branches below.
-            //
-            // Drain pending host commands BEFORE waiting on the select!.
-            // During streaming, agent events flood the biased select! and
-            // starve the host-command branch (recv_and_process_command),
-            // so CancelAgent / DeliverMessage commands sent from key
-            // handlers pile up unprocessed. Draining here ensures every
-            // command is handled promptly on each loop iteration.
-            if let Some(host) = self.host.as_mut() {
-                host.try_process_commands();
-            }
-
-            let host_ptr = self.host.as_mut().map(|h| h as *mut RuntimeHost);
 
             tokio::select! {
                 biased;
@@ -135,7 +120,7 @@ impl App {
                 }
 
                 // ── Fixed-rate render tick (dedicated thread) ──
-                // Second in the biased order so agent-event floods cannot
+                // Second in the biased order so event floods cannot
                 // starve rendering.
                 tick = ticker.tick_rx.recv() => {
                     if tick.is_none() {
@@ -173,102 +158,20 @@ impl App {
                     }
                 }
 
-                // ── Agent streaming events (host-managed) ──
-                // Consume events from RuntimeHost's multiplexed channel.
-                // This covers ALL agents — both TUI-spawned (registered
-                // via host) and tool-spawned. Events are routed to the
-                // session tab matching the agent name.
-                maybe_agent = async {
-                    if let Some(p) = host_ptr {
-                        unsafe { (*p).recv_any().await }
-                    } else if let Some(handle) =
-                        self.handles.get_mut(self.state.active_agent_idx)
-                    {
-                        // Fallback when no host is available — wrap as tagged.
-                        handle.recv_event().await.map(|e| (String::new(), e))
-                    } else {
-                        std::future::pending::<Option<runtime::TaggedEvent>>().await
-                    }
-                } => {
-                    if let Some((agent_name, event)) = maybe_agent {
-                        // Route event to the matching session tab by name.
-                        let target_idx = if !agent_name.is_empty() {
-                            self.state
-                                .sessions
-                                .iter()
-                                .position(|s| s.name == agent_name)
-                                .unwrap_or(self.state.active_agent_idx)
-                        } else {
-                            self.state.active_agent_idx
-                        };
-
-                        let is_session_list = matches!(event, AgentEvent::SessionList { .. });
-                        if matches!(
-                            event,
-                            AgentEvent::SessionActivated { .. }
-                                | AgentEvent::SessionPaused { .. }
-                                | AgentEvent::SessionClosed { .. }
-                                | AgentEvent::SessionList { .. }
-                        ) {
-                            state::apply_session_event(&mut self.state, event, target_idx);
-                        } else {
-                            // Route to the correct tab's tab_state.
-                            let tab_state = self
-                                .state
-                                .sessions
-                                .get_mut(target_idx)
-                                .map(|s| {
-                                    if s.active_sub_session_idx < s.sub_sessions.len() {
-                                        &mut s.sub_sessions[s.active_sub_session_idx].tab_state
-                                    } else {
-                                        &mut s.pending_tab_state
-                                    }
-                                });
-                            if let Some(ts) = tab_state {
-                                state::apply_event(ts, event);
-                            }
+                // ── Gateway frames (agent events / host events / notices) ──
+                maybe_frame = self.gateway_rx.recv() => {
+                    match maybe_frame {
+                        Some(frame) => {
+                            self.handle_gateway_frame(frame);
+                            self.dirty = true;
                         }
-
-                        // After SessionList arrives, spawn background history
-                        // loads for sessions that have empty tab_state.messages.
-                        if is_session_list {
-                            self.spawn_session_history_loads();
+                        None => {
+                            // The pump only ends when the channel closes —
+                            // i.e. the pump task gave up. Without it no
+                            // agent updates can arrive; exit cleanly.
+                            tracing::error!("gateway event pump terminated; exiting");
+                            self.should_quit = true;
                         }
-
-                        self.dirty = true;
-                    } else {
-                        // Active agent channel closed — don't quit, just mark.
-                        tracing::warn!("active agent event channel closed");
-                    }
-                }
-
-                // ── Host commands from agent tools (event-driven) ──
-                // Wakes only when an agent tool sends a HostCommand
-                // (list_agents, route_task, delegate_to, etc.).
-                _ = async {
-                    if let Some(p) = host_ptr {
-                        unsafe { (*p).recv_and_process_command().await; }
-                    } else {
-                        std::future::pending::<()>().await;
-                    }
-                } => {
-                    self.dirty = true;
-                }
-
-                // ── Host lifecycle events (agent registered / unregistered) ──
-                // Wakes when a new agent is registered with the host (e.g. by
-                // the spawn_agent tool) or shut down. Keeps the TUI's session
-                // list in sync with RuntimeHost's agent registry.
-                host_event = async {
-                    if let Some(p) = host_ptr {
-                        unsafe { (*p).recv_event().await }
-                    } else {
-                        std::future::pending::<Option<runtime::HostEvent>>().await
-                    }
-                } => {
-                    if let Some(ev) = host_event {
-                        self.apply_host_event(ev);
-                        self.dirty = true;
                     }
                 }
 

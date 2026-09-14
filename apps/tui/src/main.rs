@@ -109,6 +109,16 @@ fn main() -> color_eyre::Result<()> {
         _ => false,
     };
 
+    // `serve` initializes its own logging (absolute state-dir paths — the
+    // daemon outlives the launching terminal, so a relative `logs/` dir
+    // would be wherever the launcher happened to stand).
+    if matches!(&cli.command, Some(Command::Serve(_))) {
+        return commands::serve::run_serve(match cli.command {
+            Some(Command::Serve(args)) => args,
+            _ => unreachable!(),
+        });
+    }
+
     init_logging(nocapture)?;
 
     match cli.command.unwrap_or(Command::Tui(TuiArgs {
@@ -127,5 +137,6 @@ fn main() -> color_eyre::Result<()> {
             runtime.block_on(commands::bib::run_bib(bib))
         }
         Command::Run(args) => commands::run::run_headless(args),
+        Command::Serve(_) => unreachable!("dispatched before init_logging"),
     }
 }

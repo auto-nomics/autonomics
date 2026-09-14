@@ -25,10 +25,11 @@ Autonomics 不是通用聊天应用，不是围绕自由脚本的 notebook 替�
 ## Harness 架构
 
 ```text
-Ratatui TUI + 本地 HTTP API
-        |
-        v
-RuntimeHost
+Ratatui TUI(瘦客户端)──REST/SSE──▶  gateway daemon(`tui serve`)
+        |                                     |
+        |                                     v
+        └──────────── events ────────── RuntimeHost
+  (前端退出后 agents 继续运行)
   agents、profiles、sessions、memory、host tools
         |
         | ToolFunction 调用

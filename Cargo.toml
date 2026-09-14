@@ -38,6 +38,7 @@ members = [
   "crates/clinicaltrials",
   "crates/container-runtime",
   "crates/headless",
+  "crates/gateway",
   "crates/data-catalog",
   "crates/data-engine-tools",
   "crates/apply-patch",

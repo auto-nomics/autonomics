@@ -25,10 +25,11 @@ Autonomics is not a general-purpose chat application, a notebook replacement bui
 ## Harness Architecture
 
 ```text
-Ratatui TUI + local HTTP API
-        |
-        v
-RuntimeHost
+Ratatui TUI (thin client)  ──REST/SSE──▶  gateway daemon (`tui serve`)
+        |                                      |
+        |                                      v
+        └──────────── events ────────── RuntimeHost
+  (agents keep running when frontends exit)
   agents, profiles, sessions, memory, host tools
         |
         | ToolFunction calls

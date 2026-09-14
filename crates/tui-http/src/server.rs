@@ -157,6 +157,16 @@ async fn index() -> Html<&'static str> {
     Html(include_str!("../frontend/dist/index.html"))
 }
 
+/// Static routes for the embedded web frontend, exposed so the gateway
+/// daemon can mount them on its own listener (the TUI process no longer
+/// serves them itself).
+pub fn frontend_router() -> Router {
+    Router::new()
+        .route("/", get(index))
+        .route("/app.js", get(app_javascript))
+        .route("/styles.css", get(styles))
+}
+
 async fn app_javascript() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],

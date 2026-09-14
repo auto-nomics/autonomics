@@ -1,4 +1,4 @@
-//! Terminal lifecycle, panic handling, and local HTTP API startup.
+//! Terminal lifecycle and panic handling.
 
 use super::*;
 /// Restore the terminal to its normal state: disable mouse capture, leave
@@ -84,84 +84,19 @@ impl App {
         let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
 
         // The main loop is async (tokio::select! driven); run it on the
-        // existing tokio runtime that also hosts the agent task.
+        // existing tokio runtime that also hosts the client tasks.
         let runtime = self.runtime.take().expect("runtime already consumed");
         let result = runtime.block_on(self.run_loop(&mut terminal));
 
-        // Stop accepting external API requests before agents and shared
-        // infrastructure begin shutdown.
-        if let Some(server) = self.http_server.take() {
-            if let Err(error) = runtime.block_on(server.shutdown()) {
-                tracing::warn!(error = %error, "failed to shut down HTTP API server");
-            }
-        }
-
-        // Gracefully shut down all agents: pause sessions, persist
-        // snapshots, flush WAL. Must be inside `block_on` so the agent
-        // tasks can run to completion before the runtime is dropped.
-        if let Some(host) = self.host.as_mut() {
-            runtime.block_on(host.shutdown_all_agents_and_wait());
-        }
-
-        // Restore terminal on exit (whether normal or error).
+        // Thin-client exit: restore the terminal and disconnect. Agents
+        // keep running in the gateway daemon — that is the point of the
+        // resident-backend architecture; `tui serve stop` is the only
+        // thing that shuts them down.
         let _ = restore_terminal();
+
+        eprintln!("Gateway daemon 仍在后台运行（agents 未受影响）；`tui serve stop` 可停止。");
 
         result?;
         Ok(())
-    }
-
-    pub(super) fn start_http_server(
-        runtime: &tokio::runtime::Runtime,
-        host: Option<&RuntimeHost>,
-    ) -> Option<tui_http::HttpServerHandle> {
-        let Some(host) = host else {
-            tracing::warn!("HTTP API disabled: runtime host unavailable");
-            return None;
-        };
-
-        let addr = std::env::var("AUTONOMICS_HTTP_API_ADDR")
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| tui_http::DEFAULT_HTTP_API_ADDR.to_owned());
-        let bearer_token = std::env::var("AUTONOMICS_HTTP_API_TOKEN")
-            .ok()
-            .filter(|value| !value.trim().is_empty());
-        let shared = host.infra().bib.as_ref().clone();
-
-        match runtime.block_on(async {
-            tui_http::start(
-                tui_http::api_router_with_auth(shared.clone(), bearer_token),
-                &addr,
-            )
-            .await
-        }) {
-            Ok(server) => {
-                tracing::info!(
-                    addr = %server.addr(),
-                    "TUI HTTP API started at http://{}",
-                    server.addr()
-                );
-                // Resume unfinished full-text extractions (rows left
-                // pending/running by a previous session). Fire-and-forget:
-                // the semaphore inside BibShared caps the concurrency.
-                let sweep_shared = shared.clone();
-                agentik_core::supervise::spawn_safe_on_drop(
-                    runtime.handle(),
-                    "bib-extraction-sweep",
-                    async move {
-                        bib_base::sweep_pending(&sweep_shared).await;
-                    },
-                );
-                Some(server)
-            }
-            Err(error) => {
-                tracing::error!(
-                    addr = %addr,
-                    error = %error,
-                    "failed to start TUI HTTP API"
-                );
-                None
-            }
-        }
     }
 }

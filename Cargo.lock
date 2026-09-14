@@ -4393,6 +4393,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "gateway"
+version = "0.1.0"
+dependencies = [
+ "agentik-core",
+ "agentik-sdk",
+ "agentik-types",
+ "arc-swap",
+ "axum",
+ "bib-base",
+ "chrono",
+ "dag-core",
+ "eventsource-stream",
+ "futures",
+ "http-body-util",
+ "percent-encoding",
+ "reqwest",
+ "runtime",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "tui-http",
+ "uuid",
+]
+
+[[package]]
 name = "gemm"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9875,6 +9908,7 @@ dependencies = [
  "kegg",
  "kms",
  "kms-tools",
+ "libc",
  "opengwas",
  "opentargets",
  "pubchem",
@@ -11777,6 +11811,7 @@ dependencies = [
  "crossterm",
  "dag-core",
  "fuzzy-matcher",
+ "gateway",
  "headless",
  "ignore",
  "itertools 0.14.0",
@@ -11788,7 +11823,6 @@ dependencies = [
  "ratatui",
  "ratatui-comfy-tabs",
  "ratatui-core",
- "runtime",
  "rusqlite",
  "serde_json",
  "syntect",
@@ -11796,10 +11830,10 @@ dependencies = [
  "time",
  "tokio",
  "tokio-stream",
+ "tokio-util",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
- "tui-http",
  "tui-scrollbar",
  "unicode-segmentation",
  "unicode-width 0.2.2",

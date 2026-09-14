@@ -5,7 +5,7 @@ use crate::cli::KmsArgs;
 pub fn run_kms(args: KmsArgs) -> color_eyre::Result<()> {
     let agent_db = args
         .agent_db
-        .unwrap_or_else(|| runtime::RuntimeConfig::default().agent_db);
+        .unwrap_or_else(|| gateway::RuntimeConfig::default().agent_db);
     let runtime = tokio::runtime::Runtime::new()?;
     runtime.block_on(async move {
         let mut app = crate::kms_tui::KmsTui::new(&agent_db)
