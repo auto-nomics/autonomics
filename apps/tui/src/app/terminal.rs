@@ -33,6 +33,15 @@ pub(super) static PANIC_OCCURRED: std::sync::atomic::AtomicBool =
 fn set_panic_hook() {
     let hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        // Recoverable extraction panics (pdf-extract on malformed fonts)
+        // are converted to errors at the source via bib-base's panic
+        // guard. They must not restore the terminal, print the banner, or
+        // stop the render loop — a single bad PDF cannot kill the TUI.
+        if bib_base::is_expected_panic() {
+            tracing::warn!(payload = %info, "suppressed recoverable extraction panic");
+            return;
+        }
+
         PANIC_OCCURRED.store(true, std::sync::atomic::Ordering::SeqCst);
 
         static RESTORE: std::sync::Once = std::sync::Once::new();
@@ -120,13 +129,28 @@ impl App {
         let shared = host.infra().bib.as_ref().clone();
 
         match runtime.block_on(async {
-            tui_http::start(tui_http::api_router_with_auth(shared, bearer_token), &addr).await
+            tui_http::start(
+                tui_http::api_router_with_auth(shared.clone(), bearer_token),
+                &addr,
+            )
+            .await
         }) {
             Ok(server) => {
                 tracing::info!(
                     addr = %server.addr(),
                     "TUI HTTP API started at http://{}",
                     server.addr()
+                );
+                // Resume unfinished full-text extractions (rows left
+                // pending/running by a previous session). Fire-and-forget:
+                // the semaphore inside BibShared caps the concurrency.
+                let sweep_shared = shared.clone();
+                agentik_core::supervise::spawn_safe_on_drop(
+                    runtime.handle(),
+                    "bib-extraction-sweep",
+                    async move {
+                        bib_base::sweep_pending(&sweep_shared).await;
+                    },
                 );
                 Some(server)
             }

@@ -22,8 +22,11 @@
 
 use std::sync::Arc;
 
+use tokio::sync::Semaphore;
+
 use crate::Result;
 use crate::bib_base::BibBase;
+use crate::extract::TextExtractor;
 use crate::query::LiteratureGateway;
 
 /// Build the shared `reqwest::Client` from [`BibHttpOptions`]. Used by
@@ -120,6 +123,15 @@ pub struct BibShared {
     /// tools. API key read from `S2_API_KEY` (optional; absent = lower
     /// rate limit).
     pub s2: Arc<semantic_scholar::S2Client>,
+
+    /// Full-text extraction chain (MinerU cloud → local simple + OCR).
+    ///
+    /// Shared so every upload, re-extract, and sweep in the process uses
+    /// one MinerU client (one `MINERU_API_KEY` warning, one connection
+    /// pool). See [`crate::extraction`].
+    pub extractor: Arc<dyn TextExtractor>,
+    /// Caps concurrent background extractions (cloud quota + CPU).
+    pub extraction_permits: Arc<Semaphore>,
 }
 
 impl BibShared {
@@ -164,6 +176,7 @@ impl BibShared {
             crossref.clone(),
             s2.clone(),
         ));
+        let extractor = crate::extraction::default_extractor(http.as_ref().clone());
         Ok(Self {
             bib,
             file_storage: None,
@@ -175,6 +188,10 @@ impl BibShared {
             openalex,
             crossref,
             s2,
+            extractor,
+            extraction_permits: Arc::new(Semaphore::new(
+                crate::extraction::MAX_CONCURRENT_EXTRACTIONS,
+            )),
         })
     }
 
@@ -203,6 +220,7 @@ impl BibShared {
             crossref.clone(),
             s2.clone(),
         ));
+        let extractor = crate::extraction::default_extractor(http.as_ref().clone());
         Ok(Self {
             bib,
             file_storage: None,
@@ -214,6 +232,10 @@ impl BibShared {
             openalex,
             crossref,
             s2,
+            extractor,
+            extraction_permits: Arc::new(Semaphore::new(
+                crate::extraction::MAX_CONCURRENT_EXTRACTIONS,
+            )),
         })
     }
 
@@ -239,6 +261,8 @@ impl std::fmt::Debug for BibShared {
             .field("openalex", &"Arc<OpenAlexClient>")
             .field("crossref", &"Arc<CrossrefClient>")
             .field("s2", &"Arc<S2Client>")
+            .field("extractor", &self.extractor.name())
+            .field("extraction_permits", &self.extraction_permits.available_permits())
             .finish()
     }
 }

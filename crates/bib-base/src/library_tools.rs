@@ -2242,6 +2242,10 @@ mod tests {
             file_hash: None,
             file_size: None,
             uploaded_at: None,
+            extract_status: None,
+            text_format: None,
+            extracted_by: None,
+            extract_error: None,
         })
         .await
         .unwrap();

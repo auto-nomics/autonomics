@@ -45,6 +45,14 @@ export interface FullText {
   source: string;
   file_hash?: string | null;
   file_size?: number | null;
+  /** Extraction lifecycle: pending | running | done | failed. */
+  extract_status?: string | null;
+  /** Layout of `text_content`: plain | markdown. */
+  text_format?: string | null;
+  /** Which extractor produced the text (mineru, simple, …). */
+  extracted_by?: string | null;
+  /** Failure message when `extract_status` is "failed". */
+  extract_error?: string | null;
 }
 
 export interface ArticleDetail {
@@ -81,6 +89,15 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error(message);
   }
   return data as T;
+}
+
+/** Queue a background re-extraction of a stored full text. */
+export async function reextractFulltext(articleId: string): Promise<FullText> {
+  const data = await api<{ fulltext: FullText }>(
+    `/api/v1/bib/articles/${encodeURIComponent(articleId)}/fulltext/reextract`,
+    { method: "POST" },
+  );
+  return data.fulltext;
 }
 
 export function articleIdentifier(article: Article, kinds: string[]): Identifier | undefined {

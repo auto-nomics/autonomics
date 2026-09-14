@@ -120,6 +120,10 @@ opendal = { version = "0.57", features = [
 sha2 = "0.10"
 clap = { version = "4.6", features = ["derive"] }
 tar = "0.4"
+# default-features off: the default set pulls xz2, whose lzma-sys conflicts
+# with datafusion's liblzma-sys (`links = "lzma"` clash). MinerU result zips
+# only need deflate.
+zip = { version = "2.2", default-features = false, features = ["deflate"] }
 toml = "1"
 uuid = "1.24"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }

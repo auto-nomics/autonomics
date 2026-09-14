@@ -17,7 +17,7 @@
 //!
 //! Articles without a PMID or DOI (e.g. pure arXiv preprints) are skipped.
 
-use bib_types::{FileFormat, FullText, FullTextSource, IdKind};
+use bib_types::{ExtractStatus, FileFormat, FullText, FullTextSource, IdKind, TextFormat};
 use chrono::Utc;
 use europepmc::EuropePmcClient;
 use europepmc::types::{ResultType, SearchRequest};
@@ -75,6 +75,11 @@ pub async fn try_fetch_fulltext_with(
         file_hash: None,
         file_size: Some(xml.len() as i64),
         uploaded_at: Some(Utc::now()),
+        // The OA path produces final text inline — no background job.
+        extract_status: Some(ExtractStatus::Done),
+        text_format: Some(TextFormat::Plain),
+        extracted_by: Some("europepmc".to_string()),
+        extract_error: None,
     })
 }
 

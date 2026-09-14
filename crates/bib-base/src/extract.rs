@@ -40,11 +40,56 @@
 //! ```
 
 use async_trait::async_trait;
-use bib_types::FileFormat;
+use bib_types::{FileFormat, TextFormat};
 use tokio::io::AsyncWriteExt;
 use tokio::process::{ChildStdin, Command};
 
 use crate::error::{Error, Result};
+
+// ---------------------------------------------------------------------------
+// Panic guard
+// ---------------------------------------------------------------------------
+
+// Thread-local flag set while running third-party extraction code whose
+// panics are expected and recoverable.
+//
+// `pdf-extract` signals "unusable but not our bug" input problems — e.g.
+// `missing unicode map and encoding` for simple fonts without a ToUnicode
+// map — by panicking instead of returning `Err`. [`with_panic_guard`]
+// converts those panics into ordinary errors so the OCR fallback chain can
+// take over. The TUI's panic hooks consult [`is_expected_panic`] so such a
+// panic neither restores the terminal nor kills the render loop.
+thread_local! {
+    static EXPECTED_PANIC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether the current thread panicked inside a [`with_panic_guard`] call.
+///
+/// Read by panic hooks to suppress fatal handling of recoverable
+/// extraction panics. Always `false` on threads not running extraction.
+pub fn is_expected_panic() -> bool {
+    EXPECTED_PANIC.with(std::cell::Cell::get)
+}
+
+/// Run `f`, converting a panic into `Err(message)`.
+///
+/// The guard flag is set for the duration of `f` and cleared on every exit
+/// path, so a panic hook firing mid-unwind observes it, while later code
+/// (including subsequent extractions on the same pooled thread) does not.
+fn with_panic_guard<T>(f: impl FnOnce() -> T) -> std::result::Result<T, String> {
+    EXPECTED_PANIC.with(|flag| flag.set(true));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+    EXPECTED_PANIC.with(|flag| flag.set(false));
+    result.map_err(|payload| {
+        if let Some(msg) = payload.downcast_ref::<&str>() {
+            (*msg).to_string()
+        } else if let Some(msg) = payload.downcast_ref::<String>() {
+            msg.clone()
+        } else {
+            "unknown panic payload".to_string()
+        }
+    })
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -55,11 +100,30 @@ use crate::error::{Error, Result};
 pub struct ExtractedText {
     /// The extracted text content.
     pub text: String,
+    /// Format of [`ExtractedText::text`] — plain (whitespace collapsed)
+    /// or markdown (layout-aware, whitespace preserved).
+    pub format: TextFormat,
+    /// Which extractor produced this text (for provenance columns).
+    pub extractor: &'static str,
 }
 
 impl ExtractedText {
+    /// Plain-text result from the built-in [`SimpleExtractor`].
     pub fn new(text: impl Into<String>) -> Self {
-        Self { text: text.into() }
+        Self {
+            text: text.into(),
+            format: TextFormat::Plain,
+            extractor: "simple",
+        }
+    }
+
+    /// Markdown result from a layout-aware extractor (MinerU).
+    pub fn markdown(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            format: TextFormat::Markdown,
+            extractor: "mineru",
+        }
     }
 }
 
@@ -139,28 +203,28 @@ impl TextExtractor for SimpleExtractor {
         match format {
             FileFormat::Pdf => {
                 // PDF extraction is CPU-bound — run on the blocking pool.
+                // pdf-extract panics on malformed fonts; the guard converts
+                // the panic to an Err so the OCR fallback can take over.
                 let owned = content.to_vec();
-                let text =
-                    tokio::task::spawn_blocking(move || pdf_extract::extract_text_from_mem(&owned))
-                        .await
-                        .map_err(|e| Error::Unknown(format!("extraction task panicked: {e}")))?
-                        .map_err(|e| Error::Unknown(format!("PDF extraction failed: {e}")))?;
-
-                Ok(ExtractedText {
-                    text: normalize_whitespace(&text),
+                let text = tokio::task::spawn_blocking(move || {
+                    with_panic_guard(|| pdf_extract::extract_text_from_mem(&owned))
+                        .and_then(|inner| inner.map_err(|e| e.to_string()))
                 })
+                .await
+                .map_err(|e| Error::Unknown(format!("extraction task panicked: {e}")))?
+                .map_err(|e| Error::Unknown(format!("PDF extraction failed: {e}")))?;
+
+                Ok(ExtractedText::new(normalize_whitespace(&text)))
             }
             FileFormat::Html => {
                 let raw = String::from_utf8_lossy(content);
-                Ok(ExtractedText {
-                    text: normalize_whitespace(&strip_html_tags(&raw)),
-                })
+                Ok(ExtractedText::new(normalize_whitespace(&strip_html_tags(
+                    &raw,
+                ))))
             }
             FileFormat::Txt => {
                 let raw = String::from_utf8_lossy(content);
-                Ok(ExtractedText {
-                    text: raw.to_string(),
-                })
+                Ok(ExtractedText::new(raw.to_string()))
             }
         }
     }
@@ -189,6 +253,8 @@ impl TextExtractor for OcrFallbackExtractor {
         match run_tesseract(content.to_vec()).await {
             Ok(text) if !text.trim().is_empty() => Ok(ExtractedText {
                 text: normalize_whitespace(&text),
+                format: TextFormat::Plain,
+                extractor: "simple+ocr-fallback",
             }),
             _ => match simple {
                 Ok(_text) => Err(Error::Unknown(
@@ -401,6 +467,38 @@ mod tests {
             .await
             .expect("DeviceN PDF should not panic or fail");
         assert_eq!(result.text, "DeviceN text");
+    }
+
+    #[test]
+    fn panic_guard_converts_static_str_panic_to_err() {
+        let result = with_panic_guard(|| panic!("boom"));
+        assert_eq!(result.unwrap_err(), "boom");
+        // Flag must be cleared on the panic exit path.
+        assert!(!is_expected_panic());
+    }
+
+    #[test]
+    fn panic_guard_converts_formatted_panic_to_err() {
+        let result = with_panic_guard(|| panic!("code {}", 42));
+        assert_eq!(result.unwrap_err(), "code 42");
+        assert!(!is_expected_panic());
+    }
+
+    #[test]
+    fn panic_guard_passes_through_ok() {
+        let result = with_panic_guard(|| 7);
+        assert_eq!(result.unwrap(), 7);
+        assert!(!is_expected_panic());
+    }
+
+    #[tokio::test]
+    async fn extract_garbage_pdf_returns_err_without_poisoning() {
+        let ext = SimpleExtractor::new();
+        // Not a real PDF — pdf-extract errors (or panics via the guard);
+        // either way the caller sees Err and the guard flag stays clear.
+        let result = ext.extract(b"%PDF-1.7 not a real pdf", FileFormat::Pdf).await;
+        assert!(result.is_err());
+        assert!(!is_expected_panic());
     }
 
     #[test]

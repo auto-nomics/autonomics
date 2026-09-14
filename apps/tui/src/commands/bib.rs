@@ -1,6 +1,8 @@
 //! Bibliography management commands.
 
-use crate::cli::{BibAction, BibArgs, ExportArgs, InfoArgs, ListArgs, RequestsArgs, UploadArgs};
+use crate::cli::{
+    BibAction, BibArgs, ExportArgs, InfoArgs, ListArgs, RequestsArgs, ReextractArgs, UploadArgs,
+};
 use bib_base::{stored_fulltext, vfs_virtual_path};
 use vfs::OpendalFileStorage;
 
@@ -13,6 +15,7 @@ pub async fn run_bib(bib: BibArgs) -> color_eyre::Result<()> {
     let db = bib_base::BibBase::open(&db_path).await?;
     match bib.action {
         BibAction::Upload(args) => run_bib_upload(&db, &file_storage, args).await,
+        BibAction::Reextract(args) => run_bib_reextract(&db, &file_storage, args).await,
         BibAction::Requests(args) => run_bib_requests(&db, args).await,
         BibAction::Info(args) => run_bib_info(&db, args).await,
         BibAction::List(args) => run_bib_list(&db, args).await,
@@ -47,18 +50,20 @@ async fn run_bib_upload(
         .unwrap_or("txt");
     let format = bib_base::FileFormat::from_extension(ext);
 
-    // 4. Extract text.
+    // 4. Extract text with the full chain (MinerU cloud → local). The CLI
+    // waits inline, so the stored row is already final when this returns.
     use bib_base::TextExtractor;
-    let extractor = bib_base::OcrFallbackExtractor::new();
-    let extracted = match extractor.extract(&content, format).await {
-        Ok(extracted) => Some(extracted),
+    let extractor = bib_base::default_extractor(bib_base::BibHttpOptions::default().build_client());
+    let extraction = extractor.extract(&content, format).await;
+    let (extracted, extract_error) = match &extraction {
+        Ok(extracted) => (Some(extracted), None),
         Err(error) => {
             tracing::warn!(
                 filename = %args.pdf.display(),
                 error = %error,
                 "failed to extract full-text content; storing original bytes only"
             );
-            None
+            (None, Some(error.to_string()))
         }
     };
     let text_len = extracted
@@ -86,6 +91,16 @@ async fn run_bib_upload(
         file_hash: Some(stored.file_hash),
         file_size: Some(file_size),
         uploaded_at: Some(chrono::Utc::now()),
+        // CLI uploads wait for extraction inline, so the result is final:
+        // done + provenance on success, failed + message otherwise.
+        extract_status: Some(if extraction.is_ok() {
+            bib_base::ExtractStatus::Done
+        } else {
+            bib_base::ExtractStatus::Failed
+        }),
+        text_format: extracted.as_ref().map(|text| text.format),
+        extracted_by: extracted.as_ref().map(|text| text.extractor.to_string()),
+        extract_error,
     };
     let previous = db.get_fulltext(&args.article_id).await?;
     if let Err(error) = db.upsert_fulltext(&ft).await {
@@ -123,6 +138,62 @@ async fn run_bib_upload(
         );
     }
 
+    Ok(())
+}
+
+async fn run_bib_reextract(
+    db: &bib_base::BibBase,
+    file_storage: &OpendalFileStorage,
+    args: ReextractArgs,
+) -> color_eyre::Result<()> {
+    let extractor = bib_base::default_extractor(bib_base::BibHttpOptions::default().build_client());
+
+    let targets: Vec<String> = if let Some(article_id) = args.article_id.as_deref() {
+        db.get_fulltext(article_id)
+            .await?
+            .ok_or_else(|| {
+                color_eyre::eyre::eyre!("No full text stored for '{article_id}'.")
+            })?;
+        vec![article_id.to_owned()]
+    } else if args.all_missing {
+        db.list_articles_needing_extraction()
+            .await?
+            .into_iter()
+            .map(|pending| pending.article_id)
+            .collect()
+    } else {
+        return Err(color_eyre::eyre::eyre!(
+            "Specify --article-id <ID> or --all-missing."
+        ));
+    };
+
+    if targets.is_empty() {
+        println!("No articles need re-extraction.");
+        return Ok(());
+    }
+
+    let total = targets.len();
+    let mut succeeded = 0;
+    for (index, article_id) in targets.iter().enumerate() {
+        match bib_base::run_extraction_parts(db, file_storage, extractor.as_ref(), article_id)
+            .await
+        {
+            Ok(extracted) => {
+                succeeded += 1;
+                println!(
+                    "[{}/{}] {article_id} … done ({} chars, {})",
+                    index + 1,
+                    total,
+                    extracted.text.chars().count(),
+                    extracted.extractor
+                );
+            }
+            Err(message) => {
+                println!("[{}/{}] {article_id} … failed ({message})", index + 1, total);
+            }
+        }
+    }
+    println!("\n{succeeded}/{total} extractions succeeded.");
     Ok(())
 }
 

@@ -657,6 +657,68 @@ impl FullTextSource {
     }
 }
 
+/// Format of the extracted `text_content` stored alongside a full text.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TextFormat {
+    /// Single-line normalized plain text (legacy extractors).
+    #[default]
+    Plain,
+    /// Markdown produced by layout-aware extractors (e.g. MinerU);
+    /// whitespace is preserved as-is.
+    Markdown,
+}
+
+impl TextFormat {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Plain => "plain",
+            Self::Markdown => "markdown",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "markdown" => Self::Markdown,
+            _ => Self::Plain,
+        }
+    }
+}
+
+/// Lifecycle of the background extraction that produces `text_content`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExtractStatus {
+    /// Queued: the original file is stored, extraction has not started.
+    Pending,
+    /// A worker is currently extracting.
+    Running,
+    /// `text_content` holds the final extraction result.
+    Done,
+    /// Extraction failed; `extract_error` carries the reason.
+    Failed,
+}
+
+impl ExtractStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Running => "running",
+            Self::Done => "done",
+            Self::Failed => "failed",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "running" => Self::Running,
+            "failed" => Self::Failed,
+            "done" => Self::Done,
+            _ => Self::Pending,
+        }
+    }
+}
+
 /// Full text stored alongside an article.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FullText {
@@ -686,6 +748,23 @@ pub struct FullText {
 
     #[serde(default)]
     pub uploaded_at: Option<DateTime<Utc>>,
+
+    /// Lifecycle of the extraction producing [`FullText::text_content`].
+    /// `None` on rows written before extraction tracking existed.
+    #[serde(default)]
+    pub extract_status: Option<ExtractStatus>,
+
+    /// Format of [`FullText::text_content`] (`plain` or `markdown`).
+    #[serde(default)]
+    pub text_format: Option<TextFormat>,
+
+    /// Which extractor produced [`FullText::text_content` (e.g. `mineru`).
+    #[serde(default)]
+    pub extracted_by: Option<String>,
+
+    /// Last extraction failure reason, if any.
+    #[serde(default)]
+    pub extract_error: Option<String>,
 }
 
 // ---------------------------------------------------------------------------

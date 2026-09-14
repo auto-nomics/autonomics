@@ -43,6 +43,13 @@ fn init_logging(nocapture: bool) -> color_eyre::Result<()> {
     // to log the full panic + backtrace to the log file. The readable
     // message to stderr is handled by `set_panic_hook`.
     std::panic::set_hook(Box::new(|info| {
+        // Recoverable extraction panics (pdf-extract on malformed fonts)
+        // are handled at the source; keep CLI output quiet for them.
+        if bib_base::is_expected_panic() {
+            tracing::warn!(payload = %info, "suppressed recoverable extraction panic");
+            return;
+        }
+
         let bt = std::backtrace::Backtrace::force_capture();
         tracing::error!(
             target: "panic",

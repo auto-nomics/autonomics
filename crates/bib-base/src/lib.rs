@@ -20,9 +20,11 @@ pub use collections::CollectionAddOutcome;
 pub mod error;
 pub mod export;
 pub mod extract;
+pub mod extraction;
 pub mod fulltext;
 pub mod http_options;
 pub mod library_tools;
+pub mod mineru;
 pub mod oa_fetch;
 pub mod query;
 pub mod shared;
@@ -32,8 +34,15 @@ pub mod tools;
 pub use bib_base::BibBase;
 pub use error::{Error, Result};
 pub use export::{cite_key, render, render_all, to_bibtex, to_csl_json, to_markdown, to_ris};
-pub use extract::{ExtractedText, OcrFallbackExtractor, SimpleExtractor, TextExtractor};
-pub use fulltext::FullTextPage;
+pub use extract::{
+    ExtractedText, OcrFallbackExtractor, SimpleExtractor, TextExtractor, is_expected_panic,
+};
+pub use extraction::{
+    FallbackChainExtractor, default_extractor, run_extraction, run_extraction_parts,
+    spawn_extraction, sweep_pending,
+};
+pub use fulltext::{FullTextPage, PendingExtraction};
+pub use mineru::{DEFAULT_API_URL as MINERU_DEFAULT_API_URL, MineruExtractor, markdown_from_zip};
 pub use http_options::BibHttpOptions;
 pub use library_tools::bib_all_registrations;
 pub use library_tools::bib_extended_registrations;

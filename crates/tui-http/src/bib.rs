@@ -10,13 +10,12 @@ use axum::{
     routing::{delete, get, post, put},
 };
 use bib_base::{
-    BibShared, OcrFallbackExtractor, TextExtractor, stored_fulltext, try_fetch_fulltext_with,
-    vfs_virtual_path,
+    BibShared, spawn_extraction, stored_fulltext, try_fetch_fulltext_with, vfs_virtual_path,
 };
 use bib_types::{
     AddedBy, AnnotationKind, Article, ArticleRole, ArticleSource, Author, Collection,
-    CollectionStatus, ExportFormat, FileFormat, FullText, FullTextSource, IdKind, Identifier,
-    StructuredSearch,
+    CollectionStatus, ExportFormat, ExtractStatus, FileFormat, FullText, FullTextSource, IdKind,
+    Identifier, StructuredSearch,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -69,6 +68,10 @@ pub(crate) fn router(shared: BibShared) -> Router {
         .route(
             "/articles/{id}/fulltext/raw",
             get(download_fulltext).head(download_fulltext),
+        )
+        .route(
+            "/articles/{id}/fulltext/reextract",
+            post(reextract_fulltext),
         )
         .route(
             "/articles/{id}/annotations",
@@ -599,18 +602,6 @@ async fn upload_fulltext(
         .map(|(_, extension)| extension)
         .unwrap_or("txt");
     let format = FileFormat::from_extension(extension);
-    let extracted = match OcrFallbackExtractor::new().extract(&content, format).await {
-        Ok(text) => Some(text),
-        Err(extract_error) => {
-            tracing::warn!(
-                article_id = %article.id,
-                filename = %filename,
-                error = %extract_error,
-                "failed to extract full-text content; storing original bytes only"
-            );
-            None
-        }
-    };
 
     let stored = stored_fulltext(&article.id, &filename, &content);
     let path = vfs_virtual_path(&stored.path).expect("stored fulltext uses a VFS path");
@@ -619,18 +610,25 @@ async fn upload_fulltext(
         article_id: article.id.clone(),
         file_path: stored.path,
         file_format: format,
-        text_content: extracted.map(|text| text.text),
+        text_content: None,
         source: FullTextSource::UserUpload,
         file_hash: Some(stored.file_hash),
         file_size: Some(content.len() as i64),
         uploaded_at: Some(Utc::now()),
+        // Text extraction happens in the background (spawn_extraction
+        // below); the upload response returns immediately with a pending
+        // status and clients poll until done/failed.
+        extract_status: Some(ExtractStatus::Pending),
+        text_format: None,
+        extracted_by: None,
+        extract_error: None,
     };
     let previous = shared
         .bib
         .get_fulltext(&article.id)
         .await
         .map_err(internal)?;
-    if let Err(db_error) = shared.bib.upsert_fulltext(&fulltext).await {
+    if let Err(db_error) = shared.bib.upsert_fulltext_pending(&fulltext).await {
         if previous.as_ref().map(|old| old.file_path.clone()) != Some(fulltext.file_path.clone()) {
             if let Err(cleanup_error) = delete_stored_file(&shared, &path).await {
                 tracing::warn!(
@@ -655,6 +653,50 @@ async fn upload_fulltext(
             }
         }
     }
+    // Content-addressed paths guarantee the queued task reads the object
+    // just written, even though this handler returns immediately.
+    spawn_extraction(shared.as_ref().clone(), article.id.clone());
+    Ok(Json(json!({ "fulltext": fulltext })))
+}
+
+/// Queue a re-extraction of an already-stored full text.
+///
+/// Only VFS-stored originals can be re-read; inline-text sources (e.g.
+/// Europe PMC paths) must be re-uploaded instead. The row resets to
+/// `pending`, a background task claims it, and the response carries the
+/// reset row so clients can poll for the terminal state.
+async fn reextract_fulltext(
+    State(shared): State<Arc<BibShared>>,
+    Path(id): Path<String>,
+) -> ApiResult {
+    let existing = shared
+        .bib
+        .get_fulltext(&id)
+        .await
+        .map_err(internal)?
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, format!("full text for {id} not found")))?;
+    if vfs_virtual_path(&existing.file_path).is_none() {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "original file is not VFS-stored ({}); re-upload the file to re-extract",
+                existing.file_path
+            ),
+        ));
+    }
+    if !shared
+        .bib
+        .restart_extraction(&id)
+        .await
+        .map_err(internal)?
+    {
+        return Err(error(
+            StatusCode::NOT_FOUND,
+            format!("full text for {id} not found"),
+        ));
+    }
+    spawn_extraction(shared.as_ref().clone(), id.clone());
+    let fulltext = shared.bib.get_fulltext(&id).await.map_err(internal)?;
     Ok(Json(json!({ "fulltext": fulltext })))
 }
 

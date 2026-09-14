@@ -7,6 +7,7 @@ import { RecordList } from "@/components/bibliography/record-list";
 import {
   api,
   articleIdentifier,
+  reextractFulltext,
   type Article,
   type ArticleDetail,
   type BibHealth,
@@ -58,6 +59,36 @@ export function App() {
   const selectArticle = useCallback(async (id: string) => {
     const data = await api<ArticleDetail>(`/api/v1/bib/articles/${encodeURIComponent(id)}`);
     setSelected(data);
+  }, []);
+
+  // Background extraction runs after uploads and re-extract requests.
+  // Poll ~every 2.5 s until a terminal state (10 min budget, matching the
+  // server-side deadline). Refreshes the open detail panel without
+  // clobbering a different article the user may have selected meanwhile.
+  const pollExtraction = useCallback(async (articleId: string) => {
+    for (let attempt = 0; attempt < 240; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+      try {
+        const data = await api<ArticleDetail>(
+          `/api/v1/bib/articles/${encodeURIComponent(articleId)}`,
+        );
+        setSelected((current) =>
+          current && current.article.id === articleId ? data : current,
+        );
+        const status = data.fulltext?.extract_status;
+        if (status === "done") {
+          toast.success("Full text extraction finished");
+          return;
+        }
+        if (status === "failed") {
+          toast.error(`Extraction failed: ${data.fulltext?.extract_error ?? "unknown error"}`);
+          return;
+        }
+      } catch {
+        // Transient fetch failure — keep polling within the attempt budget.
+      }
+    }
+    toast.info("Extraction still running — reopen the article later to see the result");
   }, []);
 
   const loadRecords = useCallback(
@@ -151,16 +182,27 @@ export function App() {
 
   async function uploadFulltext(file: File) {
     if (!selected) return;
+    const articleId = selected.article.id;
     const form = new FormData();
     form.append("file", file);
     const response = await fetch(
-      `/api/v1/bib/articles/${encodeURIComponent(selected.article.id)}/fulltext`,
+      `/api/v1/bib/articles/${encodeURIComponent(articleId)}/fulltext`,
       { method: "POST", body: form },
     );
     const data = await response.json().catch(() => null);
     if (!response.ok) throw new Error(data?.error ?? response.statusText);
-    await selectArticle(selected.article.id);
-    toast.success("Full text uploaded");
+    await selectArticle(articleId);
+    toast.success("Uploaded — extraction started");
+    void pollExtraction(articleId);
+  }
+
+  async function reextract() {
+    if (!selected) return;
+    const articleId = selected.article.id;
+    await reextractFulltext(articleId);
+    await selectArticle(articleId);
+    toast.success("Re-extraction started");
+    void pollExtraction(articleId);
   }
 
   async function addNote(kind: string, content: string) {
@@ -269,6 +311,7 @@ export function App() {
             detail={selected}
             collections={collections}
             onUpload={(file) => void uploadFulltext(file).catch((error: Error) => toast.error(error.message))}
+            onReextract={() => void reextract().catch((error: Error) => toast.error(error.message))}
             onAddNote={(kind, content) => void addNote(kind, content).catch((error: Error) => toast.error(error.message))}
             onAddToCollection={(collectionId) => void addToCollection(collectionId).catch((error: Error) => toast.error(error.message))}
             onRemoveFromCollection={(collectionId, articleId) =>
