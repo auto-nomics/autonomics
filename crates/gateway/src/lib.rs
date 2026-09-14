@@ -7,7 +7,7 @@
 //! - [`driver`]: the daemon's host pump — the single consumer of
 //!   `RuntimeHost::recv_next`;
 //! - [`server`]: the axum API surface;
-//! - [`daemon`]: `tui serve` bootstrap + graceful shutdown;
+//! - [`daemon`]: `autonomics serve` bootstrap + graceful shutdown;
 //! - [`client`]: the Rust frontend SDK (REST + SSE pump);
 //! - [`manager`]: probe / auto-spawn / stop for frontends;
 //! - [`model_store`]: the daemon-owned app DB (model catalogue,
@@ -32,10 +32,10 @@ pub use proto::HostEventView;
 
 // Re-exports so frontends depend on `gateway` alone — the runtime types
 // frontends legitimately need (config paths for the standalone CLI
-// subcommands, model bootstrap for `tui run`) without a direct runtime
+// subcommands, model bootstrap for `autonomics run`) without a direct runtime
 // dependency.
 /// Daemon startup error type — re-exported so frontends can pattern-match
-/// (e.g. `tui run`'s lock-conflict hint) without a direct runtime dep.
+/// (e.g. `autonomics run`'s lock-conflict hint) without a direct runtime dep.
 pub use runtime::Error as RuntimeError;
 pub use runtime::control::AgentInfo;
 pub use runtime::{RuntimeConfig, RuntimeConfigBuilder};

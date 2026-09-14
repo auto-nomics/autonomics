@@ -1,7 +1,7 @@
 # Backend Gateway 架构设计
 
 状态:**P0/P1/P2 已实现**(refactor/migrate-to-gateway-backend 分支);**P3 已实现**
-(feat/headless-via-gateway 分支):`tui run` 默认经 gateway 执行,`--ephemeral` 保留
+(feat/headless-via-gateway 分支):`autonomics run` 默认经 gateway 执行,`--ephemeral` 保留
 进程内路径。后续:P4 web 前端、P5 desktop(见 §11,各自独立 PR)。
 
 前置阅读:`docs/headless-run-design.md`(§1.2 记录了「未来若出现独立 daemon 需求再
@@ -22,7 +22,7 @@ RPC 层。gateway 分支兑现该升级,核心动机:
 | 决策 | 内容 |
 |---|---|
 | D1 进程形态 | `tui` 二进制新增 `serve` 子命令(一个二进制多前端,codex 模式),不建独立 daemon 二进制 |
-| D2 TUI 定位 | 彻底瘦客户端,单一代码路径;daemon 未运行时自动拉起 `tui serve --daemon` |
+| D2 TUI 定位 | 彻底瘦客户端,单一代码路径;daemon 未运行时自动拉起 `autonomics serve --daemon` |
 | D3 传输 | v1 单 TCP loopback(`127.0.0.1:8765`,沿用 `AUTONOMICS_HTTP_API_ADDR`)+ REST(命令)+ SSE(事件)。UDS 留作后续加固 |
 | D4 鉴权 | gateway API 恒 bearer 保护:`AUTONOMICS_HTTP_API_TOKEN` 或每次启动生成、写入 `<state_dir>/gateway.token`(0600)——token 文件即本地进程的文件系统权限门。bib API 维持原契约(无 env token 则 loopback 开放) |
 | D5 写权归属 | app DB 的 rusqlite 连接只存在于 daemon(`gateway::model_store`);`Model` 构造(含 ChatGPT token 刷新回调)全部 daemon 侧 |
@@ -132,7 +132,7 @@ driver 维护 session 缓存(`SessionList/SessionClosed` 事件折叠,纯函数�
 - **启动序**:model store(app DB)→ `RuntimeHost::open`(持 flock,冲突→
   `InstanceLockHeld` 友好报错退出)→ profile seed + 默认模型槽 → ChatGPT
   ensure-fresh → axum bind(成功后才写 token/pid 文件,探活即用)→ driver 循环。
-- **`tui serve`**:前台(stderr+文件日志,Ctrl+C=优雅停);`--daemon`:stdio 全
+- **`autonomics serve`**:前台(stderr+文件日志,Ctrl+C=优雅停);`--daemon`:stdio 全
   null + 独立进程组(自动拉起方 `ensure_running` spawn);`status` / `stop` 子命令。
 - **优雅停机**(POST /gateway/shutdown):断 SSE → `shutdown_all_agents_and_wait`
   (30s 宽限)→ 退出。
@@ -182,15 +182,15 @@ driver 维护 session 缓存(`SessionList/SessionClosed` 事件折叠,纯函数�
   internal 事件当防御性 no-op(旧 TUI 时代即存在,靠「空闲时再请求」掩盖)。
   driver 因此在注册时与 TurnCompleted 后补拉列表,而非 turn 中。修复该 quirk 需要
   动 `run_session` 的事件重排语义,留独立 PR。
-- ~~**`tui run` 过渡期冲突**~~:P3 已消除——默认路径经 gateway,不碰状态目录;
-  `--ephemeral` 的进程内路径与运行中 daemon 抢锁时仍报错指向 `tui serve stop`。
+- ~~**`autonomics run` 过渡期冲突**~~:P3 已消除——默认路径经 gateway,不碰状态目录;
+  `--ephemeral` 的进程内路径与运行中 daemon 抢锁时仍报错指向 `autonomics serve stop`。
 - podman 子进程 stdin 约束随 `SharedInfra` 转移到 daemon(daemon 全程 null stdio);
-  `tui run --ephemeral` 永久保留进程内路径(benchmark 隔离硬需求)。
+  `autonomics run --ephemeral` 永久保留进程内路径(benchmark 隔离硬需求)。
 
 ## 11. 后续 PR 规划
 
 | 期 | 内容 | 要点 |
 |---|---|---|
-| ~~P3 headless~~(已完成) | `tui run` 默认走 gateway | 稳定身份 `/root/headless`(daemon 按 path 恢复同一 agent_id,`--session` 语义保持;并发撞路径回退唯一后缀);SSE 从 `state.last_seq` 订阅过滤 agent 帧 → `TranslationState::translate` → RunEvent 契约不变(与 in-process 的 JSONL parity 测试锁定);`--session` 等 SessionActivated;超时→cancel+合成 turn.failed;退出码 0/1/2/3 不变(缺模型=exit 3 启动错误);`--ephemeral` 保留进程内 |
+| ~~P3 headless~~(已完成) | `autonomics run` 默认走 gateway | 稳定身份 `/root/headless`(daemon 按 path 恢复同一 agent_id,`--session` 语义保持;并发撞路径回退唯一后缀);SSE 从 `state.last_seq` 订阅过滤 agent 帧 → `TranslationState::translate` → RunEvent 契约不变(与 in-process 的 JSONL parity 测试锁定);`--session` 等 SessionActivated;超时→cancel+合成 turn.failed;退出码 0/1/2/3 不变(缺模型=exit 3 启动错误);`--ephemeral` 保留进程内 |
 | P4 web | `apps/web`(Vite+React19+TS+pnpm) | thread≡agent session;threads/chat SSE(delta/tool/done/ping/error 帧,fetch 流解析——EventSource 带不了 Authorization);409 agent_busy;dist 由 gateway 内嵌托管,同源 token 注入;活动抽屉(agents/delegations 只读) |
 | P5 desktop | Tauri 2 纯壳 | ensure_running + 读 token + webview 指 `127.0.0.1:8765/#token=…`(hash 传 token);不自开 RuntimeHost,无第二写者;可选 UDS listener 加固 |

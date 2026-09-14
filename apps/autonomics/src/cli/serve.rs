@@ -1,11 +1,11 @@
-//! `tui serve` — the resident backend gateway daemon.
+//! `autonomics serve` — the resident backend gateway daemon.
 //!
-//! - `tui serve` — run in the foreground (logs to stderr + state-dir file;
+//! - `autonomics serve` — run in the foreground (logs to stderr + state-dir file;
 //!   Ctrl+C stops it gracefully);
-//! - `tui serve --daemon` — detached mode, spawned by
+//! - `autonomics serve --daemon` — detached mode, spawned by
 //!   `gateway::manager::ensure_running` (null stdio, own process group,
 //!   logs to the state-dir file only);
-//! - `tui serve status` / `tui serve stop` — inspect / gracefully stop a
+//! - `autonomics serve status` / `autonomics serve stop` — inspect / gracefully stop a
 //!   running daemon.
 
 use clap::Subcommand;

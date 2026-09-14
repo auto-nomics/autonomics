@@ -90,11 +90,11 @@ impl App {
 
         // Thin-client exit: restore the terminal and disconnect. Agents
         // keep running in the gateway daemon — that is the point of the
-        // resident-backend architecture; `tui serve stop` is the only
+        // resident-backend architecture; `autonomics serve stop` is the only
         // thing that shuts them down.
         let _ = restore_terminal();
 
-        eprintln!("Gateway daemon 仍在后台运行（agents 未受影响）；`tui serve stop` 可停止。");
+        eprintln!("Gateway daemon 仍在后台运行（agents 未受影响）；`autonomics serve stop` 可停止。");
 
         result?;
         Ok(())

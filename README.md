@@ -25,7 +25,7 @@ Autonomics is not a general-purpose chat application, a notebook replacement bui
 ## Harness Architecture
 
 ```text
-Ratatui TUI (thin client)  ──REST/SSE──▶  gateway daemon (`tui serve`)
+Ratatui TUI (thin client)  ──REST/SSE──▶  gateway daemon (`autonomics serve`)
         |                                      |
         |                                      v
         └──────────── events ────────── RuntimeHost
@@ -82,7 +82,7 @@ The default `data-engine` build enables all node-bundle Cargo features. A librar
 
 ```text
 autonomics/
-├── apps/tui/                     Terminal application and CLI subcommands
+├── apps/autonomics/                     Terminal application and CLI subcommands
 ├── crates/
 │   ├── agentik-*/                LLM SDK, types, proc macros, runtime, networking
 │   ├── dag-core/                 DAG traits, registry, scheduler, and codegen
@@ -122,25 +122,25 @@ Requirements:
 ```bash
 git clone --recurse-submodules <repository-url>
 cd autonomics
-cargo run -p tui
+cargo run -p autonomics
 ```
 
 The first full workspace build is large. If the default target directory is unsuitable, set `CARGO_TARGET_DIR=/path/to/target`.
 
-The workspace binary is named `tui`. After installing or copying it as `autonomics-tui`, the same CLI is available as:
+The workspace binary is named `tui`. After installing or copying it as `autonomics`, the same CLI is available as:
 
 ```bash
-autonomics-tui tui
-autonomics-tui kms
-autonomics-tui cache refresh-opengwas
-autonomics-tui bib list
+autonomics tui
+autonomics kms
+autonomics cache refresh-opengwas
+autonomics bib list
 ```
 
 With Cargo, pass the subcommand after `--`; for example:
 
 ```bash
-cargo run -p tui -- cache refresh-opengwas
-cargo run -p tui -- bib list
+cargo run -p autonomics -- cache refresh-opengwas
+cargo run -p autonomics -- bib list
 ```
 
 ### Configure the runtime

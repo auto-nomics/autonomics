@@ -1,4 +1,4 @@
-//! The gateway client used by every Rust frontend (the TUI, `tui serve
+//! The gateway client used by every Rust frontend (the TUI, `autonomics serve
 //! stop`, the future headless gateway runner, the desktop shell).
 //!
 //! Two layers:

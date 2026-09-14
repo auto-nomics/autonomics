@@ -1,4 +1,4 @@
-# Autonomics TUI（`autonomics-tui`）
+# Autonomics TUI（`autonomics`）
 
 [English](tui.md) | [中文](tui_zh.md)
 
@@ -25,24 +25,24 @@ Autonomics 智能体平台的交互式终端界面——通过一个基于 `rata
 
 ```bash
 # 构建（在工作区根目录）
-cargo build -p tui
+cargo build -p autonomics
 
 # 启动交互式 TUI（默认子命令）
-cargo run -p tui
+cargo run -p autonomics
 # …或安装二进制后
-autonomics-tui
+autonomics
 
 # 指定 TUI 配置文件
-autonomics-tui tui --config /path/to/config.toml
+autonomics tui --config /path/to/config.toml
 ```
 
 工作区中的二进制名为 `tui`；如需使用下文所示的 CLI 名称，可安装/拷贝为
-`autonomics-tui`。两者指向同一个构件。
+`autonomics`。两者指向同一个构件。
 
 ## CLI 总览
 
 ```
-autonomics-tui [OPTIONS] [COMMAND]
+autonomics [OPTIONS] [COMMAND]
 
 Commands:
   tui     启动交互式 TUI（无子命令时的默认行为）
@@ -167,7 +167,7 @@ Agent 标签页有两种输入模式——**浏览模式**（默认）和**输�
 管理 OpenGWAS `gwasinfo` 的本地 SQLite 缓存。
 
 ```
-autonomics-tui cache <ACTION>
+autonomics cache <ACTION>
 
 Actions:
   refresh-opengwas   从远程 API 重新拉取 OpenGWAS gwasinfo 目录
@@ -177,7 +177,7 @@ Actions:
 **刷新**
 
 ```bash
-autonomics-tui cache refresh-opengwas [--show-cache-path]
+autonomics cache refresh-opengwas [--show-cache-path]
 ```
 
 拉取完整目录并覆盖 SQLite 快照。需要设置 `OPENGWAS_TOKEN`。
@@ -185,7 +185,7 @@ autonomics-tui cache refresh-opengwas [--show-cache-path]
 **清除**
 
 ```bash
-autonomics-tui cache clear-opengwas [-y]
+autonomics cache clear-opengwas [-y]
 ```
 
 删除缓存文件。下一次 TUI 会话中的查询将触发全新拉取。除非传入 `-y`，否则会
@@ -204,8 +204,8 @@ autonomics-tui cache clear-opengwas [-y]
 启动 KMS 专用树浏览器，默认读取 runtime 的 `agent.db`：
 
 ```bash
-autonomics-tui kms
-autonomics-tui kms --agent-db /path/to/agent.db
+autonomics kms
+autonomics kms --agent-db /path/to/agent.db
 ```
 
 布局：
@@ -234,7 +234,7 @@ autonomics-tui kms --agent-db /path/to/agent.db
 本地文献库管理。所有子命令均接受 `--db <PATH>`（默认 `bib.db`）。
 
 ```
-autonomics-tui bib [OPTIONS] <ACTION>
+autonomics bib [OPTIONS] <ACTION>
 
 Actions:
   upload    上传 PDF（或其他文档）作为文章全文
@@ -247,7 +247,7 @@ Actions:
 ### `upload` — 上传全文
 
 ```bash
-autonomics-tui bib upload \
+autonomics bib upload \
   --pdf <PATH> \
   --article-id <ID> \
   [--collection-id <CID>]
@@ -262,7 +262,7 @@ autonomics-tui bib upload \
 ### `requests` — 待处理全文请求
 
 ```bash
-autonomics-tui bib requests [--collection-id <CID>]
+autonomics bib requests [--collection-id <CID>]
 ```
 
 列出所有 `fetch_status = fulltext_requested` 的文章。输出包含文章 ID、标题、
@@ -271,7 +271,7 @@ DOI、年份、所属集合及备注。
 ### `info` — 文章详情
 
 ```bash
-autonomics-tui bib info --article-id <ID>
+autonomics bib info --article-id <ID>
 ```
 
 打印文章的书目元数据（标题、期刊、年份、DOI），以及——若已上传全文——其格式、
@@ -280,7 +280,7 @@ autonomics-tui bib info --article-id <ID>
 ### `list` — 搜索 / 列出文献库
 
 ```bash
-autonomics-tui bib list [--query <关键词>] [--limit <N>]
+autonomics bib list [--query <关键词>] [--limit <N>]
 ```
 
 `--query` 匹配标题和摘要。默认上限 50 条（最大 500）。
@@ -288,7 +288,7 @@ autonomics-tui bib list [--query <关键词>] [--limit <N>]
 ### `export` — 引用导出
 
 ```bash
-autonomics-tui bib export \
+autonomics bib export \
   --format <bibtex|ris|markdown|csl_json> \
   [--collection-id <CID>] \
   [--output <PATH>] \
@@ -314,7 +314,7 @@ stdout。
 |------|------|
 | `phloem.db` | TUI 配置数据库（`providers`、`models`、`settings` 表） |
 | `bib.db` | 文献库（文章、集合、全文记录） |
-| `logs/autonomics-tui.log.<日期>` | 按日轮转的 tracing 日志 |
+| `logs/autonomics.log.<日期>` | 按日轮转的 tracing 日志 |
 
 ## 架构说明
 

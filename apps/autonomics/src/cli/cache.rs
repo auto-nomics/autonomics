@@ -1,4 +1,4 @@
-//! CLI definitions for the `autonomics-tui cache ...` subcommand tree.
+//! CLI definitions for the `autonomics cache ...` subcommand tree.
 
 use clap::{Args, Subcommand};
 
@@ -8,7 +8,7 @@ pub struct CacheArgs {
     pub action: CacheAction,
 }
 
-/// Subcommands under `autonomics-tui cache ...`.
+/// Subcommands under `autonomics cache ...`.
 #[derive(Debug, Subcommand)]
 pub enum CacheAction {
     /// Re-fetch the OpenGWAS gwasinfo catalog from the remote API and

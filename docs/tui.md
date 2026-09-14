@@ -1,4 +1,4 @@
-# Autonomics TUI (`autonomics-tui`)
+# Autonomics TUI (`autonomics`)
 
 [English](tui.md) | [中文](tui_zh.md)
 
@@ -31,24 +31,24 @@ bibliography library, all from a single `ratatui`-based binary.
 
 ```bash
 # Build (from workspace root)
-cargo build -p tui
+cargo build -p autonomics
 
 # Launch the interactive TUI (default subcommand)
-cargo run -p tui
+cargo run -p autonomics
 # …or after installing the binary
-autonomics-tui
+autonomics
 
 # Pass a TUI configuration file
-autonomics-tui tui --config /path/to/config.toml
+autonomics tui --config /path/to/config.toml
 ```
 
-The binary name in the workspace is `tui`; install/copy it as `autonomics-tui` if
+The binary name in the workspace is `tui`; install/copy it as `autonomics` if
 you want the CLI name shown below. Both names refer to the same artifact.
 
 ## CLI overview
 
 ```
-autonomics-tui [OPTIONS] [COMMAND]
+autonomics [OPTIONS] [COMMAND]
 
 Commands:
   tui     Launch the interactive TUI (default when no subcommand is given)
@@ -66,20 +66,20 @@ Options:
 
 ## Architecture: thin client + resident gateway
 
-The TUI is a thin client. A single resident daemon — `tui serve` — owns the
+The TUI is a thin client. A single resident daemon — `autonomics serve` — owns the
 `RuntimeHost`, the app/model databases, and the local HTTP API; every
 frontend (the TUI today; web/desktop later) connects to it over
 REST + SSE. Quitting the TUI does **not** stop agents: they keep running in
 the daemon, and reopening the TUI rehydrates sessions and transcripts.
 
 ```bash
-autonomics-tui serve          # run the daemon in the foreground
-autonomics-tui serve status   # is it running? (pid, uptime, agent count)
-autonomics-tui serve stop     # graceful shutdown (stops agents)
+autonomics serve          # run the daemon in the foreground
+autonomics serve status   # is it running? (pid, uptime, agent count)
+autonomics serve stop     # graceful shutdown (stops agents)
 ```
 
-Launching the TUI auto-spawns `tui serve --daemon` when no daemon is
-running; `tui run` submits one-shot prompts to the same daemon
+Launching the TUI auto-spawns `autonomics serve --daemon` when no daemon is
+running; `autonomics run` submits one-shot prompts to the same daemon
 (`--ephemeral` keeps the in-process path for benchmark isolation). Full
 protocol and design: `docs/design/gateway-architecture.md`.
 
@@ -89,8 +89,8 @@ Launch the dedicated knowledge-tree browser using the runtime's default
 `agent.db`:
 
 ```bash
-autonomics-tui kms
-autonomics-tui kms --agent-db /path/to/agent.db
+autonomics kms
+autonomics kms --agent-db /path/to/agent.db
 ```
 
 Layout:
@@ -228,7 +228,7 @@ with no restart.
 Manages the on-disk OpenGWAS `gwasinfo` SQLite cache.
 
 ```
-autonomics-tui cache <ACTION>
+autonomics cache <ACTION>
 
 Actions:
   refresh-opengwas   Re-fetch the OpenGWAS gwasinfo catalog from the remote API
@@ -238,7 +238,7 @@ Actions:
 **Refresh**
 
 ```bash
-autonomics-tui cache refresh-opengwas [--show-cache-path]
+autonomics cache refresh-opengwas [--show-cache-path]
 ```
 
 Fetches the full catalogue and overwrites the SQLite snapshot. Requires
@@ -247,7 +247,7 @@ Fetches the full catalogue and overwrites the SQLite snapshot. Requires
 **Clear**
 
 ```bash
-autonomics-tui cache clear-opengwas [-y]
+autonomics cache clear-opengwas [-y]
 ```
 
 Deletes the cache file. The next query in a TUI session triggers a fresh fetch.
@@ -267,7 +267,7 @@ Local bibliography library management. All subcommands accept `--db <PATH>`
 (default `bib.db`).
 
 ```
-autonomics-tui bib [OPTIONS] <ACTION>
+autonomics bib [OPTIONS] <ACTION>
 
 Actions:
   upload    Upload a PDF (or other document) as the full text for an article
@@ -280,7 +280,7 @@ Actions:
 ### `upload` — upload full text
 
 ```bash
-autonomics-tui bib upload \
+autonomics bib upload \
   --pdf <PATH> \
   --article-id <ID> \
   [--collection-id <CID>]
@@ -297,7 +297,7 @@ remains downloadable and the text column is left empty. If `--collection-id` is 
 ### `requests` — pending full-text requests
 
 ```bash
-autonomics-tui bib requests [--collection-id <CID>]
+autonomics bib requests [--collection-id <CID>]
 ```
 
 Lists all articles with `fetch_status = fulltext_requested`. Output includes
@@ -306,7 +306,7 @@ article ID, title, DOI, year, collection, and note.
 ### `info` — article detail
 
 ```bash
-autonomics-tui bib info --article-id <ID>
+autonomics bib info --article-id <ID>
 ```
 
 Prints the article's bibliographic metadata (title, journal, year, DOI) and —
@@ -316,7 +316,7 @@ a 200-character text preview.
 ### `list` — search / list the library
 
 ```bash
-autonomics-tui bib list [--query <KEYWORDS>] [--limit <N>]
+autonomics bib list [--query <KEYWORDS>] [--limit <N>]
 ```
 
 `--query` matches title + abstract. Default limit 50 (max 500).
@@ -324,7 +324,7 @@ autonomics-tui bib list [--query <KEYWORDS>] [--limit <N>]
 ### `export` — citation export
 
 ```bash
-autonomics-tui bib export \
+autonomics bib export \
   --format <bibtex|ris|markdown|csl_json> \
   [--collection-id <CID>] \
   [--output <PATH>] \
@@ -350,7 +350,7 @@ citations are written to stdout.
 |------|----------|
 | `phloem.db` | TUI configuration database (`providers`, `models`, `settings` tables) |
 | `bib.db` | Bibliography library (articles, collections, full-text records) |
-| `logs/autonomics-tui.log.<date>` | Daily-rotated tracing log |
+| `logs/autonomics.log.<date>` | Daily-rotated tracing log |
 
 ## Architecture notes
 

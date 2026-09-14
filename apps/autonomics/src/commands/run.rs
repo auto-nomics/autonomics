@@ -78,7 +78,7 @@ pub fn run_headless(args: RunArgs) -> color_eyre::Result<()> {
                 {
                     eprintln!(
                         "note: the gateway daemon currently owns the state dir ({}); \
-                         stop it (`tui serve stop`) or drop --ephemeral to run through it",
+                         stop it (`autonomics serve stop`) or drop --ephemeral to run through it",
                         path.display()
                     );
                 }

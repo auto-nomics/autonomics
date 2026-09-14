@@ -25,7 +25,7 @@ Autonomics 不是通用聊天应用，不是围绕自由脚本的 notebook 替�
 ## Harness 架构
 
 ```text
-Ratatui TUI(瘦客户端)──REST/SSE──▶  gateway daemon(`tui serve`)
+Ratatui TUI(瘦客户端)──REST/SSE──▶  gateway daemon(`autonomics serve`)
         |                                     |
         |                                     v
         └──────────── events ────────── RuntimeHost
@@ -82,7 +82,7 @@ Node registry + DAG scheduler
 
 ```text
 autonomics/
-├── apps/tui/                     终端应用和 CLI 子命令
+├── apps/autonomics/                     终端应用和 CLI 子命令
 ├── crates/
 │   ├── agentik-*/                LLM SDK、类型、过程宏、运行时与网络
 │   ├── dag-core/                 DAG trait、注册表、调度器和代码生成
@@ -122,25 +122,25 @@ autonomics/
 ```bash
 git clone --recurse-submodules <repository-url>
 cd autonomics
-cargo run -p tui
+cargo run -p autonomics
 ```
 
 首次完整构建较大。如果默认 target 目录不合适，设置 `CARGO_TARGET_DIR=/path/to/target`。
 
-工作空间二进制名为 `tui`。安装或复制为 `autonomics-tui` 后，可以使用：
+工作空间二进制名为 `tui`。安装或复制为 `autonomics` 后，可以使用：
 
 ```bash
-autonomics-tui tui
-autonomics-tui kms
-autonomics-tui cache refresh-opengwas
-autonomics-tui bib list
+autonomics tui
+autonomics kms
+autonomics cache refresh-opengwas
+autonomics bib list
 ```
 
 通过 Cargo 运行时，子命令放在 `--` 之后，例如：
 
 ```bash
-cargo run -p tui -- cache refresh-opengwas
-cargo run -p tui -- bib list
+cargo run -p autonomics -- cache refresh-opengwas
+cargo run -p autonomics -- bib list
 ```
 
 ### 配置运行时
