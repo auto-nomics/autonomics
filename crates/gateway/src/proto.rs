@@ -191,6 +191,18 @@ pub struct AgentModelInfoView {
     pub context_length: u64,
 }
 
+/// `GET /storage/agents/{id}/sessions` — persisted session metadata.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StoredSession {
+    pub id: Uuid,
+    pub title: Option<String>,
+    /// Unix epoch milliseconds.
+    pub created_at: i64,
+    /// Unix epoch milliseconds; equals `created_at` while still active.
+    pub last_active: i64,
+    pub active: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateSessionRequest {
     pub title: Option<String>,

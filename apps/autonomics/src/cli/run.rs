@@ -11,6 +11,11 @@ pub struct RunArgs {
     #[arg(value_name = "PROMPT")]
     pub prompt: Option<String>,
 
+    /// List persisted sessions for the stable headless agent instead of
+    /// running a prompt. Combine with --json for machine-readable output.
+    #[arg(long)]
+    pub list_sessions: bool,
+
     /// Print events to stdout as JSONL, one per line. Progress and
     /// warnings still go to stderr.
     #[arg(long)]

@@ -62,6 +62,9 @@ pub trait OutputProcessor {
 
     /// The terminal outcome observed in the stream.
     fn outcome(&self) -> Outcome;
+
+    /// Whether an output target failed and the run should stop streaming.
+    fn is_broken(&self) -> bool;
 }
 
 /// State shared by both processors: what the stream said, independent of
@@ -70,6 +73,7 @@ pub trait OutputProcessor {
 struct Tracker {
     last_message: Option<String>,
     outcome: Outcome,
+    write_error: Option<std::io::ErrorKind>,
 }
 
 impl Tracker {
@@ -113,7 +117,9 @@ impl<P: Write, O: Write> HumanProcessor<P, O> {
     }
 
     fn say(&mut self, line: &str) {
-        let _ = writeln!(self.progress, "{line}");
+        if let Err(error) = writeln!(self.progress, "{line}") {
+            self.tracker.write_error = Some(error.kind());
+        }
     }
 
     /// Recover the writers (for tests asserting on rendered bytes).
@@ -187,6 +193,10 @@ impl<P: Write, O: Write> OutputProcessor for HumanProcessor<P, O> {
     fn outcome(&self) -> Outcome {
         self.tracker.outcome
     }
+
+    fn is_broken(&self) -> bool {
+        self.tracker.write_error.is_some()
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -216,8 +226,12 @@ impl<W: Write> JsonlProcessor<W> {
 impl<W: Write> OutputProcessor for JsonlProcessor<W> {
     fn process(&mut self, event: &RunEvent) {
         self.tracker.observe(event);
-        if serde_json::to_writer(&mut self.writer, event).is_ok() {
-            let _ = self.writer.write_all(b"\n");
+        match serde_json::to_writer(&mut self.writer, event)
+            .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidData))
+            .and_then(|()| self.writer.write_all(b"\n"))
+        {
+            Ok(()) => {}
+            Err(error) => self.tracker.write_error = Some(error.kind()),
         }
     }
 
@@ -231,6 +245,10 @@ impl<W: Write> OutputProcessor for JsonlProcessor<W> {
 
     fn outcome(&self) -> Outcome {
         self.tracker.outcome
+    }
+
+    fn is_broken(&self) -> bool {
+        self.tracker.write_error.is_some()
     }
 }
 
@@ -285,6 +303,7 @@ mod tests {
 
     fn ended(status: RunStatus) -> RunEvent {
         RunEvent::RunEnded(RunEndedEvent {
+            run_id: Uuid::nil(),
             status,
             wall_time_secs: 0.1,
             usage: None,
@@ -297,6 +316,7 @@ mod tests {
     fn happy_flow() -> Vec<RunEvent> {
         vec![
             RunEvent::RunStarted(RunStartedEvent {
+                run_id: Uuid::nil(),
                 agent_id: Uuid::nil(),
                 session_id: Uuid::nil(),
                 profile: "default".into(),
@@ -372,6 +392,29 @@ mod tests {
         assert_eq!(processor.outcome(), Outcome::Failed);
         let (_, output) = processor.into_parts();
         assert!(output.is_empty());
+    }
+
+    #[test]
+    fn broken_output_is_observable() {
+        struct ClosedPipe;
+
+        impl Write for ClosedPipe {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
+            }
+        }
+
+        let mut jsonl = JsonlProcessor::new(ClosedPipe);
+        jsonl.process(&happy_flow()[0]);
+        assert!(jsonl.is_broken());
+
+        let mut human = HumanProcessor::new(ClosedPipe, ClosedPipe);
+        human.process(&happy_flow()[0]);
+        assert!(human.is_broken());
     }
 
     #[test]

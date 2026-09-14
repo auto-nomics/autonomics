@@ -119,7 +119,18 @@ async fn spawn_chat_turn_and_shutdown_over_the_wire() {
     })
     .await
     .expect("agent + sessions visible in /state");
-    assert!(refreshed.sessions[&path].len() >= 1);
+    assert!(!refreshed.sessions[&path].is_empty());
+
+    let records = client.list_storage_agents().await.unwrap();
+    let record = records
+        .iter()
+        .find(|record| record.name == path)
+        .expect("worker agent record persisted");
+    let stored_sessions = client.list_stored_sessions(record.id).await.unwrap();
+    assert!(
+        stored_sessions.iter().any(|session| session.active),
+        "stored session list includes the live session"
+    );
 
     // Replay: reconnect with Last-Event-ID below the terminal frame and
     // observe the replayed TurnCompleted again (dedup is the client's

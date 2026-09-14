@@ -169,6 +169,7 @@ fn tags_of(jsonl: &str) -> Vec<String> {
 async fn scripted_turn_completes_and_streams_jsonl() {
     let dir = tempfile::tempdir().unwrap();
     let mut config = test_config(&dir);
+    let run_id = config.run_id;
     config.model = Some(scripted_text_model("The answer is 2.", 6, 11));
     config.model_name = Some("mock-model".into());
 
@@ -179,6 +180,7 @@ async fn scripted_turn_completes_and_streams_jsonl() {
         .expect("startup succeeds");
 
     assert_eq!(summary.outcome, Outcome::Completed);
+    assert_eq!(summary.run_id, run_id);
     assert_eq!(summary.last_message.as_deref(), Some("The answer is 2."));
     assert_eq!(summary.turns, 1);
     assert_eq!(summary.agent_path, "/root/headless");
@@ -198,6 +200,7 @@ async fn scripted_turn_completes_and_streams_jsonl() {
     // run.ended carries the terminal status and usage.
     let ended: serde_json::Value = serde_json::from_str(jsonl.lines().last().unwrap()).unwrap();
     assert_eq!(ended["status"], "completed");
+    assert_eq!(ended["run_id"], run_id.to_string());
     assert_eq!(ended["usage"]["output_tokens"], 6);
 }
 
@@ -271,6 +274,20 @@ async fn unknown_profile_is_a_startup_error() {
     assert!(matches!(result, Err(RunError::NoProfile { .. })));
 }
 
+#[tokio::test]
+async fn unknown_session_is_a_startup_error() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let mut config = test_config(&dir);
+    config.model = Some(auth_failure_model());
+    config.session = Some(Uuid::new_v4());
+
+    let mut processor = JsonlProcessor::new(Vec::new());
+    let result = tokio::time::timeout(TEST_TIMEOUT, run_task(config, &mut processor))
+        .await
+        .expect("resolves within timeout");
+    assert!(matches!(result, Err(RunError::SessionSwitch { .. })));
+}
+
 /// A mock model whose requests always fail with a retryable error — the
 /// agent backs off (first sleep: 1s), giving a short run timeout a window
 /// to fire mid-turn.
@@ -303,6 +320,30 @@ async fn timeout_cancels_mid_turn() {
     );
     let ended: serde_json::Value = serde_json::from_str(jsonl.lines().last().unwrap()).unwrap();
     assert_eq!(ended["status"], "cancelled");
+}
+
+#[tokio::test]
+async fn frontend_cancel_cancels_mid_turn() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let mut config = test_config(&dir);
+    config.model = Some(always_retrying_model());
+    config.model_name = Some("mock-model".into());
+
+    let cancel = config.cancel.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        cancel.cancel();
+    });
+
+    let mut processor = JsonlProcessor::new(Vec::new());
+    let summary = tokio::time::timeout(TEST_TIMEOUT, run_task(config, &mut processor))
+        .await
+        .expect("run completes within timeout")
+        .expect("startup succeeds");
+
+    assert_eq!(summary.outcome, Outcome::Cancelled);
+    let jsonl = String::from_utf8(processor.into_parts()).unwrap();
+    assert!(jsonl.contains("run cancelled"), "events: {jsonl}");
 }
 
 #[test]

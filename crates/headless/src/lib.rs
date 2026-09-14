@@ -48,6 +48,7 @@ use processor::OutputProcessor;
 use runtime::{HostEvent, RuntimeConfig, RuntimeHost};
 use serde_json::Value;
 use thiserror::Error;
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use event::{
@@ -68,6 +69,8 @@ const SHUTDOWN_GRACE: Duration = Duration::from_secs(30);
 /// Everything `run_task` needs to execute one prompt.
 #[derive(Clone)]
 pub struct RunTaskConfig {
+    /// Invocation id used by the external event stream and run manifest.
+    pub run_id: Uuid,
     /// The prompt delivered as the single user message of the run.
     pub prompt: String,
     /// Profile path to spawn from; `None` picks the first stored profile.
@@ -93,6 +96,8 @@ pub struct RunTaskConfig {
     pub timeout: Option<Duration>,
     /// Fully resolved runtime configuration (state dir, feature flags, …).
     pub runtime_config: RuntimeConfig,
+    /// Cooperative cancellation requested by the embedding frontend.
+    pub cancel: CancellationToken,
 }
 
 /// Keeps the ephemeral scratch directories alive for the duration of a
@@ -128,6 +133,7 @@ impl RunTaskConfig {
 
     pub fn new(prompt: impl Into<String>, runtime_config: RuntimeConfig) -> Self {
         Self {
+            run_id: Uuid::new_v4(),
             prompt: prompt.into(),
             profile: None,
             agent_name: "headless".to_string(),
@@ -136,6 +142,7 @@ impl RunTaskConfig {
             session: None,
             timeout: None,
             runtime_config,
+            cancel: CancellationToken::new(),
         }
     }
 }
@@ -143,6 +150,7 @@ impl RunTaskConfig {
 /// Terminal outcome of a completed `run_task` invocation.
 #[derive(Debug, Clone)]
 pub struct RunSummary {
+    pub run_id: Uuid,
     pub outcome: processor::Outcome,
     pub agent_path: String,
     /// Resolved profile path the agent ran with.
@@ -171,6 +179,10 @@ pub enum RunError {
     Spawn { message: String },
     #[error("prompt delivery failed: {message}")]
     Send { message: String },
+    #[error("session switch failed for {session}: {message}")]
+    SessionSwitch { session: Uuid, message: String },
+    #[error("run cancelled")]
+    Cancelled,
 }
 
 /// Run one prompt headlessly, streaming translated events into `processor`.
@@ -183,6 +195,9 @@ pub async fn run_task<P: OutputProcessor>(
     processor: &mut P,
 ) -> Result<RunSummary, RunError> {
     let started = Instant::now();
+    if config.cancel.is_cancelled() {
+        return Err(RunError::Cancelled);
+    }
     let mut host = RuntimeHost::open(&config.runtime_config).await?;
 
     // ── Profile bootstrap (same sequence as the TUI startup) ────────
@@ -226,12 +241,12 @@ pub async fn run_task<P: OutputProcessor>(
     // host-event channel during command processing; recover it, best
     // effort with a deadline.
     let agent_id = match tokio::time::timeout(Duration::from_secs(2), async {
-        while let Some(event) = host.recv_event().await {
-            if let HostEvent::AgentRegistered { info, .. } = event {
+        loop {
+            if let Some(HostEvent::AgentRegistered { info, .. }) = host.try_recv_event() {
                 return info.agent_id.unwrap_or_default();
             }
+            host.recv_and_process_command().await;
         }
-        Uuid::nil()
     })
     .await
     {
@@ -249,12 +264,13 @@ pub async fn run_task<P: OutputProcessor>(
     if let Some(session) = config.session {
         host.control().switch_session(&agent_path, session);
         host.try_process_commands();
+        let mut activated = false;
         let switch_deadline = Instant::now() + Duration::from_secs(2);
         while Instant::now() < switch_deadline {
             host.try_process_commands();
             match tokio::time::timeout(Duration::from_millis(20), host.recv_any()).await {
                 Ok(Some(tagged)) => {
-                    let activated = matches!(
+                    activated = matches!(
                         &tagged.1,
                         AgentEvent::SessionActivated { id, .. } if *id == session
                     );
@@ -266,6 +282,12 @@ pub async fn run_task<P: OutputProcessor>(
                 Ok(None) => break,
                 Err(_) => {}
             }
+        }
+        if !activated {
+            return Err(RunError::SessionSwitch {
+                session,
+                message: "SessionActivated was not observed before delivery deadline".into(),
+            });
         }
     }
 
@@ -292,6 +314,7 @@ pub async fn run_task<P: OutputProcessor>(
 
     // ── Event loop ───────────────────────────────────────────────────
     processor.process(&RunEvent::RunStarted(RunStartedEvent {
+        run_id: config.run_id,
         agent_id,
         // Bound at the first turn.started; nil until then (single-turn
         // runs have exactly one session, created by the agent itself).
@@ -303,6 +326,18 @@ pub async fn run_task<P: OutputProcessor>(
     let mut translation = TranslationState::default();
     let deadline = config.timeout.map(|budget| started + budget);
     let terminal = loop {
+        if config.cancel.is_cancelled() {
+            host.control().cancel_agent(&agent_path);
+            host.try_process_commands();
+            translation.terminal = Some(Terminal::Cancelled);
+            if !processor.is_broken() {
+                processor.process(&RunEvent::TurnFailed(TurnFailedEvent {
+                    turn_id: translation.current_turn_id,
+                    message: "run cancelled".to_string(),
+                }));
+            }
+            break Terminal::Cancelled;
+        }
         if let Some(deadline) = deadline
             && Instant::now() >= deadline
         {
@@ -315,10 +350,12 @@ pub async fn run_task<P: OutputProcessor>(
             host.control().cancel_agent(&agent_path);
             host.try_process_commands();
             translation.terminal = Some(Terminal::Cancelled);
-            processor.process(&RunEvent::TurnFailed(TurnFailedEvent {
-                turn_id: translation.current_turn_id,
-                message: format!("run timed out after {:.1}s", budget.as_secs_f64()),
-            }));
+            if !processor.is_broken() {
+                processor.process(&RunEvent::TurnFailed(TurnFailedEvent {
+                    turn_id: translation.current_turn_id,
+                    message: format!("run timed out after {:.1}s", budget.as_secs_f64()),
+                }));
+            }
             break Terminal::Cancelled;
         }
         host.try_process_commands();
@@ -330,6 +367,9 @@ pub async fn run_task<P: OutputProcessor>(
             Ok(Some((name, event))) => {
                 for run_event in translation.translate(&name, event) {
                     processor.process(&run_event);
+                    if processor.is_broken() {
+                        config.cancel.cancel();
+                    }
                 }
                 if translation.terminal.is_some() {
                     // Drain events already queued behind the terminal one
@@ -337,6 +377,9 @@ pub async fn run_task<P: OutputProcessor>(
                     while let Some((name, event)) = host.try_recv_any() {
                         for run_event in translation.translate(&name, event) {
                             processor.process(&run_event);
+                            if processor.is_broken() {
+                                config.cancel.cancel();
+                            }
                         }
                     }
                     break translation.terminal.take().expect("checked above");
@@ -361,13 +404,16 @@ pub async fn run_task<P: OutputProcessor>(
     let usage = (translation.turns > 0).then_some(translation.run_usage);
     let turns = translation.turns;
     let tool_calls = translation.tool_calls;
-    processor.process(&RunEvent::RunEnded(RunEndedEvent {
-        status,
-        wall_time_secs,
-        usage,
-        turns,
-        tool_calls,
-    }));
+    if !processor.is_broken() {
+        processor.process(&RunEvent::RunEnded(RunEndedEvent {
+            run_id: config.run_id,
+            status,
+            wall_time_secs,
+            usage,
+            turns,
+            tool_calls,
+        }));
+    }
     processor.finish();
 
     // Belt and braces: the cooperative cancel (timeout path) and the
@@ -381,6 +427,7 @@ pub async fn run_task<P: OutputProcessor>(
     }
 
     Ok(RunSummary {
+        run_id: config.run_id,
         profile: profile.path.clone(),
         outcome: match terminal {
             Terminal::Completed => processor::Outcome::Completed,

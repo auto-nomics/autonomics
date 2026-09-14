@@ -381,6 +381,11 @@ impl GatewayClient {
         self.get("/storage/agents").await
     }
 
+    pub async fn list_stored_sessions(&self, agent_id: Uuid) -> Result<Vec<StoredSession>> {
+        self.get(&format!("/storage/agents/{agent_id}/sessions"))
+            .await
+    }
+
     pub async fn delete_agent_record(&self, agent_id: Uuid) -> Result<()> {
         self.fire(
             reqwest::Method::DELETE,

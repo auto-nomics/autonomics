@@ -111,6 +111,7 @@ pub fn api_router(state: GatewayState) -> Router {
             "/storage/agents/{id}",
             patch(rename_storage_agent).delete(delete_storage_agent),
         )
+        .route("/storage/agents/{id}/sessions", get(list_stored_sessions))
         .route(
             "/agents/{agent_id}/sessions/{session_id}/history",
             get(get_history),
@@ -501,6 +502,30 @@ async fn rename_storage_agent(
         .await
         .map_err(|e| GatewayError::Status(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn list_stored_sessions(
+    State(state): State<GatewayState>,
+    Path(id): Path<Uuid>,
+) -> GatewayResult<Json<Vec<StoredSession>>> {
+    let records = state
+        .infra
+        .storage
+        .list_session_records(id)
+        .await
+        .map_err(|e| GatewayError::Status(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(
+        records
+            .into_iter()
+            .map(|record| StoredSession {
+                id: record.session_id,
+                title: record.title,
+                created_at: record.started_at,
+                last_active: record.ended_at.unwrap_or(record.started_at),
+                active: record.ended_at.is_none(),
+            })
+            .collect(),
+    ))
 }
 
 /// Merged session history exactly as the TUI built it in-process: the

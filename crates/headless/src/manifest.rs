@@ -110,6 +110,7 @@ mod tests {
 
     fn summary() -> RunSummary {
         RunSummary {
+            run_id: Uuid::nil(),
             outcome: Outcome::Completed,
             agent_path: "/root/headless".into(),
             profile: "researcher".into(),

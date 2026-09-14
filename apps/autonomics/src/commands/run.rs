@@ -18,10 +18,12 @@ use std::io::{IsTerminal, Read, Write};
 use std::path::Path;
 use std::time::Duration;
 
+use headless::gateway_runner::list_sessions_via_gateway;
 use headless::gateway_runner::{GatewayRunConfig, run_via_gateway};
 use headless::processor::{HumanProcessor, JsonlProcessor, OutputProcessor};
 use headless::{RunError, RunSummary, RunTaskConfig, run_task};
 use rusqlite::Connection;
+use tokio_util::sync::CancellationToken;
 
 use crate::cli::RunArgs;
 
@@ -31,6 +33,13 @@ const EXIT_CANCELLED: i32 = 2;
 const EXIT_STARTUP: i32 = 3;
 
 pub fn run_headless(args: RunArgs) -> color_eyre::Result<()> {
+    if let Err(message) = validate_run_args(&args) {
+        eprintln!("error: {message}");
+        std::process::exit(EXIT_STARTUP);
+    }
+    if args.list_sessions {
+        return print_headless_sessions(&args);
+    }
     let prompt = match resolve_prompt(args.prompt.clone()) {
         Ok(prompt) => prompt,
         Err(message) => {
@@ -39,23 +48,34 @@ pub fn run_headless(args: RunArgs) -> color_eyre::Result<()> {
         }
     };
     let prompt_hash = headless::manifest::prompt_hash(&prompt);
+    let run_id = uuid::Uuid::new_v4();
 
     let runtime = tokio::runtime::Runtime::new()
         .map_err(|e| color_eyre::eyre::eyre!("failed to build tokio runtime: {e}"))?;
+    let cancel = CancellationToken::new();
+    let ctrl_cancel = cancel.clone();
+    let _ctrl_task = runtime.spawn(async move {
+        loop {
+            if tokio::signal::ctrl_c().await.is_err() {
+                break;
+            }
+            ctrl_cancel.cancel();
+        }
+    });
     runtime.block_on(async {
         let (summary, model_used) = if args.ephemeral {
-            run_in_process(&args, prompt).await
+            run_in_process(&args, prompt, run_id, cancel).await
         } else {
-            run_on_gateway(&args, prompt).await
+            run_on_gateway(&args, prompt, run_id, cancel).await
         };
 
         match summary {
             Ok(summary) => {
                 if let Some(path) = args.manifest.as_deref() {
                     let meta = headless::manifest::ManifestMeta {
-                        run_id: uuid::Uuid::new_v4(),
+                        run_id,
                         prompt_hash,
-                        profile: args.profile.clone().unwrap_or_default(),
+                        profile: summary.profile.clone(),
                         model: model_used.unwrap_or_default(),
                     };
                     let manifest = headless::manifest::RunManifest::new(meta, &summary);
@@ -82,6 +102,9 @@ pub fn run_headless(args: RunArgs) -> color_eyre::Result<()> {
                         path.display()
                     );
                 }
+                if matches!(error, RunError::Cancelled) {
+                    std::process::exit(EXIT_CANCELLED);
+                }
                 std::process::exit(EXIT_STARTUP);
             }
         }
@@ -94,13 +117,17 @@ pub fn run_headless(args: RunArgs) -> color_eyre::Result<()> {
 async fn run_on_gateway(
     args: &RunArgs,
     prompt: String,
+    run_id: uuid::Uuid,
+    cancel: CancellationToken,
 ) -> (Result<RunSummary, RunError>, Option<String>) {
     let config = GatewayRunConfig {
+        run_id,
         prompt,
         profile: args.profile.clone(),
         model: args.model.clone(),
         session: args.session,
         timeout: args.timeout.map(Duration::from_secs),
+        cancel,
     };
 
     let result = if args.json {
@@ -154,6 +181,8 @@ async fn daemon_active_model_name() -> Option<String> {
 async fn run_in_process(
     args: &RunArgs,
     prompt: String,
+    run_id: uuid::Uuid,
+    cancel: CancellationToken,
 ) -> (Result<RunSummary, RunError>, Option<String>) {
     let runtime_config = gateway::RuntimeConfig::default();
     if let Some(parent) = runtime_config.app_db_path.parent() {
@@ -182,11 +211,13 @@ async fn run_in_process(
     };
 
     let (mut config, _guard) = RunTaskConfig::ephemeral(prompt);
+    config.run_id = run_id;
     config.profile = args.profile.clone();
     config.model = Some(model);
     config.model_name = Some(model_name.clone());
     config.timeout = args.timeout.map(Duration::from_secs);
     config.session = args.session;
+    config.cancel = cancel;
 
     let result = if args.json {
         let mut processor = JsonlProcessor::new(std::io::stdout());
@@ -206,6 +237,96 @@ async fn run_in_process(
         result
     };
     (result, Some(model_name))
+}
+
+fn validate_run_args(args: &RunArgs) -> Result<(), String> {
+    if args.list_sessions {
+        if args.prompt.is_some()
+            || args.session.is_some()
+            || args.ephemeral
+            || args.timeout.is_some()
+            || args.output_last_message.is_some()
+            || args.manifest.is_some()
+        {
+            return Err("--list-sessions cannot be combined with run-specific options".to_string());
+        }
+        return Ok(());
+    }
+    if args.ephemeral && args.session.is_some() {
+        return Err(
+            "--session cannot resume a previous run in an --ephemeral state dir; \
+                    drop one of the two flags"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn print_headless_sessions(args: &RunArgs) -> color_eyre::Result<()> {
+    let runtime = tokio::runtime::Runtime::new()
+        .map_err(|e| color_eyre::eyre::eyre!("failed to build tokio runtime: {e}"))?;
+    let result = runtime.block_on(list_sessions_via_gateway(args.profile.clone()));
+    let mut sessions = match result {
+        Ok(sessions) => sessions,
+        Err(error) => {
+            eprintln!("error: {error}");
+            std::process::exit(EXIT_STARTUP);
+        }
+    };
+    sessions.sort_by(|a, b| b.last_active.cmp(&a.last_active).then(a.id.cmp(&b.id)));
+
+    if args.json {
+        let output = serde_json::to_vec(&sessions)
+            .map_err(|e| color_eyre::eyre::eyre!("serialize sessions: {e}"))?;
+        std::io::stdout().write_all(&output)?;
+        std::io::stdout().write_all(b"\n")?;
+        return Ok(());
+    }
+
+    for session in sessions {
+        let active = if session.active { "active" } else { "paused" };
+        let timestamp = chrono::DateTime::from_timestamp_millis(session.last_active)
+            .map(|time| time.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+            .unwrap_or_else(|| session.last_active.to_string());
+        let title = session.title.as_deref().unwrap_or("<untitled>");
+        println!("{active}\t{timestamp}\t{}\t{title}", session.id);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_args(prompt: Option<&str>, list_sessions: bool) -> RunArgs {
+        RunArgs {
+            prompt: prompt.map(str::to_string),
+            list_sessions,
+            json: false,
+            output_last_message: None,
+            profile: None,
+            model: None,
+            timeout: None,
+            session: None,
+            ephemeral: false,
+            manifest: None,
+        }
+    }
+
+    #[test]
+    fn ephemeral_cannot_resume_a_discarded_state_dir() {
+        let mut args = test_args(Some("prompt"), false);
+        args.ephemeral = true;
+        args.session = Some(uuid::Uuid::nil());
+        assert!(validate_run_args(&args).is_err());
+    }
+
+    #[test]
+    fn list_sessions_rejects_run_options() {
+        let mut args = test_args(None, true);
+        args.timeout = Some(1);
+        assert!(validate_run_args(&args).is_err());
+    }
 }
 
 /// Assemble the prompt, following codex exec's stdin semantics:

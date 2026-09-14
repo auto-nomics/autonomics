@@ -57,6 +57,9 @@ pub enum RunEvent {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RunStartedEvent {
+    /// Invocation id, shared with the optional on-disk run manifest.
+    #[serde(default)]
+    pub run_id: Uuid,
     /// Agent id assigned by the runtime (stable across restarts via storage).
     pub agent_id: Uuid,
     /// Session the run executes in.
@@ -91,6 +94,9 @@ pub struct TurnFailedEvent {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RunEndedEvent {
+    /// Invocation id from `run.started`.
+    #[serde(default)]
+    pub run_id: Uuid,
     pub status: RunStatus,
     pub wall_time_secs: f64,
     /// Cumulative usage across all turns, when any was reported.
@@ -238,6 +244,7 @@ mod tests {
     fn every_variant_round_trips() {
         let events = vec![
             RunEvent::RunStarted(RunStartedEvent {
+                run_id: Uuid::nil(),
                 agent_id: Uuid::nil(),
                 session_id: Uuid::nil(),
                 profile: "default".into(),
@@ -296,6 +303,7 @@ mod tests {
                 message: "compacting".into(),
             }),
             RunEvent::RunEnded(RunEndedEvent {
+                run_id: Uuid::nil(),
                 status: RunStatus::Completed,
                 wall_time_secs: 1.5,
                 usage: Some(Usage {

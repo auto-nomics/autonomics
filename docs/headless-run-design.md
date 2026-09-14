@@ -1,6 +1,6 @@
 # Headless 运行模式设计(初步)
 
-状态:**P0/P1 已实现**(feat/headless-mode 分支);**P3-gateway 已实现**(feat/headless-via-gateway 分支)——`autonomics run` 默认经 gateway daemon 执行(`crates/headless::gateway_runner::run_via_gateway`,RunEvent 契约与退出码不变),`--ephemeral` 保留进程内 `run_task`(benchmark 隔离)。CLI:`autonomics run`(--json / -o / --profile / --model / --timeout / --session / --ephemeral / --manifest);退出码 0/1/2/3。剩余:P2 的 --output-schema、多 turn stdin 脚本,P3 的多 agent 网络运行。参考实现:codex-rs `exec` 子命令(`/mnt/disk3/codex/codex-rs/exec`)。
+状态:**P0/P1 已实现**(feat/headless-mode 分支);**P3-gateway 已实现**(feat/headless-via-gateway 分支)——`autonomics run` 默认经 gateway daemon 执行(`crates/headless::gateway_runner::run_via_gateway`,RunEvent 契约与退出码不变),`--ephemeral` 保留进程内 `run_task`(benchmark 隔离)。CLI:`autonomics run`(--json / -o / --profile / --model / --timeout / --session / --ephemeral / --manifest / --list-sessions);退出码 0/1/2/3。RunEvent 与 manifest 通过 `run_id` 关联;Ctrl+C 与输出管道断连会协作取消远端 turn。剩余:P2 的 --output-schema、多 turn stdin 脚本,P3 的多 agent 网络运行。参考实现:codex-rs `exec` 子命令(`/mnt/disk3/codex/codex-rs/exec`)。
 
 ## 0. 背景与目标
 
@@ -113,6 +113,7 @@ autonomics run [OPTIONS] [PROMPT]
   --model <NAME>                     覆盖模型(仅本次运行;默认仍读 settings 表)
   --timeout <SECS>                   整体超时;超时取消,退出码 2
   --manifest <FILE>                  输出 run manifest(§8)
+  --list-sessions                    列出稳定 headless identity 的持久 session
   --ephemeral                        本次运行不落会话持久化(评测 / CI)
   -C, --cwd <DIR>                    工作目录(语义对齐 codex)
 ```
@@ -135,7 +136,7 @@ autonomics run [OPTIONS] [PROMPT]
 
 | RunEvent | 来源(AgentEvent) | payload 要点 |
 |---|---|---|
-| `run.started` | — | 首事件:{agent_id, session_id, profile, model} |
+| `run.started` | — | 首事件:{run_id, agent_id, session_id, profile, model} |
 | `turn.started` | `TurnStarted` | {turn_id} |
 | `item.started` / `item.completed` | `ToolCall` → `ToolResult` | 一次工具调用合并为单 item 生命周期:{id, tool, input, result?, ok?} |
 | `item.delta` | `TextDelta` / `ThinkingDelta` | 仅 `--json` 透传;人读模式在 stderr 流式渲染 |
@@ -145,7 +146,7 @@ autonomics run [OPTIONS] [PROMPT]
 | `notice` | `Compact` / `PlanUpdate` / `RetryableError` / `ToolCallBackground` 等 | 非致命运行时事件,统一 tag 区分 |
 | `turn.completed` | `TurnCompleted{status: Completed}` | {turn_id, usage} |
 | `turn.failed` | `TurnCompleted{status: Failed}` / `Error` | {turn_id, message} |
-| `run.ended` | — | 尾事件:{status, wall_time_secs} |
+| `run.ended` | — | 尾事件:{run_id, status, wall_time_secs, usage, turns, tool_calls} |
 
 终止信号以 `TurnCompleted`(带 turn_id 与三态 status)为权威;`Done` 与
 `LifecycleChanged` 终态仅作交叉校验。`TurnAborted` 映射为 `run.ended{status:
@@ -165,7 +166,9 @@ cancelled}` + 退出码 2。
 ## 6. 终止与超时
 
 - 权威终止:`TurnCompleted`;`is_final_status`(`host.rs:3166`,Completed|Failed)
-  作交叉校验;
+作交叉校验;
+- CLI Ctrl+C 触发协作取消并等待 `run.ended{status: cancelled}`;`--json`
+  输出管道断连同样取消 gateway/进程内 agent,避免消费端退出后继续消耗模型与工具;
 - 超时:`tokio::time::timeout` 包住事件循环;触发 → `handle.cancel()`(协作式
   取消,agent 会发 `TurnAborted`)→ 宽限期(默认 30s)排空事件 →
   `shutdown_all_agents_and_wait`;
@@ -182,6 +185,8 @@ agentik-core storage 已按 agent name 自动恢复并做 WAL replay
 - `--ephemeral`:阶段一用临时 `state_dir` 覆盖 `RuntimeConfig` 实现(顺带解决 CI
   并发隔离);storage 层原生 no-op 写模式留作后续优化;
 - `sessions list` 子命令(枚举历史会话供脚本选取)放 P1。
+- `--list-sessions` 已实现:gateway 直接读取稳定 `/root/headless` agent 的持久
+  session records,不要求模型配置,也不需要先 spawn agent;`--json` 输出数组。
 
 ## 8. Run manifest
 
