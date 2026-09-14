@@ -78,6 +78,9 @@ pub type Result<T> = std::result::Result<T, ClientError>;
 #[derive(Clone)]
 pub struct GatewayClient {
     http: reqwest::Client,
+    /// SSE responses are intentionally long-lived, so they must not use
+    /// `http`'s overall request timeout.
+    sse_http: reqwest::Client,
     base: String,
 }
 
@@ -89,12 +92,20 @@ impl GatewayClient {
                 .map_err(|e| ClientError::Transport(format!("invalid token: {e}")))?;
             headers.insert(reqwest::header::AUTHORIZATION, value);
         }
-        let http = reqwest::Client::builder()
-            .default_headers(headers)
-            .timeout(Duration::from_secs(30))
-            .build()?;
+        let build_client = |timeout: Option<Duration>| -> Result<reqwest::Client> {
+            let mut builder = reqwest::Client::builder()
+                .default_headers(headers.clone())
+                .connect_timeout(Duration::from_secs(10));
+            if let Some(timeout) = timeout {
+                builder = builder.timeout(timeout);
+            }
+            builder.build().map_err(Into::into)
+        };
+        let http = build_client(Some(Duration::from_secs(30)))?;
+        let sse_http = build_client(None)?;
         Ok(Self {
             http,
+            sse_http,
             base: format!("http://{addr}/api/v1"),
         })
     }
@@ -499,9 +510,8 @@ impl GatewayClient {
     /// `seq > snapshot.last_seq`.
     pub async fn connect_events(&self, last_event_id: u64) -> Result<reqwest::Response> {
         let response = self
-            .http
+            .sse_http
             .get(self.url("/events"))
-            .timeout(Duration::from_secs(10))
             .header("last-event-id", last_event_id.to_string())
             .send()
             .await?;
