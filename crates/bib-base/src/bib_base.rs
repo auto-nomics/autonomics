@@ -105,7 +105,11 @@ CREATE TABLE IF NOT EXISTS fulltexts (
     source       TEXT NOT NULL,
     file_hash    TEXT,
     file_size    INTEGER,
-    uploaded_at  TEXT
+    uploaded_at  TEXT,
+    extract_status TEXT,
+    text_format   TEXT,
+    extracted_by  TEXT,
+    extract_error TEXT
 );
 
 CREATE TABLE IF NOT EXISTS search_terms (
@@ -209,6 +213,40 @@ impl BibBase {
         let _write = self.write_gate.lock().await;
         let conn = self.write_conn();
         conn.execute_batch(SCHEMA_SQL).await?;
+
+        // --- fulltexts extraction-tracking columns -----------------------
+        // Databases created before background extraction tracking lack the
+        // four status/provenance columns. `CREATE TABLE IF NOT EXISTS`
+        // cannot add them to an existing table, so detect-and-ALTER here,
+        // then backfill the initial status from text presence: rows with
+        // text are already final; rows without it are failed extractions
+        // that a later re-extract can retry.
+        let mut has_extract_status = false;
+        {
+            let mut rows = conn
+                .query("PRAGMA table_info(fulltexts)", turso::params![])
+                .await?;
+            while let Some(row) = rows.next().await? {
+                if row.get::<String>(1)? == "extract_status" {
+                    has_extract_status = true;
+                }
+            }
+        }
+        if !has_extract_status {
+            conn.execute_batch(
+                "ALTER TABLE fulltexts ADD COLUMN extract_status TEXT;
+                 ALTER TABLE fulltexts ADD COLUMN text_format TEXT;
+                 ALTER TABLE fulltexts ADD COLUMN extracted_by TEXT;
+                 ALTER TABLE fulltexts ADD COLUMN extract_error TEXT;
+                 UPDATE fulltexts SET extract_status = \
+                  CASE WHEN text_content IS NOT NULL AND LENGTH(text_content) > 0 \
+                  THEN 'done' ELSE 'failed' END;
+                 UPDATE fulltexts SET text_format = 'plain' \
+                  WHERE extract_status = 'done';",
+            )
+            .await?;
+        }
+
 
         let mut rows = conn
             .query(

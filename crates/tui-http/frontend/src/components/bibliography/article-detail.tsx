@@ -3,8 +3,10 @@ import {
   BookOpen,
   ExternalLink,
   FileText,
+  Loader2,
   NotebookPen,
   Plus,
+  RefreshCw,
   Trash2,
   Upload,
   X,
@@ -56,6 +58,7 @@ interface ArticleDetailPanelProps {
   detail: ArticleDetail | null;
   collections: Collection[];
   onUpload: (file: File) => void;
+  onReextract: () => void;
   onAddNote: (kind: string, content: string) => void;
   onAddToCollection: (collectionId: string) => void;
   onRemoveFromCollection: (collectionId: string, articleId: string) => void;
@@ -66,6 +69,7 @@ export function ArticleDetailPanel({
   detail,
   collections,
   onUpload,
+  onReextract,
   onAddNote,
   onAddToCollection,
   onRemoveFromCollection,
@@ -114,14 +118,27 @@ export function ArticleDetailPanel({
     { label: "Record", value: article.id },
   ];
 
+  // Rows written before extraction tracking (or by inline sources) carry no
+  // status; a stored full text without one is treated as done.
+  const extractStatus = detail.fulltext?.extract_status ?? (detail.fulltext ? "done" : null);
+  const extracting = extractStatus === "pending" || extractStatus === "running";
+
   return (
     <Card className="flex h-full min-h-0 flex-col">
       <CardHeader>
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant="secondary">{article.source ?? "record"}</Badge>
-          <Badge variant={detail.fulltext ? "default" : "outline"}>
-            {detail.fulltext ? `${detail.fulltext.file_format} full text` : "metadata only"}
-          </Badge>
+          {!detail.fulltext ? (
+            <Badge variant="outline">metadata only</Badge>
+          ) : extractStatus === "failed" ? (
+            <Badge variant="destructive">extraction failed</Badge>
+          ) : extracting ? (
+            <Badge variant="outline" className="gap-1">
+              <Loader2 className="size-3 animate-spin" /> extracting…
+            </Badge>
+          ) : (
+            <Badge variant="default">{`${detail.fulltext.file_format} full text`}</Badge>
+          )}
         </div>
         <CardTitle className="mt-2 text-xl leading-tight">{article.title}</CardTitle>
         <CardDescription>
@@ -176,6 +193,11 @@ export function ArticleDetailPanel({
                   <BookOpen /> {showPdf ? "Hide reader" : "Read PDF"}
                 </Button>
               )}
+              {detail.fulltext?.file_path.startsWith("vfs://") && (
+                <Button variant="outline" size="sm" disabled={extracting} onClick={onReextract}>
+                  <RefreshCw /> Re-extract
+                </Button>
+              )}
               <Button size="sm" onClick={() => uploadInputRef.current?.click()}>
                 <Upload /> Upload
               </Button>
@@ -198,6 +220,11 @@ export function ArticleDetailPanel({
                 {detail.fulltext.text_content}
               </p>
             </ScrollArea>
+          )}
+          {detail.fulltext?.extract_status === "failed" && detail.fulltext.extract_error && (
+            <p className="mt-2 break-words text-xs text-destructive">
+              {detail.fulltext.extract_error}
+            </p>
           )}
           {showPdf && detail.fulltext?.file_format === "pdf" && detail.fulltext.file_path.startsWith("vfs://") && (
             <div className="mt-3">

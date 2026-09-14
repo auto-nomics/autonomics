@@ -105,6 +105,11 @@ pub enum BibAction {
     /// Extracts plain text automatically and stores it in the library.
     Upload(UploadArgs),
 
+    /// Re-run text extraction for stored full texts (single article or
+    /// everything still pending/failed). Uses the MinerU cloud extractor
+    /// with local fallback.
+    Reextract(ReextractArgs),
+
     /// List articles that have been marked as needing full-text upload
     /// (fetch_status = fulltext_requested).
     Requests(RequestsArgs),
@@ -133,6 +138,17 @@ pub struct UploadArgs {
     /// "fulltext_available" within this collection.
     #[arg(long)]
     pub collection_id: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct ReextractArgs {
+    /// Re-extract a single article's full text by its local ID.
+    #[arg(long, value_name = "ID")]
+    pub article_id: Option<String>,
+
+    /// Re-extract every article whose extraction is pending or failed.
+    #[arg(long)]
+    pub all_missing: bool,
 }
 
 #[derive(Debug, Args)]

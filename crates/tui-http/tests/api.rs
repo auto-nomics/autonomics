@@ -254,6 +254,21 @@ async fn bib_upload_preserves_and_serves_the_original_file() {
             .as_str()
             .is_some_and(|hash| hash.len() == 64)
     );
+    // Uploads return immediately; extraction runs in the background.
+    assert_eq!(fulltext["extract_status"], "pending");
+    assert!(fulltext["text_content"].is_null());
+
+    // The upload spawned a background extraction; wait for it to land
+    // before asserting on extracted text.
+    let body = wait_for_extraction(
+        &app,
+        "/api/v1/bib/articles/doi%3A10.1000%2Foriginal-upload/fulltext",
+    )
+    .await;
+    assert_eq!(
+        body["fulltext"]["text_content"],
+        "original full-text bytes"
+    );
 
     let response = app
         .clone()
@@ -356,6 +371,106 @@ async fn bib_upload_preserves_and_serves_the_original_file() {
 }
 
 #[tokio::test]
+async fn bib_reextract_resets_and_rewrites_the_text() {
+    let (app, _directory) = build_app_with_vfs().await;
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/api/v1/bib/articles",
+            Some(r#"{ "title": "Re-extract test", "doi": "10.1000/reextract-test" }"#.to_owned()),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let content = b"re-extract these bytes";
+    let multipart = format!(
+        "--boundary\r\ncontent-disposition: form-data; name=\"file\"; filename=\"note.txt\"\r\ncontent-type: text/plain\r\n\r\n{}\r\n--boundary--\r\n",
+        String::from_utf8_lossy(content)
+    );
+    let upload_request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/bib/articles/doi%3A10.1000%2Freextract-test/fulltext")
+        .header("content-type", "multipart/form-data; boundary=boundary")
+        .body(Body::from(multipart))
+        .unwrap();
+    let response = app.clone().oneshot(upload_request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let uri = "/api/v1/bib/articles/doi%3A10.1000%2Freextract-test/fulltext";
+    let body = wait_for_extraction(&app, uri).await;
+    assert_eq!(body["fulltext"]["extract_status"], "done");
+
+    // Re-extract resets the row and finishes again with the same text.
+    let response = app
+        .clone()
+        .oneshot(request("POST", &format!("{uri}/reextract"), None))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: serde_json::Value = serde_json::from_slice(
+        &response.into_body().collect().await.unwrap().to_bytes(),
+    )
+    .unwrap();
+    // The row may already be claimed (running) by the spawned task.
+    let status = body["fulltext"]["extract_status"].as_str().unwrap();
+    assert!(status == "pending" || status == "running", "status was {status}");
+
+    let body = wait_for_extraction(&app, uri).await;
+    assert_eq!(body["fulltext"]["text_content"], "re-extract these bytes");
+}
+
+#[tokio::test]
+async fn bib_reextract_rejects_non_vfs_sources() {
+    let shared = BibShared::open_in_memory().await.unwrap();
+    let article = bib_types::Article::new("doi:10.1000/inline-source", "Inline source");
+    shared.bib.upsert_article(&article).await.unwrap();
+    shared
+        .bib
+        .upsert_fulltext(&bib_types::FullText {
+            article_id: article.id.clone(),
+            file_path: "europepmc:PMC123456/fullTextXML".to_owned(),
+            file_format: bib_types::FileFormat::Html,
+            text_content: Some("<p>inline text</p>".to_owned()),
+            source: bib_types::FullTextSource::OpenAccess,
+            file_hash: None,
+            file_size: None,
+            uploaded_at: None,
+            extract_status: Some(bib_types::ExtractStatus::Done),
+            text_format: Some(bib_types::TextFormat::Plain),
+            extracted_by: Some("europepmc".to_owned()),
+            extract_error: None,
+        })
+        .await
+        .unwrap();
+    let app = tui_http::api_router(shared);
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/api/v1/bib/articles/doi%3A10.1000%2Finline-source/fulltext/reextract",
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body: serde_json::Value = serde_json::from_slice(
+        &response.into_body().collect().await.unwrap().to_bytes(),
+    )
+    .unwrap();
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("re-upload"),
+        "error was: {body}"
+    );
+}
+
+#[tokio::test]
 async fn bib_upload_stores_original_pdf_bytes_with_application_pdf_mime() {
     let (app, _directory) = build_app_with_vfs().await;
 
@@ -441,6 +556,31 @@ async fn api_bearer_auth_protects_api_routes_only() {
 #[test]
 fn http_api_defaults_to_localhost() {
     assert_eq!(tui_http::DEFAULT_HTTP_API_ADDR, "127.0.0.1:8765");
+}
+
+/// Poll a full-text row until the background extraction reaches a
+/// terminal state. Panics on `failed` or after ~5 s without progress.
+async fn wait_for_extraction(app: &axum::Router, uri: &str) -> serde_json::Value {
+    for _ in 0..250 {
+        let response = app
+            .clone()
+            .oneshot(request("GET", uri, None))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        match body["fulltext"]["extract_status"].as_str() {
+            Some("done") => return body,
+            Some("failed") => panic!(
+                "background extraction failed: {:?}",
+                body["fulltext"]["extract_error"]
+            ),
+            _ => {}
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("background extraction did not finish within 5 s ({uri})");
 }
 
 async fn build_app_with_vfs() -> (axum::Router, tempfile::TempDir) {

@@ -24,6 +24,8 @@ tracing.workspace = true
 uuid = { version = "1.12", features = ["v4"] }
 pdf-extract = "0.12"
 reqwest = { version = "0.13", features = ["json"] }
+zip = { workspace = true }  # workspace pins deflate-only features
+opendal.workspace = true
 
 # Europe PMC open-access full-text auto-fetch
 europepmc = { path = "../europepmc" }
