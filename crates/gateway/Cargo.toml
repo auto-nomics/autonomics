@@ -30,6 +30,18 @@ chrono = { workspace = true }
 reqwest = { version = "0.13", features = ["json", "stream"] }
 eventsource-stream = "0.2"
 percent-encoding = "2"
+tempfile = { version = "3", optional = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
+
+[features]
+# Test harness (`gateway::testing`) + mock-model support. Pulls
+# agentik-sdk's MockApiClient and test-only deps; never enable in
+# release builds.
+test-util = [
+    "agentik-sdk/test-util",
+    "dep:tempfile",
+    "dep:tracing-subscriber",
+]
 
 [dev-dependencies]
 agentik-sdk = { path = "../agentik-sdk", features = ["test-util"] }

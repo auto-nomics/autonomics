@@ -528,6 +528,43 @@ pub fn encode_segment(value: &str) -> String {
     percent_encoding::utf8_percent_encode(value, RESERVED).to_string()
 }
 
+/// The payload of one sequenced SSE frame, parsed. Shared by
+/// [`EventPump`] and by one-shot consumers that drive the stream inline
+/// (the headless gateway runner).
+#[derive(Debug, Clone)]
+pub enum ParsedFrame {
+    Agent { agent: String, event: AgentEvent },
+    Host(HostEventView),
+    Notice(GatewayNotice),
+    Lag { missed: u64, resume_seq: u64 },
+}
+
+/// Parse one raw SSE event into `(seq, payload)`. Returns `None` for
+/// keepalive comments and unsequenced / unknown frames.
+pub fn parse_frame(event: &eventsource_stream::Event) -> Option<(u64, ParsedFrame)> {
+    let seq = event.id.parse::<u64>().ok()?;
+    let parsed = match event.event.as_str() {
+        "agent" => {
+            let envelope: AgentEnvelope = serde_json::from_str(&event.data).ok()?;
+            ParsedFrame::Agent {
+                agent: envelope.agent,
+                event: envelope.event,
+            }
+        }
+        "host" => ParsedFrame::Host(serde_json::from_str(&event.data).ok()?),
+        "notice" => ParsedFrame::Notice(serde_json::from_str(&event.data).ok()?),
+        "lag" => {
+            let lag: LagFrame = serde_json::from_str(&event.data).ok()?;
+            ParsedFrame::Lag {
+                missed: lag.missed,
+                resume_seq: lag.resume_seq,
+            }
+        }
+        _ => return None,
+    };
+    Some((seq, parsed))
+}
+
 /// The SSE consumer task. Spawn via [`EventPump::spawn`]; it forwards
 /// deduplicated [`GatewayFrame`]s into an unbounded channel until the
 /// daemon connection drops permanently (channel closed / fatal error),
@@ -565,44 +602,25 @@ impl EventPump {
                 loop {
                     match stream.next().await {
                         Some(Ok(event)) => {
-                            let Ok(seq) = event.id.parse::<u64>() else {
+                            let Some((seq, parsed)) = parse_frame(&event) else {
                                 continue; // keepalive comments / unsequenced frames
                             };
                             if seq <= last_seq {
                                 continue; // replay duplicate
                             }
-                            let frame = match event.event.as_str() {
-                                "agent" => serde_json::from_str::<AgentEnvelope>(&event.data)
-                                    .ok()
-                                    .map(|envelope| FrameInner::Agent {
-                                        agent: envelope.agent,
-                                        event: envelope.event,
-                                    }),
-                                "host" => serde_json::from_str::<HostEventView>(&event.data)
-                                    .ok()
-                                    .map(FrameInner::Host),
-                                "notice" => serde_json::from_str::<GatewayNotice>(&event.data)
-                                    .ok()
-                                    .map(FrameInner::Notice),
-                                "lag" => {
-                                    let lag: Option<LagFrame> =
-                                        serde_json::from_str(&event.data).ok();
-                                    if let Some(lag) = lag {
-                                        if tx
-                                            .send(GatewayFrame::Lag {
-                                                missed: lag.missed,
-                                                resume_seq: lag.resume_seq,
-                                            })
-                                            .is_err()
-                                        {
-                                            return; // consumer gone
-                                        }
+                            let inner = match parsed {
+                                ParsedFrame::Lag { missed, resume_seq } => {
+                                    if tx.send(GatewayFrame::Lag { missed, resume_seq }).is_err() {
+                                        return; // consumer gone
                                     }
                                     continue;
                                 }
-                                _ => None,
+                                ParsedFrame::Agent { agent, event } => {
+                                    FrameInner::Agent { agent, event }
+                                }
+                                ParsedFrame::Host(view) => FrameInner::Host(view),
+                                ParsedFrame::Notice(notice) => FrameInner::Notice(notice),
                             };
-                            let Some(inner) = frame else { continue };
                             last_seq = seq;
                             if tx.send(GatewayFrame::Sequenced { seq, inner }).is_err() {
                                 return; // consumer gone

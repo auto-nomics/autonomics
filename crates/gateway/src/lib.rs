@@ -22,6 +22,9 @@ pub mod model_store;
 pub mod proto;
 pub mod server;
 
+#[cfg(feature = "test-util")]
+pub mod testing;
+
 pub use client::{ClientError, GatewayClient, GatewayFrame};
 pub use daemon::{DaemonError, DaemonOptions, GATEWAY_VERSION, run_daemon};
 pub use hub::EventHub;
