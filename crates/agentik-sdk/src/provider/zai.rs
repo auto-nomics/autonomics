@@ -190,8 +190,11 @@ impl ZaiProvider {
                 .capabilities(true, true, true, false)
                 .pricing(0.50, 0.50)
                 .build(),
+            // GLM-4V-Flash — Zhipu caps this model's max_tokens at 1024 per
+            // request (error 1210: 限制数值范围[1,1024]); anything larger the
+            // request layer might send is rejected outright.
             ModelInfoBuilder::new(MODEL_GLM_4V_FLASH)
-                .context(64_000, 8_000)
+                .context(64_000, 1_024)
                 .capabilities(true, true, true, false)
                 .pricing(0.10, 0.10)
                 .build(),
