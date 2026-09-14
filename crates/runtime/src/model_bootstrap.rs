@@ -86,7 +86,7 @@ pub fn ensure_app_schema(conn: &Connection) -> rusqlite::Result<()> {
 
 /// A row from the `providers` table.
 // Mirrors the `providers` table schema; not every column is consumed yet.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[allow(dead_code)]
 pub struct ProviderRow {
     pub id: i64,
@@ -120,7 +120,7 @@ impl ProviderRow {
 /// catalogue (e.g. OpenRouter's `/v1/models`). Mirrors the
 /// [`ModelInfo`](agentik_sdk::model::ModelInfo) columns that survive a DB
 /// round-trip.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ModelRow {
     pub model_name: String,
     /// Owning provider's `name` (== its provider-type string).

@@ -27,6 +27,12 @@ pub enum Error {
     #[error("writing system init failed: {0}")]
     Writing(#[from] writing_base::Error),
 
+    /// Another process already holds the single-writer lock for this
+    /// state directory (`<state_dir>/runtime.lock`). The second instance
+    /// must not open the shared databases; see [`crate::instance_lock`].
+    #[error("another instance holds the single-writer lock: {path}")]
+    InstanceLockHeld { path: std::path::PathBuf },
+
     #[error("{0}")]
     Other(String),
 }

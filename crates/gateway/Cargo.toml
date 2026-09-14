@@ -1,0 +1,42 @@
+[package]
+name = "gateway"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Resident backend gateway: one daemon owning the RuntimeHost, many thin frontends over HTTP+SSE."
+
+[dependencies]
+agentik-core = { path = "../agentik-core" }
+agentik-sdk = { path = "../agentik-sdk" }
+agentik-types = { path = "../agentik-types" }
+runtime = { path = "../runtime" }
+tui-http = { path = "../tui-http" }
+bib-base = { path = "../bib-base" }
+dag-core = { path = "../dag-core" }
+axum = "0.8"
+tokio.workspace = true
+tokio-stream = "0.1"
+tokio-util = { version = "0.7", features = ["rt"] }
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror = { workspace = true }
+tracing.workspace = true
+uuid = { version = "1.23", features = ["v4", "serde"] }
+rusqlite = "0.40.1"
+arc-swap.workspace = true
+chrono = { workspace = true }
+reqwest = { version = "0.13", features = ["json", "stream"] }
+eventsource-stream = "0.2"
+percent-encoding = "2"
+
+[dev-dependencies]
+agentik-sdk = { path = "../agentik-sdk", features = ["test-util"] }
+tempfile = "3"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+
+[lints]
+workspace = true

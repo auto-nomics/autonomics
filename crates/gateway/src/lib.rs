@@ -1,0 +1,28 @@
+//! The resident backend gateway: one daemon owning the `RuntimeHost`,
+//! many thin frontends over HTTP + SSE.
+//!
+//! Layout:
+//! - [`proto`]: the wire contract (shared by server and clients);
+//! - [`hub`]: the event fan-out hub (seq, replay, lag semantics);
+//! - [`driver`]: the daemon's host pump — the single consumer of
+//!   `RuntimeHost::recv_next`;
+//! - [`server`]: the axum API surface;
+//! - [`daemon`]: `tui serve` bootstrap + graceful shutdown;
+//! - [`client`]: the Rust frontend SDK (REST + SSE pump);
+//! - [`manager`]: probe / auto-spawn / stop for frontends;
+//! - [`model_store`]: the daemon-owned app DB (model catalogue,
+//!   credentials, ChatGPT OAuth).
+
+pub mod client;
+pub mod daemon;
+pub mod driver;
+pub mod hub;
+pub mod manager;
+pub mod model_store;
+pub mod proto;
+pub mod server;
+
+pub use client::{ClientError, GatewayClient, GatewayFrame};
+pub use daemon::{DaemonError, DaemonOptions, GATEWAY_VERSION, run_daemon};
+pub use hub::EventHub;
+pub use proto::HostEventView;

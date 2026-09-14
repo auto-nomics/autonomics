@@ -31,6 +31,7 @@ data-catalog = { path = "../data-catalog" }
 dag-core = { path = "../dag-core" }
 container-runtime = { path = "../container-runtime" }
 anyhow = "1"
+libc = "0.2"
 datafusion.workspace = true
 vfs = { path = "../vfs" }
 bib-base = { path = "../bib-base" }

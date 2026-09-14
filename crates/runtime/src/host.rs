@@ -1084,6 +1084,10 @@ pub struct RuntimeHost {
     /// Buffer of 256 should be plenty for in-flight status transitions;
     /// if it overflows, subscribers see `RecvError::Lagged` and skip ahead.
     event_broadcast: tokio::sync::broadcast::Sender<HostEvent>,
+    /// Single-writer lock for the state directory, acquired in `open`
+    /// before any database is opened and held for the host's lifetime.
+    /// See [`crate::instance_lock`].
+    _instance_lock: crate::instance_lock::InstanceLock,
 }
 
 /// Lifecycle events emitted by RuntimeHost. The TUI subscribes to keep
@@ -1112,6 +1116,21 @@ pub enum HostEvent {
 
 /// An `AgentEvent` tagged with the agent name that produced it.
 pub type TaggedEvent = (String, AgentEvent);
+
+/// One item produced by [`RuntimeHost::recv_next`].
+#[derive(Debug, Clone)]
+pub enum NextEvent {
+    /// An agent event, fully processed (delegation ledger, topology
+    /// routing, status derivation) — identical to what [`TaggedEvent`]
+    /// consumers of `recv_any` observe.
+    Agent(TaggedEvent),
+    /// A host lifecycle event (agent registered / unregistered / status
+    /// change).
+    Host(HostEvent),
+    /// A host command was processed, or a background spawn completed and
+    /// registered. No payload — observers react via the `Host` stream.
+    Command,
+}
 
 /// Commands sent to a per-agent relay task.
 enum AgentCommand {
@@ -1171,6 +1190,10 @@ impl RuntimeHost {
     /// Open shared infrastructure and create an empty agent network.
     pub async fn open(config: &RuntimeConfig) -> Result<Self> {
         tracing::info!("RuntimeHost::open: delegating to SharedInfra::open");
+        // Single-writer guard before any database is opened. A second
+        // process holding the same state dir fails fast here instead of
+        // double-writing the shared databases.
+        let instance_lock = crate::instance_lock::acquire(&config.state_dir)?;
         let mut infra = SharedInfra::open(config).await?;
         tracing::info!("RuntimeHost::open: infrastructure ready, creating channels");
         let (event_tx, event_rx) = mpsc::unbounded_channel();
@@ -1200,6 +1223,7 @@ impl RuntimeHost {
             notify_tx,
             notify_rx,
             event_broadcast,
+            _instance_lock: instance_lock,
         })
     }
 
@@ -1242,18 +1266,25 @@ impl RuntimeHost {
             }
             reg = self.registration_rx.recv() => {
                 if let Some((handle, info)) = reg {
-                    let path = handle.path.clone();
-                    let mut event_info = info;
-                    event_info.agent_id = Some(handle.agent_id);
-                    self.register_agent(handle, event_info.clone());
-                    self.emit_host_event(HostEvent::AgentRegistered {
-                        path: path.clone(),
-                        info: event_info,
-                    });
-                    tracing::info!(agent = %path, "background spawn completed and registered");
+                    self.register_background_spawn(handle, info);
                 }
             }
         }
+    }
+
+    /// Register an agent whose background spawn task just completed, and
+    /// broadcast the registration event. Shared by the command pump and
+    /// [`Self::recv_next`].
+    fn register_background_spawn(&mut self, handle: AgentHandle, info: crate::control::AgentInfo) {
+        let path = handle.path.clone();
+        let mut event_info = info;
+        event_info.agent_id = Some(handle.agent_id);
+        self.register_agent(handle, event_info.clone());
+        self.emit_host_event(HostEvent::AgentRegistered {
+            path: path.clone(),
+            info: event_info,
+        });
+        tracing::info!(agent = %path, "background spawn completed and registered");
     }
 
     fn process_command(&mut self, cmd: crate::control::HostCommand) {
@@ -2540,7 +2571,16 @@ impl RuntimeHost {
     ///
     /// The raw event is still returned to the caller for UI rendering.
     pub async fn recv_any(&mut self) -> Option<TaggedEvent> {
-        let (name, event) = self.event_rx.recv().await?;
+        let tagged = self.event_rx.recv().await?;
+        Some(self.process_tagged(tagged))
+    }
+
+    /// Apply the in-band bookkeeping every received event must go through
+    /// (delegation ledger, topology routing, status derivation) and return
+    /// the event unchanged. Extracted from [`Self::recv_any`] so the
+    /// multiplexed [`Self::recv_next`] shares one processing path.
+    fn process_tagged(&mut self, tagged: TaggedEvent) -> TaggedEvent {
+        let (name, event) = tagged;
 
         match &event {
             AgentEvent::TurnStarted {
@@ -2644,7 +2684,52 @@ impl RuntimeHost {
             }
         }
 
-        Some((name, event))
+        (name, event)
+    }
+
+    /// Multiplexed receive for gateway-style drivers: awaits the next item
+    /// from ANY of the host's input sources — agent events (with the same
+    /// in-band processing as [`Self::recv_any`]), host lifecycle events, or
+    /// host commands / background spawn registrations — in a single future.
+    ///
+    /// Single consumer, same contract as [`Self::recv_any`]: the daemon
+    /// driver must be the only caller, or delegation bookkeeping and
+    /// topology routing silently stop. Unlike calling the individual
+    /// `recv_*` methods from a `tokio::select!` (which the TUI used to do
+    /// via pointer aliasing), this method borrows the host once and keeps
+    /// every channel fairly polled.
+    pub async fn recv_next(&mut self) -> NextEvent {
+        tokio::select! {
+            tagged = self.event_rx.recv() => {
+                match tagged {
+                    Some(tagged) => NextEvent::Agent(self.process_tagged(tagged)),
+                    // The host itself holds `event_tx`, so the channel only
+                    // closes if the host was torn down — park forever.
+                    None => std::future::pending().await,
+                }
+            }
+            notify = self.notify_rx.recv() => {
+                match notify {
+                    Some(event) => NextEvent::Host(event),
+                    None => std::future::pending().await,
+                }
+            }
+            cmd = self.cmd_rx.recv() => {
+                if let Some(cmd) = cmd {
+                    self.process_command(cmd);
+                }
+                NextEvent::Command
+            }
+            reg = self.registration_rx.recv() => {
+                match reg {
+                    Some((handle, info)) => {
+                        self.register_background_spawn(handle, info);
+                        NextEvent::Command
+                    }
+                    None => std::future::pending().await,
+                }
+            }
+        }
     }
 
     /// Update the named agent's runtime [`AgentStatus`] from the event

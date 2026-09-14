@@ -4,13 +4,13 @@
 //! receive a small, owned snapshot instead of borrowing the graph across an
 //! await point or reaching into engine internals.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::runtime::RuntimeStatus;
 use super::{DagNode, NodeId};
 
 /// One declared input or output socket.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DagPortView {
     pub index: u8,
     pub label: Option<String>,
@@ -18,7 +18,7 @@ pub struct DagPortView {
 }
 
 /// One DAG node as an interactive renderer sees it.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DagNodeView {
     pub id: NodeId,
     pub kind: String,
@@ -29,7 +29,7 @@ pub struct DagNodeView {
 }
 
 /// One dataflow edge, including exact port wiring.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DagEdgeView {
     pub from: NodeId,
     pub from_port: u8,
@@ -38,7 +38,7 @@ pub struct DagEdgeView {
 }
 
 /// A stable, owned view of current DAG topology and execution state.
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DagTuiSnapshot {
     /// Nodes in deterministic id order.
     pub nodes: Vec<DagNodeView>,
