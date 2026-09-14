@@ -55,6 +55,11 @@ jobs:
       CARGO_PROFILE_TEST_DEBUG: line-tables-only
       # Limit the number of test binaries linked concurrently.
       CARGO_BUILD_JOBS: "2"
+      # Rust 1.96 uses rust-lld by default on Linux. It has crashed in LLVM's
+      # parallel linker path on GitHub-hosted runners while linking the large
+      # TUI test binary. Use the system GNU linker instead. RUSTFLAGS replaces
+      # build.rustflags from .cargo/config.toml, so keep target-cpu explicit.
+      RUSTFLAGS: "-C target-cpu=generic -C linker-features=-lld"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.96
