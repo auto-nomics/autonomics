@@ -141,6 +141,8 @@ pub async fn run_daemon(
         None => generate_token(),
     };
     let bib_shared = state.infra.bib.as_ref().clone();
+    // Clone for the extraction sweep before the move into the router.
+    let sweep_shared = bib_shared.clone();
     let router = router_with_bib(state, gateway_token.clone(), bib_shared, env_token.clone());
 
     let server = tui_http::server::start(router, &addr)
@@ -171,13 +173,9 @@ pub async fn run_daemon(
     // by a previous session) — MinerU sweep, previously kicked off by the
     // TUI's HTTP server startup. Fire-and-forget: the semaphore inside
     // BibShared caps the concurrency.
-    let sweep_shared = bib_shared.clone();
-    agentik_core::supervise::spawn_safe_drop(
-        "bib-extraction-sweep",
-        async move {
-            bib_base::sweep_pending(&sweep_shared).await;
-        },
-    );
+    agentik_core::supervise::spawn_safe_drop("bib-extraction-sweep", async move {
+        bib_base::sweep_pending(&sweep_shared).await;
+    });
 
     // ── Driver loop (sole consumer of the host) ──────────────────────
     let mut host = driver::run(host, hub, sessions, shutdown.clone()).await;
