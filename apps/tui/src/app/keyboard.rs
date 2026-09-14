@@ -2,6 +2,11 @@
 
 use super::*;
 
+/// Mouse-wheel chat scrolling kill-switch — disabled pending scroll/jump
+/// interaction fixes. (Replaces a bare `!true` debug toggle that tripped
+/// clippy's `nonminimal_bool` on toolchains that still flag it.)
+const MOUSE_SCROLL_ENABLED: bool = false;
+
 impl App {
     pub(super) fn handle_event(&mut self, event: &Event) -> i32 {
         match event {
@@ -55,7 +60,7 @@ impl App {
     /// Handle mouse events: scroll wheel scrolls the chat in Agent tab.
     /// Returns the scroll delta to be batched with other scroll events.
     fn handle_mouse(&mut self, mouse: &MouseEvent) -> i32 {
-        if !true {
+        if !MOUSE_SCROLL_ENABLED {
             return 0;
         }
 
@@ -78,7 +83,7 @@ impl App {
 
     /// Apply a batched scroll delta to the agent tab.
     pub(super) fn apply_scroll_delta(&mut self, delta: i32) {
-        if !true {
+        if !MOUSE_SCROLL_ENABLED {
             return;
         }
         let ts = self.state.active_tab_state_mut();
@@ -236,7 +241,7 @@ impl App {
         // so the user can scroll freely; a second press re-pins to the bottom.
         // Scroll-producing keys/mouse also release the lock (see handle_mouse
         // and handle_browse_key); Ctrl+G is the dedicated toggle.
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('g') && true {
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('g') {
             let ts = self.state.active_tab_state_mut();
             if ts.auto_scroll {
                 ts.auto_scroll = false;

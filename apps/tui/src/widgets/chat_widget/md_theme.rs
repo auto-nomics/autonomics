@@ -7,12 +7,9 @@ use ratatui::style::Color;
 
 /// Surface tiers — backgrounds.
 #[derive(Debug, Clone, Copy)]
-#[allow(dead_code)]
 pub(crate) struct MdSurface {
-    pub base: Color,
     /// Code block / raised surface background.
     pub raised: Color,
-    pub border: Color,
 }
 
 /// Text colours.
@@ -81,9 +78,7 @@ impl MdTokens {
     pub(crate) fn dark() -> Self {
         Self {
             surface: MdSurface {
-                base: Color::Rgb(20, 20, 30),
                 raised: Color::Rgb(40, 40, 40),
-                border: Color::DarkGray,
             },
             text: MdText {
                 primary: Color::Rgb(220, 220, 220),

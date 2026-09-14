@@ -178,7 +178,7 @@ pub struct SharedInfra {
     pub runtime_handle: tokio::runtime::Handle,
     /// Optional host control for agent tools. Set by RuntimeHost when
     /// available. When `Some`, spawned agents receive host management tools
-    /// (spawn_agent, send_to_agent, connect_agents, etc.).
+    /// (spawn_agent, delegate_to, send_message, etc.).
     pub host_control: Option<crate::control::HostControl>,
 }
 
@@ -486,7 +486,7 @@ impl SharedInfra {
         }
 
         if profile.enable_gwascatalog {
-            tools.extend(gwascatalog_tools(file_storage));
+            tools.extend(gwascatalog_tools(file_storage.clone()));
         }
 
         if profile.enable_chembl {
@@ -512,6 +512,7 @@ impl SharedInfra {
                 bib_shared.bib.clone(),
                 bib_shared.gateway.clone(),
                 Some(bib_shared.europe_pmc.clone()),
+                file_storage.clone(),
             );
             tools.extend(bib_tools);
 
@@ -1140,14 +1141,6 @@ enum AgentCommand {
 struct AgentEntry {
     cmd_tx: UnboundedSender<AgentCommand>,
     _relay_task: JoinHandle<std::result::Result<(), agentik_core::supervise::TaskPanic>>,
-    /// Full hierarchical path — source of truth for identity.
-    /// Mirrors the HashMap key but kept here for typed access within entries.
-    #[allow(dead_code)]
-    path: agentik_types::AgentPath,
-    /// Profile path this agent was instantiated from. Used to resolve
-    /// child profile lookups when this agent spawns sub-agents.
-    #[allow(dead_code)]
-    profile_path: String,
     /// Capability metadata for routing and discovery.
     ///
     /// `status` and `last_event` mirror the live runtime fields — the
@@ -2165,8 +2158,6 @@ impl RuntimeHost {
             AgentEntry {
                 cmd_tx,
                 _relay_task: relay_task,
-                path: path.clone(),
-                profile_path: profile_path.clone(),
                 status: info.status.clone(),
                 last_event: info.last_event.clone(),
                 info: info.clone(),

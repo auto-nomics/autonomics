@@ -2,7 +2,7 @@
 //!
 //! - The *framework* modules (`function`, `toolset`, `error`, `truncation`)
 //!   define how tools are declared and dispatched.
-//! - [`builtins`] holds the lifecycle and task tool implementations.
+//! - [`builtins`] holds the plan and task tool implementations.
 
 pub mod builtins;
 pub mod error;
@@ -30,6 +30,5 @@ pub use agentik_sdk::types::{
 // `use agentik_core::tools::{WaitTaskTool, ...}`.
 pub use builtins::{
     PlanHandle, PlanStepInput, TaskResultViewerTool, UpdatePlanInput, UpdatePlanTool,
-    ViewTaskResultsInput, WaitTaskInput, WaitTaskTool, lifecycle_registrations, plan_registrations,
-    task_registrations,
+    ViewTaskResultsInput, WaitTaskInput, WaitTaskTool, plan_registrations, task_registrations,
 };

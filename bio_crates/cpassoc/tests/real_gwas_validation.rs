@@ -73,15 +73,6 @@ fn json_to_f64_vec(v: &Value) -> Vec<f64> {
         .collect()
 }
 
-#[allow(dead_code)]
-fn json_to_string_vec(v: &Value) -> Vec<String> {
-    v.as_array()
-        .unwrap()
-        .iter()
-        .map(|x| x.as_str().unwrap().to_string())
-        .collect()
-}
-
 fn sample_size() -> Vec<f64> {
     vec![461823.0, 484121.0, 483078.0]
 }

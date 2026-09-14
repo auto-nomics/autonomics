@@ -78,10 +78,8 @@ impl AgentWorkspace<'_> {
         Self::render_tab_bar(areas[0], buf, tabs, active_idx);
 
         // ── Active leaf ──
-        let agent_name = tabs.get(active_idx).map(|t| t.name.as_str());
         let leaf = AgentLeaf {
             active_model: self.active_model,
-            agent_name,
             context_window: self.context_window,
             sessions: self.sessions,
             display: self.display,

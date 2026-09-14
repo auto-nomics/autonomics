@@ -1,3 +1,9 @@
+// Vendored from the xAI textarea editor core. Parts of its API surface
+// (`SingleLineViewport`, a few `EditBuffer` accessors, `cursor_affinity`)
+// are not exercised by the host app yet; keeping the upstream shape makes
+// future re-syncs diffable.
+#![allow(dead_code)]
+
 use std::ops::{Deref, Range};
 use std::sync::Arc;
 

@@ -14,12 +14,12 @@ pub use chat::OpenAiChatWire;
 pub use chatgpt::ChatgptResponsesWire;
 pub use responses::OpenAiResponsesWire;
 
-use crate::types::ReasoningConfig;
 use crate::types::errors::{AnthropicError, Result};
 use crate::types::messages::{
     ContentBlockParam, ImageSource, MessageContent, MessageCreateParams, MessageParam, Role,
 };
 use crate::types::tools::{ToolChoice, ToolDefinition};
+use crate::types::{ReasoningConfig, Usage};
 use serde_json::{Value, json};
 
 /// Common capability set for OpenAI-family protocols.
@@ -220,4 +220,39 @@ pub(crate) fn parse_json(body: &str) -> Result<Value> {
             body.chars().take(500).collect::<String>()
         ))
     })
+}
+
+/// Convert OpenAI's overlapping input-token fields to the canonical
+/// Anthropic-shaped usage model.
+///
+/// OpenAI reports the total input count in `prompt_tokens`/`input_tokens`;
+/// cached reads and cache writes are included in that total. The SDK's
+/// canonical `input_tokens` field, like Anthropic's, means uncached input.
+pub(crate) fn usage_from_openai_input(value: &Value, total_input_field: &str) -> Usage {
+    let details = value.get("input_tokens_details").or_else(|| {
+        value
+            .get("prompt_tokens_details")
+            .filter(|_| total_input_field == "prompt_tokens")
+    });
+    let cache_read = details
+        .and_then(|d| d.get("cached_tokens"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let cache_write = details
+        .and_then(|d| d.get("cache_write_tokens"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let total_input = value
+        .get(total_input_field)
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+
+    Usage {
+        input_tokens: total_input.saturating_sub(cache_read.saturating_add(cache_write)),
+        output_tokens: 0,
+        cache_creation_input_tokens: (cache_write > 0).then_some(cache_write),
+        cache_read_input_tokens: (cache_read > 0).then_some(cache_read),
+        server_tool_use: None,
+        service_tier: None,
+    }
 }

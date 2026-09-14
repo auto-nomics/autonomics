@@ -21,11 +21,9 @@ use super::{CodeDescription, Diagnostic, Severity};
 // ── Location text rendering ──────────────────────────────────────
 
 #[derive(Clone, Copy)]
-#[allow(dead_code)]
 enum LocationLeafKind {
     Index,
     Knowledge,
-    Entity,
 }
 
 fn leaf_kind_from_target(target_type: TargetType) -> LocationLeafKind {
@@ -39,7 +37,6 @@ fn format_location_with_leaf_marker(path: &str, leaf_kind: LocationLeafKind) -> 
     let suffix = match leaf_kind {
         LocationLeafKind::Index => "",
         LocationLeafKind::Knowledge => " [knowledge]",
-        LocationLeafKind::Entity => " [entity]",
     };
     if suffix.is_empty() {
         return path.to_string();

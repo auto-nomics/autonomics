@@ -397,6 +397,7 @@ const PROMPT_BIBLIOGRAPHY: &str = "\n\
 - Use `lit_fetch` to retrieve a full article record by DOI / PMID / arXiv ID.\n\
 - Use `bib_save` to store articles in your personal library, `bib_search_library` \
   to find saved articles, and `bib_export` to export collections.\n\
+- `bib_export` writes rendered citation files directly to a VFS `output_path`.\n\
 - Always verify claims against primary literature when possible.";
 
 const PROMPT_OPENGWAS: &str = "\n\
@@ -460,6 +461,17 @@ const PROMPT_KEGG: &str = "\n\
 - Use `kegg_link` and `kegg_convert` for biological relationships and identifier mapping; \
   prefer one database-level request or cached results over per-gene calls.\n\
 - Keep outputs concise and remember that KEGG API access is limited to academic use.";
+
+const PROMPT_BIOMEDICAL_RESOURCES: &str = "\n\
+### Biomedical Reference Resources\n\
+- Use `alphafold_lookup` for UniProt-linked predicted structure models, versions, quality, \
+  and downloadable CIF/PDB/confidence URLs.\n\
+- Use `interpro_lookup` for protein family/domain entry metadata, member databases, GO terms, \
+  and representative structures.\n\
+- Use `pubchem_compound_lookup` to resolve compounds by name, CID, or InChIKey and return \
+  chemical identifiers and properties.\n\
+- Use `clinicaltrials_study_lookup` for a study's status, sponsor, design, conditions, \
+  interventions, and primary outcomes.";
 
 const PROMPT_DAG_ENGINE: &str = "\n\
 ### Data Pipeline (DAG Engine)\n\
@@ -624,6 +636,7 @@ pub fn build_system_prompt<C: PromptCapabilities>(caps: &C) -> String {
     if caps.enable_kegg() {
         s.push_str(PROMPT_KEGG);
     }
+    s.push_str(PROMPT_BIOMEDICAL_RESOURCES);
 
     // DAG engine, SQL conventions, and general sections are always included —
     // the data-engine tools and filesystem tools are always registered.

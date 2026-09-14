@@ -4,8 +4,6 @@ use std::ops::Range;
 use textwrap::Options;
 use textwrap::wrap_algorithms::Penalties;
 
-use crate::xai_textarea::render::render_line_utils::push_owned_lines;
-
 pub(crate) fn wrap_ranges<'a, O>(text: &str, width_or_options: O) -> Vec<Range<usize>>
 where
     O: Into<Options<'a>>,
@@ -170,6 +168,11 @@ impl<'a> RtOptions<'a> {
     }
 }
 
+// Vendored from the xAI textarea together with `RtOptions` /
+// `slice_line_spans` / `wrap_ranges_trim` and their unit tests below.
+// Not wired into the chat input yet (`textarea.rs` uses `wrap_ranges`);
+// kept as a unit so a future upstream re-sync stays diffable.
+#[allow(dead_code)]
 #[must_use]
 pub fn word_wrap_line<'a, O>(line: &'a Line<'a>, width_or_options: O) -> Vec<Line<'a>>
 where
@@ -254,56 +257,6 @@ where
     out
 }
 
-/// Wrap a sequence of lines, applying the initial indent only to the very first
-/// output line, and using the subsequent indent for all later wrapped pieces.
-#[allow(dead_code)]
-pub(crate) fn word_wrap_lines<'a, I, O>(lines: I, width_or_options: O) -> Vec<Line<'static>>
-where
-    I: IntoIterator<Item = &'a Line<'a>>,
-    O: Into<RtOptions<'a>>,
-{
-    let base_opts: RtOptions<'a> = width_or_options.into();
-    let mut out: Vec<Line<'static>> = Vec::new();
-
-    for (idx, line) in lines.into_iter().enumerate() {
-        let opts = if idx == 0 {
-            base_opts.clone()
-        } else {
-            let mut o = base_opts.clone();
-            let sub = o.subsequent_indent.clone();
-            o = o.initial_indent(sub);
-            o
-        };
-        let wrapped = word_wrap_line(line, opts);
-        push_owned_lines(&wrapped, &mut out);
-    }
-
-    out
-}
-
-#[allow(dead_code)]
-pub(crate) fn word_wrap_lines_borrowed<'a, I, O>(lines: I, width_or_options: O) -> Vec<Line<'a>>
-where
-    I: IntoIterator<Item = &'a Line<'a>>,
-    O: Into<RtOptions<'a>>,
-{
-    let base_opts: RtOptions<'a> = width_or_options.into();
-    let mut out: Vec<Line<'a>> = Vec::new();
-    let mut first = true;
-    for line in lines.into_iter() {
-        let opts = if first {
-            base_opts.clone()
-        } else {
-            base_opts
-                .clone()
-                .initial_indent(base_opts.subsequent_indent.clone())
-        };
-        out.extend(word_wrap_line(line, opts));
-        first = false;
-    }
-    out
-}
-
 fn slice_line_spans<'a>(
     original: &'a Line<'a>,
     span_bounds: &[(Range<usize>, ratatui::style::Style)],
@@ -347,11 +300,9 @@ fn slice_line_spans<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use itertools::Itertools as _;
     use pretty_assertions::assert_eq;
     use ratatui::style::Color;
     use ratatui::style::Stylize;
-    use std::string::ToString;
 
     fn concat_line(line: &Line) -> String {
         line.spans
@@ -502,56 +453,6 @@ mod tests {
     }
 
     #[test]
-    fn wrap_lines_applies_initial_indent_only_once() {
-        let opts = RtOptions::new(8)
-            .initial_indent(Line::from("- "))
-            .subsequent_indent(Line::from("  "));
-
-        let lines = vec![Line::from("hello world"), Line::from("foo bar baz")];
-        let out = word_wrap_lines(&lines, opts);
-
-        // Expect: first line prefixed with "- ", subsequent wrapped pieces with "  "
-        // and for the second input line, there should be no "- " prefix on its first piece
-        let rendered: Vec<String> = out.iter().map(concat_line).collect();
-        assert!(rendered[0].starts_with("- "));
-        for r in rendered.iter().skip(1) {
-            assert!(r.starts_with("  "));
-        }
-    }
-
-    #[test]
-    fn wrap_lines_without_indents_is_concat_of_single_wraps() {
-        let lines = vec![Line::from("hello"), Line::from("world!")];
-        let out = word_wrap_lines(&lines, 10);
-        let rendered: Vec<String> = out.iter().map(concat_line).collect();
-        assert_eq!(rendered, vec!["hello", "world!"]);
-    }
-
-    #[test]
-    fn wrap_lines_borrowed_applies_initial_indent_only_once() {
-        let opts = RtOptions::new(8)
-            .initial_indent(Line::from("- "))
-            .subsequent_indent(Line::from("  "));
-
-        let lines = [Line::from("hello world"), Line::from("foo bar baz")];
-        let out = word_wrap_lines_borrowed(lines.iter(), opts);
-
-        let rendered: Vec<String> = out.iter().map(concat_line).collect();
-        assert!(rendered.first().unwrap().starts_with("- "));
-        for r in rendered.iter().skip(1) {
-            assert!(r.starts_with("  "));
-        }
-    }
-
-    #[test]
-    fn wrap_lines_borrowed_without_indents_is_concat_of_single_wraps() {
-        let lines = [Line::from("hello"), Line::from("world!")];
-        let out = word_wrap_lines_borrowed(lines.iter(), 10);
-        let rendered: Vec<String> = out.iter().map(concat_line).collect();
-        assert_eq!(rendered, vec!["hello", "world!"]);
-    }
-
-    #[test]
     fn line_height_counts_double_width_emoji() {
         let line = "😀😀😀".into(); // each emoji ~ width 2
         assert_eq!(word_wrap_line(&line, 4).len(), 2);
@@ -583,24 +484,5 @@ mod tests {
         let line = Line::from("\n\n\n\n\n");
         let out = word_wrap_line(&line, 1);
         assert!(!out.is_empty());
-    }
-
-    #[test]
-    fn word_wrap_does_not_split_words_simple_english() {
-        let sample = "Years passed, and Willowmere thrived in peace and friendship. Mira’s herb garden flourished with both ordinary and enchanted plants, and travelers spoke of the kindness of the woman who tended them.";
-        let line = Line::from(sample);
-        let lines = [line];
-        // Force small width to exercise wrapping at spaces.
-        let wrapped = word_wrap_lines_borrowed(&lines, 40);
-        let joined: String = wrapped.iter().map(ToString::to_string).join("\n");
-        assert_eq!(
-            joined,
-            r#"Years passed, and Willowmere thrived
-in peace and friendship. Mira’s herb
-garden flourished with both ordinary and
-enchanted plants, and travelers spoke
-of the kindness of the woman who tended
-them."#
-        );
     }
 }

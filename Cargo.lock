@@ -231,6 +231,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c880a97d28a3681c0267bd29cff89621202715b065127cd445fa0f0fe0aa2880"
 
 [[package]]
+name = "alphafold"
+version = "0.1.0"
+dependencies = [
+ "agentik-core",
+ "agentik-proc",
+ "agentik-sdk",
+ "arrow-array",
+ "arrow-schema",
+ "async-trait",
+ "dag-core",
+ "datafusion",
+ "reqwest",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+]
+
+[[package]]
 name = "android_system_properties"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1116,14 +1136,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "biofusion-cache"
-version = "0.1.0"
-dependencies = [
- "biofusion",
- "derive_more",
-]
-
-[[package]]
 name = "biorxiv"
 version = "0.1.0"
 dependencies = [
@@ -1818,6 +1830,26 @@ name = "clap_lex"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
+
+[[package]]
+name = "clinicaltrials"
+version = "0.1.0"
+dependencies = [
+ "agentik-core",
+ "agentik-proc",
+ "agentik-sdk",
+ "arrow-array",
+ "arrow-schema",
+ "async-trait",
+ "dag-core",
+ "datafusion",
+ "reqwest",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+]
 
 [[package]]
 name = "clipboard-win"
@@ -5002,6 +5034,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "headless"
+version = "0.1.0"
+dependencies = [
+ "agentik-core",
+ "agentik-sdk",
+ "agentik-types",
+ "arc-swap",
+ "runtime",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "heck"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5498,6 +5549,26 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.109",
+]
+
+[[package]]
+name = "interpro"
+version = "0.1.0"
+dependencies = [
+ "agentik-core",
+ "agentik-proc",
+ "agentik-sdk",
+ "arrow-array",
+ "arrow-schema",
+ "async-trait",
+ "dag-core",
+ "datafusion",
+ "reqwest",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
 ]
 
 [[package]]
@@ -7169,6 +7240,7 @@ dependencies = [
 name = "nodes-io"
 version = "0.1.0"
 dependencies = [
+ "alphafold",
  "arrow",
  "arrow-array",
  "arrow-buffer",
@@ -7176,6 +7248,7 @@ dependencies = [
  "async-trait",
  "biofusion",
  "chembl",
+ "clinicaltrials",
  "container-runtime",
  "crossref",
  "dag-core",
@@ -7184,12 +7257,14 @@ dependencies = [
  "flate2",
  "futures",
  "glob",
+ "interpro",
  "kegg",
  "libc",
  "mr",
  "openalex",
  "opentargets",
  "parquet",
+ "pubchem",
  "rcsb",
  "reactome",
  "schemars",
@@ -8847,6 +8922,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "pubchem"
+version = "0.1.0"
+dependencies = [
+ "agentik-core",
+ "agentik-proc",
+ "agentik-sdk",
+ "arrow-array",
+ "arrow-schema",
+ "async-trait",
+ "dag-core",
+ "datafusion",
+ "reqwest",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "pulldown-cmark"
 version = "0.13.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9759,12 +9855,14 @@ dependencies = [
  "agentik-proc",
  "agentik-sdk",
  "agentik-types",
+ "alphafold",
  "anyhow",
  "arc-swap",
  "async-trait",
  "bib-base",
  "chembl",
  "chrono",
+ "clinicaltrials",
  "container-runtime",
  "dag-core",
  "data-catalog",
@@ -9773,12 +9871,15 @@ dependencies = [
  "datafusion",
  "futures",
  "gwascatalog-sdk",
+ "interpro",
  "kegg",
  "kms",
  "kms-tools",
  "opengwas",
  "opentargets",
+ "pubchem",
  "rcsb",
+ "rusqlite",
  "schemars",
  "serde",
  "serde_json",
@@ -11676,6 +11777,7 @@ dependencies = [
  "crossterm",
  "dag-core",
  "fuzzy-matcher",
+ "headless",
  "ignore",
  "itertools 0.14.0",
  "kms",

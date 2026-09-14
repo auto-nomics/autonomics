@@ -9,38 +9,6 @@
 
 use super::interactions::{cross_prod, ut, utd};
 
-/// Evaluate the function f(alpha) for onerow optimization.
-///
-/// f(alpha) = sum_k [(a[k] - alpha * s[k]).reduce_S(soft_threshold(c_k)) - curth[jk]]^2
-///          + (alpha - something)^2 related to bp, bn constraint
-///
-/// Port of `f()` in `hierNet.c`.
-#[allow(dead_code)] // Retained as a reference implementation from the Hiernet R port.
-fn f_onerow(alpha: f64, a: &[f64], q: usize, b: &[f64], c: f64, mu: f64) -> f64 {
-    // a: a_k values for each k (interaction gradient + current th)
-    // b: b_k = sign indicators
-    // c: lambda_l1 penalty for main effect budget
-    // mu: rho/2 or similar
-
-    let mut val = 0.0;
-    for k in 0..q {
-        let t = a[k] * alpha;
-        // soft-threshold
-        let st = if t > c {
-            t - c
-        } else if t < -c {
-            t + c
-        } else {
-            0.0
-        };
-        let d = st - b[k];
-        val += d * d;
-    }
-    // Mu term
-    val += mu * (alpha - 1.0) * (alpha - 1.0);
-    val
-}
-
 /// Compute the proximal operator given residual r.
 ///
 /// Port of `prox_zz_given_r()` in `hierNet.c`.

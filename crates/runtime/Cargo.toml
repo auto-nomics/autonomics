@@ -20,6 +20,10 @@ chembl = { path = "../chembl" }
 rcsb = { path = "../rcsb" }
 string-sdk = { path = "../string-sdk" }
 kegg = { path = "../kegg" }
+alphafold = { path = "../alphafold" }
+interpro = { path = "../interpro" }
+pubchem = { path = "../pubchem" }
+clinicaltrials = { path = "../clinicaltrials" }
 gwascatalog-sdk = { path = "../gwascatalog-sdk" }
 data-engine = { path = "../data-engine" }
 data-engine-tools = { path = "../data-engine-tools" }
@@ -38,6 +42,7 @@ tokio-util = "0.7"
 thiserror = { workspace = true }
 toml = "0.8"
 tracing = { workspace = true }
+rusqlite = "0.40.1"
 arc-swap.workspace = true
 serde_json = { workspace = true }
 uuid = { version = "1.12", features = ["v4", "serde"] }

@@ -49,6 +49,9 @@ mockall = "0.14"
 
 [features]
 default = []
+# Exposes test-only constructors (e.g. `MessageStream::from_events`) to
+# downstream integration tests.
+test-util = []
 
 [dev-dependencies]
 dotenvy = "0.15"

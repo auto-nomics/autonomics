@@ -1,0 +1,18 @@
+services:
+  timesfm:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: localhost/atc/timesfm:2.5-200m-r1
+    ports:
+      - "8000:8000"
+    environment:
+      TIMESFM_CHECKPOINT: /opt/timesfm/checkpoint
+      TIMESFM_LOCAL_FILES_ONLY: true
+      TIMESFM_DEVICE: ${TIMESFM_DEVICE:-cpu}
+      TIMESFM_EAGER_LOAD: ${TIMESFM_EAGER_LOAD:-false}
+    volumes:
+      - timesfm-cache:/cache/timesfm
+
+volumes:
+  timesfm-cache:

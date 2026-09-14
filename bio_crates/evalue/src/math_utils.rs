@@ -131,7 +131,8 @@ where
         };
 
         // Check if s is acceptable; if not, use bisection
-        let cond1 = !(s >= (3.0 * a + b) / 4.0 && s <= b) && !(s <= (3.0 * a + b) / 4.0 && s >= b);
+        let interp_bound = (3.0 * a + b) / 4.0;
+        let cond1 = !((s >= interp_bound && s <= b) || (s <= interp_bound && s >= b));
         let cond2 = mflag && (s - b).abs() >= (b - c).abs() / 2.0;
         let cond3 = !mflag && (s - b).abs() >= (c - d).abs() / 2.0;
         let cond4 = mflag && (b - c).abs() < tol;

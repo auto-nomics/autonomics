@@ -85,7 +85,7 @@ impl App {
 
         // The main loop is async (tokio::select! driven); run it on the
         // existing tokio runtime that also hosts the agent task.
-        let runtime = self._runtime.take().expect("runtime already consumed");
+        let runtime = self.runtime.take().expect("runtime already consumed");
         let result = runtime.block_on(self.run_loop(&mut terminal));
 
         // Stop accepting external API requests before agents and shared

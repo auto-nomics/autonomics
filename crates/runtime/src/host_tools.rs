@@ -3,15 +3,9 @@
 //! Each tool wraps a [`HostControl`] command and exposes it to the LLM as
 //! a callable function. Agents use these tools to spawn peers, manage
 //! topology, send messages, and query system status.
-//!
-//! Some tools (connect_agents, disconnect_agents, reset_network) are
-//! currently disabled — multi-agent cooperation is delegate-driven.
-//! Their struct definitions are kept for future use.
-
-#![allow(dead_code)]
 
 use agentik_core::tools::{ToolContext, ToolFunction, ToolRegistration};
-use agentik_network::{EdgeTrigger, TerminationSpec};
+use agentik_network::TerminationSpec;
 use agentik_proc::tool;
 use agentik_sdk::types::ToolResult;
 use async_trait::async_trait;
@@ -70,12 +64,6 @@ pub fn host_tools(
         ToolRegistration::from(GetAgentHistoryTool {
             control: ctrl.clone(),
         }),
-        // ── Topology-edge tools disabled ──
-        // Multi-agent cooperation is now fully delegate-driven. Agents
-        // discover peers via route_task/get_agent_info and delegate via
-        // delegate_to. No explicit topology graph needed.
-        // ToolRegistration::from(ConnectAgentsTool { control: ctrl.clone() }),
-        // ToolRegistration::from(DisconnectAgentsTool { control: ctrl.clone() }),
         ToolRegistration::from(SetTerminationTool {
             control: ctrl.clone(),
         }),
@@ -88,7 +76,6 @@ pub fn host_tools(
         ToolRegistration::from(InterruptAgentTool {
             control: ctrl.clone(),
         }),
-        // ToolRegistration::from(ResetNetworkTool { control: ctrl.clone() }),
         ToolRegistration::from(InjectPromptsTool { control: ctrl }),
     ]
 }
@@ -586,94 +573,6 @@ impl ToolFunction for GetAgentHistoryTool {
     }
 }
 
-// Connect Agents (disabled — delegate-driven cooperation)
-// ═══════════════════════════════════════════════════════════════════════
-
-// ═══════════════════════════════════════════════════════════════════════
-
-#[tool(
-    name = "connect_agents",
-    description = "Create a directed topology edge from one agent to another. \
-                   When the source agent completes its turn (Done), its output \
-                   is forwarded to the target agent."
-)]
-struct ConnectAgentsInput {
-    /// Source agent name.
-    from: String,
-    /// Target agent name.
-    to: String,
-    /// Trigger type: "on_done" (fire when source completes) or \
-    /// "on_pattern" (fire when source response contains pattern).
-    trigger: String,
-    /// Pattern for on_pattern trigger (ignored for on_done).
-    #[serde(default)]
-    pattern: Option<String>,
-}
-
-struct ConnectAgentsTool {
-    control: HostControl,
-}
-
-#[async_trait]
-impl ToolFunction for ConnectAgentsTool {
-    type Input = ConnectAgentsInput;
-
-    async fn run(
-        &self,
-        input: ConnectAgentsInput,
-    ) -> Result<ToolResult, agentik_core::tools::ToolError> {
-        let trigger = match input.trigger.as_str() {
-            "on_done" | "done" => EdgeTrigger::OnDone,
-            "on_pattern" | "pattern" => EdgeTrigger::OnPattern {
-                pattern: input.pattern.unwrap_or_default(),
-            },
-            other => {
-                return Ok(ToolResult::success(format!(
-                    "Unknown trigger '{other}'. Use 'on_done' or 'on_pattern'."
-                )));
-            }
-        };
-        self.control.connect(&input.from, &input.to, trigger);
-        Ok(ToolResult::success(format!(
-            "Connected {} → {}.",
-            input.from, input.to
-        )))
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-// Disconnect Agents
-// ═══════════════════════════════════════════════════════════════════════
-
-#[tool(
-    name = "disconnect_agents",
-    description = "Remove all topology edges from one agent to another."
-)]
-struct DisconnectAgentsInput {
-    from: String,
-    to: String,
-}
-
-struct DisconnectAgentsTool {
-    control: HostControl,
-}
-
-#[async_trait]
-impl ToolFunction for DisconnectAgentsTool {
-    type Input = DisconnectAgentsInput;
-
-    async fn run(
-        &self,
-        input: DisconnectAgentsInput,
-    ) -> Result<ToolResult, agentik_core::tools::ToolError> {
-        self.control.disconnect(&input.from, &input.to);
-        Ok(ToolResult::success(format!(
-            "Disconnected {} → {}.",
-            input.from, input.to
-        )))
-    }
-}
-
 // ═══════════════════════════════════════════════════════════════════════
 // Set Termination
 // ═══════════════════════════════════════════════════════════════════════
@@ -702,8 +601,6 @@ impl ToolFunction for SetTerminationTool {
         &self,
         input: SetTerminationInput,
     ) -> Result<ToolResult, agentik_core::tools::ToolError> {
-        use agentik_network::TerminationSpec;
-
         let spec = match parse_termination(&input.spec) {
             Ok(s) => s,
             Err(e) => return Ok(ToolResult::success(format!("Invalid spec: {e}"))),
@@ -884,35 +781,6 @@ impl ToolFunction for InterruptAgentTool {
              available for new messages. Reason: {}",
             input.agent_name, reason
         )))
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-// Reset Network
-// ═══════════════════════════════════════════════════════════════════════
-
-#[tool(
-    name = "reset_network",
-    description = "Reset routing state (message buffers, round counts, finished flag) \
-                   while keeping the topology graph intact. Use this to restart \
-                   a run on the same topology."
-)]
-struct ResetNetworkInput {}
-
-struct ResetNetworkTool {
-    control: HostControl,
-}
-
-#[async_trait]
-impl ToolFunction for ResetNetworkTool {
-    type Input = ResetNetworkInput;
-
-    async fn run(
-        &self,
-        _input: ResetNetworkInput,
-    ) -> Result<ToolResult, agentik_core::tools::ToolError> {
-        self.control.reset_run_state();
-        Ok(ToolResult::success("Network routing state reset."))
     }
 }
 
