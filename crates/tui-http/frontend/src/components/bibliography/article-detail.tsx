@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
   BookOpen,
   ExternalLink,
@@ -53,6 +55,80 @@ import {
 } from "@/lib/bib-api";
 
 const noteTypes = ["note", "highlight", "comment"];
+
+/// Rewrite `images/<name>` figure references — the only relative links
+/// MinerU markdown carries — to the per-article serving route; absolute
+/// URLs pass through untouched.
+function figureSrc(raw: string, articleId: string): string {
+  const isRelative = !/^[a-z][a-z0-9+.-]*:/i.test(raw);
+  if (!isRelative || !raw.includes("images/")) {
+    return raw;
+  }
+  const name = raw.substring(raw.lastIndexOf("/") + 1);
+  return `/api/v1/bib/articles/${encodeURIComponent(articleId)}/fulltext/images/${encodeURIComponent(name)}`;
+}
+
+function markdownComponents(articleId: string) {
+  return {
+    a: ({ children, href }: { children?: ReactNode; href?: string }) => (
+      <a href={href} target="_blank" rel="noreferrer" className="text-primary underline underline-offset-2">
+        {children}
+      </a>
+    ),
+    blockquote: ({ children }: { children?: ReactNode }) => (
+      <blockquote className="my-3 border-l-2 pl-3 text-muted-foreground">{children}</blockquote>
+    ),
+    code: ({ children }: { children?: ReactNode }) => (
+      <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">{children}</code>
+    ),
+    h1: ({ children }: { children?: ReactNode }) => (
+      <h1 className="mb-2 mt-4 text-lg font-semibold">{children}</h1>
+    ),
+    h2: ({ children }: { children?: ReactNode }) => (
+      <h2 className="mb-2 mt-4 text-base font-semibold">{children}</h2>
+    ),
+    h3: ({ children }: { children?: ReactNode }) => (
+      <h3 className="mb-1 mt-3 text-sm font-semibold">{children}</h3>
+    ),
+    h4: ({ children }: { children?: ReactNode }) => (
+      <h4 className="mb-1 mt-3 text-sm font-semibold">{children}</h4>
+    ),
+    img: ({ src, alt }: { src?: string; alt?: string }) => {
+      const raw = typeof src === "string" ? src : "";
+      return (
+        <img
+          src={figureSrc(raw, articleId)}
+          alt={alt ?? ""}
+          className="my-4 max-w-full rounded-md border"
+          loading="lazy"
+        />
+      );
+    },
+    ol: ({ children }: { children?: ReactNode }) => (
+      <ol className="my-2 list-decimal space-y-1 pl-5 text-sm leading-6">{children}</ol>
+    ),
+    p: ({ children }: { children?: ReactNode }) => (
+      <p className="my-2 text-sm leading-6">{children}</p>
+    ),
+    pre: ({ children }: { children?: ReactNode }) => (
+      <pre className="my-3 overflow-x-auto rounded-md border bg-muted/50 p-3 text-xs">{children}</pre>
+    ),
+    table: ({ children }: { children?: ReactNode }) => (
+      <div className="my-4 overflow-x-auto">
+        <table className="w-full border-collapse text-sm">{children}</table>
+      </div>
+    ),
+    th: ({ children }: { children?: ReactNode }) => (
+      <th className="border bg-muted/50 px-2 py-1 text-left font-medium">{children}</th>
+    ),
+    td: ({ children }: { children?: ReactNode }) => (
+      <td className="border px-2 py-1 align-top">{children}</td>
+    ),
+    ul: ({ children }: { children?: ReactNode }) => (
+      <ul className="my-2 list-disc space-y-1 pl-5 text-sm leading-6">{children}</ul>
+    ),
+  };
+}
 
 interface ArticleDetailPanelProps {
   detail: ArticleDetail | null;
@@ -214,13 +290,20 @@ export function ArticleDetailPanel({
               }}
             />
           </div>
-          {detail.fulltext?.text_content && (
-            <ScrollArea className="mt-3 h-64 rounded-md border p-4">
-              <p className="whitespace-pre-wrap text-sm leading-6">
-                {detail.fulltext.text_content}
-              </p>
-            </ScrollArea>
-          )}
+          {detail.fulltext?.text_content &&
+            (detail.fulltext.text_format === "markdown" ? (
+              <ScrollArea className="mt-3 h-96 rounded-md border p-4">
+                <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents(article.id)}>
+                  {detail.fulltext.text_content}
+                </ReactMarkdown>
+              </ScrollArea>
+            ) : (
+              <ScrollArea className="mt-3 h-64 rounded-md border p-4">
+                <p className="whitespace-pre-wrap text-sm leading-6">
+                  {detail.fulltext.text_content}
+                </p>
+              </ScrollArea>
+            ))}
           {detail.fulltext?.extract_status === "failed" && detail.fulltext.extract_error && (
             <p className="mt-2 break-words text-xs text-destructive">
               {detail.fulltext.extract_error}

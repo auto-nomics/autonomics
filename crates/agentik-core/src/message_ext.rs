@@ -7,6 +7,9 @@ use uuid::Uuid;
 pub trait AgentMessageExt {
     fn system(text: impl Into<String>) -> Self;
     fn user(text: impl Into<String>) -> Self;
+    /// User message from arbitrary content blocks (e.g. a text marker
+    /// followed by images returned by a tool).
+    fn user_blocks(blocks: Vec<ContentBlock>) -> Self;
     fn assistant_text(text: impl Into<String>) -> Self;
     fn assistant_tool_use(id: impl Into<String>, name: impl Into<String>, input: Value) -> Self;
     fn tool_result(
@@ -43,6 +46,20 @@ impl AgentMessageExt for Message {
             type_: "message".to_string(),
             role: Role::User,
             content: vec![ContentBlock::Text { text: text.into() }],
+            model: None,
+            stop_reason: None,
+            stop_sequence: None,
+            usage: None,
+            request_id: None,
+        }
+    }
+
+    fn user_blocks(blocks: Vec<ContentBlock>) -> Self {
+        Self {
+            id: Uuid::new_v4().to_string(),
+            type_: "message".to_string(),
+            role: Role::User,
+            content: blocks,
             model: None,
             stop_reason: None,
             stop_sequence: None,

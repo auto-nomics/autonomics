@@ -25,7 +25,7 @@ use crate::error::{Error, Result};
 use crate::extract::{ExtractedText, OcrFallbackExtractor, TextExtractor};
 use crate::mineru::MineruExtractor;
 use crate::shared::BibShared;
-use crate::stored_files::vfs_virtual_path;
+use crate::stored_files::{figure_object_path, vfs_virtual_path};
 use bib_types::FileFormat;
 
 /// How many extractions may run concurrently.
@@ -179,7 +179,16 @@ pub async fn run_extraction_parts(
     };
 
     match extractor.extract(&content, fulltext.file_format).await {
-        Ok(extracted) => {
+        Ok(mut extracted) => {
+            // Persist figure images before recording success: the markdown
+            // is the product, so an image write failure only downgrades to
+            // a warning instead of failing the extraction. Stale figures
+            // from a previous run are NOT cleaned here — every claimable
+            // row has `text_content = NULL` (`restart_extraction` clears
+            // it), so old-vs-new diffing happens at the restart/replace/
+            // delete entry points in tui-http instead.
+            store_figures(storage, article_id, &mut extracted).await;
+
             bib.record_extraction_success(
                 article_id,
                 &extracted.text,
@@ -192,6 +201,7 @@ pub async fn run_extraction_parts(
                 article_id,
                 extractor = extracted.extractor,
                 chars = extracted.text.chars().count(),
+                figures = extracted.images.len(),
                 "full-text extraction finished"
             );
             Ok(extracted)
@@ -200,6 +210,35 @@ pub async fn run_extraction_parts(
             let message = error.to_string();
             record_failure(bib, article_id, &message).await;
             Err(message)
+        }
+    }
+}
+
+/// Write extracted figure images into the VFS under their stable names.
+///
+/// Best-effort by design: the markdown text is the primary product, so a
+/// failed image write downgrades to a warning instead of failing the
+/// extraction. Image buffers are consumed as they are written to keep the
+/// peak memory of a figure-heavy paper bounded.
+async fn store_figures(
+    storage: &vfs::OpendalFileStorage,
+    article_id: &str,
+    extracted: &mut ExtractedText,
+) {
+    for image in &mut extracted.images {
+        let object = figure_object_path(article_id, &image.name);
+        let Some(virtual_path) = vfs_virtual_path(&object) else {
+            tracing::warn!(article_id, name = %image.name, "figure path is not VFS-addressable");
+            continue;
+        };
+        let data = std::mem::take(&mut image.data);
+        if let Err(error) = storage.write_bytes(&virtual_path, data).await {
+            tracing::warn!(
+                article_id,
+                name = %image.name,
+                error = %error,
+                "failed to store figure image"
+            );
         }
     }
 }
@@ -283,6 +322,7 @@ pub async fn sweep_pending(shared: &BibShared) {
 mod tests {
     use super::*;
     use crate::bib_base::BibBase;
+    use crate::extract::ExtractedImage;
     use crate::fulltext::PendingExtraction;
     use crate::shared::BibShared;
     use crate::stored_files::stored_fulltext;
@@ -481,6 +521,80 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
         panic!("sweep did not finish the pending extraction in time");
+    }
+
+    #[tokio::test]
+    async fn figures_stored_and_orphans_cleaned_on_re_extraction() {
+        let shared = shared_with_temp_storage().await;
+        let article_id = "doi:10.1/figs";
+        upload_pending(&shared, article_id, b"figure source", "p.txt").await;
+        let storage = shared.file_storage.as_ref().unwrap();
+
+        // A scripted extractor: run 1 yields two figures, run 2 rewrites
+        // one — re-extraction overwrites the survivor in place (orphan
+        // deletion lives at the restart/replace/delete entry points, not
+        // here, because restart clears the old text before claiming).
+        struct ScriptedExtractor(std::sync::Mutex<std::collections::VecDeque<ExtractedText>>);
+        #[async_trait::async_trait]
+        impl TextExtractor for ScriptedExtractor {
+            fn name(&self) -> &'static str {
+                "scripted"
+            }
+            async fn extract(&self, _content: &[u8], _format: FileFormat) -> Result<ExtractedText> {
+                Ok(self
+                    .0
+                    .lock()
+                    .unwrap()
+                    .pop_front()
+                    .expect("scripted extractor exhausted"))
+            }
+        }
+        let extractor = ScriptedExtractor(std::sync::Mutex::new(std::collections::VecDeque::from(
+            vec![
+                ExtractedText {
+                    text: "![](images/aaa.jpg) ![](images/bbb.png)".to_owned(),
+                    format: BibTextFormat::Markdown,
+                    extractor: "scripted",
+                    images: vec![
+                        ExtractedImage {
+                            name: "aaa.jpg".to_owned(),
+                            data: vec![1],
+                        },
+                        ExtractedImage {
+                            name: "bbb.png".to_owned(),
+                            data: vec![2, 2],
+                        },
+                    ],
+                },
+                ExtractedText {
+                    text: "![](images/aaa.jpg)".to_owned(),
+                    format: BibTextFormat::Markdown,
+                    extractor: "scripted",
+                    images: vec![ExtractedImage {
+                        name: "aaa.jpg".to_owned(),
+                        data: vec![7, 7, 7],
+                    }],
+                },
+            ],
+        )));
+
+        run_extraction_parts(&shared.bib, storage, &extractor, article_id)
+            .await
+            .unwrap();
+        let figure = |name: &str| vfs_virtual_path(&figure_object_path(article_id, name)).unwrap();
+        assert_eq!(storage.content_length(&figure("aaa.jpg")).await.unwrap(), 1);
+        assert_eq!(storage.content_length(&figure("bbb.png")).await.unwrap(), 2);
+        let stored = shared.bib.get_fulltext(article_id).await.unwrap().unwrap();
+        assert_eq!(stored.text_format, Some(BibTextFormat::Markdown));
+        assert_eq!(stored.extract_status, Some(ExtractStatus::Done));
+
+        assert!(shared.bib.restart_extraction(article_id).await.unwrap());
+        let extracted = run_extraction_parts(&shared.bib, storage, &extractor, article_id)
+            .await
+            .unwrap();
+        assert_eq!(extracted.images.len(), 1);
+        // The figure MinerU re-derived is overwritten in place.
+        assert_eq!(storage.content_length(&figure("aaa.jpg")).await.unwrap(), 3);
     }
 
     /// Minimal single-page PDF whose text pdf-extract can decode.

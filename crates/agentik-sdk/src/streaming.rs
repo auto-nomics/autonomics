@@ -134,7 +134,7 @@ pub struct MessageStream {
 impl MessageStream {
     /// Create a MessageStream from a predefined list of events and a final message.
     ///
-    /// Intended for unit tests. A background task drains the event list into the
+    /// Intended for tests. A background task drains the event list into the
     /// broadcast channel (after routing it through the same `accumulate_event`
     /// and `dispatch_event` helpers the production path uses), then delivers
     /// the accumulated final message through the oneshot completion channel.

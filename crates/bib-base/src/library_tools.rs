@@ -24,9 +24,10 @@ use std::sync::Arc;
 
 use agentik_core::tools::{ToolError, ToolFunction, ToolRegistration};
 use agentik_proc::tool;
-use agentik_sdk::types::ToolResult as AgentToolResult;
+use agentik_sdk::types::{ToolResult as AgentToolResult, ToolResultBlock};
 use async_trait::async_trait;
-use bib_types::{AddedBy, ArticleRole, CollectionStatus, FetchStatus, Identifier};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use bib_types::{AddedBy, ArticleRole, CollectionStatus, FetchStatus, Identifier, TextFormat};
 use europepmc::EuropePmcClient;
 
 use crate::bib_base::BibBase;
@@ -1831,14 +1832,160 @@ impl ToolFunction for BibExportTool {
 }
 
 // ===========================================================================
+// bib_read_figure — deliver one extracted figure image to the agent
+// ===========================================================================
+
+/// Upper bound for figures entering model context. Extraction caps stored
+/// figures at 15 MiB; this tighter limit keeps one oversized-but-legal
+/// object from flooding a request.
+const MAX_TOOL_FIGURE_BYTES: usize = 10 * 1024 * 1024;
+
+#[tool(
+    name = "bib_read_figure",
+    description = "Read one figure image from an article's markdown full text and return it \
+                  as an image block, for use with vision-capable models. \
+                  \
+                  Figure names appear inside the markdown full text (see it via \
+                  bib_get_article with include_fulltext=true) as `images/<name>.jpg` \
+                  references — pass either the bare name or the `images/`-prefixed \
+                  form copied verbatim from the markdown. \
+                  \
+                  Only markdown extractions (MinerU layout-aware) carry figures; \
+                  plain-text extractions have none. \
+                  \
+                  **Examples**: \
+                  • figure=\"images/3a1f02c9.jpg\" — copied from the markdown \
+                  • figure=\"3a1f02c9.jpg\" — bare name, same object"
+)]
+pub struct BibReadFigureInput {
+    #[desc = "Article ID whose full text references the figure"]
+    pub article_id: String,
+    #[desc = "Figure file name — bare (\"abc.jpg\") or images/-prefixed, as it appears in the markdown"]
+    pub figure: String,
+}
+
+/// Fetches one VFS-stored figure object as `[text summary, image block]`.
+///
+/// `storage` is `Option` so hosts without bibliography file storage can
+/// still register the tool set; calling it there reports a clear error.
+pub struct BibReadFigureTool {
+    pub bib: Arc<BibBase>,
+    pub storage: Option<Arc<vfs::OpendalFileStorage>>,
+}
+
+#[async_trait]
+impl ToolFunction for BibReadFigureTool {
+    type Input = BibReadFigureInput;
+
+    async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
+        let article_id = input.article_id.trim();
+        let fulltext = self
+            .bib
+            .get_fulltext(article_id)
+            .await
+            .map_err(box_error)?
+            .ok_or_else(|| ToolError::ExecutionFailed {
+                source: format!(
+                    "no full text stored for '{article_id}' — save the article and upload its \
+                     file first"
+                )
+                .into(),
+            })?;
+        if fulltext.text_format != Some(TextFormat::Markdown) {
+            return Err(ToolError::ExecutionFailed {
+                source: "this article's full text was not extracted as markdown, so it has no \
+                         figures (only MinerU layout-aware extractions carry them)"
+                    .into(),
+            });
+        }
+        let name =
+            crate::stored_files::sanitize_figure_name(input.figure.trim()).ok_or_else(|| {
+                ToolError::ExecutionFailed {
+                    source: "figure must be a plain file name ([A-Za-z0-9._-], no leading dot), \
+                             e.g. \"abc123.jpg\" or \"images/abc123.jpg\""
+                        .into(),
+                }
+            })?;
+        let media_type = match name.rsplit('.').next().unwrap_or_default() {
+            "jpg" | "jpeg" => "image/jpeg",
+            "png" => "image/png",
+            "gif" => "image/gif",
+            "webp" => "image/webp",
+            _ => {
+                return Err(ToolError::ExecutionFailed {
+                    source: format!(
+                        "unsupported figure type for '{name}' (expected jpg, png, gif, or webp)"
+                    )
+                    .into(),
+                });
+            }
+        };
+        let storage = self
+            .storage
+            .as_deref()
+            .ok_or_else(|| ToolError::ExecutionFailed {
+                source: "bibliography VFS storage is not configured in this host".into(),
+            })?;
+        let object = crate::stored_files::figure_object_path(&fulltext.article_id, &name);
+        let path = crate::stored_files::vfs_virtual_path(&object).ok_or_else(|| {
+            ToolError::ExecutionFailed {
+                source: "figure object path is not VFS-addressable".into(),
+            }
+        })?;
+        let length = storage.content_length(&path).await.map_err(|error| {
+            if error.kind() == opendal::ErrorKind::NotFound {
+                ToolError::ExecutionFailed {
+                    source: format!(
+                        "figure '{name}' not found — copy the exact name from the markdown's \
+                         images/ references (bib_get_article include_fulltext=true)"
+                    )
+                    .into(),
+                }
+            } else {
+                ToolError::ExecutionFailed {
+                    source: error.to_string().into(),
+                }
+            }
+        })?;
+        if length as usize > MAX_TOOL_FIGURE_BYTES {
+            return Err(ToolError::ExecutionFailed {
+                source: format!(
+                    "figure '{name}' is {length} bytes, above the {MAX_TOOL_FIGURE_BYTES} byte \
+                     tool limit"
+                )
+                .into(),
+            });
+        }
+        let data = crate::extraction::read_full(storage, &path)
+            .await
+            .map_err(|error| ToolError::ExecutionFailed {
+                source: error.to_string().into(),
+            })?;
+
+        let summary = serde_json::json!({
+            "article_id": fulltext.article_id,
+            "figure": name,
+            "bytes": data.len(),
+            "media_type": media_type,
+        });
+        Ok(AgentToolResult::with_blocks(vec![
+            ToolResultBlock::text(summary.to_string()),
+            ToolResultBlock::image_base64(media_type, STANDARD.encode(&data)),
+        ]))
+    }
+}
+
+// ===========================================================================
 // Registration
 // ===========================================================================
 
 /// Build [`ToolRegistration`]s for all library management tools.
 ///
 /// Requires a [`BibBase`] (for storage), a [`LiteratureGateway`] (for
-/// `bib_save` external fetching), and a shared [`EuropePmcClient`] (for
-/// the OA full-text auto-fetch inside `bib_save`).
+/// `bib_save` external fetching), a shared [`EuropePmcClient`] (for
+/// the OA full-text auto-fetch inside `bib_save`), and the VFS file
+/// storage (for `bib_read_figure` — pass `None` when the host runs
+/// without bibliography file storage).
 ///
 /// `epmc` should normally come from [`crate::BibShared::europe_pmc`] so
 /// every agent in a multi-agent host shares a single connection pool.
@@ -1866,6 +2013,10 @@ pub fn bib_library_registrations(
         R::from(BibRequestFulltextTool { bib: bib.clone() }),
         R::from(BibAddNoteTool { bib: bib.clone() }),
         R::from(BibDeleteTool { bib: bib.clone() }),
+        R::from(BibReadFigureTool {
+            bib: bib.clone(),
+            storage: Some(file_storage.clone()),
+        }),
         R::from(BibExportTool {
             bib,
             storage: file_storage,
@@ -2744,6 +2895,178 @@ mod tests {
                 .unwrap()
                 .len(),
             0
+        );
+    }
+    // ── bib_read_figure ──────────────────────────────────────────────────
+
+    async fn figure_tool_with_seeded_storage() -> (
+        BibReadFigureTool,
+        Arc<BibBase>,
+        Arc<vfs::OpendalFileStorage>,
+    ) {
+        let bib = Arc::new(BibBase::open_in_memory().await.unwrap());
+        let storage = Arc::new(vfs::OpendalFileStorage::new_temp());
+        let article = bib_types::Article::new("doi:10.1/figure-tool", "Figure tool test");
+        bib.upsert_article(&article).await.unwrap();
+        // A full-text row must exist before its extraction outcome can be
+        // recorded (record_extraction_success only UPDATEs).
+        bib.upsert_fulltext(&bib_types::FullText {
+            article_id: article.id.clone(),
+            file_path: "vfs:///literature/seeded/paper.pdf".to_owned(),
+            file_format: bib_types::FileFormat::Pdf,
+            text_content: None,
+            source: bib_types::FullTextSource::UserUpload,
+            file_hash: None,
+            file_size: None,
+            uploaded_at: None,
+            extract_status: None,
+            text_format: None,
+            extracted_by: None,
+            extract_error: None,
+        })
+        .await
+        .unwrap();
+        bib.record_extraction_success(
+            &article.id,
+            "![](images/aaa.jpg)",
+            TextFormat::Markdown,
+            "test-markdown",
+        )
+        .await
+        .unwrap();
+        let path = crate::stored_files::vfs_virtual_path(&crate::stored_files::figure_object_path(
+            &article.id,
+            "aaa.jpg",
+        ))
+        .unwrap();
+        storage.write_bytes(&path, vec![1, 2, 3, 4]).await.unwrap();
+        (
+            BibReadFigureTool {
+                bib: bib.clone(),
+                storage: Some(storage.clone()),
+            },
+            bib,
+            storage,
+        )
+    }
+
+    #[tokio::test]
+    async fn read_figure_returns_text_and_image_blocks() {
+        let (tool, _, _) = figure_tool_with_seeded_storage().await;
+
+        let result = tool
+            .run(BibReadFigureInput {
+                article_id: "doi:10.1/figure-tool".into(),
+                figure: "images/aaa.jpg".into(),
+            })
+            .await
+            .unwrap();
+
+        let blocks = match result.content {
+            ToolResultContent::Blocks(blocks) => blocks,
+            other => panic!("expected blocks, got {other:?}"),
+        };
+        assert_eq!(blocks.len(), 2);
+        assert!(matches!(&blocks[0], ToolResultBlock::Text { text } if text.contains("aaa.jpg")));
+        match &blocks[1] {
+            ToolResultBlock::Image {
+                source: agentik_sdk::types::ToolImageSource::Base64 { media_type, data },
+            } => {
+                assert_eq!(media_type, "image/jpeg");
+                assert_eq!(
+                    data.as_str(),
+                    STANDARD.encode([1, 2, 3, 4]),
+                    "image payload should be the stored bytes, base64-encoded"
+                );
+            }
+            other => panic!("expected an image block, got {other:?}"),
+        }
+
+        // The bare name without the images/ prefix resolves to the same object.
+        let result = tool
+            .run(BibReadFigureInput {
+                article_id: "doi:10.1/figure-tool".into(),
+                figure: "aaa.jpg".into(),
+            })
+            .await
+            .unwrap();
+        assert!(matches!(result.content, ToolResultContent::Blocks(_)));
+    }
+
+    #[tokio::test]
+    async fn read_figure_errors_are_actionable() {
+        let (tool, bib, _) = figure_tool_with_seeded_storage().await;
+
+        // Unknown article.
+        let error = tool
+            .run(BibReadFigureInput {
+                article_id: "doi:10.1/missing".into(),
+                figure: "aaa.jpg".into(),
+            })
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("no full text"), "error was: {error}");
+
+        // Plain-text extraction: no figures at all.
+        bib.record_extraction_success(
+            "doi:10.1/figure-tool",
+            "plain words",
+            TextFormat::Plain,
+            "simple",
+        )
+        .await
+        .unwrap();
+        let error = tool
+            .run(BibReadFigureInput {
+                article_id: "doi:10.1/figure-tool".into(),
+                figure: "aaa.jpg".into(),
+            })
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("markdown"), "error was: {error}");
+
+        // Restore markdown; now a missing figure and a bad name.
+        bib.record_extraction_success(
+            "doi:10.1/figure-tool",
+            "![](images/aaa.jpg)",
+            TextFormat::Markdown,
+            "test-markdown",
+        )
+        .await
+        .unwrap();
+        let error = tool
+            .run(BibReadFigureInput {
+                article_id: "doi:10.1/figure-tool".into(),
+                figure: "nope.jpg".into(),
+            })
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("not found"), "error was: {error}");
+        // Rejected outright: not a plain file name.
+        let error = tool
+            .run(BibReadFigureInput {
+                article_id: "doi:10.1/figure-tool".into(),
+                figure: "..".into(),
+            })
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("plain file name"), "error was: {error}");
+        // Traversal is neutralized to the basename, then fails the type check.
+        let error = tool
+            .run(BibReadFigureInput {
+                article_id: "doi:10.1/figure-tool".into(),
+                figure: "../etc/passwd".into(),
+            })
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("unsupported figure type"),
+            "error was: {error}"
         );
     }
 }

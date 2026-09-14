@@ -26,11 +26,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use bib_types::FileFormat;
+use bib_types::{FileFormat, TextFormat};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
-use crate::extract::{ExtractedText, TextExtractor};
+use crate::extract::{ExtractedImage, ExtractedText, TextExtractor};
 
 /// Default MinerU cloud endpoint when `MINERU_API_URL` is unset.
 pub const DEFAULT_API_URL: &str = "https://mineru.net";
@@ -45,6 +45,11 @@ const POLL_INTERVAL: Duration = Duration::from_secs(5);
 /// Poll at most 120 × 5 s ≈ 10 min, matching the overall deadline.
 const MAX_POLL_ATTEMPTS: usize = 120;
 const OVERALL_DEADLINE: Duration = Duration::from_secs(600);
+
+/// Defensive caps on the figures kept from a result zip (a paper is far
+/// below both; these exist so a pathological zip cannot balloon memory).
+const MAX_FIGURE_IMAGES: usize = 64;
+const MAX_FIGURE_BYTES: usize = 15 * 1024 * 1024;
 
 // --- MinerU v4 API wire types (private) -------------------------------------
 
@@ -118,8 +123,8 @@ impl MineruExtractor {
         }
     }
 
-    /// Run the v4 upload → poll → download flow and return the markdown.
-    async fn extract_markdown(&self, pdf_bytes: Vec<u8>, api_key: &str) -> Result<String> {
+    /// Run the v4 upload → poll → download flow and return the zip output.
+    async fn extract_markdown(&self, pdf_bytes: Vec<u8>, api_key: &str) -> Result<MineruZipOutput> {
         let deadline = tokio::time::Instant::now() + OVERALL_DEADLINE;
         let zip_url = self.submit_and_poll(pdf_bytes, api_key, deadline).await?;
         let zip_bytes = self.download_zip(&zip_url).await?;
@@ -314,25 +319,40 @@ impl TextExtractor for MineruExtractor {
             }
             return Err(Error::Unknown("MINERU_API_KEY is not set".into()));
         };
-        let markdown = self.extract_markdown(content.to_vec(), api_key).await?;
-        Ok(ExtractedText::markdown(markdown))
+        let output = self.extract_markdown(content.to_vec(), api_key).await?;
+        Ok(ExtractedText {
+            text: output.markdown,
+            format: TextFormat::Markdown,
+            extractor: "mineru",
+            images: output.images,
+        })
     }
 }
 
-/// Pull `full.md` out of a MinerU result zip.
+/// The parts of a MinerU result zip the bibliography pipeline consumes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MineruZipOutput {
+    pub markdown: String,
+    pub images: Vec<ExtractedImage>,
+}
+
+/// Pull `full.md` (and the referenced figure images) out of a MinerU
+/// result zip.
 ///
 /// The zip nests entries under the upload name (`upload/full.md`); older
-/// downloads may use a bare `full.md`. Everything else (images, layout and
-/// middle JSON) is ignored — the bibliography pipeline only consumes
-/// markdown. A missing `full.md` fails with the entry list so operators
-/// can see what the service actually returned.
-pub fn markdown_from_zip(zip_bytes: &[u8]) -> Result<String> {
+/// downloads may use a bare `full.md`. Images live under `*/images/*` with
+/// content-derived names, so they are stored verbatim for later serving.
+/// Layout/middle JSON and anything else is ignored. A missing `full.md`
+/// fails with the entry list so operators can see what the service
+/// actually returned.
+pub fn markdown_from_zip(zip_bytes: &[u8]) -> Result<MineruZipOutput> {
     let reader = std::io::Cursor::new(zip_bytes);
     let mut archive = zip::ZipArchive::new(reader)
         .map_err(|e| Error::Unknown(format!("MinerU result zip unreadable: {e}")))?;
 
     let mut all_names = Vec::with_capacity(archive.len());
     let mut markdown: Option<String> = None;
+    let mut images: Vec<ExtractedImage> = Vec::new();
     for index in 0..archive.len() {
         let mut entry = archive
             .by_index(index)
@@ -345,14 +365,56 @@ pub fn markdown_from_zip(zip_bytes: &[u8]) -> Result<String> {
                 .read_to_string(&mut text)
                 .map_err(|e| Error::Unknown(format!("MinerU full.md unreadable: {e}")))?;
             markdown = Some(text);
+        } else if is_image_entry(&name) {
+            let base = name.rsplit('/').next().unwrap_or(&name);
+            match crate::stored_files::sanitize_figure_name(base) {
+                Some(base) if !images.iter().any(|image| image.name == base) => {
+                    let mut data = Vec::new();
+                    match entry.read_to_end(&mut data) {
+                        Ok(_) if data.len() <= MAX_FIGURE_BYTES => {
+                            if images.len() < MAX_FIGURE_IMAGES {
+                                images.push(ExtractedImage { name: base, data });
+                            } else {
+                                tracing::warn!(
+                                    entry = %name,
+                                    "MinerU zip has more than {MAX_FIGURE_IMAGES} figures; skipping the rest"
+                                );
+                            }
+                        }
+                        Ok(_) => tracing::warn!(
+                            entry = %name,
+                            bytes = data.len(),
+                            "MinerU figure exceeds {MAX_FIGURE_BYTES} bytes; skipping"
+                        ),
+                        Err(error) => tracing::warn!(
+                            entry = %name,
+                            error = %error,
+                            "MinerU figure unreadable; skipping"
+                        ),
+                    }
+                }
+                _ => tracing::warn!(entry = %name, "MinerU figure has unsafe name; skipping"),
+            }
         }
     }
 
-    markdown.ok_or_else(|| {
+    let markdown = markdown.ok_or_else(|| {
         Error::Unknown(format!(
             "MinerU result zip has no full.md (entries: {all_names:?})"
         ))
-    })
+    })?;
+    Ok(MineruZipOutput { markdown, images })
+}
+
+/// Zip entries under an `images/` directory with a known raster extension.
+fn is_image_entry(name: &str) -> bool {
+    let under_images = name.contains("/images/") || name.starts_with("images/");
+    let extension = name.rsplit('.').next().unwrap_or_default();
+    under_images
+        && matches!(
+            extension.to_ascii_lowercase().as_str(),
+            "jpg" | "jpeg" | "png" | "gif" | "webp"
+        )
 }
 
 // ---------------------------------------------------------------------------
@@ -365,12 +427,21 @@ mod tests {
     use std::io::Write;
 
     fn build_test_zip(entries: &[(&str, &str)]) -> Vec<u8> {
+        build_test_zip_binary(
+            &entries
+                .iter()
+                .map(|(name, content)| (*name, content.as_bytes().to_vec()))
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    fn build_test_zip_binary(entries: &[(&str, Vec<u8>)]) -> Vec<u8> {
         let cursor = std::io::Cursor::new(Vec::new());
         let mut zip = zip::ZipWriter::new(cursor);
         let options: zip::write::SimpleFileOptions = Default::default();
         for (name, content) in entries {
             zip.start_file(*name, options).expect("start entry");
-            zip.write_all(content.as_bytes()).expect("write entry");
+            zip.write_all(content).expect("write entry");
         }
         let cursor = zip.finish().expect("finish zip");
         cursor.into_inner()
@@ -383,13 +454,19 @@ mod tests {
             ("upload/full.md", "# Title\n\nbody"),
             ("upload/images/fig1.jpg", "\u{ff}\u{d8}fake"),
         ]);
-        assert_eq!(markdown_from_zip(&bytes).unwrap(), "# Title\n\nbody");
+        let output = markdown_from_zip(&bytes).unwrap();
+        assert_eq!(output.markdown, "# Title\n\nbody");
+        assert_eq!(output.images.len(), 1);
+        assert_eq!(output.images[0].name, "fig1.jpg");
+        assert_eq!(output.images[0].data, "\u{ff}\u{d8}fake".as_bytes());
     }
 
     #[test]
     fn markdown_from_zip_with_bare_name() {
         let bytes = build_test_zip(&[("full.md", "bare")]);
-        assert_eq!(markdown_from_zip(&bytes).unwrap(), "bare");
+        let output = markdown_from_zip(&bytes).unwrap();
+        assert_eq!(output.markdown, "bare");
+        assert!(output.images.is_empty());
     }
 
     #[test]
@@ -398,6 +475,43 @@ mod tests {
         let error = markdown_from_zip(&bytes).unwrap_err().to_string();
         assert!(error.contains("no full.md"), "error was: {error}");
         assert!(error.contains("upload/middle.json"), "error was: {error}");
+    }
+
+    #[test]
+    fn images_collected_deduped_and_filtered() {
+        let bytes = build_test_zip_binary(&[
+            (
+                "upload/full.md",
+                b"![](images/aaa.jpg) ![](images/bbb.png)".to_vec(),
+            ),
+            ("upload/images/aaa.jpg", vec![1, 2, 3]),
+            ("upload/images/bbb.png", vec![4]),
+            ("upload/images/.hidden.jpg", vec![5]), // leading dot: skipped
+            ("upload/images/notes.txt", vec![6]),   // not an image: skipped
+            ("upload/images/sub/ccc.jpg", vec![7]), // nested: basename kept
+            ("images/ddd.webp", vec![8]),           // bare images/ root: kept
+        ]);
+        let output = markdown_from_zip(&bytes).unwrap();
+        let names: Vec<&str> = output.images.iter().map(|i| i.name.as_str()).collect();
+        assert_eq!(names, ["aaa.jpg", "bbb.png", "ccc.jpg", "ddd.webp"]);
+        assert_eq!(output.images[0].data, vec![1, 2, 3]);
+        assert_eq!(output.images[3].data, vec![8]);
+    }
+
+    #[test]
+    fn image_count_capped() {
+        let mut entries = vec![("upload/full.md".to_owned(), b"m".to_vec())];
+        for i in 0..(MAX_FIGURE_IMAGES + 5) {
+            entries.push((format!("upload/images/f{i:03}.jpg"), vec![i as u8]));
+        }
+        let bytes = build_test_zip_binary(
+            &entries
+                .iter()
+                .map(|(n, d)| (n.as_str(), d.clone()))
+                .collect::<Vec<_>>(),
+        );
+        let output = markdown_from_zip(&bytes).unwrap();
+        assert_eq!(output.images.len(), MAX_FIGURE_IMAGES);
     }
 
     #[tokio::test]

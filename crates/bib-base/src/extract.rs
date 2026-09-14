@@ -95,6 +95,17 @@ fn with_panic_guard<T>(f: impl FnOnce() -> T) -> std::result::Result<T, String> 
 // Types
 // ---------------------------------------------------------------------------
 
+/// A figure image extracted alongside the markdown text.
+///
+/// `name` is the bare file name referenced from the markdown
+/// (`![](images/<name>.jpg)`); MinerU derives it from the image content,
+/// so it is stable across re-extractions of the same PDF.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtractedImage {
+    pub name: String,
+    pub data: Vec<u8>,
+}
+
 /// Plain text extracted from a document.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExtractedText {
@@ -105,6 +116,9 @@ pub struct ExtractedText {
     pub format: TextFormat,
     /// Which extractor produced this text (for provenance columns).
     pub extractor: &'static str,
+    /// Figure images carried by layout-aware extractors. Empty for the
+    /// plain-text extractors.
+    pub images: Vec<ExtractedImage>,
 }
 
 impl ExtractedText {
@@ -114,6 +128,7 @@ impl ExtractedText {
             text: text.into(),
             format: TextFormat::Plain,
             extractor: "simple",
+            images: Vec::new(),
         }
     }
 
@@ -123,6 +138,7 @@ impl ExtractedText {
             text: text.into(),
             format: TextFormat::Markdown,
             extractor: "mineru",
+            images: Vec::new(),
         }
     }
 }
@@ -255,6 +271,7 @@ impl TextExtractor for OcrFallbackExtractor {
                 text: normalize_whitespace(&text),
                 format: TextFormat::Plain,
                 extractor: "simple+ocr-fallback",
+                images: Vec::new(),
             }),
             _ => match simple {
                 Ok(_text) => Err(Error::Unknown(

@@ -34,6 +34,8 @@ schemars.workspace = true
 [dev-dependencies]
 dotenvy = "0.15"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Enables `MessageStream::from_events` for mock-backed streaming tests.
+agentik-sdk = { path = "../agentik-sdk", features = ["test-util"] }
 
 [lints]
 workspace = true

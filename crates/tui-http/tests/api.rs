@@ -369,7 +369,7 @@ async fn bib_upload_preserves_and_serves_the_original_file() {
 
 #[tokio::test]
 async fn bib_reextract_resets_and_rewrites_the_text() {
-    let (app, _directory) = build_app_with_vfs().await;
+    let (app, _shared, _directory) = build_app_with_vfs().await;
 
     let response = app
         .clone()
@@ -421,6 +421,151 @@ async fn bib_reextract_resets_and_rewrites_the_text() {
 }
 
 #[tokio::test]
+async fn bib_serves_and_cleans_extracted_figures() {
+    let (app, shared, _directory) = build_app_with_vfs().await;
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/api/v1/bib/articles",
+            Some(r#"{ "title": "Figure test", "doi": "10.1000/figure-test" }"#.to_owned()),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let content = b"figure test source";
+    let multipart = format!(
+        "--boundary\r\ncontent-disposition: form-data; name=\"file\"; filename=\"note.txt\"\r\ncontent-type: text/plain\r\n\r\n{}\r\n--boundary--\r\n",
+        String::from_utf8_lossy(content)
+    );
+    let upload_request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/bib/articles/doi%3A10.1000%2Ffigure-test/fulltext")
+        .header("content-type", "multipart/form-data; boundary=boundary")
+        .body(Body::from(multipart))
+        .unwrap();
+    let response = app.clone().oneshot(upload_request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let uri = "/api/v1/bib/articles/doi%3A10.1000%2Ffigure-test/fulltext";
+    wait_for_extraction(&app, uri).await;
+
+    // Simulate a MinerU run: rewrite the row as markdown referencing two
+    // figures and store their bytes exactly as extraction would.
+    let article_id = "doi:10.1000/figure-test";
+    shared
+        .bib
+        .record_extraction_success(
+            article_id,
+            "![](images/aaa.jpg) text ![](images/bbb.png)",
+            bib_types::TextFormat::Markdown,
+            "test-markdown",
+        )
+        .await
+        .unwrap();
+    let storage = shared.file_storage.as_ref().unwrap();
+    let aaa =
+        bib_base::vfs_virtual_path(&bib_base::figure_object_path(article_id, "aaa.jpg")).unwrap();
+    storage.write_bytes(&aaa, vec![1, 2, 3]).await.unwrap();
+    let bbb =
+        bib_base::vfs_virtual_path(&bib_base::figure_object_path(article_id, "bbb.png")).unwrap();
+    storage.write_bytes(&bbb, vec![4]).await.unwrap();
+
+    let base = "/api/v1/bib/articles/doi%3A10.1000%2Ffigure-test/fulltext/images";
+    let response = app
+        .clone()
+        .oneshot(request("GET", &format!("{base}/aaa.jpg"), None))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get("content-type").unwrap(),
+        "image/jpeg"
+    );
+    assert_eq!(response.headers().get("content-length").unwrap(), "3");
+    assert!(
+        response
+            .headers()
+            .get("content-disposition")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .starts_with("inline;")
+    );
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(&body[..], &[1, 2, 3]);
+
+    let response = app
+        .clone()
+        .oneshot(request("GET", &format!("{base}/bbb.png"), None))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers().get("content-type").unwrap(), "image/png");
+    let _ = response.into_body().collect().await.unwrap().to_bytes();
+
+    // Missing figure, missing article, unsafe or unsupported names.
+    let response = app
+        .clone()
+        .oneshot(request("GET", &format!("{base}/missing.jpg"), None))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let response = app
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/api/v1/bib/articles/doi%3A10.1000%2Funknown-article/fulltext/images/aaa.jpg",
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let response = app
+        .clone()
+        .oneshot(request("GET", &format!("{base}/.."), None))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let response = app
+        .clone()
+        .oneshot(request("GET", &format!("{base}/.hidden.jpg"), None))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let response = app
+        .clone()
+        .oneshot(request("GET", &format!("{base}/notes.txt"), None))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    // Re-extraction clears the markdown row, which takes its figures along.
+    let response = app
+        .clone()
+        .oneshot(request("POST", &format!("{uri}/reextract"), None))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    wait_for_extraction(&app, uri).await;
+    for name in ["aaa.jpg", "bbb.png"] {
+        let response = app
+            .clone()
+            .oneshot(request("GET", &format!("{base}/{name}"), None))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::NOT_FOUND,
+            "{name} should be gone after re-extraction"
+        );
+    }
+    assert!(storage.content_length(&aaa).await.is_err());
+}
+
+#[tokio::test]
 async fn bib_reextract_rejects_non_vfs_sources() {
     let shared = BibShared::open_in_memory().await.unwrap();
     let article = bib_types::Article::new("doi:10.1000/inline-source", "Inline source");
@@ -465,7 +610,7 @@ async fn bib_reextract_rejects_non_vfs_sources() {
 
 #[tokio::test]
 async fn bib_upload_stores_original_pdf_bytes_with_application_pdf_mime() {
-    let (app, _directory) = build_app_with_vfs().await;
+    let (app, _shared, _directory) = build_app_with_vfs().await;
 
     let response = app
         .clone()
@@ -576,7 +721,7 @@ async fn wait_for_extraction(app: &axum::Router, uri: &str) -> serde_json::Value
     panic!("background extraction did not finish within 5 s ({uri})");
 }
 
-async fn build_app_with_vfs() -> (axum::Router, tempfile::TempDir) {
+async fn build_app_with_vfs() -> (axum::Router, BibShared, tempfile::TempDir) {
     let directory = tempfile::tempdir().unwrap();
     let manifest = VfsManifest {
         backend: vec![BackendDefinition {
@@ -605,5 +750,6 @@ async fn build_app_with_vfs() -> (axum::Router, tempfile::TempDir) {
         .await
         .unwrap()
         .with_file_storage(file_storage);
-    (tui_http::api_router(shared), directory)
+    let app = tui_http::api_router(shared.clone());
+    (app, shared, directory)
 }
