@@ -1,8 +1,8 @@
-# TwoSampleMR (`mr`)
+# TwoSampleMR (`twosamplemr_container`)
 
 [English](mr.md) | [中文](mr_zh.md)
 
-[TwoSampleMR](https://github.com/MRCIEU/TwoSampleMR) 算法 API（不含 IO/绘图）的纯 Rust 移植，面向 DAG 引擎。
+容器化 DAG 节点直接运行官方 [TwoSampleMR](https://github.com/MRCIEU/TwoSampleMR) R 包。旧版 `mr` DataFrame 节点保留为 Rust 移植的过渡回退。
 
 ## 功能
 
@@ -14,4 +14,4 @@
 - Steiger 过滤
 - 异质性/多效性检验
 
-基于 `faer` + `statrs`，点估计与 R 金标准夹具逐位验证。
+官方镜像固定 TwoSampleMR 0.7.9、R 4.5.1 与 PLINK2 2.0.0-a.6.26。工具变量 clumping 使用目录化 1000G EUR 二进制参考，不在运行时调用 OpenGWAS API。包装节点输出官方 MR 表、harmonised 表、RDS 完整结果和执行日志。

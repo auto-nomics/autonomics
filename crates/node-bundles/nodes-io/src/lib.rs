@@ -33,6 +33,7 @@ pub mod source_semantic_scholar;
 pub mod susie_rss_container;
 pub mod timesfm_container;
 pub mod twas_fusion_container;
+pub mod twosamplemr_container;
 pub mod visualization_container;
 pub use alphafold::nodes::prediction::{AlphaFoldPredictionNode, AlphaFoldPredictionNodeFactory};
 pub use clinicaltrials::nodes::study::{ClinicalTrialsStudyNode, ClinicalTrialsStudyNodeFactory};
@@ -248,6 +249,12 @@ impl NodePlugin for Plugin {
             Arc::clone(&self.container_execution.runtime),
             Arc::clone(&self.container_execution.panel_cache),
         )));
+        registry.register(Box::new(
+            twosamplemr_container::TwoSampleMrContainerNodeFactory::new(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
         registry.register(Box::new(mtag_container::MtagContainerNodeFactory::new(
             Arc::clone(&self.container_execution.runtime),
             Arc::clone(&self.container_execution.panel_cache),

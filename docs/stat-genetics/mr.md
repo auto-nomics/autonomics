@@ -1,8 +1,10 @@
-# TwoSampleMR (`mr`)
+# TwoSampleMR (`twosamplemr_container`)
 
 [English](mr.md) | [中文](mr_zh.md)
 
-A pure-Rust port of [TwoSampleMR](https://github.com/MRCIEU/TwoSampleMR)'s algorithm API (no IO/plotting) for the DAG engine.
+The container-backed DAG node runs the official
+[TwoSampleMR](https://github.com/MRCIEU/TwoSampleMR) R package. The legacy
+`mr` DataFrame node remains registered as a transitional Rust-port fallback.
 
 ## Features
 
@@ -14,4 +16,7 @@ A pure-Rust port of [TwoSampleMR](https://github.com/MRCIEU/TwoSampleMR)'s algor
 - Steiger filtering
 - Heterogeneity/pleiotropy tests
 
-Built on `faer` + `statrs`, with point estimates validated bit-for-bit against R golden fixtures.
+The official image pins TwoSampleMR 0.7.9, R 4.5.1, and PLINK2
+2.0.0-a.6.26. Instrument clumping uses the catalog-backed 1000G EUR binary
+reference rather than a runtime OpenGWAS API call. The wrapper emits the
+official MR table, harmonised table, RDS result, and execution log.
