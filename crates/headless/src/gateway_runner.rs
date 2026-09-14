@@ -1,0 +1,367 @@
+//! Gateway-backed headless runner — the default execution path of
+//! `tui run` since the backend-gateway refactor.
+//!
+//! Same contract as the in-process [`crate::run_task`]: one prompt, the
+//! stable [`RunEvent`] JSONL schema, exit-code semantics 0/1/2/3. The
+//! difference is only *where* the agent runs: submitted to the resident
+//! gateway daemon (auto-spawned when absent) instead of a throwaway
+//! in-process `RuntimeHost`.
+//!
+//! Identity: the agent runs at the stable path `/root/headless`, so the
+//! daemon's storage restores the same agent_id across runs and
+//! `--session` resume keeps working exactly as in-process. Only when a
+//! concurrent run already holds that path does the spawn fall back to a
+//! unique suffix (resume is meaningless in that contention anyway).
+
+use std::time::{Duration, Instant};
+
+use agentik_types::AgentEvent;
+use eventsource_stream::Eventsource;
+use futures::StreamExt;
+use gateway::client::ParsedFrame;
+use gateway::proto::HostEventView;
+use uuid::Uuid;
+
+use crate::processor::OutputProcessor;
+use crate::{RunError, RunSummary, Terminal, TranslationState, event::*, pick_profile};
+
+/// How long to wait for the daemon's `AgentRegistered` frame (carrying
+/// the restored agent id) before proceeding without it.
+const REGISTRATION_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// How long to keep reading after the terminal turn event, so the
+/// compatibility `Done` / `Error` events land in the output too (the
+/// in-process runner drains them from its already-queued channel).
+const TERMINAL_DRAIN: Duration = Duration::from_millis(300);
+
+/// Everything `run_via_gateway` needs to execute one prompt.
+#[derive(Clone, Default)]
+pub struct GatewayRunConfig {
+    /// The prompt delivered as the single user message of the run.
+    pub prompt: String,
+    /// Profile path to spawn from; `None` picks the first stored profile.
+    pub profile: Option<String>,
+    /// Model override as `provider:model`; `None` uses the daemon's
+    /// active model.
+    pub model: Option<String>,
+    /// Resume this session instead of the agent's active one.
+    pub session: Option<Uuid>,
+    /// Wall-clock budget; on expiry the run is cancelled (exit code 2).
+    pub timeout: Option<Duration>,
+}
+
+/// Run one prompt through the resident gateway daemon, streaming
+/// translated events into `processor`. See the module docs for the
+/// contract; the summary mirrors [`crate::run_task`].
+pub async fn run_via_gateway<P: OutputProcessor>(
+    config: GatewayRunConfig,
+    processor: &mut P,
+) -> Result<RunSummary, RunError> {
+    // ── Connect (auto-starting the daemon) ───────────────────────────
+    gateway::manager::ensure_running()
+        .await
+        .map_err(RunError::Gateway)?;
+    let token = gateway::manager::read_token();
+    let addr = gateway::daemon::env_addr();
+    let client = gateway::GatewayClient::new(&addr, token.as_deref())
+        .map_err(|e| RunError::Gateway(e.to_string()))?;
+    run_via_gateway_with_client(client, config, processor).await
+}
+
+/// Same run, against an explicit [`gateway::GatewayClient`] — the
+/// `run_via_gateway` body after connection setup, split out so tests
+/// (and future embedders) can drive a mock daemon without env games.
+pub async fn run_via_gateway_with_client<P: OutputProcessor>(
+    client: gateway::GatewayClient,
+    config: GatewayRunConfig,
+    processor: &mut P,
+) -> Result<RunSummary, RunError> {
+    let started = Instant::now();
+
+    // ── Resolve profile + model from the daemon snapshot ─────────────
+    let state = client
+        .state()
+        .await
+        .map_err(|e| RunError::Gateway(e.to_string()))?;
+    let profile =
+        pick_profile(&state.profiles, config.profile.as_deref()).ok_or(RunError::NoProfile {
+            requested: config.profile.clone(),
+        })?;
+    // Spawn override = the user's --model only. `None` means "daemon
+    // default" — the daemon resolves and attaches its own callbacks;
+    // echoing the daemon's active spec back as an override would force a
+    // redundant DB re-resolution.
+    let spawn_model_spec = config.model.as_deref();
+    // Exit-code parity with the in-process runner: a missing model is
+    // environment misconfiguration (startup error, exit 3), not a
+    // measured turn failure.
+    if spawn_model_spec.is_none() && state.active_model_spec.is_none() {
+        return Err(RunError::Gateway(
+            "no active model configured — set one in the TUI Config tab or pass \
+             --model provider_name:model_name"
+                .to_string(),
+        ));
+    }
+    // Display name for run.started: --model's part after the colon, else
+    // the daemon's active spec (informational only).
+    let name_part = |spec: &str| {
+        spec.split_once(':')
+            .map(|(_, name)| name.to_string())
+            .unwrap_or_else(|| spec.to_string())
+    };
+    let model_name = config
+        .model
+        .as_deref()
+        .map(name_part)
+        .or_else(|| state.active_model_spec.as_deref().map(name_part));
+
+    // ── Spawn at the stable identity, with a contention fallback ─────
+    let agent_path = match client
+        .spawn_agent("headless", "/root", &profile, spawn_model_spec)
+        .await
+    {
+        Ok(path) => path,
+        Err(error) if error.to_string().contains("already exists") => {
+            // A concurrent one-shot run holds /root/headless. A unique
+            // identity can't share persisted sessions, but a contended
+            // run can't resume them anyway.
+            let fallback = format!("headless-{}", &Uuid::new_v4().simple().to_string()[..8]);
+            tracing::warn!(
+                fallback = %fallback,
+                "another run holds /root/headless; spawning with a unique identity"
+            );
+            client
+                .spawn_agent(&fallback, "/root", &profile, spawn_model_spec)
+                .await
+                .map_err(|e| RunError::Spawn {
+                    message: e.to_string(),
+                })?
+        }
+        Err(error) => {
+            return Err(RunError::Spawn {
+                message: error.to_string(),
+            });
+        }
+    };
+
+    // ── Event stream ──────────────────────────────────────────────────
+    // Subscribe from the snapshot's seq: every event of this run was
+    // published after it (the spawn happened after `state()`), so the
+    // replay covers the registration without replaying daemon history.
+    let mut last_seq = state.last_seq;
+    let response = client
+        .connect_events(state.last_seq)
+        .await
+        .map_err(|e| RunError::Gateway(e.to_string()))?;
+    let mut stream = response.bytes_stream().eventsource();
+
+    // Registration frame carries the restored agent id (best effort —
+    // same tolerance as the in-process runner).
+    let agent_id = match tokio::time::timeout(REGISTRATION_TIMEOUT, async {
+        loop {
+            match stream.next().await {
+                Some(Ok(event)) => {
+                    let Some((seq, parsed)) = gateway::client::parse_frame(&event) else {
+                        continue;
+                    };
+                    last_seq = last_seq.max(seq);
+                    if let ParsedFrame::Host(HostEventView::AgentRegistered { path, info }) = parsed
+                        && path == agent_path
+                    {
+                        return info.agent_id.unwrap_or_default();
+                    }
+                }
+                _ => return Uuid::nil(),
+            }
+        }
+    })
+    .await
+    {
+        Ok(id) => id,
+        Err(_) => Uuid::nil(),
+    };
+
+    // ── Optional session resume ───────────────────────────────────────
+    // Fire the switch, then wait for the agent's `SessionActivated`
+    // confirmation before delivering the prompt — otherwise a fast
+    // prompt can beat the switch and land in the wrong session.
+    if let Some(session) = config.session {
+        client
+            .switch_session(&agent_path, session)
+            .await
+            .map_err(|e| RunError::Send {
+                message: e.to_string(),
+            })?;
+        let activated = tokio::time::timeout(REGISTRATION_TIMEOUT, async {
+            loop {
+                match stream.next().await {
+                    Some(Ok(event)) => {
+                        let Some((seq, ParsedFrame::Agent { agent, event })) =
+                            gateway::client::parse_frame(&event)
+                        else {
+                            continue;
+                        };
+                        let _ = seq;
+                        if agent != agent_path {
+                            continue;
+                        }
+                        if let AgentEvent::SessionActivated { id, .. } = event
+                            && id == session
+                        {
+                            return true;
+                        }
+                    }
+                    _ => return false,
+                }
+            }
+        })
+        .await
+        .unwrap_or(false);
+        if !activated {
+            tracing::warn!(%session, "session switch not confirmed before prompt delivery");
+        }
+    }
+
+    // ── Prompt delivery ───────────────────────────────────────────────
+    client
+        .deliver_message(&agent_path, config.prompt.clone())
+        .await
+        .map_err(|e| RunError::Send {
+            message: e.to_string(),
+        })?;
+
+    // ── Event loop ────────────────────────────────────────────────────
+    processor.process(&RunEvent::RunStarted(RunStartedEvent {
+        agent_id,
+        session_id: Uuid::nil(),
+        profile: profile.path.clone(),
+        model: model_name,
+    }));
+
+    let mut translation = TranslationState::default();
+    let deadline = config.timeout.map(|budget| started + budget);
+    let terminal = loop {
+        if let Some(deadline) = deadline
+            && Instant::now() >= deadline
+        {
+            let budget = config.timeout.expect("deadline implies timeout");
+            // Cooperative cancel first: aborts the in-flight turn so the
+            // daemon-side shutdown below doesn't wait on running tools.
+            let _ = client.cancel_agent(&agent_path).await;
+            translation.terminal = Some(Terminal::Cancelled);
+            processor.process(&RunEvent::TurnFailed(TurnFailedEvent {
+                turn_id: translation.current_turn_id,
+                message: format!("run timed out after {:.1}s", budget.as_secs_f64()),
+            }));
+            break Terminal::Cancelled;
+        }
+
+        // Idle-bounded read so the deadline is re-checked even when the
+        // daemon is quiet.
+        let next = tokio::time::timeout(Duration::from_millis(250), stream.next()).await;
+        let event = match next {
+            Err(_) => continue, // idle tick
+            Ok(None) | Ok(Some(Err(_))) => {
+                // Stream ended (daemon gone). The in-process runner treats
+                // "all agent channels closed" the same way.
+                tracing::warn!("gateway event stream ended mid-run");
+                break translation.terminal.take().unwrap_or(Terminal::Failed);
+            }
+            Ok(Some(Ok(event))) => event,
+        };
+
+        let Some((seq, parsed)) = gateway::client::parse_frame(&event) else {
+            continue;
+        };
+        if seq <= last_seq {
+            continue; // replay duplicate
+        }
+        last_seq = seq;
+
+        match parsed {
+            ParsedFrame::Agent { agent, event } if agent == agent_path => {
+                for run_event in translation.translate(&agent, event) {
+                    processor.process(&run_event);
+                }
+                if translation.terminal.is_some() {
+                    // Drain the already-queued compatibility events
+                    // (Done / Error) without blocking long.
+                    let drain_until = tokio::time::Instant::now() + TERMINAL_DRAIN;
+                    while tokio::time::Instant::now() < drain_until {
+                        match tokio::time::timeout_at(drain_until, stream.next()).await {
+                            Ok(Some(Ok(event))) => {
+                                let Some((_, ParsedFrame::Agent { agent, event })) =
+                                    gateway::client::parse_frame(&event)
+                                else {
+                                    continue;
+                                };
+                                if agent != agent_path {
+                                    continue;
+                                }
+                                for run_event in translation.translate(&agent, event) {
+                                    processor.process(&run_event);
+                                }
+                            }
+                            _ => break,
+                        }
+                    }
+                    break translation.terminal.take().expect("checked above");
+                }
+            }
+            ParsedFrame::Lag { missed, .. } => {
+                // Events were dropped beyond the replay window — the run's
+                // delta stream is compromised and the terminal event may
+                // be gone. Fail loudly instead of hanging.
+                processor.process(&RunEvent::TurnFailed(TurnFailedEvent {
+                    turn_id: translation.current_turn_id,
+                    message: format!(
+                        "gateway event stream lagged ({missed} events missed) — run aborted"
+                    ),
+                }));
+                translation.terminal = Some(Terminal::Failed);
+                break Terminal::Failed;
+            }
+            // Other agents' events, host events, notices — not this run's.
+            _ => {}
+        }
+    };
+
+    // ── Summary ───────────────────────────────────────────────────────
+    let wall_time_secs = started.elapsed().as_secs_f64();
+    let status = match &terminal {
+        Terminal::Completed => RunStatus::Completed,
+        Terminal::Failed => RunStatus::Failed,
+        Terminal::Cancelled => RunStatus::Cancelled,
+    };
+    let usage = (translation.turns > 0).then_some(translation.run_usage);
+    let turns = translation.turns;
+    let tool_calls = translation.tool_calls;
+    processor.process(&RunEvent::RunEnded(RunEndedEvent {
+        status,
+        wall_time_secs,
+        usage,
+        turns,
+        tool_calls,
+    }));
+    processor.finish();
+
+    // Clean up the one-shot agent (the daemon flushes session snapshots
+    // during shutdown; the stored agent record remains for the next
+    // run's identity restore).
+    let _ = client.shutdown_agent(&agent_path).await;
+
+    Ok(RunSummary {
+        profile: profile.path.clone(),
+        outcome: match terminal {
+            Terminal::Completed => crate::processor::Outcome::Completed,
+            Terminal::Failed => crate::processor::Outcome::Failed,
+            Terminal::Cancelled => crate::processor::Outcome::Cancelled,
+        },
+        agent_path,
+        last_message: processor.last_message().map(str::to_owned),
+        wall_time_secs,
+        usage,
+        turns,
+        tool_calls,
+    })
+}

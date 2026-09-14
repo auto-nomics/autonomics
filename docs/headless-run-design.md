@@ -1,6 +1,6 @@
 # Headless 运行模式设计(初步)
 
-状态:**P0/P1 已实现**(feat/headless-mode 分支)。CLI:`tui run`(--json / -o / --profile / --model / --timeout / --session / --ephemeral / --manifest);库:`crates/headless::run_task`,退出码 0/1/2/3。剩余:P2 的 --output-schema、多 turn stdin 脚本,P3 的多 agent 网络运行。参考实现:codex-rs `exec` 子命令(`/mnt/disk3/codex/codex-rs/exec`)。
+状态:**P0/P1 已实现**(feat/headless-mode 分支);**P3-gateway 已实现**(feat/headless-via-gateway 分支)——`tui run` 默认经 gateway daemon 执行(`crates/headless::gateway_runner::run_via_gateway`,RunEvent 契约与退出码不变),`--ephemeral` 保留进程内 `run_task`(benchmark 隔离)。CLI:`tui run`(--json / -o / --profile / --model / --timeout / --session / --ephemeral / --manifest);退出码 0/1/2/3。剩余:P2 的 --output-schema、多 turn stdin 脚本,P3 的多 agent 网络运行。参考实现:codex-rs `exec` 子命令(`/mnt/disk3/codex/codex-rs/exec`)。
 
 ## 0. 背景与目标
 

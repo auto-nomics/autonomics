@@ -296,7 +296,19 @@ async fn spawn_agent(
                     .map_err(GatewayError::Message)?,
             )
         }
-        None => None,
+        None => {
+            // The host's model slot can be installed-but-empty (daemon
+            // started with no active model configured). Rejecting here
+            // surfaces a startup-class error at spawn instead of a turn
+            // failure later.
+            if state.model_slot.load_full().is_none() {
+                return Err(GatewayError::Status(
+                    StatusCode::CONFLICT,
+                    "No model configured on host.".to_string(),
+                ));
+            }
+            None
+        }
     };
     let path = state
         .control

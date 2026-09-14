@@ -12,6 +12,9 @@ agentik-sdk = { path = "../agentik-sdk" }
 agentik-types = { path = "../agentik-types" }
 arc-swap.workspace = true
 runtime = { path = "../runtime" }
+gateway = { path = "../gateway" }
+eventsource-stream = "0.2"
+futures.workspace = true
 serde.workspace = true
 sha2.workspace = true
 serde_json.workspace = true
@@ -23,6 +26,7 @@ uuid = { version = "1.12", features = ["v4", "serde"] }
 
 [dev-dependencies]
 agentik-sdk = { path = "../agentik-sdk", features = ["test-util"] }
+gateway = { path = "../gateway", features = ["test-util"] }
 
 [lints]
 workspace = true
