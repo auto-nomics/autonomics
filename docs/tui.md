@@ -79,7 +79,9 @@ autonomics-tui serve stop     # graceful shutdown (stops agents)
 ```
 
 Launching the TUI auto-spawns `tui serve --daemon` when no daemon is
-running. Full protocol and design: `docs/design/gateway-architecture.md`.
+running; `tui run` submits one-shot prompts to the same daemon
+(`--ephemeral` keeps the in-process path for benchmark isolation). Full
+protocol and design: `docs/design/gateway-architecture.md`.
 
 ## KMS TUI
 

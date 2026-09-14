@@ -26,7 +26,7 @@ pub struct RunArgs {
     pub profile: Option<String>,
 
     /// Model override as `provider_name:model_name` (default: the
-    /// installation's active model from the app database).
+    /// gateway daemon's active model).
     #[arg(long, value_name = "SPEC")]
     pub model: Option<String>,
 
@@ -40,8 +40,9 @@ pub struct RunArgs {
     #[arg(long, value_name = "UUID")]
     pub session: Option<uuid::Uuid>,
 
-    /// Keep conversation state in a throwaway temp dir instead of the
-    /// installation's state dir. Credentials still come from the app DB.
+    /// Run in-process with all conversation state in a throwaway temp
+    /// dir (benchmark isolation) instead of through the gateway daemon.
+    /// Credentials still come from the app DB.
     #[arg(long)]
     pub ephemeral: bool,
 

@@ -1,8 +1,8 @@
 # Backend Gateway 架构设计
 
-状态:**P0/P1/P2 已实现**(refactor/migrate-to-gateway-backend 分支):`tui serve` 常驻
-daemon + gateway crate(REST+SSE)+ TUI 瘦客户端迁移完成。后续:P3 headless 走
-gateway、P4 web 前端、P5 desktop(见 §11,各自独立 PR)。
+状态:**P0/P1/P2 已实现**(refactor/migrate-to-gateway-backend 分支);**P3 已实现**
+(feat/headless-via-gateway 分支):`tui run` 默认经 gateway 执行,`--ephemeral` 保留
+进程内路径。后续:P4 web 前端、P5 desktop(见 §11,各自独立 PR)。
 
 前置阅读:`docs/headless-run-design.md`(§1.2 记录了「未来若出现独立 daemon 需求再
 升级」——本文档就是那次升级)。
@@ -182,8 +182,8 @@ driver 维护 session 缓存(`SessionList/SessionClosed` 事件折叠,纯函数�
   internal 事件当防御性 no-op(旧 TUI 时代即存在,靠「空闲时再请求」掩盖)。
   driver 因此在注册时与 TurnCompleted 后补拉列表,而非 turn 中。修复该 quirk 需要
   动 `run_session` 的事件重排语义,留独立 PR。
-- **`tui run` 过渡期冲突**:默认 in-process 模式与运行中 daemon 抢锁,报错指向
-  `tui serve stop` / `--ephemeral`;P3(headless 走 gateway)彻底消除。
+- ~~**`tui run` 过渡期冲突**~~:P3 已消除——默认路径经 gateway,不碰状态目录;
+  `--ephemeral` 的进程内路径与运行中 daemon 抢锁时仍报错指向 `tui serve stop`。
 - podman 子进程 stdin 约束随 `SharedInfra` 转移到 daemon(daemon 全程 null stdio);
   `tui run --ephemeral` 永久保留进程内路径(benchmark 隔离硬需求)。
 
@@ -191,6 +191,6 @@ driver 维护 session 缓存(`SessionList/SessionClosed` 事件折叠,纯函数�
 
 | 期 | 内容 | 要点 |
 |---|---|---|
-| P3 headless | `tui run` 默认走 gateway | spawn(`headless-<uuid8>`)→ SSE 过滤 agent 帧 → `TranslationState::translate`(提 pub)→ RunEvent 契约逐字节不变;`--session` 等 SessionActivated;超时→cancel+合成 turn.failed;退出码 0/1/2/3 不变;`--ephemeral` 保留进程内 |
+| ~~P3 headless~~(已完成) | `tui run` 默认走 gateway | 稳定身份 `/root/headless`(daemon 按 path 恢复同一 agent_id,`--session` 语义保持;并发撞路径回退唯一后缀);SSE 从 `state.last_seq` 订阅过滤 agent 帧 → `TranslationState::translate` → RunEvent 契约不变(与 in-process 的 JSONL parity 测试锁定);`--session` 等 SessionActivated;超时→cancel+合成 turn.failed;退出码 0/1/2/3 不变(缺模型=exit 3 启动错误);`--ephemeral` 保留进程内 |
 | P4 web | `apps/web`(Vite+React19+TS+pnpm) | thread≡agent session;threads/chat SSE(delta/tool/done/ping/error 帧,fetch 流解析——EventSource 带不了 Authorization);409 agent_busy;dist 由 gateway 内嵌托管,同源 token 注入;活动抽屉(agents/delegations 只读) |
 | P5 desktop | Tauri 2 纯壳 | ensure_running + 读 token + webview 指 `127.0.0.1:8765/#token=…`(hash 传 token);不自开 RuntimeHost,无第二写者;可选 UDS listener 加固 |
