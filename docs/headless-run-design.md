@@ -56,6 +56,10 @@
   autonomics 的 TUI 与未来的 headless 在同进程直连 `RuntimeHost`,引入 RPC 层
   属于为时过早的抽象。库 API + JSONL 输出契约已覆盖需求;未来若出现独立 daemon
   需求再升级。
+  > **2026-09 更新**:独立 daemon 需求已落地——见
+  > `docs/design/gateway-architecture.md`(常驻 gateway + REST/SSE 多前端)。
+  > headless 走 gateway 的迁移(P3)规划在该文档 §11;`--ephemeral` 保留进程内
+  > 路径作为 benchmark 隔离的永久选项。
 - **item 回填机制**(turn.completed 后调 thread/read 补齐 items):它源于
   app-server 通道背压丢事件。autonomics 事件通道是 unbounded mpsc,无此问题。
 
