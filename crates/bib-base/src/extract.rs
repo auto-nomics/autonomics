@@ -496,7 +496,9 @@ mod tests {
         let ext = SimpleExtractor::new();
         // Not a real PDF — pdf-extract errors (or panics via the guard);
         // either way the caller sees Err and the guard flag stays clear.
-        let result = ext.extract(b"%PDF-1.7 not a real pdf", FileFormat::Pdf).await;
+        let result = ext
+            .extract(b"%PDF-1.7 not a real pdf", FileFormat::Pdf)
+            .await;
         assert!(result.is_err());
         assert!(!is_expected_panic());
     }

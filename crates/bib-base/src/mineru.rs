@@ -198,7 +198,10 @@ impl MineruExtractor {
         }
 
         // Step 3: poll every 5 s until done/failed.
-        let result_url = format!("{}/api/v4/extract-results/batch/{}", self.api_url, data.batch_id);
+        let result_url = format!(
+            "{}/api/v4/extract-results/batch/{}",
+            self.api_url, data.batch_id
+        );
         let mut attempts = 0;
         loop {
             if tokio::time::Instant::now() >= deadline {
@@ -235,7 +238,9 @@ impl MineruExtractor {
             let item = api_response
                 .data
                 .and_then(|data| data.extract_result.into_iter().next())
-                .ok_or_else(|| Error::Unknown("MinerU poll response missing extract_result".into()))?;
+                .ok_or_else(|| {
+                    Error::Unknown("MinerU poll response missing extract_result".into())
+                })?;
 
             match item.state.as_str() {
                 "done" => {
@@ -309,9 +314,7 @@ impl TextExtractor for MineruExtractor {
             }
             return Err(Error::Unknown("MINERU_API_KEY is not set".into()));
         };
-        let markdown = self
-            .extract_markdown(content.to_vec(), api_key)
-            .await?;
+        let markdown = self.extract_markdown(content.to_vec(), api_key).await?;
         Ok(ExtractedText::markdown(markdown))
     }
 }

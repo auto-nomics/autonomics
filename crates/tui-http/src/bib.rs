@@ -674,7 +674,12 @@ async fn reextract_fulltext(
         .get_fulltext(&id)
         .await
         .map_err(internal)?
-        .ok_or_else(|| error(StatusCode::NOT_FOUND, format!("full text for {id} not found")))?;
+        .ok_or_else(|| {
+            error(
+                StatusCode::NOT_FOUND,
+                format!("full text for {id} not found"),
+            )
+        })?;
     if vfs_virtual_path(&existing.file_path).is_none() {
         return Err(error(
             StatusCode::BAD_REQUEST,
@@ -684,12 +689,7 @@ async fn reextract_fulltext(
             ),
         ));
     }
-    if !shared
-        .bib
-        .restart_extraction(&id)
-        .await
-        .map_err(internal)?
-    {
+    if !shared.bib.restart_extraction(&id).await.map_err(internal)? {
         return Err(error(
             StatusCode::NOT_FOUND,
             format!("full text for {id} not found"),

@@ -42,10 +42,10 @@ pub use extraction::{
     spawn_extraction, sweep_pending,
 };
 pub use fulltext::{FullTextPage, PendingExtraction};
-pub use mineru::{DEFAULT_API_URL as MINERU_DEFAULT_API_URL, MineruExtractor, markdown_from_zip};
 pub use http_options::BibHttpOptions;
 pub use library_tools::bib_all_registrations;
 pub use library_tools::bib_extended_registrations;
+pub use mineru::{DEFAULT_API_URL as MINERU_DEFAULT_API_URL, MineruExtractor, markdown_from_zip};
 pub use oa_fetch::{try_fetch_fulltext, try_fetch_fulltext_with};
 pub use query::{
     ArxivSource, BiorxivSource, CrossrefSource, LiteratureGateway, LiteratureSource,

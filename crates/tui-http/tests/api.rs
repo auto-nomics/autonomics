@@ -265,10 +265,7 @@ async fn bib_upload_preserves_and_serves_the_original_file() {
         "/api/v1/bib/articles/doi%3A10.1000%2Foriginal-upload/fulltext",
     )
     .await;
-    assert_eq!(
-        body["fulltext"]["text_content"],
-        "original full-text bytes"
-    );
+    assert_eq!(body["fulltext"]["text_content"], "original full-text bytes");
 
     let response = app
         .clone()
@@ -410,13 +407,14 @@ async fn bib_reextract_resets_and_rewrites_the_text() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    let body: serde_json::Value = serde_json::from_slice(
-        &response.into_body().collect().await.unwrap().to_bytes(),
-    )
-    .unwrap();
+    let body: serde_json::Value =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
     // The row may already be claimed (running) by the spawned task.
     let status = body["fulltext"]["extract_status"].as_str().unwrap();
-    assert!(status == "pending" || status == "running", "status was {status}");
+    assert!(
+        status == "pending" || status == "running",
+        "status was {status}"
+    );
 
     let body = wait_for_extraction(&app, uri).await;
     assert_eq!(body["fulltext"]["text_content"], "re-extract these bytes");
@@ -457,15 +455,10 @@ async fn bib_reextract_rejects_non_vfs_sources() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    let body: serde_json::Value = serde_json::from_slice(
-        &response.into_body().collect().await.unwrap().to_bytes(),
-    )
-    .unwrap();
+    let body: serde_json::Value =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
     assert!(
-        body["error"]
-            .as_str()
-            .unwrap()
-            .contains("re-upload"),
+        body["error"].as_str().unwrap().contains("re-upload"),
         "error was: {body}"
     );
 }

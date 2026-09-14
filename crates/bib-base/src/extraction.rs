@@ -241,7 +241,11 @@ pub fn spawn_extraction(shared: BibShared, article_id: String) -> tokio::task::J
         let outcome = run_extraction(&shared, &article_id).await;
         drop(permit);
         if let Err(message) = outcome {
-            tracing::warn!(article_id, message, "background extraction did not complete");
+            tracing::warn!(
+                article_id,
+                message,
+                "background extraction did not complete"
+            );
         }
     })
 }
@@ -308,7 +312,10 @@ mod tests {
             .await
             .unwrap();
         let format = FileFormat::from_extension(
-            filename.rsplit_once('.').map(|(_, ext)| ext).unwrap_or("txt"),
+            filename
+                .rsplit_once('.')
+                .map(|(_, ext)| ext)
+                .unwrap_or("txt"),
         );
         shared
             .bib
@@ -344,16 +351,23 @@ mod tests {
         let stored = shared.bib.get_fulltext(article_id).await.unwrap().unwrap();
         assert_eq!(stored.extract_status, Some(ExtractStatus::Done));
         assert_eq!(stored.text_format, Some(BibTextFormat::Plain));
-        assert!(stored.extracted_by.as_deref().is_some_and(|n| n.starts_with("simple")));
+        assert!(
+            stored
+                .extracted_by
+                .as_deref()
+                .is_some_and(|n| n.starts_with("simple"))
+        );
         assert_eq!(stored.extract_error, None);
 
         // Finished rows leave the pending list.
-        assert!(shared
-            .bib
-            .list_articles_needing_extraction()
-            .await
-            .unwrap()
-            .is_empty());
+        assert!(
+            shared
+                .bib
+                .list_articles_needing_extraction()
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]
@@ -378,7 +392,12 @@ mod tests {
 
         let stored = shared.bib.get_fulltext(article_id).await.unwrap().unwrap();
         assert_eq!(stored.extract_status, Some(ExtractStatus::Done));
-        assert!(stored.extracted_by.as_deref().is_some_and(|n| n.starts_with("simple")));
+        assert!(
+            stored
+                .extracted_by
+                .as_deref()
+                .is_some_and(|n| n.starts_with("simple"))
+        );
     }
 
     #[tokio::test]
@@ -410,11 +429,7 @@ mod tests {
             fn name(&self) -> &'static str {
                 "exploding"
             }
-            async fn extract(
-                &self,
-                _content: &[u8],
-                _format: FileFormat,
-            ) -> Result<ExtractedText> {
+            async fn extract(&self, _content: &[u8], _format: FileFormat) -> Result<ExtractedText> {
                 Err(Error::Unknown("kaboom".into()))
             }
         }
@@ -429,14 +444,16 @@ mod tests {
         assert!(exploded.contains("kaboom"));
         let stored = shared.bib.get_fulltext(article_id).await.unwrap().unwrap();
         assert_eq!(stored.extract_status, Some(ExtractStatus::Failed));
-        assert!(stored.extract_error.as_deref().is_some_and(|e| e.contains("kaboom")));
+        assert!(
+            stored
+                .extract_error
+                .as_deref()
+                .is_some_and(|e| e.contains("kaboom"))
+        );
 
         // Failed VFS rows are retryable.
-        let pending: Vec<PendingExtraction> = shared
-            .bib
-            .list_articles_needing_extraction()
-            .await
-            .unwrap();
+        let pending: Vec<PendingExtraction> =
+            shared.bib.list_articles_needing_extraction().await.unwrap();
         assert_eq!(pending.len(), 1);
     }
 
@@ -485,10 +502,7 @@ mod tests {
             operations: vec![
                 Operation::new("BT", vec![]),
                 Operation::new("Tf", vec!["F1".into(), 12.into()]),
-                Operation::new(
-                    "Tj",
-                    vec![Object::string_literal("FallbackChain PDF body")],
-                ),
+                Operation::new("Tj", vec![Object::string_literal("FallbackChain PDF body")]),
                 Operation::new("ET", vec![]),
             ],
         };
@@ -516,7 +530,8 @@ mod tests {
         doc.trailer.set("Root", catalog_id);
 
         let mut pdf = Vec::new();
-        doc.save_to(&mut pdf).expect("generated PDF should serialize");
+        doc.save_to(&mut pdf)
+            .expect("generated PDF should serialize");
         pdf
     }
 }
