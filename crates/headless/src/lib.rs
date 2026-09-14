@@ -32,6 +32,7 @@
 #![deny(clippy::print_stdout)]
 
 pub mod event;
+pub mod gateway_runner;
 pub mod manifest;
 pub mod processor;
 
@@ -162,6 +163,8 @@ pub struct RunSummary {
 pub enum RunError {
     #[error("failed to open runtime host: {0}")]
     HostOpen(#[from] runtime::Error),
+    #[error("gateway error: {0}")]
+    Gateway(String),
     #[error("no agent profile available (requested: {requested:?})")]
     NoProfile { requested: Option<String> },
     #[error("agent spawn failed: {message}")]
@@ -654,5 +657,7 @@ fn notice(kind: NoticeKind, message: String) -> RunEvent {
     RunEvent::Notice(NoticeEvent { kind, message })
 }
 
+#[cfg(test)]
+mod gateway_runner_tests;
 #[cfg(test)]
 mod tests;
