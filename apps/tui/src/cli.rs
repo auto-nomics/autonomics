@@ -15,6 +15,7 @@ mod bib;
 mod cache;
 mod kms;
 mod run;
+mod serve;
 mod tui;
 
 use clap::{Parser, Subcommand};
@@ -25,6 +26,7 @@ pub use bib::{
 pub use cache::{CacheAction, CacheArgs, ClearOpengwasArgs, RefreshOpengwasArgs};
 pub use kms::KmsArgs;
 pub use run::RunArgs;
+pub use serve::{ServeAction, ServeArgs};
 pub use tui::TuiArgs;
 
 #[derive(Debug, Parser)]
@@ -49,4 +51,8 @@ pub enum Command {
 
     /// Headless mode
     Run(RunArgs),
+
+    /// Run the resident backend gateway daemon (agents keep running
+    /// after frontends disconnect). See `status` / `stop` actions.
+    Serve(ServeArgs),
 }
