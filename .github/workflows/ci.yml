@@ -47,13 +47,32 @@ jobs:
   test:
     name: test
     runs-on: ubuntu-latest
+    env:
+      # Full debug info makes the largest workspace test binaries multiple GB.
+      # Line tables keep useful CI backtraces while avoiding the runner's
+      # linker-time disk and memory ceiling.
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
+      # Limit the number of test binaries linked concurrently.
+      CARGO_BUILD_JOBS: "2"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.96
       - uses: Swatinem/rust-cache@v2
-      # Compiles every test target first; a clean compile is the most common CI
-      # signal and separates link errors from runtime failures.
-      - run: cargo test --workspace --locked --no-run
+      - name: Check runner resources before tests
+        run: |
+          set -euo pipefail
+          df -h / /home/runner/work
+          free -h
+          du -sh target "${CARGO_HOME:-$HOME/.cargo}/registry" 2>/dev/null || true
       # Runs all non-#[ignore] tests. Live-network tests are #[ignore]d and/or
       # env-gated, so this stays green without external credentials.
-      - run: cargo test --workspace --locked
+      - name: Run workspace tests
+        run: cargo test --workspace --locked
+      - name: Check runner resources after tests
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          df -h / /home/runner/work
+          free -h
+          du -sh target "${CARGO_HOME:-$HOME/.cargo}/registry" 2>/dev/null || true
