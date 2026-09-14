@@ -70,6 +70,9 @@ use nodes_io::susie_rss_container::{
 use nodes_io::twas_fusion_container::{
     FUSION_GTEX_V8_PANEL, TWAS_FUSION_CONTAINER_KIND, TwasFusionContainerNodeFactory,
 };
+use nodes_io::twosamplemr_container::{
+    TWOSAMPLEMR_CONTAINER_KIND, TwoSampleMrContainerNodeFactory,
+};
 use sha2::{Digest, Sha256};
 use vfs::{
     BackendConfig, BackendDefinition, MountDefinition, MountedObjectStore, OpendalFileStorage,
@@ -1769,4 +1772,97 @@ async fn real_catalog_backed_official_smr_heidi_eqtlgen_runs_with_container_back
             "SMR panel `{panel}` should be cached"
         );
     }
+}
+
+#[tokio::test]
+#[ignore = "requires the official TwoSampleMR image, the 1000G EUR catalog panel, and a configured Podman backend"]
+async fn real_catalog_backed_official_twosamplemr_runs_with_container_backend() {
+    use dag_core::dag::DagNode;
+
+    let fixture = catalog_test_fixture().await;
+    assert!(
+        fixture.bundles.get(PLINK2_REF_BINARY_PANEL).is_some(),
+        "plink.ref.1000g_eur.binary must be published before the E2E baseline"
+    );
+
+    let input_path = std::env::var_os("AUTONOMICS_TWOSAMPLEMR_IT_SUMSTATS")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../../containers/twosamplemr/fixtures/chr22.instruments.tsv")
+                .to_path_buf()
+        });
+    let infra = ContainerExecutionInfra::from_env();
+    let registry_ctx = fixture
+        .ctx
+        .clone()
+        .with_data_bundle_catalog(Arc::new(fixture.bundles.clone()));
+    let mut registry = NodeRegistry::new(registry_ctx);
+    registry.register(Box::new(TwoSampleMrContainerNodeFactory::new(
+        infra.runtime,
+        infra.panel_cache,
+    )));
+    let mr = registry
+        .build_node(
+            TWOSAMPLEMR_CONTAINER_KIND,
+            serde_json::json!({
+                "id_exposure": "test-exposure",
+                "exposure": "Test exposure",
+                "id_outcome": "test-outcome",
+                "outcome": "Test outcome",
+                "chr": 22
+            }),
+        )
+        .unwrap();
+
+    let mut dag = dag_core::dag::DAG::default();
+    dag.add_node(
+        "instruments".into(),
+        Box::new(FileReferenceNode::new(
+            input_path.to_string_lossy().into_owned(),
+            Some("twosamplemr_instruments".into()),
+        )),
+    )
+    .unwrap();
+    dag.add_node("twosamplemr".into(), mr).unwrap();
+    dag.add_edge("instruments", "twosamplemr", 0, 0).unwrap();
+    let report = dag
+        .run(&SchedulerConfig::default(), &fixture.ctx, None)
+        .await
+        .unwrap();
+    if !report.ok {
+        eprintln!("TwoSampleMR container-backend run report: {report:#?}");
+    }
+    assert_eq!(
+        report.statuses.get("twosamplemr"),
+        Some(&dag_core::dag::RuntimeStatus::Success)
+    );
+
+    let outputs = dag.output("twosamplemr").unwrap();
+    let results = outputs.get(&0).unwrap().as_file().unwrap().clone();
+    let log = outputs.get(&3).unwrap().as_file().unwrap().clone();
+    assert!(results.path.ends_with("/twosamplemr_results.tsv"));
+    assert!(log.path.ends_with("/twosamplemr.log"));
+
+    let storage = fixture
+        .ctx
+        .opendal
+        .as_ref()
+        .expect("test storage is registered");
+    let results_text = read_published_text(storage, &results).await;
+    let log_text = read_published_text(storage, &log).await;
+    assert!(
+        results_text.starts_with("id.exposure\tid.outcome"),
+        "official TwoSampleMR result header changed:\n{results_text}"
+    );
+    assert!(
+        results_text.contains("Inverse variance weighted"),
+        "official TwoSampleMR IVW estimate is missing:\n{results_text}"
+    );
+    assert!(
+        log_text.contains("TwoSampleMR: 0.7.9")
+            && log_text.contains("Selected instruments: 2")
+            && log_text.contains("PLINK v2.0.0-a.6.26"),
+        "official TwoSampleMR/PLINK2 baseline is missing expected markers:\n{log_text}"
+    );
 }
