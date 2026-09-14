@@ -5,17 +5,16 @@ use super::*;
 impl App {
     /// Key handling while the name input popup is open.
     pub(super) fn handle_name_input_key(&mut self, key: &KeyEvent) {
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        match key.code {
-            KeyCode::Esc => {
+        use crate::widgets::name_input::NameInputKeyOutcome;
+
+        match self.state.name_input.handle_key(*key) {
+            NameInputKeyOutcome::Cancel => {
                 self.state.name_input.close();
                 self.state.pending_profile = None;
                 self.state.pending_session_name = false;
                 self.state.pending_session_rename_id = None;
             }
-            KeyCode::Backspace => self.state.name_input.pop_char(),
-            KeyCode::Char(c) if !ctrl => self.state.name_input.push_char(c),
-            KeyCode::Enter => {
+            NameInputKeyOutcome::Submit => {
                 let name = self.state.name_input.value().to_string();
                 self.state.name_input.close();
 
@@ -66,7 +65,7 @@ impl App {
                     }
                 }
             }
-            _ => {}
+            NameInputKeyOutcome::Handled => {}
         }
     }
 

@@ -28,6 +28,9 @@ pub struct Popup<'a> {
     pub height: u16,
     /// Accent color for the title / border.
     pub accent: Color,
+    /// Center vertically in the frame instead of using the default
+    /// upper-third placement preferred by larger pickers.
+    pub vertically_centered: bool,
     /// Whether the title and border are rendered.
     pub controls: PopupControls,
 }
@@ -63,6 +66,7 @@ impl<'a> Popup<'a> {
             width: 0,
             height: 0,
             accent: Color::Cyan,
+            vertically_centered: false,
             controls,
         }
     }
@@ -82,6 +86,11 @@ impl<'a> Popup<'a> {
         self
     }
 
+    pub fn vertically_centered(mut self, enabled: bool) -> Self {
+        self.vertically_centered = enabled;
+        self
+    }
+
     /// Compute the outer rect for the popup within `frame_area`.
     pub fn outer_rect(&self, frame_area: Rect) -> Rect {
         let pw = if self.width > 0 {
@@ -95,7 +104,8 @@ impl<'a> Popup<'a> {
             (frame_area.height * 5 / 10).clamp(8, frame_area.height)
         };
         let x = frame_area.x + (frame_area.width.saturating_sub(pw)) / 2;
-        let y = frame_area.y + (frame_area.height.saturating_sub(ph)) / 3;
+        let divisor = if self.vertically_centered { 2 } else { 3 };
+        let y = frame_area.y + (frame_area.height.saturating_sub(ph)) / divisor;
         Rect::new(x, y, pw, ph)
     }
 
@@ -170,5 +180,16 @@ mod tests {
         let area = Rect::new(0, 0, 70, 10);
 
         assert_eq!(popup.inner_rect(area), Rect::new(0, 1, 70, 9));
+    }
+
+    #[test]
+    fn vertically_centered_popups_use_the_frame_middle() {
+        let popup = Popup::new("Test", PopupControls::default())
+            .width(20)
+            .height(6)
+            .vertically_centered(true);
+        let frame = Rect::new(10, 20, 100, 30);
+
+        assert_eq!(popup.outer_rect(frame), Rect::new(50, 32, 20, 6));
     }
 }

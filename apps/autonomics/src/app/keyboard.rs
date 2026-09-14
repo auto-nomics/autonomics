@@ -17,6 +17,11 @@ impl App {
                     return 0;
                 }
 
+                if self.state.name_input.visible {
+                    self.state.name_input.paste(s);
+                    return 0;
+                }
+
                 // Insert paste into the agent chat input area when in input mode.
                 if true {
                     let ts = self.state.active_tab_state_mut();

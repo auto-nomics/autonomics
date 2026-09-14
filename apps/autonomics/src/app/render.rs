@@ -232,8 +232,11 @@ impl App {
         crate::widgets::name_input::render_name_input(
             frame.area(),
             frame.buffer_mut(),
-            &self.state.name_input,
+            &mut self.state.name_input,
         );
+        if let Some((x, y)) = self.state.name_input.cursor_pos {
+            frame.set_cursor_position(ratatui::layout::Position { x, y });
+        }
 
         // ── Model config popup ──
         if self.state.model_config_visible {
