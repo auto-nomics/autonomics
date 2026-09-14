@@ -41,6 +41,7 @@ agentik-proc = { path = "../agentik-proc" }
 agentik-sdk = { path = "../agentik-sdk" }
 schemars.workspace = true
 sha2 = "0.10"
+base64 = "0.22"
 vfs = { path = "../vfs" }
 
 [lints]

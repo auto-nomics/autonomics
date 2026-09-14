@@ -10,12 +10,13 @@ use axum::{
     routing::{delete, get, post, put},
 };
 use bib_base::{
-    BibShared, spawn_extraction, stored_fulltext, try_fetch_fulltext_with, vfs_virtual_path,
+    BibShared, figure_object_path, sanitize_figure_name, scan_image_refs, spawn_extraction,
+    stored_fulltext, try_fetch_fulltext_with, vfs_virtual_path,
 };
 use bib_types::{
     AddedBy, AnnotationKind, Article, ArticleRole, ArticleSource, Author, Collection,
     CollectionStatus, ExportFormat, ExtractStatus, FileFormat, FullText, FullTextSource, IdKind,
-    Identifier, StructuredSearch,
+    Identifier, StructuredSearch, TextFormat,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -68,6 +69,10 @@ pub(crate) fn router(shared: BibShared) -> Router {
         .route(
             "/articles/{id}/fulltext/raw",
             get(download_fulltext).head(download_fulltext),
+        )
+        .route(
+            "/articles/{id}/fulltext/images/{name}",
+            get(download_figure),
         )
         .route(
             "/articles/{id}/fulltext/reextract",
@@ -515,6 +520,7 @@ async fn delete_article(State(shared): State<Arc<BibShared>>, Path(id): Path<Str
                     );
                 }
             }
+            delete_article_figures(&shared, &fulltext).await;
         }
     }
     Ok(Json(
@@ -652,6 +658,10 @@ async fn upload_fulltext(
                 }
             }
         }
+        // The row just reset to pending, so the old markdown (and any
+        // figures only it referenced) is gone regardless of whether the
+        // re-extraction succeeds.
+        delete_article_figures(&shared, &previous).await;
     }
     // Content-addressed paths guarantee the queued task reads the object
     // just written, even though this handler returns immediately.
@@ -674,7 +684,12 @@ async fn reextract_fulltext(
         .get_fulltext(&id)
         .await
         .map_err(internal)?
-        .ok_or_else(|| error(StatusCode::NOT_FOUND, format!("full text for {id} not found")))?;
+        .ok_or_else(|| {
+            error(
+                StatusCode::NOT_FOUND,
+                format!("full text for {id} not found"),
+            )
+        })?;
     if vfs_virtual_path(&existing.file_path).is_none() {
         return Err(error(
             StatusCode::BAD_REQUEST,
@@ -684,12 +699,10 @@ async fn reextract_fulltext(
             ),
         ));
     }
-    if !shared
-        .bib
-        .restart_extraction(&id)
-        .await
-        .map_err(internal)?
-    {
+    // The restart below clears the old markdown from the row, so this is
+    // the last point where the figures it referenced are identifiable.
+    delete_article_figures(&shared, &existing).await;
+    if !shared.bib.restart_extraction(&id).await.map_err(internal)? {
         return Err(error(
             StatusCode::NOT_FOUND,
             format!("full text for {id} not found"),
@@ -819,6 +832,99 @@ async fn download_fulltext(
     Ok(response)
 }
 
+/// Serve one figure image extracted alongside the markdown full text.
+///
+/// Figures are small (bounded at extraction time), so unlike the raw-file
+/// route there is no Range support — the whole object streams inline for
+/// `<img>` rendering.
+async fn download_figure(
+    State(shared): State<Arc<BibShared>>,
+    Path((id, name)): Path<(String, String)>,
+) -> Result<Response, (StatusCode, Json<ApiError>)> {
+    if shared
+        .bib
+        .get_fulltext(&id)
+        .await
+        .map_err(internal)?
+        .is_none()
+    {
+        return Err(error(
+            StatusCode::NOT_FOUND,
+            format!("full text for {id} not found"),
+        ));
+    }
+    let name = sanitize_figure_name(&name).ok_or_else(|| {
+        error(
+            StatusCode::BAD_REQUEST,
+            "figure name must be a plain file name ([A-Za-z0-9._-], no leading dot)",
+        )
+    })?;
+    let content_type = match name
+        .rsplit('.')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "jpg" | "jpeg" => "image/jpeg",
+        "png" => "image/png",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        _ => {
+            return Err(error(
+                StatusCode::NOT_FOUND,
+                format!("figure {name} has an unsupported file type"),
+            ));
+        }
+    };
+    let storage = file_storage(&shared)?;
+    let path =
+        vfs_virtual_path(&figure_object_path(&id, &name)).expect("figure path is VFS-addressable");
+    let length = storage.content_length(&path).await.map_err(|failure| {
+        if failure.kind() == opendal::ErrorKind::NotFound {
+            error(
+                StatusCode::NOT_FOUND,
+                format!("figure {name} not found for this article"),
+            )
+        } else {
+            storage_error(failure)
+        }
+    })?;
+    // read_range's read lock releases when the call returns, unlike
+    // read_stream whose guard lives as long as the response body — figures
+    // are capped at extraction time, so buffering them avoids an abandoned
+    // download pinning the object against later writers.
+    let bytes = storage
+        .read_range(&path, 0..length)
+        .await
+        .map_err(storage_error)?;
+    let mut response = Response::new(axum::body::Body::from(bytes.to_vec()));
+    let response_headers = response.headers_mut();
+    response_headers.insert(
+        header::CONTENT_TYPE,
+        content_type.parse().expect("valid content type"),
+    );
+    response_headers.insert(
+        header::CONTENT_DISPOSITION,
+        format!("inline; filename=\"{name}\"")
+            .parse()
+            .expect("valid filename"),
+    );
+    response_headers.insert(
+        header::CONTENT_LENGTH,
+        length.to_string().parse().expect("valid length"),
+    );
+    response_headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        "nosniff".parse().expect("static header"),
+    );
+    response_headers.insert(
+        header::CACHE_CONTROL,
+        "private, no-store".parse().expect("static header"),
+    );
+    Ok(response)
+}
+
 async fn delete_fulltext(
     State(shared): State<Arc<BibShared>>,
     Path(id): Path<String>,
@@ -835,6 +941,7 @@ async fn delete_fulltext(
                 );
             }
         }
+        delete_article_figures(&shared, &existing).await;
     }
     Ok(Json(json!({ "deleted": true, "id": id })))
 }
@@ -1279,4 +1386,31 @@ async fn delete_stored_file(
     let storage = file_storage(shared)?;
     storage.delete_object(path).await.map_err(storage_error)?;
     Ok(())
+}
+
+/// Best-effort removal of every figure a markdown full text references.
+///
+/// Called wherever the markdown that justifies those objects goes away:
+/// upload-replace, delete, and re-extract (a fresh run rewrites the figure
+/// set it needs; MinerU's content-derived names make that an overwrite, so
+/// clearing first never loses anything a successful re-run would reuse).
+/// Entirely advisory — a failed delete only leaves an orphan behind.
+async fn delete_article_figures(shared: &BibShared, fulltext: &FullText) {
+    if fulltext.text_format != Some(TextFormat::Markdown) {
+        return;
+    }
+    let Some(markdown) = fulltext.text_content.as_deref() else {
+        return;
+    };
+    let Some(storage) = shared.file_storage.as_ref() else {
+        return;
+    };
+    for name in scan_image_refs(markdown) {
+        let Some(path) = vfs_virtual_path(&figure_object_path(&fulltext.article_id, &name)) else {
+            continue;
+        };
+        if let Err(failure) = storage.delete_object(&path).await {
+            tracing::warn!(path = %path, error = %failure, "failed to remove figure object");
+        }
+    }
 }

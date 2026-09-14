@@ -134,11 +134,11 @@ pub struct MessageStream {
 impl MessageStream {
     /// Create a MessageStream from a predefined list of events and a final message.
     ///
-    /// Intended for unit tests. A background task drains the event list into the
+    /// Intended for tests. A background task drains the event list into the
     /// broadcast channel (after routing it through the same `accumulate_event`
     /// and `dispatch_event` helpers the production path uses), then delivers
     /// the accumulated final message through the oneshot completion channel.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-stream"))]
     pub fn from_events(events: Vec<MessageStreamEvent>, final_message: Message) -> Self {
         let (event_sender, event_receiver) = broadcast::channel(events.len().max(1));
         let (completion_sender, completion_receiver) = oneshot::channel();

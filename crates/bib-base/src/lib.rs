@@ -35,24 +35,30 @@ pub use bib_base::BibBase;
 pub use error::{Error, Result};
 pub use export::{cite_key, render, render_all, to_bibtex, to_csl_json, to_markdown, to_ris};
 pub use extract::{
-    ExtractedText, OcrFallbackExtractor, SimpleExtractor, TextExtractor, is_expected_panic,
+    ExtractedImage, ExtractedText, OcrFallbackExtractor, SimpleExtractor, TextExtractor,
+    is_expected_panic,
 };
 pub use extraction::{
     FallbackChainExtractor, default_extractor, run_extraction, run_extraction_parts,
     spawn_extraction, sweep_pending,
 };
 pub use fulltext::{FullTextPage, PendingExtraction};
-pub use mineru::{DEFAULT_API_URL as MINERU_DEFAULT_API_URL, MineruExtractor, markdown_from_zip};
 pub use http_options::BibHttpOptions;
 pub use library_tools::bib_all_registrations;
 pub use library_tools::bib_extended_registrations;
+pub use mineru::{
+    DEFAULT_API_URL as MINERU_DEFAULT_API_URL, MineruExtractor, MineruZipOutput, markdown_from_zip,
+};
 pub use oa_fetch::{try_fetch_fulltext, try_fetch_fulltext_with};
 pub use query::{
     ArxivSource, BiorxivSource, CrossrefSource, LiteratureGateway, LiteratureSource,
     OpenAlexSource, PubmedSource, S2Source, SourceBatch,
 };
 pub use shared::BibShared;
-pub use stored_files::{StoredFulltext, VFS_PREFIX, stored_fulltext, vfs_virtual_path};
+pub use stored_files::{
+    StoredFulltext, VFS_PREFIX, figure_object_path, sanitize_figure_name, scan_image_refs,
+    stored_fulltext, vfs_virtual_path,
+};
 
 /// Convenience: a [`LiteratureGateway`] pre-loaded with PubMed + arXiv + bioRxiv.
 ///

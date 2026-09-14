@@ -512,6 +512,7 @@ impl SharedInfra {
                 bib_shared.bib.clone(),
                 bib_shared.gateway.clone(),
                 Some(bib_shared.europe_pmc.clone()),
+                bib_shared.file_storage.clone(),
             );
             tools.extend(bib_tools);
 

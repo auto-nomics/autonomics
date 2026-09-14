@@ -113,7 +113,9 @@ pub const DEFAULT_BIB_DB: &str = "bib.db";
 pub async fn bib_tools(db_path: &str) -> Result<Vec<ToolRegistration>> {
     let bib = Arc::new(BibBase::open(db_path).await?);
     let gateway = Arc::new(LiteratureGateway::with_default_sources());
-    Ok(bib_base::bib_all_registrations(bib, gateway, None))
+    // Single-agent helper: no VFS file storage is wired up here, so
+    // bib_read_figure reports "not configured" rather than panicking.
+    Ok(bib_base::bib_all_registrations(bib, gateway, None, None))
 }
 
 /// Resolves the bibliography DB path: the `AUTONOMICS_BIB_DB` env var if set,

@@ -358,8 +358,12 @@ impl BibBase {
             file_hash: opt_string(row.get_value(5)?),
             file_size: opt_int(row.get_value(6)?),
             uploaded_at: opt_string(row.get_value(7)?).as_deref().and_then(parse_dt),
-            extract_status: opt_string(row.get_value(8)?).as_deref().map(ExtractStatus::from_str),
-            text_format: opt_string(row.get_value(9)?).as_deref().map(TextFormat::from_str),
+            extract_status: opt_string(row.get_value(8)?)
+                .as_deref()
+                .map(ExtractStatus::from_str),
+            text_format: opt_string(row.get_value(9)?)
+                .as_deref()
+                .map(TextFormat::from_str),
             extracted_by: opt_string(row.get_value(10)?),
             extract_error: opt_string(row.get_value(11)?),
         }))
@@ -407,8 +411,12 @@ impl BibBase {
             file_hash: opt_string(row.get_value(5)?),
             file_size: opt_int(row.get_value(6)?),
             uploaded_at: opt_string(row.get_value(7)?).as_deref().and_then(parse_dt),
-            extract_status: opt_string(row.get_value(8)?).as_deref().map(ExtractStatus::from_str),
-            text_format: opt_string(row.get_value(9)?).as_deref().map(TextFormat::from_str),
+            extract_status: opt_string(row.get_value(8)?)
+                .as_deref()
+                .map(ExtractStatus::from_str),
+            text_format: opt_string(row.get_value(9)?)
+                .as_deref()
+                .map(TextFormat::from_str),
             extracted_by: opt_string(row.get_value(10)?),
             extract_error: opt_string(row.get_value(11)?),
         };
@@ -545,7 +553,10 @@ mod tests {
         let stored = base.get_fulltext(article_id).await.unwrap().unwrap();
         assert_eq!(stored.extract_status, Some(ExtractStatus::Pending));
         assert!(stored.text_content.is_none());
-        let associations = base.list_collection_articles("col-1", None, None).await.unwrap();
+        let associations = base
+            .list_collection_articles("col-1", None, None)
+            .await
+            .unwrap();
         assert_eq!(associations[0].fetch_status, FetchStatus::MetadataOnly);
 
         // Only one concurrent claimant wins the pending → running CAS.
@@ -571,11 +582,11 @@ mod tests {
             done.text_content.as_deref(),
             Some("quantum tunneling measurement notes")
         );
-        let associations = base.list_collection_articles("col-1", None, None).await.unwrap();
-        assert_eq!(
-            associations[0].fetch_status,
-            FetchStatus::FulltextAvailable
-        );
+        let associations = base
+            .list_collection_articles("col-1", None, None)
+            .await
+            .unwrap();
+        assert_eq!(associations[0].fetch_status, FetchStatus::FulltextAvailable);
         let hits = base.search_articles("quantum", 10).await.unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].article_id, article_id);

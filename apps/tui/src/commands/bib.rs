@@ -1,7 +1,7 @@
 //! Bibliography management commands.
 
 use crate::cli::{
-    BibAction, BibArgs, ExportArgs, InfoArgs, ListArgs, RequestsArgs, ReextractArgs, UploadArgs,
+    BibAction, BibArgs, ExportArgs, InfoArgs, ListArgs, ReextractArgs, RequestsArgs, UploadArgs,
 };
 use bib_base::{stored_fulltext, vfs_virtual_path};
 use vfs::OpendalFileStorage;
@@ -151,9 +151,7 @@ async fn run_bib_reextract(
     let targets: Vec<String> = if let Some(article_id) = args.article_id.as_deref() {
         db.get_fulltext(article_id)
             .await?
-            .ok_or_else(|| {
-                color_eyre::eyre::eyre!("No full text stored for '{article_id}'.")
-            })?;
+            .ok_or_else(|| color_eyre::eyre::eyre!("No full text stored for '{article_id}'."))?;
         vec![article_id.to_owned()]
     } else if args.all_missing {
         db.list_articles_needing_extraction()
@@ -175,8 +173,7 @@ async fn run_bib_reextract(
     let total = targets.len();
     let mut succeeded = 0;
     for (index, article_id) in targets.iter().enumerate() {
-        match bib_base::run_extraction_parts(db, file_storage, extractor.as_ref(), article_id)
-            .await
+        match bib_base::run_extraction_parts(db, file_storage, extractor.as_ref(), article_id).await
         {
             Ok(extracted) => {
                 succeeded += 1;
@@ -189,7 +186,11 @@ async fn run_bib_reextract(
                 );
             }
             Err(message) => {
-                println!("[{}/{}] {article_id} … failed ({message})", index + 1, total);
+                println!(
+                    "[{}/{}] {article_id} … failed ({message})",
+                    index + 1,
+                    total
+                );
             }
         }
     }

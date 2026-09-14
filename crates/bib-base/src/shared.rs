@@ -262,7 +262,10 @@ impl std::fmt::Debug for BibShared {
             .field("crossref", &"Arc<CrossrefClient>")
             .field("s2", &"Arc<S2Client>")
             .field("extractor", &self.extractor.name())
-            .field("extraction_permits", &self.extraction_permits.available_permits())
+            .field(
+                "extraction_permits",
+                &self.extraction_permits.available_permits(),
+            )
             .finish()
     }
 }

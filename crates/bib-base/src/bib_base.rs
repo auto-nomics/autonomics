@@ -247,7 +247,6 @@ impl BibBase {
             .await?;
         }
 
-
         let mut rows = conn
             .query(
                 "SELECT value FROM bib_meta WHERE key = 'search_index_version'",
