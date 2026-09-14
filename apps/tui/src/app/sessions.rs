@@ -32,9 +32,9 @@ impl App {
                         .get(self.state.active_agent_idx)
                         .map(|s| s.name.clone());
                     if let Some(an) = agent_name {
-                        if let Some(host) = self.host.as_ref() {
-                            host.control().rename_session(&an, session_id, title);
-                        }
+                        self.fire_session_command("rename_session", move |client| async move {
+                            let _ = client.rename_session(&an, session_id, title).await;
+                        });
                     }
                 } else if self.state.pending_session_name {
                     // ── Session naming mode (new session) ──
@@ -50,9 +50,9 @@ impl App {
                         .get(self.state.active_agent_idx)
                         .map(|s| s.name.clone())
                     {
-                        if let Some(host) = self.host.as_ref() {
-                            host.control().create_session(&an, Some(title), None);
-                        }
+                        self.fire_session_command("create_session", move |client| async move {
+                            let _ = client.create_session(&an, Some(title), None).await;
+                        });
                     }
                 } else {
                     // ── Agent naming mode ──
@@ -98,9 +98,9 @@ impl App {
                         .get(self.state.active_agent_idx)
                         .map(|s| s.name.clone());
                     if let Some(an) = agent_name {
-                        if let Some(host) = self.host.as_ref() {
-                            host.control().close_session(&an, id);
-                        }
+                        self.fire_session_command("close_session", move |client| async move {
+                            let _ = client.close_session(&an, id).await;
+                        });
                     }
                 }
                 self.state.session_picker.close();
@@ -143,9 +143,9 @@ impl App {
                         .get(self.state.active_agent_idx)
                         .map(|s| s.name.clone());
                     if let Some(an) = agent_name {
-                        if let Some(host) = self.host.as_ref() {
-                            host.control().switch_session(&an, id);
-                        }
+                        self.fire_session_command("switch_session", move |client| async move {
+                            let _ = client.switch_session(&an, id).await;
+                        });
                     }
                 }
                 self.state.session_picker.close();
@@ -192,10 +192,27 @@ impl App {
         self.state
             .session_picker
             .set_sessions(initial_items, active_id);
-        // Ask the agent for a fresh list (will arrive via SessionList event).
-        if let Some(host) = self.host.as_ref() {
-            host.control().list_sessions(&agent_name);
-        }
+        // Ask the daemon for a fresh list (will arrive via SessionList
+        // event frames).
+        let agent_for_task = agent_name.clone();
+        self.fire_session_command("list_sessions", move |client| async move {
+            let _ = client.list_sessions(&agent_for_task).await;
+        });
         tracing::info!(agent = %agent_name, "session picker opened");
+    }
+}
+
+impl App {
+    /// Fire a per-agent session command at the daemon. All session
+    /// commands are fire-and-forget (202): results flow back as agent
+    /// event frames, exactly as with the in-process host.
+    pub(super) fn fire_session_command<F, Fut>(&self, name: &'static str, make: F)
+    where
+        F: FnOnce(gateway::GatewayClient) -> Fut,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
+        let client = self.client.clone();
+        let task = make(client);
+        agentik_core::supervise::spawn_safe_on_drop(&self.runtime_handle, name, task);
     }
 }

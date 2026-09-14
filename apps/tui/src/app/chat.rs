@@ -185,9 +185,12 @@ impl App {
         if let Some(text) = send_text {
             let name = self.state.sessions.get(active_idx).map(|s| s.name.clone());
             if let Some(name) = name {
-                if let Some(host) = self.host.as_ref() {
-                    host.control().deliver_message(&name, text);
-                }
+                let client = self.client.clone();
+                self.spawn_client_task("deliver_message", move || async move {
+                    if let Err(e) = client.deliver_message(&name, text).await {
+                        tracing::error!(agent = %name, error = %e, "message delivery failed");
+                    }
+                });
             }
         }
     }

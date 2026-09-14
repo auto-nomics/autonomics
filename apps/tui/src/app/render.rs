@@ -79,21 +79,21 @@ impl App {
 
     pub(super) fn render(&mut self, frame: &mut Frame) {
         // ── Workspace (full screen) ──
-        // Read the model name from the active agent's model slot via the
-        // host's agent registry, so per-agent model switches are reflected.
-        let model_info = self
+        // Model info comes from the per-agent render cache (render must
+        // never issue HTTP): filled on registration / model changes via
+        // AppEvent::ModelInfoLoaded, falling back to the daemon's active
+        // default model when no agent is active.
+        let active_agent_name = self
             .state
             .sessions
             .get(self.state.active_agent_idx)
-            .map(|s| s.name.clone())
-            .and_then(|name| self.host.as_ref().and_then(|h| h.agent_model_info(&name)))
-            .or_else(|| {
-                // Fallback to global model when no agent is active.
-                self.state
-                    .active_model
-                    .load_full()
-                    .map(|m| (m.model_info.model_name.clone(), m.model_info.context_length))
-            });
+            .map(|s| s.name.clone());
+        if let Some(name) = active_agent_name.clone() {
+            self.refresh_agent_model_info(&name);
+        }
+        let model_info = active_agent_name
+            .and_then(|name| self.agent_model_cache.get(&name).cloned())
+            .or_else(|| self.state.active_model_display.clone());
         let (model_name, context_window) = match model_info {
             Some((name, ctx)) => (Some(name), Some(ctx)),
             None => (None, None),

@@ -209,9 +209,7 @@ impl App {
                             .get(self.state.active_agent_idx)
                             .map(|s| s.name.clone());
                         if let Some(an) = agent_name {
-                            if let Some(host) = self.host.as_ref() {
-                                host.control().shutdown_agent(&an);
-                            }
+                            self.shutdown_agent_remotely(&an);
                         }
                         self.should_quit = true;
                         return;
@@ -225,9 +223,12 @@ impl App {
                 .get(self.state.active_agent_idx)
                 .map(|s| s.name.clone());
             if let Some(an) = agent_name {
-                if let Some(host) = self.host.as_ref() {
-                    host.control().cancel_agent(&an);
-                }
+                let client = self.client.clone();
+                self.spawn_client_task("cancel_agent", move || async move {
+                    if let Err(e) = client.cancel_agent(&an).await {
+                        tracing::warn!(agent = %an, error = %e, "cancel request failed");
+                    }
+                });
             }
             self.cancel_requested_at = Some(Instant::now());
             // Mark the active agent's tab as "cancel pending" so the UI

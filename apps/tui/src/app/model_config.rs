@@ -1,97 +1,51 @@
-//! Model catalog loading, selection, and provider persistence.
+//! Model catalog loading and provider configuration — thin-client edition.
+//!
+//! All state lives in the gateway daemon's app DB; this module only
+//! renders the catalog (fetched via `GET /model-config`) and issues
+//! writes (`PUT /model-config/...`). The ChatGPT OAuth flows (callback
+//! listener, token persistence, startup refresh) moved to the daemon.
 
 use super::*;
 
 impl App {
-    /// Load the built-in provider catalogue, augmented with DB credentials,
-    /// into [`ModelConfigState`] for the model config widget to render.
+    /// Load the daemon-side catalogue into [`ModelConfigState`] for the
+    /// model config widget to render.
     pub(super) fn load_model_config(
-        conn: &Connection,
+        catalog: &gateway::proto::ModelCatalog,
         state: &mut crate::widgets::model_config_widget::ModelConfigState,
     ) {
-        use runtime::model_bootstrap::ProviderRow;
-
-        // Read configured providers from DB.
-        let providers = ProviderRow::all(conn).unwrap_or_default();
-        let db_tuples: Vec<(String, String, String)> = providers
-            .into_iter()
-            .map(|p| (p.provider_type, p.api_key, p.base_url))
+        // The widget builds its catalog from the SDK registry (available
+        // in-process) + DB credentials + DB-imported remote models.
+        let db_tuples: Vec<(String, String, String)> = catalog
+            .providers
+            .iter()
+            .map(|p| {
+                (
+                    p.provider_type.clone(),
+                    p.api_key.clone(),
+                    p.base_url.clone(),
+                )
+            })
             .collect();
+        *state = crate::widgets::model_config_widget::build_catalog(&db_tuples, &catalog.models);
 
-        // Build catalogue from SDK registry + DB credentials + DB-imported
-        // remote-catalogue models.
-        let db_models = runtime::model_bootstrap::ModelRow::all(conn).unwrap_or_default();
-        *state = crate::widgets::model_config_widget::build_catalog(&db_tuples, &db_models);
-
-        // Load active model name from settings.
-        if let Ok(value) = conn.query_row(
-            "SELECT value FROM settings WHERE key = 'active_model'",
-            [],
-            |row| row.get::<_, String>(0),
-        ) {
-            // value format: "provider_name:model_name"
-            if let Some((_, model_name)) = value.split_once(':') {
+        if let Some(spec) = catalog.active_model.as_deref() {
+            if let Some((_, model_name)) = spec.split_once(':') {
                 state.active_model_name = Some(model_name.to_string());
             }
         }
     }
 
-    /// Persist a display toggle to the `settings` table.
+    /// Persist a display toggle (daemon settings table).
     pub(super) fn persist_display_setting(&self, key: &str, value: bool) {
-        let _ = self.conn.execute(
-            "INSERT OR REPLACE INTO settings (key, value) VALUES (?1, ?2)",
-            rusqlite::params![key, if value { "1" } else { "0" }],
-        );
-    }
-    /// Persist a model spec into the agent's stored record so it survives restarts.
-    pub(super) fn persist_agent_model(&mut self, agent_name: &str, model_spec: &str) {
-        let Some(storage) = self.host.as_ref().map(|h| h.storage().clone()) else {
-            tracing::warn!("no host available for model persistence");
-            return;
-        };
-        let name = agent_name.to_string();
-        let spec = model_spec.to_string();
-        agentik_core::supervise::spawn_safe_on_drop(
-            &self.runtime_handle,
-            "persist_agent_model",
-            async move {
-                // Read the current record.
-                let Some(mut record) = storage.get_agent_by_name(&name).await.ok().flatten() else {
-                    tracing::warn!(agent = %name, "agent record not found for model persistence");
-                    return;
-                };
-                // Update preferred_model inside config_json.
-                if let Some(obj) = record.config_json.as_object_mut() {
-                    obj.insert(
-                        "preferred_model".to_string(),
-                        serde_json::Value::String(spec.clone()),
-                    );
-                }
-                record.last_active = chrono::Utc::now().timestamp_millis();
-                // Upsert the updated record.
-                if let Err(e) = storage.upsert_agent(record).await {
-                    tracing::error!(agent = %name, error = %e, "failed to persist model spec");
-                } else {
-                    tracing::info!(agent = %name, model = %spec, "model spec persisted to agent record");
-                }
-            },
-        );
-    }
-
-    /// 读 provider 行的 token blob（api_key 列存 blob JSON）。
-    /// main 分支无 app-config crate，此为 chatgpt_token_blob 的内联等价。
-    fn chatgpt_token_blob(
-        conn: &Connection,
-        provider: &str,
-    ) -> Option<agentik_sdk::provider::openai::oauth::TokenBlob> {
-        let api_key: String = conn
-            .query_row(
-                "SELECT api_key FROM providers WHERE name = ?1",
-                [provider],
-                |row| row.get(0),
-            )
-            .ok()?;
-        agentik_sdk::provider::openai::oauth::TokenBlob::from_json(&api_key).ok()
+        let client = self.client.clone();
+        let key = key.to_string();
+        let value = if value { "1" } else { "0" }.to_string();
+        self.spawn_client_task("persist_display_setting", move || async move {
+            if let Err(e) = client.put_setting(&key, &value).await {
+                tracing::warn!(key = %key, error = %e, "failed to persist display setting");
+            }
+        });
     }
 
     pub(super) fn handle_model_config_key(&mut self, key: &KeyEvent) {
@@ -113,43 +67,26 @@ impl App {
                 provider_name,
                 model_name,
             } => {
-                // Build the model and apply to the active agent via host.
                 let spec = format!("{provider_name}:{model_name}");
-                if let Some(model) = runtime::model_bootstrap::resolve_model_spec(&self.conn, &spec)
-                {
-                    let model = self.attach_chatgpt_refresh_callback(Arc::new(model));
-                    let agent_name = self
-                        .state
-                        .sessions
-                        .get(self.state.active_agent_idx)
-                        .map(|s| s.name.clone());
-                    if let Some(an) = agent_name {
-                        if let Some(host) = self.host.as_ref() {
-                            host.control().set_agent_model(&an, (*model).clone());
-                            tracing::info!(
-                                agent = %an,
-                                model = %spec,
-                                "model hot-swapped for active agent"
-                            );
-                            self.persist_agent_model(&an, &spec);
+                let agent_name = self
+                    .state
+                    .sessions
+                    .get(self.state.active_agent_idx)
+                    .map(|s| s.name.clone());
+                if let Some(an) = agent_name {
+                    // The daemon resolves the spec (attaching the ChatGPT
+                    // refresh callback), hot-swaps the agent's model, and
+                    // persists the preference in its stored record.
+                    tracing::info!(agent = %an, model = %spec, "model hot-swap requested");
+                    let client = self.client.clone();
+                    let spec_for_task = spec.clone();
+                    let an_for_log = an.clone();
+                    self.spawn_client_task("set_agent_model", move || async move {
+                        if let Err(e) = client.set_agent_model(&an_for_log, &spec_for_task).await {
+                            tracing::error!(agent = %an_for_log, model = %spec_for_task, error = %e, "model hot-swap failed");
                         }
-                    }
-                } else {
-                    // openai + 过期 token 是可恢复的失败：后台刷新，落地
-                    // 事件会重建默认槽；提示用户稍后重选。
-                    if provider_name == "openai"
-                        && Self::chatgpt_token_blob(&self.conn, "openai")
-                            .is_some_and(|blob| blob.access_token_expired())
-                    {
-                        tracing::info!("openai token expired at select time; refreshing");
-                        self.spawn_chatgpt_ensure_fresh();
-                        self.state.toasts.info(
-                            "ChatGPT token 已过期",
-                            Some("正在后台刷新，完成后请重新选择模型".into()),
-                        );
-                    } else {
-                        tracing::warn!(model = %spec, "model unbuildable at select time");
-                    }
+                    });
+                    self.refresh_agent_model_info(&an);
                 }
                 self.state.model_config_visible = false;
             }
@@ -169,249 +106,99 @@ impl App {
                 self.start_chatgpt_login(&provider_name);
             }
             ConfigCommand::ReloadCatalog => {
-                Self::load_model_config(&self.conn, &mut self.state.model_config_state);
+                self.spawn_catalog_reload();
             }
             ConfigCommand::None => {}
         }
     }
 
     /// Persist and activate the model used when creating agents without a
-    /// profile-specific override.
+    /// profile-specific override. Validation and slot updates happen
+    /// daemon-side; a `ModelChanged` notice triggers the catalog reload.
     pub(super) fn set_default_model_for_new_agents(
         &mut self,
         provider_name: &str,
         model_name: &str,
     ) {
         let spec = format!("{provider_name}:{model_name}");
-        let Some(model) = runtime::model_bootstrap::resolve_model_spec(&self.conn, &spec) else {
-            tracing::warn!(model = %spec, "cannot set default model: model unavailable");
-            self.state
-                .toasts
-                .error("Invalid model", Some("Configure its provider first".into()));
-            return;
-        };
-
-        if let Err(e) = self.conn.execute(
-            "INSERT OR REPLACE INTO settings (key, value) VALUES ('active_model', ?1)",
-            rusqlite::params![spec],
-        ) {
-            tracing::error!(model = %spec, error = %e, "failed to persist default model");
-            self.state.toasts.error(
-                "Save failed",
-                Some("Could not update the default model".into()),
-            );
-            return;
-        }
-
-        // RuntimeHost shares this ArcSwapOption with AppState. New agents
-        // spawned without a profile override read the updated value.
-        self.state.active_model.store(Some(Arc::new(model)));
+        let client = self.client.clone();
+        let spec_for_task = spec.clone();
+        self.spawn_client_task("set_active_model", move || async move {
+            if let Err(e) = client.set_active_model(&spec_for_task).await {
+                tracing::warn!(model = %spec_for_task, error = %e, "failed to set default model");
+            }
+        });
+        // Optimistic UI update; the notice-driven reload overwrites it.
+        self.state.active_model_spec = Some(spec);
+        self.state.active_model_display = None;
         self.state.model_config_state.active_model_name = Some(model_name.to_string());
-        tracing::info!(model = %spec, "default model for new agents updated");
         self.state.toasts.success(
             "Default model set",
             Some(format!("{provider_name}:{model_name}")),
         );
     }
 
-    /// Insert or update a provider's api_key and base_url in the database.
+    /// Insert or update a provider's api_key and base_url (daemon-side).
     fn save_provider_config(&self, provider_name: &str, api_key: &str, base_url: &str) {
-        // Look up the built-in provider to get its type and default base_url.
+        // Look up the provider type in the catalog (client-side registry
+        // data); empty base_url means "use the provider default" — the
+        // daemon resolves it.
         let provider = self
             .state
             .model_config_state
             .providers
             .iter()
             .find(|p| p.name == provider_name);
-
         let Some(provider) = provider else {
             tracing::error!("provider not found in catalog: {provider_name}");
             return;
         };
-
         let provider_type = provider.provider_type.as_str().to_string();
-        // Prefer the user-supplied base_url; fall back to the provider default
-        // (the registry's first preset endpoint) when the field is empty.
         let base_url = if base_url.is_empty() {
             provider.selected_base_url.clone()
         } else {
             base_url.to_string()
         };
-        // Resolve the default auth method from the registry for this provider.
-        let auth_str =
-            agentik_sdk::provider::registry::default_auth_method(&provider.provider_type)
-                .storage_tag();
-
-        // Check if a row for this provider name already exists.
-        let existing: Option<i64> = self
-            .conn
-            .query_row(
-                "SELECT id FROM providers WHERE name = ?1",
-                [provider_name],
-                |row| row.get(0),
-            )
-            .ok();
-
-        let result = if let Some(id) = existing {
-            self.conn.execute(
-                "UPDATE providers SET api_key = ?1, base_url = ?2, auth_method = ?3 WHERE id = ?4",
-                rusqlite::params![api_key, &base_url, auth_str, id],
-            )
-        } else {
-            self.conn.execute(
-                "INSERT INTO providers (name, provider_type, base_url, api_key, auth_method)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                rusqlite::params![provider_name, &provider_type, &base_url, api_key, auth_str],
-            )
+        let request = gateway::proto::SaveProviderRequest {
+            name: provider_name.to_string(),
+            provider_type,
+            base_url,
+            api_key: api_key.to_string(),
         };
-
-        match &result {
-            Ok(_) => tracing::info!("saved provider config: {provider_name}"),
-            Err(e) => tracing::error!("failed to save provider config: {e}"),
-        }
+        let client = self.client.clone();
+        let provider_name = provider_name.to_string();
+        let tx = self.app_event_tx.clone();
+        self.spawn_client_task("save_provider", move || async move {
+            let result = client
+                .save_provider(&request)
+                .await
+                .map_err(|e| e.to_string());
+            tx.send(crate::app_event::AppEvent::ProviderSaved {
+                provider_name,
+                result,
+            });
+        });
     }
 
-    /// 写入 ChatGPT 登录产物：openai 行 api_key = token blob JSON、
-    /// auth_method = "chatgpt"、base_url = 默认 ChatGPT 后端。
-    pub(super) fn save_chatgpt_provider(
-        &self,
-        blob: &agentik_sdk::provider::openai::oauth::TokenBlob,
-    ) -> Result<(), String> {
-        let json = blob.to_json()?;
-        let base_url = agentik_sdk::provider::registry::default_base_url(&ProviderType::Openai)
-            .unwrap_or_default()
-            .to_string();
-        let existing: Option<i64> = self
-            .conn
-            .query_row(
-                "SELECT id FROM providers WHERE name = 'openai'",
-                ["openai"],
-                |row| row.get(0),
-            )
-            .ok();
-        let result = if let Some(id) = existing {
-            self.conn.execute(
-                "UPDATE providers SET api_key = ?1, base_url = ?2, auth_method = 'chatgpt' WHERE id = ?3",
-                rusqlite::params![json, base_url, id],
-            )
-        } else {
-            self.conn.execute(
-                "INSERT INTO providers (name, provider_type, base_url, api_key, auth_method)
-                 VALUES ('openai', 'openai', ?1, ?2, 'chatgpt')",
-                rusqlite::params![base_url, json],
-            )
-        };
-        result.map(|_| ()).map_err(|e| e.to_string())
-    }
-
-    /// 发起 ChatGPT 订阅 OAuth 登录：绑定本机回调端口 → 发
-    /// [`AppEvent::ChatgptLoginUrl`]（剪贴板 + 浏览器）→ 后台等待浏览器
-    /// 授权并换 token → [`AppEvent::ChatgptLoginCompleted`] 写库重载。
-    /// 仿 `fetch_remote_model_catalog` 的异步派发模式。
+    /// 发起 ChatGPT 订阅 OAuth 登录：daemon 绑定本机回调端口并返回
+    /// 授权 URL（剪贴板 + 浏览器）；完成结果经 ChatgptLogin notice 回流。
     fn start_chatgpt_login(&mut self, provider_name: &str) {
-        use agentik_sdk::provider::openai::oauth;
-
-        let (url, waiter) = match oauth::login_flow() {
-            Ok(pair) => pair,
-            Err(e) => {
-                tracing::warn!(provider = provider_name, error = %e, "chatgpt login failed to start");
-                self.state.toasts.error("登录启动失败", Some(e));
-                return;
-            }
-        };
-        tracing::info!(provider = provider_name, "chatgpt login flow started");
+        let client = self.client.clone();
         let tx = self.app_event_tx.clone();
-        tx.send(crate::app_event::AppEvent::ChatgptLoginUrl(url));
-        agentik_core::supervise::spawn_safe_on_drop(
-            &self.runtime_handle,
-            "chatgpt_login",
-            async move {
-                let result = waiter.wait().await;
-                tx.send(crate::app_event::AppEvent::ChatgptLoginCompleted { result });
-            },
-        );
-    }
-
-    /// 默认模型槽指向 openai 时重建之（登录/刷新前 openai 模型可能不可
-    /// 构建）。`RuntimeHost` 与 `AppState` 共享同一 `ArcSwapOption` 槽，
-    /// store 即对双方生效。
-    pub(super) fn rebuild_openai_default_model(&mut self) {
-        let Ok(spec) = self.conn.query_row(
-            "SELECT value FROM settings WHERE key = 'active_model'",
-            [],
-            |row| row.get::<_, String>(0),
-        ) else {
-            return;
-        };
-        if !spec.starts_with("openai:") {
-            return;
-        }
-        match runtime::model_bootstrap::resolve_model_spec(&self.conn, &spec) {
-            Some(model) => {
-                let model = self.attach_chatgpt_refresh_callback(Arc::new(model));
-                self.state.active_model.store(Some(model));
-                tracing::info!(model = %spec, "openai default model rebuilt after login/refresh");
-            }
-            None => {
-                tracing::warn!(model = %spec, "openai default model still unbuildable");
-            }
-        }
-    }
-
-    /// 给 ChatGPT OAuth 模型挂 token 刷新回调（新 blob JSON → 事件 →
-    /// 主循环写库）。非 OAuth 模型原样返回。
-    pub(super) fn attach_chatgpt_refresh_callback(
-        &self,
-        model: Arc<agentik_sdk::model::Model>,
-    ) -> Arc<agentik_sdk::model::Model> {
-        let tx = self.app_event_tx.clone();
-        Arc::new((*model).clone().with_token_refreshed(move |blob_json| {
-            tx.send(crate::app_event::AppEvent::ChatgptTokenRefreshed(blob_json));
-        }))
-    }
-
-    /// 启动收尾：openai 默认模型补挂 token 刷新回调（App::new 构建模型
-    /// 时事件通道尚未就绪），随后做启动期主动刷新检查。
-    pub(super) fn on_startup_chatgpt_setup(&mut self) {
-        if let Some(model) = self.state.active_model.load_full() {
-            if model.is_chatgpt() {
-                let model = self.attach_chatgpt_refresh_callback(model);
-                self.state.active_model.store(Some(model));
-            }
-        }
-        self.spawn_chatgpt_ensure_fresh();
-    }
-
-    /// 启动期/选择期主动刷新：读 openai blob，满足 8 天/24h 条件则后台
-    /// `refresh_blob` → [`AppEvent::ChatgptTokenRefreshed`] 落库并重建。
-    pub(super) fn spawn_chatgpt_ensure_fresh(&self) {
-        let Some(blob) = Self::chatgpt_token_blob(&self.conn, "openai") else {
-            return;
-        };
-        if !blob.should_refresh() {
-            return;
-        }
-        let tx = self.app_event_tx.clone();
-        agentik_core::supervise::spawn_safe_on_drop(
-            &self.runtime_handle,
-            "chatgpt_ensure_fresh",
-            async move {
-                match agentik_sdk::provider::openai::oauth::refresh_blob(&blob).await {
-                    Ok(refreshed) => match refreshed.to_json() {
-                        Ok(json) => {
-                            tx.send(crate::app_event::AppEvent::ChatgptTokenRefreshed(json));
-                        }
-                        Err(e) => {
-                            tracing::warn!(error = %e, "chatgpt ensure-fresh serialize failed")
-                        }
-                    },
-                    Err(e) => {
-                        // 非致命：401 自愈与下次启动会再试。
-                        tracing::warn!(error = %e, "chatgpt ensure-fresh refresh failed");
-                    }
+        let _ = provider_name;
+        self.spawn_client_task("chatgpt_login", move || async move {
+            match client.start_chatgpt_login().await {
+                Ok(url) => {
+                    tx.send(crate::app_event::AppEvent::ChatgptLoginUrl(url));
                 }
-            },
-        );
+                Err(e) => {
+                    tracing::warn!(error = %e, "chatgpt login failed to start");
+                    tx.send(crate::app_event::AppEvent::ChatgptLoginCompleted {
+                        result: Err(e.to_string()),
+                    });
+                }
+            }
+        });
     }
 
     /// Open OAuth link in default browser automatically
@@ -439,110 +226,44 @@ impl App {
     }
 
     /// Kick off an async fetch of a provider's live remote model catalogue
-    /// (OpenRouter's public `/v1/models`; openai 的 ChatGPT 后端
-    /// `/backend-api/codex/models`，需登录态). The result lands back
-    /// on the event loop as [`AppEvent::RemoteCatalogFetched`], which
-    /// persists the rows and reloads the catalogue widget.
+    /// on the daemon. The result lands as a `CatalogFetched` notice.
     pub(super) fn fetch_remote_model_catalog(&mut self, provider_name: &str, base_url: &str) {
         use agentik_sdk::provider::registry;
 
-        let provider_type = ProviderType::from(provider_name);
+        let provider_type = agentik_sdk::model::ProviderType::from(provider_name);
         if !registry::supports_remote_catalog(&provider_type) {
             tracing::warn!(provider = provider_name, "no remote catalogue support");
             return;
         }
-        let url = if base_url.is_empty() {
-            registry::default_base_url(&provider_type)
-                .unwrap_or("")
-                .to_string()
-        } else {
-            base_url.to_string()
-        };
-        tracing::info!(provider = provider_name, url = %url, "fetching remote catalogue");
-
-        let name = provider_name.to_string();
-        let tx = self.app_event_tx.clone();
-        // ChatGPT 订阅的目录端点需要登录态（Bearer + account id）；blob
-        // 从库里读，登录/401 自愈后总是最新。
-        if matches!(provider_type, ProviderType::Openai) {
-            let Some(blob) = Self::chatgpt_token_blob(&self.conn, &name) else {
+        // openai 的目录端点需要 ChatGPT 登录态 —— daemon 侧校验，缺登录时
+        // 通过 notice 回流错误。
+        if matches!(provider_type, agentik_sdk::model::ProviderType::Openai) {
+            let present = self
+                .state
+                .model_config_state
+                .providers
+                .iter()
+                .find(|p| p.name == "openai")
+                .is_some_and(|p| {
+                    p.api_key
+                        .as_deref()
+                        .is_some_and(|k| k.contains("refresh_token"))
+                });
+            if !present {
                 self.state.toasts.error(
                     "请先登录",
                     Some("openai 模型目录需要 ChatGPT 登录态".into()),
                 );
                 return;
-            };
-            let token = blob.access_token.clone();
-            let account = blob.account_id.clone();
-            agentik_core::supervise::spawn_safe_on_drop(
-                &self.runtime_handle,
-                "fetch_remote_catalog",
-                async move {
-                    let result =
-                        agentik_sdk::provider::openai::OpenaiProvider::fetch_remote_catalog(
-                            &url, &token, &account,
-                        )
-                        .await;
-                    tx.send(crate::app_event::AppEvent::RemoteCatalogFetched {
-                        provider_name: name,
-                        result,
-                    });
-                },
-            );
-            return;
+            }
         }
-        agentik_core::supervise::spawn_safe_on_drop(
-            &self.runtime_handle,
-            "fetch_remote_catalog",
-            async move {
-                let result =
-                    agentik_sdk::provider::openrouter::OpenrouterProvider::fetch_remote_catalog(
-                        &url,
-                    )
-                    .await;
-                tx.send(crate::app_event::AppEvent::RemoteCatalogFetched {
-                    provider_name: name,
-                    result,
-                });
-            },
-        );
-    }
-
-    /// Replace the provider's rows in the `models` table with a freshly
-    /// fetched remote catalogue. Returns the persisted model count.
-    pub(super) fn persist_remote_models(
-        &self,
-        provider_name: &str,
-        models: &[agentik_sdk::model::ModelInfo],
-    ) -> rusqlite::Result<usize> {
-        let provider_id: i64 = self.conn.query_row(
-            "SELECT id FROM providers WHERE name = ?1",
-            [provider_name],
-            |r| r.get(0),
-        )?;
-        self.conn
-            .execute("DELETE FROM models WHERE provider_id = ?1", [provider_id])?;
-        for m in models {
-            self.conn.execute(
-                "INSERT OR REPLACE INTO models (model_name, provider_id, context_length,
-                 max_output_tokens, vision_ability, supports_function_calling, supports_streaming,
-                 supports_thinking, thinking_enabled, input_token_price, output_token_price)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
-                rusqlite::params![
-                    m.model_name,
-                    provider_id,
-                    m.context_length as i64,
-                    m.max_output_tokens as i64,
-                    m.vision_ability as i64,
-                    m.supports_function_calling as i64,
-                    m.supports_streaming as i64,
-                    m.supports_thinking as i64,
-                    m.thinking_enabled as i64,
-                    m.input_token_price,
-                    m.output_token_price,
-                ],
-            )?;
-        }
-        Ok(models.len())
+        let client = self.client.clone();
+        let name = provider_name.to_string();
+        let base_url = base_url.to_string();
+        self.spawn_client_task("fetch_remote_catalog", move || async move {
+            if let Err(e) = client.fetch_catalog(&name, &base_url).await {
+                tracing::warn!(provider = %name, error = %e, "catalog fetch request failed");
+            }
+        });
     }
 }

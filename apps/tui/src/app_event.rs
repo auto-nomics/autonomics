@@ -37,24 +37,50 @@ pub(crate) enum AppEvent {
         agent_id: uuid::Uuid,
         plan: agentik_types::AgentPlan,
     },
-    /// A provider's remote model catalogue finished loading (or failed).
-    /// The payload carries metadata-only `ModelInfo`s; the handler persists
-    /// them into the `models` table and reloads the catalogue widget.
+    /// A fresh model catalogue snapshot arrived from the daemon (hydration,
+    /// `ReloadCatalog`, or after a provider/catalog change). The handler
+    /// rebuilds the config widget's catalog state.
+    ModelCatalogLoaded(gateway::proto::ModelCatalog),
+    /// The daemon's active default model changed (set-default, ChatGPT
+    /// login/refresh). Mirrors the `ModelChanged` gateway notice.
+    ActiveModelChanged {
+        spec: Option<String>,
+        reason: String,
+    },
+    /// A provider's remote catalogue fetch finished daemon-side (the
+    /// `CatalogFetched` gateway notice). The payload carries the persisted
+    /// model count.
     RemoteCatalogFetched {
         provider_name: String,
-        result: std::result::Result<Vec<agentik_sdk::model::ModelInfo>, String>,
+        result: std::result::Result<usize, String>,
     },
     /// ChatGPT 订阅登录：授权 URL 已就绪。处理器负责复制到剪贴板、
     /// 尽力打开浏览器并提示用户。
     ChatgptLoginUrl(String),
-    /// ChatGPT token 主动/自愈刷新产物：新 blob JSON。主循环覆写 openai
-    /// 行的 api_key（token 轮转落库，重启免重登）。
-    ChatgptTokenRefreshed(String),
-    /// A structured DAG snapshot arrived for the interactive TUI view.
-    DagSnapshotLoaded(Result<dag_core::dag::DagTuiSnapshot, String>),
-    /// ChatGPT 订阅登录结束。`Ok` 携带 token blob（处理器写库并重载目
-    /// 录）；`Err` 为可直接展示的失败原因（取消/超时/端口占用/交换失败）。
+    /// ChatGPT 订阅登录结束（daemon 侧完成并落库）。`Ok` 携带账户信息
+    /// 用于 toast 展示；`Err` 为可直接展示的失败原因。
     ChatgptLoginCompleted {
-        result: std::result::Result<agentik_sdk::provider::openai::oauth::TokenBlob, String>,
+        result: std::result::Result<gateway::proto::ChatgptLoginInfo, String>,
+    },
+    /// A structured DAG snapshot arrived for the interactive TUI view.
+    DagSnapshotLoaded(std::result::Result<dag_core::dag::DagTuiSnapshot, String>),
+    /// Per-agent model info arrived (render-path cache fill; render itself
+    /// must never issue HTTP).
+    ModelInfoLoaded {
+        agent: String,
+        info: Option<(String, u64)>,
+    },
+    /// A provider row save finished (PUT /model-config/provider).
+    ProviderSaved {
+        provider_name: String,
+        result: std::result::Result<(), String>,
+    },
+    /// A live agent seen in a `/state` snapshot that the UI doesn't know
+    /// yet (reconcile after lag / reconnect).
+    AgentUpserted(gateway::AgentInfo),
+    /// Known session list for an agent (from a `/state` snapshot).
+    SessionListKnown {
+        agent: String,
+        sessions: Vec<agentik_types::SessionInfo>,
     },
 }

@@ -1,7 +1,7 @@
 //! Headless run subcommand — thin CLI shell over `headless::run_task`.
 //!
 //! Responsibilities are deliberately narrow: prompt assembly (args +
-//! stdin), model resolution via `runtime::model_bootstrap`, processor
+//! stdin), model resolution via `gateway::model_bootstrap`, processor
 //! selection (`--json` vs human), the `-o` last-message file, and the
 //! exit-code contract. Everything else — spawn, translation,
 //! termination, shutdown — belongs to the headless library, so the CLI
@@ -36,12 +36,12 @@ pub fn run_headless(args: RunArgs) -> color_eyre::Result<()> {
     let runtime = tokio::runtime::Runtime::new()
         .map_err(|e| color_eyre::eyre::eyre!("failed to build tokio runtime: {e}"))?;
     runtime.block_on(async move {
-        let runtime_config = runtime::RuntimeConfig::default();
+        let runtime_config = gateway::RuntimeConfig::default();
         if let Some(parent) = runtime_config.app_db_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
         let conn = Connection::open(&runtime_config.app_db_path)?;
-        runtime::model_bootstrap::ensure_app_schema(&conn)?;
+        gateway::model_bootstrap::ensure_app_schema(&conn)?;
 
         let (model, model_name) = match resolve_model(&conn, args.model.as_deref()) {
             Ok(resolved) => resolved,
@@ -107,6 +107,20 @@ pub fn run_headless(args: RunArgs) -> color_eyre::Result<()> {
             }
             Err(error) => {
                 eprintln!("error: {error}");
+                // Gateway-era interim: the resident daemon owns the state
+                // dir, so an in-process default run cannot open the host.
+                // The gateway-backed `run` (follow-up PR) removes this
+                // conflict entirely.
+                if let headless::RunError::HostOpen(gateway::RuntimeError::InstanceLockHeld {
+                    path,
+                }) = &error
+                {
+                    eprintln!(
+                        "note: the gateway daemon currently owns the state dir ({}); \
+                         stop it (`tui serve stop`) or run with --ephemeral",
+                        path.display()
+                    );
+                }
                 std::process::exit(EXIT_STARTUP);
             }
         }
@@ -161,13 +175,13 @@ fn resolve_model(
 ) -> Result<(agentik_sdk::model::Model, String), String> {
     let spec = match model_flag {
         Some(spec) => spec.to_string(),
-        None => runtime::model_bootstrap::active_model_spec(conn).ok_or_else(|| {
+        None => gateway::model_bootstrap::active_model_spec(conn).ok_or_else(|| {
             "no active model configured — set one in the TUI Config tab or pass \
              --model provider_name:model_name"
                 .to_string()
         })?,
     };
-    let model = runtime::model_bootstrap::resolve_model_spec(conn, &spec).ok_or_else(|| {
+    let model = gateway::model_bootstrap::resolve_model_spec(conn, &spec).ok_or_else(|| {
         format!("model `{spec}` unavailable (unknown provider/model or missing API key)")
     })?;
     let name = spec

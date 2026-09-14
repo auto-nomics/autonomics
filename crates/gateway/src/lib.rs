@@ -26,3 +26,14 @@ pub use client::{ClientError, GatewayClient, GatewayFrame};
 pub use daemon::{DaemonError, DaemonOptions, GATEWAY_VERSION, run_daemon};
 pub use hub::EventHub;
 pub use proto::HostEventView;
+
+// Re-exports so frontends depend on `gateway` alone — the runtime types
+// frontends legitimately need (config paths for the standalone CLI
+// subcommands, model bootstrap for `tui run`) without a direct runtime
+// dependency.
+/// Daemon startup error type — re-exported so frontends can pattern-match
+/// (e.g. `tui run`'s lock-conflict hint) without a direct runtime dep.
+pub use runtime::Error as RuntimeError;
+pub use runtime::control::AgentInfo;
+pub use runtime::{RuntimeConfig, RuntimeConfigBuilder};
+pub use runtime::{bibliography_file_storage, model_bootstrap};

@@ -2,9 +2,7 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, RwLock};
 
 use crate::widgets::input_area::InputArea;
-use agentik_sdk::model::Model;
 use agentik_sdk::types::{AgentEvent, CompactEvent};
-use arc_swap::ArcSwapOption;
 use ratatui::text::Line;
 
 // ── Tool task tracking ─────────────────────────────────
@@ -817,6 +815,7 @@ impl DisplaySettings {
 }
 
 /// State container for the TUI.
+#[derive(Default)]
 pub struct AppState {
     /// All active agent sessions. `sessions[active_agent_idx]` is the one
     /// displayed in the workspace and receives user input.
@@ -862,7 +861,12 @@ pub struct AppState {
     pub dag_view_error: Option<String>,
     /// Global display preferences (collapse thinking/tool blocks).
     pub display_settings: DisplaySettings,
-    pub active_model: Arc<ArcSwapOption<Model>>,
+    /// Active default model as `provider:model`. Resolved and built by the
+    /// gateway daemon — the thin-client TUI never constructs `Model`s.
+    pub active_model_spec: Option<String>,
+    /// Status-bar fallback when no agent is active: (model_name,
+    /// context_length) of the active default model.
+    pub active_model_display: Option<(String, u64)>,
     /// When `true`, the delete-active-agent confirmation popup is shown.
     /// The user must press 'y' or Enter to confirm, 'n' or Esc to cancel.
     pub delete_agent_confirm: bool,
@@ -873,37 +877,6 @@ pub struct AppState {
     /// after the matching registration arrives, on spawn failure, or on
     /// pick-list close so stale flags never mis-route focus.
     pub pending_focus_agent_name: Option<String>,
-}
-
-impl Default for AppState {
-    fn default() -> Self {
-        Self {
-            sessions: Vec::new(),
-            active_agent_idx: 0,
-            profiles: Vec::new(),
-            agent_tab_state: AgentTabState::default(),
-            model_config_state: Default::default(),
-            command_palette: Default::default(),
-            profile_picker: Default::default(),
-            agent_picker: Default::default(),
-            name_input: Default::default(),
-            session_picker: Default::default(),
-            message_picker: Default::default(),
-            toasts: Default::default(),
-            pending_session_name: false,
-            pending_session_rename_id: None,
-            pending_profile: None,
-            model_config_visible: false,
-            dag_view_visible: false,
-            dag_snapshot: None,
-            dag_view_state: crate::widgets::dag_view::DagViewState::default(),
-            dag_view_error: None,
-            display_settings: DisplaySettings::default(),
-            active_model: Arc::new(ArcSwapOption::default()),
-            delete_agent_confirm: false,
-            pending_focus_agent_name: None,
-        }
-    }
 }
 
 impl AppState {
