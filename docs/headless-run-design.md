@@ -1,12 +1,12 @@
 # Headless 运行模式设计(初步)
 
-状态:**P0/P1 已实现**(feat/headless-mode 分支);**P3-gateway 已实现**(feat/headless-via-gateway 分支)——`tui run` 默认经 gateway daemon 执行(`crates/headless::gateway_runner::run_via_gateway`,RunEvent 契约与退出码不变),`--ephemeral` 保留进程内 `run_task`(benchmark 隔离)。CLI:`tui run`(--json / -o / --profile / --model / --timeout / --session / --ephemeral / --manifest);退出码 0/1/2/3。剩余:P2 的 --output-schema、多 turn stdin 脚本,P3 的多 agent 网络运行。参考实现:codex-rs `exec` 子命令(`/mnt/disk3/codex/codex-rs/exec`)。
+状态:**P0/P1 已实现**(feat/headless-mode 分支);**P3-gateway 已实现**(feat/headless-via-gateway 分支)——`autonomics run` 默认经 gateway daemon 执行(`crates/headless::gateway_runner::run_via_gateway`,RunEvent 契约与退出码不变),`--ephemeral` 保留进程内 `run_task`(benchmark 隔离)。CLI:`autonomics run`(--json / -o / --profile / --model / --timeout / --session / --ephemeral / --manifest);退出码 0/1/2/3。剩余:P2 的 --output-schema、多 turn stdin 脚本,P3 的多 agent 网络运行。参考实现:codex-rs `exec` 子命令(`/mnt/disk3/codex/codex-rs/exec`)。
 
 ## 0. 背景与目标
 
 当前 autonomics 唯一的 LLM agent 运行入口是交互式 TUI。RuntimeHost、agentik-core
 会话循环、工具体系本身是 UI 无关的,但全部初始化逻辑绑在 ratatui `App` 的生命周期里
-(`apps/tui/src/app/mod.rs:79`),导致:
+(`apps/autonomics/src/app/mod.rs:79`),导致:
 
 - benchmark(ReproBioBench)只能用纯 DAG 适配器绕过 agent(`token_count: 0`);
 - 脚本 / CI / 定时任务无法复用 agent 能力;
@@ -75,7 +75,7 @@ crates/headless/              # 新库 crate:autonomics-headless
     event.rs                  # RunEvent 外部 JSONL schema(独立于 AgentEvent)
     processor.rs              # OutputProcessor trait + human / jsonl 两个实现
 
-apps/tui/
+apps/autonomics/
   cli.rs                      # + Command::Run(RunArgs)
   commands/run.rs             # 薄包装:init_logging → 调库 → 映射退出码
 ```
@@ -94,14 +94,14 @@ RunArgs → RuntimeConfig(默认 + 覆盖)
 ```
 
 **关键前置解耦**:把 `App::build_model` / `build_model_from_spec`
-(`apps/tui/src/app/model_config.rs:13,31`)与 profile 引导
+(`apps/autonomics/src/app/model_config.rs:13,31`)与 profile 引导
 (`seed_defaults_if_empty` + `list_profiles`)从 TUI 下沉到 runtime crate。
 这是 headless 不复制 TUI 初始化逻辑的前提,也是保证两条入口配置同源的唯一办法。
 
 ## 3. CLI 契约(初步)
 
 ```text
-autonomics-tui run [OPTIONS] [PROMPT]
+autonomics run [OPTIONS] [PROMPT]
 
   PROMPT                             任务提示词;'-' 或缺省时读 stdin;
                                      管道 stdin 与参数并存时,stdin 附加为 <stdin> 块

@@ -1,4 +1,4 @@
-//! The daemon entry point — `tui serve`.
+//! The daemon entry point — `autonomics serve`.
 //!
 //! Startup order (each step before the next):
 //!
@@ -37,7 +37,7 @@ pub const PID_FILE: &str = "gateway.pid";
 #[derive(Debug, thiserror::Error)]
 pub enum DaemonError {
     #[error(
-        "another instance holds the single-writer lock: {path} — is a gateway already running? (`tui serve stop` to stop it)"
+        "another instance holds the single-writer lock: {path} — is a gateway already running? (`autonomics serve stop` to stop it)"
     )]
     InstanceLockHeld { path: std::path::PathBuf },
     #[error("failed to open runtime host: {0}")]

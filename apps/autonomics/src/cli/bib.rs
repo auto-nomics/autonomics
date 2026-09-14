@@ -1,4 +1,4 @@
-//! CLI definitions for the `autonomics-tui bib ...` subcommand tree:
+//! CLI definitions for the `autonomics bib ...` subcommand tree:
 //! bibliography management — upload full-text PDFs, list pending requests.
 
 use std::path::PathBuf;
@@ -15,7 +15,7 @@ pub struct BibArgs {
     pub db: PathBuf,
 }
 
-/// Subcommands under `autonomics-tui bib ...`.
+/// Subcommands under `autonomics bib ...`.
 #[derive(Debug, Subcommand)]
 pub enum BibAction {
     /// Upload a PDF (or other document) as the full text for an article.

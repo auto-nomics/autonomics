@@ -103,7 +103,7 @@ impl App {
             .map_err(|e| {
                 color_eyre::eyre::eyre!(
                     "failed to connect to the gateway daemon: {e} \
-                     (try `tui serve` to inspect daemon startup)"
+                     (try `autonomics serve` to inspect daemon startup)"
                 )
             })?;
 

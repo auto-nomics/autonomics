@@ -83,4 +83,4 @@ curl -X POST http://127.0.0.1:8765/api/v1/bib/articles/<article-id>/fulltext \
   -F file=@paper.pdf
 ```
 
-注意：HTTP API 使用 runtime 配置的文献库路径，默认位于 `~/.autonomics/bib.db`，可用 `AUTONOMICS_BIB_DB` 覆盖。`autonomics-tui bib --db` CLI 子命令仍保持自己的显式路径参数。
+注意：HTTP API 使用 runtime 配置的文献库路径，默认位于 `~/.autonomics/bib.db`，可用 `AUTONOMICS_BIB_DB` 覆盖。`autonomics bib --db` CLI 子命令仍保持自己的显式路径参数。

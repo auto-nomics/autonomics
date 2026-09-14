@@ -1,4 +1,4 @@
-//! CLI argument definitions for `autonomics-tui`.
+//! CLI argument definitions for `autonomics`.
 //!
 //! Kept separate from command implementations so subcommand behavior can be
 //! changed without touching clap metadata.

@@ -845,6 +845,53 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
+name = "autonomics"
+version = "0.1.0"
+dependencies = [
+ "agentik-core",
+ "agentik-sdk",
+ "agentik-types",
+ "arboard",
+ "arc-swap",
+ "base64 0.22.1",
+ "bib-base",
+ "chrono",
+ "clap",
+ "color-eyre",
+ "crossterm",
+ "dag-core",
+ "fuzzy-matcher",
+ "gateway",
+ "headless",
+ "ignore",
+ "itertools 0.14.0",
+ "kms",
+ "opengwas",
+ "pretty_assertions",
+ "pulldown-cmark",
+ "rand 0.9.5",
+ "ratatui",
+ "ratatui-comfy-tabs",
+ "ratatui-core",
+ "rusqlite",
+ "serde_json",
+ "syntect",
+ "textwrap",
+ "time",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+ "tui-scrollbar",
+ "unicode-segmentation",
+ "unicode-width 0.2.2",
+ "uuid",
+ "vfs",
+]
+
+[[package]]
 name = "aws-lc-rs"
 version = "1.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11797,53 +11844,6 @@ name = "ttf-parser"
 version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2df906b07856748fa3f6e0ad0cbaa047052d4a7dd609e231c4f72cee8c36f31"
-
-[[package]]
-name = "tui"
-version = "0.1.0"
-dependencies = [
- "agentik-core",
- "agentik-sdk",
- "agentik-types",
- "arboard",
- "arc-swap",
- "base64 0.22.1",
- "bib-base",
- "chrono",
- "clap",
- "color-eyre",
- "crossterm",
- "dag-core",
- "fuzzy-matcher",
- "gateway",
- "headless",
- "ignore",
- "itertools 0.14.0",
- "kms",
- "opengwas",
- "pretty_assertions",
- "pulldown-cmark",
- "rand 0.9.5",
- "ratatui",
- "ratatui-comfy-tabs",
- "ratatui-core",
- "rusqlite",
- "serde_json",
- "syntect",
- "textwrap",
- "time",
- "tokio",
- "tokio-stream",
- "tokio-util",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
- "tui-scrollbar",
- "unicode-segmentation",
- "unicode-width 0.2.2",
- "uuid",
- "vfs",
-]
 
 [[package]]
 name = "tui-http"

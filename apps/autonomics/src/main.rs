@@ -30,7 +30,7 @@ fn init_logging(nocapture: bool) -> color_eyre::Result<()> {
     let log_dir = PathBuf::from("logs");
     std::fs::create_dir_all(&log_dir)?;
 
-    let file_appender = RollingFileAppender::new(Rotation::DAILY, &log_dir, "autonomics-tui.log");
+    let file_appender = RollingFileAppender::new(Rotation::DAILY, &log_dir, "autonomics.log");
     let file_writer = file_appender.with_max_level(Level::DEBUG);
 
     let timer = OffsetTime::new(
@@ -68,7 +68,7 @@ fn init_logging(nocapture: bool) -> color_eyre::Result<()> {
 
     let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         EnvFilter::new(
-            "tui=debug,agentik_core=debug,agentik_sdk=debug,runtime=debug,\
+            "autonomics=debug,agentik_core=debug,agentik_sdk=debug,runtime=debug,\
              nodes_ldsc=debug,ldsc=debug",
         )
     });

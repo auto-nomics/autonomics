@@ -1,5 +1,5 @@
 //! Gateway-backed headless runner — the default execution path of
-//! `tui run` since the backend-gateway refactor.
+//! `autonomics run` since the backend-gateway refactor.
 //!
 //! Same contract as the in-process [`crate::run_task`]: one prompt, the
 //! stable [`RunEvent`] JSONL schema, exit-code semantics 0/1/2/3. The

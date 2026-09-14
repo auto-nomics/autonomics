@@ -1,4 +1,4 @@
-//! `tui serve` implementation — thin CLI shell over
+//! `autonomics serve` implementation — thin CLI shell over
 //! `gateway::run_daemon` / `gateway::manager`.
 //!
 //! Logging differs from the interactive TUI: the daemon must not depend
@@ -94,7 +94,7 @@ async fn run_foreground_or_daemon(daemon: bool) -> color_eyre::Result<()> {
         Err(gateway::DaemonError::InstanceLockHeld { path }) => {
             eprintln!(
                 "another gateway already owns the state directory ({})\n\
-                 it is probably running — check `tui serve status`, or stop it with `tui serve stop`",
+                 it is probably running — check `autonomics serve status`, or stop it with `autonomics serve stop`",
                 path.display()
             );
             std::process::exit(1);

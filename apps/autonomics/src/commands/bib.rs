@@ -236,7 +236,7 @@ async fn run_bib_requests(db: &bib_base::BibBase, args: RequestsArgs) -> color_e
     }
 
     println!(
-        "To upload: autonomics-tui bib upload --pdf <file> --article-id <id> --collection-id <id>"
+        "To upload: autonomics bib upload --pdf <file> --article-id <id> --collection-id <id>"
     );
     Ok(())
 }
