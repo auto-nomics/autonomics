@@ -28,7 +28,9 @@ Provenance:
 - Experiment: Brooks et al., Genome Research 2011, PMID 20921232
 - Accession range: GSM461176-GSM461181
 
-The expected fixture checksums are checked by
-`containers/deseq2/test_deseq2_fixture.sh`. The fixture intentionally contains
-no expected result table yet; that baseline should be generated with the first
-pinned DESeq2 container and recorded only after two repeated runs agree.
+`pasilla_baseline.json` records the lightweight result baseline from two
+repeated runs with the pinned local DESeq2 image: output SHA-256 values,
+independent-filtering counts, direction counts, size factors, and the estimates
+for two genes. `containers/deseq2/test_deseq2_fixture.sh` checks the input
+checksums and structural contract; `containers/deseq2/test_deseq2.sh` checks
+the full numerical baseline and independently recomputes normalization.

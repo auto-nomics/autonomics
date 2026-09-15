@@ -1,15 +1,26 @@
 # DESeq2 differential-expression node
 
-This is the Stage 0 design for a reusable, Podman-backed differential-
-expression node. The statistical engine will be the official R `DESeq2`
-package; this repository will not port the negative-binomial model to Rust.
+This directory contains the Stage 0 design and Stage 1 implementation for a
+reusable, Podman-backed differential-expression node. The statistical engine is
+the official R `DESeq2` package; this repository does not port the
+negative-binomial model to Rust.
 
 The first version targets bulk RNA-seq raw count matrices. Normalized
 TPM/FPKM/CPM tables, transcript-level aggregation, and single-cell-specific
 models are intentionally out of scope until separate contracts and baselines
 are defined.
 
-## Planned Node Contract
+## Layout
+
+```text
+containers/deseq2/
+  Dockerfile
+  deseq2_runner.R
+  test_deseq2.sh
+  fixtures/
+```
+
+## Node Contract
 
 Node kind:
 
@@ -72,7 +83,7 @@ with a container diagnostic rather than silently dropped.
 
 ## Outputs
 
-The thin `nodes-io` wrapper will declare five File artifacts:
+The Stage 3 `nodes-io` wrapper will declare five File artifacts:
 
 1. `results.tsv`: `gene_id`, `baseMean`, `log2FoldChange`, `lfcSE`, `stat`,
    `pvalue`, and `padj` from `DESeq2::results()`.
@@ -89,7 +100,7 @@ result table so thresholds can change without rerunning DESeq2.
 
 ## Container
 
-The first implementation should use:
+The Stage 1 implementation uses:
 
 - Base: `docker.io/rocker/r-ver:4.5.3`
   (`sha256:35394dcbf419ac29056848522006de3cd33c33191377abed182acaecd48eba37`)
@@ -107,10 +118,10 @@ reference panel or genome build is required for this analysis.
 
 The runner should read input and output locations from the runtime environment
 variables `AUTONOMICS_INPUT0`, `AUTONOMICS_INPUT1`, and `AUTONOMICS_OUTPUT0`
-through `AUTONOMICS_OUTPUT4`. It should run as a non-root user with isolated
-network and a read-only root filesystem. The eventual Rust wrapper will pin a
-published immutable image digest, just like the existing `nodes-io` container
-nodes.
+through `AUTONOMICS_OUTPUT4`. It runs as UID/GID 1000 with isolated network and
+a read-only root filesystem. The local test image has not yet been published;
+the eventual Rust wrapper will pin an immutable registry digest only after the
+exact Stage 1 image is pushed.
 
 ## Test Data
 
@@ -131,6 +142,19 @@ Validate the local data contract without R or Podman:
 ```sh
 containers/deseq2/test_deseq2_fixture.sh
 ```
+
+Build and run the complete official-package baseline:
+
+```sh
+containers/deseq2/test_deseq2.sh
+```
+
+The full test builds the image, runs the pasilla model twice, requires every
+output checksum to match `fixtures/pasilla_baseline.json`, independently
+recomputes DESeq2 median-of-ratios size factors and normalized counts, checks
+`baseMean` against normalized counts, validates p-value domains, verifies the
+RDS is a `DESeqDataSet`, and rejects mismatched sample IDs, non-integer counts,
+and rank-deficient designs.
 
 ## Acceptance Criteria
 
