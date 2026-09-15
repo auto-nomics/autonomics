@@ -1,6 +1,6 @@
 # Headless 运行模式设计(初步)
 
-状态:**P0/P1 已实现**(feat/headless-mode 分支);**P3-gateway 已实现**(feat/headless-via-gateway 分支)——`autonomics run` 默认经 gateway daemon 执行(`crates/headless::gateway_runner::run_via_gateway`,RunEvent 契约与退出码不变),`--ephemeral` 保留进程内 `run_task`(benchmark 隔离)。CLI:`autonomics run`(--json / -o / --profile / --model / --timeout / --session / --ephemeral / --manifest / --list-sessions);退出码 0/1/2/3。RunEvent 与 manifest 通过 `run_id` 关联;Ctrl+C 与输出管道断连会协作取消远端 turn。剩余:P2 的 --output-schema、多 turn stdin 脚本,P3 的多 agent 网络运行。参考实现:codex-rs `exec` 子命令(`/mnt/disk3/codex/codex-rs/exec`)。
+状态:**P0/P1 已实现**(feat/headless-mode 分支);**P3-gateway 已实现**(feat/headless-via-gateway 分支)——`autonomics run` 默认经 gateway daemon 执行(`crates/headless::gateway_runner::run_via_gateway`,RunEvent 契约与退出码不变),`--ephemeral` 保留进程内 `run_task`(benchmark 隔离),并支持 per-run VFS mounts。CLI:`autonomics run`(--json / -o / --profile / --model / --timeout / --session / --ephemeral / mount 参数 / --manifest / --list-sessions);退出码 0/1/2/3。RunEvent 与 manifest 通过 `run_id` 关联;Ctrl+C 与输出管道断连会协作取消远端 turn。剩余:P2 的 --output-schema、多 turn stdin 脚本,P3 的多 agent 网络运行,以及一次性 isolated gateway backend。参考实现:codex-rs `exec` 子命令(`/mnt/disk3/codex/codex-rs/exec`)。
 
 ## 0. 背景与目标
 
@@ -115,6 +115,12 @@ autonomics run [OPTIONS] [PROMPT]
   --manifest <FILE>                  输出 run manifest(§8)
   --list-sessions                    列出稳定 headless identity 的持久 session
   --ephemeral                        本次运行不落会话持久化(评测 / CI)
+  --backend <BACKEND>                ephemeral 实现;当前仅 in-process(默认)
+  --workspace <SOURCE=VPATH>         挂载可写宿主 workspace,如 .../work=/app
+  --data-mount <SOURCE=VPATH>        挂载只读输入,可重复,如 .../data=/data
+  --mount-manifest <FILE>            TOML 形式的 workspace/data mount 声明
+  --resume-workspace                 显式复用非空 workspace
+  --keep-state                       保留 ephemeral state root 供调试
   -C, --cwd <DIR>                    工作目录(语义对齐 codex)
 ```
 
@@ -128,6 +134,43 @@ autonomics run [OPTIONS] [PROMPT]
 | 3 | 启动错误(host 打不开、profile 不存在、模型不可用) | 可重试(配置修复后) |
 
 区分 1 与 2/3 是有意为之:评测场景下,agent 自己失败是测量结果,环境失败才是噪声。
+
+### 3.1 Ephemeral VFS mounts
+
+`--ephemeral` 表示一次性隔离运行,不等于自动启动独立 gateway。当前实现是 CLI 进程内
+打开 `RuntimeHost`,并为每次运行生成独立的 `state/vfs.toml`:
+
+```bash
+autonomics run \
+  --ephemeral \
+  --backend in-process \
+  --data-mount /absolute/task/data=/data \
+  --workspace /absolute/task/work=/app \
+  "Input is read-only at /data; write /app/answer.txt"
+```
+
+规则:
+
+- `SOURCE` 必须是绝对宿主路径;`VPATH` 必须是绝对虚拟路径且不得为 `/`;
+- mount target 不得重复或前缀重叠,且不得覆盖 `/literature`;
+- `--data-mount` 强制 read-only,`--workspace` 强制 writable;
+- workspace 默认必须为空;`--resume-workspace` 才允许复用非空目录;
+- state/data/cache 在 `0700` 临时 root 中,默认运行后删除,`--keep-state` 保留;
+- 外部 workspace 不随 ephemeral state 删除。
+
+结构化 mount manifest 使用 TOML:
+
+```toml
+[workspace]
+source = "/absolute/task/work"
+target = "/app"
+
+[[data_mounts]]
+source = "/absolute/task/data"
+target = "/data"
+```
+
+文件描述的是 mount intent,而不是生成后的 `vfs.toml`;read-only/writable 由字段决定。
 
 ## 4. 事件模型:AgentEvent → RunEvent(JSONL)
 
@@ -213,7 +256,7 @@ agentik-core storage 已按 agent name 自动恢复并做 WAL replay
 - **P0(骨架)**:`build_model` / profile 引导下沉 runtime;`crates/headless`
   库 + `run` 子命令;单 agent 单 turn;人读 + `--json`;退出码;`--timeout`。
 - **P1(可用性)**:`--output-last-message`、`--session` 恢复、
-  `--ephemeral`(临时 state_dir)、`--manifest`、`sessions list`。
+  `--ephemeral`(临时 state_dir + per-run VFS mounts)、`--manifest`、`sessions list`。
 - **P2(评测)**:`--output-schema`(依赖 agentik-sdk 结构化输出能力,见 §10.3);多 turn stdin 脚本(每行一条 user 消息的 JSONL)。
 - **P3(编排)**:多 agent 网络运行——`NetworkSpec`(nodes/edges/termination)
   以 JSON 文件输入,run 至 `TerminationSpec` 满足;复用
@@ -223,8 +266,8 @@ agentik-core storage 已按 agent name 自动恢复并做 WAL replay
 
 1. **二进制归属**:`run` 挂在现有 tui 包(包名 `tui`,二进制名有误导性)还是新建
    `apps/exec`?倾向先挂子命令验证设计,稳定后再统一 CLI 命名。
-2. `--ephemeral` 的持久语义:临时 state_dir 是否与 VFS / OpenGWAS 缓存等
-   共享目录冲突,需要在 P1 实测。
+2. `--ephemeral` 的持久语义已处理:VFS manifest、scratch 与 OpenGWAS cache 均位于
+   per-run root,外部 workspace 独立保留。
 3. 结构化输出:agentik-sdk 的模型能力位未见 `supports_structured_output`;
    `--output-schema` 是否降级为 prompt 约定 + 本地 JSON 校验,待确认 SDK 能力。
 4. headless 下容器工具的资源约束(并发容器数、单容器超时)是否需要 CLI 覆盖,
