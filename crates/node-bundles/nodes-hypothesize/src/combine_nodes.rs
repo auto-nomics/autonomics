@@ -21,6 +21,10 @@ fn default_bonf() -> String {
     "bonferroni".to_string()
 }
 
+fn default_alpha() -> f64 {
+    0.05
+}
+
 // ════ combine_pvalues ═══════════════════════════════════════════════════════
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -201,6 +205,8 @@ pub struct AdjustNodeSpec {
     pub method: String,
     pub p_column: Option<String>,
     pub n_total: Option<usize>,
+    #[serde(default = "default_alpha")]
+    pub alpha: f64,
 }
 
 pub struct AdjustNodeFactory;
@@ -212,7 +218,8 @@ impl NodeFactory for AdjustNodeFactory {
         "Multiple-testing correction (Bonferroni/Holm/BH/BY/...)."
     }
     fn doc(&self) -> &'static str {
-        "Applies p.adjust to a column of p-values, adding p_adj to the output."
+        "Applies p.adjust to a column of p-values, adding p_adj and reject \
+        (p_adj < alpha) to the output."
     }
     fn spec_schema(&self) -> schemars::Schema {
         schema_for!(AdjustNodeSpec)
@@ -226,6 +233,13 @@ impl NodeFactory for AdjustNodeFactory {
         _: NodeCtx,
     ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let s: AdjustNodeSpec = serde_json::from_value(spec)?;
+        h::AdjustMethod::parse(&s.method)
+            .map_err(|e| dag_core::registry::error::Error::Unknown(e.to_string()))?;
+        if !(0.0..=1.0).contains(&s.alpha) || s.alpha == 0.0 {
+            return Err(dag_core::registry::error::Error::Unknown(
+                "alpha must be in (0, 1]".into(),
+            ));
+        }
         Ok(Box::new(AdjustNode {
             meta: NodePorts::new().add_output_port(None).add_input_port(None),
             spec: s,
@@ -272,12 +286,11 @@ impl DagNode for AdjustNode {
         let mut cols: Vec<Arc<dyn arrow_array::Array>> = batch.columns().to_vec();
         fields.push(Arc::new(Field::new("p_adj", DataType::Float64, false)));
         cols.push(Arc::new(Float64Array::from(adjusted.clone())));
-        // Also add reject_0.05 column.
-        fields.push(Arc::new(Field::new("reject_0.05", DataType::Int32, false)));
+        fields.push(Arc::new(Field::new("reject", DataType::Int32, false)));
         cols.push(Arc::new(Int32Array::from(
             adjusted
                 .iter()
-                .map(|&p| if p < 0.05 { 1 } else { 0 })
+                .map(|&p| if p < self.spec.alpha { 1 } else { 0 })
                 .collect::<Vec<_>>(),
         )));
 
