@@ -24,6 +24,10 @@ Autonomics is not a general-purpose chat application, a notebook replacement bui
 
 ## Harness Architecture
 
+![Harness architecture: client interfaces, model cockpit, capability registry, execution plane, shared data plane, research protocol](docs/diagrams/architecture.png)
+
+The architecture separates model orchestration from research capabilities. Each agent session gets its own `DataEngine` actor, while immutable registry and runtime infrastructure are shared across the process. DAG execution is fire-and-forget from the agent command loop, so one long run does not block other agents. When DAG history is enabled, runs create snapshot lineages that can be inspected, diffed, branched, and checked out. Selected graphs can also be reverse-compiled to R or Python source.
+
 ```text
 Ratatui TUI (thin client)  ──REST/SSE──▶  gateway daemon (`autonomics serve`)
         |                                      |
@@ -59,7 +63,14 @@ Shared data plane:
   biofusion     -> VCF/BCF/FASTA/FASTQ/BED/GTF/GFF/SAM/BAM/CRAM/BigWig/BigBed readers
 ```
 
-The architecture separates model orchestration from research capabilities. Each agent session gets its own `DataEngine` actor, while immutable registry and runtime infrastructure are shared across the process. DAG execution is fire-and-forget from the agent command loop, so one long run does not block other agents. When DAG history is enabled, runs create snapshot lineages that can be inspected, diffed, branched, and checked out. Selected graphs can also be reverse-compiled to R or Python source.
+## DAG Dispatch and Container Execution
+
+![DAG-based dispatch with ephemeral, containerized analysis nodes](docs/diagrams/fig2_mechanism.png)
+
+Two mechanisms make the harness trustworthy for biomedical work:
+
+- **DAG-based dispatch.** A research request is parsed by the LLM agent, planned as a typed DAG of JSON-Schema-validated nodes, and assembled through one registry. The same DAG can mix fast in-process DataFusion / Arrow transforms with heavy external containers; the DAG core schedules them asynchronously and retains outputs for snapshot, diff, branch, and reverse-compile to R or Python.
+- **Containerized nodes.** Every external tool runs in its own ephemeral Podman container. Images are pinned by sha256 digest, reference panels are checksum-verified from `manifest.json` and mounted read-only, the rootfs is `--read-only` with `no-new-privileges` and explicit CPU / PID / shm / UID caps, and declared outputs are streamed to VFS as `FileRef = size + SHA-256` using a pending-object + atomic rename so consumers never observe partial artifacts. One `container_command` is one ephemeral run; there is no retry on container failure.
 
 ## Capability Map
 

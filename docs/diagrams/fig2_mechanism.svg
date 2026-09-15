@@ -1,0 +1,182 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600.0 1500.0" width="1600.0" height="1500.0">
+<defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L9,3 z" fill="#374151"/></marker></defs>
+<rect x="0" y="0" width="1600.0" height="1500.0" fill="#ffffff"/>
+<path d="M 370.0 180.0 L 420.0 180.0" fill="none" stroke="#6b7280" stroke-width="2.0" marker-end="url(#arrow)"/>
+<path d="M 1280.0 180.0 L 1330.0 180.0" fill="none" stroke="#6b7280" stroke-width="2.0" marker-end="url(#arrow)"/>
+<path d="M 850.0 240.0 L 850.0 480.0" fill="none" stroke="#9ca3af" stroke-width="1.0" stroke-dasharray="6 4"/>
+<path d="M 354.0 332.0 L 710.0 332.0" fill="none" stroke="#374151" stroke-width="2.0" marker-end="url(#arrow)"/>
+<path d="M 990.0 332.0 L 1346.0 332.0" fill="none" stroke="#374151" stroke-width="2.0" marker-end="url(#arrow)"/>
+<path d="M 254.0 400.0 L 730.0 400.0" fill="none" stroke="#6b7280" stroke-width="2.0" marker-end="url(#arrow)"/>
+<path d="M 164.0 422.0 L 164.0 498.0" fill="none" stroke="#6b7280" stroke-width="2.0" marker-end="url(#arrow)"/>
+<path d="M 910.0 400.0 L 1116.0 400.0 Q 1128.0 400.0 1128.0 388.0 L 1128.0 408.0 Q 1128.0 396.0 1140.0 396.0 L 1346.0 396.0" fill="none" stroke="#82b366" stroke-width="2.0" marker-end="url(#arrow)"/>
+<path d="M 910.0 400.0 L 1116.0 400.0 Q 1128.0 400.0 1128.0 412.0 L 1128.0 474.0 Q 1128.0 486.0 1140.0 486.0 L 1346.0 486.0" fill="none" stroke="#82b366" stroke-width="2.0" marker-end="url(#arrow)"/>
+<path d="M 910.0 400.0 L 1116.0 400.0 Q 1128.0 400.0 1128.0 412.0 L 1128.0 564.0 Q 1128.0 576.0 1140.0 576.0 L 1346.0 576.0" fill="none" stroke="#82b366" stroke-width="2.0" marker-end="url(#arrow)"/>
+<path d="M 294.0 802.0 L 316.0 802.0" fill="none" stroke="#6b7280" stroke-width="2.0" marker-end="url(#arrow)"/>
+<path d="M 536.0 802.0 L 558.0 802.0" fill="none" stroke="#6b7280" stroke-width="2.0" marker-end="url(#arrow)"/>
+<path d="M 778.0 802.0 L 800.0 802.0" fill="none" stroke="#9673a6" stroke-width="2.0" marker-end="url(#arrow)"/>
+<path d="M 1020.0 802.0 L 1042.0 802.0" fill="none" stroke="#6b7280" stroke-width="2.0" marker-end="url(#arrow)"/>
+<path d="M 1262.0 802.0 L 1284.0 802.0" fill="none" stroke="#6b7280" stroke-width="2.0" marker-end="url(#arrow)"/>
+<text x="850.0" y="46.0" fill="#1F2937" font-size="20.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Autonomics — DAG-based dispatch with ephemeral, containerized analysis nodes</text>
+<text x="850.0" y="70.8" fill="#6B7280" font-size="12.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">typed DAG plans the work  •  JSON-Schema-validated nodes  •  Podman-isolated execution  •  SHA-256-verified artifacts</text>
+<text x="210.0" y="108.6" fill="#1F2937" font-size="14.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Inputs</text>
+<rect x="50.0" y="120.0" width="320.0" height="120.0" rx="8" ry="8" fill="#fde2dc" stroke="#d97757" stroke-width="1.0"/>
+<text x="210.0" y="164.6" fill="#1F2937" font-size="11.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Research question (NL)</text>
+<text x="210.0" y="177.8" fill="#1F2937" font-size="11.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">+ FASTQ / VCF / parquet inputs</text>
+<text x="210.0" y="191.0" fill="#1F2937" font-size="11.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">+ scientific API credentials</text>
+<text x="210.0" y="204.2" fill="#1F2937" font-size="11.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">+ catalog reference panels</text>
+<text x="850.0" y="108.6" fill="#1F2937" font-size="14.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Autonomics — DAG-based, containerized</text>
+<rect x="420.0" y="120.0" width="860.0" height="120.0" rx="8" ry="8" fill="#fde2dc" stroke="#d97757" stroke-width="1.0"/>
+<text x="850.0" y="170.4" fill="#1F2937" font-size="12.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">DAG engine plans + dispatches analysis as a typed DAG;</text>
+<text x="850.0" y="184.8" fill="#1F2937" font-size="12.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">each node is JSON-Schema-validated and runs in its own ephemeral</text>
+<text x="850.0" y="199.2" fill="#1F2937" font-size="12.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Podman container with read-only panel mounts and SHA-256 artifact fingerprints.</text>
+<text x="1490.0" y="108.6" fill="#1F2937" font-size="14.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Outputs</text>
+<rect x="1330.0" y="120.0" width="320.0" height="120.0" rx="8" ry="8" fill="#fde2dc" stroke="#d97757" stroke-width="1.0"/>
+<text x="1490.0" y="164.6" fill="#1F2937" font-size="11.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Answer + figures</text>
+<text x="1490.0" y="177.8" fill="#1F2937" font-size="11.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">+ immutable result artifacts</text>
+<text x="1490.0" y="191.0" fill="#1F2937" font-size="11.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">+ per-node FileRef (size + SHA-256)</text>
+<text x="1490.0" y="204.2" fill="#1F2937" font-size="11.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">+ DAG history / snapshots / provenance</text>
+<rect x="50.0" y="265.0" width="1600.0" height="430.0" rx="0" ry="0" fill="#e9efe6" stroke="#8b9d83" stroke-width="1.0"/>
+<text x="64.0" y="289.0" fill="#1F2937" font-size="14.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="start">DAG-based dispatch backbone</text>
+<rect x="74.0" y="310.0" width="280.0" height="44.0" rx="8" ry="8" fill="#3f4754" stroke="#1f2937" stroke-width="1.0"/>
+<text x="214.0" y="337.6" fill="#ffffff" font-size="14.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Plan DAG</text>
+<rect x="710.0" y="310.0" width="280.0" height="44.0" rx="8" ry="8" fill="#3f4754" stroke="#1f2937" stroke-width="1.0"/>
+<text x="850.0" y="337.6" fill="#ffffff" font-size="14.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Assemble DAG</text>
+<rect x="1346.0" y="310.0" width="280.0" height="44.0" rx="8" ry="8" fill="#3f4754" stroke="#1f2937" stroke-width="1.0"/>
+<text x="1486.0" y="337.6" fill="#ffffff" font-size="14.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Execute nodes</text>
+<rect x="74.0" y="378.0" width="180.0" height="44.0" rx="8" ry="8" fill="#ffffff" stroke="#6b7280" stroke-width="1.0"/>
+<text x="164.0" y="404.8" fill="#1F2937" font-size="12.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">LLM agent</text>
+<text x="214.0" y="436.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Uniform agent loop with memory</text>
+<text x="214.0" y="448.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">compaction, reactive context, and</text>
+<text x="214.0" y="460.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">snapshots; provider-agnostic schemas.</text>
+<rect x="74.0" y="498.0" width="180.0" height="44.0" rx="8" ry="8" fill="#ffffff" stroke="#6b7280" stroke-width="1.0"/>
+<text x="164.0" y="524.8" fill="#1F2937" font-size="12.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Tool dispatch</text>
+<text x="214.0" y="556.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">ToolRegistration → Toolset;</text>
+<text x="214.0" y="568.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">ToolFunction adapters expose</text>
+<text x="214.0" y="580.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">DAG ops as agent-callable tools.</text>
+<rect x="730.0" y="378.0" width="180.0" height="44.0" rx="8" ry="8" fill="#ffffff" stroke="#82b366" stroke-width="1.0"/>
+<text x="820.0" y="404.8" fill="#1F2937" font-size="12.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Node registry</text>
+<text x="850.0" y="436.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">JSON-Schema-validated specs;</text>
+<text x="850.0" y="448.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">typed input and output ports;</text>
+<text x="850.0" y="460.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">feature-gated plugin factories.</text>
+<rect x="730.0" y="498.0" width="180.0" height="44.0" rx="8" ry="8" fill="#ffffff" stroke="#82b366" stroke-width="1.0"/>
+<text x="820.0" y="524.8" fill="#1F2937" font-size="12.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">DAG core / scheduler</text>
+<text x="850.0" y="556.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">node trait, plugin registry,</text>
+<text x="850.0" y="568.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">async scheduler, retained outputs;</text>
+<text x="850.0" y="580.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">DAG history &amp; snapshots, R / Python codegen.</text>
+<rect x="1346.0" y="378.0" width="190.0" height="36.0" rx="8" ry="8" fill="#d5e8d4" stroke="#82b366" stroke-width="1.0"/>
+<text x="1441.0" y="400.4" fill="#1F2937" font-size="11.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Pure-Rust nodes</text>
+<text x="1486.0" y="428.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">DataFusion DataFrame + Arrow RecordBatch nodes;</text>
+<text x="1486.0" y="440.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">typed ports; async execution.</text>
+<rect x="1346.0" y="468.0" width="190.0" height="36.0" rx="8" ry="8" fill="#e1d5e7" stroke="#9673a6" stroke-width="1.0"/>
+<text x="1441.0" y="490.4" fill="#1F2937" font-size="11.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">OCI container nodes</text>
+<text x="1486.0" y="518.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">External tools wrapped as Podman containers;</text>
+<text x="1486.0" y="530.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">one-shot ephemeral runs; image digest pinned.</text>
+<rect x="1346.0" y="558.0" width="190.0" height="36.0" rx="8" ry="8" fill="#fff2cc" stroke="#d6b656" stroke-width="1.0"/>
+<text x="1441.0" y="580.4" fill="#1F2937" font-size="11.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">VFS publication</text>
+<text x="1486.0" y="608.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Declared outputs streamed to VFS; FileRef = size</text>
+<text x="1486.0" y="620.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">+ SHA-256; pending-object + atomic rename.</text>
+<rect x="50.0" y="740.0" width="1600.0" height="240.0" rx="0" ry="0" fill="#f1ecf5" stroke="#9673a6" stroke-width="1.0"/>
+<text x="64.0" y="761.0" fill="#1F2937" font-size="13.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="start">container_command lifecycle (one ephemeral run per node)</text>
+<rect x="74.0" y="784.0" width="220.0" height="36.0" rx="8" ry="8" fill="#ffffff" stroke="#9673a6" stroke-width="1.0"/>
+<text x="184.0" y="806.4" fill="#1F2937" font-size="11.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">1. Stage inputs</text>
+<text x="184.0" y="840.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Copy File / Data values from VFS</text>
+<text x="184.0" y="852.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">into /work/.autonomics/inputs</text>
+<rect x="316.0" y="784.0" width="220.0" height="36.0" rx="8" ry="8" fill="#ffffff" stroke="#9673a6" stroke-width="1.0"/>
+<text x="426.0" y="806.4" fill="#1F2937" font-size="11.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">2. Verify panels</text>
+<text x="426.0" y="839.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Materialize immutable panel cache;</text>
+<text x="426.0" y="851.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">SHA-256 per file from manifest.json;</text>
+<text x="426.0" y="863.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">mount read-only at /panels</text>
+<rect x="558.0" y="784.0" width="220.0" height="36.0" rx="8" ry="8" fill="#ffffff" stroke="#9673a6" stroke-width="1.0"/>
+<text x="668.0" y="806.4" fill="#1F2937" font-size="11.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">3. Prepare workspace</text>
+<text x="668.0" y="839.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Unique /work per node, read-write;</text>
+<text x="668.0" y="851.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">tmpfs /tmp; container rootfs</text>
+<text x="668.0" y="863.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">--read-only</text>
+<rect x="800.0" y="784.0" width="220.0" height="36.0" rx="8" ry="8" fill="#e1d5e7" stroke="#9673a6" stroke-width="1.0"/>
+<text x="910.0" y="806.4" fill="#1F2937" font-size="11.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">4. Run container</text>
+<text x="910.0" y="827.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Podman one-shot: digest-pinned image,</text>
+<text x="910.0" y="839.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">no-new-privileges, CPU / PID / shm /</text>
+<text x="910.0" y="851.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">UID</text>
+<text x="910.0" y="863.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">caps, network profile (isolated |</text>
+<text x="910.0" y="875.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">egress)</text>
+<rect x="1042.0" y="784.0" width="220.0" height="36.0" rx="8" ry="8" fill="#ffffff" stroke="#9673a6" stroke-width="1.0"/>
+<text x="1152.0" y="806.4" fill="#1F2937" font-size="11.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">5. Verify outputs</text>
+<text x="1152.0" y="839.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Check exit code and capped stdout /</text>
+<text x="1152.0" y="851.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">stderr;</text>
+<text x="1152.0" y="863.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">fail if any declared output is missing</text>
+<rect x="1284.0" y="784.0" width="220.0" height="36.0" rx="8" ry="8" fill="#fff2cc" stroke="#d6b656" stroke-width="1.0"/>
+<text x="1394.0" y="806.4" fill="#1F2937" font-size="11.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">6. Publish artifacts</text>
+<text x="1394.0" y="839.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Stream declared outputs to VFS;</text>
+<text x="1394.0" y="851.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">FileRef fingerprint = size + SHA-256;</text>
+<text x="1394.0" y="863.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">pending-object + atomic rename</text>
+<text x="850.0" y="954.4" fill="#1d4ed8" font-size="11.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">one container_command = one ephemeral run; no retry on container failure</text>
+<rect x="50.0" y="1000.0" width="380.0" height="320.0" rx="0" ry="0" fill="#d5e8d4" stroke="#82b366" stroke-width="1.0"/>
+<text x="62.0" y="1020.0" fill="#1F2937" font-size="12.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="start">available node bundles</text>
+<rect x="62.0" y="1042.0" width="356.0" height="20.0" rx="0" ry="0" fill="none" stroke="none" stroke-width="1.0"/>
+<text x="240.0" y="1056.0" fill="#374151" font-size="10.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Pure-Rust (in-process)</text>
+<text x="62.0" y="1072.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="start">DataFusion / Arrow DataFrame nodes</text>
+<text x="62.0" y="1084.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="start">statkit, epi, hypothesize, cmprsk</text>
+<text x="62.0" y="1096.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="start">survey, mice, hierint</text>
+<text x="62.0" y="1108.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="start">ml (preprocessing, ensembles), dl (Burn)</text>
+<rect x="62.0" y="1148.0" width="356.0" height="20.0" rx="0" ry="0" fill="none" stroke="none" stroke-width="1.0"/>
+<text x="240.0" y="1162.0" fill="#374151" font-size="10.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">OCI container (image-pinned)</text>
+<text x="62.0" y="1178.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="start">LDSC, HDL-L, LAVA, MiXeR, SuSiE-RSS,</text>
+<text x="62.0" y="1190.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="start">MR-PRESSO, MVMR, MTAG, FUSION TWAS,</text>
+<text x="62.0" y="1202.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="start">SMR, MAGMA, HyPrColoc, coloc, GCTA,</text>
+<text x="62.0" y="1214.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="start">PLINK2, DESeq2, PyRadiomics, sc, viz, TimesFM</text>
+<text x="240.0" y="1292.0" fill="#6b7280" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">all bundles are Cargo feature-gated; default build enables all</text>
+<rect x="450.0" y="1000.0" width="500.0" height="320.0" rx="0" ry="0" fill="#fde2dc" stroke="#d97757" stroke-width="1.0"/>
+<text x="462.0" y="1020.0" fill="#1F2937" font-size="12.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="start">what makes a container node reproducible and isolated</text>
+<rect x="470.0" y="1042.0" width="220.0" height="32.0" rx="8" ry="8" fill="#ffffff" stroke="#d97757" stroke-width="1.0"/>
+<text x="580.0" y="1062.4" fill="#1F2937" font-size="11.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Reproducible</text>
+<text x="470.0" y="1088.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="start">image pinned by sha256 digest;</text>
+<text x="470.0" y="1100.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="start">panels checksum-verified from</text>
+<text x="470.0" y="1112.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="start">manifest.json;</text>
+<text x="470.0" y="1124.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="start">outputs identified by size + SHA-256</text>
+<rect x="710.0" y="1042.0" width="220.0" height="32.0" rx="8" ry="8" fill="#ffffff" stroke="#d97757" stroke-width="1.0"/>
+<text x="820.0" y="1062.4" fill="#1F2937" font-size="11.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Isolated</text>
+<text x="710.0" y="1088.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="start">one container per node;</text>
+<text x="710.0" y="1100.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="start">ephemeral /work, tmpfs /tmp;</text>
+<text x="710.0" y="1112.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="start">--read-only rootfs, no-new-privileges;</text>
+<text x="710.0" y="1124.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="start">CPU / PID / shm / UID / GID caps</text>
+<rect x="470.0" y="1170.0" width="220.0" height="32.0" rx="8" ry="8" fill="#ffffff" stroke="#d97757" stroke-width="1.0"/>
+<text x="580.0" y="1190.4" fill="#1F2937" font-size="11.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Network policy</text>
+<text x="470.0" y="1216.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="start">isolated — --network none, no egress;</text>
+<text x="470.0" y="1228.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="start">egress — Podman default network;</text>
+<text x="470.0" y="1240.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="start">cluster profile removed with k3s</text>
+<text x="470.0" y="1252.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="start">backend</text>
+<rect x="710.0" y="1170.0" width="220.0" height="32.0" rx="8" ry="8" fill="#ffffff" stroke="#d97757" stroke-width="1.0"/>
+<text x="820.0" y="1190.4" fill="#1F2937" font-size="11.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Atomic publication</text>
+<text x="710.0" y="1216.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="start">VFS write stages to a sibling object;</text>
+<text x="710.0" y="1228.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="start">rename only after the full payload</text>
+<text x="710.0" y="1240.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="start">lands;</text>
+<text x="710.0" y="1252.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="start">consumers never observe partial</text>
+<text x="710.0" y="1264.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="start">artifacts</text>
+<text x="470.0" y="1290.0" fill="#6b7280" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="start">shared data plane (VFS + DataFusion catalog + bio-format readers) backs the panel</text>
+<text x="470.0" y="1302.0" fill="#6b7280" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="start">cache and the artifact publication</text>
+<rect x="970.0" y="1000.0" width="680.0" height="320.0" rx="0" ry="0" fill="#e1d5e7" stroke="#9673a6" stroke-width="1.0"/>
+<text x="982.0" y="1020.0" fill="#1F2937" font-size="12.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="start">what this means for analysis</text>
+<rect x="990.0" y="1042.0" width="200.0" height="38.0" rx="8" ry="8" fill="#ffffff" stroke="#9673a6" stroke-width="1.0"/>
+<text x="1090.0" y="1065.8" fill="#1F2937" font-size="12.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">DAG-based</text>
+<text x="990.0" y="1094.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="start">typed nodes, JSON-Schema specs, async</text>
+<text x="990.0" y="1106.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="start">scheduler, retained outputs, snapshots;</text>
+<text x="990.0" y="1118.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="start">fire-and-forget so long runs don't block agents</text>
+<rect x="1320.0" y="1042.0" width="200.0" height="38.0" rx="8" ry="8" fill="#ffffff" stroke="#9673a6" stroke-width="1.0"/>
+<text x="1420.0" y="1065.8" fill="#1F2937" font-size="12.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Containerized</text>
+<text x="1320.0" y="1094.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="start">each external tool runs in its own</text>
+<text x="1320.0" y="1106.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="start">ephemeral Podman container with image</text>
+<text x="1320.0" y="1118.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="start">digest, read-only panels, and atomic</text>
+<text x="1320.0" y="1130.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="start">SHA-256 artifact publication</text>
+<rect x="990.0" y="1160.0" width="200.0" height="38.0" rx="8" ry="8" fill="#ffffff" stroke="#9673a6" stroke-width="1.0"/>
+<text x="1090.0" y="1183.8" fill="#1F2937" font-size="12.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Heterogeneous</text>
+<text x="990.0" y="1212.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="start">the same DAG mixes fast in-process</text>
+<text x="990.0" y="1224.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="start">DataFusion transforms with heavy external</text>
+<text x="990.0" y="1236.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="start">containers; same registry, same VFS,</text>
+<text x="990.0" y="1248.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="start">same provenance</text>
+<rect x="1320.0" y="1160.0" width="200.0" height="38.0" rx="8" ry="8" fill="#ffffff" stroke="#9673a6" stroke-width="1.0"/>
+<text x="1420.0" y="1183.8" fill="#1F2937" font-size="12.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Auditable</text>
+<text x="1320.0" y="1212.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="start">recorded spec, code path, image digest,</text>
+<text x="1320.0" y="1224.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="start">panel manifest, command, exit code;</text>
+<text x="1320.0" y="1236.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="start">reverse-compile to R or Python for re-run</text>
+<text x="990.0" y="1290.0" fill="#6b7280" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="start">DAG history = snapshot lineages that can be diffed, branched, and replayed</text>
+</svg>

@@ -1,0 +1,253 @@
+<mxfile host="65bd71144e">
+    <diagram id="GMf2ipKOst3Mt2-sBRCL" name="Page-1">
+        <mxGraphModel dx="1824" dy="1654" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1700" pageHeight="1500" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="100" value="Autonomics — DAG-based dispatch with ephemeral, containerized analysis nodes" style="text;html=1;whiteSpace=wrap;align=center;verticalAlign=middle;fontSize=20;fontStyle=1;fontColor=#1F2937;" parent="1" vertex="1">
+                    <mxGeometry x="50" y="22" width="1600" height="32" as="geometry"/>
+                </mxCell>
+                <mxCell id="101" value="typed DAG plans the work  •  JSON-Schema-validated nodes  •  Podman-isolated execution  •  SHA-256-verified artifacts" style="text;html=1;whiteSpace=wrap;align=center;verticalAlign=middle;fontSize=12;fontStyle=2;fontColor=#6B7280;" parent="1" vertex="1">
+                    <mxGeometry x="50" y="56" width="1600" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="200" value="Inputs" style="text;html=1;whiteSpace=wrap;align=center;verticalAlign=middle;fontSize=14;fontStyle=1;fontColor=#1F2937;" parent="1" vertex="1">
+                    <mxGeometry x="50" y="92" width="320" height="22" as="geometry"/>
+                </mxCell>
+                <mxCell id="210" value="Research question (NL)&#xa;+ FASTQ / VCF / parquet inputs&#xa;+ scientific API credentials&#xa;+ catalog reference panels" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fde2dc;strokeColor=#d97757;fontSize=11;gradientColor=#fce8c4;gradientDirection=north;" parent="1" vertex="1">
+                    <mxGeometry x="50" y="120" width="320" height="120" as="geometry"/>
+                </mxCell>
+                <mxCell id="220" value="Autonomics — DAG-based, containerized" style="text;html=1;whiteSpace=wrap;align=center;verticalAlign=middle;fontSize=14;fontStyle=1;fontColor=#1F2937;" parent="1" vertex="1">
+                    <mxGeometry x="420" y="92" width="860" height="22" as="geometry"/>
+                </mxCell>
+                <mxCell id="230" value="DAG engine plans + dispatches analysis as a typed DAG;&#xa;each node is JSON-Schema-validated and runs in its own ephemeral&#xa;Podman container with read-only panel mounts and SHA-256 artifact fingerprints." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fde2dc;strokeColor=#d97757;fontSize=12;fontStyle=2;gradientColor=#fce8c4;gradientDirection=north;align=center;verticalAlign=middle;" parent="1" vertex="1">
+                    <mxGeometry x="420" y="120" width="860" height="120" as="geometry"/>
+                </mxCell>
+                <mxCell id="240" value="Outputs" style="text;html=1;whiteSpace=wrap;align=center;verticalAlign=middle;fontSize=14;fontStyle=1;fontColor=#1F2937;" parent="1" vertex="1">
+                    <mxGeometry x="1330" y="92" width="320" height="22" as="geometry"/>
+                </mxCell>
+                <mxCell id="250" value="Answer + figures&#xa;+ immutable result artifacts&#xa;+ per-node FileRef (size + SHA-256)&#xa;+ DAG history / snapshots / provenance" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fde2dc;strokeColor=#d97757;fontSize=11;gradientColor=#fce8c4;gradientDirection=north;" parent="1" vertex="1">
+                    <mxGeometry x="1330" y="120" width="320" height="120" as="geometry"/>
+                </mxCell>
+                <mxCell id="300" style="endArrow=classic;html=1;strokeColor=#6b7280;strokeWidth=2;endFill=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" parent="1" source="210" target="230" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="301" style="endArrow=classic;html=1;strokeColor=#6b7280;strokeWidth=2;endFill=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" parent="1" source="230" target="250" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="400" style="endArrow=none;dashed=1;strokeColor=#9ca3af;strokeWidth=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;" parent="1" source="230" target="500" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="500" value="DAG-based dispatch backbone" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e9efe6;strokeColor=#8b9d83;fontSize=14;fontStyle=1;verticalAlign=top;align=left;spacingLeft=14;spacingTop=10;" parent="1" vertex="1">
+                    <mxGeometry x="50" y="265" width="1600" height="430" as="geometry"/>
+                </mxCell>
+                <mxCell id="510" value="Plan DAG" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#3f4754;strokeColor=#1f2937;fontSize=14;fontStyle=1;fontColor=#ffffff;" parent="1" vertex="1">
+                    <mxGeometry x="74" y="310" width="280" height="44" as="geometry"/>
+                </mxCell>
+                <mxCell id="520" value="Assemble DAG" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#3f4754;strokeColor=#1f2937;fontSize=14;fontStyle=1;fontColor=#ffffff;" parent="1" vertex="1">
+                    <mxGeometry x="710" y="310" width="280" height="44" as="geometry"/>
+                </mxCell>
+                <mxCell id="530" value="Execute nodes" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#3f4754;strokeColor=#1f2937;fontSize=14;fontStyle=1;fontColor=#ffffff;" parent="1" vertex="1">
+                    <mxGeometry x="1346" y="310" width="280" height="44" as="geometry"/>
+                </mxCell>
+                <mxCell id="540" style="endArrow=classic;html=1;strokeColor=#374151;strokeWidth=2;endFill=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" parent="1" source="510" target="520" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="541" style="endArrow=classic;html=1;strokeColor=#374151;strokeWidth=2;endFill=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" parent="1" source="520" target="530" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="600" value="LLM agent" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6b7280;fontSize=12;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="74" y="378" width="180" height="44" as="geometry"/>
+                </mxCell>
+                <mxCell id="601" value="Uniform agent loop with memory&#xa;compaction, reactive context, and&#xa;snapshots; provider-agnostic schemas." style="text;html=1;whiteSpace=wrap;align=center;verticalAlign=top;fontSize=10;fontColor=#374151;" parent="1" vertex="1">
+                    <mxGeometry x="74" y="426" width="280" height="56" as="geometry"/>
+                </mxCell>
+                <mxCell id="610" value="Tool dispatch" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6b7280;fontSize=12;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="74" y="498" width="180" height="44" as="geometry"/>
+                </mxCell>
+                <mxCell id="611" value="ToolRegistration → Toolset;&#xa;ToolFunction adapters expose&#xa;DAG ops as agent-callable tools." style="text;html=1;whiteSpace=wrap;align=center;verticalAlign=top;fontSize=10;fontColor=#374151;" parent="1" vertex="1">
+                    <mxGeometry x="74" y="546" width="280" height="56" as="geometry"/>
+                </mxCell>
+                <mxCell id="620" value="Node registry" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;fontSize=12;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="730" y="378" width="180" height="44" as="geometry"/>
+                </mxCell>
+                <mxCell id="621" value="JSON-Schema-validated specs;&#xa;typed input and output ports;&#xa;feature-gated plugin factories." style="text;html=1;whiteSpace=wrap;align=center;verticalAlign=top;fontSize=10;fontColor=#374151;" parent="1" vertex="1">
+                    <mxGeometry x="710" y="426" width="280" height="56" as="geometry"/>
+                </mxCell>
+                <mxCell id="630" value="DAG core / scheduler" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;fontSize=12;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="730" y="498" width="180" height="44" as="geometry"/>
+                </mxCell>
+                <mxCell id="631" value="node trait, plugin registry,&#xa;async scheduler, retained outputs;&#xa;DAG history &amp; snapshots, R / Python codegen." style="text;html=1;whiteSpace=wrap;align=center;verticalAlign=top;fontSize=10;fontColor=#374151;" parent="1" vertex="1">
+                    <mxGeometry x="710" y="546" width="280" height="56" as="geometry"/>
+                </mxCell>
+                <mxCell id="640" value="Pure-Rust nodes" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="1346" y="378" width="190" height="36" as="geometry"/>
+                </mxCell>
+                <mxCell id="641" value="DataFusion DataFrame + Arrow RecordBatch nodes; typed ports; async execution." style="text;html=1;whiteSpace=wrap;align=center;verticalAlign=top;fontSize=10;fontColor=#374151;" parent="1" vertex="1">
+                    <mxGeometry x="1346" y="418" width="280" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="650" value="OCI container nodes" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="1346" y="468" width="190" height="36" as="geometry"/>
+                </mxCell>
+                <mxCell id="651" value="External tools wrapped as Podman containers; one-shot ephemeral runs; image digest pinned." style="text;html=1;whiteSpace=wrap;align=center;verticalAlign=top;fontSize=10;fontColor=#374151;" parent="1" vertex="1">
+                    <mxGeometry x="1346" y="508" width="280" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="660" value="VFS publication" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="1346" y="558" width="190" height="36" as="geometry"/>
+                </mxCell>
+                <mxCell id="661" value="Declared outputs streamed to VFS; FileRef = size + SHA-256; pending-object + atomic rename." style="text;html=1;whiteSpace=wrap;align=center;verticalAlign=top;fontSize=10;fontColor=#374151;" parent="1" vertex="1">
+                    <mxGeometry x="1346" y="598" width="280" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="700" style="endArrow=classic;html=1;strokeColor=#6b7280;strokeWidth=2;endFill=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" parent="1" source="600" target="620" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="701" style="endArrow=classic;html=1;strokeColor=#6b7280;strokeWidth=2;endFill=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;exitDy=0;exitDx=0;" parent="1" source="600" target="610" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="702" style="endArrow=classic;html=1;strokeColor=#82b366;strokeWidth=2;endFill=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" parent="1" source="620" target="640" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="703" style="endArrow=classic;html=1;strokeColor=#82b366;strokeWidth=2;endFill=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" parent="1" source="620" target="650" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="704" style="endArrow=classic;html=1;strokeColor=#82b366;strokeWidth=2;endFill=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" parent="1" source="620" target="660" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="900" value="container_command lifecycle (one ephemeral run per node)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f1ecf5;strokeColor=#9673a6;fontSize=13;fontStyle=1;verticalAlign=top;align=left;spacingLeft=14;spacingTop=8;" parent="1" vertex="1">
+                    <mxGeometry x="50" y="740" width="1600" height="240" as="geometry"/>
+                </mxCell>
+                <mxCell id="910" value="1. Stage inputs" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;fontSize=11;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="74" y="784" width="220" height="36" as="geometry"/>
+                </mxCell>
+                <mxCell id="911" value="Copy File / Data values from VFS&#xa;into /work/.autonomics/inputs" style="text;html=1;whiteSpace=wrap;align=center;verticalAlign=middle;fontSize=10;fontColor=#374151;" parent="1" vertex="1">
+                    <mxGeometry x="74" y="822" width="220" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="920" value="2. Verify panels" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;fontSize=11;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="316" y="784" width="220" height="36" as="geometry"/>
+                </mxCell>
+                <mxCell id="921" value="Materialize immutable panel cache;&#xa;SHA-256 per file from manifest.json;&#xa;mount read-only at /panels" style="text;html=1;whiteSpace=wrap;align=center;verticalAlign=middle;fontSize=10;fontColor=#374151;" parent="1" vertex="1">
+                    <mxGeometry x="316" y="822" width="220" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="930" value="3. Prepare workspace" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;fontSize=11;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="558" y="784" width="220" height="36" as="geometry"/>
+                </mxCell>
+                <mxCell id="931" value="Unique /work per node, read-write;&#xa;tmpfs /tmp; container rootfs --read-only" style="text;html=1;whiteSpace=wrap;align=center;verticalAlign=middle;fontSize=10;fontColor=#374151;" parent="1" vertex="1">
+                    <mxGeometry x="558" y="822" width="220" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="940" value="4. Run container" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="800" y="784" width="220" height="36" as="geometry"/>
+                </mxCell>
+                <mxCell id="941" value="Podman one-shot: digest-pinned image,&#xa;no-new-privileges, CPU / PID / shm / UID&#xa;caps, network profile (isolated | egress)" style="text;html=1;whiteSpace=wrap;align=center;verticalAlign=middle;fontSize=10;fontColor=#374151;" parent="1" vertex="1">
+                    <mxGeometry x="800" y="822" width="220" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="950" value="5. Verify outputs" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;fontSize=11;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="1042" y="784" width="220" height="36" as="geometry"/>
+                </mxCell>
+                <mxCell id="951" value="Check exit code and capped stdout / stderr;&#xa;fail if any declared output is missing" style="text;html=1;whiteSpace=wrap;align=center;verticalAlign=middle;fontSize=10;fontColor=#374151;" parent="1" vertex="1">
+                    <mxGeometry x="1042" y="822" width="220" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="960" value="6. Publish artifacts" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="1284" y="784" width="220" height="36" as="geometry"/>
+                </mxCell>
+                <mxCell id="961" value="Stream declared outputs to VFS;&#xa;FileRef fingerprint = size + SHA-256;&#xa;pending-object + atomic rename" style="text;html=1;whiteSpace=wrap;align=center;verticalAlign=middle;fontSize=10;fontColor=#374151;" parent="1" vertex="1">
+                    <mxGeometry x="1284" y="822" width="220" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="980" style="endArrow=classic;html=1;strokeColor=#6b7280;strokeWidth=2;endFill=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" parent="1" source="910" target="920" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="981" style="endArrow=classic;html=1;strokeColor=#6b7280;strokeWidth=2;endFill=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" parent="1" source="920" target="930" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="982" style="endArrow=classic;html=1;strokeColor=#9673a6;strokeWidth=2;endFill=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" parent="1" source="930" target="940" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="983" style="endArrow=classic;html=1;strokeColor=#6b7280;strokeWidth=2;endFill=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" parent="1" source="940" target="950" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="984" style="endArrow=classic;html=1;strokeColor=#6b7280;strokeWidth=2;endFill=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" parent="1" source="950" target="960" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="990" value="one container_command = one ephemeral run; no retry on container failure" style="text;html=1;whiteSpace=wrap;align=center;verticalAlign=middle;fontSize=11;fontColor=#1d4ed8;fontStyle=2;" parent="1" vertex="1">
+                    <mxGeometry x="74" y="940" width="1552" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="1000" value="available node bundles" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;fontStyle=1;verticalAlign=top;align=left;spacingLeft=12;spacingTop=8;" parent="1" vertex="1">
+                    <mxGeometry x="50" y="1000" width="380" height="320" as="geometry"/>
+                </mxCell>
+                <mxCell id="1010" value="Pure-Rust (in-process)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=none;fontSize=10;fontStyle=1;fontColor=#374151;" parent="1" vertex="1">
+                    <mxGeometry x="62" y="1042" width="356" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="1011" value="DataFusion / Arrow DataFrame nodes&#xa;statkit, epi, hypothesize, cmprsk&#xa;survey, mice, hierint&#xa;ml (preprocessing, ensembles), dl (Burn)" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontSize=10;fontColor=#374151;" parent="1" vertex="1">
+                    <mxGeometry x="62" y="1062" width="356" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="1020" value="OCI container (image-pinned)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=none;fontSize=10;fontStyle=1;fontColor=#374151;" parent="1" vertex="1">
+                    <mxGeometry x="62" y="1148" width="356" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="1021" value="LDSC, HDL-L, LAVA, MiXeR, SuSiE-RSS,&#xa;MR-PRESSO, MVMR, MTAG, FUSION TWAS,&#xa;SMR, MAGMA, HyPrColoc, coloc, GCTA,&#xa;PLINK2, DESeq2, PyRadiomics, sc, viz, TimesFM" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontSize=10;fontColor=#374151;" parent="1" vertex="1">
+                    <mxGeometry x="62" y="1168" width="356" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="1030" value="all bundles are Cargo feature-gated; default build enables all" style="text;html=1;whiteSpace=wrap;align=center;verticalAlign=middle;fontSize=10;fontColor=#6b7280;fontStyle=2;" parent="1" vertex="1">
+                    <mxGeometry x="62" y="1268" width="356" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="1100" value="what makes a container node reproducible and isolated" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fde2dc;strokeColor=#d97757;fontSize=12;fontStyle=1;verticalAlign=top;align=left;spacingLeft=12;spacingTop=8;" parent="1" vertex="1">
+                    <mxGeometry x="450" y="1000" width="500" height="320" as="geometry"/>
+                </mxCell>
+                <mxCell id="1110" value="Reproducible" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d97757;fontSize=11;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="470" y="1042" width="220" height="32" as="geometry"/>
+                </mxCell>
+                <mxCell id="1111" value="image pinned by sha256 digest;&#xa;panels checksum-verified from manifest.json;&#xa;outputs identified by size + SHA-256" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontSize=10;fontColor=#374151;" parent="1" vertex="1">
+                    <mxGeometry x="470" y="1078" width="220" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="1120" value="Isolated" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d97757;fontSize=11;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="710" y="1042" width="220" height="32" as="geometry"/>
+                </mxCell>
+                <mxCell id="1121" value="one container per node;&#xa;ephemeral /work, tmpfs /tmp;&#xa;--read-only rootfs, no-new-privileges;&#xa;CPU / PID / shm / UID / GID caps" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontSize=10;fontColor=#374151;" parent="1" vertex="1">
+                    <mxGeometry x="710" y="1078" width="220" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="1130" value="Network policy" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d97757;fontSize=11;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="470" y="1170" width="220" height="32" as="geometry"/>
+                </mxCell>
+                <mxCell id="1131" value="isolated — --network none, no egress;&#xa;egress — Podman default network;&#xa;cluster profile removed with k3s backend" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontSize=10;fontColor=#374151;" parent="1" vertex="1">
+                    <mxGeometry x="470" y="1206" width="220" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="1140" value="Atomic publication" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d97757;fontSize=11;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="710" y="1170" width="220" height="32" as="geometry"/>
+                </mxCell>
+                <mxCell id="1141" value="VFS write stages to a sibling object;&#xa;rename only after the full payload lands;&#xa;consumers never observe partial artifacts" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontSize=10;fontColor=#374151;" parent="1" vertex="1">
+                    <mxGeometry x="710" y="1206" width="220" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="1150" value="shared data plane (VFS + DataFusion catalog + bio-format readers) backs the panel cache and the artifact publication" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontSize=10;fontColor=#6b7280;fontStyle=2;" parent="1" vertex="1">
+                    <mxGeometry x="470" y="1280" width="460" height="32" as="geometry"/>
+                </mxCell>
+                <mxCell id="1200" value="what this means for analysis" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=12;fontStyle=1;verticalAlign=top;align=left;spacingLeft=12;spacingTop=8;" parent="1" vertex="1">
+                    <mxGeometry x="970" y="1000" width="680" height="320" as="geometry"/>
+                </mxCell>
+                <mxCell id="1210" value="DAG-based" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;fontSize=12;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="990" y="1042" width="200" height="38" as="geometry"/>
+                </mxCell>
+                <mxCell id="1211" value="typed nodes, JSON-Schema specs, async&#xa;scheduler, retained outputs, snapshots;&#xa;fire-and-forget so long runs don&#39;t block agents" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontSize=10;fontColor=#374151;" parent="1" vertex="1">
+                    <mxGeometry x="990" y="1084" width="320" height="56" as="geometry"/>
+                </mxCell>
+                <mxCell id="1220" value="Containerized" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;fontSize=12;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="1320" y="1042" width="200" height="38" as="geometry"/>
+                </mxCell>
+                <mxCell id="1221" value="each external tool runs in its own&#xa;ephemeral Podman container with image&#xa;digest, read-only panels, and atomic&#xa;SHA-256 artifact publication" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontSize=10;fontColor=#374151;" parent="1" vertex="1">
+                    <mxGeometry x="1320" y="1084" width="320" height="72" as="geometry"/>
+                </mxCell>
+                <mxCell id="1230" value="Heterogeneous" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;fontSize=12;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="990" y="1160" width="200" height="38" as="geometry"/>
+                </mxCell>
+                <mxCell id="1231" value="the same DAG mixes fast in-process&#xa;DataFusion transforms with heavy external&#xa;containers; same registry, same VFS,&#xa;same provenance" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontSize=10;fontColor=#374151;" parent="1" vertex="1">
+                    <mxGeometry x="990" y="1202" width="320" height="64" as="geometry"/>
+                </mxCell>
+                <mxCell id="1240" value="Auditable" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;fontSize=12;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="1320" y="1160" width="200" height="38" as="geometry"/>
+                </mxCell>
+                <mxCell id="1241" value="recorded spec, code path, image digest,&#xa;panel manifest, command, exit code;&#xa;reverse-compile to R or Python for re-run" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontSize=10;fontColor=#374151;" parent="1" vertex="1">
+                    <mxGeometry x="1320" y="1202" width="320" height="64" as="geometry"/>
+                </mxCell>
+                <mxCell id="1250" value="DAG history = snapshot lineages that can be diffed, branched, and replayed" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontSize=10;fontColor=#6b7280;fontStyle=2;" parent="1" vertex="1">
+                    <mxGeometry x="990" y="1280" width="650" height="32" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+</mxfile>

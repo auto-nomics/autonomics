@@ -1,0 +1,273 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600.0 1500.0" width="1600.0" height="1500.0">
+<defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L9,3 z" fill="#374151"/></marker></defs>
+<rect x="0" y="0" width="1600.0" height="1500.0" fill="#ffffff"/>
+<path d="M 600.0 270.0 L 600.0 304.0" fill="none" stroke="#6c8ebf" stroke-width="2.0"/>
+<path d="M 1180.0 424.0 L 1150.0 424.0" fill="none" stroke="#1d4ed8" stroke-width="2.0" marker-end="url(#arrow)"/>
+<path d="M 600.0 544.0 L 670.5 544.0 Q 682.5 544.0 682.5 556.0 L 682.5 554.0 Q 682.5 566.0 694.5 566.0 L 765.0 566.0" fill="none" stroke="#6c8ebf" stroke-width="2.0" marker-end="url(#arrow)"/>
+<path d="M 765.0 614.0 L 467.5 614.0 Q 479.5 614.0 479.5 626.0 L 479.5 664.0 Q 479.5 676.0 467.5 676.0 L 194.0 676.0" fill="none" stroke="#374151" stroke-width="2.0" marker-end="url(#arrow)"/>
+<path d="M 314.0 708.0 L 344.0 708.0" fill="none" stroke="#374151" stroke-width="2.0" marker-end="url(#arrow)"/>
+<path d="M 584.0 708.0 L 614.0 708.0" fill="none" stroke="#374151" stroke-width="2.0" marker-end="url(#arrow)"/>
+<path d="M 854.0 708.0 L 884.0 708.0" fill="none" stroke="#82b366" stroke-width="2.0" marker-end="url(#arrow)"/>
+<path d="M 1062.0 740.0 L 944.0 740.0 Q 956.0 740.0 956.0 752.0 L 956.0 826.0 Q 956.0 838.0 944.0 838.0 L 850.0 838.0" fill="none" stroke="#82b366" stroke-width="2.0" marker-end="url(#arrow)"/>
+<path d="M 850.0 1038.0 L 850.0 1040.0" fill="none" stroke="#9673a6" stroke-width="2.0" marker-end="url(#arrow)"/>
+<path d="M 850.0 1210.0 L 850.0 1216.0" fill="none" stroke="#d6b656" stroke-width="2.0" marker-end="url(#arrow)"/>
+<path d="M 850.0 1356.0 L 850.0 1386.0" fill="none" stroke="#b85450" stroke-width="2.0" marker-end="url(#arrow)"/>
+<path d="M 1062.0 740.0 L 944.0 740.0 Q 956.0 740.0 956.0 752.0 L 956.0 826.0 Q 956.0 838.0 944.0 838.0 L 850.0 838.0" fill="none" stroke="#82b366" stroke-width="2.0" marker-end="url(#arrow)"/><rect x="923.0" y="779.0" width="66.0" height="20.0" fill="white" stroke="none" rx="3"/><text x="956.0" y="791.0" fill="#374151" font-size="10" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">JSON spec</text>
+<path d="M 1139.96 1112.9279999999999 L 679.98 1112.9279999999999 Q 691.98 1112.9279999999999 691.98 1124.9279999999999 L 691.98 1244.0 Q 691.98 1256.0 679.98 1256.0 L 244.0 1256.0" fill="none" stroke="#d6b656" stroke-width="2.0" marker-end="url(#arrow)"/><rect x="637.98" y="1174.464" width="108.0" height="20.0" fill="white" stroke="none" rx="3"/><text x="691.98" y="1186.464" fill="#374151" font-size="10" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">vfs:// artifacts</text>
+<path d="M 900.08 1112.288 L 750.04 1112.288 Q 762.04 1112.288 762.04 1124.288 L 762.04 1244.0 Q 762.04 1256.0 750.04 1256.0 L 624.0 1256.0" fill="none" stroke="#d6b656" stroke-width="2.0" marker-end="url(#arrow)"/><rect x="672.04" y="1174.144" width="180.0" height="20.0" fill="white" stroke="none" rx="3"/><text x="762.04" y="1186.144" fill="#374151" font-size="10" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">reference panels (read-only)</text>
+<path d="M 789.0 354.0 L 1199.5 354.0 Q 1211.5 354.0 1211.5 366.0 L 1211.5 1260.0 Q 1211.5 1272.0 1223.5 1272.0 L 1634.0 1272.0" fill="none" stroke="#b85450" stroke-width="1.0" stroke-dasharray="6 4" marker-end="url(#arrow)"/><rect x="1157.5" y="803.0" width="108.0" height="20.0" fill="white" stroke="none" rx="3"/><text x="1211.5" y="815.0" fill="#374151" font-size="10" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">evidence queries</text>
+<path d="M 850.0 1356.0 L 500.5 1356.0 Q 512.5 1356.0 512.5 1368.0 L 512.5 1418.0 Q 512.5 1430.0 500.5 1430.0 L 175.0 1430.0" fill="none" stroke="#b85450" stroke-width="1.0" stroke-dasharray="6 4" marker-end="url(#arrow)"/><rect x="437.5" y="1383.0" width="150.0" height="20.0" fill="white" stroke="none" rx="3"/><text x="512.5" y="1395.0" fill="#374151" font-size="10" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">replay / diff snapshots</text>
+<text x="850.0" y="46.8" fill="#1F2937" font-size="22.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Autonomics: Harness Architecture for Biomedical Agent Workflows</text>
+<text x="850.0" y="71.2" fill="#6B7280" font-size="13.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Model cockpit → capability registry → evidence plane → execution plane → research protocol</text>
+<text x="130.0" y="106.8" fill="#374151" font-size="12.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="start">Client interfaces</text>
+<rect x="130.0" y="120.0" width="200.0" height="60.0" rx="8" ry="8" fill="#f5f5f5" stroke="#9ca3af" stroke-width="1.0"/>
+<text x="230.0" y="147.6" fill="#1F2937" font-size="12.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Ratatui TUI</text>
+<text x="230.0" y="162.0" fill="#1F2937" font-size="12.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">(thin client)</text>
+<rect x="360.0" y="120.0" width="230.0" height="60.0" rx="8" ry="8" fill="#f5f5f5" stroke="#9ca3af" stroke-width="1.0"/>
+<text x="475.0" y="147.6" fill="#1F2937" font-size="12.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">HTTP frontend</text>
+<text x="475.0" y="162.0" fill="#1F2937" font-size="12.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">(Bun / 127.0.0.1:8765)</text>
+<rect x="620.0" y="120.0" width="220.0" height="60.0" rx="8" ry="8" fill="#f5f5f5" stroke="#9ca3af" stroke-width="1.0"/>
+<text x="730.0" y="147.6" fill="#1F2937" font-size="12.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Headless CLI</text>
+<text x="730.0" y="162.0" fill="#1F2937" font-size="12.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">(`autonomics tui serve`)</text>
+<rect x="870.0" y="120.0" width="200.0" height="60.0" rx="8" ry="8" fill="#f5f5f5" stroke="#9ca3af" stroke-width="1.0"/>
+<text x="970.0" y="147.6" fill="#1F2937" font-size="12.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Workflow editor</text>
+<text x="970.0" y="162.0" fill="#1F2937" font-size="12.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">and DAG view</text>
+<text x="600.0" y="202.4" fill="#4b5563" font-size="11.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">REST / SSE  •  HTTP API with bearer-token auth</text>
+<rect x="370.0" y="214.0" width="460.0" height="56.0" rx="8" ry="8" fill="#e8eefc" stroke="#6c8ebf" stroke-width="1.0"/>
+<text x="600.0" y="239.6" fill="#1F2937" font-size="12.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Gateway daemon  •  `autonomics serve`</text>
+<text x="600.0" y="254.0" fill="#1F2937" font-size="12.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">agents survive frontend exit</text>
+<text x="674.0" y="293.4" fill="#4b5563" font-size="11.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">events / agent lifecycle</text>
+<rect x="50.0" y="304.0" width="1100.0" height="240.0" rx="0" ry="0" fill="#dae8fc" stroke="#6c8ebf" stroke-width="1.0"/>
+<text x="62.0" y="326.0" fill="#1F2937" font-size="14.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="start">Model cockpit  •  RuntimeHost (process-shared)</text>
+<rect x="74.0" y="354.0" width="180.0" height="80.0" rx="8" ry="8" fill="#ffffff" stroke="#6c8ebf" stroke-width="1.0"/>
+<text x="164.0" y="378.6" fill="#1F2937" font-size="11.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Agent profiles</text>
+<text x="164.0" y="391.8" fill="#1F2937" font-size="11.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">and sessions</text>
+<text x="164.0" y="405.0" fill="#1F2937" font-size="11.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">(IDLE / RUNNING /</text>
+<text x="164.0" y="418.2" fill="#1F2937" font-size="11.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">ABORTED)</text>
+<rect x="274.0" y="354.0" width="180.0" height="80.0" rx="8" ry="8" fill="#ffffff" stroke="#6c8ebf" stroke-width="1.0"/>
+<text x="364.0" y="378.6" fill="#1F2937" font-size="11.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Multi-agent</text>
+<text x="364.0" y="391.8" fill="#1F2937" font-size="11.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">ProcessManager</text>
+<text x="364.0" y="405.0" fill="#1F2937" font-size="11.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">(spawn / start /</text>
+<text x="364.0" y="418.2" fill="#1F2937" font-size="11.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">inject / shutdown)</text>
+<rect x="474.0" y="354.0" width="190.0" height="80.0" rx="8" ry="8" fill="#ffffff" stroke="#6c8ebf" stroke-width="1.0"/>
+<text x="569.0" y="378.6" fill="#1F2937" font-size="11.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Persistent memory</text>
+<text x="569.0" y="391.8" fill="#1F2937" font-size="11.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Turso agent.db</text>
+<text x="569.0" y="405.0" fill="#1F2937" font-size="11.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">(phase-1 extract +</text>
+<text x="569.0" y="418.2" fill="#1F2937" font-size="11.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">phase-2 consolidation)</text>
+<rect x="684.0" y="354.0" width="210.0" height="80.0" rx="8" ry="8" fill="#ffffff" stroke="#6c8ebf" stroke-width="1.0"/>
+<text x="789.0" y="378.6" fill="#1F2937" font-size="11.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">KMS  •  knowledge tree</text>
+<text x="789.0" y="391.8" fill="#1F2937" font-size="11.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">(semantic-memory</text>
+<text x="789.0" y="405.0" fill="#1F2937" font-size="11.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">grounding, subject / object</text>
+<text x="789.0" y="418.2" fill="#1F2937" font-size="11.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">entities, relations)</text>
+<rect x="914.0" y="354.0" width="160.0" height="80.0" rx="8" ry="8" fill="#ffffff" stroke="#6c8ebf" stroke-width="1.0"/>
+<text x="994.0" y="378.6" fill="#1F2937" font-size="11.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Host tools</text>
+<text x="994.0" y="391.8" fill="#1F2937" font-size="11.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">(lifecycle,</text>
+<text x="994.0" y="405.0" fill="#1F2937" font-size="11.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">attempt_complete,</text>
+<text x="994.0" y="418.2" fill="#1F2937" font-size="11.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">abort_task, bash)</text>
+<rect x="74.0" y="452.0" width="320.0" height="44.0" rx="8" ry="8" fill="#ffffff" stroke="#6c8ebf" stroke-width="1.0"/>
+<text x="234.0" y="472.0" fill="#1F2937" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Agent A  •  uniform loop, memory compaction, reactive</text>
+<text x="234.0" y="484.0" fill="#1F2937" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">context, snapshots</text>
+<rect x="414.0" y="452.0" width="320.0" height="44.0" rx="8" ry="8" fill="#ffffff" stroke="#6c8ebf" stroke-width="1.0"/>
+<text x="574.0" y="472.0" fill="#1F2937" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Agent B  •  independent tokio task with status watch and</text>
+<text x="574.0" y="484.0" fill="#1F2937" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">cancellation token</text>
+<rect x="754.0" y="452.0" width="320.0" height="44.0" rx="8" ry="8" fill="#ffffff" stroke="#6c8ebf" stroke-width="1.0"/>
+<text x="914.0" y="472.0" fill="#1F2937" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Agent N  •  forwarder merges AgentUiEvents into a single</text>
+<text x="914.0" y="484.0" fill="#1F2937" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">ProcessEvent broadcast</text>
+<text x="574.0" y="519.0" fill="#6b7280" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">events: Thinking / LlmResponse / ToolCall / ToolResult / Done / Error</text>
+<rect x="1180.0" y="304.0" width="470.0" height="240.0" rx="0" ry="0" fill="#e1f0ff" stroke="#6c8ebf" stroke-width="1.0"/>
+<text x="1192.0" y="326.0" fill="#1F2937" font-size="14.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="start">LLM provider pool (Anthropic-compatible)</text>
+<rect x="1204.0" y="354.0" width="100.0" height="36.0" rx="8" ry="8" fill="#ffffff" stroke="#6c8ebf" stroke-width="1.0"/>
+<text x="1254.0" y="376.4" fill="#1F2937" font-size="11.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">DeepSeek</text>
+<rect x="1314.0" y="354.0" width="100.0" height="36.0" rx="8" ry="8" fill="#ffffff" stroke="#6c8ebf" stroke-width="1.0"/>
+<text x="1364.0" y="376.4" fill="#1F2937" font-size="11.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">MiMo</text>
+<rect x="1424.0" y="354.0" width="100.0" height="36.0" rx="8" ry="8" fill="#ffffff" stroke="#6c8ebf" stroke-width="1.0"/>
+<text x="1474.0" y="376.4" fill="#1F2937" font-size="11.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">MiniMax</text>
+<rect x="1534.0" y="354.0" width="100.0" height="36.0" rx="8" ry="8" fill="#ffffff" stroke="#6c8ebf" stroke-width="1.0"/>
+<text x="1584.0" y="376.4" fill="#1F2937" font-size="11.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Moonshot</text>
+<rect x="1204.0" y="398.0" width="100.0" height="36.0" rx="8" ry="8" fill="#ffffff" stroke="#6c8ebf" stroke-width="1.0"/>
+<text x="1254.0" y="413.8" fill="#1F2937" font-size="11.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">OpenAI /</text>
+<text x="1254.0" y="427.0" fill="#1F2937" font-size="11.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">ChatGPT</text>
+<rect x="1314.0" y="398.0" width="100.0" height="36.0" rx="8" ry="8" fill="#ffffff" stroke="#6c8ebf" stroke-width="1.0"/>
+<text x="1364.0" y="420.4" fill="#1F2937" font-size="11.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">OpenRouter</text>
+<rect x="1424.0" y="398.0" width="100.0" height="36.0" rx="8" ry="8" fill="#ffffff" stroke="#6c8ebf" stroke-width="1.0"/>
+<text x="1474.0" y="420.4" fill="#1F2937" font-size="11.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">SenseNova</text>
+<rect x="1534.0" y="398.0" width="100.0" height="36.0" rx="8" ry="8" fill="#ffffff" stroke="#6c8ebf" stroke-width="1.0"/>
+<text x="1584.0" y="420.4" fill="#1F2937" font-size="11.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Z.ai / custom</text>
+<text x="1419.0" y="470.0" fill="#4b5563" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">streaming chat + tool calls  •  provider-agnostic schemas</text>
+<text x="1419.0" y="482.0" fill="#4b5563" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">configured in TUI Config tab, stored in agent.db</text>
+<text x="1165.0" y="445.4" fill="#1d4ed8" font-size="11.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">streaming chat ↔ tool calls</text>
+<rect x="290.0" y="566.0" width="950.0" height="48.0" rx="8" ry="8" fill="#dae8fc" stroke="#6c8ebf" stroke-width="1.0"/>
+<text x="765.0" y="594.8" fill="#1F2937" font-size="12.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Agent loop  •  request / response cycling, effect application, lifecycle flips, retry-with-feedback</text>
+<text x="935.0" y="631.8" fill="#374151" font-size="11.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Tool dispatch  •  ToolRegistration → Toolset → DynToolFunction</text>
+<text x="935.0" y="645.0" fill="#374151" font-size="11.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">schema exposure  •  parallel dispatch  •  per-tool timeouts</text>
+<rect x="74.0" y="676.0" width="240.0" height="64.0" rx="8" ry="8" fill="#ffffff" stroke="#6c8ebf" stroke-width="1.0"/>
+<text x="194.0" y="699.2" fill="#1F2937" font-size="11.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">data-engine-tools</text>
+<text x="194.0" y="712.4" fill="#1F2937" font-size="11.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">(ToolFunction adapters</text>
+<text x="194.0" y="725.6" fill="#1F2937" font-size="11.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">exposed to the agent)</text>
+<text x="194.0" y="754.0" fill="#4b5563" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">list_node_factories</text>
+<text x="194.0" y="766.0" fill="#4b5563" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">add / update / remove node and edge</text>
+<text x="194.0" y="778.0" fill="#4b5563" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">run DAG, view DOT, compile R / Python</text>
+<text x="194.0" y="790.0" fill="#4b5563" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">snapshot, diff, branch, checkout</text>
+<rect x="344.0" y="676.0" width="240.0" height="64.0" rx="8" ry="8" fill="#d5e8d4" stroke="#82b366" stroke-width="1.0"/>
+<text x="464.0" y="705.6" fill="#1F2937" font-size="12.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">DataEngine actor</text>
+<text x="464.0" y="720.0" fill="#1F2937" font-size="12.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">per-session isolated state</text>
+<text x="464.0" y="754.0" fill="#4b5563" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">node discovery  •  add / update nodes and edges</text>
+<text x="464.0" y="766.0" fill="#4b5563" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">run + history  •  DAG history and snapshots</text>
+<text x="464.0" y="778.0" fill="#4b5563" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">R / Python reverse-compile</text>
+<rect x="614.0" y="676.0" width="240.0" height="64.0" rx="8" ry="8" fill="#d5e8d4" stroke="#82b366" stroke-width="1.0"/>
+<text x="734.0" y="712.8" fill="#1F2937" font-size="12.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">DAG core  •  dag-core</text>
+<text x="734.0" y="754.0" fill="#4b5563" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">node trait  •  plugin registry  •  typed ports</text>
+<text x="734.0" y="766.0" fill="#4b5563" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">JSON-Schema specs  •  scheduler</text>
+<text x="734.0" y="778.0" fill="#4b5563" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">async execution and retained outputs</text>
+<rect x="884.0" y="676.0" width="356.0" height="64.0" rx="8" ry="8" fill="#ffffff" stroke="#82b366" stroke-width="1.0"/>
+<text x="1062.0" y="705.8" fill="#1F2937" font-size="11.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Node registry  •  plugins / factories</text>
+<text x="1062.0" y="719.0" fill="#1F2937" font-size="11.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">spec  →  JSON Schema validate  →  instantiate</text>
+<text x="1356.5" y="686.0" fill="#4b5563" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">feature-gated by Cargo: bundle-stat,</text>
+<text x="1356.5" y="698.0" fill="#4b5563" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">bundle-genetics, bundle-rd,</text>
+<text x="1356.5" y="710.0" fill="#4b5563" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">bundle-ml, bundle-dl, bundle-survey,</text>
+<text x="1356.5" y="722.0" fill="#4b5563" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">bundle-writing, bundle-io,</text>
+<text x="1356.5" y="734.0" fill="#4b5563" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">bundle-sql, bundle-causal, bundle-mr</text>
+<rect x="50.0" y="838.0" width="1600.0" height="200.0" rx="0" ry="0" fill="#d5e8d4" stroke="#82b366" stroke-width="1.0"/>
+<text x="62.0" y="860.0" fill="#1F2937" font-size="14.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="start">Capability registry  •  node bundles (Cargo feature-gated plugins)</text>
+<rect x="74.0" y="880.0" width="210.0" height="32.0" rx="8" ry="8" fill="#ffffff" stroke="#82b366" stroke-width="1.0"/>
+<text x="179.0" y="900.4" fill="#1F2937" font-size="11.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Statistics and epidemiology</text>
+<rect x="74.0" y="916.0" width="210.0" height="60.0" rx="0" ry="0" fill="#ffffff" stroke="none" stroke-width="1.0"/>
+<text x="179.0" y="944.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">statkit, epi, hypothesize, cmprsk,</text>
+<text x="179.0" y="956.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">survey, hierint, mice</text>
+<rect x="304.0" y="880.0" width="210.0" height="32.0" rx="8" ry="8" fill="#ffffff" stroke="#82b366" stroke-width="1.0"/>
+<text x="409.0" y="900.4" fill="#1F2937" font-size="11.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Statistical genetics</text>
+<rect x="304.0" y="916.0" width="210.0" height="80.0" rx="0" ry="0" fill="#ffffff" stroke="none" stroke-width="1.0"/>
+<text x="409.0" y="948.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">ldsc, mr, lava, mrlap, lcv, magma,</text>
+<text x="409.0" y="960.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">coloc, bkmr, evalue, genomic_sem,</text>
+<text x="409.0" y="972.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">lcmm, cpassoc</text>
+<rect x="534.0" y="880.0" width="210.0" height="32.0" rx="8" ry="8" fill="#ffffff" stroke="#82b366" stroke-width="1.0"/>
+<text x="639.0" y="900.4" fill="#1F2937" font-size="11.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Regression discontinuity</text>
+<rect x="534.0" y="916.0" width="210.0" height="60.0" rx="0" ry="0" fill="#ffffff" stroke="none" stroke-width="1.0"/>
+<text x="639.0" y="944.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">rdrobust, rdpower, rdmulti,</text>
+<text x="639.0" y="956.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">rddensity, rdlocrand</text>
+<rect x="764.0" y="880.0" width="210.0" height="32.0" rx="8" ry="8" fill="#ffffff" stroke="#82b366" stroke-width="1.0"/>
+<text x="869.0" y="900.4" fill="#1F2937" font-size="11.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Machine learning / DL</text>
+<rect x="764.0" y="916.0" width="210.0" height="80.0" rx="0" ry="0" fill="#ffffff" stroke="none" stroke-width="1.0"/>
+<text x="869.0" y="942.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">ml (preprocessing, ensembles)</text>
+<text x="869.0" y="954.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">dl (Burn: MLP, DeepSurv, DeepHit,</text>
+<text x="869.0" y="966.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">RNN, Transformer, AE)</text>
+<text x="869.0" y="978.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">grf / grf-sys (vendored GPL-3)</text>
+<rect x="994.0" y="880.0" width="210.0" height="32.0" rx="8" ry="8" fill="#ffffff" stroke="#82b366" stroke-width="1.0"/>
+<text x="1099.0" y="900.4" fill="#1F2937" font-size="11.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">SQL / I/O / source / sink</text>
+<rect x="994.0" y="916.0" width="210.0" height="80.0" rx="0" ry="0" fill="#ffffff" stroke="none" stroke-width="1.0"/>
+<text x="1099.0" y="936.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">DataFusion DataFrame + Arrow</text>
+<text x="1099.0" y="948.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">RecordBatch nodes</text>
+<text x="1099.0" y="960.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">file_to_dataframe,</text>
+<text x="1099.0" y="972.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">dataframe_to_file,</text>
+<text x="1099.0" y="984.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">sql, csv, parquet, json, arrow</text>
+<rect x="1224.0" y="880.0" width="210.0" height="32.0" rx="8" ry="8" fill="#ffffff" stroke="#82b366" stroke-width="1.0"/>
+<text x="1329.0" y="900.4" fill="#1F2937" font-size="11.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Causal / MR / mediation</text>
+<rect x="1224.0" y="916.0" width="210.0" height="80.0" rx="0" ry="0" fill="#ffffff" stroke="none" stroke-width="1.0"/>
+<text x="1329.0" y="948.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">causal inference, mediation</text>
+<text x="1329.0" y="960.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Mendelian randomization, IV</text>
+<text x="1329.0" y="972.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">composable p-value workflows</text>
+<rect x="1454.0" y="880.0" width="180.0" height="32.0" rx="8" ry="8" fill="#ffffff" stroke="#82b366" stroke-width="1.0"/>
+<text x="1544.0" y="900.4" fill="#1F2937" font-size="11.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Writing / literature</text>
+<rect x="1454.0" y="916.0" width="180.0" height="100.0" rx="0" ry="0" fill="#ffffff" stroke="none" stroke-width="1.0"/>
+<text x="1544.0" y="940.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">bib-types, bib-base,</text>
+<text x="1544.0" y="952.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">writing-types,</text>
+<text x="1544.0" y="964.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">writing-base</text>
+<text x="1544.0" y="976.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">LaTeX AST ops, citation</text>
+<text x="1544.0" y="988.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">resolution, content-addressed</text>
+<text x="1544.0" y="1000.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">documents</text>
+<text x="854.0" y="1024.4" fill="#1d4ed8" font-size="11.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">DAG execution is fire-and-forget from the agent command loop; long runs do not block other agents</text>
+<rect x="50.0" y="1040.0" width="1600.0" height="170.0" rx="0" ry="0" fill="#e1d5e7" stroke="#9673a6" stroke-width="1.0"/>
+<text x="62.0" y="1062.0" fill="#1F2937" font-size="14.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="start">Execution plane  •  node runtimes</text>
+<rect x="74.0" y="1080.0" width="240.0" height="32.0" rx="8" ry="8" fill="#ffffff" stroke="#9673a6" stroke-width="1.0"/>
+<text x="194.0" y="1100.4" fill="#1F2937" font-size="11.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Pure-Rust nodes  •  async execution</text>
+<text x="194.0" y="1130.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">DataFusion DataFrame nodes</text>
+<text x="194.0" y="1142.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Arrow RecordBatch operators</text>
+<text x="194.0" y="1154.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">typed input / output ports</text>
+<rect x="334.0" y="1080.0" width="240.0" height="32.0" rx="8" ry="8" fill="#ffffff" stroke="#9673a6" stroke-width="1.0"/>
+<text x="454.0" y="1093.8" fill="#1F2937" font-size="11.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">OCI container nodes  •</text>
+<text x="454.0" y="1107.0" fill="#1F2937" font-size="11.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">container_command</text>
+<text x="454.0" y="1132.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">declarative image digest / tag, argv, inputs,</text>
+<text x="454.0" y="1144.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">output contracts, timeout, CPU / mem,</text>
+<text x="454.0" y="1156.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">network profile (isolated / egress)</text>
+<rect x="594.0" y="1080.0" width="240.0" height="32.0" rx="8" ry="8" fill="#ffffff" stroke="#9673a6" stroke-width="1.0"/>
+<text x="714.0" y="1093.8" fill="#1F2937" font-size="11.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Podman runtime  •  ephemeral</text>
+<text x="714.0" y="1107.0" fill="#1F2937" font-size="11.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">single-host</text>
+<text x="714.0" y="1132.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">rootful / rootless container creation</text>
+<text x="714.0" y="1144.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">--read-only, no-new-privileges,</text>
+<text x="714.0" y="1156.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">CPU, PID, shm, UID / GID caps</text>
+<rect x="854.0" y="1080.0" width="240.0" height="32.0" rx="8" ry="8" fill="#ffffff" stroke="#9673a6" stroke-width="1.0"/>
+<text x="974.0" y="1100.4" fill="#1F2937" font-size="11.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Panel cache  •  checksum-verified</text>
+<text x="974.0" y="1132.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">immutable object-store prefix</text>
+<text x="974.0" y="1144.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">manifest.json, SHA-256 per file,</text>
+<text x="974.0" y="1156.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">atomic rename on completion</text>
+<rect x="1114.0" y="1080.0" width="220.0" height="32.0" rx="8" ry="8" fill="#ffffff" stroke="#9673a6" stroke-width="1.0"/>
+<text x="1224.0" y="1100.4" fill="#1F2937" font-size="11.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Artifact publication to VFS</text>
+<text x="1224.0" y="1132.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">declared outputs streamed to VFS</text>
+<text x="1224.0" y="1144.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">FileRef fingerprint = size + SHA-256</text>
+<text x="1224.0" y="1156.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">pending-object then atomic rename</text>
+<rect x="1354.0" y="1080.0" width="280.0" height="32.0" rx="8" ry="8" fill="#ffffff" stroke="#9673a6" stroke-width="1.0"/>
+<text x="1494.0" y="1100.4" fill="#1F2937" font-size="11.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Available OCI assets</text>
+<text x="1494.0" y="1136.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">LDSC, HDL-L, LAVA, MiXeR, SuSiE-RSS,</text>
+<text x="1494.0" y="1148.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">MR-PRESSO, MVMR, MTAG, FUSION TWAS,</text>
+<text x="1494.0" y="1160.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">SMR, MAGMA, HyPrColoc, coloc, GCTA,</text>
+<text x="1494.0" y="1172.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">PLINK2, DESeq2, PyRadiomics,</text>
+<text x="1494.0" y="1184.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">sc preprocessing, viz, TimesFM</text>
+<text x="890.0" y="1205.0" fill="#6b7280" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">reference data from immutable catalog packages is materialized, verified, and mounted read-only at /panels</text>
+<rect x="50.0" y="1216.0" width="1600.0" height="140.0" rx="0" ry="0" fill="#fff2cc" stroke="#d6b656" stroke-width="1.0"/>
+<text x="62.0" y="1238.0" fill="#1F2937" font-size="14.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="start">Shared data plane</text>
+<rect x="74.0" y="1256.0" width="340.0" height="32.0" rx="8" ry="8" fill="#ffffff" stroke="#d6b656" stroke-width="1.0"/>
+<text x="244.0" y="1276.8" fill="#1F2937" font-size="12.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">VFS  •  OpenDAL</text>
+<text x="244.0" y="1310.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">unified vfs:// namespace  •  local, S3, OSS, catalog mounts</text>
+<text x="244.0" y="1322.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">reader / writer coordination per final path</text>
+<text x="244.0" y="1334.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">staged sibling object + atomic rename</text>
+<rect x="434.0" y="1256.0" width="380.0" height="32.0" rx="8" ry="8" fill="#ffffff" stroke="#d6b656" stroke-width="1.0"/>
+<text x="624.0" y="1276.8" fill="#1F2937" font-size="12.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Data catalog  •  versioned object-store packages</text>
+<text x="624.0" y="1310.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">content-addressed, immutable, versioned</text>
+<text x="624.0" y="1322.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">bundle digest, panel id / version</text>
+<text x="624.0" y="1334.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">reference panels mounted via PanelCache</text>
+<rect x="834.0" y="1256.0" width="460.0" height="32.0" rx="8" ry="8" fill="#ffffff" stroke="#d6b656" stroke-width="1.0"/>
+<text x="1064.0" y="1276.8" fill="#1F2937" font-size="12.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Biofusion  •  DataFusion readers</text>
+<text x="1064.0" y="1304.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">VCF, BCF, FASTA, FASTQ, BED, GTF, GFF,</text>
+<text x="1064.0" y="1316.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">SAM, BAM, CRAM, BigWig, BigBed</text>
+<text x="1064.0" y="1328.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Arrow-backed, schema-aware column projection</text>
+<text x="1064.0" y="1340.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">read paths only (no writers yet)</text>
+<rect x="1314.0" y="1256.0" width="320.0" height="32.0" rx="8" ry="8" fill="#ffffff" stroke="#d6b656" stroke-width="1.0"/>
+<text x="1474.0" y="1269.6" fill="#1F2937" font-size="12.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Evidence plane  •  scientific data clients (SDK</text>
+<text x="1474.0" y="1284.0" fill="#1F2937" font-size="12.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">+ DAG source nodes)</text>
+<text x="1474.0" y="1310.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">eutils, opengwas, gwascatalog-sdk, opentargets,</text>
+<text x="1474.0" y="1322.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">chembl, uniprot, string-sdk, kegg, reactome, ensembl,</text>
+<text x="1474.0" y="1334.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">rcsb, alphafold, interpro, pubchem, clinicaltrials</text>
+<rect x="50.0" y="1386.0" width="1600.0" height="180.0" rx="0" ry="0" fill="#f8cecc" stroke="#b85450" stroke-width="1.0"/>
+<text x="62.0" y="1408.0" fill="#1F2937" font-size="14.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="start">Research protocol  •  inspectable, replayable, cross-validated</text>
+<rect x="50.0" y="1430.0" width="250.0" height="32.0" rx="8" ry="8" fill="#ffffff" stroke="#b85450" stroke-width="1.0"/>
+<text x="175.0" y="1450.4" fill="#1F2937" font-size="11.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">DAG history</text>
+<text x="175.0" y="1499.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">snapshot lineages, diff, branch,</text>
+<text x="175.0" y="1511.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">checkout, ref DAGs</text>
+<rect x="320.0" y="1430.0" width="250.0" height="32.0" rx="8" ry="8" fill="#ffffff" stroke="#b85450" stroke-width="1.0"/>
+<text x="445.0" y="1450.4" fill="#1F2937" font-size="11.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Reproducibility</text>
+<text x="445.0" y="1493.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">immutable artifacts,</text>
+<text x="445.0" y="1505.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">SHA-256 fingerprints,</text>
+<text x="445.0" y="1517.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">container digest pinning</text>
+<rect x="590.0" y="1430.0" width="250.0" height="32.0" rx="8" ry="8" fill="#ffffff" stroke="#b85450" stroke-width="1.0"/>
+<text x="715.0" y="1450.4" fill="#1F2937" font-size="11.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Provenance</text>
+<text x="715.0" y="1493.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">recorded spec, code path,</text>
+<text x="715.0" y="1505.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">image, panel, command,</text>
+<text x="715.0" y="1517.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">environment version</text>
+<rect x="860.0" y="1430.0" width="250.0" height="32.0" rx="8" ry="8" fill="#ffffff" stroke="#b85450" stroke-width="1.0"/>
+<text x="985.0" y="1450.4" fill="#1F2937" font-size="11.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Cross-language validation</text>
+<text x="985.0" y="1493.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Rust ports validated against R,</text>
+<text x="985.0" y="1505.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Python, or original implementations</text>
+<text x="985.0" y="1517.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">where practical</text>
+<rect x="1130.0" y="1430.0" width="250.0" height="32.0" rx="8" ry="8" fill="#ffffff" stroke="#b85450" stroke-width="1.0"/>
+<text x="1255.0" y="1450.4" fill="#1F2937" font-size="11.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Literature / writing</text>
+<text x="1255.0" y="1493.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">arxiv, biorxiv, openalex, crossref,</text>
+<text x="1255.0" y="1505.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">embase, europepmc, semantic-scholar</text>
+<text x="1255.0" y="1517.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">BibTeX / RIS / CSL export</text>
+<rect x="1400.0" y="1430.0" width="250.0" height="32.0" rx="8" ry="8" fill="#ffffff" stroke="#b85450" stroke-width="1.0"/>
+<text x="1525.0" y="1450.4" fill="#1F2937" font-size="11.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Manuscript</text>
+<text x="1525.0" y="1493.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">LaTeX AST operations, citation</text>
+<text x="1525.0" y="1505.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">resolution, XeLaTeX compile,</text>
+<text x="1525.0" y="1517.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">carries DAG artifacts into paper</text>
+<text x="210.0" y="295.4" fill="#1d4ed8" font-size="11.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">agents outlive frontends • gateway is a long-lived process</text>
+</svg>

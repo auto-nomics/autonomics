@@ -24,6 +24,10 @@ Autonomics 不是通用聊天应用，不是围绕自由脚本的 notebook 替�
 
 ## Harness 架构
 
+![Harness 架构：客户端接口、模型驾驶舱、能力注册表、执行平面、共享数据面、科研协议](docs/diagrams/architecture.png)
+
+该架构把模型编排和科研能力分开。每个智能体会话都有独立的 `DataEngine` actor，同时进程内共享不可变的注册表和运行时基础设施。DAG 执行对智能体命令循环是 fire-and-forget 的，一个长时间分析不会阻塞其他智能体。启用 DAG history 后，每次运行会形成可检查、可 diff、可分支、可 checkout 的快照链。部分图还可以反向编译为 R 或 Python 源码。
+
 ```text
 Ratatui TUI(瘦客户端)──REST/SSE──▶  gateway daemon(`autonomics serve`)
         |                                     |
@@ -59,7 +63,14 @@ Node registry + DAG scheduler
   biofusion     -> VCF/BCF/FASTA/FASTQ/BED/GTF/GFF/SAM/BAM/CRAM/BigWig/BigBed 读取
 ```
 
-该架构把模型编排和科研能力分开。每个智能体会话都有独立的 `DataEngine` actor，同时进程内共享不可变的注册表和运行时基础设施。DAG 执行对智能体命令循环是 fire-and-forget 的，一个长时间分析不会阻塞其他智能体。启用 DAG history 后，每次运行会形成可检查、可 diff、可分支、可 checkout 的快照链。部分图还可以反向编译为 R 或 Python 源码。
+## DAG 调度与容器执行
+
+![基于 DAG 的调度与一次性容器化分析节点](docs/diagrams/fig2_mechanism.png)
+
+让这个 harness 在生物医学场景里值得信赖的两个核心机制：
+
+- **基于 DAG 的调度**。研究请求由 LLM agent 解析为类型化的 DAG（每个节点都经 JSON Schema 校验），再通过统一的注册表装配。同一个 DAG 既可以混合快速的进程内 DataFusion / Arrow 转换，又可以承载重型外部容器；DAG core 异步调度并保留输出，支持快照、diff、分支以及反向编译为 R 或 Python。
+- **容器化节点**。每个外部工具都跑在自己的一次性 Podman 容器中：镜像用 sha256 digest 钉死，参考面板用 `manifest.json` 做 SHA-256 校验并以只读方式挂载，rootfs 用 `--read-only` + `no-new-privileges` 并显式限制 CPU / PID / shm / UID，声明的产物以 `FileRef = size + SHA-256` 流式写入 VFS，配合 pending-object + atomic rename，消费方永远不会读到半成品。一次 `container_command` 就是一次一次性运行，容器失败不重试。
 
 ## 能力地图
 
