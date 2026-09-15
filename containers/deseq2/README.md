@@ -123,6 +123,22 @@ a read-only root filesystem. The local test image has not yet been published;
 the eventual Rust wrapper will pin an immutable registry digest only after the
 exact Stage 1 image is pushed.
 
+## Data-Package Decision
+
+Stage 2 deliberately binds no catalog data package and declares no panel mount.
+Both DESeq2 inputs are analysis-owned user files, and the model requires neither
+a genome build nor an annotation database. The pasilla fixture is repository
+test data, not an image or catalog dependency.
+
+The boundary is checked by:
+
+```sh
+containers/deseq2/test_deseq2_data_boundary.sh
+```
+
+The Stage 3 wrapper must therefore assert an empty `panel_bundles` list and an
+empty `panels` list in its generated `ContainerCommandSpec`.
+
 ## Test Data
 
 `fixtures/pasilla_gene_counts.tsv` and
