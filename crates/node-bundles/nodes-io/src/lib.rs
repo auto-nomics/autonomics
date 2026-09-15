@@ -22,6 +22,7 @@ pub mod magma_annotate_container;
 pub mod mixer_container;
 pub mod mrpresso_container;
 pub mod mtag_container;
+pub mod mutation_analysis_container;
 pub mod mvmr_container;
 pub mod pathway_gsea_container;
 pub mod plink2_clump_container;
@@ -344,6 +345,12 @@ impl NodePlugin for Plugin {
         ));
         registry.register(Box::new(
             single_cell_container::SingleCellPreprocessorContainerNodeFactory::new(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
+        registry.register(Box::new(
+            mutation_analysis_container::MutationAnalysisContainerNodeFactory::new(
                 Arc::clone(&self.container_execution.runtime),
                 Arc::clone(&self.container_execution.panel_cache),
             ),

@@ -1,0 +1,13 @@
+Hugo_Symbol	Chromosome	Start_Position	End_Position	Reference_Allele	Tumor_Seq_Allele2	Variant_Classification	Variant_Type	Tumor_Sample_Barcode
+TP53	17	7676594	7676594	A	G	Missense_Mutation	SNP	sample_a
+KRAS	12	25245350	25245350	C	T	Missense_Mutation	SNP	sample_a
+BRAF	7	140453136	140453136	A	T	Missense_Mutation	SNP	sample_a
+TP53	17	7674858	7674858	C	T	Nonsense_Mutation	SNP	sample_b
+KRAS	12	25227339	25227339	G	A	Missense_Mutation	SNP	sample_b
+BRAF	7	140493085	140493085	G	A	Missense_Mutation	SNP	sample_b
+TP53	17	7675049	7675150	AC	A	Frame_Shift_Del	DEL	sample_c
+KRAS	12	25226970	25226970	C	T	Missense_Mutation	SNP	sample_c
+BRAF	7	140465409	140465409	G	C	Translocation	Other	sample_c
+TP53	17	7675145	7675145	T	A	Missense_Mutation	SNP	sample_d
+KRAS	12	25225660	25225660	G	A	Nonsense_Mutation	SNP	sample_d
+BRAF	7	140448469	140448469	C	G	Missense_Mutation	SNP	sample_d
