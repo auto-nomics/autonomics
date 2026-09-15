@@ -29,6 +29,7 @@ the official replacement passes a reproducible end-to-end baseline.
 
 | Visualization | `visualization_container` is the registered runtime; the legacy host-R DataFrame `visualization` node is removed | pinned R 4.5.3 runtime with Arrow 23.0.1.2 and ggplot2 4.0.3 | no reference panel | none for the local File-to-File PNG baseline |
 | COLOC `coloc.abf` | `coloc_abf_container` implemented; unit tests passing; wrapper unit tests build the official contract | official R `coloc` 5.2.3 (CRAN Archive) | no reference panel | pin image digest by promoting the local tag to an internal registry and re-running the Podman e2e baseline |
+| Single-cell MatrixMarket preprocessing | `single_cell_preprocessor_container` implemented, ACR-pinned, and covered by real Podman inspect/ingest plus production-scale MatrixMarket baselines | official Scanpy 1.11.3 with a locked wheel closure | no reference panel | none |
 
 ### Verified local provenance
 
@@ -51,6 +52,7 @@ the official replacement passes a reproducible end-to-end baseline.
 | HDL 1.4.3 | Official commit `e6b055d42fd9904c3e994a9b829626c7e5f8422b` | local tag `localhost/atc/hdl:1.4.3`, manifest digest `sha256:9d562d48b805f1b361060a2ca36fe95e7b4227268c7c17ea15006b770d8d30aa` | Image reports HDL 1.4.3, data.table 1.18.4, and dplyr 1.2.1; published-panel chr1/piece9 region and scan Podman baselines both completed through official `HDL::HDL.L`; `hdl.ref.ukb_eur` v1.0 panel digest `sha256:411c7ae1db876ec3e17941367a74567175ca151f8f93dc6e5e1d06bb8f3a3f54` is not embedded in the image |
 | TwoSampleMR 0.7.9 | Official tag `v0.7.9`, commit `3d119f20d6fc164b0c7f710f5590fee9580f2c7b`, source archive SHA-256 `6848c344c5eead601ff52e9a88b2c23c2b61b0ce4f848e331e7494b657be64e5` | `sha256:c270de9978906ee48cbba2ac484ba3df9e86dddc69efd908c6f908963114002a` | Published to `autonomics/twosamplemr:0.7.9`; official `test_commondata.RData` reproduces IVW `0.4459` and Egger `0.5025`; catalog-backed chr22 baseline reduces 10 candidates to 2 PLINK2 index instruments and completes official harmonisation plus `mr()` |
  `sha256:66159cf0b14397b667483f08ad953d98d88718d94ee1cec0db6475cd68e4450a` | Image ID `95f3275fc917adafcaa9d578a244eafd3737ec06eecab7a6d22df7ec4ba0523c`; panel digest `sha256:a3de3339288985120eeb66d9e8d21fa157b88798504a18d02be14319a17171c4`; official chr21-22 fit1 and fit2 baselines verified |
+| Scanpy 1.11.3 | Official Scanpy wheel with the complete locked wheel closure in `containers/single-cell-preprocessor/requirements.txt` | `sha256:53fd628049d4b115b8fb805edfaf45905d4f5a60f87e4fcd2cf6acf8b378e940` | Published to `autonomics/single-cell-preprocessor:0.1.0`; image config ID `1b10f7a01efd`; real Podman inspect/ingest baseline and a 20,000-gene x 50,000-cell / 20,000,000-nonzero gzip MatrixMarket inspect baseline verified |
 
 The SuSiE-RSS image is published to the internal registry and referenced
 by immutable digest. The other local images are still referenced by tag for

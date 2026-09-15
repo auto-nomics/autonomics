@@ -24,6 +24,7 @@ pub mod mvmr_container;
 pub mod plink2_clump_container;
 pub mod radiomics;
 pub mod radiomics_container;
+pub mod single_cell_container;
 pub mod smr_heidi_container;
 pub mod source_chembl;
 pub mod source_kegg;
@@ -321,6 +322,12 @@ impl NodePlugin for Plugin {
         )));
         registry.register(Box::new(
             visualization_container::VisualizationContainerNodeFactory::new(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
+        registry.register(Box::new(
+            single_cell_container::SingleCellPreprocessorContainerNodeFactory::new(
                 Arc::clone(&self.container_execution.runtime),
                 Arc::clone(&self.container_execution.panel_cache),
             ),

@@ -37,6 +37,8 @@ pub mod manifest;
 pub mod processor;
 
 use std::collections::VecDeque;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -50,6 +52,7 @@ use serde_json::Value;
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
+use vfs::{BackendConfig, BackendDefinition, MountDefinition, VfsManifest};
 
 use event::{
     AgentMessageItem, ItemEvent, NoticeEvent, NoticeKind, ReasoningItem, RunEndedEvent, RunEvent,
@@ -65,6 +68,96 @@ const COMMAND_PUMP_INTERVAL: Duration = Duration::from_millis(50);
 /// Upper bound on the final agent shutdown wait before the host is
 /// dropped regardless.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(30);
+
+/// Implementation selected for an ephemeral run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EphemeralBackend {
+    /// Open `RuntimeHost` in the calling process. This is the Phase 1
+    /// default.
+    #[default]
+    InProcess,
+    /// Start a one-shot gateway process. Reserved for a later phase.
+    Gateway,
+}
+
+/// One host source mapped into the ephemeral virtual filesystem.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EphemeralMount {
+    pub source: PathBuf,
+    pub target: String,
+    pub read_only: bool,
+}
+
+impl EphemeralMount {
+    pub fn new(
+        source: impl Into<PathBuf>,
+        target: impl Into<String>,
+        read_only: bool,
+    ) -> Result<Self, EphemeralSetupError> {
+        let source = source.into();
+        let target = target.into();
+        let target = normalize_virtual_target(&target)?;
+        Ok(Self {
+            source,
+            target,
+            read_only,
+        })
+    }
+}
+
+/// Declarative inputs used to build one isolated run's state and VFS.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct EphemeralRunSpec {
+    pub backend: EphemeralBackend,
+    pub workspace: Option<EphemeralMount>,
+    pub data_mounts: Vec<EphemeralMount>,
+    /// Reuse a workspace that already contains entries. Inputs remain
+    /// read-only, but this permits explicit benchmark retries.
+    pub resume_workspace: bool,
+}
+
+#[derive(Debug, Error)]
+pub enum EphemeralSetupError {
+    #[error("the gateway ephemeral backend is not implemented yet")]
+    UnsupportedBackend,
+    #[error("mount source must be absolute: {0}")]
+    RelativeSource(PathBuf),
+    #[error("invalid {kind} target `{target}`: {reason}")]
+    InvalidTarget {
+        kind: &'static str,
+        target: String,
+        reason: &'static str,
+    },
+    #[error("mount target `{target}` overlaps reserved target `{reserved}`")]
+    ReservedTargetOverlap { target: String, reserved: String },
+    #[error("mount target `{target}` overlaps `{other}`")]
+    MountOverlap { target: String, other: String },
+    #[error("workspace `{path}` is not empty; pass --resume-workspace to reuse it")]
+    NonEmptyWorkspace { path: PathBuf },
+    #[error("source {kind} `{path}`: {source}")]
+    SourceIo {
+        kind: &'static str,
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    #[error("create state directory `{path}`: {source}")]
+    StateIo {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    #[error("serialize VFS manifest `{path}`: {source}")]
+    ManifestSerialize {
+        path: PathBuf,
+        source: toml::ser::Error,
+    },
+    #[error("write VFS manifest `{path}`: {source}")]
+    ManifestWrite {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    #[error("invalid generated VFS manifest: {0}")]
+    InvalidManifest(String),
+}
 
 /// Everything `run_task` needs to execute one prompt.
 #[derive(Clone)]
@@ -103,9 +196,38 @@ pub struct RunTaskConfig {
 }
 
 /// Keeps the ephemeral scratch directories alive for the duration of a
-/// run; dropping it removes them.
+/// run. The root is removed on drop unless [`EphemeralState::keep`] was
+/// called.
 pub struct EphemeralState {
-    _dir: tempfile::TempDir,
+    root: PathBuf,
+    cleanup: bool,
+}
+
+impl EphemeralState {
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    /// Preserve the ephemeral root after the run (debugging support).
+    pub fn keep(&mut self) -> &Path {
+        self.cleanup = false;
+        self.root.as_path()
+    }
+
+    /// Remove the root explicitly so callers can surface cleanup failures.
+    pub fn cleanup(mut self) -> Result<PathBuf, std::io::Error> {
+        self.cleanup = false;
+        let root = self.root.clone();
+        std::fs::remove_dir_all(&root).map(|()| root)
+    }
+}
+
+impl Drop for EphemeralState {
+    fn drop(&mut self) {
+        if self.cleanup {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
 }
 
 impl RunTaskConfig {
@@ -115,7 +237,23 @@ impl RunTaskConfig {
     /// set afterwards — ephemerality scopes *conversation state*, not
     /// credentials.
     pub fn ephemeral(prompt: impl Into<String>) -> (Self, EphemeralState) {
+        Self::ephemeral_with_mounts(prompt, EphemeralRunSpec::default())
+            .expect("default ephemeral setup is valid")
+    }
+
+    /// Create an isolated run and materialize its VFS manifest from
+    /// host-mounted benchmark inputs and workspace.
+    pub fn ephemeral_with_mounts(
+        prompt: impl Into<String>,
+        mut spec: EphemeralRunSpec,
+    ) -> Result<(Self, EphemeralState), EphemeralSetupError> {
+        if spec.backend == EphemeralBackend::Gateway {
+            return Err(EphemeralSetupError::UnsupportedBackend);
+        }
+        validate_mount_targets(&mut spec)?;
+
         let dir = tempfile::tempdir().expect("create ephemeral dir");
+        restrict_directory_to_owner(dir.path());
         let mut runtime_config = RuntimeConfig::default();
         // Every persistent path must move under the temp dir —
         // `RuntimeConfig::default()` bakes absolute `~/.autonomics`
@@ -129,8 +267,72 @@ impl RunTaskConfig {
         runtime_config.bib_db_path = dir.path().join("state/bib.db");
         runtime_config.writing_db_path = dir.path().join("state/writing.db");
         runtime_config.app_db_path = dir.path().join("state/app.db");
+        let opengwas_cache_dir = dir.path().join("cache/opengwas");
+        runtime_config.opengwas_cache_dir = Some(opengwas_cache_dir.clone());
+        prepare_workspace(&mut spec)?;
+        std::fs::create_dir_all(&opengwas_cache_dir).map_err(|source| {
+            EphemeralSetupError::StateIo {
+                path: opengwas_cache_dir,
+                source,
+            }
+        })?;
+        std::fs::create_dir_all(&runtime_config.data_dir).map_err(|source| {
+            EphemeralSetupError::StateIo {
+                path: runtime_config.data_dir.clone(),
+                source,
+            }
+        })?;
+        let manifest = ephemeral_vfs_manifest(&runtime_config, &spec)?;
+        vfs::MountedObjectStore::from_manifest(&manifest)
+            .map_err(|error| EphemeralSetupError::InvalidManifest(error.to_string()))?;
+        write_ephemeral_vfs_manifest(&dir.path().join("state/vfs.toml"), &manifest)?;
         let config = Self::new(prompt, runtime_config);
-        (config, EphemeralState { _dir: dir })
+        Ok((
+            config,
+            EphemeralState {
+                root: dir.keep(),
+                cleanup: true,
+            },
+        ))
+    }
+
+    /// Parse the TOML form accepted by `autonomics run --mount-manifest`.
+    ///
+    /// The file describes mount intent, not the generated VFS manifest:
+    /// read-only mode is supplied by the field used (`data_mounts` or
+    /// `workspace`) and cannot be overridden by the file.
+    pub fn parse_mount_manifest(source: &str) -> Result<EphemeralRunSpec, EphemeralSetupError> {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct RawMount {
+            source: PathBuf,
+            target: String,
+        }
+
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct RawManifest {
+            #[serde(default)]
+            workspace: Option<RawMount>,
+            #[serde(default)]
+            data_mounts: Vec<RawMount>,
+        }
+
+        let raw: RawManifest = toml::from_str(source)
+            .map_err(|error| EphemeralSetupError::InvalidManifest(error.to_string()))?;
+        let mut spec = EphemeralRunSpec::default();
+        if let Some(workspace) = raw.workspace {
+            spec.workspace = Some(EphemeralMount::new(
+                workspace.source,
+                workspace.target,
+                false,
+            )?);
+        }
+        for mount in raw.data_mounts {
+            spec.data_mounts
+                .push(EphemeralMount::new(mount.source, mount.target, true)?);
+        }
+        Ok(spec)
     }
 
     pub fn new(prompt: impl Into<String>, runtime_config: RuntimeConfig) -> Self {
@@ -147,6 +349,273 @@ impl RunTaskConfig {
             runtime_config,
             cancel: CancellationToken::new(),
         }
+    }
+}
+
+fn normalize_virtual_target(target: impl AsRef<str>) -> Result<String, EphemeralSetupError> {
+    let target = target.as_ref();
+    if target.contains('\0') {
+        return Err(invalid_target(target, "must not contain a NUL byte"));
+    }
+
+    let path = Path::new(target);
+    if !path.is_absolute() {
+        return Err(invalid_target(target, "must use an absolute virtual path"));
+    }
+
+    let mut components = Vec::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::Normal(part) => components.push(part.to_os_string()),
+            std::path::Component::CurDir => {}
+            std::path::Component::RootDir => {}
+            std::path::Component::ParentDir => {
+                return Err(invalid_target(target, "must not contain `..`"));
+            }
+            std::path::Component::Prefix(_) => {
+                return Err(invalid_target(target, "must not contain a Windows prefix"));
+            }
+        }
+    }
+    if components.is_empty() {
+        return Err(invalid_target(target, "must name a path below `/`"));
+    }
+
+    let mut normalized = PathBuf::from("/");
+    for component in components {
+        normalized.push(component);
+    }
+    normalized
+        .to_str()
+        .map(str::to_owned)
+        .ok_or_else(|| invalid_target(target, "must be valid UTF-8"))
+}
+
+fn invalid_target(target: &str, reason: &'static str) -> EphemeralSetupError {
+    EphemeralSetupError::InvalidTarget {
+        kind: "mount",
+        target: target.to_owned(),
+        reason,
+    }
+}
+
+fn validate_mount_targets(spec: &mut EphemeralRunSpec) -> Result<(), EphemeralSetupError> {
+    let mut targets = Vec::new();
+    let mut validate = |mount: &mut EphemeralMount| -> Result<(), EphemeralSetupError> {
+        mount.target = normalize_virtual_target(&mount.target)?;
+        if mount.target == "/literature" || mount.target.starts_with("/literature/") {
+            return Err(EphemeralSetupError::ReservedTargetOverlap {
+                target: mount.target.clone(),
+                reserved: "/literature".to_owned(),
+            });
+        }
+        if let Some(previous) = targets
+            .iter()
+            .find(|previous| {
+                Path::new(previous).starts_with(&mount.target)
+                    || Path::new(&mount.target).starts_with(previous)
+            })
+            .cloned()
+        {
+            return Err(EphemeralSetupError::MountOverlap {
+                target: mount.target.clone(),
+                other: previous,
+            });
+        }
+        targets.push(mount.target.clone());
+        Ok(())
+    };
+
+    if let Some(workspace) = spec.workspace.as_mut() {
+        workspace.read_only = false;
+        validate(workspace)?;
+    }
+    for mount in spec.data_mounts.iter_mut() {
+        mount.read_only = true;
+        validate(mount)?;
+    }
+    Ok(())
+}
+
+fn canonicalize_source(kind: &'static str, source: &Path) -> Result<PathBuf, EphemeralSetupError> {
+    if !source.is_absolute() {
+        return Err(EphemeralSetupError::RelativeSource(source.to_owned()));
+    }
+    source
+        .canonicalize()
+        .map_err(|source_error| EphemeralSetupError::SourceIo {
+            kind,
+            path: source.to_owned(),
+            source: source_error,
+        })
+}
+
+fn prepare_workspace(spec: &mut EphemeralRunSpec) -> Result<(), EphemeralSetupError> {
+    for mount in spec.data_mounts.iter_mut() {
+        mount.source = canonicalize_source("data mount", &mount.source)?;
+    }
+
+    if let Some(workspace) = spec.workspace.as_mut() {
+        if !workspace.source.is_absolute() {
+            return Err(EphemeralSetupError::RelativeSource(
+                workspace.source.clone(),
+            ));
+        }
+        if workspace.source.exists() {
+            workspace.source = canonicalize_source("workspace", &workspace.source)?;
+            if !workspace.source.is_dir() {
+                return Err(EphemeralSetupError::SourceIo {
+                    kind: "workspace",
+                    path: workspace.source.clone(),
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "workspace source must be a directory",
+                    ),
+                });
+            }
+            let is_empty = workspace
+                .source
+                .read_dir()
+                .map_err(|source| EphemeralSetupError::SourceIo {
+                    kind: "workspace",
+                    path: workspace.source.clone(),
+                    source,
+                })?
+                .next()
+                .is_none();
+            if !is_empty && !spec.resume_workspace {
+                return Err(EphemeralSetupError::NonEmptyWorkspace {
+                    path: workspace.source.clone(),
+                });
+            }
+        } else {
+            std::fs::create_dir_all(&workspace.source).map_err(|source| {
+                EphemeralSetupError::SourceIo {
+                    kind: "workspace",
+                    path: workspace.source.clone(),
+                    source,
+                }
+            })?;
+            workspace.source = canonicalize_source("workspace", &workspace.source)?;
+        }
+    }
+    Ok(())
+}
+
+fn ephemeral_vfs_manifest(
+    config: &RuntimeConfig,
+    spec: &EphemeralRunSpec,
+) -> Result<VfsManifest, EphemeralSetupError> {
+    let mut backend = vec![BackendDefinition {
+        id: "scratch".to_owned(),
+        config: BackendConfig::local("/"),
+    }];
+    let mut mount = vec![MountDefinition {
+        path: "/".to_owned(),
+        backend: "scratch".to_owned(),
+        source: config.data_dir.to_string_lossy().into_owned(),
+        read_only: false,
+    }];
+
+    let literature_root = config.state_dir.join("literature");
+    backend.push(BackendDefinition {
+        id: "literature".to_owned(),
+        config: BackendConfig::local(literature_root.to_string_lossy().into_owned()),
+    });
+    mount.push(MountDefinition {
+        path: "/literature".to_owned(),
+        backend: "literature".to_owned(),
+        source: "/".to_owned(),
+        read_only: false,
+    });
+
+    let add_local_mount = |id: &str,
+                           mount_spec: &EphemeralMount,
+                           backend: &mut Vec<BackendDefinition>,
+                           mount: &mut Vec<MountDefinition>| {
+        let source = &mount_spec.source;
+        let (root, source_key) = if source.is_dir() {
+            (source.to_string_lossy().into_owned(), "/".to_owned())
+        } else {
+            let root = source.parent().unwrap_or(Path::new("/"));
+            let key = source
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "/".to_owned());
+            (root.to_string_lossy().into_owned(), key)
+        };
+        backend.push(BackendDefinition {
+            id: id.to_owned(),
+            config: BackendConfig::local(root),
+        });
+        mount.push(MountDefinition {
+            path: mount_spec.target.clone(),
+            backend: id.to_owned(),
+            source: source_key,
+            read_only: mount_spec.read_only,
+        });
+    };
+
+    for (index, data_mount) in spec.data_mounts.iter().enumerate() {
+        add_local_mount(
+            &format!("benchmark-data-{index}"),
+            data_mount,
+            &mut backend,
+            &mut mount,
+        );
+    }
+    if let Some(workspace) = spec.workspace.as_ref() {
+        add_local_mount("benchmark-workspace", workspace, &mut backend, &mut mount);
+    }
+
+    Ok(VfsManifest { backend, mount })
+}
+
+fn write_ephemeral_vfs_manifest(
+    path: &Path,
+    manifest: &VfsManifest,
+) -> Result<(), EphemeralSetupError> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|source| EphemeralSetupError::StateIo {
+            path: parent.to_owned(),
+            source,
+        })?;
+    }
+    let contents = toml::to_string_pretty(manifest).map_err(|source| {
+        EphemeralSetupError::ManifestSerialize {
+            path: path.to_owned(),
+            source,
+        }
+    })?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(path)
+        .map_err(|source| EphemeralSetupError::ManifestWrite {
+            path: path.to_owned(),
+            source,
+        })?;
+    file.write_all(contents.as_bytes())
+        .map_err(|source| EphemeralSetupError::ManifestWrite {
+            path: path.to_owned(),
+            source,
+        })
+}
+
+fn restrict_directory_to_owner(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700));
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
     }
 }
 
@@ -172,6 +641,8 @@ pub struct RunSummary {
 /// these to a different exit code (3) than turn failure (1).
 #[derive(Debug, Error)]
 pub enum RunError {
+    #[error("ephemeral setup failed: {0}")]
+    EphemeralSetup(#[from] EphemeralSetupError),
     #[error("failed to open runtime host: {0}")]
     HostOpen(#[from] runtime::Error),
     #[error("gateway error: {0}")]
@@ -708,6 +1179,8 @@ fn notice(kind: NoticeKind, message: String) -> RunEvent {
     RunEvent::Notice(NoticeEvent { kind, message })
 }
 
+#[cfg(test)]
+mod ephemeral_tests;
 #[cfg(test)]
 mod gateway_runner_tests;
 #[cfg(test)]

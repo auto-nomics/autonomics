@@ -21,11 +21,14 @@ use std::time::Duration;
 use headless::gateway_runner::list_sessions_via_gateway;
 use headless::gateway_runner::{GatewayRunConfig, run_via_gateway};
 use headless::processor::{HumanProcessor, JsonlProcessor, OutputProcessor};
-use headless::{RunError, RunSummary, RunTaskConfig, run_task};
+use headless::{
+    EphemeralBackend, EphemeralMount, EphemeralRunSpec, RunError, RunSummary, RunTaskConfig,
+    run_task,
+};
 use rusqlite::Connection;
 use tokio_util::sync::CancellationToken;
 
-use crate::cli::RunArgs;
+use crate::cli::{RunArgs, RunBackend};
 
 const EXIT_COMPLETED: i32 = 0;
 const EXIT_TURN_FAILED: i32 = 1;
@@ -194,6 +197,14 @@ async fn run_in_process(
     run_id: uuid::Uuid,
     cancel: CancellationToken,
 ) -> (Result<RunSummary, RunError>, Option<String>) {
+    let ephemeral_spec = match parse_ephemeral_run_spec(args) {
+        Ok(spec) => spec,
+        Err(message) => {
+            eprintln!("error: {message}");
+            std::process::exit(EXIT_STARTUP);
+        }
+    };
+
     let runtime_config = gateway::RuntimeConfig::default();
     if let Some(parent) = runtime_config.app_db_path.parent() {
         std::fs::create_dir_all(parent)
@@ -220,7 +231,14 @@ async fn run_in_process(
         }
     };
 
-    let (mut config, _guard) = RunTaskConfig::ephemeral(prompt);
+    let (mut config, mut state_guard) =
+        match RunTaskConfig::ephemeral_with_mounts(prompt, ephemeral_spec) {
+            Ok(pair) => pair,
+            Err(error) => {
+                eprintln!("error: {error}");
+                std::process::exit(EXIT_STARTUP);
+            }
+        };
     config.run_id = run_id;
     config.profile = args.profile.clone();
     config.agent_runtime = agent_runtime.clone();
@@ -247,7 +265,54 @@ async fn run_in_process(
         );
         result
     };
+    if args.keep_state {
+        eprintln!("ephemeral state kept at {}", state_guard.keep().display());
+    } else if let Err(error) = state_guard.cleanup() {
+        eprintln!("warning: failed to clean ephemeral state: {error}");
+    }
     (result, Some(model_name))
+}
+
+fn parse_ephemeral_run_spec(args: &RunArgs) -> Result<EphemeralRunSpec, String> {
+    let mut spec = match args.mount_manifest.as_deref() {
+        Some(path) => {
+            let source = std::fs::read_to_string(path)
+                .map_err(|error| format!("read mount manifest {}: {error}", path.display()))?;
+            RunTaskConfig::parse_mount_manifest(&source)
+                .map_err(|error| format!("invalid mount manifest {}: {error}", path.display()))
+        }
+        None => Ok(EphemeralRunSpec::default()),
+    }?;
+
+    if args.workspace.is_some() && spec.workspace.is_some() {
+        return Err(
+            "--workspace cannot override a workspace already defined by --mount-manifest"
+                .to_owned(),
+        );
+    }
+    if let Some(workspace) = args.workspace.as_deref() {
+        spec.workspace = Some(parse_mount_argument(workspace, false)?);
+    }
+    for mount in &args.data_mount {
+        spec.data_mounts.push(parse_mount_argument(mount, true)?);
+    }
+    spec.backend = EphemeralBackend::InProcess;
+    spec.resume_workspace = args.resume_workspace;
+    Ok(spec)
+}
+
+fn parse_mount_argument(argument: &str, read_only: bool) -> Result<EphemeralMount, String> {
+    let (source, target) = argument
+        .rsplit_once('=')
+        .ok_or_else(|| format!("invalid mount `{argument}`: expected SOURCE=VPATH"))?;
+    let source = std::path::PathBuf::from(source);
+    if !source.is_absolute() {
+        return Err(format!(
+            "invalid mount `{argument}`: SOURCE must be an absolute host path"
+        ));
+    }
+    EphemeralMount::new(source, target, read_only)
+        .map_err(|error| format!("invalid mount `{argument}`: {error}"))
 }
 
 fn validate_run_args(args: &RunArgs) -> Result<(), String> {
@@ -260,10 +325,39 @@ fn validate_run_args(args: &RunArgs) -> Result<(), String> {
             || args.manifest.is_some()
             || args.agent_config.is_some()
             || args.no_memory
+            || args.backend.is_some()
+            || args.workspace.is_some()
+            || !args.data_mount.is_empty()
+            || args.mount_manifest.is_some()
+            || args.resume_workspace
+            || args.keep_state
         {
             return Err("--list-sessions cannot be combined with run-specific options".to_string());
         }
         return Ok(());
+    }
+    let backend = args.backend.unwrap_or(if args.ephemeral {
+        RunBackend::InProcess
+    } else {
+        RunBackend::Gateway
+    });
+    if args.ephemeral && backend == RunBackend::Gateway {
+        return Err(
+            "--backend gateway is not implemented for --ephemeral yet; use in-process".to_owned(),
+        );
+    }
+    if !args.ephemeral {
+        if backend == RunBackend::InProcess {
+            return Err("--backend in-process requires --ephemeral".to_owned());
+        }
+        if args.workspace.is_some()
+            || !args.data_mount.is_empty()
+            || args.mount_manifest.is_some()
+            || args.resume_workspace
+            || args.keep_state
+        {
+            return Err("mount and ephemeral-state options require --ephemeral".to_owned());
+        }
     }
     if args.ephemeral && args.session.is_some() {
         return Err(
@@ -319,68 +413,6 @@ fn print_headless_sessions(args: &RunArgs) -> color_eyre::Result<()> {
         println!("{active}\t{timestamp}\t{}\t{title}", session.id);
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn test_args(prompt: Option<&str>, list_sessions: bool) -> RunArgs {
-        RunArgs {
-            prompt: prompt.map(str::to_string),
-            list_sessions,
-            json: false,
-            output_last_message: None,
-            profile: None,
-            agent_config: None,
-            no_memory: false,
-            model: None,
-            timeout: None,
-            session: None,
-            ephemeral: false,
-            manifest: None,
-        }
-    }
-
-    #[test]
-    fn ephemeral_cannot_resume_a_discarded_state_dir() {
-        let mut args = test_args(Some("prompt"), false);
-        args.ephemeral = true;
-        args.session = Some(uuid::Uuid::nil());
-        assert!(validate_run_args(&args).is_err());
-    }
-
-    #[test]
-    fn list_sessions_rejects_run_options() {
-        let mut args = test_args(None, true);
-        args.timeout = Some(1);
-        assert!(validate_run_args(&args).is_err());
-    }
-
-    #[test]
-    fn no_memory_overrides_both_memory_settings() {
-        let mut args = test_args(Some("prompt"), false);
-        args.no_memory = true;
-        let runtime = parse_agent_runtime(&args).unwrap();
-        assert_eq!(runtime.use_memory, Some(false));
-        assert_eq!(runtime.generate_memory, Some(false));
-    }
-
-    #[test]
-    fn agent_config_json_accepts_partial_overrides() {
-        let mut args = test_args(Some("prompt"), false);
-        args.agent_config = Some(r#"{"generate_memory":false}"#.into());
-        let runtime = parse_agent_runtime(&args).unwrap();
-        assert_eq!(runtime.use_memory, None);
-        assert_eq!(runtime.generate_memory, Some(false));
-    }
-
-    #[test]
-    fn agent_config_rejects_unknown_fields() {
-        let mut args = test_args(Some("prompt"), false);
-        args.agent_config = Some(r#"{"typo":true}"#.into());
-        assert!(parse_agent_runtime(&args).is_err());
-    }
 }
 
 /// Assemble the prompt, following codex exec's stdin semantics:
@@ -465,3 +497,7 @@ fn write_last_message(path: Option<&Path>, message: Option<&str>) {
     }
     let _ = std::io::stdout().flush();
 }
+
+#[cfg(test)]
+#[path = "run_tests.rs"]
+mod run_tests;

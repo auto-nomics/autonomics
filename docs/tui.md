@@ -83,6 +83,12 @@ running; `autonomics run` submits one-shot prompts to the same daemon
 (`--ephemeral` keeps the in-process path for benchmark isolation). Full
 protocol and design: `docs/design/gateway-architecture.md`.
 
+For benchmark execution, `--ephemeral` accepts `--data-mount SOURCE=VPATH` and
+`--workspace SOURCE=VPATH`. It creates a per-run state directory and VFS
+manifest while leaving the external workspace in place. The optional isolated
+gateway backend is reserved for a later phase; the current backend is
+`in-process`.
+
 ## KMS TUI
 
 Launch the dedicated knowledge-tree browser using the runtime's default
