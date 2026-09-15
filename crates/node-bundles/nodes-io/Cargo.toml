@@ -29,6 +29,7 @@ mr = { path = "../../../bio_crates/mr" }
 arrow-array.workspace = true
 arrow.workspace = true
 arrow-schema.workspace = true
+arrow-csv.workspace = true
 parquet.workspace = true
 async-trait.workspace = true
 schemars.workspace = true
