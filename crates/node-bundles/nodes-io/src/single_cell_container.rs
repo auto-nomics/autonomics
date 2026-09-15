@@ -21,10 +21,8 @@ use container_runtime::{PanelCache, PodmanConnection, PullPolicy};
 
 pub const SINGLE_CELL_PREPROCESSOR_CONTAINER_KIND: &str = "single_cell_preprocessor_container";
 pub const SINGLE_CELL_PREPROCESSOR_IMAGE_REPOSITORY: &str = "single-cell-preprocessor";
-/// The implementation is not production-ready until this local-development
-/// placeholder is replaced with the digest produced by the smoke image build.
 pub const SINGLE_CELL_PREPROCESSOR_IMAGE_DIGEST: &str =
-    "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+    "sha256:53fd628049d4b115b8fb805edfaf45905d4f5a60f87e4fcd2cf6acf8b378e940";
 
 const DEFAULT_ARTIFACT_PREFIX: &str = "/artifacts/single_cell_preprocessor_container";
 const DEFAULT_TIMEOUT_SECS: u64 = 3600;

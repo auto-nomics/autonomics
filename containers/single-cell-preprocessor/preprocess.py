@@ -69,7 +69,14 @@ def parse_matrix_header(path: Path) -> MatrixHeader:
             raise ContractError(
                 f"{path.name}: unsupported MatrixMarket symmetry `{parts[4]}`"
             )
-        dimensions = handle.readline().split()
+        dimensions: list[str] | None = None
+        for line in handle:
+            if line.lstrip().startswith("%"):
+                continue
+            dimensions = line.split()
+            break
+        if dimensions is None:
+            raise ContractError(f"{path.name}: missing MatrixMarket dimensions")
         if len(dimensions) != 3:
             raise ContractError(f"{path.name}: malformed MatrixMarket dimensions")
         try:
@@ -88,6 +95,7 @@ def read_barcodes(path: Path) -> pd.DataFrame:
         header=None,
         names=["cell_barcode"],
         dtype={"cell_barcode": str},
+        keep_default_na=False,
     )
     if frame.empty:
         raise ContractError(f"{path.name}: barcode file is empty")
@@ -101,13 +109,13 @@ def read_barcodes(path: Path) -> pd.DataFrame:
 
 
 def read_features(path: Path) -> pd.DataFrame:
-    frame = pd.read_csv(
-        path,
-        sep="\t",
-        header=None,
-        names=["gene_id", "gene_symbol", "feature_type"][:3],
-        dtype=str,
-    )
+    frame = pd.read_csv(path, sep="\t", header=None, dtype=str, keep_default_na=False)
+    if frame.shape[1] not in {2, 3}:
+        raise ContractError(
+            f"{path.name}: feature file must have two or three columns, "
+            f"got {frame.shape[1]}"
+        )
+    frame.columns = ["gene_id", "gene_symbol", "feature_type"][: frame.shape[1]]
     if frame.empty:
         raise ContractError(f"{path.name}: feature file is empty")
     if frame.isna().any().any():
@@ -119,10 +127,18 @@ def read_features(path: Path) -> pd.DataFrame:
     return frame
 
 
-def read_metadata(path: Path, barcodes: pd.DataFrame) -> pd.DataFrame:
-    frame = pd.read_csv(path, sep=r"\s+", engine="python", index_col=0, dtype=str)
-    if frame.empty:
+def read_metadata(path: Path, barcodes: pd.DataFrame) -> tuple[pd.DataFrame, bool]:
+    frame = pd.read_csv(
+        path,
+        sep=r"\s+",
+        engine="python",
+        index_col=0,
+        dtype=str,
+        keep_default_na=False,
+    )
+    if frame.empty or frame.shape[1] == 0:
         raise ContractError(f"{path.name}: metadata file has no data rows")
+    frame.index = frame.index.astype(str)
     metadata_ids = frame.index.astype(str)
     if metadata_ids.has_duplicates:
         raise ContractError(f"{path.name}: metadata file contains duplicate cell IDs")
@@ -135,11 +151,12 @@ def read_metadata(path: Path, barcodes: pd.DataFrame) -> pd.DataFrame:
             f"{missing_from_metadata} missing from metadata, "
             f"{missing_from_barcodes} absent from barcodes"
         )
-    return frame.loc[barcode_ids].copy()
+    order_preserved = metadata_ids.equals(pd.Index(barcode_ids))
+    return frame.loc[barcode_ids].copy(), order_preserved
 
 
 def make_adata(metadata: pd.DataFrame, features: pd.DataFrame) -> ad.AnnData:
-    var = features.set_index("gene_symbol", drop=False)
+    var = features.set_index("gene_symbol")
     adata = ad.AnnData(obs=metadata, var=var)
     if adata.var_names.has_duplicates:
         adata.var_names_make_unique()
@@ -153,6 +170,26 @@ def write_report(path: Path, report: dict[str, object]) -> None:
         handle.write("\n")
 
 
+def parse_nonnegative_int(name: str, default: str = "0") -> int:
+    value = os.environ.get(name, default)
+    try:
+        parsed = int(value)
+    except ValueError as error:
+        raise ContractError(f"{name} must be an integer") from error
+    if parsed < 0:
+        raise ContractError(f"{name} cannot be negative")
+    return parsed
+
+
+def parse_bool(name: str, default: str = "false") -> bool:
+    value = os.environ.get(name, default).lower()
+    if value in {"1", "true", "yes"}:
+        return True
+    if value in {"0", "false", "no"}:
+        return False
+    raise ContractError(f"{name} must be a boolean")
+
+
 def run() -> None:
     matrix_path = required_path(MATRIX_ENV)
     barcodes_path = required_path(BARCODES_ENV)
@@ -163,21 +200,19 @@ def run() -> None:
     operation = os.environ.get("AUTONOMICS_SINGLE_CELL_OPERATION", "inspect").lower()
     if operation not in {"inspect", "ingest"}:
         raise ContractError(f"unsupported operation `{operation}`")
-    try:
-        min_genes = int(os.environ.get("AUTONOMICS_SINGLE_CELL_MIN_GENES", "0"))
-        min_cells = int(os.environ.get("AUTONOMICS_SINGLE_CELL_MIN_CELLS", "0"))
-        normalize = os.environ.get(
-            "AUTONOMICS_SINGLE_CELL_NORMALIZE_TOTAL", "false"
-        ).lower() in {"1", "true", "yes"}
-    except ValueError as error:
-        raise ContractError("min_genes and min_cells must be integers") from error
-    if min_genes < 0 or min_cells < 0:
-        raise ContractError("min_genes and min_cells cannot be negative")
+    min_genes = parse_nonnegative_int("AUTONOMICS_SINGLE_CELL_MIN_GENES")
+    min_cells = parse_nonnegative_int("AUTONOMICS_SINGLE_CELL_MIN_CELLS")
+    normalize = parse_bool("AUTONOMICS_SINGLE_CELL_NORMALIZE_TOTAL")
+    if operation == "inspect" and (min_genes > 0 or min_cells > 0 or normalize):
+        raise ContractError(
+            "filtering and normalization require operation `ingest`; "
+            "`inspect` is header-only"
+        )
 
     header = parse_matrix_header(matrix_path)
     barcodes = read_barcodes(barcodes_path)
     features = read_features(features_path)
-    metadata = read_metadata(metadata_path, barcodes)
+    metadata, metadata_order_preserved = read_metadata(metadata_path, barcodes)
     expected_cells = header.columns
     if len(barcodes) != expected_cells:
         raise ContractError(
@@ -207,7 +242,7 @@ def run() -> None:
             "genes": len(features),
             "metadata_rows": len(metadata),
             "cell_ids_aligned": True,
-            "cell_id_order_preserved": metadata.index.equals(barcodes["cell_barcode"]),
+            "cell_id_order_preserved": metadata_order_preserved,
         },
         "qc": {
             "min_genes": min_genes,
@@ -227,7 +262,8 @@ def run() -> None:
             )
         adata = raw_matrix.T.copy()
         adata.obs_names = pd.Index(barcodes["cell_barcode"], name="cell_barcode")
-        adata.var_names = pd.Index(features["gene_symbol"], name="gene_symbol")
+        adata.var = features.set_index("gene_symbol")
+        adata.var.index.name = "gene_symbol"
         if adata.var_names.has_duplicates:
             adata.var_names_make_unique()
         adata.obs = metadata
@@ -237,7 +273,7 @@ def run() -> None:
             sc.pp.filter_genes(adata, min_cells=min_cells)
         if normalize:
             adata.layers["counts"] = adata.X.copy()
-            sc.pp.normalize_total(adata)
+            sc.pp.normalize_total(adata, target_sum=1e4)
             sc.pp.log1p(adata)
         report["matrix"]["expression_loaded"] = True
         report["matrix"]["output_genes"] = adata.n_vars
