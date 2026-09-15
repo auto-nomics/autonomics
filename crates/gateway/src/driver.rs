@@ -169,6 +169,6 @@ mod tests {
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].id, id2);
         cache.remove_agent("/root/a");
-        assert!(!cache.snapshot().contains_key("/root/a"));
+        assert!(cache.snapshot().get("/root/a").is_none());
     }
 }

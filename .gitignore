@@ -1,6 +1,5 @@
 .claude
 .env
-.worktrees
 target
 *.db
 *.db-wal
