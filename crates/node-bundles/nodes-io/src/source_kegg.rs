@@ -1,6 +1,6 @@
 //! KEGG REST source nodes for structured biological identifiers and mappings.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use arrow_array::{Array, RecordBatch, StringArray};
@@ -64,9 +64,10 @@ async fn fetch_relation_pairs(
     target: &str,
     source: &str,
 ) -> Result<Vec<(String, String)>, DagError> {
+    let target = canonical_relation_target(operation, target);
     let pairs = match operation {
-        KeggRelationOperation::Conv => client.conv(target, source).await,
-        KeggRelationOperation::Link => client.link(target, source).await,
+        KeggRelationOperation::Conv => client.conv(&target, source).await,
+        KeggRelationOperation::Link => client.link(&target, source).await,
     }
     .map_err(|error| DagError::Schedule(format!("KEGG relation failed: {error}")))?;
     Ok(pairs
@@ -177,7 +178,8 @@ impl NodeFactory for KeggSearchNodeFactory {
     fn doc(&self) -> &'static str {
         "A zero-input source node for KEGG `find`. Output schema: \
          `id, description`. The query uses native KEGG syntax; quoted phrases \
-         and options such as `formula` are supported."
+         and options such as `formula` are supported. Unlike `genes`, the \
+         `pathway` database does not support exact quoted-phrase matching."
     }
 
     fn spec_schema(&self) -> schemars::Schema {
@@ -265,6 +267,9 @@ pub struct KeggRelationsSpec {
     /// API operation, either `conv` or `link`.
     pub operation: KeggRelationOperation,
     /// Target database, e.g. `pathway`, `ko`, or `ncbi-geneid`.
+    ///
+    /// `link` uses KEGG's full database names. The common abbreviation `rn`
+    /// is accepted as an alias for `reaction`.
     pub target: String,
     /// Source database or selected entries, e.g. `hsa` or `hsa:10458`.
     pub source: String,
@@ -300,7 +305,12 @@ impl NodeFactory for KeggRelationsNodeFactory {
     fn doc(&self) -> &'static str {
         "A structured source/compute node for KEGG `link` and `conv`. It emits \
          `source, target`. Connect an optional DataFrame input and set \
-         `source_column` to constrain a database-wide request to selected IDs."
+         `source_column` to constrain a database-wide request to selected IDs. \
+         For `link`, use full target names such as `pathway`, `reaction`, \
+         `ko`, `compound`, `glycan`, `enzyme`, or an organism code such as \
+         `hsa` or `eco`; `rn` is accepted as an alias for `reaction`, while \
+         returned reaction IDs still use the `rn:` prefix. For `conv`, common \
+         targets include `ncbi-geneid`, `ncbi-proteinid`, and `uniprot`."
     }
 
     fn spec_schema(&self) -> schemars::Schema {
@@ -420,7 +430,7 @@ pub struct KeggGenePathwaysSpec {
     /// Remove the `org:` prefix from gene identifiers.
     #[serde(default = "default_true")]
     pub strip_gene_prefix: bool,
-    /// Include pathway names by making a second KEGG list request.
+    /// Include pathway names and classes by fetching the KEGG pathway hierarchy.
     #[serde(default = "default_true")]
     pub include_pathway_names: bool,
     /// Optional input column used to retain only selected gene IDs.
@@ -466,7 +476,12 @@ impl NodeFactory for KeggGenePathwaysNodeFactory {
          generic `enrichment_ora` annotation input. Output port 1 emits \
          `set_id, set_id_kegg, set_name, set_class` for its metadata input. \
          `pathway_id_style=map` rewrites `hsa00010` to `map00010`; \
-         `strip_gene_prefix=true` turns `hsa:10458` into `10458`."
+         `strip_gene_prefix=true` turns `hsa:10458` into `10458`. The default \
+         `map` style matches `enrichment_ora`'s default excluded broad maps \
+         `map01100`, `map01110`, and `map01120`. With \
+         `include_pathway_names=true`, names and top-level classes come from \
+         the KEGG `br08901` pathway hierarchy; with `false`, both metadata \
+         fields are null."
     }
 
     fn spec_schema(&self) -> schemars::Schema {
@@ -503,6 +518,21 @@ struct PathwayMetadata {
     set_id: String,
     set_id_kegg: String,
     set_name: Option<String>,
+    set_class: Option<String>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct BritePathway {
+    name: String,
+    class: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct KeggBriteNode {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    children: Vec<KeggBriteNode>,
 }
 
 #[async_trait]
@@ -563,19 +593,16 @@ impl DagNode for KeggGenePathwaysNode {
         };
 
         let mut annotations = Vec::with_capacity(pairs.len());
-        let mut metadata = std::collections::BTreeMap::new();
-        let mut pathway_names = std::collections::BTreeMap::new();
+        let mut metadata = BTreeMap::new();
+        let mut pathway_details = BTreeMap::new();
         if self.spec.include_pathway_names {
-            let descriptions =
-                client
-                    .list(&format!("pathway/{organism}"))
-                    .await
-                    .map_err(|error| {
-                        DagError::Schedule(format!("KEGG pathway metadata request failed: {error}"))
-                    })?;
-            for entry in descriptions {
-                pathway_names.insert(entry.id, entry.description);
-            }
+            let hierarchy = client
+                .brite_json::<KeggBriteNode>("br:br08901")
+                .await
+                .map_err(|error| {
+                    DagError::Schedule(format!("KEGG pathway metadata request failed: {error}"))
+                })?;
+            collect_pathway_hierarchy(&hierarchy, &mut pathway_details);
         }
 
         for pair in pairs {
@@ -600,6 +627,7 @@ impl DagNode for KeggGenePathwaysNode {
             }
             let set_id = normalize_pathway_id(&set_id_kegg, self.spec.pathway_id_style);
             let set_id_kegg_for_metadata = set_id_kegg.clone();
+            let pathway_details = pathway_details.get(&pathway_reference_id(&set_id_kegg));
             annotations.push(PathwayAnnotation {
                 gene_id,
                 gene_id_kegg,
@@ -611,7 +639,8 @@ impl DagNode for KeggGenePathwaysNode {
                 .or_insert_with(|| PathwayMetadata {
                     set_id,
                     set_id_kegg: set_id_kegg_for_metadata,
-                    set_name: pathway_names.get(&pair.target).cloned(),
+                    set_name: pathway_details.map(|details| details.name.clone()),
+                    set_class: pathway_details.map(|details| details.class.clone()),
                 });
         }
 
@@ -625,6 +654,55 @@ impl DagNode for KeggGenePathwaysNode {
         let metadata_batch = build_metadata_batch(metadata.into_values().collect())?;
         outputs.insert(1, to_data_frame(&ctx.session(), metadata_batch)?);
         Ok(outputs)
+    }
+}
+
+fn collect_brite_pathways(
+    node: &KeggBriteNode,
+    top_class: Option<&str>,
+    output: &mut BTreeMap<String, BritePathway>,
+) {
+    let top_class = if node.children.is_empty() {
+        top_class
+    } else {
+        top_class.or(Some(node.name.as_str()))
+    };
+    if node.children.is_empty() {
+        if let Some((id, name)) = parse_brite_pathway(&node.name) {
+            output.entry(id).or_insert_with(|| BritePathway {
+                name,
+                class: top_class.unwrap_or_default().trim().to_string(),
+            });
+        }
+        return;
+    }
+
+    for child in &node.children {
+        collect_brite_pathways(child, top_class, output);
+    }
+}
+
+fn collect_pathway_hierarchy(root: &KeggBriteNode, output: &mut BTreeMap<String, BritePathway>) {
+    for category in &root.children {
+        collect_brite_pathways(category, None, output);
+    }
+}
+
+fn parse_brite_pathway(value: &str) -> Option<(String, String)> {
+    let (id, name) = value.trim().split_once(char::is_whitespace)?;
+    let digits = id.strip_prefix("map").unwrap_or(id);
+    if digits.len() == 5 && digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        Some((format!("map{digits}"), name.trim().to_string()))
+    } else {
+        None
+    }
+}
+
+fn pathway_reference_id(value: &str) -> String {
+    let value = value.trim().strip_prefix("path:").unwrap_or(value.trim());
+    match value.find(|character: char| character.is_ascii_digit()) {
+        Some(start) if start > 0 => format!("map{}", &value[start..]),
+        _ => value.to_string(),
     }
 }
 
@@ -678,7 +756,8 @@ fn build_annotation_batch(rows: Vec<PathwayAnnotation>) -> Result<RecordBatch, D
 }
 
 fn build_metadata_batch(rows: Vec<PathwayMetadata>) -> Result<RecordBatch, DagError> {
-    let row_count = rows.len();
+    let names: Vec<_> = rows.iter().map(|row| row.set_name.clone()).collect();
+    let classes: Vec<_> = rows.iter().map(|row| row.set_class.clone()).collect();
     let schema = Arc::new(Schema::new(vec![
         Field::new("set_id", DataType::Utf8, false),
         Field::new("set_id_kegg", DataType::Utf8, false),
@@ -694,8 +773,8 @@ fn build_metadata_batch(rows: Vec<PathwayMetadata>) -> Result<RecordBatch, DagEr
                     .map(|row| Some(row.set_id_kegg.clone()))
                     .collect(),
             ),
-            strings(rows.into_iter().map(|row| row.set_name).collect()),
-            strings(vec![None; row_count]),
+            strings(names),
+            strings(classes),
         ],
     )
     .map_err(|error| {
@@ -703,6 +782,15 @@ fn build_metadata_batch(rows: Vec<PathwayMetadata>) -> Result<RecordBatch, DagEr
             "failed to build KEGG pathway metadata batch: {error}"
         ))
     })
+}
+
+fn canonical_relation_target(operation: KeggRelationOperation, target: &str) -> String {
+    let target = target.trim();
+    if operation == KeggRelationOperation::Link && target.eq_ignore_ascii_case("rn") {
+        "reaction".to_string()
+    } else {
+        target.to_string()
+    }
 }
 
 #[cfg(test)]
@@ -795,8 +883,8 @@ mod tests {
                 "hsa:10458\tpath:hsa04151\nhsa:10458\tpath:hsa04520\n".to_string(),
             ),
             (
-                "text/plain",
-                "path:hsa04151\tPI3K-Akt signaling\npath:hsa04520\tAdherens junction\n".to_string(),
+                "application/json",
+                r#"{"name":"br08901","children":[{"name":"Organismal Systems","children":[{"name":"Signal transduction","children":[{"name":"04151\tPI3K-Akt signaling pathway"}]}]},{"name":"Cellular Processes","children":[{"name":"Cellular community","children":[{"name":"04520\tAdherens junction"}]}]}]}"#.to_string(),
             ),
         ])
         .await;
@@ -833,7 +921,97 @@ mod tests {
         assert_eq!(metadata.num_columns(), 4);
         assert_eq!(utf8(&metadata, 0, 0), "map04151");
         assert_eq!(utf8(&metadata, 1, 0), "hsa04151");
-        assert_eq!(utf8(&metadata, 2, 0), "PI3K-Akt signaling");
+        assert_eq!(utf8(&metadata, 2, 0), "PI3K-Akt signaling pathway");
+        assert_eq!(utf8(&metadata, 3, 0), "Organismal Systems");
+    }
+
+    #[tokio::test]
+    async fn pathway_node_can_omit_pathway_metadata() {
+        let endpoint = spawn_stub(vec![(
+            "text/plain",
+            "hsa:10458\tpath:hsa04151\n".to_string(),
+        )])
+        .await;
+        let ctx = NodeCtx::new(SessionContext::new().runtime_env(), None);
+        let spec = serde_json::json!({
+            "organism": "hsa",
+            "include_pathway_names": false,
+            "endpoint": endpoint,
+            "requests_per_second": 100
+        });
+        let mut node = KeggGenePathwaysNodeFactory
+            .build(spec, ctx.clone())
+            .unwrap();
+        let outputs = node
+            .execute(&ctx, &[], &NodeReporter::noop())
+            .await
+            .unwrap();
+        let metadata = outputs
+            .dataframe(1)
+            .unwrap()
+            .clone()
+            .collect()
+            .await
+            .unwrap()
+            .remove(0);
+        assert_eq!(metadata.num_rows(), 1);
+        assert!(metadata.column(2).is_null(0));
+        assert!(metadata.column(3).is_null(0));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires KEGG network access"]
+    async fn real_kegg_hsa_pathway_metadata_is_complete() {
+        let ctx = NodeCtx::new(SessionContext::new().runtime_env(), None);
+        let spec = serde_json::json!({
+            "organism": "hsa",
+            "requests_per_second": 3
+        });
+        let mut node = KeggGenePathwaysNodeFactory
+            .build(spec, ctx.clone())
+            .unwrap();
+        let outputs = node
+            .execute(&ctx, &[], &NodeReporter::noop())
+            .await
+            .unwrap();
+        let batches = outputs
+            .dataframe(1)
+            .unwrap()
+            .clone()
+            .collect()
+            .await
+            .unwrap();
+        let row_count: usize = batches.iter().map(RecordBatch::num_rows).sum();
+        assert_eq!(row_count, 372);
+
+        let mut checked_example = false;
+        for batch in &batches {
+            let set_ids = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap();
+            let names = batch
+                .column(2)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap();
+            let classes = batch
+                .column(3)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap();
+            for row in 0..batch.num_rows() {
+                assert!(!names.is_null(row));
+                assert!(!classes.is_null(row));
+                if set_ids.value(row) == "map00010" {
+                    assert_eq!(names.value(row), "Glycolysis / Gluconeogenesis");
+                    assert_eq!(classes.value(row), "Metabolism");
+                    checked_example = true;
+                }
+            }
+        }
+        assert!(checked_example);
     }
 
     #[test]
@@ -849,6 +1027,36 @@ mod tests {
         assert_eq!(
             normalize_pathway_id("map00010", KeggPathwayIdStyle::Map),
             "map00010"
+        );
+    }
+
+    #[test]
+    fn maps_reaction_abbreviation_only_for_link() {
+        assert_eq!(
+            canonical_relation_target(KeggRelationOperation::Link, " rn "),
+            "reaction"
+        );
+        assert_eq!(
+            canonical_relation_target(KeggRelationOperation::Conv, "rn"),
+            "rn"
+        );
+    }
+
+    #[test]
+    fn parses_pathway_hierarchy_names_and_top_level_classes() {
+        let hierarchy = serde_json::from_str::<KeggBriteNode>(
+            r#"{"name":"br08901","children":[{"name":"Metabolism","children":[{"name":"Carbohydrate metabolism","children":[{"name":"00010\tGlycolysis / Gluconeogenesis"}]}]}]}"#,
+        )
+        .unwrap();
+        let mut details = BTreeMap::new();
+        collect_pathway_hierarchy(&hierarchy, &mut details);
+
+        assert_eq!(
+            details.get("map00010"),
+            Some(&BritePathway {
+                name: "Glycolysis / Gluconeogenesis".to_string(),
+                class: "Metabolism".to_string()
+            })
         );
     }
 }

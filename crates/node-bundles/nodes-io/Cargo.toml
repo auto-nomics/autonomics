@@ -28,7 +28,6 @@ clinicaltrials = { path = "../../clinicaltrials" }
 mr = { path = "../../../bio_crates/mr" }
 arrow-array.workspace = true
 arrow.workspace = true
-arrow-csv.workspace = true
 arrow-schema.workspace = true
 arrow-csv.workspace = true
 parquet.workspace = true
