@@ -5133,8 +5133,10 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "tokio-util",
+ "toml 1.1.4+spec-1.1.0",
  "tracing",
  "uuid",
+ "vfs",
 ]
 
 [[package]]

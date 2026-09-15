@@ -23,7 +23,9 @@ tracing = { workspace = true }
 tempfile = "3"
 tokio = { workspace = true }
 tokio-util = { version = "0.7", features = ["rt"] }
+toml = { workspace = true }
 uuid = { version = "1.12", features = ["v4", "serde"] }
+vfs = { path = "../vfs" }
 
 [dev-dependencies]
 agentik-sdk = { path = "../agentik-sdk", features = ["test-util"] }
