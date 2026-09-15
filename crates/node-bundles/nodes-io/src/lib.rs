@@ -7,6 +7,7 @@ pub mod dataframe_to_file;
 pub mod file_reference;
 pub mod file_to_dataframe;
 pub mod gcta_container;
+pub mod gmt_import;
 pub mod hdl_l_container;
 pub mod hdl_l_scan_container;
 pub mod hyprcoloc_container;
@@ -84,6 +85,7 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(bundle_source::BundleSourceNodeFactory {}));
         registry.register(Box::new(file_reference::FileReferenceNodeFactory {}));
         registry.register(Box::new(file_to_dataframe::FileToDataFrameNodeFactory {}));
+        registry.register(Box::new(gmt_import::GmtImportNodeFactory {}));
         registry.register(Box::new(dataframe_to_file::DataFrameToFileNodeFactory {}));
         registry.register(Box::new(radiomics::RadiomicsManifestNodeFactory));
         registry.register(Box::new(radiomics::RadiomicsStageFileSetNodeFactory));
