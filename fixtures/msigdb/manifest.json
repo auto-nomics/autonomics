@@ -1,0 +1,26 @@
+{
+  "release": "2025.1.Hs",
+  "source": "https://data.broadinstitute.org/gsea-msigdb/msigdb/release/2025.1.Hs/",
+  "files": {
+    "h.all.v2025.1.Hs.symbols.gmt": {
+      "sha256": "f22066af72e215ccb7b89d88e492c07e1eef17534c2ca7b0f9902cfecbbdd8e9",
+      "size": 48689,
+      "sets": 50,
+      "gene_annotations": 7322
+    },
+    "c2.cp.v2025.1.Hs.symbols.gmt": {
+      "sha256": "906012c69871393ebe45ade1f182a2024a59bdf10ddea94082dfd82285a157e1",
+      "size": 1626547,
+      "sets": 4023,
+      "gene_annotations": 173410
+    },
+    "hallmark_minimal.gmt": {
+      "sha256": "b10418a19d3368df7b1481fefbf215968844c5ea9112570d43e0a5402739501e",
+      "size": 495,
+      "sets": 3,
+      "gene_annotations": 30,
+      "derived": true,
+      "derivation": "first 3 Hallmark sets of h.all.v2025.1.Hs.symbols.gmt, trimmed to 10 genes each"
+    }
+  }
+}
