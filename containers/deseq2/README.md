@@ -1,8 +1,8 @@
 # DESeq2 differential-expression node
 
-This directory contains the Stage 0 design and Stage 1 implementation for a
-reusable, Podman-backed differential-expression node. The statistical engine is
-the official R `DESeq2` package; this repository does not port the
+This directory contains the complete Stage 0-3 implementation for a reusable,
+Podman-backed differential-expression node. The statistical engine is the
+official R `DESeq2` package; this repository does not port the
 negative-binomial model to Rust.
 
 The first version targets bulk RNA-seq raw count matrices. Normalized
@@ -17,6 +17,7 @@ containers/deseq2/
   Dockerfile
   deseq2_runner.R
   test_deseq2.sh
+  test_deseq2_data_boundary.sh
   fixtures/
 ```
 
@@ -81,9 +82,23 @@ observation per estimated coefficient. Categorical covariates become factors;
 numeric covariates remain numeric. A design that is rank deficient is rejected
 with a container diagnostic rather than silently dropped.
 
+## Thin Wrapper
+
+The registered factory is
+`crates/node-bundles/nodes-io/src/deseq2_container.rs`. It delegates execution
+to `ContainerCommandNode`, validates parameter names and ranges, constructs the
+environment contract for the image runner, and declares the five outputs. It
+contains no DESeq2 numerical logic and no inline R model code.
+
+The wrapper always requests an isolated network, a read-only root filesystem,
+2 CPUs, a 4 GiB memory limit, a 256-process limit, and no reference panels. The
+registry test verifies that the node is discoverable through the IO plugin, and
+the fake-runtime integration test verifies both staged inputs and all five VFS
+artifacts.
+
 ## Outputs
 
-The Stage 3 `nodes-io` wrapper will declare five File artifacts:
+The `nodes-io` wrapper declares five File artifacts:
 
 1. `results.tsv`: `gene_id`, `baseMean`, `log2FoldChange`, `lfcSE`, `stat`,
    `pvalue`, and `padj` from `DESeq2::results()`.
@@ -116,12 +131,21 @@ The image contains only R, DESeq2, and its runtime dependencies. Count
 matrices, metadata, annotations, and credentials stay outside the image. No
 reference panel or genome build is required for this analysis.
 
-The runner should read input and output locations from the runtime environment
+The runner reads input and output locations from the runtime environment
 variables `AUTONOMICS_INPUT0`, `AUTONOMICS_INPUT1`, and `AUTONOMICS_OUTPUT0`
-through `AUTONOMICS_OUTPUT4`. It runs as UID/GID 1000 with isolated network and
-a read-only root filesystem. The local test image has not yet been published;
-the eventual Rust wrapper will pin an immutable registry digest only after the
-exact Stage 1 image is pushed.
+Direct image invocation defaults to UID/GID 1000; the generic DAG runtime maps
+the non-root control-process UID/GID and runs with isolated networking and a
+read-only root filesystem.
+
+Published immutable image:
+
+```text
+$ACR_ENDPOINT/autonomics/deseq2@sha256:8b2e2a78d87293e6cae6dbed2e283dff1dd8461a7f993cb347ca9810698b2b3e
+```
+
+The tag `$ACR_ENDPOINT/autonomics/deseq2:1.50.2` resolves to this digest. The
+thin wrapper pins the digest and resolves the registry host from `ACR_ENDPOINT`,
+matching the other official-tool container nodes.
 
 ## Data-Package Decision
 
@@ -136,8 +160,8 @@ The boundary is checked by:
 containers/deseq2/test_deseq2_data_boundary.sh
 ```
 
-The Stage 3 wrapper must therefore assert an empty `panel_bundles` list and an
-empty `panels` list in its generated `ContainerCommandSpec`.
+The wrapper asserts an empty `panel_bundles` list and an empty `panels` list in
+its generated `ContainerCommandSpec`.
 
 ## Test Data
 
@@ -172,15 +196,34 @@ recomputes DESeq2 median-of-ratios size factors and normalized counts, checks
 RDS is a `DESeqDataSet`, and rejects mismatched sample IDs, non-integer counts,
 and rank-deficient designs.
 
+Run the Rust contract, registry, fake-runtime, and real Podman tests:
+
+```sh
+cargo test -p nodes-io deseq2_container
+cargo test -p nodes-io stages_two_inputs_and_publishes_five_outputs
+cargo test -p nodes-io real_official_deseq2_runs_in_podman_and_matches_baseline -- --ignored
+```
+
+For a localhost-image real Podman test, first materialize the published digest
+under the equivalently named local repository:
+
+```sh
+podman pull "$ACR_ENDPOINT/autonomics/deseq2@sha256:8b2e2a78d87293e6cae6dbed2e283dff1dd8461a7f993cb347ca9810698b2b3e"
+podman tag "$ACR_ENDPOINT/autonomics/deseq2@sha256:8b2e2a78d87293e6cae6dbed2e283dff1dd8461a7f993cb347ca9810698b2b3e" \
+  localhost/autonomics/deseq2:1.50.2
+AUTONOMICS_DESEQ2_IMAGE_ENDPOINT=localhost \
+  cargo test -p nodes-io real_official_deseq2_runs_in_podman_and_matches_baseline -- --ignored
+```
+
 ## Acceptance Criteria
 
-1. The fixture script passes.
-2. The pinned image builds and reports `DESeq2 1.50.2`.
-3. The pasilla command completes twice with identical result checksums.
-4. The result table retains all 14,599 genes and the expected DESeq2 columns.
-5. Unit tests verify the generated `ContainerCommandSpec`, input staging, and
+1. [x] The fixture script passes.
+2. [x] The pinned image builds and reports `DESeq2 1.50.2`.
+3. [x] The pasilla command completes twice with identical result checksums.
+4. [x] The result table retains all 14,599 genes and the expected DESeq2 columns.
+5. [x] Unit tests verify the generated `ContainerCommandSpec`, input staging, and
    output declarations.
-6. A registry test proves the thin wrapper builds with no panel bundles.
-7. A real Podman end-to-end test publishes all five outputs through VFS.
-8. The recorded numerical baseline matches the official-image repeated run
+6. [x] A registry test proves the thin wrapper builds with no panel bundles.
+7. [x] A real Podman end-to-end test publishes all five outputs through VFS.
+8. [x] The recorded numerical baseline matches the official-image repeated run
    before the wrapper is registered as a reusable node kind.

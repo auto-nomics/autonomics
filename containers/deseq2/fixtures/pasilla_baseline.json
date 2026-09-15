@@ -5,7 +5,8 @@
     "r": "4.5.3",
     "bioconductor": "3.22",
     "deseq2": "1.50.2",
-    "local_image_id": "4d408f9c3820caa850d3095a4ee00c2bcfa26455095db66c6d23fe5ef7fdf507"
+    "local_image_id": "4d408f9c3820caa850d3095a4ee00c2bcfa26455095db66c6d23fe5ef7fdf507",
+    "published_manifest_digest": "sha256:8b2e2a78d87293e6cae6dbed2e283dff1dd8461a7f993cb347ca9810698b2b3e"
   },
   "analysis": {
     "design": "~ type + condition",

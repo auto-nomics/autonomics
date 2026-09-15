@@ -4,6 +4,7 @@ pub mod bundle_source;
 pub mod coloc_abf_container;
 pub mod container_command;
 pub mod dataframe_to_file;
+pub mod deseq2_container;
 pub mod file_reference;
 pub mod file_to_dataframe;
 pub mod gcta_container;
@@ -221,6 +222,12 @@ impl NodePlugin for Plugin {
             ),
         ));
         registry.register(Box::new(
+            deseq2_container::Deseq2DeContainerNodeFactory::new(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
+        registry.register(Box::new(
             hyprcoloc_container::HyPrColocContainerNodeFactory::new(
                 Arc::clone(&self.container_execution.runtime),
                 Arc::clone(&self.container_execution.panel_cache),
@@ -375,5 +382,28 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(ReactomeAnalysisNodeFactory {}));
         registry.register(Box::new(ReactomeParticipantsNodeFactory {}));
         registry.register_plugin(&StringPlugin);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plugin_registers_the_deseq2_container_node() {
+        let ctx = dag_core::registry::NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        );
+        let mut registry = NodeRegistry::new(ctx);
+        registry.register_plugin(&Plugin::new(Arc::new(
+            container_runtime::ContainerExecutionInfra::from_env(),
+        )));
+        assert!(
+            registry
+                .list_nodes()
+                .iter()
+                .any(|node| node.kind == deseq2_container::DESEQ2_DE_CONTAINER_KIND)
+        );
     }
 }
