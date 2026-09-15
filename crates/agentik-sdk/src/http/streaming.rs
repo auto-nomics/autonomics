@@ -8,6 +8,7 @@ use pin_project::pin_project;
 use reqwest::Response;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context, Poll};
 
 use crate::types::{AnthropicError, MessageStreamEvent, Result};
@@ -20,6 +21,12 @@ pub struct StreamConfig {
     pub buffer_size: usize,
     /// Timeout for individual events (in seconds)
     pub event_timeout: Option<u64>,
+    /// Inactivity window once `MessageStart` has been observed (in
+    /// seconds). A reconnect at that point would restart generation from
+    /// scratch, and reasoning models can think for many minutes before
+    /// the next canonical event, so this window is deliberately much
+    /// larger than `event_timeout`. Defaults to 900s.
+    pub stall_timeout: Option<u64>,
     /// Whether to retry on connection errors
     pub retry_on_error: bool,
     /// Maximum retry attempts
@@ -31,6 +38,7 @@ impl Default for StreamConfig {
         Self {
             buffer_size: 1000,
             event_timeout: Some(300),
+            stall_timeout: Some(900),
             retry_on_error: true,
             max_retries: Some(3),
         }
@@ -55,6 +63,13 @@ pub struct HttpStreamClient {
 
     /// Request ID from response headers
     request_id: Option<String>,
+
+    /// Count of raw SSE items parsed off the wire — including events the
+    /// wire adapter skipped (they produce no stream item, but prove the
+    /// connection is alive). Strictly increasing, so the idle watchdog
+    /// can snapshot it and detect "something arrived" without touching
+    /// any clock.
+    parsed_events: Arc<AtomicU64>,
 }
 
 impl HttpStreamClient {
@@ -74,13 +89,15 @@ impl HttpStreamClient {
             .map(|s| s.to_string());
 
         // Convert the HTTP response into an SSE stream
-        let event_stream = Self::create_event_stream(response, wire).await?;
+        let parsed_events = Arc::new(AtomicU64::new(0));
+        let event_stream = Self::create_event_stream(response, wire, parsed_events.clone()).await?;
 
         Ok(Self {
             event_stream: Box::pin(event_stream),
             config,
             ended: false,
             request_id,
+            parsed_events,
         })
     }
 
@@ -92,6 +109,7 @@ impl HttpStreamClient {
     async fn create_event_stream(
         response: Response,
         wire: Arc<dyn WireProtocol>,
+        parsed_events: Arc<AtomicU64>,
     ) -> Result<impl Stream<Item = Result<MessageStreamEvent>>> {
         // Check that we got a successful response
         if !response.status().is_success() {
@@ -154,6 +172,14 @@ impl HttpStreamClient {
         let sse_stream = byte_stream
             .eventsource()
             .flat_map(move |result| {
+                // Any raw SSE item — even one the adapter will skip —
+                // proves the connection is alive. Skipped events yield
+                // no stream item, so this count is the only trace they
+                // leave; the idle watchdog reads it to tell a
+                // quiet-but-live stream from a dead one. Relaxed
+                // ordering suffices: it is a pure counter with no other
+                // data hitched to it.
+                parsed_events.fetch_add(1, Ordering::Relaxed);
                 // The eventsource-stream crate wraps every body error as
                 // `Transport error: ...` — losing the original reqwest
                 // error type and source chain. Unwrap it here so we can
@@ -207,6 +233,13 @@ impl HttpStreamClient {
     /// Get the request ID from the response headers.
     pub fn request_id(&self) -> Option<&str> {
         self.request_id.as_deref()
+    }
+
+    /// Count of raw SSE items parsed off the wire so far (skipped
+    /// events included). Strictly increasing — incremented in
+    /// [`Self::create_event_stream`] for every parsed item.
+    pub fn parsed_event_count(&self) -> u64 {
+        self.parsed_events.load(Ordering::Relaxed)
     }
 
     /// Get the stream configuration.
@@ -462,6 +495,7 @@ mod tests {
         let config = StreamConfig::default();
         assert_eq!(config.buffer_size, 1000);
         assert_eq!(config.event_timeout, Some(300));
+        assert_eq!(config.stall_timeout, Some(900));
         assert!(config.retry_on_error);
         assert_eq!(config.max_retries, Some(3));
     }
