@@ -173,6 +173,8 @@ cargo run -p autonomics -- bib list
 
 TUI 启动时会在 `127.0.0.1:8765` 提供本地文献前端和 `/api/v1` API。地址可用 `AUTONOMICS_HTTP_API_ADDR` 覆盖。若暴露到回环地址之外，应设置 `AUTONOMICS_HTTP_API_TOKEN`，让 API 路由要求 Bearer 认证。
 
+Gateway Swagger UI 位于 `http://127.0.0.1:8765/swagger-ui`，OpenAPI JSON 位于 `/api/v1/api-docs/openapi.json`。文档元数据可匿名读取；在 Swagger UI 的 Authorize 中填入 gateway Bearer token 后才能执行受保护的业务请求。
+
 ```bash
 curl http://127.0.0.1:8765/api/health
 curl 'http://127.0.0.1:8765/api/v1/bib/articles?query=gwas&limit=10'

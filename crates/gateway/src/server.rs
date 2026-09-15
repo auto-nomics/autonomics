@@ -23,6 +23,9 @@ use runtime::SharedInfra;
 use runtime::control::{AgentInfo, HostControl};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
+use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityRequirement, SecurityScheme};
+use utoipa::{Modify, OpenApi};
+use utoipa_swagger_ui::SwaggerUi;
 use uuid::Uuid;
 
 use crate::driver::SessionCache;
@@ -144,7 +147,9 @@ pub fn api_router(state: GatewayState) -> Router {
 /// token when provided, else the generated token file). The bib module
 /// keeps its documented contract — open on loopback unless
 /// `AUTONOMICS_HTTP_API_TOKEN` is set, in which case that env token also
-/// guards it.
+/// guards it. Swagger UI and its OpenAPI document are metadata-only and
+/// intentionally browser-loadable; the operations they describe still
+/// require the gateway bearer token.
 pub fn router_with_bib(
     state: GatewayState,
     gateway_token: String,
@@ -155,6 +160,8 @@ pub fn router_with_bib(
         Arc::new(gateway_token),
         bearer_auth,
     ));
+    let docs =
+        SwaggerUi::new("/swagger-ui").url("/api/v1/api-docs/openapi.json", ApiDoc::openapi());
     let bib = tui_http::bib::router(bib_shared);
     let bib = match env_token.filter(|t| !t.trim().is_empty()) {
         Some(token) => bib.layer(axum::middleware::from_fn_with_state(
@@ -164,6 +171,7 @@ pub fn router_with_bib(
         None => bib,
     };
     Router::new()
+        .merge(docs)
         .nest("/api/v1/bib", bib)
         .nest("/api/v1", api)
         .merge(tui_http::frontend_router())
@@ -173,6 +181,127 @@ pub fn router_with_bib(
 
 async fn health() -> Json<serde_json::Value> {
     Json(json!({ "status": "ok", "gateway": true }))
+}
+
+#[derive(OpenApi)]
+#[openapi(
+    info(
+        title = "Autonomics Gateway API",
+        version = env!("CARGO_PKG_VERSION"),
+        description = "Control-plane API for the resident Autonomics daemon.",
+    ),
+    paths(
+        gateway_status,
+        gateway_shutdown,
+        get_state,
+        get_profiles,
+        get_events,
+        list_agents,
+        spawn_agent,
+        deliver_message,
+        cancel_agent,
+        compact_agent,
+        shutdown_agent,
+        get_agent_model,
+        set_agent_model,
+        get_agent_config,
+        set_agent_config,
+        get_agent_dag,
+        request_session_list,
+        create_session,
+        activate_session,
+        close_session,
+        rename_session,
+        list_storage_agents,
+        rename_storage_agent,
+        delete_storage_agent,
+        list_stored_sessions,
+        get_history,
+        get_plan,
+        get_model_config,
+        put_provider,
+        put_active_model,
+        chatgpt_login,
+        chatgpt_refresh,
+        fetch_catalog,
+        get_settings,
+        put_setting,
+    ),
+    components(schemas(
+        GatewayStatus,
+        StateSnapshot,
+        SpawnAgentRequest,
+        SpawnAgentResponse,
+        DeliverMessageRequest,
+        SetAgentModelRequest,
+        AgentModelInfoView,
+        AgentRuntimeConfigView,
+        SetAgentRuntimeConfigRequest,
+        StoredSession,
+        CreateSessionRequest,
+        RenameSessionRequest,
+        RenameAgentRequest,
+        SaveProviderRequest,
+        SetActiveModelRequest,
+        FetchCatalogRequest,
+        ChatgptLoginStart,
+        ChatgptRefreshResponse,
+        SettingsMap,
+        PutSettingRequest,
+    )),
+    tags(
+        (name = "gateway", description = "Daemon lifecycle and health"),
+        (name = "hydration", description = "Frontend state bootstrap and SSE"),
+        (name = "agents", description = "Live agent control"),
+        (name = "sessions", description = "Agent session control"),
+        (name = "storage", description = "Persisted agents, sessions, and history"),
+        (name = "model-config", description = "Model providers and active model"),
+        (name = "settings", description = "Display settings"),
+    ),
+    modifiers(&BearerSecurityAddon)
+)]
+struct ApiDoc;
+
+struct BearerSecurityAddon;
+
+impl Modify for BearerSecurityAddon {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        let security = vec![SecurityRequirement::new(
+            "bearer_auth",
+            Vec::<String>::new(),
+        )];
+        for path_item in openapi.paths.paths.values_mut() {
+            for operation in [
+                &mut path_item.get,
+                &mut path_item.put,
+                &mut path_item.post,
+                &mut path_item.delete,
+                &mut path_item.options,
+                &mut path_item.head,
+                &mut path_item.patch,
+                &mut path_item.trace,
+            ]
+            .into_iter()
+            .flatten()
+            {
+                operation.security = Some(security.clone());
+            }
+        }
+        let components = openapi.components.get_or_insert_with(Default::default);
+        components.add_security_scheme(
+            "bearer_auth",
+            SecurityScheme::Http(
+                HttpBuilder::new()
+                    .scheme(HttpAuthScheme::Bearer)
+                    .bearer_format("opaque")
+                    .description(Some(
+                    "Gateway bearer token. The daemon writes it to gateway.token unless AUTONOMICS_HTTP_API_TOKEN is set."
+                        .to_string(),
+                    ))
+                    .build(),
+            ),
+        );
+    }
 }
 
 async fn bearer_auth(
@@ -211,6 +340,7 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
 
 // ── daemon lifecycle ─────────────────────────────────────────────────
 
+#[utoipa::path(get, path = "/api/v1/gateway/status", tag = "gateway", responses((status = 200, body = GatewayStatus)))]
 async fn gateway_status(State(state): State<GatewayState>) -> Json<GatewayStatus> {
     Json(GatewayStatus {
         pid: std::process::id(),
@@ -221,6 +351,7 @@ async fn gateway_status(State(state): State<GatewayState>) -> Json<GatewayStatus
     })
 }
 
+#[utoipa::path(post, path = "/api/v1/gateway/shutdown", tag = "gateway", responses((status = 202, description = "Shutdown requested")))]
 async fn gateway_shutdown(State(state): State<GatewayState>) -> StatusCode {
     state.shutdown.cancel();
     StatusCode::ACCEPTED
@@ -231,11 +362,14 @@ async fn api_index() -> Json<serde_json::Value> {
         "name": "autonomics-gateway",
         "version": 1,
         "modules": ["gateway", "agents", "sessions", "storage", "model-config", "bib"],
+        "swagger_url": "/swagger-ui",
+        "openapi_url": "/api/v1/api-docs/openapi.json",
     }))
 }
 
 // ── hydration ────────────────────────────────────────────────────────
 
+#[utoipa::path(get, path = "/api/v1/state", tag = "hydration", responses((status = 200, body = StateSnapshot)))]
 async fn get_state(State(state): State<GatewayState>) -> GatewayResult<Json<StateSnapshot>> {
     let models = state.models.clone();
     let catalog = tokio::task::block_in_place(|| models.catalog())
@@ -267,12 +401,14 @@ async fn get_state(State(state): State<GatewayState>) -> GatewayResult<Json<Stat
     }))
 }
 
+#[utoipa::path(get, path = "/api/v1/profiles", tag = "hydration", responses((status = 200, body = Object)))]
 async fn get_profiles(State(state): State<GatewayState>) -> Json<Vec<agentik_core::AgentProfile>> {
     Json((*state.profiles).clone())
 }
 
 // ── agents ───────────────────────────────────────────────────────────
 
+#[utoipa::path(get, path = "/api/v1/agents", tag = "agents", responses((status = 200, body = Object)))]
 async fn list_agents(State(state): State<GatewayState>) -> Json<Vec<AgentInfo>> {
     Json(
         state
@@ -284,6 +420,13 @@ async fn list_agents(State(state): State<GatewayState>) -> Json<Vec<AgentInfo>> 
     )
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/agents",
+    tag = "agents",
+    request_body = SpawnAgentRequest,
+    responses((status = 200, body = SpawnAgentResponse), (status = 409, description = "Agent name conflict or no model configured"))
+)]
 async fn spawn_agent(
     State(state): State<GatewayState>,
     Json(req): Json<SpawnAgentRequest>,
@@ -326,6 +469,13 @@ async fn spawn_agent(
 
 /// Deliver a user message (fire-and-forget: 202; the reply stream is the
 /// SSE event channel, same contract the TUI drives today).
+#[utoipa::path(
+    post,
+    path = "/api/v1/agents/{name}/messages",
+    tag = "agents",
+    request_body = DeliverMessageRequest,
+    responses((status = 202, description = "Message accepted"))
+)]
 async fn deliver_message(
     State(state): State<GatewayState>,
     Path(name): Path<String>,
@@ -335,21 +485,25 @@ async fn deliver_message(
     StatusCode::ACCEPTED
 }
 
+#[utoipa::path(post, path = "/api/v1/agents/{name}/cancel", tag = "agents", responses((status = 202, description = "Cancel requested")))]
 async fn cancel_agent(State(state): State<GatewayState>, Path(name): Path<String>) -> StatusCode {
     state.control.cancel_agent(&name);
     StatusCode::ACCEPTED
 }
 
+#[utoipa::path(post, path = "/api/v1/agents/{name}/compact", tag = "agents", responses((status = 202, description = "Compaction requested")))]
 async fn compact_agent(State(state): State<GatewayState>, Path(name): Path<String>) -> StatusCode {
     state.control.compact_agent(&name);
     StatusCode::ACCEPTED
 }
 
+#[utoipa::path(post, path = "/api/v1/agents/{name}/shutdown", tag = "agents", responses((status = 202, description = "Shutdown requested")))]
 async fn shutdown_agent(State(state): State<GatewayState>, Path(name): Path<String>) -> StatusCode {
     state.control.shutdown_agent(&name);
     StatusCode::ACCEPTED
 }
 
+#[utoipa::path(get, path = "/api/v1/agents/{name}/model", tag = "agents", responses((status = 200, body = AgentModelInfoView), (status = 404, description = "Agent not found")))]
 async fn get_agent_model(
     State(state): State<GatewayState>,
     Path(name): Path<String>,
@@ -366,6 +520,7 @@ async fn get_agent_model(
 
 /// Hot-swap an agent's model and persist the preference in its stored
 /// record (mirrors the TUI's `set_agent_model` + `persist_agent_model`).
+#[utoipa::path(put, path = "/api/v1/agents/{name}/model", tag = "agents", request_body = SetAgentModelRequest, responses((status = 202, description = "Model updated"), (status = 400, description = "Model could not be resolved")))]
 async fn set_agent_model(
     State(state): State<GatewayState>,
     Path(name): Path<String>,
@@ -399,6 +554,7 @@ async fn set_agent_model(
     Ok(StatusCode::ACCEPTED)
 }
 
+#[utoipa::path(get, path = "/api/v1/agents/{name}/dag", tag = "agents", responses((status = 200, body = Object), (status = 500, description = "DAG snapshot failed")))]
 async fn get_agent_dag(
     State(state): State<GatewayState>,
     Path(name): Path<String>,
@@ -412,6 +568,7 @@ async fn get_agent_dag(
     Ok(Json(snapshot))
 }
 
+#[utoipa::path(get, path = "/api/v1/agents/{name}/config", tag = "agents", responses((status = 200, body = AgentRuntimeConfigView), (status = 404, description = "Agent not found")))]
 async fn get_agent_config(
     State(state): State<GatewayState>,
     Path(name): Path<String>,
@@ -440,6 +597,7 @@ async fn get_agent_config(
     }))
 }
 
+#[utoipa::path(put, path = "/api/v1/agents/{name}/config", tag = "agents", request_body = SetAgentRuntimeConfigRequest, responses((status = 200, body = AgentRuntimeConfigView), (status = 400, description = "Invalid agent configuration")))]
 async fn set_agent_config(
     State(state): State<GatewayState>,
     Path(name): Path<String>,
@@ -480,6 +638,7 @@ async fn set_agent_config(
 /// Fire a `ListSessions` at the agent; the reply arrives as a
 /// `SessionList` agent frame on the event stream (and folds into the
 /// driver's session cache for future `GET /state` calls).
+#[utoipa::path(get, path = "/api/v1/agents/{name}/sessions", tag = "sessions", responses((status = 202, description = "Session-list request sent")))]
 async fn request_session_list(
     State(state): State<GatewayState>,
     Path(name): Path<String>,
@@ -488,6 +647,7 @@ async fn request_session_list(
     StatusCode::ACCEPTED
 }
 
+#[utoipa::path(post, path = "/api/v1/agents/{name}/sessions", tag = "sessions", request_body = CreateSessionRequest, responses((status = 202, description = "Session creation accepted")))]
 async fn create_session(
     State(state): State<GatewayState>,
     Path(name): Path<String>,
@@ -499,6 +659,7 @@ async fn create_session(
     StatusCode::ACCEPTED
 }
 
+#[utoipa::path(post, path = "/api/v1/agents/{name}/sessions/{id}/activate", tag = "sessions", responses((status = 202, description = "Session activation requested")))]
 async fn activate_session(
     State(state): State<GatewayState>,
     Path((name, id)): Path<(String, Uuid)>,
@@ -507,6 +668,7 @@ async fn activate_session(
     StatusCode::ACCEPTED
 }
 
+#[utoipa::path(post, path = "/api/v1/agents/{name}/sessions/{id}/close", tag = "sessions", responses((status = 202, description = "Session close requested")))]
 async fn close_session(
     State(state): State<GatewayState>,
     Path((name, id)): Path<(String, Uuid)>,
@@ -515,6 +677,7 @@ async fn close_session(
     StatusCode::ACCEPTED
 }
 
+#[utoipa::path(patch, path = "/api/v1/agents/{name}/sessions/{id}/title", tag = "sessions", request_body = RenameSessionRequest, responses((status = 202, description = "Session rename requested")))]
 async fn rename_session(
     State(state): State<GatewayState>,
     Path((name, id)): Path<(String, Uuid)>,
@@ -526,6 +689,7 @@ async fn rename_session(
 
 // ── storage ──────────────────────────────────────────────────────────
 
+#[utoipa::path(get, path = "/api/v1/storage/agents", tag = "storage", responses((status = 200, body = Object), (status = 500, description = "Storage query failed")))]
 async fn list_storage_agents(
     State(state): State<GatewayState>,
 ) -> GatewayResult<Json<Vec<agentik_core::storage::AgentRecord>>> {
@@ -537,6 +701,7 @@ async fn list_storage_agents(
     Ok(Json(records))
 }
 
+#[utoipa::path(delete, path = "/api/v1/storage/agents/{id}", tag = "storage", responses((status = 204, description = "Agent deleted"), (status = 500, description = "Storage delete failed")))]
 async fn delete_storage_agent(
     State(state): State<GatewayState>,
     Path(id): Path<Uuid>,
@@ -550,6 +715,7 @@ async fn delete_storage_agent(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[utoipa::path(patch, path = "/api/v1/storage/agents/{id}", tag = "storage", request_body = RenameAgentRequest, responses((status = 204, description = "Agent renamed"), (status = 404, description = "Agent not found")))]
 async fn rename_storage_agent(
     State(state): State<GatewayState>,
     Path(id): Path<Uuid>,
@@ -572,6 +738,7 @@ async fn rename_storage_agent(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[utoipa::path(get, path = "/api/v1/storage/agents/{id}/sessions", tag = "storage", responses((status = 200, body = [StoredSession]), (status = 500, description = "Storage query failed")))]
 async fn list_stored_sessions(
     State(state): State<GatewayState>,
     Path(id): Path<Uuid>,
@@ -599,6 +766,7 @@ async fn list_stored_sessions(
 /// Merged session history exactly as the TUI built it in-process: the
 /// immutable transcript first, then legacy compacted summaries (only when
 /// the transcript is empty), then any live rows not yet archived.
+#[utoipa::path(get, path = "/api/v1/agents/{agent_id}/sessions/{session_id}/history", tag = "storage", responses((status = 200, body = Object)))]
 async fn get_history(
     State(state): State<GatewayState>,
     Path((agent_id, session_id)): Path<(Uuid, Uuid)>,
@@ -642,6 +810,7 @@ async fn get_history(
     Json(transcript)
 }
 
+#[utoipa::path(get, path = "/api/v1/agents/{agent_id}/plan", tag = "storage", responses((status = 200, body = Object)))]
 async fn get_plan(
     State(state): State<GatewayState>,
     Path(agent_id): Path<Uuid>,
@@ -657,6 +826,7 @@ async fn get_plan(
 
 // ── model config ─────────────────────────────────────────────────────
 
+#[utoipa::path(get, path = "/api/v1/model-config", tag = "model-config", responses((status = 200, body = ModelCatalog), (status = 500, description = "Catalog read failed")))]
 async fn get_model_config(State(state): State<GatewayState>) -> GatewayResult<Json<ModelCatalog>> {
     let models = state.models.clone();
     let catalog = tokio::task::block_in_place(|| models.catalog())
@@ -664,6 +834,7 @@ async fn get_model_config(State(state): State<GatewayState>) -> GatewayResult<Js
     Ok(Json(catalog))
 }
 
+#[utoipa::path(put, path = "/api/v1/model-config/provider", tag = "model-config", request_body = SaveProviderRequest, responses((status = 204, description = "Provider saved"), (status = 500, description = "Provider save failed")))]
 async fn put_provider(
     State(state): State<GatewayState>,
     Json(req): Json<SaveProviderRequest>,
@@ -674,6 +845,7 @@ async fn put_provider(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[utoipa::path(put, path = "/api/v1/model-config/active-model", tag = "model-config", request_body = SetActiveModelRequest, responses((status = 204, description = "Active model set"), (status = 400, description = "Model could not be resolved")))]
 async fn put_active_model(
     State(state): State<GatewayState>,
     Json(req): Json<SetActiveModelRequest>,
@@ -687,6 +859,7 @@ async fn put_active_model(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[utoipa::path(post, path = "/api/v1/model-config/chatgpt/login", tag = "model-config", responses((status = 200, body = ChatgptLoginStart), (status = 400, description = "Login could not start")))]
 async fn chatgpt_login(
     State(state): State<GatewayState>,
 ) -> GatewayResult<Json<ChatgptLoginStart>> {
@@ -697,6 +870,7 @@ async fn chatgpt_login(
     Ok(Json(ChatgptLoginStart { url }))
 }
 
+#[utoipa::path(post, path = "/api/v1/model-config/chatgpt/refresh", tag = "model-config", responses((status = 200, body = ChatgptRefreshResponse), (status = 400, description = "Refresh failed")))]
 async fn chatgpt_refresh(
     State(state): State<GatewayState>,
 ) -> GatewayResult<Json<ChatgptRefreshResponse>> {
@@ -706,6 +880,7 @@ async fn chatgpt_refresh(
     Ok(Json(ChatgptRefreshResponse { refreshed }))
 }
 
+#[utoipa::path(post, path = "/api/v1/model-config/providers/{name}/catalog", tag = "model-config", request_body = FetchCatalogRequest, responses((status = 202, description = "Catalog fetch started"), (status = 404, description = "Provider does not support remote catalogs")))]
 async fn fetch_catalog(
     State(state): State<GatewayState>,
     Path(name): Path<String>,
@@ -770,6 +945,7 @@ async fn fetch_catalog(
 
 // ── settings ─────────────────────────────────────────────────────────
 
+#[utoipa::path(get, path = "/api/v1/settings", tag = "settings", responses((status = 200, body = SettingsMap)))]
 async fn get_settings(State(state): State<GatewayState>) -> Json<SettingsMap> {
     let display = tokio::task::block_in_place(|| state.models.display_settings());
     let settings = HashMap::from([
@@ -799,6 +975,7 @@ async fn get_settings(State(state): State<GatewayState>) -> Json<SettingsMap> {
     Json(SettingsMap { settings })
 }
 
+#[utoipa::path(put, path = "/api/v1/settings", tag = "settings", request_body = PutSettingRequest, responses((status = 204, description = "Setting saved"), (status = 500, description = "Setting save failed")))]
 async fn put_setting(
     State(state): State<GatewayState>,
     Json(req): Json<PutSettingRequest>,
@@ -827,6 +1004,7 @@ struct EventStreamState {
     pending_lag: Option<sse::Event>,
 }
 
+#[utoipa::path(get, path = "/api/v1/events", tag = "hydration", responses((status = 200, description = "Server-sent event stream", content_type = "text/event-stream")))]
 async fn get_events(
     State(state): State<GatewayState>,
     headers: HeaderMap,

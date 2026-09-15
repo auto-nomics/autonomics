@@ -24,6 +24,8 @@ serde_json.workspace = true
 thiserror = { workspace = true }
 tracing.workspace = true
 uuid = { version = "1.23", features = ["v4", "serde"] }
+utoipa = { version = "5", features = ["axum_extras", "uuid"] }
+utoipa-swagger-ui = { version = "9", features = ["axum"] }
 rusqlite = "0.40.1"
 arc-swap.workspace = true
 chrono = { workspace = true }

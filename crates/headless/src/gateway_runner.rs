@@ -183,7 +183,7 @@ pub async fn run_via_gateway_with_client<P: OutputProcessor>(
             // A concurrent one-shot run holds /root/headless. A unique
             // identity can't share persisted sessions, but a contended
             // run can't resume them anyway.
-            let fallback = format!("headless-{}", &Uuid::new_v4().simple().to_string()[..8]);
+            let fallback = format!("headless_{}", &Uuid::new_v4().simple().to_string()[..8]);
             tracing::warn!(
                 fallback = %fallback,
                 "another run holds /root/headless; spawning with a unique identity"

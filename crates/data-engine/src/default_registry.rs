@@ -110,6 +110,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn generic_container_command_factory_is_not_registered() {
+        let runtime_env = datafusion::prelude::SessionContext::new().runtime_env();
+        let container_execution =
+            Arc::new(container_runtime::ContainerExecutionInfra::from_config(
+                container_runtime::PodmanConfig {
+                    program: "podman".into(),
+                    workspace_root: "/tmp/autonomics-registry-workspace".into(),
+                    panel_cache_root: "/tmp/autonomics-registry-panels".into(),
+                },
+            ));
+        let registry = build_default_registry_with_container_execution(
+            runtime_env,
+            None,
+            Arc::new(DataBundleCatalog::new()),
+            container_execution,
+        );
+
+        assert!(
+            !registry
+                .list_nodes()
+                .iter()
+                .any(|node| node.kind == "container_command"),
+            "container_command must not be exposed to agents"
+        );
+        assert!(registry.get_node_ports("container_command").is_err());
+    }
+
+    #[test]
     fn visualization_container_factory_is_registered() {
         let runtime_env = datafusion::prelude::SessionContext::new().runtime_env();
         let container_execution =

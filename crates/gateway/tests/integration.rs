@@ -190,3 +190,84 @@ async fn bearer_token_gates_the_api() {
     gateway_daemon.client().state().await.unwrap();
     gateway_daemon.stop().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn swagger_docs_expose_the_gateway_api() {
+    let gateway_daemon = start_mock_gateway("x").await;
+    let base = format!("http://{}", gateway_daemon.addr);
+    let http = reqwest::Client::new();
+
+    let openapi: serde_json::Value = http
+        .get(format!("{base}/api/v1/api-docs/openapi.json"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(openapi["info"]["title"], "Autonomics Gateway API");
+    assert_eq!(openapi["paths"].as_object().unwrap().len(), 29);
+    let expected_paths = [
+        "/api/v1/gateway/status",
+        "/api/v1/gateway/shutdown",
+        "/api/v1/state",
+        "/api/v1/agents",
+        "/api/v1/agents/{name}/messages",
+        "/api/v1/agents/{name}/cancel",
+        "/api/v1/agents/{name}/compact",
+        "/api/v1/agents/{name}/shutdown",
+        "/api/v1/agents/{name}/model",
+        "/api/v1/agents/{name}/config",
+        "/api/v1/agents/{name}/dag",
+        "/api/v1/agents/{name}/sessions",
+        "/api/v1/agents/{name}/sessions/{id}/activate",
+        "/api/v1/agents/{name}/sessions/{id}/close",
+        "/api/v1/agents/{name}/sessions/{id}/title",
+        "/api/v1/agents/{agent_id}/sessions/{session_id}/history",
+        "/api/v1/agents/{agent_id}/plan",
+        "/api/v1/storage/agents",
+        "/api/v1/storage/agents/{id}",
+        "/api/v1/storage/agents/{id}/sessions",
+        "/api/v1/model-config",
+        "/api/v1/model-config/provider",
+        "/api/v1/model-config/active-model",
+        "/api/v1/model-config/chatgpt/login",
+        "/api/v1/model-config/chatgpt/refresh",
+        "/api/v1/model-config/providers/{name}/catalog",
+        "/api/v1/settings",
+        "/api/v1/events",
+    ];
+    for path in expected_paths {
+        assert!(
+            openapi["paths"].as_object().unwrap().contains_key(path),
+            "missing OpenAPI path: {path}"
+        );
+    }
+    assert_eq!(
+        openapi["components"]["securitySchemes"]["bearer_auth"]["type"],
+        "http"
+    );
+    assert!(
+        openapi["paths"]
+            .as_object()
+            .unwrap()
+            .values()
+            .flat_map(serde_json::Value::as_object)
+            .flat_map(|operations| operations.values())
+            .all(|operation| operation["security"][0]["bearer_auth"].is_array())
+    );
+
+    let swagger = http.get(format!("{base}/swagger-ui")).send().await.unwrap();
+    assert!(swagger.status().is_success());
+    assert!(swagger.text().await.unwrap().contains("swagger-ui"));
+
+    // Documentation is metadata-only; operational endpoints stay guarded.
+    let unauthorized = http
+        .get(format!("{base}/api/v1/state"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unauthorized.status(), 401);
+
+    gateway_daemon.stop().await;
+}
