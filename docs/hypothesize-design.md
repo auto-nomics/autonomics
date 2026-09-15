@@ -411,7 +411,7 @@ one component test). They are the DAG embodiment of the closure property.
 |---------------------------------|------------------------------------|-----------------------------------------------------------------|-----------------------------------------------------------------|
 | `hypothesize.combine_pvalues`   | `poolr::fisher / stouffer / tippett` | `method: "fisher"\|"stouffer"\|"tippett_min"\|"tippett_max"\|"wilkinson"`, optional `weights_column`, optional `effect_column`+`var_column` (Stouffer) | one combined test row                                            |
 | `hypothesize.boolean_test`      | `hypothesize::intersection_test/union_test/complement_test` | `op: "intersection"\|"union"\|"complement"`, `alpha: f64` (for complement inversion) | one combined row; `statistic`/`dof` are null for and/or        |
-| `hypothesize.adjust_pvalues`    | `stats::p.adjust`                  | `method`, optional `n_total: int`, `column: "p_value"` (default) | **passthrough** — same rows + `p_adj` column + `reject_<alpha>` columns for α ∈ {0.05, 0.01, 0.001} |
+| `hypothesize.adjust_pvalues`    | `stats::p.adjust`                  | `method`, optional `n_total: int`, optional `p_column: "p_value"` (default), optional `alpha: 0.05` (default) | **passthrough** — same rows + `p_adj` column + `reject` column (`p_adj < alpha`) |
 
 `adjust_pvalues` is the **only** non-closure combinator — it preserves the
 row count because it's a column transform, not a test aggregator. This is
