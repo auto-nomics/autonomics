@@ -7,6 +7,7 @@ pub mod dataframe_to_file;
 pub mod file_reference;
 pub mod file_to_dataframe;
 pub mod gcta_container;
+pub mod gmt_import;
 pub mod hdl_l_container;
 pub mod hdl_l_scan_container;
 pub mod hyprcoloc_container;
@@ -21,6 +22,7 @@ pub mod mixer_container;
 pub mod mrpresso_container;
 pub mod mtag_container;
 pub mod mvmr_container;
+pub mod pathway_gsea_container;
 pub mod plink2_clump_container;
 pub mod radiomics;
 pub mod radiomics_container;
@@ -84,6 +86,7 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(bundle_source::BundleSourceNodeFactory {}));
         registry.register(Box::new(file_reference::FileReferenceNodeFactory {}));
         registry.register(Box::new(file_to_dataframe::FileToDataFrameNodeFactory {}));
+        registry.register(Box::new(gmt_import::GmtImportNodeFactory {}));
         registry.register(Box::new(dataframe_to_file::DataFrameToFileNodeFactory {}));
         registry.register(Box::new(radiomics::RadiomicsManifestNodeFactory));
         registry.register(Box::new(radiomics::RadiomicsStageFileSetNodeFactory));
@@ -250,6 +253,12 @@ impl NodePlugin for Plugin {
             Arc::clone(&self.container_execution.runtime),
             Arc::clone(&self.container_execution.panel_cache),
         )));
+        registry.register(Box::new(
+            pathway_gsea_container::PathwayGseaContainerNodeFactory::new(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
         registry.register(Box::new(
             twosamplemr_container::TwoSampleMrContainerNodeFactory::new(
                 Arc::clone(&self.container_execution.runtime),
