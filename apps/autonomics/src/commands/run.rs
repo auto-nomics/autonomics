@@ -294,41 +294,6 @@ fn print_headless_sessions(args: &RunArgs) -> color_eyre::Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn test_args(prompt: Option<&str>, list_sessions: bool) -> RunArgs {
-        RunArgs {
-            prompt: prompt.map(str::to_string),
-            list_sessions,
-            json: false,
-            output_last_message: None,
-            profile: None,
-            model: None,
-            timeout: None,
-            session: None,
-            ephemeral: false,
-            manifest: None,
-        }
-    }
-
-    #[test]
-    fn ephemeral_cannot_resume_a_discarded_state_dir() {
-        let mut args = test_args(Some("prompt"), false);
-        args.ephemeral = true;
-        args.session = Some(uuid::Uuid::nil());
-        assert!(validate_run_args(&args).is_err());
-    }
-
-    #[test]
-    fn list_sessions_rejects_run_options() {
-        let mut args = test_args(None, true);
-        args.timeout = Some(1);
-        assert!(validate_run_args(&args).is_err());
-    }
-}
-
 /// Assemble the prompt, following codex exec's stdin semantics:
 /// - positional prompt (or `-` sentinel / none) → read stdin;
 /// - piped stdin alongside a positional prompt → appended as a
@@ -410,4 +375,39 @@ fn write_last_message(path: Option<&Path>, message: Option<&str>) {
         eprintln!("Failed to write last message file {}: {e}", path.display());
     }
     let _ = std::io::stdout().flush();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_args(prompt: Option<&str>, list_sessions: bool) -> RunArgs {
+        RunArgs {
+            prompt: prompt.map(str::to_string),
+            list_sessions,
+            json: false,
+            output_last_message: None,
+            profile: None,
+            model: None,
+            timeout: None,
+            session: None,
+            ephemeral: false,
+            manifest: None,
+        }
+    }
+
+    #[test]
+    fn ephemeral_cannot_resume_a_discarded_state_dir() {
+        let mut args = test_args(Some("prompt"), false);
+        args.ephemeral = true;
+        args.session = Some(uuid::Uuid::nil());
+        assert!(validate_run_args(&args).is_err());
+    }
+
+    #[test]
+    fn list_sessions_rejects_run_options() {
+        let mut args = test_args(None, true);
+        args.timeout = Some(1);
+        assert!(validate_run_args(&args).is_err());
+    }
 }
