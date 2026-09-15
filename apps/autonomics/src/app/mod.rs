@@ -29,6 +29,7 @@ const HALF_PAGE: usize = 12;
 /// cancel, the app force-quits regardless of agent status.
 const FORCE_QUIT_WINDOW: Duration = Duration::from_secs(3);
 
+mod agent_config;
 mod agents;
 mod chat;
 mod commands;

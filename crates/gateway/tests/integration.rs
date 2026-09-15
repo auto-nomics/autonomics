@@ -132,6 +132,25 @@ async fn spawn_chat_turn_and_shutdown_over_the_wire() {
         "stored session list includes the live session"
     );
 
+    let initial_config = client.agent_runtime_config(&path).await.unwrap();
+    assert!(!initial_config.effective.use_memory);
+    assert!(!initial_config.effective.generate_memory);
+    let saved_config = client
+        .set_agent_runtime_config(
+            &path,
+            agentik_core::AgentRuntimeOverrides {
+                use_memory: Some(true),
+                generate_memory: Some(false),
+            },
+        )
+        .await
+        .unwrap();
+    assert!(saved_config.effective.use_memory);
+    assert!(!saved_config.effective.generate_memory);
+    let refreshed_config = client.agent_runtime_config(&path).await.unwrap();
+    assert!(refreshed_config.effective.use_memory);
+    assert!(!refreshed_config.effective.generate_memory);
+
     // Replay: reconnect with Last-Event-ID below the terminal frame and
     // observe the replayed TurnCompleted again (dedup is the client's
     // job — the raw stream must still deliver it).

@@ -141,6 +141,13 @@ impl AgentBuilder {
         self
     }
 
+    /// Attach an existing backend so runtime config updates are shared with
+    /// the host handle that requested them.
+    pub fn with_memory_backend(mut self, memory: Arc<MemoryBackend>) -> Self {
+        self.memory = Some(memory);
+        self
+    }
+
     pub fn with_agent_event_tx(
         mut self,
         tx: tokio::sync::mpsc::UnboundedSender<agentik_sdk::types::AgentEvent>,
@@ -214,7 +221,7 @@ impl AgentBuilder {
         let mut registry = ToolRegistry::new();
         registry.register_all(self.tools)?;
         let memory = self.memory;
-        if let Some(backend) = memory.as_ref().filter(|backend| backend.config.use_memory) {
+        if let Some(backend) = memory.as_ref() {
             registry.register_all(memory_registrations(Arc::clone(backend)))?;
         }
         registry.register_all(crate::tools::task_registrations(tasks.clone()))?;

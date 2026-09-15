@@ -35,6 +35,8 @@ pub enum CommandAction {
     NewAgent,
     /// Open the model config popup for the active agent.
     ModelConfig,
+    /// Open per-agent runtime settings for the active agent.
+    AgentConfig,
     /// Open the active agent's data-engine DAG view.
     ViewDag,
     /// Open the agent resume picker.
@@ -330,6 +332,12 @@ fn default_commands() -> Vec<Command> {
             keywords: "model config provider api key switch agent".into(),
             category: "agent".into(),
             action: CommandAction::ModelConfig,
+        },
+        Command {
+            title: "Agent settings".into(),
+            keywords: "agent settings memory runtime use generate per agent".into(),
+            category: "agent".into(),
+            action: CommandAction::AgentConfig,
         },
         Command {
             title: "View DAG".into(),

@@ -94,6 +94,10 @@ pub fn api_router(state: GatewayState) -> Router {
             "/agents/{name}/model",
             get(get_agent_model).put(set_agent_model),
         )
+        .route(
+            "/agents/{name}/config",
+            get(get_agent_config).put(set_agent_config),
+        )
         .route("/agents/{name}/dag", get(get_agent_dag))
         .route(
             "/agents/{name}/sessions",
@@ -253,6 +257,7 @@ async fn get_state(State(state): State<GatewayState>) -> GatewayResult<Json<Stat
         agents: live_agents,
         sessions: state.sessions.snapshot(),
         display_settings,
+        runtime_defaults: state.infra.memory.runtime_config(),
         model_catalog: catalog,
     };
     let last_seq = state.hub.last_seq();
@@ -405,6 +410,69 @@ async fn get_agent_dag(
         .await
         .map_err(|e| GatewayError::Status(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(snapshot))
+}
+
+async fn get_agent_config(
+    State(state): State<GatewayState>,
+    Path(name): Path<String>,
+) -> GatewayResult<Json<AgentRuntimeConfigView>> {
+    let record = state
+        .infra
+        .storage
+        .get_agent_by_name(&name)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| {
+            GatewayError::Status(StatusCode::NOT_FOUND, format!("agent `{name}` not found"))
+        })?;
+    let profile: agentik_core::AgentProfile =
+        serde_json::from_value(record.config_json).map_err(|e| e.to_string())?;
+    let mut effective = state.infra.memory.runtime_config();
+    if let Some(enabled) = profile.runtime.use_memory {
+        effective.use_memory = enabled;
+    }
+    if let Some(enabled) = profile.runtime.generate_memory {
+        effective.generate_memory = enabled;
+    }
+    Ok(Json(AgentRuntimeConfigView {
+        runtime: profile.runtime,
+        effective,
+    }))
+}
+
+async fn set_agent_config(
+    State(state): State<GatewayState>,
+    Path(name): Path<String>,
+    Json(req): Json<SetAgentRuntimeConfigRequest>,
+) -> GatewayResult<Json<AgentRuntimeConfigView>> {
+    let mut record = state
+        .infra
+        .storage
+        .get_agent_by_name(&name)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| {
+            GatewayError::Status(StatusCode::NOT_FOUND, format!("agent `{name}` not found"))
+        })?;
+    let runtime = req.runtime;
+    let mut profile: agentik_core::AgentProfile =
+        serde_json::from_value(record.config_json).map_err(|e| e.to_string())?;
+    profile.runtime = runtime.clone();
+    record.config_json = serde_json::to_value(profile).map_err(|e| e.to_string())?;
+    record.last_active = chrono::Utc::now().timestamp_millis();
+    state
+        .infra
+        .storage
+        .upsert_agent(record)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let effective = state
+        .control
+        .set_agent_runtime_config(&name, runtime.clone())
+        .await
+        .map_err(GatewayError::Message)?;
+    Ok(Json(AgentRuntimeConfigView { runtime, effective }))
 }
 
 // ── sessions ─────────────────────────────────────────────────────────

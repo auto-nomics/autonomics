@@ -267,6 +267,14 @@ impl App {
             self.render_dag_view(frame.area(), frame.buffer_mut());
         }
 
+        if self.state.agent_config.visible {
+            crate::widgets::agent_config_widget::render_agent_config(
+                frame.area(),
+                frame.buffer_mut(),
+                &mut self.state.agent_config,
+            );
+        }
+
         // ── Toast notifications (top-most overlay, bottom-right corner) ──
         self.state.toasts.tick();
         self.state.toasts.render(frame.area(), frame.buffer_mut());

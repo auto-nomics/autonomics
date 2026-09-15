@@ -851,6 +851,8 @@ pub struct AppState {
     pub pending_profile: Option<agentik_core::AgentProfile>,
     /// Model config popup visibility.
     pub model_config_visible: bool,
+    /// Per-agent runtime config popup state.
+    pub agent_config: crate::widgets::agent_config_widget::AgentConfigState,
     /// Interactive DAG view visibility.
     pub dag_view_visible: bool,
     /// Latest structured DAG snapshot. `None` while the first load is running.

@@ -30,6 +30,15 @@ pub struct RunArgs {
     #[arg(long, value_name = "PATH")]
     pub profile: Option<String>,
 
+    /// Per-agent runtime overrides as JSON, e.g.
+    /// `--agent-config '{"use_memory":false,"generate_memory":false}'`.
+    #[arg(long = "agent-config", value_name = "JSON")]
+    pub agent_config: Option<String>,
+
+    /// Disable memory injection, tools, and generation for this run.
+    #[arg(long)]
+    pub no_memory: bool,
+
     /// Model override as `provider_name:model_name` (default: the
     /// gateway daemon's active model).
     #[arg(long, value_name = "SPEC")]

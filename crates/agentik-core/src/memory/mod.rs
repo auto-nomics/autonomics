@@ -16,6 +16,7 @@ mod pipeline;
 mod store;
 mod tools;
 
+pub(crate) use crate::storage::AgentRuntimeConfig;
 pub use artifacts::{
     MemoryConsolidation, MemoryEntryDraft, MemoryExtraction, SemanticObservationDraft,
     parse_json_object,

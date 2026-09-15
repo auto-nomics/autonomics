@@ -248,6 +248,14 @@ pub fn profile_preview_lines(
             .clone()
             .unwrap_or_else(|| "(global default)".to_string()),
     ));
+    lines.push(field_line(
+        "Memory",
+        override_label(profile.runtime.use_memory),
+    ));
+    lines.push(field_line(
+        "Memory gen",
+        override_label(profile.runtime.generate_memory),
+    ));
     lines.push(Line::from(""));
     lines.push(section_line("Capabilities"));
 
@@ -266,6 +274,14 @@ pub fn profile_preview_lines(
     }
 
     lines
+}
+
+fn override_label(value: Option<bool>) -> String {
+    match value {
+        None => "inherit".to_string(),
+        Some(true) => "on".to_string(),
+        Some(false) => "off".to_string(),
+    }
 }
 
 pub fn field_line(label: &str, value: impl Into<String>) -> Line<'static> {
