@@ -192,14 +192,13 @@ async fn stages_maf_and_clinical_and_publishes_two_outputs() {
     }
 
     let outputs = dag.output("mutation").unwrap();
-    let report_file = outputs.get(&0).unwrap().as_file().unwrap();
+    outputs.get(&0).unwrap().as_dataframe().unwrap();
     let details_file = outputs.get(&1).unwrap().as_file().unwrap();
     assert!(
-        report_file
+        details_file
             .path
             .starts_with("vfs:///artifacts/mutation-analysis-test/")
     );
-    assert!(report_file.path.ends_with("/mutation_analysis_report.tsv"));
     assert!(
         details_file
             .path

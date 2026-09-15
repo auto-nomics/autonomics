@@ -4,6 +4,15 @@ This image packages the Bioconductor official runtime with `maftools` for
 mutation-analysis operations. Mutation and clinical tables remain outside the
 image; the Rust wrapper stages them through the existing container contract.
 
+Published immutable ACR image digest:
+
+```text
+sha256:6f33327237fb5b5cb01b65b194244a742d791a0466844a6f5a9e18af2f99158a
+```
+
+The wrapper combines this digest with
+`$ACR_ENDPOINT/autonomics/mutation-analysis`.
+
 ## Operations
 
 The entrypoint reads `MUTATION_CONFIG` and emits a TSV report to

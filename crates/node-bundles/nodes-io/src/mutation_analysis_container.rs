@@ -4,11 +4,15 @@
 //! All biological computation remains in the pinned R maftools image.
 
 use std::collections::BTreeMap;
+use std::io::{Cursor, Read, Seek, SeekFrom};
 use std::sync::Arc;
 
+use arrow_array::RecordBatch;
+use arrow_csv::{ReaderBuilder, reader::Format};
 use dag_core::node::DagNode;
 use dag_core::registry::{NodeCtx, NodeFactory};
 use dag_core::{NodeInput, NodePorts, dag::DagError, dag::graph::PortOutputs, value::PortType};
+use datafusion::prelude::{DataFrame, SessionContext};
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 
@@ -21,7 +25,7 @@ use container_runtime::{PanelCache, PodmanConnection, PullPolicy};
 pub const MUTATION_ANALYSIS_CONTAINER_KIND: &str = "mutation_analysis_container";
 pub const MUTATION_ANALYSIS_IMAGE_REPOSITORY: &str = "mutation-analysis";
 pub const MUTATION_ANALYSIS_IMAGE_DIGEST: &str =
-    "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+    "sha256:6f33327237fb5b5cb01b65b194244a742d791a0466844a6f5a9e18af2f99158a";
 
 const DEFAULT_ARTIFACT_PREFIX: &str = "/artifacts/mutation_analysis_container";
 const DEFAULT_TIMEOUT_SECS: u64 = 3600;
@@ -211,8 +215,60 @@ impl DagNode for MutationAnalysisContainerNode {
         inputs: &[NodeInput],
         reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
-        self.inner.execute(ctx, inputs, reporter).await
+        let mut outputs = self.inner.execute(ctx, inputs, reporter).await?;
+        let report_file = outputs
+            .get(&0)
+            .ok_or_else(|| DagError::Schedule("mutation analysis produced no report".into()))?
+            .as_file()?
+            .clone();
+        let virtual_path = report_file
+            .path
+            .strip_prefix("vfs://")
+            .unwrap_or(&report_file.path);
+        let storage = ctx.opendal.as_ref().ok_or_else(|| {
+            DagError::Schedule("mutation analysis report requires registered VFS storage".into())
+        })?;
+        let report_bytes = storage
+            .resolve(virtual_path)
+            .read(&storage.resolve_path(virtual_path))
+            .await
+            .map_err(|error| {
+                DagError::Schedule(format!(
+                    "cannot read mutation analysis report `{virtual_path}`: {error}"
+                ))
+            })?;
+        let dataframe = tsv_dataframe(&report_bytes.to_vec())?;
+        outputs.insert(0, dataframe);
+        Ok(outputs)
     }
+}
+
+fn tsv_dataframe(bytes: &[u8]) -> Result<DataFrame, DagError> {
+    let format = Format::default()
+        .with_header(true)
+        .with_delimiter(b'\t')
+        .with_quote(b'"');
+    let mut cursor = Cursor::new(bytes.to_vec());
+    let (schema, _) = format
+        .infer_schema(cursor.clone(), None)
+        .map_err(|error| DagError::Schedule(format!("cannot infer TSV schema: {error}")))?;
+    cursor
+        .seek(SeekFrom::Start(0))
+        .map_err(|error| DagError::Schedule(format!("cannot rewind TSV report: {error}")))?;
+    let reader = ReaderBuilder::new(Arc::new(schema))
+        .with_format(format)
+        .build(cursor)
+        .map_err(|error| DagError::Schedule(format!("cannot read TSV report: {error}")))?;
+    let batches = reader
+        .collect::<Result<Vec<RecordBatch>, _>>()
+        .map_err(|error| {
+            DagError::Schedule(format!(
+                "cannot decode mutation analysis TSV report: {error}"
+            ))
+        })?;
+    SessionContext::new()
+        .read_batches(batches)
+        .map_err(|error| DagError::Schedule(format!("cannot create report DataFrame: {error}")))
 }
 
 fn nonempty(value: &str, name: &str) -> Result<(), String> {
@@ -372,7 +428,7 @@ pub fn container_spec(
 fn port_layout(with_clinical: bool) -> NodePorts {
     let ports = NodePorts::new()
         .add_input_port_of_type_with_label(None, PortType::File, "maf")
-        .add_output_port_of_type(None, PortType::File)
+        .add_output_port(None)
         .add_output_port_of_type(None, PortType::File);
     if with_clinical {
         ports.add_optional_input_port_of_type(PortType::File)
@@ -392,10 +448,10 @@ impl NodeFactory for MutationAnalysisContainerNodeFactory {
 
     fn doc(&self) -> &'static str {
         "Input port 0 is a MAF File; the optional clinical File enables grouped \
-        TMB comparisons. The operation emits a TSV report and a SHA-256 \
-        fingerprinted JSON artifact through VFS. Supported operations are tmb, \
-        summary, top_genes, titv, and mutex. The network is disabled and the \
-        root filesystem is read-only."
+        TMB comparisons. Output port 0 is a parsed report DataFrame backed by \
+        the VFS TSV artifact; output port 1 is a SHA-256 fingerprinted JSON \
+        artifact. Supported operations are tmb, summary, top_genes, titv, and \
+        mutex. The network is disabled and the root filesystem is read-only."
     }
 
     fn spec_schema(&self) -> schemars::Schema {

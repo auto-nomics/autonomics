@@ -7329,6 +7329,7 @@ dependencies = [
  "arrow",
  "arrow-array",
  "arrow-buffer",
+ "arrow-csv",
  "arrow-schema",
  "async-trait",
  "biofusion",
