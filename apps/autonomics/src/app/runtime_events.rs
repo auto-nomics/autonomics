@@ -321,6 +321,38 @@ impl App {
                     self.state.toasts.error("Save failed", Some(e));
                 }
             },
+            crate::app_event::AppEvent::AgentConfigLoaded { agent, result } => {
+                if self.state.agent_config.visible && self.state.agent_config.agent_path == agent {
+                    match result {
+                        Ok(view) => self.state.agent_config.loaded(view),
+                        Err(error) => {
+                            self.state.agent_config.failed();
+                            self.state
+                                .toasts
+                                .error("Agent config load failed", Some(error));
+                        }
+                    }
+                }
+            }
+            crate::app_event::AppEvent::AgentConfigSaved { agent, result } => {
+                if self.state.agent_config.visible && self.state.agent_config.agent_path == agent {
+                    match result {
+                        Ok(view) => {
+                            self.state.agent_config.saved(view);
+                            self.state.toasts.success(
+                                "Agent config saved",
+                                Some(format!("{agent}: memory settings updated")),
+                            );
+                        }
+                        Err(error) => {
+                            self.state.agent_config.failed();
+                            self.state
+                                .toasts
+                                .error("Agent config save failed", Some(error));
+                        }
+                    }
+                }
+            }
             crate::app_event::AppEvent::AgentUpserted(info) => {
                 if !self.state.sessions.iter().any(|s| s.name == info.path) {
                     self.state.sessions.push(state::AgentSession {

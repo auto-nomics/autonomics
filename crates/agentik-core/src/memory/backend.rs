@@ -2,13 +2,25 @@
 
 use std::sync::Arc;
 
-use super::{MEMORY_SCOPE_ID, MemoryConfig, MemoryStore, SemanticGrounding};
+use arc_swap::ArcSwap;
 
-#[derive(Clone)]
+use super::{AgentRuntimeConfig, MEMORY_SCOPE_ID, MemoryConfig, MemoryStore, SemanticGrounding};
+
 pub struct MemoryBackend {
-    pub config: MemoryConfig,
+    config: ArcSwap<MemoryConfig>,
     pub store: Arc<dyn MemoryStore>,
     pub grounding: Option<Arc<dyn SemanticGrounding>>,
+}
+
+impl Clone for MemoryBackend {
+    fn clone(&self) -> Self {
+        let config = self.config.load();
+        Self {
+            config: ArcSwap::new(Arc::new(MemoryConfig::clone(&config))),
+            store: Arc::clone(&self.store),
+            grounding: self.grounding.clone(),
+        }
+    }
 }
 
 impl MemoryBackend {
@@ -19,17 +31,38 @@ impl MemoryBackend {
         grounding: Option<Arc<dyn SemanticGrounding>>,
     ) -> Self {
         Self {
-            config,
+            config: ArcSwap::new(std::sync::Arc::new(config)),
             store,
             grounding,
         }
     }
 
+    #[must_use]
+    pub fn runtime_config(&self) -> AgentRuntimeConfig {
+        let config = self.config.load();
+        AgentRuntimeConfig::new(config.use_memory, config.generate_memory)
+    }
+
+    pub fn set_runtime_config(&self, config: AgentRuntimeConfig) {
+        let mut next = MemoryConfig::clone(&self.config.load());
+        next.use_memory = config.use_memory;
+        next.generate_memory = config.generate_memory;
+        self.config.store(std::sync::Arc::new(next));
+    }
+
+    pub fn effective_memory_config(&self) -> MemoryConfig {
+        MemoryConfig::clone(&self.config.load())
+    }
+
     pub async fn prompt_section(&self) -> Option<String> {
+        if !self.effective_memory_config().use_memory {
+            return None;
+        }
+        let config = self.effective_memory_config();
         memory_prompt_section(
             self.store.as_ref(),
             MEMORY_SCOPE_ID,
-            self.config.summary_max_bytes,
+            config.summary_max_bytes,
         )
         .await
     }

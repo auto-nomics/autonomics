@@ -2047,6 +2047,13 @@ fn row_to_profile(row: &turso::Row) -> Result<AgentProfile, StorageError> {
             .get("preferred_model")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
+        runtime: serde_json::from_value(
+            config
+                .get("runtime")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
+        )
+        .unwrap_or_default(),
         created_at,
         updated_at,
     })
@@ -2070,6 +2077,7 @@ fn profile_to_config_json(profile: &AgentProfile) -> serde_json::Value {
         "enable_kegg": profile.enable_kegg,
         "enable_dag_history": profile.enable_dag_history,
         "preferred_model": profile.preferred_model,
+        "runtime": profile.runtime,
     })
 }
 
@@ -2800,6 +2808,7 @@ mod tests {
             enable_kegg: true,
             enable_dag_history: false,
             preferred_model: Some("anthropic:claude-sonnet-5".into()),
+            runtime: Default::default(),
             created_at: now_ms(),
             updated_at: now_ms(),
         }

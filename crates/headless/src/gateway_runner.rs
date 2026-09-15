@@ -15,6 +15,7 @@
 
 use std::time::{Duration, Instant};
 
+use agentik_core::AgentRuntimeOverrides;
 use agentik_types::AgentEvent;
 use eventsource_stream::Eventsource;
 use futures::StreamExt;
@@ -45,6 +46,8 @@ pub struct GatewayRunConfig {
     pub prompt: String,
     /// Profile path to spawn from; `None` picks the first stored profile.
     pub profile: Option<String>,
+    /// Runtime overrides layered onto the selected profile before spawn.
+    pub agent_runtime: AgentRuntimeOverrides,
     /// Model override as `provider:model`; `None` uses the daemon's
     /// active model.
     pub model: Option<String>,
@@ -129,10 +132,11 @@ pub async fn run_via_gateway_with_client<P: OutputProcessor>(
         .state()
         .await
         .map_err(|e| RunError::Gateway(e.to_string()))?;
-    let profile =
+    let mut profile =
         pick_profile(&state.profiles, config.profile.as_deref()).ok_or(RunError::NoProfile {
             requested: config.profile.clone(),
         })?;
+    profile.apply_runtime_overrides(config.agent_runtime);
     // Spawn override = the user's --model only. `None` means "daemon
     // default" — the daemon resolves and attaches its own callbacks;
     // echoing the daemon's active spec back as an override would force a

@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 
-use agentik_core::AgentProfile;
+use agentik_core::{AgentProfile, AgentRuntimeConfig, AgentRuntimeOverrides};
 use agentik_types::SessionInfo;
 use runtime::control::{AgentInfo, AgentStatus};
 use runtime::model_bootstrap::{ModelRow, ProviderRow};
@@ -115,6 +115,8 @@ pub struct StateSnapshot {
     /// (`POST /agents/{name}/sessions/list`) or emitted a list.
     pub sessions: HashMap<String, Vec<SessionInfo>>,
     pub display_settings: DisplaySettings,
+    /// Daemon-wide defaults resolved from the runtime configuration.
+    pub runtime_defaults: AgentRuntimeConfig,
     pub model_catalog: ModelCatalog,
 }
 
@@ -189,6 +191,18 @@ pub struct SetAgentModelRequest {
 pub struct AgentModelInfoView {
     pub model: String,
     pub context_length: u64,
+}
+
+/// Effective per-agent runtime settings plus the persisted override layer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentRuntimeConfigView {
+    pub runtime: AgentRuntimeOverrides,
+    pub effective: AgentRuntimeConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetAgentRuntimeConfigRequest {
+    pub runtime: AgentRuntimeOverrides,
 }
 
 /// `GET /storage/agents/{id}/sessions` — persisted session metadata.

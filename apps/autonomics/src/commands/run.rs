@@ -52,6 +52,13 @@ pub fn run_headless(args: RunArgs) -> color_eyre::Result<()> {
     };
     let prompt_hash = headless::manifest::prompt_hash(&prompt);
     let run_id = uuid::Uuid::new_v4();
+    let agent_runtime = match parse_agent_runtime(&args) {
+        Ok(runtime) => runtime,
+        Err(message) => {
+            eprintln!("error: {message}");
+            std::process::exit(EXIT_STARTUP);
+        }
+    };
 
     let runtime = tokio::runtime::Runtime::new()
         .map_err(|e| color_eyre::eyre::eyre!("failed to build tokio runtime: {e}"))?;
@@ -67,9 +74,9 @@ pub fn run_headless(args: RunArgs) -> color_eyre::Result<()> {
     });
     runtime.block_on(async {
         let (summary, model_used) = if args.ephemeral {
-            run_in_process(&args, prompt, run_id, cancel).await
+            run_in_process(&args, &agent_runtime, prompt, run_id, cancel).await
         } else {
-            run_on_gateway(&args, prompt, run_id, cancel).await
+            run_on_gateway(&args, &agent_runtime, prompt, run_id, cancel).await
         };
 
         match summary {
@@ -119,6 +126,7 @@ pub fn run_headless(args: RunArgs) -> color_eyre::Result<()> {
 /// name used (for the manifest).
 async fn run_on_gateway(
     args: &RunArgs,
+    agent_runtime: &agentik_core::AgentRuntimeOverrides,
     prompt: String,
     run_id: uuid::Uuid,
     cancel: CancellationToken,
@@ -127,6 +135,7 @@ async fn run_on_gateway(
         run_id,
         prompt,
         profile: args.profile.clone(),
+        agent_runtime: agent_runtime.clone(),
         model: args.model.clone(),
         session: args.session,
         timeout: args.timeout.map(Duration::from_secs),
@@ -183,6 +192,7 @@ async fn daemon_active_model_name() -> Option<String> {
 /// isolation). Credentials still come from the real app DB.
 async fn run_in_process(
     args: &RunArgs,
+    agent_runtime: &agentik_core::AgentRuntimeOverrides,
     prompt: String,
     run_id: uuid::Uuid,
     cancel: CancellationToken,
@@ -231,6 +241,7 @@ async fn run_in_process(
         };
     config.run_id = run_id;
     config.profile = args.profile.clone();
+    config.agent_runtime = agent_runtime.clone();
     config.model = Some(model);
     config.model_name = Some(model_name.clone());
     config.timeout = args.timeout.map(Duration::from_secs);
@@ -312,6 +323,8 @@ fn validate_run_args(args: &RunArgs) -> Result<(), String> {
             || args.timeout.is_some()
             || args.output_last_message.is_some()
             || args.manifest.is_some()
+            || args.agent_config.is_some()
+            || args.no_memory
             || args.backend.is_some()
             || args.workspace.is_some()
             || !args.data_mount.is_empty()
@@ -354,6 +367,20 @@ fn validate_run_args(args: &RunArgs) -> Result<(), String> {
         );
     }
     Ok(())
+}
+
+fn parse_agent_runtime(args: &RunArgs) -> Result<agentik_core::AgentRuntimeOverrides, String> {
+    let mut runtime = match args.agent_config.as_deref() {
+        Some(raw) => {
+            serde_json::from_str(raw).map_err(|e| format!("invalid --agent-config JSON: {e}"))?
+        }
+        None => agentik_core::AgentRuntimeOverrides::default(),
+    };
+    if args.no_memory {
+        runtime.use_memory = Some(false);
+        runtime.generate_memory = Some(false);
+    }
+    Ok(runtime)
 }
 
 fn print_headless_sessions(args: &RunArgs) -> color_eyre::Result<()> {

@@ -171,6 +171,10 @@ struct DeriveProfileInput {
     #[desc = "Enable KEGG metadata, search, entry previews, biological links, ID mapping, and DDI queries."]
     enable_kegg: Option<bool>,
     enable_dag_history: Option<bool>,
+    /// Enable or disable memory injection, tools, and generation together.
+    use_memory: Option<bool>,
+    /// Override memory generation independently.
+    generate_memory: Option<bool>,
 }
 
 struct DeriveProfileTool {
@@ -199,6 +203,8 @@ impl ToolFunction for DeriveProfileTool {
             enable_string: input.enable_string,
             enable_kegg: input.enable_kegg,
             enable_dag_history: input.enable_dag_history,
+            use_memory: input.use_memory,
+            generate_memory: input.generate_memory.or(input.use_memory),
             ..Default::default()
         };
         match self

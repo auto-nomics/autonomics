@@ -28,9 +28,8 @@ pub async fn run_memory_pipeline(
     memory: Arc<MemoryBackend>,
     model_handle: Arc<ArcSwapOption<Model>>,
 ) {
-    if let Err(error) =
-        run_pipeline(agent_id, &storage, &memory, &model_handle, &memory.config).await
-    {
+    let config = memory.effective_memory_config();
+    if let Err(error) = run_pipeline(agent_id, &storage, &memory, &model_handle, &config).await {
         tracing::warn!(agent_id = %agent_id, error = %error, "memory pipeline failed");
     }
 }
@@ -492,10 +491,12 @@ mod tests {
             .unwrap();
         storage.end_session(session_id).await.unwrap();
 
-        run_pipeline(agent_id, &storage, &memory, &model, &memory.config)
+        let config = memory.effective_memory_config();
+        run_pipeline(agent_id, &storage, &memory, &model, &config)
             .await
             .unwrap();
-        run_pipeline(agent_id, &storage, &memory, &model, &memory.config)
+        let config = memory.effective_memory_config();
+        run_pipeline(agent_id, &storage, &memory, &model, &config)
             .await
             .unwrap();
 

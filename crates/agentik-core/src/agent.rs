@@ -299,7 +299,8 @@ impl Agent {
             );
 
             if let Some(memory) = &self.shared.memory {
-                if memory.config.generate_memory && memory.config.is_root_agent(&self.shared.path) {
+                let memory_config = memory.effective_memory_config();
+                if memory_config.generate_memory && memory_config.is_root_agent(&self.shared.path) {
                     let agent_id = self.shared.id;
                     let storage = Arc::clone(&storage);
                     let memory = Arc::clone(memory);

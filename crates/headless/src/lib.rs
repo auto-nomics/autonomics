@@ -42,7 +42,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use agentik_core::AgentProfile;
+use agentik_core::{AgentProfile, AgentRuntimeOverrides};
 use agentik_sdk::model::Model;
 use agentik_types::{AgentEvent, CompactEvent, TurnExecutionStatus};
 use arc_swap::ArcSwapOption;
@@ -168,6 +168,8 @@ pub struct RunTaskConfig {
     pub prompt: String,
     /// Profile path to spawn from; `None` picks the first stored profile.
     pub profile: Option<String>,
+    /// Runtime overrides layered onto the selected profile before spawn.
+    pub agent_runtime: AgentRuntimeOverrides,
     /// Agent name segment, mounted directly under the root path.
     pub agent_name: String,
     /// The model the agent runs with. `None` leaves the host without a
@@ -338,6 +340,7 @@ impl RunTaskConfig {
             run_id: Uuid::new_v4(),
             prompt: prompt.into(),
             profile: None,
+            agent_runtime: AgentRuntimeOverrides::default(),
             agent_name: "headless".to_string(),
             model: None,
             model_name: None,
@@ -675,10 +678,11 @@ pub async fn run_task<P: OutputProcessor>(
     let profile_storage = host.infra().profile_storage.clone();
     let _ = profile_storage.seed_defaults_if_empty().await;
     let profiles = profile_storage.list_profiles().await.unwrap_or_default();
-    let profile =
+    let mut profile =
         pick_profile(&profiles, config.profile.as_deref()).ok_or(RunError::NoProfile {
             requested: config.profile.clone(),
         })?;
+    profile.apply_runtime_overrides(config.agent_runtime);
     host.set_profiles(profiles);
     host.set_model(Arc::new(ArcSwapOption::from_pointee(config.model)));
 

@@ -170,8 +170,9 @@ pub struct SharedInfra {
     /// LaTeX writing system (store + optional engine), opened **once** per
     /// process. Reuses `bib` for citation resolution when available.
     pub writing: Arc<writing_base::WritingShared>,
-    /// Persistent cross-session memory backend shared by root agents.
-    pub memory: Option<Arc<MemoryBackend>>,
+    /// Base persistent-memory backend. Each agent gets a clone with its own
+    /// resolved runtime overrides while sharing the store and grounding sink.
+    pub memory: Arc<MemoryBackend>,
     /// Optional Turso-backed KMS knowledge service.
     pub kms: Option<Arc<kms::KmsService>>,
     /// The tokio runtime handle (for spawning agent tasks).
@@ -307,12 +308,10 @@ impl SharedInfra {
         let grounding: Option<Arc<dyn SemanticGrounding>> = kms
             .as_ref()
             .map(|service| Arc::new(KmsMemoryGrounding::new(Arc::clone(service))) as Arc<_>);
-        let memory = (config.use_memory || config.generate_memory).then(|| {
-            let mut memory_config = MemoryConfig::new();
-            memory_config.use_memory = config.use_memory;
-            memory_config.generate_memory = config.generate_memory;
-            Arc::new(MemoryBackend::new(memory_config, memory_store, grounding))
-        });
+        let mut memory_config = MemoryConfig::new();
+        memory_config.use_memory = config.use_memory;
+        memory_config.generate_memory = config.generate_memory;
+        let memory = Arc::new(MemoryBackend::new(memory_config, memory_store, grounding));
 
         let bib_db_path = config.bib_db_path.clone();
         tracing::info!(
@@ -384,6 +383,16 @@ impl SharedInfra {
 
         let config_json = serde_json::to_value(profile).unwrap_or_default();
         let storage = self.storage.clone();
+        let defaults = self.memory.runtime_config();
+        let runtime_config = agentik_core::AgentRuntimeConfig::new(
+            profile.runtime.use_memory.unwrap_or(defaults.use_memory),
+            profile
+                .runtime
+                .generate_memory
+                .unwrap_or(defaults.generate_memory),
+        );
+        let memory = Arc::new(MemoryBackend::clone(&self.memory));
+        memory.set_runtime_config(runtime_config);
 
         let mut builder = Agent::builder()
             .with_model(model.clone())
@@ -392,13 +401,7 @@ impl SharedInfra {
             .with_config_json(config_json)
             .with_system_prompt_identity(&profile.agent_identity)
             .with_storage(storage.clone());
-        if let Some(memory) = self.memory.clone() {
-            builder = builder.with_memory(
-                memory.config.clone(),
-                Arc::clone(&memory.store),
-                memory.grounding.clone(),
-            );
-        }
+        builder = builder.with_memory_backend(Arc::clone(&memory));
 
         if let Some(ref prompt) = profile.system_prompt {
             builder = builder.with_system_prompt_section(prompt);
@@ -448,6 +451,7 @@ impl SharedInfra {
             agent_task,
             cancel_token,
             model: model_handle,
+            memory,
         })
     }
 
@@ -879,6 +883,7 @@ pub struct AgentHandle {
         tokio::task::JoinHandle<std::result::Result<(), agentik_core::supervise::TaskPanic>>,
     cancel_token: CancellationToken,
     model: Arc<ArcSwapOption<Model>>,
+    memory: Arc<MemoryBackend>,
 }
 
 impl AgentHandle {
@@ -980,6 +985,19 @@ impl AgentHandle {
     /// picks up the new model on its next LLM request.
     pub fn set_model(&self, model: Model) {
         self.model.store(Some(Arc::new(model)));
+    }
+
+    /// Update this agent's runtime settings in place.
+    ///
+    /// The same backend Arc is held by `AgentShared`, so prompt injection,
+    /// memory tools, and background consolidation observe the update without
+    /// rebuilding the agent or dropping its sessions.
+    pub fn set_runtime_config(&self, config: agentik_core::AgentRuntimeConfig) {
+        self.memory.set_runtime_config(config);
+    }
+
+    pub fn runtime_config(&self) -> agentik_core::AgentRuntimeConfig {
+        self.memory.runtime_config()
     }
 
     // ── Session management ────────────────────────────────
@@ -1178,6 +1196,8 @@ struct AgentEntry {
     /// Allows querying and hot-swapping the model without direct
     /// access to the moved AgentHandle.
     model: Arc<ArcSwapOption<Model>>,
+    /// Shared memory backend — same Arc as the agent's runtime.
+    memory: Arc<MemoryBackend>,
 }
 
 struct HostDelegation {
@@ -1842,6 +1862,51 @@ impl RuntimeHost {
             HostCommand::SetAgentModel { name, model } => {
                 self.send_agent_command(&name, AgentCommand::SetModel(model));
             }
+            HostCommand::SetAgentRuntimeConfig {
+                name,
+                overrides,
+                reply_tx,
+            } => {
+                let defaults = self.infra.memory.runtime_config();
+                let resolved = self.resolve_agent(&name).and_then(|key| {
+                    self.agents.get(&key).map(|entry| {
+                        let previous = entry.memory.runtime_config();
+                        let mut config = defaults;
+                        if let Some(enabled) = overrides.use_memory {
+                            config.use_memory = enabled;
+                        }
+                        if let Some(enabled) = overrides.generate_memory {
+                            config.generate_memory = enabled;
+                        }
+                        entry.memory.set_runtime_config(config);
+                        if !previous.generate_memory
+                            && config.generate_memory
+                            && agentik_types::AgentPath::try_from(key.as_str()).is_ok_and(|path| {
+                                self.infra
+                                    .memory
+                                    .effective_memory_config()
+                                    .is_root_agent(&path)
+                            })
+                            && let Some(agent_id) = entry.info.agent_id
+                        {
+                            let storage = self.infra.storage.clone();
+                            let memory = Arc::clone(&entry.memory);
+                            let model = Arc::clone(&entry.model);
+                            let task_name = format!("memory_runtime_update::{key}");
+                            agentik_core::supervise::spawn_safe_on_drop(
+                                &self.infra.runtime_handle,
+                                &task_name,
+                                agentik_core::memory::run_memory_pipeline(
+                                    agent_id, storage, memory, model,
+                                ),
+                            );
+                        }
+                        config
+                    })
+                });
+                let reply = resolved.ok_or_else(|| format!("agent `{name}` not found"));
+                let _ = reply_tx.send(reply);
+            }
             HostCommand::GetAgentModel { name, reply_tx } => {
                 let resolved = self.resolve_agent(&name);
                 let info = resolved
@@ -2171,6 +2236,7 @@ impl RuntimeHost {
         let agent_id = handle.agent_id;
         let relay_name = path.as_str().to_string();
         let model = handle.model.clone(); // Clone Arc before moving handle
+        let memory = Arc::clone(&handle.memory);
         let mut info = info;
         info.agent_id = Some(agent_id);
         let event_tx = self.event_tx.clone();
@@ -2193,6 +2259,7 @@ impl RuntimeHost {
                 last_event: info.last_event.clone(),
                 info: info.clone(),
                 model,
+                memory,
             },
         );
 

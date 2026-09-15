@@ -188,6 +188,41 @@ pub struct ProfileOverrides {
     pub enable_string: Option<bool>,
     pub enable_kegg: Option<bool>,
     pub enable_dag_history: Option<bool>,
+    pub use_memory: Option<bool>,
+    pub generate_memory: Option<bool>,
+}
+
+/// Optional per-agent settings layered on the daemon-wide runtime defaults.
+///
+/// `None` means "inherit". The structure is deliberately shared by profiles,
+/// the TUI, the gateway wire protocol, and headless embedders; new per-agent
+/// settings should be added here rather than to a frontend-specific type.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentRuntimeOverrides {
+    /// Inject the persistent-memory summary and allow memory tools.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub use_memory: Option<bool>,
+    /// Run persistent-memory extraction and consolidation for this agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generate_memory: Option<bool>,
+}
+
+/// Fully resolved per-agent settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct AgentRuntimeConfig {
+    pub use_memory: bool,
+    pub generate_memory: bool,
+}
+
+impl AgentRuntimeConfig {
+    #[must_use]
+    pub fn new(use_memory: bool, generate_memory: bool) -> Self {
+        Self {
+            use_memory,
+            generate_memory,
+        }
+    }
 }
 
 /// A hierarchical, persisted agent configuration template that can be
@@ -245,6 +280,9 @@ pub struct AgentProfile {
     /// global default.
     #[serde(default)]
     pub preferred_model: Option<String>,
+    /// Runtime settings layered on top of the daemon-wide defaults.
+    #[serde(default)]
+    pub runtime: AgentRuntimeOverrides,
 
     pub created_at: i64,
     pub updated_at: i64,
@@ -259,6 +297,16 @@ impl AgentProfile {
     /// Mirrors `AgentPath::name()`.
     pub fn name(&self) -> &str {
         self.path.rsplit('/').next().unwrap_or(&self.path)
+    }
+
+    /// Layer caller-provided runtime overrides onto this profile.
+    ///
+    /// Existing profile overrides remain active for fields the caller leaves
+    /// as `None`. This is the shared entry point used by TUI, gateway, and
+    /// headless callers before an agent is spawned.
+    pub fn apply_runtime_overrides(&mut self, overrides: AgentRuntimeOverrides) {
+        self.runtime.use_memory = overrides.use_memory.or(self.runtime.use_memory);
+        self.runtime.generate_memory = overrides.generate_memory.or(self.runtime.generate_memory);
     }
 
     /// Parent profile path, or `None` for root profiles.
@@ -291,6 +339,7 @@ impl AgentProfile {
             enable_kegg: true,
             enable_dag_history: true,
             preferred_model: None,
+            runtime: AgentRuntimeOverrides::default(),
             created_at: now,
             updated_at: now,
         }
@@ -341,6 +390,10 @@ impl AgentProfile {
             preferred_model: overrides
                 .preferred_model
                 .unwrap_or_else(|| self.preferred_model.clone()),
+            runtime: AgentRuntimeOverrides {
+                use_memory: overrides.use_memory.or(self.runtime.use_memory),
+                generate_memory: overrides.generate_memory.or(self.runtime.generate_memory),
+            },
             created_at: now,
             updated_at: now,
         })
@@ -369,6 +422,7 @@ impl AgentProfile {
                 enable_kegg: true,
                 enable_dag_history: true,
                 preferred_model: None,
+                runtime: AgentRuntimeOverrides::default(),
                 created_at: now,
                 updated_at: now,
             },
@@ -392,6 +446,7 @@ impl AgentProfile {
                 enable_kegg: false,
                 enable_dag_history: false,
                 preferred_model: None,
+                runtime: AgentRuntimeOverrides::default(),
                 created_at: now,
                 updated_at: now,
             },
@@ -415,6 +470,7 @@ impl AgentProfile {
                 enable_kegg: true,
                 enable_dag_history: true,
                 preferred_model: None,
+                runtime: AgentRuntimeOverrides::default(),
                 created_at: now,
                 updated_at: now,
             },
@@ -439,6 +495,7 @@ impl AgentProfile {
                 enable_kegg: true,
                 enable_dag_history: true,
                 preferred_model: None,
+                runtime: AgentRuntimeOverrides::default(),
                 created_at: now,
                 updated_at: now,
             },
@@ -475,6 +532,7 @@ impl AgentProfile {
                 enable_kegg: false,
                 enable_dag_history: false,
                 preferred_model: None,
+                runtime: AgentRuntimeOverrides::default(),
                 created_at: now,
                 updated_at: now,
             },
@@ -865,5 +923,26 @@ mod profile_compat_tests {
         value.as_object_mut().unwrap().remove("enable_string");
         let restored: AgentProfile = serde_json::from_value(value).unwrap();
         assert!(restored.enable_string);
+    }
+
+    #[test]
+    fn legacy_profile_without_runtime_defaults_to_inherit() {
+        let profile = AgentProfile::new("legacy");
+        let mut value = serde_json::to_value(&profile).unwrap();
+        value.as_object_mut().unwrap().remove("runtime");
+        let restored: AgentProfile = serde_json::from_value(value).unwrap();
+        assert_eq!(restored.runtime, AgentRuntimeOverrides::default());
+    }
+
+    #[test]
+    fn runtime_overrides_layer_without_discarding_profile_values() {
+        let mut profile = AgentProfile::new("researcher");
+        profile.runtime.generate_memory = Some(false);
+        profile.apply_runtime_overrides(AgentRuntimeOverrides {
+            use_memory: Some(false),
+            generate_memory: None,
+        });
+        assert_eq!(profile.runtime.use_memory, Some(false));
+        assert_eq!(profile.runtime.generate_memory, Some(false));
     }
 }

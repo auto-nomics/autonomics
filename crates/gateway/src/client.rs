@@ -295,6 +295,24 @@ impl GatewayClient {
             .await
     }
 
+    pub async fn agent_runtime_config(&self, agent: &str) -> Result<AgentRuntimeConfigView> {
+        self.get(&format!("/agents/{}/config", encode_segment(agent)))
+            .await
+    }
+
+    pub async fn set_agent_runtime_config(
+        &self,
+        agent: &str,
+        runtime: agentik_core::AgentRuntimeOverrides,
+    ) -> Result<AgentRuntimeConfigView> {
+        self.send(
+            reqwest::Method::PUT,
+            &format!("/agents/{}/config", encode_segment(agent)),
+            Some(&SetAgentRuntimeConfigRequest { runtime }),
+        )
+        .await
+    }
+
     /// Hot-swap an agent's model (also persists the preference).
     pub async fn set_agent_model(&self, agent: &str, spec: &str) -> Result<()> {
         self.fire(

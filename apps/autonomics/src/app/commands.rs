@@ -112,6 +112,9 @@ impl App {
             CommandAction::ModelConfig => {
                 self.state.model_config_visible = true;
             }
+            CommandAction::AgentConfig => {
+                self.open_agent_config();
+            }
             CommandAction::ViewDag => {
                 self.open_dag_view();
             }

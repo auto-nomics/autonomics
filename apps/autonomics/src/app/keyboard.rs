@@ -72,6 +72,7 @@ impl App {
             || state.message_picker.is_visible()
             || state.dag_view_visible
             || state.model_config_visible
+            || state.agent_config.visible
         {
             return 0;
         }
@@ -187,6 +188,11 @@ impl App {
         // Model config popup captures keys when visible.
         if self.state.model_config_visible {
             self.handle_model_config_key(key);
+            return;
+        }
+
+        if self.state.agent_config.visible {
+            self.handle_agent_config_key(key);
             return;
         }
 

@@ -75,6 +75,16 @@ pub(crate) enum AppEvent {
         provider_name: String,
         result: std::result::Result<(), String>,
     },
+    /// Per-agent runtime configuration arrived from the daemon.
+    AgentConfigLoaded {
+        agent: String,
+        result: std::result::Result<gateway::proto::AgentRuntimeConfigView, String>,
+    },
+    /// Per-agent runtime configuration was saved.
+    AgentConfigSaved {
+        agent: String,
+        result: std::result::Result<gateway::proto::AgentRuntimeConfigView, String>,
+    },
     /// A live agent seen in a `/state` snapshot that the UI doesn't know
     /// yet (reconcile after lag / reconnect).
     AgentUpserted(gateway::AgentInfo),

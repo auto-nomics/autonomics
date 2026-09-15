@@ -19,6 +19,8 @@ pub use agentik_types::SessionInfo;
 pub use context::ContextProvider;
 pub use session::Session;
 pub use storage::turso_storage::TursoAgentStorage;
-pub use storage::{AgentProfile, AgentProfileRegistry, ProfileOverrides};
+pub use storage::{
+    AgentProfile, AgentProfileRegistry, AgentRuntimeConfig, AgentRuntimeOverrides, ProfileOverrides,
+};
 
 pub use agentik_sdk::{model, provider};

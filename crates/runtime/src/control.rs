@@ -9,6 +9,7 @@
 //! `oneshot` reply channel; the tool `await`s it.
 
 use agentik_core::tools::ProgressBuffer;
+use agentik_core::{AgentRuntimeConfig, AgentRuntimeOverrides};
 use agentik_network::{EdgeTrigger, TerminationSpec};
 use agentik_sdk::model::Model;
 use serde::{Deserialize, Serialize};
@@ -254,6 +255,21 @@ impl HostControl {
         })
         .await
         .flatten()
+    }
+
+    /// Layer runtime overrides onto a live agent and return its resolved config.
+    pub async fn set_agent_runtime_config(
+        &self,
+        name: &str,
+        overrides: AgentRuntimeOverrides,
+    ) -> Result<AgentRuntimeConfig, String> {
+        self.ask(|tx| HostCommand::SetAgentRuntimeConfig {
+            name: name.into(),
+            overrides: Box::new(overrides),
+            reply_tx: tx,
+        })
+        .await
+        .unwrap_or(Err("host command channel closed".into()))
     }
 
     pub async fn spawn_agent(
@@ -563,6 +579,13 @@ pub enum HostCommand {
     // ── Model management ──
     /// Hot-swap the model of a named agent.
     SetAgentModel { name: String, model: Model },
+
+    /// Set per-agent runtime overrides. Reply: effective config or error.
+    SetAgentRuntimeConfig {
+        name: String,
+        overrides: Box<AgentRuntimeOverrides>,
+        reply_tx: oneshot::Sender<Result<AgentRuntimeConfig, String>>,
+    },
 
     /// Query model info (name + context length) for a named agent.
     GetAgentModel {

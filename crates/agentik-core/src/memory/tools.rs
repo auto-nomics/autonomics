@@ -101,6 +101,9 @@ impl ToolFunction for MemorySearchTool {
     type Input = MemorySearchInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
+        if !self.backend.effective_memory_config().use_memory {
+            return Ok(ToolResult::error("memory is disabled for this agent"));
+        }
         if input.queries.iter().any(String::is_empty) {
             return Ok(ToolResult::error("memory search queries must not be empty"));
         }
@@ -170,6 +173,9 @@ impl ToolFunction for MemoryReadTool {
     type Input = MemoryReadInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
+        if !self.backend.effective_memory_config().use_memory {
+            return Ok(ToolResult::error("memory is disabled for this agent"));
+        }
         let offset = input.offset.unwrap_or(1).max(1);
         let limit = input
             .limit
@@ -236,6 +242,9 @@ impl ToolFunction for MemoryListTool {
     type Input = MemoryListInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
+        if !self.backend.effective_memory_config().use_memory {
+            return Ok(ToolResult::error("memory is disabled for this agent"));
+        }
         let limit = input
             .limit
             .unwrap_or(DEFAULT_LIST_RESULTS)
@@ -269,6 +278,9 @@ impl ToolFunction for MemoryNoteTool {
     type Input = MemoryNoteInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
+        if !self.backend.effective_memory_config().use_memory {
+            return Ok(ToolResult::error("memory is disabled for this agent"));
+        }
         let content = redact_secrets(input.content.trim());
         if content.is_empty() {
             return Ok(ToolResult::error("memory note content must not be empty"));
