@@ -41,6 +41,7 @@ pub enum FileFormat {
     Bcf,
     Fasta,
     Fastq,
+    Mtx,
     Bed,
     Gtf,
     Gff,
@@ -69,6 +70,8 @@ impl FileFormat {
             (".fastq", FileFormat::Fastq),
             (".fq.gz", FileFormat::Fastq),
             (".fq", FileFormat::Fastq),
+            (".mtx.gz", FileFormat::Mtx),
+            (".mtx", FileFormat::Mtx),
             (".bed.gz", FileFormat::Bed),
             (".bed", FileFormat::Bed),
             (".gtf.gz", FileFormat::Gtf),
@@ -110,6 +113,7 @@ impl FileFormat {
             "bcf" => Some(Self::Bcf),
             "fasta" => Some(Self::Fasta),
             "fastq" => Some(Self::Fastq),
+            "mtx" | "matrixmarket" => Some(Self::Mtx),
             "bed" => Some(Self::Bed),
             "gtf" => Some(Self::Gtf),
             "gff" => Some(Self::Gff),
@@ -132,6 +136,7 @@ impl FileFormat {
             Self::Bcf => "bcf",
             Self::Fasta => "fasta",
             Self::Fastq => "fastq",
+            Self::Mtx => "mtx",
             Self::Bed => "bed",
             Self::Gtf => "gtf",
             Self::Gff => "gff",
@@ -237,7 +242,7 @@ impl NodeFactory for FileToDataFrameNodeFactory {
         "Reads an external path or an upstream file reference into a \
         DataFrame. Supports local/remote files: CSV/TSV/Parquet via \
         DataFusion, JSON arrays and NDJSON (including .json.gz), and \
-        bioinformatics formats (VCF, BAM, BED, GTF, FASTA, etc.) via \
+        bioinformatics formats (VCF, BAM, BED, GTF, FASTA, MatrixMarket, etc.) via \
         biofusion. Format is inferred from the \
         extension when not given explicitly. Optional file input; one \
         DataFrame output."
@@ -325,6 +330,13 @@ impl NodeFactory for FileToDataFrameNodeFactory {
             }
             FileFormat::Bed => {
                 format!(r#"{out} <- read.table({path}, sep = "\t", header = FALSE)"#)
+            }
+            FileFormat::Mtx => {
+                format!(
+                    "# NOTE: MatrixMarket is loaded as the long table (row, column, value).\n\
+                     mm_summary <- Matrix::summary(Matrix::readMM({path}))\n\
+                     {out} <- data.frame(row = mm_summary$i, column = mm_summary$j, value = mm_summary$x)"
+                )
             }
             _ => {
                 // Fallback: comment + placeholder
@@ -530,6 +542,7 @@ async fn read_file(
         Bcf => ctx.read_bcf(path, BioReadOptions::default()).await,
         Fasta => ctx.read_fasta(path, BioReadOptions::default()).await,
         Fastq => ctx.read_fastq(path, BioReadOptions::default()).await,
+        Mtx => ctx.read_mtx(path, BioReadOptions::default()).await,
         Bed => ctx.read_bed(path, BioReadOptions::default()).await,
         Gtf => ctx.read_gtf(path, BioReadOptions::default()).await,
         Gff => ctx.read_gff(path, BioReadOptions::default()).await,
@@ -1107,4 +1120,50 @@ mod tests {
             );
         }
     }
+}
+
+#[tokio::test]
+async fn file_to_dataframe_reads_matrixmarket_long_table() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("counts.mtx");
+    std::fs::write(
+        &path,
+        "%%MatrixMarket matrix coordinate integer general\n\
+         % rows are genes and columns are cells\n\
+         2 3 4\n\
+         1 1 10\n\
+         1 3 2\n\
+         2 1 5\n\
+         2 2 7\n",
+    )
+    .unwrap();
+
+    let ctx = SessionContext::new();
+    let node_ctx = dag_core::registry::NodeCtx::new(ctx.runtime_env().clone(), None);
+    let mut node = FileToDataFrameNode::new(Some(path.to_string_lossy().to_string()), None);
+    let outputs = node
+        .execute(
+            &node_ctx,
+            &[],
+            &dag_core::dag::node_event::NodeReporter::noop(),
+        )
+        .await
+        .unwrap();
+    let df = outputs.dataframe(0).unwrap();
+
+    let fields: Vec<&str> = df
+        .schema()
+        .fields()
+        .iter()
+        .map(|field| field.name().as_str())
+        .collect();
+    assert_eq!(fields, ["row", "column", "value"]);
+    assert_eq!(
+        df.schema()
+            .field_with_name(None, "value")
+            .unwrap()
+            .data_type(),
+        &arrow_schema::DataType::Float64
+    );
+    assert_eq!(df.clone().count().await.unwrap(), 4);
 }

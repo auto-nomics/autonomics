@@ -21,6 +21,7 @@ biofusion turns a JSON / VCF / BAM / CRAM / BigWig / … file into a queryable [
 | `read_bcf`    | BCF                     |                                             |
 | `read_fasta`  | FASTA                   |                                             |
 | `read_fastq`  | FASTQ                   |                                             |
+| `read_mtx`    | MatrixMarket (`.mtx`)   | sparse coordinate input as a long table      |
 | `read_bed`    | BED                     |                                             |
 | `read_gtf`    | GTF                     |                                             |
 | `read_gff`    | GFF                     |                                             |
@@ -31,6 +32,10 @@ biofusion turns a JSON / VCF / BAM / CRAM / BigWig / … file into a queryable [
 | `read_bigbed` | BigBed                  | read-only via `bigtools`                    |
 
 Compression (gzip / BGZF) is auto-detected from the file's magic bytes — you don't need to tell the reader whether a `.vcf.gz` is BGZF or plain gzip.
+
+`read_mtx` represents sparse coordinate data as `row`, `column`, and `value`
+columns. Matrix Market coordinates are 1-based and are preserved as written.
+Pattern entries produce `value = 1`; `general` matrices are supported.
 
 ## Quick start
 

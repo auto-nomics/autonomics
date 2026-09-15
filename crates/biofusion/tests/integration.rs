@@ -74,6 +74,51 @@ format_smoke!(read_fasta, read_fasta, "sample.fasta");
 format_smoke!(read_fasta_gz, read_fasta, "sample.fasta.gz");
 format_smoke!(read_fastq, read_fastq, "sample.fastq");
 format_smoke!(read_fastq_gz, read_fastq, "sample.fastq.gz");
+
+#[tokio::test]
+async fn read_mtx_long_table_and_batches() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("sample.mtx");
+    std::fs::write(
+        &path,
+        "%%MatrixMarket matrix coordinate integer general\n\
+         % test sparse matrix\n\
+         2 3 4\n\
+         1 1 10\n\
+         1 3 2\n\
+         2 1 5\n\
+         2 2 7\n",
+    )
+    .unwrap();
+
+    let ctx = SessionContext::new();
+    let df = ctx
+        .read_mtx(path.to_str().unwrap(), BioReadOptions::default())
+        .await
+        .unwrap();
+    let names: Vec<_> = df
+        .schema()
+        .fields()
+        .iter()
+        .map(|field| field.name().as_str())
+        .collect();
+    assert_eq!(names, ["row", "column", "value"]);
+    assert_eq!(df.count().await.unwrap(), 4);
+
+    let ctx = SessionContext::new();
+    let batched = ctx
+        .read_mtx(
+            path.to_str().unwrap(),
+            BioReadOptions::default().with_batch_size(2),
+        )
+        .await
+        .unwrap();
+    let batches = batched.collect().await.unwrap();
+    assert_eq!(
+        batches.iter().map(|batch| batch.num_rows()).sum::<usize>(),
+        4
+    );
+}
 format_smoke!(read_bed, read_bed, "sample.bed");
 format_smoke!(read_bed_gz, read_bed, "sample.bed.gz");
 format_smoke!(read_gtf, read_gtf, "sample.gtf");

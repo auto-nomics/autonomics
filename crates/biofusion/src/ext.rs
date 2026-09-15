@@ -27,7 +27,7 @@ use oxbow::{CoordSystem, Region as OxRegion, Select}; // bring trait methods int
 
 use crate::datasource::drivers::{
     BamDriver, BcfDriver, BedDriver, BigBedDriver, BigWigDriver, CramDriver, FastaDriver,
-    FastqDriver, GffDriver, GtfDriver, SamDriver, VcfDriver,
+    FastqDriver, GffDriver, GtfDriver, MtxDriver, SamDriver, VcfDriver,
 };
 use crate::datasource::{BioReadOptions, read_bio, read_json};
 use datafusion::common::Result;
@@ -58,6 +58,13 @@ pub trait DataFusionReadExt {
 
     /// Read FASTQ file(s).
     fn read_fastq<P: DataFilePaths + Send>(
+        &self,
+        table_paths: P,
+        options: BioReadOptions,
+    ) -> impl std::future::Future<Output = Result<DataFrame>> + Send;
+
+    /// Read a MatrixMarket coordinate file as a long-table [`DataFrame`].
+    fn read_mtx<P: DataFilePaths + Send>(
         &self,
         table_paths: P,
         options: BioReadOptions,
@@ -174,6 +181,13 @@ impl DataFusionReadExt for SessionContext {
         options: BioReadOptions,
     ) -> impl std::future::Future<Output = Result<DataFrame>> + Send {
         read_bio::<FastqDriver, _>(self, table_paths, options)
+    }
+    fn read_mtx<P: DataFilePaths + Send>(
+        &self,
+        table_paths: P,
+        options: BioReadOptions,
+    ) -> impl std::future::Future<Output = Result<DataFrame>> + Send {
+        read_bio::<MtxDriver, _>(self, table_paths, options)
     }
     fn read_bed<P: DataFilePaths + Send>(
         &self,

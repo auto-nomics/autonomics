@@ -13,6 +13,7 @@ pub mod fasta;
 pub mod fastq;
 pub mod gff;
 pub mod gtf;
+pub mod mtx;
 pub mod sam;
 pub mod vcf;
 
@@ -26,5 +27,6 @@ pub use fasta::FastaDriver;
 pub use fastq::FastqDriver;
 pub use gff::GffDriver;
 pub use gtf::GtfDriver;
+pub use mtx::MtxDriver;
 pub use sam::SamDriver;
 pub use vcf::VcfDriver;
