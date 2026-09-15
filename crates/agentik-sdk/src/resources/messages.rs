@@ -115,8 +115,11 @@ impl<'a> MessagesResource<'a> {
     /// Create a streaming message with explicit `StreamConfig`.
     ///
     /// The supplied config controls per-chunk idle timeout (`event_timeout`),
+    /// the post-`MessageStart` inactivity window (`stall_timeout`),
     /// automatic reconnect-and-retry on pre-`MessageStart` stalls
     /// (`retry_on_error` / `max_retries`), and the broadcast buffer size.
+    /// Both windows reset on any wire activity, including SSE events the
+    /// wire adapter skips.
     pub async fn create_stream_with_config(
         &self,
         mut params: MessageCreateParams,

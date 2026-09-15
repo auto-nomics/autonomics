@@ -222,16 +222,25 @@ impl MessageStream {
     ///
     /// Semantics:
     /// - Each chunk is gated by `config.event_timeout` seconds. If no
-    ///   event arrives in that window, the current HttpStreamClient is
-    ///   dropped (canceling its underlying reqwest connection) and
-    ///   `reconnect` is invoked to open a fresh one. The retry counter
-    ///   is bounded by `config.max_retries`.
+    ///   wire activity arrives in that window, the current
+    ///   HttpStreamClient is dropped (canceling its underlying reqwest
+    ///   connection) and `reconnect` is invoked to open a fresh one.
+    ///   The retry counter is bounded by `config.max_retries`.
     /// - Once a `MessageStart` event has been emitted, the stream is
-    ///   considered "in flight" and any subsequent timeout / network
-    ///   error terminates the stream with
+    ///   considered "in flight": reconnecting would restart generation
+    ///   from scratch, so the inactivity window widens to
+    ///   `config.stall_timeout` (default 900s — reasoning models can
+    ///   think for many minutes before the next canonical event) and any
+    ///   timeout / network error terminates the stream with
     ///   [`crate::types::AnthropicError::StreamError`] (the partial
     ///   message accumulated so far is still returned via
     ///   `final_message()`).
+    /// - Both windows are activity-aware: they reset on *any* raw SSE
+    ///   item parsed off the wire, including events the wire adapter
+    ///   skips (`ping`, comments, protocol bookkeeping — see
+    ///   [`crate::http::streaming::HttpStreamClient::parsed_event_count`]).
+    ///   A connection that trickles skipped events is alive and is never
+    ///   killed; only true wire silence for a full window is a stall.
     /// - If `reconnect` itself returns an error, the retry counter is
     ///   still consumed and the stream terminates with that error
     ///   once `max_retries` is exhausted.
@@ -261,6 +270,12 @@ impl MessageStream {
 
         // Idle timeout (per chunk). Default 300s (5 minutes), matching StreamConfig.
         let event_timeout_secs = config.event_timeout.unwrap_or(300);
+        // Post-MessageStart the partial message is already delivered; a
+        // reconnect would restart generation from scratch. Reasoning
+        // models (e.g. gpt-5.6 on high effort) can think for many
+        // minutes before the next canonical event, so the inactivity
+        // window is deliberately much larger than the pre-start one.
+        let stall_timeout_secs = config.stall_timeout.unwrap_or(900);
         let max_retries = config.max_retries.unwrap_or(3);
         let retry_on_error = config.retry_on_error;
 
@@ -280,7 +295,6 @@ impl MessageStream {
 
             let mut final_message: Option<crate::types::Message> = None;
             let mut completion_sender = Some(completion_sender);
-            let timeout_duration = std::time::Duration::from_secs(event_timeout_secs);
             let mut saw_message_start = false;
             let mut retries_used: u32 = 0;
 
@@ -290,15 +304,44 @@ impl MessageStream {
                 }
 
                 loop {
-                    let next_result =
-                        tokio::time::timeout(timeout_duration, http_stream.next()).await;
+                    // Arm the idle window against the stream's activity
+                    // counter. `http_stream.next()` only resolves on
+                    // canonical events; skipped SSE events (ping /
+                    // comments / adapter `Ok(None)`) produce no items.
+                    // Snapshot the count so that when the timer fires we
+                    // can tell "events arrived but were all skipped"
+                    // (connection alive — re-arm) from "the wire was
+                    // silent" (true stall).
+                    let basis = http_stream.parsed_event_count();
+                    let window_secs = if saw_message_start {
+                        stall_timeout_secs
+                    } else {
+                        event_timeout_secs
+                    };
+                    let next_result = tokio::time::timeout(
+                        std::time::Duration::from_secs(window_secs),
+                        http_stream.next(),
+                    )
+                    .await;
 
                     match next_result {
                         Err(_elapsed) => {
+                            if http_stream.parsed_event_count() != basis {
+                                // Skipped events kept arriving inside the
+                                // window — the connection is alive, the
+                                // model just isn't emitting canonical
+                                // events (e.g. server-side reasoning).
+                                // Re-arm instead of killing the stream.
+                                tracing::debug!(
+                                    window_secs,
+                                    "idle window elapsed but wire activity observed; re-arming"
+                                );
+                                continue;
+                            }
                             tracing::warn!(
-                                timeout_secs = event_timeout_secs,
+                                window_secs,
                                 saw_message_start,
-                                "stream idle timeout: no event received"
+                                "stream idle timeout: no wire activity"
                             );
                             if !saw_message_start && retry_on_error && retries_used < max_retries {
                                 retries_used += 1;
@@ -327,7 +370,7 @@ impl MessageStream {
                             }
                             let err = if saw_message_start {
                                 crate::types::AnthropicError::StreamError(format!(
-                                    "stream stalled after MessageStart (no event for {event_timeout_secs}s)"
+                                    "stream stalled after MessageStart (no wire activity for {window_secs}s)"
                                 ))
                             } else {
                                 crate::types::AnthropicError::Timeout
@@ -1301,6 +1344,7 @@ data: {\"type\":\"message_stop\"}\r\n\
         let config = crate::http::streaming::StreamConfig {
             buffer_size: 64,
             event_timeout: Some(1),
+            stall_timeout: Some(1),
             retry_on_error: true,
             max_retries: Some(2),
         };
@@ -1433,6 +1477,7 @@ data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":
         let config = crate::http::streaming::StreamConfig {
             buffer_size: 64,
             event_timeout: Some(1),
+            stall_timeout: Some(1),
             retry_on_error: true,
             max_retries: Some(3),
         };
@@ -1472,6 +1517,137 @@ data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":
             reconnect_calls.load(std::sync::atomic::Ordering::SeqCst),
             0,
             "reconnect must not fire after MessageStart"
+        );
+    }
+
+    /// Server variant: writes `prefix`, then a `skip_event` every 500ms
+    /// (of the paused tokio clock) `skip_rounds` times, then `tail`,
+    /// then holds the socket open. The skip events are ones the wire
+    /// adapter maps to `Ok(None)` — they produce no stream item but must
+    /// still count as wire activity for the idle watchdog.
+    async fn single_shot_periodic_skips_server(
+        prefix: &'static [u8],
+        skip_event: &'static [u8],
+        tail: &'static [u8],
+        skip_rounds: usize,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            if let Ok((mut sock, _)) = listener.accept().await {
+                let mut buf = vec![0u8; 4096];
+                let _ = sock.read(&mut buf).await;
+                let headers = "HTTP/1.1 200 OK\r\n\
+                     content-type: text/event-stream\r\n\
+                     connection: close\r\n\
+                     \r\n"
+                    .to_string();
+                let _ = sock.write_all(headers.as_bytes()).await;
+                let _ = sock.write_all(prefix).await;
+                for _ in 0..skip_rounds {
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    let _ = sock.write_all(skip_event).await;
+                }
+                let _ = sock.write_all(tail).await;
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+                }
+            }
+        });
+        (format!("http://{addr}"), handle)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn from_http_stream_with_retry_skipped_events_keep_stream_alive() {
+        // Regression: reasoning-heavy models can stream only "skipped"
+        // SSE events (ping / unknown types the adapter maps to Ok(None))
+        // for longer than the idle window. Skipped events produce no
+        // stream items, so a watchdog counting only canonical events
+        // kills a perfectly healthy connection ("stream stalled after
+        // MessageStart"). The fix resets the window on any wire
+        // activity: pings arriving every 500ms must keep a 1s window
+        // re-armed until the real tail completes the message.
+        let prefix = b"\
+event: message_start\r\n\
+data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_k\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"claude\",\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":1,\"output_tokens\":0,\"cache_creation_input_tokens\":null,\"cache_read_input_tokens\":null,\"server_tool_use\":null,\"service_tier\":null}}}\r\n\
+\r\n";
+        // `ping` events are skipped by the wire adapter (Ok(None)).
+        let skip = b"event: ping\r\ndata: {}\r\n\r\n";
+        let tail = b"\
+event: content_block_start\r\n\
+data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\r\n\
+\r\n\
+event: content_block_delta\r\n\
+data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}\r\n\
+\r\n\
+event: content_block_stop\r\n\
+data: {\"type\":\"content_block_stop\",\"index\":0}\r\n\
+\r\n\
+event: message_delta\r\n\
+data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"output_tokens\":2,\"input_tokens\":1,\"cache_creation_input_tokens\":null,\"cache_read_input_tokens\":null}}\r\n\
+\r\n\
+event: message_stop\r\n\
+data: {\"type\":\"message_stop\"}\r\n\
+\r\n";
+
+        // 12 rounds × 500ms = 6s of pings-only traffic — six times the
+        // 1s window, well inside the 30s paused-clock bound below.
+        let (url, _h) = single_shot_periodic_skips_server(prefix, skip, tail, 12).await;
+
+        let client = reqwest::Client::new();
+        let response = client.get(&url).send().await.expect("response");
+
+        let config = crate::http::streaming::StreamConfig {
+            buffer_size: 64,
+            event_timeout: Some(1),
+            stall_timeout: Some(1),
+            retry_on_error: true,
+            max_retries: Some(3),
+        };
+
+        let http_stream = crate::http::streaming::HttpStreamClient::from_response(
+            response,
+            config.clone(),
+            Arc::new(crate::wire::AnthropicWire),
+        )
+        .await
+        .unwrap();
+
+        let reconnect_calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let rc = reconnect_calls.clone();
+        let reconnect = move || {
+            rc.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            async {
+                Err(crate::types::AnthropicError::StreamError(
+                    "must not reconnect while skipped events keep arriving".to_string(),
+                ))
+            }
+        };
+
+        let stream = MessageStream::from_http_stream_with_retry(http_stream, reconnect, config)
+            .expect("construct");
+
+        // Advance the paused clock in small steps so both the server's
+        // 500ms ping cadence and the watchdog's 1s timer can fire.
+        tokio::spawn(async {
+            for _ in 0..300 {
+                tokio::time::advance(std::time::Duration::from_millis(100)).await;
+            }
+        });
+
+        let final_msg =
+            tokio::time::timeout(std::time::Duration::from_secs(30), stream.final_message())
+                .await
+                .expect("final_message resolves in bounded time")
+                .expect("wire activity must keep the stream alive until the tail completes");
+        assert_eq!(final_msg.id, "msg_k");
+        assert_eq!(
+            reconnect_calls.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "activity was observed throughout; no reconnect may fire"
         );
     }
 
