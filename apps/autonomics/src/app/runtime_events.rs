@@ -134,12 +134,12 @@ impl App {
     pub(super) fn handle_app_event(&mut self, event: crate::app_event::AppEvent) {
         match event {
             crate::app_event::AppEvent::AgentRecordsLoaded(records) => {
-                self.state.agent_picker.set_records(&records);
-                self.state.agent_picker.open();
+                self.state.agent_profile_picker.set_records(&records);
+                self.state.agent_profile_picker.open();
                 tracing::info!(count = records.len(), "agent records loaded for picker");
             }
             crate::app_event::AppEvent::AgentDeleted(agent_id) => {
-                self.state.agent_picker.remove_by_id(agent_id);
+                self.state.agent_profile_picker.remove_by_id(agent_id);
                 // If this agent's leaf is currently open, close it too — all
                 // stored data has been erased so there's nothing to resume.
                 self.close_agent_leaf_by_id(agent_id);
@@ -147,7 +147,7 @@ impl App {
             }
             crate::app_event::AppEvent::AgentRenamed { agent_id, new_path } => {
                 self.state
-                    .agent_picker
+                    .agent_profile_picker
                     .apply_rename(agent_id, new_path.clone());
                 tracing::info!(%agent_id, new_path = %new_path, "agent renamed in picker");
             }

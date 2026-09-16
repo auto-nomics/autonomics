@@ -49,6 +49,54 @@ pub struct LeafTab {
     pub status: AgentStatus,
 }
 
+/// Result of fitting tabs into a fixed width: how many tabs render, whether
+/// the rest were collapsed into a stub, and the display width the visible
+/// part occupies (the stub, if any, spans `used_width..width`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TabBarFit {
+    /// Number of tabs rendered before collapsing.
+    pub visible_tabs: usize,
+    /// `true` when the remaining tabs were collapsed into a `>` stub.
+    pub collapsed: bool,
+    /// Display width used by visible tabs + separators.
+    pub used_width: usize,
+}
+
+/// Decide which tabs fit into `width` columns. Shared by the renderer and
+/// the mouse handler (stub click detection) so both agree on the layout.
+///
+/// One column is reserved for the `>` stub so the collapse affordance is
+/// always visible. The active tab is never collapsed away: if it lies past
+/// the collapse point the visible range is extended to include it (any
+/// overflow is clipped by the terminal edge).
+pub(crate) fn fit_tabs(width: usize, tabs: &[LeafTab], active_idx: usize) -> TabBarFit {
+    let budget = width.saturating_sub(1); // reserve the stub column
+    let cost = |i: usize| -> usize {
+        let tab = &tabs[i];
+        let label_w = format!(" {} {} ", status_icon(&tab.status), tab.name).width();
+        label_w + usize::from(i + 1 < tabs.len())
+    };
+
+    let mut used = 0usize;
+    for i in 0..tabs.len() {
+        if used + cost(i) > budget && i != active_idx {
+            // Keep the active tab visible even past the collapse point.
+            let visible = (active_idx + 1).min(tabs.len()).max(i);
+            return TabBarFit {
+                visible_tabs: visible,
+                collapsed: visible < tabs.len(),
+                used_width: (0..visible).map(cost).sum(),
+            };
+        }
+        used += cost(i);
+    }
+    TabBarFit {
+        visible_tabs: tabs.len(),
+        collapsed: false,
+        used_width: used,
+    }
+}
+
 impl AgentWorkspace<'_> {
     /// Render the workspace: tab bar (1 row) + active leaf (remaining space).
     ///
@@ -143,24 +191,15 @@ impl AgentWorkspace<'_> {
     }
 
     fn render_top_tab_bar(area: Rect, buf: &mut Buffer, tabs: &[LeafTab], active_idx: usize) {
-        let budget = area.width as usize;
+        let fit = fit_tabs(area.width as usize, tabs, active_idx);
+        let visible = &tabs[..fit.visible_tabs];
         let mut spans: Vec<Span> = Vec::new();
-        let mut used = 0usize;
-        let mut collapsed = false;
 
-        for (i, tab) in tabs.iter().enumerate() {
+        for (i, tab) in visible.iter().enumerate() {
             let is_active = i == active_idx;
             let icon = status_icon(&tab.status);
             let color = status_color(&tab.status);
             let label = format!(" {} {} ", icon, tab.name);
-            let label_w = label.width();
-            let sep_w = usize::from(i + 1 < tabs.len()); // trailing separator
-
-            // Tab does not fit (and is not the active one) → collapse the rest.
-            if used + label_w + sep_w > budget && !is_active {
-                collapsed = true;
-                break;
-            }
 
             if is_active {
                 spans.push(Span::styled(
@@ -173,16 +212,18 @@ impl AgentWorkspace<'_> {
             } else {
                 spans.push(Span::styled(label, Style::default().fg(Color::DarkGray)));
             }
-            used += label_w;
 
-            if sep_w == 1 {
+            // Separator between rendered tabs; when tabs were collapsed the
+            // last visible tab keeps its separator before the stub.
+            if i + 1 < visible.len() || fit.collapsed {
                 spans.push(Span::raw("│"));
-                used += 1;
             }
         }
 
-        if collapsed {
-            spans.push(Self::render_tab_stub(budget.saturating_sub(used)));
+        if fit.collapsed {
+            spans.push(Self::render_tab_stub(
+                area.width as usize - fit.used_width.min(area.width as usize),
+            ));
         }
 
         // Render tab labels on the FIRST row only (height 1 sub-area).
@@ -201,7 +242,7 @@ impl AgentWorkspace<'_> {
     }
 }
 
-fn status_icon(status: &AgentStatus) -> &'static str {
+pub(crate) fn status_icon(status: &AgentStatus) -> &'static str {
     match status {
         AgentStatus::Idle | AgentStatus::Aborted => "●",
         AgentStatus::Requesting => "◐",
@@ -215,7 +256,7 @@ fn status_icon(status: &AgentStatus) -> &'static str {
     }
 }
 
-fn status_color(status: &AgentStatus) -> Color {
+pub(crate) fn status_color(status: &AgentStatus) -> Color {
     match status {
         AgentStatus::Idle | AgentStatus::Aborted => Color::Green,
         AgentStatus::Requesting | AgentStatus::Streaming => Color::Cyan,
@@ -225,5 +266,56 @@ fn status_color(status: &AgentStatus) -> Color {
         AgentStatus::Cancelled => Color::DarkGray,
         AgentStatus::Waiting => Color::Blue,
         AgentStatus::Compacting => Color::Magenta,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tab(name: &str) -> LeafTab {
+        LeafTab {
+            name: name.to_string(),
+            status: AgentStatus::Idle,
+        }
+    }
+
+    #[test]
+    fn fit_tabs_shows_everything_when_there_is_room() {
+        let tabs = [tab("a"), tab("bb")];
+        let fit = fit_tabs(40, &tabs, 0);
+        assert!(!fit.collapsed);
+        assert_eq!(fit.visible_tabs, 2);
+        assert_eq!(fit.used_width, " ● a ".width() + 1 + " ● bb ".width());
+    }
+
+    #[test]
+    fn fit_tabs_collapses_and_reports_stub_offset() {
+        let tabs = [tab("aaaa"), tab("bbbb"), tab("cccc")];
+        // Room for tab 0 + separator + the reserved stub column, no more.
+        let first = " ● aaaa ".width();
+        let fit = fit_tabs(first + 1 + 1, &tabs, 0);
+        assert!(fit.collapsed);
+        assert_eq!(fit.visible_tabs, 1);
+        assert_eq!(fit.used_width, first + 1);
+    }
+
+    #[test]
+    fn fit_tabs_keeps_active_tab_visible_even_past_collapse_point() {
+        let tabs = [tab("aaaa"), tab("bbbb")];
+        // Far too narrow for either tab, but tab 1 is active: the visible
+        // range must extend to include it (clipped, not collapsed away).
+        let fit = fit_tabs(3, &tabs, 1);
+        assert!(!fit.collapsed);
+        assert_eq!(fit.visible_tabs, 2);
+    }
+
+    #[test]
+    fn fit_tabs_collapses_inactive_tabs_after_active() {
+        let tabs = [tab("aa"), tab("bb"), tab("cc"), tab("dd")];
+        // Active tab 0 fits; nothing else does.
+        let fit = fit_tabs(" ● aa ".width() + 1 + 1, &tabs, 0);
+        assert!(fit.collapsed);
+        assert_eq!(fit.visible_tabs, 1);
     }
 }

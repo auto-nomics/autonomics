@@ -99,9 +99,91 @@ impl App {
         tracing::info!(profile = %profile.path, agent = %target_path, "spawning agent...");
     }
 
-    /// Query stored agents and open the resume picker.
+    /// Build the workspace tab list (one entry per running agent). Shared
+    /// by the renderer and the mouse stub hit-test so both agree on the
+    /// tab layout.
+    pub(super) fn workspace_tabs(&self) -> Vec<crate::widgets::agent_workspace::LeafTab> {
+        self.state
+            .sessions
+            .iter()
+            .map(|s| crate::widgets::agent_workspace::LeafTab {
+                name: s.name.clone(),
+                status: s
+                    .sub_sessions
+                    .get(s.active_sub_session_idx)
+                    .map(|sub| sub.tab_state.status)
+                    .unwrap_or_default(),
+            })
+            .collect()
+    }
+
+    /// Open the switch-agent picker, refreshing its list from the running
+    /// sessions first.
     pub(super) fn open_agent_picker(&mut self) {
-        tracing::info!("open_agent_picker called");
+        self.refresh_agent_picker();
+        self.state.agent_picker.open();
+    }
+
+    /// Sync the switch-agent picker's list from the running sessions.
+    /// Preserves the picker's query; `set_agents` reselects by name.
+    pub(super) fn refresh_agent_picker(&mut self) {
+        let active_name = self
+            .state
+            .sessions
+            .get(self.state.active_agent_idx)
+            .map(|s| s.name.clone());
+        let agents: Vec<crate::widgets::agent_picker::RunningAgent> = self
+            .state
+            .sessions
+            .iter()
+            .map(|s| crate::widgets::agent_picker::RunningAgent {
+                name: s.name.clone(),
+                status: s
+                    .sub_sessions
+                    .get(s.active_sub_session_idx)
+                    .map(|sub| sub.tab_state.status)
+                    .unwrap_or_default(),
+                is_active: active_name.as_deref() == Some(s.name.as_str()),
+            })
+            .collect();
+        self.state.agent_picker.set_agents(agents);
+    }
+
+    /// Key handling while the switch-agent picker popup is open.
+    pub(super) fn handle_agent_picker_key(&mut self, key: &KeyEvent) {
+        // Re-sync the list: agents may have been spawned or closed while
+        // the picker was open.
+        self.refresh_agent_picker();
+
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Esc => self.state.agent_picker.close(),
+            KeyCode::Up => self.state.agent_picker.move_up(),
+            KeyCode::Down => self.state.agent_picker.move_down(),
+            KeyCode::Backspace => self.state.agent_picker.pop_char(),
+            KeyCode::Char(c) if !ctrl => self.state.agent_picker.push_char(c),
+            KeyCode::Enter => {
+                let name = self
+                    .state
+                    .agent_picker
+                    .selected_agent()
+                    .map(|a| a.name.clone());
+                if let Some(name) = name {
+                    self.state.agent_picker.close();
+                    // Look up by name: the stored index may be stale if
+                    // agents were closed while the picker was open.
+                    if let Some(idx) = self.state.sessions.iter().position(|s| s.name == name) {
+                        self.state.active_agent_idx = idx;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Query stored agents and open the resume picker.
+    pub(super) fn open_agent_profile_picker(&mut self) {
+        tracing::info!("open_agent_profile_picker called");
         let client = self.client.clone();
         let tx = self.app_event_tx.clone();
         self.spawn_client_task("list_agents", move || async move {
@@ -119,21 +201,23 @@ impl App {
     }
 
     /// Key handling while the agent resume picker popup is open.
-    pub(super) fn handle_agent_picker_key(&mut self, key: &KeyEvent) {
+    pub(super) fn handle_agent_profile_picker_key(&mut self, key: &KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
         // If rename mode is active, route keys to the rename input.
-        if self.state.agent_picker.rename_id.is_some() {
+        if self.state.agent_profile_picker.rename_id.is_some() {
             match key.code {
-                KeyCode::Esc => self.state.agent_picker.cancel_rename(),
+                KeyCode::Esc => self.state.agent_profile_picker.cancel_rename(),
                 KeyCode::Backspace => {
-                    self.state.agent_picker.rename_input.pop();
+                    self.state.agent_profile_picker.rename_input.pop();
                 }
                 KeyCode::Char(c) if !ctrl => {
-                    self.state.agent_picker.rename_input.push(c);
+                    self.state.agent_profile_picker.rename_input.push(c);
                 }
                 KeyCode::Enter => {
-                    if let Some((agent_id, new_path)) = self.state.agent_picker.check_rename() {
+                    if let Some((agent_id, new_path)) =
+                        self.state.agent_profile_picker.check_rename()
+                    {
                         self.rename_agent_record(agent_id, new_path);
                     }
                 }
@@ -143,21 +227,21 @@ impl App {
         }
 
         // If delete confirmation is active, route keys differently.
-        if self.state.agent_picker.delete_confirm_id.is_some() {
+        if self.state.agent_profile_picker.delete_confirm_id.is_some() {
             match key.code {
-                KeyCode::Esc => self.state.agent_picker.cancel_delete(),
+                KeyCode::Esc => self.state.agent_profile_picker.cancel_delete(),
                 KeyCode::Backspace => {
-                    self.state.agent_picker.delete_confirm_input.pop();
+                    self.state.agent_profile_picker.delete_confirm_input.pop();
                 }
                 KeyCode::Char(c) if !ctrl => {
-                    self.state.agent_picker.delete_confirm_input.push(c);
+                    self.state.agent_profile_picker.delete_confirm_input.push(c);
                 }
                 KeyCode::Enter => {
                     // Only commit when the typed confirmation matches
                     // "yes" (case-insensitive). Partial / empty / typo
                     // input is silently ignored so the user can keep
                     // typing without losing context. Esc cancels.
-                    if let Some(agent_id) = self.state.agent_picker.check_delete_confirm() {
+                    if let Some(agent_id) = self.state.agent_profile_picker.check_delete_confirm() {
                         self.delete_agent_record(agent_id);
                     }
                 }
@@ -169,28 +253,28 @@ impl App {
         // Normal mode.
         match key.code {
             KeyCode::Esc => {
-                self.state.agent_picker.close();
+                self.state.agent_profile_picker.close();
             }
-            KeyCode::Up => self.state.agent_picker.move_up(),
-            KeyCode::Down => self.state.agent_picker.move_down(),
-            KeyCode::Left | KeyCode::Tab => self.state.agent_picker.toggle_expand(),
-            KeyCode::Right => self.state.agent_picker.toggle_expand(),
-            KeyCode::Backspace => self.state.agent_picker.pop_char(),
+            KeyCode::Up => self.state.agent_profile_picker.move_up(),
+            KeyCode::Down => self.state.agent_profile_picker.move_down(),
+            KeyCode::Left | KeyCode::Tab => self.state.agent_profile_picker.toggle_expand(),
+            KeyCode::Right => self.state.agent_profile_picker.toggle_expand(),
+            KeyCode::Backspace => self.state.agent_profile_picker.pop_char(),
             KeyCode::Char('d') if ctrl => {
-                self.state.agent_picker.start_delete_confirm();
+                self.state.agent_profile_picker.start_delete_confirm();
             }
             KeyCode::Char('r') if ctrl => {
-                self.state.agent_picker.start_rename();
+                self.state.agent_profile_picker.start_rename();
             }
-            KeyCode::Char(c) if !ctrl => self.state.agent_picker.push_char(c),
+            KeyCode::Char(c) if !ctrl => self.state.agent_profile_picker.push_char(c),
             KeyCode::Enter => {
                 // If cursor is on a folder, toggle expand/collapse.
-                let on_leaf = self.state.agent_picker.selected_item().is_some();
+                let on_leaf = self.state.agent_profile_picker.selected_item().is_some();
                 if !on_leaf {
-                    self.state.agent_picker.toggle_expand();
+                    self.state.agent_profile_picker.toggle_expand();
                     return;
                 }
-                if let Some(item) = self.state.agent_picker.selected_item() {
+                if let Some(item) = self.state.agent_profile_picker.selected_item() {
                     // If this agent is already open in a leaf, just switch focus
                     // instead of spawning a duplicate.
                     if let Some(idx) = self
@@ -205,14 +289,14 @@ impl App {
                             "agent already open — switching focus instead of restoring"
                         );
                         self.state.active_agent_idx = idx;
-                        self.state.agent_picker.close();
+                        self.state.agent_profile_picker.close();
                         return;
                     }
 
                     let config_json = item.config_json.clone();
                     // `item.path` is the full persisted AgentPath. Preserve its
                     // hierarchy so child agents restore their original runtime ID.
-                    self.state.agent_picker.close();
+                    self.state.agent_profile_picker.close();
                     let short_name = item.path.name().to_string();
                     let profile_path = item.path.as_str().trim_start_matches("/root/");
                     // Try to reconstruct the profile from the stored config_json.

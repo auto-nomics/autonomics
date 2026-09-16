@@ -830,7 +830,13 @@ pub struct AppState {
     pub model_config_state: crate::widgets::model_config_widget::ModelConfigState,
     pub command_palette: crate::widgets::command_palette::CommandPaletteState,
     pub profile_picker: crate::widgets::profile_picker::ProfilePickerState,
+    pub agent_profile_picker: crate::widgets::agent_profile_picker::AgentProfilePickerState,
+    /// Switch-agent picker (Ctrl+T / tab-bar collapse stub): lists all
+    /// running agents and switches the active leaf on Enter.
     pub agent_picker: crate::widgets::agent_picker::AgentPickerState,
+    /// Terminal area of the last rendered frame. Used by mouse handlers for
+    /// hit-testing (e.g. the tab-bar collapse stub). Refreshed every render.
+    pub last_frame_area: ratatui::layout::Rect,
     pub name_input: crate::widgets::name_input::NameInputState,
     pub session_picker: crate::widgets::session_picker::SessionPickerState,
     /// Message picker popup (Ctrl+P → "Copy message"). Lists text-bearing
