@@ -3,13 +3,6 @@
 use std::path::PathBuf;
 
 use clap::Args;
-use clap::ValueEnum;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum RunBackend {
-    InProcess,
-    Gateway,
-}
 
 #[derive(Debug, Args)]
 pub struct RunArgs {
@@ -37,6 +30,9 @@ pub struct RunArgs {
     #[arg(long, value_name = "PATH")]
     pub profile: Option<String>,
 
+    #[arg(long)]
+    pub name: String,
+
     /// Per-agent runtime overrides as JSON, e.g.
     /// `--agent-config '{"use_memory":false,"generate_memory":false}'`.
     #[arg(long = "agent-config", value_name = "JSON")]
@@ -60,39 +56,6 @@ pub struct RunArgs {
     /// `turn.started` event) instead of the agent's active one.
     #[arg(long, value_name = "UUID")]
     pub session: Option<uuid::Uuid>,
-
-    /// Run in-process with all conversation state in a throwaway temp
-    /// dir (benchmark isolation) instead of through the gateway daemon.
-    /// Credentials still come from the app DB.
-    #[arg(long)]
-    pub ephemeral: bool,
-
-    /// Ephemeral runtime implementation. Defaults to `in-process`;
-    /// non-ephemeral runs continue through the resident gateway.
-    #[arg(long, value_enum)]
-    pub backend: Option<RunBackend>,
-
-    /// Map an absolute host workspace directory to an absolute virtual
-    /// path, for example `/path/to/work=/app`.
-    #[arg(long, value_name = "SOURCE=VPATH")]
-    pub workspace: Option<String>,
-
-    /// Map an absolute read-only host data source to an absolute virtual
-    /// path, for example `/path/to/data=/data`. May be repeated.
-    #[arg(long, value_name = "SOURCE=VPATH")]
-    pub data_mount: Vec<String>,
-
-    /// Read workspace/data mount intent from a TOML file.
-    #[arg(long, value_name = "FILE")]
-    pub mount_manifest: Option<PathBuf>,
-
-    /// Reuse an existing non-empty `--workspace`.
-    #[arg(long)]
-    pub resume_workspace: bool,
-
-    /// Keep the ephemeral state root after the run for debugging.
-    #[arg(long)]
-    pub keep_state: bool,
 
     /// Write a JSON run manifest (prompt hash, model, usage, status) to
     /// this file after the run, whatever the outcome.

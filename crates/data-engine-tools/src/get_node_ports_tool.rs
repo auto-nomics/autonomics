@@ -13,7 +13,7 @@ use crate::ExecError;
     description = "Get the input/output port layout of a specific node kind. \
                   Returns declared ports needed to wire edges via add_edge. \
                   Call this before add_edge to know which ports are available. \
-                  For dynamic-port kinds (notably container_command), pass the exact \
+                  For dynamic-port kinds, pass the exact \
                   `spec` you plan to add so the returned output ports match the \
                   spec's declared outputs."
 )]

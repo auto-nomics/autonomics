@@ -478,6 +478,12 @@ const PROMPT_DAG_ENGINE: &str = "\n\
 - Build and execute data processing pipelines: add data sources, apply SQL transforms, \
   connect nodes into a DAG, run the pipeline, and retrieve output.\n\
 \n\
+- **Prefer dedicated nodes**: before adding a source, processing, analysis, or external-tool \
+  node, inspect the available node factories and choose the dedicated node kind that is most \
+  appropriate for the operation. If no registered node supports the required semantics, \
+  schema handling, or computation, tell the user that the operation is unsupported instead of \
+  assembling an equivalent manually.\n\
+\n\
 - Use this when a task requires multi-step data processing or transformation.\n\
 \n\
 - **Build incrementally, layer by layer — never construct the full DAG in one shot.** \
@@ -491,8 +497,8 @@ const PROMPT_DAG_ENGINE: &str = "\n\
 - **Inspect ports before wiring**: every node kind declares typed input/output ports. \
   `list_node_factories` returns lightweight metadata (kind + short description) only. \
   To see the full port layout (port count, variadic flag, per-port column schema), \
-  call `get_node_ports` with the chosen `kind`. For dynamic-port kinds such as \
-  `container_command`, pass the exact `spec` so declared outputs are included. Read the downstream node's input \
+  call `get_node_ports` with the chosen `kind`. For dynamic-port kinds, pass the exact \
+  `spec` so declared outputs are included. Read the downstream node's input \
   port schema BEFORE writing the transform that feeds it. The downstream port's \
   required columns and types are a contract, not a suggestion. \
   Similarly, call `get_node_spec` to fetch the JSON Schema a node expects for its \
@@ -509,26 +515,6 @@ const PROMPT_DAG_ENGINE: &str = "\n\
   \"z\" = beta / se and selecting exactly `rsid, \"z\", \"n\"`. A VCF emits an `info` Struct column; \
   extract subfields with `get_field(info, 'ES')` in the transform, never rely on a List \
   column where a Struct is required. Reserve exactly the required column names and types.";
-
-const PROMPT_DAG_SCRIPTS: &str = "\n\
-### Container Commands (container_command)\n\
-- Use `container_command` for external bioinformatics tools. It runs a \
-an ephemeral Podman container with no shell insertion, a read-only rootfs, `network: \"isolated\"` \
-by default, and `/work` as the writable workspace bind mount.\n\
-- Put the executable and arguments in `command`. Bind file paths only through \
-`$input0`, `$output0`, `$workdir`, `AUTONOMICS_INPUT0`, \
-`AUTONOMICS_OUTPUT0`, and `AUTONOMICS_WORKDIR`. Prefer image digests. \
-Reference data requires immutable `panels` backed by object storage.\n\
-- DataFrame values must cross the file boundary explicitly: \
-`dataframe_to_file -> container_command -> file_to_dataframe`. Output paths \
-must be safe relative paths under `/work`; declare every output in `outputs`. \
-Missing files fail the node. After `run_dag`, use `output_files` to locate \
-artifacts.\n\
-\n\
-- Do not interpolate file paths into shell commands. Use `AUTONOMICS_INPUT0`, \
-`AUTONOMICS_OUTPUT0`, `AUTONOMICS_WORKDIR`, and helper paths from \
-`AUTONOMICS_FILES_DIR`. Always start Bash scripts with \
-`set -Eeuo pipefail`.";
 
 const PROMPT_DAG_HISTORY: &str = "\n\
 ### DAG Version Control (History & Refs)\n\
@@ -646,7 +632,6 @@ pub fn build_system_prompt<C: PromptCapabilities>(caps: &C) -> String {
         s.push_str(PROMPT_DAG_HISTORY);
     }
 
-    s.push_str(PROMPT_DAG_SCRIPTS);
     s.push_str(PROMPT_SQL_CONVENTIONS);
 
     s.push_str(PROMPT_GENERAL);
@@ -1183,6 +1168,14 @@ mod tests {
         assert!(prompt.contains("Data Pipeline (DAG Engine)"));
         assert!(prompt.contains("SQL Conventions"));
         assert!(prompt.contains("## Guidelines"));
+    }
+
+    #[test]
+    fn system_prompt_requires_dedicated_node_priority() {
+        let prompt = RuntimeConfig::default().system_prompt_or_default();
+
+        assert!(prompt.contains("**Prefer dedicated nodes**"));
+        assert!(!prompt.contains("container_command"));
     }
 
     #[test]

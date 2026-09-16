@@ -1,6 +1,6 @@
 # Headless 运行模式设计(初步)
 
-状态:**P0/P1 已实现**(feat/headless-mode 分支);**P3-gateway 已实现**(feat/headless-via-gateway 分支)——`autonomics run` 默认经 gateway daemon 执行(`crates/headless::gateway_runner::run_via_gateway`,RunEvent 契约与退出码不变),`--ephemeral` 保留进程内 `run_task`(benchmark 隔离),并支持 per-run VFS mounts。CLI:`autonomics run`(--json / -o / --profile / --model / --timeout / --session / --ephemeral / mount 参数 / --manifest / --list-sessions);退出码 0/1/2/3。RunEvent 与 manifest 通过 `run_id` 关联;Ctrl+C 与输出管道断连会协作取消远端 turn。剩余:P2 的 --output-schema、多 turn stdin 脚本,P3 的多 agent 网络运行,以及一次性 isolated gateway backend。参考实现:codex-rs `exec` 子命令(`/mnt/disk3/codex/codex-rs/exec`)。
+状态:**gateway 单一路径**(2026-09 起)——`autonomics run` 经 gateway daemon 执行(`crates/headless::gateway_runner::run_via_gateway`,RunEvent 契约与退出码不变)。**进程内 `run_task` 与 `--ephemeral`/per-run VFS mounts 已整体移除**(双路径维护成本高于其价值;benchmark 隔离待未来一次性 isolated gateway backend,见 §3.1)。CLI:`autonomics run`(--json / -o / --profile / --model / --timeout / --session / --manifest / --list-sessions);退出码 0/1/2/3。RunEvent 与 manifest 通过 `run_id` 关联;Ctrl+C 与输出管道断连会协作取消远端 turn。剩余:P2 的 --output-schema、多 turn stdin 脚本,P3 的多 agent 网络运行,以及一次性 isolated gateway backend。参考实现:codex-rs `exec` 子命令(`/mnt/disk3/codex/codex-rs/exec`)。
 
 ## 0. 背景与目标
 
@@ -58,8 +58,8 @@
   需求再升级。
   > **2026-09 更新**:独立 daemon 需求已落地——见
   > `docs/design/gateway-architecture.md`(常驻 gateway + REST/SSE 多前端)。
-  > headless 走 gateway 的迁移(P3)规划在该文档 §11;`--ephemeral` 保留进程内
-  > 路径作为 benchmark 隔离的永久选项。
+  > headless 走 gateway 的迁移(P3)规划在该文档 §11;后续进程内路径整体移除,
+  > gateway 成为唯一执行路径(见状态行)。
 - **item 回填机制**(turn.completed 后调 thread/read 补齐 items):它源于
   app-server 通道背压丢事件。autonomics 事件通道是 unbounded mpsc,无此问题。
 
@@ -98,6 +98,11 @@ RunArgs → RuntimeConfig(默认 + 覆盖)
 (`seed_defaults_if_empty` + `list_profiles`)从 TUI 下沉到 runtime crate。
 这是 headless 不复制 TUI 初始化逻辑的前提,也是保证两条入口配置同源的唯一办法。
 
+> **2026-09 更新**:上图是 P0 时代的进程内数据流;P3-gateway 迁移后,执行循环
+> 位于 `gateway_runner.rs`(spawn → prompt → SSE 事件翻译 → 清理),`lib.rs`
+> 只保留 RunEvent 契约、`TranslationState`(AgentEvent → RunEvent)与
+> `RunSummary`/`RunError`。
+
 ## 3. CLI 契约(初步)
 
 ```text
@@ -114,13 +119,6 @@ autonomics run [OPTIONS] [PROMPT]
   --timeout <SECS>                   整体超时;超时取消,退出码 2
   --manifest <FILE>                  输出 run manifest(§8)
   --list-sessions                    列出稳定 headless identity 的持久 session
-  --ephemeral                        本次运行不落会话持久化(评测 / CI)
-  --backend <BACKEND>                ephemeral 实现;当前仅 in-process(默认)
-  --workspace <SOURCE=VPATH>         挂载可写宿主 workspace,如 .../work=/app
-  --data-mount <SOURCE=VPATH>        挂载只读输入,可重复,如 .../data=/data
-  --mount-manifest <FILE>            TOML 形式的 workspace/data mount 声明
-  --resume-workspace                 显式复用非空 workspace
-  --keep-state                       保留 ephemeral state root 供调试
   -C, --cwd <DIR>                    工作目录(语义对齐 codex)
 ```
 
@@ -135,42 +133,16 @@ autonomics run [OPTIONS] [PROMPT]
 
 区分 1 与 2/3 是有意为之:评测场景下,agent 自己失败是测量结果,环境失败才是噪声。
 
-### 3.1 Ephemeral VFS mounts
+### 3.1 Ephemeral VFS mounts(已移除)
 
-`--ephemeral` 表示一次性隔离运行,不等于自动启动独立 gateway。当前实现是 CLI 进程内
-打开 `RuntimeHost`,并为每次运行生成独立的 `state/vfs.toml`:
-
-```bash
-autonomics run \
-  --ephemeral \
-  --backend in-process \
-  --data-mount /absolute/task/data=/data \
-  --workspace /absolute/task/work=/app \
-  "Input is read-only at /data; write /app/answer.txt"
-```
-
-规则:
-
-- `SOURCE` 必须是绝对宿主路径;`VPATH` 必须是绝对虚拟路径且不得为 `/`;
-- mount target 不得重复或前缀重叠,且不得覆盖 `/literature`;
-- `--data-mount` 强制 read-only,`--workspace` 强制 writable;
-- workspace 默认必须为空;`--resume-workspace` 才允许复用非空目录;
-- state/data/cache 在 `0700` 临时 root 中,默认运行后删除,`--keep-state` 保留;
-- 外部 workspace 不随 ephemeral state 删除。
-
-结构化 mount manifest 使用 TOML:
-
-```toml
-[workspace]
-source = "/absolute/task/work"
-target = "/app"
-
-[[data_mounts]]
-source = "/absolute/task/data"
-target = "/data"
-```
-
-文件描述的是 mount intent,而不是生成后的 `vfs.toml`;read-only/writable 由字段决定。
+`--ephemeral` 及其 per-run VFS mounts(`--workspace` / `--data-mount` /
+`--mount-manifest` / `--resume-workspace` / `--keep-state`)曾以 CLI 进程内
+`RuntimeHost` + 一次性 state dir 实现(原 §3.1,git 历史可查)。2026-09 随
+进程内路径整体移除:gateway/daemon 的 VFS 是进程级(`RuntimeHost::open` 时
+一次性构建),per-run mounts 在 wire 协议上没有对应物,双路径维护成本高于
+其价值(移除时无任何调用方)。benchmark 隔离的需求留待**一次性 isolated
+gateway backend**:以独立 state_dir 拉起临时 daemon,以 gateway 参数形式
+重新提供挂载语义。
 
 ## 4. 事件模型:AgentEvent → RunEvent(JSONL)
 
@@ -225,8 +197,6 @@ agentik-core storage 已按 agent name 自动恢复并做 WAL replay
 `Agent::run()` 引导时回放),所以恢复语义几乎免费:
 
 - `--session <UUID>`:spawn 后 `switch_session(id)` → `send_message`;
-- `--ephemeral`:阶段一用临时 `state_dir` 覆盖 `RuntimeConfig` 实现(顺带解决 CI
-  并发隔离);storage 层原生 no-op 写模式留作后续优化;
 - `sessions list` 子命令(枚举历史会话供脚本选取)放 P1。
 - `--list-sessions` 已实现:gateway 直接读取稳定 `/root/headless` agent 的持久
   session records,不要求模型配置,也不需要先 spawn agent;`--json` 输出数组。
@@ -256,7 +226,8 @@ agentik-core storage 已按 agent name 自动恢复并做 WAL replay
 - **P0(骨架)**:`build_model` / profile 引导下沉 runtime;`crates/headless`
   库 + `run` 子命令;单 agent 单 turn;人读 + `--json`;退出码;`--timeout`。
 - **P1(可用性)**:`--output-last-message`、`--session` 恢复、
-  `--ephemeral`(临时 state_dir + per-run VFS mounts)、`--manifest`、`sessions list`。
+  `--manifest`、`sessions list`。(原 P1 还交付了 `--ephemeral` 临时 state_dir +
+  per-run VFS mounts,已在 2026-09 随进程内路径移除,见 §3.1。)
 - **P2(评测)**:`--output-schema`(依赖 agentik-sdk 结构化输出能力,见 §10.3);多 turn stdin 脚本(每行一条 user 消息的 JSONL)。
 - **P3(编排)**:多 agent 网络运行——`NetworkSpec`(nodes/edges/termination)
   以 JSON 文件输入,run 至 `TerminationSpec` 满足;复用
@@ -266,8 +237,8 @@ agentik-core storage 已按 agent name 自动恢复并做 WAL replay
 
 1. **二进制归属**:`run` 挂在现有 tui 包(包名 `tui`,二进制名有误导性)还是新建
    `apps/exec`?倾向先挂子命令验证设计,稳定后再统一 CLI 命名。
-2. `--ephemeral` 的持久语义已处理:VFS manifest、scratch 与 OpenGWAS cache 均位于
-   per-run root,外部 workspace 独立保留。
+2. ~~`--ephemeral` 的持久语义~~ 已随进程内路径移除(2026-09,见 §3.1);
+   per-run 隔离待未来 isolated gateway backend 重新设计。
 3. 结构化输出:agentik-sdk 的模型能力位未见 `supports_structured_output`;
    `--output-schema` 是否降级为 prompt 约定 + 本地 JSON 校验,待确认 SDK 能力。
 4. headless 下容器工具的资源约束(并发容器数、单容器超时)是否需要 CLI 覆盖,

@@ -1124,6 +1124,28 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn add_node_client_rejects_generic_container_kind() {
+        let engine = DataEngine::builder().build();
+        let (client, _handle) = spawn_with_engine(engine);
+
+        let error = client
+            .add_node(
+                "generic_container".to_string(),
+                "container_command".to_string(),
+                serde_json::json!({}),
+            )
+            .await
+            .expect_err("container_command creation must be rejected");
+
+        assert!(
+            error.to_string().contains(
+                "node kind 'container_command' is disabled; use a registered dedicated node instead"
+            ),
+            "unexpected error: {error}"
+        );
+    }
+
     /// Dropping the `CancelOnDropReceiver` must:
     /// 1. Fire the `CancellationToken`
     /// 2. Abort the spawned DAG run task

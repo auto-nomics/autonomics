@@ -1,15 +1,14 @@
-//! Headless run subcommand — thin CLI shell over the headless runners.
+//! Headless run subcommand — thin CLI shell over the gateway runner.
 //!
-//! Default path: `headless::gateway_runner::run_via_gateway` — the prompt
-//! is submitted to the resident gateway daemon (auto-started when
-//! absent). `--ephemeral` keeps the original in-process
-//! `headless::run_task` with a throwaway state dir (benchmark isolation).
+//! The prompt is submitted to the resident gateway daemon
+//! (`headless::gateway_runner::run_via_gateway`, auto-started when
+//! absent).
 //!
 //! Responsibilities are deliberately narrow: prompt assembly (args +
-//! stdin), model resolution for the in-process path, processor selection
-//! (`--json` vs human), the `-o` last-message file, and the exit-code
-//! contract. Everything else belongs to the headless library, so the CLI
-//! and any future adapter share one execution path.
+//! stdin), processor selection (`--json` vs human), the `-o`
+//! last-message file, and the exit-code contract. Everything else
+//! belongs to the headless library, so the CLI and any future adapter
+//! share one execution path.
 //!
 //! Exit codes (see docs/headless-run-design.md §3):
 //! 0 turn completed · 1 turn failed · 2 run cancelled · 3 startup error.
@@ -21,14 +20,10 @@ use std::time::Duration;
 use headless::gateway_runner::list_sessions_via_gateway;
 use headless::gateway_runner::{GatewayRunConfig, run_via_gateway};
 use headless::processor::{HumanProcessor, JsonlProcessor, OutputProcessor};
-use headless::{
-    EphemeralBackend, EphemeralMount, EphemeralRunSpec, RunError, RunSummary, RunTaskConfig,
-    run_task,
-};
-use rusqlite::Connection;
+use headless::{RunError, RunSummary};
 use tokio_util::sync::CancellationToken;
 
-use crate::cli::{RunArgs, RunBackend};
+use crate::cli::RunArgs;
 
 const EXIT_COMPLETED: i32 = 0;
 const EXIT_TURN_FAILED: i32 = 1;
@@ -73,11 +68,8 @@ pub fn run_headless(args: RunArgs) -> color_eyre::Result<()> {
         }
     });
     runtime.block_on(async {
-        let (summary, model_used) = if args.ephemeral {
-            run_in_process(&args, &agent_runtime, prompt, run_id, cancel).await
-        } else {
-            run_on_gateway(&args, &agent_runtime, prompt, run_id, cancel).await
-        };
+        let (summary, model_used) =
+            run_on_gateway(&args, &agent_runtime, prompt, run_id, cancel).await;
 
         match summary {
             Ok(summary) => {
@@ -102,16 +94,6 @@ pub fn run_headless(args: RunArgs) -> color_eyre::Result<()> {
             }
             Err(error) => {
                 eprintln!("error: {error}");
-                // Only the in-process (--ephemeral) path can hit this: the
-                // resident daemon owns the state dir's single-writer lock.
-                if let RunError::HostOpen(gateway::RuntimeError::InstanceLockHeld { path }) = &error
-                {
-                    eprintln!(
-                        "note: the gateway daemon currently owns the state dir ({}); \
-                         stop it (`autonomics serve stop`) or drop --ephemeral to run through it",
-                        path.display()
-                    );
-                }
                 if matches!(error, RunError::Cancelled) {
                     std::process::exit(EXIT_CANCELLED);
                 }
@@ -187,184 +169,17 @@ async fn daemon_active_model_name() -> Option<String> {
     )
 }
 
-/// The `--ephemeral` path: the original in-process runner with every
-/// persistent path redirected to a throwaway temp dir (benchmark
-/// isolation). Credentials still come from the real app DB.
-async fn run_in_process(
-    args: &RunArgs,
-    agent_runtime: &agentik_core::AgentRuntimeOverrides,
-    prompt: String,
-    run_id: uuid::Uuid,
-    cancel: CancellationToken,
-) -> (Result<RunSummary, RunError>, Option<String>) {
-    let ephemeral_spec = match parse_ephemeral_run_spec(args) {
-        Ok(spec) => spec,
-        Err(message) => {
-            eprintln!("error: {message}");
-            std::process::exit(EXIT_STARTUP);
-        }
-    };
-
-    let runtime_config = gateway::RuntimeConfig::default();
-    if let Some(parent) = runtime_config.app_db_path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| color_eyre::eyre::eyre!("create {}: {e}", parent.display()))
-            .expect("app db dir exists");
-    }
-    let conn = match Connection::open(&runtime_config.app_db_path) {
-        Ok(conn) => conn,
-        Err(e) => {
-            eprintln!("error: failed to open app db: {e}");
-            std::process::exit(EXIT_STARTUP);
-        }
-    };
-    if let Err(e) = gateway::model_bootstrap::ensure_app_schema(&conn) {
-        eprintln!("error: failed to initialize app database schema: {e}");
-        std::process::exit(EXIT_STARTUP);
-    }
-
-    let (model, model_name) = match resolve_model(&conn, args.model.as_deref()) {
-        Ok(resolved) => resolved,
-        Err(message) => {
-            eprintln!("error: {message}");
-            std::process::exit(EXIT_STARTUP);
-        }
-    };
-
-    let (mut config, mut state_guard) =
-        match RunTaskConfig::ephemeral_with_mounts(prompt, ephemeral_spec) {
-            Ok(pair) => pair,
-            Err(error) => {
-                eprintln!("error: {error}");
-                std::process::exit(EXIT_STARTUP);
-            }
-        };
-    config.run_id = run_id;
-    config.profile = args.profile.clone();
-    config.agent_runtime = agent_runtime.clone();
-    config.model = Some(model);
-    config.model_name = Some(model_name.clone());
-    config.timeout = args.timeout.map(Duration::from_secs);
-    config.session = args.session;
-    config.cancel = cancel;
-
-    let result = if args.json {
-        let mut processor = JsonlProcessor::new(std::io::stdout());
-        let result = run_task(config, &mut processor).await;
-        write_last_message(
-            args.output_last_message.as_deref(),
-            processor.last_message(),
-        );
-        result
-    } else {
-        let mut processor = HumanProcessor::new(std::io::stderr(), std::io::stdout());
-        let result = run_task(config, &mut processor).await;
-        write_last_message(
-            args.output_last_message.as_deref(),
-            processor.last_message(),
-        );
-        result
-    };
-    if args.keep_state {
-        eprintln!("ephemeral state kept at {}", state_guard.keep().display());
-    } else if let Err(error) = state_guard.cleanup() {
-        eprintln!("warning: failed to clean ephemeral state: {error}");
-    }
-    (result, Some(model_name))
-}
-
-fn parse_ephemeral_run_spec(args: &RunArgs) -> Result<EphemeralRunSpec, String> {
-    let mut spec = match args.mount_manifest.as_deref() {
-        Some(path) => {
-            let source = std::fs::read_to_string(path)
-                .map_err(|error| format!("read mount manifest {}: {error}", path.display()))?;
-            RunTaskConfig::parse_mount_manifest(&source)
-                .map_err(|error| format!("invalid mount manifest {}: {error}", path.display()))
-        }
-        None => Ok(EphemeralRunSpec::default()),
-    }?;
-
-    if args.workspace.is_some() && spec.workspace.is_some() {
-        return Err(
-            "--workspace cannot override a workspace already defined by --mount-manifest"
-                .to_owned(),
-        );
-    }
-    if let Some(workspace) = args.workspace.as_deref() {
-        spec.workspace = Some(parse_mount_argument(workspace, false)?);
-    }
-    for mount in &args.data_mount {
-        spec.data_mounts.push(parse_mount_argument(mount, true)?);
-    }
-    spec.backend = EphemeralBackend::InProcess;
-    spec.resume_workspace = args.resume_workspace;
-    Ok(spec)
-}
-
-fn parse_mount_argument(argument: &str, read_only: bool) -> Result<EphemeralMount, String> {
-    let (source, target) = argument
-        .rsplit_once('=')
-        .ok_or_else(|| format!("invalid mount `{argument}`: expected SOURCE=VPATH"))?;
-    let source = std::path::PathBuf::from(source);
-    if !source.is_absolute() {
-        return Err(format!(
-            "invalid mount `{argument}`: SOURCE must be an absolute host path"
-        ));
-    }
-    EphemeralMount::new(source, target, read_only)
-        .map_err(|error| format!("invalid mount `{argument}`: {error}"))
-}
-
 fn validate_run_args(args: &RunArgs) -> Result<(), String> {
-    if args.list_sessions {
-        if args.prompt.is_some()
+    if args.list_sessions
+        && (args.prompt.is_some()
             || args.session.is_some()
-            || args.ephemeral
             || args.timeout.is_some()
             || args.output_last_message.is_some()
             || args.manifest.is_some()
             || args.agent_config.is_some()
-            || args.no_memory
-            || args.backend.is_some()
-            || args.workspace.is_some()
-            || !args.data_mount.is_empty()
-            || args.mount_manifest.is_some()
-            || args.resume_workspace
-            || args.keep_state
-        {
-            return Err("--list-sessions cannot be combined with run-specific options".to_string());
-        }
-        return Ok(());
-    }
-    let backend = args.backend.unwrap_or(if args.ephemeral {
-        RunBackend::InProcess
-    } else {
-        RunBackend::Gateway
-    });
-    if args.ephemeral && backend == RunBackend::Gateway {
-        return Err(
-            "--backend gateway is not implemented for --ephemeral yet; use in-process".to_owned(),
-        );
-    }
-    if !args.ephemeral {
-        if backend == RunBackend::InProcess {
-            return Err("--backend in-process requires --ephemeral".to_owned());
-        }
-        if args.workspace.is_some()
-            || !args.data_mount.is_empty()
-            || args.mount_manifest.is_some()
-            || args.resume_workspace
-            || args.keep_state
-        {
-            return Err("mount and ephemeral-state options require --ephemeral".to_owned());
-        }
-    }
-    if args.ephemeral && args.session.is_some() {
-        return Err(
-            "--session cannot resume a previous run in an --ephemeral state dir; \
-                    drop one of the two flags"
-                .to_string(),
-        );
+            || args.no_memory)
+    {
+        return Err("--list-sessions cannot be combined with run-specific options".to_string());
     }
     Ok(())
 }
@@ -453,31 +268,6 @@ fn resolve_prompt(arg_prompt: Option<String>) -> Result<String, String> {
             Ok(prompt)
         }
     }
-}
-
-/// Resolve the in-process run's model: the `--model` spec when given,
-/// else the installation's active model. Returns the model and its
-/// display name.
-fn resolve_model(
-    conn: &Connection,
-    model_flag: Option<&str>,
-) -> Result<(agentik_sdk::model::Model, String), String> {
-    let spec = match model_flag {
-        Some(spec) => spec.to_string(),
-        None => gateway::model_bootstrap::active_model_spec(conn).ok_or_else(|| {
-            "no active model configured — set one in the TUI Config tab or pass \
-             --model provider_name:model_name"
-                .to_string()
-        })?,
-    };
-    let model = gateway::model_bootstrap::resolve_model_spec(conn, &spec).ok_or_else(|| {
-        format!("model `{spec}` unavailable (unknown provider/model or missing API key)")
-    })?;
-    let name = spec
-        .split_once(':')
-        .map(|(_, name)| name.to_string())
-        .unwrap_or_else(|| spec.clone());
-    Ok((model, name))
 }
 
 /// Write the final agent message to the `-o` file. Codex behavior: the

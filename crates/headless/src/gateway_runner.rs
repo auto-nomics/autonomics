@@ -1,17 +1,15 @@
-//! Gateway-backed headless runner — the default execution path of
-//! `autonomics run` since the backend-gateway refactor.
+//! Gateway-backed headless runner — the execution path of `autonomics run`.
 //!
-//! Same contract as the in-process [`crate::run_task`]: one prompt, the
-//! stable [`RunEvent`] JSONL schema, exit-code semantics 0/1/2/3. The
-//! difference is only *where* the agent runs: submitted to the resident
-//! gateway daemon (auto-spawned when absent) instead of a throwaway
-//! in-process `RuntimeHost`.
+//! The contract: one prompt, the stable [`RunEvent`] JSONL schema,
+//! exit-code semantics 0/1/2/3. The prompt is submitted to the resident
+//! gateway daemon (auto-spawned when absent); the run loop here only
+//! orchestrates spawn → prompt → event translation → cleanup.
 //!
 //! Identity: the agent runs at the stable path `/root/headless`, so the
 //! daemon's storage restores the same agent_id across runs and
-//! `--session` resume keeps working exactly as in-process. Only when a
-//! concurrent run already holds that path does the spawn fall back to a
-//! unique suffix (resume is meaningless in that contention anyway).
+//! `--session` resume keeps working. Only when a concurrent run already
+//! holds that path does the spawn fall back to a unique suffix (resume
+//! is meaningless in that contention anyway).
 
 use std::time::{Duration, Instant};
 
@@ -33,8 +31,8 @@ const REGISTRATION_TIMEOUT: Duration = Duration::from_secs(2);
 const HEADLESS_AGENT_PATH: &str = "/root/headless";
 
 /// How long to keep reading after the terminal turn event, so the
-/// compatibility `Done` / `Error` events land in the output too (the
-/// in-process runner drains them from its already-queued channel).
+/// compatibility `Done` / `Error` events land in the output too (they
+/// may still be in flight on the SSE stream).
 const TERMINAL_DRAIN: Duration = Duration::from_millis(300);
 
 /// Everything `run_via_gateway` needs to execute one prompt.
@@ -61,7 +59,7 @@ pub struct GatewayRunConfig {
 
 /// Run one prompt through the resident gateway daemon, streaming
 /// translated events into `processor`. See the module docs for the
-/// contract; the summary mirrors [`crate::run_task`].
+/// contract.
 pub async fn run_via_gateway<P: OutputProcessor>(
     config: GatewayRunConfig,
     processor: &mut P,
@@ -142,9 +140,8 @@ pub async fn run_via_gateway_with_client<P: OutputProcessor>(
     // echoing the daemon's active spec back as an override would force a
     // redundant DB re-resolution.
     let spawn_model_spec = config.model.as_deref();
-    // Exit-code parity with the in-process runner: a missing model is
-    // environment misconfiguration (startup error, exit 3), not a
-    // measured turn failure.
+    // A missing model is environment misconfiguration (startup error,
+    // exit 3), not a measured turn failure.
     if spawn_model_spec.is_none() && state.active_model_spec.is_none() {
         return Err(RunError::Gateway(
             "no active model configured — set one in the TUI Config tab or pass \
@@ -183,7 +180,7 @@ pub async fn run_via_gateway_with_client<P: OutputProcessor>(
             // A concurrent one-shot run holds /root/headless. A unique
             // identity can't share persisted sessions, but a contended
             // run can't resume them anyway.
-            let fallback = format!("headless-{}", &Uuid::new_v4().simple().to_string()[..8]);
+            let fallback = format!("headless_{}", &Uuid::new_v4().simple().to_string()[..8]);
             tracing::warn!(
                 fallback = %fallback,
                 "another run holds /root/headless; spawning with a unique identity"
@@ -217,7 +214,7 @@ pub async fn run_via_gateway_with_client<P: OutputProcessor>(
     let mut stream = response.bytes_stream().eventsource();
 
     // Registration frame carries the restored agent id (best effort —
-    // same tolerance as the in-process runner).
+    // the run proceeds without it when the frame is late).
     let agent_id = match tokio::time::timeout(REGISTRATION_TIMEOUT, async {
         loop {
             match stream.next().await {
@@ -347,8 +344,8 @@ pub async fn run_via_gateway_with_client<P: OutputProcessor>(
         let event = match next {
             Err(_) => continue, // idle tick
             Ok(None) | Ok(Some(Err(_))) => {
-                // Stream ended (daemon gone). The in-process runner treats
-                // "all agent channels closed" the same way.
+                // Stream ended (daemon gone) — the run's delta stream is
+                // gone with it.
                 tracing::warn!("gateway event stream ended mid-run");
                 break translation.terminal.take().unwrap_or(Terminal::Failed);
             }

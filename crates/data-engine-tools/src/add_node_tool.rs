@@ -75,8 +75,36 @@ impl ToolFunction for AddNodeTool {
 
 #[cfg(test)]
 mod tests {
-    use agentik_core::tools::ToolFunction;
+    use agentik_core::tools::{ToolError, ToolFunction};
     use agentik_sdk::types::ToolInput;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn rejects_disabled_generic_container_kind() {
+        let engine = data_engine::data_engine::DataEngine::builder().build();
+        let (client, _handle) = data_engine::runtime::spawn_with_engine(engine);
+        let tool = super::AddNodeTool::new(Arc::new(client));
+
+        let error = tool
+            .run(super::AddNodeInput {
+                id: "generic_container".to_string(),
+                kind: "container_command".to_string(),
+                spec: serde_json::json!({}),
+            })
+            .await
+            .expect_err("container_command creation must be rejected");
+
+        assert!(
+            matches!(error, ToolError::ExecutionFailed { .. }),
+            "unexpected error: {error}"
+        );
+        assert!(
+            error.to_string().contains(
+                "node kind 'container_command' is disabled; use a registered dedicated node instead"
+            ),
+            "unexpected error: {error}"
+        );
+    }
 
     /// Normal round-trip: JSON input → `AddNodeInput`.  Exercises the exact
     /// path the framework uses when an LLM returns a tool_use payload.

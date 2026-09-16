@@ -57,7 +57,8 @@ impl App {
         self.state.active_tab_state_mut().cancel_pending = false;
     }
 
-    /// Handle mouse events: scroll wheel scrolls the chat in Agent tab.
+    /// Handle mouse events: scroll wheel scrolls the chat in Agent tab;
+    /// clicking the tab bar's collapse stub opens the switch-agent picker.
     /// Returns the scroll delta to be batched with other scroll events.
     fn handle_mouse(&mut self, mouse: &MouseEvent) -> i32 {
         // Mouse input is not routed by screen area yet. While an overlay is
@@ -66,6 +67,7 @@ impl App {
         if state.delete_agent_confirm
             || state.command_palette.is_visible()
             || state.profile_picker.visible
+            || state.agent_profile_picker.visible
             || state.agent_picker.visible
             || state.name_input.visible
             || state.session_picker.visible
@@ -74,6 +76,14 @@ impl App {
             || state.model_config_visible
             || state.agent_config.visible
         {
+            return 0;
+        }
+
+        // Click on the tab bar's `>` collapse stub → switch-agent picker.
+        if let MouseEventKind::Down(crossterm::event::MouseButton::Left) = mouse.kind {
+            if self.tab_stub_hit(mouse.column, mouse.row) {
+                self.open_agent_picker();
+            }
             return 0;
         }
 
@@ -92,6 +102,24 @@ impl App {
             }
             _ => 0,
         }
+    }
+
+    /// `true` when `(x, y)` is inside the tab bar's collapse stub. Recomputes
+    /// the same layout the renderer used (via [`fit_tabs`]) against the last
+    /// frame area.
+    fn tab_stub_hit(&self, x: u16, y: u16) -> bool {
+        let area = self.state.last_frame_area;
+        // Tab labels render on the first row of the workspace area.
+        if area.width == 0 || y != area.y {
+            return false;
+        }
+        let tabs = self.workspace_tabs();
+        let fit = crate::widgets::agent_workspace::fit_tabs(
+            area.width as usize,
+            &tabs,
+            self.state.active_agent_idx,
+        );
+        fit.collapsed && (x as usize) >= fit.used_width && x < area.width
     }
 
     /// Apply a batched scroll delta to the agent tab.
@@ -119,6 +147,17 @@ impl App {
             return;
         }
 
+        // Ctrl+T: toggle the switch-agent picker (all running agents —
+        // complements the tab bar, whose overflow tabs are collapsed).
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('t') {
+            if self.state.agent_picker.visible {
+                self.state.agent_picker.close();
+            } else {
+                self.open_agent_picker();
+            }
+            return;
+        }
+
         // Ctrl+O opens a read-only view of the active agent's data DAG. This
         // is intentionally global: the overlay is useful while an agent is
         // composing or executing pipeline changes.
@@ -132,6 +171,12 @@ impl App {
         // see them.
         if self.state.command_palette.is_visible() {
             self.handle_command_palette_key(key);
+            return;
+        }
+
+        // Switch-agent picker popup captures keys when visible.
+        if self.state.agent_picker.visible {
+            self.handle_agent_picker_key(key);
             return;
         }
 
@@ -152,8 +197,8 @@ impl App {
         }
 
         // Agent resume picker popup captures keys when visible.
-        if self.state.agent_picker.visible {
-            self.handle_agent_picker_key(key);
+        if self.state.agent_profile_picker.visible {
+            self.handle_agent_profile_picker_key(key);
             return;
         }
 

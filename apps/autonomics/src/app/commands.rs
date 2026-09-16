@@ -97,7 +97,7 @@ impl App {
                 self.state.profile_picker.open();
             }
             CommandAction::ResumeAgent => {
-                self.open_agent_picker();
+                self.open_agent_profile_picker();
             }
             CommandAction::CloseAgent => {
                 if !self.state.sessions.is_empty() {

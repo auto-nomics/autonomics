@@ -182,7 +182,7 @@ impl NodeFactory for FileReferenceNodeFactory {
         that the configured `vfs://` or absolute path names a concrete file, \
         attaches size/mtime metadata, and emits a FileRef. Unlike \
         `file_to_dataframe`, it never reads the payload into a DataFrame. This is \
-        the intended input node for nodes such as `container_command` and \
+        the intended input node for file-backed dedicated container nodes such as \
         `ldsc_h2_container`."
     }
 

@@ -78,6 +78,9 @@ impl App {
     }
 
     pub(super) fn render(&mut self, frame: &mut Frame) {
+        // Remember the frame area for mouse hit-testing (tab-bar stub).
+        self.state.last_frame_area = frame.area();
+
         // ── Workspace (full screen) ──
         // Model info comes from the per-agent render cache (render must
         // never issue HTTP): filled on registration / model changes via
@@ -100,19 +103,7 @@ impl App {
         };
 
         // Collect tab data before mutably borrowing tab state.
-        let workspace_tabs: Vec<crate::widgets::agent_workspace::LeafTab> = self
-            .state
-            .sessions
-            .iter()
-            .map(|s| crate::widgets::agent_workspace::LeafTab {
-                name: s.name.clone(),
-                status: s
-                    .sub_sessions
-                    .get(s.active_sub_session_idx)
-                    .map(|sub| sub.tab_state.status)
-                    .unwrap_or_default(),
-            })
-            .collect();
+        let workspace_tabs = self.workspace_tabs();
         let active_idx = self.state.active_agent_idx;
 
         // Build session summaries for the sidebar. Collect as owned data to
@@ -189,11 +180,23 @@ impl App {
         }
 
         // ── Agent resume picker popup ──
+        if self.state.agent_profile_picker.visible {
+            use ratatui::widgets::StatefulWidget as _;
+            crate::widgets::agent_profile_picker::AgentProfilePicker::new()
+                .popup_width((frame.area().width * 8 / 10).max(70))
+                .list_width(28)
+                .render(
+                    frame.area(),
+                    frame.buffer_mut(),
+                    &mut self.state.agent_profile_picker,
+                );
+        }
+
+        // ── Switch-agent picker popup ──
         if self.state.agent_picker.visible {
             use ratatui::widgets::StatefulWidget as _;
             crate::widgets::agent_picker::AgentPicker::new()
-                .popup_width((frame.area().width * 8 / 10).max(70))
-                .list_width(28)
+                .popup_width(50)
                 .render(
                     frame.area(),
                     frame.buffer_mut(),

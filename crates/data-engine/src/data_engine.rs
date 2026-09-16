@@ -50,6 +50,17 @@ pub struct DataEngine {
 }
 
 impl DataEngine {
+    const DISABLED_NODE_KIND: &str = "container_command";
+
+    fn ensure_node_kind_allowed(kind: &str) -> Result<()> {
+        if kind == Self::DISABLED_NODE_KIND {
+            return Err(Error::Custom(format!(
+                "node kind '{kind}' is disabled; use a registered dedicated node instead"
+            )));
+        }
+        Ok(())
+    }
+
     fn new_from_parts(
         ctx: SessionContext,
         runtime_env: Arc<RuntimeEnv>,
@@ -135,6 +146,7 @@ impl DataEngine {
         kind: &str,
         spec: serde_json::Value,
     ) -> Result<()> {
+        Self::ensure_node_kind_allowed(kind)?;
         let node = self.node_registry.build_node(kind, spec.clone())?;
         self.dag
             .add_node_with_spec(node_id.into(), node, kind.to_string(), spec)?;
@@ -195,6 +207,7 @@ impl DataEngine {
             .ok_or_else(|| Error::Dag(DagError::UnknownNode(id.clone())))?
             .kind()
             .to_string();
+        Self::ensure_node_kind_allowed(&kind)?;
         let node = self.node_registry.build_node(&kind, spec.clone())?;
         self.dag.replace_node_with_spec(&id, node, kind, spec)?;
         Ok(())
@@ -452,6 +465,7 @@ impl DataEngine {
     fn rebuild_dag_from_manifest(&mut self, manifest: &crate::dag::DagManifest) -> Result<()> {
         self.dag.clear();
         for entry in &manifest.nodes {
+            Self::ensure_node_kind_allowed(&entry.kind)?;
             let node = self
                 .node_registry
                 .build_node(&entry.kind, entry.spec.clone())?;
@@ -1566,6 +1580,25 @@ mod tests {
         assert!(
             msg.contains("nonexistent_kind_42"),
             "error should mention the kind; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn add_node_rejects_disabled_generic_container_kind() {
+        let mut engine = DataEngine::builder().build();
+        let error = engine
+            .add_node_from_registry(
+                "generic_container",
+                "container_command",
+                serde_json::json!({}),
+            )
+            .expect_err("container_command creation must be rejected");
+
+        assert!(
+            error.to_string().contains(
+                "node kind 'container_command' is disabled; use a registered dedicated node instead"
+            ),
+            "unexpected error: {error}"
         );
     }
 

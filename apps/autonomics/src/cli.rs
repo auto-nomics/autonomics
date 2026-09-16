@@ -25,7 +25,7 @@ pub use bib::{
 };
 pub use cache::{CacheAction, CacheArgs, ClearOpengwasArgs, RefreshOpengwasArgs};
 pub use kms::KmsArgs;
-pub use run::{RunArgs, RunBackend};
+pub use run::RunArgs;
 pub use serve::{ServeAction, ServeArgs};
 pub use tui::TuiArgs;
 
