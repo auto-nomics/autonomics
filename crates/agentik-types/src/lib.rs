@@ -10,6 +10,7 @@ pub mod plan;
 pub mod reasoning;
 pub mod shared;
 pub mod streaming;
+pub mod telemetry;
 pub mod tools;
 
 pub use agent_events::SessionInfo;
@@ -19,6 +20,7 @@ pub use reasoning::{
     ReasoningConfig, ReasoningEffort, ThinkingConfig, ThinkingKind, anthropic_budget_for_effort,
 };
 pub use shared::{HasRequestId, RequestId, ServerToolUsage, Usage};
+pub use telemetry::{SessionTelemetry, TurnTelemetry};
 
 pub use messages::{
     ContentBlock, ContentBlockParam, ImageSource, Message, MessageContent, MessageCreateBuilder,

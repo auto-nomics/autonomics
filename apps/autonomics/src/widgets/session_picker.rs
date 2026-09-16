@@ -44,6 +44,12 @@ pub struct PickerSession {
     pub input_tokens: u64,
     /// Cumulative output tokens across all assistant turns.
     pub output_tokens: u64,
+    /// Total raw token units reported by the runtime.
+    pub total_tokens: u64,
+    /// Tool-use blocks requested by the model.
+    pub total_tool_use: u64,
+    /// Active agent work time, excluding background-task waits.
+    pub time_consume_ms: u64,
     /// First user message text, capped at 1024 characters.
     pub first_user_message: Option<String>,
     /// Last assistant message text, capped at 1024 characters.
@@ -54,9 +60,6 @@ pub struct PickerSession {
 pub struct SessionStats {
     pub user_message_count: usize,
     pub assistant_message_count: usize,
-    pub tool_call_count: usize,
-    pub input_tokens: u64,
-    pub output_tokens: u64,
     pub first_user_message: Option<String>,
     pub last_assistant_message: Option<String>,
 }
@@ -65,9 +68,6 @@ pub struct SessionStats {
 pub fn compute_session_stats(messages: &[crate::state::ChatLine]) -> SessionStats {
     let mut user_count = 0usize;
     let mut assistant_count = 0usize;
-    let mut tool_call_count = 0usize;
-    let mut input_tokens = 0u64;
-    let mut output_tokens = 0u64;
     let mut first_user: Option<String> = None;
     let mut last_assistant: Option<String> = None;
 
@@ -79,21 +79,13 @@ pub fn compute_session_stats(messages: &[crate::state::ChatLine]) -> SessionStat
                     first_user = Some(truncate_for_preview(text, PREVIEW_MAX_CHARS));
                 }
             }
-            crate::state::ChatLine::Assistant { text, usage } => {
+            crate::state::ChatLine::Assistant { text, .. } => {
                 assistant_count += 1;
-                if let Some(u) = usage {
-                    if let Some(inp) = u.input_tokens {
-                        input_tokens += inp;
-                    }
-                    output_tokens += u.output_tokens;
-                }
                 if !text.trim().is_empty() {
                     last_assistant = Some(truncate_for_preview(text, PREVIEW_MAX_CHARS));
                 }
             }
-            crate::state::ChatLine::ToolCall { .. } => {
-                tool_call_count += 1;
-            }
+            crate::state::ChatLine::ToolCall { .. } => {}
             _ => {}
         }
     }
@@ -101,9 +93,6 @@ pub fn compute_session_stats(messages: &[crate::state::ChatLine]) -> SessionStat
     SessionStats {
         user_message_count: user_count,
         assistant_message_count: assistant_count,
-        tool_call_count,
-        input_tokens,
-        output_tokens,
         first_user_message: first_user,
         last_assistant_message: last_assistant,
     }
@@ -630,10 +619,15 @@ impl SessionPicker {
         ]));
 
         // ── Token usage ──
-        if session.input_tokens > 0 || session.output_tokens > 0 {
+        if session.input_tokens > 0
+            || session.output_tokens > 0
+            || session.total_tokens > 0
+            || session.total_tool_use > 0
+            || session.time_consume_ms > 0
+        {
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                "  ── Tokens ──",
+                "  ── Telemetry ──",
                 label_style.add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::from(vec![
@@ -648,6 +642,27 @@ impl SessionPicker {
                 Span::styled(
                     format_tokens(session.output_tokens),
                     Style::default().fg(Color::Green),
+                ),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled("  Total    ", label_style),
+                Span::styled(
+                    format_tokens(session.total_tokens),
+                    Style::default().fg(Color::Yellow),
+                ),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled("  Tools    ", label_style),
+                Span::styled(
+                    session.total_tool_use.to_string(),
+                    Style::default().fg(Color::Magenta),
+                ),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled("  Time     ", label_style),
+                Span::styled(
+                    format_duration(session.time_consume_ms),
+                    Style::default().fg(Color::Cyan),
                 ),
             ]));
         }
@@ -743,6 +758,23 @@ fn format_timestamp(millis: i64) -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
+fn format_duration(millis: u64) -> String {
+    if millis < 1_000 {
+        format!("{millis}ms")
+    } else if millis < 60_000 {
+        format!("{:.1}s", millis as f64 / 1_000.0)
+    } else {
+        let minutes = millis / 60_000;
+        let seconds = (millis % 60_000) / 1_000;
+        if minutes < 60 {
+            format!("{minutes}m {seconds}s")
+        } else {
+            let hours = minutes / 60;
+            format!("{hours}h {}m", minutes % 60)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -792,6 +824,9 @@ mod tests {
             tool_call_count: 0,
             input_tokens: 0,
             output_tokens: 0,
+            total_tokens: 0,
+            total_tool_use: 0,
+            time_consume_ms: 0,
             first_user_message: None,
             last_assistant_message: None,
         };

@@ -655,11 +655,13 @@ pub fn apply_session_event(state: &mut AppState, event: AgentEvent, agent_idx: u
                         old.title = info.title;
                         old.last_active = info.last_active;
                         old.created_at = info.created_at;
+                        old.telemetry = info.telemetry;
                         old
                     } else {
                         let mut sub = SubSession::new(info.id, info.title);
                         sub.last_active = info.last_active;
                         sub.created_at = info.created_at;
+                        sub.telemetry = info.telemetry;
                         sub
                     }
                 })
@@ -679,9 +681,12 @@ pub fn apply_session_event(state: &mut AppState, event: AgentEvent, agent_idx: u
                             created_at: 0, // not tracked on SubSession
                             user_message_count: stats.user_message_count,
                             assistant_message_count: stats.assistant_message_count,
-                            tool_call_count: stats.tool_call_count,
-                            input_tokens: stats.input_tokens,
-                            output_tokens: stats.output_tokens,
+                            tool_call_count: s.telemetry.total_tool_use as usize,
+                            input_tokens: s.telemetry.input_tokens,
+                            output_tokens: s.telemetry.output_tokens,
+                            total_tokens: s.telemetry.total_tokens,
+                            total_tool_use: s.telemetry.total_tool_use,
+                            time_consume_ms: s.telemetry.time_consume_ms,
                             first_user_message: stats.first_user_message,
                             last_assistant_message: stats.last_assistant_message,
                         }
@@ -769,6 +774,7 @@ pub struct SubSession {
     /// Epoch-millis when this session was created. Used for ordering in the
     /// sidebar session list (newest first).
     pub created_at: i64,
+    pub telemetry: agentik_types::SessionTelemetry,
     /// Conversation-level state — chat history, token counts, scroll, etc.
     /// Owned per-session so each session has its own memory of what
     /// happened in it.
@@ -782,6 +788,7 @@ impl SubSession {
             title,
             last_active: 0,
             created_at: chrono::Utc::now().timestamp_millis(),
+            telemetry: Default::default(),
             tab_state: AgentTabState::default(),
         }
     }

@@ -104,10 +104,8 @@ pub async fn run(
                     // session-management internal events while a turn is
                     // in flight (a pre-existing runtime quirk), so
                     // TurnStarted-triggered requests would be lost.
-                    if let AgentEvent::TurnCompleted { session_id, .. } = &event {
-                        if !sessions.contains_session(&name, *session_id) {
-                            host.control().list_sessions(&name);
-                        }
+                    if let AgentEvent::TurnCompleted { .. } = &event {
+                        host.control().list_sessions(&name);
                     }
                     sessions.observe(&name, &event);
                     hub.publish(EventKind::Agent {
@@ -149,6 +147,7 @@ mod tests {
             title: Some(title.into()),
             created_at: 0,
             last_active: 0,
+            telemetry: Default::default(),
         }
     }
 

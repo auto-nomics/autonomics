@@ -15,6 +15,13 @@ Uniform agent loop, memory management, tool dispatch, and multi-agent orchestrat
 - **Lifecycle** — `AgentLifecycle` (IDLE / RUNNING / ABORTED) driven by built-in lifecycle tools, so agents self-terminate without external orchestration.
 - **Retry with feedback** — Retryable `AgentError`s trigger exponential backoff and the failure reason is injected back into memory for the next attempt.
 - **Observation** — Optional `mpsc` event channel streams `AgentUiEvent`s (Thinking, LlmResponse, ToolCall, ToolResult, Requesting, Done, Error) to a TUI or logger.
+- **Session telemetry** — Every session accumulates provider-reported token usage
+  (including cache reads/writes), successful LLM responses, requested tool uses,
+  completed/failed tool results, turn count, and active work time. Per-turn
+  deltas ride the terminal `TurnCompleted` event and are persisted beside the
+  turn ledger; cumulative values are persisted on the session row and exposed
+  through session-list APIs. Active work time excludes `Waiting` periods while
+  a background task runs.
 - **Snapshots** — `AgentSnapshotStorage` trait with a SQLite backend for persisting agent memory and status.
 - **Multi-agent `ProcessManager`** — Spawn, start, stop, restart, and inject messages into multiple agents as independent tokio tasks; aggregates all per-agent events into one `broadcast::Receiver<ProcessEvent>` stream with exit status (`Completed` / `Error` / `Panicked` / `Cancelled` / `Stopped`).
 

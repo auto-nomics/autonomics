@@ -233,11 +233,20 @@ impl TranslationState {
 
             AgentEvent::TurnCompleted {
                 turn_id,
+                telemetry,
                 delegation_id: None,
                 status,
                 ..
             } => {
                 self.turns += 1;
+                self.turn_usage = Usage {
+                    input_tokens: Some(telemetry.input_tokens),
+                    output_tokens: telemetry.output_tokens,
+                    cache_read_input_tokens: (telemetry.cache_read_input_tokens > 0)
+                        .then_some(telemetry.cache_read_input_tokens),
+                    cache_creation_input_tokens: (telemetry.cache_creation_input_tokens > 0)
+                        .then_some(telemetry.cache_creation_input_tokens),
+                };
                 self.fold_turn_usage();
                 match status {
                     TurnExecutionStatus::Completed => {

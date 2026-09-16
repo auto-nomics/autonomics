@@ -2423,6 +2423,7 @@ impl RuntimeHost {
             status: "running".to_string(),
             started_at: unix_epoch_ms(),
             completed_at: None,
+            telemetry: None,
         };
         agentik_core::supervise::spawn_safe_on(
             &self.infra.runtime_handle,
@@ -2435,7 +2436,22 @@ impl RuntimeHost {
         );
     }
 
-    fn persist_turn_finish(&self, turn_id: uuid::Uuid, status: agentik_types::TurnExecutionStatus) {
+    fn persist_turn_finish(
+        &self,
+        agent_path: &str,
+        telemetry: agentik_types::TurnTelemetry,
+        turn_id: uuid::Uuid,
+        session_id: uuid::Uuid,
+        delegation_id: Option<uuid::Uuid>,
+        status: agentik_types::TurnExecutionStatus,
+    ) {
+        let Some(agent_id) = self
+            .agents
+            .get(agent_path)
+            .and_then(|entry| entry.info.agent_id)
+        else {
+            return;
+        };
         let storage = self.infra.storage.clone();
         let status = match status {
             agentik_types::TurnExecutionStatus::Completed => "completed",
@@ -2446,10 +2462,17 @@ impl RuntimeHost {
             &self.infra.runtime_handle,
             &format!("persist_turn_finish::{turn_id}"),
             async move {
-                if let Err(error) = storage
-                    .finish_agent_turn(turn_id, status, unix_epoch_ms())
-                    .await
-                {
+                let record = AgentTurnRecord {
+                    turn_id,
+                    agent_id,
+                    session_id,
+                    delegation_id,
+                    status: status.to_string(),
+                    started_at: unix_epoch_ms(),
+                    completed_at: Some(unix_epoch_ms()),
+                    telemetry: Some(telemetry),
+                };
+                if let Err(error) = storage.finish_agent_turn(record).await {
                     tracing::warn!(%turn_id, %error, "failed to persist turn completion");
                 }
             },
@@ -2677,8 +2700,10 @@ impl RuntimeHost {
             }
             AgentEvent::TurnCompleted {
                 turn_id,
+                session_id,
                 delegation_id,
                 status,
+                telemetry,
                 ..
             } => {
                 let response = self.network.accumulated_response(&name).to_string();
@@ -2700,7 +2725,6 @@ impl RuntimeHost {
                         let completion_status = record.snapshot.status;
                         let reply_tx = record.reply_tx.take();
                         self.persist_delegation(*delegation_id);
-                        self.persist_turn_finish(*turn_id, *status);
                         push_delegation_progress(
                             &progress,
                             "turn_completed",
@@ -2712,7 +2736,14 @@ impl RuntimeHost {
                         }
                     }
                 }
-                self.persist_turn_finish(*turn_id, *status);
+                self.persist_turn_finish(
+                    &name,
+                    *telemetry,
+                    *turn_id,
+                    *session_id,
+                    *delegation_id,
+                    *status,
+                );
             }
             _ => {}
         }

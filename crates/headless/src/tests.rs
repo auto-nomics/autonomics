@@ -263,6 +263,10 @@ fn translation_pairs_tools_and_counts_them() {
             session_id: Uuid::nil(),
             delegation_id: None,
             status: TurnExecutionStatus::Completed,
+            telemetry: agentik_types::TurnTelemetry {
+                total_tool_use: 2,
+                ..Default::default()
+            },
         },
     ];
     let mut out = vec![];

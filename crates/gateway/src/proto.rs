@@ -229,6 +229,8 @@ pub struct StoredSession {
     /// Unix epoch milliseconds; equals `created_at` while still active.
     pub last_active: i64,
     pub active: bool,
+    #[serde(default)]
+    pub telemetry: agentik_types::SessionTelemetry,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]

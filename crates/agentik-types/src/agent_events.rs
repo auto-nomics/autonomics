@@ -3,7 +3,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::{ContentBlockDelta, Message, MessageStreamEvent, StopReason};
+use crate::{
+    ContentBlockDelta, Message, MessageStreamEvent, SessionTelemetry, StopReason, TurnTelemetry,
+};
 
 /// Unified event emitted by the agent for external observation (TUI, logging, etc.).
 ///
@@ -81,6 +83,8 @@ pub enum AgentEvent {
         session_id: Uuid,
         delegation_id: Option<Uuid>,
         status: TurnExecutionStatus,
+        #[serde(default)]
+        telemetry: TurnTelemetry,
     },
 
     /// Agent is calling a tool. `input` carries the raw JSON arguments.
@@ -158,6 +162,8 @@ pub struct SessionInfo {
     pub title: Option<String>,
     pub created_at: i64,
     pub last_active: i64,
+    #[serde(default)]
+    pub telemetry: SessionTelemetry,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

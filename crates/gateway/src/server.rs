@@ -756,8 +756,9 @@ async fn list_stored_sessions(
                 id: record.session_id,
                 title: record.title,
                 created_at: record.started_at,
-                last_active: record.ended_at.unwrap_or(record.started_at),
+                last_active: record.last_active,
                 active: record.ended_at.is_none(),
+                telemetry: record.telemetry,
             })
             .collect(),
     ))

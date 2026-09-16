@@ -72,7 +72,7 @@ use tokio::sync::Mutex;
 use turso::{IntoParams, Value, params_from_iter};
 use uuid::Uuid;
 
-use agentik_sdk::types::messages::Message;
+use agentik_sdk::types::messages::{ContentBlock, Message, Role};
 use agentik_types::AgentPlan;
 
 use crate::memory::MemoryStage1Record;
@@ -285,7 +285,9 @@ impl TursoAgentStorage {
                     agent_id   TEXT NOT NULL,
                     started_at INTEGER NOT NULL,
                     ended_at   INTEGER,
-                    title      TEXT
+                    title      TEXT,
+                    last_active_at INTEGER,
+                    telemetry_json TEXT
                 );
                 CREATE INDEX IF NOT EXISTS idx_sessions_agent
                     ON sessions(agent_id);
@@ -351,7 +353,8 @@ impl TursoAgentStorage {
                     delegation_id TEXT,
                     status        TEXT NOT NULL,
                     started_at    INTEGER NOT NULL,
-                    completed_at  INTEGER
+                    completed_at  INTEGER,
+                    telemetry_json TEXT
                 );
                 CREATE INDEX IF NOT EXISTS idx_agent_turns_agent
                     ON agent_turns(agent_id, started_at DESC);
@@ -465,6 +468,18 @@ impl TursoAgentStorage {
             .conn
             .execute("ALTER TABLE sessions ADD COLUMN title TEXT", ())
             .await;
+        let _ = self
+            .conn
+            .execute("ALTER TABLE sessions ADD COLUMN last_active_at INTEGER", ())
+            .await;
+        let _ = self
+            .conn
+            .execute("ALTER TABLE sessions ADD COLUMN telemetry_json TEXT", ())
+            .await;
+        let _ = self
+            .conn
+            .execute("ALTER TABLE agent_turns ADD COLUMN telemetry_json TEXT", ())
+            .await;
         // Add `session_id` column to snapshots if missing (idempotent).
         let _ = self
             .conn
@@ -513,6 +528,9 @@ impl TursoAgentStorage {
         );
         if let Err(e) = self.backfill_transcript_from_wal().await {
             tracing::warn!(error = %e, "transcript WAL backfill failed");
+        }
+        if let Err(e) = self.backfill_session_telemetry().await {
+            tracing::warn!(error = %e, "session telemetry backfill failed");
         }
 
         Ok(())
@@ -660,6 +678,94 @@ fn parse_relation(row: &turso::Row) -> Result<AgentRelation, StorageError> {
 }
 
 impl TursoAgentStorage {
+    /// Build cumulative telemetry for sessions created before telemetry columns.
+    ///
+    /// Token and tool counters come from the immutable transcript. Turn count
+    /// and duration use the existing turn ledger; those durations are wall-time
+    /// approximations because pre-telemetry turns did not distinguish active
+    /// work from `Waiting`.
+    async fn backfill_session_telemetry(&self) -> Result<(), StorageError> {
+        let mut rows = self
+            .conn
+            .query("SELECT id FROM sessions WHERE telemetry_json IS NULL", ())
+            .await?;
+
+        let mut session_ids = Vec::new();
+        loop {
+            match rows.next().await {
+                Ok(Some(row)) => {
+                    let id = Uuid::parse_str(&text_col(&row, 0)?).map_err(|e| {
+                        StorageError::Other(format!("parse session id: {e}").into())
+                    })?;
+                    session_ids.push(id);
+                }
+                Ok(None) => break,
+                Err(e) => return Err(e.into()),
+            }
+        }
+        drop(rows);
+
+        for session_id in session_ids {
+            let messages = self.get_transcript_messages(session_id).await?;
+            let mut telemetry = agentik_types::SessionTelemetry::default();
+            for message in &messages {
+                if message.role == Role::Assistant
+                    && let Some(usage) = &message.usage
+                {
+                    telemetry.record_usage(usage);
+                }
+                for block in &message.content {
+                    match block {
+                        ContentBlock::ToolUse { .. } => telemetry.record_tool_use(1),
+                        ContentBlock::ToolResult { is_error, .. } => {
+                            telemetry.record_tool_results(1, u64::from(is_error.unwrap_or(false)));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            let mut turn_rows = self
+                .conn
+                .query(
+                    "SELECT COUNT(*), COALESCE(SUM(
+                        CASE WHEN completed_at IS NOT NULL AND completed_at >= started_at
+                             THEN completed_at - started_at ELSE 0 END), 0)
+                     FROM agent_turns WHERE session_id = ?1",
+                    params_from_iter([Value::Text(session_id.to_string())]),
+                )
+                .await?;
+            let turn_row = turn_rows.next().await?.ok_or_else(|| {
+                StorageError::Other("turn aggregate query returned no row".into())
+            })?;
+            telemetry.turn_count = match turn_row.get_value(0)? {
+                Value::Integer(value) => value.max(0) as u64,
+                _ => 0,
+            };
+            telemetry.time_consume_ms = match turn_row.get_value(1)? {
+                Value::Integer(value) => value.max(0) as u64,
+                _ => 0,
+            };
+            drop(turn_rows);
+
+            let telemetry_json = serde_json::to_string(&telemetry)?;
+            self.conn
+                .execute(
+                    "UPDATE sessions
+                     SET telemetry_json = ?1,
+                         last_active_at = COALESCE(last_active_at, ended_at, started_at)
+                     WHERE id = ?2",
+                    params_from_iter([
+                        Value::Text(telemetry_json),
+                        Value::Text(session_id.to_string()),
+                    ]),
+                )
+                .await?;
+        }
+
+        Ok(())
+    }
+
     async fn append_transcript_message(
         &self,
         session_id: Uuid,
@@ -1064,9 +1170,12 @@ impl AgentStorage for TursoAgentStorage {
         let now = chrono::Utc::now().timestamp_millis();
         self.conn
             .execute(
-                "INSERT INTO sessions (id, agent_id, started_at, ended_at)
-                 VALUES (?1, ?2, ?3, NULL)
-                 ON CONFLICT(id) DO UPDATE SET ended_at = NULL",
+                "INSERT INTO sessions
+                    (id, agent_id, started_at, ended_at, last_active_at)
+                 VALUES (?1, ?2, ?3, NULL, ?3)
+                 ON CONFLICT(id) DO UPDATE SET
+                    ended_at = NULL,
+                    last_active_at = excluded.last_active_at",
                 params_from_iter([
                     Value::Text(session_id.to_string()),
                     Value::Text(agent_id.to_string()),
@@ -1108,8 +1217,32 @@ impl AgentStorage for TursoAgentStorage {
         let now = chrono::Utc::now().timestamp_millis();
         self.conn
             .execute(
-                "UPDATE sessions SET ended_at = ?1 WHERE id = ?2",
+                "UPDATE sessions
+                 SET ended_at = ?1, last_active_at = COALESCE(last_active_at, ?1)
+                 WHERE id = ?2",
                 params_from_iter([Value::Integer(now), Value::Text(session_id.to_string())]),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn update_session_telemetry(
+        &self,
+        session_id: Uuid,
+        telemetry: &agentik_types::SessionTelemetry,
+    ) -> Result<(), StorageError> {
+        let telemetry_json = serde_json::to_string(telemetry)?;
+        let now = chrono::Utc::now().timestamp_millis();
+        self.conn
+            .execute(
+                "UPDATE sessions
+                 SET telemetry_json = ?1, last_active_at = ?2
+                 WHERE id = ?3",
+                params_from_iter([
+                    Value::Text(telemetry_json),
+                    Value::Integer(now),
+                    Value::Text(session_id.to_string()),
+                ]),
             )
             .await?;
         Ok(())
@@ -1274,7 +1407,8 @@ impl AgentStorage for TursoAgentStorage {
         let mut rows = self
             .conn
             .query(
-                "SELECT id, title, started_at, ended_at FROM sessions
+                "SELECT id, title, started_at, ended_at, last_active_at, telemetry_json
+                 FROM sessions
                  WHERE agent_id = ?1
                  ORDER BY started_at ASC",
                 params_from_iter([Value::Text(agent_id.to_string())]),
@@ -1298,6 +1432,14 @@ impl AgentStorage for TursoAgentStorage {
                         Value::Integer(n) => Some(n),
                         _ => None,
                     };
+                    let last_active = match row.get_value(4)? {
+                        Value::Integer(n) => n,
+                        _ => ended_at.unwrap_or(started_at),
+                    };
+                    let telemetry = match row.get_value(5)? {
+                        Value::Text(json) => serde_json::from_str(&json)?,
+                        _ => agentik_types::SessionTelemetry::default(),
+                    };
                     let session_id = Uuid::parse_str(&id_str).map_err(|e| {
                         StorageError::Other(format!("invalid session UUID '{id_str}': {e}").into())
                     })?;
@@ -1306,6 +1448,8 @@ impl AgentStorage for TursoAgentStorage {
                         title,
                         started_at,
                         ended_at,
+                        last_active,
+                        telemetry,
                     });
                 }
                 Ok(None) => break,
@@ -1324,11 +1468,10 @@ impl AgentStorage for TursoAgentStorage {
             .execute(
                 "INSERT INTO agent_turns
                     (turn_id, agent_id, session_id, delegation_id, status,
-                     started_at, completed_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                     started_at, completed_at, telemetry_json)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
                  ON CONFLICT(turn_id) DO UPDATE SET
-                    delegation_id = excluded.delegation_id,
-                    status = excluded.status",
+                    delegation_id = excluded.delegation_id",
                 params_from_iter([
                     Value::Text(turn.turn_id.to_string()),
                     Value::Text(turn.agent_id.to_string()),
@@ -1339,6 +1482,11 @@ impl AgentStorage for TursoAgentStorage {
                     Value::Text(turn.status),
                     Value::Integer(turn.started_at),
                     turn.completed_at.map(Value::Integer).unwrap_or(Value::Null),
+                    turn.telemetry
+                        .map(|telemetry| serde_json::to_string(&telemetry))
+                        .transpose()?
+                        .map(Value::Text)
+                        .unwrap_or(Value::Null),
                 ]),
             )
             .await?;
@@ -1347,19 +1495,36 @@ impl AgentStorage for TursoAgentStorage {
 
     async fn finish_agent_turn(
         &self,
-        turn_id: Uuid,
-        status: &str,
-        completed_at: i64,
+        turn: crate::storage::AgentTurnRecord,
     ) -> Result<(), StorageError> {
+        let telemetry_json = turn
+            .telemetry
+            .map(|telemetry| serde_json::to_string(&telemetry))
+            .transpose()?;
         self.conn
             .execute(
-                "UPDATE agent_turns
-                 SET status = ?1, completed_at = ?2
-                 WHERE turn_id = ?3",
+                "INSERT INTO agent_turns
+                    (turn_id, agent_id, session_id, delegation_id, status,
+                     started_at, completed_at, telemetry_json)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                 ON CONFLICT(turn_id) DO UPDATE SET
+                    delegation_id = excluded.delegation_id,
+                    status = excluded.status,
+                    completed_at = excluded.completed_at,
+                    telemetry_json = COALESCE(
+                        excluded.telemetry_json, agent_turns.telemetry_json
+                    )",
                 params_from_iter([
-                    Value::Text(status.to_string()),
-                    Value::Integer(completed_at),
-                    Value::Text(turn_id.to_string()),
+                    Value::Text(turn.turn_id.to_string()),
+                    Value::Text(turn.agent_id.to_string()),
+                    Value::Text(turn.session_id.to_string()),
+                    turn.delegation_id
+                        .map(|id| Value::Text(id.to_string()))
+                        .unwrap_or(Value::Null),
+                    Value::Text(turn.status),
+                    Value::Integer(turn.started_at),
+                    turn.completed_at.map(Value::Integer).unwrap_or(Value::Null),
+                    telemetry_json.map(Value::Text).unwrap_or(Value::Null),
                 ]),
             )
             .await?;
@@ -2402,6 +2567,110 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_session_telemetry_is_persisted_and_restored() {
+        let store = TursoAgentStorage::open_in_memory().await.unwrap();
+        let agent_id = Uuid::new_v4();
+        let session_id = Uuid::new_v4();
+        let telemetry = agentik_types::SessionTelemetry {
+            input_tokens: 11,
+            output_tokens: 6,
+            cache_read_input_tokens: 3,
+            cache_creation_input_tokens: 2,
+            total_tokens: 22,
+            llm_call_count: 1,
+            turn_count: 1,
+            total_tool_use: 2,
+            tool_result_count: 2,
+            failed_tool_result_count: 1,
+            time_consume_ms: 1_234,
+        };
+
+        store.start_session(agent_id, session_id).await.unwrap();
+        store
+            .update_session_telemetry(session_id, &telemetry)
+            .await
+            .unwrap();
+        store.end_session(session_id).await.unwrap();
+
+        let records = store.list_session_records(agent_id).await.unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].telemetry, telemetry);
+        assert!(records[0].last_active >= records[0].started_at);
+    }
+
+    #[tokio::test]
+    async fn test_legacy_session_telemetry_is_backfilled() {
+        let store = TursoAgentStorage::open_in_memory().await.unwrap();
+        let agent_id = Uuid::new_v4();
+        let session_id = Uuid::new_v4();
+        let turn_id = Uuid::new_v4();
+        let now = now_ms();
+
+        store.start_session(agent_id, session_id).await.unwrap();
+        let mut assistant = Message::assistant_tool_use(
+            "call_legacy",
+            "legacy_tool",
+            serde_json::json!({"input": "x"}),
+        );
+        assistant.usage = Some(agentik_types::Usage {
+            input_tokens: 11,
+            output_tokens: 6,
+            cache_read_input_tokens: Some(3),
+            cache_creation_input_tokens: Some(2),
+            ..Default::default()
+        });
+        store.append_message(session_id, &assistant).await.unwrap();
+        store
+            .append_message(
+                session_id,
+                &Message::tool_result("call_legacy", "failed", true),
+            )
+            .await
+            .unwrap();
+        store
+            .start_agent_turn(crate::storage::AgentTurnRecord {
+                turn_id,
+                agent_id,
+                session_id,
+                delegation_id: None,
+                status: "running".into(),
+                started_at: now,
+                completed_at: None,
+                telemetry: None,
+            })
+            .await
+            .unwrap();
+        store
+            .finish_agent_turn(crate::storage::AgentTurnRecord {
+                turn_id,
+                agent_id,
+                session_id,
+                delegation_id: None,
+                status: "completed".into(),
+                started_at: now,
+                completed_at: Some(now + 1_500),
+                telemetry: None,
+            })
+            .await
+            .unwrap();
+
+        store.backfill_session_telemetry().await.unwrap();
+        let records = store.list_session_records(agent_id).await.unwrap();
+        let telemetry = records[0].telemetry;
+        assert_eq!(telemetry.input_tokens, 11);
+        assert_eq!(telemetry.output_tokens, 6);
+        assert_eq!(telemetry.cache_read_input_tokens, 3);
+        assert_eq!(telemetry.cache_creation_input_tokens, 2);
+        assert_eq!(telemetry.total_tokens, 22);
+        assert_eq!(telemetry.llm_call_count, 1);
+        assert_eq!(telemetry.turn_count, 1);
+        assert_eq!(telemetry.total_tool_use, 1);
+        assert_eq!(telemetry.tool_result_count, 1);
+        assert_eq!(telemetry.failed_tool_result_count, 1);
+        assert_eq!(telemetry.time_consume_ms, 1_500);
+    }
+
+    #[tokio::test]
     async fn test_turn_and_delegation_ledger_persistence() {
         let store = TursoAgentStorage::open_in_memory().await.unwrap();
         let agent_id = Uuid::new_v4();
@@ -2419,6 +2688,7 @@ mod tests {
                 status: "running".into(),
                 started_at: now,
                 completed_at: None,
+                telemetry: None,
             })
             .await
             .unwrap();
@@ -2447,7 +2717,22 @@ mod tests {
         assert_eq!(running[0].session_id, Some(session_id));
 
         store
-            .finish_agent_turn(turn_id, "completed", now + 10)
+            .finish_agent_turn(crate::storage::AgentTurnRecord {
+                turn_id,
+                agent_id,
+                session_id,
+                delegation_id: Some(delegation_id),
+                status: "completed".into(),
+                started_at: now,
+                completed_at: Some(now + 10),
+                telemetry: Some(agentik_types::TurnTelemetry {
+                    input_tokens: 11,
+                    output_tokens: 6,
+                    total_tokens: 17,
+                    total_tool_use: 2,
+                    ..Default::default()
+                }),
+            })
             .await
             .unwrap();
         store
@@ -2479,6 +2764,20 @@ mod tests {
             .unwrap();
         assert_eq!(completed.len(), 1);
         assert_eq!(completed[0].response.as_deref(), Some("analysis complete"));
+
+        let mut rows = store
+            .conn
+            .query(
+                "SELECT telemetry_json FROM agent_turns WHERE turn_id = ?1",
+                params_from_iter([Value::Text(turn_id.to_string())]),
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let persisted: agentik_types::TurnTelemetry =
+            serde_json::from_str(&text_col(&row, 0).unwrap()).unwrap();
+        assert_eq!(persisted.total_tokens, 17);
+        assert_eq!(persisted.total_tool_use, 2);
     }
 
     #[tokio::test]
@@ -2657,6 +2956,7 @@ mod tests {
             messages: vec![original[2].clone()],
             summary: Some("checkpoint".into()),
             ancestor_summaries: vec!["checkpoint".into()],
+            telemetry: Default::default(),
         };
         store
             .replace_session_state(agent_id, session_id, &compacted_state)

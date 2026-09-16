@@ -9,7 +9,7 @@ description = "Resident backend gateway: one daemon owning the RuntimeHost, many
 [dependencies]
 agentik-core = { path = "../agentik-core" }
 agentik-sdk = { path = "../agentik-sdk" }
-agentik-types = { path = "../agentik-types" }
+agentik-types = { path = "../agentik-types", features = ["schema"] }
 runtime = { path = "../runtime" }
 tui-http = { path = "../tui-http" }
 bib-base = { path = "../bib-base" }

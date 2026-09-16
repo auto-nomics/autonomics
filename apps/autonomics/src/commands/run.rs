@@ -232,9 +232,31 @@ fn print_headless_sessions(args: &RunArgs) -> color_eyre::Result<()> {
             .map(|time| time.format("%Y-%m-%d %H:%M:%S UTC").to_string())
             .unwrap_or_else(|| session.last_active.to_string());
         let title = session.title.as_deref().unwrap_or("<untitled>");
-        println!("{active}\t{timestamp}\t{}\t{title}", session.id);
+        println!(
+            "{active}\t{timestamp}\t{}\t{title}\ttokens:{}\ttools:{}\ttime:{}",
+            session.id,
+            session.telemetry.total_tokens,
+            session.telemetry.total_tool_use,
+            format_duration(session.telemetry.time_consume_ms)
+        );
     }
     Ok(())
+}
+
+fn format_duration(millis: u64) -> String {
+    if millis < 1_000 {
+        format!("{millis}ms")
+    } else if millis < 60_000 {
+        format!("{:.1}s", millis as f64 / 1_000.0)
+    } else {
+        let minutes = millis / 60_000;
+        let seconds = (millis % 60_000) / 1_000;
+        if minutes < 60 {
+            format!("{minutes}m {seconds}s")
+        } else {
+            format!("{}h {}m", minutes / 60, minutes % 60)
+        }
+    }
 }
 
 /// Assemble the prompt, following codex exec's stdin semantics:

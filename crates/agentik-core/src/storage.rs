@@ -12,7 +12,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use agentik_sdk::types::messages::Message;
-use agentik_types::AgentPlan;
+use agentik_types::{AgentPlan, SessionTelemetry, TurnTelemetry};
 
 use crate::lifecycle::AgentLifecycleStatus;
 use crate::session::SessionState;
@@ -153,6 +153,11 @@ pub enum PersistOp {
         agent_id: Uuid,
         session_id: Uuid,
         state: SessionState,
+    },
+    /// Replace a session's cumulative telemetry counters.
+    UpdateSessionTelemetry {
+        session_id: Uuid,
+        telemetry: SessionTelemetry,
     },
     /// Preserve the full user-facing transcript before compaction replaces the
     /// active model context.
@@ -709,16 +714,18 @@ pub trait AgentStorage: Send + Sync {
         agent_id: Uuid,
     ) -> Result<Vec<SessionRecord>, StorageError>;
 
+    /// Replace cumulative telemetry counters for a session.
+    async fn update_session_telemetry(
+        &self,
+        session_id: Uuid,
+        telemetry: &SessionTelemetry,
+    ) -> Result<(), StorageError>;
+
     /// Insert or reopen an explicit agent turn.
     async fn start_agent_turn(&self, turn: AgentTurnRecord) -> Result<(), StorageError>;
 
     /// Update a turn's terminal status and completion timestamp.
-    async fn finish_agent_turn(
-        &self,
-        turn_id: Uuid,
-        status: &str,
-        completed_at: i64,
-    ) -> Result<(), StorageError>;
+    async fn finish_agent_turn(&self, turn: AgentTurnRecord) -> Result<(), StorageError>;
 
     /// Upsert the delegation ledger entry.
     async fn upsert_agent_delegation(
@@ -802,6 +809,9 @@ pub struct SessionRecord {
     pub started_at: i64,
     /// Last time the session was paused or closed. `None` means active.
     pub ended_at: Option<i64>,
+    /// Last time telemetry observed activity in this session.
+    pub last_active: i64,
+    pub telemetry: SessionTelemetry,
 }
 
 /// One explicitly tracked conversation turn.
@@ -814,6 +824,8 @@ pub struct AgentTurnRecord {
     pub status: String,
     pub started_at: i64,
     pub completed_at: Option<i64>,
+    #[serde(default)]
+    pub telemetry: Option<TurnTelemetry>,
 }
 
 /// Persisted agent-to-agent delegation ledger entry.

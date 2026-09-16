@@ -338,6 +338,8 @@ impl Agent {
                         s.cancel_token = self.cancel_token.clone();
                         s.title = rec.title;
                         s.created_at = rec.started_at;
+                        s.last_active = rec.last_active;
+                        s.telemetry = rec.telemetry;
 
                         match crate::storage::restore_session_state(
                             storage.as_ref(),
@@ -383,6 +385,7 @@ impl Agent {
                     messages,
                     summary: None,
                     ancestor_summaries: Vec::new(),
+                    telemetry: agentik_types::SessionTelemetry::default(),
                 };
                 let mut s = Session::new_with_state(
                     id,
@@ -504,6 +507,7 @@ impl Agent {
         // would outlive the agent task; cancelling their tokens lets them
         // exit cleanly before the runtime is dropped.
         for session in self.sessions.values_mut() {
+            session.finish_turn(agentik_types::TurnExecutionStatus::Interrupted);
             session.toolset.cancel_all_tasks().await;
             session.pause().await;
         }
@@ -597,6 +601,7 @@ impl Agent {
 
     async fn handle_close_session(&mut self, id: Uuid) {
         if let Some(s) = self.sessions.get_mut(&id) {
+            s.finish_turn(agentik_types::TurnExecutionStatus::Interrupted);
             s.pause().await;
         }
         self.sessions.remove(&id);
@@ -751,6 +756,14 @@ async fn persist_worker(
                     .replace_session_state(agent_id, session_id, &state)
                     .await
             }
+            PersistOp::UpdateSessionTelemetry {
+                session_id,
+                telemetry,
+            } => {
+                storage
+                    .update_session_telemetry(session_id, &telemetry)
+                    .await
+            }
             PersistOp::ArchiveTranscript {
                 session_id,
                 messages,
@@ -819,6 +832,7 @@ mod tests {
             messages: messages.clone(),
             summary: None,
             ancestor_summaries: Vec::new(),
+            telemetry: Default::default(),
         };
 
         let budget = TokenBudget::default();

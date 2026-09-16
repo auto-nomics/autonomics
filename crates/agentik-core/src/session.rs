@@ -18,7 +18,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use agentik_sdk::model::Model;
 use agentik_sdk::types::messages::{ContentBlock, ImageSource, Message, Role};
@@ -26,7 +26,9 @@ use agentik_sdk::types::tools::{
     ImageSource as ToolImageSource, ToolResult, ToolResultBlock, ToolResultContent, ToolUse,
 };
 use agentik_sdk::types::{AgentEvent, AnthropicError, ToolDefinition};
-use agentik_types::{AgentPlan, CompactEvent, SessionInfo, TurnExecutionStatus};
+use agentik_types::{
+    AgentPlan, CompactEvent, SessionInfo, SessionTelemetry, TurnExecutionStatus, TurnTelemetry,
+};
 use arc_swap::{ArcSwap, ArcSwapOption};
 use chrono::Utc;
 use futures::StreamExt;
@@ -312,6 +314,33 @@ pub struct SessionState {
     /// Copied at compaction time so `render_context` is self-contained.
     #[serde(default)]
     pub ancestor_summaries: Vec<String>,
+    #[serde(default)]
+    pub telemetry: SessionTelemetry,
+}
+
+#[derive(Default)]
+struct TurnTiming {
+    active_since: Option<Instant>,
+    active_ms: u64,
+}
+
+impl TurnTiming {
+    fn start(&mut self) {
+        self.active_since.get_or_insert_with(Instant::now);
+    }
+
+    fn pause(&mut self) -> u64 {
+        if let Some(started) = self.active_since.take() {
+            self.active_ms = self
+                .active_ms
+                .saturating_add(started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64);
+        }
+        self.active_ms
+    }
+
+    fn is_active(&self) -> bool {
+        self.active_since.is_some()
+    }
 }
 
 // ─────────────────────────── Session ───────────────────────────
@@ -329,6 +358,7 @@ pub struct Session {
     pub summary: Option<String>,
     /// Summaries from compaction ancestors, oldest first.
     pub ancestor_summaries: Vec<String>,
+    pub telemetry: SessionTelemetry,
 
     // ── Runtime state ──
     pub persist_tx: Option<UnboundedSender<PersistOp>>,
@@ -352,6 +382,8 @@ pub struct Session {
     /// completion, interruption, or failure.
     pub(crate) active_turn_id: Option<Uuid>,
     pub(crate) active_delegation_id: Option<Uuid>,
+    turn_baseline: Option<SessionTelemetry>,
+    turn_timing: TurnTiming,
 
     /// Back-reference to shared agent resources.
     pub(crate) shared: Arc<AgentShared>,
@@ -402,6 +434,7 @@ impl Session {
             messages: Vec::new(),
             summary: None,
             ancestor_summaries: Vec::new(),
+            telemetry: SessionTelemetry::default(),
             persist_tx,
             lifecycle: AgentLifecycle::new(),
             toolset,
@@ -411,6 +444,8 @@ impl Session {
             pending_system_prompt: None,
             active_turn_id: None,
             active_delegation_id: None,
+            turn_baseline: None,
+            turn_timing: TurnTiming::default(),
             shared,
         }
     }
@@ -437,6 +472,7 @@ impl Session {
             messages: state.messages,
             summary: state.summary,
             ancestor_summaries: state.ancestor_summaries,
+            telemetry: state.telemetry,
             persist_tx,
             lifecycle: AgentLifecycle::new(),
             toolset,
@@ -446,6 +482,8 @@ impl Session {
             pending_system_prompt: None,
             active_turn_id: None,
             active_delegation_id: None,
+            turn_baseline: None,
+            turn_timing: TurnTiming::default(),
             shared,
         }
     }
@@ -470,6 +508,7 @@ impl Session {
             messages: parent.messages.clone(),
             summary: parent.summary.clone(),
             ancestor_summaries: parent.ancestor_summaries.clone(),
+            telemetry: SessionTelemetry::default(),
             persist_tx,
             lifecycle: AgentLifecycle::new(),
             toolset,
@@ -479,6 +518,8 @@ impl Session {
             pending_system_prompt: None,
             active_turn_id: None,
             active_delegation_id: None,
+            turn_baseline: None,
+            turn_timing: TurnTiming::default(),
             shared,
         }
     }
@@ -501,6 +542,28 @@ impl Session {
         }
     }
 
+    fn persist_telemetry(&self) {
+        if let Some(tx) = &self.persist_tx {
+            let _ = tx.send(PersistOp::UpdateSessionTelemetry {
+                session_id: self.id,
+                telemetry: self.telemetry,
+            });
+        }
+    }
+
+    fn pause_telemetry(&mut self) {
+        self.turn_timing.pause();
+    }
+
+    fn finish_telemetry(&mut self) -> TurnTelemetry {
+        let elapsed_ms = self.turn_timing.pause();
+        let baseline = self.turn_baseline.take().unwrap_or_default();
+        self.telemetry.record_elapsed(elapsed_ms);
+        self.last_active = chrono::Utc::now().timestamp_millis();
+        self.persist_telemetry();
+        TurnTelemetry::from_session_delta(&self.telemetry, &baseline, elapsed_ms)
+    }
+
     pub fn snapshot(&self) -> AgentSnapshot {
         AgentSnapshot {
             snapshot_id: Uuid::new_v4(),
@@ -514,6 +577,7 @@ impl Session {
                 messages: self.messages.clone(),
                 summary: self.summary.clone(),
                 ancestor_summaries: self.ancestor_summaries.clone(),
+                telemetry: self.telemetry,
             },
             session_id: Some(self.id),
         }
@@ -785,6 +849,10 @@ impl Session {
         let response = model
             .request(messages, &Vec::<ToolDefinition>::new())
             .await?;
+        let usage = response.usage.clone().unwrap_or_default();
+        self.telemetry.record_usage(&usage);
+        self.last_active = chrono::Utc::now().timestamp_millis();
+        self.persist_telemetry();
 
         // Extract the summary text from the LLM response
         let raw_summary: String = response
@@ -849,6 +917,7 @@ impl Session {
                     messages: self.messages.clone(),
                     summary: self.summary.clone(),
                     ancestor_summaries: self.ancestor_summaries.clone(),
+                    telemetry: self.telemetry,
                 },
             });
         }
@@ -889,6 +958,8 @@ impl Session {
                 return;
             }
         };
+        let timing_was_active = self.turn_timing.is_active();
+        let standalone_started = Instant::now();
 
         self.set_lifecycle(agentik_types::AgentLifecycleStatus::Compacting);
         self.shared.send_event(AgentEvent::Compact {
@@ -909,6 +980,16 @@ impl Session {
                     .send_event(AgentEvent::Error(format!("Compaction failed: {e}")));
             }
         }
+        if !timing_was_active {
+            self.telemetry.record_elapsed(
+                standalone_started
+                    .elapsed()
+                    .as_millis()
+                    .min(u128::from(u64::MAX)) as u64,
+            );
+            self.last_active = chrono::Utc::now().timestamp_millis();
+            self.persist_telemetry();
+        }
 
         self.shared.send_event(AgentEvent::Compact {
             event: CompactEvent::CompactFinish { ts: Utc::now() },
@@ -920,6 +1001,7 @@ impl Session {
 
     /// Pause the session: lifecycle → Idle, persist snapshot, end WAL session.
     pub async fn pause(&mut self) {
+        self.pause_telemetry();
         self.set_lifecycle(agentik_types::AgentLifecycleStatus::Idle);
         self.persist_snapshot().await;
         if let Some(storage) = &self.shared.storage {
@@ -965,6 +1047,7 @@ impl Session {
                 messages: self.messages.clone(),
                 summary: self.summary.clone(),
                 ancestor_summaries: self.ancestor_summaries.clone(),
+                telemetry: self.telemetry,
             };
             let _ = tx.send(PersistOp::ReplaceSessionState {
                 agent_id: self.shared.id,
@@ -1096,9 +1179,13 @@ impl Session {
         if self.active_turn_id.is_none() {
             self.active_turn_id = Some(Uuid::new_v4());
             self.active_delegation_id = delegation_id;
+            self.telemetry.turn_count += 1;
+            self.turn_baseline = Some(self.telemetry);
+            self.turn_timing = TurnTiming::default();
         } else if delegation_id.is_some() {
             self.active_delegation_id = delegation_id;
         }
+        self.turn_timing.start();
 
         self.shared.send_event(AgentEvent::TurnStarted {
             turn_id: self.active_turn_id.expect("turn id set above"),
@@ -1113,11 +1200,13 @@ impl Session {
             return;
         };
         let delegation_id = self.active_delegation_id.take();
+        let telemetry = self.finish_telemetry();
         self.shared.send_event(AgentEvent::TurnCompleted {
             turn_id,
             session_id: self.id,
             delegation_id,
             status,
+            telemetry,
         });
     }
 
@@ -1237,6 +1326,7 @@ impl Session {
                 }
             }
             if session_mgmt_pending {
+                self.pause_telemetry();
                 self.stop();
                 break;
             }
@@ -1363,6 +1453,9 @@ impl Session {
         let response_message = self.request_with_retries(allowed.as_deref()).await?;
 
         let last_usage = response_message.usage.clone().unwrap_or_default();
+        self.telemetry.record_usage(&last_usage);
+        self.last_active = chrono::Utc::now().timestamp_millis();
+        self.persist_telemetry();
 
         for block in &response_message.content {
             match block {
@@ -1390,6 +1483,11 @@ impl Session {
             return Ok(());
         }
 
+        self.telemetry
+            .record_tool_use(toolcalls.len().try_into().unwrap_or(u64::MAX));
+        self.last_active = chrono::Utc::now().timestamp_millis();
+        self.persist_telemetry();
+
         for tc in &toolcalls {
             self.shared.send_event(AgentEvent::ToolCall {
                 name: tc.name.clone(),
@@ -1408,6 +1506,18 @@ impl Session {
             .toolset
             .execute(&toolcalls, Some(internal_event_tx.clone()))
             .await?;
+        let failed_tool_results = tool_results
+            .iter()
+            .filter(|result| result.is_error.unwrap_or(false))
+            .count()
+            .try_into()
+            .unwrap_or(u64::MAX);
+        self.telemetry.record_tool_results(
+            tool_results.len().try_into().unwrap_or(u64::MAX),
+            failed_tool_results,
+        );
+        self.last_active = chrono::Utc::now().timestamp_millis();
+        self.persist_telemetry();
 
         // ── Non-blocking wait_task: detect "waiting" results ──
         //
@@ -1478,6 +1588,7 @@ impl Session {
         }
 
         if registered_waits {
+            self.pause_telemetry();
             // Keep lifecycle as `Waiting` — the session loop will exit.
             // The watcher(s) will inject messages to re-enter run_session.
             // Emit tool results so the UI shows the "waiting" status.
@@ -1972,6 +2083,7 @@ impl From<&Session> for SessionInfo {
             title: s.title.clone(),
             created_at: s.created_at,
             last_active: s.last_active,
+            telemetry: s.telemetry,
         }
     }
 }
