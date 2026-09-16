@@ -116,6 +116,7 @@ async fn run_on_gateway(
     let config = GatewayRunConfig {
         run_id,
         prompt,
+        agent_name: Some(args.name.clone()),
         profile: args.profile.clone(),
         agent_runtime: agent_runtime.clone(),
         model: args.model.clone(),
@@ -170,6 +171,9 @@ async fn daemon_active_model_name() -> Option<String> {
 }
 
 fn validate_run_args(args: &RunArgs) -> Result<(), String> {
+    if let Err(error) = agentik_types::validate_segment(&args.name) {
+        return Err(format!("invalid --name `{}`: {error}", args.name));
+    }
     if args.list_sessions
         && (args.prompt.is_some()
             || args.session.is_some()
@@ -201,7 +205,10 @@ fn parse_agent_runtime(args: &RunArgs) -> Result<agentik_core::AgentRuntimeOverr
 fn print_headless_sessions(args: &RunArgs) -> color_eyre::Result<()> {
     let runtime = tokio::runtime::Runtime::new()
         .map_err(|e| color_eyre::eyre::eyre!("failed to build tokio runtime: {e}"))?;
-    let result = runtime.block_on(list_sessions_via_gateway(args.profile.clone()));
+    let result = runtime.block_on(list_sessions_via_gateway(
+        args.profile.clone(),
+        Some(args.name.clone()),
+    ));
     let mut sessions = match result {
         Ok(sessions) => sessions,
         Err(error) => {

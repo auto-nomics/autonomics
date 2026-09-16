@@ -2,9 +2,8 @@
 
 use std::sync::Arc;
 
+use arrow::csv::{ReaderBuilder, WriterBuilder, reader::Format};
 use arrow_array::RecordBatch;
-use arrow_csv::reader::Format;
-use arrow_csv::{ReaderBuilder, WriterBuilder};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion::prelude::DataFrame;

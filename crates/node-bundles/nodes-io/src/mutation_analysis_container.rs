@@ -7,8 +7,8 @@ use std::collections::BTreeMap;
 use std::io::{Cursor, Read, Seek, SeekFrom};
 use std::sync::Arc;
 
+use arrow::csv::{ReaderBuilder, reader::Format};
 use arrow_array::RecordBatch;
-use arrow_csv::{ReaderBuilder, reader::Format};
 use dag_core::node::DagNode;
 use dag_core::registry::{NodeCtx, NodeFactory};
 use dag_core::{NodeInput, NodePorts, dag::DagError, dag::graph::PortOutputs, value::PortType};

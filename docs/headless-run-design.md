@@ -1,6 +1,6 @@
 # Headless 运行模式设计(初步)
 
-状态:**gateway 单一路径**(2026-09 起)——`autonomics run` 经 gateway daemon 执行(`crates/headless::gateway_runner::run_via_gateway`,RunEvent 契约与退出码不变)。**进程内 `run_task` 与 `--ephemeral`/per-run VFS mounts 已整体移除**(双路径维护成本高于其价值;benchmark 隔离待未来一次性 isolated gateway backend,见 §3.1)。CLI:`autonomics run`(--json / -o / --profile / --model / --timeout / --session / --manifest / --list-sessions);退出码 0/1/2/3。RunEvent 与 manifest 通过 `run_id` 关联;Ctrl+C 与输出管道断连会协作取消远端 turn。剩余:P2 的 --output-schema、多 turn stdin 脚本,P3 的多 agent 网络运行,以及一次性 isolated gateway backend。参考实现:codex-rs `exec` 子命令(`/mnt/disk3/codex/codex-rs/exec`)。
+状态:**gateway 单一路径**(2026-09 起)——`autonomics run` 经 gateway daemon 执行(`crates/headless::gateway_runner::run_via_gateway`,RunEvent 契约与退出码不变)。**进程内 `run_task` 与 `--ephemeral`/per-run VFS mounts 已整体移除**(双路径维护成本高于其价值;benchmark 隔离待未来一次性 isolated gateway backend,见 §3.1)。CLI:`autonomics run`(--name / --json / -o / --profile / --model / --timeout / --session / --manifest / --list-sessions);退出码 0/1/2/3。RunEvent 与 manifest 通过 `run_id` 关联;Ctrl+C 与输出管道断连会协作取消远端 turn。剩余:P2 的 --output-schema、多 turn stdin 脚本,P3 的多 agent 网络运行,以及一次性 isolated gateway backend。参考实现:codex-rs `exec` 子命令(`/mnt/disk3/codex/codex-rs/exec`)。
 
 ## 0. 背景与目标
 
@@ -113,12 +113,12 @@ autonomics run [OPTIONS] [PROMPT]
   --json                             stdout 输出 JSONL 事件流(§4)
   -o, --output-last-message <FILE>   最终消息写入文件(turn 失败也写出)
   --profile <PATH>                   agent profile;缺省用默认 profile
-  --agent <PATH>                     AgentPath;缺省 /root/headless
+  --name <NAME>                      Agent name segment;路径为 /root/<NAME>
   --session <UUID>                   在既有会话上继续(§7)
   --model <NAME>                     覆盖模型(仅本次运行;默认仍读 settings 表)
   --timeout <SECS>                   整体超时;超时取消,退出码 2
   --manifest <FILE>                  输出 run manifest(§8)
-  --list-sessions                    列出稳定 headless identity 的持久 session
+  --list-sessions                    列出 --name 对应 agent 的持久 session
   -C, --cwd <DIR>                    工作目录(语义对齐 codex)
 ```
 
@@ -198,7 +198,7 @@ agentik-core storage 已按 agent name 自动恢复并做 WAL replay
 
 - `--session <UUID>`:spawn 后 `switch_session(id)` → `send_message`;
 - `sessions list` 子命令(枚举历史会话供脚本选取)放 P1。
-- `--list-sessions` 已实现:gateway 直接读取稳定 `/root/headless` agent 的持久
+- `--list-sessions` 已实现:gateway 直接读取 `--name` 对应 agent 的持久
   session records,不要求模型配置,也不需要先 spawn agent;`--json` 输出数组。
 
 ## 8. Run manifest

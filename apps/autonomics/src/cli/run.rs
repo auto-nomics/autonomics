@@ -11,8 +11,8 @@ pub struct RunArgs {
     #[arg(value_name = "PROMPT")]
     pub prompt: Option<String>,
 
-    /// List persisted sessions for the stable headless agent instead of
-    /// running a prompt. Combine with --json for machine-readable output.
+    /// List persisted sessions for the --name agent instead of running a
+    /// prompt. Combine with --json for machine-readable output.
     #[arg(long)]
     pub list_sessions: bool,
 
@@ -30,7 +30,9 @@ pub struct RunArgs {
     #[arg(long, value_name = "PATH")]
     pub profile: Option<String>,
 
-    #[arg(long)]
+    /// Create or restore the agent at /root/<NAME>. Concurrent live agents
+    /// with the same name fall back to a unique suffix.
+    #[arg(long, value_name = "NAME")]
     pub name: String,
 
     /// Per-agent runtime overrides as JSON, e.g.

@@ -5,8 +5,8 @@
 //! gateway daemon (auto-spawned when absent); the run loop here only
 //! orchestrates spawn → prompt → event translation → cleanup.
 //!
-//! Identity: the agent runs at the stable path `/root/headless`, so the
-//! daemon's storage restores the same agent_id across runs and
+//! Identity: the caller names the agent, which maps to `/root/<name>`;
+//! the daemon's storage restores the same agent_id across runs and
 //! `--session` resume keeps working. Only when a concurrent run already
 //! holds that path does the spawn fall back to a unique suffix (resume
 //! is meaningless in that contention anyway).
@@ -28,7 +28,7 @@ use crate::{RunError, RunSummary, Terminal, TranslationState, event::*, pick_pro
 /// How long to wait for the daemon's `AgentRegistered` frame (carrying
 /// the restored agent id) before proceeding without it.
 const REGISTRATION_TIMEOUT: Duration = Duration::from_secs(2);
-const HEADLESS_AGENT_PATH: &str = "/root/headless";
+const DEFAULT_HEADLESS_AGENT_NAME: &str = "headless";
 
 /// How long to keep reading after the terminal turn event, so the
 /// compatibility `Done` / `Error` events land in the output too (they
@@ -42,6 +42,9 @@ pub struct GatewayRunConfig {
     pub run_id: Uuid,
     /// The prompt delivered as the single user message of the run.
     pub prompt: String,
+    /// Agent name segment; the runtime path is `/root/<name>`.
+    /// `None` uses the stable legacy name `headless`.
+    pub agent_name: Option<String>,
     /// Profile path to spawn from; `None` picks the first stored profile.
     pub profile: Option<String>,
     /// Runtime overrides layered onto the selected profile before spawn.
@@ -78,13 +81,15 @@ pub async fn run_via_gateway<P: OutputProcessor>(
     run_via_gateway_with_client(client, config, processor).await
 }
 
-/// List persisted sessions for the stable headless agent identity.
+/// List persisted sessions for a named headless agent identity.
 ///
 /// This reads storage through the daemon rather than spawning an agent, so it
 /// works before the first run and does not require a model to be configured.
 pub async fn list_sessions_via_gateway(
     profile: Option<String>,
+    agent_name: Option<String>,
 ) -> Result<Vec<StoredSession>, RunError> {
+    let agent_path = named_agent_path(agent_name.as_deref())?;
     gateway::manager::ensure_running()
         .await
         .map_err(RunError::Gateway)?;
@@ -103,10 +108,7 @@ pub async fn list_sessions_via_gateway(
         .list_storage_agents()
         .await
         .map_err(|e| RunError::Gateway(e.to_string()))?;
-    let Some(record) = agents
-        .iter()
-        .find(|record| record.name == HEADLESS_AGENT_PATH)
-    else {
+    let Some(record) = agents.iter().find(|record| record.name == agent_path) else {
         return Ok(Vec::new());
     };
     client
@@ -124,6 +126,7 @@ pub async fn run_via_gateway_with_client<P: OutputProcessor>(
     processor: &mut P,
 ) -> Result<RunSummary, RunError> {
     let started = Instant::now();
+    let agent_name = validated_agent_name(config.agent_name.as_deref())?;
 
     // ── Resolve profile + model from the daemon snapshot ─────────────
     let state = client
@@ -162,9 +165,9 @@ pub async fn run_via_gateway_with_client<P: OutputProcessor>(
         .map(name_part)
         .or_else(|| state.active_model_spec.as_deref().map(name_part));
 
-    // ── Spawn at the stable identity, with a contention fallback ─────
+    // ── Spawn at the named identity, with a contention fallback ─────
     let agent_path = match client
-        .spawn_agent("headless", "/root", &profile, spawn_model_spec)
+        .spawn_agent(&agent_name, "/root", &profile, spawn_model_spec)
         .await
     {
         Ok(path) => path,
@@ -172,18 +175,19 @@ pub async fn run_via_gateway_with_client<P: OutputProcessor>(
             if config.session.is_some() {
                 return Err(RunError::SessionSwitch {
                     session: config.session.expect("session checked above"),
-                    message: "the stable headless identity is already live, so this run \
+                    message: "the named identity is already live, so this run \
                               received a new agent path and cannot resume that session"
                         .into(),
                 });
             }
-            // A concurrent one-shot run holds /root/headless. A unique
+            // A concurrent run holds the requested path. A unique
             // identity can't share persisted sessions, but a contended
             // run can't resume them anyway.
-            let fallback = format!("headless_{}", &Uuid::new_v4().simple().to_string()[..8]);
+            let fallback = unique_agent_name(&agent_name);
             tracing::warn!(
                 fallback = %fallback,
-                "another run holds /root/headless; spawning with a unique identity"
+                requested = %agent_name,
+                "another run holds the named agent; spawning with a unique identity"
             );
             client
                 .spawn_agent(&fallback, "/root", &profile, spawn_model_spec)
@@ -456,4 +460,27 @@ pub async fn run_via_gateway_with_client<P: OutputProcessor>(
         turns,
         tool_calls,
     })
+}
+
+fn validated_agent_name(name: Option<&str>) -> Result<String, RunError> {
+    let name = name.unwrap_or(DEFAULT_HEADLESS_AGENT_NAME);
+    agentik_types::validate_segment(name)
+        .map_err(|error| RunError::Spawn {
+            message: format!("invalid agent name `{name}`: {error}"),
+        })
+        .map(|()| name.to_string())
+}
+
+fn named_agent_path(name: Option<&str>) -> Result<String, RunError> {
+    Ok(format!("/root/{}", validated_agent_name(name)?))
+}
+
+fn unique_agent_name(name: &str) -> String {
+    // AgentPath caps every segment at 32 ASCII characters.
+    let base_len = name.len().min(23);
+    format!(
+        "{}_{}",
+        &name[..base_len],
+        &Uuid::new_v4().simple().to_string()[..8]
+    )
 }

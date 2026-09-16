@@ -136,6 +136,30 @@ async fn gateway_run_streams_the_contract_jsonl() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn gateway_run_spawns_the_named_agent_path() {
+    let daemon = start_mock_gateway("named reply").await;
+    let mut processor = JsonlProcessor::new(Vec::new());
+    let summary = tokio::time::timeout(
+        TEST_TIMEOUT,
+        run_via_gateway_with_client(
+            daemon.client(),
+            GatewayRunConfig {
+                prompt: "ping".into(),
+                agent_name: Some("research_run".into()),
+                ..Default::default()
+            },
+            &mut processor,
+        ),
+    )
+    .await
+    .expect("run completes within timeout")
+    .expect("run starts");
+    daemon.stop().await;
+
+    assert_eq!(summary.agent_path, "/root/research_run");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn gateway_run_cleans_up_the_one_shot_agent() {
     let daemon = start_mock_gateway("done").await;
     let client = daemon.client();

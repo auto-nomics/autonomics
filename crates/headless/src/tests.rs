@@ -307,6 +307,7 @@ async fn session_resume_continues_the_same_session() {
         client.clone(),
         GatewayRunConfig {
             prompt: "first prompt".into(),
+            agent_name: Some("named_resume".into()),
             ..Default::default()
         },
     )
@@ -327,7 +328,7 @@ async fn session_resume_continues_the_same_session() {
     tokio::time::timeout(TEST_TIMEOUT, async {
         loop {
             let agents = client.list_storage_agents().await.unwrap();
-            if let Some(record) = agents.iter().find(|r| r.name == "/root/headless") {
+            if let Some(record) = agents.iter().find(|r| r.name == "/root/named_resume") {
                 let sessions = client.list_stored_sessions(record.id).await.unwrap();
                 if sessions.iter().any(|s| s.id == session_id) {
                     return;
@@ -344,6 +345,7 @@ async fn session_resume_continues_the_same_session() {
         client.clone(),
         GatewayRunConfig {
             prompt: "second prompt".into(),
+            agent_name: Some("named_resume".into()),
             session: Some(session_id),
             ..Default::default()
         },

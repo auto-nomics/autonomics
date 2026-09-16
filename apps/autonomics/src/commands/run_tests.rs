@@ -25,6 +25,15 @@ fn list_sessions_rejects_run_options() {
 }
 
 #[test]
+fn run_rejects_invalid_agent_names() {
+    for name in ["Bad Name", "a/b", "root", ""] {
+        let mut args = test_args(Some("prompt"), false);
+        args.name = name.to_string();
+        assert!(validate_run_args(&args).is_err(), "name `{name}` accepted");
+    }
+}
+
+#[test]
 fn no_memory_overrides_both_memory_settings() {
     let mut args = test_args(Some("prompt"), false);
     args.no_memory = true;
