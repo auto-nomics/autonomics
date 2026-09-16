@@ -9,7 +9,7 @@ Builds the Scanpy runtime image and validates the four-input inspect and ingest
 contracts.
 
 Environment:
-  SINGLE_CELL_IMAGE  Image tag (default localhost/atc/single-cell-preprocessor:0.1.0)
+  SINGLE_CELL_IMAGE  Image tag (default localhost/atc/single-cell-preprocessor:0.2.0)
   BUILD_IMAGE=0      Skip the Podman build
   SINGLE_CELL_PRODUCTION_BASELINE=1
                      Also generate and inspect a deterministic 20,000-gene by
@@ -19,7 +19,7 @@ EOF
 }
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-image=${SINGLE_CELL_IMAGE:-localhost/atc/single-cell-preprocessor:0.1.0}
+image=${SINGLE_CELL_IMAGE:-localhost/atc/single-cell-preprocessor:0.2.0}
 build_image=${BUILD_IMAGE:-1}
 production_baseline=${SINGLE_CELL_PRODUCTION_BASELINE:-0}
 

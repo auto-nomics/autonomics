@@ -1,7 +1,7 @@
 # Single-cell preprocessor container
 
 This image provides a pinned official [Scanpy](https://github.com/scverse/scanpy)
-1.11.3 runtime for 10x-style MatrixMarket single-cell inputs. It carries only
+1.11.3 runtime for 10x MatrixMarket and H5AD single-cell workflows. It carries only
 the Python implementation and its locked wheel dependencies; expression
 matrices, barcodes, feature maps, metadata, and reference panels stay outside
 the image.
@@ -9,7 +9,7 @@ the image.
 Published immutable image:
 
 ```text
-crpi-isjkczwpadlvr9i3.cn-hongkong.personal.cr.aliyuncs.com/autonomics/single-cell-preprocessor@sha256:53fd628049d4b115b8fb805edfaf45905d4f5a60f87e4fcd2cf6acf8b378e940
+crpi-isjkczwpadlvr9i3.cn-hongkong.personal.cr.aliyuncs.com/autonomics/single-cell-preprocessor@sha256:7a7397f45775a4c4b6c4c220711db2b95dd37fdc40b7b7f06d181a220903e467
 ```
 
 The DAG wrapper combines this digest with the repository above through
@@ -47,10 +47,29 @@ total-count scaling to 10,000 followed by `log1p`. Duplicate gene symbols are
 made unique in `var_names`; `gene_id` and `feature_type` remain available in
 `var`. This operation requires enough container memory for the sparse matrix.
 
+## H5AD workflow contract
+
+The same image also runs `/opt/autonomics/workflow.py` for the DAG H5AD
+nodes:
+
+1. `h5ad_qc_filter`: H5AD to filtered H5AD plus JSON report.
+2. `h5ad_pca_neighbors_umap_leiden`: optional normalize/log1p/HVG plus PCA,
+   neighbors, UMAP, and Leiden.
+3. `h5ad_celltypist_annotate`: H5AD plus explicit local model File to annotated
+   H5AD and report.
+4. `h5ad_obs_to_parquet`: backed H5AD obs projection, including explicit
+   `obsm` keys.
+5. `h5ad_subset_by_obs`: H5AD plus selection Parquet to filtered H5AD.
+
+The DAG wrapper supplies the workflow script as an inline private script and a
+JSON parameter file, so parameters are schema-validated in Rust before reaching
+the container. Expression matrices remain opaque File values.
+
 ## Build and baselines
 
 ```sh
 containers/single-cell-preprocessor/test_single_cell_preprocessor.sh
+containers/single-cell-preprocessor/test_single_cell_workflow.sh
 ```
 
 The script builds the image and validates both paths with real rootless Podman:
