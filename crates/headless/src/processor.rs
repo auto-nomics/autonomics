@@ -273,7 +273,7 @@ mod tests {
     use super::*;
     use crate::event::{
         AgentMessageItem, ItemEvent, NoticeKind, RunEndedEvent, RunItem, RunStartedEvent,
-        ToolCallItem, TurnCompletedEvent, TurnFailedEvent, TurnStartedEvent, Usage,
+        Telemetry, ToolCallItem, TurnCompletedEvent, TurnFailedEvent, TurnStartedEvent, Usage,
     };
     use serde_json::Value;
     use uuid::Uuid;
@@ -309,6 +309,7 @@ mod tests {
             usage: None,
             turns: 1,
             tool_calls: 1,
+            telemetry: Telemetry::default(),
         })
     }
 
@@ -342,6 +343,7 @@ mod tests {
             RunEvent::TurnCompleted(TurnCompletedEvent {
                 turn_id: Uuid::nil(),
                 usage: Usage::default(),
+                telemetry: Telemetry::default(),
             }),
             ended(RunStatus::Completed),
         ]
@@ -385,6 +387,7 @@ mod tests {
         processor.process(&RunEvent::TurnFailed(TurnFailedEvent {
             turn_id: Uuid::nil(),
             message: "api down".into(),
+            telemetry: Telemetry::default(),
         }));
         processor.process(&ended(RunStatus::Failed));
         processor.finish();

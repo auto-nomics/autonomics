@@ -84,12 +84,18 @@ pub struct TurnCompletedEvent {
     pub turn_id: Uuid,
     /// Cumulative token usage for the turn.
     pub usage: Usage,
+    /// Authoritative resource telemetry for the turn.
+    #[serde(default)]
+    pub telemetry: Telemetry,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TurnFailedEvent {
     pub turn_id: Uuid,
     pub message: String,
+    /// Best-known telemetry for the failed turn.
+    #[serde(default)]
+    pub telemetry: Telemetry,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -106,6 +112,9 @@ pub struct RunEndedEvent {
     pub turns: u64,
     /// Number of tool calls that completed during the run.
     pub tool_calls: u64,
+    /// Aggregated resource telemetry for this invocation.
+    #[serde(default)]
+    pub telemetry: Telemetry,
 }
 
 /// Terminal status of the whole run.
@@ -127,6 +136,41 @@ pub struct Usage {
     pub output_tokens: u64,
     pub cache_read_input_tokens: Option<u64>,
     pub cache_creation_input_tokens: Option<u64>,
+}
+
+/// Resource telemetry for a turn or a complete headless invocation.
+///
+/// Unlike `Usage`, this includes tool activity and active agent work time.
+/// `time_consume_ms` excludes time spent waiting for background tools.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Telemetry {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_input_tokens: u64,
+    pub cache_creation_input_tokens: u64,
+    pub total_tokens: u64,
+    pub llm_call_count: u64,
+    pub total_tool_use: u64,
+    pub tool_result_count: u64,
+    pub failed_tool_result_count: u64,
+    pub time_consume_ms: u64,
+}
+
+impl From<agentik_types::TurnTelemetry> for Telemetry {
+    fn from(value: agentik_types::TurnTelemetry) -> Self {
+        Self {
+            input_tokens: value.input_tokens,
+            output_tokens: value.output_tokens,
+            cache_read_input_tokens: value.cache_read_input_tokens,
+            cache_creation_input_tokens: value.cache_creation_input_tokens,
+            total_tokens: value.total_tokens,
+            llm_call_count: value.llm_call_count,
+            total_tool_use: value.total_tool_use,
+            tool_result_count: value.tool_result_count,
+            failed_tool_result_count: value.failed_tool_result_count,
+            time_consume_ms: value.time_consume_ms,
+        }
+    }
 }
 
 /// An item happening inside a turn, with its typed payload.
@@ -293,10 +337,12 @@ mod tests {
             RunEvent::TurnCompleted(TurnCompletedEvent {
                 turn_id: Uuid::nil(),
                 usage: Usage::default(),
+                telemetry: Telemetry::default(),
             }),
             RunEvent::TurnFailed(TurnFailedEvent {
                 turn_id: Uuid::nil(),
                 message: "boom".into(),
+                telemetry: Telemetry::default(),
             }),
             RunEvent::Notice(NoticeEvent {
                 kind: NoticeKind::Compact,
@@ -313,6 +359,7 @@ mod tests {
                 }),
                 turns: 1,
                 tool_calls: 2,
+                telemetry: Telemetry::default(),
             }),
         ];
         for event in events {
@@ -320,5 +367,44 @@ mod tests {
             let back: RunEvent = serde_json::from_str(&json).unwrap();
             assert_eq!(back, event, "round-trip failed for {json}");
         }
+    }
+
+    #[test]
+    fn terminal_events_deserialize_without_telemetry() {
+        let completed: RunEvent = serde_json::from_str(
+            r#"{
+                "type": "turn.completed",
+                "turn_id": "00000000-0000-0000-0000-000000000000",
+                "usage": {
+                    "input_tokens": null,
+                    "output_tokens": 0,
+                    "cache_read_input_tokens": null,
+                    "cache_creation_input_tokens": null
+                }
+            }"#,
+        )
+        .unwrap();
+        let telemetry = match completed {
+            RunEvent::TurnCompleted(TurnCompletedEvent { telemetry, .. }) => telemetry,
+            other => panic!("expected turn.completed, got {other:?}"),
+        };
+        assert_eq!(telemetry, Telemetry::default());
+
+        let ended: RunEvent = serde_json::from_str(
+            r#"{
+                "type": "run.ended",
+                "run_id": "00000000-0000-0000-0000-000000000000",
+                "status": "completed",
+                "wall_time_secs": 1.0,
+                "turns": 1,
+                "tool_calls": 0
+            }"#,
+        )
+        .unwrap();
+        let telemetry = match ended {
+            RunEvent::RunEnded(RunEndedEvent { telemetry, .. }) => telemetry,
+            other => panic!("expected run.ended, got {other:?}"),
+        };
+        assert_eq!(telemetry, Telemetry::default());
     }
 }

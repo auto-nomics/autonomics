@@ -159,9 +159,9 @@ gateway backend**:以独立 state_dir 拉起临时 daemon,以 gateway 参数形�
 | `item.completed` (reasoning) | `Thinking` | 思考块 |
 | `usage` | `UsageUpdate` | 累计 token;`turn.completed` 携带汇总 |
 | `notice` | `Compact` / `PlanUpdate` / `RetryableError` / `ToolCallBackground` 等 | 非致命运行时事件,统一 tag 区分 |
-| `turn.completed` | `TurnCompleted{status: Completed}` | {turn_id, usage} |
-| `turn.failed` | `TurnCompleted{status: Failed}` / `Error` | {turn_id, message} |
-| `run.ended` | — | 尾事件:{run_id, status, wall_time_secs, usage, turns, tool_calls} |
+| `turn.completed` | `TurnCompleted{status: Completed}` | {turn_id, usage, telemetry} |
+| `turn.failed` | `TurnCompleted{status: Failed}` / `Error` | {turn_id, message, telemetry} |
+| `run.ended` | — | 尾事件:{run_id, status, wall_time_secs, usage, telemetry, turns, tool_calls} |
 
 终止信号以 `TurnCompleted`(带 turn_id 与三态 status)为权威;`Done` 与
 `LifecycleChanged` 终态仅作交叉校验。`TurnAborted` 映射为 `run.ended{status:
@@ -214,6 +214,7 @@ agentik-core storage 已按 agent name 自动恢复并做 WAL replay
   "session_id": "...",
   "status": "completed | failed | cancelled",
   "usage": {"input_tokens": 0, "output_tokens": 0, "...": 0},
+  "telemetry": {"total_tokens": 0, "total_tool_use": 0, "time_consume_ms": 0, "...": 0},
   "wall_time_secs": 0.0,
   "turns": 1
 }

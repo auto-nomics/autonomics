@@ -13,6 +13,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::RunSummary;
+use crate::event::Telemetry;
 use crate::processor::Outcome;
 
 /// Identifying metadata the caller contributes (things the runner does
@@ -43,6 +44,8 @@ pub struct RunManifest {
     pub status: &'static str,
     pub turns: u64,
     pub tool_calls: u64,
+    #[serde(default)]
+    pub telemetry: Telemetry,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage: Option<crate::event::Usage>,
     pub wall_time_secs: f64,
@@ -64,6 +67,7 @@ impl RunManifest {
             status: status_str(summary.outcome),
             turns: summary.turns,
             tool_calls: summary.tool_calls,
+            telemetry: summary.telemetry,
             usage: summary.usage,
             wall_time_secs: summary.wall_time_secs,
         }
@@ -123,6 +127,11 @@ mod tests {
             }),
             turns: 1,
             tool_calls: 2,
+            telemetry: Telemetry {
+                total_tokens: 17,
+                total_tool_use: 2,
+                ..Default::default()
+            },
         }
     }
 

@@ -46,7 +46,8 @@ use uuid::Uuid;
 
 use event::{
     AgentMessageItem, ItemEvent, NoticeEvent, NoticeKind, ReasoningItem, RunEvent, RunItem,
-    RunItemDetails, ToolCallItem, TurnCompletedEvent, TurnFailedEvent, TurnStartedEvent, Usage,
+    RunItemDetails, Telemetry, ToolCallItem, TurnCompletedEvent, TurnFailedEvent, TurnStartedEvent,
+    Usage,
 };
 
 /// Terminal outcome of a completed headless run.
@@ -64,6 +65,8 @@ pub struct RunSummary {
     pub turns: u64,
     /// Tool calls that completed during the run.
     pub tool_calls: u64,
+    /// Aggregated telemetry for this invocation.
+    pub telemetry: Telemetry,
 }
 
 /// Startup-phase failures — distinct from a failed *turn*, which is a
@@ -116,9 +119,12 @@ struct TranslationState {
     pending_tools: VecDeque<(String, String, Value)>,
     turn_usage: Usage,
     run_usage: Usage,
+    turn_telemetry: Telemetry,
+    run_telemetry: Telemetry,
     turns: u64,
     tool_calls: u64,
     terminal: Option<Terminal>,
+    current_turn_active: bool,
     /// Turn id of the in-flight top-level turn, from `TurnStarted`.
     current_turn_id: Uuid,
     /// Most recent retryable-error message — used as the failure text
@@ -144,7 +150,9 @@ impl TranslationState {
             } => {
                 // A fresh top-level turn: reset per-turn usage.
                 self.turn_usage = Usage::default();
+                self.turn_telemetry = Telemetry::default();
                 self.current_turn_id = turn_id;
+                self.current_turn_active = true;
                 vec![RunEvent::TurnStarted(TurnStartedEvent {
                     turn_id,
                     session_id,
@@ -153,6 +161,7 @@ impl TranslationState {
 
             AgentEvent::ToolCall { name, input } => {
                 let id = self.next_id("tool");
+                self.turn_telemetry.total_tool_use += 1;
                 self.pending_tools
                     .push_back((id.clone(), name.clone(), input.clone()));
                 vec![RunEvent::ItemStarted(ItemEvent {
@@ -176,6 +185,10 @@ impl TranslationState {
                     return vec![];
                 };
                 self.tool_calls += 1;
+                self.turn_telemetry.tool_result_count += 1;
+                if !ok {
+                    self.turn_telemetry.failed_tool_result_count += 1;
+                }
                 vec![RunEvent::ItemCompleted(ItemEvent {
                     item: RunItem {
                         id,
@@ -228,6 +241,17 @@ impl TranslationState {
                 if let Some(v) = cache_read_input_tokens {
                     self.turn_usage.cache_read_input_tokens = Some(v);
                 }
+                self.turn_telemetry.input_tokens = input_tokens.unwrap_or(0);
+                self.turn_telemetry.output_tokens = output_tokens;
+                self.turn_telemetry.cache_read_input_tokens = cache_read_input_tokens.unwrap_or(0);
+                self.turn_telemetry.cache_creation_input_tokens =
+                    cache_creation_input_tokens.unwrap_or(0);
+                self.turn_telemetry.total_tokens = self
+                    .turn_telemetry
+                    .input_tokens
+                    .saturating_add(output_tokens)
+                    .saturating_add(self.turn_telemetry.cache_read_input_tokens)
+                    .saturating_add(self.turn_telemetry.cache_creation_input_tokens);
                 vec![]
             }
 
@@ -239,6 +263,7 @@ impl TranslationState {
                 ..
             } => {
                 self.turns += 1;
+                self.turn_telemetry = Telemetry::from(telemetry);
                 self.turn_usage = Usage {
                     input_tokens: Some(telemetry.input_tokens),
                     output_tokens: telemetry.output_tokens,
@@ -248,12 +273,15 @@ impl TranslationState {
                         .then_some(telemetry.cache_creation_input_tokens),
                 };
                 self.fold_turn_usage();
+                self.fold_turn_telemetry();
+                self.current_turn_active = false;
                 match status {
                     TurnExecutionStatus::Completed => {
                         self.terminal = Some(Terminal::Completed);
                         vec![RunEvent::TurnCompleted(TurnCompletedEvent {
                             turn_id,
                             usage: self.turn_usage,
+                            telemetry: self.turn_telemetry,
                         })]
                     }
                     TurnExecutionStatus::Failed => {
@@ -262,13 +290,18 @@ impl TranslationState {
                             .clone()
                             .unwrap_or_else(|| "turn failed".to_string());
                         self.terminal = Some(Terminal::Failed);
-                        vec![RunEvent::TurnFailed(TurnFailedEvent { turn_id, message })]
+                        vec![RunEvent::TurnFailed(TurnFailedEvent {
+                            turn_id,
+                            message,
+                            telemetry: self.turn_telemetry,
+                        })]
                     }
                     TurnExecutionStatus::Interrupted => {
                         self.terminal = Some(Terminal::Cancelled);
                         vec![RunEvent::TurnFailed(TurnFailedEvent {
                             turn_id,
                             message: "turn interrupted".to_string(),
+                            telemetry: self.turn_telemetry,
                         })]
                     }
                 }
@@ -283,17 +316,24 @@ impl TranslationState {
                 match self.terminal.take() {
                     Some(Terminal::Failed) => {
                         self.terminal = Some(Terminal::Failed);
-                        vec![RunEvent::TurnFailed(TurnFailedEvent { turn_id, message })]
+                        vec![RunEvent::TurnFailed(TurnFailedEvent {
+                            turn_id,
+                            message,
+                            telemetry: self.turn_telemetry,
+                        })]
                     }
                     Some(other) => {
                         self.terminal = Some(other);
                         vec![]
                     }
                     None => {
-                        self.turns += 1;
-                        self.fold_turn_usage();
+                        let telemetry = self.fail_current_turn();
                         self.terminal = Some(Terminal::Failed);
-                        vec![RunEvent::TurnFailed(TurnFailedEvent { turn_id, message })]
+                        vec![RunEvent::TurnFailed(TurnFailedEvent {
+                            turn_id,
+                            message,
+                            telemetry,
+                        })]
                     }
                 }
             }
@@ -323,6 +363,7 @@ impl TranslationState {
 
             AgentEvent::TurnAborted => {
                 if self.terminal.is_none() {
+                    self.fail_current_turn();
                     self.terminal = Some(Terminal::Cancelled);
                 }
                 vec![]
@@ -348,6 +389,31 @@ impl TranslationState {
         if self.turn_usage.cache_read_input_tokens.is_some() {
             self.run_usage.cache_read_input_tokens = self.turn_usage.cache_read_input_tokens;
         }
+    }
+
+    fn fail_current_turn(&mut self) -> Telemetry {
+        if self.current_turn_active {
+            self.turns += 1;
+            self.fold_turn_usage();
+            self.fold_turn_telemetry();
+            self.current_turn_active = false;
+        }
+        self.turn_telemetry
+    }
+
+    fn fold_turn_telemetry(&mut self) {
+        let current = self.turn_telemetry;
+        let run = &mut self.run_telemetry;
+        run.input_tokens += current.input_tokens;
+        run.output_tokens += current.output_tokens;
+        run.cache_read_input_tokens += current.cache_read_input_tokens;
+        run.cache_creation_input_tokens += current.cache_creation_input_tokens;
+        run.total_tokens += current.total_tokens;
+        run.llm_call_count += current.llm_call_count;
+        run.total_tool_use += current.total_tool_use;
+        run.tool_result_count += current.tool_result_count;
+        run.failed_tool_result_count += current.failed_tool_result_count;
+        run.time_consume_ms += current.time_consume_ms;
     }
 }
 

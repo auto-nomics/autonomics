@@ -316,11 +316,13 @@ pub async fn run_via_gateway_with_client<P: OutputProcessor>(
     let terminal = loop {
         if config.cancel.is_cancelled() {
             let _ = client.cancel_agent(&agent_path).await;
+            let telemetry = translation.fail_current_turn();
             translation.terminal = Some(Terminal::Cancelled);
             if !processor.is_broken() {
                 processor.process(&RunEvent::TurnFailed(TurnFailedEvent {
                     turn_id: translation.current_turn_id,
                     message: "run cancelled".to_string(),
+                    telemetry,
                 }));
             }
             break Terminal::Cancelled;
@@ -332,11 +334,13 @@ pub async fn run_via_gateway_with_client<P: OutputProcessor>(
             // Cooperative cancel first: aborts the in-flight turn so the
             // daemon-side shutdown below doesn't wait on running tools.
             let _ = client.cancel_agent(&agent_path).await;
+            let telemetry = translation.fail_current_turn();
             translation.terminal = Some(Terminal::Cancelled);
             if !processor.is_broken() {
                 processor.process(&RunEvent::TurnFailed(TurnFailedEvent {
                     turn_id: translation.current_turn_id,
                     message: format!("run timed out after {:.1}s", budget.as_secs_f64()),
+                    telemetry,
                 }));
             }
             break Terminal::Cancelled;
@@ -351,7 +355,10 @@ pub async fn run_via_gateway_with_client<P: OutputProcessor>(
                 // Stream ended (daemon gone) — the run's delta stream is
                 // gone with it.
                 tracing::warn!("gateway event stream ended mid-run");
-                break translation.terminal.take().unwrap_or(Terminal::Failed);
+                break translation.terminal.take().unwrap_or_else(|| {
+                    translation.fail_current_turn();
+                    Terminal::Failed
+                });
             }
             Ok(Some(Ok(event))) => event,
         };
@@ -404,11 +411,13 @@ pub async fn run_via_gateway_with_client<P: OutputProcessor>(
                 // Events were dropped beyond the replay window — the run's
                 // delta stream is compromised and the terminal event may
                 // be gone. Fail loudly instead of hanging.
+                let telemetry = translation.fail_current_turn();
                 processor.process(&RunEvent::TurnFailed(TurnFailedEvent {
                     turn_id: translation.current_turn_id,
                     message: format!(
                         "gateway event stream lagged ({missed} events missed) — run aborted"
                     ),
+                    telemetry,
                 }));
                 translation.terminal = Some(Terminal::Failed);
                 break Terminal::Failed;
@@ -428,6 +437,7 @@ pub async fn run_via_gateway_with_client<P: OutputProcessor>(
     let usage = (translation.turns > 0).then_some(translation.run_usage);
     let turns = translation.turns;
     let tool_calls = translation.tool_calls;
+    let telemetry = translation.run_telemetry;
     if !processor.is_broken() {
         processor.process(&RunEvent::RunEnded(RunEndedEvent {
             run_id: config.run_id,
@@ -436,6 +446,7 @@ pub async fn run_via_gateway_with_client<P: OutputProcessor>(
             usage,
             turns,
             tool_calls,
+            telemetry,
         }));
     }
     processor.finish();
@@ -459,6 +470,7 @@ pub async fn run_via_gateway_with_client<P: OutputProcessor>(
         usage,
         turns,
         tool_calls,
+        telemetry,
     })
 }
 

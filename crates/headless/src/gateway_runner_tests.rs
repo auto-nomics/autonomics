@@ -22,6 +22,8 @@ fn normalize(value: &mut serde_json::Value) {
             for (key, entry) in map.iter_mut() {
                 if key == "wall_time_secs" {
                     *entry = serde_json::json!(0.0);
+                } else if key == "time_consume_ms" {
+                    *entry = serde_json::json!(0);
                 } else {
                     normalize(entry);
                 }
@@ -104,6 +106,18 @@ async fn gateway_run_streams_the_contract_jsonl() {
                 "cache_read_input_tokens": null,
                 "cache_creation_input_tokens": null,
             },
+            "telemetry": {
+                "input_tokens": 11,
+                "output_tokens": 6,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "total_tokens": 17,
+                "llm_call_count": 1,
+                "total_tool_use": 0,
+                "tool_result_count": 0,
+                "failed_tool_result_count": 0,
+                "time_consume_ms": 0,
+            },
         }),
         serde_json::json!({
             "type": "run.ended",
@@ -118,6 +132,18 @@ async fn gateway_run_streams_the_contract_jsonl() {
             },
             "turns": 1,
             "tool_calls": 0,
+            "telemetry": {
+                "input_tokens": 11,
+                "output_tokens": 6,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "total_tokens": 17,
+                "llm_call_count": 1,
+                "total_tool_use": 0,
+                "tool_result_count": 0,
+                "failed_tool_result_count": 0,
+                "time_consume_ms": 0,
+            },
         }),
     ];
     assert_eq!(
@@ -133,6 +159,8 @@ async fn gateway_run_streams_the_contract_jsonl() {
     let usage = summary.usage.expect("usage reported");
     assert_eq!(usage.output_tokens, 6);
     assert_eq!(usage.input_tokens, Some(11));
+    assert_eq!(summary.telemetry.total_tokens, 17);
+    assert_eq!(summary.telemetry.llm_call_count, 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
