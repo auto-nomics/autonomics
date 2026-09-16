@@ -2,13 +2,15 @@
 //!
 //! Renders a horizontal tab bar (one tab per running agent) and the active
 //! agent's leaf below it. The tab bar is purely visual — agent switching is
-//! driven by the sidebar or keyboard shortcuts handled in `App`.
+//! driven by the sidebar or keyboard shortcuts handled in `App`. Tabs that
+//! do not fit the available width are collapsed into a `>` stub; the active
+//! tab is never collapsed.
 //!
 //! # Layout
 //!
 //! ```text
 //! ┌──────────────────────────────────────────┐
-//! │ ● default │ ◐ literature │   gwas-analysis│  ← Tab bar
+//! │ ● default │ ◐ literature │  gwas-analysis│  ← Tab bar
 //! ├──────────────────────────────────────────┤
 //! │                                          │
 //! │  Active AgentLeaf                        │
@@ -24,6 +26,8 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, StatefulWidgetRef},
 };
+
+use unicode_width::UnicodeWidthStr;
 
 use crate::state::{AgentStatus, AgentTabState, DisplaySettings};
 use crate::widgets::agent_leaf::AgentLeaf;
@@ -75,7 +79,7 @@ impl AgentWorkspace<'_> {
             .split(area);
 
         // ── Tab bar ──
-        Self::render_tab_bar(areas[0], buf, tabs, active_idx);
+        Self::render_top_tab_bar(areas[0], buf, tabs, active_idx);
 
         // ── Active leaf ──
         let leaf = AgentLeaf {
@@ -125,15 +129,38 @@ impl AgentWorkspace<'_> {
         ratatui::widgets::Paragraph::new(msg).render(inner, buf);
     }
 
-    fn render_tab_bar(area: Rect, buf: &mut Buffer, tabs: &[LeafTab], active_idx: usize) {
+    /// Collapsed-tab indicator: a `>` centered in the remaining width.
+    /// Returns an empty span when there is no room for it.
+    fn render_tab_stub(width: usize) -> Span<'static> {
+        if width <= 1 {
+            return Span::raw("");
+        }
+        let left = (width - 1) / 2;
+        Span::styled(
+            format!("{}>{}", " ".repeat(left), " ".repeat(width - 1 - left)),
+            Style::default().fg(Color::Reset),
+        )
+    }
+
+    fn render_top_tab_bar(area: Rect, buf: &mut Buffer, tabs: &[LeafTab], active_idx: usize) {
+        let budget = area.width as usize;
         let mut spans: Vec<Span> = Vec::new();
+        let mut used = 0usize;
+        let mut collapsed = false;
 
         for (i, tab) in tabs.iter().enumerate() {
             let is_active = i == active_idx;
             let icon = status_icon(&tab.status);
             let color = status_color(&tab.status);
-
             let label = format!(" {} {} ", icon, tab.name);
+            let label_w = label.width();
+            let sep_w = usize::from(i + 1 < tabs.len()); // trailing separator
+
+            // Tab does not fit (and is not the active one) → collapse the rest.
+            if used + label_w + sep_w > budget && !is_active {
+                collapsed = true;
+                break;
+            }
 
             if is_active {
                 spans.push(Span::styled(
@@ -146,11 +173,16 @@ impl AgentWorkspace<'_> {
             } else {
                 spans.push(Span::styled(label, Style::default().fg(Color::DarkGray)));
             }
+            used += label_w;
 
-            // Separator
-            if i < tabs.len() - 1 {
+            if sep_w == 1 {
                 spans.push(Span::raw("│"));
+                used += 1;
             }
+        }
+
+        if collapsed {
+            spans.push(Self::render_tab_stub(budget.saturating_sub(used)));
         }
 
         // Render tab labels on the FIRST row only (height 1 sub-area).
