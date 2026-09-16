@@ -15,7 +15,7 @@ use uuid::Uuid;
 use crate::RunSummary;
 use crate::processor::Outcome;
 
-/// Identifying metadata the caller contributes (things `run_task` does
+/// Identifying metadata the caller contributes (things the runner does
 /// not know, like the prompt hash).
 #[derive(Debug, Clone)]
 pub struct ManifestMeta {

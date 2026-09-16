@@ -28,7 +28,6 @@ opengwas = { path = "../../crates/opengwas" }
 bib-base = { path = "../../crates/bib-base" }
 vfs = { path = "../../crates/vfs" }
 chrono = { workspace = true }
-rusqlite = "0.40.1"
 pulldown-cmark = "0.13"
 syntect = { version = "5.3.0", default-features = false, features = [
   "default-fancy",

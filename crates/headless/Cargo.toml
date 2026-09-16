@@ -8,10 +8,7 @@ description = "Headless (non-interactive) execution of agentik agents"
 
 [dependencies]
 agentik-core = { path = "../agentik-core" }
-agentik-sdk = { path = "../agentik-sdk" }
 agentik-types = { path = "../agentik-types" }
-arc-swap.workspace = true
-runtime = { path = "../runtime" }
 gateway = { path = "../gateway" }
 eventsource-stream = "0.2"
 futures.workspace = true
@@ -20,15 +17,11 @@ sha2.workspace = true
 serde_json.workspace = true
 thiserror = { workspace = true }
 tracing = { workspace = true }
-tempfile = "3"
 tokio = { workspace = true }
 tokio-util = { version = "0.7", features = ["rt"] }
-toml = { workspace = true }
 uuid = { version = "1.12", features = ["v4", "serde"] }
-vfs = { path = "../vfs" }
 
 [dev-dependencies]
-agentik-sdk = { path = "../agentik-sdk", features = ["test-util"] }
 gateway = { path = "../gateway", features = ["test-util"] }
 
 [lints]

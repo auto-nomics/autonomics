@@ -88,8 +88,15 @@ pub fn mock_model_info() -> ModelInfo {
 
 /// A mock model whose stream scripts one plain-text assistant reply
 /// ending with `EndTurn` (usage: 11 input / 6 output tokens — asserted by
-/// consumers' JSONL parity tests).
+/// consumers' JSONL contract tests).
 pub fn scripted_text_model(text: &str) -> Model {
+    scripted_text_model_n(text, 1)
+}
+
+/// Like [`scripted_text_model`], but admits `times` scripted calls — a
+/// harness that reuses one daemon across runs (session resume) needs
+/// more than one.
+pub fn scripted_text_model_n(text: &str, times: usize) -> Model {
     let mut mock = MockApiClient::new();
 
     let start = Message {
@@ -150,7 +157,7 @@ pub fn scripted_text_model(text: &str) -> Model {
     };
 
     mock.expect_request_stream_with_system()
-        .times(1)
+        .times(times)
         .returning(move |_, _, _, _| {
             Ok(MessageStream::from_events(
                 events.clone(),
@@ -163,6 +170,30 @@ pub fn scripted_text_model(text: &str) -> Model {
     Model::with_client(mock_model_info(), mock)
 }
 
+/// A mock model that fails immediately with a non-retryable error —
+/// surfaces as a failed turn, never a retry loop.
+pub fn auth_failure_model() -> Model {
+    let mut mock = MockApiClient::new();
+    mock.expect_request_stream_with_system()
+        .returning(|_, _, _, _| {
+            Err(AnthropicError::Authentication {
+                message: "bad key".into(),
+                status: 401,
+            })
+        });
+    Model::with_client(mock_model_info(), mock)
+}
+
+/// A mock model whose requests always fail with a retryable error — the
+/// agent backs off (first sleep: 1s), giving a short run timeout a window
+/// to fire mid-turn.
+pub fn always_retrying_model() -> Model {
+    let mut mock = MockApiClient::new();
+    mock.expect_request_stream_with_system()
+        .returning(|_, _, _, _| Err(AnthropicError::StreamError("transient".into())));
+    Model::with_client(mock_model_info(), mock)
+}
+
 /// Boot a full gateway daemon (host + driver + axum) on an ephemeral
 /// port with an isolated state dir and a scripted mock model.
 ///
@@ -170,6 +201,12 @@ pub fn scripted_text_model(text: &str) -> Model {
 /// turn, and the post-turn memory-consolidation background turn would
 /// call the mock a second time and trip mockall.
 pub async fn start_mock_gateway(reply: &'static str) -> TestGateway {
+    start_mock_gateway_with_model(scripted_text_model(reply)).await
+}
+
+/// [`start_mock_gateway`] with an explicit mock model — failure and
+/// retry harnesses inject their own scripting.
+pub async fn start_mock_gateway_with_model(model: Model) -> TestGateway {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .with_writer(std::io::stderr)
@@ -192,9 +229,7 @@ pub async fn start_mock_gateway(reply: &'static str) -> TestGateway {
     host.set_profiles(profiles.clone());
     // One slot shared by the host and the gateway state — exactly like
     // the real daemon wires it.
-    let model_slot: Arc<ArcSwapOption<Model>> = Arc::new(ArcSwapOption::from_pointee(Some(
-        scripted_text_model(reply),
-    )));
+    let model_slot: Arc<ArcSwapOption<Model>> = Arc::new(ArcSwapOption::from_pointee(Some(model)));
     host.set_model(model_slot.clone());
 
     let hub = EventHub::new();
