@@ -24,11 +24,13 @@ pub mod mrpresso_container;
 pub mod mtag_container;
 pub mod mutation_analysis_container;
 pub mod mvmr_container;
+pub mod parquet_sql;
 pub mod pathway_gsea_container;
 pub mod plink2_clump_container;
 pub mod radiomics;
 pub mod radiomics_container;
 pub mod single_cell_container;
+pub mod single_cell_h5ad;
 pub mod smr_heidi_container;
 pub mod source_chembl;
 pub mod source_kegg;
@@ -90,6 +92,7 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(file_to_dataframe::FileToDataFrameNodeFactory {}));
         registry.register(Box::new(gmt_import::GmtImportNodeFactory {}));
         registry.register(Box::new(dataframe_to_file::DataFrameToFileNodeFactory {}));
+        registry.register(Box::new(parquet_sql::DataFusionSqlNodeFactory {}));
         registry.register(Box::new(radiomics::RadiomicsManifestNodeFactory));
         registry.register(Box::new(radiomics::RadiomicsStageFileSetNodeFactory));
         registry.register(Box::new(radiomics::RadiomicsDcmGlobNodeFactory));
@@ -345,6 +348,30 @@ impl NodePlugin for Plugin {
                 Arc::clone(&self.container_execution.panel_cache),
             ),
         ));
+        for factory in [
+            single_cell_h5ad::SingleCellH5adContainerNodeFactory::qc_filter(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+            single_cell_h5ad::SingleCellH5adContainerNodeFactory::embed_cluster(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+            single_cell_h5ad::SingleCellH5adContainerNodeFactory::celltypist(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+            single_cell_h5ad::SingleCellH5adContainerNodeFactory::obs_projection(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+            single_cell_h5ad::SingleCellH5adContainerNodeFactory::subset(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ] {
+            registry.register(Box::new(factory));
+        }
         registry.register(Box::new(
             mutation_analysis_container::MutationAnalysisContainerNodeFactory::new(
                 Arc::clone(&self.container_execution.runtime),

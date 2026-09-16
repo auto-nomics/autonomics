@@ -232,7 +232,7 @@ assert!(report.ok, "pipeline errors: {:?}", report.errors);
 
 外部分析运行时通过 `container-runtime` 和 Podman 隔离。一次容器运行会声明镜像 digest 或 tag、argv 命令、输入、输出契约、超时、资源限制、网络策略和 artifact prefix。参考数据来自不可变 catalog 数据包，经 checksum 校验后发布到 panel cache，再挂载进一次性 workspace。镜像与数据包独立版本化。
 
-现有 OCI 资产包括 LDSC、HDL-L、LAVA、MiXeR、SuSiE-RSS、MR-PRESSO、MVMR、MTAG、FUSION TWAS、SMR、MAGMA annotation、HyPrColoc、coloc、GCTA、PLINK2、DESeq2、PyRadiomics、single-cell preprocessing、visualization 和 TimesFM。见 [containers/README.md](containers/README.md)、[docs/container-execution-design.md](docs/container-execution-design.md) 和 [docs/container-node-migration.md](docs/container-node-migration.md)。
+现有 OCI 资产包括 LDSC、HDL-L、LAVA、MiXeR、SuSiE-RSS、MR-PRESSO、MVMR、MTAG、FUSION TWAS、SMR、MAGMA annotation、HyPrColoc、coloc、GCTA、PLINK2、DESeq2、PyRadiomics、single-cell preprocessing/H5AD 工作流、visualization 和 TimesFM。见 [containers/README.md](containers/README.md)、[docs/container-execution-design.md](docs/container-execution-design.md)、[docs/container-node-migration.md](docs/container-node-migration.md) 和 [docs/single-cell-h5ad-dag.md](docs/single-cell-h5ad-dag.md)。
 
 容器执行要求 Podman 与 VFS workspace、panel cache 位于同一主机或使用显式配置的远程运行时。默认 TUI 容器镜像没有挂载 Podman socket，因此 OCI 节点适用于主机上运行的 TUI，或已显式接入远程 runtime 的部署。
 

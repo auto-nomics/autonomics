@@ -230,7 +230,7 @@ The exact catalog is runtime-dependent because node bundles are Cargo features. 
 
 External analysis runtimes are isolated through `container-runtime` and Podman. A container run has a declared image digest or tag, argv command, inputs, output contracts, timeout, resource limits, network policy, and artifact prefix. Reference data is resolved from immutable catalog packages, checksum-verified in a panel cache, and mounted into an ephemeral workspace. Images and data packages are versioned independently.
 
-Available OCI assets include LDSC, HDL-L, LAVA, MiXeR, SuSiE-RSS, MR-PRESSO, MVMR, MTAG, FUSION TWAS, SMR, MAGMA annotation, HyPrColoc, coloc, GCTA, PLINK2, DESeq2, PyRadiomics, single-cell preprocessing, visualization, and TimesFM. See [containers/README.md](containers/README.md), [docs/container-execution-design.md](docs/container-execution-design.md), and [docs/container-node-migration.md](docs/container-node-migration.md).
+Available OCI assets include LDSC, HDL-L, LAVA, MiXeR, SuSiE-RSS, MR-PRESSO, MVMR, MTAG, FUSION TWAS, SMR, MAGMA annotation, HyPrColoc, coloc, GCTA, PLINK2, DESeq2, PyRadiomics, single-cell preprocessing and H5AD workflows, visualization, and TimesFM. See [containers/README.md](containers/README.md), [docs/container-execution-design.md](docs/container-execution-design.md), [docs/container-node-migration.md](docs/container-node-migration.md), and [docs/single-cell-h5ad-dag.md](docs/single-cell-h5ad-dag.md).
 
 Container execution requires a Podman runtime reachable on the same host as the VFS workspace and panel cache. The default TUI container image does not mount a Podman socket, so OCI-backed nodes are intended for a host-run TUI or an explicitly configured remote runtime.
 
