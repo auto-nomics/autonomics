@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
 };
+use crate::file_reference::FileReferenceNode;
 use crate::image_registry::acr_image;
 use container_runtime::{PanelCache, PodmanConnection, PullPolicy};
 
@@ -24,6 +25,10 @@ pub const H5AD_PCA_NEIGHBORS_UMAP_LEIDEN_KIND: &str = "h5ad_pca_neighbors_umap_l
 pub const H5AD_CELLTYPIST_ANNOTATE_KIND: &str = "h5ad_celltypist_annotate";
 pub const H5AD_OBS_TO_PARQUET_KIND: &str = "h5ad_obs_to_parquet";
 pub const H5AD_SUBSET_BY_OBS_KIND: &str = "h5ad_subset_by_obs";
+pub const SC_DENSE_INGEST_KIND: &str = "sc_dense_ingest";
+pub const H5AD_RANK_GENES_GROUPS_KIND: &str = "h5ad_rank_genes_groups";
+pub const H5AD_CLUSTER_MEAN_EXPRESSION_KIND: &str = "h5ad_cluster_mean_expression";
+pub const H5AD_GENE_SET_SCORE_KIND: &str = "gene_set_score";
 pub const SINGLE_CELL_WORKFLOW_IMAGE_REPOSITORY: &str = "single-cell-preprocessor";
 pub const SINGLE_CELL_WORKFLOW_IMAGE_DIGEST: &str =
     "sha256:7a7397f45775a4c4b6c4c220711db2b95dd37fdc40b7b7f06d181a220903e467";
@@ -45,6 +50,10 @@ pub enum Workflow {
     Celltypist,
     ObsProjection,
     Subset,
+    DenseIngest,
+    RankGenesGroups,
+    ClusterMeanExpression,
+    GeneSetScore,
 }
 
 impl Workflow {
@@ -55,6 +64,10 @@ impl Workflow {
             Self::Celltypist => H5AD_CELLTYPIST_ANNOTATE_KIND,
             Self::ObsProjection => H5AD_OBS_TO_PARQUET_KIND,
             Self::Subset => H5AD_SUBSET_BY_OBS_KIND,
+            Self::DenseIngest => SC_DENSE_INGEST_KIND,
+            Self::RankGenesGroups => H5AD_RANK_GENES_GROUPS_KIND,
+            Self::ClusterMeanExpression => H5AD_CLUSTER_MEAN_EXPRESSION_KIND,
+            Self::GeneSetScore => H5AD_GENE_SET_SCORE_KIND,
         }
     }
 
@@ -65,12 +78,24 @@ impl Workflow {
             Self::Celltypist => "celltypist_annotate",
             Self::ObsProjection => "obs_to_parquet",
             Self::Subset => "subset_by_obs",
+            Self::DenseIngest => "dense_ingest",
+            Self::RankGenesGroups => "rank_genes_groups",
+            Self::ClusterMeanExpression => "cluster_mean_expression",
+            Self::GeneSetScore => "gene_set_score",
         }
     }
 
     fn ports(self) -> NodePorts {
-        let mut ports =
-            NodePorts::new().add_input_port_of_type_with_label(None, PortType::File, "h5ad");
+        let input_label = if self == Self::DenseIngest {
+            "count_matrix"
+        } else {
+            "h5ad"
+        };
+        let mut ports = if self == Self::DenseIngest {
+            NodePorts::new().add_optional_input_port_of_type(PortType::File)
+        } else {
+            NodePorts::new().add_input_port_of_type_with_label(None, PortType::File, input_label)
+        };
         if matches!(self, Self::Celltypist | Self::Subset) {
             let label = if self == Self::Celltypist {
                 "model"
@@ -80,7 +105,10 @@ impl Workflow {
             ports = ports.add_input_port_of_type_with_label(None, PortType::File, label);
         }
         ports = ports.add_output_port_of_type(None, PortType::File);
-        if self != Self::ObsProjection {
+        if !matches!(self, Self::ObsProjection | Self::ClusterMeanExpression) {
+            ports = ports.add_output_port_of_type(None, PortType::File);
+        }
+        if self == Self::RankGenesGroups {
             ports = ports.add_output_port_of_type(None, PortType::File);
         }
         ports
@@ -102,6 +130,34 @@ impl Workflow {
                     format: Some("single_cell_workflow_report_json".into()),
                 },
             ],
+            Self::DenseIngest | Self::GeneSetScore => vec![
+                ContainerCommandOutputSpec {
+                    path: "output.h5ad".into(),
+                    format: Some("h5ad".into()),
+                },
+                ContainerCommandOutputSpec {
+                    path: "report.json".into(),
+                    format: Some("single_cell_workflow_report_json".into()),
+                },
+            ],
+            Self::RankGenesGroups => vec![
+                ContainerCommandOutputSpec {
+                    path: "rank_genes_groups.parquet".into(),
+                    format: Some("parquet".into()),
+                },
+                ContainerCommandOutputSpec {
+                    path: "report.json".into(),
+                    format: Some("single_cell_workflow_report_json".into()),
+                },
+                ContainerCommandOutputSpec {
+                    path: "output.h5ad".into(),
+                    format: Some("h5ad".into()),
+                },
+            ],
+            Self::ClusterMeanExpression => vec![ContainerCommandOutputSpec {
+                path: "cluster_mean_expression.parquet".into(),
+                format: Some("parquet".into()),
+            }],
         }
     }
 }
@@ -218,6 +274,103 @@ pub struct H5adSubsetSpec {
     pub pids_limit: Option<i64>,
 }
 
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DenseOrientation {
+    GenesByCells,
+    CellsByGenes,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct ScDenseIngestSpec {
+    /// Optional source path; an upstream File input takes precedence.
+    pub path: Option<String>,
+    pub orientation: DenseOrientation,
+    #[serde(default = "default_auto_delimiter")]
+    pub delimiter: String,
+    #[serde(default = "default_true")]
+    pub has_header: bool,
+    #[serde(default)]
+    pub min_genes: u32,
+    #[serde(default)]
+    pub min_cells: u32,
+    #[serde(default)]
+    pub sample_label: Option<String>,
+    #[serde(default)]
+    pub condition_label: Option<String>,
+    #[serde(default = "default_artifact_prefix_dense")]
+    pub artifact_prefix: String,
+    #[serde(default = "default_timeout")]
+    pub timeout_secs: u64,
+    #[serde(default)]
+    pub cpus: Option<f64>,
+    #[serde(default)]
+    pub memory: Option<String>,
+    #[serde(default)]
+    pub pids_limit: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct H5adRankGenesGroupsSpec {
+    pub groupby: String,
+    #[serde(default = "default_rank_method")]
+    pub method: String,
+    #[serde(default = "default_reference")]
+    pub reference: String,
+    #[serde(default = "default_n_genes")]
+    pub n_genes: u32,
+    #[serde(default = "default_artifact_prefix_rank")]
+    pub artifact_prefix: String,
+    #[serde(default = "default_timeout")]
+    pub timeout_secs: u64,
+    #[serde(default)]
+    pub cpus: Option<f64>,
+    #[serde(default)]
+    pub memory: Option<String>,
+    #[serde(default)]
+    pub pids_limit: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct H5adClusterMeanExpressionSpec {
+    pub groupby: String,
+    #[serde(default)]
+    pub genes: Vec<String>,
+    #[serde(default = "default_normalize_cp10k")]
+    pub normalize: String,
+    #[serde(default)]
+    pub include_percent_expressed: bool,
+    #[serde(default = "default_artifact_prefix_mean")]
+    pub artifact_prefix: String,
+    #[serde(default = "default_timeout")]
+    pub timeout_secs: u64,
+    #[serde(default)]
+    pub cpus: Option<f64>,
+    #[serde(default)]
+    pub memory: Option<String>,
+    #[serde(default)]
+    pub pids_limit: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct H5adGeneSetScoreSpec {
+    pub gene_sets: BTreeMap<String, Vec<String>>,
+    #[serde(default = "default_ctrl_size")]
+    pub ctrl_size: u32,
+    #[serde(default)]
+    pub random_state: i64,
+    #[serde(default = "default_artifact_prefix_score")]
+    pub artifact_prefix: String,
+    #[serde(default = "default_timeout")]
+    pub timeout_secs: u64,
+    #[serde(default)]
+    pub cpus: Option<f64>,
+    #[serde(default)]
+    pub memory: Option<String>,
+    #[serde(default)]
+    pub pids_limit: Option<i64>,
+}
+
 fn default_max_percent() -> f64 {
     100.0
 }
@@ -263,16 +416,48 @@ fn default_artifact_prefix_obs() -> String {
 fn default_artifact_prefix_subset() -> String {
     format!("/artifacts/{H5AD_SUBSET_BY_OBS_KIND}")
 }
+fn default_artifact_prefix_dense() -> String {
+    format!("/artifacts/{SC_DENSE_INGEST_KIND}")
+}
+fn default_artifact_prefix_rank() -> String {
+    format!("/artifacts/{H5AD_RANK_GENES_GROUPS_KIND}")
+}
+fn default_artifact_prefix_mean() -> String {
+    format!("/artifacts/{H5AD_CLUSTER_MEAN_EXPRESSION_KIND}")
+}
+fn default_artifact_prefix_score() -> String {
+    format!("/artifacts/{H5AD_GENE_SET_SCORE_KIND}")
+}
 fn default_timeout() -> u64 {
     DEFAULT_TIMEOUT_SECS
 }
 fn default_embed_timeout() -> u64 {
     DEFAULT_EMBED_TIMEOUT_SECS
 }
+fn default_auto_delimiter() -> String {
+    "auto".into()
+}
+fn default_rank_method() -> String {
+    "wilcoxon".into()
+}
+fn default_reference() -> String {
+    "rest".into()
+}
+fn default_n_genes() -> u32 {
+    100
+}
+fn default_normalize_cp10k() -> String {
+    "cp10k".into()
+}
+fn default_ctrl_size() -> u32 {
+    50
+}
 
 pub struct SingleCellH5adContainerNode {
     kind: &'static str,
+    workflow: Workflow,
     ports: NodePorts,
+    fallback_input: Option<String>,
     inner: Box<dyn DagNode>,
 }
 
@@ -280,7 +465,9 @@ impl Clone for SingleCellH5adContainerNode {
     fn clone(&self) -> Self {
         Self {
             kind: self.kind,
+            workflow: self.workflow,
             ports: self.ports.clone(),
+            fallback_input: self.fallback_input.clone(),
             inner: self.inner.clone_box(),
         }
     }
@@ -310,6 +497,21 @@ impl DagNode for SingleCellH5adContainerNode {
         inputs: &[NodeInput],
         reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
+        let fallback_inputs;
+        let inputs = if self.workflow == Workflow::DenseIngest
+            && inputs.is_empty()
+            && let Some(path) = self.fallback_input.clone()
+        {
+            let mut source = FileReferenceNode::new(path, None);
+            let outputs = source.execute(ctx, &[], reporter).await?;
+            let file = outputs.get(&0).ok_or_else(|| {
+                DagError::Schedule("sc_dense_ingest path resolution produced no File".into())
+            })?;
+            fallback_inputs = vec![NodeInput::file(0, file.as_file()?.clone())];
+            &fallback_inputs
+        } else {
+            inputs
+        };
         self.inner.execute(ctx, inputs, reporter).await
     }
 }
@@ -342,6 +544,31 @@ impl SingleCellH5adContainerNodeFactory {
 
     pub fn subset(runtime: Arc<dyn PodmanConnection>, panel_cache: Arc<PanelCache>) -> Self {
         Self::new(Workflow::Subset, runtime, panel_cache)
+    }
+
+    pub fn dense_ingest(runtime: Arc<dyn PodmanConnection>, panel_cache: Arc<PanelCache>) -> Self {
+        Self::new(Workflow::DenseIngest, runtime, panel_cache)
+    }
+
+    pub fn rank_genes_groups(
+        runtime: Arc<dyn PodmanConnection>,
+        panel_cache: Arc<PanelCache>,
+    ) -> Self {
+        Self::new(Workflow::RankGenesGroups, runtime, panel_cache)
+    }
+
+    pub fn cluster_mean_expression(
+        runtime: Arc<dyn PodmanConnection>,
+        panel_cache: Arc<PanelCache>,
+    ) -> Self {
+        Self::new(Workflow::ClusterMeanExpression, runtime, panel_cache)
+    }
+
+    pub fn gene_set_score(
+        runtime: Arc<dyn PodmanConnection>,
+        panel_cache: Arc<PanelCache>,
+    ) -> Self {
+        Self::new(Workflow::GeneSetScore, runtime, panel_cache)
     }
 
     fn new(
@@ -483,6 +710,90 @@ pub fn validate(workflow: Workflow, spec: &serde_json::Value) -> Result<(), Stri
                 return Err("join_column cannot be empty".into());
             }
         }
+        Workflow::DenseIngest => {
+            let spec: ScDenseIngestSpec =
+                serde_json::from_value(spec.clone()).map_err(|e| e.to_string())?;
+            validate_resource(
+                &spec.artifact_prefix,
+                spec.timeout_secs,
+                spec.cpus,
+                spec.memory.as_deref(),
+                spec.pids_limit,
+            )?;
+            if spec.delimiter.trim().is_empty() {
+                return Err("delimiter cannot be empty".into());
+            }
+            if spec
+                .path
+                .as_deref()
+                .is_some_and(|path| path.trim().is_empty())
+            {
+                return Err("path cannot be empty when provided".into());
+            }
+        }
+        Workflow::RankGenesGroups => {
+            let spec: H5adRankGenesGroupsSpec =
+                serde_json::from_value(spec.clone()).map_err(|e| e.to_string())?;
+            validate_resource(
+                &spec.artifact_prefix,
+                spec.timeout_secs,
+                spec.cpus,
+                spec.memory.as_deref(),
+                spec.pids_limit,
+            )?;
+            if spec.groupby.trim().is_empty() {
+                return Err("groupby cannot be empty".into());
+            }
+            if !matches!(
+                spec.method.as_str(),
+                "wilcoxon" | "t-test" | "t-test_overestim_var" | "logreg"
+            ) {
+                return Err(format!(
+                    "unsupported rank_genes_groups method `{}`",
+                    spec.method
+                ));
+            }
+            if spec.reference.trim().is_empty() || spec.n_genes == 0 {
+                return Err("reference must be nonempty and n_genes must be positive".into());
+            }
+        }
+        Workflow::ClusterMeanExpression => {
+            let spec: H5adClusterMeanExpressionSpec =
+                serde_json::from_value(spec.clone()).map_err(|e| e.to_string())?;
+            validate_resource(
+                &spec.artifact_prefix,
+                spec.timeout_secs,
+                spec.cpus,
+                spec.memory.as_deref(),
+                spec.pids_limit,
+            )?;
+            if spec.groupby.trim().is_empty() {
+                return Err("groupby cannot be empty".into());
+            }
+            if !matches!(spec.normalize.as_str(), "cp10k" | "none") {
+                return Err(format!(
+                    "unsupported normalize mode `{}`; expected cp10k or none",
+                    spec.normalize
+                ));
+            }
+        }
+        Workflow::GeneSetScore => {
+            let spec: H5adGeneSetScoreSpec =
+                serde_json::from_value(spec.clone()).map_err(|e| e.to_string())?;
+            validate_resource(
+                &spec.artifact_prefix,
+                spec.timeout_secs,
+                spec.cpus,
+                spec.memory.as_deref(),
+                spec.pids_limit,
+            )?;
+            if spec.gene_sets.is_empty() {
+                return Err("gene_sets cannot be empty".into());
+            }
+            if spec.ctrl_size == 0 {
+                return Err("ctrl_size must be greater than zero".into());
+            }
+        }
     }
     Ok(())
 }
@@ -574,6 +885,10 @@ fn default_artifact_prefix(workflow: Workflow) -> String {
         Workflow::Celltypist => default_artifact_prefix_celltypist(),
         Workflow::ObsProjection => default_artifact_prefix_obs(),
         Workflow::Subset => default_artifact_prefix_subset(),
+        Workflow::DenseIngest => default_artifact_prefix_dense(),
+        Workflow::RankGenesGroups => default_artifact_prefix_rank(),
+        Workflow::ClusterMeanExpression => default_artifact_prefix_mean(),
+        Workflow::GeneSetScore => default_artifact_prefix_score(),
     }
 }
 
@@ -595,6 +910,16 @@ impl NodeFactory for SingleCellH5adContainerNodeFactory {
             Workflow::Celltypist => "Annotates an H5AD with a local CellTypist model file.",
             Workflow::ObsProjection => "Projects H5AD obs and selected obsm keys to Parquet.",
             Workflow::Subset => "Subsets an H5AD by cell IDs read from a Parquet sidecar.",
+            Workflow::DenseIngest => {
+                "Ingests a dense CSV/TSV gene-by-cell or cell-by-gene count matrix into H5AD."
+            }
+            Workflow::RankGenesGroups => {
+                "Runs Scanpy rank_genes_groups and emits a tidy Parquet marker table."
+            }
+            Workflow::ClusterMeanExpression => {
+                "Exports cluster-by-gene mean expression and optionally expression fractions."
+            }
+            Workflow::GeneSetScore => "Scores per-cell gene sets with Scanpy score_genes.",
         }
     }
 
@@ -620,6 +945,23 @@ impl NodeFactory for SingleCellH5adContainerNodeFactory {
                 "Input ports are H5AD then selection Parquet. Output ports are output.h5ad \
                 then report.json. By default the Parquet cell_id column selects obs_names."
             }
+            Workflow::DenseIngest => {
+                "Input port 0 is a CSV/TSV(.gz) count matrix, or set `path` directly. \
+                Output ports are output.h5ad then report.json. genes_by_cells expects \
+                genes in rows; cells_by_genes is transposed automatically."
+            }
+            Workflow::RankGenesGroups => {
+                "Input port 0 is H5AD. Outputs are rank_genes_groups.parquet, report.json, \
+                and output.h5ad with the Scanpy result stored in uns."
+            }
+            Workflow::ClusterMeanExpression => {
+                "Input port 0 is H5AD. The single output is a long Parquet table with \
+                cluster, gene, mean_expression, and optionally pct_expressed columns."
+            }
+            Workflow::GeneSetScore => {
+                "Input port 0 is H5AD. Output ports are output.h5ad then report.json; each \
+                score is added to obs using the configured gene-set key."
+            }
         }
     }
 
@@ -630,6 +972,10 @@ impl NodeFactory for SingleCellH5adContainerNodeFactory {
             Workflow::Celltypist => schema_for!(H5adCelltypistSpec),
             Workflow::ObsProjection => schema_for!(H5adObsProjectionSpec),
             Workflow::Subset => schema_for!(H5adSubsetSpec),
+            Workflow::DenseIngest => schema_for!(ScDenseIngestSpec),
+            Workflow::RankGenesGroups => schema_for!(H5adRankGenesGroupsSpec),
+            Workflow::ClusterMeanExpression => schema_for!(H5adClusterMeanExpressionSpec),
+            Workflow::GeneSetScore => schema_for!(H5adGeneSetScoreSpec),
         }
     }
 
@@ -642,6 +988,10 @@ impl NodeFactory for SingleCellH5adContainerNodeFactory {
         spec: serde_json::Value,
         _node_ctx: NodeCtx,
     ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
+        let fallback_input = spec
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
         let spec = container_spec(self.workflow, &spec)
             .map_err(dag_core::registry::error::Error::Unknown)?;
         let node = ContainerCommandNode::new(
@@ -652,7 +1002,9 @@ impl NodeFactory for SingleCellH5adContainerNodeFactory {
         .map_err(|error| dag_core::registry::error::Error::Unknown(error.to_string()))?;
         Ok(Box::new(SingleCellH5adContainerNode {
             kind: self.workflow.kind(),
+            workflow: self.workflow,
             ports: self.workflow.ports(),
+            fallback_input,
             inner: Box::new(node),
         }))
     }
@@ -709,6 +1061,41 @@ mod tests {
     fn omitted_artifact_prefix_stays_node_specific() {
         let container = container_spec(Workflow::Subset, &serde_json::json!({})).unwrap();
         assert_eq!(container.artifact_prefix, "/artifacts/h5ad_subset_by_obs");
+    }
+
+    #[test]
+    fn dense_ingest_declares_h5ad_report_contract() {
+        let container = container_spec(
+            Workflow::DenseIngest,
+            &serde_json::json!({"orientation": "genes_by_cells"}),
+        )
+        .unwrap();
+        assert_eq!(
+            container.env["AUTONOMICS_SINGLE_CELL_WORKFLOW"],
+            "dense_ingest"
+        );
+        assert_eq!(container.outputs[0].path, "output.h5ad");
+        assert_eq!(container.outputs[1].path, "report.json");
+        assert!(container.network == "isolated" && container.read_only_rootfs);
+    }
+
+    #[test]
+    fn marker_and_mean_workflows_emit_parquet() {
+        let rank = container_spec(
+            Workflow::RankGenesGroups,
+            &serde_json::json!({"groupby": "leiden"}),
+        )
+        .unwrap();
+        assert_eq!(rank.outputs[0].path, "rank_genes_groups.parquet");
+        assert_eq!(rank.outputs[2].path, "output.h5ad");
+
+        let mean = container_spec(
+            Workflow::ClusterMeanExpression,
+            &serde_json::json!({"groupby": "leiden", "genes": ["MS4A1"]}),
+        )
+        .unwrap();
+        assert_eq!(mean.outputs[0].path, "cluster_mean_expression.parquet");
+        assert_eq!(mean.outputs.len(), 1);
     }
 
     #[test]

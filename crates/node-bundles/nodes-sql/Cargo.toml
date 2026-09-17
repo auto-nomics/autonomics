@@ -9,6 +9,10 @@ description = "SQL and echo DAG node bundle."
 [dependencies]
 dag-core = { path = "../../dag-core" }
 arrow-array.workspace = true
+arrow-cast.workspace = true
+arrow-schema.workspace = true
+regex = "1"
+statrs = "0.18"
 async-trait.workspace = true
 schemars.workspace = true
 serde = { workspace = true, features = ["derive"] }
