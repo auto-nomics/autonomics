@@ -158,12 +158,14 @@ impl LdscMungeContainerNodeFactory {
 
 pub struct LdscMungeContainerNode {
     inner: Box<dyn DagNode>,
+    ports: NodePorts,
 }
 
 impl Clone for LdscMungeContainerNode {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone_box(),
+            ports: self.ports.clone(),
         }
     }
 }
@@ -171,7 +173,7 @@ impl Clone for LdscMungeContainerNode {
 #[async_trait::async_trait]
 impl DagNode for LdscMungeContainerNode {
     fn ports(&self) -> &NodePorts {
-        self.inner.ports()
+        &self.ports
     }
 
     fn clone_box(&self) -> Box<dyn DagNode> {
@@ -413,9 +415,14 @@ pub fn container_spec(spec: &LdscMungeContainerSpec) -> Result<ContainerCommandS
 
 fn port_layout() -> NodePorts {
     NodePorts::new()
-        .add_input_port_of_type(None, PortType::File)
-        .add_output_port_of_type(None, PortType::File)
-        .add_output_port_of_type(None, PortType::File)
+        .add_input_port_of_type_with_label(None, PortType::File, "raw_sumstats")
+        .add_output_port_of_type_with_label_and_format(
+            None,
+            PortType::File,
+            "sumstats",
+            "sumstats_gz",
+        )
+        .add_output_port_of_type_with_label_and_format(None, PortType::File, "log", "ldsc_log")
 }
 
 impl NodeFactory for LdscMungeContainerNodeFactory {
@@ -459,6 +466,7 @@ impl NodeFactory for LdscMungeContainerNodeFactory {
                 .map_err(|error| dag_core::registry::error::Error::Unknown(error.to_string()))?;
         Ok(Box::new(LdscMungeContainerNode {
             inner: Box::new(node),
+            ports: port_layout(),
         }))
     }
 
@@ -617,6 +625,17 @@ mod tests {
         assert!(script.contains("--a1 \\\n  'effect allele'"));
         assert!(script.contains("--ignore \\\n  'odds ratio'"));
         assert!(script.contains("--keep-maf"));
+    }
+
+    #[test]
+    fn declares_semantic_output_ports() {
+        let ports = port_layout();
+        let sumstats = ports.output_port(0).unwrap();
+        assert_eq!(sumstats.label.as_deref(), Some("sumstats"));
+        assert_eq!(sumstats.format.as_deref(), Some("sumstats_gz"));
+        let log = ports.output_port(1).unwrap();
+        assert_eq!(log.label.as_deref(), Some("log"));
+        assert_eq!(log.format.as_deref(), Some("ldsc_log"));
     }
 
     #[test]

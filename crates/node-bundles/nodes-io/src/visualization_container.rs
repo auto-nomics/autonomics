@@ -1,11 +1,13 @@
-//! Containerized ggplot2 visualization node.
+//! Terminal-only containerized ggplot2 visualization node.
 //!
-//! Data and plot code enter as ordinary File values so the existing container
-//! staging path owns all host/VFS I/O. The image provides a fixed R entrypoint
-//! that loads the data as `df`, sources the caller's script, and saves the
-//! required `p` plot as a PNG.
+//! Data and constrained plot code enter as ordinary File values so the existing
+//! container staging path owns all host/VFS I/O. The plot script is validated
+//! before staging; the image then loads plot-ready data as `df`, evaluates the
+//! constrained ggplot2 expression, and saves `p` as a PNG. The DAG rejects
+//! outgoing edges from this node.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
+use std::path::Path;
 use std::sync::Arc;
 
 use dag_core::node::DagNode;
@@ -33,6 +35,7 @@ const DEFAULT_DPI: f64 = 150.0;
 const DEFAULT_CPUS: f64 = 2.0;
 const DEFAULT_MEMORY: &str = "2Gi";
 const DEFAULT_PIDS_LIMIT: i64 = 256;
+const MAX_PLOT_SCRIPT_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -149,7 +152,21 @@ impl DagNode for VisualizationContainerNode {
         inputs: &[NodeInput],
         reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
+        let script_input = inputs.iter().find(|input| input.port == 1).ok_or_else(|| {
+            DagError::Schedule("visualization_container requires an R script on port 1".into())
+        })?;
+        let script_file = script_input.file_value().map_err(|error| {
+            DagError::Schedule(format!(
+                "visualization_container port 1 must be a File: {error}"
+            ))
+        })?;
+        let script = read_plot_script(ctx, script_file).await?;
+        validate_plot_script(&script)?;
         self.inner.execute(ctx, inputs, reporter).await
+    }
+
+    fn is_terminal(&self) -> bool {
+        true
     }
 }
 
@@ -185,6 +202,402 @@ pub fn validate(spec: &VisualizationContainerSpec) -> Result<(), String> {
         return Err("memory cannot be empty".into());
     }
     Ok(())
+}
+
+async fn read_plot_script(
+    ctx: &NodeCtx,
+    file: &dag_core::value::FileRef,
+) -> Result<String, DagError> {
+    if let Some(fingerprint) = &file.fingerprint
+        && fingerprint.size > MAX_PLOT_SCRIPT_BYTES as u64
+    {
+        return Err(DagError::Schedule(format!(
+            "visualization R script is too large: {} bytes (maximum {} bytes)",
+            fingerprint.size, MAX_PLOT_SCRIPT_BYTES
+        )));
+    }
+
+    let bytes = if let Some(virtual_path) = file.path.strip_prefix("vfs://") {
+        let storage = ctx.opendal.as_ref().ok_or_else(|| {
+            DagError::Schedule(format!(
+                "visualization R script `{}` requires a registered runtime VFS",
+                file.path
+            ))
+        })?;
+        let key = storage.resolve_path(virtual_path);
+        storage
+            .resolve(virtual_path)
+            .read(&key)
+            .await
+            .map(|bytes| bytes.to_vec())
+            .map_err(|error| {
+                DagError::Schedule(format!("cannot read R script `{}`: {error}", file.path))
+            })?
+    } else if Path::new(&file.path).is_absolute() {
+        tokio::fs::read(&file.path).await.map_err(|error| {
+            DagError::Schedule(format!("cannot read R script `{}`: {error}", file.path))
+        })?
+    } else {
+        return Err(DagError::Schedule(format!(
+            "visualization R script path must be a `vfs://` URI or absolute path: `{}`",
+            file.path
+        )));
+    };
+
+    if bytes.len() > MAX_PLOT_SCRIPT_BYTES {
+        return Err(DagError::Schedule(format!(
+            "visualization R script is too large: {} bytes (maximum {} bytes)",
+            bytes.len(),
+            MAX_PLOT_SCRIPT_BYTES
+        )));
+    }
+    String::from_utf8(bytes).map_err(|error| {
+        DagError::Schedule(format!(
+            "visualization R script `{}` is not valid UTF-8: {error}",
+            file.path
+        ))
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RToken {
+    Assignment,
+    Plus,
+    DoubleColon,
+    Identifier(String),
+    Number(String),
+    StringLiteral(String),
+    Comma,
+    Equals,
+    LeftParen,
+    RightParen,
+}
+
+fn lex_plot_script(script: &str) -> Result<Vec<RToken>, String> {
+    let mut tokens = Vec::new();
+    let mut chars = script.chars().peekable();
+
+    while let Some(&ch) = chars.peek() {
+        match ch {
+            ' ' | '\t' | '\r' | '\n' => {
+                chars.next();
+            }
+            '#' => return Err("comments are not allowed in visualization scripts".into()),
+            '<' => {
+                chars.next();
+                if chars.next() != Some('-') {
+                    return Err("only the `<-` assignment is allowed".into());
+                }
+                tokens.push(RToken::Assignment);
+            }
+            '+' => {
+                chars.next();
+                tokens.push(RToken::Plus);
+            }
+            ':' => {
+                chars.next();
+                if chars.next() != Some(':') {
+                    return Err("single `:` is not allowed in visualization scripts".into());
+                }
+                tokens.push(RToken::DoubleColon);
+            }
+            ',' => {
+                chars.next();
+                tokens.push(RToken::Comma);
+            }
+            '=' => {
+                chars.next();
+                tokens.push(RToken::Equals);
+            }
+            '(' => {
+                chars.next();
+                tokens.push(RToken::LeftParen);
+            }
+            ')' => {
+                chars.next();
+                tokens.push(RToken::RightParen);
+            }
+            '"' | '\'' => {
+                let quote = ch;
+                chars.next();
+                let mut value = String::new();
+                let mut closed = false;
+                while let Some(current) = chars.next() {
+                    if current == quote {
+                        closed = true;
+                        break;
+                    }
+                    if current == '\n' {
+                        return Err("unterminated string literal in visualization script".into());
+                    }
+                    if current == '\\' {
+                        value.push(current);
+                        if let Some(escaped) = chars.next() {
+                            value.push(escaped);
+                        }
+                        continue;
+                    }
+                    value.push(current);
+                }
+                if !closed {
+                    return Err("unterminated string literal in visualization script".into());
+                }
+                tokens.push(RToken::StringLiteral(value));
+            }
+            '-' | '.' | '0'..='9' => {
+                let mut value = String::new();
+                if ch == '-' {
+                    chars.next();
+                    value.push('-');
+                    if !chars
+                        .peek()
+                        .is_some_and(|next| next.is_ascii_digit() || *next == '.')
+                    {
+                        return Err("minus is only allowed as part of a numeric constant".into());
+                    }
+                }
+                let mut has_digit = false;
+                while let Some(&current) = chars.peek() {
+                    if current.is_ascii_digit() {
+                        has_digit = true;
+                        value.push(current);
+                        chars.next();
+                    } else if current == '.' || current == 'e' || current == 'E' {
+                        value.push(current);
+                        chars.next();
+                    } else if (current == '+' || current == '-') && value.ends_with(['e', 'E']) {
+                        value.push(current);
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                if !has_digit {
+                    return Err("invalid numeric constant in visualization script".into());
+                }
+                tokens.push(RToken::Number(value));
+            }
+            _ if ch.is_ascii_alphabetic() || ch == '_' => {
+                let mut value = String::new();
+                while let Some(&current) = chars.peek() {
+                    if current.is_ascii_alphanumeric() || current == '_' || current == '.' {
+                        value.push(current);
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                tokens.push(RToken::Identifier(value));
+            }
+            other => {
+                return Err(format!(
+                    "character `{other}` is not allowed in visualization scripts"
+                ));
+            }
+        }
+    }
+
+    Ok(tokens)
+}
+
+fn is_ggplot_function(name: &str) -> bool {
+    matches!(
+        name,
+        "aes"
+            | "aes_"
+            | "ggplot"
+            | "labs"
+            | "ggtitle"
+            | "xlab"
+            | "ylab"
+            | "lims"
+            | "xlim"
+            | "ylim"
+            | "expansion"
+            | "sec_axis"
+            | "dup_axis"
+            | "guide_axis"
+            | "guide_legend"
+            | "guide_colourbar"
+            | "guide_colorbar"
+            | "guide_bins"
+            | "guide_coloursteps"
+            | "guide_colorsteps"
+            | "guide_none"
+            | "element_blank"
+            | "annotation_custom"
+            | "annotation_logticks"
+            | "annotation_map"
+            | "annotation_raster"
+            | "annotate"
+            | "draft"
+    ) || name == "stat_identity"
+        || matches!(
+            name,
+            "geom_point"
+                | "geom_jitter"
+                | "geom_text"
+                | "geom_label"
+                | "geom_line"
+                | "geom_path"
+                | "geom_step"
+                | "geom_ribbon"
+                | "geom_area"
+                | "geom_tile"
+                | "geom_rect"
+                | "geom_polygon"
+                | "geom_segment"
+                | "geom_curve"
+                | "geom_errorbar"
+                | "geom_errorbarh"
+                | "geom_crossbar"
+                | "geom_linerange"
+                | "geom_pointrange"
+                | "geom_rug"
+                | "geom_raster"
+                | "geom_hline"
+                | "geom_vline"
+                | "geom_abline"
+                | "geom_blank"
+                | "geom_col"
+        )
+        || name.starts_with("scale_")
+        || name.starts_with("coord_")
+        || name.starts_with("facet_")
+        || name.starts_with("theme_")
+        || name.starts_with("position_")
+}
+
+fn is_ggplot_call(tokens: &[RToken]) -> bool {
+    tokens.len() >= 3
+        && matches!(
+            (&tokens[0], &tokens[1], &tokens[2]),
+            (
+                RToken::Identifier(package),
+                RToken::DoubleColon,
+                RToken::Identifier(function)
+            ) if package == "ggplot2" && is_ggplot_function(function)
+        )
+}
+
+fn validate_plot_call(tokens: &[RToken]) -> Result<(), String> {
+    if tokens.len() < 4 || !is_ggplot_call(tokens) || tokens[3] != RToken::LeftParen {
+        return Err("each visualization layer must call an allowlisted ggplot2 function".into());
+    }
+
+    let mut depth = 1usize;
+    let mut previous: VecDeque<RToken> = VecDeque::with_capacity(3);
+    for (index, token) in tokens.iter().enumerate().skip(4) {
+        match token {
+            RToken::LeftParen => {
+                depth += 1;
+                let valid_call = previous.len() == 3
+                    && is_ggplot_call(&[
+                        previous[0].clone(),
+                        previous[1].clone(),
+                        previous[2].clone(),
+                    ]);
+                if !valid_call {
+                    return Err(
+                        "all function calls in visualization scripts must be ggplot2:: functions"
+                            .into(),
+                    );
+                }
+            }
+            RToken::RightParen => {
+                depth = depth
+                    .checked_sub(1)
+                    .ok_or_else(|| "unbalanced parentheses in visualization script".to_string())?;
+                if depth == 0 && index != tokens.len() - 1 {
+                    return Err(
+                        "text follows the closing parenthesis of a visualization layer".into(),
+                    );
+                }
+            }
+            RToken::Plus | RToken::Assignment => {
+                return Err(format!(
+                    "`{}` is only allowed in the top-level plot expression",
+                    token_name(token)
+                ));
+            }
+            RToken::Identifier(_)
+            | RToken::Number(_)
+            | RToken::StringLiteral(_)
+            | RToken::Comma
+            | RToken::Equals
+            | RToken::DoubleColon => {}
+        }
+        previous.push_back(token.clone());
+        if previous.len() > 3 {
+            previous.pop_front();
+        }
+    }
+    if depth != 0 {
+        return Err("unbalanced parentheses in visualization script".into());
+    }
+
+    Ok(())
+}
+
+fn token_name(token: &RToken) -> &'static str {
+    match token {
+        RToken::Assignment => "<-",
+        RToken::Plus => "+",
+        RToken::DoubleColon => "::",
+        RToken::Identifier(_) => "identifier",
+        RToken::Number(_) => "number",
+        RToken::StringLiteral(_) => "string",
+        RToken::Comma => ",",
+        RToken::Equals => "=",
+        RToken::LeftParen => "(",
+        RToken::RightParen => ")",
+    }
+}
+
+pub fn validate_plot_script(script: &str) -> Result<(), DagError> {
+    if script.trim().is_empty() {
+        return Err(DagError::Schedule(
+            "visualization R script cannot be empty".into(),
+        ));
+    }
+    let tokens = lex_plot_script(script).map_err(DagError::Schedule)?;
+    if tokens.len() < 3
+        || tokens[0] != RToken::Identifier("p".into())
+        || tokens[1] != RToken::Assignment
+    {
+        return Err(DagError::Schedule(
+            "visualization script must be exactly `p <- ggplot2::...`".into(),
+        ));
+    }
+
+    let mut start = 2;
+    let mut paren_depth = 0usize;
+    for index in 2..tokens.len() {
+        match tokens[index] {
+            RToken::LeftParen => paren_depth += 1,
+            RToken::RightParen => {
+                paren_depth = paren_depth.saturating_sub(1);
+            }
+            RToken::Plus if paren_depth == 0 => {
+                let layer = &tokens[start..index];
+                if layer.is_empty() {
+                    return Err(DagError::Schedule(
+                        "visualization script cannot contain an empty layer".into(),
+                    ));
+                }
+                validate_plot_call(layer).map_err(DagError::Schedule)?;
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    let last = &tokens[start..];
+    if last.is_empty() {
+        return Err(DagError::Schedule(
+            "visualization script cannot contain an empty layer".into(),
+        ));
+    }
+    validate_plot_call(last).map_err(DagError::Schedule)
 }
 
 pub fn container_spec(spec: &VisualizationContainerSpec) -> Result<ContainerCommandSpec, String> {
@@ -244,17 +657,20 @@ impl NodeFactory for VisualizationContainerNodeFactory {
     }
 
     fn desc(&self) -> &'static str {
-        "Renders a data File and ggplot2 R script to PNG in an OCI container."
+        "Terminal-only renderer for plot-ready data and a constrained ggplot2 script."
     }
 
     fn doc(&self) -> &'static str {
-        "Renders a plot in an isolated R/ggplot2 OCI container. Input port 0 is \
-        a data File (`csv`, `tsv`, `parquet`, Arrow IPC stream, or Arrow IPC \
-        file); input port 1 is an R script File. The fixed container entrypoint \
-        binds the loaded data to `df`, sources the script, requires the script \
-        to assign a plot to `p`, and writes `plot.png` as an immutable VFS File \
-        artifact. The network is disabled, the root filesystem is read-only, \
-        and CPU, memory, PID, and runtime limits are enforced."
+        "Terminal-only plot renderer in an isolated R/ggplot2 OCI container. \
+        Input port 0 must already contain plot-ready data (`csv`, `tsv`, \
+        `parquet`, Arrow IPC stream, or Arrow IPC file). Input port 1 is a \
+        small R script containing exactly `p <- ggplot2::... + ggplot2::...`; \
+        filtering, aggregation, modeling, indexing, file I/O, arbitrary \
+        functions, and computation inside aesthetics are rejected before the \
+        container starts. The node cannot have downstream DAG edges. The \
+        fixed entrypoint renders `p` to immutable `plot.png` with networking \
+        disabled, a read-only root filesystem, and CPU, memory, PID, and \
+        runtime limits."
     }
 
     fn spec_schema(&self) -> schemars::Schema {
@@ -352,5 +768,48 @@ mod tests {
         let mut value = spec();
         value.dpi = -1.0;
         assert!(validate(&value).is_err());
+    }
+
+    #[test]
+    fn accepts_only_a_single_constrained_ggplot_expression() {
+        if let Err(error) = validate_plot_script(
+            "p <- ggplot2::ggplot(df, ggplot2::aes(x, y)) + ggplot2::geom_point()",
+        ) {
+            panic!("valid ggplot script was rejected: {error}");
+        }
+        assert!(validate_plot_script(
+            "p <- ggplot2::ggplot(df, ggplot2::aes(x = beta, y = se)) + ggplot2::geom_point(size = 1.5)"
+        )
+        .is_ok());
+
+        assert!(
+            validate_plot_script(
+                "p <- ggplot2::ggplot(df) + ggplot2::geom_point(); write.csv(df, '/tmp/x')"
+            )
+            .is_err()
+        );
+        assert!(
+            validate_plot_script(
+                "p <- ggplot2::ggplot(df, ggplot2::aes(x, log10(y))) + ggplot2::geom_point()"
+            )
+            .is_err()
+        );
+        assert!(
+            validate_plot_script("p <- ggplot2::ggplot(df, ggplot2::aes(df$x, df$y))").is_err()
+        );
+        assert!(
+            validate_plot_script(
+                "p <- ggplot2::ggplot(df, ggplot2::aes(x, y)) + ggplot2::geom_histogram()"
+            )
+            .is_err()
+        );
+        assert!(
+            validate_plot_script(
+                "p <- ggplot2::ggplot(df, ggplot2::aes(x, y)) + ggplot2::stat_bin()"
+            )
+            .is_err()
+        );
+        assert!(validate_plot_script("# plot\np <- ggplot2::ggplot(df)").is_err());
+        assert!(validate_plot_script("x <- 1\np <- ggplot2::ggplot(df)").is_err());
     }
 }

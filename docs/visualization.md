@@ -2,15 +2,30 @@
 
 [English](visualization.md) | [中文](visualization_zh.md)
 
-Renders staged data and R plot files to PNG in an isolated R/ggplot2 OCI
-container. The legacy host-`Rscript` `visualization` node has been removed.
+Renders already-computed, plot-ready data and a constrained R plot script to
+PNG in an isolated R/ggplot2 OCI container. `visualization_container` is a
+terminal sink and cannot have downstream DAG nodes. The legacy host-`Rscript`
+`visualization` node has been removed.
 
 ## File-to-File contract
 
 `visualization_container` uses the standard container file data plane. Port 0 is
-the data File and port 1 is the user's R script File. The node loads the data as
-`df`, sources the script, requires a plot assigned to `p`, and publishes
-`plot.png` as an immutable VFS File artifact.
+the data File and port 1 is the user's R script File. The script is validated
+before container execution and may contain only one constrained expression of
+this shape:
+
+```r
+p <- ggplot2::ggplot(df, ggplot2::aes(x, y)) + ggplot2::geom_point()
+```
+
+Only allowlisted, non-computational `ggplot2::` plotting functions may be
+called. Comments, control flow, arbitrary R functions, indexing, file I/O,
+computational geoms and stats such as histograms/smoothers, computation inside
+aesthetics, scripts over 64 KiB, and downstream edges from the rendered plot
+are rejected. Filtering, aggregation, normalization, modeling, and all other
+data transformations must happen upstream. The fixed entrypoint loads the data
+as `df`, requires a plot assigned to `p`, and publishes `plot.png` as an
+immutable VFS File artifact.
 
 Supported `data_format` values are `csv`, `tsv`, `parquet`, `arrow_stream`, and
 `arrow_file`. Optional dimensions, resource limits, timeout, and artifact prefix

@@ -6,6 +6,8 @@
 use datafusion::common::HashMap;
 use serde::{Deserialize, Serialize};
 
+use std::collections::BTreeMap;
+
 use super::NodeId;
 use super::error::DagError;
 
@@ -21,6 +23,8 @@ const SCHEMA_FULL_THRESHOLD: usize = 50;
 /// small — the type distribution carries the shape, these are just a sample
 /// so the agent can see concrete column names / types.
 const SCHEMA_PREVIEW_COLS: usize = 20;
+/// Maximum column-name length retained verbatim in the agent-facing schema.
+const SCHEMA_COLUMN_NAME_PREVIEW_CHARS: usize = 64;
 
 /// Compact, agent-facing summary of a node's output schema.
 ///
@@ -58,7 +62,10 @@ impl SchemaReport {
 
         let mut columns = SchemaMap::with_capacity(take);
         for f in fields.iter().take(take) {
-            columns.insert(f.name().clone(), f.data_type().to_string());
+            columns.insert(
+                truncate_schema_column_name(f.name()),
+                f.data_type().to_string(),
+            );
         }
 
         let type_distribution = if folded {
@@ -78,6 +85,18 @@ impl SchemaReport {
             type_distribution,
         }
     }
+}
+
+fn truncate_schema_column_name(name: &str) -> String {
+    let char_count = name.chars().count();
+    if char_count <= SCHEMA_COLUMN_NAME_PREVIEW_CHARS {
+        return name.to_string();
+    }
+    let prefix = name
+        .chars()
+        .take(SCHEMA_COLUMN_NAME_PREVIEW_CHARS)
+        .collect::<String>();
+    format!("{prefix}…(len={char_count})")
 }
 
 /// Per-node runtime lifecycle state tracked by the scheduler.
@@ -180,6 +199,11 @@ pub struct NodeReport {
     pub output_type: Option<String>,
     /// File outputs carried by File and FileSet values.
     pub output_files: Vec<crate::value::FileRef>,
+    /// File outputs keyed by the declared output port that produced them.
+    ///
+    /// Unlike `output_files`, this is the deterministic port contract and must
+    /// be used when wiring artifacts into downstream nodes.
+    pub port_assignments: BTreeMap<u8, crate::value::FileRef>,
     /// Output column schema. Narrow schemas list every column; wide schemas
     /// are folded to a leading-column sample + type distribution (see
     /// [`SchemaReport`]).
@@ -292,6 +316,26 @@ mod tests {
         assert!(
             report.type_distribution.is_none(),
             "narrow schemas must not carry a type distribution"
+        );
+    }
+
+    #[test]
+    fn long_schema_column_names_are_truncated_with_original_length() {
+        let column_name = "x".repeat(SCHEMA_COLUMN_NAME_PREVIEW_CHARS + 17);
+        let fields = arrow_schema::Fields::from(vec![arrow_schema::Field::new(
+            &column_name,
+            DataType::Utf8,
+            true,
+        )]);
+        let report = SchemaReport::from_fields(&fields);
+        let key = report.columns.keys().next().unwrap();
+        assert_eq!(
+            key,
+            &format!(
+                "{}…(len={})",
+                "x".repeat(SCHEMA_COLUMN_NAME_PREVIEW_CHARS),
+                column_name.chars().count()
+            )
         );
     }
 

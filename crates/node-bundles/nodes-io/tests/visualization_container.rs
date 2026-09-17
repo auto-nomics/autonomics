@@ -19,6 +19,44 @@ struct FakeRenderRuntime {
     requests: Mutex<Vec<ContainerRunRequest>>,
 }
 
+#[test]
+fn visualization_node_is_graph_terminal() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = Arc::new(FakeRenderRuntime::new(root.path()));
+    let factory = VisualizationContainerNodeFactory::new(
+        runtime,
+        Arc::new(PanelCache::new(root.path().join("panels"))),
+    );
+    let node = factory
+        .build(
+            serde_json::json!({"data_format": "csv"}),
+            NodeCtx::new(
+                datafusion::prelude::SessionContext::new().runtime_env(),
+                Some(Arc::new(OpendalFileStorage::new(root.path()))),
+            ),
+        )
+        .unwrap();
+
+    let mut dag = dag_core::dag::DAG::default();
+    dag.add_node("plot".into(), node).unwrap();
+    dag.add_node(
+        "downstream".into(),
+        Box::new(FileReferenceNode::new(
+            root.path().join("data.csv").to_string_lossy().into_owned(),
+            Some("csv".into()),
+        )),
+    )
+    .unwrap();
+
+    let error = dag.add_edge("plot", "downstream", 0, 0).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("node `plot` is terminal and cannot have downstream edges"),
+        "unexpected error: {error}"
+    );
+}
+
 impl FakeRenderRuntime {
     fn new(workspace_root: &Path) -> Self {
         Self {
@@ -146,6 +184,9 @@ async fn stages_data_and_script_files_and_publishes_png() {
         )
         .await
         .unwrap();
+    if report.statuses.get("plot") != Some(&dag_core::dag::RuntimeStatus::Success) {
+        panic!("visualization run failed: {report:#?}");
+    }
     assert_eq!(
         report.statuses.get("plot"),
         Some(&dag_core::dag::RuntimeStatus::Success)

@@ -71,12 +71,14 @@ impl LdscRgContainerNodeFactory {
 
 pub struct LdscRgContainerNode {
     inner: Box<dyn DagNode>,
+    ports: NodePorts,
 }
 
 impl Clone for LdscRgContainerNode {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone_box(),
+            ports: self.ports.clone(),
         }
     }
 }
@@ -84,7 +86,7 @@ impl Clone for LdscRgContainerNode {
 #[async_trait::async_trait]
 impl DagNode for LdscRgContainerNode {
     fn ports(&self) -> &NodePorts {
-        self.inner.ports()
+        &self.ports
     }
 
     fn clone_box(&self) -> Box<dyn DagNode> {
@@ -174,9 +176,21 @@ pub fn container_spec(spec: &LdscRgContainerSpec) -> Result<ContainerCommandSpec
 
 fn port_layout() -> NodePorts {
     NodePorts::new()
-        .add_input_port_of_type(None, PortType::File)
-        .add_input_port_of_type(None, PortType::File)
-        .add_output_port_of_type(None, PortType::File)
+        .add_input_port_of_type_with_accepted_formats(
+            None,
+            PortType::File,
+            "trait_1_sumstats",
+            "sumstats_gz",
+            ["sumstats_gz", "sumstats_tsv"],
+        )
+        .add_input_port_of_type_with_accepted_formats(
+            None,
+            PortType::File,
+            "trait_2_sumstats",
+            "sumstats_gz",
+            ["sumstats_gz", "sumstats_tsv"],
+        )
+        .add_output_port_of_type_with_label_and_format(None, PortType::File, "log", "ldsc_log")
 }
 
 fn panel_bindings() -> Vec<DataBundleBinding> {
@@ -244,6 +258,7 @@ impl NodeFactory for LdscRgContainerNodeFactory {
         .map_err(|error| dag_core::registry::error::Error::Unknown(error.to_string()))?;
         Ok(Box::new(LdscRgContainerNode {
             inner: Box::new(node),
+            ports: port_layout(),
         }))
     }
 

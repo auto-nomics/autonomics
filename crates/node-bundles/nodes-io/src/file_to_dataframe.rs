@@ -11,6 +11,7 @@ use biofusion::datasource::BioReadOptions;
 use biofusion::ext::DataFusionReadExt;
 use datafusion::{
     common::HashMap,
+    datasource::file_format::file_compression_type::FileCompressionType,
     prelude::{CsvReadOptions, DataFrame, ParquetReadOptions, SessionContext},
 };
 use schemars::{JsonSchema, schema_for};
@@ -33,6 +34,7 @@ use dag_core::{
 pub enum FileFormat {
     // DataFusion native
     Csv,
+    #[serde(alias = "tsv.gz")]
     Tsv,
     Parquet,
     Json,
@@ -106,7 +108,7 @@ impl FileFormat {
     pub fn from_label(label: &str) -> Option<Self> {
         match label.to_ascii_lowercase().as_str() {
             "csv" => Some(Self::Csv),
-            "tsv" => Some(Self::Tsv),
+            "tsv" | "tsv.gz" => Some(Self::Tsv),
             "parquet" => Some(Self::Parquet),
             "json" | "ndjson" => Some(Self::Json),
             "vcf" => Some(Self::Vcf),
@@ -149,6 +151,48 @@ impl FileFormat {
     }
 }
 
+/// Compression requested by a `file_to_dataframe` specification.
+///
+/// `Gzip` also covers blocked gzip (`bgz`) because both use the gzip container
+/// format.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum FileCompression {
+    #[default]
+    Auto,
+    None,
+    Gzip,
+    Zstd,
+}
+
+/// User-controlled options for tabular CSV/TSV inputs.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TabularReadOptions {
+    pub delimiter: Option<u8>,
+    pub has_header: Option<bool>,
+    pub compression: FileCompression,
+}
+
+impl TabularReadOptions {
+    pub fn new(
+        delimiter: Option<u8>,
+        has_header: Option<bool>,
+        compression: FileCompression,
+    ) -> Self {
+        Self {
+            delimiter,
+            has_header,
+            compression,
+        }
+    }
+
+    fn is_default_for_non_tabular(&self) -> bool {
+        self.delimiter.is_none()
+            && self.has_header.is_none()
+            && self.compression == FileCompression::Auto
+    }
+}
+
 /// Errors specific to [`FileToDataFrameNode`].
 #[derive(Debug, Error)]
 pub enum FileToDataFrameError {
@@ -186,6 +230,7 @@ pub struct FileToDataFrameNode {
     path: Option<String>,
     format: Option<FileFormat>,
     partition_by: Vec<String>,
+    tabular_options: TabularReadOptions,
 }
 
 impl FileToDataFrameNode {
@@ -198,12 +243,22 @@ impl FileToDataFrameNode {
         format: Option<FileFormat>,
         partition_by: Vec<String>,
     ) -> Self {
+        Self::new_with_tabular_options(path, format, partition_by, TabularReadOptions::default())
+    }
+
+    pub fn new_with_tabular_options(
+        path: Option<String>,
+        format: Option<FileFormat>,
+        partition_by: Vec<String>,
+        tabular_options: TabularReadOptions,
+    ) -> Self {
         // The optional file input lets a file-producing node supply the path.
         Self {
             meta: port_layout(),
             path,
             format,
             partition_by,
+            tabular_options,
         }
     }
 }
@@ -211,15 +266,43 @@ impl FileToDataFrameNode {
 #[derive(Debug, Clone, JsonSchema, Deserialize)]
 pub struct FileToDataFrameNodeSpec {
     /// A file path or URL. When `format` is `None`, it is inferred from the
-    /// extension (`.vcf.gz` → Vcf, `.bam` → Bam, `.csv` → Csv, `.json` → Json, …).
+    /// extension (`.vcf.gz` → Vcf, `.bam` → Bam, `.csv` → Csv,
+    /// `.tsv.gz` → Tsv, `.json` → Json, ...).
     pub path: Option<String>,
     pub format: Option<FileFormat>,
+    /// Single-byte delimiter for CSV/TSV input. Accepts a literal character
+    /// or the escape strings `\t`, `\0`, `\r`, and `\n`.
+    pub delimiter: Option<String>,
+    /// Whether tabular input has a header row. Defaults to `true`.
+    pub has_header: Option<bool>,
+    /// Input compression. Defaults to extension-based detection.
+    #[serde(default)]
+    pub compression: Option<FileCompression>,
     /// Hive-style partition column names. Values are restored as Utf8.
     #[serde(default)]
     pub partition_by: Vec<String>,
 }
 
 pub struct FileToDataFrameNodeFactory {}
+
+fn parse_delimiter(value: &str) -> std::result::Result<u8, String> {
+    match value {
+        "\\t" | "\t" | "tab" => Ok(b'\t'),
+        "\\0" | "\0" | "nul" => Ok(0),
+        "\\r" | "\r" => Ok(b'\r'),
+        "\\n" | "\n" => Ok(b'\n'),
+        _ => {
+            let bytes = value.as_bytes();
+            if bytes.len() == 1 && bytes[0].is_ascii() {
+                Ok(bytes[0])
+            } else {
+                Err(format!(
+                    "delimiter must be one ASCII byte or one of `\\t`, `tab`, `\\0`, `nul`, `\\r`, `\\n`; got `{value}`"
+                ))
+            }
+        }
+    }
+}
 
 /// Static port layout for every [`FileToDataFrameNode`]: an optional file input
 /// and a single DataFrame output.
@@ -241,11 +324,12 @@ impl NodeFactory for FileToDataFrameNodeFactory {
     fn doc(&self) -> &'static str {
         "Reads an external path or an upstream file reference into a \
         DataFrame. Supports local/remote files: CSV/TSV/Parquet via \
-        DataFusion, JSON arrays and NDJSON (including .json.gz), and \
+        DataFusion (including .tsv.gz), JSON arrays and NDJSON (including \
+        .json.gz), and \
         bioinformatics formats (VCF, BAM, BED, GTF, FASTA, MatrixMarket, etc.) via \
-        biofusion. Format is inferred from the \
-        extension when not given explicitly. Optional file input; one \
-        DataFrame output."
+        biofusion. Format is inferred from the extension when not given \
+        explicitly. CSV/TSV inputs accept delimiter, has_header, and \
+        compression overrides. Optional file input; one DataFrame output."
     }
 
     fn spec_schema(&self) -> schemars::Schema {
@@ -262,10 +346,20 @@ impl NodeFactory for FileToDataFrameNodeFactory {
         _node_ctx: NodeCtx,
     ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let node_spec: FileToDataFrameNodeSpec = serde_json::from_value(spec)?;
-        let node = FileToDataFrameNode::new_with_partitions(
+        let delimiter = match node_spec.delimiter.as_deref().map(parse_delimiter) {
+            Some(Ok(delimiter)) => Some(delimiter),
+            Some(Err(message)) => return Err(message.as_str().into()),
+            None => None,
+        };
+        let node = FileToDataFrameNode::new_with_tabular_options(
             node_spec.path,
             node_spec.format,
             node_spec.partition_by,
+            TabularReadOptions::new(
+                delimiter,
+                node_spec.has_header,
+                node_spec.compression.unwrap_or_default(),
+            ),
         );
         Ok(Box::new(node))
     }
@@ -472,6 +566,15 @@ impl DagNode for FileToDataFrameNode {
             None if !self.partition_by.is_empty() => FileFormat::Parquet,
             None => return Err(FileToDataFrameError::UnknownFormat(path.clone()).into()),
         };
+        if !matches!(fmt, FileFormat::Csv | FileFormat::Tsv)
+            && !self.tabular_options.is_default_for_non_tabular()
+        {
+            return Err(FileToDataFrameError::InvalidInput(
+                "delimiter, has_header, and compression are only supported for CSV/TSV input"
+                    .into(),
+            )
+            .into());
+        }
         if !self.partition_by.is_empty() && fmt != FileFormat::Parquet {
             return Err(FileToDataFrameError::InvalidInput(
                 "partition_by is only supported for Parquet input".into(),
@@ -483,7 +586,8 @@ impl DagNode for FileToDataFrameNode {
             .iter()
             .map(|name| (name.clone(), arrow_schema::DataType::Utf8))
             .collect::<Vec<_>>();
-        let df = read_file(&ctx, &path, fmt, &partition_cols).await?;
+        let df =
+            read_file_with_options(&ctx, &path, fmt, &partition_cols, self.tabular_options).await?;
 
         let df = if matches!(fmt, FileFormat::Csv | FileFormat::Tsv) {
             promote_identifier_strings(df)?
@@ -502,35 +606,64 @@ impl DagNode for FileToDataFrameNode {
     }
 }
 
-async fn read_file(
+async fn read_file_with_options(
     ctx: &SessionContext,
     path: &str,
     fmt: FileFormat,
     partition_cols: &[(String, arrow_schema::DataType)],
+    options: TabularReadOptions,
 ) -> Result<DataFrame, DagError> {
     use FileFormat::*;
-    use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
     let expected_extension = path_file_extension(path);
-    let compression = if path.to_lowercase().ends_with(".gz") {
-        FileCompressionType::GZIP
+    let lower_path = path.to_ascii_lowercase();
+    let compression = match options.compression {
+        FileCompression::Auto => {
+            if lower_path.ends_with(".gz") || lower_path.ends_with(".bgz") {
+                FileCompressionType::GZIP
+            } else if lower_path.ends_with(".zst") || lower_path.ends_with(".zstd") {
+                FileCompressionType::ZSTD
+            } else {
+                FileCompressionType::UNCOMPRESSED
+            }
+        }
+        FileCompression::None => FileCompressionType::UNCOMPRESSED,
+        FileCompression::Gzip => FileCompressionType::GZIP,
+        FileCompression::Zstd => FileCompressionType::ZSTD,
+    };
+    let has_header = options.has_header.unwrap_or(true);
+    let delimiter = match fmt {
+        Csv => options.delimiter.unwrap_or(b','),
+        Tsv => options.delimiter.unwrap_or(b'\t'),
+        _ => b',',
+    };
+    let ragged_header_schema = if matches!(fmt, Csv | Tsv)
+        && has_header
+        && !matches!(compression, FileCompressionType::ZSTD)
+        && (lower_path.ends_with(".txt.gz") || lower_path.ends_with(".txt.bgz"))
+    {
+        infer_ragged_header_schema(ctx, path, delimiter, compression)
+            .await
+            .map_err(DagError::DataFusion)?
     } else {
-        FileCompressionType::UNCOMPRESSED
+        None
+    };
+    let csv_options = |delimiter: u8| {
+        let mut csv_options = CsvReadOptions::default()
+            .delimiter(delimiter)
+            .has_header(has_header)
+            .file_extension(&expected_extension)
+            .file_compression_type(compression);
+        if let Some(schema) = ragged_header_schema.as_ref() {
+            csv_options = csv_options.schema(schema).truncated_rows(true);
+        }
+        csv_options
     };
     let df = match fmt {
-        Csv => {
-            let opts = CsvReadOptions::default()
-                .file_extension(&expected_extension)
-                .file_compression_type(compression);
-            ctx.read_csv(path, opts).await
-        }
+        Csv => ctx.read_csv(path, csv_options(delimiter)).await,
         Tsv => {
             // The expected extension follows the actual path so an explicit
             // TSV format can also read nonstandard extensions such as .raw.
-            let opts = CsvReadOptions::default()
-                .delimiter(b'\t')
-                .file_extension(&expected_extension)
-                .file_compression_type(compression);
-            ctx.read_csv(path, opts).await
+            ctx.read_csv(path, csv_options(delimiter)).await
         }
         Parquet => {
             let options =
@@ -561,10 +694,119 @@ async fn read_file(
     })
 }
 
+/// Build a schema for wide matrices whose header omits the first column name.
+///
+/// This layout is common for gene-by-cell count matrices: the header contains
+/// N cell barcodes while each data record contains a feature name plus N
+/// values. DataFusion's normal inference rejects the shorter first record.
+async fn infer_ragged_header_schema(
+    ctx: &SessionContext,
+    path: &str,
+    delimiter: u8,
+    compression: FileCompressionType,
+) -> Result<Option<arrow_schema::Schema>, datafusion::error::DataFusionError> {
+    use datafusion::datasource::listing::ListingTableUrl;
+    use datafusion::object_store::ObjectStoreExt;
+    use std::io::Read;
+
+    // This probe is opportunistic. Glob paths and stores without direct range
+    // reads should fall through to DataFusion's normal ListingTable handling.
+    let Ok(table_url) = ListingTableUrl::parse(path) else {
+        return Ok(None);
+    };
+    let Ok(store) = ctx.runtime_env().object_store(&table_url) else {
+        return Ok(None);
+    };
+    let Ok(metadata) = store.head(table_url.prefix()).await else {
+        return Ok(None);
+    };
+    let compressed_len = metadata.size.min(4 * 1024 * 1024) as u64;
+    let Ok(compressed) = store.get_range(table_url.prefix(), 0..compressed_len).await else {
+        return Ok(None);
+    };
+    let mut decoded = Vec::new();
+    match compression {
+        FileCompressionType::GZIP => {
+            // A range can end in the middle of a gzip member; retain the
+            // complete lines decoded before any truncation error.
+            let _ = flate2::read::MultiGzDecoder::new(&compressed[..])
+                .take(4 * 1024 * 1024)
+                .read_to_end(&mut decoded);
+        }
+        FileCompressionType::UNCOMPRESSED => {
+            decoded.extend_from_slice(&compressed);
+        }
+        _ => return Ok(None),
+    }
+
+    let text = String::from_utf8_lossy(&decoded);
+    let mut lines = text.split_inclusive('\n');
+    let Some(header) = lines.next().map(str::trim_end) else {
+        return Ok(None);
+    };
+    let Some(first_record) = lines.next().map(str::trim_end) else {
+        return Ok(None);
+    };
+    let header_fields = count_tabular_fields(header, delimiter);
+    let record_fields = count_tabular_fields(first_record, delimiter);
+    if header_fields == 0 || record_fields != header_fields + 1 {
+        return Ok(None);
+    }
+
+    let mut fields = Vec::with_capacity(record_fields);
+    fields.push(arrow_schema::Field::new(
+        "feature_id",
+        arrow_schema::DataType::Utf8,
+        true,
+    ));
+    for (index, field) in header.split(delimiter as char).enumerate() {
+        let name = unquote_tabular_field(field);
+        let name = if name.is_empty() {
+            format!("cell_{index}")
+        } else {
+            name
+        };
+        fields.push(arrow_schema::Field::new(
+            name,
+            arrow_schema::DataType::Float64,
+            true,
+        ));
+    }
+    Ok(Some(arrow_schema::Schema::new(fields)))
+}
+
+fn count_tabular_fields(line: &str, delimiter: u8) -> usize {
+    let bytes = line.as_bytes();
+    let mut fields = 1;
+    let mut quoted = false;
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'"' if quoted && bytes.get(index + 1) == Some(&b'"') => index += 1,
+            b'"' => quoted = !quoted,
+            byte if byte == delimiter && !quoted => fields += 1,
+            _ => {}
+        }
+        index += 1;
+    }
+    fields
+}
+
+fn unquote_tabular_field(field: &str) -> String {
+    field
+        .strip_prefix('"')
+        .and_then(|field| field.strip_suffix('"'))
+        .map(|field| field.replace("\"\"", "\""))
+        .unwrap_or_else(|| field.to_string())
+}
+
 fn path_file_extension(path: &str) -> String {
-    let compressed = path.to_ascii_lowercase().ends_with(".gz");
-    let path = if compressed {
-        &path[..path.len() - ".gz".len()]
+    let lower = path.to_ascii_lowercase();
+    let compressed_suffix = [".gz", ".bgz", ".zst", ".zstd"]
+        .into_iter()
+        .find(|suffix| lower.ends_with(suffix));
+    let path = if let Some(suffix) = compressed_suffix {
+        &path[..path.len() - suffix.len()]
     } else {
         path
     };
@@ -573,8 +815,8 @@ fn path_file_extension(path: &str) -> String {
         .and_then(|extension| extension.to_str())
         .map(|extension| format!(".{extension}"))
         .unwrap_or_default();
-    if compressed {
-        format!("{extension}.gz")
+    if let Some(suffix) = compressed_suffix {
+        format!("{extension}{suffix}")
     } else {
         extension
     }
@@ -665,6 +907,150 @@ mod tests {
     use vfs::{BackendConfig, BackendDefinition, MountDefinition, MountedObjectStore, VfsManifest};
 
     #[test]
+    fn parses_tabular_delimiters() {
+        assert_eq!(parse_delimiter("\\t"), Ok(b'\t'));
+        assert_eq!(parse_delimiter("tab"), Ok(b'\t'));
+        assert_eq!(parse_delimiter(";"), Ok(b';'));
+        assert!(parse_delimiter("too long").is_err());
+        assert!(parse_delimiter("é").is_err());
+    }
+
+    #[test]
+    fn tabular_read_options_are_optional_in_schema() {
+        let schema = serde_json::to_value(schema_for!(FileToDataFrameNodeSpec)).unwrap();
+        let required = schema
+            .get("required")
+            .and_then(|required| required.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        for option in ["delimiter", "has_header", "compression"] {
+            assert!(
+                !required.iter().any(|field| field == option),
+                "{option} must be optional, got required fields: {required:?}"
+            );
+        }
+    }
+
+    async fn execute_tabular_spec(spec: serde_json::Value) -> DataFrame {
+        let ctx = SessionContext::new();
+        let node_ctx = dag_core::registry::NodeCtx::new(ctx.runtime_env().clone(), None);
+        let mut node = FileToDataFrameNodeFactory {}
+            .build(spec, node_ctx.clone())
+            .unwrap();
+        let outputs = node
+            .execute(
+                &node_ctx,
+                &[],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap();
+        outputs.dataframe(0).unwrap().clone()
+    }
+
+    #[tokio::test]
+    async fn file_to_dataframe_supports_tabular_read_options() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let plain_path = dir.path().join("counts.txt");
+        std::fs::write(&plain_path, "gene_id\tcell_1\n79501\t504\n").unwrap();
+        let plain = execute_tabular_spec(serde_json::json!({
+            "path": plain_path.to_string_lossy(),
+            "format": "tsv",
+            "delimiter": "\\t",
+            "has_header": true,
+            "compression": null
+        }))
+        .await;
+        assert_eq!(plain.schema().fields().len(), 2);
+        assert_eq!(plain.count().await.unwrap(), 1);
+
+        let gzip_path = dir.path().join("counts.txt.gz");
+        let mut encoder = flate2::write::GzEncoder::new(
+            std::fs::File::create(&gzip_path).unwrap(),
+            Default::default(),
+        );
+        std::io::Write::write_all(&mut encoder, b"gene_id\tcell_1\n79501\t504\n").unwrap();
+        encoder.finish().unwrap();
+        let gzip = execute_tabular_spec(serde_json::json!({
+            "path": gzip_path.to_string_lossy(),
+            "format": "csv",
+            "delimiter": "\\t",
+            "compression": "auto"
+        }))
+        .await;
+        assert_eq!(gzip.schema().fields().len(), 2);
+        assert_eq!(gzip.count().await.unwrap(), 1);
+
+        let raw_gzip_path = dir.path().join("counts.raw");
+        let mut encoder = flate2::write::GzEncoder::new(
+            std::fs::File::create(&raw_gzip_path).unwrap(),
+            Default::default(),
+        );
+        std::io::Write::write_all(&mut encoder, b"79501\t504\n").unwrap();
+        encoder.finish().unwrap();
+        let headerless = execute_tabular_spec(serde_json::json!({
+            "path": raw_gzip_path.to_string_lossy(),
+            "format": "csv",
+            "delimiter": "\\t",
+            "has_header": false,
+            "compression": "gzip"
+        }))
+        .await;
+        assert_eq!(headerless.schema().fields().len(), 2);
+        assert_eq!(headerless.count().await.unwrap(), 1);
+
+        let zstd_path = dir.path().join("counts.txt.zst");
+        let mut encoder =
+            zstd::Encoder::new(std::fs::File::create(&zstd_path).unwrap(), 0).unwrap();
+        std::io::Write::write_all(&mut encoder, b"gene_id\tcell_1\n79501\t504\n").unwrap();
+        encoder.finish().unwrap();
+        let zstd = execute_tabular_spec(serde_json::json!({
+            "path": zstd_path.to_string_lossy(),
+            "format": "csv",
+            "delimiter": "\\t",
+            "compression": "zstd"
+        }))
+        .await;
+        assert_eq!(zstd.schema().fields().len(), 2);
+        assert_eq!(zstd.count().await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn file_to_dataframe_reads_ragged_single_cell_header() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("counts.txt.gz");
+        let mut encoder = flate2::write::GzEncoder::new(
+            std::fs::File::create(&path).unwrap(),
+            Default::default(),
+        );
+        std::io::Write::write_all(
+            &mut encoder,
+            b"cell_1\tcell_2\nMIR1302-10\t0\t1\nFAM138A\t2\t3\n",
+        )
+        .unwrap();
+        encoder.finish().unwrap();
+
+        let df = execute_tabular_spec(serde_json::json!({
+            "path": path.to_string_lossy(),
+            "format": "tsv",
+            "delimiter": "\\t",
+            "compression": "auto"
+        }))
+        .await;
+
+        let names = df
+            .schema()
+            .fields()
+            .iter()
+            .map(|field| field.name().as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["feature_id", "cell_1", "cell_2"]);
+        assert_eq!(df.count().await.unwrap(), 2);
+    }
+
+    #[test]
     fn promote_floats_preserves_camel_case_column_names() {
         let ctx = SessionContext::new();
         let schema = Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new(
@@ -718,9 +1104,15 @@ mod tests {
         writer.close().unwrap();
 
         let ctx = SessionContext::new();
-        let df = read_file(&ctx, path.to_str().unwrap(), FileFormat::Parquet, &[])
-            .await
-            .unwrap();
+        let df = read_file_with_options(
+            &ctx,
+            path.to_str().unwrap(),
+            FileFormat::Parquet,
+            &[],
+            TabularReadOptions::default(),
+        )
+        .await
+        .unwrap();
         let df = promote_floats(df).unwrap();
 
         let fields: Vec<&str> = df
@@ -1050,7 +1442,88 @@ mod tests {
                 .data_type(),
             &arrow_schema::DataType::Utf8
         );
+        assert_eq!(df.schema().fields().len(), 2);
         assert_eq!(df.clone().count().await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn file_to_dataframe_reads_gzipped_tsv() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cohort.tsv.gz");
+        let mut encoder = flate2::write::GzEncoder::new(
+            std::fs::File::create(&path).unwrap(),
+            Default::default(),
+        );
+        std::io::Write::write_all(&mut encoder, b"gene_id\tn\n79501\t504\n").unwrap();
+        encoder.finish().unwrap();
+
+        let ctx = SessionContext::new();
+        let node_ctx = dag_core::registry::NodeCtx::new(ctx.runtime_env().clone(), None);
+        let mut node = FileToDataFrameNodeFactory {}
+            .build(
+                serde_json::json!({
+                    "path": path.to_string_lossy(),
+                    "format": "tsv.gz",
+                }),
+                node_ctx.clone(),
+            )
+            .unwrap();
+
+        let outputs = node
+            .execute(
+                &node_ctx,
+                &[],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap();
+        let df = outputs.dataframe(0).unwrap();
+        assert_eq!(
+            df.schema()
+                .field_with_name(None, "gene_id")
+                .unwrap()
+                .data_type(),
+            &arrow_schema::DataType::Utf8
+        );
+        assert_eq!(df.clone().count().await.unwrap(), 1);
+    }
+
+    #[test]
+    fn file_format_accepts_gzipped_tsv_label() {
+        let spec = serde_json::from_value::<FileToDataFrameNodeSpec>(serde_json::json!({
+            "path": "/input/cohort.tsv.gz",
+            "format": "tsv.gz"
+        }))
+        .unwrap();
+
+        assert_eq!(spec.format, Some(FileFormat::Tsv));
+        assert_eq!(FileFormat::from_label("tsv.gz"), Some(FileFormat::Tsv));
+    }
+
+    #[tokio::test]
+    async fn file_to_dataframe_reads_gzipped_tsv_glob() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cohort.tsv.gz");
+        let mut encoder = flate2::write::GzEncoder::new(
+            std::fs::File::create(&path).unwrap(),
+            Default::default(),
+        );
+        std::io::Write::write_all(&mut encoder, b"id\tvalue\n1\tone\n").unwrap();
+        encoder.finish().unwrap();
+
+        let ctx = SessionContext::new();
+        let glob = format!("{}/*.tsv.gz", dir.path().to_string_lossy());
+        let df = read_file_with_options(
+            &ctx,
+            &glob,
+            FileFormat::Tsv,
+            &[],
+            TabularReadOptions::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(df.schema().fields().len(), 2);
+        assert_eq!(df.count().await.unwrap(), 1);
     }
 
     #[tokio::test]
@@ -1060,6 +1533,22 @@ mod tests {
         std::fs::create_dir_all(&source_dir).unwrap();
         std::fs::write(source_dir.join("data.csv"), "id\n1\n2\n").unwrap();
         std::fs::write(source_dir.join("data.json"), r#"[{"id":1},{"id":2}]"#).unwrap();
+        let mut gzip_encoder = flate2::write::GzEncoder::new(
+            std::fs::File::create(source_dir.join("data.tsv.gz")).unwrap(),
+            Default::default(),
+        );
+        std::io::Write::write_all(&mut gzip_encoder, b"id\tvalue\n1\tone\n2\ttwo\n").unwrap();
+        gzip_encoder.finish().unwrap();
+        let mut matrix_encoder = flate2::write::GzEncoder::new(
+            std::fs::File::create(source_dir.join("matrix.txt.gz")).unwrap(),
+            Default::default(),
+        );
+        std::io::Write::write_all(
+            &mut matrix_encoder,
+            b"cell_1\tcell_2\nMIR1302-10\t0\t1\nFAM138A\t2\t3\n",
+        )
+        .unwrap();
+        matrix_encoder.finish().unwrap();
 
         let manifest = VfsManifest {
             backend: vec![BackendDefinition {
@@ -1095,6 +1584,12 @@ mod tests {
             "vfs:///mount/data.json",
             "file:///mount/data.json",
             "/mount/data.json",
+            "vfs:///mount/data.tsv.gz",
+            "file:///mount/data.tsv.gz",
+            "/mount/data.tsv.gz",
+            "vfs:///mount/matrix.txt.gz",
+            "file:///mount/matrix.txt.gz",
+            "/mount/matrix.txt.gz",
         ] {
             if path.ends_with(".json") {
                 let direct_df = ctx
@@ -1103,7 +1598,10 @@ mod tests {
                     .unwrap_or_else(|e| panic!("direct read {path} failed: {e}"));
                 assert_eq!(direct_df.count().await.unwrap(), 2);
             }
-            let mut node = FileToDataFrameNode::new(Some(path.into()), None);
+            let mut node = FileToDataFrameNode::new(
+                Some(path.into()),
+                (path.ends_with(".txt.gz")).then_some(FileFormat::Tsv),
+            );
             let outputs = node
                 .execute(
                     &node_ctx,
@@ -1113,6 +1611,20 @@ mod tests {
                 .await
                 .unwrap_or_else(|e| panic!("read {path} failed: {e}"));
             let df = outputs.dataframe(0).expect("source output port");
+            if path.ends_with(".tsv.gz") {
+                assert_eq!(
+                    df.schema().fields().len(),
+                    2,
+                    "gzip TSV should preserve tab-delimited columns for {path}"
+                );
+            }
+            if path.ends_with(".txt.gz") {
+                assert_eq!(
+                    df.schema().fields().len(),
+                    3,
+                    "ragged gzip matrix should preserve feature and cell columns for {path}"
+                );
+            }
             assert_eq!(
                 df.clone().count().await.unwrap(),
                 2,

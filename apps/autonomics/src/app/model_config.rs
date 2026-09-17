@@ -79,14 +79,31 @@ impl App {
                     // persists the preference in its stored record.
                     tracing::info!(agent = %an, model = %spec, "model hot-swap requested");
                     let client = self.client.clone();
+                    let tx = self.app_event_tx.clone();
                     let spec_for_task = spec.clone();
                     let an_for_log = an.clone();
+                    let an_for_info = an.clone();
+                    self.agent_model_cache.remove(&an);
+                    self.model_info_pending.insert(an.clone());
+                    self.dirty = true;
                     self.spawn_client_task("set_agent_model", move || async move {
                         if let Err(e) = client.set_agent_model(&an_for_log, &spec_for_task).await {
                             tracing::error!(agent = %an_for_log, model = %spec_for_task, error = %e, "model hot-swap failed");
                         }
+                        // The PUT returns before the host applies the model
+                        // change. Query only after that request completes so
+                        // this fetch does not repopulate the cache with the
+                        // previous model.
+                        let info = client
+                            .agent_model_info(&an_for_info)
+                            .await
+                            .ok()
+                            .map(|view| (view.model, view.context_length));
+                        tx.send(crate::app_event::AppEvent::ModelInfoLoaded {
+                            agent: an_for_info,
+                            info,
+                        });
                     });
-                    self.refresh_agent_model_info(&an);
                 }
                 self.state.model_config_visible = false;
             }

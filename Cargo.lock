@@ -7326,6 +7326,7 @@ dependencies = [
  "arrow",
  "arrow-array",
  "arrow-buffer",
+ "arrow-cast",
  "arrow-schema",
  "async-trait",
  "biofusion",
@@ -7333,9 +7334,11 @@ dependencies = [
  "clinicaltrials",
  "container-runtime",
  "crossref",
+ "csv",
  "dag-core",
  "data-catalog",
  "datafusion",
+ "encoding_rs",
  "flate2",
  "futures",
  "glob",
@@ -7361,6 +7364,7 @@ dependencies = [
  "tracing",
  "uniprot",
  "vfs",
+ "zstd",
 ]
 
 [[package]]
@@ -7525,13 +7529,17 @@ name = "nodes-sql"
 version = "0.1.0"
 dependencies = [
  "arrow-array",
+ "arrow-cast",
  "arrow-schema",
  "async-trait",
  "dag-core",
  "datafusion",
+ "futures",
+ "regex",
  "schemars",
  "serde",
  "serde_json",
+ "statrs",
  "thiserror 2.0.20",
  "tokio",
 ]

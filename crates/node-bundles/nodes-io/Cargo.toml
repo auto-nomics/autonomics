@@ -27,6 +27,7 @@ pubchem = { path = "../../pubchem" }
 clinicaltrials = { path = "../../clinicaltrials" }
 mr = { path = "../../../bio_crates/mr" }
 arrow-array.workspace = true
+arrow-cast.workspace = true
 arrow.workspace = true
 arrow-schema.workspace = true
 parquet.workspace = true
@@ -40,6 +41,9 @@ tracing.workspace = true
 datafusion.workspace = true
 futures.workspace = true
 glob = "0.3"
+flate2 = "1.1"
+csv = "1.4"
+encoding_rs = "0.8"
 tokio = { workspace = true, features = ["process", "io-util", "time"] }
 libc = "0.2"
 
@@ -48,7 +52,7 @@ data-catalog = { path = "../../data-catalog" }
 tokio = { workspace = true }
 arrow-buffer.workspace = true
 tempfile = "3.27.0"
-flate2 = "1.1"
+zstd = "0.13"
 
 [lints]
 workspace = true

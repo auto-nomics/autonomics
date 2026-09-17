@@ -484,6 +484,11 @@ const PROMPT_DAG_ENGINE: &str = "\n\
   schema handling, or computation, tell the user that the operation is unsupported instead of \
   assembling an equivalent manually.\n\
 \n\
+- **Terminal visualization only**: `visualization_container` is a final sink for \
+  plot-ready data. Perform filtering, aggregation, normalization, modeling, and all \
+  other computation in upstream dedicated or SQL nodes. The node rejects arbitrary \
+  computation in its R script and downstream edges from the rendered plot.\n\
+\n\
 - Use this when a task requires multi-step data processing or transformation.\n\
 \n\
 - **Build incrementally, layer by layer — never construct the full DAG in one shot.** \

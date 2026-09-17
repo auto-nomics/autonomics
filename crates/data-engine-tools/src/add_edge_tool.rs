@@ -15,7 +15,9 @@ use crate::ExecError;
                   'from' node's output port to the 'to' node's input port. \
                   All four arguments are required — there is no default-port \
                   fallback. Use `get_node_ports` to discover the correct \
-                  output/input port indices before calling. \
+                  output/input port indices and semantic labels before calling. \
+                  When both ports declare file formats, incompatible formats \
+                  are rejected here instead of failing during execution. \
                   Each input port accepts at most one incoming edge; for a \
                   variadic node such as `sql`, connect additional upstreams \
                   to distinct target ports (0, 1, 2, ...). \

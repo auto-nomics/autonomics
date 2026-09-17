@@ -134,10 +134,7 @@ impl DagNode for DataFusionSqlNode {
                     "cannot register Parquet input `{input_path}`: {error}"
                 ))
             })?;
-        let result = session
-            .sql(&self.sql)
-            .await
-            .map_err(|error| DagError::DataFusion(error))?;
+        let result = session.sql(&self.sql).await.map_err(DagError::DataFusion)?;
         result
             .write_parquet(
                 &output_path,

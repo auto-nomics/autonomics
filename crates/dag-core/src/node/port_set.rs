@@ -54,6 +54,38 @@ impl Ports {
         self.add_port_with(port);
     }
 
+    /// Append a typed-value port with a semantic label and format contract.
+    pub fn add_port_of_type_with_label_and_format(
+        &mut self,
+        schema: Option<SchemaRef>,
+        data_type: PortType,
+        label: impl Into<String>,
+        format: impl Into<String>,
+    ) {
+        let port = Port::new(self.next_index(), schema)
+            .with_data_type(data_type)
+            .with_label(label)
+            .with_format(format);
+        self.add_port_with(port);
+    }
+
+    /// Append an input port with a primary and alternate format contracts.
+    pub fn add_port_of_type_with_accepted_formats(
+        &mut self,
+        schema: Option<SchemaRef>,
+        data_type: PortType,
+        label: impl Into<String>,
+        format: impl Into<String>,
+        accepted_formats: impl IntoIterator<Item = impl Into<String>>,
+    ) {
+        let port = Port::new(self.next_index(), schema)
+            .with_data_type(data_type)
+            .with_label(label)
+            .with_format(format)
+            .with_accepted_formats(accepted_formats);
+        self.add_port_with(port);
+    }
+
     /// Append an optional, schema-less typed-value port.
     pub fn add_optional_port_of_type(&mut self, data_type: PortType) {
         let port = Port::new(self.next_index(), None)

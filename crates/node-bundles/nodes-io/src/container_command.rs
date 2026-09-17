@@ -215,8 +215,21 @@ impl ContainerCommandNode {
         let mut ports = NodePorts::new()
             .set_fixed_input(false)
             .add_optional_input_port_of_type(PortType::File);
-        for _ in &spec.outputs {
-            ports = ports.add_output_port_of_type(None, PortType::File);
+        for output in &spec.outputs {
+            let label = Path::new(&output.path)
+                .file_stem()
+                .and_then(|name| name.to_str())
+                .unwrap_or("output");
+            if let Some(format) = &output.format {
+                ports = ports.add_output_port_of_type_with_label_and_format(
+                    None,
+                    PortType::File,
+                    label,
+                    format.clone(),
+                );
+            } else {
+                ports = ports.add_output_port_of_type(None, PortType::File);
+            }
         }
         Ok(Self {
             ports,
