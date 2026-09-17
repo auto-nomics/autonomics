@@ -10,11 +10,13 @@ use std::sync::Arc;
 
 use crate::table_transforms::{float_values, utf8_values};
 use dag_core::dag::{DagError, graph::PortOutputs};
-use dag_core::node::{DagNode, NodeInput, NodePorts};
+use dag_core::node::{DagNode, DataBundleBinding, NodeInput, NodePorts};
 use dag_core::registry::{NodeCtx, NodeFactory};
 use dag_core::value::PortType;
 
 pub const LR_COMMUNICATION_SCORE_KIND: &str = "lr_communication_score";
+pub const DEFAULT_LR_TABLE_BUNDLE: &str = "lrdb.cellphonedb.v5";
+pub const DEFAULT_LR_TABLE_FILE: &str = "lr_pairs.parquet";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -26,6 +28,16 @@ pub enum LrDirection {
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct LrCommunicationScoreSpec {
+    /// Use the published CellPhoneDB LR catalog bundle when input port 0 is not wired.
+    #[serde(default = "default_true")]
+    pub use_catalog_lr_table: bool,
+    #[serde(default = "default_lr_table_bundle")]
+    pub lr_table_bundle: String,
+    #[serde(default = "default_lr_table_file")]
+    pub lr_table_file: String,
+    /// Explicit LR table path override. Takes precedence over the catalog bundle.
+    #[serde(default)]
+    pub lr_table_path: Option<String>,
     #[serde(default = "default_ligand_column")]
     pub ligand_column: String,
     #[serde(default = "default_receptor_column")]
@@ -54,6 +66,15 @@ pub struct LrCommunicationScoreSpec {
     pub extra_columns: Vec<String>,
 }
 
+fn default_true() -> bool {
+    true
+}
+fn default_lr_table_bundle() -> String {
+    DEFAULT_LR_TABLE_BUNDLE.into()
+}
+fn default_lr_table_file() -> String {
+    DEFAULT_LR_TABLE_FILE.into()
+}
 fn default_ligand_column() -> String {
     "ligand".into()
 }
@@ -83,6 +104,7 @@ fn default_direction() -> LrDirection {
 pub struct LrCommunicationScoreNode {
     ports: NodePorts,
     spec: LrCommunicationScoreSpec,
+    fallback_lr_table_path: Option<String>,
 }
 
 fn node_error(message: impl Into<String>) -> DagError {
@@ -90,6 +112,18 @@ fn node_error(message: impl Into<String>) -> DagError {
         node_type: LR_COMMUNICATION_SCORE_KIND.into(),
         msg: message.into(),
     }
+}
+
+fn validate_bundle_relative_path(path: &str, field: &str) -> Result<(), String> {
+    if path.trim().is_empty()
+        || path.starts_with('/')
+        || path
+            .split('/')
+            .any(|component| component.is_empty() || matches!(component, "." | ".."))
+    {
+        return Err(format!("{field} must be a safe relative bundle path"));
+    }
+    Ok(())
 }
 
 fn column_index(
@@ -171,7 +205,49 @@ impl LrCommunicationScoreNode {
         Self {
             ports: port_layout(),
             spec,
+            fallback_lr_table_path: None,
         }
+    }
+
+    pub fn new_with_fallback(
+        spec: LrCommunicationScoreSpec,
+        fallback_lr_table_path: Option<String>,
+    ) -> Self {
+        Self {
+            ports: port_layout(),
+            spec,
+            fallback_lr_table_path,
+        }
+    }
+
+    async fn default_lr_batches(&self, ctx: &NodeCtx) -> Result<Vec<RecordBatch>, DagError> {
+        let path = self.fallback_lr_table_path.as_deref().ok_or_else(|| {
+            node_error(
+                "input port 0 is not wired and no default ligand-receptor table is configured",
+            )
+        })?;
+        let session = ctx.session();
+        session
+            .register_parquet(
+                "__lr_default",
+                path,
+                datafusion::prelude::ParquetReadOptions::default(),
+            )
+            .await
+            .map_err(|error| {
+                node_error(format!(
+                    "cannot register default LR table `{path}`: {error}"
+                ))
+            })?;
+        session
+            .table("__lr_default")
+            .await
+            .map_err(|error| {
+                node_error(format!("cannot resolve default LR table `{path}`: {error}"))
+            })?
+            .collect()
+            .await
+            .map_err(|error| node_error(format!("cannot read default LR table `{path}`: {error}")))
     }
 
     async fn read_lr_records(&self, batches: &[RecordBatch]) -> Result<Vec<LrRecord>, DagError> {
@@ -368,7 +444,7 @@ impl LrCommunicationScoreNode {
 
 fn port_layout() -> NodePorts {
     NodePorts::new()
-        .add_input_port_of_type_with_label(None, PortType::DataFrame, "lr_table")
+        .add_optional_input_port_of_type(PortType::DataFrame)
         .add_input_port_of_type_with_label(None, PortType::DataFrame, "cluster_mean_table")
         .add_output_port(None)
 }
@@ -397,13 +473,27 @@ impl DagNode for LrCommunicationScoreNode {
         inputs: &[NodeInput],
         _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
-        if inputs.len() != 2 || inputs.iter().any(|input| input.port > 1) {
+        if inputs.is_empty()
+            || inputs.iter().any(|input| input.port > 1)
+            || !inputs.iter().any(|input| input.port == 1)
+        {
             return Err(node_error(
-                "lr_communication_score requires inputs on ports 0 and 1 only",
+                "lr_communication_score requires cluster_mean_table on port 1 and accepts an optional lr_table on port 0",
             ));
         }
-        let lr_batches = inputs[0].dataframe()?.clone().collect().await?;
-        let mean_batches = inputs[1].dataframe()?.clone().collect().await?;
+        let lr_batches = if let Some(input) = inputs.iter().find(|input| input.port == 0) {
+            input.dataframe()?.clone().collect().await?
+        } else {
+            self.default_lr_batches(ctx).await?
+        };
+        let mean_batches = inputs
+            .iter()
+            .find(|input| input.port == 1)
+            .expect("validated port 1 input")
+            .dataframe()?
+            .clone()
+            .collect()
+            .await?;
         let lr_records = self.read_lr_records(&lr_batches).await?;
         let (clusters, means, fractions) = self.read_cluster_means(&mean_batches).await?;
         let mut records = self.build_records(&lr_records, &clusters, &means, &fractions)?;
@@ -550,8 +640,10 @@ impl NodeFactory for LrCommunicationScoreNodeFactory {
     }
 
     fn doc(&self) -> &'static str {
-        "Input 0 is a ligand-receptor table and input 1 is a long cluster mean \
-        table (`cluster`, `gene`, `mean_expression`, optionally `pct_expressed`). \
+        "Input 1 is a long cluster mean table (`cluster`, `gene`, `mean_expression`, \
+        optionally `pct_expressed`). Input 0 is an optional ligand-receptor table; \
+        when omitted it defaults to the published CellPhoneDB v5 `lr_pairs.parquet` \
+        catalog resource and can be overridden with `lr_table_path` or `lr_table_bundle`. \
         For every ordered pair of distinct clusters, score = ligand mean x receptor \
         mean. Permutations shuffle mean values across cluster labels within each \
         gene; p-values are exact one-sided add-one estimates and BH-adjusted."
@@ -565,10 +657,14 @@ impl NodeFactory for LrCommunicationScoreNodeFactory {
         port_layout()
     }
 
+    fn data_bundles(&self) -> Vec<DataBundleBinding> {
+        vec![DataBundleBinding::new("lr_table", DEFAULT_LR_TABLE_BUNDLE)]
+    }
+
     fn build(
         &self,
         spec: serde_json::Value,
-        _node_ctx: NodeCtx,
+        node_ctx: NodeCtx,
     ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let parsed: LrCommunicationScoreSpec = serde_json::from_value(spec)?;
         if parsed.n_permutations > 100_000 {
@@ -582,17 +678,98 @@ impl NodeFactory for LrCommunicationScoreNodeFactory {
         if parsed.pct_column.as_deref() == Some(parsed.mean_column.as_str()) {
             return Err("pct_column and mean_column must differ".into());
         }
-        Ok(Box::new(LrCommunicationScoreNode::new(parsed)))
+        if parsed.use_catalog_lr_table {
+            if parsed.lr_table_bundle.trim().is_empty() {
+                return Err("lr_table_bundle cannot be empty".into());
+            }
+            validate_bundle_relative_path(&parsed.lr_table_file, "lr_table_file")
+                .map_err(dag_core::registry::error::Error::Unknown)?;
+        }
+        if parsed
+            .lr_table_path
+            .as_deref()
+            .is_some_and(|path| path.trim().is_empty())
+        {
+            return Err("lr_table_path cannot be empty when provided".into());
+        }
+        let fallback = if let Some(path) = parsed.lr_table_path.clone() {
+            Some(path)
+        } else if parsed.use_catalog_lr_table {
+            let bundle = node_ctx.bound_data_bundle("lr_table")?;
+            Some(format!(
+                "vfs://{}/{}",
+                bundle.vpath.trim_end_matches('/'),
+                parsed.lr_table_file.trim_start_matches('/')
+            ))
+        } else {
+            None
+        };
+        Ok(Box::new(LrCommunicationScoreNode::new_with_fallback(
+            parsed, fallback,
+        )))
+    }
+
+    fn data_bundles_for_spec(
+        &self,
+        spec: serde_json::Value,
+    ) -> dag_core::registry::error::Result<Vec<DataBundleBinding>> {
+        let parsed: LrCommunicationScoreSpec = serde_json::from_value(spec)?;
+        if !parsed.use_catalog_lr_table || parsed.lr_table_path.is_some() {
+            return Ok(Vec::new());
+        }
+        Ok(vec![DataBundleBinding::new(
+            "lr_table",
+            parsed.lr_table_bundle,
+        )])
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dag_core::node::{DataBundle, DataBundleCatalog};
     use datafusion::prelude::SessionContext;
 
     fn frame(batch: RecordBatch) -> datafusion::prelude::DataFrame {
         SessionContext::new().read_batch(batch).unwrap()
+    }
+
+    #[test]
+    fn defaults_to_catalog_lr_table_and_optional_input() {
+        let factory = LrCommunicationScoreNodeFactory;
+        let bindings = factory
+            .data_bundles_for_spec(serde_json::json!({}))
+            .unwrap();
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].binding, "lr_table");
+        assert_eq!(bindings[0].bundle_id, DEFAULT_LR_TABLE_BUNDLE);
+        let ports = factory.ports();
+        assert!(!ports.input_port(0).unwrap().required);
+        assert!(ports.input_port(1).unwrap().required);
+
+        let catalog = Arc::new(
+            DataBundleCatalog::from_bundles([DataBundle::new(
+                DEFAULT_LR_TABLE_BUNDLE,
+                "test LR table",
+                "/bundles/lrdb.cellphonedb.v5",
+            )])
+            .unwrap(),
+        );
+        let ctx = NodeCtx::new(SessionContext::new().runtime_env(), None)
+            .with_data_bundle_catalog(catalog);
+        let mut registry = dag_core::registry::NodeRegistry::new(ctx);
+        registry.register(Box::new(factory));
+        let node = registry
+            .build_node(LR_COMMUNICATION_SCORE_KIND, serde_json::json!({}))
+            .unwrap();
+        let node = node
+            .as_any()
+            .downcast_ref::<LrCommunicationScoreNode>()
+            .unwrap();
+        assert_eq!(
+            node.fallback_lr_table_path.as_deref(),
+            Some("vfs:///bundles/lrdb.cellphonedb.v5/lr_pairs.parquet")
+        );
     }
 
     #[tokio::test]
@@ -628,6 +805,10 @@ mod tests {
             .unwrap(),
         );
         let spec = LrCommunicationScoreSpec {
+            use_catalog_lr_table: false,
+            lr_table_bundle: DEFAULT_LR_TABLE_BUNDLE.into(),
+            lr_table_file: DEFAULT_LR_TABLE_FILE.into(),
+            lr_table_path: None,
             ligand_column: "ligand".into(),
             receptor_column: "receptor".into(),
             cluster_column: "cluster".into(),
@@ -658,5 +839,89 @@ mod tests {
             outputs.dataframe(0).unwrap().clone().count().await.unwrap(),
             2
         );
+    }
+
+    #[tokio::test]
+    async fn reads_fallback_lr_table_when_port_zero_is_omitted() {
+        let lr = frame(
+            RecordBatch::try_new(
+                Arc::new(Schema::new(vec![
+                    Field::new("ligand", DataType::Utf8, false),
+                    Field::new("receptor", DataType::Utf8, false),
+                ])),
+                vec![
+                    Arc::new(StringArray::from(vec!["L"])),
+                    Arc::new(StringArray::from(vec!["R"])),
+                ],
+            )
+            .unwrap(),
+        );
+        let path = std::env::temp_dir().join(format!(
+            "lr-communication-default-{}-{}.parquet",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        lr.write_parquet(
+            path.to_string_lossy().as_ref(),
+            datafusion::dataframe::DataFrameWriteOptions::new().with_single_file_output(true),
+            None::<datafusion::config::TableParquetOptions>,
+        )
+        .await
+        .unwrap();
+
+        let mean = frame(
+            RecordBatch::try_new(
+                Arc::new(Schema::new(vec![
+                    Field::new("cluster", DataType::Utf8, false),
+                    Field::new("gene", DataType::Utf8, false),
+                    Field::new("mean_expression", DataType::Float64, false),
+                ])),
+                vec![
+                    Arc::new(StringArray::from(vec!["A", "A", "B", "B"])),
+                    Arc::new(StringArray::from(vec!["L", "R", "L", "R"])),
+                    Arc::new(Float64Array::from(vec![2.0, 3.0, 5.0, 7.0])),
+                ],
+            )
+            .unwrap(),
+        );
+        let spec = LrCommunicationScoreSpec {
+            use_catalog_lr_table: false,
+            lr_table_bundle: DEFAULT_LR_TABLE_BUNDLE.into(),
+            lr_table_file: DEFAULT_LR_TABLE_FILE.into(),
+            lr_table_path: Some(path.to_string_lossy().into_owned()),
+            ligand_column: "ligand".into(),
+            receptor_column: "receptor".into(),
+            cluster_column: "cluster".into(),
+            gene_column: "gene".into(),
+            mean_column: "mean_expression".into(),
+            pct_column: None,
+            n_permutations: 0,
+            random_state: 1,
+            direction: LrDirection::All,
+            source_clusters: Vec::new(),
+            target_clusters: Vec::new(),
+            min_score: None,
+            extra_columns: Vec::new(),
+        };
+        let mut node = LrCommunicationScoreNode::new_with_fallback(
+            spec,
+            Some(path.to_string_lossy().into_owned()),
+        );
+        let outputs = node
+            .execute(
+                &NodeCtx::new(SessionContext::new().runtime_env(), None),
+                &[NodeInput::new_dataframe(1, mean)],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            outputs.dataframe(0).unwrap().clone().count().await.unwrap(),
+            2
+        );
+        let _ = tokio::fs::remove_file(path).await;
     }
 }

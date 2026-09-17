@@ -41,7 +41,7 @@ sc_dense_ingest(path=dense counts)
 file_reference(h5ad)
   -> h5ad_qc_filter
   -> h5ad_pca_neighbors_umap_leiden
-  -> h5ad_celltypist_annotate(model=file_reference)
+  -> h5ad_celltypist_annotate
 
 h5ad_qc_filter
   -> h5ad_obs_to_parquet
@@ -50,11 +50,10 @@ h5ad_qc_filter
 
 h5ad_pca_neighbors_umap_leiden
   -> h5ad_cluster_mean_expression
-  -> file_to_dataframe
-  -> lr_communication_score(lr_table=port_0, cluster_mean_table=port_1)
+  -> lr_communication_score(cluster_mean_table=port_1; lr_table defaults to CellPhoneDB v5)
 ```
 
-Use `file_reference` with format `h5ad` for an existing VFS or local input. Container network access is disabled; CellTypist models are explicit File inputs. A model must match the input feature space expected by its trained model, and expression should follow that model's preprocessing contract.
+Use `file_reference` with format `h5ad` for an existing VFS or local input. Container network access is disabled. `h5ad_celltypist_annotate` defaults to `celltypist.models.pan_immune/Immune_All_Low.pkl`; an explicit model File input still takes precedence. Set `model_path`, `model_bundle`, `model_file`, or `use_catalog_model=false` to override the default. A model must match the input feature space expected by its trained model, and expression should follow that model's preprocessing contract.
 
 ## Reference data packages
 
@@ -68,5 +67,10 @@ Current catalog IDs are:
 | `genecards.hgnc_symbols` | `/bundles/genecards.hgnc_symbols` | HGNC complete set and exploded alias dictionary |
 | `celltypist.models.pan_immune` | `/bundles/celltypist.models.pan_immune` | `Immune_All_Low.pkl` and `Immune_All_High.pkl` |
 
-For `lr_communication_score`, read `<stable path>/lr_pairs.parquet` with `file_to_dataframe`.
-For CellTypist, connect `<stable path>/Immune_All_Low.pkl` to the model input.
+`lr_communication_score` defaults its optional LR-table input to
+`lrdb.cellphonedb.v5/lr_pairs.parquet`. A wired input port 0 takes precedence;
+`lr_table_path`, `lr_table_bundle`, `lr_table_file`, or
+`use_catalog_lr_table=false` provide explicit overrides.
+
+The catalog paths remain available for DAGs that need to pin or inspect the
+raw resource directly.

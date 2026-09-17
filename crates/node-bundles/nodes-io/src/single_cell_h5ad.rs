@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use dag_core::node::DagNode;
+use dag_core::node::{DagNode, DataBundleBinding};
 use dag_core::registry::{NodeCtx, NodeFactory};
 use dag_core::{NodeInput, NodePorts, dag::DagError, dag::graph::PortOutputs, value::PortType};
 use schemars::{JsonSchema, schema_for};
@@ -29,6 +29,8 @@ pub const SC_DENSE_INGEST_KIND: &str = "sc_dense_ingest";
 pub const H5AD_RANK_GENES_GROUPS_KIND: &str = "h5ad_rank_genes_groups";
 pub const H5AD_CLUSTER_MEAN_EXPRESSION_KIND: &str = "h5ad_cluster_mean_expression";
 pub const H5AD_GENE_SET_SCORE_KIND: &str = "gene_set_score";
+pub const CELLTYPIST_MODEL_BUNDLE: &str = "celltypist.models.pan_immune";
+pub const DEFAULT_CELLTYPIST_MODEL_FILE: &str = "Immune_All_Low.pkl";
 pub const SINGLE_CELL_WORKFLOW_IMAGE_REPOSITORY: &str = "single-cell-preprocessor";
 pub const SINGLE_CELL_WORKFLOW_IMAGE_DIGEST: &str =
     "sha256:7a7397f45775a4c4b6c4c220711db2b95dd37fdc40b7b7f06d181a220903e467";
@@ -96,13 +98,11 @@ impl Workflow {
         } else {
             NodePorts::new().add_input_port_of_type_with_label(None, PortType::File, input_label)
         };
-        if matches!(self, Self::Celltypist | Self::Subset) {
-            let label = if self == Self::Celltypist {
-                "model"
-            } else {
-                "selection_parquet"
-            };
-            ports = ports.add_input_port_of_type_with_label(None, PortType::File, label);
+        if self == Self::Celltypist {
+            ports = ports.add_optional_input_port_of_type(PortType::File);
+        } else if self == Self::Subset {
+            ports =
+                ports.add_input_port_of_type_with_label(None, PortType::File, "selection_parquet");
         }
         ports = ports.add_output_port_of_type(None, PortType::File);
         if !matches!(self, Self::ObsProjection | Self::ClusterMeanExpression) {
@@ -230,6 +230,16 @@ pub struct H5adEmbedClusterSpec {
 pub struct H5adCelltypistSpec {
     #[serde(default)]
     pub majority_voting: bool,
+    /// Use the published CellTypist catalog bundle unless `model_path` is set.
+    #[serde(default = "default_true")]
+    pub use_catalog_model: bool,
+    #[serde(default = "default_celltypist_model_bundle")]
+    pub model_bundle: String,
+    #[serde(default = "default_celltypist_model_file")]
+    pub model_file: String,
+    /// Explicit model path override. Takes precedence over the catalog bundle.
+    #[serde(default)]
+    pub model_path: Option<String>,
     #[serde(default = "default_artifact_prefix_celltypist")]
     pub artifact_prefix: String,
     #[serde(default = "default_timeout")]
@@ -410,6 +420,12 @@ fn default_artifact_prefix_embed() -> String {
 fn default_artifact_prefix_celltypist() -> String {
     format!("/artifacts/{H5AD_CELLTYPIST_ANNOTATE_KIND}")
 }
+fn default_celltypist_model_bundle() -> String {
+    CELLTYPIST_MODEL_BUNDLE.into()
+}
+fn default_celltypist_model_file() -> String {
+    DEFAULT_CELLTYPIST_MODEL_FILE.into()
+}
 fn default_artifact_prefix_obs() -> String {
     format!("/artifacts/{H5AD_OBS_TO_PARQUET_KIND}")
 }
@@ -458,6 +474,7 @@ pub struct SingleCellH5adContainerNode {
     workflow: Workflow,
     ports: NodePorts,
     fallback_input: Option<String>,
+    fallback_model: Option<String>,
     inner: Box<dyn DagNode>,
 }
 
@@ -468,6 +485,7 @@ impl Clone for SingleCellH5adContainerNode {
             workflow: self.workflow,
             ports: self.ports.clone(),
             fallback_input: self.fallback_input.clone(),
+            fallback_model: self.fallback_model.clone(),
             inner: self.inner.clone_box(),
         }
     }
@@ -508,6 +526,19 @@ impl DagNode for SingleCellH5adContainerNode {
                 DagError::Schedule("sc_dense_ingest path resolution produced no File".into())
             })?;
             fallback_inputs = vec![NodeInput::file(0, file.as_file()?.clone())];
+            &fallback_inputs
+        } else if self.workflow == Workflow::Celltypist
+            && !inputs.iter().any(|input| input.port == 1)
+            && let Some(path) = self.fallback_model.clone()
+        {
+            let mut source = FileReferenceNode::new(path, Some("pkl".into()));
+            let outputs = source.execute(ctx, &[], reporter).await?;
+            let file = outputs.get(&0).ok_or_else(|| {
+                DagError::Schedule("CellTypist model resolution produced no File".into())
+            })?;
+            let mut resolved = inputs.to_vec();
+            resolved.push(NodeInput::file(1, file.as_file()?.clone()));
+            fallback_inputs = resolved;
             &fallback_inputs
         } else {
             inputs
@@ -615,6 +646,26 @@ fn validate_resource(
     Ok(())
 }
 
+fn validate_bundle_relative_path(path: &str, field: &str) -> Result<(), String> {
+    if path.trim().is_empty()
+        || path.starts_with('/')
+        || path
+            .split('/')
+            .any(|component| component.is_empty() || matches!(component, "." | ".."))
+    {
+        return Err(format!("{field} must be a safe relative bundle path"));
+    }
+    Ok(())
+}
+
+fn celltypist_model_binding(spec: &H5adCelltypistSpec) -> Option<DataBundleBinding> {
+    if !spec.use_catalog_model || spec.model_path.is_some() {
+        None
+    } else {
+        Some(DataBundleBinding::new("model", spec.model_bundle.clone()))
+    }
+}
+
 pub fn validate(workflow: Workflow, spec: &serde_json::Value) -> Result<(), String> {
     match workflow {
         Workflow::QcFilter => {
@@ -675,6 +726,19 @@ pub fn validate(workflow: Workflow, spec: &serde_json::Value) -> Result<(), Stri
                 spec.memory.as_deref(),
                 spec.pids_limit,
             )?;
+            if spec.use_catalog_model {
+                if spec.model_bundle.trim().is_empty() {
+                    return Err("model_bundle cannot be empty".into());
+                }
+                validate_bundle_relative_path(&spec.model_file, "model_file")?;
+            }
+            if spec
+                .model_path
+                .as_deref()
+                .is_some_and(|path| path.trim().is_empty())
+            {
+                return Err("model_path cannot be empty when provided".into());
+            }
         }
         Workflow::ObsProjection => {
             let spec: H5adObsProjectionSpec =
@@ -907,7 +971,9 @@ impl NodeFactory for SingleCellH5adContainerNodeFactory {
             Workflow::EmbedCluster => {
                 "Runs normalization/HVG/PCA plus neighbors, UMAP, and Leiden on an H5AD."
             }
-            Workflow::Celltypist => "Annotates an H5AD with a local CellTypist model file.",
+            Workflow::Celltypist => {
+                "Annotates an H5AD with the catalog-backed or an explicit CellTypist model."
+            }
             Workflow::ObsProjection => "Projects H5AD obs and selected obsm keys to Parquet.",
             Workflow::Subset => "Subsets an H5AD by cell IDs read from a Parquet sidecar.",
             Workflow::DenseIngest => {
@@ -934,8 +1000,9 @@ impl NodeFactory for SingleCellH5adContainerNodeFactory {
                 If X_pca is absent, normalization, HVG selection, and PCA run before neighbors, UMAP, and Leiden."
             }
             Workflow::Celltypist => {
-                "Input ports are H5AD then a local CellTypist model File. Output ports \
-                are output.h5ad then report.json. Network access is disabled."
+                "Input port 0 is H5AD. Input port 1 is an optional CellTypist model File; \
+                when omitted, the published `celltypist.models.pan_immune` bundle is used. \
+                Output ports are output.h5ad then report.json. Network access is disabled."
             }
             Workflow::ObsProjection => {
                 "Input port 0 is H5AD and the single output is cells.parquet. The first \
@@ -983,15 +1050,40 @@ impl NodeFactory for SingleCellH5adContainerNodeFactory {
         self.workflow.ports()
     }
 
+    fn data_bundles(&self) -> Vec<DataBundleBinding> {
+        if self.workflow == Workflow::Celltypist {
+            vec![DataBundleBinding::new("model", CELLTYPIST_MODEL_BUNDLE)]
+        } else {
+            Vec::new()
+        }
+    }
+
     fn build(
         &self,
         spec: serde_json::Value,
-        _node_ctx: NodeCtx,
+        node_ctx: NodeCtx,
     ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let fallback_input = spec
             .get("path")
             .and_then(serde_json::Value::as_str)
             .map(str::to_string);
+        let fallback_model = if self.workflow == Workflow::Celltypist {
+            let parsed: H5adCelltypistSpec = serde_json::from_value(spec.clone())?;
+            if let Some(path) = parsed.model_path {
+                Some(path)
+            } else if celltypist_model_binding(&parsed).is_some() {
+                let bundle = node_ctx.bound_data_bundle("model")?;
+                Some(format!(
+                    "{}/{}",
+                    bundle.vpath.trim_end_matches('/'),
+                    parsed.model_file.trim_start_matches('/')
+                ))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         let spec = container_spec(self.workflow, &spec)
             .map_err(dag_core::registry::error::Error::Unknown)?;
         let node = ContainerCommandNode::new(
@@ -1005,8 +1097,20 @@ impl NodeFactory for SingleCellH5adContainerNodeFactory {
             workflow: self.workflow,
             ports: self.workflow.ports(),
             fallback_input,
+            fallback_model,
             inner: Box::new(node),
         }))
+    }
+
+    fn data_bundles_for_spec(
+        &self,
+        spec: serde_json::Value,
+    ) -> dag_core::registry::error::Result<Vec<DataBundleBinding>> {
+        if self.workflow != Workflow::Celltypist {
+            return Ok(Vec::new());
+        }
+        let spec: H5adCelltypistSpec = serde_json::from_value(spec)?;
+        Ok(celltypist_model_binding(&spec).into_iter().collect())
     }
 
     fn ports_for_spec(
@@ -1021,6 +1125,9 @@ impl NodeFactory for SingleCellH5adContainerNodeFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use container_runtime::{PanelCache, PodmanRuntime};
+    use dag_core::node::{DataBundle, DataBundleCatalog};
+    use dag_core::registry::NodeRegistry;
 
     fn resource_json() -> serde_json::Value {
         serde_json::json!({
@@ -1061,6 +1168,56 @@ mod tests {
     fn omitted_artifact_prefix_stays_node_specific() {
         let container = container_spec(Workflow::Subset, &serde_json::json!({})).unwrap();
         assert_eq!(container.artifact_prefix, "/artifacts/h5ad_subset_by_obs");
+    }
+
+    #[test]
+    fn celltypist_defaults_to_published_model_bundle() {
+        let spec: H5adCelltypistSpec = serde_json::from_value(serde_json::json!({})).unwrap();
+        let binding = celltypist_model_binding(&spec).unwrap();
+        assert_eq!(binding.binding, "model");
+        assert_eq!(binding.bundle_id, CELLTYPIST_MODEL_BUNDLE);
+        assert_eq!(spec.model_file, DEFAULT_CELLTYPIST_MODEL_FILE);
+        assert!(!Workflow::Celltypist.ports().input_port(1).unwrap().required);
+
+        let explicit: H5adCelltypistSpec = serde_json::from_value(serde_json::json!({
+            "model_path": "/bundles/custom/model.pkl"
+        }))
+        .unwrap();
+        assert!(celltypist_model_binding(&explicit).is_none());
+    }
+
+    #[test]
+    fn celltypist_registry_resolves_default_model_path() {
+        let catalog = Arc::new(
+            DataBundleCatalog::from_bundles([DataBundle::new(
+                CELLTYPIST_MODEL_BUNDLE,
+                "test CellTypist models",
+                "/bundles/celltypist.models.pan_immune",
+            )])
+            .unwrap(),
+        );
+        let ctx = NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        )
+        .with_data_bundle_catalog(catalog);
+        let mut registry = NodeRegistry::new(ctx);
+        let cache = Arc::new(PanelCache::new(tempfile::tempdir().unwrap().path()));
+        registry.register(Box::new(SingleCellH5adContainerNodeFactory::celltypist(
+            Arc::new(PodmanRuntime::default()),
+            cache,
+        )));
+        let node = registry
+            .build_node(H5AD_CELLTYPIST_ANNOTATE_KIND, serde_json::json!({}))
+            .unwrap();
+        let node = node
+            .as_any()
+            .downcast_ref::<SingleCellH5adContainerNode>()
+            .unwrap();
+        assert_eq!(
+            node.fallback_model.as_deref(),
+            Some("/bundles/celltypist.models.pan_immune/Immune_All_Low.pkl")
+        );
     }
 
     #[test]
