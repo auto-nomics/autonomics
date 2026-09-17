@@ -156,6 +156,17 @@ impl DagNode for SqlNode {
         // Build a fresh, isolated context per execution — no shared CatalogList,
         // so concurrent SqlNodes never collide on `port_N` registrations.
         let ctx = node_ctx.session();
+        if let Some(array_element) = datafusion::functions_nested::all_default_nested_functions()
+            .into_iter()
+            .find(|function| function.name() == "array_element")
+        {
+            ctx.register_udf(
+                array_element
+                    .as_ref()
+                    .clone()
+                    .with_aliases(vec!["element_at"]),
+            );
+        }
 
         for inp in inputs {
             // Register each upstream DataFrame under `port_{port}`.
@@ -230,6 +241,54 @@ mod tests {
             .await
             .unwrap();
         dbg!(output);
+    }
+
+    #[tokio::test]
+    async fn test_information_schema_and_show_columns() {
+        let (_ctx, mut node, df) = setup_test_node("SELECT 1");
+        node.set_sql_query(
+            "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'port_0'",
+        );
+        let output = node
+            .execute(
+                &node_ctx(),
+                &[NodeInput::new_dataframe(0, df.clone())],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            output.dataframe(0).unwrap().clone().count().await.unwrap(),
+            1
+        );
+
+        node.set_sql_query("SHOW COLUMNS FROM port_0");
+        let output = node
+            .execute(
+                &node_ctx(),
+                &[NodeInput::new_dataframe(0, df.clone())],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            output.dataframe(0).unwrap().clone().count().await.unwrap(),
+            1
+        );
+
+        node.set_sql_query("SELECT element_at(make_array(10, 20), 1) AS value");
+        let output = node
+            .execute(
+                &node_ctx(),
+                &[NodeInput::new_dataframe(0, df)],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            output.dataframe(0).unwrap().clone().count().await.unwrap(),
+            1
+        );
     }
 
     /// Build a RecordBatch carrying a nested `Struct` column

@@ -72,6 +72,32 @@ def opt_bool(params: dict[str, Any], name: str, default: bool) -> bool:
     return value
 
 
+def opt_int(params: dict[str, Any], name: str, default: int) -> int:
+    value = params.get(name, default)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ContractError(f"parameter `{name}` must be an integer")
+    return value
+
+
+def delimiter_spec(value: Any) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        raise ContractError("parameter `delimiter` must be a nonempty string")
+    normalized = value.lower()
+    if normalized in {"auto", ""}:
+        return None
+    if normalized in {"tab", "\\t", "\t"}:
+        return "\t"
+    if normalized in {"comma", ","}:
+        return ","
+    if normalized in {"semicolon", ";"}:
+        return ";"
+    if normalized in {"pipe", "|"}:
+        return "|"
+    if len(value) == 1:
+        return value
+    raise ContractError(f"unsupported delimiter `{value}`")
+
+
 def ensure_h5ad_signature(path: Path) -> None:
     signature = b"\x89HDF\r\n\x1a\n"
     try:
@@ -446,6 +472,266 @@ def subset_by_obs(params: dict[str, Any]) -> tuple[ad.AnnData, Path, Path]:
     return adata, output_path, report_path
 
 
+def dense_ingest(params: dict[str, Any]) -> tuple[ad.AnnData, Path, Path]:
+    import scanpy as sc
+
+    matrix_path = required_path(H5AD_INPUT)
+    output_path = required_output(H5AD_OUTPUT)
+    report_path = required_output(REPORT_OUTPUT)
+    orientation = require_str(params, "orientation").lower()
+    if orientation not in {"genes_by_cells", "cells_by_genes"}:
+        raise ContractError("orientation must be `genes_by_cells` or `cells_by_genes`")
+    has_header = opt_bool(params, "has_header", True)
+    delimiter = delimiter_spec(params.get("delimiter", "auto"))
+    try:
+        frame = pd.read_csv(
+            matrix_path,
+            index_col=0,
+            header=0 if has_header else None,
+            sep=delimiter,
+            engine="python" if delimiter is None else "c",
+        )
+    except Exception as error:
+        raise ContractError(f"cannot read dense matrix `{matrix_path}`: {error}") from error
+    frame.index = frame.index.astype(str)
+    frame.columns = frame.columns.astype(str)
+    if frame.index.has_duplicates:
+        raise ContractError("dense matrix contains duplicate row identifiers")
+    if frame.columns.has_duplicates:
+        raise ContractError("dense matrix contains duplicate column identifiers")
+
+    if orientation == "cells_by_genes":
+        frame = frame.T
+    try:
+        values = frame.apply(pd.to_numeric, errors="raise").to_numpy(dtype=np.float64)
+    except Exception as error:
+        raise ContractError(f"dense matrix contains non-numeric expression values: {error}") from error
+    if not np.isfinite(values).all():
+        raise ContractError("dense matrix contains missing or non-finite expression values")
+
+    obs = pd.DataFrame(index=pd.Index(frame.index, name="cell_id"))
+    var = pd.DataFrame(index=pd.Index(frame.columns, name="gene_symbol"))
+    adata = ad.AnnData(X=values, obs=obs, var=var)
+    sample_label = params.get("sample_label")
+    condition_label = params.get("condition_label")
+    if sample_label is not None:
+        if not isinstance(sample_label, str) or not sample_label:
+            raise ContractError("sample_label must be a nonempty string when provided")
+        adata.obs["sample"] = sample_label
+    if condition_label is not None:
+        if not isinstance(condition_label, str) or not condition_label:
+            raise ContractError("condition_label must be a nonempty string when provided")
+        adata.obs["condition"] = condition_label
+    adata.layers["counts"] = adata.X.copy()
+
+    input_cells, input_genes = adata.n_obs, adata.n_vars
+    min_genes = opt_int(params, "min_genes", 0)
+    min_cells = opt_int(params, "min_cells", 0)
+    if min(min_genes, min_cells) < 0:
+        raise ContractError("min_genes and min_cells cannot be negative")
+    if min_genes > 0:
+        sc.pp.filter_cells(adata, min_genes=min_genes)
+    if min_cells > 0:
+        sc.pp.filter_genes(adata, min_cells=min_cells)
+    if adata.n_obs == 0 or adata.n_vars == 0:
+        raise ContractError("dense ingest filters removed every cell or gene")
+
+    report = {
+        "schema_version": "1.0",
+        "operation": "dense_ingest",
+        "input_cells": int(input_cells),
+        "input_genes": int(input_genes),
+        "output_cells": int(adata.n_obs),
+        "output_genes": int(adata.n_vars),
+        "orientation": orientation,
+        "delimiter": params.get("delimiter", "auto"),
+        "has_header": has_header,
+        "min_genes": min_genes,
+        "min_cells": min_cells,
+        "sample_label": sample_label,
+        "condition_label": condition_label,
+    }
+    write_json(report, report_path)
+    return adata, output_path, report_path
+
+
+def rank_genes_groups(params: dict[str, Any]) -> tuple[Path, Path, ad.AnnData]:
+    import scanpy as sc
+
+    input_path = required_path(H5AD_INPUT)
+    parquet_path = required_output(H5AD_OUTPUT)
+    report_path = required_output(REPORT_OUTPUT)
+    output_path = required_output("AUTONOMICS_OUTPUT2")
+    groupby = require_str(params, "groupby")
+    method = require_str(params, "method", "wilcoxon")
+    reference = require_str(params, "reference", "rest")
+    n_genes = opt_int(params, "n_genes", 100)
+    if method not in {"wilcoxon", "t-test", "t-test_overestim_var", "logreg"}:
+        raise ContractError(f"unsupported rank_genes_groups method `{method}`")
+    if n_genes <= 0:
+        raise ContractError("n_genes must be positive")
+
+    adata = read_h5ad(input_path)
+    if groupby not in adata.obs:
+        raise ContractError(f"H5AD obs has no `{groupby}` column")
+    if adata.obs[groupby].isna().any():
+        raise ContractError(f"H5AD obs column `{groupby}` contains missing cluster labels")
+    groups = adata.obs[groupby].drop_duplicates()
+    if reference != "rest" and reference not in set(groups.astype(str)):
+        raise ContractError(f"reference cluster `{reference}` is not present in `{groupby}`")
+    sc.tl.rank_genes_groups(
+        adata,
+        groupby=groupby,
+        method=method,
+        reference=reference,
+        n_genes=n_genes,
+        key_added="rank_genes_groups",
+        use_raw=False,
+    )
+    result = adata.uns["rank_genes_groups"]
+    names = result["names"]
+    result_groups = list(names.dtype.names or [])
+    records: list[dict[str, Any]] = []
+    for rank in range(int(len(names))):
+        for group in result_groups:
+            record = {"group": str(group), "gene": str(names[rank][group]), "rank": rank + 1}
+            for output_name, result_name in (
+                ("score", "scores"),
+                ("pvalue", "pvals"),
+                ("pvalue_adj", "pvals_adj"),
+            ):
+                if result_name in result:
+                    value = result[result_name][rank][group]
+                    record[output_name] = None if pd.isna(value) else float(value)
+            records.append(record)
+    marker_table = pd.DataFrame.from_records(records)
+    write_parquet(marker_table, parquet_path)
+    report = {
+        "schema_version": "1.0",
+        "operation": "rank_genes_groups",
+        "cells": int(adata.n_obs),
+        "groupby": groupby,
+        "method": method,
+        "reference": reference,
+        "n_genes": n_genes,
+        "groups": result_groups,
+        "marker_rows": int(len(marker_table)),
+    }
+    write_json(report, report_path)
+    return parquet_path, report_path, adata
+
+
+def cluster_mean_expression(params: dict[str, Any]) -> Path:
+    input_path = required_path(H5AD_INPUT)
+    output_path = required_output(PARQUET_OUTPUT)
+    groupby = require_str(params, "groupby")
+    normalize = require_str(params, "normalize", "cp10k").lower()
+    include_percent = opt_bool(params, "include_percent_expressed", True)
+    if normalize not in {"cp10k", "none"}:
+        raise ContractError("normalize must be `cp10k` or `none`")
+    adata = read_h5ad(input_path, backed="r")
+    if groupby not in adata.obs:
+        raise ContractError(f"H5AD obs has no `{groupby}` column")
+    gene_names = [str(value) for value in adata.var_names]
+    requested = params.get("genes", [])
+    if not isinstance(requested, list) or any(not isinstance(gene, str) or not gene for gene in requested):
+        raise ContractError("genes must be an array of nonempty strings")
+    selected = requested or gene_names
+    if len(set(selected)) != len(selected):
+        raise ContractError("requested genes must be unique")
+    missing = sorted(set(selected) - set(gene_names))
+    if missing:
+        raise ContractError(f"requested genes are absent from H5AD: {', '.join(missing)}")
+    positions = [gene_names.index(gene) for gene in selected]
+
+    subset = adata[:, positions].to_memory()
+    use_counts = normalize == "cp10k" and "counts" in adata.layers
+    matrix = subset.layers["counts"] if use_counts else subset.X
+    if normalize == "cp10k":
+        total_source = adata.layers["counts"] if use_counts else adata.X
+        totals = sparse_or_dense_axis_sum(total_source, axis=1)
+        if np.any(totals <= 0):
+            raise ContractError("cp10k normalization requires positive cell totals")
+        if sp.issparse(matrix):
+            matrix = matrix.tocsr().astype(np.float64)
+            scaling = np.reciprocal(totals) * 1e4
+            matrix = sp.diags(scaling) @ matrix
+        else:
+            matrix = np.asarray(matrix, dtype=np.float64) * (1e4 / totals)[:, None]
+
+    groups = adata.obs[groupby].astype(str)
+    records: list[dict[str, Any]] = []
+    for group in sorted(groups.unique()):
+        mask = (groups == group).to_numpy()
+        selected_matrix = matrix[mask]
+        means = sparse_or_dense_axis_sum(selected_matrix, axis=0) / int(mask.sum())
+        fractions = column_counts(selected_matrix) / int(mask.sum())
+        for index, gene in enumerate(selected):
+            record = {
+                "cluster": group,
+                "gene": gene,
+                "mean_expression": float(means[index]),
+            }
+            if include_percent:
+                record["pct_expressed"] = float(fractions[index] * 100)
+            records.append(record)
+    write_parquet(pd.DataFrame.from_records(records), output_path)
+    return output_path
+
+
+def gene_set_score(params: dict[str, Any]) -> tuple[ad.AnnData, Path, Path]:
+    import scanpy as sc
+
+    input_path = required_path(H5AD_INPUT)
+    output_path = required_output(H5AD_OUTPUT)
+    report_path = required_output(REPORT_OUTPUT)
+    gene_sets = params.get("gene_sets")
+    if not isinstance(gene_sets, dict) or not gene_sets:
+        raise ContractError("gene_sets must be a nonempty object")
+    ctrl_size = opt_int(params, "ctrl_size", 50)
+    random_state = opt_int(params, "random_state", 0)
+    if ctrl_size <= 0:
+        raise ContractError("ctrl_size must be positive")
+    adata = read_h5ad(input_path)
+    known = set(str(value) for value in adata.var_names)
+    summaries: dict[str, dict[str, Any]] = {}
+    for name, genes in gene_sets.items():
+        if not isinstance(name, str) or not name or name in adata.obs:
+            raise ContractError(f"gene set name `{name}` is empty or already present in obs")
+        if not isinstance(genes, list) or any(not isinstance(gene, str) or not gene for gene in genes):
+            raise ContractError(f"gene set `{name}` must be an array of nonempty strings")
+        present = [gene for gene in genes if gene in known]
+        missing = sorted(set(genes) - known)
+        if len(present) < 2:
+            raise ContractError(f"gene set `{name}` has fewer than two genes present")
+        effective_ctrl_size = max(1, min(ctrl_size, adata.n_vars - 1))
+        sc.score_genes(
+            adata,
+            gene_list=present,
+            score_name=name,
+            ctrl_size=effective_ctrl_size,
+            random_state=random_state,
+        )
+        score = adata.obs[name].to_numpy(dtype=float)
+        summaries[name] = {
+            "genes_requested": int(len(genes)),
+            "genes_present": int(len(present)),
+            "missing_genes": missing,
+            "mean": float(np.mean(score)),
+            **percentile_summary(score),
+        }
+    report = {
+        "schema_version": "1.0",
+        "operation": "gene_set_score",
+        "cells": int(adata.n_obs),
+        "ctrl_size": ctrl_size,
+        "random_state": random_state,
+        "gene_sets": summaries,
+    }
+    write_json(report, report_path)
+    return adata, output_path, report_path
+
+
 def run() -> None:
     workflow = os.environ.get(WORKFLOW_ENV, "").lower()
     params = load_params()
@@ -464,6 +750,21 @@ def run() -> None:
             raise ContractError("obs projection did not produce Parquet output")
     elif workflow == "subset_by_obs":
         adata, h5ad_path, report_path = subset_by_obs(params)
+        write_h5ad(adata, h5ad_path)
+    elif workflow == "dense_ingest":
+        adata, h5ad_path, report_path = dense_ingest(params)
+        write_h5ad(adata, h5ad_path)
+    elif workflow == "rank_genes_groups":
+        parquet_path, _report_path, adata = rank_genes_groups(params)
+        if not parquet_path.is_file():
+            raise ContractError("rank_genes_groups did not produce Parquet output")
+        write_h5ad(adata, required_output("AUTONOMICS_OUTPUT2"))
+    elif workflow == "cluster_mean_expression":
+        parquet_path = cluster_mean_expression(params)
+        if not parquet_path.is_file():
+            raise ContractError("cluster_mean_expression did not produce Parquet output")
+    elif workflow == "gene_set_score":
+        adata, h5ad_path, report_path = gene_set_score(params)
         write_h5ad(adata, h5ad_path)
     else:
         raise ContractError(f"unsupported single-cell workflow `{workflow}`")

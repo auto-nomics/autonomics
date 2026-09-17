@@ -5,6 +5,7 @@ use crate::dag::graph::PortOutputs;
 use crate::dag::node_event::NodeEvent;
 use crate::dag::runtime::RuntimeStatus;
 use crate::dag::{DagTuiSnapshot, RunReport};
+use crate::data_engine::ClearDagOutcome;
 use crate::error::Result as EngineResult;
 
 /// Envelope that routes a [`DataEngineCmd`] to a session's actor.
@@ -89,7 +90,7 @@ pub enum DataEngineCmd {
         reply: oneshot::Sender<EngineResult<DagTuiSnapshot>>,
     },
     ClearDag {
-        reply: oneshot::Sender<EngineResult<()>>,
+        reply: oneshot::Sender<EngineResult<ClearDagOutcome>>,
     },
     /// Clear the in-memory DAG and switch to a new history ref.
     NewDagRef {

@@ -21,7 +21,7 @@ use std::collections::HashMap as BoundDataBundles;
 pub fn new_isolated_ctx(runtime_env: Arc<RuntimeEnv>) -> SessionContext {
     let state = SessionStateBuilder::new()
         .with_default_features()
-        .with_config(SessionConfig::new())
+        .with_config(SessionConfig::new().with_information_schema(true))
         .with_runtime_env(runtime_env)
         .build();
     SessionContext::new_with_state(state)

@@ -245,7 +245,8 @@ impl SessionServer {
                     .engine
                     .try_lock()
                     .expect("uncontended: running flag is false");
-                let _ = reply.send(engine.clear_dag().map(|_| ()));
+                let result = engine.clear_dag().await;
+                let _ = reply.send(result);
             }
 
             // ── Read-only engine inspection ──────────────────────────────
@@ -800,7 +801,7 @@ impl DataEngineClient {
         .await
     }
 
-    pub async fn clear_dag(&self) -> Result<()> {
+    pub async fn clear_dag(&self) -> Result<crate::data_engine::ClearDagOutcome> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         self.request(DataEngineCmd::ClearDag { reply: reply_tx }, reply_rx)
             .await

@@ -153,19 +153,14 @@ impl FileFormat {
 ///
 /// `Gzip` also covers blocked gzip (`bgz`) because both use the gzip container
 /// format.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum FileCompression {
+    #[default]
     Auto,
     None,
     Gzip,
     Zstd,
-}
-
-impl Default for FileCompression {
-    fn default() -> Self {
-        Self::Auto
-    }
 }
 
 /// User-controlled options for tabular CSV/TSV inputs.

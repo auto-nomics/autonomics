@@ -7,6 +7,7 @@ pub mod dataframe_to_file;
 pub mod deseq2_container;
 pub mod file_reference;
 pub mod file_to_dataframe;
+pub mod file_transform;
 pub mod gcta_container;
 pub mod gmt_import;
 pub mod hdl_l_container;
@@ -29,6 +30,7 @@ pub mod pathway_gsea_container;
 pub mod plink2_clump_container;
 pub mod radiomics;
 pub mod radiomics_container;
+pub mod script_nodes;
 pub mod single_cell_container;
 pub mod single_cell_h5ad;
 pub mod smr_heidi_container;
@@ -90,6 +92,15 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(bundle_source::BundleSourceNodeFactory {}));
         registry.register(Box::new(file_reference::FileReferenceNodeFactory {}));
         registry.register(Box::new(file_to_dataframe::FileToDataFrameNodeFactory {}));
+        registry.register(Box::new(file_transform::FileTransformNodeFactory {}));
+        registry.register(Box::new(script_nodes::ScriptNodeFactory::python(
+            Arc::clone(&self.container_execution.runtime),
+            Arc::clone(&self.container_execution.panel_cache),
+        )));
+        registry.register(Box::new(script_nodes::ScriptNodeFactory::r(
+            Arc::clone(&self.container_execution.runtime),
+            Arc::clone(&self.container_execution.panel_cache),
+        )));
         registry.register(Box::new(gmt_import::GmtImportNodeFactory {}));
         registry.register(Box::new(dataframe_to_file::DataFrameToFileNodeFactory {}));
         registry.register(Box::new(parquet_sql::DataFusionSqlNodeFactory {}));
@@ -366,6 +377,22 @@ impl NodePlugin for Plugin {
                 Arc::clone(&self.container_execution.panel_cache),
             ),
             single_cell_h5ad::SingleCellH5adContainerNodeFactory::subset(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+            single_cell_h5ad::SingleCellH5adContainerNodeFactory::dense_ingest(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+            single_cell_h5ad::SingleCellH5adContainerNodeFactory::rank_genes_groups(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+            single_cell_h5ad::SingleCellH5adContainerNodeFactory::cluster_mean_expression(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+            single_cell_h5ad::SingleCellH5adContainerNodeFactory::gene_set_score(
                 Arc::clone(&self.container_execution.runtime),
                 Arc::clone(&self.container_execution.panel_cache),
             ),

@@ -41,4 +41,31 @@ fi
 podman run --rm --entrypoint Rscript "$image" \
   -e 'stopifnot(requireNamespace("MVMR", quietly=TRUE))' >/dev/null
 
+podman run --rm \
+  -v "$root/containers/mvmr/fixtures:/fixtures:ro,Z" \
+  --entrypoint Rscript "$image" -e '
+    data <- read.csv("/fixtures/rawdat_mvmr.csv", check.names = FALSE)
+    mvmr_input <- MVMR::format_mvmr(
+      BXGs = as.matrix(data[, c("LDL_beta", "HDL_beta"), drop = FALSE]),
+      BYG = data$SBP_beta,
+      seBXGs = as.matrix(data[, c("LDL_se", "HDL_se"), drop = FALSE]),
+      seBYG = data$SBP_se,
+      RSID = data$SNP
+    )
+    pcor <- matrix(c(1, 0.3, 0.3, 1), nrow = 2, byrow = TRUE)
+    gencov <- MVMR::phenocov_mvmr(
+      pcor,
+      as.matrix(data[, c("LDL_se", "HDL_se"), drop = FALSE])
+    )
+    ivw_default <- MVMR::ivw_mvmr(mvmr_input)
+    ivw_pcor <- MVMR::ivw_mvmr(mvmr_input, gencov = gencov)
+    strength_default <- suppressWarnings(MVMR::strength_mvmr(mvmr_input, 0))
+    strength_pcor <- MVMR::strength_mvmr(mvmr_input, gencov)
+    pleio_default <- suppressWarnings(MVMR::pleiotropy_mvmr(mvmr_input, 0))
+    pleio_pcor <- MVMR::pleiotropy_mvmr(mvmr_input, gencov)
+    stopifnot(isTRUE(all.equal(ivw_default, ivw_pcor)))
+    stopifnot(!isTRUE(all.equal(strength_default, strength_pcor)))
+    stopifnot(!isTRUE(all.equal(pleio_default, pleio_pcor)))
+  ' >/dev/null
+
 echo "Official MVMR container test completed successfully."

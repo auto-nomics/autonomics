@@ -6,6 +6,7 @@ use datafusion::{
     execution::{object_store::ObjectStoreUrl, runtime_env::RuntimeEnv},
     prelude::SessionContext,
 };
+use serde::Serialize;
 use vfs::{MountedObjectStore, OpendalFileStorage};
 
 use crate::dag::{DAG, DagError, DagHistory, RunReport, SchedulerConfig};
@@ -14,6 +15,17 @@ use crate::node_registry::registry::NodeRegistry;
 use crate::nodes::DagNode;
 
 pub use dag_core::sink::SinkMode;
+
+/// Observable outcome of a DAG clear operation.
+#[derive(Debug, Clone, Serialize)]
+pub struct ClearDagOutcome {
+    /// Snapshot that can be checked out to recover the cleared DAG.
+    pub snapshot_id: Option<String>,
+    pub history_ref: String,
+    pub node_count: usize,
+    pub edge_count: usize,
+    pub warnings: Vec<String>,
+}
 
 /// `DataEngine` is the core object that implements the data analysis engine.
 /// It orchestrates ingestion, transformation, and querying of datasets via a
@@ -239,10 +251,55 @@ impl DataEngine {
         self.dag.get_node(id).is_some()
     }
 
-    /// Clear all nodes, edges, and runtime state — start fresh.
-    pub fn clear_dag(&mut self) -> Result<()> {
+    /// Commit a recoverable pre-clear snapshot when history is attached, then
+    /// clear all nodes, edges, and runtime state.
+    pub async fn clear_dag(&mut self) -> Result<ClearDagOutcome> {
+        let manifest = self.dag.to_manifest();
+        let manifest_hash = manifest.content_hash();
+        let node_count = manifest.nodes.len();
+        let edge_count = manifest.edges.len();
+        let mut warnings = Vec::new();
+        let snapshot_id = if node_count == 0 && edge_count == 0 {
+            None
+        } else if let Some(history) = self.history.clone() {
+            let head = history
+                .ref_head(&self.history_ref)
+                .await
+                .map_err(Error::Dag)?;
+            match head {
+                Some(head) if head.manifest_hash == manifest_hash => Some(head.id),
+                _ => Some(
+                    history
+                        .commit(
+                            &self.history_ref,
+                            &manifest,
+                            None::<&RunReport>,
+                            "before clear DAG",
+                        )
+                        .await
+                        .map_err(Error::Dag)?,
+                ),
+            }
+        } else {
+            warnings
+                .push("no DAG history store attached; pre-clear snapshot was not persisted".into());
+            None
+        };
         self.dag.clear();
-        Ok(())
+        tracing::info!(
+            history_ref = %self.history_ref,
+            snapshot_id = ?snapshot_id,
+            node_count,
+            edge_count,
+            "DAG cleared"
+        );
+        Ok(ClearDagOutcome {
+            snapshot_id,
+            history_ref: self.history_ref.clone(),
+            node_count,
+            edge_count,
+            warnings,
+        })
     }
 
     // ── history / ref management ───────────────────────────────────────────
@@ -887,7 +944,7 @@ mod tests {
 
     use super::DataEngine;
     use crate::dag::graph::PortOutputs;
-    use crate::dag::{DagError, RuntimeStatus, SchedulerConfig};
+    use crate::dag::{DagError, DagHistory, RuntimeStatus, SchedulerConfig};
     use crate::error::Error;
     use crate::nodes::{DagNode, NodeInput, NodePorts};
     use datafusion::execution::object_store::ObjectStoreUrl;
@@ -910,6 +967,44 @@ mod tests {
 
         assert!(Arc::ptr_eq(engine.container_execution(), &infra));
         assert!(Arc::ptr_eq(session.container_execution(), &infra));
+    }
+
+    #[tokio::test]
+    async fn clear_dag_commits_a_recoverable_pre_clear_snapshot() {
+        let directory = tempfile::tempdir().unwrap();
+        let history = DagHistory::open(&directory.path().join("history.db"))
+            .await
+            .unwrap();
+        let mut engine = DataEngine::builder().build().with_history(history);
+        engine
+            .add_node_from_registry(
+                "read",
+                "file_to_dataframe",
+                serde_json::json!({"path": datasets_dir().join("Iris.csv").to_string_lossy()}),
+            )
+            .unwrap();
+        engine
+            .add_node_from_registry(
+                "write",
+                "dataframe_to_file",
+                serde_json::json!({
+                    "path": directory.path().join("out.csv").to_string_lossy(),
+                    "format": "csv"
+                }),
+            )
+            .unwrap();
+        engine.add_edge("read", "write", 0, 0).unwrap();
+
+        let outcome = engine.clear_dag().await.unwrap();
+        assert_eq!(outcome.node_count, 2);
+        assert_eq!(outcome.edge_count, 1);
+        let snapshot_id = outcome.snapshot_id.expect("pre-clear snapshot");
+        assert!(!engine.node_exists("read"));
+        assert!(!engine.node_exists("write"));
+
+        engine.checkout_dag(&snapshot_id).await.unwrap();
+        assert!(engine.node_exists("read"));
+        assert!(engine.node_exists("write"));
     }
 
     #[test]
