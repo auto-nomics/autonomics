@@ -5,7 +5,7 @@ use arrow_schema::{DataType, Field, Schema};
 use async_trait::async_trait;
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::table_transforms::{float_values, utf8_values};
@@ -26,6 +26,13 @@ pub enum LrDirection {
     B2a,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ComplexAggregation {
+    Mean,
+    Min,
+}
+
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct LrCommunicationScoreSpec {
     /// Use the published CellPhoneDB LR catalog bundle when input port 0 is not wired.
@@ -38,6 +45,14 @@ pub struct LrCommunicationScoreSpec {
     /// Explicit LR table path override. Takes precedence over the catalog bundle.
     #[serde(default)]
     pub lr_table_path: Option<String>,
+    /// Group rows sharing an interaction id/partner pair into one complex-aware interaction.
+    #[serde(default = "default_true")]
+    pub group_complexes: bool,
+    /// Require every gene represented in a complex to be present in the mean table.
+    #[serde(default = "default_true")]
+    pub require_complete_complex: bool,
+    #[serde(default = "default_complex_aggregation")]
+    pub complex_aggregation: ComplexAggregation,
     #[serde(default = "default_ligand_column")]
     pub ligand_column: String,
     #[serde(default = "default_receptor_column")]
@@ -74,6 +89,9 @@ fn default_lr_table_bundle() -> String {
 }
 fn default_lr_table_file() -> String {
     DEFAULT_LR_TABLE_FILE.into()
+}
+fn default_complex_aggregation() -> ComplexAggregation {
+    ComplexAggregation::Mean
 }
 fn default_ligand_column() -> String {
     "ligand".into()
@@ -114,6 +132,16 @@ fn node_error(message: impl Into<String>) -> DagError {
     }
 }
 
+fn aggregate_values(values: &[f64], aggregation: ComplexAggregation) -> Option<f64> {
+    if values.is_empty() {
+        return None;
+    }
+    match aggregation {
+        ComplexAggregation::Mean => Some(values.iter().sum::<f64>() / values.len() as f64),
+        ComplexAggregation::Min => values.iter().copied().reduce(f64::min),
+    }
+}
+
 fn validate_bundle_relative_path(path: &str, field: &str) -> Result<(), String> {
     if path.trim().is_empty()
         || path.starts_with('/')
@@ -142,12 +170,25 @@ fn column_index(
 struct LrRecord {
     ligand: String,
     receptor: String,
+    interaction_id: Option<String>,
+    ligand_partner: Option<String>,
+    receptor_partner: Option<String>,
+    extra: Vec<Option<String>>,
+}
+
+#[derive(Debug, Clone)]
+struct LrInteraction {
+    id: String,
+    ligand: String,
+    receptor: String,
+    ligand_genes: Vec<String>,
+    receptor_genes: Vec<String>,
     extra: Vec<Option<String>>,
 }
 
 #[derive(Debug, Clone)]
 struct ScoreRecord {
-    lr_index: usize,
+    interaction_index: usize,
     source: String,
     target: String,
     score: f64,
@@ -257,6 +298,9 @@ impl LrCommunicationScoreNode {
             .ok_or_else(|| node_error("ligand-receptor table has no batches"))?;
         let ligand = column_index(&fields, &self.spec.ligand_column, true)?.unwrap();
         let receptor = column_index(&fields, &self.spec.receptor_column, true)?.unwrap();
+        let interaction_id = fields.find("interaction_id").map(|(index, _)| index);
+        let ligand_partner = fields.find("ligand_partner").map(|(index, _)| index);
+        let receptor_partner = fields.find("receptor_partner").map(|(index, _)| index);
         let mut extra = Vec::with_capacity(self.spec.extra_columns.len());
         for name in &self.spec.extra_columns {
             extra.push(column_index(&fields, name, true)?.unwrap());
@@ -265,6 +309,15 @@ impl LrCommunicationScoreNode {
         for batch in batches {
             let ligands = utf8_values(batch.column(ligand))?;
             let receptors = utf8_values(batch.column(receptor))?;
+            let interaction_ids = interaction_id
+                .map(|index| utf8_values(batch.column(index)))
+                .transpose()?;
+            let ligand_partners = ligand_partner
+                .map(|index| utf8_values(batch.column(index)))
+                .transpose()?;
+            let receptor_partners = receptor_partner
+                .map(|index| utf8_values(batch.column(index)))
+                .transpose()?;
             let extras = extra
                 .iter()
                 .map(|index| utf8_values(batch.column(*index)))
@@ -279,11 +332,87 @@ impl LrCommunicationScoreNode {
                 records.push(LrRecord {
                     ligand,
                     receptor,
+                    interaction_id: interaction_ids
+                        .as_ref()
+                        .and_then(|values| values[row].clone()),
+                    ligand_partner: ligand_partners
+                        .as_ref()
+                        .and_then(|values| values[row].clone()),
+                    receptor_partner: receptor_partners
+                        .as_ref()
+                        .and_then(|values| values[row].clone()),
                     extra: extras.iter().map(|values| values[row].clone()).collect(),
                 });
             }
         }
         Ok(records)
+    }
+
+    fn group_lr_records(&self, records: &[LrRecord]) -> Vec<LrInteraction> {
+        if !self.spec.group_complexes {
+            return records
+                .iter()
+                .map(|record| LrInteraction {
+                    id: format!("{}:{}", record.ligand, record.receptor),
+                    ligand: record.ligand.clone(),
+                    receptor: record.receptor.clone(),
+                    ligand_genes: vec![record.ligand.clone()],
+                    receptor_genes: vec![record.receptor.clone()],
+                    extra: record.extra.clone(),
+                })
+                .collect();
+        }
+
+        let mut grouped: BTreeMap<String, Vec<&LrRecord>> = BTreeMap::new();
+        for record in records {
+            let key = record
+                .interaction_id
+                .clone()
+                .unwrap_or_else(|| format!("{}:{}", record.ligand, record.receptor));
+            grouped.entry(key).or_default().push(record);
+        }
+        grouped
+            .into_iter()
+            .map(|(id, records)| {
+                let ligand_genes = records
+                    .iter()
+                    .map(|record| record.ligand.clone())
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect::<Vec<_>>();
+                let receptor_genes = records
+                    .iter()
+                    .map(|record| record.receptor.clone())
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect::<Vec<_>>();
+                let first = records[0];
+                let ligand = if ligand_genes.len() == 1 {
+                    ligand_genes[0].clone()
+                } else {
+                    first
+                        .ligand_partner
+                        .clone()
+                        .unwrap_or_else(|| ligand_genes.join("+"))
+                };
+                let receptor = if receptor_genes.len() == 1 {
+                    receptor_genes[0].clone()
+                } else {
+                    first
+                        .receptor_partner
+                        .clone()
+                        .unwrap_or_else(|| receptor_genes.join("+"))
+                };
+                LrInteraction {
+                    id,
+                    ligand,
+                    receptor,
+                    ligand_genes,
+                    receptor_genes,
+                    extra: first.extra.clone(),
+                }
+            })
+            .collect()
     }
 
     async fn read_cluster_means(
@@ -342,25 +471,29 @@ impl LrCommunicationScoreNode {
                 }
             }
         }
-        let genes = means
-            .keys()
-            .map(|(gene, _)| gene.clone())
-            .collect::<BTreeSet<_>>();
-        for gene in &genes {
-            for cluster in &clusters {
-                if !means.contains_key(&(gene.clone(), cluster.clone())) {
-                    return Err(node_error(format!(
-                        "cluster mean table has no mean for gene `{gene}` in cluster `{cluster}`"
-                    )));
-                }
+        Ok((clusters, means, fractions))
+    }
+
+    fn aggregate_genes(
+        &self,
+        genes: &[String],
+        cluster: &str,
+        values: &HashMap<(String, String), f64>,
+    ) -> Option<f64> {
+        let mut selected = Vec::with_capacity(genes.len());
+        for gene in genes {
+            match values.get(&(gene.clone(), cluster.to_string())) {
+                Some(value) => selected.push(*value),
+                None if self.spec.require_complete_complex => return None,
+                None => {}
             }
         }
-        Ok((clusters, means, fractions))
+        aggregate_values(&selected, self.spec.complex_aggregation)
     }
 
     fn build_records(
         &self,
-        lr_records: &[LrRecord],
+        interactions: &[LrInteraction],
         clusters: &BTreeSet<String>,
         means: &HashMap<(String, String), f64>,
         fractions: &HashMap<(String, String), f64>,
@@ -389,7 +522,7 @@ impl LrCommunicationScoreNode {
             )
         };
         let mut records = Vec::new();
-        for (lr_index, record) in lr_records.iter().enumerate() {
+        for (interaction_index, interaction) in interactions.iter().enumerate() {
             for source in &all_clusters {
                 for target in &all_clusters {
                     if source == target {
@@ -405,24 +538,29 @@ impl LrCommunicationScoreNode {
                     {
                         continue;
                     }
-                    let ligand_key = (record.ligand.clone(), ligand_cluster.clone());
-                    let receptor_key = (record.receptor.clone(), receptor_cluster.clone());
-                    let (Some(ligand_mean), Some(receptor_mean)) =
-                        (means.get(&ligand_key), means.get(&receptor_key))
-                    else {
+                    let (Some(ligand_mean), Some(receptor_mean)) = (
+                        self.aggregate_genes(&interaction.ligand_genes, ligand_cluster, means),
+                        self.aggregate_genes(&interaction.receptor_genes, receptor_cluster, means),
+                    ) else {
                         continue;
                     };
                     let score = ligand_mean * receptor_mean;
                     if self.spec.min_score.is_some_and(|minimum| score < minimum) {
                         continue;
                     }
-                    let pct_product =
-                        match (fractions.get(&ligand_key), fractions.get(&receptor_key)) {
-                            (Some(left), Some(right)) => Some((left / 100.0) * (right / 100.0)),
-                            _ => None,
-                        };
+                    let pct_product = match (
+                        self.aggregate_genes(&interaction.ligand_genes, ligand_cluster, fractions),
+                        self.aggregate_genes(
+                            &interaction.receptor_genes,
+                            receptor_cluster,
+                            fractions,
+                        ),
+                    ) {
+                        (Some(left), Some(right)) => Some((left / 100.0) * (right / 100.0)),
+                        _ => None,
+                    };
                     records.push(ScoreRecord {
-                        lr_index,
+                        interaction_index,
                         source: ligand_cluster.clone(),
                         target: receptor_cluster.clone(),
                         score,
@@ -495,8 +633,9 @@ impl DagNode for LrCommunicationScoreNode {
             .collect()
             .await?;
         let lr_records = self.read_lr_records(&lr_batches).await?;
+        let interactions = self.group_lr_records(&lr_records);
         let (clusters, means, fractions) = self.read_cluster_means(&mean_batches).await?;
-        let mut records = self.build_records(&lr_records, &clusters, &means, &fractions)?;
+        let mut records = self.build_records(&interactions, &clusters, &means, &fractions)?;
 
         if self.spec.n_permutations > 0 {
             let cluster_order = clusters.iter().cloned().collect::<Vec<_>>();
@@ -522,9 +661,23 @@ impl DagNode for LrCommunicationScoreNode {
                     }
                 }
                 for (index, record) in records.iter().enumerate() {
-                    let lr = &lr_records[record.lr_index];
-                    let ligand = permuted[&(lr.ligand.clone(), record.source.clone())];
-                    let receptor = permuted[&(lr.receptor.clone(), record.target.clone())];
+                    let interaction = &interactions[record.interaction_index];
+                    let ligand_values = interaction
+                        .ligand_genes
+                        .iter()
+                        .map(|gene| permuted[&(gene.clone(), record.source.clone())])
+                        .collect::<Vec<_>>();
+                    let receptor_values = interaction
+                        .receptor_genes
+                        .iter()
+                        .map(|gene| permuted[&(gene.clone(), record.target.clone())])
+                        .collect::<Vec<_>>();
+                    let (Some(ligand), Some(receptor)) = (
+                        aggregate_values(&ligand_values, self.spec.complex_aggregation),
+                        aggregate_values(&receptor_values, self.spec.complex_aggregation),
+                    ) else {
+                        continue;
+                    };
                     if ligand * receptor >= record.score {
                         exceedances[index] += 1;
                     }
@@ -548,6 +701,9 @@ impl DagNode for LrCommunicationScoreNode {
         let mut fields = vec![
             Field::new("ligand", DataType::Utf8, true),
             Field::new("receptor", DataType::Utf8, true),
+            Field::new("interaction_id", DataType::Utf8, true),
+            Field::new("ligand_genes", DataType::Utf8, true),
+            Field::new("receptor_genes", DataType::Utf8, true),
             Field::new("ligand_cluster", DataType::Utf8, true),
             Field::new("receptor_cluster", DataType::Utf8, true),
             Field::new("score", DataType::Float64, true),
@@ -565,13 +721,39 @@ impl DagNode for LrCommunicationScoreNode {
             Arc::new(StringArray::from(
                 records
                     .iter()
-                    .map(|record| lr_records[record.lr_index].ligand.clone())
+                    .map(|record| interactions[record.interaction_index].ligand.clone())
                     .collect::<Vec<_>>(),
             )),
             Arc::new(StringArray::from(
                 records
                     .iter()
-                    .map(|record| lr_records[record.lr_index].receptor.clone())
+                    .map(|record| interactions[record.interaction_index].receptor.clone())
+                    .collect::<Vec<_>>(),
+            )),
+            Arc::new(StringArray::from(
+                records
+                    .iter()
+                    .map(|record| interactions[record.interaction_index].id.clone())
+                    .collect::<Vec<_>>(),
+            )),
+            Arc::new(StringArray::from(
+                records
+                    .iter()
+                    .map(|record| {
+                        interactions[record.interaction_index]
+                            .ligand_genes
+                            .join(";")
+                    })
+                    .collect::<Vec<_>>(),
+            )),
+            Arc::new(StringArray::from(
+                records
+                    .iter()
+                    .map(|record| {
+                        interactions[record.interaction_index]
+                            .receptor_genes
+                            .join(";")
+                    })
                     .collect::<Vec<_>>(),
             )),
             Arc::new(StringArray::from(
@@ -615,7 +797,7 @@ impl DagNode for LrCommunicationScoreNode {
             columns.push(Arc::new(StringArray::from(
                 records
                     .iter()
-                    .map(|record| lr_records[record.lr_index].extra[index].clone())
+                    .map(|record| interactions[record.interaction_index].extra[index].clone())
                     .collect::<Vec<_>>(),
             )));
         }
@@ -727,6 +909,7 @@ impl NodeFactory for LrCommunicationScoreNodeFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow_array::Array;
     use dag_core::node::{DataBundle, DataBundleCatalog};
     use datafusion::prelude::SessionContext;
 
@@ -809,6 +992,9 @@ mod tests {
             lr_table_bundle: DEFAULT_LR_TABLE_BUNDLE.into(),
             lr_table_file: DEFAULT_LR_TABLE_FILE.into(),
             lr_table_path: None,
+            group_complexes: true,
+            require_complete_complex: true,
+            complex_aggregation: ComplexAggregation::Mean,
             ligand_column: "ligand".into(),
             receptor_column: "receptor".into(),
             cluster_column: "cluster".into(),
@@ -892,6 +1078,9 @@ mod tests {
             lr_table_bundle: DEFAULT_LR_TABLE_BUNDLE.into(),
             lr_table_file: DEFAULT_LR_TABLE_FILE.into(),
             lr_table_path: Some(path.to_string_lossy().into_owned()),
+            group_complexes: true,
+            require_complete_complex: true,
+            complex_aggregation: ComplexAggregation::Mean,
             ligand_column: "ligand".into(),
             receptor_column: "receptor".into(),
             cluster_column: "cluster".into(),
@@ -923,5 +1112,93 @@ mod tests {
             2
         );
         let _ = tokio::fs::remove_file(path).await;
+    }
+
+    #[tokio::test]
+    async fn aggregates_complex_subunits_before_scoring() {
+        let lr = frame(
+            RecordBatch::try_new(
+                Arc::new(Schema::new(vec![
+                    Field::new("interaction_id", DataType::Utf8, false),
+                    Field::new("ligand", DataType::Utf8, false),
+                    Field::new("receptor", DataType::Utf8, false),
+                    Field::new("ligand_partner", DataType::Utf8, false),
+                    Field::new("receptor_partner", DataType::Utf8, false),
+                ])),
+                vec![
+                    Arc::new(StringArray::from(vec!["LR1", "LR1"])),
+                    Arc::new(StringArray::from(vec!["L1", "L2"])),
+                    Arc::new(StringArray::from(vec!["R", "R"])),
+                    Arc::new(StringArray::from(vec!["L1_L2", "L1_L2"])),
+                    Arc::new(StringArray::from(vec!["R", "R"])),
+                ],
+            )
+            .unwrap(),
+        );
+        let mean = frame(
+            RecordBatch::try_new(
+                Arc::new(Schema::new(vec![
+                    Field::new("cluster", DataType::Utf8, false),
+                    Field::new("gene", DataType::Utf8, false),
+                    Field::new("mean_expression", DataType::Float64, false),
+                ])),
+                vec![
+                    Arc::new(StringArray::from(vec!["A", "A", "A", "B", "B", "B"])),
+                    Arc::new(StringArray::from(vec!["L1", "L2", "R", "L1", "L2", "R"])),
+                    Arc::new(Float64Array::from(vec![2.0, 4.0, 3.0, 5.0, 7.0, 10.0])),
+                ],
+            )
+            .unwrap(),
+        );
+        let spec = LrCommunicationScoreSpec {
+            use_catalog_lr_table: false,
+            lr_table_bundle: DEFAULT_LR_TABLE_BUNDLE.into(),
+            lr_table_file: DEFAULT_LR_TABLE_FILE.into(),
+            lr_table_path: None,
+            group_complexes: true,
+            require_complete_complex: true,
+            complex_aggregation: ComplexAggregation::Mean,
+            ligand_column: "ligand".into(),
+            receptor_column: "receptor".into(),
+            cluster_column: "cluster".into(),
+            gene_column: "gene".into(),
+            mean_column: "mean_expression".into(),
+            pct_column: None,
+            n_permutations: 0,
+            random_state: 0,
+            direction: LrDirection::All,
+            source_clusters: Vec::new(),
+            target_clusters: Vec::new(),
+            min_score: None,
+            extra_columns: Vec::new(),
+        };
+        let mut node = LrCommunicationScoreNode::new(spec);
+        let outputs = node
+            .execute(
+                &NodeCtx::new(SessionContext::new().runtime_env(), None),
+                &[
+                    NodeInput::new_dataframe(0, lr),
+                    NodeInput::new_dataframe(1, mean),
+                ],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap();
+        let batches = outputs
+            .dataframe(0)
+            .unwrap()
+            .clone()
+            .collect()
+            .await
+            .unwrap();
+        let scores = batches[0]
+            .column_by_name("score")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap();
+        let mut values = scores.values().to_vec();
+        values.sort_by(f64::total_cmp);
+        assert_eq!(values, vec![18.0, 30.0]);
     }
 }

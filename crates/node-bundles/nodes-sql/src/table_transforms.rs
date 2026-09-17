@@ -4,6 +4,7 @@ use arrow_array::{Array, ArrayRef, Float64Array, RecordBatch, StringArray};
 use arrow_cast::cast;
 use arrow_schema::{DataType, Field, Schema};
 use async_trait::async_trait;
+use futures::StreamExt;
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 use std::collections::HashSet;
@@ -99,6 +100,20 @@ pub struct TableTransposeSpec {
     pub id_column: String,
     #[serde(default)]
     pub keep_columns: Vec<String>,
+    /// Emit multiple RecordBatches instead of building the full output in memory.
+    #[serde(default = "default_true")]
+    pub streaming: bool,
+    /// Rows per output batch when `streaming` is enabled.
+    #[serde(default = "default_chunk_size")]
+    pub chunk_size: usize,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_chunk_size() -> usize {
+    1024
 }
 
 #[derive(Clone)]
@@ -106,14 +121,27 @@ pub struct TableTransposeNode {
     ports: NodePorts,
     id_column: String,
     keep_columns: Vec<String>,
+    streaming: bool,
+    chunk_size: usize,
 }
 
 impl TableTransposeNode {
     pub fn new(id_column: String, keep_columns: Vec<String>) -> Self {
+        Self::new_with_options(id_column, keep_columns, true, 1024)
+    }
+
+    pub fn new_with_options(
+        id_column: String,
+        keep_columns: Vec<String>,
+        streaming: bool,
+        chunk_size: usize,
+    ) -> Self {
         Self {
             ports: port_layout(),
             id_column,
             keep_columns,
+            streaming,
+            chunk_size,
         }
     }
 }
@@ -192,7 +220,7 @@ impl DagNode for TableTransposeNode {
 
         let mut row_ids = Vec::new();
         let mut keep_rows = vec![Vec::new(); keep_indexes.len()];
-        let mut matrix = vec![Vec::new(); value_indexes.len()];
+        let mut matrix = vec![Vec::new(); fields.len()];
         for batch in &batches {
             let ids = utf8_values(batch.column(id_index))?;
             let row_count = ids.len();
@@ -200,8 +228,8 @@ impl DagNode for TableTransposeNode {
             for (output, index) in keep_rows.iter_mut().zip(&keep_indexes) {
                 output.extend(utf8_values(batch.column(*index))?);
             }
-            for (output, index) in matrix.iter_mut().zip(&value_indexes) {
-                output.extend(float_values(batch.column(*index))?);
+            for index in &value_indexes {
+                matrix[*index].extend(float_values(batch.column(*index))?);
             }
             if row_count != batch.num_rows() {
                 return Err(node_error(
@@ -228,31 +256,61 @@ impl DagNode for TableTransposeNode {
             output_fields.push(Field::new(name, DataType::Float64, true));
         }
         let output_schema = Arc::new(Schema::new(output_fields));
-        let mut columns: Vec<ArrayRef> =
-            Vec::with_capacity(1 + self.keep_columns.len() + row_ids.len());
-        columns.push(Arc::new(StringArray::from(
-            value_indexes
-                .iter()
-                .map(|index| field_names[*index].to_string())
-                .collect::<Vec<_>>(),
-        )));
-        for rows in &keep_rows {
-            columns.push(Arc::new(StringArray::from(rows.clone())));
+        let chunk_size = if self.streaming {
+            self.chunk_size.max(1)
+        } else {
+            value_indexes.len().max(1)
+        };
+        let mut output: Option<datafusion::prelude::DataFrame> = None;
+        for (chunk_index, value_chunk) in value_indexes.chunks(chunk_size).enumerate() {
+            let start = chunk_index * chunk_size;
+            let end = start + value_chunk.len();
+            let mut columns: Vec<ArrayRef> =
+                Vec::with_capacity(1 + self.keep_columns.len() + row_ids.len());
+            columns.push(Arc::new(StringArray::from(
+                value_chunk
+                    .iter()
+                    .map(|index| field_names[*index].to_string())
+                    .collect::<Vec<_>>(),
+            )));
+            for rows in &keep_rows {
+                columns.push(Arc::new(StringArray::from(
+                    (start..end)
+                        .map(|index| rows.get(index).cloned().flatten())
+                        .collect::<Vec<_>>(),
+                )));
+            }
+            for row in 0..row_ids.len() {
+                let values = value_chunk
+                    .iter()
+                    .map(|value_index| matrix[*value_index].get(row).copied().flatten())
+                    .collect::<Vec<_>>();
+                columns.push(Arc::new(Float64Array::from(values)));
+            }
+            let batch =
+                RecordBatch::try_new(Arc::clone(&output_schema), columns).map_err(|error| {
+                    node_error(
+                        TABLE_TRANSPOSE_KIND,
+                        format!("cannot transpose table: {error}"),
+                    )
+                })?;
+            let batch_df = ctx.session().read_batch(batch)?;
+            output = Some(match output {
+                Some(existing) => existing.union(batch_df).map_err(|error| {
+                    node_error(
+                        TABLE_TRANSPOSE_KIND,
+                        format!("cannot combine transpose batches: {error}"),
+                    )
+                })?,
+                None => batch_df,
+            });
         }
-        for row in 0..row_ids.len() {
-            let values = matrix
-                .iter()
-                .map(|column| column.get(row).copied().flatten())
-                .collect::<Vec<_>>();
-            columns.push(Arc::new(Float64Array::from(values)));
-        }
-        let batch = RecordBatch::try_new(output_schema, columns).map_err(|error| {
+        let output = output.ok_or_else(|| {
             node_error(
                 TABLE_TRANSPOSE_KIND,
-                format!("cannot transpose table: {error}"),
+                "input has no value columns to transpose",
             )
         })?;
-        let output = ctx.session().read_batch(batch)?;
         let mut outputs = PortOutputs::new();
         outputs.insert(0, output);
         Ok(outputs)
@@ -273,7 +331,8 @@ impl NodeFactory for TableTransposeNodeFactory {
     fn doc(&self) -> &'static str {
         "The id column becomes output columns. Every non-id, non-keep column \
         becomes one output row named in the `column` field. Values are cast to \
-        Float64. keep_columns are repeated by row and cast to Utf8 metadata."
+        Float64. `chunk_size` bounds output RecordBatch rows when `streaming` is true; \
+        keep_columns are retained as Utf8 metadata."
     }
 
     fn spec_schema(&self) -> schemars::Schema {
@@ -293,9 +352,14 @@ impl NodeFactory for TableTransposeNodeFactory {
         if spec.id_column.trim().is_empty() {
             return Err("id_column cannot be empty".into());
         }
-        Ok(Box::new(TableTransposeNode::new(
+        if spec.chunk_size == 0 {
+            return Err("chunk_size must be greater than zero".into());
+        }
+        Ok(Box::new(TableTransposeNode::new_with_options(
             spec.id_column,
             spec.keep_columns,
+            spec.streaming,
+            spec.chunk_size,
         )))
     }
 }
@@ -541,6 +605,24 @@ mod tests {
         let schema = outputs.dataframe(0).unwrap().schema();
         let names: Vec<_> = schema.fields().iter().map(|f| f.name().as_str()).collect();
         assert_eq!(names, ["column", "pathway", "GENE1", "GENE2"]);
+        assert_eq!(
+            outputs.dataframe(0).unwrap().clone().count().await.unwrap(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn transposes_in_chunked_output_mode() {
+        let mut node =
+            TableTransposeNode::new_with_options("gene".into(), vec!["pathway".into()], true, 1);
+        let outputs = node
+            .execute(
+                &ctx(),
+                &[NodeInput::new_dataframe(0, wide_frame())],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap();
         assert_eq!(
             outputs.dataframe(0).unwrap().clone().count().await.unwrap(),
             2

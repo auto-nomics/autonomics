@@ -7534,6 +7534,7 @@ dependencies = [
  "async-trait",
  "dag-core",
  "datafusion",
+ "futures",
  "regex",
  "schemars",
  "serde",
