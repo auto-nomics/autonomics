@@ -33,6 +33,7 @@ use dag_core::{
 pub enum FileFormat {
     // DataFusion native
     Csv,
+    #[serde(alias = "tsv.gz")]
     Tsv,
     Parquet,
     Json,
@@ -106,7 +107,7 @@ impl FileFormat {
     pub fn from_label(label: &str) -> Option<Self> {
         match label.to_ascii_lowercase().as_str() {
             "csv" => Some(Self::Csv),
-            "tsv" => Some(Self::Tsv),
+            "tsv" | "tsv.gz" => Some(Self::Tsv),
             "parquet" => Some(Self::Parquet),
             "json" | "ndjson" => Some(Self::Json),
             "vcf" => Some(Self::Vcf),
@@ -211,7 +212,8 @@ impl FileToDataFrameNode {
 #[derive(Debug, Clone, JsonSchema, Deserialize)]
 pub struct FileToDataFrameNodeSpec {
     /// A file path or URL. When `format` is `None`, it is inferred from the
-    /// extension (`.vcf.gz` → Vcf, `.bam` → Bam, `.csv` → Csv, `.json` → Json, …).
+    /// extension (`.vcf.gz` → Vcf, `.bam` → Bam, `.csv` → Csv,
+    /// `.tsv.gz` → Tsv, `.json` → Json, ...).
     pub path: Option<String>,
     pub format: Option<FileFormat>,
     /// Hive-style partition column names. Values are restored as Utf8.
@@ -241,7 +243,8 @@ impl NodeFactory for FileToDataFrameNodeFactory {
     fn doc(&self) -> &'static str {
         "Reads an external path or an upstream file reference into a \
         DataFrame. Supports local/remote files: CSV/TSV/Parquet via \
-        DataFusion, JSON arrays and NDJSON (including .json.gz), and \
+        DataFusion (including .tsv.gz), JSON arrays and NDJSON (including \
+        .json.gz), and \
         bioinformatics formats (VCF, BAM, BED, GTF, FASTA, MatrixMarket, etc.) via \
         biofusion. Format is inferred from the \
         extension when not given explicitly. Optional file input; one \
@@ -1050,7 +1053,80 @@ mod tests {
                 .data_type(),
             &arrow_schema::DataType::Utf8
         );
+        assert_eq!(df.schema().fields().len(), 2);
         assert_eq!(df.clone().count().await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn file_to_dataframe_reads_gzipped_tsv() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cohort.tsv.gz");
+        let mut encoder = flate2::write::GzEncoder::new(
+            std::fs::File::create(&path).unwrap(),
+            Default::default(),
+        );
+        std::io::Write::write_all(&mut encoder, b"gene_id\tn\n79501\t504\n").unwrap();
+        encoder.finish().unwrap();
+
+        let ctx = SessionContext::new();
+        let node_ctx = dag_core::registry::NodeCtx::new(ctx.runtime_env().clone(), None);
+        let mut node = FileToDataFrameNodeFactory {}
+            .build(
+                serde_json::json!({
+                    "path": path.to_string_lossy(),
+                    "format": "tsv.gz",
+                }),
+                node_ctx.clone(),
+            )
+            .unwrap();
+
+        let outputs = node
+            .execute(
+                &node_ctx,
+                &[],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap();
+        let df = outputs.dataframe(0).unwrap();
+        assert_eq!(
+            df.schema()
+                .field_with_name(None, "gene_id")
+                .unwrap()
+                .data_type(),
+            &arrow_schema::DataType::Utf8
+        );
+        assert_eq!(df.clone().count().await.unwrap(), 1);
+    }
+
+    #[test]
+    fn file_format_accepts_gzipped_tsv_label() {
+        let spec = serde_json::from_value::<FileToDataFrameNodeSpec>(serde_json::json!({
+            "path": "/input/cohort.tsv.gz",
+            "format": "tsv.gz"
+        }))
+        .unwrap();
+
+        assert_eq!(spec.format, Some(FileFormat::Tsv));
+        assert_eq!(FileFormat::from_label("tsv.gz"), Some(FileFormat::Tsv));
+    }
+
+    #[tokio::test]
+    async fn file_to_dataframe_reads_gzipped_tsv_glob() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cohort.tsv.gz");
+        let mut encoder = flate2::write::GzEncoder::new(
+            std::fs::File::create(&path).unwrap(),
+            Default::default(),
+        );
+        std::io::Write::write_all(&mut encoder, b"id\tvalue\n1\tone\n").unwrap();
+        encoder.finish().unwrap();
+
+        let ctx = SessionContext::new();
+        let glob = format!("{}/*.tsv.gz", dir.path().to_string_lossy());
+        let df = read_file(&ctx, &glob, FileFormat::Tsv, &[]).await.unwrap();
+        assert_eq!(df.schema().fields().len(), 2);
+        assert_eq!(df.count().await.unwrap(), 1);
     }
 
     #[tokio::test]
@@ -1060,6 +1136,12 @@ mod tests {
         std::fs::create_dir_all(&source_dir).unwrap();
         std::fs::write(source_dir.join("data.csv"), "id\n1\n2\n").unwrap();
         std::fs::write(source_dir.join("data.json"), r#"[{"id":1},{"id":2}]"#).unwrap();
+        let mut gzip_encoder = flate2::write::GzEncoder::new(
+            std::fs::File::create(source_dir.join("data.tsv.gz")).unwrap(),
+            Default::default(),
+        );
+        std::io::Write::write_all(&mut gzip_encoder, b"id\tvalue\n1\tone\n2\ttwo\n").unwrap();
+        gzip_encoder.finish().unwrap();
 
         let manifest = VfsManifest {
             backend: vec![BackendDefinition {
@@ -1095,6 +1177,9 @@ mod tests {
             "vfs:///mount/data.json",
             "file:///mount/data.json",
             "/mount/data.json",
+            "vfs:///mount/data.tsv.gz",
+            "file:///mount/data.tsv.gz",
+            "/mount/data.tsv.gz",
         ] {
             if path.ends_with(".json") {
                 let direct_df = ctx
@@ -1113,6 +1198,13 @@ mod tests {
                 .await
                 .unwrap_or_else(|e| panic!("read {path} failed: {e}"));
             let df = outputs.dataframe(0).expect("source output port");
+            if path.ends_with(".tsv.gz") {
+                assert_eq!(
+                    df.schema().fields().len(),
+                    2,
+                    "gzip TSV should preserve tab-delimited columns for {path}"
+                );
+            }
             assert_eq!(
                 df.clone().count().await.unwrap(),
                 2,
