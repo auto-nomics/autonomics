@@ -402,6 +402,28 @@ impl DAG {
                                     to_port: edge.to_port,
                                 });
                             }
+                            if let Some(input) =
+                                inputs.iter().find(|input| input.port == edge.to_port)
+                            {
+                                let actual_format = input
+                                    .data
+                                    .as_file()
+                                    .ok()
+                                    .and_then(|file| file.format.as_deref());
+                                if !port.accepts_format(actual_format) {
+                                    return Err(DagError::PortFormatMismatch {
+                                        from_node: from.clone(),
+                                        from_port: edge.from_port,
+                                        to_node: id.clone(),
+                                        to_port: edge.to_port,
+                                        expected: port
+                                            .format
+                                            .clone()
+                                            .unwrap_or_else(|| "unspecified".into()),
+                                        actual: actual_format.unwrap_or("unspecified").into(),
+                                    });
+                                }
+                            }
                         }
                     }
                 }
@@ -517,14 +539,29 @@ impl DAG {
                     let output_type_error = self.nodes.get(&id).and_then(|node| {
                         outs.iter().find_map(|(port, value)| {
                             let declared = node.ports().output_port(*port)?;
-                            (!declared.data_type.accepts(value.data_type())).then(|| {
-                                DagError::PortTypeMismatch {
+                            if !declared.data_type.accepts(value.data_type()) {
+                                return Some(DagError::PortTypeMismatch {
                                     from_node: id.clone(),
                                     from_port: *port,
                                     to_node: id.clone(),
                                     to_port: *port,
                                     expected: declared.data_type.to_string(),
                                     actual: value.data_type().to_string(),
+                                });
+                            }
+                            let actual_format =
+                                value.as_file().ok().and_then(|file| file.format.as_deref());
+                            (!declared.accepts_format(actual_format)).then(|| {
+                                DagError::PortFormatMismatch {
+                                    from_node: id.clone(),
+                                    from_port: *port,
+                                    to_node: id.clone(),
+                                    to_port: *port,
+                                    expected: declared
+                                        .format
+                                        .clone()
+                                        .unwrap_or_else(|| "unspecified".into()),
+                                    actual: actual_format.unwrap_or("unspecified").into(),
                                 }
                             })
                         })
@@ -675,6 +712,25 @@ impl DAG {
                     .get(id)
                     .and_then(|outputs| outputs.values().next())
                     .map(|value| value.data_type().to_string());
+                let port_assignments = self
+                    .outputs
+                    .get(id)
+                    .and_then(|outputs| {
+                        self.nodes.get(id).map(|node| {
+                            node.ports()
+                                .output_ports()
+                                .iter()
+                                .filter_map(|port| {
+                                    outputs
+                                        .get(&port.index)
+                                        .and_then(|value| value.as_file().ok())
+                                        .cloned()
+                                        .map(|file| (port.index, file))
+                                })
+                                .collect::<std::collections::BTreeMap<_, _>>()
+                        })
+                    })
+                    .unwrap_or_default();
                 let output_files = self
                     .outputs
                     .get(id)
@@ -730,6 +786,7 @@ impl DAG {
                     node_type,
                     output_type,
                     output_files,
+                    port_assignments,
                     output_schema,
                     output_rows,
                     elapsed_ms,
@@ -846,6 +903,11 @@ impl DAG {
         let from = from.into();
         let to = to.into();
         self.resolve_nodes(&from, &to)?;
+        if self.nodes[&from].is_terminal() {
+            return Err(DagError::Schedule(format!(
+                "node `{from}` is terminal and cannot have downstream edges"
+            )));
+        }
 
         // Port existence — reject out-of-range indices here instead of
         // letting the edge validate but never deliver a value.
@@ -1259,6 +1321,16 @@ impl DAG {
                 to_port,
                 expected: tp.data_type.to_string(),
                 actual: fp.data_type.to_string(),
+            });
+        }
+        if !tp.accepts_format(fp.format.as_deref()) {
+            return Err(DagError::PortFormatMismatch {
+                from_node: from.to_string(),
+                from_port,
+                to_node: to.to_string(),
+                to_port,
+                expected: tp.format.clone().unwrap_or_else(|| "unspecified".into()),
+                actual: fp.format.clone().unwrap_or_else(|| "unspecified".into()),
             });
         }
         let (PortType::DataFrame, PortType::DataFrame, Some(out_schema), Some(in_schema)) = (
@@ -1881,6 +1953,75 @@ mod tests {
     }
 
     #[test]
+    fn add_edge_rejects_incompatible_port_formats() {
+        let mut dag = DAG::default();
+        dag.add_node(
+            "munge".into(),
+            Box::new(PortedNode(
+                NodePorts::new().add_output_port_of_type_with_label_and_format(
+                    None,
+                    PortType::File,
+                    "log",
+                    "ldsc_log",
+                ),
+            )),
+        )
+        .unwrap();
+        dag.add_node(
+            "h2".into(),
+            Box::new(PortedNode(
+                NodePorts::new().add_input_port_of_type_with_label_and_format(
+                    None,
+                    PortType::File,
+                    "sumstats",
+                    "sumstats_gz",
+                ),
+            )),
+        )
+        .unwrap();
+
+        let err = dag.add_edge("munge", "h2", 0, 0).unwrap_err();
+        assert_matches!(
+            err,
+            DagError::PortFormatMismatch {
+                expected, actual, ..
+            } if expected == "sumstats_gz" && actual == "ldsc_log"
+        );
+    }
+
+    #[test]
+    fn add_edge_allows_declared_alternate_input_formats() {
+        let mut dag = DAG::default();
+        dag.add_node(
+            "reference".into(),
+            Box::new(PortedNode(
+                NodePorts::new().add_output_port_of_type_with_label_and_format(
+                    None,
+                    PortType::File,
+                    "sumstats",
+                    "sumstats_tsv",
+                ),
+            )),
+        )
+        .unwrap();
+        dag.add_node(
+            "h2".into(),
+            Box::new(PortedNode(
+                NodePorts::new().add_input_port_of_type_with_accepted_formats(
+                    None,
+                    PortType::File,
+                    "sumstats",
+                    "sumstats_gz",
+                    ["sumstats_gz", "sumstats_tsv"],
+                ),
+            )),
+        )
+        .unwrap();
+
+        dag.add_edge("reference", "h2", 0, 0).unwrap();
+    }
+
+    #[test]
     fn add_edge_rejects_unknown_output_port_immediately() {
         let mut dag = DAG::default();
         add(&mut dag, "x");
@@ -2026,6 +2167,113 @@ mod tests {
         assert_matches!(
             report.errors.get("bad"),
             Some(DagError::PortTypeMismatch { .. })
+        );
+    }
+
+    #[derive(Clone)]
+    struct MultiFileOutputNode {
+        paths: [std::path::PathBuf; 2],
+        ports: NodePorts,
+    }
+
+    #[async_trait::async_trait]
+    impl DagNode for MultiFileOutputNode {
+        fn ports(&self) -> &NodePorts {
+            &self.ports
+        }
+
+        async fn execute(
+            &mut self,
+            _ctx: &crate::registry::NodeCtx,
+            _inputs: &[NodeInput],
+            _reporter: &NodeReporter,
+        ) -> std::result::Result<PortOutputs, DagError> {
+            let mut outputs = PortOutputs::new();
+            for (port, (path, format)) in [
+                (&self.paths[0], "sumstats_gz"),
+                (&self.paths[1], "ldsc_log"),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                std::fs::write(path, format)
+                    .map_err(|error| DagError::Schedule(error.to_string()))?;
+                let file = FileRef::local(path, Some(format.into()))
+                    .map_err(|error| DagError::Schedule(error.to_string()))?;
+                outputs.insert_file(port as u8, file);
+            }
+            Ok(outputs)
+        }
+
+        fn clone_box(&self) -> Box<dyn DagNode> {
+            Box::new((*self).clone())
+        }
+
+        fn kind(&self) -> &'static str {
+            "multi_file_output"
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    #[tokio::test]
+    async fn run_report_assigns_files_by_declared_output_port() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut dag = DAG::default();
+        dag.add_node(
+            "source".into(),
+            Box::new(MultiFileOutputNode {
+                paths: [
+                    temp.path().join("munged.sumstats.gz"),
+                    temp.path().join("munge_sumstats.log"),
+                ],
+                ports: NodePorts::new()
+                    .add_output_port_of_type_with_label_and_format(
+                        None,
+                        PortType::File,
+                        "sumstats",
+                        "sumstats_gz",
+                    )
+                    .add_output_port_of_type_with_label_and_format(
+                        None,
+                        PortType::File,
+                        "log",
+                        "ldsc_log",
+                    ),
+            }),
+        )
+        .unwrap();
+
+        let report = dag
+            .run(&SchedulerConfig::default(), &test_ctx(), None)
+            .await
+            .unwrap();
+
+        let node = report
+            .nodes
+            .iter()
+            .find(|node| node.id == "source")
+            .unwrap();
+        assert_eq!(node.port_assignments.len(), 2);
+        assert!(
+            node.port_assignments[&0]
+                .path
+                .ends_with("munged.sumstats.gz")
+        );
+        assert_eq!(
+            node.port_assignments[&0].format.as_deref(),
+            Some("sumstats_gz")
+        );
+        assert!(
+            node.port_assignments[&1]
+                .path
+                .ends_with("munge_sumstats.log")
+        );
+        assert_eq!(
+            node.port_assignments[&1].format.as_deref(),
+            Some("ldsc_log")
         );
     }
 

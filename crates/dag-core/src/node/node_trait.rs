@@ -56,6 +56,13 @@ pub trait DagNode: Send + Sync {
     fn artifact_path(&self) -> Option<&str> {
         None
     }
+
+    /// Whether this node is an intentional workflow sink and therefore may not
+    /// have outgoing DAG edges. This is a graph-level contract, not a display
+    /// hint.
+    fn is_terminal(&self) -> bool {
+        false
+    }
 }
 
 impl Clone for Box<dyn DagNode> {

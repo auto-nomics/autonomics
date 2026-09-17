@@ -80,12 +80,13 @@ impl LdscH2ContainerNodeFactory {
 
 pub struct LdscH2ContainerNode {
     inner: Box<dyn DagNode>,
+    ports: NodePorts,
 }
 
 #[async_trait::async_trait]
 impl DagNode for LdscH2ContainerNode {
     fn ports(&self) -> &NodePorts {
-        self.inner.ports()
+        &self.ports
     }
 
     fn clone_box(&self) -> Box<dyn DagNode> {
@@ -114,6 +115,7 @@ impl Clone for LdscH2ContainerNode {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone_box(),
+            ports: self.ports.clone(),
         }
     }
 }
@@ -192,8 +194,14 @@ pub fn container_spec(spec: &LdscH2ContainerSpec) -> Result<ContainerCommandSpec
 
 fn port_layout() -> NodePorts {
     NodePorts::new()
-        .add_input_port_of_type(None, PortType::File)
-        .add_output_port_of_type(None, PortType::File)
+        .add_input_port_of_type_with_accepted_formats(
+            None,
+            PortType::File,
+            "sumstats",
+            "sumstats_gz",
+            ["sumstats_gz", "sumstats_tsv"],
+        )
+        .add_output_port_of_type_with_label_and_format(None, PortType::File, "log", "ldsc_log")
 }
 
 fn panel_bindings() -> Vec<DataBundleBinding> {
@@ -264,6 +272,7 @@ impl NodeFactory for LdscH2ContainerNodeFactory {
         .map_err(|error| dag_core::registry::error::Error::Unknown(error.to_string()))?;
         Ok(Box::new(LdscH2ContainerNode {
             inner: Box::new(node),
+            ports: port_layout(),
         }))
     }
 
@@ -280,6 +289,33 @@ impl NodeFactory for LdscH2ContainerNodeFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ldsc_munge_container::LDSC_MUNGE_CONTAINER_KIND;
+    use container_runtime::{ContainerRunRequest, ContainerRuntimeError};
+
+    #[derive(Clone)]
+    struct NoopConnection {
+        workspace_root: std::path::PathBuf,
+    }
+
+    #[async_trait::async_trait]
+    impl PodmanConnection for NoopConnection {
+        async fn run(
+            &self,
+            _request: ContainerRunRequest,
+        ) -> Result<container_runtime::ContainerRunResult, ContainerRuntimeError> {
+            Err(ContainerRuntimeError::Invalid(
+                "this connection is only used to build nodes in tests".into(),
+            ))
+        }
+
+        fn name(&self) -> &'static str {
+            "noop-ldsc-build"
+        }
+
+        fn workspace_root(&self) -> &std::path::Path {
+            &self.workspace_root
+        }
+    }
 
     #[test]
     fn builds_a_fixed_panel_and_image_contract() {
@@ -314,6 +350,96 @@ mod tests {
                 .unwrap()
                 .contains("/panels/ref_ld/LDscore.")
         );
+    }
+
+    #[test]
+    fn declares_sumstats_input_contract() {
+        let ports = port_layout();
+        let input = ports.input_port(0).unwrap();
+        assert_eq!(input.label.as_deref(), Some("sumstats"));
+        assert_eq!(input.format.as_deref(), Some("sumstats_gz"));
+        assert!(input.accepts_format(Some("sumstats_tsv")));
+        assert!(!input.accepts_format(Some("ldsc_log")));
+    }
+
+    #[test]
+    fn built_wrapper_keeps_consumer_format_contract() {
+        let scratch = tempfile::tempdir().unwrap();
+        let mut ref_panel = dag_core::DataBundle::new(
+            LDSC_REF_LD_PANEL,
+            "reference LD scores",
+            "/bundles/ldsc/ref",
+        );
+        ref_panel.source = Some("/bundles/ldsc/ref".into());
+        ref_panel.digest = Some("unused".into());
+        let mut w_ld_panel =
+            dag_core::DataBundle::new(LDSC_W_LD_PANEL, "LD score weights", "/bundles/ldsc/w_ld");
+        w_ld_panel.source = Some("/bundles/ldsc/w_ld".into());
+        w_ld_panel.digest = Some("unused".into());
+        let ctx = NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        )
+        .with_data_bundle_catalog(std::sync::Arc::new(
+            dag_core::DataBundleCatalog::from_bundles([ref_panel, w_ld_panel]).unwrap(),
+        ));
+        let mut registry = dag_core::registry::NodeRegistry::new(ctx);
+        registry.register(Box::new(LdscH2ContainerNodeFactory::new(
+            std::sync::Arc::new(NoopConnection {
+                workspace_root: scratch.path().join("workspace"),
+            }),
+            std::sync::Arc::new(PanelCache::new(scratch.path().join("panels"))),
+        )));
+        registry.register(Box::new(
+            crate::ldsc_munge_container::LdscMungeContainerNodeFactory::new(
+                std::sync::Arc::new(NoopConnection {
+                    workspace_root: scratch.path().join("workspace"),
+                }),
+                std::sync::Arc::new(PanelCache::new(scratch.path().join("panels"))),
+            ),
+        ));
+        let wrapper = registry
+            .build_node(LDSC_H2_CONTAINER_KIND, serde_json::json!({}))
+            .unwrap();
+        let input = wrapper.ports().input_port(0).unwrap();
+
+        assert_eq!(input.format.as_deref(), Some("sumstats_gz"));
+        assert!(input.accepts_format(Some("sumstats_gz")));
+        assert!(input.accepts_format(Some("sumstats_tsv")));
+        assert!(!input.accepts_format(Some("ldsc_log")));
+
+        let mut dag = dag_core::dag::DAG::default();
+        dag.add_node(
+            "pm".into(),
+            registry
+                .build_node(LDSC_MUNGE_CONTAINER_KIND, serde_json::json!({}))
+                .unwrap(),
+        )
+        .unwrap();
+        dag.add_node("ph".into(), wrapper).unwrap();
+        dag.add_edge("pm", "ph", 0, 0).unwrap();
+
+        let mut rejecting = dag_core::dag::DAG::default();
+        rejecting
+            .add_node(
+                "pm".into(),
+                registry
+                    .build_node(LDSC_MUNGE_CONTAINER_KIND, serde_json::json!({}))
+                    .unwrap(),
+            )
+            .unwrap();
+        rejecting
+            .add_node(
+                "ph".into(),
+                registry
+                    .build_node(LDSC_H2_CONTAINER_KIND, serde_json::json!({}))
+                    .unwrap(),
+            )
+            .unwrap();
+        assert!(matches!(
+            rejecting.add_edge("pm", "ph", 1, 0),
+            Err(DagError::PortFormatMismatch { .. })
+        ));
     }
 
     #[test]

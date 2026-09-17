@@ -73,6 +73,20 @@ pub enum DagError {
         actual: String,
     },
 
+    /// Connected ports declare compatible payload types but incompatible file
+    /// formats (for example an LDSC log feeding a sumstats input).
+    #[error(
+        "port format mismatch on edge {from_node}.{from_port} -> {to_node}.{to_port}: expected {expected}, got {actual}"
+    )]
+    PortFormatMismatch {
+        from_node: String,
+        from_port: u8,
+        to_node: String,
+        to_port: u8,
+        expected: String,
+        actual: String,
+    },
+
     /// A scheduler invariant was violated (e.g. a job result arrived for a node
     /// the scheduler did not dispatch).
     #[error("scheduler: {0}")]
@@ -211,6 +225,19 @@ impl DagError {
                 actual,
             } => (
                 "port_type_mismatch",
+                format!(
+                    "edge {from_node}.{from_port} -> {to_node}.{to_port}: expected {expected}, got {actual}"
+                ),
+            ),
+            Self::PortFormatMismatch {
+                from_node,
+                from_port,
+                to_node,
+                to_port,
+                expected,
+                actual,
+            } => (
+                "port_format_mismatch",
                 format!(
                     "edge {from_node}.{from_port} -> {to_node}.{to_port}: expected {expected}, got {actual}"
                 ),

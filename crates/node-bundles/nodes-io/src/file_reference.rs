@@ -29,7 +29,7 @@ pub struct FileReferenceNode {
 impl FileReferenceNode {
     pub fn new(path: impl Into<String>, format: Option<String>) -> Self {
         Self {
-            ports: port_layout(),
+            ports: port_layout(format.as_deref()),
             path: path.into(),
             format,
         }
@@ -40,8 +40,16 @@ impl FileReferenceNode {
     }
 }
 
-fn port_layout() -> NodePorts {
-    NodePorts::new().add_output_port_of_type(None, PortType::File)
+fn port_layout(format: Option<&str>) -> NodePorts {
+    match format {
+        Some(format) => NodePorts::new().add_output_port_of_type_with_label_and_format(
+            None,
+            PortType::File,
+            "file",
+            format,
+        ),
+        None => NodePorts::new().add_output_port_of_type(None, PortType::File),
+    }
 }
 
 #[async_trait]
@@ -183,7 +191,8 @@ impl NodeFactory for FileReferenceNodeFactory {
         attaches size/mtime metadata, and emits a FileRef. Unlike \
         `file_to_dataframe`, it never reads the payload into a DataFrame. This is \
         the intended input node for file-backed dedicated container nodes such as \
-        `ldsc_h2_container`."
+        `ldsc_h2_container`. Set `format` whenever it is known; downstream ports \
+        can reject mismatched files before execution."
     }
 
     fn spec_schema(&self) -> schemars::Schema {
@@ -191,7 +200,7 @@ impl NodeFactory for FileReferenceNodeFactory {
     }
 
     fn ports(&self) -> NodePorts {
-        port_layout()
+        port_layout(None)
     }
 
     fn build(
@@ -201,6 +210,14 @@ impl NodeFactory for FileReferenceNodeFactory {
     ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let spec: FileReferenceNodeSpec = serde_json::from_value(spec)?;
         Ok(Box::new(FileReferenceNode::new(spec.path, spec.format)))
+    }
+
+    fn ports_for_spec(
+        &self,
+        spec: serde_json::Value,
+    ) -> dag_core::registry::error::Result<NodePorts> {
+        let spec: FileReferenceNodeSpec = serde_json::from_value(spec)?;
+        Ok(port_layout(spec.format.as_deref()))
     }
 }
 
@@ -254,6 +271,19 @@ mod tests {
         assert_eq!(file.format.as_deref(), Some("sumstats_gz"));
         let fingerprint = file.fingerprint.as_ref().unwrap();
         assert_eq!(fingerprint.size, b"binary-payload".len() as u64);
+    }
+
+    #[test]
+    fn resolves_spec_format_into_port_contract() {
+        let ports = FileReferenceNodeFactory {}
+            .ports_for_spec(serde_json::json!({
+                "path": "/workspace/data/munged.sumstats.gz",
+                "format": "sumstats_gz"
+            }))
+            .unwrap();
+        let output = ports.output_port(0).unwrap();
+        assert_eq!(output.label.as_deref(), Some("file"));
+        assert_eq!(output.format.as_deref(), Some("sumstats_gz"));
     }
 
     #[tokio::test]

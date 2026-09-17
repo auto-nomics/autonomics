@@ -18,6 +18,16 @@ pub struct Port {
     pub label: Option<String>,
     pub schema: Option<SchemaRef>,
     pub data_type: PortType,
+    /// Optional payload format contract, such as `sumstats_gz` or `ldsc_log`.
+    ///
+    /// `None` is intentionally permissive for legacy nodes and dynamically
+    /// typed files. When both ends of an edge declare a format, they must match.
+    pub format: Option<String>,
+    /// Additional formats accepted by an input port in addition to `format`.
+    ///
+    /// This preserves nodes that accept semantically equivalent encodings (for
+    /// example gzip and plain-text LDSC sumstats).
+    pub accepted_formats: Option<Vec<String>>,
     pub required: bool,
 }
 
@@ -29,6 +39,8 @@ impl Port {
             label: None,
             schema,
             data_type: PortType::DataFrame,
+            format: None,
+            accepted_formats: None,
             required: true,
         }
     }
@@ -46,6 +58,8 @@ impl Port {
             label: None,
             schema: Some(schema),
             data_type: PortType::DataFrame,
+            format: None,
+            accepted_formats: None,
             required: true,
         }
     }
@@ -53,6 +67,40 @@ impl Port {
     pub fn with_data_type(mut self, data_type: PortType) -> Self {
         self.data_type = data_type;
         self
+    }
+
+    /// Attach a payload format contract enforced by DAG edge validation.
+    pub fn with_format(mut self, format: impl Into<String>) -> Self {
+        self.format = Some(format.into());
+        self
+    }
+
+    pub fn with_accepted_formats(
+        mut self,
+        formats: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.accepted_formats = Some(formats.into_iter().map(Into::into).collect());
+        self
+    }
+
+    /// Returns `true` when both format contracts are present and compatible.
+    pub fn accepts_format(&self, actual: Option<&str>) -> bool {
+        // A consumer with no format contract accepts any payload. Likewise,
+        // dynamically typed legacy producers may omit their runtime format.
+        if self.format.is_none() && self.accepted_formats.is_none() {
+            return true;
+        }
+        let Some(actual) = actual else {
+            return true;
+        };
+        if self
+            .accepted_formats
+            .as_deref()
+            .is_some_and(|formats| formats.iter().any(|format| format == actual))
+        {
+            return true;
+        }
+        self.format.as_deref() == Some(actual)
     }
 
     pub fn optional(mut self) -> Self {
@@ -82,9 +130,17 @@ impl Serialize for Port {
         let mut map = serializer.serialize_map(None)?;
         map.serialize_entry("index", &self.index)?;
         if let Some(label) = &self.label {
+            map.serialize_entry("name", label)?;
+            // Older graph clients still refer to the semantic field as a label.
             map.serialize_entry("label", label)?;
         }
         map.serialize_entry("data_type", &self.data_type)?;
+        if let Some(format) = &self.format {
+            map.serialize_entry("format", format)?;
+        }
+        if let Some(formats) = &self.accepted_formats {
+            map.serialize_entry("accepted_formats", formats)?;
+        }
         map.serialize_entry("required", &self.required)?;
 
         match &self.schema {

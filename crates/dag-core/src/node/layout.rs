@@ -79,6 +79,51 @@ impl NodePorts {
         self
     }
 
+    /// Append a typed-value input port with a label and format contract.
+    pub fn add_input_port_of_type_with_label_and_format(
+        mut self,
+        schema: Option<SchemaRef>,
+        data_type: PortType,
+        label: impl Into<String>,
+        format: impl Into<String>,
+    ) -> Self {
+        self.input_ports
+            .add_port_of_type_with_label_and_format(schema, data_type, label, format);
+        self
+    }
+
+    /// Append a typed-value output port with a label and format contract.
+    pub fn add_output_port_of_type_with_label_and_format(
+        mut self,
+        schema: Option<SchemaRef>,
+        data_type: PortType,
+        label: impl Into<String>,
+        format: impl Into<String>,
+    ) -> Self {
+        self.output_ports
+            .add_port_of_type_with_label_and_format(schema, data_type, label, format);
+        self
+    }
+
+    /// Append an input port with primary and alternate format contracts.
+    pub fn add_input_port_of_type_with_accepted_formats(
+        mut self,
+        schema: Option<SchemaRef>,
+        data_type: PortType,
+        label: impl Into<String>,
+        format: impl Into<String>,
+        accepted_formats: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.input_ports.add_port_of_type_with_accepted_formats(
+            schema,
+            data_type,
+            label,
+            format,
+            accepted_formats,
+        );
+        self
+    }
+
     /// Append an optional, schema-less input port carrying a specific value type.
     pub fn add_optional_input_port_of_type(mut self, data_type: PortType) -> Self {
         self.input_ports.add_optional_port_of_type(data_type);

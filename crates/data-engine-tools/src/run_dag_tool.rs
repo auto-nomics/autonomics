@@ -18,6 +18,8 @@ use crate::ExecError;
                   and run according to their dependency order. Returns a \
                   detailed report with per-node status, type, output schema, \
                   row counts, timing, sink paths, and error/skip details. \
+                  For file-producing nodes, use port_assignments (not \
+                  output_files order) when wiring downstream ports. \
                   A snapshot of the DAG is automatically committed to the \
                   history store — provide a descriptive commit message for \
                   easy retrieval via dag_history_log."
@@ -98,6 +100,12 @@ fn build_report_json(report: RunReport) -> serde_json::Value {
             }
             if !nr.output_files.is_empty() {
                 obj.insert("output_files".into(), serde_json::json!(nr.output_files));
+            }
+            if !nr.port_assignments.is_empty() {
+                obj.insert(
+                    "port_assignments".into(),
+                    serde_json::json!(nr.port_assignments),
+                );
             }
 
             if let Some(schema) = nr.output_schema {

@@ -20,14 +20,16 @@ df <- switch(
   stop("unsupported visualization data format: ", data_format)
 )
 
-source(script_path, local = FALSE)
-if (!exists("p", inherits = TRUE) || is.null(p)) {
+script_env <- new.env(parent = emptyenv())
+script_env$df <- df
+source(script_path, local = script_env)
+if (!exists("p", envir = script_env, inherits = FALSE) || is.null(script_env$p)) {
   stop("visualization script must assign a plot to a variable named `p`")
 }
 
 ggplot2::ggsave(
   filename = output_path,
-  plot = p,
+  plot = script_env$p,
   device = "png",
   width = width,
   height = height,
