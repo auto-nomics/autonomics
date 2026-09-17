@@ -150,6 +150,7 @@ impl PodmanConnection for PodmanRuntime {
                     Err(ContainerRuntimeError::ExitStatus {
                         exit_code: output.status.code().unwrap_or(1),
                         stderr,
+                        stdout,
                     })
                 }
             }

@@ -36,7 +36,8 @@ use nodes_io::gcta_container::{
     GctaContainerNodeFactory,
 };
 use nodes_io::hdl_l_container::{
-    HDL_L_CONTAINER_KIND, HDL_UKB_EUR_PANEL, HdlLContainerNodeFactory,
+    HDL_L_CONTAINER_KIND, HDL_ORIGINAL_IMAGE_DIGEST, HDL_ORIGINAL_IMAGE_REPOSITORY,
+    HDL_UKB_EUR_PANEL, HdlLContainerNodeFactory,
 };
 use nodes_io::hdl_l_scan_container::{HDL_L_SCAN_CONTAINER_KIND, HdlLScanContainerNodeFactory};
 use nodes_io::hyprcoloc_container::{HYPRCOLOC_CONTAINER_KIND, HyPrColocContainerNodeFactory};
@@ -624,7 +625,7 @@ async fn catalog_test_fixture() -> CatalogTextFixture {
 }
 
 #[tokio::test]
-#[ignore = "requires rootless Podman and the local official HDL image"]
+#[ignore = "requires rootless Podman and the pinned ACR HDL image"]
 async fn real_official_hdl_l_runs_in_podman_with_local_panel() {
     let scratch = tempfile::tempdir().unwrap();
     let fixture_root = scratch.path().join("official-fixture");
@@ -675,8 +676,13 @@ write.table(gwas2, "/work/gwas2.tsv", sep = "\t", quote = FALSE, row.names = FAL
 "#;
     let podman_program =
         std::env::var("AUTONOMICS_PODMAN_PROGRAM").unwrap_or_else(|_| "podman".into());
-    let image = std::env::var("AUTONOMICS_HDL_IMAGE")
-        .unwrap_or_else(|_| nodes_io::hdl_l_container::HDL_ORIGINAL_IMAGE.into());
+    let image = std::env::var("AUTONOMICS_HDL_IMAGE").unwrap_or_else(|_| {
+        nodes_io::image_registry::acr_image(
+            HDL_ORIGINAL_IMAGE_REPOSITORY,
+            HDL_ORIGINAL_IMAGE_DIGEST,
+        )
+        .unwrap()
+    });
     let fixture_mount = format!("{}:/work", fixture_root.display());
     let status = Command::new(&podman_program)
         .args([
@@ -1179,7 +1185,7 @@ async fn real_catalog_backed_official_hdl_l_scan_runs_in_podman_with_published_p
 }
 
 #[tokio::test]
-#[ignore = "requires the Garage LAVA tutorial panel, rootless Podman, and the local official LAVA image"]
+#[ignore = "requires the Garage LAVA tutorial panel, rootless Podman, and the pinned ACR LAVA image"]
 async fn real_catalog_backed_official_lava_scan_runs_in_podman() {
     let fixture = catalog_test_fixture().await;
     assert!(fixture.bundles.get(LAVA_TUTORIAL_REF_PANEL).is_some());

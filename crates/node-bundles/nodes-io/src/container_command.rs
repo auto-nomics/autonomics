@@ -29,6 +29,7 @@ use container_runtime::{
 };
 
 pub const CONTAINER_COMMAND_KIND: &str = "container_command";
+const FAILURE_CAPTURE_PREVIEW_CHARS: usize = 400;
 
 pub(crate) fn decompress_gzip_inputs(count: usize) -> String {
     let mut script = String::from(
@@ -61,12 +62,54 @@ pub enum ContainerCommandError {
 }
 
 impl ContainerCommandError {
+    fn diagnostic_message(&self) -> String {
+        let Self::Runtime(ContainerRuntimeError::ExitStatus {
+            exit_code,
+            stderr,
+            stdout,
+        }) = self
+        else {
+            return self.to_string();
+        };
+
+        let mut message = format!("container exited with status {exit_code}");
+        if stderr.trim().is_empty() && stdout.trim().is_empty() {
+            message.push_str("; no stdout or stderr captured");
+            return message;
+        }
+        if !stderr.trim().is_empty() {
+            message.push_str("; ");
+            message.push_str(&capture_preview("stderr", stderr));
+        }
+        if !stdout.trim().is_empty() {
+            message.push_str("; ");
+            message.push_str(&capture_preview("stdout", stdout));
+        }
+        message
+    }
+
     fn into_dag_error(self) -> DagError {
         DagError::NodeError {
             node_type: CONTAINER_COMMAND_KIND.into(),
-            msg: self.to_string(),
+            msg: self.diagnostic_message(),
         }
     }
+}
+
+fn capture_preview(label: &str, capture: &str) -> String {
+    let total_chars = capture.chars().count();
+    if total_chars <= FAILURE_CAPTURE_PREVIEW_CHARS {
+        return format!("{label}: {capture}");
+    }
+
+    let start = capture
+        .char_indices()
+        .nth_back(FAILURE_CAPTURE_PREVIEW_CHARS - 1)
+        .map(|(index, _)| index)
+        .unwrap_or(0);
+    let tail = capture[start..].trim_end();
+    let omitted_chars = total_chars - tail.chars().count();
+    format!("{label} tail ({omitted_chars} chars omitted): {tail}")
 }
 
 impl dag_core::dag::NodeError for ContainerCommandError {
@@ -896,12 +939,16 @@ impl DagNode for ContainerCommandNode {
             request.image,
             self.runtime.name()
         ));
-        let result = self
-            .runtime
-            .run(request)
-            .await
-            .map_err(ContainerCommandError::from)
-            .map_err(ContainerCommandError::into_dag_error)?;
+        let result = match self.runtime.run(request).await {
+            Ok(result) => result,
+            Err(error) => {
+                // Also surface the capped capture on the live event stream; the
+                // authoritative copy travels through the node's RunReport error.
+                let error = ContainerCommandError::Runtime(error);
+                reporter.error(error.diagnostic_message());
+                return Err(error.into_dag_error());
+            }
+        };
         if !result.stdout.trim().is_empty() {
             reporter.info(result.stdout);
         }
@@ -1845,6 +1892,72 @@ mod tests {
             .unwrap_err();
 
         assert!(error.to_string().contains("missing.txt"));
+    }
+
+    #[tokio::test]
+    async fn failed_container_exit_is_reported_with_captured_output() {
+        struct FailingRuntime {
+            workspace_root: PathBuf,
+        }
+        #[async_trait]
+        impl PodmanConnection for FailingRuntime {
+            async fn run(
+                &self,
+                _request: ContainerRunRequest,
+            ) -> Result<ContainerRunResult, ContainerRuntimeError> {
+                Err(ContainerRuntimeError::ExitStatus {
+                    exit_code: 42,
+                    stderr: format!("{}\nfinal tool failure", "diagnostic noise\n".repeat(100)),
+                    stdout: "fatal dataframe error".into(),
+                })
+            }
+            fn workspace_root(&self) -> &Path {
+                &self.workspace_root
+            }
+        }
+
+        let env = test_env();
+        let dir = env.workspace.path().join("failed");
+        std::fs::create_dir_all(&dir).unwrap();
+        let node_spec = spec("tool", vec!["tool".into()], "result.txt");
+        let mut node = ContainerCommandNode::new(
+            node_spec,
+            Arc::new(FailingRuntime {
+                workspace_root: env.workspace.path().to_path_buf(),
+            }),
+            Arc::new(PanelCache::new(env.workspace.path().join("cache"))),
+        )
+        .unwrap();
+
+        let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(8);
+        let reporter = dag_core::dag::node_event::NodeReporter::new("container", event_tx);
+        let error = node.execute(&env.ctx, &[], &reporter).await.unwrap_err();
+        let report = error.to_report();
+
+        assert_eq!(report.kind, "node_error");
+        assert!(report.message.contains("status 42"), "{}", report.message);
+        assert!(
+            report.message.contains("final tool failure"),
+            "{}",
+            report.message
+        );
+        assert!(
+            report.message.contains("chars omitted"),
+            "{}",
+            report.message
+        );
+        assert!(
+            report.message.contains("fatal dataframe error"),
+            "{}",
+            report.message
+        );
+        assert!(
+            event_rx.try_recv().is_ok_and(|event| matches!(
+                event.kind,
+                dag_core::dag::node_event::NodeEventKind::Log { .. }
+            )),
+            "container failure should also be emitted as a live node log"
+        );
     }
 
     #[tokio::test]
