@@ -19,12 +19,15 @@ use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
     ContainerPanelBundleSpec,
 };
+use crate::image_registry::acr_image;
 use crate::lava_container;
-use crate::lava_container::{LAVA_TUTORIAL_REF_PANEL, LAVA_UKB_EUR_PANEL};
+use crate::lava_container::{
+    LAVA_ORIGINAL_IMAGE_DIGEST, LAVA_ORIGINAL_IMAGE_REPOSITORY, LAVA_TUTORIAL_REF_PANEL,
+    LAVA_UKB_EUR_PANEL,
+};
 use container_runtime::{PanelCache, PodmanConnection, PullPolicy};
 
 pub const LAVA_SCAN_CONTAINER_KIND: &str = "lava_scan_container";
-pub const LAVA_ORIGINAL_IMAGE: &str = "localhost/atc/lava:0.1.5";
 
 const DEFAULT_ARTIFACT_PREFIX: &str = "/artifacts/lava_scan_container";
 const DEFAULT_TIMEOUT_SECS: u64 = 86_400;
@@ -518,7 +521,7 @@ pub fn container_spec(spec: &LavaScanContainerSpec) -> Result<ContainerCommandSp
         .unwrap_or_else(|| panel.mount_path.to_string());
 
     Ok(ContainerCommandSpec {
-        image: LAVA_ORIGINAL_IMAGE.into(),
+        image: acr_image(LAVA_ORIGINAL_IMAGE_REPOSITORY, LAVA_ORIGINAL_IMAGE_DIGEST)?,
         command: vec!["Rscript".into()],
         script: Some(build_script(spec)),
         files: Default::default(),
@@ -684,7 +687,10 @@ mod tests {
     #[test]
     fn builds_official_lava_scan_contract() {
         let container = container_spec(&spec()).unwrap();
-        assert_eq!(container.image, LAVA_ORIGINAL_IMAGE);
+        assert_eq!(
+            container.image,
+            acr_image(LAVA_ORIGINAL_IMAGE_REPOSITORY, LAVA_ORIGINAL_IMAGE_DIGEST).unwrap()
+        );
         assert_eq!(container.panel_bundles.len(), 1);
         assert_eq!(container.panel_bundles[0].panel_id, LAVA_TUTORIAL_REF_PANEL);
         assert_eq!(container.panel_bundles[0].mount_path, "/panels/lava_ref");

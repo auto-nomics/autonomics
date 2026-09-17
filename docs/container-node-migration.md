@@ -450,9 +450,9 @@ crates/node-bundles/nodes-io/src/hdl_l_container.rs
 crates/node-bundles/nodes-io/src/hdl_l_scan_container.rs
 ```
 
-The image installs official `HDL` 1.4.3 at commit `e6b055d` and runs through
-rootless Podman under the local `localhost/atc/hdl:1.4.3` tag. No registry or
-Podman backend is required. The official Zenodo UKB EUR payload is normalized into
+The image installs official `HDL` 1.4.3 at commit `e6b055d`, is published as
+`$ACR_ENDPOINT/autonomics/hdl:1.4.3`, and is pinned by immutable manifest
+digest. The official Zenodo UKB EUR payload is normalized into
 one catalog package with `LD/*_LDSVD.rda`, `LD/HDLL_LOC_snps.RData`, and
 matching per-block BIM files. The wrapper takes two official-format GWAS
 summary Files plus `chr` and `piece`, invokes `HDL::HDL.L`, and emits TSV, RDS,
