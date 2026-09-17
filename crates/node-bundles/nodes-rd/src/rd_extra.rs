@@ -119,34 +119,6 @@ impl NodeFactory for RdMcNodeFactory {
     ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         Ok(Box::new(RdMcNode::new(serde_json::from_value(spec)?)))
     }
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut dag_core::codegen::CodegenCtx,
-    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
-        use dag_core::codegen::helpers::*;
-        let cfg = parse_spec::<RdMcNodeConfig>(spec, RDMC_NODE_KIND)?;
-        let input = ctx
-            .input_vars
-            .first()
-            .map(|s| s.as_str())
-            .unwrap_or("__missing_input");
-        let out = ctx.output_var.to_string();
-        let code = vec![
-            "# rdmc: multi-cutoff RD".to_string(),
-            "library(rdmulti)".to_string(),
-            format!(
-                "{out} <- rdmc(Y = {input}${}, X = {input}${}, C = {input}${})",
-                r_str(&cfg.y),
-                r_str(&cfg.x),
-                r_str(&cfg.c)
-            ),
-        ];
-        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
-    }
-    fn r_packages(&self) -> Vec<String> {
-        vec!["rdmulti".into()]
-    }
 }
 
 #[async_trait]
@@ -362,34 +334,6 @@ impl NodeFactory for RdDensityNodeFactory {
     ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         Ok(Box::new(RdDensityNode::new(serde_json::from_value(spec)?)))
     }
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut dag_core::codegen::CodegenCtx,
-    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
-        use dag_core::codegen::helpers::*;
-        let cfg = parse_spec::<RdDensityNodeConfig>(spec, RDDENSITY_NODE_KIND)?;
-        let input = ctx
-            .input_vars
-            .first()
-            .map(|s| s.as_str())
-            .unwrap_or("__missing_input");
-        let out = ctx.output_var.to_string();
-        let code = vec![
-            "# rddensity: manipulation testing".to_string(),
-            "library(rddensity)".to_string(),
-            format!(
-                "{out} <- rddensity(X = {input}${}, c = {})",
-                r_str(&cfg.x),
-                cfg.cutoff
-            ),
-            format!("print(summary({out}))"),
-        ];
-        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
-    }
-    fn r_packages(&self) -> Vec<String> {
-        vec!["rddensity".into()]
-    }
 }
 
 #[async_trait]
@@ -581,34 +525,6 @@ impl NodeFactory for RdRandInfNodeFactory {
         _: NodeCtx,
     ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         Ok(Box::new(RdRandInfNode::new(serde_json::from_value(spec)?)))
-    }
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut dag_core::codegen::CodegenCtx,
-    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
-        use dag_core::codegen::helpers::*;
-        let cfg = parse_spec::<RdRandInfNodeConfig>(spec, RDRANDINF_NODE_KIND)?;
-        let input = ctx
-            .input_vars
-            .first()
-            .map(|s| s.as_str())
-            .unwrap_or("__missing_input");
-        let out = ctx.output_var.to_string();
-        let code = vec![
-            "# rdrandinf: randomization inference".to_string(),
-            "library(rdlocrand)".to_string(),
-            format!(
-                "{out} <- rdrandinf(Y = {input}${}, R = {input}${}, cutoff = {})",
-                r_str(&cfg.y),
-                r_str(&cfg.r),
-                cfg.cutoff
-            ),
-        ];
-        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
-    }
-    fn r_packages(&self) -> Vec<String> {
-        vec!["rdlocrand".into()]
     }
 }
 

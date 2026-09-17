@@ -11,8 +11,6 @@ use async_trait::async_trait;
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 
-use dag_core::codegen::context::{CodegenCtx, CodegenError, NodeCodegen};
-use dag_core::codegen::helpers::*;
 use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::registry::NodeFactory;
 use dag_core::{
@@ -84,26 +82,6 @@ impl NodeFactory for MiceCompleteNodeFactory {
             meta: port_layout(),
             spec: s,
         }))
-    }
-
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut CodegenCtx,
-    ) -> std::result::Result<NodeCodegen, CodegenError> {
-        let s = parse_spec::<MiceCompleteNodeSpec>(spec, "mice_complete")?;
-        let out = ctx.output_var.to_string();
-        let input = input_0(ctx).to_string();
-        let code = vec![
-            "# Extract completed data".to_string(),
-            format!("{out} <- {input}[{input}$.imp == {}, ]", s.imputation),
-            format!("print({out})"),
-        ];
-        Ok(NodeCodegen::simple(code, out))
-    }
-
-    fn r_packages(&self) -> Vec<String> {
-        vec!["mice".into()]
     }
 }
 

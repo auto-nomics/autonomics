@@ -20,8 +20,6 @@ use thiserror::Error;
 
 use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::{
-    codegen::CodegenTarget,
-    codegen::context::{CodegenCtx, CodegenError, NodeCodegen},
     dag::{DagError, graph::PortOutputs},
     registry::{NodeCtx, NodeFactory},
     value::PortType,
@@ -367,91 +365,6 @@ impl NodeFactory for FileToDataFrameNodeFactory {
             ),
         );
         Ok(Box::new(node))
-    }
-
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut CodegenCtx,
-    ) -> std::result::Result<NodeCodegen, CodegenError> {
-        let node_spec: FileToDataFrameNodeSpec =
-            serde_json::from_value(spec.clone()).map_err(|e| CodegenError::BadSpec {
-                kind: "file_to_dataframe".into(),
-                source: e,
-            })?;
-
-        let connected_input = ctx
-            .input_vars
-            .first()
-            .is_some_and(|input| !input.starts_with("__missing_input"));
-        let literal_path = node_spec.path.as_deref();
-        if literal_path.is_none() && !connected_input {
-            return Err(CodegenError::NotSupported {
-                kind: "file_to_dataframe".into(),
-                target: CodegenTarget::R,
-            });
-        }
-        if !node_spec.partition_by.is_empty() {
-            return Err(CodegenError::NotSupported {
-                kind: "file_to_dataframe partitioned Parquet".into(),
-                target: CodegenTarget::R,
-            });
-        }
-        let fmt = node_spec
-            .format
-            .or_else(|| literal_path.and_then(FileFormat::from_path))
-            .unwrap_or(FileFormat::Csv);
-        let path = if connected_input {
-            ctx.input_vars
-                .first()
-                .expect("checked input presence")
-                .clone()
-        } else {
-            format!(r#""{}""#, literal_path.unwrap_or_default())
-        };
-
-        let out = ctx.output_var.to_string();
-        let read_call = match fmt {
-            FileFormat::Csv | FileFormat::Tsv => {
-                format!(r#"{out} <- fread({path})"#)
-            }
-            FileFormat::Parquet => {
-                format!(r#"{out} <- read_parquet({path})"#)
-            }
-            FileFormat::Json => {
-                format!(r#"{out} <- jsonlite::fromJSON({path}, simplifyDataFrame = TRUE)"#)
-            }
-            FileFormat::Vcf => {
-                format!(
-                    r#"# NOTE: R codegen for VCF uses vcfR::read.vcfR
-{out} <- vcfR::read.vcfR({path}, verbose = FALSE)"#
-                )
-            }
-            FileFormat::Bed => {
-                format!(r#"{out} <- read.table({path}, sep = "\t", header = FALSE)"#)
-            }
-            FileFormat::Mtx => {
-                format!(
-                    "# NOTE: MatrixMarket is loaded as the long table (row, column, value).\n\
-                     mm_summary <- Matrix::summary(Matrix::readMM({path}))\n\
-                     {out} <- data.frame(row = mm_summary$i, column = mm_summary$j, value = mm_summary$x)"
-                )
-            }
-            _ => {
-                // Fallback: comment + placeholder
-                format!(
-                    "# NOTE: R codegen for {fmt:?} format not yet implemented — \
-                     read the file manually"
-                )
-            }
-        };
-
-        let code = vec![read_call];
-        Ok(NodeCodegen::simple(code, out))
-    }
-
-    fn r_packages(&self) -> Vec<String> {
-        vec!["data.table".into(), "jsonlite".into()]
     }
 }
 

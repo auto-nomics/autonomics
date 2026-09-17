@@ -1,11 +1,10 @@
-//! Core DAG engine: node traits, factory registry, graph scheduler, and
-//! codegen — free of any concrete node implementations.
+//! Core DAG engine: node traits, factory registry, and graph scheduler,
+//! free of any concrete node implementations.
 //!
 //! Concrete node bundles live in separate `nodes-*` crates and register
 //! themselves via the [`plugin::NodePlugin`] trait.
 
 pub mod arrow_util;
-pub mod codegen;
 pub mod dag;
 pub mod dataset;
 pub mod error;

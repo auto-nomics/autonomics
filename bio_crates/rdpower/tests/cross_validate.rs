@@ -444,23 +444,3 @@ fn test_power_function_properties() {
         n3
     );
 }
-
-// =====================================================================
-// codegen_r validation
-// =====================================================================
-
-mod codegen_tests {
-    // The codegen_r tests verify that the generated R code correctly
-    // calls the rdrobust and rdpower packages. These are validated
-    // by the codegen_r methods in the DAG node implementations.
-
-    #[test]
-    fn test_codegen_r_structure() {
-        // Verify that the R package names are correct.
-        let rd_packages = ["rdrobust".to_string()];
-        assert!(rd_packages.contains(&"rdrobust".to_string()));
-
-        let power_packages = ["rdpower".to_string()];
-        assert!(power_packages.contains(&"rdpower".to_string()));
-    }
-}

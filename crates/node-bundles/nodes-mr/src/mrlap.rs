@@ -161,53 +161,6 @@ impl NodeFactory for MrlapNodeFactory {
             ctx.bound_data_bundle("ld_panel")?.clone(),
         )))
     }
-
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut dag_core::codegen::CodegenCtx,
-    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
-        use dag_core::codegen::helpers::*;
-        let s = parse_spec::<MrlapSpec>(spec, "mrlap")?;
-        let out = ctx.output_var.to_string();
-        let input1 = ctx
-            .input_vars
-            .first()
-            .cloned()
-            .unwrap_or_else(|| "__missing_input_0".into());
-        let input2 = ctx
-            .input_vars
-            .get(1)
-            .cloned()
-            .unwrap_or_else(|| "__missing_input_1".into());
-        let exp_dat = ctx.fresh_var("exp_dat");
-        let out_dat = ctx.fresh_var("out_dat");
-        let result = ctx.fresh_var("mrlap_result");
-        let code = vec![
-            format!("# MRlap: overlap-aware Mendelian Randomisation"),
-            format!("{exp_dat} <- {input1}"),
-            format!("{out_dat} <- {input2}"),
-            format!("set.seed({})", s.seed),
-            format!("{result} <- MRlap::MRlap("),
-            format!("  exposure_dat = {exp_dat},"),
-            format!("  outcome_dat = {out_dat},"),
-            format!("  exposure_name = \"{}\",", s.exposure_name),
-            format!("  outcome_name = \"{}\",", s.outcome_name),
-            format!("  bfile = \"<path_to_plink_bed_prefix>\","),
-            format!("  ld_threads = 1,"),
-            format!("  mr_threshold = {},", s.mr_threshold),
-            format!("  mr_pruning_dist_kb = {},", s.mr_pruning_dist_kb),
-            format!("  mr_reverse = {}", s.mr_reverse),
-            format!(")"),
-            format!("{out} <- summary({result})"),
-            format!("print({out})"),
-        ];
-        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
-    }
-
-    fn r_packages(&self) -> Vec<String> {
-        vec!["MRlap".into()]
-    }
 }
 
 // ---- arrow column helpers ----

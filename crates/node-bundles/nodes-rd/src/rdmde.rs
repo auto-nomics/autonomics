@@ -128,50 +128,6 @@ impl NodeFactory for RdMdeNodeFactory {
         let config: RdMdeNodeConfig = serde_json::from_value(spec)?;
         Ok(Box::new(RdMdeNode::new(config)))
     }
-
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut dag_core::codegen::CodegenCtx,
-    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
-        use dag_core::codegen::helpers::*;
-        let cfg = parse_spec::<RdMdeNodeConfig>(spec, RDMDE_NODE_KIND)?;
-        let input = ctx
-            .input_vars
-            .first()
-            .map(|s| s.as_str())
-            .unwrap_or("__missing_input");
-        let out = ctx.output_var.to_string();
-        let mut args = vec![
-            format!(
-                "data = cbind({input}${}, {input}${})",
-                r_str(&cfg.y),
-                r_str(&cfg.x)
-            ),
-            format!("cutoff = {}", cfg.cutoff),
-            format!("alpha = {}", cfg.alpha),
-            format!("beta = {}", cfg.beta),
-            format!("p = {}", cfg.p),
-            format!("deriv = {}", cfg.deriv),
-            format!("kernel = {}", r_str(&cfg.kernel)),
-            format!("bwselect = {}", r_str(&cfg.bwselect)),
-            format!("vce = {}", r_str(&cfg.vce)),
-        ];
-        if let Some(ic) = cfg.init_cond {
-            args.push(format!("init.cond = {ic}"));
-        }
-        let code = vec![
-            "# rdmde: RD minimum detectable effect".to_string(),
-            "library(rdpower)".to_string(),
-            format!("{out} <- rdmde({})", args.join(", ")),
-            format!("print({out})"),
-        ];
-        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
-    }
-
-    fn r_packages(&self) -> Vec<String> {
-        vec!["rdpower".into()]
-    }
 }
 
 #[async_trait]

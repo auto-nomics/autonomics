@@ -8,8 +8,6 @@ use rand::rngs::StdRng;
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 
-use dag_core::codegen::context::{CodegenCtx, CodegenError, NodeCodegen};
-use dag_core::codegen::helpers::*;
 use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::registry::NodeFactory;
 use dag_core::{
@@ -79,63 +77,6 @@ impl NodeFactory for MiceImputeLogregNodeFactory {
             meta: port_layout(),
             spec: s,
         }))
-    }
-
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut CodegenCtx,
-    ) -> std::result::Result<NodeCodegen, CodegenError> {
-        let s = parse_spec::<MiceImputeLogregNodeSpec>(spec, "mice_impute_logreg")?;
-        let out = ctx.output_var.to_string();
-        let fit_var = ctx.fresh_var("logreg_fit");
-        let input = input_0(ctx).to_string();
-        let preds_expr = if s.predictors.is_empty() {
-            String::new()
-        } else {
-            format!(
-                "cbind({})",
-                s.predictors
-                    .iter()
-                    .map(|c| format!("{input}${c}"))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        };
-        let yc = s.y_column.clone();
-        let code = vec![
-            "src <- as.data.frame(src)".to_string(),
-            "# Logistic regression imputation".to_string(),
-            "library(mice)".to_string(),
-            format!("{fit_var} <- mice.impute.logreg("),
-            format!("  y = {input}${},", yc),
-            format!("  ry = !is.na({input}${}),", yc),
-            format!("  x = {preds_expr},"),
-            format!("  wy = is.na({input}${})", yc),
-            ")".to_string(),
-            "# Observed-set statistics + glm predicted probability for xval".to_string(),
-            {
-                let formula_part = format!(
-                    "as.formula(paste(\"{yc} ~\", paste(setdiff(names({input}), \"{yc}\"), collapse = \" + \")))",
-                    yc = yc,
-                    input = input
-                );
-                format!(
-                    "{{ obs_y <- {input}${yc}[!is.na({input}${yc})]; obs_mean <- mean(obs_y); formula_glm <- {formula}; fit_glm <- glm(formula_glm, family = binomial, data = {input}); pred_obs <- predict(fit_glm, newdata = {input}[is.na({input}${yc}), ], type = \"response\"); binarised_pred <- as.numeric(pred_obs > 0.5); {out} <- data.frame(imputed = as.numeric({fit_var}), is_binary = as.numeric({fit_var}) %in% c(0, 1), predicted_prob = as.numeric(pred_obs), binarised_pred = binarised_pred, observed_mean = obs_mean) }}",
-                    input = input,
-                    yc = yc,
-                    formula = formula_part,
-                    fit_var = fit_var,
-                    out = out
-                )
-            },
-            format!("print({out})"),
-        ];
-        Ok(NodeCodegen::simple(code, out))
-    }
-
-    fn r_packages(&self) -> Vec<String> {
-        vec!["mice".into()]
     }
 }
 

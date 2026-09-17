@@ -6,9 +6,7 @@
 //!   fpc, nest, pps)`).
 //! - [`SurveyStubNode`] — a generic stub node used until per-node Rust
 //!   implementations are written. Returns a "not yet implemented" error from
-//!   `execute`, but fully supports `codegen_r` so R survey-package code can be
-//!   generated immediately.
-//! - R codegen helpers: [`gen_design_r`], [`formula_rhs`], [`r_true_false`].
+//!   `execute`.
 //!
 //! See `reference/survey/` for the R package source (v4.5, Thomas Lumley).
 //! The porting plan is documented in memory `[[survey-crate-scope]]`.
@@ -19,7 +17,6 @@ use serde::Deserialize;
 
 use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::{
-    codegen::CodegenCtx,
     dag::{DagError, graph::PortOutputs},
     registry::NodeCtx,
 };
@@ -98,8 +95,7 @@ fn default_variance() -> String {
 
 /// A generic stub node for survey analysis nodes.
 ///
-/// The `execute` method returns a "not yet implemented" error, directing
-/// users to `codegen_r` for working R survey-package code. Each node kind
+/// The `execute` method returns a "not yet implemented" error. Each node kind
 /// is differentiated only by its `kind` string and port layout.
 ///
 /// When implementing a node's Rust execution path, replace this with a
@@ -152,11 +148,7 @@ impl DagNode for SurveyStubNode {
     ) -> Result<PortOutputs, DagError> {
         Err(DagError::NodeError {
             node_type: self.kind.to_string(),
-            msg: format!(
-                "Rust execution not yet implemented for '{}'. \
-                 Use codegen_r to generate working R survey-package code.",
-                self.kind
-            ),
+            msg: format!("Rust execution not yet implemented for '{}'", self.kind),
         })
     }
 }
@@ -180,84 +172,13 @@ pub fn one_in_two_out() -> NodePorts {
 }
 
 // =====================================================================
-// R codegen helpers
-// =====================================================================
-
-/// Build the right-hand side of an R formula from column names.
-/// Empty → `"1"`, single → `"col"`, multiple → `"col1 + col2"`.
-pub fn formula_rhs(cols: &[String]) -> String {
-    if cols.is_empty() {
-        "1".to_string()
-    } else {
-        cols.join(" + ")
-    }
-}
-
-/// Convert a Rust `bool` to an R `TRUE`/`FALSE` literal.
-pub fn r_true_false(b: bool) -> &'static str {
-    if b { "TRUE" } else { "FALSE" }
-}
-
-/// Generate R code to construct a `svydesign` object from a
-/// [`SurveyDesignSpec`].
-///
-/// Returns `(design_var_name, code_lines)` where `code_lines` includes the
-/// `svydesign(...)` call (and optionally `options(survey.lonely.psu=...)`
-/// before it).
-pub fn gen_design_r(
-    design: &SurveyDesignSpec,
-    data_var: &str,
-    ctx: &mut CodegenCtx,
-) -> (String, Vec<String>) {
-    let des_var = ctx.fresh_var("des");
-    let mut code = Vec::new();
-
-    // Set lonely-PSU option if specified.
-    if let Some(lp) = &design.lonely_psu {
-        code.push(format!("options(survey.lonely.psu = \"{lp}\")"));
-    }
-
-    let mut args = vec![
-        format!("ids = ~{}", formula_rhs(&design.ids)),
-        format!("data = {data_var}"),
-    ];
-
-    if !design.strata.is_empty() {
-        args.push(format!("strata = ~{}", formula_rhs(&design.strata)));
-    }
-    if let Some(w) = &design.weights {
-        args.push(format!("weights = ~{w}"));
-    }
-    if !design.probs.is_empty() {
-        args.push(format!("probs = ~{}", formula_rhs(&design.probs)));
-    }
-    if !design.fpc.is_empty() {
-        args.push(format!("fpc = ~{}", formula_rhs(&design.fpc)));
-    }
-    if design.nest {
-        args.push("nest = TRUE".to_string());
-    }
-    match design.pps.as_str() {
-        "none" | "" => {}
-        p => args.push(format!("pps = \"{p}\"")),
-    }
-    if design.variance == "YG" {
-        args.push("variance = \"YG\"".to_string());
-    }
-
-    code.push(format!("{des_var} <- svydesign({})", args.join(", ")));
-    (des_var, code)
-}
-
-// =====================================================================
 // Generic spec-validation build helper
 // =====================================================================
 
 /// Deserialize a spec JSON into a typed config, returning a stub node.
 ///
 /// Used by factory `build` methods to validate the spec during DAG
-/// construction (so errors surface early) while deferring execution to
-/// `codegen_r`.
+/// construction so errors surface early while execution remains deferred.
 pub fn build_stub<S>(
     kind: &'static str,
     spec: serde_json::Value,
@@ -740,24 +661,6 @@ pub fn student_t_two_sided_p(t: f64, df: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn formula_rhs_empty_is_one() {
-        assert_eq!(formula_rhs(&[]), "1");
-    }
-
-    #[test]
-    fn formula_rhs_single() {
-        assert_eq!(formula_rhs(&["psu".to_string()]), "psu");
-    }
-
-    #[test]
-    fn formula_rhs_multi() {
-        assert_eq!(
-            formula_rhs(&["county".to_string(), "school".to_string()]),
-            "county + school"
-        );
-    }
 
     #[test]
     fn design_spec_deserializes() {

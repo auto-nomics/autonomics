@@ -15,9 +15,7 @@ use arrow_array::{Float64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 use async_trait::async_trait;
 
-use crate::survey_common::{SurveyDesignSpec, formula_rhs, gen_design_r, one_in_one_out};
-use dag_core::codegen::helpers::{input_0, parse_spec, r_formula};
-use dag_core::codegen::{CodegenCtx, CodegenError, NodeCodegen};
+use crate::survey_common::{SurveyDesignSpec, one_in_one_out};
 use dag_core::dag::{DagError, graph::PortOutputs};
 use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::registry::{NodeCtx, NodeFactory};
@@ -235,34 +233,6 @@ impl NodeFactory for SvyGlmFactory {
         let node_spec: SvyGlmSpec = serde_json::from_value(spec)?;
         Ok(Box::new(SvyGlmNode::new(node_spec)))
     }
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut CodegenCtx,
-    ) -> Result<NodeCodegen, CodegenError> {
-        let s = parse_spec::<SvyGlmSpec>(spec, "survey_node")?;
-        let input = input_0(ctx).to_string();
-        let out = ctx.output_var.to_string();
-        let (des, mut code) = gen_design_r(&s.design, &input, ctx);
-        let formula = r_formula(&s.response, &s.predictors, s.intercept);
-        let family_call = match &s.link {
-            Some(link) => format!("{}(link = \"{link}\")", s.family),
-            None => format!("{}()", s.family),
-        };
-        let std_arg = if s.std_errors != "linearized" {
-            format!(", std.errors = \"{}\"", s.std_errors)
-        } else {
-            String::new()
-        };
-        code.push(format!(
-            "{out} <- svyglm({formula}, {des}, family = {family_call}{std_arg})"
-        ));
-        code.push(format!("print(summary({out}))"));
-        Ok(NodeCodegen::simple(code, out))
-    }
-    fn r_packages(&self) -> Vec<String> {
-        vec!["survey".into()]
-    }
 }
 
 // =====================================================================
@@ -273,8 +243,7 @@ impl NodeFactory for SvyGlmFactory {
 #[serde(deny_unknown_fields)]
 pub struct SvyCoxphSpec {
     pub design: SurveyDesignSpec,
-    /// Response: a survival outcome column name. In R this must be a
-    /// `Surv(time, event)` object; for codegen we emit `Surv({time}, {event})`.
+    /// Response: a survival outcome column name.
     pub time_column: String,
     pub event_column: String,
     pub predictors: Vec<String>,
@@ -317,31 +286,6 @@ impl NodeFactory for SvyCoxphFactory {
             });
         }
         Ok(Box::new(SvyCoxphNode::new(s)))
-    }
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut CodegenCtx,
-    ) -> Result<NodeCodegen, CodegenError> {
-        let s = parse_spec::<SvyCoxphSpec>(spec, "survey_node")?;
-        let input = input_0(ctx).to_string();
-        let out = ctx.output_var.to_string();
-        let (des, mut code) = gen_design_r(&s.design, &input, ctx);
-        let rhs = if s.predictors.is_empty() {
-            "1".to_string()
-        } else {
-            s.predictors.join(" + ")
-        };
-        code.push(format!(
-            "{out} <- svycoxph(Surv({t}, {e}) ~ {rhs}, {des}, ties = \"breslow\")",
-            t = s.time_column,
-            e = s.event_column
-        ));
-        code.push(format!("print(summary({out}))"));
-        Ok(NodeCodegen::simple(code, out))
-    }
-    fn r_packages(&self) -> Vec<String> {
-        vec!["survey".into(), "survival".into()]
     }
 }
 
@@ -394,32 +338,6 @@ impl NodeFactory for SvySurvregFactory {
             Ok(Box::new(SvySurvregNode::new(s)))
         }
     }
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut CodegenCtx,
-    ) -> Result<NodeCodegen, CodegenError> {
-        let s = parse_spec::<SvySurvregSpec>(spec, "survey_node")?;
-        let input = input_0(ctx).to_string();
-        let out = ctx.output_var.to_string();
-        let (des, mut code) = gen_design_r(&s.design, &input, ctx);
-        let rhs = if s.predictors.is_empty() {
-            "1".to_string()
-        } else {
-            s.predictors.join(" + ")
-        };
-        code.push(format!(
-            "{out} <- svysurvreg(Surv({t}, {e}) ~ {rhs}, {des}, dist = \"{dist}\")",
-            t = s.time_column,
-            e = s.event_column,
-            dist = s.dist
-        ));
-        code.push(format!("print(summary({out}))"));
-        Ok(NodeCodegen::simple(code, out))
-    }
-    fn r_packages(&self) -> Vec<String> {
-        vec!["survey".into(), "survival".into()]
-    }
 }
 
 // =====================================================================
@@ -470,31 +388,6 @@ impl NodeFactory for SvyOlrFactory {
             Ok(Box::new(SvyOlrNode::new(s)))
         }
     }
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut CodegenCtx,
-    ) -> Result<NodeCodegen, CodegenError> {
-        let s = parse_spec::<SvyOlrSpec>(spec, "survey_node")?;
-        let input = input_0(ctx).to_string();
-        let out = ctx.output_var.to_string();
-        let (des, mut code) = gen_design_r(&s.design, &input, ctx);
-        let rhs = if s.predictors.is_empty() {
-            "1".to_string()
-        } else {
-            s.predictors.join(" + ")
-        };
-        code.push(format!(
-            "{out} <- svyolr({resp} ~ {rhs}, {des}, method = \"{m}\")",
-            resp = s.response,
-            m = s.method
-        ));
-        code.push(format!("print(summary({out}))"));
-        Ok(NodeCodegen::simple(code, out))
-    }
-    fn r_packages(&self) -> Vec<String> {
-        vec!["survey".into(), "MASS".into()]
-    }
 }
 
 // =====================================================================
@@ -539,30 +432,6 @@ impl NodeFactory for SvyLoglinFactory {
             let s: SvyLoglinSpec = serde_json::from_value(spec)?;
             Ok(Box::new(SvyLoglinNode::new(s)))
         }
-    }
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut CodegenCtx,
-    ) -> Result<NodeCodegen, CodegenError> {
-        let s = parse_spec::<SvyLoglinSpec>(spec, "survey_node")?;
-        let input = input_0(ctx).to_string();
-        let out = ctx.output_var.to_string();
-        let (des, mut code) = gen_design_r(&s.design, &input, ctx);
-        let rhs = formula_rhs(&s.variables);
-        let subset_arg = match s.max_interaction {
-            Some(k) => format!(", subset = ~.^{k}"),
-            None => String::new(),
-        };
-        code.push(format!(
-            "{out} <- svyloglin(~{rhs}{sa}, {des})",
-            sa = subset_arg
-        ));
-        code.push(format!("print(summary({out}))"));
-        Ok(NodeCodegen::simple(code, out))
-    }
-    fn r_packages(&self) -> Vec<String> {
-        vec!["survey".into()]
     }
 }
 
@@ -614,34 +483,6 @@ impl NodeFactory for SvyMleFactory {
             Ok(Box::new(SvyMleNode::new(s)))
         }
     }
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut CodegenCtx,
-    ) -> Result<NodeCodegen, CodegenError> {
-        let s = parse_spec::<SvyMleSpec>(spec, "survey_node")?;
-        let input = input_0(ctx).to_string();
-        let out = ctx.output_var.to_string();
-        let (des, mut code) = gen_design_r(&s.design, &input, ctx);
-        let grad_arg = match &s.gradient_fn {
-            Some(g) => format!(", gradient = {g}"),
-            None => String::new(),
-        };
-        code.push(format!(
-            "{out} <- svymle(loglike = {fn}, start = list({start}), \
-             design = {des}, formulas = list({resp} ~ {rhs}){grad})",
-            fn = s.loglik_fn,
-            start = s.start,
-            resp = s.response,
-            rhs = formula_rhs(&s.predictors),
-            grad = grad_arg
-        ));
-        code.push(format!("print(summary({out}))"));
-        Ok(NodeCodegen::simple(code, out))
-    }
-    fn r_packages(&self) -> Vec<String> {
-        vec!["survey".into()]
-    }
 }
 
 // =====================================================================
@@ -685,26 +526,6 @@ impl NodeFactory for SvyNlsFactory {
             let s: SvyNlsSpec = serde_json::from_value(spec)?;
             Ok(Box::new(SvyNlsNode::new(s)))
         }
-    }
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut CodegenCtx,
-    ) -> Result<NodeCodegen, CodegenError> {
-        let s = parse_spec::<SvyNlsSpec>(spec, "survey_node")?;
-        let input = input_0(ctx).to_string();
-        let out = ctx.output_var.to_string();
-        let (des, mut code) = gen_design_r(&s.design, &input, ctx);
-        code.push(format!(
-            "{out} <- svynls({formula}, design = {des}, start = list({start}))",
-            formula = s.formula,
-            start = s.start
-        ));
-        code.push(format!("print(summary({out}))"));
-        Ok(NodeCodegen::simple(code, out))
-    }
-    fn r_packages(&self) -> Vec<String> {
-        vec!["survey".into()]
     }
 }
 
@@ -755,40 +576,6 @@ impl NodeFactory for SvyIvregFactory {
             let s: SvyIvregSpec = serde_json::from_value(spec)?;
             Ok(Box::new(SvyIvregNode::new(s)))
         }
-    }
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut CodegenCtx,
-    ) -> Result<NodeCodegen, CodegenError> {
-        let s = parse_spec::<SvyIvregSpec>(spec, "survey_node")?;
-        let input = input_0(ctx).to_string();
-        let out = ctx.output_var.to_string();
-        let (des, mut code) = gen_design_r(&s.design, &input, ctx);
-        // AER::ivreg formula: y ~ endo + exo | instruments
-        let endo = if s.endogenous.is_empty() {
-            "1"
-        } else {
-            &s.endogenous.join(" + ")
-        };
-        let exo = if s.exogenous.is_empty() {
-            String::new()
-        } else {
-            format!(" + {}", s.exogenous.join(" + "))
-        };
-        let instr = s.instruments.join(" + ");
-        code.push(format!(
-            "{out} <- svyivreg({resp} ~ {endo}{exo} | {instr}, {des})",
-            resp = s.response,
-            endo = endo,
-            exo = exo,
-            instr = instr
-        ));
-        code.push(format!("print(summary({out}))"));
-        Ok(NodeCodegen::simple(code, out))
-    }
-    fn r_packages(&self) -> Vec<String> {
-        vec!["survey".into(), "AER".into()]
     }
 }
 
@@ -1187,8 +974,10 @@ impl SpecExecute for SvyNlsSpec {
         _r: &dag_core::dag::node_event::NodeReporter,
         kind: &str,
     ) -> Result<PortOutputs, DagError> {
-        Err(DagError::NodeError { node_type: kind.into(),
-            msg: "svynls requires user-supplied model function. Use codegen_r or call survey::svy_nls directly.".into() })
+        Err(DagError::NodeError {
+            node_type: kind.into(),
+            msg: "svynls requires a user-supplied model function".into(),
+        })
     }
 }
 
@@ -1285,7 +1074,7 @@ impl SpecExecute for SvyMleSpec {
     ) -> Result<PortOutputs, DagError> {
         Err(DagError::NodeError {
             node_type: kind.into(),
-            msg: "svymle requires user-supplied loglike/gradient closures. Use codegen_r.".into(),
+            msg: "svymle requires user-supplied loglike/gradient closures".into(),
         })
     }
 }

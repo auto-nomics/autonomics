@@ -16,11 +16,7 @@ use std::sync::Arc;
 use arrow_array::{Float64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 
-use crate::survey_common::{
-    SurveyDesignSpec, formula_rhs, gen_design_r, one_in_one_out, r_true_false,
-};
-use dag_core::codegen::helpers::{input_0, parse_spec};
-use dag_core::codegen::{CodegenCtx, CodegenError, NodeCodegen};
+use crate::survey_common::{SurveyDesignSpec, one_in_one_out};
 use dag_core::dag::{DagError, graph::PortOutputs};
 use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::registry::{NodeCtx, NodeFactory};
@@ -119,24 +115,6 @@ impl NodeFactory for SvyMeanFactory {
         let node_spec: SvyMeanSpec = serde_json::from_value(spec)?;
         Ok(Box::new(SvyMeanNode::new(node_spec)))
     }
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut CodegenCtx,
-    ) -> Result<NodeCodegen, CodegenError> {
-        let s = parse_spec::<SvyMeanSpec>(spec, "survey_node")?;
-        let input = input_0(ctx).to_string();
-        let out = ctx.output_var.to_string();
-        let (des, mut code) = gen_design_r(&s.design, &input, ctx);
-        let vars = formula_rhs(&s.variables);
-        let na_rm = r_true_false(s.na_rm);
-        code.push(format!("{out} <- svymean(~{vars}, {des}, na.rm = {na_rm})"));
-        code.push(format!("print({out})"));
-        Ok(NodeCodegen::simple(code, out))
-    }
-    fn r_packages(&self) -> Vec<String> {
-        vec!["survey".into()]
-    }
 }
 
 // =====================================================================
@@ -228,26 +206,6 @@ impl NodeFactory for SvyTotalFactory {
         let node_spec: SvyTotalSpec = serde_json::from_value(spec)?;
         Ok(Box::new(SvyTotalNode::new(node_spec)))
     }
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut CodegenCtx,
-    ) -> Result<NodeCodegen, CodegenError> {
-        let s = parse_spec::<SvyTotalSpec>(spec, "survey_node")?;
-        let input = input_0(ctx).to_string();
-        let out = ctx.output_var.to_string();
-        let (des, mut code) = gen_design_r(&s.design, &input, ctx);
-        let vars = formula_rhs(&s.variables);
-        let na_rm = r_true_false(s.na_rm);
-        code.push(format!(
-            "{out} <- svytotal(~{vars}, {des}, na.rm = {na_rm})"
-        ));
-        code.push(format!("print({out})"));
-        Ok(NodeCodegen::simple(code, out))
-    }
-    fn r_packages(&self) -> Vec<String> {
-        vec!["survey".into()]
-    }
 }
 
 // =====================================================================
@@ -338,24 +296,6 @@ impl NodeFactory for SvyVarFactory {
     ) -> dag_core::registry::error::Result<Box<dyn dag_core::dag::DagNode>> {
         let node_spec: SvyVarSpec = serde_json::from_value(spec)?;
         Ok(Box::new(SvyVarNode::new(node_spec)))
-    }
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut CodegenCtx,
-    ) -> Result<NodeCodegen, CodegenError> {
-        let s = parse_spec::<SvyVarSpec>(spec, "survey_node")?;
-        let input = input_0(ctx).to_string();
-        let out = ctx.output_var.to_string();
-        let (des, mut code) = gen_design_r(&s.design, &input, ctx);
-        let vars = formula_rhs(&s.variables);
-        let na_rm = r_true_false(s.na_rm);
-        code.push(format!("{out} <- svyvar(~{vars}, {des}, na.rm = {na_rm})"));
-        code.push(format!("print({out})"));
-        Ok(NodeCodegen::simple(code, out))
-    }
-    fn r_packages(&self) -> Vec<String> {
-        vec!["survey".into()]
     }
 }
 
@@ -478,27 +418,6 @@ impl NodeFactory for SvyRatioFactory {
     ) -> dag_core::registry::error::Result<Box<dyn dag_core::dag::DagNode>> {
         let node_spec: SvyRatioSpec = serde_json::from_value(spec)?;
         Ok(Box::new(SvyRatioNode::new(node_spec)))
-    }
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut CodegenCtx,
-    ) -> Result<NodeCodegen, CodegenError> {
-        let s = parse_spec::<SvyRatioSpec>(spec, "survey_node")?;
-        let input = input_0(ctx).to_string();
-        let out = ctx.output_var.to_string();
-        let (des, mut code) = gen_design_r(&s.design, &input, ctx);
-        let na_rm = r_true_false(s.na_rm);
-        code.push(format!(
-            "{out} <- svyratio(~{num}/{den}, {des}, na.rm = {na_rm})",
-            num = s.numerator,
-            den = s.denominator
-        ));
-        code.push(format!("print({out})"));
-        Ok(NodeCodegen::simple(code, out))
-    }
-    fn r_packages(&self) -> Vec<String> {
-        vec!["survey".into()]
     }
 }
 
@@ -710,23 +629,6 @@ impl NodeFactory for SvyTableFactory {
         let node_spec: SvyTableSpec = serde_json::from_value(spec)?;
         Ok(Box::new(SvyTableNode::new(node_spec)))
     }
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut CodegenCtx,
-    ) -> Result<NodeCodegen, CodegenError> {
-        let s = parse_spec::<SvyTableSpec>(spec, "survey_node")?;
-        let input = input_0(ctx).to_string();
-        let out = ctx.output_var.to_string();
-        let (des, mut code) = gen_design_r(&s.design, &input, ctx);
-        let rhs = s.variables.join(":");
-        code.push(format!("{out} <- svytable(~{rhs}, {des})"));
-        code.push(format!("print({out})"));
-        Ok(NodeCodegen::simple(code, out))
-    }
-    fn r_packages(&self) -> Vec<String> {
-        vec!["survey".into()]
-    }
 }
 
 // =====================================================================
@@ -908,33 +810,6 @@ impl NodeFactory for SvyQuantileFactory {
     ) -> dag_core::registry::error::Result<Box<dyn dag_core::dag::DagNode>> {
         let node_spec: SvyQuantileSpec = serde_json::from_value(spec)?;
         Ok(Box::new(SvyQuantileNode::new(node_spec)))
-    }
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut CodegenCtx,
-    ) -> Result<NodeCodegen, CodegenError> {
-        let s = parse_spec::<SvyQuantileSpec>(spec, "survey_node")?;
-        let input = input_0(ctx).to_string();
-        let out = ctx.output_var.to_string();
-        let (des, mut code) = gen_design_r(&s.design, &input, ctx);
-        let vars = formula_rhs(&s.variables);
-        let qs: Vec<String> = s.quantiles.iter().map(|q| q.to_string()).collect();
-        let na_rm = r_true_false(s.na_rm);
-        code.push(format!(
-            "{out} <- svyquantile(~{vars}, {des}, quantiles = c({qs}), \
-             alpha = {alpha}, qrule = \"{qrule}\", interval.type = \"{it}\", na.rm = {na_rm})",
-            qs = qs.join(", "),
-            alpha = s.alpha,
-            qrule = s.qrule,
-            it = s.interval_type,
-            na_rm = na_rm
-        ));
-        code.push(format!("print({out})"));
-        Ok(NodeCodegen::simple(code, out))
-    }
-    fn r_packages(&self) -> Vec<String> {
-        vec!["survey".into()]
     }
 }
 

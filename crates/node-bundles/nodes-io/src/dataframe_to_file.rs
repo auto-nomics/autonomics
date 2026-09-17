@@ -19,8 +19,6 @@ use crate::file_to_dataframe::{normalize_path, source_path};
 use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::sink::SinkMode;
 use dag_core::{
-    codegen::CodegenTarget,
-    codegen::context::{CodegenCtx, CodegenError, NodeCodegen},
     dag::DagError,
     dag::graph::PortOutputs,
     registry::{NodeCtx, NodeFactory},
@@ -345,48 +343,6 @@ impl NodeFactory for DataFrameToFileNodeFactory {
             node_spec.partition_by,
         );
         Ok(Box::new(node))
-    }
-
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut CodegenCtx,
-    ) -> std::result::Result<NodeCodegen, CodegenError> {
-        let node_spec: DataFrameToFileNodeSpec =
-            serde_json::from_value(spec.clone()).map_err(|e| CodegenError::BadSpec {
-                kind: "dataframe_to_file".into(),
-                source: e,
-            })?;
-
-        let path = &node_spec.path;
-        let input = ctx
-            .input_vars
-            .first()
-            .map(|s| s.as_str())
-            .unwrap_or("__missing_input");
-        if !node_spec.partition_by.is_empty() {
-            return Err(CodegenError::NotSupported {
-                kind: "dataframe_to_file partitioned Parquet".into(),
-                target: CodegenTarget::R,
-            });
-        }
-        let write_call = match node_spec.format {
-            WriteFormat::Csv => format!(r#"fwrite({input}, "{path}")"#),
-            WriteFormat::Tsv => format!(r#"fwrite({input}, "{path}", sep = "\t")"#),
-            WriteFormat::Parquet => format!(r#"write_parquet({input}, "{path}")"#),
-        };
-        let output_var = ctx.output_var.to_string();
-        let code = vec![write_call, format!(r#"{output_var} <- "{path}""#)];
-
-        Ok(NodeCodegen {
-            code,
-            output_vars: vec![output_var],
-            extra_packages: vec![],
-        })
-    }
-
-    fn r_packages(&self) -> Vec<String> {
-        vec!["data.table".into()]
     }
 }
 

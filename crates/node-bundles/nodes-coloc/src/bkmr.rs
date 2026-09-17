@@ -254,61 +254,6 @@ impl NodeFactory for BkmrNodeFactory {
         let config: BkmrConfig = serde_json::from_value(spec)?;
         Ok(Box::new(BkmrNode::new(config)))
     }
-
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut dag_core::codegen::CodegenCtx,
-    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
-        use dag_core::codegen::helpers::*;
-        let cfg = parse_spec::<BkmrConfig>(spec, "bkmr")?;
-        let input = ctx
-            .input_vars
-            .first()
-            .map(|s| s.as_str())
-            .unwrap_or("__missing_input");
-        let out = ctx.output_var.to_string();
-
-        let z_cols = cfg
-            .exposures
-            .iter()
-            .map(|c| format!("{input}${c}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let x_part = if cfg.covariates.is_empty() {
-            "NULL".to_string()
-        } else {
-            let x_cols = cfg
-                .covariates
-                .iter()
-                .map(|c| format!("{input}${c}"))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("cbind({x_cols})")
-        };
-
-        let code = vec![
-            "# bkmr: Bayesian Kernel Machine Regression".to_string(),
-            "library(bkmr)".to_string(),
-            format!("set.seed({})", cfg.seed),
-            format!("{out} <- kmbayes("),
-            format!("  y = {input}${},", r_str(&cfg.outcome)),
-            format!("  Z = cbind({z_cols}),"),
-            format!("  X = {x_part},"),
-            format!("  iter = {},", cfg.iter),
-            format!("  varsel = {},", cfg.varsel),
-            format!("  verbose = FALSE,"),
-            format!("  control.params = list(r.prior = {})", r_str(&cfg.r_prior)),
-            ")".to_string(),
-            format!("print(summary({out}))"),
-        ];
-
-        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
-    }
-
-    fn r_packages(&self) -> Vec<String> {
-        vec!["bkmr".into()]
-    }
 }
 
 #[async_trait]

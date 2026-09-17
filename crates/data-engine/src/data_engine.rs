@@ -239,19 +239,6 @@ impl DataEngine {
         self.dag.get_node(id).is_some()
     }
 
-    /// Reverse-compile the current DAG into R or Python source code.
-    pub fn compile_dag(
-        &self,
-        target: crate::codegen::CodegenTarget,
-    ) -> Result<crate::codegen::CompiledScript> {
-        let compiler = crate::codegen::DagCompiler {
-            registry: &self.node_registry,
-        };
-        compiler
-            .compile_dag(&self.dag, target)
-            .map_err(|e| Error::Custom(e.to_string()))
-    }
-
     /// Clear all nodes, edges, and runtime state — start fresh.
     pub fn clear_dag(&mut self) -> Result<()> {
         self.dag.clear();

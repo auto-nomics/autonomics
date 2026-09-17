@@ -8,8 +8,6 @@ use rand::rngs::StdRng;
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 
-use dag_core::codegen::context::{CodegenCtx, CodegenError, NodeCodegen};
-use dag_core::codegen::helpers::*;
 use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::registry::NodeFactory;
 use dag_core::{
@@ -70,37 +68,6 @@ impl NodeFactory for MiceImputeMeanNodeFactory {
             meta: port_layout(),
             spec: s,
         }))
-    }
-
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut CodegenCtx,
-    ) -> std::result::Result<NodeCodegen, CodegenError> {
-        let s = parse_spec::<MiceImputeMeanNodeSpec>(spec, "mice_impute_mean")?;
-        let out = ctx.output_var.to_string();
-        let fit_var = ctx.fresh_var("mean_fit");
-        let input = input_0(ctx).to_string();
-        let yc = s.y_column.clone();
-        let code = vec![
-            "src <- as.data.frame(src)".to_string(),
-            "# Mean imputation".to_string(),
-            "library(mice)".to_string(),
-            format!(
-                "{fit_var} <- mice.impute.mean(y = {input}${}, ry = !is.na({input}${}))",
-                yc, yc
-            ),
-            "# Observed mean for cross-validation".to_string(),
-            format!(
-                "{{ obs_mean <- mean({input}${yc}[!is.na({input}${yc})]); {out} <- data.frame(imputed = as.numeric({fit_var}), observed_mean = obs_mean, deviation_from_mean = as.numeric({fit_var}) - obs_mean) }}"
-            ),
-            format!("print({out})"),
-        ];
-        Ok(NodeCodegen::simple(code, out))
-    }
-
-    fn r_packages(&self) -> Vec<String> {
-        vec!["mice".into()]
     }
 }
 

@@ -110,17 +110,6 @@ its descendants are marked dirty and re-executed.
 This detects local artifact mutation. Remote object-store fingerprints and
 opt-in content hashes are future extensions.
 
-## Code generation
-
-The R code generator distinguishes edge payload types:
-
-- DataFrame edges continue to materialize `_edge_{node}_{port}.csv` files.
-- File edges pass path-bearing variables directly.
-
-For example, `dataframe_to_file -> file_to_dataframe` assigns the written path to the sink's
-output variable and passes that variable to `file_to_dataframe`; no edge CSV is
-generated for the File edge.
-
 ## Migration notes
 
 Node implementations that consume tabular input now call

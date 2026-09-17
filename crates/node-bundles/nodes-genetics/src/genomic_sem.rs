@@ -247,40 +247,6 @@ impl NodeFactory for GsemMungeNodeFactory {
             config,
         }))
     }
-
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut dag_core::codegen::CodegenCtx,
-    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
-        use dag_core::codegen::helpers::*;
-        let cfg = parse_spec::<GsemMungeConfig>(spec, GSEM_MUNGE_NODE_KIND)?;
-        let out = ctx.output_var.to_string();
-        let _input = input_0(ctx).to_string();
-        let tmp = ctx.fresh_var("munged_file");
-        let n_flag = cfg.n.map(|v| format!(" --N {v}")).unwrap_or_default();
-        let trait_flag = cfg
-            .trait_name
-            .as_deref()
-            .map(|t| format!(" --trait-name \"{t}\""))
-            .unwrap_or_default();
-        let code = vec![
-            format!("# Munge GWAS summary statistics for GenomicSEM"),
-            format!("{tmp} <- tempfile(fileext = \".sumstats.gz\")"),
-            format!(
-                "{tmp} <- system2(\"munge_sumstats.py\", c(\"--out\", {tmp}, \
-                 \"--info\", \"{}\", \"--maf\", \"{}\"{n_flag}{trait_flag}), \
-                 stdout = TRUE, stderr = TRUE)",
-                cfg.info_filter, cfg.maf_filter,
-            ),
-            format!("{out} <- data.table::fread({tmp})"),
-        ];
-        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
-    }
-
-    fn r_packages(&self) -> Vec<String> {
-        vec!["data.table".into()]
-    }
 }
 
 #[async_trait]
@@ -831,10 +797,6 @@ impl NodeFactory for GsemLdscNodeFactory {
             ld_panel: node_ctx.bound_data_bundle("ld_panel")?.clone(),
             m_panel: node_ctx.bound_data_bundle("m_panel")?.clone(),
         }))
-    }
-
-    fn r_packages(&self) -> Vec<String> {
-        vec!["GenomicSEM".into()]
     }
 }
 
@@ -1934,10 +1896,6 @@ impl NodeFactory for GsemUsermodelNodeFactory {
             config,
         }))
     }
-
-    fn r_packages(&self) -> Vec<String> {
-        vec!["GenomicSEM".into()]
-    }
 }
 
 #[async_trait]
@@ -2082,10 +2040,6 @@ impl NodeFactory for GsemCommonfactorNodeFactory {
                 .add_output_port(Some(results_schema())),
             config,
         }))
-    }
-
-    fn r_packages(&self) -> Vec<String> {
-        vec!["GenomicSEM".into()]
     }
 }
 
@@ -2232,10 +2186,6 @@ impl NodeFactory for GsemRgmodelNodeFactory {
                 .add_output_port(Some(rgmodel_output_schema(config.n_traits))),
             config,
         }))
-    }
-
-    fn r_packages(&self) -> Vec<String> {
-        vec!["GenomicSEM".into()]
     }
 }
 

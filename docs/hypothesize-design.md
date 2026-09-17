@@ -509,7 +509,7 @@ can regenerate via `Rscript driver.R`. Data archives follow the
 
 ---
 
-## 7. Registration & Codegen
+## 7. Registration
 
 ### 7.1 Registry wiring
 
@@ -517,18 +517,6 @@ Each Group gets a `register_hypothesize_nodes(registry: &mut NodeRegistry)`
 helper called from `NodeRegistry::new()` in
 `crates/data-engine/src/node_registry/registry.rs`. Factories live under
 `nodes::hypothesize::*` and are re-exported in `nodes/mod.rs`.
-
-### 7.2 R codegen
-
-Like the existing `chi_square` node, every Group A node emits an
-`Rscript`-runnable `codegen_r` snippet via the standard `CodegenCtx` /
-`NodeCodegen` helpers. The codegen for combinators writes the matching
-`hypothesize::` call; for sample-data primitives it writes the
-corresponding `stats::` call. This keeps the round-trip "DAG → R → re-run"
-guarantee that the codegen layer already provides.
-
-For nodes that have no exact `stats::` analogue (e.g. `combine_pvalues`
-Stouffer), the codegen writes a small inline R helper.
 
 ---
 
@@ -582,7 +570,7 @@ schema-driven normaliser handles object-wrapped-array repair for free).
 | **3** | `hypothesize` crate: ranks (wilcoxon/MW/KW/friedman) + Bartlett/Levene/Fligner + ANOVA + AD | `xval_stats.rs` extended                  |
 | **4** | DAG nodes: Group A primitives                                        | every primitive emits the standard test-row schema       |
 | **5** | DAG nodes: Group B (trinity), Group C (combinators), Group D (invert)| compositional DAGs §5 runnable end-to-end                |
-| **6** | R codegen for every node; docs (`hypothesize-design_zh.md`)          | round-trip verified; bilingual design doc                |
+| **6** | Documentation (`hypothesize-design_zh.md`)                            | bilingual design doc                                      |
 
 Each phase is independently shippable: Phase 1 alone gives the agent a
 fully composable likelihood-trinity + meta-analysis toolkit.

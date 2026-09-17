@@ -791,69 +791,6 @@ impl NodeFactory for HlmeNodeFactory {
         let config: HlmeConfig = serde_json::from_value(spec)?;
         Ok(Box::new(HlmeNode::new(config)))
     }
-
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut dag_core::codegen::CodegenCtx,
-    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
-        use dag_core::codegen::helpers::*;
-        let cfg = parse_spec::<HlmeConfig>(spec, "hlme")?;
-        let input = ctx
-            .input_vars
-            .first()
-            .map(|s| s.as_str())
-            .unwrap_or("__missing_input");
-        let out = ctx.output_var.to_string();
-
-        // Build R formula strings.
-        let fixed_formula = if cfg.fixed.is_empty() {
-            "1".to_string()
-        } else {
-            cfg.fixed.join(" + ")
-        };
-        let response_part = format!("{} ~ {}", cfg.outcome, fixed_formula);
-
-        let mut args: Vec<(&str, String)> = vec![
-            ("fixed", response_part),
-            ("subject", r_str(&cfg.subject)),
-            ("ng", cfg.ng.to_string()),
-            ("data", input.to_string()),
-        ];
-
-        if !cfg.mixture.is_empty() {
-            args.push(("mixture", format!("~ {}", cfg.mixture.join(" + "))));
-        }
-        if !cfg.random.is_empty() {
-            args.push(("random", format!("~ {}", cfg.random.join(" + "))));
-        }
-        if !cfg.classmb.is_empty() {
-            args.push(("classmb", format!("~ {}", cfg.classmb.join(" + "))));
-        }
-        if cfg.idiag {
-            args.push(("idiag", "TRUE".into()));
-        }
-        if cfg.nwg {
-            args.push(("nwg", "TRUE".into()));
-        }
-        if cfg.maxiter != 500 {
-            args.push(("maxiter", cfg.maxiter.to_string()));
-        }
-
-        let code = vec![
-            "# hlme: Latent class linear mixed model".to_string(),
-            "library(lcmm)".to_string(),
-            format!("set.seed(1)"),
-            format!("{out} <- {}", r_call_multiline("hlme", &args, 0)),
-            format!("print(summary({out}))"),
-        ];
-
-        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
-    }
-
-    fn r_packages(&self) -> Vec<String> {
-        vec!["lcmm".into()]
-    }
 }
 
 #[async_trait]
@@ -1260,46 +1197,6 @@ impl NodeFactory for HlmePredictNodeFactory {
         let config: HlmePredictConfig = serde_json::from_value(spec)?;
         Ok(Box::new(HlmePredictNode::new(config)))
     }
-
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut dag_core::codegen::CodegenCtx,
-    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
-        use dag_core::codegen::helpers::*;
-        let cfg = parse_spec::<HlmePredictConfig>(spec, "hlme_predict")?;
-        let input = ctx
-            .input_vars
-            .first()
-            .map(|s| s.as_str())
-            .unwrap_or("__missing_input");
-        let out = ctx.output_var.to_string();
-
-        let newdata_cols: Vec<String> = cfg.columns.iter().map(|c| r_col(input, c)).collect();
-        let newdata_df = r_dataframe(
-            &cfg.columns
-                .iter()
-                .map(|c| c.as_str())
-                .zip(newdata_cols.iter().map(|s| s.as_str()))
-                .collect::<Vec<_>>(),
-        );
-
-        let code = vec![
-            "# hlme_predict: class-conditional trajectory prediction".to_string(),
-            "library(lcmm)".to_string(),
-            format!("newdata <- {newdata_df}"),
-            format!(
-                "{out} <- predictY(model, newdata = newdata, var.time = {}, draws = FALSE)",
-                r_str(cfg.columns.first().map(|s| s.as_str()).unwrap_or("Time"))
-            ),
-        ];
-
-        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
-    }
-
-    fn r_packages(&self) -> Vec<String> {
-        vec!["lcmm".into()]
-    }
 }
 
 #[async_trait]
@@ -1564,65 +1461,6 @@ impl NodeFactory for HlmeCompareNodeFactory {
     ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let config: HlmeCompareConfig = serde_json::from_value(spec)?;
         Ok(Box::new(HlmeCompareNode::new(config)))
-    }
-
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        _ctx: &mut dag_core::codegen::CodegenCtx,
-    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
-        use dag_core::codegen::helpers::*;
-        let cfg = parse_spec::<HlmeCompareConfig>(spec, "hlme_compare")?;
-
-        let mut code = vec![
-            "# hlme_compare: model comparison".to_string(),
-            "summarytable <- data.frame(".to_string(),
-        ];
-        code.push(format!(
-            "  model = c({}),",
-            cfg.models
-                .iter()
-                .map(|m| r_str(&m.name))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-        code.push(format!(
-            "  ng = c({}),",
-            cfg.models
-                .iter()
-                .map(|m| m.ng.to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-        code.push(format!(
-            "  npm = c({}),",
-            cfg.models
-                .iter()
-                .map(|m| m.npm.to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-        code.push(format!(
-            "  loglik = c({})",
-            cfg.models
-                .iter()
-                .map(|m| m.loglik.to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-        code.push(")".to_string());
-        code.push("summarytable$aic <- -2*summarytable$loglik + 2*summarytable$npm".into());
-        code.push("summarytable$bic <- -2*summarytable$loglik + log(N)*summarytable$npm".into());
-        code.push("print(summarytable)".into());
-
-        Ok(dag_core::codegen::NodeCodegen::simple(
-            code,
-            "summarytable".to_string(),
-        ))
-    }
-
-    fn r_packages(&self) -> Vec<String> {
-        vec!["lcmm".into()]
     }
 }
 

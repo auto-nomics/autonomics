@@ -12,11 +12,7 @@ use arrow_array::{Float64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 use async_trait::async_trait;
 
-use crate::survey_common::{
-    SurveyDesignSpec, formula_rhs, gen_design_r, one_in_one_out, r_true_false,
-};
-use dag_core::codegen::helpers::{input_0, parse_spec};
-use dag_core::codegen::{CodegenCtx, CodegenError, NodeCodegen};
+use crate::survey_common::{SurveyDesignSpec, one_in_one_out};
 use dag_core::dag::{DagError, graph::PortOutputs};
 use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::registry::{NodeCtx, NodeFactory};
@@ -274,38 +270,6 @@ impl NodeFactory for SvyByFactory {
     ) -> dag_core::registry::error::Result<Box<dyn dag_core::dag::DagNode>> {
         let node_spec: SvyBySpec = serde_json::from_value(spec)?;
         Ok(Box::new(SvyByNode::new(node_spec)))
-    }
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut CodegenCtx,
-    ) -> Result<NodeCodegen, CodegenError> {
-        let s = parse_spec::<SvyBySpec>(spec, "survey_node")?;
-        let input = input_0(ctx).to_string();
-        let out = ctx.output_var.to_string();
-        let (des, mut code) = gen_design_r(&s.design, &input, ctx);
-        let vars = formula_rhs(&s.variables);
-        let by = formula_rhs(&s.by);
-        let vartype_str = s
-            .vartype
-            .iter()
-            .map(|v| format!("\"{v}\""))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let na_rm = r_true_false(s.na_rm);
-        code.push(format!(
-            "{out} <- svyby(~{vars}, ~{by}, {des}, {fun}, \
-             vartype = c({vt}), drop.empty.groups = {deg}, na.rm = {na_rm})",
-            fun = s.fun,
-            vt = vartype_str,
-            deg = r_true_false(s.drop_empty_groups),
-            na_rm = na_rm
-        ));
-        code.push(format!("print({out})"));
-        Ok(NodeCodegen::simple(code, out))
-    }
-    fn r_packages(&self) -> Vec<String> {
-        vec!["survey".into()]
     }
 }
 
@@ -592,38 +556,6 @@ impl NodeFactory for SvyContrastFactory {
         let node_spec: SvyContrastSpec = serde_json::from_value(spec)?;
         Ok(Box::new(SvyContrastNode::new(node_spec)))
     }
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut CodegenCtx,
-    ) -> Result<NodeCodegen, CodegenError> {
-        let s = parse_spec::<SvyContrastSpec>(spec, "survey_node")?;
-        let input = input_0(ctx).to_string();
-        let out = ctx.output_var.to_string();
-        let (des, mut code) = gen_design_r(&s.design, &input, ctx);
-        let vars = formula_rhs(&s.variables);
-
-        // First compute the base statistic (assumes svymean; user can
-        // customise in future).
-        let stat_var = ctx.fresh_var("stat");
-        code.push(format!("{stat_var} <- svymean(~{vars}, {des})"));
-
-        // Build the named contrast list.
-        let items: Vec<String> = s
-            .contrasts
-            .iter()
-            .map(|c| format!("{} = {}", c.name, c.expr))
-            .collect();
-        code.push(format!(
-            "{out} <- svycontrast({stat_var}, list({}))",
-            items.join(", ")
-        ));
-        code.push(format!("print({out})"));
-        Ok(NodeCodegen::simple(code, out))
-    }
-    fn r_packages(&self) -> Vec<String> {
-        vec!["survey".into()]
-    }
 }
 
 // =====================================================================
@@ -794,38 +726,6 @@ impl NodeFactory for SvyStandardizeFactory {
         let node_spec: SvyStandardizeSpec = serde_json::from_value(spec)?;
         Ok(Box::new(SvyStandardizeNode::new(node_spec)))
     }
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut CodegenCtx,
-    ) -> Result<NodeCodegen, CodegenError> {
-        let s = parse_spec::<SvyStandardizeSpec>(spec, "survey_node")?;
-        let input = input_0(ctx).to_string();
-        let out = ctx.output_var.to_string();
-        let (des, mut code) = gen_design_r(&s.design, &input, ctx);
-
-        let by_formula = formula_rhs(&s.by);
-        let over_formula = if s.over.is_empty() {
-            "~1".to_string()
-        } else {
-            format!("~{}", formula_rhs(&s.over))
-        };
-
-        // Build the population proportions vector.
-        let pop_vec: Vec<String> = s.population.values().map(|v| v.to_string()).collect();
-        code.push(format!(
-            "{out} <- svystandardize({des}, by = ~{bf}, over = {of}, \
-             population = c({pv}))",
-            bf = by_formula,
-            of = over_formula,
-            pv = pop_vec.join(", ")
-        ));
-        code.push(format!("print({out})"));
-        Ok(NodeCodegen::simple(code, out))
-    }
-    fn r_packages(&self) -> Vec<String> {
-        vec!["survey".into()]
-    }
 }
 
 // =====================================================================
@@ -899,7 +799,7 @@ impl DagNode for RegTermTestNode {
                 node_type: "reg_term_test".into(),
                 msg: format!(
                     "Rust execution only supports method='Wald', requested '{}'. \
-                     Use codegen_r for R code.",
+                     Provide a supported method.",
                     self.spec.method
                 ),
             });
@@ -1011,35 +911,6 @@ impl NodeFactory for RegTermTestFactory {
     ) -> dag_core::registry::error::Result<Box<dyn dag_core::dag::DagNode>> {
         let node_spec: RegTermTestSpec = serde_json::from_value(spec)?;
         Ok(Box::new(RegTermTestNode::new(node_spec)))
-    }
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut CodegenCtx,
-    ) -> Result<NodeCodegen, CodegenError> {
-        let s = parse_spec::<RegTermTestSpec>(spec, "survey_node")?;
-        let input = input_0(ctx).to_string();
-        let out = ctx.output_var.to_string();
-        let (des, mut code) = gen_design_r(&s.design, &input, ctx);
-
-        // Fit the full model.
-        let model_var = ctx.fresh_var("model");
-        let formula = dag_core::codegen::helpers::r_formula(&s.response, &s.predictors, true);
-        code.push(format!(
-            "{model_var} <- svyglm({formula}, {des}, family = {}())",
-            s.family
-        ));
-
-        let test_rhs = formula_rhs(&s.test_terms);
-        code.push(format!(
-            "{out} <- regTermTest({model_var}, ~{test_rhs}, method = \"{m}\")",
-            m = s.method
-        ));
-        code.push(format!("print({out})"));
-        Ok(NodeCodegen::simple(code, out))
-    }
-    fn r_packages(&self) -> Vec<String> {
-        vec!["survey".into()]
     }
 }
 

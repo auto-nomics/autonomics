@@ -16,11 +16,7 @@ use arrow_array::{Float64Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
 use async_trait::async_trait;
 
-use crate::survey_common::{
-    SurveyDesignSpec, build_survey_design, formula_rhs, gen_design_r, one_in_one_out, r_true_false,
-};
-use dag_core::codegen::helpers::{input_0, parse_spec};
-use dag_core::codegen::{CodegenCtx, CodegenError, NodeCodegen};
+use crate::survey_common::{SurveyDesignSpec, build_survey_design, one_in_one_out};
 use dag_core::dag::{DagError, graph::PortOutputs};
 use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::registry::{NodeCtx, NodeFactory};
@@ -197,48 +193,6 @@ impl NodeFactory for PostStratifyFactory {
     ) -> dag_core::registry::error::Result<Box<dyn dag_core::dag::DagNode>> {
         let node_spec: PostStratifySpec = serde_json::from_value(spec)?;
         Ok(Box::new(PostStratifyNode::new(node_spec)))
-    }
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut CodegenCtx,
-    ) -> Result<NodeCodegen, CodegenError> {
-        let s = parse_spec::<PostStratifySpec>(spec, "survey_node")?;
-        let input = input_0(ctx).to_string();
-        let out = ctx.output_var.to_string();
-        let (des, mut code) = gen_design_r(&s.design, &input, ctx);
-
-        // Build the population data.frame in R.
-        let levels: Vec<String> = s.population.keys().cloned().collect();
-        let counts: Vec<String> = s.population.values().map(|v| v.to_string()).collect();
-        let pop_var = ctx.fresh_var("pop");
-        let strat_rhs = formula_rhs(&s.strata);
-        let strat_single = &s.strata[0];
-        code.push(format!(
-            "{pop_var} <- data.frame({strat} = c({lvls}), Freq = c({cnts}))",
-            strat = strat_single,
-            lvls = levels
-                .iter()
-                .map(|l| format!("\"{l}\""))
-                .collect::<Vec<_>>()
-                .join(", "),
-            cnts = counts.join(", ")
-        ));
-
-        let partial_arg = if s.partial { ", partial = TRUE" } else { "" };
-        let des_ps = ctx.fresh_var("des_ps");
-        code.push(format!(
-            "{des_ps} <- postStratify({des}, ~{strat_rhs}, {pop_var}{pa})",
-            pa = partial_arg
-        ));
-        code.push(format!(
-            "{out} <- cbind({input}, {wc} = weights({des_ps}))",
-            wc = s.weight_col
-        ));
-        Ok(NodeCodegen::simple(code, out))
-    }
-    fn r_packages(&self) -> Vec<String> {
-        vec!["survey".into()]
     }
 }
 
@@ -429,62 +383,6 @@ impl NodeFactory for RakeFactory {
         let node_spec: RakeSpec = serde_json::from_value(spec)?;
         Ok(Box::new(RakeNode::new(node_spec)))
     }
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut CodegenCtx,
-    ) -> Result<NodeCodegen, CodegenError> {
-        let s = parse_spec::<RakeSpec>(spec, "survey_node")?;
-        let input = input_0(ctx).to_string();
-        let out = ctx.output_var.to_string();
-        let (des, mut code) = gen_design_r(&s.design, &input, ctx);
-
-        // Build sample.margins list and population.margins list.
-        let sm_var = ctx.fresh_var("sm");
-        let pm_var = ctx.fresh_var("pm");
-        let sm_items: Vec<String> = s
-            .margins
-            .iter()
-            .map(|m| format!("~{}", m.variable))
-            .collect();
-        code.push(format!("{sm_var} <- list({})", sm_items.join(", ")));
-
-        let pm_items: Vec<String> = s
-            .margins
-            .iter()
-            .map(|m| {
-                let levels: Vec<String> = m.population.keys().cloned().collect();
-                let counts: Vec<String> = m.population.values().map(|v| v.to_string()).collect();
-                format!(
-                    "data.frame({var} = c({lvls}), Freq = c({cnts}))",
-                    var = m.variable,
-                    lvls = levels
-                        .iter()
-                        .map(|l| format!("\"{l}\""))
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                    cnts = counts.join(", ")
-                )
-            })
-            .collect();
-        code.push(format!("{pm_var} <- list({})", pm_items.join(", ")));
-
-        let des_raked = ctx.fresh_var("des_raked");
-        code.push(format!(
-            "{des_raked} <- rake({des}, sample.margins = {sm_var}, \
-             population.margins = {pm_var}, control = list(maxit = {mi}, epsilon = {eps}))",
-            mi = s.maxit,
-            eps = s.epsilon
-        ));
-        code.push(format!(
-            "{out} <- cbind({input}, {wc} = weights({des_raked}))",
-            wc = s.weight_col
-        ));
-        Ok(NodeCodegen::simple(code, out))
-    }
-    fn r_packages(&self) -> Vec<String> {
-        vec!["survey".into()]
-    }
 }
 
 // =====================================================================
@@ -575,7 +473,7 @@ impl DagNode for CalibrateNode {
                 node_type: "calibrate".into(),
                 msg: format!(
                     "Rust execution only supports calfun='linear'; requested '{}'. \
-                     Use codegen_r for R code.",
+                     Provide a supported method.",
                     self.spec.calfun
                 ),
             });
@@ -674,48 +572,6 @@ impl NodeFactory for CalibrateFactory {
     ) -> dag_core::registry::error::Result<Box<dyn dag_core::dag::DagNode>> {
         let node_spec: CalibrateSpec = serde_json::from_value(spec)?;
         Ok(Box::new(CalibrateNode::new(node_spec)))
-    }
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut CodegenCtx,
-    ) -> Result<NodeCodegen, CodegenError> {
-        let s = parse_spec::<CalibrateSpec>(spec, "survey_node")?;
-        let input = input_0(ctx).to_string();
-        let out = ctx.output_var.to_string();
-        let (des, mut code) = gen_design_r(&s.design, &input, ctx);
-
-        let totals: String = s
-            .population_totals
-            .iter()
-            .map(|v| v.to_string())
-            .collect::<Vec<_>>()
-            .join(", ");
-        let vars = formula_rhs(&s.variables);
-
-        let mut extra_args = format!(
-            ", calfun = \"{}\", maxit = {}, epsilon = {}",
-            s.calfun, s.maxit, s.epsilon
-        );
-        if let Some(bounds) = &s.bounds {
-            if bounds.len() >= 2 {
-                extra_args.push_str(&format!(", bounds = c({}, {})", bounds[0], bounds[1]));
-            }
-        }
-
-        let des_cal = ctx.fresh_var("des_cal");
-        code.push(format!(
-            "{des_cal} <- calibrate({des}, ~{vars}, c({totals}){ea})",
-            ea = extra_args
-        ));
-        code.push(format!(
-            "{out} <- cbind({input}, {wc} = weights({des_cal}))",
-            wc = s.weight_col
-        ));
-        Ok(NodeCodegen::simple(code, out))
-    }
-    fn r_packages(&self) -> Vec<String> {
-        vec!["survey".into()]
     }
 }
 
@@ -879,42 +735,6 @@ impl NodeFactory for TrimWeightsFactory {
     ) -> dag_core::registry::error::Result<Box<dyn dag_core::dag::DagNode>> {
         let node_spec: TrimWeightsSpec = serde_json::from_value(spec)?;
         Ok(Box::new(TrimWeightsNode::new(node_spec)))
-    }
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut CodegenCtx,
-    ) -> Result<NodeCodegen, CodegenError> {
-        let s = parse_spec::<TrimWeightsSpec>(spec, "survey_node")?;
-        let input = input_0(ctx).to_string();
-        let out = ctx.output_var.to_string();
-        let (des, mut code) = gen_design_r(&s.design, &input, ctx);
-
-        let upper = s
-            .upper
-            .map(|v| v.to_string())
-            .unwrap_or_else(|| "Inf".to_string());
-        let lower = s
-            .lower
-            .map(|v| v.to_string())
-            .unwrap_or_else(|| "-Inf".to_string());
-        let strict = r_true_false(s.strict);
-
-        let des_trim = ctx.fresh_var("des_trim");
-        code.push(format!(
-            "{des_trim} <- trimWeights({des}, upper = {u}, lower = {lo}, strict = {st})",
-            u = upper,
-            lo = lower,
-            st = strict
-        ));
-        code.push(format!(
-            "{out} <- cbind({input}, {wc} = weights({des_trim}))",
-            wc = s.weight_col
-        ));
-        Ok(NodeCodegen::simple(code, out))
-    }
-    fn r_packages(&self) -> Vec<String> {
-        vec!["survey".into()]
     }
 }
 

@@ -26,7 +26,7 @@ Autonomics is not a general-purpose chat application, a notebook replacement bui
 
 ![Harness architecture: client interfaces, model cockpit, capability registry, execution plane, shared data plane, research protocol](docs/diagrams/architecture.png)
 
-The architecture separates model orchestration from research capabilities. Each agent session gets its own `DataEngine` actor, while immutable registry and runtime infrastructure are shared across the process. DAG execution is fire-and-forget from the agent command loop, so one long run does not block other agents. When DAG history is enabled, runs create snapshot lineages that can be inspected, diffed, branched, and checked out. Selected graphs can also be reverse-compiled to R or Python source.
+The architecture separates model orchestration from research capabilities. Each agent session gets its own `DataEngine` actor, while immutable registry and runtime infrastructure are shared across the process. DAG execution is fire-and-forget from the agent command loop, so one long run does not block other agents. When DAG history is enabled, runs create snapshot lineages that can be inspected, diffed, branched, and checked out.
 
 ```text
 Ratatui TUI (thin client)  ──REST/SSE──▶  gateway daemon (`autonomics serve`)
@@ -69,7 +69,7 @@ Shared data plane:
 
 Two mechanisms make the harness trustworthy for biomedical work:
 
-- **DAG-based dispatch.** A research request is parsed by the LLM agent, planned as a typed DAG of JSON-Schema-validated nodes, and assembled through one registry. The same DAG can mix fast in-process DataFusion / Arrow transforms with heavy external containers; the DAG core schedules them asynchronously and retains outputs for snapshot, diff, branch, and reverse-compile to R or Python.
+- **DAG-based dispatch.** A research request is parsed by the LLM agent, planned as a typed DAG of JSON-Schema-validated nodes, and assembled through one registry. The same DAG can mix fast in-process DataFusion / Arrow transforms with heavy external containers; the DAG core schedules them asynchronously and retains outputs for snapshot, diff, and branch operations.
 - **Containerized nodes.** Every external tool runs in its own ephemeral Podman container. Images are pinned by sha256 digest, reference panels are checksum-verified from `manifest.json` and mounted read-only, the rootfs is `--read-only` with `no-new-privileges` and explicit CPU / PID / shm / UID caps, and declared outputs are streamed to VFS as `FileRef = size + SHA-256` using a pending-object + atomic rename so consumers never observe partial artifacts. One `container_command` is one ephemeral run; there is no retry on container failure.
 
 ## Capability Map
@@ -77,7 +77,7 @@ Two mechanisms make the harness trustworthy for biomedical work:
 | Area | Main crates | What it provides |
 | --- | --- | --- |
 | Model orchestration | `agentik-sdk`, `agentik-types`, `agentik-proc`, `agentik-core`, `agentik-network`, `runtime` | Streaming LLM clients, tool schemas and calls, persistent memory, lifecycle, multi-agent topology, and a sync-to-async host. |
-| Analysis execution | `dag-core`, `data-engine`, `data-engine-tools`, `crates/node-bundles/*`, `workflow-editor` | Node traits, plugin registry, typed ports, scheduler, JSON-schema specs, agent tools, snapshots, code generation, and reusable workflow skills. |
+| Analysis execution | `dag-core`, `data-engine`, `data-engine-tools`, `crates/node-bundles/*`, `workflow-editor` | Node traits, plugin registry, typed ports, scheduler, JSON-schema specs, agent tools, snapshots, and reusable workflow skills. |
 | Data infrastructure | `vfs`, `data-catalog`, `container-runtime`, `biofusion` | OpenDAL-backed VFS, versioned object-storage packages, Podman execution, immutable panel caches, and biological-format DataFusion readers. |
 | Statistics and epidemiology | `statkit`, `epi`, `hypothesize`, `cmprsk`, `survey`, `mice`, `hierint` | Descriptive statistics and regression; causal inference and mediation; composable tests and p-value workflows; competing risks; survey designs; imputation; hierarchical interaction models. |
 | Machine learning and deep learning | `ml`, `dl`, `grf`, `grf-sys` | Preprocessing, feature engineering, clustering, supervised models, ensembles, anomaly detection, dimensionality reduction; Burn-based MLP, DeepSurv, DeepHit, RNN, Transformer, and autoencoder workflows; generalized random forests through the vendored C++ core. |
@@ -96,7 +96,7 @@ autonomics/
 ├── apps/autonomics/                     Terminal application and CLI subcommands
 ├── crates/
 │   ├── agentik-*/                LLM SDK, types, proc macros, runtime, networking
-│   ├── dag-core/                 DAG traits, registry, scheduler, and codegen
+│   ├── dag-core/                 DAG traits, registry, and scheduler
 │   ├── data-engine/              DataFusion engine and node-bundle wiring
 │   ├── data-engine-tools/        Agent ToolFunction adapters for DAG operations
 │   ├── node-bundles/             Feature-gated analysis-node plugins
@@ -221,7 +221,6 @@ Agent tools expose the same operations without direct mutable engine access:
 - add, update, inspect, and remove nodes and edges
 - run and inspect a DAG
 - view Graphviz DOT output
-- compile a DAG to R or Python
 - create refs, inspect history, show snapshots, diff snapshots, and branch
 
 The exact catalog is runtime-dependent because node bundles are Cargo features. In a running agent, use `list_node_factories`; in Rust, use `DataEngine::list_nodes()`.
@@ -281,7 +280,6 @@ bun run build
 - [VFS design](docs/vfs.md): mounts, concurrent writes, catalog overlays, and reference data.
 - [Data catalog](docs/data-catalog.md): package layout, publication, and panel references.
 - [Runtime bundles](docs/data-bundles.md): built-in bundle identifiers and runtime overlays.
-- [DAG code generation](docs/dag-codegen-design.md): reverse compilation to R and Python.
 - [Container execution](docs/container-execution-design.md): Podman contracts and lifecycle.
 - [Container migration workflow](docs/container-node-migration.md): image, data package, and wrapper acceptance criteria.
 

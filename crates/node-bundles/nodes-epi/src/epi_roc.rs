@@ -131,58 +131,6 @@ impl NodeFactory for EpiRocNodeFactory {
             seed: s.seed,
         }))
     }
-
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut dag_core::codegen::CodegenCtx,
-    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
-        use dag_core::codegen::helpers::*;
-        let s = parse_spec::<EpiRocNodeSpec>(spec, "epi_roc")?;
-        let out = ctx.output_var.to_string();
-        // Pre-allocate all fresh vars before borrowing ctx via input_0.
-        let roc1 = ctx.fresh_var("roc1");
-        let roc2 = ctx.fresh_var("roc2");
-        let input = input_0(ctx).to_string();
-        let mut code = vec![
-            format!("# ROC analysis"),
-            format!(
-                "{roc1} <- roc({input}${}, {input}${}, quiet = TRUE)",
-                s.label_column, s.score1_column
-            ),
-            format!("cat(\"AUC ({}):\", auc({roc1}), \"\\n\")", s.score1_column),
-        ];
-        if let Some(s2) = &s.score2_column {
-            code.push(format!(
-                "{roc2} <- roc({input}${}, {input}${}, quiet = TRUE)",
-                s.label_column, s2
-            ));
-            code.push(format!("cat(\"AUC ({}):\", auc({roc2}), \"\\n\")", s2));
-            code.push(format!("{out} <- data.frame("));
-            code.push(format!(
-                "  score1 = \"{}\", auc1 = as.numeric(auc({roc1})),",
-                s.score1_column
-            ));
-            code.push(format!(
-                "  score2 = \"{s2}\", auc2 = as.numeric(auc({roc2}))"
-            ));
-            code.push(")".to_string());
-        } else {
-            let ci_var = ctx.fresh_var("ci");
-            code.push(format!("{ci_var} <- ci.auc({roc1})"));
-            code.push(format!("{out} <- data.frame("));
-            code.push(format!("  auc = as.numeric(auc({roc1})),"));
-            code.push(format!("  ci_lower = as.numeric({ci_var})[1],"));
-            code.push(format!("  ci_upper = as.numeric({ci_var})[3]"));
-            code.push(")".to_string());
-        }
-        code.push(format!("print({out})"));
-        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
-    }
-
-    fn r_packages(&self) -> Vec<String> {
-        vec!["pROC".into()]
-    }
 }
 
 #[async_trait]

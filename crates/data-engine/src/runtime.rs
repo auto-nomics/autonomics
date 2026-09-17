@@ -327,20 +327,6 @@ impl SessionServer {
                     .expect("uncontended: running flag is false");
                 let _ = reply.send(engine.dag_tui_snapshot());
             }
-            DataEngineCmd::CompileDag { target, reply } => {
-                if self.running.load(Ordering::SeqCst) {
-                    let _ = reply.send(Err(crate::error::Error::Custom(
-                        "DAG is currently running; compile it after completion".to_string(),
-                    )));
-                    return;
-                }
-                let engine = self
-                    .engine
-                    .try_lock()
-                    .expect("uncontended: running flag is false");
-                let _ = reply.send(engine.compile_dag(target));
-            }
-
             // ── History / ref management (async, may hold lock across await) ──
             DataEngineCmd::NewDagRef { name, reply } => {
                 if self.running.load(Ordering::SeqCst) {
@@ -943,21 +929,6 @@ impl DataEngineClient {
             DataEngineCmd::UpdateNode {
                 id,
                 spec,
-                reply: reply_tx,
-            },
-            reply_rx,
-        )
-        .await
-    }
-
-    pub async fn compile_dag(
-        &self,
-        target: crate::codegen::CodegenTarget,
-    ) -> Result<crate::codegen::CompiledScript> {
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.request(
-            DataEngineCmd::CompileDag {
-                target,
                 reply: reply_tx,
             },
             reply_rx,

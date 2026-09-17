@@ -127,34 +127,6 @@ impl NodeFactory for CrossrefWorksNodeFactory {
             spec: node_spec,
         }))
     }
-
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut dag_core::codegen::CodegenCtx,
-    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
-        use dag_core::codegen::helpers::*;
-        let s = parse_spec::<CrossrefWorksSpec>(spec, "source_crossref_works")?;
-        let out = ctx.output_var.to_string();
-        let query_str = s.query.unwrap_or_default();
-        let rows = s.rows.unwrap_or(100);
-        let code = vec![
-            format!("# Crossref: search /works for '{}'", query_str),
-            format!("# NOTE: Uses the Crossref REST API via httr"),
-            format!("{out} <- httr::content(httr::GET("),
-            format!(
-                "  paste0(\"https://api.crossref.org/works?query={}&rows={}\"),",
-                query_str, rows
-            ),
-            format!("  encode = \"json\""),
-            format!("))$message$items"),
-        ];
-        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
-    }
-
-    fn r_packages(&self) -> Vec<String> {
-        vec!["httr".into()]
-    }
 }
 
 #[async_trait]

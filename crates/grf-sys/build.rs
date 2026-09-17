@@ -40,7 +40,7 @@ fn main() {
     //    simplest robust approach: let CMake build the `grf` executable, then
     //    we extract its object files. Even simpler: do NOT use CMake at all
     //    and instead compile the core sources ourselves with `cc::Build` --
-    //    they're plain C++17 + Eigen + pthread, with no codegen.
+    //    they're plain C++17 + Eigen + pthread, with no generated bindings.
     //
     //    We choose the latter (cc::Build direct) -- this avoids the executable
     //    target entirely, gives us deterministic flag handling, and matches

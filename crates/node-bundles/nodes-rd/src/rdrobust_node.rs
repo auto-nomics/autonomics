@@ -179,55 +179,6 @@ impl NodeFactory for RdRobustNodeFactory {
         let config: RdRobustNodeConfig = serde_json::from_value(spec)?;
         Ok(Box::new(RdRobustNode::new(config)))
     }
-
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut dag_core::codegen::CodegenCtx,
-    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
-        use dag_core::codegen::helpers::*;
-        let cfg = parse_spec::<RdRobustNodeConfig>(spec, RDROBUST_NODE_KIND)?;
-        let input = ctx
-            .input_vars
-            .first()
-            .map(|s| s.as_str())
-            .unwrap_or("__missing_input");
-        let out = ctx.output_var.to_string();
-
-        let mut args = vec![
-            format!("y = {input}${}", r_str(&cfg.y)),
-            format!("x = {input}${}", r_str(&cfg.x)),
-            format!("c = {}", cfg.cutoff),
-            format!("p = {}", cfg.p),
-            format!("deriv = {}", cfg.deriv),
-            format!("kernel = {}", r_str(&cfg.kernel)),
-            format!("bwselect = {}", r_str(&cfg.bwselect)),
-            format!("vce = {}", r_str(&cfg.vce)),
-            format!("level = {}", cfg.level),
-            format!("scalepar = {}", cfg.scalepar),
-        ];
-        if let Some(h) = cfg.h {
-            args.push(format!("h = {h}"));
-        }
-        if let Some(col) = &cfg.cluster {
-            args.push(format!("cluster = {input}${col}"));
-        }
-        if let Some(col) = &cfg.fuzzy {
-            args.push(format!("fuzzy = {input}${col}"));
-        }
-
-        let code = vec![
-            "# rdrobust: local-polynomial RD estimation".to_string(),
-            "library(rdrobust)".to_string(),
-            format!("{out} <- rdrobust({})", args.join(", ")),
-            format!("print(summary({out}))"),
-        ];
-        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
-    }
-
-    fn r_packages(&self) -> Vec<String> {
-        vec!["rdrobust".into()]
-    }
 }
 
 #[async_trait]

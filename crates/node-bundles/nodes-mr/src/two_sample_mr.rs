@@ -37,7 +37,6 @@ use thiserror::Error;
 
 use dag_core::node::{DagNode, DataBundle, DataBundleBinding, NodeInput, NodePorts};
 use dag_core::{
-    codegen::context::{CodegenCtx, CodegenError, NodeCodegen},
     dag::{DagError, graph::PortOutputs},
     registry::{NodeCtx, NodeFactory},
 };
@@ -967,122 +966,6 @@ impl NodeFactory for TwoSampleMrNodeFactory {
             spec,
             node_ctx.bound_data_bundle("ld_matrix").ok().cloned(),
         )))
-    }
-
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut CodegenCtx,
-    ) -> std::result::Result<NodeCodegen, CodegenError> {
-        let spec: TwoSampleMrNodeSpec =
-            serde_json::from_value(spec.clone()).map_err(|e| CodegenError::BadSpec {
-                kind: "two_sample_mr".into(),
-                source: e,
-            })?;
-
-        let input = ctx
-            .input_vars
-            .first()
-            .map(|s| s.as_str())
-            .unwrap_or("__missing_input");
-        let out = ctx.output_var.to_string();
-
-        // Format upstream merged data as TwoSampleMR exposure + outcome.
-        let exp_dat = ctx.fresh_var("exposure_dat");
-        let out_dat = ctx.fresh_var("outcome_dat");
-        let harm = ctx.fresh_var("harmonised");
-
-        let mut code = vec![
-            format!("# Format upstream data as TwoSampleMR exposure data"),
-            format!("{exp_dat} <- data.frame("),
-            format!("  SNP = {input}$snp,"),
-            format!("  beta.exposure = {input}$beta_exposure,"),
-            format!("  se.exposure = {input}$se_exposure,"),
-            format!("  effect_allele.exposure = {input}$effect_allele_exposure,"),
-            format!("  other_allele.exposure = {input}$other_allele_exposure,"),
-            format!("  eaf.exposure = {input}$eaf_exposure,"),
-            format!("  id.exposure = \"{}\",", spec.id_exposure),
-            format!("  exposure = \"{}\"", spec.id_exposure),
-            format!(")"),
-            String::new(),
-            format!("# Format upstream data as TwoSampleMR outcome data"),
-            format!("{out_dat} <- data.frame("),
-            format!("  SNP = {input}$snp,"),
-            format!("  beta.outcome = {input}$beta_outcome,"),
-            format!("  se.outcome = {input}$se_outcome,"),
-            format!("  effect_allele.outcome = {input}$effect_allele_outcome,"),
-            format!("  other_allele.outcome = {input}$other_allele_outcome,"),
-            format!("  eaf.outcome = {input}$eaf_outcome,"),
-            format!("  id.outcome = \"{}\",", spec.id_outcome),
-            format!("  outcome = \"{}\"", spec.id_outcome),
-            format!(")"),
-        ];
-
-        // LD clumping — branch on the configured backend.
-        code.push(String::new());
-        match &spec.clump.mode {
-            ClumpMode::Opengwas => {
-                code.push("# LD clumping via OpenGWAS (requires API token)".to_string());
-                code.push(format!(
-                    "{exp_dat} <- clump_data({exp_dat}, clump_r2 = {}, clump_kb = {}, clump_p1 = {}, pop = \"{}\")",
-                    spec.clump.r2, spec.clump.kb, spec.clump.p1, spec.clump.pop,
-                ));
-            }
-            ClumpMode::LocalLd => {
-                // VFS LD clumping: the Rust runtime queries the
-                // vfs:///data/oss/ld_matrix/eur_chr{N}/ tables and performs greedy
-                // clumping. In the R codegen (used for cross-validation),
-                // we emit a note since R's clump_data() only supports
-                // OpenGWAS. The exposure data entering this point has
-                // already been clumped by the Rust node.
-                code.push("# LD clumping performed via VFS LD matrix table".to_string());
-                code.push("# (Rust runtime uses greedy clumping on pre-computed r²;".to_string());
-                code.push(format!(
-                    "#  {exp_dat} is already clumped to independent instruments)"
-                ));
-            }
-        }
-
-        // Harmonise
-        code.push(String::new());
-        code.push("# Allele harmonisation".to_string());
-        code.push(format!(
-            "{harm} <- harmonise_data({exp_dat}, {out_dat}, action = {})",
-            match spec.action {
-                mr::harmonise::HarmoniseAction::ForwardStrand => 1,
-                mr::harmonise::HarmoniseAction::InferStrand => 2,
-                mr::harmonise::HarmoniseAction::ExcludePalindromic => 3,
-            }
-        ));
-
-        // MR dispatch
-        let methods = if spec.method_list.is_empty() {
-            "c(\"mr_ivw\", \"mr_egger_regression\", \"mr_weighted_median\", \"mr_simple_mode\", \"mr_weighted_mode\")".to_string()
-        } else {
-            format!(
-                "c({})",
-                spec.method_list
-                    .iter()
-                    .map(|m| format!("\"{m}\""))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        };
-
-        code.push(String::new());
-        code.push("# Mendelian randomisation".to_string());
-        code.push(format!("{out} <- mr({harm}, method_list = {methods})"));
-        code.push(format!("print({out})"));
-
-        Ok(NodeCodegen {
-            code,
-            output_vars: vec![out],
-            extra_packages: vec![],
-        })
-    }
-
-    fn r_packages(&self) -> Vec<String> {
-        vec!["TwoSampleMR".into()]
     }
 }
 

@@ -61,7 +61,6 @@ BioMNI 的论文贡献顺序是：定义问题、构建动作空间、提出 Age
 4. **不可变数据和参考面板**：data catalog 使用 manifest、版本目录和 canonical digest；panel cache 校验每个文件的大小和 SHA-256 后才原子暴露；DAG 可引用 `/datasets/<id>@sha256-<digest>`。
 5. **统一数据面**：VFS 将 local、S3、OSS 和 catalog 挂载到统一命名空间，避免 Agent 直接处理部署路径和凭据。
 6. **科研闭环**：生物医学 API、文献库、全文、引文、LaTeX/写作工具、图表/表格节点和 KMS 位于同一运行时，支持从数据到文献支撑稿件的材料流。
-7. **可重放出口**：部分 DAG 可反向编译为 R/Python，能作为审稿人可检查的独立执行产物。
 
 ## 与 BioMNI 的对照
 

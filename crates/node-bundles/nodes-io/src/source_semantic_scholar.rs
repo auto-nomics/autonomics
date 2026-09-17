@@ -146,34 +146,6 @@ impl NodeFactory for S2PaperSearchNodeFactory {
             spec: node_spec,
         }))
     }
-
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut dag_core::codegen::CodegenCtx,
-    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
-        use dag_core::codegen::helpers::*;
-        let s = parse_spec::<S2PaperSearchSpec>(spec, "source_s2_paper_search")?;
-        let out = ctx.output_var.to_string();
-        let code = vec![
-            format!("# Semantic Scholar: paper search for '{}'", s.query),
-            format!("# NOTE: Uses the S2 Academic Graph REST API via httr"),
-            format!("{out} <- httr::content(httr::GET("),
-            format!("  \"https://api.semanticscholar.org/graph/v1/paper/search\",",),
-            format!(
-                "  query = list(query = \"{}\", limit = {}, fields = \"paperId,title,year,venue,citationCount,referenceCount,isOpenAccess,openAccessPdf,externalIds,tldr\"),",
-                s.query,
-                s.limit.unwrap_or(50)
-            ),
-            format!("  add_headers(`x-api-key` = Sys.getenv(\"S2_API_KEY\"))"),
-            format!("))"),
-        ];
-        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
-    }
-
-    fn r_packages(&self) -> Vec<String> {
-        vec!["httr".into()]
-    }
 }
 
 #[async_trait]
@@ -406,33 +378,6 @@ impl NodeFactory for S2AuthorSearchNodeFactory {
             meta: author_search_port_layout(),
             spec: node_spec,
         }))
-    }
-
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut dag_core::codegen::CodegenCtx,
-    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
-        use dag_core::codegen::helpers::*;
-        let s = parse_spec::<S2AuthorSearchSpec>(spec, "source_s2_author_search")?;
-        let out = ctx.output_var.to_string();
-        let code = vec![
-            format!("# Semantic Scholar: author search for '{}'", s.query),
-            format!("{out} <- httr::content(httr::GET("),
-            format!("  \"https://api.semanticscholar.org/graph/v1/author/search\",",),
-            format!(
-                "  query = list(query = \"{}\", limit = {}, fields = \"authorId,name,affiliations,homepage,paperCount,citationCount,hIndex\"),",
-                s.query,
-                s.limit.unwrap_or(50)
-            ),
-            format!("  add_headers(`x-api-key` = Sys.getenv(\"S2_API_KEY\"))"),
-            format!("))"),
-        ];
-        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
-    }
-
-    fn r_packages(&self) -> Vec<String> {
-        vec!["httr".into()]
     }
 }
 

@@ -1,12 +1,11 @@
 //! Data analysis engine — aggregates the DAG core with concrete node bundles.
 //!
-//! All infrastructure (DagNode trait, NodeRegistry, DAG scheduler, codegen)
+//! All infrastructure (DagNode trait, NodeRegistry, DAG scheduler)
 //! lives in [`dag_core`]. This crate re-exports those modules under their
-//! familiar `data_engine::dag`, `data_engine::codegen`, etc. paths so that
-//! existing consumers need no changes.
+//! familiar `data_engine::dag`, etc. paths so that existing consumers need no
+//! changes.
 
 // Re-export core infrastructure from dag-core under the original paths.
-pub use dag_core::codegen;
 pub use dag_core::dag;
 pub use dag_core::dataset;
 pub use dag_core::error;
@@ -28,9 +27,3 @@ pub mod runtime;
 pub use dag_core::{
     DagNode, FileRef, NodeCtx, NodeFactory, NodeId, NodeInput, NodePorts, NodeRegistry, NodeValue,
 };
-
-// Codegen tests require concrete node types, so they live here not in dag-core.
-#[cfg(test)]
-mod codegen_tests;
-#[cfg(test)]
-mod xval_tests;

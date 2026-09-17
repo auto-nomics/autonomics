@@ -5,7 +5,6 @@ use async_trait::async_trait;
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 
-use dag_core::codegen;
 use dag_core::dag::{DagError, graph::PortOutputs};
 use dag_core::node::{DagNode, NodePorts};
 use dag_core::registry::{NodeCtx, NodeFactory};
@@ -78,32 +77,6 @@ impl NodeFactory for OpengwasGwasinfoSearchNodeFactory {
             meta: single_output_port(),
             spec: s,
         }))
-    }
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut codegen::CodegenCtx,
-    ) -> std::result::Result<codegen::NodeCodegen, codegen::CodegenError> {
-        use codegen::helpers::*;
-        let s = parse_spec::<OpengwasGwasinfoSearchSpec>(spec, KIND_GWASINFO_SEARCH)?;
-        let out = ctx.output_var.to_string();
-        let code = vec![
-            format!(
-                "# OpenGWAS dataset search: \"{}\" in {}",
-                s.keyword, s.field
-            ),
-            format!("# NOTE: requires ieugwasr and OPENGWAS_TOKEN"),
-            format!("# Fetch all metadata then filter client-side"),
-            format!("_all <- ieugwasr::gwasinfo()"),
-            format!(
-                "{out} <- _all[grepl(\"{}\", _all${}, ignore.case = TRUE), ]",
-                s.keyword, s.field
-            ),
-        ];
-        Ok(codegen::NodeCodegen::simple(code, out))
-    }
-    fn r_packages(&self) -> Vec<String> {
-        vec!["ieugwasr".into()]
     }
 }
 

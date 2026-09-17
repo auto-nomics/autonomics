@@ -130,51 +130,6 @@ impl NodeFactory for RdPowerNodeFactory {
         let config: RdPowerNodeConfig = serde_json::from_value(spec)?;
         Ok(Box::new(RdPowerNode::new(config)))
     }
-
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut dag_core::codegen::CodegenCtx,
-    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
-        use dag_core::codegen::helpers::*;
-        let cfg = parse_spec::<RdPowerNodeConfig>(spec, RDPOWER_NODE_KIND)?;
-        let input = ctx
-            .input_vars
-            .first()
-            .map(|s| s.as_str())
-            .unwrap_or("__missing_input");
-        let out = ctx.output_var.to_string();
-
-        let mut args = vec![
-            format!(
-                "data = cbind({input}${}, {input}${})",
-                r_str(&cfg.y),
-                r_str(&cfg.x)
-            ),
-            format!("cutoff = {}", cfg.cutoff),
-            format!("alpha = {}", cfg.alpha),
-            format!("p = {}", cfg.p),
-            format!("deriv = {}", cfg.deriv),
-            format!("kernel = {}", r_str(&cfg.kernel)),
-            format!("bwselect = {}", r_str(&cfg.bwselect)),
-            format!("vce = {}", r_str(&cfg.vce)),
-        ];
-        if let Some(t) = cfg.tau {
-            args.push(format!("tau = {t}"));
-        }
-
-        let code = vec![
-            "# rdpower: RD power calculation".to_string(),
-            "library(rdpower)".to_string(),
-            format!("{out} <- rdpower({})", args.join(", ")),
-            format!("print({out})"),
-        ];
-        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
-    }
-
-    fn r_packages(&self) -> Vec<String> {
-        vec!["rdpower".into()]
-    }
 }
 
 #[async_trait]

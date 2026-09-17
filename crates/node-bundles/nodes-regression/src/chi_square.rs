@@ -115,34 +115,6 @@ impl NodeFactory for ChiSquareNodeFactory {
             col_column: s.col_column,
         }))
     }
-
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut dag_core::codegen::CodegenCtx,
-    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
-        use dag_core::codegen::helpers::*;
-        let s = parse_spec::<ChiSquareNodeSpec>(spec, "chi_square")?;
-        let out = ctx.output_var.to_string();
-        let test_var = ctx.fresh_var("chisq");
-        let input = input_0(ctx).to_string();
-        let code = vec![
-            format!("# Chi-square test"),
-            format!(
-                "{test_var} <- chisq.test(table({input}${}, {input}${}))",
-                s.row_column, s.col_column
-            ),
-            format!("{out} <- data.frame("),
-            format!("  chi_squared = as.numeric({test_var}$statistic),"),
-            format!("  df = as.integer({test_var}$parameter),"),
-            format!("  p_value = {test_var}$p.value,"),
-            format!("  n = sum({test_var}$observed),"),
-            format!("  small_expected = sum({test_var}$expected < 5)"),
-            format!(")"),
-            format!("print({out})"),
-        ];
-        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
-    }
 }
 
 #[async_trait]

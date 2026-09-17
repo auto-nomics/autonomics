@@ -573,47 +573,6 @@ impl NodeFactory for MagmaGeneNodeFactory {
             node_ctx.bound_data_bundle("reference")?.clone(),
         )))
     }
-
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut dag_core::codegen::CodegenCtx,
-    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
-        use dag_core::codegen::helpers::*;
-        let s = parse_spec::<MagmaGeneConfig>(spec, "magma_gene")?;
-        let input = input_0(ctx).to_string();
-        let out = ctx.output_var.to_string();
-        let reference = s
-            .reference
-            .clone()
-            .unwrap_or_else(|| format!("g1000_{}", s.population.to_ascii_lowercase()));
-        let annotation = format!("\"<magma_bundle_gene_annotation:{reference}>\"");
-        let n_args = match &s.fixed_n {
-            Some(n) => format!(" --sample-n {}", n),
-            None => format!(" --n-col {}", s.n_col),
-        };
-        let code = vec![
-            format!("# MAGMA gene-level analysis"),
-            format!("# Write sumstats to temp file first"),
-            format!("tmp_sumstats <- tempfile(fileext = \".sumstats\")"),
-            format!("data.table::fwrite({input}, tmp_sumstats, sep = \"\\t\")"),
-            format!("system2(\"magma\", c("),
-            format!(
-                "  \"--bfile\", \"<magma_bundle_dir:{}>/plink_prefix\",",
-                reference
-            ),
-            format!(
-                "  \"--pval\", tmp_sumstats, usecols=\"{} {}\",",
-                s.snp_col, s.pval_col
-            ),
-            format!("  \"{n_args}\","),
-            format!("  \"--gene-annot\", {annotation},"),
-            format!("  \"--out\", \"{out}\""),
-            format!("))"),
-            format!("# NOTE: Output in {out}.genes.raw and {out}.genes.out"),
-        ];
-        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
-    }
 }
 
 impl MagmaGeneNode {
@@ -823,29 +782,6 @@ impl NodeFactory for MagmaSetNodeFactory {
     ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let config = serde_json::from_value(spec)?;
         Ok(Box::new(MagmaSetNode::new(config)))
-    }
-
-    fn codegen_r(
-        &self,
-        _spec: &serde_json::Value,
-        ctx: &mut dag_core::codegen::CodegenCtx,
-    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
-        let input = ctx
-            .input_vars
-            .first()
-            .cloned()
-            .unwrap_or_else(|| "__missing_input".into());
-        let out = ctx.output_var.to_string();
-        let code = vec![
-            format!("# MAGMA gene-set analysis"),
-            format!("# Input: {input} (gene-level results)"),
-            format!("system2(\"magma\", c("),
-            format!("  \"--gene-results\", \"<gene_raw_file>\","),
-            format!("  \"--set-annot\", \"<set_annotation_file>\","),
-            format!("  \"--out\", \"{out}\""),
-            format!("))"),
-        ];
-        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
     }
 }
 
@@ -1065,30 +1001,6 @@ impl NodeFactory for MagmaMetaNodeFactory {
     ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let config = serde_json::from_value(spec)?;
         Ok(Box::new(MagmaMetaNode::new(config)))
-    }
-
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut dag_core::codegen::CodegenCtx,
-    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
-        use dag_core::codegen::helpers::*;
-        let s = parse_spec::<MagmaMetaConfig>(spec, "magma_meta")?;
-        let out = ctx.output_var.to_string();
-        let cohort_files = s
-            .cohort_files
-            .iter()
-            .map(|f| format!("\"{f}\""))
-            .collect::<Vec<_>>()
-            .join(" ");
-        let code = vec![
-            format!("# MAGMA meta-analysis"),
-            format!("system2(\"magma\", c("),
-            format!("  \"--meta\", {cohort_files},"),
-            format!("  \"--out\", \"{out}\""),
-            format!("))"),
-        ];
-        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
     }
 }
 

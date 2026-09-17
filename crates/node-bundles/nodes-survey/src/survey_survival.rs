@@ -10,9 +10,7 @@ use serde::Deserialize;
 
 use arrow_array::Float64Array;
 
-use crate::survey_common::{SurveyDesignSpec, gen_design_r, one_in_one_out};
-use dag_core::codegen::helpers::{input_0, parse_spec};
-use dag_core::codegen::{CodegenCtx, CodegenError, NodeCodegen};
+use crate::survey_common::{SurveyDesignSpec, one_in_one_out};
 use dag_core::dag::{DagError, graph::PortOutputs};
 use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::registry::{NodeCtx, NodeFactory};
@@ -155,28 +153,6 @@ impl NodeFactory for SvyKmFactory {
     ) -> dag_core::registry::error::Result<Box<dyn dag_core::dag::DagNode>> {
         let node_spec: SvyKmSpec = serde_json::from_value(spec)?;
         Ok(Box::new(SvyKmNode::new(node_spec)))
-    }
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut CodegenCtx,
-    ) -> Result<NodeCodegen, CodegenError> {
-        let s = parse_spec::<SvyKmSpec>(spec, "survey_node")?;
-        let input = input_0(ctx).to_string();
-        let out = ctx.output_var.to_string();
-        let (des, mut code) = gen_design_r(&s.design, &input, ctx);
-        let rhs = match &s.group {
-            Some(g) => format!("Surv({}, {}) ~ {}", s.time_column, s.event_column, g),
-            None => format!("Surv({}, {}) ~ 1", s.time_column, s.event_column),
-        };
-        let se_arg = if s.se { ", se = TRUE" } else { "" };
-        code.push(format!("{out} <- svykm({rhs}, {des}{se_arg})"));
-        code.push(format!("plot({out})"));
-        code.push(format!("print({out})"));
-        Ok(NodeCodegen::simple(code, out))
-    }
-    fn r_packages(&self) -> Vec<String> {
-        vec!["survey".into(), "survival".into()]
     }
 }
 
@@ -343,33 +319,6 @@ impl NodeFactory for SvyLogrankFactory {
             let s: SvyLogrankSpec = serde_json::from_value(spec)?;
             Ok(Box::new(SvyLogrankNode::new(s)))
         }
-    }
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut CodegenCtx,
-    ) -> Result<NodeCodegen, CodegenError> {
-        let s = parse_spec::<SvyLogrankSpec>(spec, "survey_node")?;
-        let input = input_0(ctx).to_string();
-        let out = ctx.output_var.to_string();
-        let (des, mut code) = gen_design_r(&s.design, &input, ctx);
-        let rho_arg = match s.rho {
-            Some(r) => format!(", rho = {}", r),
-            None => String::new(),
-        };
-        code.push(format!(
-            "{out} <- svylogrank(Surv({t}, {e}) ~ {g}, {des}, method = \"{m}\"{rho})",
-            t = s.time_column,
-            e = s.event_column,
-            g = s.group,
-            m = s.method,
-            rho = rho_arg
-        ));
-        code.push(format!("print({out})"));
-        Ok(NodeCodegen::simple(code, out))
-    }
-    fn r_packages(&self) -> Vec<String> {
-        vec!["survey".into(), "survival".into()]
     }
 }
 

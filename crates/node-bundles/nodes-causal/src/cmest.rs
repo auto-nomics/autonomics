@@ -273,36 +273,6 @@ impl NodeFactory for CmestNodeFactory {
             spec: s,
         }))
     }
-
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut dag_core::codegen::CodegenCtx,
-    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
-        use dag_core::codegen::helpers::*;
-        let s = parse_spec::<CmestSpec>(spec, "cmest")?;
-        let out = ctx.output_var.to_string();
-        let input = input_0(ctx).to_string();
-        let code = vec![
-            format!("# CMAverse cmest: regression-based causal mediation"),
-            format!("set.seed({})", s.seed),
-            format!("{out} <- cmest("),
-            format!("  data = {input},"),
-            format!("  exposure = \"{}\",", s.exposure_column),
-            format!("  mediator = \"{}\",", s.mediator_column),
-            format!("  outcome = \"{}\",", s.outcome_column),
-            format!("  covariates = c(\"{}\"),", s.covariates.join("\", \"")),
-            format!("  yreg = \"linear\", mreg = \"linear\","),
-            format!("  estimation = \"imputation\", inference = \"bootstrap\","),
-            format!("  nboot = {}", s.n_bootstrap),
-            format!(")"),
-            format!("print(summary({out}))"),
-        ];
-        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
-    }
-    fn r_packages(&self) -> Vec<String> {
-        vec!["CMAverse".into()]
-    }
 }
 
 #[async_trait]
@@ -441,42 +411,6 @@ impl NodeFactory for CmestMultiNodeFactory {
             spec: s,
         }))
     }
-
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut dag_core::codegen::CodegenCtx,
-    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
-        use dag_core::codegen::helpers::*;
-        let s = parse_spec::<CmestMultiSpec>(spec, "cmest_multi")?;
-        let out = ctx.output_var.to_string();
-        let input = input_0(ctx).to_string();
-        let med_cols = s
-            .mediator_columns
-            .iter()
-            .map(|m| format!("\"{m}\""))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let code = vec![
-            format!("# CMAverse cmest: multiple mediators"),
-            format!("set.seed({})", s.seed),
-            format!("{out} <- cmest("),
-            format!("  data = {input},"),
-            format!("  exposure = \"{}\",", s.exposure_column),
-            format!("  mediators = c({med_cols}),"),
-            format!("  outcome = \"{}\",", s.outcome_column),
-            format!("  covariates = c(\"{}\"),", s.covariates.join("\", \"")),
-            format!("  yreg = \"linear\", mreg = \"linear\","),
-            format!("  estimation = \"imputation\", inference = \"bootstrap\","),
-            format!("  nboot = {}", s.n_bootstrap),
-            format!(")"),
-            format!("print(summary({out}))"),
-        ];
-        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
-    }
-    fn r_packages(&self) -> Vec<String> {
-        vec!["CMAverse".into()]
-    }
 }
 
 #[async_trait]
@@ -600,37 +534,6 @@ impl NodeFactory for CmestBinaryYNodeFactory {
             spec: s,
         }))
     }
-
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut dag_core::codegen::CodegenCtx,
-    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
-        use dag_core::codegen::helpers::*;
-        let s = parse_spec::<CmestBinaryYSpec>(spec, "cmest_binary_y")?;
-        let out = ctx.output_var.to_string();
-        let input = input_0(ctx).to_string();
-        let code = vec![
-            format!("# CMAverse cmest: binary outcome"),
-            format!("set.seed({})", s.seed),
-            format!("{out} <- cmest("),
-            format!(
-                "  data = {input}, exposure = \"{}\", mediator = \"{}\", outcome = \"{}\",",
-                s.exposure_column, s.mediator_column, s.outcome_column
-            ),
-            format!("  yreg = \"logistic\", mreg = \"linear\","),
-            format!(
-                "  estimation = \"imputation\", inference = \"bootstrap\", nboot = {}",
-                s.n_bootstrap
-            ),
-            format!(")"),
-            format!("print(summary({out}))"),
-        ];
-        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
-    }
-    fn r_packages(&self) -> Vec<String> {
-        vec!["CMAverse".into()]
-    }
 }
 
 #[async_trait]
@@ -750,37 +653,6 @@ impl NodeFactory for CmestBinaryMNodeFactory {
             meta: NodePorts::new().add_output_port(None).add_input_port(None),
             spec: s,
         }))
-    }
-
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut dag_core::codegen::CodegenCtx,
-    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
-        use dag_core::codegen::helpers::*;
-        let s = parse_spec::<CmestBinaryMSpec>(spec, "cmest_binary_m")?;
-        let out = ctx.output_var.to_string();
-        let input = input_0(ctx).to_string();
-        let code = vec![
-            format!("# CMAverse cmest: binary mediator"),
-            format!("set.seed({})", s.seed),
-            format!("{out} <- cmest("),
-            format!(
-                "  data = {input}, exposure = \"{}\", mediator = \"{}\", outcome = \"{}\",",
-                s.exposure_column, s.mediator_column, s.outcome_column
-            ),
-            format!("  yreg = \"linear\", mreg = \"logistic\","),
-            format!(
-                "  estimation = \"imputation\", inference = \"bootstrap\", nboot = {}",
-                s.n_bootstrap
-            ),
-            format!(")"),
-            format!("print(summary({out}))"),
-        ];
-        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
-    }
-    fn r_packages(&self) -> Vec<String> {
-        vec!["CMAverse".into()]
     }
 }
 
@@ -911,39 +783,6 @@ impl NodeFactory for CmestWeightingNodeFactory {
             spec: s,
         }))
     }
-
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut dag_core::codegen::CodegenCtx,
-    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
-        use dag_core::codegen::helpers::*;
-        let s = parse_spec::<CmestWeightingSpec>(spec, "cmest_weighting")?;
-        let out = ctx.output_var.to_string();
-        let input = input_0(ctx).to_string();
-        let code = vec![
-            format!("# CMAverse cmest: IPW weighting estimation"),
-            format!("set.seed({})", s.seed),
-            format!("{out} <- cmest("),
-            format!(
-                "  data = {input}, exposure = \"{}\", mediator = \"{}\", outcome = \"{}\",",
-                s.exposure_column, s.mediator_column, s.outcome_column
-            ),
-            format!("  covariates = c(\"{}\"),", s.covariates.join("\", \"")),
-            format!("  yreg = \"linear\", mreg = \"linear\","),
-            format!("  estimation = \"imputation\","),
-            format!(
-                "  weighting = \"IPW\", inference = \"bootstrap\", nboot = {}",
-                s.n_bootstrap
-            ),
-            format!(")"),
-            format!("print(summary({out}))"),
-        ];
-        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
-    }
-    fn r_packages(&self) -> Vec<String> {
-        vec!["CMAverse".into()]
-    }
 }
 
 #[async_trait]
@@ -1066,38 +905,6 @@ impl NodeFactory for CmestGformulaNodeFactory {
             meta: NodePorts::new().add_output_port(None).add_input_port(None),
             spec: s,
         }))
-    }
-
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut dag_core::codegen::CodegenCtx,
-    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
-        use dag_core::codegen::helpers::*;
-        let s = parse_spec::<CmestGformulaSpec>(spec, "cmest_gformula")?;
-        let out = ctx.output_var.to_string();
-        let input = input_0(ctx).to_string();
-        let code = vec![
-            format!("# CMAverse cmest: G-formula estimation"),
-            format!("set.seed({})", s.seed),
-            format!("{out} <- cmest("),
-            format!(
-                "  data = {input}, exposure = \"{}\", mediator = \"{}\", outcome = \"{}\",",
-                s.exposure_column, s.mediator_column, s.outcome_column
-            ),
-            format!("  covariates = c(\"{}\"),", s.covariates.join("\", \"")),
-            format!("  yreg = \"linear\", mreg = \"linear\","),
-            format!(
-                "  estimation = \"paramfunc\", inference = \"bootstrap\", nboot = {}",
-                s.n_bootstrap
-            ),
-            format!(")"),
-            format!("print(summary({out}))"),
-        ];
-        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
-    }
-    fn r_packages(&self) -> Vec<String> {
-        vec!["CMAverse".into()]
     }
 }
 

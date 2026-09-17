@@ -107,14 +107,14 @@
 <text x="194.0" y="725.6" fill="#1F2937" font-size="11.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">exposed to the agent)</text>
 <text x="194.0" y="754.0" fill="#4b5563" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">list_node_factories</text>
 <text x="194.0" y="766.0" fill="#4b5563" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">add / update / remove node and edge</text>
-<text x="194.0" y="778.0" fill="#4b5563" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">run DAG, view DOT, compile R / Python</text>
+<text x="194.0" y="778.0" fill="#4b5563" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">run DAG, view DOT, inspect outputs</text>
 <text x="194.0" y="790.0" fill="#4b5563" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">snapshot, diff, branch, checkout</text>
 <rect x="344.0" y="676.0" width="240.0" height="64.0" rx="8" ry="8" fill="#d5e8d4" stroke="#82b366" stroke-width="1.0"/>
 <text x="464.0" y="705.6" fill="#1F2937" font-size="12.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">DataEngine actor</text>
 <text x="464.0" y="720.0" fill="#1F2937" font-size="12.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">per-session isolated state</text>
 <text x="464.0" y="754.0" fill="#4b5563" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">node discovery  •  add / update nodes and edges</text>
 <text x="464.0" y="766.0" fill="#4b5563" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">run + history  •  DAG history and snapshots</text>
-<text x="464.0" y="778.0" fill="#4b5563" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">R / Python reverse-compile</text>
+<text x="464.0" y="778.0" fill="#4b5563" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">snapshot and output inspection</text>
 <rect x="614.0" y="676.0" width="240.0" height="64.0" rx="8" ry="8" fill="#d5e8d4" stroke="#82b366" stroke-width="1.0"/>
 <text x="734.0" y="712.8" fill="#1F2937" font-size="12.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">DAG core  •  dag-core</text>
 <text x="734.0" y="754.0" fill="#4b5563" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">node trait  •  plugin registry  •  typed ports</text>

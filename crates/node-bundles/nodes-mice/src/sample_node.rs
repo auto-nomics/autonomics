@@ -8,8 +8,6 @@ use rand::rngs::StdRng;
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 
-use dag_core::codegen::context::{CodegenCtx, CodegenError, NodeCodegen};
-use dag_core::codegen::helpers::*;
 use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::registry::NodeFactory;
 use dag_core::{
@@ -70,37 +68,6 @@ impl NodeFactory for MiceImputeSampleNodeFactory {
             meta: port_layout(),
             spec: s,
         }))
-    }
-
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut CodegenCtx,
-    ) -> std::result::Result<NodeCodegen, CodegenError> {
-        let s = parse_spec::<MiceImputeSampleNodeSpec>(spec, "mice_impute_sample")?;
-        let out = ctx.output_var.to_string();
-        let fit_var = ctx.fresh_var("sample_fit");
-        let input = input_0(ctx).to_string();
-        let yc = s.y_column.clone();
-        let code = vec![
-            "src <- as.data.frame(src)".to_string(),
-            "# Sample imputation".to_string(),
-            "library(mice)".to_string(),
-            format!(
-                "{fit_var} <- mice.impute.sample(y = {input}${}, ry = !is.na({input}${}))",
-                yc, yc
-            ),
-            "# Observed-set statistics for xval".to_string(),
-            format!(
-                "{{ obs_y <- {input}${yc}[!is.na({input}${yc})]; obs_mean <- mean(obs_y); obs_sd <- sd(obs_y); obs_min <- min(obs_y); obs_max <- max(obs_y); {out} <- data.frame(imputed = as.numeric({fit_var}), in_observed_set = as.numeric({fit_var}) %in% obs_y, observed_mean = obs_mean, observed_sd = obs_sd, observed_min = obs_min, observed_max = obs_max) }}"
-            ),
-            format!("print({out})"),
-        ];
-        Ok(NodeCodegen::simple(code, out))
-    }
-
-    fn r_packages(&self) -> Vec<String> {
-        vec!["mice".into()]
     }
 }
 

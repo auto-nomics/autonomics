@@ -76,7 +76,7 @@
                 <mxCell id="630" value="DAG core / scheduler" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;fontSize=12;fontStyle=1;" parent="1" vertex="1">
                     <mxGeometry x="730" y="498" width="180" height="44" as="geometry"/>
                 </mxCell>
-                <mxCell id="631" value="node trait, plugin registry,&#xa;async scheduler, retained outputs;&#xa;DAG history &amp; snapshots, R / Python codegen." style="text;html=1;whiteSpace=wrap;align=center;verticalAlign=top;fontSize=10;fontColor=#374151;" parent="1" vertex="1">
+                <mxCell id="631" value="node trait, plugin registry,&#xa;async scheduler, retained outputs;&#xa;DAG history &amp; snapshots." style="text;html=1;whiteSpace=wrap;align=center;verticalAlign=top;fontSize=10;fontColor=#374151;" parent="1" vertex="1">
                     <mxGeometry x="710" y="546" width="280" height="56" as="geometry"/>
                 </mxCell>
                 <mxCell id="640" value="Pure-Rust nodes" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;fontStyle=1;" parent="1" vertex="1">
@@ -241,7 +241,7 @@
                 <mxCell id="1240" value="Auditable" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;fontSize=12;fontStyle=1;" parent="1" vertex="1">
                     <mxGeometry x="1320" y="1160" width="200" height="38" as="geometry"/>
                 </mxCell>
-                <mxCell id="1241" value="recorded spec, code path, image digest,&#xa;panel manifest, command, exit code;&#xa;reverse-compile to R or Python for re-run" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontSize=10;fontColor=#374151;" parent="1" vertex="1">
+                <mxCell id="1241" value="recorded spec, code path, image digest,&#xa;panel manifest, command, exit code" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontSize=10;fontColor=#374151;" parent="1" vertex="1">
                     <mxGeometry x="1320" y="1202" width="320" height="64" as="geometry"/>
                 </mxCell>
                 <mxCell id="1250" value="DAG history = snapshot lineages that can be diffed, branched, and replayed" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontSize=10;fontColor=#6b7280;fontStyle=2;" parent="1" vertex="1">

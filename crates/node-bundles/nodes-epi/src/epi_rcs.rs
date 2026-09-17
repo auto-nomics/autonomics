@@ -145,62 +145,6 @@ impl NodeFactory for EpiRcsNodeFactory {
             n_grid_points: s.n_grid_points,
         }))
     }
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut dag_core::codegen::CodegenCtx,
-    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
-        use dag_core::codegen::helpers::*;
-        let s = parse_spec::<EpiRcsNodeSpec>(spec, "epi_rcs")?;
-        let out = ctx.output_var.to_string();
-        let fit = ctx.fresh_var("rcs_fit");
-        let input = input_0(ctx).to_string();
-        let out2 = ctx.fresh_var("rcs_curve");
-        let covars = if s.covariates.is_empty() {
-            String::new()
-        } else {
-            format!(" + {}", s.covariates.join(" + "))
-        };
-        let pred = ctx.fresh_var("rcs_pred");
-        let code = vec![
-            format!("# Restricted cubic splines ({} knots)", s.n_knots),
-            format!("ddist <- datadist({input})"),
-            format!("options(datadist = 'ddist')"),
-            format!(
-                "{fit} <- lrm({} ~ rcs({}, {}){}, data = {input}, x=TRUE)",
-                s.outcome_column, s.x_column, s.n_knots, covars
-            ),
-            // Port 0: summary statistics
-            format!("{out} <- data.frame("),
-            format!("  lr_stat = as.numeric({fit}$stats[\"Model L.R.\"]),"),
-            format!(
-                "  p_overall = 1 - pchisq(as.numeric({fit}$stats[\"Model L.R.\"]), as.numeric({fit}$stats[\"d.f.\"])),"
-            ),
-            format!("  n_knots = {},", s.n_knots),
-            format!("  n_obs = {fit}$stats[\"Obs\"]"),
-            format!(")"),
-            // Port 1: OR curve points
-            format!(
-                "{pred} <- Predict({fit}, {} = seq(min({input}${}), max({input}${}), length.out = {}))",
-                s.x_column, s.x_column, s.x_column, s.n_grid_points
-            ),
-            format!("{out2} <- data.frame("),
-            format!("  x = {pred}${},", s.x_column),
-            format!("  log_odds = {pred}$yhat,"),
-            format!("  or = exp({pred}$yhat)"),
-            format!(")"),
-            format!("print({out})"),
-            format!("options(datadist = NULL)"),
-        ];
-        Ok(dag_core::codegen::NodeCodegen {
-            code,
-            output_vars: vec![out, out2],
-            extra_packages: vec![],
-        })
-    }
-    fn r_packages(&self) -> Vec<String> {
-        vec!["rms".into()]
-    }
 }
 
 #[async_trait]

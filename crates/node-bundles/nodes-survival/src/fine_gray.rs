@@ -187,24 +187,6 @@ fn port_layout() -> NodePorts {
         .add_input_port(None)
 }
 
-// ── R codegen helpers ───────────────────────────────────────────────────────
-
-/// `as.matrix(df[, c("a", "b"), drop = FALSE])` — the shape `crr` wants for
-/// `cov1` / `cov2`, preserving column names so R's term labels match ours.
-fn r_cov_matrix(input: &str, cols: &[String]) -> String {
-    let quoted: Vec<String> = cols.iter().map(|c| format!("\"{c}\"")).collect();
-    format!(
-        "as.matrix({input}[, c({}), drop = FALSE])",
-        quoted.join(", ")
-    )
-}
-
-/// Build the `tf` closure R needs: `function(uft) cbind(uft, uft^2)`.
-fn r_tf_closure(fns: &[TimeFn]) -> String {
-    let cols: Vec<String> = fns.iter().map(|f| f.r_expr("uft")).collect();
-    format!("function(uft) cbind({})", cols.join(", "))
-}
-
 impl NodeFactory for FineGrayNodeFactory {
     fn kind(&self) -> &'static str {
         FINE_GRAY_NODE_KIND
@@ -251,108 +233,6 @@ impl NodeFactory for FineGrayNodeFactory {
             meta: port_layout(),
             spec: s,
         }))
-    }
-
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut dag_core::codegen::CodegenCtx,
-    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
-        use dag_core::codegen::helpers::*;
-        let s = parse_spec::<FineGrayNodeSpec>(spec, FINE_GRAY_NODE_KIND)?;
-        let input = input_0(ctx).to_string();
-        let out = ctx.output_var.to_string();
-        let base_var = ctx.fresh_var("fg_baseline");
-        let fit = ctx.fresh_var("fg_fit");
-        let se = ctx.fresh_var("fg_se");
-
-        let mut code = vec![
-            "# Fine-Gray proportional subdistribution hazards regression".to_string(),
-            format!("{fit} <- cmprsk::crr("),
-            format!("  ftime = {},", r_col(&input, &s.time_column)),
-            format!("  fstatus = {},", r_col(&input, &s.status_column)),
-        ];
-        if !s.covariates.is_empty() {
-            code.push(format!("  cov1 = {},", r_cov_matrix(&input, &s.covariates)));
-        }
-        if !s.tv_covariates.is_empty() {
-            code.push(format!(
-                "  cov2 = {},",
-                r_cov_matrix(&input, &s.tv_covariates)
-            ));
-            code.push(format!("  tf = {},", r_tf_closure(&s.time_functions)));
-        }
-        if let Some(cg) = &s.cengroup_column {
-            code.push(format!("  cengroup = {},", r_col(&input, cg)));
-        }
-        code.extend([
-            format!("  failcode = {},", s.failcode),
-            format!("  cencode = {},", s.cencode),
-            format!("  gtol = {},", s.gtol),
-            format!("  maxiter = {},", s.maxiter),
-        ]);
-        if let Some(init) = &s.init {
-            let vals: Vec<String> = init.iter().map(|v| v.to_string()).collect();
-            code.push(format!("  init = c({}),", vals.join(", ")));
-        }
-        code.push(format!(
-            "  variance = {}",
-            if s.variance { "TRUE" } else { "FALSE" }
-        ));
-        code.push(")".to_string());
-
-        // ── port 0: coefficient table ───────────────────────────────────────
-        let a = (1.0 - s.conf_level) / 2.0;
-        code.extend([
-            format!("{se} <- sqrt(diag(as.matrix({fit}$var)))"),
-            format!("{out} <- data.frame("),
-            format!("  term = names({fit}$coef),"),
-            format!("  coefficient = as.numeric({fit}$coef),"),
-            format!("  subhazard_ratio = as.numeric(exp({fit}$coef)),"),
-            format!("  std_error = as.numeric({se}),"),
-            format!("  z_stat = as.numeric({fit}$coef / {se}),"),
-            format!("  p_value = as.numeric(2 * (1 - pnorm(abs({fit}$coef / {se})))),"),
-            format!("  shr_ci_lower = as.numeric(exp({fit}$coef + qnorm({a}) * {se})),"),
-            format!(
-                "  shr_ci_upper = as.numeric(exp({fit}$coef + qnorm({}) * {se})),",
-                1.0 - a
-            ),
-            "  stringsAsFactors = FALSE".to_string(),
-            ")".to_string(),
-            format!("{out}$log_likelihood <- {fit}$loglik"),
-            format!("{out}$loglik_null <- {fit}$loglik.null"),
-            format!("{out}$lr_stat <- -2 * ({fit}$loglik.null - {fit}$loglik)"),
-            format!("{out}$lr_df <- length({fit}$coef)"),
-            format!("{out}$lr_p_value <- 1 - pchisq({out}$lr_stat[1], length({fit}$coef))"),
-            format!("{out}$n_obs <- {fit}$n"),
-            format!("{out}$n_missing <- {fit}$n.missing"),
-            format!(
-                "{out}$n_events <- sum({} == {})",
-                r_col(&input, &s.status_column),
-                s.failcode
-            ),
-            format!("{out}$converged <- {fit}$converged"),
-            format!("print({out})"),
-        ]);
-
-        // ── port 1: baseline cumulative incidence ───────────────────────────
-        code.extend([
-            format!("{base_var} <- data.frame("),
-            format!("  uftime = as.numeric({fit}$uftime),"),
-            format!("  bfitj = as.numeric({fit}$bfitj),"),
-            format!("  baseline_cif = as.numeric(1 - exp(-cumsum({fit}$bfitj)))"),
-            ")".to_string(),
-        ]);
-
-        Ok(dag_core::codegen::NodeCodegen {
-            code,
-            output_vars: vec![out, base_var],
-            extra_packages: vec![],
-        })
-    }
-
-    fn r_packages(&self) -> Vec<String> {
-        vec!["cmprsk".into()]
     }
 }
 
@@ -586,26 +466,5 @@ mod tests {
             "time_functions": ["identity"]
         }));
         assert!(s.validate().is_err());
-    }
-
-    #[test]
-    fn tf_closure_matches_the_documented_example() {
-        // crr.Rd: crr(..., cbind(cov[,1], cov[,1]), function(Uft) cbind(Uft, Uft^2))
-        assert_eq!(
-            r_tf_closure(&[TimeFn::Identity, TimeFn::Square]),
-            "function(uft) cbind(uft, uft^2)"
-        );
-        assert_eq!(
-            r_tf_closure(&[TimeFn::Log]),
-            "function(uft) cbind(log(uft))"
-        );
-    }
-
-    #[test]
-    fn cov_matrix_preserves_column_names() {
-        assert_eq!(
-            r_cov_matrix("df", &["x1".into(), "x2".into()]),
-            "as.matrix(df[, c(\"x1\", \"x2\"), drop = FALSE])"
-        );
     }
 }

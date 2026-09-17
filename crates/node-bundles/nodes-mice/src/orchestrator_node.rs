@@ -13,8 +13,6 @@ use async_trait::async_trait;
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 
-use dag_core::codegen::context::{CodegenCtx, CodegenError, NodeCodegen};
-use dag_core::codegen::helpers::*;
 use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::registry::NodeFactory;
 use dag_core::{
@@ -137,88 +135,6 @@ impl NodeFactory for MiceOrchestratorNodeFactory {
             spec: s,
         }))
     }
-
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut CodegenCtx,
-    ) -> std::result::Result<NodeCodegen, CodegenError> {
-        let s = parse_spec::<MiceOrchestratorNodeSpec>(spec, "mice")?;
-        let out = ctx.output_var.to_string();
-        let mids_var = ctx.fresh_var("mids");
-        let y0 = s
-            .impute_columns
-            .first()
-            .cloned()
-            .unwrap_or_else(|| "y".to_string());
-        let comp_var = ctx.fresh_var("comp");
-        let input = input_0(ctx).to_string();
-
-        // Build a length-ncol(input) method vector at R runtime by aligning
-        // `impute_columns`/`methods` to the actual column positions of `input`.
-        // Positions for non-impute columns are filled with ""; positions for
-        // impute columns use the corresponding entry from `methods`. This is
-        // required because mice() overwrites methods for any column with zero
-        // missing values back to ""; the vector must therefore encode the user
-        // intent per column, not a positional pad.
-        let method_vec = if let Some(m) = s.methods.as_ref() {
-            let impute_cols_r = vec_to_r_str(&s.impute_columns);
-            let methods_r = vec_to_r_str(m);
-            format!(
-                "{{ impute_cols <- {impute_cols_r}; user_methods_list <- {methods_r}; n_cols <- ncol({input}); mthd <- rep(\"\", n_cols); names(mthd) <- colnames({input}); for (i in seq_along(impute_cols)) {{ idx <- match(impute_cols[i], colnames({input}), nomatch = 0L); if (idx > 0L) {{ mthd[idx] <- user_methods_list[[i]] }} }}; mthd }}",
-                input = input,
-                impute_cols_r = impute_cols_r,
-                methods_r = methods_r
-            )
-        } else {
-            "NULL".to_string()
-        };
-        let pm_lines = if let Some(pm) = s.predictor_matrix.as_ref() {
-            let rows: Vec<String> = pm
-                .iter()
-                .map(|r| {
-                    let inner: Vec<String> = r.iter().map(|c| format!("\"{c}\"")).collect();
-                    format!("c({})", inner.join(", "))
-                })
-                .collect();
-            format!("predictorMatrix = rbind({})", rows.join(",\n  "))
-        } else {
-            String::new()
-        };
-        let pm_arg = if s.predictor_matrix.is_some() {
-            format!(", {pm_lines}")
-        } else {
-            String::new()
-        };
-
-        let code = vec![
-            format!("set.seed({})", s.seed.unwrap_or(42)),
-            format!("{input} <- as.data.frame({input})"),
-            "# MICE orchestrator".to_string(),
-            "library(mice)".to_string(),
-            format!("{mids_var} <- mice("),
-            format!("  data = {input},"),
-            format!("  m = {},", s.m),
-            format!("  method = {method_vec},"),
-            format!("  maxit = {},", s.maxit),
-            format!("  ridge = {},", s.ridge),
-            format!("  donors = {},", s.donors),
-            format!("  matchtype = {},", s.matchtype),
-            format!("  printFlag = FALSE{pm_arg}"),
-            ")".to_string(),
-            format!("{comp_var} <- complete({mids_var}, action = \"long\", include = FALSE)"),
-            format!(
-                "{{ comp_y <- as.data.frame({comp_var})[, c('.imp', '{y0}')]; summ <- data.frame(imp_col = unique(comp_y[, '.imp']), n_rows = as.numeric(table(comp_y[, '.imp'])), y_mean = as.numeric(tapply(comp_y[, '{y0}'], comp_y[, '.imp'], mean)), y_sd = as.numeric(tapply(comp_y[, '{y0}'], comp_y[, '.imp'], sd)), y_min = as.numeric(tapply(comp_y[, '{y0}'], comp_y[, '.imp'], min)), y_max = as.numeric(tapply(comp_y[, '{y0}'], comp_y[, '.imp'], max))) }}"
-            ),
-            format!("{out} <- summ"),
-            format!("print({out})"),
-        ];
-        Ok(NodeCodegen::simple(code, out))
-    }
-
-    fn r_packages(&self) -> Vec<String> {
-        vec!["mice".into()]
-    }
 }
 
 #[async_trait]
@@ -321,9 +237,7 @@ impl DagNode for MiceOrchestratorNode {
 
         // Build method vector aligned to column_order: "" for columns not
         // in impute_columns (so they're never imputed), the specified or
-        // default method for impute columns. This mirrors the codegen_r
-        // path, which builds the same ""-padded method vector for R's
-        // mice().
+        // default method for impute columns.
         let method_vec: Vec<String> = col_order
             .iter()
             .map(|col| {

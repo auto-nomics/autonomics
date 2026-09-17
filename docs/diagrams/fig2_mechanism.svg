@@ -63,7 +63,7 @@
 <text x="820.0" y="524.8" fill="#1F2937" font-size="12.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">DAG core / scheduler</text>
 <text x="850.0" y="556.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">node trait, plugin registry,</text>
 <text x="850.0" y="568.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">async scheduler, retained outputs;</text>
-<text x="850.0" y="580.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">DAG history &amp; snapshots, R / Python codegen.</text>
+<text x="850.0" y="580.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">DAG history &amp; snapshots.</text>
 <rect x="1346.0" y="378.0" width="190.0" height="36.0" rx="8" ry="8" fill="#d5e8d4" stroke="#82b366" stroke-width="1.0"/>
 <text x="1441.0" y="400.4" fill="#1F2937" font-size="11.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Pure-Rust nodes</text>
 <text x="1486.0" y="428.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">DataFusion DataFrame + Arrow RecordBatch nodes;</text>
@@ -177,6 +177,6 @@
 <text x="1420.0" y="1183.8" fill="#1F2937" font-size="12.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">Auditable</text>
 <text x="1320.0" y="1212.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="start">recorded spec, code path, image digest,</text>
 <text x="1320.0" y="1224.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="start">panel manifest, command, exit code;</text>
-<text x="1320.0" y="1236.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="start">reverse-compile to R or Python for re-run</text>
+<text x="1320.0" y="1236.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="start">recorded execution metadata for auditing</text>
 <text x="990.0" y="1290.0" fill="#6b7280" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="start">DAG history = snapshot lineages that can be diffed, branched, and replayed</text>
 </svg>

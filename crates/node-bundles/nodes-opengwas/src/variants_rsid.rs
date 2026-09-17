@@ -5,7 +5,6 @@ use async_trait::async_trait;
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 
-use dag_core::codegen;
 use dag_core::dag::{DagError, graph::PortOutputs};
 use dag_core::node::{DagNode, NodePorts};
 use dag_core::registry::{NodeCtx, NodeFactory};
@@ -60,25 +59,6 @@ impl NodeFactory for OpengwasVariantsRsidNodeFactory {
             meta: single_output_port(),
             spec: s,
         }))
-    }
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut codegen::CodegenCtx,
-    ) -> std::result::Result<codegen::NodeCodegen, codegen::CodegenError> {
-        use codegen::helpers::*;
-        let s = parse_spec::<OpengwasVariantsRsidSpec>(spec, KIND_VARIANTS_RSID)?;
-        let out = ctx.output_var.to_string();
-        let rsids = r_vec(&s.rsid);
-        let code = vec![
-            format!("# OpenGWAS variant annotations by rsID"),
-            format!("# NOTE: requires ieugwasr and OPENGWAS_TOKEN"),
-            format!("{out} <- ieugwasr::variants_rsid(c({rsids}))"),
-        ];
-        Ok(codegen::NodeCodegen::simple(code, out))
-    }
-    fn r_packages(&self) -> Vec<String> {
-        vec!["ieugwasr".into()]
     }
 }
 

@@ -265,37 +265,6 @@ impl NodeFactory for LinearRegressionNodeFactory {
             LinearRegressionNode::new(node_spec.x_columns, node_spec.y_column, node_spec.intercept);
         Ok(Box::new(node))
     }
-
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut dag_core::codegen::CodegenCtx,
-    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
-        use dag_core::codegen::helpers::*;
-        let s = parse_spec::<LinearRegressionNodeSpec>(spec, "linear_regression")?;
-        let out = ctx.output_var.to_string();
-        let fit = ctx.fresh_var("lm_fit");
-        let smry = ctx.fresh_var("lm_smry");
-        let coefs = ctx.fresh_var("lm_coefs");
-        let input = input_0(ctx).to_string();
-        let formula = r_formula(&s.y_column, &s.x_columns, s.intercept);
-        let code = vec![
-            format!("# Linear regression: {formula}"),
-            format!("{fit} <- lm({formula}, data = {input})"),
-            format!("{smry} <- summary({fit})"),
-            format!("{coefs} <- as.data.frame({smry}$coefficients)"),
-            format!("names({coefs}) <- c(\"coefficient\", \"std_error\", \"t_stat\", \"p_value\")"),
-            format!("{coefs}$term <- rownames({coefs})"),
-            format!(
-                "{out} <- {coefs}[, c(\"term\", \"coefficient\", \"std_error\", \"t_stat\", \"p_value\")]"
-            ),
-            format!("{out}$r_squared <- {smry}$r.squared"),
-            format!("{out}$n_obs <- {fit}$df + length({fit}$residuals) - {fit}$df"),
-            format!("{out}$n_obs <- length({fit}$residuals)"),
-            format!("print({out})"),
-        ];
-        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
-    }
 }
 
 #[async_trait]

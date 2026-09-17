@@ -46,18 +46,6 @@ impl TimeFn {
         }
     }
 
-    /// R expression for this function applied to `var`, used by node codegen so
-    /// the generated script builds an identical `tf` closure.
-    pub fn r_expr(self, var: &str) -> String {
-        match self {
-            TimeFn::Identity => var.to_string(),
-            TimeFn::Log => format!("log({var})"),
-            TimeFn::Sqrt => format!("sqrt({var})"),
-            TimeFn::Square => format!("{var}^2"),
-            TimeFn::Log1p => format!("log1p({var})"),
-        }
-    }
-
     /// Short label used to name the interaction term, mirroring R's
     /// `paste(cov2.vars, 'tf', 1:nc2, sep = '')` convention but readable.
     pub fn label(self) -> &'static str {

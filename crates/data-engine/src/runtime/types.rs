@@ -142,9 +142,4 @@ pub enum DataEngineCmd {
         spec: serde_json::Value,
         reply: oneshot::Sender<EngineResult<()>>,
     },
-    /// Reverse-compile the current DAG to R or Python source code.
-    CompileDag {
-        target: crate::codegen::CodegenTarget,
-        reply: oneshot::Sender<EngineResult<crate::codegen::CompiledScript>>,
-    },
 }

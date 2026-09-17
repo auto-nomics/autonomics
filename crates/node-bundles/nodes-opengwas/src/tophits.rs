@@ -4,7 +4,6 @@ use async_trait::async_trait;
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 
-use dag_core::codegen;
 use dag_core::dag::{DagError, graph::PortOutputs};
 use dag_core::node::{DagNode, NodePorts};
 use dag_core::registry::{NodeCtx, NodeFactory};
@@ -113,35 +112,6 @@ impl NodeFactory for OpengwasTophitsNodeFactory {
     ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let node_spec: OpengwasTophitsSpec = serde_json::from_value(spec)?;
         Ok(Box::new(OpengwasTophitsNode::new(node_spec)))
-    }
-
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut codegen::CodegenCtx,
-    ) -> std::result::Result<codegen::NodeCodegen, codegen::CodegenError> {
-        use codegen::helpers::*;
-        let s = parse_spec::<OpengwasTophitsSpec>(spec, SOURCE_OPENGWAS_TOPHITS_KIND)?;
-        let out = ctx.output_var.to_string();
-        let ids = s.id.join("\", \"");
-        let code = vec![
-            format!("# OpenGWAS tophits for: [\"{}\"]", ids),
-            format!("# NOTE: requires the TwoSampleMR R package and OPENGWAS_TOKEN"),
-            format!(
-                "ao <- extract_outcome_data(snps = c(), outcomes = c(\"{}\"))",
-                ids
-            ),
-            format!(
-                "# Top hits with pval ≤ {} (clump={}, pop=\"{}\")",
-                s.pval, s.clump, s.pop
-            ),
-            format!("{out} <- ao[ao$pval.outcome <= {}, ]", s.pval),
-        ];
-        Ok(codegen::NodeCodegen::simple(code, out))
-    }
-
-    fn r_packages(&self) -> Vec<String> {
-        vec!["TwoSampleMR".into()]
     }
 }
 

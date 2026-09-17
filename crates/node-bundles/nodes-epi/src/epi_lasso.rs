@@ -164,66 +164,6 @@ impl NodeFactory for EpiLassoNodeFactory {
             seed: s.seed,
         }))
     }
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut dag_core::codegen::CodegenCtx,
-    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
-        use dag_core::codegen::helpers::*;
-        let s = parse_spec::<EpiLassoNodeSpec>(spec, "epi_lasso")?;
-        let out = ctx.output_var.to_string();
-        let cv_out = ctx.fresh_var("cv_curve");
-        let cv_fit = ctx.fresh_var("cv_fit");
-        let x_mat = ctx.fresh_var("x_mat");
-        let y_vec = ctx.fresh_var("y_vec");
-        let input = input_0(ctx).to_string();
-        let x_cols = s
-            .predictors
-            .iter()
-            .map(|c| format!("\"{c}\""))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let code = vec![
-            format!(
-                "# LASSO regression ({}-fold CV, {} lambdas)",
-                s.cv_folds, s.n_lambda
-            ),
-            format!("{x_mat} <- as.matrix({input}[, c({x_cols})])"),
-            format!("{y_vec} <- {input}${}", s.outcome_column),
-            format!("set.seed({})", s.seed),
-            format!(
-                "{cv_fit} <- cv.glmnet({x_mat}, {y_vec}, alpha = 1, nfolds = {}, nlambda = {})",
-                s.cv_folds, s.n_lambda
-            ),
-            format!("{out} <- data.frame("),
-            format!("  feature = colnames({x_mat}),"),
-            format!("  coef_min = as.numeric(coef({cv_fit}, s = \"lambda.min\")[-1]),"),
-            format!("  coef_1se = as.numeric(coef({cv_fit}, s = \"lambda.1se\")[-1]),"),
-            format!("  lambda_min = {cv_fit}$lambda.min,"),
-            format!("  lambda_1se = {cv_fit}$lambda.1se"),
-            format!(")"),
-            format!("# NOTE: bootstrap_freq not generated in R reference"),
-            format!("print({out})"),
-            format!("# CV curve (port 1)"),
-            format!("{cv_out} <- data.frame("),
-            format!("  lambda = {cv_fit}$lambda,"),
-            format!("  cv_mean = {cv_fit}$cvm,"),
-            format!("  cv_se = {cv_fit}$cvsd,"),
-            format!("  n_selected = {cv_fit}$nzero,"),
-            format!("  is_lambda_min = {cv_fit}$lambda == {cv_fit}$lambda.min,"),
-            format!("  is_lambda_1se = {cv_fit}$lambda == {cv_fit}$lambda.1se"),
-            format!(")"),
-            format!("print({cv_out})"),
-        ];
-        Ok(dag_core::codegen::NodeCodegen {
-            code,
-            output_vars: vec![out, cv_out],
-            extra_packages: vec![],
-        })
-    }
-    fn r_packages(&self) -> Vec<String> {
-        vec!["glmnet".into()]
-    }
 }
 
 #[async_trait]

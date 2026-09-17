@@ -5,7 +5,6 @@ use async_trait::async_trait;
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 
-use dag_core::codegen;
 use dag_core::dag::{DagError, graph::PortOutputs};
 use dag_core::node::{DagNode, NodePorts};
 use dag_core::registry::{NodeCtx, NodeFactory};
@@ -64,26 +63,6 @@ impl NodeFactory for OpengwasVariantsChrposNodeFactory {
             meta: single_output_port(),
             spec: s,
         }))
-    }
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut codegen::CodegenCtx,
-    ) -> std::result::Result<codegen::NodeCodegen, codegen::CodegenError> {
-        use codegen::helpers::*;
-        let s = parse_spec::<OpengwasVariantsChrposSpec>(spec, KIND_VARIANTS_CHRPOS)?;
-        let out = ctx.output_var.to_string();
-        let chrpos = r_vec(&s.chrpos);
-        let radius = s.radius.unwrap_or(0);
-        let code = vec![
-            format!("# OpenGWAS variant annotations by chr:pos (radius={radius}bp)"),
-            format!("# NOTE: requires ieugwasr and OPENGWAS_TOKEN"),
-            format!("{out} <- ieugwasr::variants_chrpos(c({chrpos}), radius = {radius})"),
-        ];
-        Ok(codegen::NodeCodegen::simple(code, out))
-    }
-    fn r_packages(&self) -> Vec<String> {
-        vec!["ieugwasr".into()]
     }
 }
 

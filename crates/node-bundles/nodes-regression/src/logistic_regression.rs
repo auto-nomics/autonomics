@@ -168,40 +168,6 @@ impl NodeFactory for LogisticRegressionNodeFactory {
             s.intercept,
         )))
     }
-
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut dag_core::codegen::CodegenCtx,
-    ) -> std::result::Result<dag_core::codegen::NodeCodegen, dag_core::codegen::CodegenError> {
-        use dag_core::codegen::helpers::*;
-        let s = parse_spec::<LogisticRegressionNodeSpec>(spec, "logistic_regression")?;
-        let out = ctx.output_var.to_string();
-        let fit = ctx.fresh_var("glm_fit");
-        let smry = ctx.fresh_var("glm_smry");
-        let coefs = ctx.fresh_var("glm_coefs");
-        let input = input_0(ctx).to_string();
-        let formula = r_formula(&s.outcome, &s.predictors, s.intercept);
-        let code = vec![
-            format!("# Logistic regression: {formula}"),
-            format!("{fit} <- glm({formula}, data = {input}, family = binomial)"),
-            format!("{smry} <- summary({fit})"),
-            format!("{coefs} <- as.data.frame({smry}$coefficients)"),
-            format!("names({coefs}) <- c(\"coefficient\", \"std_error\", \"z_stat\", \"p_value\")"),
-            format!("{coefs}$term <- rownames({coefs})"),
-            format!(
-                "{out} <- {coefs}[, c(\"term\", \"coefficient\", \"std_error\", \"z_stat\", \"p_value\")]"
-            ),
-            format!("{out}$odds_ratio <- exp({out}$coefficient)"),
-            format!("{out}$or_ci_lower <- exp({out}$coefficient - 1.96 * {out}$std_error)"),
-            format!("{out}$or_ci_upper <- exp({out}$coefficient + 1.96 * {out}$std_error)"),
-            format!("{out}$log_likelihood <- as.numeric(logLik({fit}))"),
-            format!("{out}$n_obs <- as.integer(length({fit}$fitted.values))"),
-            format!("{out}$converged <- {fit}$converged"),
-            format!("print({out})"),
-        ];
-        Ok(dag_core::codegen::NodeCodegen::simple(code, out))
-    }
 }
 
 // ── DagNode impl ───────────────────────────────────────────────────────────

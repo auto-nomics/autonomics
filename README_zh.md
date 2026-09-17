@@ -26,7 +26,7 @@ Autonomics 不是通用聊天应用，不是围绕自由脚本的 notebook 替�
 
 ![Harness 架构：客户端接口、模型驾驶舱、能力注册表、执行平面、共享数据面、科研协议](docs/diagrams/architecture.png)
 
-该架构把模型编排和科研能力分开。每个智能体会话都有独立的 `DataEngine` actor，同时进程内共享不可变的注册表和运行时基础设施。DAG 执行对智能体命令循环是 fire-and-forget 的，一个长时间分析不会阻塞其他智能体。启用 DAG history 后，每次运行会形成可检查、可 diff、可分支、可 checkout 的快照链。部分图还可以反向编译为 R 或 Python 源码。
+该架构把模型编排和科研能力分开。每个智能体会话都有独立的 `DataEngine` actor，同时进程内共享不可变的注册表和运行时基础设施。DAG 执行对智能体命令循环是 fire-and-forget 的，一个长时间分析不会阻塞其他智能体。启用 DAG history 后，每次运行会形成可检查、可 diff、可分支、可 checkout 的快照链。
 
 ```text
 Ratatui TUI(瘦客户端)──REST/SSE──▶  gateway daemon(`autonomics serve`)
@@ -69,7 +69,7 @@ Node registry + DAG scheduler
 
 让这个 harness 在生物医学场景里值得信赖的两个核心机制：
 
-- **基于 DAG 的调度**。研究请求由 LLM agent 解析为类型化的 DAG（每个节点都经 JSON Schema 校验），再通过统一的注册表装配。同一个 DAG 既可以混合快速的进程内 DataFusion / Arrow 转换，又可以承载重型外部容器；DAG core 异步调度并保留输出，支持快照、diff、分支以及反向编译为 R 或 Python。
+- **基于 DAG 的调度**。研究请求由 LLM agent 解析为类型化的 DAG（每个节点都经 JSON Schema 校验），再通过统一的注册表装配。同一个 DAG 既可以混合快速的进程内 DataFusion / Arrow 转换，又可以承载重型外部容器；DAG core 异步调度并保留输出，支持快照、diff 和分支。
 - **容器化节点**。每个外部工具都跑在自己的一次性 Podman 容器中：镜像用 sha256 digest 钉死，参考面板用 `manifest.json` 做 SHA-256 校验并以只读方式挂载，rootfs 用 `--read-only` + `no-new-privileges` 并显式限制 CPU / PID / shm / UID，声明的产物以 `FileRef = size + SHA-256` 流式写入 VFS，配合 pending-object + atomic rename，消费方永远不会读到半成品。一次 `container_command` 就是一次一次性运行，容器失败不重试。
 
 ## 能力地图
@@ -77,7 +77,7 @@ Node registry + DAG scheduler
 | 领域 | 主要 crate | 提供能力 |
 | --- | --- | --- |
 | 模型编排 | `agentik-sdk`、`agentik-types`、`agentik-proc`、`agentik-core`、`agentik-network`、`runtime` | 流式 LLM 客户端、工具 schema 与调用、持久记忆、生命周期、多智能体拓扑和同步到异步宿主。 |
-| 分析执行 | `dag-core`、`data-engine`、`data-engine-tools`、`crates/node-bundles/*`、`workflow-editor` | 节点 trait、插件注册表、类型化端口、调度器、JSON Schema 参数、智能体工具、快照、代码生成和可复用 workflow skill。 |
+| 分析执行 | `dag-core`、`data-engine`、`data-engine-tools`、`crates/node-bundles/*`、`workflow-editor` | 节点 trait、插件注册表、类型化端口、调度器、JSON Schema 参数、智能体工具、快照和可复用 workflow skill。 |
 | 数据基础设施 | `vfs`、`data-catalog`、`container-runtime`、`biofusion` | OpenDAL VFS、版本化对象存储数据包、Podman 执行、不可变 panel 缓存，以及生物格式的 DataFusion 读取器。 |
 | 统计与流行病学 | `statkit`、`epi`、`hypothesize`、`cmprsk`、`survey`、`mice`、`hierint` | 描述统计与回归；因果推断和中介；可组合检验与 p 值工作流；竞争风险；调查设计；插补；层级交互模型。 |
 | 机器学习与深度学习 | `ml`、`dl`、`grf`、`grf-sys` | 预处理、特征工程、聚类、监督模型、集成学习、异常检测、降维；Burn 的 MLP、DeepSurv、DeepHit、RNN、Transformer、autoencoder；通过 vendored C++ 核心运行 generalized random forests。 |
@@ -96,7 +96,7 @@ autonomics/
 ├── apps/autonomics/                     终端应用和 CLI 子命令
 ├── crates/
 │   ├── agentik-*/                LLM SDK、类型、过程宏、运行时与网络
-│   ├── dag-core/                 DAG trait、注册表、调度器和代码生成
+│   ├── dag-core/                 DAG trait、注册表和调度器
 │   ├── data-engine/              DataFusion 引擎与 node-bundle 装配
 │   ├── data-engine-tools/        DAG 操作的 Agent ToolFunction 适配器
 │   ├── node-bundles/             feature-gated 分析节点插件
@@ -223,7 +223,6 @@ assert!(report.ok, "pipeline errors: {:?}", report.errors);
 - 新增、更新、检查、删除节点与边
 - 运行和检查 DAG
 - 查看 Graphviz DOT
-- 将 DAG 编译为 R 或 Python
 - 创建 ref、查看历史、展示快照、diff 快照和分支
 
 由于 node bundle 由 Cargo feature 控制，精确目录依赖运行时配置。运行中的智能体使用 `list_node_factories`；Rust 使用 `DataEngine::list_nodes()`。
@@ -283,7 +282,6 @@ bun run build
 - [VFS 设计](docs/vfs.md)
 - [Data catalog](docs/data-catalog.md)
 - [Runtime bundles](docs/data-bundles.md)
-- [DAG 代码生成](docs/dag-codegen-design.md)
 - [容器执行设计](docs/container-execution-design.md)
 - [容器迁移流程](docs/container-node-migration.md)
 

@@ -10,7 +10,7 @@
 |------|------|
 | `nodes/` 下文件 | 65 个 `.rs` |
 | 节点代码总量 | ~38,400 行 |
-| 非节点基础设施 (dag/runtime/codegen/engine) | ~9,800 行 |
+| 非节点基础设施 (dag/runtime/engine) | ~9,800 行 |
 | `NodeRegistry::new()` 硬编码注册 | ~100 个 `register(Box::new(...))` |
 | `fixture_spec()` 测试 | ~800 行 match arm |
 | bio/stat 算法 crate 依赖 | ~20 个 |
@@ -53,7 +53,7 @@
      ┌─────────▼─────────┐          ┌──────────▼──────────┐
      │    dag-core       │          │   node bundles      │
      │ (trait+registry+  │◄──────── │  nodes-io           │
-     │  dag+codegen)     │  depend  │  nodes-mr           │
+     │  dag)     │  depend  │  nodes-mr           │
      │                   │   on     │  nodes-ldsc         │
      └───────────────────┘          │  nodes-ml           │
                                     │  nodes-survey       │
@@ -76,7 +76,6 @@
 | `node_registry/spec_normalize.rs` | `registry/spec_normalize.rs` | LLM spec 修复 |
 | `node_registry/error.rs` | `registry/error.rs` | registry 错误类型 |
 | `dag/*` | `dag/*` | DAG 图引擎 + 调度器 (graph, runtime, history, node_event, error, utils) |
-| `codegen/*` | `codegen/*` | R/Python 代码生成 (context, compiler, helpers, mod) |
 | `error.rs`, `dataset.rs`, `types.rs` | 同名 | 引擎级错误/类型 |
 
 **新增: `NodePlugin` trait**
@@ -292,7 +291,7 @@ pub fn assert_all_factories_build(registry: &NodeRegistry) {
 **目标**: 把 `data-engine` 拆为 `dag-core` (trait+引擎) + `data-engine` (壳) ，节点暂时全部留在 `data-engine` 中。
 
 **步骤**:
-1. 创建 `crates/dag-core/`，复制 `dag/`, `codegen/`, `node_registry/`, `nodes/meta.rs`, `nodes/numeric_util.rs`, `nodes/sink_common.rs`, `nodes/ldsc_common.rs`, `nodes/survey_common.rs`, `error.rs`, `dataset.rs`, `types.rs`
+1. 创建 `crates/dag-core/`，复制 `dag/`, `node_registry/`, `nodes/meta.rs`, `nodes/numeric_util.rs`, `nodes/sink_common.rs`, `nodes/ldsc_common.rs`, `nodes/survey_common.rs`, `error.rs`, `dataset.rs`, `types.rs`
 2. 定义 `NodePlugin` trait + `NodeRegistry::register_plugin`
 3. `data-engine` 的 `Cargo.toml` 加 `dag-core` 依赖；`nodes/mod.rs` 改为 `pub use dag_core::{DagNode, NodeInput, ...}`
 4. 所有节点的 `use super::meta::*` → `use dag_core::node::*`; `use super::numeric_util::*` → `use dag_core::arrow_util::*`
@@ -359,7 +358,7 @@ pub fn assert_all_factories_build(registry: &NodeRegistry) {
 
 ```
 crates/
-├── dag-core/                      # 引擎核心 (trait + DAG + registry + codegen)
+├── dag-core/                      # 引擎核心 (trait + DAG + registry)
 │   ├── src/
 │   │   ├── lib.rs
 │   │   ├── node.rs                # DagNode, NodePorts, Port, NodeInput
@@ -377,10 +376,6 @@ crates/
 │   │   │   ├── node_event.rs
 │   │   │   ├── error.rs
 │   │   │   └── utils.rs
-│   │   └── codegen/
-│   │       ├── context.rs
-│   │       ├── compiler.rs
-│   │       └── helpers.rs
 │   └── Cargo.toml
 │
 ├── data-engine/                   # 聚合层 (thin shell)
@@ -424,7 +419,6 @@ data_engine::dag::DagNode           // → data_engine re-exports dag_core::dag:
 data_engine::dag::DAG
 data_engine::data_engine::DataEngine
 data_engine::runtime::DataEngineClient
-data_engine::codegen::CodegenTarget
 ```
 
 ### 需要调整的路径
@@ -445,7 +439,7 @@ dag_core::...  // 不对，SqlNodeSpec 在 nodes-sql 中
 
 ```rust
 pub use dag_core::{
-    dag, codegen,
+    dag,
     node::{DagNode, NodeInput, NodePorts, Port, NodeId, DEFAULT_PORT},
     registry::{NodeFactory, NodeRegistry, NodeCtx, NodeInfo},
 };
@@ -478,7 +472,6 @@ pub use nodes_mr::{TwoSampleMrNode, TwoSampleMrNodeFactory, TwoSampleMrSpec};
 | 共享代码归属争议 | 中 | 原则: 被 ≥2 个 bundle 用 → 放 dag-core；只被 1 个 bundle 用 → 留在 bundle 内部 |
 | Cargo feature 矩阵爆炸 | 中 | 不在 bundle crate 内部再做 feature；bundle 是最小编译单元 |
 | 外部消费者路径断裂 | 低 | data-engine 保持 re-export shim；Phase 5 统一更新 |
-| `codegen` 跨 bundle 引用节点类型 | 中 | codegen trait + NodePlugin 在 dag-core；bundle 各自实现 codegen_r/python |
 
 ## 9. 后续演进 (本设计范围外)
 

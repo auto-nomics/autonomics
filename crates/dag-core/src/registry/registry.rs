@@ -9,7 +9,6 @@ use datafusion::{
 use serde::Serialize;
 
 use super::error::{Error, Result};
-use crate::codegen::context::{CodegenCtx, CodegenError, CodegenTarget, NodeCodegen};
 use crate::dag::DagNode;
 use crate::node::{DataBundle, DataBundleBinding, DataBundleCatalog, NodePorts};
 use std::collections::HashMap as BoundDataBundles;
@@ -60,46 +59,6 @@ pub trait NodeFactory: Send + Sync {
         Ok(self.data_bundles())
     }
     fn build(&self, spec: serde_json::Value, node_ctx: NodeCtx) -> Result<Box<dyn DagNode>>;
-
-    // ── reverse-compilation (codegen) ────────────────────────────────────
-    //
-    // Default implementations return `NotSupported`, so existing factories
-    // compile unchanged. Override per-kind to enable R/Python codegen.
-
-    /// Compile this node kind's spec into R code that calls the original
-    /// reference R package.
-    fn codegen_r(
-        &self,
-        _spec: &serde_json::Value,
-        _ctx: &mut CodegenCtx,
-    ) -> std::result::Result<NodeCodegen, CodegenError> {
-        Err(CodegenError::NotSupported {
-            kind: self.kind().to_string(),
-            target: CodegenTarget::R,
-        })
-    }
-
-    /// Compile this node kind's spec into Python code.
-    fn codegen_python(
-        &self,
-        _spec: &serde_json::Value,
-        _ctx: &mut CodegenCtx,
-    ) -> std::result::Result<NodeCodegen, CodegenError> {
-        Err(CodegenError::NotSupported {
-            kind: self.kind().to_string(),
-            target: CodegenTarget::Python,
-        })
-    }
-
-    /// R packages this node's generated code requires (e.g. `["TwoSampleMR"]`).
-    fn r_packages(&self) -> Vec<String> {
-        Vec::new()
-    }
-
-    /// Python packages this node's generated code requires.
-    fn python_packages(&self) -> Vec<String> {
-        Vec::new()
-    }
 }
 
 /// Ingredients for building an isolated [`SessionContext`] per node execution.
@@ -311,7 +270,7 @@ impl NodeRegistry {
         Ok(self.get_node_factory(node_kind)?.spec_schema())
     }
 
-    /// Look up a node factory by kind string. Used by the DAG compiler.
+    /// Look up a node factory by kind string.
     pub fn get_factory(&self, kind: &str) -> Result<&dyn NodeFactory> {
         self.get_node_factory(kind)
     }
@@ -321,7 +280,7 @@ impl NodeRegistry {
     }
 
     /// Resolve the concrete port layout for a node spec. This is the metadata
-    /// contract used by agent wiring and DAG code generation for dynamic-port
+    /// contract used by agent wiring for dynamic-port
     /// node kinds such as `container_command`.
     pub fn get_node_ports_for_spec(
         &self,

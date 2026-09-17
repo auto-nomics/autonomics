@@ -13,9 +13,7 @@ use serde::Deserialize;
 
 use arrow_array::Float64Array;
 
-use crate::survey_common::{SurveyDesignSpec, gen_design_r, one_in_one_out};
-use dag_core::codegen::helpers::{input_0, parse_spec};
-use dag_core::codegen::{CodegenCtx, CodegenError, NodeCodegen};
+use crate::survey_common::{SurveyDesignSpec, one_in_one_out};
 use dag_core::dag::{DagError, graph::PortOutputs};
 use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::registry::{NodeCtx, NodeFactory};
@@ -40,7 +38,7 @@ pub struct SvyTtestSpec {
 }
 
 /// Survey-weighted t-test node — **implemented** (one-sample).
-/// Two-sample path falls back to R codegen for now.
+/// Two-sample path is not implemented yet.
 #[derive(Clone)]
 pub struct SvyTtestNode {
     meta: NodePorts,
@@ -203,30 +201,6 @@ impl NodeFactory for SvyTtestFactory {
     ) -> dag_core::registry::error::Result<Box<dyn dag_core::dag::DagNode>> {
         let node_spec: SvyTtestSpec = serde_json::from_value(spec)?;
         Ok(Box::new(SvyTtestNode::new(node_spec)))
-    }
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut CodegenCtx,
-    ) -> Result<NodeCodegen, CodegenError> {
-        let s = parse_spec::<SvyTtestSpec>(spec, "survey_node")?;
-        let input = input_0(ctx).to_string();
-        let out = ctx.output_var.to_string();
-        let (des, mut code) = gen_design_r(&s.design, &input, ctx);
-        let formula = match &s.group {
-            Some(g) => format!("{} ~ {}", s.response, g),
-            None => format!("~{}", s.response),
-        };
-        let null_arg = match s.null_value {
-            Some(v) => format!(", mu = {}", v),
-            None => String::new(),
-        };
-        code.push(format!("{out} <- svyttest({formula}, {des}{null_arg})"));
-        code.push(format!("print({out})"));
-        Ok(NodeCodegen::simple(code, out))
-    }
-    fn r_packages(&self) -> Vec<String> {
-        vec!["survey".into()]
     }
 }
 
@@ -401,27 +375,6 @@ impl NodeFactory for SvyRankTestFactory {
         let node_spec: SvyRankTestSpec = serde_json::from_value(spec)?;
         Ok(Box::new(SvyRankTestNode::new(node_spec)))
     }
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut CodegenCtx,
-    ) -> Result<NodeCodegen, CodegenError> {
-        let s = parse_spec::<SvyRankTestSpec>(spec, "survey_node")?;
-        let input = input_0(ctx).to_string();
-        let out = ctx.output_var.to_string();
-        let (des, mut code) = gen_design_r(&s.design, &input, ctx);
-        code.push(format!(
-            "{out} <- svyranktest({resp} ~ {grp}, {des}, test = \"{test}\")",
-            resp = s.response,
-            grp = s.group,
-            test = s.test
-        ));
-        code.push(format!("print({out})"));
-        Ok(NodeCodegen::simple(code, out))
-    }
-    fn r_packages(&self) -> Vec<String> {
-        vec!["survey".into()]
-    }
 }
 
 // =====================================================================
@@ -582,27 +535,6 @@ impl NodeFactory for SvyChisqFactory {
         let node_spec: SvyChisqSpec = serde_json::from_value(spec)?;
         Ok(Box::new(SvyChisqNode::new(node_spec)))
     }
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut CodegenCtx,
-    ) -> Result<NodeCodegen, CodegenError> {
-        let s = parse_spec::<SvyChisqSpec>(spec, "survey_node")?;
-        let input = input_0(ctx).to_string();
-        let out = ctx.output_var.to_string();
-        let (des, mut code) = gen_design_r(&s.design, &input, ctx);
-        code.push(format!(
-            "{out} <- svychisq(~{r} * {c}, {des}, statistic = \"{stat}\")",
-            r = s.row_var,
-            c = s.col_var,
-            stat = s.statistic
-        ));
-        code.push(format!("print({out})"));
-        Ok(NodeCodegen::simple(code, out))
-    }
-    fn r_packages(&self) -> Vec<String> {
-        vec!["survey".into()]
-    }
 }
 
 // =====================================================================
@@ -760,27 +692,6 @@ impl NodeFactory for SvyCiPropFactory {
     ) -> dag_core::registry::error::Result<Box<dyn dag_core::dag::DagNode>> {
         let node_spec: SvyCiPropSpec = serde_json::from_value(spec)?;
         Ok(Box::new(SvyCiPropNode::new(node_spec)))
-    }
-    fn codegen_r(
-        &self,
-        spec: &serde_json::Value,
-        ctx: &mut CodegenCtx,
-    ) -> Result<NodeCodegen, CodegenError> {
-        let s = parse_spec::<SvyCiPropSpec>(spec, "survey_node")?;
-        let input = input_0(ctx).to_string();
-        let out = ctx.output_var.to_string();
-        let (des, mut code) = gen_design_r(&s.design, &input, ctx);
-        code.push(format!(
-            "{out} <- svyciprop(~{v}, {des}, method = \"{m}\", level = {lvl})",
-            v = s.variable,
-            m = s.method,
-            lvl = 1.0 - s.alpha
-        ));
-        code.push(format!("print({out})"));
-        Ok(NodeCodegen::simple(code, out))
-    }
-    fn r_packages(&self) -> Vec<String> {
-        vec!["survey".into()]
     }
 }
 
