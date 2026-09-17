@@ -30,7 +30,10 @@ pub struct MvmrContainerSpec {
     pub sebeta_xg: Vec<String>,
     #[serde(default)]
     pub label_column: Option<String>,
+    /// Legacy MVMR 0.4.8 argument. Only zero is meaningful; supply `pcor` for
+    /// non-zero exposure covariance.
     #[serde(default)]
+    #[schemars(skip)]
     pub gencov: f64,
     #[serde(default = "default_true")]
     pub strength: bool,
@@ -40,6 +43,9 @@ pub struct MvmrContainerSpec {
     pub pleiotropy: bool,
     #[serde(default)]
     pub qhet: bool,
+    /// Exposure correlation matrix ordered like `beta_xg`. When supplied,
+    /// the node converts it to per-SNP covariance matrices with
+    /// `MVMR::phenocov_mvmr()`.
     #[serde(default)]
     pub pcor: Vec<Vec<f64>>,
     #[serde(default = "default_artifact_prefix")]
@@ -124,21 +130,50 @@ pub fn validate(spec: &MvmrContainerSpec) -> Result<(), String> {
     if !spec.gencov.is_finite() {
         return Err("gencov must be finite".into());
     }
+    if spec.gencov != 0.0 {
+        return Err(
+            "non-zero scalar gencov is not supported by MVMR 0.4.8; use pcor to specify exposure covariance"
+                .into(),
+        );
+    }
     if spec.timeout_secs == 0 {
         return Err("timeout_secs must be greater than zero".into());
     }
     if !spec.artifact_prefix.starts_with('/') {
         return Err("artifact_prefix must be an absolute VFS path".into());
     }
-    if spec.qhet {
-        let p = spec.beta_xg.len();
-        if spec.pcor.len() != p
-            || spec
-                .pcor
-                .iter()
-                .any(|row| row.len() != p || row.iter().any(|value| !value.is_finite()))
-        {
-            return Err(format!("qhet requires a finite {p}x{p} pcor matrix"));
+    validate_pcor(spec)?;
+    Ok(())
+}
+
+fn validate_pcor(spec: &MvmrContainerSpec) -> Result<(), String> {
+    let p = spec.beta_xg.len();
+    if spec.pcor.is_empty() {
+        return if spec.qhet {
+            Err("qhet requires a pcor matrix".into())
+        } else {
+            Ok(())
+        };
+    }
+    if spec.pcor.len() != p || spec.pcor.iter().any(|row| row.len() != p) {
+        return Err(format!("pcor must be a {p}x{p} matrix"));
+    }
+    if spec
+        .pcor
+        .iter()
+        .any(|row| row.iter().any(|value| !value.is_finite()))
+    {
+        return Err(format!("pcor must contain only finite values ({p}x{p})"));
+    }
+    const TOL: f64 = 1e-6;
+    for i in 0..p {
+        if (spec.pcor[i][i] - 1.0).abs() > TOL {
+            return Err(format!("pcor diagonal entry [{i}][{i}] must equal 1"));
+        }
+        for j in (i + 1)..p {
+            if (spec.pcor[i][j] - spec.pcor[j][i]).abs() > TOL {
+                return Err("pcor must be symmetric".into());
+            }
         }
     }
     Ok(())
@@ -177,10 +212,18 @@ pub fn container_spec(spec: &MvmrContainerSpec) -> Result<ContainerCommandSpec, 
         .as_deref()
         .map(r_string)
         .unwrap_or_else(|| "rownames(data)".into());
-    let pcor = if spec.qhet {
-        format!("pcor <- {}", r_pcor(&spec.pcor))
-    } else {
+    let pcor = if spec.pcor.is_empty() {
         "pcor <- NULL".into()
+    } else {
+        format!("pcor <- {}", r_pcor(&spec.pcor))
+    };
+    let gencov = if spec.pcor.is_empty() {
+        "gencov <- 0".into()
+    } else {
+        format!(
+            "gencov <- MVMR::phenocov_mvmr(pcor, as.matrix(data[, {sebeta_xg}, drop = FALSE]))",
+            sebeta_xg = r_strings(&spec.sebeta_xg)
+        )
     };
 
     let r_code = format!(
@@ -196,12 +239,13 @@ pub fn container_spec(spec: &MvmrContainerSpec) -> Result<ContainerCommandSpec, 
          \x20 RSID = {label}\n\
          )\n\
          {pcor}\n\
-         gencov <- {gencov}\n\
-         result <- list(input = mvmr_input, ivw = MVMR::ivw_mvmr(mvmr_input))\n\
+         {gencov}\n\
+         result <- list(input = mvmr_input, ivw = MVMR::ivw_mvmr(mvmr_input, gencov = gencov))\n\
          result$strength <- {strength_flag}\n\
          result$strhet <- {strhet_flag}\n\
          result$pleiotropy <- {pleiotropy_flag}\n\
          result$qhet <- {qhet_flag}\n\
+         result$covariance <- list(pcor = pcor, source = if (is.null(pcor)) \"zero\" else \"phenocov_mvmr\")\n\
          sink(log_path, split = TRUE)\n\
          print(result)\n\
          sink()\n\
@@ -232,7 +276,6 @@ pub fn container_spec(spec: &MvmrContainerSpec) -> Result<ContainerCommandSpec, 
         } else {
             "NULL".to_string()
         },
-        gencov = spec.gencov,
     );
 
     Ok(ContainerCommandSpec {
@@ -285,10 +328,12 @@ impl NodeFactory for MvmrContainerNodeFactory {
 
     fn doc(&self) -> &'static str {
         "Runs the official R MVMR package. Input is one tab-separated File with \
-        outcome effect/SE and at least two exposure effect/SE columns. The \
-        wrapper saves the official input and selected result objects as an RDS \
-        artifact and emits their printed representation as a log artifact. No \
-        numerical logic is reimplemented."
+        outcome effect/SE and at least two exposure effect/SE columns. Supply \
+        pcor to convert a phenotypic exposure correlation matrix into the \
+        per-SNP covariance list used by the package's strength, heterogeneity \
+        and pleiotropy diagnostics. The wrapper saves the official input and \
+        selected result objects as an RDS artifact and emits their printed \
+        representation as a log artifact. No numerical logic is reimplemented."
     }
 
     fn spec_schema(&self) -> schemars::Schema {
@@ -363,8 +408,42 @@ mod tests {
                 .unwrap()
                 .contains("MVMR::format_mvmr")
         );
-        assert!(container.script.as_deref().unwrap().contains("ivw_mvmr"));
+        assert!(
+            container
+                .script
+                .as_deref()
+                .unwrap()
+                .contains("ivw_mvmr(mvmr_input, gencov = gencov)")
+        );
         assert_eq!(container.outputs.len(), 2);
+    }
+
+    #[test]
+    fn converts_pcor_to_per_snp_gencov() {
+        let mut value = spec();
+        value.pcor = vec![vec![1.0, 0.25], vec![0.25, 1.0]];
+        let script = container_spec(&value).unwrap().script.unwrap();
+        assert!(
+            script
+                .contains("pcor <- matrix(c(1, 0.25, 0.25, 1), nrow = 2, ncol = 2, byrow = TRUE)")
+        );
+        assert!(script.contains(
+            "gencov <- MVMR::phenocov_mvmr(pcor, as.matrix(data[, c(\"LDL_se\", \"HDL_se\"), drop = FALSE]))"
+        ));
+    }
+
+    #[test]
+    fn rejects_nonzero_scalar_gencov() {
+        let mut value = spec();
+        value.gencov = 0.1;
+        assert!(validate(&value).is_err());
+    }
+
+    #[test]
+    fn schema_does_not_advertise_legacy_scalar_gencov() {
+        let schema = serde_json::to_value(schema_for!(MvmrContainerSpec)).unwrap();
+        assert!(schema["properties"].get("gencov").is_none());
+        assert!(schema["properties"].get("pcor").is_some());
     }
 
     #[test]
@@ -374,5 +453,21 @@ mod tests {
         assert!(validate(&value).is_err());
         value.pcor = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
         assert!(validate(&value).is_ok());
+    }
+
+    #[test]
+    fn validates_pcor_shape_symmetry_and_diagonal() {
+        let mut value = spec();
+        value.pcor = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
+        assert!(validate(&value).is_ok());
+
+        value.pcor = vec![vec![1.0, 0.0]];
+        assert!(validate(&value).is_err());
+
+        value.pcor = vec![vec![1.0, 0.25], vec![0.2, 1.0]];
+        assert!(validate(&value).is_err());
+
+        value.pcor = vec![vec![1.0, 0.0], vec![0.0, 0.9]];
+        assert!(validate(&value).is_err());
     }
 }
