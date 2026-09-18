@@ -25,7 +25,7 @@ use container_runtime::{PanelCache, PodmanConnection, PullPolicy};
 pub const LDSC_H2_CONTAINER_KIND: &str = "ldsc_h2_container";
 pub const LDSC_ORIGINAL_IMAGE_REPOSITORY: &str = "ldsc";
 pub const LDSC_ORIGINAL_IMAGE_DIGEST: &str =
-    "sha256:05f43523bf82b6865b2a6ae6fb0233ee919a7f20a70ab052d5d0b803ef190107";
+    "sha256:6ba8941a8f628dcdb8a77c1134b36e9c905495017f1f75616903e70cd32673fe";
 pub const LDSC_REF_LD_PANEL: &str = "ldsc.ref_ld.1000g_eur.basic";
 pub const LDSC_W_LD_PANEL: &str = "ldsc.w_ld.1000g_eur_hm3_no_mhc";
 
