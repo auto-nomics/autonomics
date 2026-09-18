@@ -5,6 +5,8 @@
 //! and only declared output files become DAG values.
 
 use std::collections::BTreeMap;
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
@@ -30,6 +32,7 @@ use container_runtime::{
 
 pub const CONTAINER_COMMAND_KIND: &str = "container_command";
 const FAILURE_CAPTURE_PREVIEW_CHARS: usize = 400;
+const FAILURE_OUTPUT_PREVIEW_BYTES: u64 = 8 * 1024;
 
 pub(crate) fn decompress_gzip_inputs(count: usize) -> String {
     let mut script = String::from(
@@ -57,24 +60,34 @@ pub enum ContainerCommandError {
     Invalid(String),
     #[error(transparent)]
     Runtime(#[from] ContainerRuntimeError),
+    #[error(
+        "container exited with status {exit_code}; stderr: {stderr}; stdout: {stdout}; declared output logs: {output_logs:?}"
+    )]
+    ExitStatus {
+        exit_code: i32,
+        stderr: String,
+        stdout: String,
+        output_logs: Vec<(String, String)>,
+    },
     #[error("declared output `{path}` was not produced")]
     MissingOutput { path: String },
 }
 
 impl ContainerCommandError {
     fn diagnostic_message(&self) -> String {
-        let Self::Runtime(ContainerRuntimeError::ExitStatus {
+        let Self::ExitStatus {
             exit_code,
             stderr,
             stdout,
-        }) = self
+            output_logs,
+        } = self
         else {
             return self.to_string();
         };
 
         let mut message = format!("container exited with status {exit_code}");
-        if stderr.trim().is_empty() && stdout.trim().is_empty() {
-            message.push_str("; no stdout or stderr captured");
+        if stderr.trim().is_empty() && stdout.trim().is_empty() && output_logs.is_empty() {
+            message.push_str("; no stdout, stderr, or declared output logs captured");
             return message;
         }
         if !stderr.trim().is_empty() {
@@ -84,6 +97,10 @@ impl ContainerCommandError {
         if !stdout.trim().is_empty() {
             message.push_str("; ");
             message.push_str(&capture_preview("stdout", stdout));
+        }
+        for (label, capture) in output_logs {
+            message.push_str("; ");
+            message.push_str(&capture_preview(label, capture));
         }
         message
     }
@@ -110,6 +127,37 @@ fn capture_preview(label: &str, capture: &str) -> String {
     let tail = capture[start..].trim_end();
     let omitted_chars = total_chars - tail.chars().count();
     format!("{label} tail ({omitted_chars} chars omitted): {tail}")
+}
+
+fn capture_declared_output_logs(
+    resolved_outputs: &[(&ContainerCommandOutputSpec, PathBuf)],
+) -> Vec<(String, String)> {
+    let mut logs = Vec::new();
+    for (spec, path) in resolved_outputs {
+        if !matches!(
+            path.extension().and_then(|extension| extension.to_str()),
+            Some("log" | "txt" | "out" | "stderr" | "stdout")
+        ) {
+            continue;
+        }
+        let Some(capture) = read_text_tail(path, FAILURE_OUTPUT_PREVIEW_BYTES) else {
+            continue;
+        };
+        if !capture.trim().is_empty() {
+            logs.push((spec.path.clone(), capture));
+        }
+    }
+    logs
+}
+
+fn read_text_tail(path: &Path, max_bytes: u64) -> Option<String> {
+    let mut file = File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    let start = len.saturating_sub(max_bytes);
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut bytes = Vec::with_capacity((len - start).try_into().ok()?);
+    file.read_to_end(&mut bytes).ok()?;
+    Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 impl dag_core::dag::NodeError for ContainerCommandError {
@@ -944,7 +992,19 @@ impl DagNode for ContainerCommandNode {
             Err(error) => {
                 // Also surface the capped capture on the live event stream; the
                 // authoritative copy travels through the node's RunReport error.
-                let error = ContainerCommandError::Runtime(error);
+                let error = match error {
+                    ContainerRuntimeError::ExitStatus {
+                        exit_code,
+                        stderr,
+                        stdout,
+                    } => ContainerCommandError::ExitStatus {
+                        exit_code,
+                        stderr,
+                        stdout,
+                        output_logs: capture_declared_output_logs(&resolved_outputs),
+                    },
+                    error => ContainerCommandError::Runtime(error),
+                };
                 reporter.error(error.diagnostic_message());
                 return Err(error.into_dag_error());
             }
@@ -1903,12 +1963,26 @@ mod tests {
         impl PodmanConnection for FailingRuntime {
             async fn run(
                 &self,
-                _request: ContainerRunRequest,
+                request: ContainerRunRequest,
             ) -> Result<ContainerRunResult, ContainerRuntimeError> {
+                let output = request
+                    .env
+                    .iter()
+                    .find(|(key, _)| key == "AUTONOMICS_OUTPUT0")
+                    .map(|(_, value)| value.clone())
+                    .expect("output binding");
+                std::fs::write(
+                    host_path(&request, &output),
+                    format!(
+                        "{}\nTraceback (most recent call last):\nValueError: malformed sumstats",
+                        "diagnostic noise\n".repeat(100)
+                    ),
+                )
+                .unwrap();
                 Err(ContainerRuntimeError::ExitStatus {
                     exit_code: 42,
-                    stderr: format!("{}\nfinal tool failure", "diagnostic noise\n".repeat(100)),
-                    stdout: "fatal dataframe error".into(),
+                    stderr: String::new(),
+                    stdout: String::new(),
                 })
             }
             fn workspace_root(&self) -> &Path {
@@ -1919,7 +1993,9 @@ mod tests {
         let env = test_env();
         let dir = env.workspace.path().join("failed");
         std::fs::create_dir_all(&dir).unwrap();
-        let node_spec = spec("tool", vec!["tool".into()], "result.txt");
+        let mut node_spec = spec("tool", vec!["tool".into()], "result.txt");
+        // A persistent workspace makes this test independent of scratch naming.
+        node_spec.workdir = Some(dir.to_string_lossy().into_owned());
         let mut node = ContainerCommandNode::new(
             node_spec,
             Arc::new(FailingRuntime {
@@ -1937,17 +2013,17 @@ mod tests {
         assert_eq!(report.kind, "node_error");
         assert!(report.message.contains("status 42"), "{}", report.message);
         assert!(
-            report.message.contains("final tool failure"),
+            report.message.contains("result.txt tail"),
             "{}",
             report.message
         );
         assert!(
-            report.message.contains("chars omitted"),
+            report.message.contains("ValueError: malformed sumstats"),
             "{}",
             report.message
         );
         assert!(
-            report.message.contains("fatal dataframe error"),
+            !report.message.contains("no stdout or stderr captured"),
             "{}",
             report.message
         );

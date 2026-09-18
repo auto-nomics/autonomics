@@ -26,5 +26,6 @@ datafusion.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true }
+vfs = { path = "../../vfs" }
 [lints]
 workspace = true
