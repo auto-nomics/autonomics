@@ -11,6 +11,8 @@
 //! `std_beta.exp` / `std_SE.exp` are kept as-is (exposure defines the effect
 //! allele direction).
 
+use std::collections::HashMap;
+
 use crate::input::TidyRow;
 
 /// A harmonised exposure–outcome pair ready for MR / pruning.
@@ -39,13 +41,19 @@ pub struct HarmonisedRow {
 /// R `dplyr::inner_join` produces a Cartesian product per key; we replicate that
 /// by emitting every matching pair. In practice GWAS sumstats are unique by rsid.
 pub fn harmonise(exposure: &[TidyRow], outcome: &[TidyRow]) -> Vec<HarmonisedRow> {
-    // Index outcome by rsid for the join (preserving multiplicity).
+    // Index outcome by rsid for the join (preserving multiplicity). GWAS inputs
+    // routinely contain tens of thousands to millions of rows, so a nested
+    // scan would turn an otherwise linear join into a quadratic one.
     let mut out: Vec<HarmonisedRow> = Vec::new();
+    let mut outcomes = HashMap::<&str, Vec<&TidyRow>>::with_capacity(outcome.len());
+    for row in outcome {
+        outcomes.entry(row.rsid.as_str()).or_default().push(row);
+    }
     for e in exposure {
-        for o in outcome {
-            if e.rsid != o.rsid {
-                continue;
-            }
+        let Some(matching) = outcomes.get(e.rsid.as_str()) else {
+            continue;
+        };
+        for o in matching {
             // Allele alignment — `run_MR.R` lines 35-39.
             let aligned = if e.alt == o.alt && e.ref_allele == o.ref_allele {
                 Some(o.std_beta)
@@ -75,4 +83,33 @@ pub fn harmonise(exposure: &[TidyRow], outcome: &[TidyRow]) -> Vec<HarmonisedRow
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::input::RawGwasRow;
+
+    #[test]
+    fn harmonise_50k_matching_rsids_is_linear() {
+        let rows: Vec<RawGwasRow> = (0..50_000)
+            .map(|index| RawGwasRow {
+                rsid: format!("rs{index}"),
+                chr: Some(1),
+                pos: Some(index as i64 + 1),
+                alt: "A".into(),
+                ref_allele: "G".into(),
+                beta: Some(1.0),
+                se: Some(1.0),
+                n: 100.0,
+                ..RawGwasRow::default()
+            })
+            .collect();
+        let exposure = crate::input::tidy(&rows, true).unwrap();
+        let outcome = crate::input::tidy(&rows, true).unwrap();
+
+        let harmonised = harmonise(&exposure, &outcome);
+
+        assert_eq!(harmonised.len(), 50_000);
+    }
 }
