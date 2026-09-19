@@ -39,6 +39,7 @@ pub mod source_kegg;
 pub mod source_openalex;
 pub mod source_opentargets;
 pub mod source_semantic_scholar;
+pub mod spreadsheet;
 pub mod susie_rss_container;
 pub mod timesfm_container;
 pub mod twas_fusion_container;
