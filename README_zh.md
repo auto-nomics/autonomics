@@ -4,7 +4,7 @@
 
 Autonomics 是一个专门为生物医学科研设计的 harness。它把 LLM 智能体接入一个类型化、可审计的科研执行面：智能体可以发现已注册的分析节点，组装 DataFusion DAG，读取科研数据，运行纯 Rust 或 OCI 容器方法，通过虚拟文件系统持久化结果，并进一步把分析结果整理成有文献支撑的稿件。流行病学、统计遗传学、临床与调查分析、机器学习、科研数据库和可复现执行被当作同一条科研工作流，而不是彼此独立的应用。
 
-根 Cargo 工作空间在本版 README 更新时包含 94 个 crate。这是一个活跃研究代码库，API、节点契约和配置路径仍可能调整。`dendrite/` 是独立的嵌套 Rust 工作空间，用于知识管理系统。
+根 Cargo 工作空间在本版 README 更新时包含 96 个 crate。这是一个活跃研究代码库，API、节点契约和配置路径仍可能调整。`dendrite/` 是独立的嵌套 Rust 工作空间，用于知识管理系统。
 
 ## Harness 契约
 
@@ -83,7 +83,7 @@ Node registry + DAG scheduler
 | 机器学习与深度学习 | `ml`、`dl`、`grf`、`grf-sys` | 预处理、特征工程、聚类、监督模型、集成学习、异常检测、降维；Burn 的 MLP、DeepSurv、DeepHit、RNN、Transformer、autoencoder；通过 vendored C++ 核心运行 generalized random forests。 |
 | 统计遗传学 | `ldsc`、`mr`、`lava`、`mrlap`、`lcv`、`cpassoc`、`magma`、`coloc`、`bkmr`、`evalue`、`genomic_sem`、`lcmm` | LD score regression、孟德尔随机化、局部遗传相关、colocalization、Bayesian kernel-machine regression、E-value、Genomic SEM、latent-class mixed models 等。 |
 | 断点回归 | `rdrobust`、`rdpower`、`rdmulti`、`rddensity`、`rdlocrand` | 局部多项式 RD 估计、功效与样本量、多 cutoff 设计、manipulation testing、局部随机化推断。 |
-| 科研数据客户端 | `eutils`、`opengwas`、`gwascatalog-sdk`、`opentargets`、`chembl`、`uniprot`、`string-sdk`、`kegg`、`reactome`、`ensembl`、`rcsb`、`alphafold`、`interpro`、`pubchem`、`clinicaltrials` | PubMed/Entrez、OpenGWAS、GWAS Catalog、Open Targets、ChEMBL、UniProt、STRING、KEGG、Reactome、Ensembl、RCSB、AlphaFold、InterPro、PubChem、ClinicalTrials.gov 的 SDK、智能体工具和部分 DAG source 节点。 |
+| 科研数据客户端 | `eutils`、`opengwas`、`gwascatalog-sdk`、`opentargets`、`chembl`、`uniprot`、`string-sdk`、`kegg`、`reactome`、`ensembl`、`rcsb`、`alphafold`、`interpro`、`pubchem`、`protocolio`、`clinicaltrials` | PubMed/Entrez、OpenGWAS、GWAS Catalog、Open Targets、ChEMBL、UniProt、STRING、KEGG、Reactome、Ensembl、RCSB、AlphaFold、InterPro、PubChem、protocols.io、ClinicalTrials.gov 的 SDK、智能体工具和部分 DAG source 节点。 |
 | 文献、写作与知识 | `arxiv`、`biorxiv`、`openalex`、`crossref`、`embase`、`europepmc`、`semantic-scholar`、`bib-types`、`bib-base`、`writing-types`、`writing-base`、`kms`、`kms-tools` | 统一文献检索与全文管理、内容寻址文档、BibTeX/RIS/Markdown/CSL 导出、LaTeX AST 操作、引文解析、编译和知识树工具。 |
 | Harness 界面 | `tui`、`tui-http`、`workflow-editor` | 流式终端对话、模型配置、DAG 视图、文献 CLI/API/前端、KMS 浏览器和工作流编辑组件。 |
 
@@ -163,6 +163,7 @@ cargo run -p autonomics -- bib list
 - `OPENGWAS_TOKEN`
 - `OPENALEX_API_KEY`
 - `EUTILS_API_KEY`
+- `PROTOCOLS_IO_ACCESS_TOKEN`
 - `EMBASE_API_KEY`、`EMBASE_INSTTOKEN` 及相关 Embase token
 - `UMLS_API_KEY`
 - OSS/S3 的 catalog 与 VFS 凭据
