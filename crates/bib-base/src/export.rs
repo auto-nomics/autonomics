@@ -71,10 +71,10 @@ pub fn to_bibtex(article: &Article) -> String {
         let pages = escape_bibtex(&p.replace('-', "--"));
         lines.push(format!("  pages = {{{pages}}},"));
     }
-    if let Some(ref doi) = article.doi() {
+    if let Some(doi) = article.doi() {
         lines.push(format!("  doi = {{{}}},", escape_bibtex(doi)));
     }
-    if let Some(ref pmid) = article.pmid() {
+    if let Some(pmid) = article.pmid() {
         lines.push(format!("  pmid = {{{}}},", escape_bibtex(pmid)));
     }
 

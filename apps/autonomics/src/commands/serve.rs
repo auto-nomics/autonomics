@@ -25,6 +25,13 @@ use gateway::manager;
 use crate::cli::{ServeAction, ServeArgs};
 
 pub fn run_serve(args: ServeArgs) -> color_eyre::Result<()> {
+    let daemon_config = if args.action.is_none() {
+        let mut config = gateway::RuntimeConfig::default();
+        stabilize_daemon_cwd(&mut config)?;
+        Some(config)
+    } else {
+        None
+    };
     let runtime = tokio::runtime::Runtime::new()
         .map_err(|e| color_eyre::eyre::eyre!("failed to build tokio runtime: {e}"))?;
     runtime.block_on(async move {
@@ -60,13 +67,21 @@ pub fn run_serve(args: ServeArgs) -> color_eyre::Result<()> {
                     std::process::exit(3);
                 }
             },
-            None => run_foreground_or_daemon(args.daemon).await,
+            None => {
+                run_foreground_or_daemon(
+                    daemon_config.expect("daemon config was prepared"),
+                    args.daemon,
+                )
+                .await
+            }
         }
     })
 }
 
-async fn run_foreground_or_daemon(daemon: bool) -> color_eyre::Result<()> {
-    let config = gateway::RuntimeConfig::default();
+async fn run_foreground_or_daemon(
+    config: gateway::RuntimeConfig,
+    daemon: bool,
+) -> color_eyre::Result<()> {
     init_gateway_logging(&config.state_dir, daemon)?;
 
     let shutdown = CancellationToken::new();
@@ -104,6 +119,39 @@ async fn run_foreground_or_daemon(daemon: bool) -> color_eyre::Result<()> {
             std::process::exit(1);
         }
     }
+}
+
+/// Resolve launcher-relative paths before moving the long-lived daemon to a
+/// stable host cwd. The daemon can outlive the frontend and the directory it
+/// was launched from; child processes such as Podman resolve their inherited
+/// cwd during startup.
+fn stabilize_daemon_cwd(config: &mut gateway::RuntimeConfig) -> color_eyre::Result<()> {
+    let launcher_cwd = std::env::current_dir().map_err(|error| {
+        color_eyre::eyre::eyre!("cannot resolve launcher working directory: {error}")
+    })?;
+    let absolute = |path: &std::path::Path| {
+        if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            launcher_cwd.join(path)
+        }
+    };
+
+    config.data_dir = absolute(&config.data_dir);
+    config.state_dir = absolute(&config.state_dir);
+    config.dag_history_db = absolute(&config.dag_history_db);
+    config.bib_db_path = absolute(&config.bib_db_path);
+    config.writing_db_path = absolute(&config.writing_db_path);
+    config.app_db_path = absolute(&config.app_db_path);
+    config.agent_db = absolute(&config.agent_db);
+    config.opengwas_cache_dir = config
+        .opengwas_cache_dir
+        .as_ref()
+        .map(|path| absolute(path));
+
+    std::env::set_current_dir("/").map_err(|error| {
+        color_eyre::eyre::eyre!("cannot move gateway daemon to stable working directory: {error}")
+    })
 }
 
 /// File log under the absolute state dir (independent of the launcher's
