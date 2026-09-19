@@ -26,6 +26,7 @@ use crate::types::{
 };
 
 const CLEANUP_TIMEOUT_SECS: u64 = 30;
+const HOST_CWD: &str = "/";
 
 #[derive(Debug, Clone)]
 pub struct PodmanConfig {
@@ -100,7 +101,8 @@ impl PodmanConnection for PodmanRuntime {
         create_container(&self.config.program, &request, args).await?;
         let mut guard = ContainerCleanupGuard::new(&self.config.program, &request.name);
 
-        let start = Command::new(&self.config.program)
+        let mut start = async_podman_command(&self.config.program);
+        start
             .arg("start")
             .arg("--attach")
             .arg("--sig-proxy=false")
@@ -108,8 +110,8 @@ impl PodmanConnection for PodmanRuntime {
             .kill_on_drop(true)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn();
+            .stderr(Stdio::piped());
+        let start = start.spawn();
         let child = match start {
             Ok(child) => child,
             Err(error) => {
@@ -184,7 +186,7 @@ async fn create_container(
 ) -> Result<(), ContainerRuntimeError> {
     let created = tokio::time::timeout(
         Duration::from_secs(request.timeout_secs),
-        Command::new(program)
+        async_podman_command(program)
             .arg("create")
             .args(args)
             .stdin(Stdio::null())
@@ -226,7 +228,7 @@ async fn create_container(
 async fn remove_container(program: &str, name: &str) -> Result<(), String> {
     let removed = tokio::time::timeout(
         Duration::from_secs(CLEANUP_TIMEOUT_SECS),
-        Command::new(program)
+        async_podman_command(program)
             .arg("rm")
             .arg("--force")
             .arg("--time=0")
@@ -273,7 +275,7 @@ impl Drop for ContainerCleanupGuard {
         let program = self.program.clone();
         let name = self.name.clone();
         std::thread::spawn(move || {
-            let _ = std::process::Command::new(program)
+            let _ = blocking_podman_command(&program)
                 .args(["rm", "--force", "--time=0", &name])
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
@@ -281,6 +283,18 @@ impl Drop for ContainerCleanupGuard {
                 .status();
         });
     }
+}
+
+fn async_podman_command(program: &str) -> Command {
+    let mut command = Command::new(program);
+    command.current_dir(HOST_CWD);
+    command
+}
+
+fn blocking_podman_command(program: &str) -> std::process::Command {
+    let mut command = std::process::Command::new(program);
+    command.current_dir(HOST_CWD);
+    command
 }
 
 fn append_capture(value: &mut String, message: String) {
@@ -500,6 +514,14 @@ mod tests {
     }
 
     #[test]
+    fn podman_commands_do_not_inherit_daemon_cwd() {
+        assert_eq!(
+            blocking_podman_command("podman").get_current_dir(),
+            Some(std::path::Path::new("/"))
+        );
+    }
+
+    #[test]
     fn create_args_map_security_data_plane_and_resources() {
         let args = build_create_args(&request(ContainerNetwork::Isolated)).unwrap();
         let expected = [
@@ -635,7 +657,7 @@ mod tests {
         let program = root.path().join("fake-podman");
         std::fs::write(
             &program,
-            "#!/bin/sh\ncase \"$1\" in\n  create) exit 0 ;;\n  start) exec sleep 30 ;;\n  rm) printf '%s\\n' \"$*\" > \"${0}.removed\"; exit 0 ;;\n  *) exit 2 ;;\nesac\n",
+            "#!/bin/sh\ncase \"$1\" in\n  create) pwd -P > \"${0}.cwd\"; exit 0 ;;\n  start) exec sleep 30 ;;\n  rm) printf '%s\\n' \"$*\" > \"${0}.removed\"; exit 0 ;;\n  *) exit 2 ;;\nesac\n",
         )
         .unwrap();
         make_executable(&program);
@@ -658,6 +680,10 @@ mod tests {
             error.unwrap_err(),
             ContainerRuntimeError::Timeout { timeout_secs: 1 }
         ));
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("fake-podman.cwd")).unwrap(),
+            "/\n"
+        );
         assert!(marker.is_file());
     }
 
