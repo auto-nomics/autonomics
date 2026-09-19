@@ -19,7 +19,6 @@ use thiserror::Error;
 
 use crate::file_to_dataframe::{normalize_path, source_path};
 use dag_core::node::{DagNode, NodeInput, NodePorts};
-use dag_core::sink::SinkMode;
 use dag_core::{
     dag::DagError,
     dag::graph::PortOutputs,
@@ -35,6 +34,19 @@ pub enum WriteFormat {
     Tsv,
     Parquet,
     Mtx,
+}
+
+/// Whether a sink appends to, or overwrites, its destination.
+///
+/// Used by file-producing sink nodes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum SinkMode {
+    /// Add the new rows after whatever is already at the destination.
+    Append,
+    /// Replace whatever is at the destination with the new rows.
+    #[default]
+    Overwrite,
 }
 
 impl WriteFormat {
@@ -670,6 +682,7 @@ mod tests {
             None,
         )
     }
+    use super::SinkMode;
     use std::sync::Arc;
 
     use arrow_array::{Int32Array, RecordBatch, StringArray};
@@ -679,7 +692,7 @@ mod tests {
     use vfs::{MountedObjectStore, OpendalFileStorage, VfsManifest};
 
     use crate::dataframe_to_file::{DataFrameToFileNode, WriteFormat};
-    use dag_core::{DagNode, NodeInput, SinkMode};
+    use dag_core::{DagNode, NodeInput};
 
     /// Build a small in-memory [`DataFrame`] for sink tests.
     ///

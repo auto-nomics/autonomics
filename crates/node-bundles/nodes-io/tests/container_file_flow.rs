@@ -343,7 +343,7 @@ async fn dataframe_to_file_output_flows_through_container_command_in_dag() {
         Box::new(DataFrameToFileNode::new(
             input_path,
             WriteFormat::Csv,
-            dag_core::SinkMode::Overwrite,
+            nodes_io::dataframe_to_file::SinkMode::Overwrite,
         )),
     )
     .unwrap();
