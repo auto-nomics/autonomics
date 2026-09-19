@@ -47,6 +47,8 @@ pub mod visualization_container;
 pub use alphafold::nodes::prediction::{AlphaFoldPredictionNode, AlphaFoldPredictionNodeFactory};
 pub use clinicaltrials::nodes::study::{ClinicalTrialsStudyNode, ClinicalTrialsStudyNodeFactory};
 pub use crossref::nodes::works::{CrossrefWorksNode, CrossrefWorksNodeFactory};
+pub use nhanes::nodes::download::{NhanesDownloadNode, NhanesDownloadNodeFactory};
+pub use nhanes::nodes::files::{NhanesFilesNode, NhanesFilesNodeFactory};
 pub use interpro::nodes::entry::{InterProEntryNode, InterProEntryNodeFactory};
 pub use pubchem::nodes::compound::{PubChemCompoundNode, PubChemCompoundNodeFactory};
 pub use rcsb::nodes::assembly::{RcsbAssemblyNode, RcsbAssemblyNodeFactory};
@@ -431,6 +433,8 @@ impl NodePlugin for Plugin {
             source_opentargets::OpentargetsSearchNodeFactory {},
         ));
         registry.register(Box::new(CrossrefWorksNodeFactory {}));
+        registry.register(Box::new(NhanesFilesNodeFactory {}));
+        registry.register(Box::new(NhanesDownloadNodeFactory {}));
         registry.register(Box::new(AlphaFoldPredictionNodeFactory));
         registry.register(Box::new(InterProEntryNodeFactory));
         registry.register(Box::new(PubChemCompoundNodeFactory));

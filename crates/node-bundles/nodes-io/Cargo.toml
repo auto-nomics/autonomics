@@ -16,6 +16,7 @@ chembl = { path = "../../chembl" }
 openalex = { path = "../../openalex" }
 semantic-scholar = { path = "../../semantic-scholar" }
 crossref = { path = "../../crossref" }
+nhanes = { path = "../../nhanes" }
 uniprot = { path = "../../uniprot" }
 reactome = { path = "../../reactome" }
 rcsb = { path = "../../rcsb" }
@@ -36,6 +37,7 @@ schemars.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2.workspace = true
+sas_xport.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 datafusion.workspace = true
