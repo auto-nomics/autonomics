@@ -1,12 +1,14 @@
 //! Searchable runtime view over the immutable object-storage catalog.
 //!
-//! [`CatalogRuntime`] intentionally remains a lightweight loader used during
+//! [`CatalogRuntime`](crate::runtime::CatalogRuntime) intentionally remains a
+//! lightweight loader used during
 //! process startup. [`CatalogService`] adds the process-level behavior needed
 //! by agents: a refreshable current-entry snapshot, manifest-backed summaries,
 //! text/tag search, version inspection, and file listings.
 
 use std::collections::BTreeMap;
 
+use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
@@ -73,6 +75,25 @@ pub struct CatalogSearchQuery {
     /// Maximum number of records to return. Defaults to 50.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<usize>,
+}
+
+/// Behavior for refreshing a process-level catalog snapshot.
+#[async_trait]
+pub trait CatalogServiceTrait {
+    /// The immutable snapshot produced by a successful refresh.
+    type Snapshot;
+
+    /// Reload catalog state from the configured backend.
+    async fn refresh(&self) -> Result<Self::Snapshot, String>;
+}
+
+#[async_trait]
+impl CatalogServiceTrait for CatalogService {
+    type Snapshot = CatalogSnapshot;
+
+    async fn refresh(&self) -> Result<CatalogSnapshot, String> {
+        CatalogService::refresh(self).await
+    }
 }
 
 impl CatalogService {

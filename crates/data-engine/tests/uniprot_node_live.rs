@@ -15,7 +15,7 @@ fn build_node(kind: &str, spec: serde_json::Value) -> Box<dyn data_engine::dag::
     let registry = data_engine::default_registry::build_default_registry(
         SessionContext::new().runtime_env(),
         None,
-        std::sync::Arc::new(dag_core::DataBundleCatalog::new()),
+        std::sync::Arc::new(dag_core::BundleRegistry::new()),
     );
     registry.build_node(kind, spec).expect("build_node failed")
 }
@@ -25,7 +25,7 @@ fn factories_are_registered() {
     let registry = data_engine::default_registry::build_default_registry(
         SessionContext::new().runtime_env(),
         None,
-        std::sync::Arc::new(dag_core::DataBundleCatalog::new()),
+        std::sync::Arc::new(dag_core::BundleRegistry::new()),
     );
     let kinds: Vec<_> = registry.list_nodes().into_iter().map(|n| n.kind).collect();
     for kind in [

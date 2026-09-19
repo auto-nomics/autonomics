@@ -178,7 +178,7 @@ mod tests {
         assert_eq!(runtime.index.entries.len(), 1);
         assert_eq!(
             runtime
-                .data_bundles()
+                .bundle_registry()
                 .get("panel")
                 .map(|bundle| bundle.vpath.as_str())
                 .unwrap(),

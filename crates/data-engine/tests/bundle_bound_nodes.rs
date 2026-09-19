@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use dag_core::{DataBundle, DataBundleCatalog};
+use dag_core::{BundleRegistry, DataBundle};
 use data_engine::data_engine::DataEngine;
 use datafusion::prelude::SessionContext;
 
@@ -17,8 +17,8 @@ fn catalog_panel(id: &str, source: &str) -> DataBundle {
     value
 }
 
-fn catalog() -> DataBundleCatalog {
-    DataBundleCatalog::from_bundles([
+fn catalog() -> BundleRegistry {
+    BundleRegistry::from_bundles([
         catalog_panel(
             nodes_io::ldsc_h2_container::LDSC_REF_LD_PANEL,
             "/catalog/ref-ld",
@@ -266,7 +266,7 @@ fn all_bundle_bound_node_kinds_build_from_runtime_catalog() {
     for (kind, spec) in cases {
         registry
             .build_node(kind, spec)
-            .unwrap_or_else(|error| panic!("build `{kind}` through bundle catalog: {error}"));
+            .unwrap_or_else(|error| panic!("build `{kind}` through bundle registry: {error}"));
     }
 }
 
@@ -276,7 +276,7 @@ fn missing_catalog_bundle_rejects_node_build() {
     let registry = data_engine::default_registry::build_default_registry(
         ctx.runtime_env(),
         None,
-        Arc::new(DataBundleCatalog::new()),
+        Arc::new(BundleRegistry::new()),
     );
 
     let error = match registry.build_node(
@@ -296,7 +296,7 @@ fn global_builtin_bundles_build_without_a_runtime_catalog() {
     let registry = data_engine::default_registry::build_default_registry(
         ctx.runtime_env(),
         None,
-        Arc::new(DataBundleCatalog::new()),
+        Arc::new(BundleRegistry::new()),
     );
 
     registry

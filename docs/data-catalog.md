@@ -36,7 +36,7 @@ On startup the runtime:
 5. mounts each current entry at both:
    - `/datasets/<id>@sha256-<digest>` for immutable references;
    - `/bundles/<id>` for stable compatibility aliases;
-6. injects each alias into the existing DataBundle catalog.
+6. injects each alias into the runtime bundle registry.
 
 The runtime also retains a `CatalogService` over the same backend. Agents can
 search and inspect it without restarting:

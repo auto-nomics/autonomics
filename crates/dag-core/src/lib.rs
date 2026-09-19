@@ -15,8 +15,8 @@ pub mod sink;
 pub mod value;
 
 pub use node::{
-    DEFAULT_PORT, DagNode, DataBundle, DataBundleBinding, DataBundleCatalog,
-    DataBundleCatalogError, NodeId, NodeInput, NodePorts, Port, PortId, ResolvedDataBundle,
+    BundleRegistry, BundleRegistryError, DEFAULT_PORT, DagNode, DataBundle, DataBundleBinding,
+    NodeId, NodeInput, NodePorts, Port, PortId, ResolvedDataBundle,
 };
 pub use plugin::NodePlugin;
 pub use registry::{NodeCtx, NodeFactory, NodeInfo, NodeRegistry, new_isolated_ctx};

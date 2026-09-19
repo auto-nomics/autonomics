@@ -10,7 +10,7 @@ use serde::Serialize;
 
 use super::error::{Error, Result};
 use crate::dag::DagNode;
-use crate::node::{DataBundle, DataBundleBinding, DataBundleCatalog, NodePorts};
+use crate::node::{BundleRegistry, DataBundle, DataBundleBinding, NodePorts};
 use std::collections::HashMap as BoundDataBundles;
 
 /// Build a fresh, isolated [`SessionContext`].
@@ -77,8 +77,8 @@ pub struct NodeCtx {
     /// engine's virtualized filesystem rather than the host filesystem.
     /// `None` when no opendal fs was registered.
     pub opendal: Option<Arc<vfs::OpendalFileStorage>>,
-    /// Engine-wide stable mapping from bundle identifiers to VFS paths.
-    pub data_bundles: Arc<DataBundleCatalog>,
+    /// Engine-wide mapping from stable bundle identifiers to logical bundles.
+    pub bundle_registry: Arc<BundleRegistry>,
     /// Bindings resolved for the node currently being built. Empty on the
     /// scheduler-wide context.
     pub bound_data_bundles: BoundDataBundles<String, DataBundle>,
@@ -106,15 +106,15 @@ impl NodeCtx {
         Self {
             runtime_env,
             opendal,
-            data_bundles: Arc::new(DataBundleCatalog::new()),
+            bundle_registry: Arc::new(BundleRegistry::new()),
             bound_data_bundles: BoundDataBundles::new(),
             global_sem: None,
         }
     }
 
-    /// Attach the engine-wide bundle catalog.
-    pub fn with_data_bundle_catalog(mut self, catalog: Arc<DataBundleCatalog>) -> Self {
-        self.data_bundles = catalog;
+    /// Attach the engine-wide bundle registry.
+    pub fn with_bundle_registry(mut self, registry: Arc<BundleRegistry>) -> Self {
+        self.bundle_registry = registry;
         self
     }
 
@@ -126,7 +126,7 @@ impl NodeCtx {
     ) -> Result<Self> {
         for requirement in bindings {
             let bundle = self
-                .data_bundles
+                .bundle_registry
                 .get(&requirement.bundle_id)
                 .ok_or_else(|| Error::DataBundleNotFound {
                     kind: kind.to_string(),

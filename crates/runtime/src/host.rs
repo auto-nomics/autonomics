@@ -28,7 +28,7 @@ use agentik_sdk::types::{AgentEvent, ContentBlock};
 use arc_swap::ArcSwapOption;
 use container_runtime::ContainerExecutionInfra;
 use container_runtime::{PanelGcPolicy, WorkspaceGcPolicy, sweep_panels, sweep_workspace};
-use dag_core::{DataBundle, DataBundleCatalog};
+use dag_core::{BundleRegistry, DataBundle};
 use data_catalog::{CatalogConfig, CatalogRuntime, CatalogService, catalog_mount_definitions};
 use data_engine::dag::DagHistory;
 use data_engine::data_engine::DataEngine;
@@ -224,14 +224,18 @@ impl SharedInfra {
             "SharedInfra::open: VFS mounted"
         );
         tracing::info!("SharedInfra::open: building DataEngine");
-        let user_data_bundles = build_data_bundle_catalog(config)?;
-        let data_bundles = catalog_bundles
-            .with_overriding_bundles(user_data_bundles.iter().map(|(_, bundle)| bundle.clone()))
+        let user_bundle_registry = build_bundle_registry(config)?;
+        let bundle_registry = catalog_bundles
+            .with_overriding_bundles(
+                user_bundle_registry
+                    .iter()
+                    .map(|(_, bundle)| bundle.clone()),
+            )
             .map_err(|error| Error::Other(error.to_string()))?;
         let engine_builder = DataEngine::builder()
             .register_opendal_fs(file_storage.clone())?
             .with_vfs((*vfs).clone())
-            .with_data_bundle_catalog(data_bundles)
+            .with_bundle_registry(bundle_registry)
             .with_container_execution(Arc::clone(&container_execution));
 
         let mut engine = engine_builder.build();
@@ -590,13 +594,13 @@ async fn build_vfs_with_catalog(
     config: &RuntimeConfig,
 ) -> Result<(
     MountedObjectStore,
-    dag_core::DataBundleCatalog,
+    dag_core::BundleRegistry,
     Option<Arc<CatalogService>>,
 )> {
     let state = load_or_create_vfs_manifest(config)?;
     let mut manifest = state.manifest;
 
-    let mut catalog_bundles = dag_core::DataBundleCatalog::new();
+    let mut catalog_registry = dag_core::BundleRegistry::new();
     let mut catalog_service = None;
     if let Some(catalog_source) = state.catalog_source {
         let catalog_config = CatalogConfig::from_vfs_toml(&format!(
@@ -612,16 +616,16 @@ async fn build_vfs_with_catalog(
             let mut mounts = catalog_mount_definitions(&manifest, &snapshot.index, &catalog_config)
                 .map_err(Error::Other)?;
             manifest.mount.append(&mut mounts);
-            catalog_bundles = CatalogRuntime {
+            catalog_registry = CatalogRuntime {
                 index: snapshot.index,
             }
-            .data_bundles();
+            .bundle_registry();
             catalog_service = Some(service);
         }
     }
     MountedObjectStore::from_manifest(&manifest)
         .map_err(|e| Error::Other(e.to_string()))
-        .map(|store| (store, catalog_bundles, catalog_service))
+        .map(|store| (store, catalog_registry, catalog_service))
 }
 
 struct VfsManifestState {
@@ -726,17 +730,17 @@ struct DataBundleManifest {
     bundle: Vec<DataBundle>,
 }
 
-/// Load the engine-wide bundle ID to VFS path mapping from
-/// `state_dir/data_bundles.toml`.
+/// Load user-provided bundle registry entries from `state_dir/data_bundles.toml`.
 ///
-/// A missing file yields an empty catalog. Nodes with bundle requirements then
-/// fail with an actionable missing-bundle error when they are built.
-fn build_data_bundle_catalog(config: &RuntimeConfig) -> Result<DataBundleCatalog> {
+/// A missing file yields an empty registry. Entries returned here override
+/// object-storage catalog entries, while built-in entries are layered beneath
+/// both when the engine is constructed.
+fn build_bundle_registry(config: &RuntimeConfig) -> Result<BundleRegistry> {
     let manifest_path = config.state_dir.join("data_bundles.toml");
     let source = match std::fs::read_to_string(&manifest_path) {
         Ok(source) => source,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(DataBundleCatalog::new());
+            return Ok(BundleRegistry::new());
         }
         Err(e) => {
             return Err(Error::Other(format!(
@@ -747,12 +751,12 @@ fn build_data_bundle_catalog(config: &RuntimeConfig) -> Result<DataBundleCatalog
     };
     let manifest: DataBundleManifest = toml::from_str(&source)
         .map_err(|e| Error::Other(format!("invalid {}: {e}", manifest_path.display())))?;
-    DataBundleCatalog::from_bundles(manifest.bundle)
+    BundleRegistry::from_bundles(manifest.bundle)
         .map_err(|e| Error::Other(format!("invalid {}: {e}", manifest_path.display())))
 }
 
 #[cfg(test)]
-mod data_bundle_catalog_tests {
+mod bundle_registry_tests {
     use super::*;
 
     #[test]
@@ -771,10 +775,10 @@ vpath = "/bundles/panels/EUR.panel"
         )
         .unwrap();
 
-        let catalog = build_data_bundle_catalog(&config).unwrap();
+        let registry = build_bundle_registry(&config).unwrap();
 
         assert_eq!(
-            catalog
+            registry
                 .get("EUR.panel")
                 .map(|bundle| bundle.vpath.as_str())
                 .unwrap(),

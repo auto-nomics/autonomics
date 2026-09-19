@@ -27,23 +27,28 @@ pub struct DataBundle {
     pub digest: Option<String>,
 }
 
-/// Runtime mapping from stable bundle identifiers to VFS virtual paths.
+/// Runtime registry mapping stable bundle identifiers to [`DataBundle`] entries.
 ///
-/// Factories and node specs refer only to `DataBundle::ident`. The physical
-/// backend and path are resolved by this catalog plus the mounted VFS.
+/// This registry is deliberately independent of the object-storage data
+/// catalog. It is a runtime projection that can contain catalog-backed
+/// datasets, built-in mappings, local overrides, and test fixtures. Factories
+/// and node specs refer only to `DataBundle::ident`; the mounted VFS resolves
+/// that logical bundle to a physical backend and object key.
 #[derive(Debug, Default, Clone)]
-pub struct DataBundleCatalog {
+pub struct BundleRegistry {
     bundles: StdHashMap<String, DataBundle>,
 }
 
-impl DataBundleCatalog {
+impl BundleRegistry {
+    /// Create an empty registry.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Build a registry from bundles, rejecting duplicate identifiers.
     pub fn from_bundles(
         bundles: impl IntoIterator<Item = DataBundle>,
-    ) -> Result<Self, DataBundleCatalogError> {
+    ) -> Result<Self, BundleRegistryError> {
         let mut catalog = Self::new();
         for bundle in bundles {
             catalog.register(bundle)?;
@@ -51,48 +56,48 @@ impl DataBundleCatalog {
         Ok(catalog)
     }
 
-    /// Overlay entries on top of this catalog.
+    /// Overlay entries on top of this registry.
     ///
     /// Later entries override earlier ones. Runtime-provided bundles use this
     /// path to replace engine defaults without editing factory declarations.
     pub fn with_overriding_bundles(
         mut self,
         bundles: impl IntoIterator<Item = DataBundle>,
-    ) -> Result<Self, DataBundleCatalogError> {
+    ) -> Result<Self, BundleRegistryError> {
         for bundle in bundles {
             if bundle.ident.trim().is_empty() {
-                return Err(DataBundleCatalogError::InvalidIdentifier(
-                    bundle.ident.clone(),
-                ));
+                return Err(BundleRegistryError::InvalidIdentifier(bundle.ident.clone()));
             }
             if !bundle.vpath.starts_with('/') {
-                return Err(DataBundleCatalogError::InvalidPath(bundle.vpath));
+                return Err(BundleRegistryError::InvalidPath(bundle.vpath));
             }
             self.bundles.insert(bundle.ident.clone(), bundle);
         }
         Ok(self)
     }
 
-    pub fn register(&mut self, bundle: DataBundle) -> Result<(), DataBundleCatalogError> {
+    /// Register one bundle, rejecting an empty identifier, a relative virtual
+    /// path, or a duplicate identifier.
+    pub fn register(&mut self, bundle: DataBundle) -> Result<(), BundleRegistryError> {
         if bundle.ident.trim().is_empty() {
-            return Err(DataBundleCatalogError::InvalidIdentifier(
-                bundle.ident.clone(),
-            ));
+            return Err(BundleRegistryError::InvalidIdentifier(bundle.ident.clone()));
         }
         if !bundle.vpath.starts_with('/') {
-            return Err(DataBundleCatalogError::InvalidPath(bundle.vpath));
+            return Err(BundleRegistryError::InvalidPath(bundle.vpath));
         }
         if self.bundles.contains_key(&bundle.ident) {
-            return Err(DataBundleCatalogError::Duplicate);
+            return Err(BundleRegistryError::Duplicate);
         }
         self.bundles.insert(bundle.ident.clone(), bundle);
         Ok(())
     }
 
+    /// Look up a bundle by its stable identifier.
     pub fn get(&self, ident: &str) -> Option<&DataBundle> {
         self.bundles.get(ident)
     }
 
+    /// Iterate all registered bundles in unspecified order.
     pub fn iter(&self) -> impl Iterator<Item = (&str, &DataBundle)> {
         self.bundles
             .iter()
@@ -100,8 +105,9 @@ impl DataBundleCatalog {
     }
 }
 
+/// Errors produced while constructing or modifying a [`BundleRegistry`].
 #[derive(Debug, thiserror::Error)]
-pub enum DataBundleCatalogError {
+pub enum BundleRegistryError {
     #[error("data bundle identifier cannot be empty")]
     InvalidIdentifier(String),
     #[error("data bundle identifier is registered more than once")]
@@ -111,16 +117,17 @@ pub enum DataBundleCatalogError {
     InvalidPath(String),
 }
 
-/// A factory-declared dependency on a named runtime bundle.
+/// A dependency declaration attached by a node factory.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DataBundleBinding {
     /// Local slot used by the node implementation, such as `reference_panel`.
     pub binding: String,
-    /// Stable identifier in the runtime [`DataBundleCatalog`].
+    /// Stable identifier in the runtime [`BundleRegistry`].
     pub bundle_id: String,
 }
 
 impl DataBundleBinding {
+    /// Declare that `binding` should receive the bundle registered as `bundle_id`.
     pub fn new(binding: impl Into<String>, bundle_id: impl Into<String>) -> Self {
         Self {
             binding: binding.into(),
@@ -178,26 +185,26 @@ mod tests {
     use crate::node::test_support::mounted_vfs;
 
     #[test]
-    fn catalog_registers_and_reports_duplicate_bundles() {
+    fn registry_registers_and_reports_duplicate_bundles() {
         let panel = DataBundle::new("panel", "Reference panel", "/bundles/panel.txt");
-        let mut catalog = DataBundleCatalog::new();
+        let mut registry = BundleRegistry::new();
 
-        catalog.register(panel.clone()).unwrap();
+        registry.register(panel.clone()).unwrap();
 
-        assert_eq!(catalog.get("panel"), Some(&panel));
+        assert_eq!(registry.get("panel"), Some(&panel));
         assert!(matches!(
-            catalog.register(panel),
-            Err(DataBundleCatalogError::Duplicate)
+            registry.register(panel),
+            Err(BundleRegistryError::Duplicate)
         ));
     }
 
     #[test]
-    fn catalog_rejects_relative_virtual_paths() {
+    fn registry_rejects_relative_virtual_paths() {
         let bundle = DataBundle::new("panel", "Reference panel", "relative/panel.txt");
 
         assert!(matches!(
-            DataBundleCatalog::from_bundles([bundle]),
-            Err(DataBundleCatalogError::InvalidPath(_))
+            BundleRegistry::from_bundles([bundle]),
+            Err(BundleRegistryError::InvalidPath(_))
         ));
     }
 

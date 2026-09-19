@@ -1,10 +1,10 @@
-# Runtime Data Bundle Catalog
+# Runtime Bundle Registry
 
 Nodes no longer embed deployment paths. Factories declare stable bundle IDs,
 and the runtime resolves those IDs through `state_dir/data_bundles.toml`.
 `vpath` is always a runtime VFS virtual path, never a host path.
 
-The data engine also installs a built-in catalog for factory-declared global
+The data engine also installs a built-in registry for factory-declared global
 reference bundles. Consequently registry-backed tests and embedded engines can
 build nodes such as `sldsc`, `lcv`, and MRlap without duplicating global entries. A
 bundle with the same `ident` in `data_bundles.toml` always overrides the
@@ -38,7 +38,7 @@ vpath = "/bundles/ldsc/1000g.parquet"
 - `kegg.pathways`
 - `kegg.genome_pathways`
 
-Custom `bundle_source` nodes may reference any additional catalog ID.
+Custom `bundle_source` nodes may reference any additional registry ID.
 
 ## Unified catalog overlay
 

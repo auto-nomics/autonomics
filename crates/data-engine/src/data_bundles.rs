@@ -1,4 +1,4 @@
-//! Built-in runtime data bundle mappings.
+//! Built-in runtime bundle mappings.
 //!
 //! These entries make registry-backed integration tests and embedded engines
 //! buildable without copying a catalog into every test. Runtime entries from
@@ -6,13 +6,17 @@
 
 use std::sync::Arc;
 
-use dag_core::{DataBundle, DataBundleCatalog};
+use dag_core::{BundleRegistry, DataBundle};
 
 fn bundle(id: &str, desc: &str, vpath: &str) -> DataBundle {
     DataBundle::new(id, desc, vpath)
 }
 
-pub fn builtin_data_bundle_catalog() -> DataBundleCatalog {
+/// Build the registry of bundles embedded with the data engine.
+///
+/// These mappings keep registry-backed tests and embedded engines usable
+/// before an object-storage catalog has been deployed.
+pub fn builtin_bundle_registry() -> BundleRegistry {
     let mut bundles = Vec::new();
     bundles.extend([
         bundle(
@@ -88,13 +92,17 @@ pub fn builtin_data_bundle_catalog() -> DataBundleCatalog {
             &format!("/bundles/magma/g1000_{population}"),
         ));
     }
-    DataBundleCatalog::from_bundles(bundles)
+    BundleRegistry::from_bundles(bundles)
         .expect("built-in data bundle IDs are unique and use absolute vpaths")
 }
 
-pub fn catalog_with_builtins(user: &DataBundleCatalog) -> Arc<DataBundleCatalog> {
+/// Layer user-configured bundles on top of the built-in registry.
+///
+/// Returns an `Arc` because the merged projection is installed in both the
+/// engine context and every node-registry context.
+pub fn registry_with_builtins(user: &BundleRegistry) -> Arc<BundleRegistry> {
     let overrides: Vec<DataBundle> = user.iter().map(|(_, bundle)| bundle.clone()).collect();
-    let merged = builtin_data_bundle_catalog()
+    let merged = builtin_bundle_registry()
         .with_overriding_bundles(overrides)
         .expect("runtime data bundles should be validated when loaded");
     Arc::new(merged)
@@ -105,17 +113,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn builtin_catalog_contains_global_ldsc_bundles() {
-        let catalog = builtin_data_bundle_catalog();
+    fn builtin_registry_contains_global_ldsc_bundles() {
+        let registry = builtin_bundle_registry();
 
-        assert!(catalog.get("ldscore.1000g_eur").is_some());
-        assert!(catalog.get("ldscore.1000g_eur_m").is_some());
-        assert!(catalog.get("ldscore.baselineLD_v2_2_eur").is_some());
+        assert!(registry.get("ldscore.1000g_eur").is_some());
+        assert!(registry.get("ldscore.1000g_eur_m").is_some());
+        assert!(registry.get("ldscore.baselineLD_v2_2_eur").is_some());
     }
 
     #[test]
     fn runtime_entries_override_builtin_entries() {
-        let mut user = DataBundleCatalog::new();
+        let mut user = BundleRegistry::new();
         user.register(DataBundle::new(
             "ldscore.1000g_eur",
             "Runtime override",
@@ -123,7 +131,7 @@ mod tests {
         ))
         .unwrap();
 
-        let merged = catalog_with_builtins(&user);
+        let merged = registry_with_builtins(&user);
 
         assert_eq!(
             merged

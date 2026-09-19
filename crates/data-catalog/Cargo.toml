@@ -8,6 +8,7 @@ description = "Versioned object-storage catalog for external analysis data packa
 
 [dependencies]
 clap.workspace = true
+async-trait.workspace = true
 dag-core = { path = "../dag-core" }
 flate2 = "1.1"
 opendal.workspace = true
@@ -17,7 +18,12 @@ serde_json.workspace = true
 sha2.workspace = true
 tar.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["fs", "io-util", "macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = [
+  "fs",
+  "io-util",
+  "macros",
+  "rt-multi-thread",
+] }
 toml.workspace = true
 uuid.workspace = true
 vfs = { path = "../vfs" }
