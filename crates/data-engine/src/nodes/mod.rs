@@ -11,8 +11,5 @@ pub mod meta {
 pub mod numeric_util {
     pub use dag_core::arrow_util::*;
 }
-pub mod sink_common {
-    pub use dag_core::sink::*;
-}
 
 pub use meta::{DEFAULT_PORT, DagNode, NodeId, NodeInput, NodePorts, Port};

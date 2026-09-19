@@ -14,8 +14,6 @@ use crate::error::{Error, Result};
 use crate::node_registry::registry::NodeRegistry;
 use crate::nodes::DagNode;
 
-pub use dag_core::sink::SinkMode;
-
 /// Observable outcome of a DAG clear operation.
 #[derive(Debug, Clone, Serialize)]
 pub struct ClearDagOutcome {
