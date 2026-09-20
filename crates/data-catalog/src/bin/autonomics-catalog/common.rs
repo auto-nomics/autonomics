@@ -40,6 +40,22 @@ pub(crate) fn open_cache(path: &Path) -> Result<LocalCatalog> {
     LocalCatalog::open(expand_home(path)?)
 }
 
+/// Default package cache: the shared panel cache root, so installed packages
+/// participate in the panel LRU sweeper.
+pub(crate) fn default_cache_root() -> String {
+    std::env::var_os("AUTONOMICS_PANEL_CACHE_ROOT")
+        .map(|value| value.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "~/.autonomics/panels".into())
+}
+
+pub(crate) fn resolve_hf_token(explicit: Option<String>) -> Option<String> {
+    explicit.or_else(|| {
+        std::env::var("HUGGING_FACE_TOKEN")
+            .ok()
+            .filter(|token| !token.is_empty())
+    })
+}
+
 pub(crate) fn parse_metadata(
     values: &[String],
 ) -> Result<std::collections::BTreeMap<String, String>> {

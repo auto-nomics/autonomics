@@ -2,6 +2,7 @@
 
 use std::path::Path;
 
+use async_trait::async_trait;
 use hf_hub::repository::CommitOperation;
 use hf_hub::{HFClient, HFClientBuilder, HFError, HFRepository, RepoTypeDataset};
 
@@ -9,6 +10,7 @@ use crate::error::Result;
 use crate::model::{CatalogEntry, CatalogIndex, DatasetManifest};
 use crate::package::{PACKAGE_MANIFEST, PAYLOAD_DIR, validate_package};
 use crate::publish::{build_entry, upsert_entry};
+use crate::remote::ObjectSource;
 
 const INDEX_PATH: &str = "index.json";
 
@@ -24,6 +26,64 @@ pub struct HfPublishTarget {
     pub token: Option<String>,
     /// Create the dataset repository first when it does not exist yet.
     pub create_repository: bool,
+}
+
+/// Object source reading catalog objects from a Hugging Face dataset repo.
+pub struct HfSource {
+    repository: HFRepository<RepoTypeDataset>,
+    revision: String,
+}
+
+impl HfSource {
+    pub fn new(repo_id: &str, revision: Option<String>, token: Option<String>) -> Result<Self> {
+        let (owner, name) = split_repo_id(repo_id)?;
+        let mut builder = HFClientBuilder::new();
+        if let Some(token) = token {
+            builder = builder.token(token);
+        }
+        let client = builder
+            .build()
+            .map_err(|error| format!("build Hugging Face client: {error}"))?;
+        Ok(Self {
+            repository: client.dataset(owner, name),
+            revision: revision.unwrap_or_else(|| "main".to_string()),
+        })
+    }
+
+    pub fn revision(&self) -> &str {
+        &self.revision
+    }
+}
+
+#[async_trait]
+impl ObjectSource for HfSource {
+    async fn read(&self, key: &str) -> Result<Vec<u8>> {
+        let bytes = self
+            .repository
+            .download_file_to_bytes()
+            .filename(key.to_string())
+            .revision(self.revision.clone())
+            .send()
+            .await
+            .map_err(|error| format!("read Hugging Face object `{key}`: {error}"))?;
+        Ok(bytes.to_vec())
+    }
+
+    async fn read_range(&self, key: &str, offset: u64, len: u64) -> Result<Vec<u8>> {
+        if len == 0 {
+            return Ok(Vec::new());
+        }
+        let bytes = self
+            .repository
+            .download_file_to_bytes()
+            .filename(key.to_string())
+            .revision(self.revision.clone())
+            .range(offset..offset + len)
+            .send()
+            .await
+            .map_err(|error| format!("read Hugging Face object `{key}` at {offset}: {error}"))?;
+        Ok(bytes.to_vec())
+    }
 }
 
 /// Publish a validated local package to a Hugging Face dataset repository.
@@ -156,6 +216,7 @@ fn commit_operations(
 mod tests {
     use super::*;
     use crate::package::{BuildOptions, build_package};
+    use crate::remote::RemoteCatalog;
     use hf_hub::repository::AddSource;
 
     #[test]
@@ -168,6 +229,17 @@ mod tests {
         assert!(split_repo_id("/catalog").is_err());
         assert!(split_repo_id("wjx/").is_err());
         assert!(split_repo_id("a/b/c").is_err());
+    }
+
+    #[test]
+    fn remote_catalog_hf_construction_is_lazy() {
+        let catalog = RemoteCatalog::hf("owner/catalog", None, None).unwrap();
+        assert!(
+            catalog
+                .config()
+                .object_key("entries/x")
+                .starts_with("entries/")
+        );
     }
 
     #[test]

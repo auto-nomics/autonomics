@@ -4,6 +4,7 @@ use vfs::VfsManifest;
 
 use crate::config::CatalogConfig;
 use crate::error::Result;
+use crate::hf::HfSource;
 use crate::model::{CatalogEntry, CatalogIndex, DatasetManifest};
 use crate::storage::operator_for_backend;
 
@@ -86,6 +87,18 @@ impl RemoteCatalog {
             config: config.clone(),
             source,
         })
+    }
+
+    /// Read a catalog hosted in a Hugging Face dataset repository.
+    pub fn hf(repo_id: &str, revision: Option<String>, token: Option<String>) -> Result<Self> {
+        let config = CatalogConfig {
+            backend: "huggingface".into(),
+            source: "/".into(),
+            index: "index.json".into(),
+            enabled: true,
+            agent_visible: false,
+        };
+        Self::from_source(&config, Box::new(HfSource::new(repo_id, revision, token)?))
     }
 
     pub fn config(&self) -> &CatalogConfig {

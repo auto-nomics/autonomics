@@ -5,7 +5,7 @@ use data_catalog::error::Result;
 use data_catalog::hf::{HfPublishTarget, publish_package_to_hf};
 use data_catalog::publish_package;
 
-use crate::common::{load_backend, print_json};
+use crate::common::{load_backend, print_json, resolve_hf_token};
 
 #[derive(Args)]
 pub struct PublishArgs {
@@ -28,11 +28,7 @@ pub struct PublishArgs {
 
 pub async fn run(args: PublishArgs) -> Result<()> {
     let entry = if let Some(repo_id) = args.repo {
-        let token = args.token.or_else(|| {
-            std::env::var("HUGGING_FACE_TOKEN")
-                .ok()
-                .filter(|token| !token.is_empty())
-        });
+        let token = resolve_hf_token(args.token.clone());
         publish_package_to_hf(
             &args.package,
             &HfPublishTarget {

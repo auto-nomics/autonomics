@@ -16,7 +16,7 @@ pub mod remote;
 pub mod storage;
 
 pub use config::CatalogConfig;
-pub use hf::{HfPublishTarget, publish_package_to_hf};
+pub use hf::{HfPublishTarget, HfSource, publish_package_to_hf};
 pub use local::LocalCatalog;
 pub use model::{CatalogEntry, CatalogIndex, DatasetFile, DatasetManifest};
 pub use package::{build_package, validate_package};
