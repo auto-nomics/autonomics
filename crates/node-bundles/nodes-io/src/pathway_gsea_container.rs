@@ -293,6 +293,7 @@ pub fn container_spec(spec: &PathwayGseaContainerSpec) -> Result<ContainerComman
         memory: Some(spec.memory.clone().unwrap_or_else(|| DEFAULT_MEMORY.into())),
         pids_limit: Some(DEFAULT_PIDS_LIMIT),
         shm_size: Some(DEFAULT_SHM_SIZE.into()),
+        gpus: None,
         user: None,
     })
 }

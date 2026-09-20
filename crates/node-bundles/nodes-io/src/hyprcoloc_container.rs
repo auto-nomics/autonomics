@@ -447,6 +447,7 @@ pub fn container_spec(spec: &HyPrColocContainerSpec) -> Result<ContainerCommandS
         memory: None,
         pids_limit: None,
         shm_size: None,
+        gpus: None,
         user: None,
     })
 }

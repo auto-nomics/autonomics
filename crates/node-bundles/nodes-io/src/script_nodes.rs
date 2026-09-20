@@ -564,6 +564,7 @@ pub fn container_spec(
         memory: Some(spec.memory.clone().unwrap_or_else(|| DEFAULT_MEMORY.into())),
         pids_limit: Some(spec.pids_limit.unwrap_or(DEFAULT_PIDS_LIMIT)),
         shm_size: None,
+        gpus: None,
         user: None,
     })
 }

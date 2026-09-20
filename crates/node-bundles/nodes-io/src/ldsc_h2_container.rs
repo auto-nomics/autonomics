@@ -188,6 +188,7 @@ pub fn container_spec(spec: &LdscH2ContainerSpec) -> Result<ContainerCommandSpec
         memory: None,
         pids_limit: None,
         shm_size: None,
+        gpus: None,
         user: None,
     })
 }

@@ -181,6 +181,7 @@ pub fn container_spec(spec: &TimesfmForecastContainerSpec) -> Result<ContainerCo
         memory: Some("8Gi".into()),
         pids_limit: Some(512),
         shm_size: Some("1Gi".into()),
+        gpus: None,
         user: None,
     })
 }

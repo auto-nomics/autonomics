@@ -19,7 +19,7 @@ use crate::image_registry::acr_image;
 
 pub const PYRADIOMICS_IMAGE_REPOSITORY: &str = "pyradiomics";
 pub const PYRADIOMICS_IMAGE_DIGEST: &str =
-    "sha256:4ef0fc2abbd5a85812b04bceef70b03f207494dbaa53a06c1a3eb9e24b3e7392";
+    "sha256:bccbe15b2ec8d079e1bf869c4f06bfe4143642015394453c584dc981e5403fbe";
 pub const RADIOMICS_IMAGE_INGEST_KIND: &str = "radiomics_image_ingest";
 pub const RADIOMICS_MASK_INGEST_KIND: &str = "radiomics_mask_ingest";
 pub const RADIOMICS_PAIR_VALIDATE_KIND: &str = "radiomics_pair_validate";
@@ -35,6 +35,12 @@ pub const RADIOMICS_IVH_KIND: &str = "radiomics_ivh_extract";
 pub const RADIOMICS_SHAPE_TOPOLOGY_KIND: &str = "radiomics_shape_topology";
 pub const RADIOMICS_REGISTER_KIND: &str = "radiomics_register";
 pub const RADIOMICS_DELTA_FEATURES_KIND: &str = "radiomics_delta_features";
+pub const RADIOMICS_BIAS_CORRECT_KIND: &str = "radiomics_bias_correct";
+pub const RADIOMICS_ROBUST_NORMALIZE_KIND: &str = "radiomics_robust_normalize";
+pub const RADIOMICS_PERITUMORAL_RING_KIND: &str = "radiomics_peritumoral_ring";
+pub const RADIOMICS_HABITAT_FIT_KIND: &str = "radiomics_habitat_fit";
+pub const RADIOMICS_HABITAT_ASSIGN_KIND: &str = "radiomics_habitat_assign";
+pub const RADIOMICS_PERTURB_STABILITY_KIND: &str = "radiomics_perturb_stability";
 
 const DEFAULT_TIMEOUT_SECS: u64 = 3600;
 const PYRADIOMICS_IMAGE_TYPES: &[&str] = &[
@@ -145,6 +151,24 @@ fn default_register_prefix() -> String {
 }
 fn default_delta_prefix() -> String {
     "/artifacts/radiomics_delta_features".into()
+}
+fn default_bias_prefix() -> String {
+    "/artifacts/radiomics_bias_correct".into()
+}
+fn default_robust_normalize_prefix() -> String {
+    "/artifacts/radiomics_robust_normalize".into()
+}
+fn default_ring_prefix() -> String {
+    "/artifacts/radiomics_peritumoral_ring".into()
+}
+fn default_habitat_fit_prefix() -> String {
+    "/artifacts/radiomics_habitat_fit".into()
+}
+fn default_habitat_assign_prefix() -> String {
+    "/artifacts/radiomics_habitat_assign".into()
+}
+fn default_perturb_prefix() -> String {
+    "/artifacts/radiomics_perturb_stability".into()
 }
 fn default_timeout() -> u64 {
     DEFAULT_TIMEOUT_SECS
@@ -473,6 +497,175 @@ pub struct RadiomicsDeltaFeaturesSpec {
     pub timeout_secs: u64,
 }
 
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct RadiomicsBiasCorrectSpec {
+    /// Positive mask label that confines N4 fitting.
+    #[serde(default = "default_mask_label")]
+    pub mask_label: i32,
+    /// Isotropic down-sampling factor for the fit; 1 runs at full resolution.
+    #[serde(default = "default_bias_shrink")]
+    pub shrink_factor: u32,
+    /// Per-level iteration caps passed to the N4 multi-resolution scheme.
+    #[serde(default = "default_bias_iterations")]
+    pub max_iterations: Vec<u32>,
+    #[serde(default = "default_bias_convergence")]
+    pub convergence_threshold: f64,
+    #[serde(default = "default_bias_prefix")]
+    pub artifact_prefix: String,
+    #[serde(default = "default_timeout")]
+    pub timeout_secs: u64,
+}
+
+fn default_bias_shrink() -> u32 {
+    4
+}
+fn default_bias_iterations() -> Vec<u32> {
+    vec![50, 50, 50, 50]
+}
+fn default_bias_convergence() -> f64 {
+    1e-6
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct RadiomicsRobustNormalizeSpec {
+    /// Mask label whose voxels define the intensity statistics.
+    #[serde(default = "default_mask_label")]
+    pub mask_label: i32,
+    /// Lower winsorization percentile over the tissue mask.
+    #[serde(default = "default_normalize_lower")]
+    pub lower_percentile: f64,
+    /// Upper winsorization percentile over the tissue mask.
+    #[serde(default = "default_normalize_upper")]
+    pub upper_percentile: f64,
+    #[serde(default = "default_robust_normalize_prefix")]
+    pub artifact_prefix: String,
+    #[serde(default = "default_timeout")]
+    pub timeout_secs: u64,
+}
+
+fn default_normalize_lower() -> f64 {
+    1.0
+}
+fn default_normalize_upper() -> f64 {
+    99.0
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct RadiomicsPeritumoralRingSpec {
+    /// Positive tumor label inside the mask input.
+    #[serde(default = "default_mask_label")]
+    pub mask_label: i32,
+    /// Inner ring radius in millimeters; 0 grows the ring from the tumor edge.
+    #[serde(default = "default_ring_inner")]
+    pub inner_mm: f64,
+    /// Outer ring radius in millimeters.
+    #[serde(default = "default_ring_outer")]
+    pub outer_mm: f64,
+    #[serde(default = "default_ring_prefix")]
+    pub artifact_prefix: String,
+    #[serde(default = "default_timeout")]
+    pub timeout_secs: u64,
+}
+
+fn default_ring_inner() -> f64 {
+    0.0
+}
+fn default_ring_outer() -> f64 {
+    5.0
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct RadiomicsHabitatFitSpec {
+    /// Positive tumor label inside each mask.
+    #[serde(default = "default_mask_label")]
+    pub mask_label: i32,
+    /// Number of habitats; must lie in `[2, 6]`.
+    #[serde(default = "default_n_habitats")]
+    pub n_habitats: u32,
+    /// Equal per-case voxel sample budget for the pooled fit.
+    #[serde(default = "default_habitat_sample")]
+    pub sample_voxels_per_case: u32,
+    /// Seed fixing k-means++ restarts and per-case sampling.
+    #[serde(default)]
+    pub seed: u64,
+    /// Z-score each case's channels before pooling.
+    #[serde(default = "default_true")]
+    pub standardize: bool,
+    /// Seeded restarts of Lloyd's algorithm; best inertia wins.
+    #[serde(default = "default_habitat_n_init")]
+    pub n_init: u32,
+    #[serde(default = "default_habitat_max_iter")]
+    pub max_iter: u32,
+    #[serde(default = "default_habitat_fit_prefix")]
+    pub artifact_prefix: String,
+    #[serde(default = "default_timeout")]
+    pub timeout_secs: u64,
+}
+
+fn default_n_habitats() -> u32 {
+    3
+}
+fn default_habitat_sample() -> u32 {
+    10_000
+}
+fn default_habitat_n_init() -> u32 {
+    8
+}
+fn default_habitat_max_iter() -> u32 {
+    300
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct RadiomicsHabitatAssignSpec {
+    /// Positive tumor label inside the mask input.
+    #[serde(default = "default_mask_label")]
+    pub mask_label: i32,
+    #[serde(default = "default_habitat_assign_prefix")]
+    pub artifact_prefix: String,
+    #[serde(default = "default_timeout")]
+    pub timeout_secs: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct RadiomicsPerturbStabilitySpec {
+    pub extraction_id: String,
+    pub patient_id: String,
+    pub image_id: String,
+    pub roi_id: String,
+    pub modality: String,
+    pub preset_id: String,
+    #[serde(flatten)]
+    pub settings: RadiomicsExtractionSettings,
+    /// Controlled perturbations to replicate; subset of `dilate1`, `erode1`,
+    /// `translate_x`, `translate_y`, `translate_z`, `noise`.
+    #[serde(default = "default_perturbations")]
+    pub perturbations: Vec<String>,
+    /// Noise standard deviation as a percentage of the ROI intensity SD.
+    #[serde(default = "default_noise_sigma_pct")]
+    pub noise_sigma_pct: f64,
+    /// Seed fixing the Gaussian noise field.
+    #[serde(default)]
+    pub seed: u64,
+    #[serde(default = "default_perturb_prefix")]
+    pub artifact_prefix: String,
+    #[serde(default = "default_timeout")]
+    pub timeout_secs: u64,
+}
+
+fn default_perturbations() -> Vec<String> {
+    vec![
+        "dilate1".into(),
+        "erode1".into(),
+        "translate_x".into(),
+        "translate_y".into(),
+        "translate_z".into(),
+        "noise".into(),
+    ]
+}
+fn default_noise_sigma_pct() -> f64 {
+    2.0
+}
+
 fn default_true() -> bool {
     true
 }
@@ -612,6 +805,7 @@ fn base_spec(command: &str, prefix: &str, timeout: u64) -> Result<ContainerComma
         memory: None,
         pids_limit: None,
         shm_size: None,
+        gpus: None,
         user: None,
     })
 }
@@ -1047,6 +1241,232 @@ pub fn delta_features_container_spec(
     Ok(container)
 }
 
+pub fn bias_correct_container_spec(
+    spec: &RadiomicsBiasCorrectSpec,
+) -> Result<ContainerCommandSpec, String> {
+    validate_prefix_timeout(&spec.artifact_prefix, spec.timeout_secs)?;
+    if spec.mask_label <= 0 {
+        return Err("mask_label must be positive".into());
+    }
+    if !(1..=8).contains(&spec.shrink_factor) {
+        return Err("shrink_factor must lie in [1, 8]".into());
+    }
+    if spec.max_iterations.is_empty()
+        || spec.max_iterations.len() > 8
+        || spec.max_iterations.contains(&0)
+    {
+        return Err("max_iterations must contain 1-8 positive levels".into());
+    }
+    if !(spec.convergence_threshold.is_finite() && spec.convergence_threshold > 0.0) {
+        return Err("convergence_threshold must be finite and positive".into());
+    }
+    let mut container = base_spec("bias-correct", &spec.artifact_prefix, spec.timeout_secs)?;
+    container.env.insert(
+        "RADIOMICS_BIAS_SETTINGS".into(),
+        serde_json::json!({
+            "mask_label": spec.mask_label,
+            "shrink_factor": spec.shrink_factor,
+            "max_iterations": spec.max_iterations,
+            "convergence_threshold": spec.convergence_threshold,
+        })
+        .to_string(),
+    );
+    container.outputs = vec![
+        output("corrected.mha", "mha"),
+        output("bias_field.mha", "mha"),
+        output("bias_meta.json", "json"),
+    ];
+    Ok(container)
+}
+
+pub fn robust_normalize_container_spec(
+    spec: &RadiomicsRobustNormalizeSpec,
+) -> Result<ContainerCommandSpec, String> {
+    validate_prefix_timeout(&spec.artifact_prefix, spec.timeout_secs)?;
+    if spec.mask_label <= 0 {
+        return Err("mask_label must be positive".into());
+    }
+    if !(spec.lower_percentile.is_finite() && spec.upper_percentile.is_finite())
+        || !(0.0..=100.0).contains(&spec.lower_percentile)
+        || !(0.0..=100.0).contains(&spec.upper_percentile)
+        || spec.lower_percentile >= spec.upper_percentile
+    {
+        return Err("percentiles must be finite, in [0, 100], and ordered".into());
+    }
+    let mut container = base_spec("normalize", &spec.artifact_prefix, spec.timeout_secs)?;
+    container.env.insert(
+        "RADIOMICS_NORMALIZE_SETTINGS".into(),
+        serde_json::json!({
+            "mask_label": spec.mask_label,
+            "lower_percentile": spec.lower_percentile,
+            "upper_percentile": spec.upper_percentile,
+        })
+        .to_string(),
+    );
+    container.outputs = vec![
+        output("normalized.mha", "mha"),
+        output("normalize_meta.json", "json"),
+    ];
+    Ok(container)
+}
+
+pub fn peritumoral_ring_container_spec(
+    spec: &RadiomicsPeritumoralRingSpec,
+) -> Result<ContainerCommandSpec, String> {
+    validate_prefix_timeout(&spec.artifact_prefix, spec.timeout_secs)?;
+    if spec.mask_label <= 0 {
+        return Err("mask_label must be positive".into());
+    }
+    if !(spec.inner_mm.is_finite() && spec.outer_mm.is_finite())
+        || !(0.0..=50.0).contains(&spec.inner_mm)
+        || !(0.0..=50.0).contains(&spec.outer_mm)
+        || spec.inner_mm >= spec.outer_mm
+    {
+        return Err("radii must be finite, in [0, 50] millimeters, and ordered".into());
+    }
+    let mut container = base_spec("peritumoral-ring", &spec.artifact_prefix, spec.timeout_secs)?;
+    container.env.insert(
+        "RADIOMICS_RING_SETTINGS".into(),
+        serde_json::json!({
+            "mask_label": spec.mask_label,
+            "inner_mm": spec.inner_mm,
+            "outer_mm": spec.outer_mm,
+        })
+        .to_string(),
+    );
+    container.outputs = vec![
+        output("mask_ring.mha", "mha"),
+        output("mask_tumor_ring.mha", "mha"),
+        output("mask_combined.mha", "mha"),
+        output("ring_meta.json", "json"),
+    ];
+    Ok(container)
+}
+
+pub fn habitat_fit_container_spec(
+    spec: &RadiomicsHabitatFitSpec,
+) -> Result<ContainerCommandSpec, String> {
+    validate_prefix_timeout(&spec.artifact_prefix, spec.timeout_secs)?;
+    if spec.mask_label <= 0 {
+        return Err("mask_label must be positive".into());
+    }
+    if !(2..=6).contains(&spec.n_habitats) {
+        return Err("n_habitats must lie in [2, 6]".into());
+    }
+    if spec.sample_voxels_per_case < 100 {
+        return Err("sample_voxels_per_case must be at least 100".into());
+    }
+    if !(1..=50).contains(&spec.n_init) || spec.max_iter == 0 {
+        return Err("n_init must lie in [1, 50] and max_iter must be positive".into());
+    }
+    let mut container = base_spec("habitat-fit", &spec.artifact_prefix, spec.timeout_secs)?;
+    container.env.insert(
+        "RADIOMICS_HABITAT_FIT_SETTINGS".into(),
+        serde_json::json!({
+            "mask_label": spec.mask_label,
+            "n_habitats": spec.n_habitats,
+            "sample_voxels_per_case": spec.sample_voxels_per_case,
+            "seed": spec.seed,
+            "standardize": spec.standardize,
+            "n_init": spec.n_init,
+            "max_iter": spec.max_iter,
+        })
+        .to_string(),
+    );
+    container.outputs = vec![
+        output("habitats.json", "json"),
+        output("habitat_fit_samples.parquet", "parquet"),
+    ];
+    Ok(container)
+}
+
+pub fn habitat_assign_container_spec(
+    spec: &RadiomicsHabitatAssignSpec,
+) -> Result<ContainerCommandSpec, String> {
+    validate_prefix_timeout(&spec.artifact_prefix, spec.timeout_secs)?;
+    if spec.mask_label <= 0 {
+        return Err("mask_label must be positive".into());
+    }
+    let mut container = base_spec("habitat-assign", &spec.artifact_prefix, spec.timeout_secs)?;
+    container.env.insert(
+        "RADIOMICS_HABITAT_ASSIGN_SETTINGS".into(),
+        serde_json::json!({"mask_label": spec.mask_label}).to_string(),
+    );
+    container.outputs = vec![
+        output("habitat_mask.mha", "mha"),
+        output("habitat_features.parquet", "parquet"),
+        output("assign_meta.json", "json"),
+    ];
+    Ok(container)
+}
+
+pub fn perturb_stability_container_spec(
+    spec: &RadiomicsPerturbStabilitySpec,
+) -> Result<ContainerCommandSpec, String> {
+    validate_prefix_timeout(&spec.artifact_prefix, spec.timeout_secs)?;
+    if [
+        &spec.extraction_id,
+        &spec.patient_id,
+        &spec.image_id,
+        &spec.roi_id,
+        &spec.modality,
+        &spec.preset_id,
+    ]
+    .iter()
+    .any(|value| value.trim().is_empty())
+    {
+        return Err("extraction identity fields cannot be empty".into());
+    }
+    let allowed = [
+        "dilate1",
+        "erode1",
+        "translate_x",
+        "translate_y",
+        "translate_z",
+        "noise",
+    ];
+    let unknown = spec
+        .perturbations
+        .iter()
+        .filter(|value| !allowed.contains(&value.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !unknown.is_empty() {
+        return Err(format!(
+            "unsupported perturbation(s): {}. Allowed: {}",
+            unknown.join(", "),
+            allowed.join(", ")
+        ));
+    }
+    if spec.perturbations.len() != spec.perturbations.iter().collect::<std::collections::BTreeSet<_>>().len() {
+        return Err("perturbations must be unique".into());
+    }
+    if !(spec.noise_sigma_pct.is_finite() && spec.noise_sigma_pct > 0.0) {
+        return Err("noise_sigma_pct must be finite and positive".into());
+    }
+    spec.settings.validate()?;
+    let mut container = base_spec("perturb-stability", &spec.artifact_prefix, spec.timeout_secs)?;
+    container.env.insert(
+        "RADIOMICS_EXTRACT_SETTINGS".into(),
+        extraction_settings_json(&spec.settings).to_string(),
+    );
+    container.env.insert(
+        "RADIOMICS_PERTURB_SETTINGS".into(),
+        serde_json::json!({
+            "perturbations": spec.perturbations,
+            "noise_sigma_pct": spec.noise_sigma_pct,
+            "seed": spec.seed,
+        })
+        .to_string(),
+    );
+    container.outputs = vec![
+        output("replicates_wide.parquet", "parquet"),
+        output("replicates_long.parquet", "parquet"),
+        output("perturb_meta.json", "json"),
+    ];
+    Ok(container)
+}
+
 fn output(path: &str, format: &str) -> ContainerCommandOutputSpec {
     ContainerCommandOutputSpec {
         path: path.into(),
@@ -1187,6 +1607,62 @@ fn delta_features_ports() -> NodePorts {
         .add_output_port_of_type(None, PortType::File)
 }
 
+fn bias_correct_ports() -> NodePorts {
+    NodePorts::new()
+        .add_input_port_of_type(None, PortType::File)
+        .add_input_port_of_type(None, PortType::File)
+        .add_output_port_of_type(None, PortType::File)
+        .add_output_port_of_type(None, PortType::File)
+        .add_output_port_of_type(None, PortType::File)
+}
+
+fn robust_normalize_ports() -> NodePorts {
+    NodePorts::new()
+        .add_input_port_of_type(None, PortType::File)
+        .add_input_port_of_type(None, PortType::File)
+        .add_output_port_of_type(None, PortType::File)
+        .add_output_port_of_type(None, PortType::File)
+}
+
+fn peritumoral_ring_ports() -> NodePorts {
+    NodePorts::new()
+        .add_input_port_of_type(None, PortType::File)
+        .add_input_port_of_type(None, PortType::File)
+        .add_input_port_of_type(None, PortType::File)
+        .add_output_port_of_type(None, PortType::File)
+        .add_output_port_of_type(None, PortType::File)
+        .add_output_port_of_type(None, PortType::File)
+        .add_output_port_of_type(None, PortType::File)
+}
+
+fn habitat_fit_ports() -> NodePorts {
+    NodePorts::new()
+        .add_input_port_of_type(None, PortType::FileSet)
+        .add_input_port_of_type(None, PortType::FileSet)
+        .add_input_port_of_type(None, PortType::File)
+        .add_output_port_of_type(None, PortType::File)
+        .add_output_port_of_type(None, PortType::File)
+}
+
+fn habitat_assign_ports() -> NodePorts {
+    NodePorts::new()
+        .add_input_port_of_type(None, PortType::File)
+        .add_input_port_of_type(None, PortType::FileSet)
+        .add_input_port_of_type(None, PortType::File)
+        .add_output_port_of_type(None, PortType::File)
+        .add_output_port_of_type(None, PortType::File)
+        .add_output_port_of_type(None, PortType::File)
+}
+
+fn perturb_stability_ports() -> NodePorts {
+    NodePorts::new()
+        .add_input_port_of_type(None, PortType::File)
+        .add_input_port_of_type(None, PortType::File)
+        .add_output_port_of_type(None, PortType::File)
+        .add_output_port_of_type(None, PortType::File)
+        .add_output_port_of_type(None, PortType::File)
+}
+
 fn deserialize_spec<T: for<'de> Deserialize<'de>>(
     spec: serde_json::Value,
 ) -> dag_core::registry::error::Result<T> {
@@ -1232,6 +1708,18 @@ impl NodeFactory for RadiomicsContainerNodeFactory {
             RADIOMICS_REGISTER_KIND => "Registers a moving image to a fixed image.",
             RADIOMICS_DELTA_FEATURES_KIND => {
                 "Computes baseline-to-followup feature changes from a wide feature table."
+            }
+            RADIOMICS_BIAS_CORRECT_KIND => "Applies mask-guided N4 bias-field correction.",
+            RADIOMICS_ROBUST_NORMALIZE_KIND => {
+                "Applies percentile-truncated robust z-score normalization."
+            }
+            RADIOMICS_PERITUMORAL_RING_KIND => {
+                "Builds an anatomically constrained peritumoral ring mask."
+            }
+            RADIOMICS_HABITAT_FIT_KIND => "Fits common intratumoral habitat centers.",
+            RADIOMICS_HABITAT_ASSIGN_KIND => "Assigns tumor voxels to frozen habitat centers.",
+            RADIOMICS_PERTURB_STABILITY_KIND => {
+                "Re-extracts features under controlled perturbations."
             }
             _ => "Radiomics container node.",
         }
@@ -1284,6 +1772,24 @@ impl NodeFactory for RadiomicsContainerNodeFactory {
             RADIOMICS_DELTA_FEATURES_KIND => {
                 "Reads a CSV/Parquet wide feature table and pairs configured baseline/followup rows by patient ID. Emits absolute, relative, and percent feature changes plus unresolved-patient diagnostics."
             }
+            RADIOMICS_BIAS_CORRECT_KIND => {
+                "Runs SimpleITK N4 inhomogeneity correction guided by the ROI mask, down-sampled by a configurable shrink factor for speed. Emits the corrected image, the reconstructed full-resolution bias field for QC, and convergence metadata."
+            }
+            RADIOMICS_ROBUST_NORMALIZE_KIND => {
+                "Computes winsorization bounds at configured percentiles of the tissue-mask intensity distribution, z-scores the whole image with the winsorized mean and standard deviation, and records every fitted parameter. No cohort-level statistics are involved."
+            }
+            RADIOMICS_PERITUMORAL_RING_KIND => {
+                "Dilates the tumor mask by physical radii (a ball footprint built from the image spacing) and subtracts tumor and an exclusion mask, yielding a ring-only mask, a tumor=1/ring=2 labeled mask, a combined mask, and volume accounting including exclusion removals."
+            }
+            RADIOMICS_HABITAT_FIT_KIND => {
+                "Reads a manifest of cases with co-registered multi-parametric channel images, draws an equal-size seeded voxel sample per case, z-scores channels per case, pools the samples, and fits deterministic k-means habitat centers. Labels are frozen by descending first-channel center so habitats are comparable across folds."
+            }
+            RADIOMICS_HABITAT_ASSIGN_KIND => {
+                "Input port 0 is the tumor mask, port 1 the channel FileSet, port 2 the frozen habitats.json from habitat-fit. Standardizes the case's own tumor intensities, assigns every tumor voxel to the nearest center, and emits a labeled habitat mask plus per-habitat volume fraction, dispersion, interface fraction, and raw channel statistics."
+            }
+            RADIOMICS_PERTURB_STABILITY_KIND => {
+                "Applies controlled perturbations (one-voxel dilation/erosion, one-voxel mask translations, Gaussian noise at a percentage of the ROI SD) and re-runs PyRadiomics per replicate. Emits wide and long per-replicate feature tables; cohort-level ICC(2,1) is computed downstream in Rust from the stacked replicates."
+            }
             _ => "Radiomics container node.",
         }
     }
@@ -1305,6 +1811,12 @@ impl NodeFactory for RadiomicsContainerNodeFactory {
             RADIOMICS_SHAPE_TOPOLOGY_KIND => schema_for!(RadiomicsShapeTopologySpec),
             RADIOMICS_REGISTER_KIND => schema_for!(RadiomicsRegisterSpec),
             RADIOMICS_DELTA_FEATURES_KIND => schema_for!(RadiomicsDeltaFeaturesSpec),
+            RADIOMICS_BIAS_CORRECT_KIND => schema_for!(RadiomicsBiasCorrectSpec),
+            RADIOMICS_ROBUST_NORMALIZE_KIND => schema_for!(RadiomicsRobustNormalizeSpec),
+            RADIOMICS_PERITUMORAL_RING_KIND => schema_for!(RadiomicsPeritumoralRingSpec),
+            RADIOMICS_HABITAT_FIT_KIND => schema_for!(RadiomicsHabitatFitSpec),
+            RADIOMICS_HABITAT_ASSIGN_KIND => schema_for!(RadiomicsHabitatAssignSpec),
+            RADIOMICS_PERTURB_STABILITY_KIND => schema_for!(RadiomicsPerturbStabilitySpec),
             _ => schema_for!(RadiomicsArtifactSpec),
         }
     }
@@ -1326,6 +1838,12 @@ impl NodeFactory for RadiomicsContainerNodeFactory {
             RADIOMICS_SHAPE_TOPOLOGY_KIND => shape_topology_ports(),
             RADIOMICS_REGISTER_KIND => register_ports(),
             RADIOMICS_DELTA_FEATURES_KIND => delta_features_ports(),
+            RADIOMICS_BIAS_CORRECT_KIND => bias_correct_ports(),
+            RADIOMICS_ROBUST_NORMALIZE_KIND => robust_normalize_ports(),
+            RADIOMICS_PERITUMORAL_RING_KIND => peritumoral_ring_ports(),
+            RADIOMICS_HABITAT_FIT_KIND => habitat_fit_ports(),
+            RADIOMICS_HABITAT_ASSIGN_KIND => habitat_assign_ports(),
+            RADIOMICS_PERTURB_STABILITY_KIND => perturb_stability_ports(),
             _ => image_ingest_ports(),
         }
     }
@@ -1395,6 +1913,30 @@ impl NodeFactory for RadiomicsContainerNodeFactory {
             RADIOMICS_DELTA_FEATURES_KIND => {
                 let spec: RadiomicsDeltaFeaturesSpec = deserialize_spec(spec)?;
                 delta_features_container_spec(&spec)
+            }
+            RADIOMICS_BIAS_CORRECT_KIND => {
+                let spec: RadiomicsBiasCorrectSpec = deserialize_spec(spec)?;
+                bias_correct_container_spec(&spec)
+            }
+            RADIOMICS_ROBUST_NORMALIZE_KIND => {
+                let spec: RadiomicsRobustNormalizeSpec = deserialize_spec(spec)?;
+                robust_normalize_container_spec(&spec)
+            }
+            RADIOMICS_PERITUMORAL_RING_KIND => {
+                let spec: RadiomicsPeritumoralRingSpec = deserialize_spec(spec)?;
+                peritumoral_ring_container_spec(&spec)
+            }
+            RADIOMICS_HABITAT_FIT_KIND => {
+                let spec: RadiomicsHabitatFitSpec = deserialize_spec(spec)?;
+                habitat_fit_container_spec(&spec)
+            }
+            RADIOMICS_HABITAT_ASSIGN_KIND => {
+                let spec: RadiomicsHabitatAssignSpec = deserialize_spec(spec)?;
+                habitat_assign_container_spec(&spec)
+            }
+            RADIOMICS_PERTURB_STABILITY_KIND => {
+                let spec: RadiomicsPerturbStabilitySpec = deserialize_spec(spec)?;
+                perturb_stability_container_spec(&spec)
             }
             _ => Err("unsupported radiomics container kind".into()),
         }
@@ -1483,6 +2025,45 @@ impl RadiomicsContainerNodeFactory {
         panel_cache: Arc<PanelCache>,
     ) -> Self {
         Self::new(RADIOMICS_DELTA_FEATURES_KIND, runtime, panel_cache)
+    }
+
+    pub fn bias_correct(
+        runtime: Arc<dyn PodmanConnection>,
+        panel_cache: Arc<PanelCache>,
+    ) -> Self {
+        Self::new(RADIOMICS_BIAS_CORRECT_KIND, runtime, panel_cache)
+    }
+
+    pub fn robust_normalize(
+        runtime: Arc<dyn PodmanConnection>,
+        panel_cache: Arc<PanelCache>,
+    ) -> Self {
+        Self::new(RADIOMICS_ROBUST_NORMALIZE_KIND, runtime, panel_cache)
+    }
+
+    pub fn peritumoral_ring(
+        runtime: Arc<dyn PodmanConnection>,
+        panel_cache: Arc<PanelCache>,
+    ) -> Self {
+        Self::new(RADIOMICS_PERITUMORAL_RING_KIND, runtime, panel_cache)
+    }
+
+    pub fn habitat_fit(runtime: Arc<dyn PodmanConnection>, panel_cache: Arc<PanelCache>) -> Self {
+        Self::new(RADIOMICS_HABITAT_FIT_KIND, runtime, panel_cache)
+    }
+
+    pub fn habitat_assign(
+        runtime: Arc<dyn PodmanConnection>,
+        panel_cache: Arc<PanelCache>,
+    ) -> Self {
+        Self::new(RADIOMICS_HABITAT_ASSIGN_KIND, runtime, panel_cache)
+    }
+
+    pub fn perturb_stability(
+        runtime: Arc<dyn PodmanConnection>,
+        panel_cache: Arc<PanelCache>,
+    ) -> Self {
+        Self::new(RADIOMICS_PERTURB_STABILITY_KIND, runtime, panel_cache)
     }
 }
 
@@ -1648,6 +2229,82 @@ mod tests {
                 .unwrap(),
                 2,
             ),
+            (
+                bias_correct_container_spec(&RadiomicsBiasCorrectSpec {
+                    mask_label: 1,
+                    shrink_factor: default_bias_shrink(),
+                    max_iterations: default_bias_iterations(),
+                    convergence_threshold: default_bias_convergence(),
+                    artifact_prefix: default_bias_prefix(),
+                    timeout_secs: default_timeout(),
+                })
+                .unwrap(),
+                3,
+            ),
+            (
+                robust_normalize_container_spec(&RadiomicsRobustNormalizeSpec {
+                    mask_label: 1,
+                    lower_percentile: default_normalize_lower(),
+                    upper_percentile: default_normalize_upper(),
+                    artifact_prefix: default_robust_normalize_prefix(),
+                    timeout_secs: default_timeout(),
+                })
+                .unwrap(),
+                2,
+            ),
+            (
+                peritumoral_ring_container_spec(&RadiomicsPeritumoralRingSpec {
+                    mask_label: 1,
+                    inner_mm: default_ring_inner(),
+                    outer_mm: default_ring_outer(),
+                    artifact_prefix: default_ring_prefix(),
+                    timeout_secs: default_timeout(),
+                })
+                .unwrap(),
+                4,
+            ),
+            (
+                habitat_fit_container_spec(&RadiomicsHabitatFitSpec {
+                    mask_label: 1,
+                    n_habitats: default_n_habitats(),
+                    sample_voxels_per_case: default_habitat_sample(),
+                    seed: 0,
+                    standardize: true,
+                    n_init: default_habitat_n_init(),
+                    max_iter: default_habitat_max_iter(),
+                    artifact_prefix: default_habitat_fit_prefix(),
+                    timeout_secs: default_timeout(),
+                })
+                .unwrap(),
+                2,
+            ),
+            (
+                habitat_assign_container_spec(&RadiomicsHabitatAssignSpec {
+                    mask_label: 1,
+                    artifact_prefix: default_habitat_assign_prefix(),
+                    timeout_secs: default_timeout(),
+                })
+                .unwrap(),
+                3,
+            ),
+            (
+                perturb_stability_container_spec(&RadiomicsPerturbStabilitySpec {
+                    extraction_id: "case".into(),
+                    patient_id: "patient".into(),
+                    image_id: "image".into(),
+                    roi_id: "gtv".into(),
+                    modality: "MR".into(),
+                    preset_id: "pyradiomics_original_v1".into(),
+                    settings: extraction_settings(),
+                    perturbations: default_perturbations(),
+                    noise_sigma_pct: default_noise_sigma_pct(),
+                    seed: 0,
+                    artifact_prefix: default_perturb_prefix(),
+                    timeout_secs: default_timeout(),
+                })
+                .unwrap(),
+                3,
+            ),
         ];
         for (container, output_count) in contracts {
             assert_eq!(
@@ -1657,6 +2314,146 @@ mod tests {
             assert_eq!(container.outputs.len(), output_count);
             assert_eq!(container.network, "isolated");
         }
+
+        let bias = bias_correct_container_spec(&RadiomicsBiasCorrectSpec {
+            mask_label: 1,
+            shrink_factor: default_bias_shrink(),
+            max_iterations: default_bias_iterations(),
+            convergence_threshold: default_bias_convergence(),
+            artifact_prefix: default_bias_prefix(),
+            timeout_secs: default_timeout(),
+        })
+        .unwrap();
+        assert_eq!(bias.command[2], "bias-correct");
+        assert!(bias.env.contains_key("RADIOMICS_BIAS_SETTINGS"));
+
+        let ring = peritumoral_ring_container_spec(&RadiomicsPeritumoralRingSpec {
+            mask_label: 1,
+            inner_mm: default_ring_inner(),
+            outer_mm: default_ring_outer(),
+            artifact_prefix: default_ring_prefix(),
+            timeout_secs: default_timeout(),
+        })
+        .unwrap();
+        assert_eq!(ring.command[2], "peritumoral-ring");
+        assert!(ring.env.contains_key("RADIOMICS_RING_SETTINGS"));
+
+        let perturb = perturb_stability_container_spec(&RadiomicsPerturbStabilitySpec {
+            extraction_id: "case".into(),
+            patient_id: "patient".into(),
+            image_id: "image".into(),
+            roi_id: "gtv".into(),
+            modality: "MR".into(),
+            preset_id: "pyradiomics_original_v1".into(),
+            settings: extraction_settings(),
+            perturbations: default_perturbations(),
+            noise_sigma_pct: default_noise_sigma_pct(),
+            seed: 0,
+            artifact_prefix: default_perturb_prefix(),
+            timeout_secs: default_timeout(),
+        })
+        .unwrap();
+        assert_eq!(perturb.command[2], "perturb-stability");
+        assert!(perturb.env.contains_key("RADIOMICS_EXTRACT_SETTINGS"));
+        assert!(perturb.env.contains_key("RADIOMICS_PERTURB_SETTINGS"));
+    }
+
+    #[test]
+    fn rejects_invalid_preprocess_family_settings() {
+        assert!(bias_correct_container_spec(&RadiomicsBiasCorrectSpec {
+            mask_label: 1,
+            shrink_factor: 0,
+            max_iterations: default_bias_iterations(),
+            convergence_threshold: default_bias_convergence(),
+            artifact_prefix: default_bias_prefix(),
+            timeout_secs: default_timeout(),
+        })
+        .is_err());
+        assert!(bias_correct_container_spec(&RadiomicsBiasCorrectSpec {
+            mask_label: 1,
+            shrink_factor: default_bias_shrink(),
+            max_iterations: vec![],
+            convergence_threshold: default_bias_convergence(),
+            artifact_prefix: default_bias_prefix(),
+            timeout_secs: default_timeout(),
+        })
+        .is_err());
+
+        assert!(robust_normalize_container_spec(&RadiomicsRobustNormalizeSpec {
+            mask_label: 1,
+            lower_percentile: 99.0,
+            upper_percentile: 1.0,
+            artifact_prefix: default_robust_normalize_prefix(),
+            timeout_secs: default_timeout(),
+        })
+        .is_err());
+
+        assert!(peritumoral_ring_container_spec(&RadiomicsPeritumoralRingSpec {
+            mask_label: 1,
+            inner_mm: 5.0,
+            outer_mm: 5.0,
+            artifact_prefix: default_ring_prefix(),
+            timeout_secs: default_timeout(),
+        })
+        .is_err());
+        assert!(peritumoral_ring_container_spec(&RadiomicsPeritumoralRingSpec {
+            mask_label: 1,
+            inner_mm: 0.0,
+            outer_mm: 60.0,
+            artifact_prefix: default_ring_prefix(),
+            timeout_secs: default_timeout(),
+        })
+        .is_err());
+
+        assert!(habitat_fit_container_spec(&RadiomicsHabitatFitSpec {
+            mask_label: 1,
+            n_habitats: 1,
+            sample_voxels_per_case: default_habitat_sample(),
+            seed: 0,
+            standardize: true,
+            n_init: default_habitat_n_init(),
+            max_iter: default_habitat_max_iter(),
+            artifact_prefix: default_habitat_fit_prefix(),
+            timeout_secs: default_timeout(),
+        })
+        .is_err());
+        assert!(habitat_fit_container_spec(&RadiomicsHabitatFitSpec {
+            mask_label: 1,
+            n_habitats: default_n_habitats(),
+            sample_voxels_per_case: 10,
+            seed: 0,
+            standardize: true,
+            n_init: default_habitat_n_init(),
+            max_iter: default_habitat_max_iter(),
+            artifact_prefix: default_habitat_fit_prefix(),
+            timeout_secs: default_timeout(),
+        })
+        .is_err());
+
+        let mut perturb = RadiomicsPerturbStabilitySpec {
+            extraction_id: "case".into(),
+            patient_id: "patient".into(),
+            image_id: "image".into(),
+            roi_id: "gtv".into(),
+            modality: "MR".into(),
+            preset_id: "pyradiomics_original_v1".into(),
+            settings: extraction_settings(),
+            perturbations: default_perturbations(),
+            noise_sigma_pct: default_noise_sigma_pct(),
+            seed: 0,
+            artifact_prefix: default_perturb_prefix(),
+            timeout_secs: default_timeout(),
+        };
+        perturb.perturbations = vec!["rotate_90".into()];
+        assert!(perturb_stability_container_spec(&perturb).is_err());
+        perturb.perturbations = vec!["noise".into(), "noise".into()];
+        assert!(perturb_stability_container_spec(&perturb).is_err());
+        perturb.perturbations = default_perturbations();
+        perturb.noise_sigma_pct = 0.0;
+        assert!(perturb_stability_container_spec(&perturb).is_err());
+        perturb.noise_sigma_pct = default_noise_sigma_pct();
+        perturb.extraction_id = "  ".into();
+        assert!(perturb_stability_container_spec(&perturb).is_err());
     }
 
     #[test]

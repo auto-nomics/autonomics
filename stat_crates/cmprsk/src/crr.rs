@@ -200,89 +200,21 @@ pub fn crr(input: &CrrInput, opts: &CrrOptions) -> Result<CrrFit> {
         });
     }
 
-    // ── na.action = na.omit: drop rows with any missing value ───────────────
-    let mut keep: Vec<usize> = Vec::with_capacity(n_in);
-    for i in 0..n_in {
-        let mut ok = input.ftime[i].is_finite() && input.fstatus[i].is_finite();
-        if let Some(cg) = input.cengroup {
-            ok &= cg[i].is_finite();
-        }
-        if ok && nc1 > 0 {
-            ok &= input.cov1[i].iter().all(|v| v.is_finite());
-        }
-        if ok && nc2 > 0 {
-            ok &= input.cov2[i].iter().all(|v| v.is_finite());
-        }
-        if ok {
-            keep.push(i);
-        }
-    }
-    let n_missing = n_in - keep.len();
-    if keep.is_empty() {
-        return Err(CmprskError::NoObservations);
-    }
+    let prepared = prepare(input, opts.failcode, opts.cencode)?;
+    let Prepared {
+        keep,
+        ftime,
+        ici,
+        icg,
+        ncg,
+        uuu,
+        uft,
+        n,
+        n_missing,
+        n_events,
+    } = prepared;
 
-    // ── d <- d[order(d$ftime), ] — R's order() is stable ────────────────────
-    keep.sort_by(|&a, &b| {
-        input.ftime[a]
-            .partial_cmp(&input.ftime[b])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    let n = keep.len();
-
-    let ftime: Vec<f64> = keep.iter().map(|&i| input.ftime[i]).collect();
-
-    // ── status recoding (cmprsk.R:64-65) ────────────────────────────────────
-    // cenind = 1 when censored; ici = 1 for the cause of interest, 2 for any
-    // competing failure, 0 for censored.
-    let mut cenind = vec![0u8; n];
-    let mut ici = vec![0u8; n];
-    for (k, &i) in keep.iter().enumerate() {
-        let st = input.fstatus[i];
-        cenind[k] = u8::from(st == opts.cencode);
-        ici[k] = if st == opts.failcode {
-            1
-        } else {
-            2 * (1 - cenind[k])
-        };
-    }
-
-    // ── censoring groups: match(cengroup, sort(unique(cengroup))) ───────────
-    let (icg, ncg) = match input.cengroup {
-        None => (vec![0usize; n], 1usize),
-        Some(cg) => {
-            let mut ucg: Vec<f64> = keep.iter().map(|&i| cg[i]).collect();
-            ucg.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-            ucg.dedup();
-            let idx: Vec<usize> = keep
-                .iter()
-                .map(|&i| {
-                    ucg.iter()
-                        .position(|&u| u == cg[i])
-                        .expect("cengroup level present")
-                })
-                .collect();
-            let ncg = ucg.len();
-            (idx, ncg)
-        }
-    };
-
-    let uuu = censoring_weights(&ftime, &cenind, &icg, ncg);
-
-    // ── unique failure times of the cause of interest ───────────────────────
-    let mut uft: Vec<f64> = ftime
-        .iter()
-        .zip(ici.iter())
-        .filter(|&(_, &c)| c == 1)
-        .map(|(&t, _)| t)
-        .collect();
-    let n_events = uft.len();
-    uft.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    uft.dedup();
     let ndf = uft.len();
-    if ndf == 0 {
-        return Err(CmprskError::NoEvents);
-    }
 
     // ── covariate matrices ──────────────────────────────────────────────────
     let cov1: Vec<Vec<f64>> = if nc1 > 0 {
@@ -446,6 +378,125 @@ pub fn crr(input: &CrrInput, opts: &CrrOptions) -> Result<CrrFit> {
         n_events,
         ncov1: nc1,
         ncov2: nc2,
+    })
+}
+
+/// Shared preprocessing shared by [`crr`] and the penalized variant in
+/// [`crate::ridge`]: complete-case filtering, stable time ordering, status
+/// recoding, censoring groups, the censoring KM weights, and the unique
+/// failure times of the cause of interest.
+pub(crate) struct Prepared {
+    pub keep: Vec<usize>,
+    pub ftime: Vec<f64>,
+    pub ici: Vec<u8>,
+    pub icg: Vec<usize>,
+    pub ncg: usize,
+    pub uuu: Vec<Vec<f64>>,
+    pub uft: Vec<f64>,
+    pub n: usize,
+    pub n_missing: usize,
+    pub n_events: usize,
+}
+
+pub(crate) fn prepare(
+    input: &CrrInput,
+    failcode: f64,
+    cencode: f64,
+) -> Result<Prepared> {
+    let n_in = input.ftime.len();
+    let nc1 = input.cov1.first().map_or(0, |r| r.len());
+    let nc2 = input.cov2.first().map_or(0, |r| r.len());
+
+    // ── na.action = na.omit: drop rows with any missing value ───────────────
+    let mut keep: Vec<usize> = Vec::with_capacity(n_in);
+    for i in 0..n_in {
+        let mut ok = input.ftime[i].is_finite() && input.fstatus[i].is_finite();
+        if let Some(cg) = input.cengroup {
+            ok &= cg[i].is_finite();
+        }
+        if ok && nc1 > 0 {
+            ok &= input.cov1[i].iter().all(|v| v.is_finite());
+        }
+        if ok && nc2 > 0 {
+            ok &= input.cov2[i].iter().all(|v| v.is_finite());
+        }
+        if ok {
+            keep.push(i);
+        }
+    }
+    let n_missing = n_in - keep.len();
+    if keep.is_empty() {
+        return Err(CmprskError::NoObservations);
+    }
+
+    // ── d <- d[order(d$ftime), ] — R's order() is stable ────────────────────
+    keep.sort_by(|&a, &b| {
+        input.ftime[a]
+            .partial_cmp(&input.ftime[b])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let n = keep.len();
+
+    let ftime: Vec<f64> = keep.iter().map(|&i| input.ftime[i]).collect();
+
+    // ── status recoding (cmprsk.R:64-65) ────────────────────────────────────
+    // cenind = 1 when censored; ici = 1 for the cause of interest, 2 for any
+    // competing failure, 0 for censored.
+    let mut cenind = vec![0u8; n];
+    let mut ici = vec![0u8; n];
+    for (k, &i) in keep.iter().enumerate() {
+        let st = input.fstatus[i];
+        cenind[k] = u8::from(st == cencode);
+        ici[k] = if st == failcode { 1 } else { 2 * (1 - cenind[k]) };
+    }
+
+    // ── censoring groups: match(cengroup, sort(unique(cengroup))) ───────────
+    let (icg, ncg) = match input.cengroup {
+        None => (vec![0usize; n], 1usize),
+        Some(cg) => {
+            let mut ucg: Vec<f64> = keep.iter().map(|&i| cg[i]).collect();
+            ucg.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            ucg.dedup();
+            let idx: Vec<usize> = keep
+                .iter()
+                .map(|&i| {
+                    ucg.iter()
+                        .position(|&u| u == cg[i])
+                        .expect("cengroup level present")
+                })
+                .collect();
+            let ncg = ucg.len();
+            (idx, ncg)
+        }
+    };
+
+    let uuu = censoring_weights(&ftime, &cenind, &icg, ncg);
+
+    // ── unique failure times of the cause of interest ───────────────────────
+    let mut uft: Vec<f64> = ftime
+        .iter()
+        .zip(ici.iter())
+        .filter(|&(_, &c)| c == 1)
+        .map(|(&t, _)| t)
+        .collect();
+    let n_events = uft.len();
+    uft.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    uft.dedup();
+    if uft.is_empty() {
+        return Err(CmprskError::NoEvents);
+    }
+
+    Ok(Prepared {
+        keep,
+        ftime,
+        ici,
+        icg,
+        ncg,
+        uuu,
+        uft,
+        n,
+        n_missing,
+        n_events,
     })
 }
 

@@ -32,6 +32,6 @@ pub use gc::{
 pub use panel::{PanelCache, PanelFile, PanelManifest};
 pub use podman::{PodmanConfig, PodmanRuntime};
 pub use types::{
-    CachedPanel, ContainerNetwork, ContainerRunRequest, ContainerRunResult, PanelRef, PullPolicy,
-    WorkspaceRef,
+    CachedPanel, ContainerNetwork, ContainerRunRequest, ContainerRunResult, GpuRequest, PanelRef,
+    PullPolicy, WorkspaceRef,
 };

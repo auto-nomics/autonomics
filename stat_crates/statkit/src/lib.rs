@@ -14,6 +14,8 @@
 
 pub mod descriptive;
 pub mod error;
+pub mod icc;
 pub mod regression;
 
 pub use error::{Result, StatError};
+pub use icc::{IccResult, icc_2_1, icc_2_1_level};

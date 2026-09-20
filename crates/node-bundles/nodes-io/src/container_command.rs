@@ -24,7 +24,7 @@ use dag_core::{NodeCtx, NodeFactory};
 
 use container_runtime::gc::{acquire_panel_lock_shared, acquire_scratch_lock_shared};
 use container_runtime::{
-    CachedPanel, ContainerNetwork, ContainerRunRequest, ContainerRuntimeError,
+    CachedPanel, ContainerNetwork, ContainerRunRequest, ContainerRuntimeError, GpuRequest,
     DEFAULT_CONTAINER_WORKDIR, DEFAULT_TIMEOUT_SECS, PanelCache, PanelRef, PodmanConfig,
     PodmanConnection, PodmanRuntime, PullPolicy, keep_workspace_enabled, unique_container_name,
     workspace_ref,
@@ -227,6 +227,12 @@ pub struct ContainerCommandSpec {
     pub pids_limit: Option<i64>,
     #[serde(default)]
     pub shm_size: Option<String>,
+    /// GPU passthrough for images that need accelerators: `all`, a positive
+    /// device count, or `device=<comma-separated indices or UUIDs>`. Absent
+    /// means no GPU is visible to the container. The host needs the
+    /// nvidia-container-toolkit CDI spec for rootless Podman.
+    #[serde(default)]
+    pub gpus: Option<String>,
     /// Advanced override for images that must run as an internal user. The
     /// default runs as the control process uid/gid while enforcing non-root.
     #[serde(default)]
@@ -275,6 +281,7 @@ pub struct ContainerCommandNode {
     memory: Option<String>,
     pids_limit: Option<i64>,
     shm_size: Option<String>,
+    gpus: GpuRequest,
     user: Option<String>,
     runtime: Arc<dyn PodmanConnection>,
     panel_cache: Arc<PanelCache>,
@@ -343,6 +350,12 @@ impl ContainerCommandNode {
             memory: spec.memory,
             pids_limit: spec.pids_limit,
             shm_size: spec.shm_size,
+            gpus: match spec.gpus.as_deref() {
+                None => GpuRequest::None,
+                Some(value) => {
+                    GpuRequest::parse(value).map_err(ContainerCommandError::Invalid)?
+                }
+            },
             user: spec.user,
             runtime,
             panel_cache,
@@ -785,6 +798,7 @@ impl DagNode for ContainerCommandNode {
             memory: self.memory.clone(),
             pids_limit: self.pids_limit,
             shm_size: self.shm_size.clone(),
+            gpus: self.gpus.clone(),
             user: self.user.clone(),
             runtime: Arc::clone(&self.runtime),
             panel_cache: Arc::clone(&self.panel_cache),
@@ -976,6 +990,7 @@ impl DagNode for ContainerCommandNode {
             memory: self.memory.clone(),
             pids_limit: self.pids_limit,
             shm_size: self.shm_size.clone(),
+            gpus: self.gpus.clone(),
             user: self.user.clone(),
             timeout_secs: self.timeout_secs,
             name: unique_container_name(),
@@ -1455,6 +1470,7 @@ mod tests {
             memory: None,
             pids_limit: None,
             shm_size: None,
+            gpus: None,
             user: None,
         }
     }

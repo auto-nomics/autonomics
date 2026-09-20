@@ -30,6 +30,7 @@ pub mod mutation_analysis_container;
 pub mod mvmr_container;
 pub mod parquet_sql;
 pub mod pathway_gsea_container;
+pub mod pathology_container;
 pub mod plink2_clump_container;
 pub mod radiomics;
 pub mod radiomics_container;
@@ -51,6 +52,8 @@ pub mod wgcna_container;
 pub use alphafold::nodes::prediction::{AlphaFoldPredictionNode, AlphaFoldPredictionNodeFactory};
 pub use clinicaltrials::nodes::study::{ClinicalTrialsStudyNode, ClinicalTrialsStudyNodeFactory};
 pub use crossref::nodes::works::{CrossrefWorksNode, CrossrefWorksNodeFactory};
+pub use nhanes::nodes::download::{NhanesDownloadNode, NhanesDownloadNodeFactory};
+pub use nhanes::nodes::files::{NhanesFilesNode, NhanesFilesNodeFactory};
 pub use interpro::nodes::entry::{InterProEntryNode, InterProEntryNodeFactory};
 pub use pubchem::nodes::compound::{PubChemCompoundNode, PubChemCompoundNodeFactory};
 pub use rcsb::nodes::assembly::{RcsbAssemblyNode, RcsbAssemblyNodeFactory};
@@ -203,6 +206,88 @@ impl NodePlugin for Plugin {
                 Arc::clone(&self.container_execution.panel_cache),
             ),
         ));
+        registry.register(Box::new(
+            radiomics_container::RadiomicsContainerNodeFactory::bias_correct(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
+        registry.register(Box::new(
+            radiomics_container::RadiomicsContainerNodeFactory::robust_normalize(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
+        registry.register(Box::new(
+            radiomics_container::RadiomicsContainerNodeFactory::peritumoral_ring(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
+        registry.register(Box::new(
+            radiomics_container::RadiomicsContainerNodeFactory::habitat_fit(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
+        registry.register(Box::new(
+            radiomics_container::RadiomicsContainerNodeFactory::habitat_assign(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
+        registry.register(Box::new(
+            radiomics_container::RadiomicsContainerNodeFactory::perturb_stability(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
+        registry.register(Box::new(
+            pathology_container::PathologyContainerNodeFactory::wsi_ingest(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
+        registry.register(Box::new(
+            pathology_container::PathologyContainerNodeFactory::wsi_qc(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
+        registry.register(Box::new(
+            pathology_container::PathologyContainerNodeFactory::patch_sample(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
+        registry.register(Box::new(
+            pathology_container::PathologyContainerNodeFactory::wsi_embed(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
+        registry.register(Box::new(
+            pathology_container::PathologyContainerNodeFactory::domain_check(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
+        registry.register(Box::new(
+            pathology_container::PathologyContainerNodeFactory::ihc_quant(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
+        registry.register(Box::new(
+            pathology_container::PathologyContainerNodeFactory::qupath_import(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
+        registry.register(Box::new(container_command::ContainerCommandNodeFactory {
+            runtime: Arc::clone(&self.container_execution.runtime),
+            panel_cache: Arc::clone(&self.container_execution.panel_cache),
+        }));
         registry.register(Box::new(
             ldsc_h2_container::LdscH2ContainerNodeFactory::new(
                 Arc::clone(&self.container_execution.runtime),
@@ -460,6 +545,8 @@ impl NodePlugin for Plugin {
             source_opentargets::OpentargetsSearchNodeFactory {},
         ));
         registry.register(Box::new(CrossrefWorksNodeFactory {}));
+        registry.register(Box::new(NhanesFilesNodeFactory {}));
+        registry.register(Box::new(NhanesDownloadNodeFactory {}));
         registry.register(Box::new(AlphaFoldPredictionNodeFactory));
         registry.register(Box::new(InterProEntryNodeFactory));
         registry.register(Box::new(PubChemCompoundNodeFactory));

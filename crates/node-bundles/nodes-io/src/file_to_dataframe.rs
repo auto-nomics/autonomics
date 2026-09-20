@@ -4,7 +4,8 @@
 //! and produces exactly one DataFrame output. The format is auto-detected from
 //! the extension or explicitly given. Tabular formats (CSV, Parquet) go through
 //! DataFusion natively; JSON and bioinformatics formats (VCF, BAM, BED, ...) go through
-//! `biofusion`, which exposes them as DataFusion tables.
+//! `biofusion`, which exposes them as DataFusion tables; SAS XPORT transport
+//! files (NHANES) go through `sas_xport`.
 
 use async_trait::async_trait;
 use biofusion::datasource::BioReadOptions;
@@ -36,6 +37,8 @@ pub enum FileFormat {
     Tsv,
     Parquet,
     Json,
+    // sas_xport (SAS transport, used by NHANES)
+    Xpt,
     // biofusion bioinformatics
     Vcf,
     Bcf,
@@ -96,6 +99,7 @@ impl FileFormat {
             (".json", FileFormat::Json),
             (".ndjson.gz", FileFormat::Json),
             (".ndjson", FileFormat::Json),
+            (".xpt", FileFormat::Xpt),
         ];
         suffixes
             .iter()
@@ -109,6 +113,7 @@ impl FileFormat {
             "tsv" | "tsv.gz" => Some(Self::Tsv),
             "parquet" => Some(Self::Parquet),
             "json" | "ndjson" => Some(Self::Json),
+            "xpt" => Some(Self::Xpt),
             "vcf" => Some(Self::Vcf),
             "bcf" => Some(Self::Bcf),
             "fasta" => Some(Self::Fasta),
@@ -132,6 +137,7 @@ impl FileFormat {
             Self::Tsv => "tsv",
             Self::Parquet => "parquet",
             Self::Json => "json",
+            Self::Xpt => "xpt",
             Self::Vcf => "vcf",
             Self::Bcf => "bcf",
             Self::Fasta => "fasta",
@@ -316,14 +322,16 @@ impl NodeFactory for FileToDataFrameNodeFactory {
     }
 
     fn desc(&self) -> &'static str {
-        "Reads CSV, TSV, JSON/NDJSON, Parquet, or bioinformatics files into the DAG as a DataFrame."
+        "Reads CSV, TSV, JSON/NDJSON, Parquet, XPT, or bioinformatics files into the DAG as a DataFrame."
     }
 
     fn doc(&self) -> &'static str {
         "Reads an external path or an upstream file reference into a \
         DataFrame. Supports local/remote files: CSV/TSV/Parquet via \
         DataFusion (including .tsv.gz), JSON arrays and NDJSON (including \
-        .json.gz), and \
+        .json.gz), SAS XPORT transport files (.xpt, as distributed by \
+        NHANES — numeric columns become Float64, missing values become \
+        nulls), and \
         bioinformatics formats (VCF, BAM, BED, GTF, FASTA, MatrixMarket, etc.) via \
         biofusion. Format is inferred from the extension when not given \
         explicitly. CSV/TSV inputs accept delimiter, has_header, and \
@@ -499,8 +507,15 @@ impl DagNode for FileToDataFrameNode {
             .iter()
             .map(|name| (name.clone(), arrow_schema::DataType::Utf8))
             .collect::<Vec<_>>();
-        let df =
-            read_file_with_options(&ctx, &path, fmt, &partition_cols, self.tabular_options).await?;
+        let df = read_file_with_options(
+            node_ctx,
+            &ctx,
+            &path,
+            fmt,
+            &partition_cols,
+            self.tabular_options,
+        )
+        .await?;
 
         let df = if matches!(fmt, FileFormat::Csv | FileFormat::Tsv) {
             promote_identifier_strings(df)?
@@ -520,6 +535,7 @@ impl DagNode for FileToDataFrameNode {
 }
 
 async fn read_file_with_options(
+    node_ctx: &NodeCtx,
     ctx: &SessionContext,
     path: &str,
     fmt: FileFormat,
@@ -584,6 +600,10 @@ async fn read_file_with_options(
             ctx.read_parquet(path, options).await
         }
         Json => ctx.read_bio_json(path, BioReadOptions::default()).await,
+        Xpt => {
+            let batch = xpt_record_batch(node_ctx, path).await?;
+            ctx.read_batch(batch)
+        }
         Vcf => ctx.read_vcf(path, BioReadOptions::default()).await,
         Bcf => ctx.read_bcf(path, BioReadOptions::default()).await,
         Fasta => ctx.read_fasta(path, BioReadOptions::default()).await,
@@ -605,6 +625,131 @@ async fn read_file_with_options(
         }
         .into()
     })
+}
+
+/// Read the full contents of an input path: `vfs://` addresses go through
+/// the engine's OpenDAL storage, anything else is a local filesystem read.
+async fn read_input_bytes(
+    node_ctx: &NodeCtx,
+    path: &str,
+) -> Result<Vec<u8>, FileToDataFrameError> {
+    if let Some(vpath) = path.strip_prefix("vfs://") {
+        let storage = node_ctx.opendal.as_ref().ok_or_else(|| {
+            FileToDataFrameError::InvalidInput(format!(
+                "path `{path}` requires engine file storage, but none is registered"
+            ))
+        })?;
+        let length = storage.content_length(vpath).await.map_err(|e| {
+            FileToDataFrameError::InvalidInput(format!("failed to stat `{path}`: {e}"))
+        })?;
+        let buffer = storage.read_range(vpath, 0..length).await.map_err(|e| {
+            FileToDataFrameError::InvalidInput(format!("failed to read `{path}`: {e}"))
+        })?;
+        Ok(buffer.to_vec())
+    } else {
+        tokio::fs::read(path).await.map_err(|e| {
+            FileToDataFrameError::InvalidInput(format!("failed to read `{path}`: {e}"))
+        })
+    }
+}
+
+/// Load an XPORT file into an Arrow batch for `ctx.read_batch`.
+///
+/// Byte-reading and parsing problems surface as
+/// [`datafusion::error::DataFusionError::External`] so they flow through the
+/// same `Read { path }` wrapping as the DataFusion-native formats.
+async fn xpt_record_batch(
+    node_ctx: &NodeCtx,
+    path: &str,
+) -> Result<arrow_array::RecordBatch, datafusion::error::DataFusionError> {
+    let bytes = read_input_bytes(node_ctx, path)
+        .await
+        .map_err(|e| datafusion::error::DataFusionError::External(Box::new(e)))?;
+    xpt::record_batch(&bytes).map_err(|e| {
+        datafusion::error::DataFusionError::External(
+            format!("failed to parse XPORT file '{path}': {e}").into(),
+        )
+    })
+}
+
+/// Decode SAS XPORT (`.xpt`) bytes into an Arrow `RecordBatch`.
+///
+/// NHANES distributes every table as XPORT V5 with exactly one dataset per
+/// file. Numeric columns become Float64 with SAS missing values (NaN) read
+/// as nulls; character columns become Utf8 with space-padding trimmed and
+/// all-blank values read as nulls. All fields are nullable.
+mod xpt {
+    use std::sync::Arc;
+
+    use arrow_array::{Array, Float64Array, RecordBatch, StringArray};
+    use arrow_schema::{DataType, Field, Schema};
+    use sas_xport::sas::SasVariableType;
+    use sas_xport::sas::xport::{XportReader, XportValue};
+
+    pub fn record_batch(bytes: &[u8]) -> Result<RecordBatch, String> {
+        let mut dataset = XportReader::from_reader(bytes)
+            .map_err(|e| format!("not a valid XPORT file: {e}"))?
+            .next_dataset()
+            .map_err(|e| format!("failed to read XPORT dataset header: {e}"))?
+            .ok_or_else(|| "XPORT file contains no dataset".to_string())?;
+
+        let variables: Vec<(String, SasVariableType)> = dataset
+            .schema()
+            .variables()
+            .iter()
+            .map(|variable| (variable.short_name().trim().to_string(), variable.value_type()))
+            .collect();
+        let mut character_columns: Vec<Vec<Option<String>>> =
+            vec![Vec::new(); variables.len()];
+        let mut numeric_columns: Vec<Vec<Option<f64>>> = vec![Vec::new(); variables.len()];
+        let mut row_number = 0usize;
+        for record in dataset.records() {
+            let record = record
+                .map_err(|e| format!("failed to read XPORT record {row_number}: {e}"))?;
+            for (column, value) in record.iter().enumerate() {
+                match value {
+                    XportValue::Character(text) => {
+                        let trimmed = text.trim_end();
+                        character_columns[column].push(
+                            if trimmed.is_empty() { None } else { Some(trimmed.to_string()) },
+                        );
+                    }
+                    XportValue::Number(number) => {
+                        numeric_columns[column]
+                            .push(if number.is_nan() { None } else { Some(*number) });
+                    }
+                }
+            }
+            row_number += 1;
+        }
+
+        let fields: Vec<Field> = variables
+            .iter()
+            .map(|(name, kind)| {
+                let data_type = match kind {
+                    SasVariableType::Numeric => DataType::Float64,
+                    SasVariableType::Character => DataType::Utf8,
+                };
+                Field::new(name, data_type, true)
+            })
+            .collect();
+        let columns: Vec<Arc<dyn Array>> = variables
+            .iter()
+            .enumerate()
+            .map(|(column, (_, kind))| -> Arc<dyn Array> {
+                match kind {
+                    SasVariableType::Numeric => {
+                        Arc::new(Float64Array::from(numeric_columns[column].clone()))
+                    }
+                    SasVariableType::Character => {
+                        Arc::new(StringArray::from(character_columns[column].clone()))
+                    }
+                }
+            })
+            .collect();
+        RecordBatch::try_new(Arc::new(Schema::new(fields)), columns)
+            .map_err(|e| format!("failed to assemble XPORT batch: {e}"))
+    }
 }
 
 /// Build a schema for wide matrices whose header omits the first column name.
@@ -820,6 +965,214 @@ mod tests {
     use vfs::{BackendConfig, BackendDefinition, MountDefinition, MountedObjectStore, VfsManifest};
 
     #[test]
+    fn xpt_format_infers_from_paths_and_labels() {
+        assert_eq!(FileFormat::from_path("/data/DEMO_J.xpt"), Some(FileFormat::Xpt));
+        assert_eq!(FileFormat::from_path("/data/DEMO_J.XPT"), Some(FileFormat::Xpt));
+        assert_eq!(FileFormat::from_label("xpt"), Some(FileFormat::Xpt));
+        assert_eq!(FileFormat::from_label("XPT"), Some(FileFormat::Xpt));
+        assert_eq!(FileFormat::Xpt.as_label(), "xpt");
+    }
+
+    /// Write a three-row XPORT fixture with one character and two numeric
+    /// columns, including a SAS missing value (NaN) and a space-padded blank.
+    fn write_xpt_fixture(path: &std::path::Path) {
+        use sas_xport::sas::SasVariableType;
+        use sas_xport::sas::xport::{
+            XportMetadata, XportSchema, XportValue, XportVariable, XportWriter,
+        };
+        use std::io::Write;
+
+        let mut seqn = XportVariable::builder();
+        seqn.short_name("SEQN").value_type(SasVariableType::Numeric).value_length(8);
+        let mut age = XportVariable::builder();
+        age.short_name("RIDAGEYR").value_type(SasVariableType::Numeric).value_length(8);
+        let mut gender = XportVariable::builder();
+        gender.short_name("RIAGENDR").value_type(SasVariableType::Character).value_length(2);
+
+        let schema = XportSchema::builder()
+            .dataset_name("DEMO")
+            .add_variable(seqn)
+            .add_variable(age)
+            .add_variable(gender)
+            .try_build()
+            .unwrap();
+
+        let file = File::create(path).unwrap();
+        let writer = XportWriter::from_file(file, XportMetadata::builder().build()).unwrap();
+        let mut writer = writer.write_schema(schema).unwrap();
+        writer
+            .write_record(&[
+                XportValue::from(1.0),
+                XportValue::from(35.0),
+                XportValue::from("M"),
+            ])
+            .unwrap();
+        writer
+            .write_record(&[
+                XportValue::from(2.0),
+                XportValue::from(f64::NAN),
+                XportValue::from("  "),
+            ])
+            .unwrap();
+        writer
+            .write_record(&[
+                XportValue::from(3.0),
+                XportValue::from(42.0),
+                XportValue::from("F"),
+            ])
+            .unwrap();
+        writer.finish().unwrap().flush().unwrap();
+    }
+
+    #[tokio::test]
+    async fn reads_xpt_to_dataframe() {
+        use arrow_array::Array;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("DEMO_J.xpt");
+        write_xpt_fixture(&path);
+
+        let node_ctx = NodeCtx::new(SessionContext::new().runtime_env(), None);
+        let mut node = FileToDataFrameNode::new(Some(path.to_str().unwrap().to_owned()), None);
+        let outputs = node
+            .execute(
+                &node_ctx,
+                &[],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap();
+        let df = outputs.dataframe(0).unwrap();
+        let schema = df.schema();
+        let fields: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
+        assert_eq!(fields, ["SEQN", "RIDAGEYR", "RIAGENDR"]);
+        assert_eq!(schema.field(0).data_type(), &arrow_schema::DataType::Float64);
+        assert_eq!(schema.field(2).data_type(), &arrow_schema::DataType::Utf8);
+
+        let batch = df.clone().collect().await.unwrap().remove(0);
+        assert_eq!(batch.num_rows(), 3);
+        let seqn = batch
+            .column_by_name("SEQN")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<arrow_array::Float64Array>()
+            .unwrap();
+        assert_eq!(seqn.value(0), 1.0);
+        assert_eq!(seqn.value(2), 3.0);
+        let age = batch
+            .column_by_name("RIDAGEYR")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<arrow_array::Float64Array>()
+            .unwrap();
+        assert_eq!(age.value(0), 35.0);
+        assert!(age.is_null(1), "SAS missing (NaN) must become a null");
+        assert_eq!(age.value(2), 42.0);
+        let gender = batch
+            .column_by_name("RIAGENDR")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<arrow_array::StringArray>()
+            .unwrap();
+        assert_eq!(gender.value(0), "M");
+        assert!(gender.is_null(1), "space-padded blank must become a null");
+        assert_eq!(gender.value(2), "F");
+    }
+
+    #[tokio::test]
+    async fn reads_xpt_from_vfs() {
+        let (ctx, storage) = OpendalFileStorage::new_temp().register_to_ctx();
+        let fixture = tempfile::tempdir().unwrap();
+        let fixture_path = fixture.path().join("DEMO_J.xpt");
+        write_xpt_fixture(&fixture_path);
+        let bytes = std::fs::read(&fixture_path).unwrap();
+        storage.write_bytes("/nhanes/DEMO_J.xpt", bytes).await.unwrap();
+        fixture.close().unwrap();
+
+        let node_ctx = NodeCtx::new(ctx.runtime_env().clone(), Some(storage));
+        let mut node =
+            FileToDataFrameNode::new(Some("vfs:///nhanes/DEMO_J.xpt".into()), None);
+        let outputs = node
+            .execute(
+                &node_ctx,
+                &[],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap();
+        let df = outputs.dataframe(0).unwrap();
+        assert_eq!(df.clone().count().await.unwrap(), 3);
+        let batch = df.clone().collect().await.unwrap().remove(0);
+        assert!(batch.column_by_name("SEQN").is_some());
+    }
+
+    #[tokio::test]
+    async fn garbage_xpt_bytes_fail_with_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("garbage.xpt");
+        std::fs::write(&path, b"this is definitely not an XPORT transport file").unwrap();
+
+        let node_ctx = NodeCtx::new(SessionContext::new().runtime_env(), None);
+        let mut node = FileToDataFrameNode::new(Some(path.to_str().unwrap().to_owned()), None);
+        let error = node
+            .execute(
+                &node_ctx,
+                &[],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("garbage.xpt"), "{message}");
+        assert!(message.contains("XPORT"), "{message}");
+    }
+
+    /// Live end-to-end: download DEMO_J from CDC and read it back. Requires
+    /// network access to wwwn.cdc.gov.
+    #[tokio::test]
+    #[ignore = "hits the live CDC NHANES endpoint"]
+    async fn live_nhanes_download_reads_into_dataframe() {
+        use crate::NhanesDownloadNodeFactory;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("DEMO_J.xpt");
+        let (ctx, storage) = OpendalFileStorage::new_temp().register_to_ctx();
+        let node_ctx =
+            dag_core::registry::NodeCtx::new(ctx.runtime_env().clone(), Some(storage));
+        let spec = serde_json::json!({
+            "component": "Demographics",
+            "cycle": "2017-2018",
+            "file_pattern": "DEMO_J",
+            "path": path.to_str().unwrap()
+        });
+        let mut download = NhanesDownloadNodeFactory.build(spec, node_ctx.clone()).unwrap();
+        download
+            .execute(
+                &node_ctx,
+                &[],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap();
+
+        let mut reader = FileToDataFrameNode::new(Some(path.to_str().unwrap().to_owned()), None);
+        let outputs = reader
+            .execute(
+                &node_ctx,
+                &[],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap();
+        let df = outputs.dataframe(0).unwrap();
+        assert!(
+            df.schema().index_of_column_by_name(None, "SEQN").is_some(),
+            "DEMO_J must expose the SEQN participant identifier"
+        );
+        let rows = df.clone().count().await.unwrap();
+        assert!(rows > 5000, "DEMO_J 2017-2018 has ~9254 rows, got {rows}");
+    }
+
+    #[test]
     fn parses_tabular_delimiters() {
         assert_eq!(parse_delimiter("\\t"), Ok(b'\t'));
         assert_eq!(parse_delimiter("tab"), Ok(b'\t'));
@@ -1017,7 +1370,9 @@ mod tests {
         writer.close().unwrap();
 
         let ctx = SessionContext::new();
+        let node_ctx = NodeCtx::new(ctx.runtime_env().clone(), None);
         let df = read_file_with_options(
+            &node_ctx,
             &ctx,
             path.to_str().unwrap(),
             FileFormat::Parquet,
@@ -1425,8 +1780,10 @@ mod tests {
         encoder.finish().unwrap();
 
         let ctx = SessionContext::new();
+        let node_ctx = NodeCtx::new(ctx.runtime_env().clone(), None);
         let glob = format!("{}/*.tsv.gz", dir.path().to_string_lossy());
         let df = read_file_with_options(
+            &node_ctx,
             &ctx,
             &glob,
             FileFormat::Tsv,

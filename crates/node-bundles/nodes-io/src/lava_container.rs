@@ -540,6 +540,7 @@ pub fn container_spec(spec: &LavaContainerSpec) -> Result<ContainerCommandSpec, 
         memory: None,
         pids_limit: None,
         shm_size: None,
+        gpus: None,
         user: None,
     })
 }

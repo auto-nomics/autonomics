@@ -279,6 +279,7 @@ fn container_spec(
         memory: Some(DEFAULT_MEMORY.into()),
         pids_limit: Some(512),
         shm_size: None,
+        gpus: None,
         user: None,
     })
 }

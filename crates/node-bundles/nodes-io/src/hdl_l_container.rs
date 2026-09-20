@@ -329,6 +329,7 @@ pub fn container_spec(spec: &HdlLContainerSpec) -> Result<ContainerCommandSpec, 
         memory: None,
         pids_limit: None,
         shm_size: None,
+        gpus: None,
         user: None,
     })
 }

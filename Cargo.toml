@@ -56,6 +56,7 @@ members = [
   "stat_crates/epi",
   "stat_crates/hypothesize",
   "stat_crates/cmprsk",
+  "stat_crates/crrkit",
   "stat_crates/survey",
   "crates/bib-types",
   "crates/bib-base",
@@ -86,6 +87,7 @@ members = [
   "crates/rcsb",
   "crates/string-sdk",
   "crates/kegg",
+  "crates/nhanes",
   "crates/grf-sys",
   "bio_crates/grf",
   "bio_crates/genomic_sem",
@@ -119,6 +121,7 @@ opendal = { version = "0.57", features = [
   "services-oss",
 ] }
 sha2 = "0.10"
+sas_xport = "0.4.1"
 clap = { version = "4.6", features = ["derive"] }
 tar = "0.4"
 # default-features off: the default set pulls xz2, whose lzma-sys conflicts
