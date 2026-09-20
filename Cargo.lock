@@ -7446,6 +7446,7 @@ dependencies = [
  "arrow-schema",
  "async-trait",
  "dag-core",
+ "datafusion",
  "epi",
  "schemars",
  "serde",

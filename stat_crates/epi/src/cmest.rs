@@ -756,8 +756,8 @@ fn pci(boot: &[f64]) -> (f64, f64) {
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let n = sorted.len();
     (
-        sorted[(0.025 * n as f64).floor() as usize],
-        sorted[(0.975 * n as f64).ceil() as usize],
+        sorted[((0.025 * n as f64).floor() as usize).min(n - 1)],
+        sorted[((0.975 * n as f64).ceil() as usize).min(n - 1)],
     )
 }
 
