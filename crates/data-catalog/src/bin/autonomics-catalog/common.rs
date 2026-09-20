@@ -43,9 +43,9 @@ pub(crate) fn open_cache(path: &Path) -> Result<LocalCatalog> {
 /// Default package cache: the shared panel cache root, so installed packages
 /// participate in the panel LRU sweeper.
 pub(crate) fn default_cache_root() -> String {
-    std::env::var_os("AUTONOMICS_PANEL_CACHE_ROOT")
-        .map(|value| value.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "~/.autonomics/panels".into())
+    data_catalog::default_panel_cache_root()
+        .to_string_lossy()
+        .into_owned()
 }
 
 pub(crate) fn resolve_hf_token(explicit: Option<String>) -> Option<String> {

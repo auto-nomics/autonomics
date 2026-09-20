@@ -17,7 +17,7 @@ pub mod storage;
 
 pub use config::CatalogConfig;
 pub use hf::{HfPublishTarget, HfSource, publish_package_to_hf};
-pub use local::LocalCatalog;
+pub use local::{LocalCatalog, default_panel_cache_root};
 pub use model::{CatalogEntry, CatalogIndex, DatasetFile, DatasetManifest};
 pub use package::{build_package, validate_package};
 pub use publish::publish_package;

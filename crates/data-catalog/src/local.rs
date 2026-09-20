@@ -10,6 +10,25 @@ use crate::remote::{ObjectSource, RemoteCatalog, validate_entry_manifest};
 const DOWNLOAD_CHUNK_BYTES: u64 = 4 * 1024 * 1024;
 /// Matches container-runtime's panel cache entry convention.
 pub const PANEL_CACHE_COMPLETE_MARKER: &str = ".autonomics-panel-complete";
+/// Environment override for the shared panel/catalog cache root.
+pub const PANEL_CACHE_ROOT_ENV: &str = "AUTONOMICS_PANEL_CACHE_ROOT";
+
+/// Resolve the shared panel/catalog cache root.
+///
+/// `AUTONOMICS_PANEL_CACHE_ROOT` takes precedence; otherwise the root is
+/// `$HOME/.autonomics/panels` (or a temp fallback when HOME is unset). The
+/// CLI installer, the runtime host, and the container panel cache all
+/// resolve to the same location, so installed packages are mounted by the
+/// runtime without copying.
+pub fn default_panel_cache_root() -> PathBuf {
+    if let Some(root) = std::env::var_os(PANEL_CACHE_ROOT_ENV).filter(|value| !value.is_empty()) {
+        return PathBuf::from(root);
+    }
+    if let Some(home) = std::env::var_os("HOME").filter(|value| !value.is_empty()) {
+        return Path::new(&home).join(".autonomics").join("panels");
+    }
+    std::env::temp_dir().join("autonomics").join("panels")
+}
 
 /// Local cache of selected catalog packages.
 ///
@@ -326,6 +345,24 @@ mod tests {
     use vfs::{
         BackendConfig, BackendDefinition, MountedObjectStore, OpendalFileStorage, VfsManifest,
     };
+
+    #[test]
+    fn panel_cache_root_env_overrides_default() {
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                // SAFETY: no other data-catalog test reads this variable.
+                unsafe { std::env::remove_var(PANEL_CACHE_ROOT_ENV) };
+            }
+        }
+        let _reset = Reset;
+        // SAFETY: see Reset above.
+        unsafe { std::env::set_var(PANEL_CACHE_ROOT_ENV, "/tmp/panel-cache-override") };
+        assert_eq!(
+            default_panel_cache_root(),
+            PathBuf::from("/tmp/panel-cache-override")
+        );
+    }
 
     async fn published_fixture(id: &str) -> (RemoteCatalog, tempfile::TempDir) {
         let workspace = tempfile::tempdir().unwrap();

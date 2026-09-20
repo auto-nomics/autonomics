@@ -29,7 +29,7 @@ use arc_swap::ArcSwapOption;
 use container_runtime::ContainerExecutionInfra;
 use container_runtime::{WorkspaceGcPolicy, sweep_workspace};
 use dag_core::{BundleRegistry, DataBundle};
-use data_catalog::{CatalogConfig, LocalCatalog, RemoteCatalog};
+use data_catalog::{CatalogConfig, LocalCatalog, RemoteCatalog, default_panel_cache_root};
 use data_engine::dag::DagHistory;
 use data_engine::data_engine::DataEngine;
 use data_engine::runtime::{DataEngineClient, DataEngineManager};
@@ -603,7 +603,7 @@ async fn build_vfs_with_catalog(
             }
             let remote = RemoteCatalog::new(&manifest, &catalog_config)
                 .map_err(|error| Error::Other(error.to_string()))?;
-            let local = LocalCatalog::open(config.state_dir.join("catalog"))
+            let local = LocalCatalog::open(default_panel_cache_root())
                 .map_err(|error| Error::Other(error.to_string()))?;
             let mounts = local
                 .mount_definitions(CACHE_BACKEND_ID, catalog_config.agent_visible)
@@ -4247,7 +4247,18 @@ backend = "warehouse"
         )
         .unwrap();
         let remote = data_catalog::RemoteCatalog::new(&vfs_manifest, &catalog_config).unwrap();
-        let local = data_catalog::LocalCatalog::open(config.state_dir.join("catalog")).unwrap();
+        struct PanelCacheRootEnv;
+        impl Drop for PanelCacheRootEnv {
+            fn drop(&mut self) {
+                // SAFETY: no other host test reads this variable concurrently.
+                unsafe { std::env::remove_var("AUTONOMICS_PANEL_CACHE_ROOT") };
+            }
+        }
+        let panel_root = tempfile::tempdir().unwrap();
+        let _panel_env = PanelCacheRootEnv;
+        // SAFETY: the host resolves this variable in build_vfs_with_catalog below.
+        unsafe { std::env::set_var("AUTONOMICS_PANEL_CACHE_ROOT", panel_root.path()) };
+        let local = data_catalog::LocalCatalog::open(panel_root.path()).unwrap();
         local
             .install(&remote, "catalog_panel", None, None)
             .await
