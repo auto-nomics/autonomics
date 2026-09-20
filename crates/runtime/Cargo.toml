@@ -23,6 +23,7 @@ kegg = { path = "../kegg" }
 alphafold = { path = "../alphafold" }
 interpro = { path = "../interpro" }
 pubchem = { path = "../pubchem" }
+protocolio = { path = "../protocolio" }
 clinicaltrials = { path = "../clinicaltrials" }
 gwascatalog-sdk = { path = "../gwascatalog-sdk" }
 data-engine = { path = "../data-engine" }

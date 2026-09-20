@@ -370,6 +370,7 @@ pub fn container_spec(spec: &TwoSampleMrContainerSpec) -> Result<ContainerComman
         memory: None,
         pids_limit: None,
         shm_size: None,
+        gpus: None,
         user: None,
     })
 }

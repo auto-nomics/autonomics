@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "als_cns.cell_markers",
+  "version": "v1",
+  "kind": "cell_marker_set",
+  "metadata": {
+    "cell_names": "Astrocyte,Microglial cell,Oligodendrocyte,Neuron",
+    "license": "CC BY 4.0",
+    "snapshot_date": "2024-10-11",
+    "source_commit": "c870a9ff6a8b48390a2fe6fe8054b88738a821ad",
+    "source_repository": "WilsonWukz/EasyCellMarker2",
+    "species": "Human",
+    "tissue_filter": "Brain|Spinal cord"
+  },
+  "files": [
+    {
+      "path": "markers.tsv",
+      "size": 136011,
+      "sha256": "sha256:d3b91df902a5eb7ed6063500c2c01200d0d8bf6d07b3cf9b140bef707d2a07c9"
+    },
+    {
+      "path": "metadata.tsv",
+      "size": 1254,
+      "sha256": "sha256:e71c545b58f07c88d6a5c0c94913ca0c3d05d7fc022f593dd707398924bd50ca"
+    },
+    {
+      "path": "source_manifest.json",
+      "size": 1101,
+      "sha256": "sha256:4d9d9c196fed5a7a85508145aea51223124ce22d16507db0283707294963bcb2"
+    }
+  ],
+  "payload": {},
+  "digest": "sha256:2dde836952984aec320bdb4927d72e43c61a78c4d9792234da0aa938343705da"
+}

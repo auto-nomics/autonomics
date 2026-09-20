@@ -1,4 +1,5 @@
 .claude
+.serena/
 .env
 target
 *.db
@@ -30,6 +31,9 @@ reference/
 containers/hdl-l/HDL-L/
 containers/mixer/gsa-mixer/
 containers/mixer/mixer/
+
+# Python bytecode caches
+__pycache__/
 
 # infra (Python venv, caches)
 infra/.venv/

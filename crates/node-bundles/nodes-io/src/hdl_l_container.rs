@@ -19,12 +19,13 @@ use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
     ContainerPanelBundleSpec,
 };
+use crate::image_registry::acr_image;
 use container_runtime::{PanelCache, PodmanConnection, PullPolicy};
 
 pub const HDL_L_CONTAINER_KIND: &str = "hdl_l_container";
-pub const HDL_ORIGINAL_IMAGE: &str = "localhost/atc/hdl:1.4.3";
-pub const HDL_ORIGINAL_IMAGE_MANIFEST_DIGEST: &str =
-    "sha256:9d562d48b805f1b361060a2ca36fe95e7b4227268c7c17ea15006b770d8d30aa";
+pub const HDL_ORIGINAL_IMAGE_REPOSITORY: &str = "hdl";
+pub const HDL_ORIGINAL_IMAGE_DIGEST: &str =
+    "sha256:1ba46cf2f480ffb4e0f9845911029e71f2fc9fd89dab19bdd81a60a3b5babf45";
 pub const HDL_UKB_EUR_PANEL: &str = "hdl.ref.ukb_eur";
 
 const DEFAULT_ARTIFACT_PREFIX: &str = "/artifacts/hdl_l_container";
@@ -294,7 +295,7 @@ saveRDS(result, Sys.getenv("AUTONOMICS_OUTPUT1"))
 pub fn container_spec(spec: &HdlLContainerSpec) -> Result<ContainerCommandSpec, String> {
     validate(spec)?;
     Ok(ContainerCommandSpec {
-        image: HDL_ORIGINAL_IMAGE.into(),
+        image: acr_image(HDL_ORIGINAL_IMAGE_REPOSITORY, HDL_ORIGINAL_IMAGE_DIGEST)?,
         command: vec!["Rscript".into()],
         script: Some(build_script(spec)),
         files: Default::default(),
@@ -328,6 +329,7 @@ pub fn container_spec(spec: &HdlLContainerSpec) -> Result<ContainerCommandSpec, 
         memory: None,
         pids_limit: None,
         shm_size: None,
+        gpus: None,
         user: None,
     })
 }
@@ -447,7 +449,10 @@ mod tests {
     #[test]
     fn builds_official_hdl_l_contract() {
         let container = container_spec(&spec()).unwrap();
-        assert_eq!(container.image, HDL_ORIGINAL_IMAGE);
+        assert_eq!(
+            container.image,
+            acr_image(HDL_ORIGINAL_IMAGE_REPOSITORY, HDL_ORIGINAL_IMAGE_DIGEST).unwrap()
+        );
         assert_eq!(container.panel_bundles.len(), 1);
         assert_eq!(container.panel_bundles[0].panel_id, HDL_UKB_EUR_PANEL);
         assert_eq!(container.panel_bundles[0].mount_path, "/panels/hdl_ref");

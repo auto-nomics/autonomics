@@ -775,7 +775,9 @@ def read_other_sumstats(
     if not args.no_check_alleles:
         valid_indices = filter_alleles(alleles)
         merged_sumstats = select_and_log(merged_sumstats, valid_indices, logger, "{N} SNPs with valid alleles.")
-        merged_sumstats["Z2"] = align_alleles(merged_sumstats.Z2, alleles)
+        merged_sumstats["Z2"] = align_alleles(
+            merged_sumstats.Z2, alleles[valid_indices]
+        )
 
     merged_sumstats = merged_sumstats.drop(["A1", "A1x", "A2", "A2x"], axis=1)
     check_ld_condition_number(args, logger, merged_sumstats[ref_ld_cnames])

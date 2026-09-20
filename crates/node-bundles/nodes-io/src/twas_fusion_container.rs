@@ -258,6 +258,7 @@ pub fn container_spec(spec: &TwasFusionContainerSpec) -> Result<ContainerCommand
         memory: None,
         pids_limit: None,
         shm_size: None,
+        gpus: None,
         user: None,
     })
 }

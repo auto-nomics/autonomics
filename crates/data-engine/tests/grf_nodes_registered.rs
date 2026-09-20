@@ -10,7 +10,7 @@ fn registry() -> NodeRegistry {
     data_engine::default_registry::build_default_registry(
         ctx.runtime_env(),
         None,
-        std::sync::Arc::new(dag_core::DataBundleCatalog::new()),
+        std::sync::Arc::new(dag_core::BundleRegistry::new()),
     )
 }
 

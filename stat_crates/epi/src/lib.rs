@@ -11,7 +11,11 @@
 //! | [`lasso`] | LASSO logistic regression (coordinate descent, k-fold CV)      |
 //! | [`wqs`]   | Weighted Quantile Sum regression (constrained opt, bootstrap)  |
 //! | [`survival`] | Kaplan-Meier estimator, log-rank (Mantel-Cox) test          |
+//! | [`bootstrap`] | Survey-aware bootstrap resampling + percentile/BC CIs    |
 //! | [`mediation`] | Causal mediation analysis (VanderWeele decomposition)     |
+//! | [`mediation_moderated`] | Survey-weighted moderated mediation (Hayes index)|
+//! | [`mediation_weighted`] | Survey-weighted mediation with BC bootstrap CIs   |
+//! | [`mediation_serial`] | Survey-weighted serial two-mediator decomposition |
 //! | [`causal`] | IPTW + PSM (propensity score causal inference)               |
 //! | [`clpm`]  | Cross-Lagged Panel Model (2-wave longitudinal reciprocal effects) |
 //! | [`gbtm`]  | Group-Based Trajectory Modeling (Nagin mixture of polynomials)    |
@@ -23,6 +27,7 @@
 //! | [`sem`]    | Structural Equation Modeling (CFA via ML fit function)         |
 //! | [`cmest`]  | CMAverse-compatible causal mediation (Valeri/VanderWeele rb)    |
 
+pub mod bootstrap;
 pub mod causal;
 pub mod chisq;
 pub mod clpm;
@@ -34,6 +39,9 @@ pub mod gbtm;
 pub mod lasso;
 pub mod lca;
 pub mod mediation;
+pub mod mediation_moderated;
+pub mod mediation_serial;
+pub mod mediation_weighted;
 pub mod multistate;
 pub mod rcs;
 pub mod roc;

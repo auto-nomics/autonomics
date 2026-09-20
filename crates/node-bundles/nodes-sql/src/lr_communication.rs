@@ -910,7 +910,7 @@ impl NodeFactory for LrCommunicationScoreNodeFactory {
 mod tests {
     use super::*;
     use arrow_array::Array;
-    use dag_core::node::{DataBundle, DataBundleCatalog};
+    use dag_core::node::{BundleRegistry, DataBundle};
     use datafusion::prelude::SessionContext;
 
     fn frame(batch: RecordBatch) -> datafusion::prelude::DataFrame {
@@ -931,15 +931,15 @@ mod tests {
         assert!(ports.input_port(1).unwrap().required);
 
         let catalog = Arc::new(
-            DataBundleCatalog::from_bundles([DataBundle::new(
+            BundleRegistry::from_bundles([DataBundle::new(
                 DEFAULT_LR_TABLE_BUNDLE,
                 "test LR table",
                 "/bundles/lrdb.cellphonedb.v5",
             )])
             .unwrap(),
         );
-        let ctx = NodeCtx::new(SessionContext::new().runtime_env(), None)
-            .with_data_bundle_catalog(catalog);
+        let ctx =
+            NodeCtx::new(SessionContext::new().runtime_env(), None).with_bundle_registry(catalog);
         let mut registry = dag_core::registry::NodeRegistry::new(ctx);
         registry.register(Box::new(factory));
         let node = registry

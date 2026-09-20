@@ -16,6 +16,7 @@ chembl = { path = "../../chembl" }
 openalex = { path = "../../openalex" }
 semantic-scholar = { path = "../../semantic-scholar" }
 crossref = { path = "../../crossref" }
+nhanes = { path = "../../nhanes" }
 uniprot = { path = "../../uniprot" }
 reactome = { path = "../../reactome" }
 rcsb = { path = "../../rcsb" }
@@ -24,6 +25,7 @@ kegg = { path = "../../kegg" }
 alphafold = { path = "../../alphafold" }
 interpro = { path = "../../interpro" }
 pubchem = { path = "../../pubchem" }
+protocolio = { path = "../../protocolio" }
 clinicaltrials = { path = "../../clinicaltrials" }
 mr = { path = "../../../bio_crates/mr" }
 arrow-array.workspace = true
@@ -36,6 +38,7 @@ schemars.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2.workspace = true
+sas_xport.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 datafusion.workspace = true
@@ -44,7 +47,7 @@ glob = "0.3"
 flate2 = "1.1"
 csv = "1.4"
 encoding_rs = "0.8"
-calamine = { version = "0.35.0", features = ["chrono"] }
+calamine = { version = "0.35.0", features = ["dates", "chrono"] }
 tokio = { workspace = true, features = ["process", "io-util", "time"] }
 libc = "0.2"
 

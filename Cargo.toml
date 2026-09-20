@@ -35,6 +35,7 @@ members = [
   "crates/alphafold",
   "crates/interpro",
   "crates/pubchem",
+  "crates/protocolio",
   "crates/clinicaltrials",
   "crates/container-runtime",
   "crates/headless",
@@ -56,6 +57,7 @@ members = [
   "stat_crates/epi",
   "stat_crates/hypothesize",
   "stat_crates/cmprsk",
+  "stat_crates/crrkit",
   "stat_crates/survey",
   "crates/bib-types",
   "crates/bib-base",
@@ -86,6 +88,7 @@ members = [
   "crates/rcsb",
   "crates/string-sdk",
   "crates/kegg",
+  "crates/nhanes",
   "crates/grf-sys",
   "bio_crates/grf",
   "bio_crates/genomic_sem",
@@ -119,12 +122,13 @@ opendal = { version = "0.57", features = [
   "services-oss",
 ] }
 sha2 = "0.10"
+sas_xport = "0.4.1"
 clap = { version = "4.6", features = ["derive"] }
 tar = "0.4"
 # default-features off: the default set pulls xz2, whose lzma-sys conflicts
 # with datafusion's liblzma-sys (`links = "lzma"` clash). MinerU result zips
 # only need deflate.
-zip = { version = "2.2", default-features = false, features = ["deflate"] }
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 toml = "1"
 uuid = "1.24"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
@@ -152,6 +156,7 @@ noodles = { version = "0.107.0", features = ["vcf"] }
 oxbow = { git = "https://github.com/wjixiang/oxbow.git" }
 
 faer = "0.24.4"
+hf-hub = "1.0.0"
 
 # Suppress unused-warnings for the public-API workspace.dependencies that
 # the umbrella doesn't directly import. Keep this list as a hint for

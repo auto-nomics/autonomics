@@ -409,6 +409,7 @@ pub fn container_spec(spec: &LdscMungeContainerSpec) -> Result<ContainerCommandS
         memory: None,
         pids_limit: None,
         shm_size: None,
+        gpus: None,
         user: None,
     })
 }

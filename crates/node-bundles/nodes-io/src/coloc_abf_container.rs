@@ -376,6 +376,7 @@ pub fn container_spec(spec: &ColocAbfContainerSpec) -> Result<ContainerCommandSp
         memory: None,
         pids_limit: None,
         shm_size: None,
+        gpus: None,
         user: None,
     })
 }

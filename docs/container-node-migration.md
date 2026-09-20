@@ -450,9 +450,9 @@ crates/node-bundles/nodes-io/src/hdl_l_container.rs
 crates/node-bundles/nodes-io/src/hdl_l_scan_container.rs
 ```
 
-The image installs official `HDL` 1.4.3 at commit `e6b055d` and runs through
-rootless Podman under the local `localhost/atc/hdl:1.4.3` tag. No registry or
-Podman backend is required. The official Zenodo UKB EUR payload is normalized into
+The image installs official `HDL` 1.4.3 at commit `e6b055d`, is published as
+`$ACR_ENDPOINT/autonomics/hdl:1.4.3`, and is pinned by immutable manifest
+digest. The official Zenodo UKB EUR payload is normalized into
 one catalog package with `LD/*_LDSVD.rda`, `LD/HDLL_LOC_snps.RData`, and
 matching per-block BIM files. The wrapper takes two official-format GWAS
 summary Files plus `chr` and `piece`, invokes `HDL::HDL.L`, and emits TSV, RDS,
@@ -484,3 +484,84 @@ packages and the LAVA UKBB eigen `.bcor` panel are not interchangeable with
 that contract. The rootless-Podman baseline verifies a deterministic two-trait
 GWAS fixture, catalog panel materialization, both official result tables, and
 numerical summary markers.
+## Bulk RNA-seq wrappers (`limma_voom_container` + `wgcna_container`)
+
+The ALS / neurology rubric calls for two methods the existing DESeq2
+wrapper cannot cover: limma/voom/eBayes (continuous outcome + quantile
+normalization) and signed WGCNA with dynamic tree cut + module merge.
+Both are packaged as a single `autonomics/bulk-rnaseq` image layered on
+top of the published `autonomics/deseq2` image, with `limma` 3.66.0,
+`edgeR` 4.8.2 and `WGCNA` 1.74 installed via `BiocManager`/CRAN and
+sha256-verified. The wrappers live at:
+
+- `containers/bulk-rnaseq/Dockerfile`
+- `containers/bulk-rnaseq/limma_voom_runner.R`
+- `containers/bulk-rnaseq/wgcna_runner.R`
+- `containers/bulk-rnaseq/test_smoke.sh`
+- `crates/node-bundles/nodes-io/src/limma_voom_container.rs`
+- `crates/node-bundles/nodes-io/src/wgcna_container.rs`
+- `crates/node-bundles/nodes-io/tests/limma_voom_container.rs`
+- `crates/node-bundles/nodes-io/tests/wgcna_container.rs`
+
+The WGCNA runner deliberately keeps the TOM inside the container:
+`WGCNA::blockwiseModules` runs block-wise, only the soft-threshold scan,
+module size table, TOM summary stats, kME-augmented module assignments
+and module eigengenes land on VFS, so the agent runtime never
+materializes a large TOM dataframe.
+
+Both wrappers pin the current immutable manifest digest:
+`sha256:fc0e90c2883a799db1e2c8934589ab7addd44a6edd1769d50f9d2e668925a66e`.
+
+## Multi-omic concordance node (`multiomic_concordance`)
+
+A pure-Rust DataFusion node that joins RNA DE, tissue proteomics and
+CSF proteomics tables on a shared gene-symbol column, enforces direction
+agreement (optional), and ranks survivors by the absolute effect-size
+product. It supports per-modality column contracts, `-log10(p)` conversion,
+an optional ID-mapping input, and exploding multi-symbol protein IDs before
+the join. Lives at `crates/node-bundles/nodes-io/src/multiomic_concordance.rs`.
+
+## ALS / CNS marker bundle (`als_cns.cell_markers`)
+
+Versioned data package built from the CellMarker 2.0 Human snapshot
+(`2024-10-11`), filtered to CNS cell types. Lives at
+`fixtures/als_cns_cell_markers/` and is published through
+`autonomics-catalog`. The alias `/bundles/als_cns.cell_markers` is
+added to the built-in bundle registry in
+`crates/data-engine/src/data_bundles.rs` for offline DAG construction.
+
+## Donor-level composition node (`hypothesize.donor_composition_test`)
+
+`crates/node-bundles/nodes-hypothesize/src/donor_composition.rs` aggregates a
+cell-level table to donor-by-cell-type counts before inference. For each cell
+type it fits a donor-level binomial logistic model against the requested
+test/reference condition, reports log-odds, Wald z, raw p and BH-adjusted p,
+and separately emits the donor composition table. Cells are therefore never
+treated as independent biological replicates.
+
+## MuSiC bulk deconvolution (`music_deconvolution_container`)
+
+The P2 bulk-reference deconvolution migration uses official MuSiC 1.0.0 at
+commit `f21fe67f5670d5e9fca0ad7550abaae3423eb59c`. The wrapper is a compute
+node rather than a source node and embeds no reference dataset:
+
+```text
+bulk expression + single-cell counts + cell metadata
+  + optional cell sizes + optional markers
+  -> MuSiC::music_prop
+  -> proportions / NNLS proportions / weights / diagnostics / report
+```
+
+Files:
+
+- `containers/music-deconvolution/Dockerfile`
+- `containers/music-deconvolution/music_runner.R`
+- `containers/music-deconvolution/test_smoke.sh`
+- `crates/node-bundles/nodes-io/src/music_deconvolution_container.rs`
+- `crates/node-bundles/nodes-io/tests/music_deconvolution_container.rs`
+
+The deterministic fixture has four donors, two cell types, 80 reference cells,
+and six pseudo-bulk samples with known neuron fractions from 0.70 through
+0.20. MuSiC recovers 0.709, 0.603, 0.500, 0.397, 0.296 and 0.196 when both
+cell sizes and markers are supplied. The image pins immutable ACR manifest
+digest `sha256:311e32ba2b0e0ce81715bc72f17342604086faeb7eb4964f706f83dcff53c971`.

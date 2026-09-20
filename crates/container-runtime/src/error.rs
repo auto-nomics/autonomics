@@ -11,8 +11,12 @@ pub enum ContainerRuntimeError {
     ObjectStorage(String),
     #[error("invalid panel manifest at `{path}`: {message}")]
     PanelManifest { path: String, message: String },
-    #[error("container exited with status {exit_code}: {stderr}")]
-    ExitStatus { exit_code: i32, stderr: String },
+    #[error("container exited with status {exit_code}; stderr: {stderr}; stdout: {stdout}")]
+    ExitStatus {
+        exit_code: i32,
+        stderr: String,
+        stdout: String,
+    },
     #[error("container was killed before completing within {timeout_secs}s")]
     Timeout { timeout_secs: u64 },
 }

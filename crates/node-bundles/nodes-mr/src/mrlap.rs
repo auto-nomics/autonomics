@@ -7,9 +7,14 @@
 //! (3-way inner join of exposure × outcome × the VFS LD-score panel) and emits
 //! the correction results as a one-row summary table.
 
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use arrow_array::{Array, Float64Array, Int64Array, RecordBatch, StringArray};
+use arrow_array::{
+    Array, ArrayRef, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array, Int64Array,
+    LargeStringArray, RecordBatch, StringArray, StringViewArray, UInt8Array, UInt16Array,
+    UInt32Array, UInt64Array,
+};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
 use faer::Mat;
@@ -23,15 +28,20 @@ use dag_core::registry::{NodeCtx, NodeFactory};
 
 const MRLAP_KIND: &str = "mrlap";
 
-// Input column names the node expects on both GWAS ports (lower-case, matching
-// the aliases MRlap's tidy_inputGWAS accepts).
+// Input column names the node expects on both GWAS ports. EA/NEA are the
+// primary allele contract; ALT/REF is retained for older graphs.
 const IN_RSID: &str = "rsid";
-const IN_Z: &str = "z";
-const IN_N: &str = "n";
 const IN_CHR: &str = "chr";
 const IN_POS: &str = "pos";
 const IN_ALT: &str = "alt";
 const IN_REF: &str = "ref";
+const IN_EA: &str = "ea";
+const IN_NEA: &str = "nea";
+const IN_BETA: &str = "beta";
+const IN_SE: &str = "se";
+const IN_OR: &str = "or";
+const IN_Z: &str = "z";
+const IN_N: &str = "n";
 
 fn result_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
@@ -134,7 +144,10 @@ impl NodeFactory for MrlapNodeFactory {
         "Reads two GWAS sumstat tables + a VFS LD-score panel, runs the \
          full MRlap pipeline: cross-trait LDSC (h², λ, rg), distance-pruned \
          IVW-MR, and the de-biasing correction for sample overlap / weak \
-         instruments / Winner's curse. Emits a one-row summary."
+         instruments / Winner's curse. Each GWAS input requires lowercase \
+         rsid, chr, pos, ea, nea, and n columns, plus either z or beta/se \
+         (or/se is also accepted). eaf may be present and is ignored by this \
+         implementation. Emits a one-row summary."
     }
     fn spec_schema(&self) -> schemars::Schema {
         schema_for!(MrlapSpec)
@@ -165,83 +178,149 @@ impl NodeFactory for MrlapNodeFactory {
 
 // ---- arrow column helpers ----
 
-fn arr_f64(arr: &dyn Array, i: usize) -> f64 {
-    if let Some(a) = arr.as_any().downcast_ref::<Float64Array>() {
-        return a.value(i);
+fn primitive_string_value(arr: &dyn Array, index: usize) -> Result<Option<String>, String> {
+    if arr.is_null(index) {
+        return Ok(None);
     }
-    f64::NAN
+    if let Some(values) = arr.as_any().downcast_ref::<StringArray>() {
+        Ok(Some(values.value(index).to_string()))
+    } else if let Some(values) = arr.as_any().downcast_ref::<LargeStringArray>() {
+        Ok(Some(values.value(index).to_string()))
+    } else if let Some(values) = arr.as_any().downcast_ref::<StringViewArray>() {
+        Ok(Some(values.value(index).to_string()))
+    } else {
+        Err(format!(
+            "expected a string column, found {}",
+            arr.data_type()
+        ))
+    }
 }
 
-fn col_str(batches: &[RecordBatch], name: &str) -> Option<Vec<String>> {
+fn col_str(batches: &[RecordBatch], name: &str) -> Result<Vec<String>, String> {
     let mut out = Vec::new();
     for b in batches {
-        let col = b.column_by_name(name)?;
-        for v in dag_core::node::string_opt_values(col.as_ref())? {
-            out.push(v.unwrap_or_default());
+        let Some(col) = b.column_by_name(name) else {
+            return Err(format!("column `{name}` is missing"));
+        };
+        for index in 0..col.len() {
+            out.push(primitive_string_value(col.as_ref(), index)?.unwrap_or_default());
         }
     }
-    Some(out)
+    Ok(out)
 }
 
-fn col_f64(batches: &[RecordBatch], name: &str) -> Option<Vec<f64>> {
+fn optional_col_str(
+    batches: &[RecordBatch],
+    names: &[&str],
+) -> Result<Option<Vec<String>>, String> {
+    for name in names {
+        if batches
+            .iter()
+            .all(|batch| batch.column_by_name(name).is_some())
+        {
+            return col_str(batches, name).map(Some);
+        }
+    }
+    Ok(None)
+}
+
+fn arr_f64(arr: &dyn Array, i: usize) -> Result<f64, String> {
+    macro_rules! integer_value {
+        ($array:ident) => {
+            if let Some(values) = arr.as_any().downcast_ref::<$array>() {
+                return Ok(values.value(i) as f64);
+            }
+        };
+    }
+    if let Some(values) = arr.as_any().downcast_ref::<Float64Array>() {
+        return Ok(values.value(i));
+    }
+    if let Some(values) = arr.as_any().downcast_ref::<Float32Array>() {
+        return Ok(values.value(i) as f64);
+    }
+    integer_value!(Int8Array);
+    integer_value!(Int16Array);
+    integer_value!(Int32Array);
+    integer_value!(Int64Array);
+    integer_value!(UInt8Array);
+    integer_value!(UInt16Array);
+    integer_value!(UInt32Array);
+    integer_value!(UInt64Array);
+    Err(format!(
+        "expected a numeric column, found {}",
+        arr.data_type()
+    ))
+}
+
+fn col_f64(batches: &[RecordBatch], name: &str) -> Result<Vec<f64>, String> {
     let mut out = Vec::new();
     for b in batches {
-        let col = b.column_by_name(name)?;
+        let Some(col) = b.column_by_name(name) else {
+            return Err(format!("column `{name}` is missing"));
+        };
         for i in 0..col.len() {
             out.push(if col.is_null(i) {
                 f64::NAN
             } else {
-                arr_f64(col.as_ref(), i)
+                arr_f64(col.as_ref(), i)?
             });
         }
     }
-    Some(out)
+    Ok(out)
 }
 
-fn col_i32(batches: &[RecordBatch], name: &str) -> Option<Vec<Option<i32>>> {
-    use arrow_array::{Int32Array, Int64Array as I64};
-    let mut out = Vec::new();
-    for b in batches {
-        let col = b.column_by_name(name)?;
-        if let Some(a) = col.as_any().downcast_ref::<Int32Array>() {
-            for i in 0..a.len() {
-                out.push(if a.is_null(i) { None } else { Some(a.value(i)) });
-            }
-        } else {
-            let a = col.as_any().downcast_ref::<I64>()?;
-            for i in 0..a.len() {
-                out.push(if a.is_null(i) {
-                    None
-                } else {
-                    Some(a.value(i) as i32)
-                });
-            }
+fn optional_col_f64(batches: &[RecordBatch], names: &[&str]) -> Result<Option<Vec<f64>>, String> {
+    for name in names {
+        if batches
+            .iter()
+            .all(|batch| batch.column_by_name(name).is_some())
+        {
+            return col_f64(batches, name).map(Some);
         }
     }
-    Some(out)
+    Ok(None)
 }
 
-fn col_i64(batches: &[RecordBatch], name: &str) -> Option<Vec<Option<i64>>> {
-    use arrow_array::{Int32Array, Int64Array as I64};
+fn arr_i64(arr: &dyn Array, index: usize) -> Result<Option<i64>, String> {
+    if arr.is_null(index) {
+        return Ok(None);
+    }
+    macro_rules! integer_value {
+        ($array:ident) => {
+            if let Some(values) = arr.as_any().downcast_ref::<$array>() {
+                return Ok(Some(values.value(index) as i64));
+            }
+        };
+    }
+    integer_value!(Int8Array);
+    integer_value!(Int16Array);
+    integer_value!(Int32Array);
+    integer_value!(Int64Array);
+    integer_value!(UInt8Array);
+    integer_value!(UInt16Array);
+    integer_value!(UInt32Array);
+    integer_value!(UInt64Array);
+    if let Some(value) = primitive_string_value(arr, index)? {
+        let parsed = value
+            .trim()
+            .parse::<i64>()
+            .map_err(|error| format!("invalid integer `{value}`: {error}"))?;
+        return Ok(Some(parsed));
+    }
+    Ok(None)
+}
+
+fn col_i64(batches: &[RecordBatch], name: &str) -> Result<Vec<Option<i64>>, String> {
     let mut out = Vec::new();
     for b in batches {
-        let col = b.column_by_name(name)?;
-        if let Some(a) = col.as_any().downcast_ref::<I64>() {
-            for i in 0..a.len() {
-                out.push(if a.is_null(i) { None } else { Some(a.value(i)) });
-            }
-        } else {
-            let a = col.as_any().downcast_ref::<Int32Array>()?;
-            for i in 0..a.len() {
-                out.push(if a.is_null(i) {
-                    None
-                } else {
-                    Some(a.value(i) as i64)
-                });
-            }
+        let Some(col) = b.column_by_name(name) else {
+            return Err(format!("column `{name}` is missing"));
+        };
+        for index in 0..col.len() {
+            out.push(arr_i64(col.as_ref(), index)?);
         }
     }
-    Some(out)
+    Ok(out)
 }
 
 fn err(msg: impl Into<String>) -> DagError {
@@ -266,27 +345,102 @@ async fn collect_batches(input: &NodeInput) -> Result<Vec<RecordBatch>, DagError
 
 /// Parse a GWAS RecordBatch set into [`mrlap::input::RawGwasRow`].
 fn parse_gwas(batches: &[RecordBatch]) -> Result<Vec<mrlap::input::RawGwasRow>, DagError> {
-    let rsid = col_str(batches, IN_RSID).ok_or_else(|| err("missing rsid column"))?;
-    let z = col_f64(batches, IN_Z).ok_or_else(|| err("missing z column"))?;
-    let n = col_f64(batches, IN_N).ok_or_else(|| err("missing n column"))?;
-    let alt = col_str(batches, IN_ALT).unwrap_or_else(|| vec![String::new(); rsid.len()]);
-    let ref_ = col_str(batches, IN_REF).unwrap_or_else(|| vec![String::new(); rsid.len()]);
-    let chr = col_i32(batches, IN_CHR).unwrap_or_else(|| vec![None; rsid.len()]);
-    let pos = col_i64(batches, IN_POS).unwrap_or_else(|| vec![None; rsid.len()]);
+    let rsid = col_str(batches, IN_RSID).map_err(err)?;
+    let n = col_f64(batches, IN_N).map_err(err)?;
+    let z = optional_col_f64(batches, &[IN_Z]).map_err(err)?;
+    let beta = optional_col_f64(batches, &[IN_BETA]).map_err(err)?;
+    let odds_ratio = optional_col_f64(batches, &[IN_OR]).map_err(err)?;
+    let se = optional_col_f64(batches, &[IN_SE]).map_err(err)?;
+    let Some(alt) = optional_col_str(batches, &[IN_EA, IN_ALT]).map_err(err)? else {
+        return Err(err("missing ea/nea (or alt/ref) allele columns"));
+    };
+    let Some(ref_) = optional_col_str(batches, &[IN_NEA, IN_REF]).map_err(err)? else {
+        return Err(err("missing ea/nea (or alt/ref) allele columns"));
+    };
+    let chr = col_i64(batches, IN_CHR).map_err(err)?;
+    let pos = col_i64(batches, IN_POS).map_err(err)?;
     let mut rows = Vec::with_capacity(rsid.len());
     for i in 0..rsid.len() {
+        let chr = chr
+            .get(i)
+            .copied()
+            .flatten()
+            .and_then(|value| i32::try_from(value).ok())
+            .ok_or_else(|| err(format!("row {i}: chr is missing or outside Int32 range")))?;
+        let pos = pos
+            .get(i)
+            .copied()
+            .flatten()
+            .ok_or_else(|| err(format!("row {i}: pos is missing")))?;
         rows.push(mrlap::input::RawGwasRow {
             rsid: rsid[i].clone(),
-            chr: chr[i],
-            pos: pos[i],
+            chr: Some(chr),
+            pos: Some(pos),
             alt: alt.get(i).cloned().unwrap_or_default(),
             ref_allele: ref_.get(i).cloned().unwrap_or_default(),
-            z: Some(z[i]),
+            beta: beta.as_ref().and_then(|values| values.get(i).copied()),
+            or: odds_ratio
+                .as_ref()
+                .and_then(|values| values.get(i).copied()),
+            se: se.as_ref().and_then(|values| values.get(i).copied()),
+            z: z.as_ref().and_then(|values| values.get(i).copied()),
             n: n[i],
-            ..Default::default()
         });
     }
     Ok(rows)
+}
+
+fn column_type(batches: &[RecordBatch], name: &str) -> String {
+    batches
+        .iter()
+        .find_map(|batch| batch.column_by_name(name))
+        .map(|column| column.data_type().to_string())
+        .unwrap_or_else(|| "missing".into())
+}
+
+fn no_harmonised_snps_message(
+    b1: &[RecordBatch],
+    b2: &[RecordBatch],
+    tidy1: &[mrlap::input::TidyRow],
+    tidy2: &[mrlap::input::TidyRow],
+) -> String {
+    let keys1: HashSet<&str> = tidy1.iter().map(|row| row.rsid.as_str()).collect();
+    let keys2: HashSet<&str> = tidy2.iter().map(|row| row.rsid.as_str()).collect();
+    let shared = keys1.intersection(&keys2).count();
+    let outcomes: HashMap<&str, Vec<&mrlap::input::TidyRow>> = {
+        let mut map: HashMap<&str, Vec<&mrlap::input::TidyRow>> =
+            HashMap::with_capacity(tidy2.len());
+        for row in tidy2 {
+            map.entry(row.rsid.as_str()).or_default().push(row);
+        }
+        map
+    };
+    let allele_aligned = tidy1
+        .iter()
+        .filter_map(|exposure| {
+            outcomes
+                .get(exposure.rsid.as_str())
+                .map(|rows| (exposure, rows))
+        })
+        .flat_map(|(exposure, rows)| {
+            rows.iter().filter(|outcome| {
+                (exposure.alt == outcome.alt && exposure.ref_allele == outcome.ref_allele)
+                    || (exposure.ref_allele == outcome.alt && exposure.alt == outcome.ref_allele)
+            })
+        })
+        .count();
+
+    format!(
+        "no SNPs survive harmonisation: exposure={} valid rows / {} unique rsids, outcome={} valid rows / {} unique rsids, shared rsids={}, allele-aligned joins={}; rsid types: exposure={}, outcome={}",
+        tidy1.len(),
+        keys1.len(),
+        tidy2.len(),
+        keys2.len(),
+        shared,
+        allele_aligned,
+        column_type(b1, IN_RSID),
+        column_type(b2, IN_RSID),
+    )
 }
 
 #[async_trait]
@@ -335,7 +489,7 @@ impl DagNode for MrlapNode {
         let tidy2 = mrlap::input::tidy(&raw2, true).map_err(|e| err(e.to_string()))?;
         let harm = mrlap::harmonise::harmonise(&tidy1, &tidy2);
         if harm.is_empty() {
-            return Err(err("no SNPs survive harmonisation"));
+            return Err(err(no_harmonised_snps_message(&b1, &b2, &tidy1, &tidy2)));
         }
 
         // ---- LDSC stage: 3-way join via the VFS LD panel ----
@@ -356,12 +510,15 @@ impl DagNode for MrlapNode {
         // M = total SNPs in the LD panel.
         let m = count_panel_snp(&ctx, "ld_panel").await?;
         let sql = format!(
-            r#"SELECT s1."{z}" AS z1, s2."{z}" AS z2,
-                      s1."{n}" AS n1, s2."{n}" AS n2,
-                      l.ld_score AS ref_ld, l.ld_score AS w_ld
+            r#"SELECT CAST(s1."{z}" AS DOUBLE) AS z1, CAST(s2."{z}" AS DOUBLE) AS z2,
+                      CAST(s1."{n}" AS DOUBLE) AS n1, CAST(s2."{n}" AS DOUBLE) AS n2,
+                      CAST(l.ld_score AS DOUBLE) AS ref_ld,
+                      CAST(l.w_ld AS DOUBLE) AS w_ld
                FROM sumstats1 AS s1
-               INNER JOIN sumstats2 AS s2 ON s1."{rsid}" = s2."{rsid}"
-               INNER JOIN {tbl} AS l ON s1."{rsid}" = l.rsid
+               INNER JOIN sumstats2 AS s2
+                 ON CAST(s1."{rsid}" AS VARCHAR) = CAST(s2."{rsid}" AS VARCHAR)
+               INNER JOIN {tbl} AS l
+                 ON CAST(s1."{rsid}" AS VARCHAR) = CAST(l.rsid AS VARCHAR)
                ORDER BY l.locus.position"#,
             z = IN_Z,
             n = IN_N,
@@ -376,14 +533,12 @@ impl DagNode for MrlapNode {
             .collect()
             .await
             .map_err(|e| err(format!("ldsc collect: {e}")))?;
-        let z1 = col_f64(&jb, "z1").ok_or_else(|| err("ldsc join missing z1"))?;
-        let z2 = col_f64(&jb, "z2").ok_or_else(|| err("ldsc join missing z2"))?;
-        let n1 = col_f64(&jb, "n1").ok_or_else(|| err("ldsc join missing n1"))?;
-        let n2 = col_f64(&jb, "n2").ok_or_else(|| err("ldsc join missing n2"))?;
-        let ref_ld = col_f64(&jb, "ref_ld").ok_or_else(|| err("ldsc join missing ref_ld"))?;
-        let w_ld = col_f64(&jb, "wld")
-            .or_else(|| col_f64(&jb, "w_ld"))
-            .unwrap_or_else(|| ref_ld.clone());
+        let z1 = col_f64(&jb, "z1").map_err(err)?;
+        let z2 = col_f64(&jb, "z2").map_err(err)?;
+        let n1 = col_f64(&jb, "n1").map_err(err)?;
+        let n2 = col_f64(&jb, "n2").map_err(err)?;
+        let ref_ld = col_f64(&jb, "ref_ld").map_err(err)?;
+        let w_ld = col_f64(&jb, "w_ld").map_err(err)?;
         let n_snp = z1.len();
         if n_snp < 2 {
             return Err(err("LDSC join yielded < 2 shared SNPs"));
@@ -542,6 +697,8 @@ async fn count_panel_snp(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow_array::UInt32Array;
+    use arrow_schema::{Field, Schema};
 
     #[tokio::test]
     async fn missing_inputs_yield_clear_error() {
@@ -571,5 +728,91 @@ mod tests {
             .unwrap_err();
 
         assert!(error.to_string().contains("no exposure input"));
+    }
+
+    #[test]
+    fn parses_primary_gwas_contract_with_string_view_keys() {
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("rsid", DataType::Utf8View, false),
+                Field::new("chr", DataType::Utf8View, false),
+                Field::new("pos", DataType::UInt32, false),
+                Field::new("ea", DataType::Utf8View, false),
+                Field::new("nea", DataType::LargeUtf8, false),
+                Field::new("beta", DataType::Float64, false),
+                Field::new("se", DataType::Float64, false),
+                Field::new("n", DataType::Float64, false),
+            ])),
+            vec![
+                Arc::new(StringViewArray::from(vec!["rs1"])),
+                Arc::new(StringViewArray::from(vec!["1"])),
+                Arc::new(UInt32Array::from(vec![101])),
+                Arc::new(StringViewArray::from(vec!["A"])),
+                Arc::new(LargeStringArray::from(vec!["G"])),
+                Arc::new(Float64Array::from(vec![2.5])),
+                Arc::new(Float64Array::from(vec![1.0])),
+                Arc::new(Float64Array::from(vec![100.0])),
+            ],
+        )
+        .unwrap();
+
+        let raw = parse_gwas(&[batch]).unwrap();
+        let tidy = mrlap::input::tidy(&raw, true).unwrap();
+
+        assert_eq!(tidy.len(), 1);
+        assert_eq!(tidy[0].rsid, "rs1");
+        assert_eq!(tidy[0].chr, Some(1));
+        assert_eq!(tidy[0].pos, Some(101));
+        assert_eq!(tidy[0].alt, "A");
+        assert_eq!(tidy[0].ref_allele, "G");
+        assert_eq!(tidy[0].z, 2.5);
+    }
+
+    #[test]
+    fn empty_harmonisation_diagnostic_reports_key_overlap() {
+        let make_batch = |rsid: ArrayRef, ea: ArrayRef, nea: ArrayRef| {
+            RecordBatch::try_new(
+                Arc::new(Schema::new(vec![
+                    Field::new("rsid", rsid.data_type().clone(), false),
+                    Field::new("chr", DataType::Int64, false),
+                    Field::new("pos", DataType::Int64, false),
+                    Field::new("ea", ea.data_type().clone(), false),
+                    Field::new("nea", nea.data_type().clone(), false),
+                    Field::new("z", DataType::Float64, false),
+                    Field::new("n", DataType::Float64, false),
+                ])),
+                vec![
+                    rsid,
+                    Arc::new(Int64Array::from(vec![1])),
+                    Arc::new(Int64Array::from(vec![101])),
+                    ea,
+                    nea,
+                    Arc::new(Float64Array::from(vec![1.0])),
+                    Arc::new(Float64Array::from(vec![100.0])),
+                ],
+            )
+            .unwrap()
+        };
+        let b1 = make_batch(
+            Arc::new(StringViewArray::from(vec!["rs1"])),
+            Arc::new(StringArray::from(vec!["A"])),
+            Arc::new(StringArray::from(vec!["G"])),
+        );
+        let b2 = make_batch(
+            Arc::new(LargeStringArray::from(vec!["rs1"])),
+            Arc::new(StringArray::from(vec!["C"])),
+            Arc::new(StringArray::from(vec!["T"])),
+        );
+        let tidy1 =
+            mrlap::input::tidy(&parse_gwas(std::slice::from_ref(&b1)).unwrap(), true).unwrap();
+        let tidy2 =
+            mrlap::input::tidy(&parse_gwas(std::slice::from_ref(&b2)).unwrap(), true).unwrap();
+
+        let message = no_harmonised_snps_message(&[b1], &[b2], &tidy1, &tidy2);
+
+        assert!(message.contains("shared rsids=1"), "{message}");
+        assert!(message.contains("allele-aligned joins=0"), "{message}");
+        assert!(message.contains("Utf8View"), "{message}");
+        assert!(message.contains("LargeUtf8"), "{message}");
     }
 }

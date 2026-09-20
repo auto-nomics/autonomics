@@ -6,7 +6,7 @@ use arrow_array::{Array, StringArray, UInt64Array};
 use data_engine::data_engine::DataEngine;
 use datafusion::prelude::SessionContext;
 
-use dag_core::DataBundleCatalog;
+use dag_core::BundleRegistry;
 use dag_core::dag::node_event::NodeReporter;
 use dag_core::registry::NodeCtx;
 
@@ -14,7 +14,7 @@ fn registry() -> data_engine::node_registry::NodeRegistry {
     data_engine::default_registry::build_default_registry(
         SessionContext::new().runtime_env(),
         None,
-        Arc::new(DataBundleCatalog::new()),
+        Arc::new(BundleRegistry::new()),
     )
 }
 

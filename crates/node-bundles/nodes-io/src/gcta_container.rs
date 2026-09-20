@@ -297,6 +297,7 @@ fn command_spec(
         memory: None,
         pids_limit: None,
         shm_size: None,
+        gpus: None,
         user: None,
     })
 }

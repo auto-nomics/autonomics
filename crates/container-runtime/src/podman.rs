@@ -21,9 +21,12 @@ use crate::connection::{
     PodmanConnection, request_user_ids, truncate_captured_bytes, validate_run_request,
 };
 use crate::error::ContainerRuntimeError;
-use crate::types::{ContainerNetwork, ContainerRunRequest, ContainerRunResult, PullPolicy};
+use crate::types::{
+    ContainerNetwork, ContainerRunRequest, ContainerRunResult, GpuRequest, PullPolicy,
+};
 
 const CLEANUP_TIMEOUT_SECS: u64 = 30;
+const HOST_CWD: &str = "/";
 
 #[derive(Debug, Clone)]
 pub struct PodmanConfig {
@@ -98,7 +101,8 @@ impl PodmanConnection for PodmanRuntime {
         create_container(&self.config.program, &request, args).await?;
         let mut guard = ContainerCleanupGuard::new(&self.config.program, &request.name);
 
-        let start = Command::new(&self.config.program)
+        let mut start = async_podman_command(&self.config.program);
+        start
             .arg("start")
             .arg("--attach")
             .arg("--sig-proxy=false")
@@ -106,8 +110,8 @@ impl PodmanConnection for PodmanRuntime {
             .kill_on_drop(true)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn();
+            .stderr(Stdio::piped());
+        let start = start.spawn();
         let child = match start {
             Ok(child) => child,
             Err(error) => {
@@ -150,6 +154,7 @@ impl PodmanConnection for PodmanRuntime {
                     Err(ContainerRuntimeError::ExitStatus {
                         exit_code: output.status.code().unwrap_or(1),
                         stderr,
+                        stdout,
                     })
                 }
             }
@@ -181,7 +186,7 @@ async fn create_container(
 ) -> Result<(), ContainerRuntimeError> {
     let created = tokio::time::timeout(
         Duration::from_secs(request.timeout_secs),
-        Command::new(program)
+        async_podman_command(program)
             .arg("create")
             .args(args)
             .stdin(Stdio::null())
@@ -223,7 +228,7 @@ async fn create_container(
 async fn remove_container(program: &str, name: &str) -> Result<(), String> {
     let removed = tokio::time::timeout(
         Duration::from_secs(CLEANUP_TIMEOUT_SECS),
-        Command::new(program)
+        async_podman_command(program)
             .arg("rm")
             .arg("--force")
             .arg("--time=0")
@@ -270,7 +275,7 @@ impl Drop for ContainerCleanupGuard {
         let program = self.program.clone();
         let name = self.name.clone();
         std::thread::spawn(move || {
-            let _ = std::process::Command::new(program)
+            let _ = blocking_podman_command(&program)
                 .args(["rm", "--force", "--time=0", &name])
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
@@ -278,6 +283,18 @@ impl Drop for ContainerCleanupGuard {
                 .status();
         });
     }
+}
+
+fn async_podman_command(program: &str) -> Command {
+    let mut command = Command::new(program);
+    command.current_dir(HOST_CWD);
+    command
+}
+
+fn blocking_podman_command(program: &str) -> std::process::Command {
+    let mut command = std::process::Command::new(program);
+    command.current_dir(HOST_CWD);
+    command
 }
 
 fn append_capture(value: &mut String, message: String) {
@@ -327,6 +344,10 @@ pub(crate) fn build_create_args(
     if let Some(pids_limit) = request.pids_limit {
         args.push("--pids-limit".into());
         args.push(pids_limit.to_string());
+    }
+    if let Some(gpus) = request.gpus.podman_value() {
+        args.push("--gpus".into());
+        args.push(gpus);
     }
     for (name, value) in &request.env {
         args.push("--env".into());
@@ -485,10 +506,19 @@ mod tests {
             memory: Some("1Gi".into()),
             pids_limit: Some(512),
             shm_size: Some("64Mi".into()),
+            gpus: GpuRequest::None,
             user: Some("1000:1000".into()),
             timeout_secs: 60,
             name: "podman-test".into(),
         }
+    }
+
+    #[test]
+    fn podman_commands_do_not_inherit_daemon_cwd() {
+        assert_eq!(
+            blocking_podman_command("podman").get_current_dir(),
+            Some(std::path::Path::new("/"))
+        );
     }
 
     #[test]
@@ -571,6 +601,31 @@ mod tests {
     }
 
     #[test]
+    fn gpu_requests_add_gpus_flag_only_when_present() {
+        let without = build_create_args(&request(ContainerNetwork::Isolated)).unwrap();
+        assert!(!without.iter().any(|arg| arg == "--gpus"));
+
+        let mut with = request(ContainerNetwork::Isolated);
+        with.gpus = GpuRequest::All;
+        let args = build_create_args(&with).unwrap();
+        let flag = args
+            .windows(2)
+            .find(|args| args[0] == "--gpus")
+            .map(|args| args[1].clone())
+            .unwrap();
+        assert_eq!(flag, "all");
+
+        with.gpus = GpuRequest::Devices("0,2".into());
+        let args = build_create_args(&with).unwrap();
+        let flag = args
+            .windows(2)
+            .find(|args| args[0] == "--gpus")
+            .map(|args| args[1].clone())
+            .unwrap();
+        assert_eq!(flag, "device=0,2");
+    }
+
+    #[test]
     fn panel_mounts_must_exist_and_not_overlap_workspace() {
         let panel = tempfile::tempdir().unwrap();
         let mut valid = request(ContainerNetwork::Isolated);
@@ -602,7 +657,7 @@ mod tests {
         let program = root.path().join("fake-podman");
         std::fs::write(
             &program,
-            "#!/bin/sh\ncase \"$1\" in\n  create) exit 0 ;;\n  start) exec sleep 30 ;;\n  rm) printf '%s\\n' \"$*\" > \"${0}.removed\"; exit 0 ;;\n  *) exit 2 ;;\nesac\n",
+            "#!/bin/sh\ncase \"$1\" in\n  create) pwd -P > \"${0}.cwd\"; exit 0 ;;\n  start) exec sleep 30 ;;\n  rm) printf '%s\\n' \"$*\" > \"${0}.removed\"; exit 0 ;;\n  *) exit 2 ;;\nesac\n",
         )
         .unwrap();
         make_executable(&program);
@@ -625,6 +680,10 @@ mod tests {
             error.unwrap_err(),
             ContainerRuntimeError::Timeout { timeout_secs: 1 }
         ));
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("fake-podman.cwd")).unwrap(),
+            "/\n"
+        );
         assert!(marker.is_file());
     }
 
@@ -662,6 +721,7 @@ mod tests {
             memory: None,
             pids_limit: None,
             shm_size: None,
+            gpus: GpuRequest::None,
             user: None,
             timeout_secs: 120,
             name: unique_container_name(),

@@ -47,9 +47,9 @@ pub fn to_bibtex(article: &Article) -> String {
             .authors
             .iter()
             .map(|a| match (&a.fore_name, &a.initials) {
-                (Some(f), _) => format!("{f} {}", a.last_name),
-                (None, Some(i)) => format!("{} {}", a.last_name, i),
-                (None, None) => a.last_name.clone(),
+                (Some(f), _) => format!("{} {}", escape_bibtex(f), escape_bibtex(&a.last_name)),
+                (None, Some(i)) => format!("{} {}", escape_bibtex(&a.last_name), escape_bibtex(i)),
+                (None, None) => escape_bibtex(&a.last_name),
             })
             .collect();
         lines.push(format!("  author = {{{}}},", names.join(" and ")));
@@ -62,19 +62,20 @@ pub fn to_bibtex(article: &Article) -> String {
         lines.push(format!("  year = {{{y}}},"));
     }
     if let Some(ref v) = article.volume {
-        lines.push(format!("  volume = {{{}}},", v));
+        lines.push(format!("  volume = {{{}}},", escape_bibtex(v)));
     }
     if let Some(ref i) = article.issue {
-        lines.push(format!("  number = {{{}}},", i));
+        lines.push(format!("  number = {{{}}},", escape_bibtex(i)));
     }
     if let Some(ref p) = article.pages {
-        lines.push(format!("  pages = {{{}}},", p.replace('-', "--")));
+        let pages = escape_bibtex(&p.replace('-', "--"));
+        lines.push(format!("  pages = {{{pages}}},"));
     }
-    if let Some(ref doi) = article.doi() {
-        lines.push(format!("  doi = {{{doi}}},"));
+    if let Some(doi) = article.doi() {
+        lines.push(format!("  doi = {{{}}},", escape_bibtex(doi)));
     }
-    if let Some(ref pmid) = article.pmid() {
-        lines.push(format!("  pmid = {{{pmid}}},"));
+    if let Some(pmid) = article.pmid() {
+        lines.push(format!("  pmid = {{{}}},", escape_bibtex(pmid)));
     }
 
     // Remove trailing comma from last field.
@@ -93,7 +94,14 @@ pub fn cite_key(article: &Article) -> String {
     let author_part = article
         .authors
         .first()
-        .map(|a| a.last_name.to_lowercase().replace(' ', ""))
+        .map(|a| {
+            a.last_name
+                .to_lowercase()
+                .chars()
+                .filter(|c| c.is_ascii_alphanumeric())
+                .collect::<String>()
+        })
+        .filter(|part| !part.is_empty())
         .unwrap_or_else(|| "anon".into());
     let year_part = article
         .year
@@ -117,7 +125,23 @@ pub fn cite_key(article: &Article) -> String {
 }
 
 fn escape_bibtex(s: &str) -> String {
-    s.replace('{', "\\{").replace('}', "\\}")
+    let mut escaped = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => escaped.push_str("\\textbackslash{}"),
+            '{' => escaped.push_str("\\{"),
+            '}' => escaped.push_str("\\}"),
+            '#' => escaped.push_str("\\#"),
+            '$' => escaped.push_str("\\$"),
+            '%' => escaped.push_str("\\%"),
+            '&' => escaped.push_str("\\&"),
+            '_' => escaped.push_str("\\_"),
+            '^' => escaped.push_str("\\textasciicircum{}"),
+            '~' => escaped.push_str("\\textasciitilde{}"),
+            _ => escaped.push(c),
+        }
+    }
+    escaped
 }
 
 // ---------------------------------------------------------------------------
@@ -297,6 +321,33 @@ mod tests {
         assert!(bib.contains("pages = {100--110}"));
         assert!(bib.contains("doi = {10.1000/test}"));
         assert!(bib.contains("pmid = {30124452}"));
+    }
+
+    #[test]
+    fn bibtex_escapes_special_characters() {
+        let mut article = sample();
+        article.title = "R&D at 100%: A_B {C} #1, $2, C^D ~E, F\\G".into();
+        article.journal = Some("Journal of R&D Systems".into());
+        article.authors[0].last_name = "O'Neill & Co".into();
+        article.volume = Some("10_20".into());
+        article.issue = Some("Issue #3".into());
+        article.pages = Some("1&2-3_4".into());
+        article.identifiers.clear();
+        article
+            .identifiers
+            .push(bib_types::Identifier::doi("10.1000/r&_d_2024#1"));
+
+        let bib = to_bibtex(&article);
+
+        assert!(bib.starts_with("@article{oneillco2024rd,"));
+
+        assert!(bib.contains("title = {R\\&D at 100\\%: A\\_B \\{C\\} \\#1, \\$2, C\\textasciicircum{}D \\textasciitilde{}E, F\\textbackslash{}G},"));
+        assert!(bib.contains("journal = {Journal of R\\&D Systems}"));
+        assert!(bib.contains("author = {John A O'Neill \\& Co and Jones B}"));
+        assert!(bib.contains("volume = {10\\_20}"));
+        assert!(bib.contains("number = {Issue \\#3}"));
+        assert!(bib.contains("pages = {1\\&2--3\\_4}"));
+        assert!(bib.contains("doi = {10.1000/r\\&\\_d\\_2024\\#1}"));
     }
 
     #[test]

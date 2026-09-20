@@ -36,7 +36,8 @@ use nodes_io::gcta_container::{
     GctaContainerNodeFactory,
 };
 use nodes_io::hdl_l_container::{
-    HDL_L_CONTAINER_KIND, HDL_UKB_EUR_PANEL, HdlLContainerNodeFactory,
+    HDL_L_CONTAINER_KIND, HDL_ORIGINAL_IMAGE_DIGEST, HDL_ORIGINAL_IMAGE_REPOSITORY,
+    HDL_UKB_EUR_PANEL, HdlLContainerNodeFactory,
 };
 use nodes_io::hdl_l_scan_container::{HDL_L_SCAN_CONTAINER_KIND, HdlLScanContainerNodeFactory};
 use nodes_io::hyprcoloc_container::{HYPRCOLOC_CONTAINER_KIND, HyPrColocContainerNodeFactory};
@@ -44,7 +45,9 @@ use nodes_io::lava_container::{
     LAVA_CONTAINER_KIND, LAVA_TUTORIAL_REF_PANEL, LAVA_UKB_EUR_PANEL, LavaContainerNodeFactory,
 };
 use nodes_io::lava_scan_container::{LAVA_SCAN_CONTAINER_KIND, LavaScanContainerNodeFactory};
-use nodes_io::ldsc_h2_container::{LDSC_H2_CONTAINER_KIND, LdscH2ContainerNodeFactory};
+use nodes_io::ldsc_h2_container::{
+    LDSC_H2_CONTAINER_KIND, LDSC_REF_LD_PANEL, LDSC_W_LD_PANEL, LdscH2ContainerNodeFactory,
+};
 use nodes_io::ldsc_munge_container::{LDSC_MUNGE_CONTAINER_KIND, LdscMungeContainerNodeFactory};
 use nodes_io::ldsc_rg_container::{LDSC_RG_CONTAINER_KIND, LdscRgContainerNodeFactory};
 use nodes_io::magma_annotate_container::{
@@ -248,6 +251,7 @@ fn container_spec(image: &str, workspace: &Path, artifact_prefix: String) -> Con
         memory: None,
         pids_limit: None,
         shm_size: None,
+        gpus: None,
         user: None,
     }
 }
@@ -340,7 +344,7 @@ async fn dataframe_to_file_output_flows_through_container_command_in_dag() {
         Box::new(DataFrameToFileNode::new(
             input_path,
             WriteFormat::Csv,
-            dag_core::SinkMode::Overwrite,
+            nodes_io::dataframe_to_file::SinkMode::Overwrite,
         )),
     )
     .unwrap();
@@ -451,7 +455,7 @@ async fn real_catalog_backed_official_mtag_runs_in_podman() {
     let registry_ctx = fixture
         .ctx
         .clone()
-        .with_data_bundle_catalog(Arc::new(fixture.bundles.clone()));
+        .with_bundle_registry(Arc::new(fixture.bundles.clone()));
     let mut registry = NodeRegistry::new(registry_ctx);
     registry.register(Box::new(MtagContainerNodeFactory::new(
         runtime,
@@ -562,9 +566,127 @@ async fn real_catalog_backed_official_mtag_runs_in_podman() {
     assert!(cached_panel, "MTAG panel should be cached");
 }
 
+#[tokio::test]
+#[ignore = "requires a working rootless Podman runtime, the patched LDSC image, the EUR LDSC panels, and baseline sumstats"]
+async fn real_catalog_backed_ldsc_rg_tolerates_incompatible_allele_pairs() {
+    let fixture = catalog_test_fixture().await;
+    assert!(
+        fixture.bundles.get(LDSC_REF_LD_PANEL).is_some()
+            && fixture.bundles.get(LDSC_W_LD_PANEL).is_some(),
+        "the LDSC reference and weight panels must be published before the E2E baseline"
+    );
+
+    let input1 = std::env::var_os("AUTONOMICS_LDSC_RG_IT_SUMSTATS1")
+        .map(PathBuf::from)
+        .expect("AUTONOMICS_LDSC_RG_IT_SUMSTATS1 is required");
+    let input2 = std::env::var_os("AUTONOMICS_LDSC_RG_IT_SUMSTATS2")
+        .map(PathBuf::from)
+        .expect("AUTONOMICS_LDSC_RG_IT_SUMSTATS2 is required");
+    assert!(
+        input1.is_file(),
+        "missing LDSC input 1: {}",
+        input1.display()
+    );
+    assert!(
+        input2.is_file(),
+        "missing LDSC input 2: {}",
+        input2.display()
+    );
+
+    let scratch = tempfile::tempdir().unwrap();
+    let workspace_root = scratch.path().join("workspace");
+    let panel_root = scratch.path().join("panels");
+    std::fs::create_dir_all(&workspace_root).unwrap();
+    std::fs::create_dir_all(&panel_root).unwrap();
+    let runtime: Arc<dyn PodmanConnection> = Arc::new(PodmanRuntime::new(PodmanConfig {
+        program: std::env::var("AUTONOMICS_PODMAN_PROGRAM").unwrap_or_else(|_| "podman".into()),
+        workspace_root,
+        panel_cache_root: panel_root.clone(),
+    }));
+    let panel_cache = Arc::new(PanelCache::new(panel_root.clone()));
+    let registry_ctx = fixture
+        .ctx
+        .clone()
+        .with_bundle_registry(Arc::new(fixture.bundles.clone()));
+    let mut registry = NodeRegistry::new(registry_ctx);
+    registry.register(Box::new(LdscRgContainerNodeFactory::new(
+        runtime,
+        panel_cache,
+    )));
+    // The production wrapper pins a manifest digest. Local E2E runs resolve
+    // that digest through a localhost repository with the same name.
+    // SAFETY: ignored E2E tests are run one at a time by the LDSC test script.
+    unsafe {
+        std::env::set_var(
+            nodes_io::image_registry::ACR_ENDPOINT_ENV,
+            std::env::var("AUTONOMICS_LDSC_IMAGE_ENDPOINT").unwrap_or_else(|_| "localhost".into()),
+        );
+    }
+    let rg = registry
+        .build_node(
+            LDSC_RG_CONTAINER_KIND,
+            serde_json::json!({
+                "artifact_prefix": "/artifacts/ldsc-rg-allele-regression",
+                "timeout_secs": 1800,
+            }),
+        )
+        .unwrap();
+
+    let mut dag = dag_core::dag::DAG::default();
+    dag.add_node(
+        "trait1".into(),
+        Box::new(FileReferenceNode::new(
+            input1.to_string_lossy().into_owned(),
+            Some("sumstats_gz".into()),
+        )),
+    )
+    .unwrap();
+    dag.add_node(
+        "trait2".into(),
+        Box::new(FileReferenceNode::new(
+            input2.to_string_lossy().into_owned(),
+            Some("sumstats_gz".into()),
+        )),
+    )
+    .unwrap();
+    dag.add_node("rg".into(), rg).unwrap();
+    dag.add_edge("trait1", "rg", 0, 0).unwrap();
+    dag.add_edge("trait2", "rg", 0, 1).unwrap();
+    let report = dag
+        .run(&SchedulerConfig::default(), &fixture.ctx, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        report.statuses.get("rg"),
+        Some(&dag_core::dag::RuntimeStatus::Success),
+        "LDSC rg node failed: {report:#?}"
+    );
+
+    let outputs = dag.output("rg").unwrap();
+    let log = outputs.get(&0).unwrap().as_file().unwrap().clone();
+    assert!(log.path.ends_with("/ldsc_rg.log"));
+    let log_text = read_published_text(
+        fixture
+            .ctx
+            .opendal
+            .as_ref()
+            .expect("test storage is registered"),
+        &log,
+    )
+    .await;
+    assert!(
+        !log_text.contains("Incompatible alleles in .sumstats files"),
+        "patched LDSC still hit the stale allele series:\n{log_text}"
+    );
+    assert!(
+        log_text.contains("Genetic Correlation:"),
+        "LDSC rg regression did not complete:\n{log_text}"
+    );
+}
+
 struct CatalogTextFixture {
     ctx: NodeCtx,
-    bundles: dag_core::DataBundleCatalog,
+    bundles: dag_core::BundleRegistry,
     _scratch: tempfile::TempDir,
 }
 
@@ -618,13 +740,13 @@ async fn catalog_test_fixture() -> CatalogTextFixture {
         .register_object_store(ObjectStoreUrl::parse("vfs://").unwrap().as_ref(), mounted);
     CatalogTextFixture {
         ctx: NodeCtx::new(session.runtime_env(), Some(storage)),
-        bundles: catalog_runtime.data_bundles(),
+        bundles: catalog_runtime.bundle_registry(),
         _scratch: scratch,
     }
 }
 
 #[tokio::test]
-#[ignore = "requires rootless Podman and the local official HDL image"]
+#[ignore = "requires rootless Podman and the pinned ACR HDL image"]
 async fn real_official_hdl_l_runs_in_podman_with_local_panel() {
     let scratch = tempfile::tempdir().unwrap();
     let fixture_root = scratch.path().join("official-fixture");
@@ -675,8 +797,13 @@ write.table(gwas2, "/work/gwas2.tsv", sep = "\t", quote = FALSE, row.names = FAL
 "#;
     let podman_program =
         std::env::var("AUTONOMICS_PODMAN_PROGRAM").unwrap_or_else(|_| "podman".into());
-    let image = std::env::var("AUTONOMICS_HDL_IMAGE")
-        .unwrap_or_else(|_| nodes_io::hdl_l_container::HDL_ORIGINAL_IMAGE.into());
+    let image = std::env::var("AUTONOMICS_HDL_IMAGE").unwrap_or_else(|_| {
+        nodes_io::image_registry::acr_image(
+            HDL_ORIGINAL_IMAGE_REPOSITORY,
+            HDL_ORIGINAL_IMAGE_DIGEST,
+        )
+        .unwrap()
+    });
     let fixture_mount = format!("{}:/work", fixture_root.display());
     let status = Command::new(&podman_program)
         .args([
@@ -783,8 +910,8 @@ write.table(gwas2, "/work/gwas2.tsv", sep = "\t", quote = FALSE, row.names = FAL
     );
     panel.source = Some("/catalog/hdl_ref".into());
     panel.digest = built.manifest.digest.clone();
-    let registry_ctx = ctx.clone().with_data_bundle_catalog(Arc::new(
-        dag_core::DataBundleCatalog::from_bundles([panel]).unwrap(),
+    let registry_ctx = ctx.clone().with_bundle_registry(Arc::new(
+        dag_core::BundleRegistry::from_bundles([panel]).unwrap(),
     ));
 
     let workspace_root = scratch.path().join("podman-workspace");
@@ -938,7 +1065,7 @@ async fn real_catalog_backed_official_hdl_l_runs_in_podman_with_published_panel(
     let registry_ctx = fixture
         .ctx
         .clone()
-        .with_data_bundle_catalog(Arc::new(fixture.bundles.clone()));
+        .with_bundle_registry(Arc::new(fixture.bundles.clone()));
     let mut registry = NodeRegistry::new(registry_ctx);
     registry.register(Box::new(HdlLContainerNodeFactory::new(
         runtime,
@@ -1098,7 +1225,7 @@ async fn real_catalog_backed_official_hdl_l_scan_runs_in_podman_with_published_p
     let registry_ctx = fixture
         .ctx
         .clone()
-        .with_data_bundle_catalog(Arc::new(fixture.bundles.clone()));
+        .with_bundle_registry(Arc::new(fixture.bundles.clone()));
     let mut registry = NodeRegistry::new(registry_ctx);
     registry.register(Box::new(HdlLScanContainerNodeFactory::new(
         runtime,
@@ -1179,7 +1306,7 @@ async fn real_catalog_backed_official_hdl_l_scan_runs_in_podman_with_published_p
 }
 
 #[tokio::test]
-#[ignore = "requires the Garage LAVA tutorial panel, rootless Podman, and the local official LAVA image"]
+#[ignore = "requires the Garage LAVA tutorial panel, rootless Podman, and the pinned ACR LAVA image"]
 async fn real_catalog_backed_official_lava_scan_runs_in_podman() {
     let fixture = catalog_test_fixture().await;
     assert!(fixture.bundles.get(LAVA_TUTORIAL_REF_PANEL).is_some());
@@ -1208,7 +1335,7 @@ async fn real_catalog_backed_official_lava_scan_runs_in_podman() {
     let registry_ctx = fixture
         .ctx
         .clone()
-        .with_data_bundle_catalog(Arc::new(fixture.bundles.clone()));
+        .with_bundle_registry(Arc::new(fixture.bundles.clone()));
     let mut registry = NodeRegistry::new(registry_ctx);
     registry.register(Box::new(LavaScanContainerNodeFactory::new(
         runtime,
@@ -1441,8 +1568,8 @@ async fn real_official_mixer_fit1_and_fit2_run_in_podman_and_match_baselines() {
     );
     panel.source = Some("/catalog/mixer_g1000_eur".into());
     panel.digest = built.manifest.digest.clone();
-    let registry_ctx = ctx.clone().with_data_bundle_catalog(Arc::new(
-        dag_core::DataBundleCatalog::from_bundles([panel]).unwrap(),
+    let registry_ctx = ctx.clone().with_bundle_registry(Arc::new(
+        dag_core::BundleRegistry::from_bundles([panel]).unwrap(),
     ));
 
     let workspace_root = scratch.path().join("podman-workspace");
@@ -1669,7 +1796,7 @@ async fn real_catalog_backed_official_smr_heidi_eqtlgen_runs_with_container_back
     let registry_ctx = fixture
         .ctx
         .clone()
-        .with_data_bundle_catalog(Arc::new(fixture.bundles.clone()));
+        .with_bundle_registry(Arc::new(fixture.bundles.clone()));
     let mut registry = NodeRegistry::new(registry_ctx);
     registry.register(Box::new(SmrHeidiContainerNodeFactory::new(
         infra.runtime,
@@ -1796,7 +1923,7 @@ async fn real_catalog_backed_official_twosamplemr_runs_with_container_backend() 
     let registry_ctx = fixture
         .ctx
         .clone()
-        .with_data_bundle_catalog(Arc::new(fixture.bundles.clone()));
+        .with_bundle_registry(Arc::new(fixture.bundles.clone()));
     let mut registry = NodeRegistry::new(registry_ctx);
     registry.register(Box::new(TwoSampleMrContainerNodeFactory::new(
         infra.runtime,

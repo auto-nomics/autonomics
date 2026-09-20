@@ -14,7 +14,7 @@ use datafusion::datasource::listing::{
 };
 use datafusion::prelude::SessionContext;
 
-/// Stable bundle IDs resolved by the runtime `DataBundleCatalog`.
+/// Stable bundle IDs resolved by the runtime `BundleRegistry`.
 pub const BUNDLE_LDSCORE_1000G_EUR: &str = "ldscore.1000g_eur";
 pub const BUNDLE_LDSCORE_1000G_EUR_M: &str = "ldscore.1000g_eur_m";
 pub const BUNDLE_LDSCORE_BASELINELD_V2_2_EUR: &str = "ldscore.baselineLD_v2_2_eur";

@@ -5,6 +5,8 @@
 //! and only declared output files become DAG values.
 
 use std::collections::BTreeMap;
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
@@ -22,13 +24,15 @@ use dag_core::{NodeCtx, NodeFactory};
 
 use container_runtime::gc::{acquire_panel_lock_shared, acquire_scratch_lock_shared};
 use container_runtime::{
-    CachedPanel, ContainerNetwork, ContainerRunRequest, ContainerRuntimeError,
+    CachedPanel, ContainerNetwork, ContainerRunRequest, ContainerRuntimeError, GpuRequest,
     DEFAULT_CONTAINER_WORKDIR, DEFAULT_TIMEOUT_SECS, PanelCache, PanelRef, PodmanConfig,
     PodmanConnection, PodmanRuntime, PullPolicy, keep_workspace_enabled, unique_container_name,
     workspace_ref,
 };
 
 pub const CONTAINER_COMMAND_KIND: &str = "container_command";
+const FAILURE_CAPTURE_PREVIEW_CHARS: usize = 400;
+const FAILURE_OUTPUT_PREVIEW_BYTES: u64 = 8 * 1024;
 
 pub(crate) fn decompress_gzip_inputs(count: usize) -> String {
     let mut script = String::from(
@@ -56,17 +60,104 @@ pub enum ContainerCommandError {
     Invalid(String),
     #[error(transparent)]
     Runtime(#[from] ContainerRuntimeError),
+    #[error(
+        "container exited with status {exit_code}; stderr: {stderr}; stdout: {stdout}; declared output logs: {output_logs:?}"
+    )]
+    ExitStatus {
+        exit_code: i32,
+        stderr: String,
+        stdout: String,
+        output_logs: Vec<(String, String)>,
+    },
     #[error("declared output `{path}` was not produced")]
     MissingOutput { path: String },
 }
 
 impl ContainerCommandError {
+    fn diagnostic_message(&self) -> String {
+        let Self::ExitStatus {
+            exit_code,
+            stderr,
+            stdout,
+            output_logs,
+        } = self
+        else {
+            return self.to_string();
+        };
+
+        let mut message = format!("container exited with status {exit_code}");
+        if stderr.trim().is_empty() && stdout.trim().is_empty() && output_logs.is_empty() {
+            message.push_str("; no stdout, stderr, or declared output logs captured");
+            return message;
+        }
+        if !stderr.trim().is_empty() {
+            message.push_str("; ");
+            message.push_str(&capture_preview("stderr", stderr));
+        }
+        if !stdout.trim().is_empty() {
+            message.push_str("; ");
+            message.push_str(&capture_preview("stdout", stdout));
+        }
+        for (label, capture) in output_logs {
+            message.push_str("; ");
+            message.push_str(&capture_preview(label, capture));
+        }
+        message
+    }
+
     fn into_dag_error(self) -> DagError {
         DagError::NodeError {
             node_type: CONTAINER_COMMAND_KIND.into(),
-            msg: self.to_string(),
+            msg: self.diagnostic_message(),
         }
     }
+}
+
+fn capture_preview(label: &str, capture: &str) -> String {
+    let total_chars = capture.chars().count();
+    if total_chars <= FAILURE_CAPTURE_PREVIEW_CHARS {
+        return format!("{label}: {capture}");
+    }
+
+    let start = capture
+        .char_indices()
+        .nth_back(FAILURE_CAPTURE_PREVIEW_CHARS - 1)
+        .map(|(index, _)| index)
+        .unwrap_or(0);
+    let tail = capture[start..].trim_end();
+    let omitted_chars = total_chars - tail.chars().count();
+    format!("{label} tail ({omitted_chars} chars omitted): {tail}")
+}
+
+fn capture_declared_output_logs(
+    resolved_outputs: &[(&ContainerCommandOutputSpec, PathBuf)],
+) -> Vec<(String, String)> {
+    let mut logs = Vec::new();
+    for (spec, path) in resolved_outputs {
+        if !matches!(
+            path.extension().and_then(|extension| extension.to_str()),
+            Some("log" | "txt" | "out" | "stderr" | "stdout")
+        ) {
+            continue;
+        }
+        let Some(capture) = read_text_tail(path, FAILURE_OUTPUT_PREVIEW_BYTES) else {
+            continue;
+        };
+        if !capture.trim().is_empty() {
+            logs.push((spec.path.clone(), capture));
+        }
+    }
+    logs
+}
+
+fn read_text_tail(path: &Path, max_bytes: u64) -> Option<String> {
+    let mut file = File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    let start = len.saturating_sub(max_bytes);
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut bytes = Vec::with_capacity((len - start).try_into().ok()?);
+    file.read_to_end(&mut bytes).ok()?;
+    Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 impl dag_core::dag::NodeError for ContainerCommandError {
@@ -136,6 +227,12 @@ pub struct ContainerCommandSpec {
     pub pids_limit: Option<i64>,
     #[serde(default)]
     pub shm_size: Option<String>,
+    /// GPU passthrough for images that need accelerators: `all`, a positive
+    /// device count, or `device=<comma-separated indices or UUIDs>`. Absent
+    /// means no GPU is visible to the container. The host needs the
+    /// nvidia-container-toolkit CDI spec for rootless Podman.
+    #[serde(default)]
+    pub gpus: Option<String>,
     /// Advanced override for images that must run as an internal user. The
     /// default runs as the control process uid/gid while enforcing non-root.
     #[serde(default)]
@@ -184,6 +281,7 @@ pub struct ContainerCommandNode {
     memory: Option<String>,
     pids_limit: Option<i64>,
     shm_size: Option<String>,
+    gpus: GpuRequest,
     user: Option<String>,
     runtime: Arc<dyn PodmanConnection>,
     panel_cache: Arc<PanelCache>,
@@ -252,6 +350,12 @@ impl ContainerCommandNode {
             memory: spec.memory,
             pids_limit: spec.pids_limit,
             shm_size: spec.shm_size,
+            gpus: match spec.gpus.as_deref() {
+                None => GpuRequest::None,
+                Some(value) => {
+                    GpuRequest::parse(value).map_err(ContainerCommandError::Invalid)?
+                }
+            },
             user: spec.user,
             runtime,
             panel_cache,
@@ -649,7 +753,7 @@ fn resolve_catalog_panels(
             .find(|bundle| bundle.ident == panel.panel_id)
             .ok_or_else(|| {
                 ContainerCommandError::Invalid(format!(
-                    "catalog panel `{}` was not resolved by the runtime DataBundle catalog",
+                    "catalog panel `{}` was not resolved by the runtime bundle registry",
                     panel.panel_id
                 ))
             })?;
@@ -694,6 +798,7 @@ impl DagNode for ContainerCommandNode {
             memory: self.memory.clone(),
             pids_limit: self.pids_limit,
             shm_size: self.shm_size.clone(),
+            gpus: self.gpus.clone(),
             user: self.user.clone(),
             runtime: Arc::clone(&self.runtime),
             panel_cache: Arc::clone(&self.panel_cache),
@@ -885,6 +990,7 @@ impl DagNode for ContainerCommandNode {
             memory: self.memory.clone(),
             pids_limit: self.pids_limit,
             shm_size: self.shm_size.clone(),
+            gpus: self.gpus.clone(),
             user: self.user.clone(),
             timeout_secs: self.timeout_secs,
             name: unique_container_name(),
@@ -896,12 +1002,28 @@ impl DagNode for ContainerCommandNode {
             request.image,
             self.runtime.name()
         ));
-        let result = self
-            .runtime
-            .run(request)
-            .await
-            .map_err(ContainerCommandError::from)
-            .map_err(ContainerCommandError::into_dag_error)?;
+        let result = match self.runtime.run(request).await {
+            Ok(result) => result,
+            Err(error) => {
+                // Also surface the capped capture on the live event stream; the
+                // authoritative copy travels through the node's RunReport error.
+                let error = match error {
+                    ContainerRuntimeError::ExitStatus {
+                        exit_code,
+                        stderr,
+                        stdout,
+                    } => ContainerCommandError::ExitStatus {
+                        exit_code,
+                        stderr,
+                        stdout,
+                        output_logs: capture_declared_output_logs(&resolved_outputs),
+                    },
+                    error => ContainerCommandError::Runtime(error),
+                };
+                reporter.error(error.diagnostic_message());
+                return Err(error.into_dag_error());
+            }
+        };
         if !result.stdout.trim().is_empty() {
             reporter.info(result.stdout);
         }
@@ -1348,6 +1470,7 @@ mod tests {
             memory: None,
             pids_limit: None,
             shm_size: None,
+            gpus: None,
             user: None,
         }
     }
@@ -1845,6 +1968,88 @@ mod tests {
             .unwrap_err();
 
         assert!(error.to_string().contains("missing.txt"));
+    }
+
+    #[tokio::test]
+    async fn failed_container_exit_is_reported_with_captured_output() {
+        struct FailingRuntime {
+            workspace_root: PathBuf,
+        }
+        #[async_trait]
+        impl PodmanConnection for FailingRuntime {
+            async fn run(
+                &self,
+                request: ContainerRunRequest,
+            ) -> Result<ContainerRunResult, ContainerRuntimeError> {
+                let output = request
+                    .env
+                    .iter()
+                    .find(|(key, _)| key == "AUTONOMICS_OUTPUT0")
+                    .map(|(_, value)| value.clone())
+                    .expect("output binding");
+                std::fs::write(
+                    host_path(&request, &output),
+                    format!(
+                        "{}\nTraceback (most recent call last):\nValueError: malformed sumstats",
+                        "diagnostic noise\n".repeat(100)
+                    ),
+                )
+                .unwrap();
+                Err(ContainerRuntimeError::ExitStatus {
+                    exit_code: 42,
+                    stderr: String::new(),
+                    stdout: String::new(),
+                })
+            }
+            fn workspace_root(&self) -> &Path {
+                &self.workspace_root
+            }
+        }
+
+        let env = test_env();
+        let dir = env.workspace.path().join("failed");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut node_spec = spec("tool", vec!["tool".into()], "result.txt");
+        // A persistent workspace makes this test independent of scratch naming.
+        node_spec.workdir = Some(dir.to_string_lossy().into_owned());
+        let mut node = ContainerCommandNode::new(
+            node_spec,
+            Arc::new(FailingRuntime {
+                workspace_root: env.workspace.path().to_path_buf(),
+            }),
+            Arc::new(PanelCache::new(env.workspace.path().join("cache"))),
+        )
+        .unwrap();
+
+        let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(8);
+        let reporter = dag_core::dag::node_event::NodeReporter::new("container", event_tx);
+        let error = node.execute(&env.ctx, &[], &reporter).await.unwrap_err();
+        let report = error.to_report();
+
+        assert_eq!(report.kind, "node_error");
+        assert!(report.message.contains("status 42"), "{}", report.message);
+        assert!(
+            report.message.contains("result.txt tail"),
+            "{}",
+            report.message
+        );
+        assert!(
+            report.message.contains("ValueError: malformed sumstats"),
+            "{}",
+            report.message
+        );
+        assert!(
+            !report.message.contains("no stdout or stderr captured"),
+            "{}",
+            report.message
+        );
+        assert!(
+            event_rx.try_recv().is_ok_and(|event| matches!(
+                event.kind,
+                dag_core::dag::node_event::NodeEventKind::Log { .. }
+            )),
+            "container failure should also be emitted as a live node log"
+        );
     }
 
     #[tokio::test]

@@ -7,12 +7,18 @@ use crate::config::CatalogConfig;
 use crate::model::CatalogIndex;
 use crate::storage::{catalog_object_key, operator_for_backend, read_json_object};
 
+/// Startup-time snapshot of the object-storage catalog index.
+///
+/// This type intentionally does not own manifests or provide refresh behavior.
+/// Use [`S3CatalogService`](crate::S3CatalogService) for the process-level,
+/// refreshable view used by agent tools.
 #[derive(Debug, Clone)]
 pub struct CatalogRuntime {
     pub index: CatalogIndex,
 }
 
 impl CatalogRuntime {
+    /// Read and validate the root catalog index from the configured backend.
     pub async fn load(manifest: &vfs::VfsManifest, config: &CatalogConfig) -> Result<Self, String> {
         config.validate()?;
         let operator = operator_for_backend(manifest, &config.backend)?;
@@ -27,7 +33,12 @@ impl CatalogRuntime {
         Ok(Self { index })
     }
 
-    pub fn data_bundles(&self) -> dag_core::DataBundleCatalog {
+    /// Project current catalog entries into the DAG runtime bundle registry.
+    ///
+    /// The returned registry stores logical VFS aliases plus immutable content
+    /// digests. It is generated once during startup; refreshing the catalog
+    /// service does not mutate an already installed registry.
+    pub fn bundle_registry(&self) -> dag_core::BundleRegistry {
         let mut bundles = Vec::new();
         for entry in self.index.current_entries() {
             let mut bundle = DataBundle::new(
@@ -43,11 +54,15 @@ impl CatalogRuntime {
             bundle.digest = Some(entry.digest.clone());
             bundles.push(bundle);
         }
-        dag_core::DataBundleCatalog::from_bundles(bundles)
+        dag_core::BundleRegistry::from_bundles(bundles)
             .expect("validated catalog entries have unique current ids")
     }
 }
 
+/// Generate the VFS mounts represented by a catalog index.
+///
+/// The definitions include `/catalog`, immutable dataset paths, and stable
+/// `/bundles/<id>` aliases. Existing static VFS paths take precedence.
 pub fn catalog_mount_definitions(
     manifest: &vfs::VfsManifest,
     index: &CatalogIndex,

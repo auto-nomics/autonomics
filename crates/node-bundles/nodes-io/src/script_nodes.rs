@@ -356,7 +356,7 @@ utils::write.table(
 
 fn python_generic_wrapper(spec: &ScriptNodeSpec) -> String {
     let mut script = String::from(
-        "import json\nimport os\nimport pandas as pd\n\nscript_inputs = {}\nscript_outputs = {}\n",
+        "import contextlib\nimport io\nimport os\nimport sys\nimport pandas as pd\n\nscript_inputs = {}\nscript_outputs = {}\n",
     );
     for (index, input) in spec.inputs.iter().enumerate() {
         let env = format!("AUTONOMICS_INPUT{index}");
@@ -397,26 +397,30 @@ fn python_generic_wrapper(spec: &ScriptNodeSpec) -> String {
             "{name}_path = os.environ[\"AUTONOMICS_OUTPUT{index}\"]\nscript_outputs[{name:?}] = {name}_path\nos.makedirs(os.path.dirname({name}_path) or \".\", exist_ok=True)\n",
             name = output.name
         ));
+        if output.kind == ScriptValueKind::File {
+            script.push_str(&format!("{name} = {name}_path\n", name = output.name));
+        }
     }
     script.push_str(
-        "with open(\"/work/.autonomics/files/user_code.py\", \"r\", encoding=\"utf-8\") as handle:\n    exec(compile(handle.read(), \"user_code.py\", \"exec\"), globals())\n",
+        "user_stderr = io.StringIO()\nwith open(\"/work/.autonomics/files/user_code.py\", \"r\", encoding=\"utf-8\") as handle:\n    with contextlib.redirect_stderr(user_stderr):\n        exec(compile(handle.read(), \"user_code.py\", \"exec\"), globals())\nuser_stderr_text = user_stderr.getvalue()[-4000:]\nif user_stderr_text:\n    sys.stderr.write(user_stderr_text)\n",
     );
     for output in &spec.outputs {
-        let path = output_path(output);
+        let path = serde_json::to_string(&output_path(output)).unwrap_or_else(|_| "\"\"".into());
         if output.kind == ScriptValueKind::Dataframe {
             let writer = match output.format.as_str() {
-                "parquet" => "to_parquet(value, path, index=False)",
-                "tsv" => "to_csv(value, path, index=False, sep='\\t')",
-                _ => "to_csv(value, path, index=False)",
+                "parquet" => "value.to_parquet(path, index=False)",
+                "tsv" => "value.to_csv(path, index=False, sep='\\t')",
+                _ => "value.to_csv(path, index=False)",
             };
             script.push_str(&format!(
-                "if \"{name}\" in globals() and isinstance(globals()[\"{name}\"], pd.DataFrame) and not os.path.exists({name}_path):\n    value = globals()[\"{name}\"]\n    {writer}\n",
+                "if \"{name}\" in globals() and isinstance(globals()[\"{name}\"], pd.DataFrame) and not os.path.exists({name}_path):\n    value = globals()[\"{name}\"]\n    path = {name}_path\n    {writer}\n",
                 name = output.name
             ));
         }
         script.push_str(&format!(
-            "if not os.path.exists({name}_path) or os.path.getsize({name}_path) == 0:\n    raise RuntimeError(\"script did not produce output `{path}`\")\n",
-            name = output.name
+            "if not os.path.exists({name}_path) or os.path.getsize({name}_path) == 0:\n    message = \"script did not produce output \" + {path} + \"; write it to {name}_path\"\n    if user_stderr_text:\n        message += \"; user stderr:\\n\" + user_stderr_text\n    raise RuntimeError(message)\n",
+            path = path,
+            name = output.name,
         ));
     }
     script
@@ -560,6 +564,7 @@ pub fn container_spec(
         memory: Some(spec.memory.clone().unwrap_or_else(|| DEFAULT_MEMORY.into())),
         pids_limit: Some(spec.pids_limit.unwrap_or(DEFAULT_PIDS_LIMIT)),
         shm_size: None,
+        gpus: None,
         user: None,
     })
 }
@@ -965,5 +970,50 @@ mod tests {
         let wrapper = container.script.unwrap();
         assert!(wrapper.contains("script_inputs"));
         assert!(wrapper.contains("results/output.parquet"));
+        assert!(wrapper.contains("artifact = artifact_path"));
+        assert!(wrapper.contains("user stderr"));
+    }
+
+    #[test]
+    fn python_generic_wrapper_autowrites_dataframes_with_defined_values() {
+        let spec = ScriptNodeSpec {
+            code: "table = pd.DataFrame({'id': [1]})".into(),
+            inputs: Vec::new(),
+            outputs: vec![
+                ScriptOutputSpec {
+                    name: "table".into(),
+                    kind: ScriptValueKind::Dataframe,
+                    path: None,
+                    format: "csv".into(),
+                },
+                ScriptOutputSpec {
+                    name: "table_tsv".into(),
+                    kind: ScriptValueKind::Dataframe,
+                    path: None,
+                    format: "tsv".into(),
+                },
+                ScriptOutputSpec {
+                    name: "table_parquet".into(),
+                    kind: ScriptValueKind::Dataframe,
+                    path: None,
+                    format: "parquet".into(),
+                },
+            ],
+            packages: Vec::new(),
+            artifact_prefix: "/artifacts/python-script-test".into(),
+            timeout_s: 60,
+            cpus: None,
+            memory: None,
+            pids_limit: None,
+        };
+
+        let wrapper = python_generic_wrapper(&spec);
+        assert!(wrapper.contains("value = globals()[\"table\"]"));
+        assert!(wrapper.contains("path = table_path"));
+        assert!(wrapper.contains("value.to_csv(path, index=False)"));
+        assert!(wrapper.contains("value.to_csv(path, index=False, sep='\\t')"));
+        assert!(wrapper.contains("value.to_parquet(path, index=False)"));
+        assert!(!wrapper.contains("to_csv(value"));
+        assert!(!wrapper.contains("to_parquet(value"));
     }
 }

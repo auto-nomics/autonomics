@@ -50,10 +50,12 @@ pub mod kernels;
 pub mod km;
 pub mod linalg;
 pub mod predict;
+pub mod ridge;
 pub mod summary;
 
 pub use crr::{CrrFit, CrrInput, CrrOptions, TimeFn, TimeFunctions, crr};
 pub use cuminc::{CumincCurve, CumincOptions, CumincResult, GrayTest, cuminc, timepoints};
 pub use error::{CmprskError, Result};
 pub use predict::{CrrPrediction, baseline_cif, predict_crr};
+pub use ridge::{CrrRidgeFit, CrrRidgeOptions, crr_ridge, predict_crr_ridge};
 pub use summary::{CoefRow, CrrSummary, summary_crr};

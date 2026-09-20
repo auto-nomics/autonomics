@@ -6,6 +6,7 @@ pub mod glinternet;
 pub mod hiernet;
 pub mod linear_regression;
 pub mod logistic_regression;
+pub mod rlm;
 
 use dag_core::{NodePlugin, NodeRegistry};
 
@@ -23,5 +24,6 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(chi_square::ChiSquareNodeFactory {}));
         registry.register(Box::new(glinternet::GlinternetNodeFactory));
         registry.register(Box::new(hiernet::HierNetNodeFactory));
+        registry.register(Box::new(rlm::RlmNodeFactory {}));
     }
 }
