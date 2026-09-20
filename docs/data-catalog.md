@@ -38,7 +38,7 @@ On startup the runtime:
    - `/bundles/<id>` for stable compatibility aliases;
 6. injects each alias into the runtime bundle registry.
 
-The runtime also retains a `CatalogService` over the same backend. Agents can
+The runtime also retains an `S3CatalogService` over the same backend. Agents can
 search and inspect it without restarting:
 
 | Tool | Purpose |

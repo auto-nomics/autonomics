@@ -17,4 +17,7 @@ pub use model::{CatalogEntry, CatalogIndex, DatasetFile, DatasetManifest};
 pub use package::{build_package, validate_package};
 pub use publish::publish_package;
 pub use runtime::{CatalogRuntime, catalog_mount_definitions};
-pub use service::{CatalogDataset, CatalogRecord, CatalogSearchQuery, CatalogService};
+pub use service::{
+    CatalogDataset, CatalogRecord, CatalogSearchQuery, CatalogServiceTrait, HfCatalogService,
+    S3CatalogService,
+};

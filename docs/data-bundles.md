@@ -33,6 +33,7 @@ vpath = "/bundles/ldsc/1000g.parquet"
 - MAGMA population panel IDs such as `g1000_eur`, `g1000_eas`, `g1000_afr`,
   `g1000_amr`, and `g1000_sas`
 - `magma.gene_loc`
+- `als_cns.cell_markers`: ALS / CNS cell-marker bundle (astrocyte, microglia, oligodendrocyte, neuron)
 - `kegg.genes`
 - `kegg.pathway_ko`
 - `kegg.pathways`

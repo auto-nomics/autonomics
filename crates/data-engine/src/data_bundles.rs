@@ -84,6 +84,11 @@ pub fn builtin_bundle_registry() -> BundleRegistry {
             "KEGG genome-pathway table",
             "/bundles/kegg/genome_pathways.parquet",
         ),
+        bundle(
+            "als_cns.cell_markers",
+            "ALS / CNS cell markers (astrocyte, microglia, oligodendrocyte, neuron) from CellMarker 2.0",
+            "/bundles/als_cns.cell_markers/markers.tsv",
+        ),
     ]);
     for population in ["afr", "amr", "eas", "sas"] {
         bundles.push(bundle(
@@ -119,6 +124,12 @@ mod tests {
         assert!(registry.get("ldscore.1000g_eur").is_some());
         assert!(registry.get("ldscore.1000g_eur_m").is_some());
         assert!(registry.get("ldscore.baselineLD_v2_2_eur").is_some());
+        assert_eq!(
+            registry
+                .get("als_cns.cell_markers")
+                .map(|bundle| bundle.vpath.as_str()),
+            Some("/bundles/als_cns.cell_markers/markers.tsv")
+        );
     }
 
     #[test]

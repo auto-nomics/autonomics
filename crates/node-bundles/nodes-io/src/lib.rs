@@ -19,10 +19,12 @@ pub mod lava_scan_container;
 pub mod ldsc_h2_container;
 pub mod ldsc_munge_container;
 pub mod ldsc_rg_container;
+pub mod limma_voom_container;
 pub mod magma_annotate_container;
 pub mod mixer_container;
 pub mod mrpresso_container;
 pub mod mtag_container;
+pub mod multiomic_concordance;
 pub mod mutation_analysis_container;
 pub mod mvmr_container;
 pub mod parquet_sql;
@@ -44,6 +46,7 @@ pub mod timesfm_container;
 pub mod twas_fusion_container;
 pub mod twosamplemr_container;
 pub mod visualization_container;
+pub mod wgcna_container;
 pub use alphafold::nodes::prediction::{AlphaFoldPredictionNode, AlphaFoldPredictionNodeFactory};
 pub use clinicaltrials::nodes::study::{ClinicalTrialsStudyNode, ClinicalTrialsStudyNodeFactory};
 pub use crossref::nodes::works::{CrossrefWorksNode, CrossrefWorksNodeFactory};
@@ -273,6 +276,25 @@ impl NodePlugin for Plugin {
         )));
         registry.register(Box::new(
             pathway_gsea_container::PathwayGseaContainerNodeFactory::new(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
+        registry.register(Box::new(
+            limma_voom_container::LimmaVoomContainerNodeFactory::new(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
+        registry.register(Box::new(wgcna_container::WgcnaContainerNodeFactory::new(
+            Arc::clone(&self.container_execution.runtime),
+            Arc::clone(&self.container_execution.panel_cache),
+        )));
+        registry.register(Box::new(
+            multiomic_concordance::MultiomicConcordanceNodeFactory,
+        ));
+        registry.register(Box::new(
+            twosamplemr_container::TwoSampleMrContainerNodeFactory::new(
                 Arc::clone(&self.container_execution.runtime),
                 Arc::clone(&self.container_execution.panel_cache),
             ),

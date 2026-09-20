@@ -10,7 +10,7 @@ use crate::storage::{catalog_object_key, operator_for_backend, read_json_object}
 /// Startup-time snapshot of the object-storage catalog index.
 ///
 /// This type intentionally does not own manifests or provide refresh behavior.
-/// Use [`CatalogService`](crate::CatalogService) for the process-level,
+/// Use [`S3CatalogService`](crate::S3CatalogService) for the process-level,
 /// refreshable view used by agent tools.
 #[derive(Debug, Clone)]
 pub struct CatalogRuntime {

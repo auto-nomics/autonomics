@@ -484,3 +484,59 @@ packages and the LAVA UKBB eigen `.bcor` panel are not interchangeable with
 that contract. The rootless-Podman baseline verifies a deterministic two-trait
 GWAS fixture, catalog panel materialization, both official result tables, and
 numerical summary markers.
+## Bulk RNA-seq wrappers (`limma_voom_container` + `wgcna_container`)
+
+The ALS / neurology rubric calls for two methods the existing DESeq2
+wrapper cannot cover: limma/voom/eBayes (continuous outcome + quantile
+normalization) and signed WGCNA with dynamic tree cut + module merge.
+Both are packaged as a single `autonomics/bulk-rnaseq` image layered on
+top of the published `autonomics/deseq2` image, with `limma` 3.66.0,
+`edgeR` 4.8.2 and `WGCNA` 1.74 installed via `BiocManager`/CRAN and
+sha256-verified. The wrappers live at:
+
+- `containers/bulk-rnaseq/Dockerfile`
+- `containers/bulk-rnaseq/limma_voom_runner.R`
+- `containers/bulk-rnaseq/wgcna_runner.R`
+- `containers/bulk-rnaseq/test_smoke.sh`
+- `crates/node-bundles/nodes-io/src/limma_voom_container.rs`
+- `crates/node-bundles/nodes-io/src/wgcna_container.rs`
+- `crates/node-bundles/nodes-io/tests/limma_voom_container.rs`
+- `crates/node-bundles/nodes-io/tests/wgcna_container.rs`
+
+The WGCNA runner deliberately keeps the TOM inside the container:
+`WGCNA::blockwiseModules` runs block-wise, only the soft-threshold scan,
+module size table, TOM summary stats, kME-augmented module assignments
+and module eigengenes land on VFS, so the agent runtime never
+materializes a large TOM dataframe.
+
+Both wrappers pin the current immutable manifest digest:
+`sha256:fc0e90c2883a799db1e2c8934589ab7addd44a6edd1769d50f9d2e668925a66e`.
+
+## Multi-omic concordance node (`multiomic_concordance`)
+
+A pure-Rust DataFusion node that joins RNA DE, tissue proteomics and
+CSF proteomics tables on a shared gene-symbol column, enforces direction
+agreement (optional), and ranks survivors by the absolute effect-size
+product. It supports per-modality column contracts, `-log10(p)` conversion,
+an optional ID-mapping input, and exploding multi-symbol protein IDs before
+the join. Lives at `crates/node-bundles/nodes-io/src/multiomic_concordance.rs`.
+
+## ALS / CNS marker bundle (`als_cns.cell_markers`)
+
+Versioned data package built from the CellMarker 2.0 Human snapshot
+(`2024-10-11`), filtered to CNS cell types. Lives at
+`fixtures/als_cns_cell_markers/` and is published through
+`autonomics-catalog`. The alias `/bundles/als_cns.cell_markers` is
+added to the built-in bundle registry in
+`crates/data-engine/src/data_bundles.rs` for offline DAG construction.
+
+## Donor-level composition node (`hypothesize.donor_composition_test`)
+
+`crates/node-bundles/nodes-hypothesize/src/donor_composition.rs` aggregates a
+cell-level table to donor-by-cell-type counts before inference. For each cell
+type it fits a donor-level binomial logistic model against the requested
+test/reference condition, reports log-odds, Wald z, raw p and BH-adjusted p,
+and separately emits the donor composition table. Cells are therefore never
+treated as independent biological replicates. Bulk-reference deconvolution
+(MuSiC/BisqueRNA) remains a separate P2 container migration because it needs
+a pinned reference-expression contract and a different image closure.

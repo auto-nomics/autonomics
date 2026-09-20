@@ -302,6 +302,15 @@ fn global_builtin_bundles_build_without_a_runtime_catalog() {
     registry
         .build_node("sldsc", serde_json::json!({}))
         .unwrap_or_else(|error| panic!("build `sldsc` from built-in catalog: {error}"));
+    registry
+        .build_node(
+            "bundle_source",
+            serde_json::json!({
+                "bundle_id": "als_cns.cell_markers",
+                "format": "tsv"
+            }),
+        )
+        .unwrap_or_else(|error| panic!("build marker bundle source: {error}"));
 }
 
 #[test]
@@ -333,4 +342,16 @@ fn native_hdl_l_nodes_are_removed() {
     assert!(!kinds.iter().any(|node| node.kind == "hdl_l"));
     assert!(kinds.iter().any(|node| node.kind == "hdl_l_container"));
     assert!(kinds.iter().any(|node| node.kind == "hdl_l_scan"));
+}
+
+#[test]
+fn donor_composition_node_is_registered() {
+    let registry = registry();
+
+    assert!(
+        registry
+            .list_nodes()
+            .iter()
+            .any(|node| node.kind == "hypothesize.donor_composition_test")
+    );
 }

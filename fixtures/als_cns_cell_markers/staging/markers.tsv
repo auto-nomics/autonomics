@@ -1,0 +1,1170 @@
+gene_symbol	set_id	set_name	set_class	evidence	marker_source	tissue_class	tissue_type	pmid	journal	year	species
+ACSBG1	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+ALDH1A1	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	32341540	Nature neuroscience	2020	Human
+ALDH1A1	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	32620753	Nature communications	2020	Human
+ALDH1A1	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	35210419	Nature communications	2022	Human
+ALDH1L1	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	26295203	Glia	2015	Human
+ALDH1L1	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Central nervous system	30760929	Nature	2019	Human
+ALDH1L1	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Cortex	31456032	Acta neuropathologica	2019	Human
+ALDH1L1	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Cerebrospinal fluid	31805958	Journal of neuroinflammation	2019	Human
+ALDH1L1	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	32299492	Journal of neuroinflammation	2020	Human
+ALDH1L1	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	32341540	Nature neuroscience	2020	Human
+ALDH1L1	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+ALDH1L1	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Spinal cord	Spinal cord	34605607	EMBO reports	2021	Human
+ALDH1L1	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	35109872	Journal of neuroinflammation	2022	Human
+ALDOC	ALS_CNS_ASTROCYTE	Astrocyte	Glial	supporting	Review	Brain	Brain	32317014	Molecular autism	2020	Human
+ALDOC	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	32663469	Cancer cell	2020	Human
+ALDOC	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	33607293	Genomics, proteomics & bioinformatics	2021	Human
+ALDOC	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+APC	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	32469469	Glia	2020	Human
+APC	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	35109872	Journal of neuroinflammation	2022	Human
+APOE	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Cortex	34675437	Nature neuroscience	2021	Human
+AQP4	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	White matter	30747918	Nature	2019	Human
+AQP4	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	31042697	Nature	2019	Human
+AQP4	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	31455859	Molecular psychiatry	2019	Human
+AQP4	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Cortex	31456032	Acta neuropathologica	2019	Human
+AQP4	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	31693905	Cell reports	2019	Human
+AQP4	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	31768052	Nature neuroscience	2019	Human
+AQP4	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Hippocampus	31942070	Nature	2020	Human
+AQP4	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	31974223	Science (New York, N.Y.)	2020	Human
+AQP4	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	32341540	Nature neuroscience	2020	Human
+AQP4	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	32663469	Cancer cell	2020	Human
+AQP4	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Cortex	32826893	Nature communications	2020	Human
+AQP4	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	32961131	Cell	2020	Human
+AQP4	ALS_CNS_ASTROCYTE	Astrocyte	Glial	supporting	Review	Brain	Brain	32976581	Nucleic acids research	2020	Human
+AQP4	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Superior frontal gyrus	33432193	Nature neuroscience	2021	Human
+AQP4	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	33510160	Nature communications	2021	Human
+AQP4	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	33609158	Acta neuropathologica	2021	Human
+AQP4	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	33731928	Nature	2021	Human
+AQP4	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	34019156	Acta neuropathologica	2021	Human
+AQP4	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	34281603	Genome medicine	2021	Human
+AQP4	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+AQP4	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Spinal cord	Spinal cord	34605607	EMBO reports	2021	Human
+AQP4	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Neocortex	34616070	Nature	2021	Human
+AQP4	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Cortex	34675437	Nature neuroscience	2021	Human
+AQP4	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	34692159	National science review	2020	Human
+AQP4	ALS_CNS_ASTROCYTE	Astrocyte	Glial	supporting	Review	Brain	Brain	34919646	Brain : a journal of neurology	2021	Human
+AQP4	ALS_CNS_ASTROCYTE	Astrocyte	Glial	supporting	Review	Brain	Brain	35236372	Molecular neurodegeneration	2022	Human
+AQP4	ALS_CNS_ASTROCYTE	Astrocyte	Glial	supporting	Review	Brain	Brain	35309325	Frontiers in immunology	2022	Human
+ATP1A2	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	33607293	Genomics, proteomics & bioinformatics	2021	Human
+ATP1A2	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	33657375	Cell reports	2021	Human
+ATP1B2	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	33609158	Acta neuropathologica	2021	Human
+ATP1B2	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Cortex	34675437	Nature neuroscience	2021	Human
+BMPR1B	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	31693905	Cell reports	2019	Human
+CADM2	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Superior frontal gyrus	33432193	Nature neuroscience	2021	Human
+CD109	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	33008897	Science advances	2020	Human
+CD44	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	32641768	Nature communications	2020	Human
+CD44	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Superior frontal gyrus	33432193	Nature neuroscience	2021	Human
+CD44	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	34046693	Acta neuropathologica	2021	Human
+CHI3L1	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	31023379	Acta neuropathologica communications	2019	Human
+CHI3L1	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	31932797	Nature medicine	2020	Human
+CHI3L1	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	35109872	Journal of neuroinflammation	2022	Human
+CHRDL1	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+CLU	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	33008897	Science advances	2020	Human
+CLU	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	33607293	Genomics, proteomics & bioinformatics	2021	Human
+CLU	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	33731928	Nature	2021	Human
+CLU	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	34692159	National science review	2020	Human
+CLU	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	34767070	Acta neuropathologica	2021	Human
+COL12A1	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	33008897	Science advances	2020	Human
+CST3	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	32961131	Cell	2020	Human
+DIO2	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Middle temporal gyrus	31435019	Nature	2019	Human
+DIO2	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	31455859	Molecular psychiatry	2019	Human
+DIO2	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+F3	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+FABP7	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	31901251	Cell stem cell	2020	Human
+FAM107A	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Cortex	34675437	Nature neuroscience	2021	Human
+GASK1B	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	32485136	Neuron	2020	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	12417106	Clinica chimica acta; international journal of clinical chemistry	2002	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Spinal cord	Spinal cord	16682082	Journal of neuroscience methods	2006	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	26295203	Glia	2015	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	27314618	Journal of Huntington's disease	2016	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	30799279	Cell stem cell	2019	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	30867424	Nature communications	2019	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	31168097	Nature	2019	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	31249382	Molecular psychiatry	2019	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	supporting	Review	Brain	Brain	31288837	Journal of neuroinflammation	2019	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	31327527	Cell	2019	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Middle temporal gyrus	31435019	Nature	2019	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Cortex	31456032	Acta neuropathologica	2019	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	31534165	Cell death & disease	2019	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	31618642	Cell reports	2019	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	31796114	Acta neuropathologica communications	2019	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Cerebrospinal fluid	31805958	Journal of neuroinflammation	2019	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Hippocampus	31942070	Nature	2020	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	32299492	Journal of neuroinflammation	2020	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	supporting	Review	Brain	Brain	32317014	Molecular autism	2020	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	32341540	Nature neuroscience	2020	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	32469469	Glia	2020	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	32663469	Cancer cell	2020	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	32694205	Proceedings of the National Academy of Sciences of the United States of America	2020	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	32764143	Proceedings of the National Academy of Sciences of the United States of America	2020	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	32788587	Nature communications	2020	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	32788653	Experimental & molecular medicine	2020	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Cortex	32826893	Nature communications	2020	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	32961131	Cell	2020	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	33093452	Cell death & disease	2020	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	33173731	Advanced science (Weinheim, Baden-Wurttemberg, Germany)	2020	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	33308315	Acta neuropathologica communications	2020	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Superior frontal gyrus	33432193	Nature neuroscience	2021	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	33510160	Nature communications	2021	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	33592174	Cell	2021	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	33607293	Genomics, proteomics & bioinformatics	2021	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	33609158	Acta neuropathologica	2021	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	33837133	Genome research	2021	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Hippocampus	33875655	Nature communications	2021	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	34019156	Acta neuropathologica	2021	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	34061592	mBio	2021	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	34357384	Schizophrenia bulletin	2021	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	supporting	Review	Brain	Brain	34383057	Neuro-oncology	2021	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	34459315	The Neuroscientist : a review journal bringing neurobiology, neurology and	2021	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Spinal cord	Spinal cord	34605607	EMBO reports	2021	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Cortex	34675437	Nature neuroscience	2021	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	35109872	Journal of neuroinflammation	2022	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	35210419	Nature communications	2022	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	supporting	Review	Brain	Brain	35309325	Frontiers in immunology	2022	Human
+GFAP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	35459228	Nature communications	2022	Human
+GJA1	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	White matter	30747918	Nature	2019	Human
+GJA1	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Cortex	31456032	Acta neuropathologica	2019	Human
+GJA1	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	32341540	Nature neuroscience	2020	Human
+GJB6	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+GLUL	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Cerebrospinal fluid	31805958	Journal of neuroinflammation	2019	Human
+GLUL	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	32341540	Nature neuroscience	2020	Human
+GLUL	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	32620753	Nature communications	2020	Human
+GLUL	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Superior frontal gyrus	33432193	Nature neuroscience	2021	Human
+GPC5	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Entorhinal cortex	33432193	Nature neuroscience	2021	Human
+HEPACAM	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	33731928	Nature	2021	Human
+HEPN1	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	33731928	Nature	2021	Human
+HOPX	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Cortex	34675437	Nature neuroscience	2021	Human
+HSP90AA1	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Superior frontal gyrus	33432193	Nature neuroscience	2021	Human
+HSPB1	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Superior frontal gyrus	33432193	Nature neuroscience	2021	Human
+ID3	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Middle temporal gyrus	31435019	Nature	2019	Human
+IL17A	ALS_CNS_ASTROCYTE	Astrocyte	Glial	supporting	Review	Brain	Brain	35296090	Frontiers in immunology	2022	Human
+IQCK	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	34767070	Acta neuropathologica	2021	Human
+IRAG1	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	32485136	Neuron	2020	Human
+ITGA1	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	33008897	Science advances	2020	Human
+ITGA6	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	32485136	Neuron	2020	Human
+ITGA6	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	35029059	Journal of extracellular vesicles	2022	Human
+KCNJ10	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Cortex	30936556	Nature neuroscience	2019	Human
+LAMB2	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	33008897	Science advances	2020	Human
+LGR6	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Cortex	30936556	Nature neuroscience	2019	Human
+LRP1	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	35029059	Journal of extracellular vesicles	2022	Human
+LRRC3B	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	32485136	Neuron	2020	Human
+MBP	ALS_CNS_ASTROCYTE	Astrocyte	Glial	supporting	Review	Brain	Brain	33510160	Nature communications	2021	Human
+MEF2C	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	34767070	Acta neuropathologica	2021	Human
+MLC1	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	31327527	Cell	2019	Human
+MLC1	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	32961131	Cell	2020	Human
+MLC1	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+MPG	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+MT1F	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Middle temporal gyrus	31435019	Nature	2019	Human
+MT3	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	33657375	Cell reports	2021	Human
+NDRG2	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	32341540	Nature neuroscience	2020	Human
+NFIA	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	26295203	Glia	2015	Human
+NFIA	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	34763709	Genome biology	2021	Human
+NRXN1	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Superior frontal gyrus	33432193	Nature neuroscience	2021	Human
+OLIG1	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	32341540	Nature neuroscience	2020	Human
+OLIG2	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Cortex	30936556	Nature neuroscience	2019	Human
+OLIG2	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	32341540	Nature neuroscience	2020	Human
+PCDH15	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	32341540	Nature neuroscience	2020	Human
+PDGFRA	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	32341540	Nature neuroscience	2020	Human
+PEA15	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Cerebrospinal fluid	31805958	Journal of neuroinflammation	2019	Human
+PISD	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+PON2	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	33657375	Cell reports	2021	Human
+PPP1R3G	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+PRDM16-DT	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Middle temporal gyrus	31435019	Nature	2019	Human
+PTGDS	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	32341540	Nature neuroscience	2020	Human
+PTN	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Superior frontal gyrus	33432193	Nature neuroscience	2021	Human
+RFX4	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+RYR3	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	32485136	Neuron	2020	Human
+S100B	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	26295203	Glia	2015	Human
+S100B	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	30867424	Nature communications	2019	Human
+S100B	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	31168097	Nature	2019	Human
+S100B	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	31249382	Molecular psychiatry	2019	Human
+S100B	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	31327527	Cell	2019	Human
+S100B	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Central nervous system	31405387	Acta neuropathologica communications	2019	Human
+S100B	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Cerebrospinal fluid	31805958	Journal of neuroinflammation	2019	Human
+S100B	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Hippocampus	31942070	Nature	2020	Human
+S100B	ALS_CNS_ASTROCYTE	Astrocyte	Glial	supporting	Review	Brain	Brain	32317014	Molecular autism	2020	Human
+S100B	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	32620753	Nature communications	2020	Human
+S100B	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	32632204	Molecular psychiatry	2020	Human
+S100B	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	32663469	Cancer cell	2020	Human
+S100B	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	35110736	Nature	2022	Human
+SLC14A1	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Middle temporal gyrus	31435019	Nature	2019	Human
+SLC14A1	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+SLC15A2	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+SLC1A2	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	31455859	Molecular psychiatry	2019	Human
+SLC1A2	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	31768052	Nature neuroscience	2019	Human
+SLC1A2	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	32620753	Nature communications	2020	Human
+SLC1A2	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Superior frontal gyrus	33432193	Nature neuroscience	2021	Human
+SLC1A2	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	33609158	Acta neuropathologica	2021	Human
+SLC1A2	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+SLC1A2	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	34459315	The Neuroscientist : a review journal bringing neurobiology, neurology and	2021	Human
+SLC1A2	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	35109872	Journal of neuroinflammation	2022	Human
+SLC1A3	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	30799279	Cell stem cell	2019	Human
+SLC1A3	ALS_CNS_ASTROCYTE	Astrocyte	Glial	supporting	Review	Brain	Brain	31283899	Annual review of neuroscience	2019	Human
+SLC1A3	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	31327527	Cell	2019	Human
+SLC1A3	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Middle temporal gyrus	31435019	Nature	2019	Human
+SLC1A3	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Cerebrospinal fluid	31805958	Journal of neuroinflammation	2019	Human
+SLC1A3	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	32299492	Journal of neuroinflammation	2020	Human
+SLC1A3	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	32620753	Nature communications	2020	Human
+SLC1A3	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Superior frontal gyrus	33432193	Nature neuroscience	2021	Human
+SLC1A3	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	33657375	Cell reports	2021	Human
+SLC1A3	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+SLC1A3	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	35109872	Journal of neuroinflammation	2022	Human
+SLC25A18	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+SLC39A12	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+SLC4A4	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+SOX2	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	34459315	The Neuroscientist : a review journal bringing neurobiology, neurology and	2021	Human
+SOX9	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	28336567	The Journal of neuroscience : the official journal of the Society for	2017	Human
+SOX9	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	30867424	Nature communications	2019	Human
+SOX9	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Cortex	31456032	Acta neuropathologica	2019	Human
+SOX9	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	31693905	Cell reports	2019	Human
+SOX9	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	32341540	Nature neuroscience	2020	Human
+SOX9	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Cortex	34675437	Nature neuroscience	2021	Human
+STOX1	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	32485136	Neuron	2020	Human
+SYNE3	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	34459315	The Neuroscientist : a review journal bringing neurobiology, neurology and	2021	Human
+THBS1	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	31455859	Molecular psychiatry	2019	Human
+TNC	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Superior frontal gyrus	33432193	Nature neuroscience	2021	Human
+TNC	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Cortex	34675437	Nature neuroscience	2021	Human
+TSPO	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	34609758	Movement disorders : official journal of the Movement Disorder Society	2021	Human
+TTPA	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+VIM	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	32341540	Nature neuroscience	2020	Human
+VIM	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	35109872	Journal of neuroinflammation	2022	Human
+VIM	ALS_CNS_ASTROCYTE	Astrocyte	Glial	canonical	Experiment	Brain	Brain	35210419	Nature communications	2022	Human
+A1BG	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+ABI3	ALS_CNS_MICROGLIA	Microglia	Glial	supporting	Review	Brain	Brain	30758077	Glia	2019	Human
+ACACA	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+ACD	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+ACTR3B	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+ADAM8	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+ADAMTS13	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+ADGRG1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Cortical layer	34795060	Proceedings of the National Academy of Sciences of the United States of America	2021	Human
+ADORA3	ALS_CNS_MICROGLIA	Microglia	Glial	supporting	Review	Brain	Brain	33692572	Nature reviews. Neurology	2021	Human
+ADORA3	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	33704822	Glia	2021	Human
+ADSS1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+AIF1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	30214039	Molecular psychiatry	2019	Human
+AIF1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	White matter	30747918	Nature	2019	Human
+AIF1	ALS_CNS_MICROGLIA	Microglia	Glial	supporting	Review	Brain	Brain	30758077	Glia	2019	Human
+AIF1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	31618642	Cell reports	2019	Human
+AIF1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	31693905	Cell reports	2019	Human
+AIF1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Pluripotent stem cell	32220329	Stem cell reports	2020	Human
+AIF1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	32961131	Cell	2020	Human
+AIF1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	33193404	Frontiers in immunology	2020	Human
+AIF1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	33723434	Nature neuroscience	2021	Human
+AIF1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	34390642	Cell	2021	Human
+AIF1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	34525361	Cell reports	2021	Human
+AIF1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35109872	Journal of neuroinflammation	2022	Human
+AIF1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35180881	Genome medicine	2022	Human
+AIF1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35210419	Nature communications	2022	Human
+ALDOA	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+ANK1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+ANKRD26P3	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+ANXA3	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+ANXA5	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+APBB1IP	ALS_CNS_MICROGLIA	Microglia	Glial	supporting	Review	Brain	Brain	30758077	Glia	2019	Human
+APBB1IP	ALS_CNS_MICROGLIA	Microglia	Glial	supporting	Review	Brain	Brain	32976581	Nucleic acids research	2020	Human
+APBB1IP	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	34281603	Genome medicine	2021	Human
+APBB2	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+APLP2	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+APOC4	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+APOE	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Superior frontal gyrus	33432193	Nature neuroscience	2021	Human
+APOE	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	34525361	Cell reports	2021	Human
+APOE	ALS_CNS_MICROGLIA	Microglia	Glial	supporting	Review	Brain	Cerebrospinal fluid	34707085	Signal transduction and targeted therapy	2021	Human
+APOE	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	34767070	Acta neuropathologica	2021	Human
+APOE	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+AQP6	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+ARHGDIB	ALS_CNS_MICROGLIA	Microglia	Glial	supporting	Review	Brain	Brain	30758077	Glia	2019	Human
+ARRDC4	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+ARSA	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+ASAH1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35245443	Cell stem cell	2022	Human
+ASPH	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	33008897	Science advances	2020	Human
+ASTN1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+ATOH8	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+ATOX1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+ATP1A3	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+ATP1B3	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+ATP6V0C	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+ATP6V0D2	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+AXL	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Superior frontal gyrus	33432193	Nature neuroscience	2021	Human
+AXL	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+B2M	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	33193404	Frontiers in immunology	2020	Human
+B2M	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Superior frontal gyrus	33432193	Nature neuroscience	2021	Human
+B2M	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+BAIAP2L2	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+BAMBI	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+BHLHE40	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+BHLHE41	ALS_CNS_MICROGLIA	Microglia	Glial	supporting	Review	Brain	Brain	35140215	Nature communications	2022	Human
+BIN1	ALS_CNS_MICROGLIA	Microglia	Glial	supporting	Review	Brain	Brain	33692572	Nature reviews. Neurology	2021	Human
+BST2	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	33193404	Frontiers in immunology	2020	Human
+C1QA	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	31693905	Cell reports	2019	Human
+C1QA	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	32961131	Cell	2020	Human
+C1QB	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	31768052	Nature neuroscience	2019	Human
+C1QB	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Hippocampus	31942070	Nature	2020	Human
+C1QB	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	32070434	Acta neuropathologica communications	2020	Human
+C1QC	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	33433612	Neuro-oncology	2021	Human
+C1QC	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Cortical layer	34795060	Proceedings of the National Academy of Sciences of the United States of America	2021	Human
+C3	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Middle temporal gyrus	31435019	Nature	2019	Human
+C3	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	33207193	Cell reports	2020	Human
+C3AR1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	33193404	Frontiers in immunology	2020	Human
+CACNA1A	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Cortical layer	34795060	Proceedings of the National Academy of Sciences of the United States of America	2021	Human
+CADM1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+CAPG	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+CBX6	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+CCK	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+CCL3	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	34390642	Cell	2021	Human
+CCL3	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+CCL4	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+CCND1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	33193404	Frontiers in immunology	2020	Human
+CCT3	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	33193404	Frontiers in immunology	2020	Human
+CD14	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	32663469	Cancer cell	2020	Human
+CD163	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	33044746	The Journal of pathology	2020	Human
+CD163	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	34525361	Cell reports	2021	Human
+CD300LB	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+CD33	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Superior frontal gyrus	33432193	Nature neuroscience	2021	Human
+CD34	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+CD40	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	32577755	Brain : a journal of neurology	2020	Human
+CD5	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+CD52	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+CD63	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+CD68	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	18825001	Neurosurgery	2008	Human
+CD68	ALS_CNS_MICROGLIA	Microglia	Glial	supporting	Review	Brain	Brain	30758077	Glia	2019	Human
+CD68	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	30946477	Brain : a journal of neurology	2019	Human
+CD68	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Central nervous system	31405387	Acta neuropathologica communications	2019	Human
+CD68	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Hippocampus	31942070	Nature	2020	Human
+CD68	ALS_CNS_MICROGLIA	Microglia	Glial	supporting	Review	Brain	Brain	32643143	Neuropathology and applied neurobiology	2020	Human
+CD68	ALS_CNS_MICROGLIA	Microglia	Glial	supporting	Review	Brain	Brain	34117475	Nature reviews. Clinical oncology	2021	Human
+CD68	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	34388852	Neuropathology and applied neurobiology	2021	Human
+CD68	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+CD68	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35109872	Journal of neuroinflammation	2022	Human
+CD74	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	White matter	30747918	Nature	2019	Human
+CD74	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	31042697	Nature	2019	Human
+CD74	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	33207193	Cell reports	2020	Human
+CD74	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Entorhinal cortex	33432193	Nature neuroscience	2021	Human
+CD74	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	34019156	Acta neuropathologica	2021	Human
+CD74	ALS_CNS_MICROGLIA	Microglia	Glial	supporting	Review	Brain	Brain	34919646	Brain : a journal of neurology	2021	Human
+CD74	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+CD74	ALS_CNS_MICROGLIA	Microglia	Glial	supporting	Review	Brain	Brain	35236372	Molecular neurodegeneration	2022	Human
+CD83	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+CD9	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Entorhinal cortex	33432193	Nature neuroscience	2021	Human
+CD9	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+CECR2	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+CH25H	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+CHCHD5	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+CHST2	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+CLDN15	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+CLEC7A	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+COLEC12	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+COPS9	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+COX4I1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+COX6A1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+COX6A2	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+COX8A	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+CPD	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+CREG1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+CRLF2	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+CSF1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Entorhinal cortex	33432193	Nature neuroscience	2021	Human
+CSF1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+CSF1R	ALS_CNS_MICROGLIA	Microglia	Glial	supporting	Review	Brain	Brain	30758077	Glia	2019	Human
+CSF1R	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	30867424	Nature communications	2019	Human
+CSF1R	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	31042697	Nature	2019	Human
+CSF1R	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Middle temporal gyrus	31435019	Nature	2019	Human
+CSF1R	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	31768052	Nature neuroscience	2019	Human
+CSF1R	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	32371549	Neurology(R) neuroimmunology & neuroinflammation	2020	Human
+CSF1R	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	32663469	Cancer cell	2020	Human
+CSF1R	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	32961131	Cell	2020	Human
+CSF1R	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	33207193	Cell reports	2020	Human
+CSF1R	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	33609158	Acta neuropathologica	2021	Human
+CSF1R	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	34429139	Molecular neurodegeneration	2021	Human
+CSF1R	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	34525361	Cell reports	2021	Human
+CSF1R	ALS_CNS_MICROGLIA	Microglia	Glial	supporting	Review	Brain	Brain	35236372	Molecular neurodegeneration	2022	Human
+CSF2RA	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+CSF3R	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Cortex	32826893	Nature communications	2020	Human
+CSF3R	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Spinal cord	Spinal cord	34605607	EMBO reports	2021	Human
+CST7	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Superior frontal gyrus	33432193	Nature neuroscience	2021	Human
+CST7	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+CSTB	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+CTBP1-AS	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+CTSA	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+CTSB	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	34525361	Cell reports	2021	Human
+CTSB	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+CTSD	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+CTSE	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+CTSL	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+CTSZ	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+CX3CR1	ALS_CNS_MICROGLIA	Microglia	Glial	supporting	Review	Brain	Brain	30758077	Glia	2019	Human
+CX3CR1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	30867424	Nature communications	2019	Human
+CX3CR1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Middle temporal gyrus	31435019	Nature	2019	Human
+CX3CR1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Cortex	31456032	Acta neuropathologica	2019	Human
+CX3CR1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	31768052	Nature neuroscience	2019	Human
+CX3CR1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Pluripotent stem cell	32220329	Stem cell reports	2020	Human
+CX3CR1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	32371549	Neurology(R) neuroimmunology & neuroinflammation	2020	Human
+CX3CR1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	32961131	Cell	2020	Human
+CX3CR1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Superior frontal gyrus	33432193	Nature neuroscience	2021	Human
+CX3CR1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	33609158	Acta neuropathologica	2021	Human
+CX3CR1	ALS_CNS_MICROGLIA	Microglia	Glial	supporting	Review	Brain	Brain	33692572	Nature reviews. Neurology	2021	Human
+CX3CR1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	33704822	Glia	2021	Human
+CX3CR1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	34228647	JCI insight	2021	Human
+CX3CR1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	34525361	Cell reports	2021	Human
+CX3CR1	ALS_CNS_MICROGLIA	Microglia	Glial	supporting	Review	Brain	Brain	34539650	Frontiers in immunology	2021	Human
+CX3CR1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	34563398	Trends in genetics : TIG	2021	Human
+CX3CR1	ALS_CNS_MICROGLIA	Microglia	Glial	supporting	Review	Brain	Cerebrospinal fluid	34707085	Signal transduction and targeted therapy	2021	Human
+CX3CR1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	34836966	Nature communications	2021	Human
+CX3CR1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	34902524	Cancer letters	2021	Human
+CX3CR1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35090578	Acta neuropathologica communications	2022	Human
+CX3CR1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35210419	Nature communications	2022	Human
+CXCL14	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+CXCL16	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+CXCR4	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+CYBB	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	33008897	Science advances	2020	Human
+DKK2	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+DLX6-AS1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35245443	Cell stem cell	2022	Human
+DNAJB14	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+DNAJB4	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35245443	Cell stem cell	2022	Human
+DOCK8	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	33207193	Cell reports	2020	Human
+DPP4	ALS_CNS_MICROGLIA	Microglia	Glial	supporting	Review	Brain	Brain	31023379	Acta neuropathologica communications	2019	Human
+DPP7	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+DPYD	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+DPYS	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+ECM1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+EEF1A1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+EEF1B2	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+EGLN3	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+EMP2	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+EPHX1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+ETL4	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+FABP3	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+FABP5	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+FAM20C	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+FBRSL1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+FCER1G	ALS_CNS_MICROGLIA	Microglia	Glial	supporting	Review	Brain	Brain	30758077	Glia	2019	Human
+FCER1G	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	32663469	Cancer cell	2020	Human
+FCER1G	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+FCGR1A	ALS_CNS_MICROGLIA	Microglia	Glial	supporting	Review	Brain	Brain	32643143	Neuropathology and applied neurobiology	2020	Human
+FCGR1A	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	32961131	Cell	2020	Human
+FCGR1A	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	33193404	Frontiers in immunology	2020	Human
+FCGR1A	ALS_CNS_MICROGLIA	Microglia	Glial	supporting	Review	Brain	Brain	33692572	Nature reviews. Neurology	2021	Human
+FKBP5	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35245443	Cell stem cell	2022	Human
+FLT1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+FOXP1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+FTH1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+FTL	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35109872	Journal of neuroinflammation	2022	Human
+FXYD6	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+GALK1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+GAS2L1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+GAS2L3	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+GAS7	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+GBA	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+GFAP	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	31249382	Molecular psychiatry	2019	Human
+GLB1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+GLT1D1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+GM2A	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+GNAS	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+GNG7	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	33193404	Frontiers in immunology	2020	Human
+GPNMB	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+GPR34	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	33704822	Glia	2021	Human
+GPR34	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	34836966	Nature communications	2021	Human
+GPR65	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+GPR84	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+GRIA2	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+GRN	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+GSTM5	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+GTSE1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35245443	Cell stem cell	2022	Human
+GUSB	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+GYPC	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+H2BP1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+HCAR2	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+HEXA	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+HIF1A	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+HLA-B	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	32070434	Acta neuropathologica communications	2020	Human
+HLA-DRA	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	31768052	Nature neuroscience	2019	Human
+HLA-DRA	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	34525361	Cell reports	2021	Human
+HLA-DRB1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35245443	Cell stem cell	2022	Human
+HMOX1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	33193404	Frontiers in immunology	2020	Human
+HPSE	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+HSPA8	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	33193404	Frontiers in immunology	2020	Human
+IFI44	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+IFNGR1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	34525361	Cell reports	2021	Human
+IFNGR1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35245443	Cell stem cell	2022	Human
+IGF1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+IGSF10	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+IL15	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+IL18BP	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+IL1A	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Cortex	31456032	Acta neuropathologica	2019	Human
+IL1B	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	34525361	Cell reports	2021	Human
+IL4I1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+INF2	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+IRF8	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35090578	Acta neuropathologica communications	2022	Human
+ISL1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35245443	Cell stem cell	2022	Human
+ITGAM	ALS_CNS_MICROGLIA	Microglia	Glial	supporting	Review	Brain	Brain	30758077	Glia	2019	Human
+ITGAM	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	31249382	Molecular psychiatry	2019	Human
+ITGAM	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	34019156	Acta neuropathologica	2021	Human
+ITGAM	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	34525361	Cell reports	2021	Human
+ITGAX	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Entorhinal cortex	33432193	Nature neuroscience	2021	Human
+ITGAX	ALS_CNS_MICROGLIA	Microglia	Glial	supporting	Review	Brain	Brain	33692572	Nature reviews. Neurology	2021	Human
+ITGAX	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+KCNJ2	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+KCNJ5	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+KCNMA1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+KIF1A	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+LAPTM5	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	31693905	Cell reports	2019	Human
+LDHA	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+LGALS1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35245443	Cell stem cell	2022	Human
+LGALS3BP	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+LGI2	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+LHX1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35245443	Cell stem cell	2022	Human
+LILRB4	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+LOX	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+LPL	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Superior frontal gyrus	33432193	Nature neuroscience	2021	Human
+LPL	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+LRPAP1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+LSR	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+LYVE1	ALS_CNS_MICROGLIA	Microglia	Glial	supporting	Review	Brain	Cerebrospinal fluid	34707085	Signal transduction and targeted therapy	2021	Human
+MAFF	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+MAMDC2	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+MARCKS	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	32371549	Neurology(R) neuroimmunology & neuroinflammation	2020	Human
+MCM5	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35245443	Cell stem cell	2022	Human
+MEIS1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+MIF	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+MKI67	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Hippocampus	31942070	Nature	2020	Human
+MNDA	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	33193404	Frontiers in immunology	2020	Human
+MOBP	ALS_CNS_MICROGLIA	Microglia	Glial	supporting	Review	Brain	Brain	34919646	Brain : a journal of neurology	2021	Human
+MOV10L1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+MPEG1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+MS4A6A	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	34767070	Acta neuropathologica	2021	Human
+MYO1E	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+MYO5A	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+NCEH1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+NDUFA1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+NDUFA6	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+NEUROD2	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35245443	Cell stem cell	2022	Human
+NEXN	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+NIN	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+NLRP1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	34525361	Cell reports	2021	Human
+NOS2	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	32577755	Brain : a journal of neurology	2020	Human
+NPC2	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+NRP1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+OLFML3	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	33704822	Glia	2021	Human
+P2RY12	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	30559476	Nature neuroscience	2019	Human
+P2RY12	ALS_CNS_MICROGLIA	Microglia	Glial	supporting	Review	Brain	Brain	30758077	Glia	2019	Human
+P2RY12	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	30867424	Nature communications	2019	Human
+P2RY12	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	31983537	Cell	2020	Human
+P2RY12	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Pluripotent stem cell	32220329	Stem cell reports	2020	Human
+P2RY12	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	32961131	Cell	2020	Human
+P2RY12	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Entorhinal cortex	33432193	Nature neuroscience	2021	Human
+P2RY12	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	33502028	Annals of neurology	2021	Human
+P2RY12	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	33609158	Acta neuropathologica	2021	Human
+P2RY12	ALS_CNS_MICROGLIA	Microglia	Glial	supporting	Review	Brain	Brain	33692572	Nature reviews. Neurology	2021	Human
+P2RY12	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	33704822	Glia	2021	Human
+P2RY12	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	33782623	Nature neuroscience	2021	Human
+P2RY12	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	34077540	Neuro-oncology	2021	Human
+P2RY12	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	34228647	JCI insight	2021	Human
+P2RY12	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	34459315	The Neuroscientist : a review journal bringing neurobiology, neurology and	2021	Human
+P2RY12	ALS_CNS_MICROGLIA	Microglia	Glial	supporting	Review	Brain	Brain	34539650	Frontiers in immunology	2021	Human
+P2RY12	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	34563398	Trends in genetics : TIG	2021	Human
+P2RY12	ALS_CNS_MICROGLIA	Microglia	Glial	supporting	Review	Brain	Brain	34623511	Acta neuropathologica	2021	Human
+P2RY12	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35090578	Acta neuropathologica communications	2022	Human
+P2RY12	ALS_CNS_MICROGLIA	Microglia	Glial	supporting	Review	Brain	Brain	35140215	Nature communications	2022	Human
+P2RY12	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35262217	Glia	2022	Human
+P2RY12	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35371110	Frontiers in immunology	2022	Human
+P2RY13	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	32371549	Neurology(R) neuroimmunology & neuroinflammation	2020	Human
+P2RY13	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	34228647	JCI insight	2021	Human
+PABPC1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+PAX6	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35245443	Cell stem cell	2022	Human
+PDCD1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+PDCD6IPP2	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+PDGFRA	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	34525361	Cell reports	2021	Human
+PEBP1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+PERP	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+PGAM1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+PGK1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+PHETA1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+PILRA	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	34767070	Acta neuropathologica	2021	Human
+PKM	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+PLAUR	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+PLBD2	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+PLD3	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+PLEKHH2	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+PLIN2	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+PLXDC2	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Cortex	32826893	Nature communications	2020	Human
+PLXNC1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+PRDX1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+PSAT1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+PSTPIP1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+PTCHD1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+PTPRC	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	30559476	Nature neuroscience	2019	Human
+PTPRC	ALS_CNS_MICROGLIA	Microglia	Glial	supporting	Review	Brain	Brain	30758077	Glia	2019	Human
+PTPRC	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	30946477	Brain : a journal of neurology	2019	Human
+PTPRC	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Hippocampus	31942070	Nature	2020	Human
+PTPRC	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	32961131	Cell	2020	Human
+PTPRC	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	33207193	Cell reports	2020	Human
+PTPRC	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	34429139	Molecular neurodegeneration	2021	Human
+PTPRC	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Spinal cord	Spinal cord	34605607	EMBO reports	2021	Human
+PTPRG	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+PTPRZ1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+PTTG1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35245443	Cell stem cell	2022	Human
+RAMP1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RFTN1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RFX2	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RIMS2	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RPL10A	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RPL11	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RPL12	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RPL13	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RPL13A	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RPL14	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RPL18A	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RPL22	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RPL23	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RPL27A	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RPL3	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RPL32	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RPL35	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RPL35A	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RPL37	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RPL37A	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RPL38	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RPL39	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RPL5	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RPL6	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RPL7	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RPLP0	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RPLP1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RPLP2	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RPS10	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RPS12	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RPS14	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RPS15	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RPS15A	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RPS16	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RPS18	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RPS19	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RPS2	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RPS20	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RPS21	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RPS24	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RPS25	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RPS26	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RPS27A	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RPS28	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RPS3	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RPS3A	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RPS4X	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RPS5	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RPS9	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RPSA	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+RUNX3	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+S100A4	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+SALL1	ALS_CNS_MICROGLIA	Microglia	Glial	supporting	Review	Brain	Brain	33692572	Nature reviews. Neurology	2021	Human
+SALL1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	33704822	Glia	2021	Human
+SALL1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	33782623	Nature neuroscience	2021	Human
+SALL1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	34077540	Neuro-oncology	2021	Human
+SALL1	ALS_CNS_MICROGLIA	Microglia	Glial	supporting	Review	Brain	Brain	34539650	Frontiers in immunology	2021	Human
+SCD5	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+SCPEP1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+SDF2L1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+SDF4	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+SECTM1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+SELENBP1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+SERPINE2	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+SERPINF1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+SH3PXD2B	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+SIGLEC8	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	33704822	Glia	2021	Human
+SLAMF9	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+SLC11A1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+SLC2A5	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	32371549	Neurology(R) neuroimmunology & neuroinflammation	2020	Human
+SLC2A5	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	33704822	Glia	2021	Human
+SLC38A7	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+SMAD7	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+SMIM3	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+SORL1	ALS_CNS_MICROGLIA	Microglia	Glial	supporting	Review	Brain	Brain	35140215	Nature communications	2022	Human
+SOX2	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	34525361	Cell reports	2021	Human
+SPI1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	34459315	The Neuroscientist : a review journal bringing neurobiology, neurology and	2021	Human
+SPP1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Superior frontal gyrus	33432193	Nature neuroscience	2021	Human
+SPP1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+SPRY1	ALS_CNS_MICROGLIA	Microglia	Glial	supporting	Review	Brain	Brain	35140215	Nature communications	2022	Human
+SSR4	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+ST14	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+STAB1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	33008897	Science advances	2020	Human
+STEAP3	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+SULF2	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+SYNDIG1L	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+SYNGR1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+TCAP	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+TCF7L2	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35245443	Cell stem cell	2022	Human
+TEK	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	33044746	The Journal of pathology	2020	Human
+TENT5C	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+TGFBI	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+TIMP2	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+TLN2	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+TLR2	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Cortex	31456032	Acta neuropathologica	2019	Human
+TLR2	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	33193404	Frontiers in immunology	2020	Human
+TLR2	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+TM9SF1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+TMED3	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+TMEM119	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	30559476	Nature neuroscience	2019	Human
+TMEM119	ALS_CNS_MICROGLIA	Microglia	Glial	supporting	Review	Brain	Brain	30758077	Glia	2019	Human
+TMEM119	ALS_CNS_MICROGLIA	Microglia	Glial	supporting	Review	Brain	Brain	31214167	Frontiers in immunology	2019	Human
+TMEM119	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	31282941	Annals of oncology : official journal of the European Society for Medical	2019	Human
+TMEM119	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	31368890	eLife	2019	Human
+TMEM119	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Pluripotent stem cell	32220329	Stem cell reports	2020	Human
+TMEM119	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	32282893	Brain : a journal of neurology	2020	Human
+TMEM119	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	32375811	Journal of neuroinflammation	2020	Human
+TMEM119	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	32577755	Brain : a journal of neurology	2020	Human
+TMEM119	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Superior frontal gyrus	33432193	Nature neuroscience	2021	Human
+TMEM119	ALS_CNS_MICROGLIA	Microglia	Glial	supporting	Review	Brain	Brain	33692572	Nature reviews. Neurology	2021	Human
+TMEM119	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	33704822	Glia	2021	Human
+TMEM119	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	33782623	Nature neuroscience	2021	Human
+TMEM119	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	34077540	Neuro-oncology	2021	Human
+TMEM119	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	34459315	The Neuroscientist : a review journal bringing neurobiology, neurology and	2021	Human
+TMEM119	ALS_CNS_MICROGLIA	Microglia	Glial	supporting	Review	Brain	Brain	34539650	Frontiers in immunology	2021	Human
+TMEM119	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	34836966	Nature communications	2021	Human
+TMEM119	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35109872	Journal of neuroinflammation	2022	Human
+TMEM119	ALS_CNS_MICROGLIA	Microglia	Glial	supporting	Review	Brain	Brain	35140215	Nature communications	2022	Human
+TMEM119	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35180881	Genome medicine	2022	Human
+TMEM119	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35262217	Glia	2022	Human
+TMEM119	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35355981	Frontiers in immunology	2022	Human
+TMEM119	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35371110	Frontiers in immunology	2022	Human
+TMEM163	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+TMEM19	ALS_CNS_MICROGLIA	Microglia	Glial	supporting	Review	Brain	Brain	34623511	Acta neuropathologica	2021	Human
+TNF	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	30946477	Brain : a journal of neurology	2019	Human
+TNFRSF21	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+TNFSF8	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+TOX2	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+TPD52	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+TPI1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+TPT1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+TREM2	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Superior frontal gyrus	33432193	Nature neuroscience	2021	Human
+TREM2	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	34563398	Trends in genetics : TIG	2021	Human
+TREM2	ALS_CNS_MICROGLIA	Microglia	Glial	supporting	Review	Brain	Cerebrospinal fluid	34707085	Signal transduction and targeted therapy	2021	Human
+TREM2	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+TREM2	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35371110	Frontiers in immunology	2022	Human
+TSHZ3	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+TSPO	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	34609758	Movement disorders : official journal of the Movement Disorder Society	2021	Human
+TSPO	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+TSPO	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35109872	Journal of neuroinflammation	2022	Human
+TTYH1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35245443	Cell stem cell	2022	Human
+TTYH3	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+TUBA1A	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	33193404	Frontiers in immunology	2020	Human
+TYROBP	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Middle temporal gyrus	31435019	Nature	2019	Human
+TYROBP	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Entorhinal cortex	33432193	Nature neuroscience	2021	Human
+TYROBP	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+ULK3	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+USP12	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+VAT1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+VCAN	ALS_CNS_MICROGLIA	Microglia	Glial	supporting	Review	Brain	Brain	34919646	Brain : a journal of neurology	2021	Human
+VENTX	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+VPS13C	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+VSIG4	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Cortical layer	34795060	Proceedings of the National Academy of Sciences of the United States of America	2021	Human
+XBP1	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35245443	Cell stem cell	2022	Human
+ZBTB8B	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+ZNF532	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+ZNF662	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+ZNF696	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+ZNF703	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+ZNF843	ALS_CNS_MICROGLIA	Microglia	Glial	canonical	Experiment	Brain	Brain	35105355	Genome medicine	2022	Human
+ABI3BP	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33028830	Nature communications	2020	Human
+ADARB2	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33028830	Nature communications	2020	Human
+ALDH1L1	ALS_CNS_NEURON	Neuron	Neuronal	supporting	Review	Brain	Brain	32840654	Acta neuropathologica	2020	Human
+APOE	ALS_CNS_NEURON	Neuron	Neuronal	supporting	Review	Brain	Brain	32840654	Acta neuropathologica	2020	Human
+AQP4	ALS_CNS_NEURON	Neuron	Neuronal	supporting	Review	Brain	Brain	32840654	Acta neuropathologica	2020	Human
+AQP4	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	34048549	Brain : a journal of neurology	2021	Human
+ARF3	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+ASCL1	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	32483223	Nature communications	2020	Human
+ATP6V1A	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+BCL11B	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	31168097	Nature	2019	Human
+BCL11B	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	32483223	Nature communications	2020	Human
+BCL11B	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33723434	Nature neuroscience	2021	Human
+BEX3	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	32070434	Acta neuropathologica communications	2020	Human
+CACNA2D1	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33008897	Science advances	2020	Human
+CACNA2D1	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+CACNA2D2	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33008897	Science advances	2020	Human
+CALB1	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33028830	Nature communications	2020	Human
+CALB2	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33028830	Nature communications	2020	Human
+CALB2	ALS_CNS_NEURON	Neuron	Neuronal	supporting	Review	Brain	Brain	33259802	Cell	2020	Human
+CBLN1	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33028830	Nature communications	2020	Human
+CCK	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Cortex	31456032	Acta neuropathologica	2019	Human
+CCK	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	32070434	Acta neuropathologica communications	2020	Human
+CCK	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33028830	Nature communications	2020	Human
+CD24	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	32483223	Nature communications	2020	Human
+CD24	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	32641768	Nature communications	2020	Human
+CD68	ALS_CNS_NEURON	Neuron	Neuronal	supporting	Review	Brain	Brain	32840654	Acta neuropathologica	2020	Human
+CDK1	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	31341285	Nature	2019	Human
+CHAT	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33711266	Stem cell reports	2021	Human
+CRH	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33028830	Nature communications	2020	Human
+CUX2	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Cortex	33106496	Nature communications	2020	Human
+CX3CR1	ALS_CNS_NEURON	Neuron	Neuronal	supporting	Review	Brain	Brain	32840654	Acta neuropathologica	2020	Human
+CX3CR1	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	34048549	Brain : a journal of neurology	2021	Human
+DACH2	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33028830	Nature communications	2020	Human
+DCN	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	34048549	Brain : a journal of neurology	2021	Human
+DCX	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	31978324	Developmental cell	2020	Human
+DCX	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	32483223	Nature communications	2020	Human
+DCX	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	32632204	Molecular psychiatry	2020	Human
+DCX	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Pluripotent stem cell	33470930	eLife	2021	Human
+DCX	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	34624206	Cell stem cell	2021	Human
+ENO2	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	30867424	Nature communications	2019	Human
+ENO2	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	32483223	Nature communications	2020	Human
+ENO2	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Hippocampus	33875655	Nature communications	2021	Human
+EOMES	ALS_CNS_NEURON	Neuron	Neuronal	supporting	Review	Brain	Brain	34185323	Annals of neurology	2021	Human
+EPHA7	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+FABP7	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	34228647	JCI insight	2021	Human
+FLT1	ALS_CNS_NEURON	Neuron	Neuronal	supporting	Review	Brain	Brain	32840654	Acta neuropathologica	2020	Human
+FOS	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	32483223	Nature communications	2020	Human
+FOXG1	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	32483223	Nature communications	2020	Human
+GABBR1	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	32483223	Nature communications	2020	Human
+GABRA1	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	31815646	Acta neuropathologica communications	2019	Human
+GABRA1	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33711266	Stem cell reports	2021	Human
+GABRA1	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	34259569	Environmental health perspectives	2021	Human
+GABRB2	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	White matter	30747918	Nature	2019	Human
+GAD1	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Cortex	31456032	Acta neuropathologica	2019	Human
+GAD1	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	32341540	Nature neuroscience	2020	Human
+GAD1	ALS_CNS_NEURON	Neuron	Neuronal	supporting	Review	Brain	Brain	32840654	Acta neuropathologica	2020	Human
+GAD2	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	32341540	Nature neuroscience	2020	Human
+GAD2	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	32483223	Nature communications	2020	Human
+GAD2	ALS_CNS_NEURON	Neuron	Neuronal	supporting	Review	Brain	Brain	32840654	Acta neuropathologica	2020	Human
+GAD2	ALS_CNS_NEURON	Neuron	Neuronal	supporting	Review	Brain	Brain	33259802	Cell	2020	Human
+GAD2	ALS_CNS_NEURON	Neuron	Neuronal	supporting	Review	Brain	Brain	34919646	Brain : a journal of neurology	2021	Human
+GAP43	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Pluripotent stem cell	33470930	eLife	2021	Human
+GFAP	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	24142904	Journal of biomedical materials research. Part B, Applied biomaterials	2013	Human
+GFAP	ALS_CNS_NEURON	Neuron	Neuronal	supporting	Review	Brain	Brain	32840654	Acta neuropathologica	2020	Human
+GRIA1	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33008897	Science advances	2020	Human
+GRIK1	ALS_CNS_NEURON	Neuron	Neuronal	supporting	Review	Brain	Brain	34919646	Brain : a journal of neurology	2021	Human
+GRIN1	ALS_CNS_NEURON	Neuron	Neuronal	supporting	Review	Brain	Brain	32513247	Genome biology	2020	Human
+GRIN1	ALS_CNS_NEURON	Neuron	Neuronal	supporting	Review	Brain	Brain	32840654	Acta neuropathologica	2020	Human
+GRIN1	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33008897	Science advances	2020	Human
+GRIN2B	ALS_CNS_NEURON	Neuron	Neuronal	supporting	Review	Brain	Brain	32840654	Acta neuropathologica	2020	Human
+GRIN2B	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33008897	Science advances	2020	Human
+GXYLT2	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33028830	Nature communications	2020	Human
+HPGD	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33028830	Nature communications	2020	Human
+HTR2C	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33028830	Nature communications	2020	Human
+ID2	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33028830	Nature communications	2020	Human
+INA	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	32483223	Nature communications	2020	Human
+ISOC1	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33028830	Nature communications	2020	Human
+JAG1	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	32483223	Nature communications	2020	Human
+JPH4	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Spinal cord	Spinal cord	34605607	EMBO reports	2021	Human
+KCNS3	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	34048549	Brain : a journal of neurology	2021	Human
+KNSTRN	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	34048549	Brain : a journal of neurology	2021	Human
+L1CAM	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Cerebrospinal fluid	31805958	Journal of neuroinflammation	2019	Human
+LAMP5	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33028830	Nature communications	2020	Human
+LCP2	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33028830	Nature communications	2020	Human
+LGR5	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33028830	Nature communications	2020	Human
+LHX6	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33028830	Nature communications	2020	Human
+LINGO2	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Cortex	33106496	Nature communications	2020	Human
+MAP1B	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	32070434	Acta neuropathologica communications	2020	Human
+MAP2	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Spinal cord	Spinal cord	16682082	Journal of neuroscience methods	2006	Human
+MAP2	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	24142904	Journal of biomedical materials research. Part B, Applied biomaterials	2013	Human
+MAP2	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	30867424	Nature communications	2019	Human
+MAP2	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	31168097	Nature	2019	Human
+MAP2	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	32483223	Nature communications	2020	Human
+MAP2	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	32788587	Nature communications	2020	Human
+MAP2	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Cortex	33288841	Neuropsychopharmacology : official publication of the American College of	2020	Human
+MAP2	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Pluripotent stem cell	33470930	eLife	2021	Human
+MAP2	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Hippocampus	33875655	Nature communications	2021	Human
+MAP2	ALS_CNS_NEURON	Neuron	Neuronal	supporting	Review	Brain	Brain	33888112	Journal of biomedical science	2021	Human
+MAP2	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	34061592	mBio	2021	Human
+MAP2	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	34459315	The Neuroscientist : a review journal bringing neurobiology, neurology and	2021	Human
+MAP2	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	35262217	Glia	2022	Human
+MAPT	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	31978324	Developmental cell	2020	Human
+MAPT	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	32483223	Nature communications	2020	Human
+MAPT	ALS_CNS_NEURON	Neuron	Neuronal	supporting	Review	Brain	Brain	35286370	Brain : a journal of neurology	2022	Human
+MAPT	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	35289477	EMBO reports	2022	Human
+MARK4	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	16973293	Neuroscience	2006	Human
+MBP	ALS_CNS_NEURON	Neuron	Neuronal	supporting	Review	Brain	Brain	32840654	Acta neuropathologica	2020	Human
+MEPE	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33028830	Nature communications	2020	Human
+MOG	ALS_CNS_NEURON	Neuron	Neuronal	supporting	Review	Brain	Brain	32840654	Acta neuropathologica	2020	Human
+MOG	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	34048549	Brain : a journal of neurology	2021	Human
+MRC1	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	34048549	Brain : a journal of neurology	2021	Human
+MSI1	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	32483223	Nature communications	2020	Human
+MYT1L	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	32483223	Nature communications	2020	Human
+NCAM1	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	32483223	Nature communications	2020	Human
+NCAM1	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33008897	Science advances	2020	Human
+NCAM2	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	35303420	Cancer cell	2022	Human
+NCDN	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+NCKAP5	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33028830	Nature communications	2020	Human
+NEFL	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+NEFM	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Pluripotent stem cell	33470930	eLife	2021	Human
+NES	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	32694205	Proceedings of the National Academy of Sciences of the United States of America	2020	Human
+NETO2	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+NEUROD2	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	32632204	Molecular psychiatry	2020	Human
+NEUROD6	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	31974223	Science (New York, N.Y.)	2020	Human
+NEUROD6	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	32632204	Molecular psychiatry	2020	Human
+NFASC	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Cerebrospinal fluid	31805958	Journal of neuroinflammation	2019	Human
+NMBR	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33028830	Nature communications	2020	Human
+NOG	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33028830	Nature communications	2020	Human
+NOS1	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33028830	Nature communications	2020	Human
+NPTN	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Cerebrospinal fluid	31805958	Journal of neuroinflammation	2019	Human
+NPY	ALS_CNS_NEURON	Neuron	Neuronal	supporting	Review	Brain	Brain	33259802	Cell	2020	Human
+NR2F1	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	32483223	Nature communications	2020	Human
+NRCAM	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Cerebrospinal fluid	31805958	Journal of neuroinflammation	2019	Human
+NRCAM	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	35303420	Cancer cell	2022	Human
+NRG1	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33028830	Nature communications	2020	Human
+NRGN	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	32070434	Acta neuropathologica communications	2020	Human
+NSF	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+OLIG1	ALS_CNS_NEURON	Neuron	Neuronal	supporting	Review	Brain	Brain	32840654	Acta neuropathologica	2020	Human
+OLIG2	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	31534165	Cell death & disease	2019	Human
+OLIG2	ALS_CNS_NEURON	Neuron	Neuronal	supporting	Review	Brain	Brain	32840654	Acta neuropathologica	2020	Human
+OPRM1	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33028830	Nature communications	2020	Human
+PAX6	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	30581079	Cell stem cell	2019	Human
+PAX6	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33028830	Nature communications	2020	Human
+PDGFRA	ALS_CNS_NEURON	Neuron	Neuronal	supporting	Review	Brain	Brain	32840654	Acta neuropathologica	2020	Human
+PNMA2	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+POU3F2	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	32483223	Nature communications	2020	Human
+PREPL	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+PRKAA2	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+PROX1	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	31501549	Nature methods	2019	Human
+PTBP2	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	34459315	The Neuroscientist : a review journal bringing neurobiology, neurology and	2021	Human
+PTPRZ1	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	34228647	JCI insight	2021	Human
+PVALB	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33028830	Nature communications	2020	Human
+RBFOX1	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	31768052	Nature neuroscience	2019	Human
+RBFOX3	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	31618642	Cell reports	2019	Human
+RBFOX3	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	32341540	Nature neuroscience	2020	Human
+RBFOX3	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	32483223	Nature communications	2020	Human
+RBFOX3	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	34048549	Brain : a journal of neurology	2021	Human
+RBFOX3	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Spinal cord	Spinal cord	34605607	EMBO reports	2021	Human
+RELN	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	32632204	Molecular psychiatry	2020	Human
+RRM2	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	31341285	Nature	2019	Human
+SATB2	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	31168097	Nature	2019	Human
+SATB2	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	31501549	Nature methods	2019	Human
+SATB2	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	32341540	Nature neuroscience	2020	Human
+SCGN	ALS_CNS_NEURON	Neuron	Neuronal	supporting	Review	Brain	Brain	33259802	Cell	2020	Human
+SCN1A	ALS_CNS_NEURON	Neuron	Neuronal	supporting	Review	Brain	Brain	34185323	Annals of neurology	2021	Human
+SCN3A	ALS_CNS_NEURON	Neuron	Neuronal	supporting	Review	Brain	Brain	34185323	Annals of neurology	2021	Human
+SEMA3C	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33028830	Nature communications	2020	Human
+SHANK3	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	34259569	Environmental health perspectives	2021	Human
+SHISA9	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	35303420	Cancer cell	2022	Human
+SLC12A5	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	31815646	Acta neuropathologica communications	2019	Human
+SLC17A6	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	32341540	Nature neuroscience	2020	Human
+SLC17A6	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Pluripotent stem cell	33470930	eLife	2021	Human
+SLC17A6	ALS_CNS_NEURON	Neuron	Neuronal	supporting	Review	Brain	Brain	34919646	Brain : a journal of neurology	2021	Human
+SLC17A7	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	32341540	Nature neuroscience	2020	Human
+SLC17A7	ALS_CNS_NEURON	Neuron	Neuronal	supporting	Review	Brain	Brain	32840654	Acta neuropathologica	2020	Human
+SLC17A7	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Cortex	33288841	Neuropsychopharmacology : official publication of the American College of	2020	Human
+SLC17A7	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33711266	Stem cell reports	2021	Human
+SLC1A2	ALS_CNS_NEURON	Neuron	Neuronal	supporting	Review	Brain	Brain	32840654	Acta neuropathologica	2020	Human
+SLC1A3	ALS_CNS_NEURON	Neuron	Neuronal	supporting	Review	Brain	Brain	32840654	Acta neuropathologica	2020	Human
+SLC32A1	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	32341540	Nature neuroscience	2020	Human
+SNAP25	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	White matter	30747918	Nature	2019	Human
+SNAP25	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Middle temporal gyrus	31435019	Nature	2019	Human
+SNAP25	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	32341540	Nature neuroscience	2020	Human
+SNAP25	ALS_CNS_NEURON	Neuron	Neuronal	supporting	Review	Brain	Brain	32513247	Genome biology	2020	Human
+SNAP25	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	35459228	Nature communications	2022	Human
+SNAP91	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Cerebrospinal fluid	31805958	Journal of neuroinflammation	2019	Human
+SNRPN	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+SOX1	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	30581079	Cell stem cell	2019	Human
+SOX10	ALS_CNS_NEURON	Neuron	Neuronal	supporting	Review	Brain	Brain	32840654	Acta neuropathologica	2020	Human
+SOX11	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	32483223	Nature communications	2020	Human
+SOX2	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	31978324	Developmental cell	2020	Human
+SOX2	ALS_CNS_NEURON	Neuron	Neuronal	supporting	Review	Brain	Brain	34185323	Annals of neurology	2021	Human
+SOX4	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	31341285	Nature	2019	Human
+SOX6	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33028830	Nature communications	2020	Human
+SOX9	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	31974223	Science (New York, N.Y.)	2020	Human
+SRRM4	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Spinal cord	Spinal cord	34605607	EMBO reports	2021	Human
+SST	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33028830	Nature communications	2020	Human
+SST	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Cortex	33106496	Nature communications	2020	Human
+SSTR1	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33028830	Nature communications	2020	Human
+STK32A	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33028830	Nature communications	2020	Human
+STMN2	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	31341285	Nature	2019	Human
+STMN2	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Cortex	31456032	Acta neuropathologica	2019	Human
+STMN2	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	31693905	Cell reports	2019	Human
+STMN2	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	32341540	Nature neuroscience	2020	Human
+STMN2	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	32632204	Molecular psychiatry	2020	Human
+STMN2	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33230203	Molecular psychiatry	2020	Human
+STMN2	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Pluripotent stem cell	33470930	eLife	2021	Human
+STMN2	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	35016005	Developmental cell	2022	Human
+STMN3	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+SULF1	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33028830	Nature communications	2020	Human
+SYN1	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Cortex	31456032	Acta neuropathologica	2019	Human
+SYN1	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Cerebrospinal fluid	31805958	Journal of neuroinflammation	2019	Human
+SYNE1	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	34459315	The Neuroscientist : a review journal bringing neurobiology, neurology and	2021	Human
+SYT1	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Cortex	31456032	Acta neuropathologica	2019	Human
+SYT1	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	31815646	Acta neuropathologica communications	2019	Human
+SYT1	ALS_CNS_NEURON	Neuron	Neuronal	supporting	Review	Brain	Brain	32513247	Genome biology	2020	Human
+SYT1	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Pluripotent stem cell	33470930	eLife	2021	Human
+SYT11	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	31341285	Nature	2019	Human
+SYT4	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Pluripotent stem cell	33470930	eLife	2021	Human
+TAC1	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33028830	Nature communications	2020	Human
+TAC3	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33028830	Nature communications	2020	Human
+TBR1	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	34624206	Cell stem cell	2021	Human
+TH	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33028830	Nature communications	2020	Human
+TH	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33711266	Stem cell reports	2021	Human
+TH	ALS_CNS_NEURON	Neuron	Neuronal	supporting	Review	Brain	Brain	34919646	Brain : a journal of neurology	2021	Human
+THY1	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+TMEM130	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	31693905	Cell reports	2019	Human
+TOP2A	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	31341285	Nature	2019	Human
+TRHDE	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33028830	Nature communications	2020	Human
+TUBB3	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	32483223	Nature communications	2020	Human
+TUBB3	ALS_CNS_NEURON	Neuron	Neuronal	supporting	Review	Brain	Brain	34185323	Annals of neurology	2021	Human
+TUBB3	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+TYR	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33028830	Nature communications	2020	Human
+TYROBP	ALS_CNS_NEURON	Neuron	Neuronal	supporting	Review	Brain	Brain	32840654	Acta neuropathologica	2020	Human
+UBE3A	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+UCHL1	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+VCAN	ALS_CNS_NEURON	Neuron	Neuronal	supporting	Review	Brain	Brain	32840654	Acta neuropathologica	2020	Human
+VDAC3	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+VIM	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	31978324	Developmental cell	2020	Human
+VIP	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	33028830	Nature communications	2020	Human
+YWHAG	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+YWHAH	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+ZIC1	ALS_CNS_NEURON	Neuron	Neuronal	canonical	Experiment	Brain	Brain	31341285	Nature	2019	Human
+ALCAM	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	31327527	Cell	2019	Human
+APC	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	32783945	Cell reports	2020	Human
+BCAS1	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+CLDN11	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	31327527	Cell	2019	Human
+CLDN11	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	32620753	Nature communications	2020	Human
+CLDN11	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	34019156	Acta neuropathologica	2021	Human
+CLDN11	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+CLDN11	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	35301426	Molecular psychiatry	2022	Human
+CNDP1	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	34917090	Frontiers in immunology	2021	Human
+CNP	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	White matter	30747918	Nature	2019	Human
+CNP	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	31693905	Cell reports	2019	Human
+CNP	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	31958186	Glia	2020	Human
+CNP	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	34459315	The Neuroscientist : a review journal bringing neurobiology, neurology and	2021	Human
+CNP	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	35301426	Molecular psychiatry	2022	Human
+CNTNAP2	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	35301426	Molecular psychiatry	2022	Human
+CRYAB	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Cerebrospinal fluid	31805958	Journal of neuroinflammation	2019	Human
+CSPG4	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	30867424	Nature communications	2019	Human
+CSPG4	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	35301426	Molecular psychiatry	2022	Human
+DLL3	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	34692159	National science review	2020	Human
+DSCAM	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	35301426	Molecular psychiatry	2022	Human
+EDIL3	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	34917090	Frontiers in immunology	2021	Human
+ENPP6	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+EPHX2	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Cerebrospinal fluid	31805958	Journal of neuroinflammation	2019	Human
+ERBB3	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+ERMN	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	34917090	Frontiers in immunology	2021	Human
+EVI2A	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+FA2H	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+GALNT6	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+GPR17	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+GPR37	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Cortex	31456032	Acta neuropathologica	2019	Human
+GPR62	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+GRIA1	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	33193404	Frontiers in immunology	2020	Human
+GRIA2	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	33193404	Frontiers in immunology	2020	Human
+IGKV1D-37	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Cerebellum	30862721	Cancer research	2019	Human
+KLK6	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Middle temporal gyrus	31435019	Nature	2019	Human
+MAG	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	30867424	Nature communications	2019	Human
+MAG	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	31327527	Cell	2019	Human
+MAG	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Middle temporal gyrus	31435019	Nature	2019	Human
+MAG	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	31693905	Cell reports	2019	Human
+MAG	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	32341540	Nature neuroscience	2020	Human
+MAG	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	33008897	Science advances	2020	Human
+MAG	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	33510160	Nature communications	2021	Human
+MAG	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	33975634	Genome medicine	2021	Human
+MAG	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+MAG	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	34917090	Frontiers in immunology	2021	Human
+MAG	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	35301426	Molecular psychiatry	2022	Human
+MAG	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	35303420	Cancer cell	2022	Human
+MAL	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+MBP	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	31042697	Nature	2019	Human
+MBP	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	31327527	Cell	2019	Human
+MBP	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	31768052	Nature neuroscience	2019	Human
+MBP	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Cerebrospinal fluid	31805958	Journal of neuroinflammation	2019	Human
+MBP	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Hippocampus	31942070	Nature	2020	Human
+MBP	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	31958186	Glia	2020	Human
+MBP	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	32070434	Acta neuropathologica communications	2020	Human
+MBP	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	32341540	Nature neuroscience	2020	Human
+MBP	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	32663469	Cancer cell	2020	Human
+MBP	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	supporting	Review	Brain	Brain	32976581	Nucleic acids research	2020	Human
+MBP	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Superior frontal gyrus	33432193	Nature neuroscience	2021	Human
+MBP	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	33975634	Genome medicine	2021	Human
+MBP	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	34019156	Acta neuropathologica	2021	Human
+MBP	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+MBP	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	34459315	The Neuroscientist : a review journal bringing neurobiology, neurology and	2021	Human
+MBP	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	supporting	Review	Brain	Brain	35236372	Molecular neurodegeneration	2022	Human
+MBP	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	35301426	Molecular psychiatry	2022	Human
+MOBP	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Cortex	31456032	Acta neuropathologica	2019	Human
+MOBP	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	31768052	Nature neuroscience	2019	Human
+MOBP	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	32070434	Acta neuropathologica communications	2020	Human
+MOBP	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	32341540	Nature neuroscience	2020	Human
+MOBP	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Cortex	32826893	Nature communications	2020	Human
+MOBP	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	34281603	Genome medicine	2021	Human
+MOBP	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+MOG	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	supporting	Review	Brain	Brain	30758077	Glia	2019	Human
+MOG	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	30867424	Nature communications	2019	Human
+MOG	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	31327527	Cell	2019	Human
+MOG	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Cortex	31456032	Acta neuropathologica	2019	Human
+MOG	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	31693905	Cell reports	2019	Human
+MOG	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	32341540	Nature neuroscience	2020	Human
+MOG	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	32620753	Nature communications	2020	Human
+MOG	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	32663469	Cancer cell	2020	Human
+MOG	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Cortex	32826893	Nature communications	2020	Human
+MOG	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	33008897	Science advances	2020	Human
+MOG	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	33230203	Molecular psychiatry	2020	Human
+MOG	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	33432193	Nature neuroscience	2021	Human
+MOG	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	33510160	Nature communications	2021	Human
+MOG	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+MOG	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	35016005	Developmental cell	2022	Human
+MOG	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	35301426	Molecular psychiatry	2022	Human
+MOG	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	35303420	Cancer cell	2022	Human
+MYT1	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	33339831	Nature communications	2020	Human
+OLIG1	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	31327527	Cell	2019	Human
+OLIG1	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	31618642	Cell reports	2019	Human
+OLIG1	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	32783945	Cell reports	2020	Human
+OLIG1	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Cortex	32826893	Nature communications	2020	Human
+OLIG1	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	33433612	Neuro-oncology	2021	Human
+OLIG1	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	33657375	Cell reports	2021	Human
+OLIG1	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Cortex	34675437	Nature neuroscience	2021	Human
+OLIG1	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	35301426	Molecular psychiatry	2022	Human
+OLIG2	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	26110560	Histology and histopathology	2015	Human
+OLIG2	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	27596440	Journal of neuroinflammation	2016	Human
+OLIG2	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	31958186	Glia	2020	Human
+OLIG2	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	32469469	Glia	2020	Human
+OLIG2	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	32620753	Nature communications	2020	Human
+OLIG2	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	32694205	Proceedings of the National Academy of Sciences of the United States of America	2020	Human
+OLIG2	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	32783945	Cell reports	2020	Human
+OLIG2	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	33657375	Cell reports	2021	Human
+OLIG2	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Hippocampus	33875655	Nature communications	2021	Human
+OLIG2	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Cortex	34675437	Nature neuroscience	2021	Human
+OLIG2	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	34692159	National science review	2020	Human
+OLIG2	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	34763709	Genome biology	2021	Human
+OLIG2	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	35301426	Molecular psychiatry	2022	Human
+OMG	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	31327527	Cell	2019	Human
+OPALIN	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Middle temporal gyrus	31435019	Nature	2019	Human
+PCDH15	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	35301426	Molecular psychiatry	2022	Human
+PCDH9	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	35301426	Molecular psychiatry	2022	Human
+PDGFRA	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Spinal cord	Spinal cord	34605607	EMBO reports	2021	Human
+PDGFRA	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Neocortex	34616070	Nature	2021	Human
+PDGFRA	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Cortex	34675437	Nature neuroscience	2021	Human
+PDGFRA	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	35301426	Molecular psychiatry	2022	Human
+PLEKHH1	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+PLLP	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	31327527	Cell	2019	Human
+PLP1	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	White matter	30747918	Nature	2019	Human
+PLP1	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	31327527	Cell	2019	Human
+PLP1	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Middle temporal gyrus	31435019	Nature	2019	Human
+PLP1	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	31768052	Nature neuroscience	2019	Human
+PLP1	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Cerebrospinal fluid	31805958	Journal of neuroinflammation	2019	Human
+PLP1	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	31958186	Glia	2020	Human
+PLP1	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	32341540	Nature neuroscience	2020	Human
+PLP1	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	32663469	Cancer cell	2020	Human
+PLP1	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	33975634	Genome medicine	2021	Human
+PLP1	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	34019156	Acta neuropathologica	2021	Human
+PLP1	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	34101353	Molecular systems biology	2021	Human
+PLP1	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+PLP1	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	34594037	Nature genetics	2021	Human
+PLP1	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	34917090	Frontiers in immunology	2021	Human
+PLP1	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	34952986	Annals of neurology	2021	Human
+PLP1	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	35301426	Molecular psychiatry	2022	Human
+PLP1	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	35459228	Nature communications	2022	Human
+PPP1R14A	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+PPP1R14A	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	34917090	Frontiers in immunology	2021	Human
+PRKCQ	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+PTGDS	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	31958186	Glia	2020	Human
+QKI	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	35301426	Molecular psychiatry	2022	Human
+RFFL	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+RTN4	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	18515322	Brain : a journal of neurology	2008	Human
+SGK2	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	34376242	Molecular neurodegeneration	2021	Human
+SGSM3	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	34952986	Annals of neurology	2021	Human
+SOX10	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Cortex	31456032	Acta neuropathologica	2019	Human
+SOX10	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	31958186	Glia	2020	Human
+SOX10	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	33975634	Genome medicine	2021	Human
+SOX10	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	34459315	The Neuroscientist : a review journal bringing neurobiology, neurology and	2021	Human
+SOX10	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Spinal cord	Spinal cord	34605607	EMBO reports	2021	Human
+SOX10	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	34952986	Annals of neurology	2021	Human
+SOX6	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	35301426	Molecular psychiatry	2022	Human
+TF	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	31327527	Cell	2019	Human
+TF	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	34917090	Frontiers in immunology	2021	Human
+TNR	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	31327527	Cell	2019	Human
+TNR	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Cerebrospinal fluid	31805958	Journal of neuroinflammation	2019	Human
+TNR	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	33008897	Science advances	2020	Human
+VCAN	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	32783945	Cell reports	2020	Human
+VCAN	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Cortex	32826893	Nature communications	2020	Human
+VCAN	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	canonical	Experiment	Brain	Brain	35301426	Molecular psychiatry	2022	Human
+ZNF488	ALS_CNS_OLIGODENDROCYTE	Oligodendrocyte	Glial	supporting	Review	Brain	Brain	33510160	Nature communications	2021	Human

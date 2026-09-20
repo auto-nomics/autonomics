@@ -29,7 +29,10 @@ use arc_swap::ArcSwapOption;
 use container_runtime::ContainerExecutionInfra;
 use container_runtime::{PanelGcPolicy, WorkspaceGcPolicy, sweep_panels, sweep_workspace};
 use dag_core::{BundleRegistry, DataBundle};
-use data_catalog::{CatalogConfig, CatalogRuntime, CatalogService, catalog_mount_definitions};
+use data_catalog::{
+    CatalogConfig, CatalogRuntime, CatalogServiceTrait, S3CatalogService,
+    catalog_mount_definitions,
+};
 use data_engine::dag::DagHistory;
 use data_engine::data_engine::DataEngine;
 use data_engine::runtime::{DataEngineClient, DataEngineManager};
@@ -154,7 +157,7 @@ pub struct SharedInfra {
     pub vfs: Arc<MountedObjectStore>,
     /// Refreshable searchable view over the object-storage catalog. `None`
     /// when the catalog is absent or disabled.
-    pub catalog: Option<Arc<CatalogService>>,
+    pub catalog: Option<Arc<dyn CatalogServiceTrait>>,
     /// Process-wide Podman connection and immutable panel cache shared by
     /// all DAG sessions.
     pub container_execution: Arc<ContainerExecutionInfra>,
@@ -595,7 +598,7 @@ async fn build_vfs_with_catalog(
 ) -> Result<(
     MountedObjectStore,
     dag_core::BundleRegistry,
-    Option<Arc<CatalogService>>,
+    Option<Arc<dyn CatalogServiceTrait>>,
 )> {
     let state = load_or_create_vfs_manifest(config)?;
     let mut manifest = state.manifest;
@@ -607,8 +610,8 @@ async fn build_vfs_with_catalog(
             "[[mount]]\npath=\"/\"\nbackend=\"x\"\nsource=\"/\"\n\n{catalog_source}"
         ))?;
         if catalog_config.enabled {
-            let service = Arc::new(
-                CatalogService::new(&manifest, &catalog_config)
+            let service: Arc<dyn CatalogServiceTrait> = Arc::new(
+                S3CatalogService::new(&manifest, &catalog_config)
                     .await
                     .map_err(Error::Other)?,
             );

@@ -7,6 +7,8 @@ rust-version.workspace = true
 description = "Versioned object-storage catalog for external analysis data packages."
 
 [dependencies]
+hf-hub.workspace = true
+
 clap.workspace = true
 async-trait.workspace = true
 dag-core = { path = "../dag-core" }
@@ -29,7 +31,6 @@ uuid.workspace = true
 vfs = { path = "../vfs" }
 zstd = "0.13"
 tempfile = "3"
-
 [dev-dependencies]
 tempfile = "3"
 
