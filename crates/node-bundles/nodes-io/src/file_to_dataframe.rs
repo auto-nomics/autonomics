@@ -3,10 +3,12 @@
 //! A [`FileToDataFrameNode`] reads an external path or an upstream file reference
 //! and produces exactly one DataFrame output. The format is auto-detected from
 //! the extension or explicitly given. Tabular formats (CSV, Parquet) go through
-//! DataFusion natively; JSON and bioinformatics formats (VCF, BAM, BED, ...) go through
-//! `biofusion`, which exposes them as DataFusion tables; SAS XPORT transport
+//! DataFusion natively; Excel workbooks are converted to Arrow; JSON and
+//! bioinformatics formats (VCF, BAM, BED, ...) go through `biofusion`, which
+//! exposes them as DataFusion tables.
 //! files (NHANES) go through `sas_xport`.
 
+use crate::spreadsheet::read_spreadsheet;
 use async_trait::async_trait;
 use biofusion::datasource::BioReadOptions;
 use biofusion::ext::DataFusionReadExt;
@@ -26,8 +28,9 @@ use dag_core::{
     value::PortType,
 };
 
-/// Supported file formats. CSV/TSV/Parquet use DataFusion directly; JSON and
-/// bioinformatics formats use `biofusion`.
+/// Supported file formats. CSV/TSV/Parquet use DataFusion directly; Excel
+/// workbooks use the spreadsheet reader; JSON and bioinformatics formats use
+/// `biofusion`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum FileFormat {
@@ -37,6 +40,9 @@ pub enum FileFormat {
     Tsv,
     Parquet,
     Json,
+    // Spreadsheet formats.
+    Xls,
+    Xlsx,
     // sas_xport (SAS transport, used by NHANES)
     Xpt,
     // biofusion bioinformatics
@@ -99,6 +105,9 @@ impl FileFormat {
             (".json", FileFormat::Json),
             (".ndjson.gz", FileFormat::Json),
             (".ndjson", FileFormat::Json),
+            (".xls", FileFormat::Xls),
+            (".xlsx", FileFormat::Xlsx),
+            (".xlsm", FileFormat::Xlsx),
             (".xpt", FileFormat::Xpt),
         ];
         suffixes
@@ -113,6 +122,8 @@ impl FileFormat {
             "tsv" | "tsv.gz" => Some(Self::Tsv),
             "parquet" => Some(Self::Parquet),
             "json" | "ndjson" => Some(Self::Json),
+            "xls" => Some(Self::Xls),
+            "xlsx" | "xlsm" => Some(Self::Xlsx),
             "xpt" => Some(Self::Xpt),
             "vcf" => Some(Self::Vcf),
             "bcf" => Some(Self::Bcf),
@@ -137,6 +148,8 @@ impl FileFormat {
             Self::Tsv => "tsv",
             Self::Parquet => "parquet",
             Self::Json => "json",
+            Self::Xls => "xls",
+            Self::Xlsx => "xlsx",
             Self::Xpt => "xpt",
             Self::Vcf => "vcf",
             Self::Bcf => "bcf",
@@ -175,6 +188,12 @@ pub struct TabularReadOptions {
     pub delimiter: Option<u8>,
     pub has_header: Option<bool>,
     pub compression: FileCompression,
+}
+
+/// User-controlled options for Excel spreadsheet inputs.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SpreadsheetReadOptions {
+    pub sheet_name: Option<String>,
 }
 
 impl TabularReadOptions {
@@ -235,6 +254,7 @@ pub struct FileToDataFrameNode {
     format: Option<FileFormat>,
     partition_by: Vec<String>,
     tabular_options: TabularReadOptions,
+    spreadsheet_options: SpreadsheetReadOptions,
 }
 
 impl FileToDataFrameNode {
@@ -247,7 +267,13 @@ impl FileToDataFrameNode {
         format: Option<FileFormat>,
         partition_by: Vec<String>,
     ) -> Self {
-        Self::new_with_tabular_options(path, format, partition_by, TabularReadOptions::default())
+        Self::new_with_spreadsheet_options(
+            path,
+            format,
+            partition_by,
+            TabularReadOptions::default(),
+            SpreadsheetReadOptions::default(),
+        )
     }
 
     pub fn new_with_tabular_options(
@@ -256,6 +282,22 @@ impl FileToDataFrameNode {
         partition_by: Vec<String>,
         tabular_options: TabularReadOptions,
     ) -> Self {
+        Self::new_with_spreadsheet_options(
+            path,
+            format,
+            partition_by,
+            tabular_options,
+            SpreadsheetReadOptions::default(),
+        )
+    }
+
+    pub fn new_with_spreadsheet_options(
+        path: Option<String>,
+        format: Option<FileFormat>,
+        partition_by: Vec<String>,
+        tabular_options: TabularReadOptions,
+        spreadsheet_options: SpreadsheetReadOptions,
+    ) -> Self {
         // The optional file input lets a file-producing node supply the path.
         Self {
             meta: port_layout(),
@@ -263,6 +305,7 @@ impl FileToDataFrameNode {
             format,
             partition_by,
             tabular_options,
+            spreadsheet_options,
         }
     }
 }
@@ -278,10 +321,16 @@ pub struct FileToDataFrameNodeSpec {
     /// or the escape strings `\t`, `\0`, `\r`, and `\n`.
     pub delimiter: Option<String>,
     /// Whether tabular input has a header row. Defaults to `true`.
+    ///
+    /// For Excel input, this controls whether the first worksheet row is
+    /// treated as column names.
     pub has_header: Option<bool>,
     /// Input compression. Defaults to extension-based detection.
     #[serde(default)]
     pub compression: Option<FileCompression>,
+    /// Worksheet name for Excel input. Defaults to the first worksheet.
+    #[serde(default)]
+    pub sheet_name: Option<String>,
     /// Hive-style partition column names. Values are restored as Utf8.
     #[serde(default)]
     pub partition_by: Vec<String>,
@@ -328,14 +377,14 @@ impl NodeFactory for FileToDataFrameNodeFactory {
     fn doc(&self) -> &'static str {
         "Reads an external path or an upstream file reference into a \
         DataFrame. Supports local/remote files: CSV/TSV/Parquet via \
-        DataFusion (including .tsv.gz), JSON arrays and NDJSON (including \
-        .json.gz), SAS XPORT transport files (.xpt, as distributed by \
-        NHANES — numeric columns become Float64, missing values become \
-        nulls), and \
+        DataFusion (including .tsv.gz), XLS/XLSX workbooks via calamine, \
+        JSON arrays and NDJSON (including .json.gz), JSON arrays and NDJSON (including \
+        .json.gz), SAS XPORT transport files, and \
         bioinformatics formats (VCF, BAM, BED, GTF, FASTA, MatrixMarket, etc.) via \
         biofusion. Format is inferred from the extension when not given \
         explicitly. CSV/TSV inputs accept delimiter, has_header, and \
-        compression overrides. Optional file input; one DataFrame output."
+        compression overrides. Excel inputs accept has_header and sheet_name. \
+        Optional file input; one DataFrame output."
     }
 
     fn spec_schema(&self) -> schemars::Schema {
@@ -357,7 +406,7 @@ impl NodeFactory for FileToDataFrameNodeFactory {
             Some(Err(message)) => return Err(message.as_str().into()),
             None => None,
         };
-        let node = FileToDataFrameNode::new_with_tabular_options(
+        let node = FileToDataFrameNode::new_with_spreadsheet_options(
             node_spec.path,
             node_spec.format,
             node_spec.partition_by,
@@ -366,6 +415,9 @@ impl NodeFactory for FileToDataFrameNodeFactory {
                 node_spec.has_header,
                 node_spec.compression.unwrap_or_default(),
             ),
+            SpreadsheetReadOptions {
+                sheet_name: node_spec.sheet_name,
+            },
         );
         Ok(Box::new(node))
     }
@@ -487,7 +539,21 @@ impl DagNode for FileToDataFrameNode {
             None if !self.partition_by.is_empty() => FileFormat::Parquet,
             None => return Err(FileToDataFrameError::UnknownFormat(path.clone()).into()),
         };
-        if !matches!(fmt, FileFormat::Csv | FileFormat::Tsv)
+        if matches!(fmt, FileFormat::Xls | FileFormat::Xlsx) {
+            if self.tabular_options.delimiter.is_some()
+                || self.tabular_options.compression != FileCompression::Auto
+            {
+                return Err(FileToDataFrameError::InvalidInput(
+                    "delimiter and compression are only supported for CSV/TSV input".into(),
+                )
+                .into());
+            }
+        } else if self.spreadsheet_options.sheet_name.is_some() {
+            return Err(FileToDataFrameError::InvalidInput(
+                "sheet_name is only supported for Excel input".into(),
+            )
+            .into());
+        } else if !matches!(fmt, FileFormat::Csv | FileFormat::Tsv)
             && !self.tabular_options.is_default_for_non_tabular()
         {
             return Err(FileToDataFrameError::InvalidInput(
@@ -514,6 +580,7 @@ impl DagNode for FileToDataFrameNode {
             fmt,
             &partition_cols,
             self.tabular_options,
+            self.spreadsheet_options.sheet_name.as_deref(),
         )
         .await?;
 
@@ -541,6 +608,7 @@ async fn read_file_with_options(
     fmt: FileFormat,
     partition_cols: &[(String, arrow_schema::DataType)],
     options: TabularReadOptions,
+    sheet_name: Option<&str>,
 ) -> Result<DataFrame, DagError> {
     use FileFormat::*;
     let expected_extension = path_file_extension(path);
@@ -600,6 +668,8 @@ async fn read_file_with_options(
             ctx.read_parquet(path, options).await
         }
         Json => ctx.read_bio_json(path, BioReadOptions::default()).await,
+        Xls | Xlsx => {
+            read_spreadsheet(ctx, path, sheet_name, options.has_header.unwrap_or(true)).await
         Xpt => {
             let batch = xpt_record_batch(node_ctx, path).await?;
             ctx.read_batch(batch)
@@ -1196,6 +1266,25 @@ mod tests {
                 "{option} must be optional, got required fields: {required:?}"
             );
         }
+        assert!(!required.iter().any(|field| field == "sheet_name"));
+    }
+
+    #[test]
+    fn infers_excel_formats_from_paths_and_labels() {
+        assert_eq!(
+            FileFormat::from_path("/data/sample.xls"),
+            Some(FileFormat::Xls)
+        );
+        assert_eq!(
+            FileFormat::from_path("/data/sample.XLSX"),
+            Some(FileFormat::Xlsx)
+        );
+        assert_eq!(
+            FileFormat::from_path("/data/macro.xlsm"),
+            Some(FileFormat::Xlsx)
+        );
+        assert_eq!(FileFormat::from_label("xls"), Some(FileFormat::Xls));
+        assert_eq!(FileFormat::from_label("xlsm"), Some(FileFormat::Xlsx));
     }
 
     async fn execute_tabular_spec(spec: serde_json::Value) -> DataFrame {
@@ -1213,6 +1302,153 @@ mod tests {
             .await
             .unwrap();
         outputs.dataframe(0).unwrap().clone()
+    }
+
+    #[tokio::test]
+    async fn file_to_dataframe_reads_excel_workbooks() {
+        for name in ["sample.xls", "sample.xlsx"] {
+            let path = fixture(name);
+            let df = execute_tabular_spec(serde_json::json!({
+                "path": path.to_string_lossy(),
+                "format": null,
+                "has_header": true
+            }))
+            .await;
+
+            let fields: Vec<&str> = df
+                .schema()
+                .fields()
+                .iter()
+                .map(|field| field.name().as_str())
+                .collect();
+            assert_eq!(fields, ["id", "name", "score", "active"], "{name}");
+            assert_eq!(
+                df.schema().field(0).data_type(),
+                &arrow_schema::DataType::Int64
+            );
+            assert_eq!(
+                df.schema().field(1).data_type(),
+                &arrow_schema::DataType::Utf8
+            );
+            assert_eq!(
+                df.schema().field(2).data_type(),
+                &arrow_schema::DataType::Float64
+            );
+            assert_eq!(
+                df.schema().field(3).data_type(),
+                &arrow_schema::DataType::Boolean
+            );
+            assert_eq!(df.clone().count().await.unwrap(), 2, "{name}");
+
+            let batches = df.collect().await.unwrap();
+            assert_eq!(batches.len(), 1, "{name}");
+            let batch = &batches[0];
+            let ids = batch
+                .column_by_name("id")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<arrow_array::Int64Array>()
+                .unwrap();
+            let names = batch
+                .column_by_name("name")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<arrow_array::StringArray>()
+                .unwrap();
+            let scores = batch
+                .column_by_name("score")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<arrow_array::Float64Array>()
+                .unwrap();
+            let active = batch
+                .column_by_name("active")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<arrow_array::BooleanArray>()
+                .unwrap();
+            assert_eq!(ids.values(), &[1, 2], "{name}");
+            assert_eq!((names.value(0), names.value(1)), ("Alice", "Bob"), "{name}");
+            assert_eq!(scores.values(), &[92.5, 88.25], "{name}");
+            assert_eq!((active.value(0), active.value(1)), (true, false), "{name}");
+        }
+    }
+
+    #[tokio::test]
+    async fn file_to_dataframe_selects_an_excel_sheet() {
+        for name in ["sample.xls", "sample.xlsx"] {
+            let path = fixture(name);
+            let df = execute_tabular_spec(serde_json::json!({
+                "path": path.to_string_lossy(),
+                "sheet_name": "Notes"
+            }))
+            .await;
+            let fields: Vec<&str> = df
+                .schema()
+                .fields()
+                .iter()
+                .map(|field| field.name().as_str())
+                .collect();
+            assert_eq!(fields, ["key", "value"], "{name}");
+            assert_eq!(df.count().await.unwrap(), 1, "{name}");
+        }
+    }
+
+    #[tokio::test]
+    async fn file_to_dataframe_rejects_csv_options_for_excel() {
+        let path = fixture("sample.xlsx");
+        let ctx = SessionContext::new();
+        let node_ctx = dag_core::registry::NodeCtx::new(ctx.runtime_env().clone(), None);
+        let mut node = FileToDataFrameNodeFactory {}
+            .build(
+                serde_json::json!({
+                    "path": path.to_string_lossy(),
+                    "delimiter": ",",
+                    "compression": "none"
+                }),
+                node_ctx.clone(),
+            )
+            .unwrap();
+        let error = node
+            .execute(
+                &node_ctx,
+                &[],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("only supported for CSV/TSV input")
+        );
+    }
+
+    #[tokio::test]
+    async fn file_to_dataframe_rejects_sheet_name_for_non_excel() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("data.csv");
+        std::fs::write(&path, "id\n1\n").unwrap();
+        let ctx = SessionContext::new();
+        let node_ctx = dag_core::registry::NodeCtx::new(ctx.runtime_env().clone(), None);
+        let mut node = FileToDataFrameNodeFactory {}
+            .build(
+                serde_json::json!({
+                    "path": path.to_string_lossy(),
+                    "sheet_name": "Data"
+                }),
+                node_ctx.clone(),
+            )
+            .unwrap();
+        let error = node
+            .execute(
+                &node_ctx,
+                &[],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("sheet_name is only supported"));
     }
 
     #[tokio::test]
@@ -1378,6 +1614,7 @@ mod tests {
             FileFormat::Parquet,
             &[],
             TabularReadOptions::default(),
+            None,
         )
         .await
         .unwrap();
@@ -1789,6 +2026,7 @@ mod tests {
             FileFormat::Tsv,
             &[],
             TabularReadOptions::default(),
+            None,
         )
         .await
         .unwrap();
@@ -1803,6 +2041,9 @@ mod tests {
         std::fs::create_dir_all(&source_dir).unwrap();
         std::fs::write(source_dir.join("data.csv"), "id\n1\n2\n").unwrap();
         std::fs::write(source_dir.join("data.json"), r#"[{"id":1},{"id":2}]"#).unwrap();
+        for name in ["sample.xls", "sample.xlsx"] {
+            std::fs::copy(fixture(name), source_dir.join(name)).unwrap();
+        }
         let mut gzip_encoder = flate2::write::GzEncoder::new(
             std::fs::File::create(source_dir.join("data.tsv.gz")).unwrap(),
             Default::default(),
@@ -1854,6 +2095,12 @@ mod tests {
             "vfs:///mount/data.json",
             "file:///mount/data.json",
             "/mount/data.json",
+            "vfs:///mount/sample.xls",
+            "file:///mount/sample.xls",
+            "/mount/sample.xls",
+            "vfs:///mount/sample.xlsx",
+            "file:///mount/sample.xlsx",
+            "/mount/sample.xlsx",
             "vfs:///mount/data.tsv.gz",
             "file:///mount/data.tsv.gz",
             "/mount/data.tsv.gz",

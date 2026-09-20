@@ -26,7 +26,8 @@ use crate::ExecError;
                   - \"sql\":            {\"sql_query\": \"SELECT * FROM port_0\"} \
                   - \"file_to_dataframe\": {\"path\": \"/data/sample.json\", \"format\": null} \
                     (also reads JSON arrays, NDJSON, .json.gz, CSV/TSV/Parquet, \
-                    and bioinformatics formats such as VCF/BAM into a DataFrame) \
+                    XLS/XLSX workbooks, and bioinformatics formats such as VCF/BAM \
+                    into a DataFrame; use \"sheet_name\" to select an Excel worksheet) \
                   - \"dataframe_to_file\":   {\"path\": \"/out/result.csv\", \"format\": \"csv\", \"mode\": \"overwrite\"} \
                   - \"bundle_source\": {\"bundle_id\": \"EUR.panel\", \"format\": \"txt\"} \
                   - \"linear_regression\": {\"x_columns\": [\"x1\"], \"y_column\": \"y\", \"intercept\": true} \
