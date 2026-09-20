@@ -607,16 +607,17 @@ async fn build_vfs_with_catalog(
     if let Some(catalog_source) = state.catalog_source {
         let catalog_config = CatalogConfig::from_vfs_toml(&format!(
             "[[mount]]\npath=\"/\"\nbackend=\"x\"\nsource=\"/\"\n\n{catalog_source}"
-        ))?;
+        ))
+        .map_err(|error| Error::Other(error.to_string()))?;
         if catalog_config.enabled {
             let service: Arc<dyn CatalogServiceTrait> = Arc::new(
                 S3CatalogService::new(&manifest, &catalog_config)
                     .await
-                    .map_err(Error::Other)?,
+                    .map_err(|error| Error::Other(error.to_string()))?,
             );
             let snapshot = service.snapshot().await;
             let mut mounts = catalog_mount_definitions(&manifest, &snapshot.index, &catalog_config)
-                .map_err(Error::Other)?;
+                .map_err(|error| Error::Other(error.to_string()))?;
             manifest.mount.append(&mut mounts);
             catalog_registry = CatalogRuntime {
                 index: snapshot.index,

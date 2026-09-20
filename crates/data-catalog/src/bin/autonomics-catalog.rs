@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
+use data_catalog::error::Result;
 use data_catalog::{
     CatalogConfig, CatalogRuntime, build_package, catalog_mount_definitions, package::BuildOptions,
     publish_package, storage::operator_for_backend, validate_package,
@@ -66,7 +67,7 @@ async fn main() {
     }
 }
 
-async fn run(cli: Cli) -> Result<(), String> {
+async fn run(cli: Cli) -> Result<()> {
     match cli.command {
         Command::Build {
             input,
@@ -139,7 +140,7 @@ async fn run(cli: Cli) -> Result<(), String> {
 
 async fn load_backend(
     config: &std::path::Path,
-) -> Result<(VfsManifest, CatalogConfig, opendal::Operator), String> {
+) -> Result<(VfsManifest, CatalogConfig, opendal::Operator)> {
     let source = std::fs::read_to_string(expand_home(config)?)
         .map_err(|error| format!("read VFS config: {error}"))?;
     let manifest = VfsManifest::from_toml(&source).map_err(|error| error.to_string())?;
@@ -148,7 +149,7 @@ async fn load_backend(
     Ok((manifest, catalog_config, operator))
 }
 
-fn parse_metadata(values: Vec<String>) -> Result<BTreeMap<String, String>, String> {
+fn parse_metadata(values: Vec<String>) -> Result<BTreeMap<String, String>> {
     let mut metadata = BTreeMap::new();
     for value in values {
         let (key, value) = value
@@ -159,7 +160,7 @@ fn parse_metadata(values: Vec<String>) -> Result<BTreeMap<String, String>, Strin
     Ok(metadata)
 }
 
-fn expand_home(path: impl AsRef<std::path::Path>) -> Result<std::path::PathBuf, String> {
+fn expand_home(path: impl AsRef<std::path::Path>) -> Result<std::path::PathBuf> {
     let path = path.as_ref().to_path_buf();
     let text = path.to_string_lossy();
     if let Some(rest) = text.strip_prefix("~/") {
@@ -169,7 +170,7 @@ fn expand_home(path: impl AsRef<std::path::Path>) -> Result<std::path::PathBuf, 
     Ok(path)
 }
 
-fn print_json(value: &impl serde::Serialize) -> Result<(), String> {
+fn print_json(value: &impl serde::Serialize) -> Result<()> {
     let bytes = serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?;
     println!("{}", String::from_utf8_lossy(&bytes));
     Ok(())

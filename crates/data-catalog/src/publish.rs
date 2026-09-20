@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use crate::config::CatalogConfig;
+use crate::error::Result;
 use crate::model::{CatalogEntry, CatalogIndex, DatasetManifest};
 use crate::package::{PAYLOAD_DIR, validate_package};
 use crate::storage::{read_json_object, upload_file, write_json_object};
@@ -11,7 +12,7 @@ pub async fn publish_package(
     package: impl AsRef<Path>,
     config: &CatalogConfig,
     operator: &opendal::Operator,
-) -> Result<CatalogEntry, String> {
+) -> Result<CatalogEntry> {
     config.validate()?;
     let manifest = validate_package(package.as_ref()).map_err(|error| error.to_string())?;
     let digest = manifest
@@ -57,7 +58,7 @@ pub async fn publish_package(
     let mut index = match operator.stat(&index_key).await {
         Ok(_) => read_json_object::<CatalogIndex>(operator, &index_key).await?,
         Err(error) if error.kind() == opendal::ErrorKind::NotFound => CatalogIndex::default(),
-        Err(error) => return Err(format!("stat catalog index `{index_key}`: {error}")),
+        Err(error) => return Err(format!("stat catalog index `{index_key}`: {error}").into()),
     };
     index
         .validate()
@@ -74,7 +75,7 @@ async fn upload_payload_files(
     files_prefix: &str,
     manifest: &DatasetManifest,
     config: &CatalogConfig,
-) -> Result<(), String> {
+) -> Result<()> {
     for batch in manifest.files.chunks(PAYLOAD_UPLOAD_CONCURRENCY) {
         let mut tasks = tokio::task::JoinSet::new();
         for file in batch {
@@ -101,11 +102,11 @@ async fn remote_size_matches(
     operator: &opendal::Operator,
     key: &str,
     expected_size: u64,
-) -> Result<bool, String> {
+) -> Result<bool> {
     match operator.stat(key).await {
         Ok(metadata) => Ok(metadata.content_length() == expected_size),
         Err(error) if error.kind() == opendal::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(format!("stat object `{key}`: {error}")),
+        Err(error) => Err(format!("stat object `{key}`: {error}").into()),
     }
 }
 
@@ -113,7 +114,7 @@ async fn upload_object_if_needed(
     operator: &opendal::Operator,
     key: &str,
     bytes: &[u8],
-) -> Result<(), String> {
+) -> Result<()> {
     if remote_size_matches(operator, key, bytes.len() as u64).await? {
         return Ok(());
     }

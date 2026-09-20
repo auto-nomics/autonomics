@@ -5,11 +5,9 @@ use vfs::{
 };
 
 use crate::config::{join_object_key, normalize_prefix};
+use crate::error::Result;
 
-pub fn operator_for_backend(
-    manifest: &VfsManifest,
-    backend_id: &str,
-) -> Result<opendal::Operator, String> {
+pub fn operator_for_backend(manifest: &VfsManifest, backend_id: &str) -> Result<opendal::Operator> {
     let backend = manifest
         .backend
         .iter()
@@ -38,29 +36,25 @@ pub fn operator_for_backend(
 pub async fn read_json_object<T: serde::de::DeserializeOwned>(
     operator: &opendal::Operator,
     key: &str,
-) -> Result<T, String> {
+) -> Result<T> {
     let bytes = operator
         .read(key)
         .await
         .map_err(|error| format!("read object `{key}`: {error}"))?;
     serde_json::from_slice(&bytes.to_vec())
-        .map_err(|error| format!("parse object `{key}`: {error}"))
+        .map_err(|error| format!("parse object `{key}`: {error}").into())
 }
 
 pub async fn write_json_object<T: serde::Serialize>(
     operator: &opendal::Operator,
     key: &str,
     value: &T,
-) -> Result<(), String> {
+) -> Result<()> {
     let bytes = serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?;
     write_object(operator, key, &bytes).await
 }
 
-pub async fn write_object(
-    operator: &opendal::Operator,
-    key: &str,
-    bytes: &[u8],
-) -> Result<(), String> {
+pub async fn write_object(operator: &opendal::Operator, key: &str, bytes: &[u8]) -> Result<()> {
     let pending = format!("{key}.pending-{}", uuid::Uuid::new_v4());
     let mut writer = operator
         .writer(&pending)
@@ -82,7 +76,7 @@ pub async fn upload_file(
     operator: &opendal::Operator,
     key: &str,
     path: &std::path::Path,
-) -> Result<(), String> {
+) -> Result<()> {
     let mut input = tokio::fs::File::open(path)
         .await
         .map_err(|error| format!("open {}: {error}", path.display()))?;
@@ -114,11 +108,7 @@ pub async fn upload_file(
     Ok(())
 }
 
-async fn publish_pending(
-    operator: &opendal::Operator,
-    pending: &str,
-    key: &str,
-) -> Result<(), String> {
+async fn publish_pending(operator: &opendal::Operator, pending: &str, key: &str) -> Result<()> {
     if let Err(error) = operator.rename(pending, key).await {
         // Garage supports copy/delete but not S3 server-side rename. Copy only
         // starts after the complete pending object has been closed.
@@ -126,23 +116,21 @@ async fn publish_pending(
             let _ = operator.delete(pending).await;
             return Err(format!(
                 "publish object `{key}`: rename failed ({error}); copy fallback failed ({copy_error})"
-            ));
+            )
+            .into());
         }
         let _ = operator.delete(pending).await;
     }
     Ok(())
 }
 
-pub fn backend_definition(
-    manifest: &VfsManifest,
-    backend_id: &str,
-) -> Result<BackendDefinition, String> {
+pub fn backend_definition(manifest: &VfsManifest, backend_id: &str) -> Result<BackendDefinition> {
     manifest
         .backend
         .iter()
         .find(|backend| backend.id == backend_id)
         .cloned()
-        .ok_or_else(|| format!("catalog backend `{backend_id}` is not defined"))
+        .ok_or_else(|| format!("catalog backend `{backend_id}` is not defined").into())
 }
 
 pub fn catalog_object_key(source: &str, relative: &str) -> String {

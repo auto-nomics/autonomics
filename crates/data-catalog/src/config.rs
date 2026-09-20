@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::error::Result;
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct CatalogConfig {
     /// Backend ID defined in the same `vfs.toml`.
@@ -50,7 +52,7 @@ impl Default for CatalogConfig {
 }
 
 impl CatalogConfig {
-    pub fn from_vfs_toml(source: &str) -> Result<Self, String> {
+    pub fn from_vfs_toml(source: &str) -> Result<Self> {
         #[derive(Deserialize)]
         struct Wrapper {
             #[serde(default)]
@@ -63,7 +65,7 @@ impl CatalogConfig {
         Ok(config)
     }
 
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<()> {
         if self.backend.trim().is_empty() {
             return Err("catalog backend cannot be empty".into());
         }

@@ -4,6 +4,7 @@ use dag_core::DataBundle;
 use vfs::MountDefinition;
 
 use crate::config::CatalogConfig;
+use crate::error::Result;
 use crate::model::CatalogIndex;
 use crate::storage::{catalog_object_key, operator_for_backend, read_json_object};
 
@@ -19,7 +20,7 @@ pub struct CatalogRuntime {
 
 impl CatalogRuntime {
     /// Read and validate the root catalog index from the configured backend.
-    pub async fn load(manifest: &vfs::VfsManifest, config: &CatalogConfig) -> Result<Self, String> {
+    pub async fn load(manifest: &vfs::VfsManifest, config: &CatalogConfig) -> Result<Self> {
         config.validate()?;
         let operator = operator_for_backend(manifest, &config.backend)?;
         let key = config.object_key(&config.index);
@@ -67,12 +68,12 @@ pub fn catalog_mount_definitions(
     manifest: &vfs::VfsManifest,
     index: &CatalogIndex,
     config: &CatalogConfig,
-) -> Result<Vec<MountDefinition>, String> {
+) -> Result<Vec<MountDefinition>> {
     crate::storage::backend_definition(manifest, &config.backend)?;
     let mut existing = BTreeSet::new();
     for mount in &manifest.mount {
         if !existing.insert(mount.path.clone()) {
-            return Err(format!("duplicate VFS mount path `{}`", mount.path));
+            return Err(format!("duplicate VFS mount path `{}`", mount.path).into());
         }
     }
 

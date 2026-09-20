@@ -5,6 +5,7 @@
 //! to consume `/bundles/<id>` through [`dag_core::DataBundle`].
 
 pub mod config;
+pub mod error;
 pub mod model;
 pub mod package;
 pub mod publish;

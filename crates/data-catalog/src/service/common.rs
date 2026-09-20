@@ -9,6 +9,7 @@
 use opendal::Operator;
 
 use crate::config::CatalogConfig;
+use crate::error::Result;
 use crate::model::{CatalogEntry, DatasetManifest};
 use crate::storage::read_json_object;
 
@@ -19,7 +20,7 @@ pub(crate) async fn read_manifest(
     operator: &Operator,
     config: &CatalogConfig,
     relative_key: &str,
-) -> Result<DatasetManifest, String> {
+) -> Result<DatasetManifest> {
     let key = config.object_key(relative_key);
     let manifest: DatasetManifest = read_json_object(operator, &key).await?;
     manifest
@@ -32,16 +33,13 @@ pub(crate) async fn read_manifest(
 pub(crate) fn validate_entry_manifest(
     entry: &CatalogEntry,
     manifest: &DatasetManifest,
-) -> Result<(), String> {
+) -> Result<()> {
     if manifest.id != entry.id
         || manifest.version != entry.version
         || manifest.kind != entry.kind
         || manifest.digest.as_deref() != Some(entry.digest.as_str())
     {
-        return Err(format!(
-            "catalog entry `{}` does not match its manifest",
-            entry.id
-        ));
+        return Err(format!("catalog entry `{}` does not match its manifest", entry.id).into());
     }
     Ok(())
 }

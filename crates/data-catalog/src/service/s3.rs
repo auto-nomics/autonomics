@@ -3,6 +3,7 @@ use tokio::sync::RwLock;
 use vfs::VfsManifest;
 
 use crate::config::CatalogConfig;
+use crate::error::Result;
 use crate::model::{CatalogEntry, CatalogIndex, DatasetFile};
 use crate::storage::{operator_for_backend, read_json_object};
 
@@ -23,7 +24,7 @@ pub struct S3CatalogService {
 
 impl S3CatalogService {
     /// Open the configured catalog backend and load the initial snapshot.
-    pub async fn new(manifest: &VfsManifest, config: &CatalogConfig) -> Result<Self, String> {
+    pub async fn new(manifest: &VfsManifest, config: &CatalogConfig) -> Result<Self> {
         config.validate()?;
         let operator = operator_for_backend(manifest, &config.backend)?;
         let snapshot = Self::load_snapshot(&operator, config).await?;
@@ -37,7 +38,7 @@ impl S3CatalogService {
     async fn load_snapshot(
         operator: &opendal::Operator,
         config: &CatalogConfig,
-    ) -> Result<CatalogSnapshot, String> {
+    ) -> Result<CatalogSnapshot> {
         config.validate()?;
         let index_key = config.object_key(&config.index);
         let index: CatalogIndex = read_json_object(operator, &index_key).await?;
@@ -54,7 +55,7 @@ impl S3CatalogService {
         Ok(CatalogSnapshot { index, records })
     }
 
-    async fn load_dataset(&self, entry: &CatalogEntry) -> Result<CatalogDataset, String> {
+    async fn load_dataset(&self, entry: &CatalogEntry) -> Result<CatalogDataset> {
         let manifest = read_manifest(&self.operator, &self.config, &entry.manifest).await?;
         validate_entry_manifest(entry, &manifest)?;
         let record = CatalogRecord::from_parts(entry.clone(), manifest.clone());
@@ -69,7 +70,7 @@ impl S3CatalogService {
 
 #[async_trait]
 impl CatalogServiceTrait for S3CatalogService {
-    async fn refresh(&self) -> Result<CatalogSnapshot, String> {
+    async fn refresh(&self) -> std::result::Result<CatalogSnapshot, String> {
         let snapshot = Self::load_snapshot(&self.operator, &self.config).await?;
         *self.snapshot.write().await = snapshot.clone();
         Ok(snapshot)
@@ -79,7 +80,10 @@ impl CatalogServiceTrait for S3CatalogService {
         self.snapshot.read().await.clone()
     }
 
-    async fn search(&self, query: CatalogSearchQuery) -> Result<Vec<CatalogRecord>, String> {
+    async fn search(
+        &self,
+        query: CatalogSearchQuery,
+    ) -> std::result::Result<Vec<CatalogRecord>, String> {
         let records = self.snapshot().await.records;
         let limit = query.limit.unwrap_or(50).min(500);
         let terms = query
@@ -124,10 +128,10 @@ impl CatalogServiceTrait for S3CatalogService {
         id: &str,
         version: Option<&str>,
         digest: Option<&str>,
-    ) -> Result<CatalogDataset, String> {
+    ) -> std::result::Result<CatalogDataset, String> {
         let snapshot = self.snapshot().await;
         let entry = select_entry(&snapshot.index, id, version, digest)?;
-        self.load_dataset(&entry).await
+        Ok(self.load_dataset(&entry).await?)
     }
 
     async fn list_files(
@@ -135,11 +139,11 @@ impl CatalogServiceTrait for S3CatalogService {
         id: &str,
         version: Option<&str>,
         digest: Option<&str>,
-    ) -> Result<Vec<DatasetFile>, String> {
+    ) -> std::result::Result<Vec<DatasetFile>, String> {
         Ok(self.describe(id, version, digest).await?.files)
     }
 
-    async fn list_versions(&self, id: &str) -> Result<Vec<CatalogEntry>, String> {
+    async fn list_versions(&self, id: &str) -> std::result::Result<Vec<CatalogEntry>, String> {
         let snapshot = self.snapshot().await;
         let mut entries = snapshot
             .index
@@ -166,7 +170,7 @@ fn select_entry(
     id: &str,
     version: Option<&str>,
     digest: Option<&str>,
-) -> Result<CatalogEntry, String> {
+) -> Result<CatalogEntry> {
     let mut matched = index
         .entries
         .iter()
@@ -176,7 +180,7 @@ fn select_entry(
         .cloned()
         .collect::<Vec<_>>();
     match matched.len() {
-        0 => Err(format!("catalog dataset `{id}` was not found")),
+        0 => Err(format!("catalog dataset `{id}` was not found").into()),
         1 => Ok(matched.remove(0)),
         _ => {
             matched.retain(|entry| entry.current);
@@ -184,10 +188,9 @@ fn select_entry(
                 1 => Ok(matched.remove(0)),
                 0 => Err(format!(
                     "catalog dataset `{id}` has multiple versions; specify version or digest"
-                )),
-                _ => Err(format!(
-                    "catalog dataset `{id}` has multiple current entries"
-                )),
+                )
+                .into()),
+                _ => Err(format!("catalog dataset `{id}` has multiple current entries").into()),
             }
         }
     }

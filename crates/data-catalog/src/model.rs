@@ -4,6 +4,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::error::Result;
+
 pub const CATALOG_SCHEMA_VERSION: u8 = 1;
 pub const DATASET_SCHEMA_VERSION: u8 = 1;
 
@@ -38,12 +40,11 @@ fn default_dataset_schema_version() -> u8 {
 }
 
 impl DatasetManifest {
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<()> {
         if self.schema_version != DATASET_SCHEMA_VERSION {
-            return Err(format!(
-                "unsupported dataset schema version {}",
-                self.schema_version
-            ));
+            return Err(
+                format!("unsupported dataset schema version {}", self.schema_version).into(),
+            );
         }
         validate_id(&self.id)?;
         validate_version(&self.version)?;
@@ -53,7 +54,7 @@ impl DatasetManifest {
             .as_deref()
             .ok_or_else(|| "digest is missing".to_string())?;
         if !is_sha256(digest) {
-            return Err(format!("invalid manifest digest `{digest}`"));
+            return Err(format!("invalid manifest digest `{digest}`").into());
         }
         if self.digest.as_deref() != Some(&manifest_digest(self)) {
             return Err("manifest digest does not match its canonical content".into());
@@ -63,10 +64,10 @@ impl DatasetManifest {
         for file in &self.files {
             validate_relative_path(&file.path)?;
             if !is_sha256(&file.sha256) {
-                return Err(format!("invalid sha256 for `{}`", file.path));
+                return Err(format!("invalid sha256 for `{}`", file.path).into());
             }
             if !paths.insert(file.path.clone()) {
-                return Err(format!("duplicate payload file `{}`", file.path));
+                return Err(format!("duplicate payload file `{}`", file.path).into());
             }
         }
         if self.files.is_empty() {
@@ -75,11 +76,11 @@ impl DatasetManifest {
         Ok(())
     }
 
-    pub fn short_digest(&self) -> Result<&str, String> {
+    pub fn short_digest(&self) -> Result<&str> {
         self.digest
             .as_deref()
             .and_then(|digest| digest.strip_prefix("sha256:"))
-            .ok_or_else(|| "dataset digest is missing".to_string())
+            .ok_or_else(|| "dataset digest is missing".into())
     }
 }
 
@@ -125,12 +126,11 @@ impl Default for CatalogIndex {
 }
 
 impl CatalogIndex {
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<()> {
         if self.schema_version != CATALOG_SCHEMA_VERSION {
-            return Err(format!(
-                "unsupported catalog schema version {}",
-                self.schema_version
-            ));
+            return Err(
+                format!("unsupported catalog schema version {}", self.schema_version).into(),
+            );
         }
         if self.generation == 0 {
             return Err("catalog generation must be greater than zero".into());
@@ -143,7 +143,7 @@ impl CatalogIndex {
             validate_version(&entry.version)?;
             validate_kind(&entry.kind)?;
             if !is_sha256(&entry.digest) {
-                return Err(format!("catalog entry `{}` has invalid digest", entry.id));
+                return Err(format!("catalog entry `{}` has invalid digest", entry.id).into());
             }
             validate_object_path(&entry.manifest)?;
             validate_object_path(&entry.files)?;
@@ -153,20 +153,21 @@ impl CatalogIndex {
                 return Err(format!(
                     "catalog entry `{}` manifest must end with manifest.json",
                     entry.id
-                ));
+                )
+                .into());
             }
             if !identities.insert((entry.id.clone(), entry.digest.clone())) {
-                return Err(format!(
-                    "duplicate catalog entry `{}@{}`",
-                    entry.id, entry.digest
-                ));
+                return Err(
+                    format!("duplicate catalog entry `{}@{}`", entry.id, entry.digest).into(),
+                );
             }
             if entry.current {
                 if let Some(previous) = current_by_id.insert(entry.id.clone(), index) {
                     return Err(format!(
                         "catalog id `{}` has multiple current entries at indexes {previous} and {index}",
                         entry.id
-                    ));
+                    )
+                    .into());
                 }
             }
         }
@@ -204,26 +205,26 @@ pub fn manifest_digest(manifest: &DatasetManifest) -> String {
     format!("sha256:{}", hex(&Sha256::digest(&bytes)))
 }
 
-pub fn validate_id(value: &str) -> Result<(), String> {
+pub fn validate_id(value: &str) -> Result<()> {
     valid_token(value, "id")
 }
 
-pub fn validate_version(value: &str) -> Result<(), String> {
+pub fn validate_version(value: &str) -> Result<()> {
     valid_token(value, "version")
 }
 
-pub fn validate_kind(value: &str) -> Result<(), String> {
+pub fn validate_kind(value: &str) -> Result<()> {
     if value.is_empty()
         || !value.chars().all(|character| {
             character.is_ascii_lowercase() || character.is_ascii_digit() || character == '_'
         })
     {
-        return Err(format!("kind `{value}` must use lowercase snake_case"));
+        return Err(format!("kind `{value}` must use lowercase snake_case").into());
     }
     Ok(())
 }
 
-fn valid_token(value: &str, field: &str) -> Result<(), String> {
+fn valid_token(value: &str, field: &str) -> Result<()> {
     let mut characters = value.chars();
     let valid = characters
         .next()
@@ -233,12 +234,12 @@ fn valid_token(value: &str, field: &str) -> Result<(), String> {
         })
         && value.len() <= 128;
     if !valid {
-        return Err(format!("invalid {field} `{value}`"));
+        return Err(format!("invalid {field} `{value}`").into());
     }
     Ok(())
 }
 
-pub fn validate_relative_path(value: &str) -> Result<(), String> {
+pub fn validate_relative_path(value: &str) -> Result<()> {
     let path = std::path::Path::new(value);
     if value.is_empty()
         || value.contains('\\')
@@ -248,20 +249,20 @@ pub fn validate_relative_path(value: &str) -> Result<(), String> {
             .components()
             .all(|component| matches!(component, std::path::Component::Normal(_)))
     {
-        return Err(format!("unsafe relative path `{value}`"));
+        return Err(format!("unsafe relative path `{value}`").into());
     }
     Ok(())
 }
 
-pub fn validate_object_path(value: &str) -> Result<(), String> {
+pub fn validate_object_path(value: &str) -> Result<()> {
     validate_relative_path(value.trim_start_matches('/'))?;
     if value.is_empty() || value.contains('\\') || value.contains('\0') {
-        return Err(format!("unsafe object path `{value}`"));
+        return Err(format!("unsafe object path `{value}`").into());
     }
     Ok(())
 }
 
-pub fn validate_absolute_vfs_path(value: &str) -> Result<(), String> {
+pub fn validate_absolute_vfs_path(value: &str) -> Result<()> {
     if !value.starts_with('/')
         || value.contains('\\')
         || value.contains('\0')
@@ -269,7 +270,7 @@ pub fn validate_absolute_vfs_path(value: &str) -> Result<(), String> {
         || value.ends_with("/..")
         || value == "/"
     {
-        return Err(format!("unsafe VFS path `{value}`"));
+        return Err(format!("unsafe VFS path `{value}`").into());
     }
     Ok(())
 }

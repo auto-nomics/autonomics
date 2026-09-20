@@ -1,4 +1,7 @@
+use std::env;
+
 use async_trait::async_trait;
+use hf_hub::{HFClient, HFClientBuilder};
 use tokio::sync::RwLock;
 use vfs::VfsManifest;
 
@@ -19,6 +22,7 @@ pub struct HfCatalogService {
     config: CatalogConfig,
     operator: opendal::Operator,
     snapshot: RwLock<CatalogSnapshot>,
+    client: HFClient,
 }
 
 impl HfCatalogService {
@@ -27,10 +31,16 @@ impl HfCatalogService {
         config.validate()?;
         let operator = operator_for_backend(manifest, &config.backend)?;
         let snapshot = Self::load_snapshot(&operator, config).await?;
+        let client_builder = HFClientBuilder::default();
+        let client = client_builder
+            .token(env::var("HUGGING_FACE_TOKEN").unwrap())
+            .build()
+            .unwrap();
         Ok(Self {
             config: config.clone(),
             operator,
             snapshot: RwLock::new(snapshot),
+            client,
         })
     }
 
