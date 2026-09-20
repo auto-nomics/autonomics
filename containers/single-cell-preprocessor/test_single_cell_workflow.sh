@@ -6,7 +6,7 @@ usage() {
 Usage: test_single_cell_workflow.sh
 
 Builds the single-cell runtime and validates the H5AD-first QC, embedding,
-Parquet projection, and reverse-subset contracts.
+and reverse-subset contracts.
 
 Environment:
   SINGLE_CELL_IMAGE  Image tag (default localhost/atc/single-cell-preprocessor:0.2.0)
@@ -68,7 +68,6 @@ PY
 printf '%s\n' '{"max_pct_mt":100}' > "$scratch/qc-params.json"
 printf '%s\n' '{"n_pcs":3,"n_neighbors":3,"n_top_genes":6,"resolution":0.5,"random_state":17}' \
   > "$scratch/embed-params.json"
-printf '%s\n' '{"include_obsm":["X_umap"]}' > "$scratch/projection-params.json"
 printf '%s\n' '{"join_column":"cell_id"}' > "$scratch/subset-params.json"
 
 podman run "${flags[@]}" \
@@ -85,13 +84,6 @@ podman run "${flags[@]}" \
   -e AUTONOMICS_INPUT0=/data/qc.h5ad \
   -e AUTONOMICS_OUTPUT0=/data/embedded.h5ad \
   -e AUTONOMICS_OUTPUT1=/data/embedded.json \
-  "$image" python /opt/autonomics/workflow.py
-
-podman run "${flags[@]}" \
-  -e AUTONOMICS_SINGLE_CELL_WORKFLOW=obs_to_parquet \
-  -e AUTONOMICS_SINGLE_CELL_PARAMS=/data/projection-params.json \
-  -e AUTONOMICS_INPUT0=/data/embedded.h5ad \
-  -e AUTONOMICS_OUTPUT0=/data/cells.parquet \
   "$image" python /opt/autonomics/workflow.py
 
 podman run -i "${flags[@]}" "$image" python - <<'PY'
@@ -121,11 +113,9 @@ assert "connectivities" in embedded.obsp
 assert "leiden" in embedded.obs
 assert "counts" in embedded.layers
 
-cells = pd.read_parquet("/data/cells.parquet")
-assert cells.shape[0] == 12
-assert cells.columns[0] == "cell_id"
-assert {"obsm_X_umap_0", "obsm_X_umap_1"}.issubset(cells.columns)
-cells[["cell_id"]].head(5).to_parquet("/data/selection.parquet", index=False)
+pd.DataFrame({"cell_id": embedded.obs_names[:5]}).to_parquet(
+    "/data/selection.parquet", index=False
+)
 PY
 
 podman run "${flags[@]}" \

@@ -27,13 +27,12 @@ The embedding node creates `X_pca`, `X_umap`, neighbor graphs in `obsp`, paramet
 | `h5ad_obs_to_dataframe` | `h5ad` | DataFrame |
 | `sql` | one or more DataFrames | DataFrame |
 | `dataframe_to_file` | DataFrame | selected file |
-| `h5ad_obs_to_parquet` | `h5ad` | `cells.parquet` |
 | `datafusion_sql` | `parquet` | result `parquet` |
 | `h5ad_subset_by_obs` | `h5ad`, `selection_parquet` | `output.h5ad`, `report.json` |
 
-`h5ad_obs_to_dataframe` is the preferred path. It reads only `/obs` and explicitly selected `/obsm` matrices, emits `cell_id` first, and streams record batches into DataFusion without materializing a full `cells.parquet`. Its first release supports numeric arrays, booleans, strings, string-valued categoricals, nullable integer/boolean/string arrays, and numeric `obsm` matrices. `validate_unique_ids` can be disabled when an upstream H5AD node has already enforced the unique-ID contract.
+`h5ad_obs_to_dataframe` is the canonical H5AD metadata path. It reads only `/obs` and explicitly selected `/obsm` matrices, emits `cell_id` first, and streams record batches into DataFusion without materializing a full intermediate Parquet table. Its first release supports numeric arrays, booleans, strings, string-valued categoricals, nullable integer/boolean/string arrays, and numeric `obsm` matrices. `validate_unique_ids` can be disabled when an upstream H5AD node has already enforced the unique-ID contract.
 
-The legacy `h5ad_obs_to_parquet` path remains for compatibility. Its `cells.parquet` starts with `cell_id` derived from `obs_names`, followed by obs columns and explicitly selected `obsm` dimensions named `obsm_{key}_{dimension}`. `datafusion_sql` registers the Parquet input as table `input` and materializes a single-file result. The reverse bridge keeps H5AD row order and reports matched and missing IDs.
+`datafusion_sql` is a generic Parquet-to-Parquet SQL node; it does not read the opaque H5AD main path. The reverse bridge keeps H5AD row order and reports matched and missing IDs.
 
 ## Workflow shape
 

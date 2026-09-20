@@ -57,14 +57,11 @@ nodes:
    neighbors, UMAP, and Leiden.
 3. `h5ad_celltypist_annotate`: H5AD plus explicit local model File to annotated
    H5AD and report.
-4. `h5ad_obs_to_parquet`: backed H5AD obs projection, including explicit
-   `obsm` keys.
-5. `h5ad_subset_by_obs`: H5AD plus selection Parquet to filtered H5AD.
+4. `h5ad_subset_by_obs`: H5AD plus selection Parquet to filtered H5AD.
 
 The scheduler also registers a native `h5ad_obs_to_dataframe` source outside
 this container image. It streams the same `/obs` projection into DataFusion and
-is preferred when the DAG can consume a DataFrame directly; the container
-Parquet bridge remains available for legacy workflows.
+is used when the DAG consumes a DataFrame directly.
 
 The DAG wrapper supplies the workflow script as an inline private script and a
 JSON parameter file, so parameters are schema-validated in Rust before reaching

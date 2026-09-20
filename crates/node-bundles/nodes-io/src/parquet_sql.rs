@@ -169,8 +169,8 @@ impl NodeFactory for DataFusionSqlNodeFactory {
     fn doc(&self) -> &'static str {
         "The input File port must refer to Parquet and is registered with the configured \
         table name (`input` by default). The SQL result is materialized as a single-file \
-        Parquet output. This is the legacy SQL bridge after `h5ad_obs_to_parquet`; prefer \
-        `h5ad_obs_to_dataframe` plus the DataFrame `sql` node for new workflows."
+        Parquet output. This node is for Parquet inputs only; it does not read the opaque \
+        H5AD main path."
     }
 
     fn spec_schema(&self) -> schemars::Schema {

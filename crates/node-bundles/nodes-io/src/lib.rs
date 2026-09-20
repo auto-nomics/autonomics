@@ -497,10 +497,6 @@ impl NodePlugin for Plugin {
                 Arc::clone(&self.container_execution.runtime),
                 Arc::clone(&self.container_execution.panel_cache),
             ),
-            single_cell_h5ad::SingleCellH5adContainerNodeFactory::obs_projection(
-                Arc::clone(&self.container_execution.runtime),
-                Arc::clone(&self.container_execution.panel_cache),
-            ),
             single_cell_h5ad::SingleCellH5adContainerNodeFactory::subset(
                 Arc::clone(&self.container_execution.runtime),
                 Arc::clone(&self.container_execution.panel_cache),

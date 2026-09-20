@@ -400,36 +400,6 @@ def celltypist_annotate(params: dict[str, Any]) -> tuple[ad.AnnData, Path, Path]
     return annotated, output_path, report_path
 
 
-def safe_projection_column(key: str, dimension: int) -> str:
-    safe = re.sub(r"[^0-9A-Za-z_]+", "_", key).strip("_")
-    if not safe:
-        raise ContractError(f"obsm key `{key}` cannot be projected to a column name")
-    return f"obsm_{safe}_{dimension}"
-
-
-def obs_to_parquet(params: dict[str, Any]) -> tuple[Path, Path]:
-    input_path = required_path(H5AD_INPUT)
-    output_path = required_output(PARQUET_OUTPUT)
-    include_obsm = params.get("include_obsm", [])
-    if not isinstance(include_obsm, list) or any(not isinstance(key, str) or not key for key in include_obsm):
-        raise ContractError("include_obsm must be an array of nonempty strings")
-    adata = read_h5ad(input_path, backed="r")
-    if "cell_id" in adata.obs.columns:
-        raise ContractError("obs already contains a reserved `cell_id` column")
-    frame = adata.obs.copy()
-    frame.insert(0, "cell_id", pd.Index(adata.obs_names).astype(str))
-    for key in include_obsm:
-        if key not in adata.obsm:
-            raise ContractError(f"obsm key `{key}` is not present")
-        embedding = np.asarray(adata.obsm[key])
-        if embedding.ndim != 2 or embedding.shape[0] != adata.n_obs:
-            raise ContractError(f"obsm key `{key}` is not a cell-aligned two-dimensional matrix")
-        for dimension in range(embedding.shape[1]):
-            frame[safe_projection_column(key, dimension)] = embedding[:, dimension]
-    write_parquet(frame, output_path)
-    return output_path, input_path
-
-
 def subset_by_obs(params: dict[str, Any]) -> tuple[ad.AnnData, Path, Path]:
     input_path = required_path(H5AD_INPUT)
     selection_path = required_path(PARQUET_INPUT)
@@ -744,10 +714,6 @@ def run() -> None:
     elif workflow == "celltypist_annotate":
         adata, h5ad_path, report_path = celltypist_annotate(params)
         write_h5ad(adata, h5ad_path)
-    elif workflow == "obs_to_parquet":
-        parquet_path, _ = obs_to_parquet(params)
-        if not parquet_path.is_file():
-            raise ContractError("obs projection did not produce Parquet output")
     elif workflow == "subset_by_obs":
         adata, h5ad_path, report_path = subset_by_obs(params)
         write_h5ad(adata, h5ad_path)

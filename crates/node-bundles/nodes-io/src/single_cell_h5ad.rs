@@ -23,7 +23,6 @@ use container_runtime::{PanelCache, PodmanConnection, PullPolicy};
 pub const H5AD_QC_FILTER_KIND: &str = "h5ad_qc_filter";
 pub const H5AD_PCA_NEIGHBORS_UMAP_LEIDEN_KIND: &str = "h5ad_pca_neighbors_umap_leiden";
 pub const H5AD_CELLTYPIST_ANNOTATE_KIND: &str = "h5ad_celltypist_annotate";
-pub const H5AD_OBS_TO_PARQUET_KIND: &str = "h5ad_obs_to_parquet";
 pub const H5AD_SUBSET_BY_OBS_KIND: &str = "h5ad_subset_by_obs";
 pub const SC_DENSE_INGEST_KIND: &str = "sc_dense_ingest";
 pub const H5AD_RANK_GENES_GROUPS_KIND: &str = "h5ad_rank_genes_groups";
@@ -50,7 +49,6 @@ pub enum Workflow {
     QcFilter,
     EmbedCluster,
     Celltypist,
-    ObsProjection,
     Subset,
     DenseIngest,
     RankGenesGroups,
@@ -64,7 +62,6 @@ impl Workflow {
             Self::QcFilter => H5AD_QC_FILTER_KIND,
             Self::EmbedCluster => H5AD_PCA_NEIGHBORS_UMAP_LEIDEN_KIND,
             Self::Celltypist => H5AD_CELLTYPIST_ANNOTATE_KIND,
-            Self::ObsProjection => H5AD_OBS_TO_PARQUET_KIND,
             Self::Subset => H5AD_SUBSET_BY_OBS_KIND,
             Self::DenseIngest => SC_DENSE_INGEST_KIND,
             Self::RankGenesGroups => H5AD_RANK_GENES_GROUPS_KIND,
@@ -78,7 +75,6 @@ impl Workflow {
             Self::QcFilter => "qc_filter",
             Self::EmbedCluster => "pca_neighbors_umap_leiden",
             Self::Celltypist => "celltypist_annotate",
-            Self::ObsProjection => "obs_to_parquet",
             Self::Subset => "subset_by_obs",
             Self::DenseIngest => "dense_ingest",
             Self::RankGenesGroups => "rank_genes_groups",
@@ -105,7 +101,7 @@ impl Workflow {
                 ports.add_input_port_of_type_with_label(None, PortType::File, "selection_parquet");
         }
         ports = ports.add_output_port_of_type(None, PortType::File);
-        if !matches!(self, Self::ObsProjection | Self::ClusterMeanExpression) {
+        if self != Self::ClusterMeanExpression {
             ports = ports.add_output_port_of_type(None, PortType::File);
         }
         if self == Self::RankGenesGroups {
@@ -116,10 +112,6 @@ impl Workflow {
 
     fn output_specs(self) -> Vec<ContainerCommandOutputSpec> {
         match self {
-            Self::ObsProjection => vec![ContainerCommandOutputSpec {
-                path: "cells.parquet".into(),
-                format: Some("parquet".into()),
-            }],
             Self::Subset | Self::QcFilter | Self::EmbedCluster | Self::Celltypist => vec![
                 ContainerCommandOutputSpec {
                     path: "output.h5ad".into(),
@@ -241,22 +233,6 @@ pub struct H5adCelltypistSpec {
     #[serde(default)]
     pub model_path: Option<String>,
     #[serde(default = "default_artifact_prefix_celltypist")]
-    pub artifact_prefix: String,
-    #[serde(default = "default_timeout")]
-    pub timeout_secs: u64,
-    #[serde(default)]
-    pub cpus: Option<f64>,
-    #[serde(default)]
-    pub memory: Option<String>,
-    #[serde(default)]
-    pub pids_limit: Option<i64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct H5adObsProjectionSpec {
-    #[serde(default)]
-    pub include_obsm: Vec<String>,
-    #[serde(default = "default_artifact_prefix_obs")]
     pub artifact_prefix: String,
     #[serde(default = "default_timeout")]
     pub timeout_secs: u64,
@@ -426,9 +402,6 @@ fn default_celltypist_model_bundle() -> String {
 fn default_celltypist_model_file() -> String {
     DEFAULT_CELLTYPIST_MODEL_FILE.into()
 }
-fn default_artifact_prefix_obs() -> String {
-    format!("/artifacts/{H5AD_OBS_TO_PARQUET_KIND}")
-}
 fn default_artifact_prefix_subset() -> String {
     format!("/artifacts/{H5AD_SUBSET_BY_OBS_KIND}")
 }
@@ -564,13 +537,6 @@ impl SingleCellH5adContainerNodeFactory {
 
     pub fn celltypist(runtime: Arc<dyn PodmanConnection>, panel_cache: Arc<PanelCache>) -> Self {
         Self::new(Workflow::Celltypist, runtime, panel_cache)
-    }
-
-    pub fn obs_projection(
-        runtime: Arc<dyn PodmanConnection>,
-        panel_cache: Arc<PanelCache>,
-    ) -> Self {
-        Self::new(Workflow::ObsProjection, runtime, panel_cache)
     }
 
     pub fn subset(runtime: Arc<dyn PodmanConnection>, panel_cache: Arc<PanelCache>) -> Self {
@@ -738,26 +704,6 @@ pub fn validate(workflow: Workflow, spec: &serde_json::Value) -> Result<(), Stri
                 .is_some_and(|path| path.trim().is_empty())
             {
                 return Err("model_path cannot be empty when provided".into());
-            }
-        }
-        Workflow::ObsProjection => {
-            let spec: H5adObsProjectionSpec =
-                serde_json::from_value(spec.clone()).map_err(|e| e.to_string())?;
-            validate_resource(
-                &spec.artifact_prefix,
-                spec.timeout_secs,
-                spec.cpus,
-                spec.memory.as_deref(),
-                spec.pids_limit,
-            )?;
-            if spec.include_obsm.iter().any(|key| key.trim().is_empty()) {
-                return Err("include_obsm entries cannot be empty".into());
-            }
-            let mut keys = spec.include_obsm.clone();
-            keys.sort_unstable();
-            keys.dedup();
-            if keys.len() != spec.include_obsm.len() {
-                return Err("include_obsm entries must be unique".into());
             }
         }
         Workflow::Subset => {
@@ -948,7 +894,6 @@ fn default_artifact_prefix(workflow: Workflow) -> String {
         Workflow::QcFilter => default_artifact_prefix_qc(),
         Workflow::EmbedCluster => default_artifact_prefix_embed(),
         Workflow::Celltypist => default_artifact_prefix_celltypist(),
-        Workflow::ObsProjection => default_artifact_prefix_obs(),
         Workflow::Subset => default_artifact_prefix_subset(),
         Workflow::DenseIngest => default_artifact_prefix_dense(),
         Workflow::RankGenesGroups => default_artifact_prefix_rank(),
@@ -974,9 +919,6 @@ impl NodeFactory for SingleCellH5adContainerNodeFactory {
             }
             Workflow::Celltypist => {
                 "Annotates an H5AD with the catalog-backed or an explicit CellTypist model."
-            }
-            Workflow::ObsProjection => {
-                "Legacy bridge that projects H5AD obs and selected obsm keys to Parquet."
             }
             Workflow::Subset => "Subsets an H5AD by cell IDs read from a Parquet sidecar.",
             Workflow::DenseIngest => {
@@ -1007,11 +949,6 @@ impl NodeFactory for SingleCellH5adContainerNodeFactory {
                 when omitted, the published `celltypist.models.pan_immune` bundle is used. \
                 Output ports are output.h5ad then report.json. Network access is disabled."
             }
-            Workflow::ObsProjection => {
-                "Input port 0 is H5AD and the single output is cells.parquet. The first \
-                column is cell_id derived from obs_names; include_obsm projects explicit embeddings. \
-                Prefer h5ad_obs_to_dataframe followed by the DataFrame sql node for new workflows."
-            }
             Workflow::Subset => {
                 "Input ports are H5AD then selection Parquet. Output ports are output.h5ad \
                 then report.json. By default the Parquet cell_id column selects obs_names."
@@ -1041,7 +978,6 @@ impl NodeFactory for SingleCellH5adContainerNodeFactory {
             Workflow::QcFilter => schema_for!(H5adQcFilterSpec),
             Workflow::EmbedCluster => schema_for!(H5adEmbedClusterSpec),
             Workflow::Celltypist => schema_for!(H5adCelltypistSpec),
-            Workflow::ObsProjection => schema_for!(H5adObsProjectionSpec),
             Workflow::Subset => schema_for!(H5adSubsetSpec),
             Workflow::DenseIngest => schema_for!(ScDenseIngestSpec),
             Workflow::RankGenesGroups => schema_for!(H5adRankGenesGroupsSpec),
@@ -1159,13 +1095,6 @@ mod tests {
         assert_eq!(container.outputs[1].path, "report.json");
         assert_eq!(container.network, "isolated");
         assert!(container.read_only_rootfs);
-    }
-
-    #[test]
-    fn projection_has_a_single_parquet_output() {
-        let container = container_spec(Workflow::ObsProjection, &resource_json()).unwrap();
-        assert_eq!(container.outputs.len(), 1);
-        assert_eq!(container.outputs[0].path, "cells.parquet");
     }
 
     #[test]
