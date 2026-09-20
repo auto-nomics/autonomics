@@ -537,6 +537,31 @@ cell-level table to donor-by-cell-type counts before inference. For each cell
 type it fits a donor-level binomial logistic model against the requested
 test/reference condition, reports log-odds, Wald z, raw p and BH-adjusted p,
 and separately emits the donor composition table. Cells are therefore never
-treated as independent biological replicates. Bulk-reference deconvolution
-(MuSiC/BisqueRNA) remains a separate P2 container migration because it needs
-a pinned reference-expression contract and a different image closure.
+treated as independent biological replicates.
+
+## MuSiC bulk deconvolution (`music_deconvolution_container`)
+
+The P2 bulk-reference deconvolution migration uses official MuSiC 1.0.0 at
+commit `f21fe67f5670d5e9fca0ad7550abaae3423eb59c`. The wrapper is a compute
+node rather than a source node and embeds no reference dataset:
+
+```text
+bulk expression + single-cell counts + cell metadata
+  + optional cell sizes + optional markers
+  -> MuSiC::music_prop
+  -> proportions / NNLS proportions / weights / diagnostics / report
+```
+
+Files:
+
+- `containers/music-deconvolution/Dockerfile`
+- `containers/music-deconvolution/music_runner.R`
+- `containers/music-deconvolution/test_smoke.sh`
+- `crates/node-bundles/nodes-io/src/music_deconvolution_container.rs`
+- `crates/node-bundles/nodes-io/tests/music_deconvolution_container.rs`
+
+The deterministic fixture has four donors, two cell types, 80 reference cells,
+and six pseudo-bulk samples with known neuron fractions from 0.70 through
+0.20. MuSiC recovers 0.709, 0.603, 0.500, 0.397, 0.296 and 0.196 when both
+cell sizes and markers are supplied. The image pins immutable ACR manifest
+digest `sha256:311e32ba2b0e0ce81715bc72f17342604086faeb7eb4964f706f83dcff53c971`.

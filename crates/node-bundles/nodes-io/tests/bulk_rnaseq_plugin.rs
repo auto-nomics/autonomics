@@ -20,6 +20,7 @@ fn plugin_registers_limma_voom_wgcna_and_multiomic_concordance() {
     for kind in [
         "limma_voom_container",
         "wgcna_container",
+        "music_deconvolution_container",
         "multiomic_concordance",
         "deseq2_de_container",
     ] {

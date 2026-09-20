@@ -25,6 +25,7 @@ pub mod mixer_container;
 pub mod mrpresso_container;
 pub mod mtag_container;
 pub mod multiomic_concordance;
+pub mod music_deconvolution_container;
 pub mod mutation_analysis_container;
 pub mod mvmr_container;
 pub mod parquet_sql;
@@ -276,6 +277,12 @@ impl NodePlugin for Plugin {
         )));
         registry.register(Box::new(
             pathway_gsea_container::PathwayGseaContainerNodeFactory::new(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
+        registry.register(Box::new(
+            music_deconvolution_container::MusicDeconvolutionContainerNodeFactory::new(
                 Arc::clone(&self.container_execution.runtime),
                 Arc::clone(&self.container_execution.panel_cache),
             ),
