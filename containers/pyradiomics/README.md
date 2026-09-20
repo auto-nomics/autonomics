@@ -20,7 +20,7 @@ pinned medical-imaging stack. It is used by every radiomics container node in
 Published immutable ACR image digest:
 
 ```text
-sha256:4ef0fc2abbd5a85812b04bceef70b03f207494dbaa53a06c1a3eb9e24b3e7392
+sha256:bccbe15b2ec8d079e1bf869c4f06bfe4143642015394453c584dc981e5403fbe
 ```
 
 The wrapper combines this digest with `$ACR_ENDPOINT/autonomics/pyradiomics`.

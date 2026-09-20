@@ -19,7 +19,7 @@ use crate::image_registry::acr_image;
 
 pub const PYRADIOMICS_IMAGE_REPOSITORY: &str = "pyradiomics";
 pub const PYRADIOMICS_IMAGE_DIGEST: &str =
-    "sha256:4ef0fc2abbd5a85812b04bceef70b03f207494dbaa53a06c1a3eb9e24b3e7392";
+    "sha256:bccbe15b2ec8d079e1bf869c4f06bfe4143642015394453c584dc981e5403fbe";
 pub const RADIOMICS_IMAGE_INGEST_KIND: &str = "radiomics_image_ingest";
 pub const RADIOMICS_MASK_INGEST_KIND: &str = "radiomics_mask_ingest";
 pub const RADIOMICS_PAIR_VALIDATE_KIND: &str = "radiomics_pair_validate";
