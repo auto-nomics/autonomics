@@ -4,7 +4,7 @@
 
 Autonomics is a purpose-built harness for biomedical research. It places an LLM agent in control of a typed, auditable research surface: the agent discovers registered analysis nodes, assembles a DataFusion DAG, reads scientific data, runs pure-Rust or OCI-container methods, persists results through a virtual file system, and can carry those results into a literature-backed manuscript. Epidemiology, statistical genetics, clinical and survey analysis, machine learning, scientific databases, and reproducible execution are treated as parts of one research workflow rather than as separate applications.
 
-The root Cargo workspace contains 94 crates at the time of this README update. It is an active research codebase: APIs, node contracts, and configuration paths may still change. The `dendrite/` directory is a separate nested Rust workspace for the knowledge-management system.
+The root Cargo workspace contains 96 crates at the time of this README update. It is an active research codebase: APIs, node contracts, and configuration paths may still change. The `dendrite/` directory is a separate nested Rust workspace for the knowledge-management system.
 
 ## Harness Contract
 
@@ -83,7 +83,7 @@ Two mechanisms make the harness trustworthy for biomedical work:
 | Machine learning and deep learning | `ml`, `dl`, `grf`, `grf-sys` | Preprocessing, feature engineering, clustering, supervised models, ensembles, anomaly detection, dimensionality reduction; Burn-based MLP, DeepSurv, DeepHit, RNN, Transformer, and autoencoder workflows; generalized random forests through the vendored C++ core. |
 | Statistical genetics | `ldsc`, `mr`, `lava`, `mrlap`, `lcv`, `cpassoc`, `magma`, `coloc`, `bkmr`, `evalue`, `genomic_sem`, `lcmm` | LD score regression, Mendelian randomization, local genetic correlation, colocalization, Bayesian kernel-machine regression, E-value analysis, Genomic SEM, latent-class mixed models, and related ports. |
 | Regression discontinuity | `rdrobust`, `rdpower`, `rdmulti`, `rddensity`, `rdlocrand` | Local-polynomial RD estimation, power and sample-size calculations, multi-cutoff designs, manipulation testing, and local randomization inference. |
-| Scientific data clients | `eutils`, `opengwas`, `gwascatalog-sdk`, `opentargets`, `chembl`, `uniprot`, `string-sdk`, `kegg`, `reactome`, `ensembl`, `rcsb`, `alphafold`, `interpro`, `pubchem`, `clinicaltrials` | SDKs, agent tools, and selected DAG source nodes for PubMed/Entrez, OpenGWAS, GWAS Catalog, Open Targets, ChEMBL, UniProt, STRING, KEGG, Reactome, Ensembl, RCSB, AlphaFold, InterPro, PubChem, and ClinicalTrials.gov. |
+| Scientific data clients | `eutils`, `opengwas`, `gwascatalog-sdk`, `opentargets`, `chembl`, `uniprot`, `string-sdk`, `kegg`, `reactome`, `ensembl`, `rcsb`, `alphafold`, `interpro`, `pubchem`, `protocolio`, `clinicaltrials` | SDKs, agent tools, and selected DAG source nodes for PubMed/Entrez, OpenGWAS, GWAS Catalog, Open Targets, ChEMBL, UniProt, STRING, KEGG, Reactome, Ensembl, RCSB, AlphaFold, InterPro, PubChem, protocols.io, and ClinicalTrials.gov. |
 | Literature, writing, and knowledge | `arxiv`, `biorxiv`, `openalex`, `crossref`, `embase`, `europepmc`, `semantic-scholar`, `bib-types`, `bib-base`, `writing-types`, `writing-base`, `kms`, `kms-tools` | Unified literature search and full-text management, content-addressed documents, BibTeX/RIS/Markdown/CSL export, LaTeX AST operations, citation resolution, compilation, and knowledge-tree tools. |
 | Harness interface | `tui`, `tui-http`, `workflow-editor` | Streaming terminal chat, provider/model configuration, DAG view, bibliography CLI/API/frontend, KMS browser, and workflow editor components. |
 
@@ -163,6 +163,7 @@ Scientific API credentials must be present in the process environment. The repos
 - `OPENGWAS_TOKEN`
 - `OPENALEX_API_KEY`
 - `EUTILS_API_KEY`
+- `PROTOCOLS_IO_ACCESS_TOKEN`
 - `EMBASE_API_KEY`, `EMBASE_INSTTOKEN`, and related Embase tokens
 - `UMLS_API_KEY`
 - OSS/S3 credentials for catalog and VFS backends

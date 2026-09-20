@@ -7611,6 +7611,7 @@ dependencies = [
  "openalex",
  "opentargets",
  "parquet",
+ "protocolio",
  "pubchem",
  "rcsb",
  "reactome",
@@ -9311,6 +9312,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "protocolio"
+version = "0.1.0"
+dependencies = [
+ "agentik-core",
+ "agentik-proc",
+ "agentik-sdk",
+ "arrow-array",
+ "arrow-schema",
+ "async-trait",
+ "chrono",
+ "dag-core",
+ "datafusion",
+ "futures",
+ "reqwest",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.20",
+ "tokio",
+ "url",
+ "vfs",
+]
+
+[[package]]
 name = "psm"
 version = "0.1.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10311,6 +10337,7 @@ dependencies = [
  "libc",
  "opengwas",
  "opentargets",
+ "protocolio",
  "pubchem",
  "rcsb",
  "rusqlite",

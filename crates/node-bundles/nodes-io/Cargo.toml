@@ -25,6 +25,7 @@ kegg = { path = "../../kegg" }
 alphafold = { path = "../../alphafold" }
 interpro = { path = "../../interpro" }
 pubchem = { path = "../../pubchem" }
+protocolio = { path = "../../protocolio" }
 clinicaltrials = { path = "../../clinicaltrials" }
 mr = { path = "../../../bio_crates/mr" }
 arrow-array.workspace = true

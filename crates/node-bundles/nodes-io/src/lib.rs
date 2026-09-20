@@ -55,6 +55,12 @@ pub use crossref::nodes::works::{CrossrefWorksNode, CrossrefWorksNodeFactory};
 pub use nhanes::nodes::download::{NhanesDownloadNode, NhanesDownloadNodeFactory};
 pub use nhanes::nodes::files::{NhanesFilesNode, NhanesFilesNodeFactory};
 pub use interpro::nodes::entry::{InterProEntryNode, InterProEntryNodeFactory};
+pub use protocolio::nodes::materials::{ProtocolioMaterialsNode, ProtocolioMaterialsNodeFactory};
+pub use protocolio::nodes::pdf::{ProtocolioPdfNode, ProtocolioPdfNodeFactory};
+pub use protocolio::nodes::protocol::{ProtocolioProtocolNode, ProtocolioProtocolNodeFactory};
+pub use protocolio::nodes::reagents::{ProtocolioReagentsNode, ProtocolioReagentsNodeFactory};
+pub use protocolio::nodes::search::{ProtocolioSearchNode, ProtocolioSearchNodeFactory};
+pub use protocolio::nodes::steps::{ProtocolioStepsNode, ProtocolioStepsNodeFactory};
 pub use pubchem::nodes::compound::{PubChemCompoundNode, PubChemCompoundNodeFactory};
 pub use rcsb::nodes::assembly::{RcsbAssemblyNode, RcsbAssemblyNodeFactory};
 pub use rcsb::nodes::entry::{RcsbEntryNode, RcsbEntryNodeFactory};
@@ -550,6 +556,12 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(AlphaFoldPredictionNodeFactory));
         registry.register(Box::new(InterProEntryNodeFactory));
         registry.register(Box::new(PubChemCompoundNodeFactory));
+        registry.register(Box::new(ProtocolioSearchNodeFactory));
+        registry.register(Box::new(ProtocolioProtocolNodeFactory));
+        registry.register(Box::new(ProtocolioStepsNodeFactory));
+        registry.register(Box::new(ProtocolioMaterialsNodeFactory));
+        registry.register(Box::new(ProtocolioReagentsNodeFactory));
+        registry.register(Box::new(ProtocolioPdfNodeFactory));
         registry.register(Box::new(ClinicalTrialsStudyNodeFactory));
         registry.register(Box::new(RcsbSearchNodeFactory {}));
         registry.register(Box::new(RcsbEntryNodeFactory {}));
@@ -587,5 +599,31 @@ mod tests {
                 .iter()
                 .any(|node| node.kind == deseq2_container::DESEQ2_DE_CONTAINER_KIND)
         );
+    }
+
+    #[test]
+    fn plugin_registers_protocolio_source_nodes() {
+        let ctx = dag_core::registry::NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        );
+        let mut registry = NodeRegistry::new(ctx);
+        registry.register_plugin(&Plugin::new(Arc::new(
+            container_runtime::ContainerExecutionInfra::from_env(),
+        )));
+        let expected = [
+            "source_protocolio_protocols",
+            "source_protocolio_protocol",
+            "source_protocolio_steps",
+            "source_protocolio_materials",
+            "source_protocolio_reagents",
+            "source_protocolio_pdf",
+        ];
+        for kind in expected {
+            assert!(
+                registry.list_nodes().iter().any(|node| node.kind == kind),
+                "missing protocol.io node: {kind}"
+            );
+        }
     }
 }

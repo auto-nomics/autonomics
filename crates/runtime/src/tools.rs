@@ -20,6 +20,7 @@ use interpro::InterProClient;
 use kegg::KeggClient;
 use opengwas::OpengwasClient;
 use opentargets::OpenTargetsClient;
+use protocolio::ProtocolioClient;
 use pubchem::PubChemClient;
 use rcsb::RcsbClient;
 use string_sdk::StringDbClient;
@@ -108,6 +109,23 @@ pub fn biomedical_resources_tools() -> Vec<ToolRegistration> {
 pub fn gwascatalog_tools(storage: Arc<OpendalFileStorage>) -> Vec<ToolRegistration> {
     let client = Arc::new(GwasCatalogClient::new());
     gwascatalog_sdk::gwascatalog_registrations(client, storage)
+}
+
+/// protocols.io tools (protocol search/details/steps/materials and PDF export).
+///
+/// The API requires a Bearer token. If `PROTOCOLS_IO_ACCESS_TOKEN` is absent,
+/// the tools are disabled rather than failing the entire runtime startup.
+pub fn protocolio_tools(storage: Arc<OpendalFileStorage>) -> Vec<ToolRegistration> {
+    match ProtocolioClient::new() {
+        Ok(client) => {
+            let client = Arc::new(client);
+            protocolio::tools::registrations(client, storage)
+        }
+        Err(error) => {
+            eprintln!("[runtime] WARNING: protocols.io tools disabled: {error}");
+            Vec::new()
+        }
+    }
 }
 
 /// Default on-disk location for the bibliography database, mirroring the
@@ -236,6 +254,7 @@ pub async fn tool_set_from_config(
     }
 
     tools.extend(biomedical_resources_tools());
+    tools.extend(protocolio_tools(file_storage.clone()));
 
     tools.extend(data_engine_tools::registrations(data_engine_client));
 
