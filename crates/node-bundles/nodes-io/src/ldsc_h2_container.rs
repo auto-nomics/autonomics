@@ -381,8 +381,8 @@ mod tests {
             datafusion::prelude::SessionContext::new().runtime_env(),
             None,
         )
-        .with_data_bundle_catalog(std::sync::Arc::new(
-            dag_core::DataBundleCatalog::from_bundles([ref_panel, w_ld_panel]).unwrap(),
+        .with_bundle_registry(std::sync::Arc::new(
+            dag_core::BundleRegistry::from_bundles([ref_panel, w_ld_panel]).unwrap(),
         ));
         let mut registry = dag_core::registry::NodeRegistry::new(ctx);
         registry.register(Box::new(LdscH2ContainerNodeFactory::new(

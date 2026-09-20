@@ -1127,7 +1127,7 @@ impl NodeFactory for SingleCellH5adContainerNodeFactory {
 mod tests {
     use super::*;
     use container_runtime::{PanelCache, PodmanRuntime};
-    use dag_core::node::{DataBundle, DataBundleCatalog};
+    use dag_core::node::{BundleRegistry, DataBundle};
     use dag_core::registry::NodeRegistry;
 
     fn resource_json() -> serde_json::Value {
@@ -1190,7 +1190,7 @@ mod tests {
     #[test]
     fn celltypist_registry_resolves_default_model_path() {
         let catalog = Arc::new(
-            DataBundleCatalog::from_bundles([DataBundle::new(
+            BundleRegistry::from_bundles([DataBundle::new(
                 CELLTYPIST_MODEL_BUNDLE,
                 "test CellTypist models",
                 "/bundles/celltypist.models.pan_immune",
@@ -1201,7 +1201,7 @@ mod tests {
             datafusion::prelude::SessionContext::new().runtime_env(),
             None,
         )
-        .with_data_bundle_catalog(catalog);
+        .with_bundle_registry(catalog);
         let mut registry = NodeRegistry::new(ctx);
         let cache = Arc::new(PanelCache::new(tempfile::tempdir().unwrap().path()));
         registry.register(Box::new(SingleCellH5adContainerNodeFactory::celltypist(

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use container_runtime::ContainerExecutionInfra;
-use dag_core::DataBundleCatalog;
+use dag_core::BundleRegistry;
 use datafusion::{
     execution::{object_store::ObjectStoreUrl, runtime_env::RuntimeEnv},
     prelude::SessionContext,
@@ -75,10 +75,10 @@ impl DataEngine {
         ctx: SessionContext,
         runtime_env: Arc<RuntimeEnv>,
         opendal: Option<Arc<OpendalFileStorage>>,
-        data_bundles: Arc<DataBundleCatalog>,
+        bundle_registry: Arc<BundleRegistry>,
         container_execution: Arc<ContainerExecutionInfra>,
     ) -> Self {
-        let data_bundles = crate::data_bundles::catalog_with_builtins(&data_bundles);
+        let bundle_registry = crate::data_bundles::registry_with_builtins(&bundle_registry);
         // Global concurrency limiter shared across all agent sessions.
         // Sized to leave ≥ 2 worker threads for SessionServer actors +
         // tool execution, preventing CPU-bound node work from starving
@@ -91,7 +91,7 @@ impl DataEngine {
         let engine_ctx = crate::node_registry::registry::NodeCtx {
             runtime_env: runtime_env.clone(),
             opendal: opendal.clone(),
-            data_bundles: data_bundles.clone(),
+            bundle_registry: bundle_registry.clone(),
             bound_data_bundles: Default::default(),
             global_sem,
         };
@@ -99,7 +99,7 @@ impl DataEngine {
             crate::default_registry::build_default_registry_with_container_execution(
                 runtime_env.clone(),
                 opendal.clone(),
-                data_bundles,
+                bundle_registry,
                 Arc::clone(&container_execution),
             );
         Self {
@@ -779,10 +779,11 @@ impl DataEngine {
     }
 }
 
+/// Builder for the process-wide [`DataEngine`].
 pub struct DataEngineBuilder {
     runtime_env: Arc<RuntimeEnv>,
     opendal: Option<Arc<OpendalFileStorage>>,
-    data_bundles: Arc<DataBundleCatalog>,
+    bundle_registry: Arc<BundleRegistry>,
     container_execution: Arc<ContainerExecutionInfra>,
 }
 
@@ -793,7 +794,7 @@ impl Default for DataEngineBuilder {
         Self {
             runtime_env,
             opendal: None,
-            data_bundles: Arc::new(DataBundleCatalog::new()),
+            bundle_registry: Arc::new(BundleRegistry::new()),
             container_execution: Arc::new(ContainerExecutionInfra::from_env()),
         }
     }
@@ -813,9 +814,12 @@ impl DataEngineBuilder {
         })
     }
 
-    /// Set the engine-wide mapping from bundle identifiers to VFS paths.
-    pub fn with_data_bundle_catalog(mut self, catalog: DataBundleCatalog) -> Self {
-        self.data_bundles = Arc::new(catalog);
+    /// Install the engine-wide mapping from bundle identifiers to VFS paths.
+    ///
+    /// The registry is shared by every node factory and DAG session. Built-in
+    /// entries are layered beneath it when the engine is built.
+    pub fn with_bundle_registry(mut self, registry: BundleRegistry) -> Self {
+        self.bundle_registry = Arc::new(registry);
         self
     }
 
@@ -870,7 +874,7 @@ impl DataEngineBuilder {
             ctx,
             self.runtime_env,
             self.opendal,
-            self.data_bundles,
+            self.bundle_registry,
             self.container_execution,
         )
     }

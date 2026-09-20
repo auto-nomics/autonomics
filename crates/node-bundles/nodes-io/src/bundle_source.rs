@@ -172,7 +172,7 @@ impl NodeFactory for BundleSourceNodeFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dag_core::DataBundleCatalog;
+    use dag_core::BundleRegistry;
     use dag_core::dag::DAG;
     use dag_core::dag::runtime::SchedulerConfig;
     use datafusion::prelude::SessionContext;
@@ -230,14 +230,14 @@ mod tests {
     }
 
     fn runtime_ctx(storage: Arc<vfs::OpendalFileStorage>) -> NodeCtx {
-        let catalog = DataBundleCatalog::from_bundles([DataBundle::new(
+        let catalog = BundleRegistry::from_bundles([DataBundle::new(
             "panels",
             "Reference panels",
             "/bundles/panels/panel.txt",
         )])
         .unwrap();
         NodeCtx::new(SessionContext::new().runtime_env(), Some(storage))
-            .with_data_bundle_catalog(Arc::new(catalog))
+            .with_bundle_registry(Arc::new(catalog))
     }
 
     #[tokio::test]

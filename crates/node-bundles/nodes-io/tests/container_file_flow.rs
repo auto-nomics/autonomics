@@ -455,7 +455,7 @@ async fn real_catalog_backed_official_mtag_runs_in_podman() {
     let registry_ctx = fixture
         .ctx
         .clone()
-        .with_data_bundle_catalog(Arc::new(fixture.bundles.clone()));
+        .with_bundle_registry(Arc::new(fixture.bundles.clone()));
     let mut registry = NodeRegistry::new(registry_ctx);
     registry.register(Box::new(MtagContainerNodeFactory::new(
         runtime,
@@ -607,7 +607,7 @@ async fn real_catalog_backed_ldsc_rg_tolerates_incompatible_allele_pairs() {
     let registry_ctx = fixture
         .ctx
         .clone()
-        .with_data_bundle_catalog(Arc::new(fixture.bundles.clone()));
+        .with_bundle_registry(Arc::new(fixture.bundles.clone()));
     let mut registry = NodeRegistry::new(registry_ctx);
     registry.register(Box::new(LdscRgContainerNodeFactory::new(
         runtime,
@@ -686,7 +686,7 @@ async fn real_catalog_backed_ldsc_rg_tolerates_incompatible_allele_pairs() {
 
 struct CatalogTextFixture {
     ctx: NodeCtx,
-    bundles: dag_core::DataBundleCatalog,
+    bundles: dag_core::BundleRegistry,
     _scratch: tempfile::TempDir,
 }
 
@@ -740,7 +740,7 @@ async fn catalog_test_fixture() -> CatalogTextFixture {
         .register_object_store(ObjectStoreUrl::parse("vfs://").unwrap().as_ref(), mounted);
     CatalogTextFixture {
         ctx: NodeCtx::new(session.runtime_env(), Some(storage)),
-        bundles: catalog_runtime.data_bundles(),
+        bundles: catalog_runtime.bundle_registry(),
         _scratch: scratch,
     }
 }
@@ -910,8 +910,8 @@ write.table(gwas2, "/work/gwas2.tsv", sep = "\t", quote = FALSE, row.names = FAL
     );
     panel.source = Some("/catalog/hdl_ref".into());
     panel.digest = built.manifest.digest.clone();
-    let registry_ctx = ctx.clone().with_data_bundle_catalog(Arc::new(
-        dag_core::DataBundleCatalog::from_bundles([panel]).unwrap(),
+    let registry_ctx = ctx.clone().with_bundle_registry(Arc::new(
+        dag_core::BundleRegistry::from_bundles([panel]).unwrap(),
     ));
 
     let workspace_root = scratch.path().join("podman-workspace");
@@ -1065,7 +1065,7 @@ async fn real_catalog_backed_official_hdl_l_runs_in_podman_with_published_panel(
     let registry_ctx = fixture
         .ctx
         .clone()
-        .with_data_bundle_catalog(Arc::new(fixture.bundles.clone()));
+        .with_bundle_registry(Arc::new(fixture.bundles.clone()));
     let mut registry = NodeRegistry::new(registry_ctx);
     registry.register(Box::new(HdlLContainerNodeFactory::new(
         runtime,
@@ -1225,7 +1225,7 @@ async fn real_catalog_backed_official_hdl_l_scan_runs_in_podman_with_published_p
     let registry_ctx = fixture
         .ctx
         .clone()
-        .with_data_bundle_catalog(Arc::new(fixture.bundles.clone()));
+        .with_bundle_registry(Arc::new(fixture.bundles.clone()));
     let mut registry = NodeRegistry::new(registry_ctx);
     registry.register(Box::new(HdlLScanContainerNodeFactory::new(
         runtime,
@@ -1335,7 +1335,7 @@ async fn real_catalog_backed_official_lava_scan_runs_in_podman() {
     let registry_ctx = fixture
         .ctx
         .clone()
-        .with_data_bundle_catalog(Arc::new(fixture.bundles.clone()));
+        .with_bundle_registry(Arc::new(fixture.bundles.clone()));
     let mut registry = NodeRegistry::new(registry_ctx);
     registry.register(Box::new(LavaScanContainerNodeFactory::new(
         runtime,
@@ -1568,8 +1568,8 @@ async fn real_official_mixer_fit1_and_fit2_run_in_podman_and_match_baselines() {
     );
     panel.source = Some("/catalog/mixer_g1000_eur".into());
     panel.digest = built.manifest.digest.clone();
-    let registry_ctx = ctx.clone().with_data_bundle_catalog(Arc::new(
-        dag_core::DataBundleCatalog::from_bundles([panel]).unwrap(),
+    let registry_ctx = ctx.clone().with_bundle_registry(Arc::new(
+        dag_core::BundleRegistry::from_bundles([panel]).unwrap(),
     ));
 
     let workspace_root = scratch.path().join("podman-workspace");
@@ -1796,7 +1796,7 @@ async fn real_catalog_backed_official_smr_heidi_eqtlgen_runs_with_container_back
     let registry_ctx = fixture
         .ctx
         .clone()
-        .with_data_bundle_catalog(Arc::new(fixture.bundles.clone()));
+        .with_bundle_registry(Arc::new(fixture.bundles.clone()));
     let mut registry = NodeRegistry::new(registry_ctx);
     registry.register(Box::new(SmrHeidiContainerNodeFactory::new(
         infra.runtime,
@@ -1923,7 +1923,7 @@ async fn real_catalog_backed_official_twosamplemr_runs_with_container_backend() 
     let registry_ctx = fixture
         .ctx
         .clone()
-        .with_data_bundle_catalog(Arc::new(fixture.bundles.clone()));
+        .with_bundle_registry(Arc::new(fixture.bundles.clone()));
     let mut registry = NodeRegistry::new(registry_ctx);
     registry.register(Box::new(TwoSampleMrContainerNodeFactory::new(
         infra.runtime,

@@ -753,7 +753,7 @@ fn resolve_catalog_panels(
             .find(|bundle| bundle.ident == panel.panel_id)
             .ok_or_else(|| {
                 ContainerCommandError::Invalid(format!(
-                    "catalog panel `{}` was not resolved by the runtime DataBundle catalog",
+                    "catalog panel `{}` was not resolved by the runtime bundle registry",
                     panel.panel_id
                 ))
             })?;

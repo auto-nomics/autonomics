@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use datafusion::execution::runtime_env::RuntimeEnv;
 
-use dag_core::{DataBundleCatalog, registry::NodeRegistry};
+use dag_core::{BundleRegistry, registry::NodeRegistry};
 
 /// Build a [`NodeRegistry`] populated with every built-in node factory.
 ///
@@ -22,12 +22,12 @@ use dag_core::{DataBundleCatalog, registry::NodeRegistry};
 pub fn build_default_registry(
     runtime_env: Arc<RuntimeEnv>,
     opendal: Option<Arc<vfs::OpendalFileStorage>>,
-    data_bundles: Arc<DataBundleCatalog>,
+    bundle_registry: Arc<BundleRegistry>,
 ) -> NodeRegistry {
     build_default_registry_with_container_execution(
         runtime_env,
         opendal,
-        data_bundles,
+        bundle_registry,
         Arc::new(container_runtime::ContainerExecutionInfra::from_env()),
     )
 }
@@ -37,13 +37,13 @@ pub fn build_default_registry(
 pub fn build_default_registry_with_container_execution(
     runtime_env: Arc<RuntimeEnv>,
     opendal: Option<Arc<vfs::OpendalFileStorage>>,
-    data_bundles: Arc<DataBundleCatalog>,
+    bundle_registry: Arc<BundleRegistry>,
     container_execution: Arc<container_runtime::ContainerExecutionInfra>,
 ) -> NodeRegistry {
-    let data_bundles = crate::data_bundles::catalog_with_builtins(&data_bundles);
+    let bundle_registry = crate::data_bundles::registry_with_builtins(&bundle_registry);
     let mut registry = NodeRegistry::new(
         dag_core::registry::NodeCtx::new(runtime_env, opendal)
-            .with_data_bundle_catalog(data_bundles),
+            .with_bundle_registry(bundle_registry),
     );
 
     // ── Phase 4: LDSC + genetics bundles ──────────────────────────────
@@ -123,7 +123,7 @@ mod tests {
         let registry = build_default_registry_with_container_execution(
             runtime_env,
             None,
-            Arc::new(DataBundleCatalog::new()),
+            Arc::new(BundleRegistry::new()),
             container_execution,
         );
 
@@ -151,7 +151,7 @@ mod tests {
         let registry = build_default_registry_with_container_execution(
             runtime_env,
             None,
-            Arc::new(DataBundleCatalog::new()),
+            Arc::new(BundleRegistry::new()),
             container_execution,
         );
 
@@ -180,7 +180,7 @@ mod tests {
         let registry = build_default_registry_with_container_execution(
             runtime_env,
             None,
-            Arc::new(DataBundleCatalog::new()),
+            Arc::new(BundleRegistry::new()),
             container_execution,
         );
 
@@ -194,8 +194,7 @@ mod tests {
     #[test]
     fn string_source_factories_are_registered() {
         let runtime_env = datafusion::prelude::SessionContext::new().runtime_env();
-        let registry =
-            build_default_registry(runtime_env, None, Arc::new(DataBundleCatalog::new()));
+        let registry = build_default_registry(runtime_env, None, Arc::new(BundleRegistry::new()));
 
         for kind in [
             "source_string_id_map",
@@ -224,7 +223,7 @@ mod tests {
         let registry = build_default_registry_with_container_execution(
             runtime_env,
             None,
-            Arc::new(DataBundleCatalog::new()),
+            Arc::new(BundleRegistry::new()),
             container_execution,
         );
 

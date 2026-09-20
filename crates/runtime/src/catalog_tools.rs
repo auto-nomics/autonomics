@@ -6,7 +6,7 @@ use agentik_core::tools::{ToolError, ToolFunction, ToolRegistration};
 use agentik_proc::tool;
 use agentik_sdk::types::ToolResult;
 use async_trait::async_trait;
-use data_catalog::{CatalogSearchQuery, CatalogService};
+use data_catalog::{CatalogSearchQuery, CatalogServiceTrait, S3CatalogService};
 use serde_json::json;
 
 #[tool(
@@ -27,7 +27,7 @@ pub struct CatalogSearchInput {
 }
 
 pub struct CatalogSearchTool {
-    service: Arc<CatalogService>,
+    service: Arc<dyn CatalogServiceTrait>,
 }
 
 #[tool(
@@ -46,7 +46,7 @@ pub struct CatalogDescribeInput {
 }
 
 pub struct CatalogDescribeTool {
-    service: Arc<CatalogService>,
+    service: Arc<dyn CatalogServiceTrait>,
 }
 
 #[tool(
@@ -65,7 +65,7 @@ pub struct CatalogListFilesInput {
 }
 
 pub struct CatalogListFilesTool {
-    service: Arc<CatalogService>,
+    service: Arc<dyn CatalogServiceTrait>,
 }
 
 #[tool(
@@ -80,7 +80,7 @@ pub struct CatalogListVersionsInput {
 }
 
 pub struct CatalogListVersionsTool {
-    service: Arc<CatalogService>,
+    service: Arc<dyn CatalogServiceTrait>,
 }
 
 #[tool(
@@ -90,7 +90,7 @@ pub struct CatalogListVersionsTool {
 pub struct CatalogRefreshInput {}
 
 pub struct CatalogRefreshTool {
-    service: Arc<CatalogService>,
+    service: Arc<dyn CatalogServiceTrait>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -103,7 +103,10 @@ fn execution_failed(error: String) -> ToolError {
     }
 }
 
-async fn refresh_if_requested(service: &CatalogService, refresh: bool) -> Result<(), ToolError> {
+async fn refresh_if_requested(
+    service: &dyn CatalogServiceTrait,
+    refresh: bool,
+) -> Result<(), ToolError> {
     if refresh {
         service
             .refresh()
@@ -119,7 +122,7 @@ impl ToolFunction for CatalogSearchTool {
     type Input = CatalogSearchInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        refresh_if_requested(&self.service, input.refresh.unwrap_or(false)).await?;
+        refresh_if_requested(&*self.service, input.refresh.unwrap_or(false)).await?;
         let records = self
             .service
             .search(CatalogSearchQuery {
@@ -139,7 +142,7 @@ impl ToolFunction for CatalogDescribeTool {
     type Input = CatalogDescribeInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        refresh_if_requested(&self.service, input.refresh.unwrap_or(false)).await?;
+        refresh_if_requested(&*self.service, input.refresh.unwrap_or(false)).await?;
         let dataset = self
             .service
             .describe(&input.id, input.version.as_deref(), input.digest.as_deref())
@@ -154,7 +157,7 @@ impl ToolFunction for CatalogListFilesTool {
     type Input = CatalogListFilesInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        refresh_if_requested(&self.service, input.refresh.unwrap_or(false)).await?;
+        refresh_if_requested(&*self.service, input.refresh.unwrap_or(false)).await?;
         let files = self
             .service
             .list_files(&input.id, input.version.as_deref(), input.digest.as_deref())
@@ -169,7 +172,7 @@ impl ToolFunction for CatalogListVersionsTool {
     type Input = CatalogListVersionsInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        refresh_if_requested(&self.service, input.refresh.unwrap_or(false)).await?;
+        refresh_if_requested(&*self.service, input.refresh.unwrap_or(false)).await?;
         let versions = self
             .service
             .list_versions(&input.id)
@@ -194,7 +197,7 @@ impl ToolFunction for CatalogRefreshTool {
     }
 }
 
-pub fn catalog_registrations(service: Arc<CatalogService>) -> Vec<ToolRegistration> {
+pub fn catalog_registrations(service: Arc<dyn CatalogServiceTrait>) -> Vec<ToolRegistration> {
     vec![
         ToolRegistration::from(CatalogSearchTool {
             service: Arc::clone(&service),
@@ -220,7 +223,7 @@ mod tests {
     };
     use vfs::{BackendConfig, BackendDefinition, MountDefinition, VfsManifest};
 
-    async fn test_service() -> CatalogService {
+    async fn test_service() -> S3CatalogService {
         let workspace = tempfile::tempdir().unwrap();
         let warehouse = tempfile::tempdir().unwrap();
         let input = workspace.path().join("input");
@@ -258,7 +261,7 @@ mod tests {
         publish_package(package.path, &config, &operator)
             .await
             .unwrap();
-        CatalogService::new(&manifest, &config).await.unwrap()
+        S3CatalogService::new(&manifest, &config).await.unwrap()
     }
 
     #[tokio::test]
