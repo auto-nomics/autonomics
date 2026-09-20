@@ -5361,6 +5361,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "ibm_hfp"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3669430a66a65694b30ebaa4efb35d894ffce6dc8d5bd6264dcc4fa41f0b045e"
+
+[[package]]
 name = "icu_collator"
 version = "2.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7166,6 +7172,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "nhanes"
+version = "0.1.0"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "async-trait",
+ "dag-core",
+ "datafusion",
+ "reqwest",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+]
+
+[[package]]
 name = "nix"
 version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7346,12 +7371,14 @@ dependencies = [
  "kegg",
  "libc",
  "mr",
+ "nhanes",
  "openalex",
  "opentargets",
  "parquet",
  "pubchem",
  "rcsb",
  "reactome",
+ "sas_xport",
  "schemars",
  "semantic-scholar",
  "serde",
@@ -10277,6 +10304,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "93fc1dc3aaa9bfed95e02e6eadabb4baf7e3078b0bd1b4d7b6b0b68378900502"
 dependencies = [
  "winapi-util",
+]
+
+[[package]]
+name = "sas_xport"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ec8f430d471d4e960f674350712ab5988ae38e417f0ccff74a27eff4e6946cd"
+dependencies = [
+ "encoding_rs",
+ "ibm_hfp",
 ]
 
 [[package]]
