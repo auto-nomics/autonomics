@@ -36,16 +36,17 @@ pub struct BuildOptions {
     pub force: bool,
 }
 
+/// Authoring spec stored as `package.json` inside a package directory.
 #[derive(Debug, Clone, Deserialize, Serialize)]
-struct PackageSpec {
-    schema_version: u8,
-    id: String,
-    version: String,
-    kind: String,
+pub struct PackageSpec {
+    pub schema_version: u8,
+    pub id: String,
+    pub version: String,
+    pub kind: String,
     #[serde(default)]
-    metadata: BTreeMap<String, String>,
+    pub metadata: BTreeMap<String, String>,
     #[serde(default)]
-    payload: serde_json::Map<String, serde_json::Value>,
+    pub payload: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Debug)]
@@ -75,8 +76,8 @@ pub fn build_package(
     }
     let output_parent = output
         .parent()
-        .ok_or_else(|| PackageError::Invalid("output has no parent".into()))?
-        .to_path_buf();
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .map_or_else(|| Path::new(".").to_path_buf(), Path::to_path_buf);
     fs::create_dir_all(&output_parent)?;
     let output_parent = output_parent.canonicalize()?;
     let output = output_parent.join(output.file_name().ok_or_else(|| {
