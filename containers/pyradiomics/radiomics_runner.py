@@ -1510,6 +1510,630 @@ def extract_batch() -> None:
     extract_rows(extractions, input_paths(0), input_paths(1))
 
 
+def require_same_geometry(reference: sitk.Image, other: sitk.Image, role: str) -> None:
+    if list(reference.GetSize()) != list(other.GetSize()) or not close(
+        reference.GetSpacing(), other.GetSpacing(), 0.01
+    ):
+        raise RuntimeError(f"{role} geometry does not match the reference image")
+
+
+def bias_correct() -> None:
+    """N4 inhomogeneity correction, mask-guided; the field is kept for QC."""
+    settings = json.loads(os.environ.get("RADIOMICS_BIAS_SETTINGS", "{}"))
+    image = read_single_image(input_paths(0)[0])
+    mask = read_single_image(input_paths(1)[0])
+    require_same_geometry(image, mask, "mask")
+
+    label = int(settings.get("mask_label", 1))
+    shrink = int(settings.get("shrink_factor", 4))
+    iterations = [int(value) for value in settings.get("max_iterations", [50, 50, 50, 50])]
+    if shrink < 1 or shrink > 8:
+        raise RuntimeError("shrink_factor must lie in [1, 8]")
+    if not iterations or len(iterations) > 8 or any(value < 1 for value in iterations):
+        raise RuntimeError("max_iterations must contain 1-8 positive levels")
+
+    binary_array = (sitk.GetArrayFromImage(mask) == label).astype(np.uint8)
+    if np.count_nonzero(binary_array) == 0:
+        raise RuntimeError(f"mask label {label} is empty")
+    binary = sitk.GetImageFromArray(binary_array)
+    binary.CopyInformation(mask)
+
+    image = sitk.Cast(image, sitk.sitkFloat32)
+    shrunk_image = sitk.Shrink(image, [shrink] * image.GetDimension())
+    shrunk_mask = sitk.Shrink(binary, [shrink] * image.GetDimension())
+    if np.count_nonzero(sitk.GetArrayFromImage(shrunk_mask)) == 0:
+        raise RuntimeError(
+            f"mask label {label} vanishes at shrink factor {shrink}; lower shrink_factor"
+        )
+
+    corrector = sitk.N4BiasFieldCorrectionImageFilter()
+    corrector.SetMaximumNumberOfIterations(iterations)
+    corrector.SetConvergenceThreshold(float(settings.get("convergence_threshold", 1e-6)))
+    corrector.SetNumberOfHistogramBins(int(settings.get("histogram_bins", 200)))
+    corrector.SetWienerFilterNoise(float(settings.get("wiener_noise", 0.01)))
+    corrector.Execute(shrunk_image, shrunk_mask)
+    # SimpleITK wraps ITK's GetLogBiasFieldAsImageHeadReference under a
+    # shorter name; the argument is the full-resolution reference grid.
+    log_bias = corrector.GetLogBiasFieldAsImage(image)
+    field = sitk.Exp(log_bias)
+    corrected = sitk.Divide(image, field)
+
+    sitk.WriteImage(sitk.Cast(corrected, sitk.sitkFloat32), str(output_dir(0)), True)
+    sitk.WriteImage(sitk.Cast(field, sitk.sitkFloat32), str(output_dir(1)), True)
+    field_array = sitk.GetArrayFromImage(field)
+    write_json(
+        2,
+        {
+            "settings": settings,
+            "corrected": image_metadata(corrected, input_paths(0)),
+            "bias_field_min": float(field_array.min()),
+            "bias_field_max": float(field_array.max()),
+            "bias_field_ratio": float(field_array.max() / field_array.min()),
+            "elapsed_iterations": corrector.GetElapsedIterations(),
+            "convergence_measurement": corrector.GetCurrentConvergenceMeasurement(),
+            "image_hash": sha256(input_paths(0)[0]),
+            "mask_hash": sha256(input_paths(1)[0]),
+        },
+    )
+
+
+def robust_normalize() -> None:
+    """Percentile-truncated robust z-score over a tissue mask, whole image."""
+    settings = json.loads(os.environ.get("RADIOMICS_NORMALIZE_SETTINGS", "{}"))
+    image = read_single_image(input_paths(0)[0])
+    mask = read_single_image(input_paths(1)[0])
+    require_same_geometry(image, mask, "mask")
+
+    label = int(settings.get("mask_label", 1))
+    lower_pct = float(settings.get("lower_percentile", 1.0))
+    upper_pct = float(settings.get("upper_percentile", 99.0))
+    if not (0.0 <= lower_pct < upper_pct <= 100.0):
+        raise RuntimeError("percentiles must satisfy 0 <= lower < upper <= 100")
+
+    image_array = sitk.GetArrayFromImage(image).astype(np.float64)
+    tissue = sitk.GetArrayFromImage(mask) == label
+    if np.count_nonzero(tissue) == 0:
+        raise RuntimeError(f"tissue mask label {label} is empty")
+    values = image_array[tissue]
+    low, high = (float(value) for value in np.percentile(values, [lower_pct, upper_pct]))
+    if high <= low:
+        raise RuntimeError("tissue intensity range is degenerate")
+    winsorized = np.clip(values, low, high)
+    mean = float(winsorized.mean())
+    std = float(winsorized.std())
+    if std == 0.0:
+        raise RuntimeError("tissue intensity is constant; cannot z-score")
+
+    normalized = sitk.GetImageFromArray(
+        ((np.clip(image_array, low, high) - mean) / std).astype(np.float32)
+    )
+    normalized.CopyInformation(image)
+    sitk.WriteImage(normalized, str(output_dir(0)), True)
+    write_json(
+        1,
+        {
+            "settings": settings,
+            "normalized": image_metadata(normalized, input_paths(0)),
+            "lower_bound": low,
+            "upper_bound": high,
+            "winsorized_mean": mean,
+            "winsorized_std": std,
+            "n_tissue_voxels": int(np.count_nonzero(tissue)),
+            "clipped_tissue_fraction": float(np.mean((values < low) | (values > high))),
+            "image_hash": sha256(input_paths(0)[0]),
+        },
+    )
+
+
+def physical_ball_footprint(spacing_xyz: Sequence[float], radius_mm: float) -> np.ndarray:
+    """Boolean ball in array space (z, y, x) covering a physical radius."""
+    spacing_zyx = [float(value) for value in reversed(spacing_xyz)]
+    radii = [max(1, int(math.ceil(radius_mm / value))) for value in spacing_zyx]
+    grids = np.ogrid[tuple(slice(-radius, radius + 1) for radius in radii)]
+    squared = sum((grid * value) ** 2 for grid, value in zip(grids, spacing_zyx))
+    footprint = squared <= radius_mm**2 + 1e-9
+    if not footprint.any():
+        raise RuntimeError(f"ball footprint for {radius_mm} mm is empty")
+    return footprint
+
+
+def peritumoral_ring() -> None:
+    """Ring band around the tumor at physical radii, minus an exclusion mask."""
+    settings = json.loads(os.environ.get("RADIOMICS_RING_SETTINGS", "{}"))
+    image = read_single_image(input_paths(0)[0])
+    mask = read_single_image(input_paths(1)[0])
+    exclusion = read_single_image(input_paths(2)[0])
+    require_same_geometry(image, mask, "mask")
+    require_same_geometry(image, exclusion, "exclusion mask")
+
+    label = int(settings.get("mask_label", 1))
+    inner_mm = float(settings.get("inner_mm", 0.0))
+    outer_mm = float(settings.get("outer_mm", 5.0))
+    if not (0.0 <= inner_mm < outer_mm) or outer_mm > 50.0:
+        raise RuntimeError("radii must satisfy 0 <= inner_mm < outer_mm <= 50")
+
+    spacing = image.GetSpacing()
+    voxel_volume = float(np.prod(spacing))
+    tumor = sitk.GetArrayFromImage(mask) == label
+    if np.count_nonzero(tumor) == 0:
+        raise RuntimeError(f"mask label {label} is empty")
+    excluded = sitk.GetArrayFromImage(exclusion) != 0
+
+    outer_shell = ndimage.binary_dilation(
+        tumor, structure=physical_ball_footprint(spacing, outer_mm)
+    )
+    core = (
+        ndimage.binary_dilation(tumor, structure=physical_ball_footprint(spacing, inner_mm))
+        if inner_mm > 0.0
+        else tumor
+    )
+    ring = outer_shell & ~core & ~tumor & ~excluded
+    ring_voxels = int(np.count_nonzero(ring))
+    if ring_voxels == 0:
+        raise RuntimeError(
+            "peritumoral ring is empty under the requested radii and exclusions"
+        )
+
+    def write_mask(array: np.ndarray, index: int) -> None:
+        written = sitk.GetImageFromArray(array.astype(np.uint8))
+        written.CopyInformation(image)
+        sitk.WriteImage(written, str(output_dir(index)), True)
+
+    write_mask(ring, 0)
+    labeled = np.where(tumor, 1, np.where(ring, 2, 0))
+    write_mask(labeled, 1)
+    write_mask(tumor | ring, 2)
+    write_json(
+        3,
+        {
+            "settings": settings,
+            "tumor_voxels": int(np.count_nonzero(tumor)),
+            "ring_voxels": ring_voxels,
+            "combined_voxels": int(np.count_nonzero(tumor | ring)),
+            "tumor_volume_mm3": float(np.count_nonzero(tumor) * voxel_volume),
+            "ring_volume_mm3": float(ring_voxels * voxel_volume),
+            "ring_voxels_removed_by_exclusion": int(
+                np.count_nonzero(outer_shell & ~core & ~tumor & excluded)
+            ),
+            "voxel_volume_mm3": voxel_volume,
+            "image_hash": sha256(input_paths(0)[0]),
+            "mask_hash": sha256(input_paths(1)[0]),
+            "exclusion_hash": sha256(input_paths(2)[0]),
+        },
+    )
+
+
+def kmeans_pp_init(data: np.ndarray, k: int, rng: np.random.Generator) -> np.ndarray:
+    centers = np.empty((k, data.shape[1]), dtype=np.float64)
+    centers[0] = data[rng.integers(data.shape[0])]
+    closest = ((data - centers[0]) ** 2).sum(axis=1)
+    for index in range(1, k):
+        total = float(closest.sum())
+        if total <= 0.0:
+            centers[index:] = data[rng.integers(data.shape[0], size=k - index)]
+            break
+        centers[index] = data[rng.choice(data.shape[0], p=closest / total)]
+        closest = np.minimum(closest, ((data - centers[index]) ** 2).sum(axis=1))
+    return centers
+
+
+def deterministic_kmeans(
+    data: np.ndarray,
+    k: int,
+    seed: int,
+    n_init: int,
+    max_iter: int,
+    tol: float,
+) -> tuple[np.ndarray, np.ndarray, float]:
+    """Plain Lloyd k-means with seeded k-means++ restarts; best inertia wins."""
+    rng = np.random.default_rng(seed)
+    best_centers = None
+    best_labels = None
+    best_inertia = math.inf
+    for _ in range(n_init):
+        centers = kmeans_pp_init(data, k, rng)
+        labels = np.zeros(data.shape[0], dtype=np.int64)
+        for _ in range(max_iter):
+            distances = ((data[:, None, :] - centers[None, :, :]) ** 2).sum(axis=2)
+            labels = distances.argmin(axis=1)
+            new_centers = centers.copy()
+            for cluster in range(k):
+                members = labels == cluster
+                if np.any(members):
+                    new_centers[cluster] = data[members].mean(axis=0)
+                else:
+                    # Re-seed an empty cluster on the worst-fit point.
+                    new_centers[cluster] = data[int(distances.min(axis=1).argmax())]
+            shift = float(np.abs(new_centers - centers).max())
+            centers = new_centers
+            if shift <= tol:
+                break
+        distances = ((data[:, None, :] - centers[None, :, :]) ** 2).sum(axis=2)
+        labels = distances.argmin(axis=1)
+        inertia = float(distances.min(axis=1).sum())
+        if inertia < best_inertia:
+            best_centers, best_labels, best_inertia = centers, labels, inertia
+    assert best_centers is not None and best_labels is not None
+    return best_centers, best_labels, best_inertia
+
+
+def read_channel_stack(
+    mask: sitk.Image, channel_paths: Sequence[Path], role: str
+) -> np.ndarray:
+    arrays = []
+    for path in channel_paths:
+        channel = read_single_image(path)
+        require_same_geometry(mask, channel, f"{role} channel `{path.name}`")
+        arrays.append(sitk.GetArrayFromImage(channel).astype(np.float64))
+    return np.stack(arrays, axis=-1)
+
+
+def habitat_fit() -> None:
+    """Fit common habitat centers on pooled, per-case standardized samples."""
+    settings = json.loads(os.environ.get("RADIOMICS_HABITAT_FIT_SETTINGS", "{}"))
+    manifest = pd.read_csv(input_paths(2)[0], dtype=str)
+    required = {"case_id", "mask", "channels"}
+    missing = sorted(required.difference(manifest.columns))
+    if missing:
+        raise RuntimeError(f"manifest is missing columns: {', '.join(missing)}")
+    rows = manifest.to_dict(orient="records")
+    if not rows:
+        raise RuntimeError("habitat manifest has no rows")
+
+    label = int(settings.get("mask_label", 1))
+    n_habitats = int(settings.get("n_habitats", 3))
+    sample_target = int(settings.get("sample_voxels_per_case", 10000))
+    seed = int(settings.get("seed", 0))
+    standardize = bool(settings.get("standardize", True))
+    n_init = int(settings.get("n_init", 8))
+    max_iter = int(settings.get("max_iter", 300))
+    if not 2 <= n_habitats <= 6:
+        raise RuntimeError("n_habitats must lie in [2, 6]")
+    if sample_target < 100:
+        raise RuntimeError("sample_voxels_per_case must be at least 100")
+    if not 1 <= n_init <= 50 or max_iter < 1:
+        raise RuntimeError("n_init must lie in [1, 50] and max_iter must be positive")
+
+    mask_files = {path.name: path for path in input_paths(0)}
+    channel_files = {path.name: path for path in input_paths(1)}
+    channel_names = [name.strip() for name in str(rows[0]["channels"]).split(";") if name.strip()]
+    if not channel_names:
+        raise RuntimeError("channels column must list at least one channel file name")
+
+    pooled: list[np.ndarray] = []
+    per_case: list[dict[str, Any]] = []
+    for case_index, row in enumerate(rows):
+        case_id = str(row["case_id"])
+        mask_name = str(row["mask"])
+        if mask_name not in mask_files:
+            raise RuntimeError(f"case `{case_id}` references unknown mask `{mask_name}`")
+        names = [name.strip() for name in str(row["channels"]).split(";") if name.strip()]
+        if names != channel_names:
+            raise RuntimeError(
+                f"case `{case_id}` channel list differs from the first case; "
+                "all cases must share one ordered channel list"
+            )
+        missing_channels = [name for name in channel_names if name not in channel_files]
+        if missing_channels:
+            raise RuntimeError(
+                f"case `{case_id}` is missing channel files: {', '.join(missing_channels)}"
+            )
+        mask = read_single_image(mask_files[mask_name])
+        stack = read_channel_stack(
+            mask, [channel_files[name] for name in channel_names], case_id
+        )
+        tumor = sitk.GetArrayFromImage(mask) == label
+        n_tumor = int(np.count_nonzero(tumor))
+        if n_tumor == 0:
+            raise RuntimeError(f"case `{case_id}` mask label {label} is empty")
+        values = stack[tumor]
+        case_rng = np.random.default_rng([seed, case_index])
+        if values.shape[0] > sample_target:
+            chosen = np.sort(case_rng.choice(values.shape[0], size=sample_target, replace=False))
+            values = values[chosen]
+        means = np.zeros(values.shape[1])
+        scales = np.ones(values.shape[1])
+        if standardize:
+            means = values.mean(axis=0)
+            scales = values.std(axis=0)
+            if np.any(scales == 0.0):
+                raise RuntimeError(
+                    f"case `{case_id}` has a constant channel; cannot standardize"
+                )
+            values = (values - means) / scales
+        pooled.append(values)
+        per_case.append(
+            {
+                "case_id": case_id,
+                "n_tumor_voxels": n_tumor,
+                "n_sampled": int(values.shape[0]),
+                "channel_means": means.tolist(),
+                "channel_stds": scales.tolist(),
+            }
+        )
+
+    data = np.concatenate(pooled, axis=0)
+    centers, _, inertia = deterministic_kmeans(
+        data, n_habitats, seed, n_init, max_iter, 1e-8
+    )
+    # Freeze label order by descending first-channel center so habitat k means
+    # the same thing across folds, cases, and the frozen model.
+    order = np.argsort(-centers[:, 0], kind="stable")
+    centers = centers[order]
+
+    write_json(
+        0,
+        {
+            "n_habitats": n_habitats,
+            "channel_names": channel_names,
+            "standardize": standardize,
+            "centers": centers.tolist(),
+            "relabel_rule": "descending_first_channel_center",
+            "inertia": inertia,
+            "seed": seed,
+            "n_init": n_init,
+            "max_iter": max_iter,
+            "sample_voxels_per_case": sample_target,
+            "n_cases": len(rows),
+            "n_pooled_voxels": int(data.shape[0]),
+            "per_case": per_case,
+            "mask_hashes": [sha256(mask_files[str(row["mask"])]) for row in rows],
+        },
+    )
+    sample_rows = []
+    offset = 0
+    for case in per_case:
+        n_sampled = case["n_sampled"]
+        counts = np.bincount(
+            np.argmax(
+                (
+                    (data[offset : offset + n_sampled, None, :] - centers[None, :, :]) ** 2
+                ).sum(axis=2),
+                axis=1,
+            ),
+            minlength=n_habitats,
+        )
+        for habitat in range(n_habitats):
+            sample_rows.append(
+                {
+                    "case_id": case["case_id"],
+                    "habitat": habitat + 1,
+                    "n_sampled_voxels": int(counts[habitat]),
+                }
+            )
+        offset += n_sampled
+    pd.DataFrame(sample_rows).to_parquet(output_dir(1), index=False)
+
+
+def habitat_interface_fraction(labels: np.ndarray) -> np.ndarray:
+    """Per-label fraction of voxels 6-adjacent to a different habitat label."""
+    different = np.zeros(labels.shape, dtype=bool)
+    for axis in range(labels.ndim):
+        for step in (-1, 1):
+            neighbor = np.zeros_like(labels)
+            target = [slice(None)] * labels.ndim
+            source = [slice(None)] * labels.ndim
+            if step == 1:
+                target[axis] = slice(0, -1)
+                source[axis] = slice(1, None)
+            else:
+                target[axis] = slice(1, None)
+                source[axis] = slice(0, -1)
+            neighbor[tuple(target)] = labels[tuple(source)]
+            different |= (neighbor != 0) & (neighbor != labels)
+    fractions = []
+    for habitat in range(1, int(labels.max()) + 1):
+        members = labels == habitat
+        n_members = int(np.count_nonzero(members))
+        fractions.append(
+            float(np.count_nonzero(members & different) / n_members) if n_members else 0.0
+        )
+    return np.asarray(fractions)
+
+
+def habitat_assign() -> None:
+    """Assign tumor voxels to frozen habitat centers; emit mask + features."""
+    settings = json.loads(os.environ.get("RADIOMICS_HABITAT_ASSIGN_SETTINGS", "{}"))
+    label = int(settings.get("mask_label", 1))
+    mask = read_single_image(input_paths(0)[0])
+    model = json.loads(input_paths(2)[0].read_text())
+    channel_names = [str(name) for name in model["channel_names"]]
+    centers = np.asarray(model["centers"], dtype=np.float64)
+    n_habitats = centers.shape[0]
+
+    channel_files = {path.name: path for path in input_paths(1)}
+    missing = [name for name in channel_names if name not in channel_files]
+    if missing:
+        raise RuntimeError(f"channel files missing for assignment: {', '.join(missing)}")
+    stack = read_channel_stack(
+        mask, [channel_files[name] for name in channel_names], "assignment"
+    )
+    tumor = sitk.GetArrayFromImage(mask) == label
+    n_tumor = int(np.count_nonzero(tumor))
+    if n_tumor == 0:
+        raise RuntimeError(f"mask label {label} is empty")
+
+    values = stack[tumor]
+    means = np.zeros(values.shape[1])
+    scales = np.ones(values.shape[1])
+    if bool(model.get("standardize", True)):
+        means = values.mean(axis=0)
+        scales = values.std(axis=0)
+        if np.any(scales == 0.0):
+            raise RuntimeError("assignment case has a constant channel; cannot standardize")
+        values = (values - means) / scales
+    assignments = ((values[:, None, :] - centers[None, :, :]) ** 2).sum(axis=2).argmin(axis=1)
+
+    label_volume = np.zeros(stack.shape[:3], dtype=np.uint8)
+    label_volume[tumor] = (assignments + 1).astype(np.uint8)
+    habitat_mask = sitk.GetImageFromArray(label_volume)
+    habitat_mask.CopyInformation(mask)
+    sitk.WriteImage(habitat_mask, str(output_dir(0)), True)
+
+    spacing_zyx = np.asarray(list(reversed(mask.GetSpacing())), dtype=np.float64)
+    voxel_volume = float(np.prod(spacing_zyx))
+    interface = habitat_interface_fraction(label_volume)
+    rows = []
+    coordinates = np.array(np.nonzero(tumor), dtype=np.float64).T * spacing_zyx
+    for habitat in range(n_habitats):
+        members = assignments == habitat
+        n_members = int(np.count_nonzero(members))
+        member_coordinates = coordinates[members]
+        dispersion = (
+            float(np.linalg.norm(member_coordinates - member_coordinates.mean(axis=0), axis=1).mean())
+            if n_members
+            else 0.0
+        )
+        raw = stack[tumor][members]
+        row = {
+            "habitat": habitat + 1,
+            "n_voxels": n_members,
+            "volume_mm3": float(n_members * voxel_volume),
+            "volume_fraction": float(n_members / n_tumor),
+            "dispersion_mm": dispersion,
+            "interface_fraction": float(interface[habitat]),
+        }
+        for channel_index, name in enumerate(channel_names):
+            suffix = name.rsplit(".", 1)[0]
+            row[f"mean_{suffix}"] = float(raw[:, channel_index].mean()) if n_members else 0.0
+            row[f"std_{suffix}"] = float(raw[:, channel_index].std()) if n_members else 0.0
+        rows.append(row)
+    pd.DataFrame(rows).to_parquet(output_dir(1), index=False)
+    write_json(
+        2,
+        {
+            "settings": settings,
+            "n_habitats": int(n_habitats),
+            "channel_names": channel_names,
+            "channel_means": means.tolist(),
+            "channel_stds": scales.tolist(),
+            "n_tumor_voxels": n_tumor,
+            "tumor_volume_mm3": float(n_tumor * voxel_volume),
+            "mask_hash": sha256(input_paths(0)[0]),
+            "model_hash": sha256(input_paths(2)[0]),
+        },
+    )
+
+
+PERTURBATION_AXES = {"translate_x": 2, "translate_y": 1, "translate_z": 0}
+
+
+def perturb_stability() -> None:
+    """Re-extract features under controlled mask/image perturbations."""
+    extraction = json.loads(os.environ.get("RADIOMICS_EXTRACTION", "{}"))
+    settings = json.loads(os.environ.get("RADIOMICS_PERTURB_SETTINGS", "{}"))
+    required = ["extraction_id", "patient_id", "image_id", "roi_id", "modality", "preset_id"]
+    missing = [key for key in required if not extraction.get(key)]
+    if missing:
+        raise RuntimeError(f"missing extraction metadata: {', '.join(missing)}")
+
+    allowed = ["dilate1", "erode1", *PERTURBATION_AXES, "noise"]
+    perturbations = [
+        str(value) for value in settings.get(
+            "perturbations", ["dilate1", "erode1", "translate_x", "translate_y", "translate_z", "noise"]
+        )
+    ]
+    unknown = [value for value in perturbations if value not in allowed]
+    if unknown:
+        raise RuntimeError(
+            f"unsupported perturbations: {', '.join(unknown)}; expected one of {allowed}"
+        )
+    if len(set(perturbations)) != len(perturbations):
+        raise RuntimeError("perturbations must be unique")
+    sigma_pct = float(settings.get("noise_sigma_pct", 2.0))
+    seed = int(settings.get("seed", 0))
+    if not (sigma_pct > 0.0):
+        raise RuntimeError("noise_sigma_pct must be positive")
+
+    image = read_single_image(input_paths(0)[0])
+    mask = read_single_image(input_paths(1)[0])
+    require_same_geometry(image, mask, "mask")
+    label = int(extraction_settings().get("mask_label", 1))
+    mask_array = sitk.GetArrayFromImage(mask) == label
+    if np.count_nonzero(mask_array) == 0:
+        raise RuntimeError(f"mask label {label} is empty")
+    image_array = sitk.GetArrayFromImage(image).astype(np.float64)
+    roi_values = image_array[mask_array]
+    roi_std = float(roi_values.std())
+    if roi_std == 0.0:
+        raise RuntimeError("ROI intensity is constant; noise perturbation is undefined")
+    sigma = sigma_pct / 100.0 * roi_std
+    rng = np.random.default_rng(seed)
+    noise = rng.normal(0.0, sigma, image_array.shape)
+
+    def as_image(array: np.ndarray, reference: sitk.Image) -> sitk.Image:
+        written = sitk.GetImageFromArray(array)
+        written.CopyInformation(reference)
+        return written
+
+    replicates: list[tuple[str, sitk.Image, sitk.Image]] = [
+        ("original", image, as_image(mask_array.astype(np.uint8), mask))
+    ]
+    structure = ndimage.generate_binary_structure(3, 1)
+    if "dilate1" in perturbations:
+        replicates.append(
+            ("dilate1", image, as_image(ndimage.binary_dilation(mask_array, structure).astype(np.uint8), mask))
+        )
+    if "erode1" in perturbations:
+        eroded = ndimage.binary_erosion(mask_array, structure)
+        if np.count_nonzero(eroded) == 0:
+            raise RuntimeError("erode1 emptied the mask; ROI is too small to perturb")
+        replicates.append(("erode1", image, as_image(eroded.astype(np.uint8), mask)))
+    for name in ("translate_x", "translate_y", "translate_z"):
+        if name not in perturbations:
+            continue
+        shift = [0.0, 0.0, 0.0]
+        shift[PERTURBATION_AXES[name]] = 1.0
+        shifted = ndimage.shift(mask_array.astype(np.uint8), shift, order=0, mode="constant", cval=0)
+        if np.count_nonzero(shifted) == 0:
+            raise RuntimeError(f"{name} emptied the mask")
+        replicates.append((name, image, as_image(shifted, mask)))
+    if "noise" in perturbations:
+        noisy = as_image((image_array + noise).astype(np.float32), image)
+        replicates.append(("noise", noisy, as_image(mask_array.astype(np.uint8), mask)))
+
+    extractor = make_extractor()
+    wide_rows: list[dict[str, Any]] = []
+    long_rows: list[dict[str, Any]] = []
+    metadata_rows: list[dict[str, Any]] = []
+    replicate_meta: list[dict[str, Any]] = []
+    original_voxels = int(np.count_nonzero(mask_array))
+    for replicate_id, (name, replicate_image, replicate_mask) in enumerate(replicates):
+        replicate_mask_array = sitk.GetArrayFromImage(replicate_mask) != 0
+        n_voxels = int(np.count_nonzero(replicate_mask_array))
+        row_extraction = {**extraction, "replicate_id": replicate_id, "perturbation": name}
+        result = extractor.execute(replicate_image, replicate_mask)
+        wide, longs, metadata = result_rows(row_extraction, dict(result))
+        if not longs:
+            raise RuntimeError(f"PyRadiomics returned no features for perturbation `{name}`")
+        wide_rows.append(wide)
+        long_rows.extend(longs)
+        metadata_rows.extend(metadata)
+        replicate_meta.append(
+            {
+                "replicate_id": replicate_id,
+                "perturbation": name,
+                "mask_voxels": n_voxels,
+                "voxel_delta_vs_original": n_voxels - original_voxels,
+            }
+        )
+
+    pd.DataFrame(wide_rows).to_parquet(output_dir(0), index=False)
+    pd.DataFrame(long_rows).to_parquet(output_dir(1), index=False)
+    write_json(
+        2,
+        {
+            "settings": settings,
+            "extraction": extraction,
+            "replicates": replicate_meta,
+            "roi_std": roi_std,
+            "noise_sigma": sigma,
+            "image_hash": sha256(input_paths(0)[0]),
+            "mask_hash": sha256(input_paths(1)[0]),
+        },
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("command", choices=[
@@ -1528,6 +2152,12 @@ def main() -> int:
         "shape-topology",
         "register",
         "delta-features",
+        "bias-correct",
+        "normalize",
+        "peritumoral-ring",
+        "habitat-fit",
+        "habitat-assign",
+        "perturb-stability",
     ])
     args = parser.parse_args()
     commands = {
@@ -1546,6 +2176,12 @@ def main() -> int:
         "shape-topology": shape_topology,
         "register": register_images,
         "delta-features": delta_features,
+        "bias-correct": bias_correct,
+        "normalize": robust_normalize,
+        "peritumoral-ring": peritumoral_ring,
+        "habitat-fit": habitat_fit,
+        "habitat-assign": habitat_assign,
+        "perturb-stability": perturb_stability,
     }
     commands[args.command]()
     return 0

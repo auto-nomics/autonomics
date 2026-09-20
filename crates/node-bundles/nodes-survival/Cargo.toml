@@ -9,9 +9,11 @@ description = "Survival analysis DAG node bundle (Fine-Gray, cuminc, KM)."
 [dependencies]
 dag-core = { path = "../../dag-core" }
 cmprsk = { path = "../../../stat_crates/cmprsk" }
+crrkit = { path = "../../../stat_crates/crrkit" }
 epi = { path = "../../../stat_crates/epi" }
 arrow-array.workspace = true
 arrow-schema.workspace = true
+arrow-select.workspace = true
 async-trait.workspace = true
 schemars.workspace = true
 serde = { workspace = true, features = ["derive"] }

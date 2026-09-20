@@ -12,8 +12,10 @@
 
 mod cox;
 mod logistic;
+mod negbin;
 mod ols;
 
 pub use cox::{CoxResult, cox};
 pub use logistic::{LogisticResult, logistic};
+pub use negbin::{NegbinOptions, NegbinResult, negbin};
 pub use ols::{Regression, ols, wls};

@@ -21,7 +21,9 @@ use crate::connection::{
     PodmanConnection, request_user_ids, truncate_captured_bytes, validate_run_request,
 };
 use crate::error::ContainerRuntimeError;
-use crate::types::{ContainerNetwork, ContainerRunRequest, ContainerRunResult, PullPolicy};
+use crate::types::{
+    ContainerNetwork, ContainerRunRequest, ContainerRunResult, GpuRequest, PullPolicy,
+};
 
 const CLEANUP_TIMEOUT_SECS: u64 = 30;
 
@@ -328,6 +330,10 @@ pub(crate) fn build_create_args(
         args.push("--pids-limit".into());
         args.push(pids_limit.to_string());
     }
+    if let Some(gpus) = request.gpus.podman_value() {
+        args.push("--gpus".into());
+        args.push(gpus);
+    }
     for (name, value) in &request.env {
         args.push("--env".into());
         args.push(format!("{name}={value}"));
@@ -485,6 +491,7 @@ mod tests {
             memory: Some("1Gi".into()),
             pids_limit: Some(512),
             shm_size: Some("64Mi".into()),
+            gpus: GpuRequest::None,
             user: Some("1000:1000".into()),
             timeout_secs: 60,
             name: "podman-test".into(),
@@ -568,6 +575,31 @@ mod tests {
             .map(|args| args[1].clone())
             .unwrap();
         assert_eq!(egress_network, "default");
+    }
+
+    #[test]
+    fn gpu_requests_add_gpus_flag_only_when_present() {
+        let without = build_create_args(&request(ContainerNetwork::Isolated)).unwrap();
+        assert!(!without.iter().any(|arg| arg == "--gpus"));
+
+        let mut with = request(ContainerNetwork::Isolated);
+        with.gpus = GpuRequest::All;
+        let args = build_create_args(&with).unwrap();
+        let flag = args
+            .windows(2)
+            .find(|args| args[0] == "--gpus")
+            .map(|args| args[1].clone())
+            .unwrap();
+        assert_eq!(flag, "all");
+
+        with.gpus = GpuRequest::Devices("0,2".into());
+        let args = build_create_args(&with).unwrap();
+        let flag = args
+            .windows(2)
+            .find(|args| args[0] == "--gpus")
+            .map(|args| args[1].clone())
+            .unwrap();
+        assert_eq!(flag, "device=0,2");
     }
 
     #[test]
@@ -662,6 +694,7 @@ mod tests {
             memory: None,
             pids_limit: None,
             shm_size: None,
+            gpus: GpuRequest::None,
             user: None,
             timeout_secs: 120,
             name: unique_container_name(),

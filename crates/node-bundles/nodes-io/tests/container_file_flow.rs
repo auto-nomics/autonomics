@@ -248,6 +248,7 @@ fn container_spec(image: &str, workspace: &Path, artifact_prefix: String) -> Con
         memory: None,
         pids_limit: None,
         shm_size: None,
+        gpus: None,
         user: None,
     }
 }

@@ -102,6 +102,14 @@ pub fn td_auc(risk_scores: &[f64], times: &[f64], events: &[usize], t: f64) -> f
 // Brier score
 // ═══════════════════════════════════════════════════════════════════════
 
+/// IPCW Brier score under a **single-event** (no competing risks) view:
+/// every non-event observation — censored or otherwise — is pooled as
+/// "event-free", which biases the score whenever competing events exist.
+///
+/// For competing-risks data (e.g. the chordoma SAP's cause-specific local
+/// recurrence under death as a competing risk) use the cause-specific IPCW
+/// Brier score of Graf/Hoop/Keiding in the Schoop et al. 2011 formulation
+/// instead: `crrkit::brier::ipcw_brier` in the `crrkit` crate.
 pub fn brier_score(predicted_probs: &[f64], times: &[f64], events: &[usize], t: f64) -> f64 {
     let n = times.len();
     let g_t = km_censoring(times, events, t);

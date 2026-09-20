@@ -2349,6 +2349,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "crrkit"
+version = "0.1.0"
+dependencies = [
+ "rand 0.9.5",
+ "rand_chacha 0.9.0",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "crunchy"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7595,8 +7607,10 @@ version = "0.1.0"
 dependencies = [
  "arrow-array",
  "arrow-schema",
+ "arrow-select",
  "async-trait",
  "cmprsk",
+ "crrkit",
  "dag-core",
  "epi",
  "schemars",
