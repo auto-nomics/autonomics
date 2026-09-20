@@ -1,35 +1,17 @@
-use std::sync::Arc;
-
-use vfs::{
-    BackendDefinition, MountDefinition, MountedObjectStore, OpendalFileStorage, VfsManifest,
-};
+use vfs::{BackendDefinition, VfsManifest};
 
 use crate::error::Result;
 
+/// Build a raw object-store operator from a `vfs.toml` backend definition.
+///
+/// The catalog borrows the `[[backend]]` table for credentials and endpoints;
+/// no VFS mounts or path mappings are constructed.
 pub fn operator_for_backend(manifest: &VfsManifest, backend_id: &str) -> Result<opendal::Operator> {
-    let backend = manifest
-        .backend
-        .iter()
-        .find(|backend| backend.id == backend_id)
-        .cloned()
-        .ok_or_else(|| format!("catalog backend `{backend_id}` is not defined"))?;
-    let bootstrap = VfsManifest {
-        backend: vec![backend],
-        mount: vec![MountDefinition {
-            path: "/".into(),
-            backend: backend_id.into(),
-            source: "/".into(),
-            read_only: true,
-        }],
-    };
-    let mounted =
-        Arc::new(MountedObjectStore::from_manifest(&bootstrap).map_err(|error| error.to_string())?);
-    let scratch = std::env::temp_dir().join(format!(
-        "autonomics-catalog-bootstrap-{}",
-        std::process::id()
-    ));
-    let storage = OpendalFileStorage::with_mounts(&scratch, mounted);
-    Ok(storage.resolve("/"))
+    let backend = backend_definition(manifest, backend_id)?;
+    Ok(backend
+        .config
+        .build()
+        .map_err(|error| format!("build catalog backend `{backend_id}`: {error}"))?)
 }
 
 pub async fn read_json_object<T: serde::de::DeserializeOwned>(

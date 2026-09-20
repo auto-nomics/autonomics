@@ -5,7 +5,7 @@ use vfs::MountDefinition;
 
 use crate::error::Result;
 use crate::model::{CatalogEntry, CatalogIndex, DatasetManifest, hex};
-use crate::remote::{RemoteCatalog, validate_entry_manifest};
+use crate::remote::{ObjectSource, RemoteCatalog, validate_entry_manifest};
 
 const DOWNLOAD_CHUNK_BYTES: u64 = 4 * 1024 * 1024;
 
@@ -194,7 +194,7 @@ impl LocalCatalog {
                     format!("create staging directory `{}`: {error}", parent.display())
                 })?;
             }
-            download_and_verify(remote.operator(), &key, &target, file.size, &file.sha256).await?;
+            download_and_verify(remote.source(), &key, &target, file.size, &file.sha256).await?;
         }
         let manifest_bytes = serde_json::to_vec_pretty(manifest)
             .map_err(|error| format!("encode local manifest: {error}"))?;
@@ -259,7 +259,7 @@ impl LocalCatalog {
 }
 
 async fn download_and_verify(
-    operator: &opendal::Operator,
+    source: &dyn ObjectSource,
     key: &str,
     target: &Path,
     expected_size: u64,
@@ -270,19 +270,11 @@ async fn download_and_verify(
     let mut file = tokio::fs::File::create(target)
         .await
         .map_err(|error| format!("create cached file `{}`: {error}", target.display()))?;
-    let reader = operator
-        .reader(key)
-        .await
-        .map_err(|error| format!("open object `{key}`: {error}"))?;
     let mut hasher = Sha256::new();
     let mut offset = 0_u64;
     while offset < expected_size {
         let end = (offset + DOWNLOAD_CHUNK_BYTES).min(expected_size);
-        let chunk = reader
-            .read(offset..end)
-            .await
-            .map_err(|error| format!("read object `{key}` at {offset}: {error}"))?;
-        let chunk = chunk.to_vec();
+        let chunk = source.read_range(key, offset, end - offset).await?;
         let chunk_len = chunk.len() as u64;
         if chunk_len == 0 {
             return Err(format!(
