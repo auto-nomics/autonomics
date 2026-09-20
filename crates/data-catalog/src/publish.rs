@@ -15,20 +15,7 @@ pub async fn publish_package(
 ) -> Result<CatalogEntry> {
     config.validate()?;
     let manifest = validate_package(package.as_ref()).map_err(|error| error.to_string())?;
-    let entry = CatalogEntry {
-        id: manifest.id.clone(),
-        version: manifest.version.clone(),
-        kind: manifest.kind.clone(),
-        digest: manifest
-            .digest
-            .clone()
-            .expect("validated manifests have a digest"),
-        current: true,
-        created_unix_seconds: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_secs() as i64)
-            .unwrap_or_default(),
-    };
+    let entry = build_entry(&manifest);
     let manifest_key = config.object_key(&entry.manifest_key());
     let files_prefix = entry.payload_prefix();
 
@@ -41,7 +28,7 @@ pub async fn publish_package(
     .await?;
 
     let index_key = config.object_key(&config.index);
-    let mut index = match operator.stat(&index_key).await {
+    let index = match operator.stat(&index_key).await {
         Ok(_) => read_json_object::<CatalogIndex>(operator, &index_key).await?,
         Err(error) if error.kind() == opendal::ErrorKind::NotFound => CatalogIndex::default(),
         Err(error) => return Err(format!("stat catalog index `{index_key}`: {error}").into()),
@@ -49,10 +36,32 @@ pub async fn publish_package(
     index
         .validate()
         .map_err(|error| format!("invalid existing catalog index: {error}"))?;
-    index.upsert_current(entry.clone());
-    index.validate()?;
+    let index = upsert_entry(index, &entry)?;
     write_json_object(operator, &index_key, &index).await?;
     Ok(entry)
+}
+
+pub(crate) fn build_entry(manifest: &DatasetManifest) -> CatalogEntry {
+    CatalogEntry {
+        id: manifest.id.clone(),
+        version: manifest.version.clone(),
+        kind: manifest.kind.clone(),
+        digest: manifest
+            .digest
+            .clone()
+            .expect("validated manifests have a digest"),
+        current: true,
+        created_unix_seconds: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_secs() as i64)
+            .unwrap_or_default(),
+    }
+}
+
+pub(crate) fn upsert_entry(mut index: CatalogIndex, entry: &CatalogEntry) -> Result<CatalogIndex> {
+    index.upsert_current(entry.clone());
+    index.validate()?;
+    Ok(index)
 }
 
 async fn upload_payload_files(
