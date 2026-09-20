@@ -27,7 +27,7 @@ use agentik_sdk::model::Model;
 use agentik_sdk::types::{AgentEvent, ContentBlock};
 use arc_swap::ArcSwapOption;
 use container_runtime::ContainerExecutionInfra;
-use container_runtime::{PanelGcPolicy, WorkspaceGcPolicy, sweep_panels, sweep_workspace};
+use container_runtime::{WorkspaceGcPolicy, sweep_workspace};
 use dag_core::{BundleRegistry, DataBundle};
 use data_catalog::{CatalogConfig, LocalCatalog, RemoteCatalog};
 use data_engine::dag::DagHistory;
@@ -54,17 +54,11 @@ use crate::memory_kms::KmsMemoryGrounding;
 /// (`AUTONOMICS_WORKSPACE_GC_INTERVAL_SECS`, `0` disables the loop).
 ///
 /// The sweeper never removes a directory a live run holds a lock on, a
-/// scratch owned by a live process younger than the GC age, user-declared
-/// workdirs, or panel entries beyond the configured byte budget
-/// (`AUTONOMICS_PANEL_CACHE_MAX_BYTES`, unset keeps panels forever).
+/// scratch owned by a live process younger than the GC age, or user-declared
+/// workdirs. The panel data cache is not managed here.
 fn spawn_container_gc(infra: &Arc<ContainerExecutionInfra>) {
     let config = infra.config.clone();
     let workspace_policy = WorkspaceGcPolicy {
-        min_age: container_runtime::workspace_gc_age(),
-        dry_run: false,
-    };
-    let panel_policy = PanelGcPolicy {
-        max_bytes: container_runtime::panel_cache_max_bytes(),
         min_age: container_runtime::workspace_gc_age(),
         dry_run: false,
     };
@@ -83,19 +77,6 @@ fn spawn_container_gc(infra: &Arc<ContainerExecutionInfra>) {
                 foreign = workspace.foreign_entries,
                 pending_cleared = workspace.pending_cleared,
                 "container workspace GC"
-            );
-            let panels = sweep_panels(&config.panel_cache_root, &panel_policy).await;
-            if !panels.errors.is_empty() {
-                tracing::warn!(errors = ?panels.errors, "panel cache GC errors");
-            }
-            tracing::info!(
-                entries = panels.entries,
-                bytes_total = panels.bytes_total,
-                removed = panels.removed,
-                bytes_freed = panels.bytes_freed,
-                in_use = panels.retained_in_use,
-                recent = panels.retained_recent,
-                "panel cache GC"
             );
             let Some(interval) = interval else {
                 break;

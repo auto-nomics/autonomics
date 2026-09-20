@@ -8,8 +8,7 @@ use crate::model::{CatalogEntry, CatalogIndex, DatasetManifest, hex};
 use crate::remote::{ObjectSource, RemoteCatalog, validate_entry_manifest};
 
 const DOWNLOAD_CHUNK_BYTES: u64 = 4 * 1024 * 1024;
-/// Matches container-runtime's panel cache so sweep_panels can manage
-/// installed packages as cache entries.
+/// Matches container-runtime's panel cache entry convention.
 pub const PANEL_CACHE_COMPLETE_MARKER: &str = ".autonomics-panel-complete";
 
 /// Local cache of selected catalog packages.
@@ -21,8 +20,7 @@ pub const PANEL_CACHE_COMPLETE_MARKER: &str = ".autonomics-panel-complete";
 /// Installing a package verifies every file checksum before the entry becomes
 /// visible in the local index. Runtime VFS mounts are generated from this
 /// cache; the remote catalog is never mounted directly. Entry directories use
-/// the panel cache convention so `sweep_panels` can account for and evict
-/// them under its byte budget.
+/// the panel cache convention, including completion markers and in-use locks.
 pub struct LocalCatalog {
     root: PathBuf,
 }
