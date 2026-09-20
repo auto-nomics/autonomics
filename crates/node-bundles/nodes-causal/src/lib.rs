@@ -3,6 +3,9 @@
 pub mod causal;
 pub mod cmest;
 pub mod mediation;
+pub mod mediation_moderated;
+pub mod mediation_serial;
+pub mod mediation_weighted;
 
 use dag_core::{NodePlugin, NodeRegistry};
 
@@ -13,6 +16,9 @@ impl NodePlugin for Plugin {
     }
     fn register(&self, registry: &mut NodeRegistry) {
         registry.register(Box::new(mediation::MediationNodeFactory {}));
+        registry.register(Box::new(mediation_weighted::MediationWeightedNodeFactory {}));
+        registry.register(Box::new(mediation_serial::MediationSerialNodeFactory {}));
+        registry.register(Box::new(mediation_moderated::MediationModeratedNodeFactory {}));
         registry.register(Box::new(causal::CausalNodeFactory {}));
         registry.register(Box::new(cmest::CmestNodeFactory {}));
         registry.register(Box::new(cmest::CmestMultiNodeFactory {}));
