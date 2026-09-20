@@ -5,7 +5,7 @@
 use serde_json::Value;
 use std::fs;
 
-use statkit::regression::{rlm, PsiFunction, RlmOptions};
+use statkit::regression::{PsiFunction, RlmOptions, rlm};
 
 const TOL: f64 = 1e-4;
 
@@ -118,5 +118,10 @@ fn xval_rlm_vs_mass() {
     let ref_val = load_reference();
 
     check_family(&data, &ref_val["huber"], PsiFunction::Huber, "Huber");
-    check_family(&data, &ref_val["tukey"], PsiFunction::TukeyBisquare, "Tukey");
+    check_family(
+        &data,
+        &ref_val["tukey"],
+        PsiFunction::TukeyBisquare,
+        "Tukey",
+    );
 }

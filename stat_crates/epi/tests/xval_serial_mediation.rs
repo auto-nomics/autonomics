@@ -58,7 +58,9 @@ fn load_reference() -> Value {
         env!("CARGO_MANIFEST_DIR"),
         "/tests/xval/serial_mediation_reference.json"
     ))
-    .expect("serial_mediation_reference.json not found — run gen_serial_mediation_reference.R first");
+    .expect(
+        "serial_mediation_reference.json not found — run gen_serial_mediation_reference.R first",
+    );
     serde_json::from_str(&json).expect("invalid JSON")
 }
 
@@ -105,6 +107,8 @@ fn xval_serial_mediation_vs_r() {
     }
 
     println!("✅ serial mediation: 14 point estimates match R lm(weights=) decomposition");
-    println!("  ie_serial = {:.4}, total_indirect = {:.4}, te = {:.4}",
-             r.ie_serial, r.total_indirect, r.te);
+    println!(
+        "  ie_serial = {:.4}, total_indirect = {:.4}, te = {:.4}",
+        r.ie_serial, r.total_indirect, r.te
+    );
 }

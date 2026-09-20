@@ -58,7 +58,9 @@ pub fn icc_2_1(rows: &[&[f64]]) -> Result<IccResult> {
 pub fn icc_2_1_level(rows: &[&[f64]], alpha: f64) -> Result<IccResult> {
     let n = rows.len();
     if n == 0 {
-        return Err(StatError::InvalidInput("ratings must be non-empty".to_string()));
+        return Err(StatError::InvalidInput(
+            "ratings must be non-empty".to_string(),
+        ));
     }
     let k = rows[0].len();
     if rows.iter().any(|r| r.len() != k) {
@@ -104,9 +106,16 @@ pub fn icc_2_1_level(rows: &[&[f64]], alpha: f64) -> Result<IccResult> {
     }
     grand /= (n * k) as f64;
 
-    let ss_subjects: f64 = (0..n).map(|i| k as f64 * (row_mean[i] - grand).powi(2)).sum();
-    let ss_raters: f64 = (0..k).map(|j| n as f64 * (col_mean[j] - grand).powi(2)).sum();
-    let ss_total: f64 = rows.iter().flat_map(|r| r.iter().map(|&x| (x - grand).powi(2))).sum();
+    let ss_subjects: f64 = (0..n)
+        .map(|i| k as f64 * (row_mean[i] - grand).powi(2))
+        .sum();
+    let ss_raters: f64 = (0..k)
+        .map(|j| n as f64 * (col_mean[j] - grand).powi(2))
+        .sum();
+    let ss_total: f64 = rows
+        .iter()
+        .flat_map(|r| r.iter().map(|&x| (x - grand).powi(2)))
+        .sum();
     let ss_error = ss_total - ss_subjects - ss_raters;
 
     let msr = ss_subjects / (n - 1) as f64;

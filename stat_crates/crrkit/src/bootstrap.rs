@@ -256,8 +256,26 @@ mod tests {
             seed: 42,
             alpha: 0.05,
         };
-        let r1 = paired_brier_delta_bootstrap(&times, &status, &pa, &pb, 1095.75, &BrierOptions::default(), &o).unwrap();
-        let r2 = paired_brier_delta_bootstrap(&times, &status, &pa, &pb, 1095.75, &BrierOptions::default(), &o).unwrap();
+        let r1 = paired_brier_delta_bootstrap(
+            &times,
+            &status,
+            &pa,
+            &pb,
+            1095.75,
+            &BrierOptions::default(),
+            &o,
+        )
+        .unwrap();
+        let r2 = paired_brier_delta_bootstrap(
+            &times,
+            &status,
+            &pa,
+            &pb,
+            1095.75,
+            &BrierOptions::default(),
+            &o,
+        )
+        .unwrap();
         assert_eq!(r1.ci_percentile, r2.ci_percentile);
     }
 

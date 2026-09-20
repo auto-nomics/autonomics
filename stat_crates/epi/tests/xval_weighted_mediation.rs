@@ -96,10 +96,16 @@ fn check(d: &MedData, ref_case: &Value, interaction: bool) {
         );
     }
 
-    let label = if interaction { "interaction" } else { "no_interaction" };
+    let label = if interaction {
+        "interaction"
+    } else {
+        "no_interaction"
+    };
     println!("✅ {label}: 10 point estimates match R lm(weights=) decomposition");
-    println!("  nie = {:.4}, te = {:.4}, prop_mediated = {:.4}",
-             r.nie, r.te, r.prop_mediated);
+    println!(
+        "  nie = {:.4}, te = {:.4}, prop_mediated = {:.4}",
+        r.nie, r.te, r.prop_mediated
+    );
 }
 
 #[test]

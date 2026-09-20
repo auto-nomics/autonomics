@@ -305,12 +305,12 @@ mod tests {
         let x: Vec<f64> = (0..n).map(|i| ((i % 5) / 3) as f64).collect();
         let c1: Vec<f64> = (0..n).map(|i| 55.0 + (i as f64 % 17.0)).collect();
         let c2: Vec<f64> = (0..n).map(|i| ((i % 4) / 2) as f64).collect();
-        let w: Vec<f64> = (0..n)
-            .map(|i| 5000.0 + 250.0 * (i as f64 % 11.0))
-            .collect();
+        let w: Vec<f64> = (0..n).map(|i| 5000.0 + 250.0 * (i as f64 % 11.0)).collect();
         let m: Vec<f64> = (0..n)
             .map(|i| {
-                2.0 + 0.8 * x[i] + 0.05 * c1[i] + 0.3 * c2[i]
+                2.0 + 0.8 * x[i]
+                    + 0.05 * c1[i]
+                    + 0.3 * c2[i]
                     + 1.2 * ((i as f64 * 7.0) % 13.0 - 6.0) / 6.0
             })
             .collect();
@@ -328,8 +328,7 @@ mod tests {
             n_bootstrap: 0,
             ..Default::default()
         };
-        let r =
-            mediation_weighted(&x, &m, &y, &[&c1, &c2], &design, &opts).unwrap();
+        let r = mediation_weighted(&x, &m, &y, &[&c1, &c2], &design, &opts).unwrap();
         assert!(approx_eq(r.nie, 0.72, 0.05), "nie {}", r.nie);
         assert!(approx_eq(r.nde, 0.4, 0.05), "nde {}", r.nde);
         assert!(approx_eq(r.cde, 0.4, 0.05), "cde {}", r.cde);
@@ -389,8 +388,7 @@ mod tests {
         };
         let r = mediation_weighted(&x, &m, &y, &[&c1, &c2], &design, &opts).unwrap();
         assert!(r.n_bootstrap >= 190, "too many failed replicates");
-        let bracketed =
-            |v: f64, (lo, hi): (f64, f64)| v >= lo - 1e-9 && v <= hi + 1e-9;
+        let bracketed = |v: f64, (lo, hi): (f64, f64)| v >= lo - 1e-9 && v <= hi + 1e-9;
         assert!(bracketed(r.nie, r.nie_ci));
         assert!(bracketed(r.te, r.te_ci));
         assert!(r.nie_ci.0 < r.nie_ci.1);

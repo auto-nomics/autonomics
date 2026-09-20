@@ -149,11 +149,16 @@ impl<'a> BootstrapDesign<'a> {
             }
             if strata.is_none() {
                 return Err(EpiError::Numerical(
-                    "psu requires strata (cluster codes are interpreted within stratum)".to_string(),
+                    "psu requires strata (cluster codes are interpreted within stratum)"
+                        .to_string(),
                 ));
             }
         }
-        Ok(Self { weights, strata, psu })
+        Ok(Self {
+            weights,
+            strata,
+            psu,
+        })
     }
 
     /// Number of rows the design was built from.
@@ -186,10 +191,13 @@ impl<'a> BootstrapDesign<'a> {
             (None, _) => draw_range(rng, n, n),
             (Some(strata), None) => {
                 let rows_by_stratum: BTreeMap<u64, Vec<usize>> =
-                    strata.iter().enumerate().fold(BTreeMap::new(), |mut m, (i, &h)| {
-                        m.entry(h).or_default().push(i);
-                        m
-                    });
+                    strata
+                        .iter()
+                        .enumerate()
+                        .fold(BTreeMap::new(), |mut m, (i, &h)| {
+                            m.entry(h).or_default().push(i);
+                            m
+                        });
                 let mut out = Vec::with_capacity(n);
                 for rows in rows_by_stratum.values() {
                     out.extend(draw_from(rng, rows, rows.len()));
@@ -200,7 +208,12 @@ impl<'a> BootstrapDesign<'a> {
                 // stratum -> psu -> rows, both keyed ascending.
                 let mut by_stratum: BTreeMap<u64, BTreeMap<u64, Vec<usize>>> = BTreeMap::new();
                 for (i, (&h, &c)) in strata.iter().zip(psu).enumerate() {
-                    by_stratum.entry(h).or_default().entry(c).or_default().push(i);
+                    by_stratum
+                        .entry(h)
+                        .or_default()
+                        .entry(c)
+                        .or_default()
+                        .push(i);
                 }
                 let mut out = Vec::with_capacity(n);
                 for psus in by_stratum.values() {
@@ -253,7 +266,10 @@ mod tests {
         let (plo, _) = percentile_ci(&boot);
         let (blo, _) = bias_corrected_ci(&boot, 0.0);
         // All replicates above the estimate → correction pushes bounds down.
-        assert!(blo < plo, "bc lower {blo} should sit below percentile lower {plo}");
+        assert!(
+            blo < plo,
+            "bc lower {blo} should sit below percentile lower {plo}"
+        );
     }
 
     #[test]
@@ -271,7 +287,10 @@ mod tests {
     fn ci_dispatch_matches_direct_calls() {
         let boot: Vec<f64> = (0..50).map(|i| i as f64).collect();
         assert_eq!(ci(CiMethod::Percentile, &boot, 25.0), percentile_ci(&boot));
-        assert_eq!(ci(CiMethod::BiasCorrected, &boot, 25.0), bias_corrected_ci(&boot, 25.0));
+        assert_eq!(
+            ci(CiMethod::BiasCorrected, &boot, 25.0),
+            bias_corrected_ci(&boot, 25.0)
+        );
     }
 
     #[test]
@@ -308,7 +327,10 @@ mod tests {
         assert_eq!((in_s0, in_s1), (10, 10));
         // Each PSU enters 0/1/2 times → its rows appear in blocks of 5·k.
         for c in [0u64, 1] {
-            let cnt: usize = idx.iter().filter(|&&i| psu[i] == c && strata[i] == 0).count();
+            let cnt: usize = idx
+                .iter()
+                .filter(|&&i| psu[i] == c && strata[i] == 0)
+                .count();
             assert_eq!(cnt % 5, 0);
         }
     }

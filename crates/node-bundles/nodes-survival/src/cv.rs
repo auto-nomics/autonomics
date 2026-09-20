@@ -51,7 +51,12 @@ pub(crate) fn stratified_folds(
     let mut folds = vec![0u32; strata.len()];
     let levels: Vec<u8> = {
         use std::collections::BTreeSet;
-        strata.iter().copied().collect::<BTreeSet<_>>().into_iter().collect()
+        strata
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
     };
     for level in levels {
         let mut idxs: Vec<usize> = strata
@@ -108,10 +113,7 @@ pub(crate) fn event_by_horizon_strata(time: &[f64], status_code: &[u8], horizon:
 /// `1 − exp(−Λ₀(t*) · exp(x·β + intercept))`. Times before the first failure
 /// give `0`.
 pub(crate) fn cif_at(fit: &CrrRidgeFit, row: &[f64], horizon: f64) -> Result<f64, String> {
-    let eta = fit
-        .linear_predictor(row)
-        .map_err(|e| e.to_string())?
-        .exp();
+    let eta = fit.linear_predictor(row).map_err(|e| e.to_string())?.exp();
     let mut acc = 0.0_f64;
     for (&t, &j) in fit.uftime.iter().zip(fit.bfitj.iter()) {
         if t > horizon {
@@ -174,8 +176,12 @@ pub(crate) fn select_lambda_inner(
         let mut sum = 0.0_f64;
         let mut n_ok = 0usize;
         for fold in 0..n_inner {
-            let val_pos: Vec<usize> = (0..idx.len()).filter(|&j| inner[j] as usize == fold).collect();
-            let fit_pos: Vec<usize> = (0..idx.len()).filter(|&j| inner[j] as usize != fold).collect();
+            let val_pos: Vec<usize> = (0..idx.len())
+                .filter(|&j| inner[j] as usize == fold)
+                .collect();
+            let fit_pos: Vec<usize> = (0..idx.len())
+                .filter(|&j| inner[j] as usize != fold)
+                .collect();
             if val_pos.is_empty() || fit_pos.is_empty() {
                 n_failed += 1;
                 continue;

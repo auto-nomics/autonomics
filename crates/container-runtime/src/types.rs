@@ -107,9 +107,7 @@ impl GpuRequest {
         if let Some(ids) = value.strip_prefix("device=") {
             let valid = !ids.is_empty()
                 && ids.split(',').all(|id| {
-                    !id.is_empty()
-                        && id.chars()
-                            .all(|c| c.is_ascii_alphanumeric() || c == '-')
+                    !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
                 });
             if valid {
                 return Ok(Self::Devices(ids.to_string()));

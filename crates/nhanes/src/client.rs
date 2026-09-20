@@ -89,10 +89,17 @@ impl NhanesClient {
     /// component. Invalid component/year combinations do NOT return an HTTP
     /// error — CDC serves an HTTP 200 "Page Not Found" template. Check the
     /// body with [`is_soft_404`] / [`parse_listing`] before using the result.
-    pub async fn listing_html(&self, component: &str, cycle_begin_year: Option<u16>) -> Result<String> {
+    pub async fn listing_html(
+        &self,
+        component: &str,
+        cycle_begin_year: Option<u16>,
+    ) -> Result<String> {
         let mut request = self
             .http
-            .get(format!("{}/nchs/nhanes/search/datapage.aspx", self.endpoint))
+            .get(format!(
+                "{}/nchs/nhanes/search/datapage.aspx",
+                self.endpoint
+            ))
             .query(&[("Component", component)]);
         if let Some(year) = cycle_begin_year {
             request = request.query(&[("CycleBeginYear", &year.to_string())]);
@@ -122,8 +129,7 @@ impl NhanesClient {
             || content_type.contains("text/html")
             || !bytes.starts_with(XPORT_MAGIC)
         {
-            let prefix =
-                String::from_utf8_lossy(&bytes[..bytes.len().min(200)]).into_owned();
+            let prefix = String::from_utf8_lossy(&bytes[..bytes.len().min(200)]).into_owned();
             return Err(NhanesError::InvalidDownload {
                 url,
                 status: status.as_u16(),
@@ -417,7 +423,10 @@ mod tests {
         assert_eq!(cfq.cycle.as_deref(), Some("2017-2018"));
         assert_eq!(cfq.topic, "Cognitive Functioning");
         assert_eq!(cfq.doc_href.as_deref(), Some("/Nchs/Nhanes/2017/CFQ_J.htm"));
-        assert_eq!(cfq.href, "/Nchs/Data/Nhanes/Public/2017/DataFiles/CFQ_J.xpt");
+        assert_eq!(
+            cfq.href,
+            "/Nchs/Data/Nhanes/Public/2017/DataFiles/CFQ_J.xpt"
+        );
         assert_eq!(cfq.file_stem, "CFQ_J");
         assert_eq!(cfq.year.as_deref(), Some("2017"));
         assert_eq!(cfq.size_text.as_deref(), Some("[XPT - 3.2 MB]"));
@@ -462,10 +471,7 @@ mod tests {
             "<html><head><title>Page Not Found</title></head></html>"
         ));
         assert!(!is_soft_404(LISTING_HTML));
-        assert!(parse_listing(
-            "<html><body><h1>Page Not Found</h1></body></html>"
-        )
-        .is_empty());
+        assert!(parse_listing("<html><body><h1>Page Not Found</h1></body></html>").is_empty());
     }
 
     #[test]

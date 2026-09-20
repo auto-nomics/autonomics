@@ -178,10 +178,7 @@ fn validate_core(times: &[f64], status: &[u8], horizon: f64) -> Result<()> {
 
 fn safe_weight(w: f64, opts: &BrierOptions, at: f64) -> Result<f64> {
     if !w.is_finite() || w > 1.0 / opts.g_floor {
-        Err(CrrkitError::CollapsedCensoring {
-            g: 1.0 / w,
-            t: at,
-        })
+        Err(CrrkitError::CollapsedCensoring { g: 1.0 / w, t: at })
     } else {
         Ok(w)
     }

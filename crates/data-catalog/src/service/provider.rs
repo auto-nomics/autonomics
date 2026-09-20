@@ -2,9 +2,7 @@ use async_trait::async_trait;
 
 use crate::model::{CatalogEntry, DatasetFile};
 
-use super::model::{
-    CatalogDataset, CatalogRecord, CatalogSearchQuery, CatalogSnapshot,
-};
+use super::model::{CatalogDataset, CatalogRecord, CatalogSearchQuery, CatalogSnapshot};
 
 /// Query and refresh behavior for a process-level catalog view.
 #[async_trait]

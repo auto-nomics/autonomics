@@ -24,10 +24,10 @@ use dag_core::{NodeCtx, NodeFactory};
 
 use container_runtime::gc::{acquire_panel_lock_shared, acquire_scratch_lock_shared};
 use container_runtime::{
-    CachedPanel, ContainerNetwork, ContainerRunRequest, ContainerRuntimeError, GpuRequest,
-    DEFAULT_CONTAINER_WORKDIR, DEFAULT_TIMEOUT_SECS, PanelCache, PanelRef, PodmanConfig,
-    PodmanConnection, PodmanRuntime, PullPolicy, keep_workspace_enabled, unique_container_name,
-    workspace_ref,
+    CachedPanel, ContainerNetwork, ContainerRunRequest, ContainerRuntimeError,
+    DEFAULT_CONTAINER_WORKDIR, DEFAULT_TIMEOUT_SECS, GpuRequest, PanelCache, PanelRef,
+    PodmanConfig, PodmanConnection, PodmanRuntime, PullPolicy, keep_workspace_enabled,
+    unique_container_name, workspace_ref,
 };
 
 pub const CONTAINER_COMMAND_KIND: &str = "container_command";
@@ -352,9 +352,7 @@ impl ContainerCommandNode {
             shm_size: spec.shm_size,
             gpus: match spec.gpus.as_deref() {
                 None => GpuRequest::None,
-                Some(value) => {
-                    GpuRequest::parse(value).map_err(ContainerCommandError::Invalid)?
-                }
+                Some(value) => GpuRequest::parse(value).map_err(ContainerCommandError::Invalid)?,
             },
             user: spec.user,
             runtime,

@@ -228,8 +228,8 @@ impl DagNode for RlmNode {
         }
 
         let x_slices: Vec<&[f64]> = x_filtered.iter().map(|v| v.as_slice()).collect();
-        let result = rlm(&x_slices, &y, &w, &self.opts)
-            .map_err(|e| RlmError::Fit(e.to_string()))?;
+        let result =
+            rlm(&x_slices, &y, &w, &self.opts).map_err(|e| RlmError::Fit(e.to_string()))?;
 
         // Wide single-row schema: one quartet per term (intercept first).
         let mut terms: Vec<String> = Vec::with_capacity(result.n_params);
@@ -237,7 +237,8 @@ impl DagNode for RlmNode {
         terms.extend(self.predictors.iter().cloned());
 
         let mut fields: Vec<Field> = Vec::with_capacity(result.n_params * 4 + 4);
-        let mut cols: Vec<Arc<dyn arrow_array::Array>> = Vec::with_capacity(result.n_params * 4 + 4);
+        let mut cols: Vec<Arc<dyn arrow_array::Array>> =
+            Vec::with_capacity(result.n_params * 4 + 4);
         for (j, term) in terms.iter().enumerate() {
             fields.push(Field::new(format!("coef_{term}"), DataType::Float64, false));
             cols.push(Arc::new(Float64Array::from(vec![result.coefficients[j]])));
@@ -251,14 +252,15 @@ impl DagNode for RlmNode {
         fields.push(Field::new("sigma_robust", DataType::Float64, false));
         cols.push(Arc::new(Float64Array::from(vec![result.scale])));
         fields.push(Field::new("converged", DataType::Int32, false));
-        cols.push(Arc::new(Int32Array::from(vec![i32::from(result.converged)])));
+        cols.push(Arc::new(Int32Array::from(vec![i32::from(
+            result.converged,
+        )])));
         fields.push(Field::new("n_iter", DataType::Int32, false));
         cols.push(Arc::new(Int32Array::from(vec![result.n_iter as i32])));
         fields.push(Field::new("n_obs", DataType::Int32, false));
         cols.push(Arc::new(Int32Array::from(vec![result.n_obs as i32])));
 
-        let batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), cols)
-            .expect("rlm schema");
+        let batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), cols).expect("rlm schema");
 
         let ctx = node_ctx.session();
         let df = ctx
@@ -304,10 +306,7 @@ mod tests {
         if let Some(a) = col.as_any().downcast_ref::<Float64Array>() {
             a.value(0)
         } else {
-            col.as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap()
-                .value(0) as f64
+            col.as_any().downcast_ref::<Int32Array>().unwrap().value(0) as f64
         }
     }
 

@@ -108,9 +108,7 @@ fn default_seed() -> u64 {
 }
 
 /// Parse the CI-method string shared by the weighted mediation nodes.
-pub(crate) fn parse_ci_method(
-    s: &str,
-) -> Result<CiMethod, MediationWeightedError> {
+pub(crate) fn parse_ci_method(s: &str) -> Result<CiMethod, MediationWeightedError> {
     match s {
         "bc" => Ok(CiMethod::BiasCorrected),
         "percentile" => Ok(CiMethod::Percentile),
@@ -121,10 +119,7 @@ pub(crate) fn parse_ci_method(
 }
 
 /// Cast a filtered f64 stratum/PSU column to u64 codes.
-pub(crate) fn to_u64_codes(
-    v: &[f64],
-    name: &str,
-) -> Result<Vec<u64>, MediationWeightedError> {
+pub(crate) fn to_u64_codes(v: &[f64], name: &str) -> Result<Vec<u64>, MediationWeightedError> {
     v.iter()
         .enumerate()
         .map(|(i, &x)| {
@@ -226,9 +221,9 @@ impl DagNode for MediationWeightedNode {
         inputs: &[NodeInput],
         _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
-        let input = inputs
-            .first()
-            .ok_or(MediationWeightedError::Column("no input connected".to_string()))?;
+        let input = inputs.first().ok_or(MediationWeightedError::Column(
+            "no input connected".to_string(),
+        ))?;
         let batches = input
             .dataframe()?
             .clone()
@@ -285,7 +280,10 @@ impl DagNode for MediationWeightedNode {
         }
 
         let strata = match &s_raw {
-            Some(s) => Some(to_u64_codes(s, self.strata_column.as_deref().unwrap_or(""))?),
+            Some(s) => Some(to_u64_codes(
+                s,
+                self.strata_column.as_deref().unwrap_or(""),
+            )?),
             None => None,
         };
         let psu = match &p_raw {
@@ -303,8 +301,9 @@ impl DagNode for MediationWeightedNode {
             seed: self.seed,
             ..Default::default()
         };
-        let result = epi::mediation_weighted::mediation_weighted(&x, &m, &y, &cov_slices, &design, &opts)
-            .map_err(|e| MediationWeightedError::Fit(e.to_string()))?;
+        let result =
+            epi::mediation_weighted::mediation_weighted(&x, &m, &y, &cov_slices, &design, &opts)
+                .map_err(|e| MediationWeightedError::Fit(e.to_string()))?;
 
         let batch = RecordBatch::try_new(
             Arc::new(Schema::new(vec![
@@ -423,7 +422,9 @@ mod tests {
     }
 
     async fn run_node(spec: serde_json::Value) -> Vec<RecordBatch> {
-        let mut node = MediationWeightedNodeFactory {}.build(spec, node_ctx()).unwrap();
+        let mut node = MediationWeightedNodeFactory {}
+            .build(spec, node_ctx())
+            .unwrap();
         let input = dag_core::node::NodeInput::new_dataframe(
             0,
             datafusion::prelude::SessionContext::new()
@@ -448,10 +449,7 @@ mod tests {
         if let Some(a) = col.as_any().downcast_ref::<Float64Array>() {
             a.value(0)
         } else {
-            col.as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap()
-                .value(0) as f64
+            col.as_any().downcast_ref::<Int32Array>().unwrap().value(0) as f64
         }
     }
 

@@ -32,7 +32,7 @@
 
 use crate::crr::{CrrInput, Prepared, prepare};
 use crate::error::{CmprskError, Result};
-use crate::kernels::{CrrData, crrf, crrfsv, crrfit, crrvv};
+use crate::kernels::{CrrData, crrf, crrfit, crrfsv, crrvv};
 use crate::linalg;
 use crate::predict::CrrPrediction;
 
@@ -126,7 +126,12 @@ impl CrrRidgeFit {
                 row.len()
             )));
         }
-        Ok(self.intercept + row.iter().zip(self.coef.iter()).map(|(x, b)| x * b).sum::<f64>())
+        Ok(self.intercept
+            + row
+                .iter()
+                .zip(self.coef.iter())
+                .map(|(x, b)| x * b)
+                .sum::<f64>())
     }
 }
 
@@ -139,7 +144,9 @@ pub fn crr_ridge(input: &CrrInput, opts: &CrrRidgeOptions) -> Result<CrrRidgeFit
         ));
     }
     if !(opts.lambda.is_finite() && opts.lambda >= 0.0) {
-        return Err(CmprskError::Invalid("lambda must be finite and nonnegative".into()));
+        return Err(CmprskError::Invalid(
+            "lambda must be finite and nonnegative".into(),
+        ));
     }
     let nc1 = input.cov1.first().map_or(0, |r| r.len());
     if input.cov1.len() != input.ftime.len() {
@@ -227,7 +234,13 @@ pub fn crr_ridge(input: &CrrInput, opts: &CrrRidgeOptions) -> Result<CrrRidgeFit
 
     // λ per column: the penalty only touches columns not exempted.
     let lambda_eff: Vec<f64> = (0..np)
-        .map(|j| if opts.unpenalized.contains(&j) { 0.0 } else { opts.lambda })
+        .map(|j| {
+            if opts.unpenalized.contains(&j) {
+                0.0
+            } else {
+                opts.lambda
+            }
+        })
         .collect();
 
     // ── Armijo-damped Newton on the penalized objective ─────────────────────
@@ -236,7 +249,12 @@ pub fn crr_ridge(input: &CrrInput, opts: &CrrRidgeOptions) -> Result<CrrRidgeFit
     let mut n_iter = 0usize;
 
     let penalized_objective = |lik: f64, b: &[f64]| -> f64 {
-        lik + 0.5 * lambda_eff.iter().zip(b.iter()).map(|(&l, &bj)| l * bj * bj).sum::<f64>()
+        lik + 0.5
+            * lambda_eff
+                .iter()
+                .zip(b.iter())
+                .map(|(&l, &bj)| l * bj * bj)
+                .sum::<f64>()
     };
     let penalized_gradient = |s: &[f64], b: &[f64]| -> Vec<f64> {
         s.iter()
@@ -265,17 +283,16 @@ pub fn crr_ridge(input: &CrrInput, opts: &CrrRidgeOptions) -> Result<CrrRidgeFit
             break;
         }
 
-        let h_pen: Vec<Vec<f64>> = z
-            .v
-            .iter()
-            .enumerate()
-            .map(|(j, row)| {
-                row.iter()
-                    .enumerate()
-                    .map(|(k, &v)| if j == k { v + lambda_eff[j] } else { v })
-                    .collect()
-            })
-            .collect();
+        let h_pen: Vec<Vec<f64>> =
+            z.v.iter()
+                .enumerate()
+                .map(|(j, row)| {
+                    row.iter()
+                        .enumerate()
+                        .map(|(k, &v)| if j == k { v + lambda_eff[j] } else { v })
+                        .collect()
+                })
+                .collect();
         let step = linalg::solve(&h_pen, &g, "ridge Newton step")?;
         let mut sc: Vec<f64> = step.iter().map(|v| -v).collect();
         let mut bn: Vec<f64> = b.iter().zip(sc.iter()).map(|(x, y)| x + y).collect();
@@ -307,17 +324,16 @@ pub fn crr_ridge(input: &CrrInput, opts: &CrrRidgeOptions) -> Result<CrrRidgeFit
 
     // ── variance conditional on λ: (H+Λ)⁻¹ V2 (H+Λ)⁻¹, back-transformed ─────
     let vv = crrvv(&data, &b);
-    let h_pen: Vec<Vec<f64>> = vv
-        .v
-        .iter()
-        .enumerate()
-        .map(|(j, row)| {
-            row.iter()
-                .enumerate()
-                .map(|(k, &v)| if j == k { v + lambda_eff[j] } else { v })
-                .collect()
-        })
-        .collect();
+    let h_pen: Vec<Vec<f64>> =
+        vv.v.iter()
+            .enumerate()
+            .map(|(j, row)| {
+                row.iter()
+                    .enumerate()
+                    .map(|(k, &v)| if j == k { v + lambda_eff[j] } else { v })
+                    .collect()
+            })
+            .collect();
     let bread = linalg::inverse(&h_pen, "ridge variance")?;
     let var_std = linalg::sandwich(&bread, &vv.v2);
     let var = var_std
@@ -332,7 +348,11 @@ pub fn crr_ridge(input: &CrrInput, opts: &CrrRidgeOptions) -> Result<CrrRidgeFit
         .collect();
 
     // ── back-transform and baseline ─────────────────────────────────────────
-    let coef: Vec<f64> = b.iter().zip(scale.iter()).map(|(&bj, &sj)| bj / sj).collect();
+    let coef: Vec<f64> = b
+        .iter()
+        .zip(scale.iter())
+        .map(|(&bj, &sj)| bj / sj)
+        .collect();
     let intercept = -b
         .iter()
         .zip(center.iter())
@@ -481,11 +501,23 @@ mod tests {
             tf: TimeFunctions::None,
             cengroup: None,
         };
-        let plain = crr(&input, &CrrOptions { maxiter: 100, gtol: 1e-9, ..Default::default() })
-            .unwrap();
+        let plain = crr(
+            &input,
+            &CrrOptions {
+                maxiter: 100,
+                gtol: 1e-9,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         let ridge = crr_ridge(
             &input,
-            &CrrRidgeOptions { lambda: 0.0, maxiter: 200, gtol: 1e-9, ..Default::default() },
+            &CrrRidgeOptions {
+                lambda: 0.0,
+                maxiter: 200,
+                gtol: 1e-9,
+                ..Default::default()
+            },
         )
         .unwrap();
         assert!(plain.converged);
@@ -496,10 +528,7 @@ mod tests {
         assert_eq!(p_plain.uftime.len(), p_ridge.uftime.len());
         for (a, b) in p_plain.curves.iter().zip(p_ridge.curves.iter()) {
             for (ca, cb) in a.iter().zip(b.iter()) {
-                assert!(
-                    (ca - cb).abs() < 5e-4,
-                    "curves differ: {ca} vs {cb}"
-                );
+                assert!((ca - cb).abs() < 5e-4, "curves differ: {ca} vs {cb}");
             }
         }
     }
@@ -518,8 +547,15 @@ mod tests {
             tf: TimeFunctions::None,
             cengroup: None,
         };
-        let full = crr(&input, &CrrOptions { maxiter: 100, gtol: 1e-8, ..Default::default() })
-            .unwrap();
+        let full = crr(
+            &input,
+            &CrrOptions {
+                maxiter: 100,
+                gtol: 1e-8,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         // Clinical column 0 exempt, biomarker column 1 penalized.
         let shrunk = crr_ridge(
             &input,
@@ -564,7 +600,12 @@ mod tests {
                 tf: TimeFunctions::None,
                 cengroup: None,
             },
-            &CrrRidgeOptions { lambda: 3.0, maxiter: 200, gtol: 1e-9, ..Default::default() },
+            &CrrRidgeOptions {
+                lambda: 3.0,
+                maxiter: 200,
+                gtol: 1e-9,
+                ..Default::default()
+            },
         )
         .unwrap();
         let fit_b = crr_ridge(
@@ -578,7 +619,12 @@ mod tests {
                 tf: TimeFunctions::None,
                 cengroup: None,
             },
-            &CrrRidgeOptions { lambda: 3.0, maxiter: 200, gtol: 1e-9, ..Default::default() },
+            &CrrRidgeOptions {
+                lambda: 3.0,
+                maxiter: 200,
+                gtol: 1e-9,
+                ..Default::default()
+            },
         )
         .unwrap();
         let rows = vec![vec![0.4], vec![-0.9]];
@@ -609,9 +655,16 @@ mod tests {
             tf: TimeFunctions::None,
             cengroup: None,
         };
-        let fit =
-            crr_ridge(&input, &CrrRidgeOptions { lambda: 5.0, maxiter: 300, gtol: 1e-7, ..Default::default() })
-                .unwrap();
+        let fit = crr_ridge(
+            &input,
+            &CrrRidgeOptions {
+                lambda: 5.0,
+                maxiter: 300,
+                gtol: 1e-7,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert!(fit.converged);
         assert!(fit.coef.iter().all(|c| c.is_finite()));
         let pred = predict_crr_ridge(&fit, &cov1[..5]).unwrap();
@@ -635,16 +688,26 @@ mod tests {
             tf: TimeFunctions::None,
             cengroup: None,
         };
-        assert!(crr_ridge(
-            &input,
-            &CrrRidgeOptions { lambda: -1.0, ..Default::default() }
-        )
-        .is_err());
-        assert!(crr_ridge(
-            &input,
-            &CrrRidgeOptions { unpenalized: vec![7], ..Default::default() }
-        )
-        .is_err());
+        assert!(
+            crr_ridge(
+                &input,
+                &CrrRidgeOptions {
+                    lambda: -1.0,
+                    ..Default::default()
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            crr_ridge(
+                &input,
+                &CrrRidgeOptions {
+                    unpenalized: vec![7],
+                    ..Default::default()
+                }
+            )
+            .is_err()
+        );
 
         let constant: Vec<Vec<f64>> = vec![vec![1.0]; 50];
         let bad = CrrInput {
@@ -658,11 +721,16 @@ mod tests {
             cengroup: None,
         };
         assert!(crr_ridge(&bad, &CrrRidgeOptions::default()).is_err());
-        assert!(crr_ridge(
-            &bad,
-            &CrrRidgeOptions { standardize: false, ..Default::default() }
-        )
-        .is_ok());
+        assert!(
+            crr_ridge(
+                &bad,
+                &CrrRidgeOptions {
+                    standardize: false,
+                    ..Default::default()
+                }
+            )
+            .is_ok()
+        );
 
         let with_cov2 = CrrInput {
             ftime: &ftime,

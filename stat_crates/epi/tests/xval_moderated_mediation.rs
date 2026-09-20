@@ -8,9 +8,7 @@ use serde_json::Value;
 use std::fs;
 
 use epi::bootstrap::BootstrapDesign;
-use epi::mediation_moderated::{
-    ModeratedMediationOptions, ModerationStage, mediation_moderated,
-};
+use epi::mediation_moderated::{ModeratedMediationOptions, ModerationStage, mediation_moderated};
 
 const TOL: f64 = 1e-4;
 
@@ -28,7 +26,9 @@ fn load_data() -> ModData {
         env!("CARGO_MANIFEST_DIR"),
         "/tests/xval/moderated_mediation_data.csv"
     ))
-    .expect("moderated_mediation_data.csv not found — run gen_moderated_mediation_reference.R first");
+    .expect(
+        "moderated_mediation_data.csv not found — run gen_moderated_mediation_reference.R first",
+    );
     let mut d = ModData {
         x: Vec::new(),
         m: Vec::new(),
@@ -102,10 +102,8 @@ fn xval_moderated_mediation_vs_r() {
             n_bootstrap: 0,
             ..Default::default()
         };
-        let r = mediation_moderated(
-            &d.x, &d.m, &d.wm, &d.y, &[&d.c1], &design, &opts,
-        )
-        .expect("first-stage moderated mediation fit");
+        let r = mediation_moderated(&d.x, &d.m, &d.wm, &d.y, &[&d.c1], &design, &opts)
+            .expect("first-stage moderated mediation fit");
 
         let f = &r_val["first"];
         check_scalar(r.a_x, f["a_x"].as_f64().unwrap(), "first a_x");
@@ -150,10 +148,8 @@ fn xval_moderated_mediation_vs_r() {
             n_bootstrap: 0,
             ..Default::default()
         };
-        let r = mediation_moderated(
-            &d.x, &d.m, &d.wm, &d.y, &[&d.c1], &design, &opts,
-        )
-        .expect("second-stage moderated mediation fit");
+        let r = mediation_moderated(&d.x, &d.m, &d.wm, &d.y, &[&d.c1], &design, &opts)
+            .expect("second-stage moderated mediation fit");
 
         let s = &r_val["second"];
         check_scalar(r.a_x, s["a_x"].as_f64().unwrap(), "second a_x");

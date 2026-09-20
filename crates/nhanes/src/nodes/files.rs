@@ -217,9 +217,7 @@ impl DagNode for NhanesFilesNode {
                         .map(|l| l.cycle.clone().or_else(|| self.spec.cycle.clone()))
                         .collect(),
                 ),
-                super::util::str_array(
-                    selected.iter().map(|l| Some(l.topic.clone())).collect(),
-                ),
+                super::util::str_array(selected.iter().map(|l| Some(l.topic.clone())).collect()),
                 super::util::str_array(selected.iter().map(|l| l.doc_href.clone()).collect()),
                 super::util::str_array(selected.iter().map(|l| Some(l.href.clone())).collect()),
                 super::util::str_array(
@@ -316,10 +314,7 @@ mod tests {
 "#;
 
     async fn first_batch(mut node: Box<dyn DagNode>, ctx: &NodeCtx) -> RecordBatch {
-        let outputs = node
-            .execute(ctx, &[], &NodeReporter::noop())
-            .await
-            .unwrap();
+        let outputs = node.execute(ctx, &[], &NodeReporter::noop()).await.unwrap();
         outputs
             .dataframe(0)
             .unwrap()

@@ -670,6 +670,7 @@ async fn read_file_with_options(
         Json => ctx.read_bio_json(path, BioReadOptions::default()).await,
         Xls | Xlsx => {
             read_spreadsheet(ctx, path, sheet_name, options.has_header.unwrap_or(true)).await
+        }
         Xpt => {
             let batch = xpt_record_batch(node_ctx, path).await?;
             ctx.read_batch(batch)
@@ -699,10 +700,7 @@ async fn read_file_with_options(
 
 /// Read the full contents of an input path: `vfs://` addresses go through
 /// the engine's OpenDAL storage, anything else is a local filesystem read.
-async fn read_input_bytes(
-    node_ctx: &NodeCtx,
-    path: &str,
-) -> Result<Vec<u8>, FileToDataFrameError> {
+async fn read_input_bytes(node_ctx: &NodeCtx, path: &str) -> Result<Vec<u8>, FileToDataFrameError> {
     if let Some(vpath) = path.strip_prefix("vfs://") {
         let storage = node_ctx.opendal.as_ref().ok_or_else(|| {
             FileToDataFrameError::InvalidInput(format!(
@@ -767,26 +765,35 @@ mod xpt {
             .schema()
             .variables()
             .iter()
-            .map(|variable| (variable.short_name().trim().to_string(), variable.value_type()))
+            .map(|variable| {
+                (
+                    variable.short_name().trim().to_string(),
+                    variable.value_type(),
+                )
+            })
             .collect();
-        let mut character_columns: Vec<Vec<Option<String>>> =
-            vec![Vec::new(); variables.len()];
+        let mut character_columns: Vec<Vec<Option<String>>> = vec![Vec::new(); variables.len()];
         let mut numeric_columns: Vec<Vec<Option<f64>>> = vec![Vec::new(); variables.len()];
         let mut row_number = 0usize;
         for record in dataset.records() {
-            let record = record
-                .map_err(|e| format!("failed to read XPORT record {row_number}: {e}"))?;
+            let record =
+                record.map_err(|e| format!("failed to read XPORT record {row_number}: {e}"))?;
             for (column, value) in record.iter().enumerate() {
                 match value {
                     XportValue::Character(text) => {
                         let trimmed = text.trim_end();
-                        character_columns[column].push(
-                            if trimmed.is_empty() { None } else { Some(trimmed.to_string()) },
-                        );
+                        character_columns[column].push(if trimmed.is_empty() {
+                            None
+                        } else {
+                            Some(trimmed.to_string())
+                        });
                     }
                     XportValue::Number(number) => {
-                        numeric_columns[column]
-                            .push(if number.is_nan() { None } else { Some(*number) });
+                        numeric_columns[column].push(if number.is_nan() {
+                            None
+                        } else {
+                            Some(*number)
+                        });
                     }
                 }
             }
@@ -1036,8 +1043,14 @@ mod tests {
 
     #[test]
     fn xpt_format_infers_from_paths_and_labels() {
-        assert_eq!(FileFormat::from_path("/data/DEMO_J.xpt"), Some(FileFormat::Xpt));
-        assert_eq!(FileFormat::from_path("/data/DEMO_J.XPT"), Some(FileFormat::Xpt));
+        assert_eq!(
+            FileFormat::from_path("/data/DEMO_J.xpt"),
+            Some(FileFormat::Xpt)
+        );
+        assert_eq!(
+            FileFormat::from_path("/data/DEMO_J.XPT"),
+            Some(FileFormat::Xpt)
+        );
         assert_eq!(FileFormat::from_label("xpt"), Some(FileFormat::Xpt));
         assert_eq!(FileFormat::from_label("XPT"), Some(FileFormat::Xpt));
         assert_eq!(FileFormat::Xpt.as_label(), "xpt");
@@ -1053,11 +1066,18 @@ mod tests {
         use std::io::Write;
 
         let mut seqn = XportVariable::builder();
-        seqn.short_name("SEQN").value_type(SasVariableType::Numeric).value_length(8);
+        seqn.short_name("SEQN")
+            .value_type(SasVariableType::Numeric)
+            .value_length(8);
         let mut age = XportVariable::builder();
-        age.short_name("RIDAGEYR").value_type(SasVariableType::Numeric).value_length(8);
+        age.short_name("RIDAGEYR")
+            .value_type(SasVariableType::Numeric)
+            .value_length(8);
         let mut gender = XportVariable::builder();
-        gender.short_name("RIAGENDR").value_type(SasVariableType::Character).value_length(2);
+        gender
+            .short_name("RIAGENDR")
+            .value_type(SasVariableType::Character)
+            .value_length(2);
 
         let schema = XportSchema::builder()
             .dataset_name("DEMO")
@@ -1115,7 +1135,10 @@ mod tests {
         let schema = df.schema();
         let fields: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
         assert_eq!(fields, ["SEQN", "RIDAGEYR", "RIAGENDR"]);
-        assert_eq!(schema.field(0).data_type(), &arrow_schema::DataType::Float64);
+        assert_eq!(
+            schema.field(0).data_type(),
+            &arrow_schema::DataType::Float64
+        );
         assert_eq!(schema.field(2).data_type(), &arrow_schema::DataType::Utf8);
 
         let batch = df.clone().collect().await.unwrap().remove(0);
@@ -1155,12 +1178,14 @@ mod tests {
         let fixture_path = fixture.path().join("DEMO_J.xpt");
         write_xpt_fixture(&fixture_path);
         let bytes = std::fs::read(&fixture_path).unwrap();
-        storage.write_bytes("/nhanes/DEMO_J.xpt", bytes).await.unwrap();
+        storage
+            .write_bytes("/nhanes/DEMO_J.xpt", bytes)
+            .await
+            .unwrap();
         fixture.close().unwrap();
 
         let node_ctx = NodeCtx::new(ctx.runtime_env().clone(), Some(storage));
-        let mut node =
-            FileToDataFrameNode::new(Some("vfs:///nhanes/DEMO_J.xpt".into()), None);
+        let mut node = FileToDataFrameNode::new(Some("vfs:///nhanes/DEMO_J.xpt".into()), None);
         let outputs = node
             .execute(
                 &node_ctx,
@@ -1206,15 +1231,16 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("DEMO_J.xpt");
         let (ctx, storage) = OpendalFileStorage::new_temp().register_to_ctx();
-        let node_ctx =
-            dag_core::registry::NodeCtx::new(ctx.runtime_env().clone(), Some(storage));
+        let node_ctx = dag_core::registry::NodeCtx::new(ctx.runtime_env().clone(), Some(storage));
         let spec = serde_json::json!({
             "component": "Demographics",
             "cycle": "2017-2018",
             "file_pattern": "DEMO_J",
             "path": path.to_str().unwrap()
         });
-        let mut download = NhanesDownloadNodeFactory.build(spec, node_ctx.clone()).unwrap();
+        let mut download = NhanesDownloadNodeFactory
+            .build(spec, node_ctx.clone())
+            .unwrap();
         download
             .execute(
                 &node_ctx,

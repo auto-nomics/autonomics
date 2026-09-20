@@ -193,11 +193,7 @@ pub fn mediation_moderated(
     if n == 0 || x.len() != n || m.len() != n || moderator.len() != n || y.len() != n {
         return Err(EpiError::DimensionMismatch {
             a: n,
-            b: x
-                .len()
-                .max(m.len())
-                .max(moderator.len())
-                .max(y.len()),
+            b: x.len().max(m.len()).max(moderator.len()).max(y.len()),
         });
     }
     for c in covariates.iter() {
@@ -323,16 +319,8 @@ fn fit_moderated(
     opts: &ModeratedMediationOptions,
 ) -> Result<ModeratedFit> {
     // Materialised interaction columns.
-    let xw: Vec<f64> = x
-        .iter()
-        .zip(moderator)
-        .map(|(&xi, &wi)| xi * wi)
-        .collect();
-    let mw: Vec<f64> = m
-        .iter()
-        .zip(moderator)
-        .map(|(&mi, &wi)| mi * wi)
-        .collect();
+    let xw: Vec<f64> = x.iter().zip(moderator).map(|(&xi, &wi)| xi * wi).collect();
+    let mw: Vec<f64> = m.iter().zip(moderator).map(|(&mi, &wi)| mi * wi).collect();
     let xm: Vec<f64> = x.iter().zip(m).map(|(&xi, &mi)| xi * mi).collect();
 
     // ── Mediator model ─────────────────────────────────────────────────
@@ -399,11 +387,7 @@ fn fit_moderated(
 }
 
 /// Conditional paths at moderator level `w`: `(a(w), b(w))`.
-fn conditional_paths(
-    fit: &ModeratedFit,
-    opts: &ModeratedMediationOptions,
-    w: f64,
-) -> (f64, f64) {
+fn conditional_paths(fit: &ModeratedFit, opts: &ModeratedMediationOptions, w: f64) -> (f64, f64) {
     (
         fit.a_x + fit.a_xw * w,
         fit.b_m + fit.b_mw * w + fit.beta_xm * opts.x_treated,
@@ -469,18 +453,18 @@ mod tests {
         let x: Vec<f64> = (0..n).map(|i| ((i % 5) / 3) as f64).collect();
         let wm: Vec<f64> = (0..n).map(|i| ((i as f64 % 7.0) - 3.0) / 3.0).collect();
         let c1: Vec<f64> = (0..n).map(|i| 40.0 + (i as f64 % 19.0)).collect();
-        let w: Vec<f64> = (0..n)
-            .map(|i| 4000.0 + 300.0 * (i as f64 % 13.0))
-            .collect();
+        let w: Vec<f64> = (0..n).map(|i| 4000.0 + 300.0 * (i as f64 % 13.0)).collect();
         let xw: Vec<f64> = x.iter().zip(&wm).map(|(&a, &b)| a * b).collect();
-        let n1_raw: Vec<f64> =
-            (0..n).map(|i| ((i as f64 * 7.0) % 13.0 - 6.0) / 6.0).collect();
+        let n1_raw: Vec<f64> = (0..n)
+            .map(|i| ((i as f64 * 7.0) % 13.0 - 6.0) / 6.0)
+            .collect();
         let n1 = orthogonalize(&n1_raw, &[&x, &wm, &xw, &c1], &w);
         let m: Vec<f64> = (0..n)
             .map(|i| 1.0 + 0.5 * x[i] + 0.3 * wm[i] + 0.4 * xw[i] + 2.0 * n1[i])
             .collect();
-        let n2_raw: Vec<f64> =
-            (0..n).map(|i| ((i as f64 * 3.0) % 17.0 - 8.0) / 8.0).collect();
+        let n2_raw: Vec<f64> = (0..n)
+            .map(|i| ((i as f64 * 3.0) % 17.0 - 8.0) / 8.0)
+            .collect();
         let n2 = orthogonalize(&n2_raw, &[&x, &m, &wm, &c1], &w);
         let y: Vec<f64> = (0..n)
             .map(|i| 2.0 + 0.2 * x[i] + 0.7 * m[i] + 0.1 * wm[i] + 0.05 * c1[i] + 2.5 * n2[i])
@@ -502,15 +486,27 @@ mod tests {
         assert!(approx_eq(r.a_xw, 0.4, 1e-6), "a_xw {}", r.a_xw);
         assert!(approx_eq(r.b_m, 0.7, 1e-6), "b_m {}", r.b_m);
         assert!(approx_eq(r.c_x, 0.2, 1e-6), "c_x {}", r.c_x);
-        assert!(approx_eq(r.index_first_stage, 0.28, 1e-6),
-                "index_first {}", r.index_first_stage);
+        assert!(
+            approx_eq(r.index_first_stage, 0.28, 1e-6),
+            "index_first {}",
+            r.index_first_stage
+        );
         // ω(w) = 0.35 + 0.28w at w = −1, 0, +1.
-        assert!(approx_eq(r.conditional[0].indirect, 0.07, 1e-6),
-                "ω(-1) {}", r.conditional[0].indirect);
-        assert!(approx_eq(r.conditional[1].indirect, 0.35, 1e-6),
-                "ω(0) {}", r.conditional[1].indirect);
-        assert!(approx_eq(r.conditional[2].indirect, 0.63, 1e-6),
-                "ω(1) {}", r.conditional[2].indirect);
+        assert!(
+            approx_eq(r.conditional[0].indirect, 0.07, 1e-6),
+            "ω(-1) {}",
+            r.conditional[0].indirect
+        );
+        assert!(
+            approx_eq(r.conditional[1].indirect, 0.35, 1e-6),
+            "ω(0) {}",
+            r.conditional[1].indirect
+        );
+        assert!(
+            approx_eq(r.conditional[2].indirect, 0.63, 1e-6),
+            "ω(1) {}",
+            r.conditional[2].indirect
+        );
         // Conditional paths themselves.
         assert!(approx_eq(r.conditional[2].a_path, 0.9, 1e-6));
         assert!(approx_eq(r.conditional[2].b_path, 0.7, 1e-6));
@@ -530,14 +526,16 @@ mod tests {
         let (x, _m, wm, _y, c1, w) = system();
         let n = x.len();
         let xw: Vec<f64> = x.iter().zip(&wm).map(|(&a, &b)| a * b).collect();
-        let n1_raw: Vec<f64> =
-            (0..n).map(|i| ((i as f64 * 7.0) % 13.0 - 6.0) / 6.0).collect();
+        let n1_raw: Vec<f64> = (0..n)
+            .map(|i| ((i as f64 * 7.0) % 13.0 - 6.0) / 6.0)
+            .collect();
         let n1 = orthogonalize(&n1_raw, &[&x, &wm, &xw, &c1], &w);
         let m: Vec<f64> = (0..n)
             .map(|i| 1.0 + 0.5 * x[i] + 0.3 * wm[i] + 2.0 * n1[i])
             .collect();
-        let n2_raw: Vec<f64> =
-            (0..n).map(|i| ((i as f64 * 3.0) % 17.0 - 8.0) / 8.0).collect();
+        let n2_raw: Vec<f64> = (0..n)
+            .map(|i| ((i as f64 * 3.0) % 17.0 - 8.0) / 8.0)
+            .collect();
         let n2 = orthogonalize(&n2_raw, &[&x, &m, &wm, &c1], &w);
         let y: Vec<f64> = (0..n)
             .map(|i| 2.0 + 0.2 * x[i] + 0.7 * m[i] + 0.1 * wm[i] + 2.5 * n2[i])
@@ -555,7 +553,12 @@ mod tests {
         assert!(r.index_second_stage.abs() < 1e-8);
         let base = r.conditional[1].indirect;
         for c in &r.conditional {
-            assert!((c.indirect - base).abs() < 1e-8, "ω({}) {}", c.w, c.indirect);
+            assert!(
+                (c.indirect - base).abs() < 1e-8,
+                "ω({}) {}",
+                c.w,
+                c.indirect
+            );
         }
     }
 
@@ -596,12 +599,14 @@ mod tests {
             ..Default::default()
         };
         let a = mediation_moderated(&x, &m, &wm, &y, &[&c1], &design, &base_opts).unwrap();
-        let b =
-            mediation_moderated(&x, &m, &wm_shift, &y, &[&c1], &design, &shift_opts)
-                .unwrap();
+        let b = mediation_moderated(&x, &m, &wm_shift, &y, &[&c1], &design, &shift_opts).unwrap();
         for (ca, cb) in a.conditional.iter().zip(&b.conditional) {
-            assert!((ca.indirect - cb.indirect).abs() < 1e-8,
-                    "ω shift: {} vs {}", ca.indirect, cb.indirect);
+            assert!(
+                (ca.indirect - cb.indirect).abs() < 1e-8,
+                "ω shift: {} vs {}",
+                ca.indirect,
+                cb.indirect
+            );
             assert!((ca.a_path - cb.a_path).abs() < 1e-8);
         }
         for ((_, da, _), (_, db, _)) in a.conditional_direct.iter().zip(&b.conditional_direct) {

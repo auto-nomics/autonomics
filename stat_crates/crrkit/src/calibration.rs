@@ -22,9 +22,9 @@
 //!   an intercept-in-the-large (ideal 0) on the identity link.
 
 use crate::brier::BrierOptions;
+use crate::brier::validate_inputs;
 use crate::censoring::ReverseKmCensoring;
 use crate::error::{CrrkitError, Result};
-use crate::brier::validate_inputs;
 
 /// One calibration group: mean prediction vs IPCW-observed event probability.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -60,7 +60,9 @@ pub fn grouped_calibration(
 ) -> Result<Vec<CalibrationGroup>> {
     validate_inputs(times, status, prob, horizon)?;
     if n_groups == 0 {
-        return Err(CrrkitError::Invalid("n_groups must be positive".to_string()));
+        return Err(CrrkitError::Invalid(
+            "n_groups must be positive".to_string(),
+        ));
     }
     let n = times.len();
     if n == 0 {

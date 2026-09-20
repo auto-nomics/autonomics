@@ -504,10 +504,7 @@ pub fn wsi_qc_container_spec(spec: &PathologyWsiQcSpec) -> Result<ContainerComma
         ("saturation_threshold", spec.saturation_threshold),
         ("value_floor", spec.value_floor),
         ("value_ceiling", spec.value_ceiling),
-        (
-            "min_slide_tissue_fraction",
-            spec.min_slide_tissue_fraction,
-        ),
+        ("min_slide_tissue_fraction", spec.min_slide_tissue_fraction),
     ] {
         unit_interval(value, name)?;
     }
@@ -576,7 +573,11 @@ pub fn wsi_embed_container_spec(
     }
     match spec.device.as_str() {
         "auto" | "cpu" | "cuda" => {}
-        other => return Err(format!("unsupported device `{other}`; use auto, cpu, or cuda")),
+        other => {
+            return Err(format!(
+                "unsupported device `{other}`; use auto, cpu, or cuda"
+            ));
+        }
     }
     let mut container = base_spec("wsi-embed", &spec.artifact_prefix, spec.timeout_secs)?;
     container.gpus = spec.gpus.clone();
@@ -738,9 +739,13 @@ impl NodeFactory for PathologyContainerNodeFactory {
 
     fn desc(&self) -> &'static str {
         match self.kind {
-            PATHOLOGY_WSI_INGEST_KIND => "Ingests a whole-slide image and emits a thumbnail plus metadata.",
+            PATHOLOGY_WSI_INGEST_KIND => {
+                "Ingests a whole-slide image and emits a thumbnail plus metadata."
+            }
             PATHOLOGY_WSI_QC_KIND => "Tile-level focus, tissue, and blanking QC for one slide.",
-            PATHOLOGY_PATCH_SAMPLE_KIND => "Deterministic tissue-aware patch sampling for one slide.",
+            PATHOLOGY_PATCH_SAMPLE_KIND => {
+                "Deterministic tissue-aware patch sampling for one slide."
+            }
             PATHOLOGY_WSI_EMBED_KIND => "Embeds sampled patches with a staged foundation model.",
             PATHOLOGY_DOMAIN_CHECK_KIND => "Compares two embedding tables for batch effects.",
             PATHOLOGY_IHC_QUANT_KIND => "Quantifies DAB positivity and H-score inside an ROI.",
@@ -873,10 +878,7 @@ impl PathologyContainerNodeFactory {
         Self::new(PATHOLOGY_IHC_QUANT_KIND, runtime, panel_cache)
     }
 
-    pub fn qupath_import(
-        runtime: Arc<dyn PodmanConnection>,
-        panel_cache: Arc<PanelCache>,
-    ) -> Self {
+    pub fn qupath_import(runtime: Arc<dyn PodmanConnection>, panel_cache: Arc<PanelCache>) -> Self {
         Self::new(PATHOLOGY_QUPATH_IMPORT_KIND, runtime, panel_cache)
     }
 }
@@ -1012,71 +1014,81 @@ mod tests {
 
     #[test]
     fn invalid_settings_are_rejected() {
-        assert!(wsi_qc_container_spec(&PathologyWsiQcSpec {
-            level: -2,
-            max_downsample: 16.0,
-            tile_size: 512,
-            max_tiles: 400,
-            saturation_threshold: 0.2,
-            value_floor: 0.95,
-            value_ceiling: 0.92,
-            focus_threshold: 40.0,
-            min_slide_tissue_fraction: 0.05,
-            artifact_prefix: default_wsi_qc_prefix(),
-            timeout_secs: default_timeout(),
-        })
-        .is_err());
+        assert!(
+            wsi_qc_container_spec(&PathologyWsiQcSpec {
+                level: -2,
+                max_downsample: 16.0,
+                tile_size: 512,
+                max_tiles: 400,
+                saturation_threshold: 0.2,
+                value_floor: 0.95,
+                value_ceiling: 0.92,
+                focus_threshold: 40.0,
+                min_slide_tissue_fraction: 0.05,
+                artifact_prefix: default_wsi_qc_prefix(),
+                timeout_secs: default_timeout(),
+            })
+            .is_err()
+        );
 
-        assert!(wsi_embed_container_spec(&PathologyWsiEmbedSpec {
-            batch_size: 32,
-            device: "tpu".into(),
-            amp: false,
-            gpus: None,
-            artifact_prefix: default_wsi_embed_prefix(),
-            timeout_secs: default_embed_timeout(),
-        })
-        .is_err());
+        assert!(
+            wsi_embed_container_spec(&PathologyWsiEmbedSpec {
+                batch_size: 32,
+                device: "tpu".into(),
+                amp: false,
+                gpus: None,
+                artifact_prefix: default_wsi_embed_prefix(),
+                timeout_secs: default_embed_timeout(),
+            })
+            .is_err()
+        );
 
-        assert!(ihc_quant_container_spec(&PathologyIhcQuantSpec {
-            roi_label: None,
-            mask_downsample: 16.0,
-            dab_weak_threshold: 0.4,
-            dab_strong_threshold: 0.35,
-            max_downsample: 4.0,
-            tile_size: 512,
-            max_tiles: 20_000,
-            artifact_prefix: default_ihc_quant_prefix(),
-            timeout_secs: default_timeout(),
-        })
-        .is_err());
+        assert!(
+            ihc_quant_container_spec(&PathologyIhcQuantSpec {
+                roi_label: None,
+                mask_downsample: 16.0,
+                dab_weak_threshold: 0.4,
+                dab_strong_threshold: 0.35,
+                max_downsample: 4.0,
+                tile_size: 512,
+                max_tiles: 20_000,
+                artifact_prefix: default_ihc_quant_prefix(),
+                timeout_secs: default_timeout(),
+            })
+            .is_err()
+        );
 
-        assert!(domain_check_container_spec(&PathologyDomainCheckSpec {
-            l2_normalize: true,
-            shrinkage: 1.0,
-            silhouette_max_samples: 20_000,
-            seed: 0,
-            artifact_prefix: default_domain_check_prefix(),
-            timeout_secs: default_timeout(),
-        })
-        .is_err());
+        assert!(
+            domain_check_container_spec(&PathologyDomainCheckSpec {
+                l2_normalize: true,
+                shrinkage: 1.0,
+                silhouette_max_samples: 20_000,
+                seed: 0,
+                artifact_prefix: default_domain_check_prefix(),
+                timeout_secs: default_timeout(),
+            })
+            .is_err()
+        );
 
-        assert!(patch_sample_container_spec(&PathologyPatchSampleSpec {
-            level: 0,
-            patch_size: 256,
-            max_patches: 5000,
-            min_tissue_fraction: 1.5,
-            seed: 0,
-            mask_max_downsample: 64.0,
-            mask_max_width: 4096,
-            mask_open_radius: 3,
-            mask_close_radius: 3,
-            mask_min_object_px: 500,
-            saturation_threshold: 0.2,
-            value_floor: 0.15,
-            value_ceiling: 0.92,
-            artifact_prefix: "artifacts/patch".into(),
-            timeout_secs: default_timeout(),
-        })
-        .is_err());
+        assert!(
+            patch_sample_container_spec(&PathologyPatchSampleSpec {
+                level: 0,
+                patch_size: 256,
+                max_patches: 5000,
+                min_tissue_fraction: 1.5,
+                seed: 0,
+                mask_max_downsample: 64.0,
+                mask_max_width: 4096,
+                mask_open_radius: 3,
+                mask_close_radius: 3,
+                mask_min_object_px: 500,
+                saturation_threshold: 0.2,
+                value_floor: 0.15,
+                value_ceiling: 0.92,
+                artifact_prefix: "artifacts/patch".into(),
+                timeout_secs: default_timeout(),
+            })
+            .is_err()
+        );
     }
 }

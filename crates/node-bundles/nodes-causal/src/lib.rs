@@ -16,9 +16,13 @@ impl NodePlugin for Plugin {
     }
     fn register(&self, registry: &mut NodeRegistry) {
         registry.register(Box::new(mediation::MediationNodeFactory {}));
-        registry.register(Box::new(mediation_weighted::MediationWeightedNodeFactory {}));
+        registry.register(Box::new(
+            mediation_weighted::MediationWeightedNodeFactory {},
+        ));
         registry.register(Box::new(mediation_serial::MediationSerialNodeFactory {}));
-        registry.register(Box::new(mediation_moderated::MediationModeratedNodeFactory {}));
+        registry.register(Box::new(
+            mediation_moderated::MediationModeratedNodeFactory {},
+        ));
         registry.register(Box::new(causal::CausalNodeFactory {}));
         registry.register(Box::new(cmest::CmestNodeFactory {}));
         registry.register(Box::new(cmest::CmestMultiNodeFactory {}));

@@ -234,7 +234,14 @@ impl DagNode for NhanesDownloadNode {
                             .into(),
                     ));
                 }
-                if self.spec.component.as_deref().map(str::trim).unwrap_or("").is_empty() {
+                if self
+                    .spec
+                    .component
+                    .as_deref()
+                    .map(str::trim)
+                    .unwrap_or("")
+                    .is_empty()
+                {
                     return Err(DagError::Schedule(
                         "source_nhanes_download: convenience mode requires a non-empty \
                          `component`"
@@ -436,8 +443,7 @@ mod tests {
     #[tokio::test]
     async fn ambiguous_and_missing_patterns_list_candidates() {
         // "DEMO" matches both DEMO_J and DEMO_I → ambiguous.
-        let endpoint = spawn_stub(vec![("text/html", LISTING_HTML.to_string().into_bytes())])
-            .await;
+        let endpoint = spawn_stub(vec![("text/html", LISTING_HTML.to_string().into_bytes())]).await;
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx();
         let spec = serde_json::json!({
@@ -456,8 +462,7 @@ mod tests {
         assert!(message.contains("DEMO_J, DEMO_I"), "{message}");
 
         // "NOPE" matches nothing → zero-hit error lists available stems.
-        let endpoint = spawn_stub(vec![("text/html", LISTING_HTML.to_string().into_bytes())])
-            .await;
+        let endpoint = spawn_stub(vec![("text/html", LISTING_HTML.to_string().into_bytes())]).await;
         let spec = serde_json::json!({
             "component": "Demographics",
             "file_pattern": "NOPE",

@@ -365,25 +365,26 @@ mod tests {
         let n = 240;
         let x: Vec<f64> = (0..n).map(|i| ((i % 5) / 3) as f64).collect();
         let c1: Vec<f64> = (0..n).map(|i| 40.0 + (i as f64 % 19.0)).collect();
-        let w: Vec<f64> = (0..n)
-            .map(|i| 4000.0 + 300.0 * (i as f64 % 13.0))
-            .collect();
+        let w: Vec<f64> = (0..n).map(|i| 4000.0 + 300.0 * (i as f64 % 13.0)).collect();
         // Three pseudo-noise sequences with coprime periods, so no model
         // column becomes an exact linear combination of the others.
-        let n1_raw: Vec<f64> =
-            (0..n).map(|i| ((i as f64 * 7.0) % 13.0 - 6.0) / 6.0).collect();
+        let n1_raw: Vec<f64> = (0..n)
+            .map(|i| ((i as f64 * 7.0) % 13.0 - 6.0) / 6.0)
+            .collect();
         let n1 = orthogonalize(&n1_raw, &[&x, &c1], &w);
         let m1: Vec<f64> = (0..n)
             .map(|i| 1.0 + 0.7 * x[i] + 0.02 * c1[i] + 2.0 * n1[i])
             .collect();
-        let n2_raw: Vec<f64> =
-            (0..n).map(|i| ((i as f64 * 5.0) % 11.0 - 5.0) / 5.0).collect();
+        let n2_raw: Vec<f64> = (0..n)
+            .map(|i| ((i as f64 * 5.0) % 11.0 - 5.0) / 5.0)
+            .collect();
         let n2 = orthogonalize(&n2_raw, &[&x, &m1, &c1], &w);
         let m2: Vec<f64> = (0..n)
             .map(|i| 3.0 + 0.2 * x[i] + 0.5 * m1[i] + 0.01 * c1[i] + 1.5 * n2[i])
             .collect();
-        let n3_raw: Vec<f64> =
-            (0..n).map(|i| ((i as f64 * 3.0) % 17.0 - 8.0) / 8.0).collect();
+        let n3_raw: Vec<f64> = (0..n)
+            .map(|i| ((i as f64 * 3.0) % 17.0 - 8.0) / 8.0)
+            .collect();
         let n3 = orthogonalize(&n3_raw, &[&x, &m1, &m2, &c1], &w);
         let y: Vec<f64> = (0..n)
             .map(|i| 2.0 + 0.3 * x[i] + 0.6 * m1[i] + 0.8 * m2[i] + 0.05 * c1[i] + 2.5 * n3[i])
@@ -404,7 +405,11 @@ mod tests {
         // coefficients exactly; assert the closed-form paths tightly.
         assert!(approx_eq(r.ie_m1, 0.42, 1e-6), "ie_m1 {}", r.ie_m1);
         assert!(approx_eq(r.ie_m2, 0.16, 1e-6), "ie_m2 {}", r.ie_m2);
-        assert!(approx_eq(r.ie_serial, 0.28, 1e-6), "ie_serial {}", r.ie_serial);
+        assert!(
+            approx_eq(r.ie_serial, 0.28, 1e-6),
+            "ie_serial {}",
+            r.ie_serial
+        );
         assert!(approx_eq(r.total_indirect, 0.86, 1e-6));
         assert!(approx_eq(r.direct, 0.3, 1e-6), "direct {}", r.direct);
         assert!(approx_eq(r.te, 1.16, 1e-6));
@@ -429,9 +434,7 @@ mod tests {
         };
         let r = mediation_serial(&x, &m1, &m2, &y, &[&c1], &design, &opts).unwrap();
         assert!((r.te - (r.direct + r.total_indirect)).abs() < 1e-12);
-        assert!(
-            (r.total_indirect - (r.ie_m1 + r.ie_m2 + r.ie_serial)).abs() < 1e-12
-        );
+        assert!((r.total_indirect - (r.ie_m1 + r.ie_m2 + r.ie_serial)).abs() < 1e-12);
     }
 
     #[test]

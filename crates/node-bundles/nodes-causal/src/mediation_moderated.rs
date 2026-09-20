@@ -119,9 +119,7 @@ fn default_seed() -> u64 {
     42
 }
 
-fn parse_stage(
-    s: &str,
-) -> Result<ModerationStage, MediationModeratedError> {
+fn parse_stage(s: &str) -> Result<ModerationStage, MediationModeratedError> {
     match s {
         "first" => Ok(ModerationStage::First),
         "second" => Ok(ModerationStage::Second),
@@ -228,9 +226,9 @@ impl DagNode for MediationModeratedNode {
         inputs: &[NodeInput],
         _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
-        let input = inputs
-            .first()
-            .ok_or(MediationModeratedError::Column("no input connected".to_string()))?;
+        let input = inputs.first().ok_or(MediationModeratedError::Column(
+            "no input connected".to_string(),
+        ))?;
         let batches = input
             .dataframe()?
             .clone()
@@ -240,7 +238,8 @@ impl DagNode for MediationModeratedNode {
 
         let x_raw = dag_core::arrow_util::extract_numeric_lenient(&batches, &self.exposure_column)?;
         let m_raw = dag_core::arrow_util::extract_numeric_lenient(&batches, &self.mediator_column)?;
-        let wm_raw = dag_core::arrow_util::extract_numeric_lenient(&batches, &self.moderator_column)?;
+        let wm_raw =
+            dag_core::arrow_util::extract_numeric_lenient(&batches, &self.moderator_column)?;
         let y_raw = dag_core::arrow_util::extract_numeric_lenient(&batches, &self.outcome_column)?;
         let w_raw = dag_core::arrow_util::extract_numeric_lenient(&batches, &self.weight_column)?;
         let s_raw = match &self.strata_column {
@@ -295,16 +294,24 @@ impl DagNode for MediationModeratedNode {
             }
         }
         if x.is_empty() {
-            return Err(MediationModeratedError::Column("no complete-case rows".to_string()).into());
+            return Err(
+                MediationModeratedError::Column("no complete-case rows".to_string()).into(),
+            );
         }
 
         let strata = if s_raw.is_some() {
-            Some(to_u64_codes(&s_kept, self.strata_column.as_deref().unwrap_or(""))?)
+            Some(to_u64_codes(
+                &s_kept,
+                self.strata_column.as_deref().unwrap_or(""),
+            )?)
         } else {
             None
         };
         let psu = if p_raw.is_some() {
-            Some(to_u64_codes(&p_kept, self.psu_column.as_deref().unwrap_or(""))?)
+            Some(to_u64_codes(
+                &p_kept,
+                self.psu_column.as_deref().unwrap_or(""),
+            )?)
         } else {
             None
         };
@@ -322,7 +329,13 @@ impl DagNode for MediationModeratedNode {
             ..Default::default()
         };
         let result = epi::mediation_moderated::mediation_moderated(
-            &x, &m, &wm, &y, &cov_slices, &design, &opts,
+            &x,
+            &m,
+            &wm,
+            &y,
+            &cov_slices,
+            &design,
+            &opts,
         )
         .map_err(|e| MediationModeratedError::Fit(e.to_string()))?;
 
@@ -337,12 +350,32 @@ impl DagNode for MediationModeratedNode {
         ];
         for i in 0..result.w_points.len() {
             fields.push(Field::new(format!("w_{i}"), DataType::Float64, false));
-            fields.push(Field::new(format!("cond_indirect_{i}"), DataType::Float64, false));
-            fields.push(Field::new(format!("cond_indirect_{i}_ci_lower"), DataType::Float64, false));
-            fields.push(Field::new(format!("cond_indirect_{i}_ci_upper"), DataType::Float64, false));
+            fields.push(Field::new(
+                format!("cond_indirect_{i}"),
+                DataType::Float64,
+                false,
+            ));
+            fields.push(Field::new(
+                format!("cond_indirect_{i}_ci_lower"),
+                DataType::Float64,
+                false,
+            ));
+            fields.push(Field::new(
+                format!("cond_indirect_{i}_ci_upper"),
+                DataType::Float64,
+                false,
+            ));
             fields.push(Field::new(format!("direct_{i}"), DataType::Float64, false));
-            fields.push(Field::new(format!("direct_{i}_ci_lower"), DataType::Float64, false));
-            fields.push(Field::new(format!("direct_{i}_ci_upper"), DataType::Float64, false));
+            fields.push(Field::new(
+                format!("direct_{i}_ci_lower"),
+                DataType::Float64,
+                false,
+            ));
+            fields.push(Field::new(
+                format!("direct_{i}_ci_upper"),
+                DataType::Float64,
+                false,
+            ));
         }
         fields.extend([
             Field::new("a_x", DataType::Float64, false),
@@ -438,18 +471,13 @@ mod tests {
             .map(|i| 2.0 + 0.2 * x[i] + 0.7 * m[i] + 0.1 * wm[i] + (i % 3) as f64 / 3.0)
             .collect();
         let wt: Vec<f64> = (0..n).map(|i| 5000.0 + 100.0 * (i % 5) as f64).collect();
-        make_batch(vec![
-            ("x", x),
-            ("m", m),
-            ("wm", wm),
-            ("y", y),
-            ("wt", wt),
-        ])
+        make_batch(vec![("x", x), ("m", m), ("wm", wm), ("y", y), ("wt", wt)])
     }
 
     async fn run_node(spec: serde_json::Value) -> Vec<RecordBatch> {
-        let mut node =
-            MediationModeratedNodeFactory {}.build(spec, node_ctx()).unwrap();
+        let mut node = MediationModeratedNodeFactory {}
+            .build(spec, node_ctx())
+            .unwrap();
         let input = dag_core::node::NodeInput::new_dataframe(
             0,
             datafusion::prelude::SessionContext::new()
@@ -474,10 +502,7 @@ mod tests {
         if let Some(a) = col.as_any().downcast_ref::<Float64Array>() {
             a.value(0)
         } else {
-            col.as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap()
-                .value(0) as f64
+            col.as_any().downcast_ref::<Int32Array>().unwrap().value(0) as f64
         }
     }
 

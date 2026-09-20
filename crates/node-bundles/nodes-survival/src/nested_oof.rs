@@ -28,7 +28,9 @@
 
 use std::sync::Arc;
 
-use arrow_array::{Array, ArrayRef, BooleanArray, Float64Array, RecordBatch, UInt32Array, UInt8Array};
+use arrow_array::{
+    Array, ArrayRef, BooleanArray, Float64Array, RecordBatch, UInt8Array, UInt32Array,
+};
 use arrow_schema::{DataType, Field, Schema};
 use async_trait::async_trait;
 use cmprsk::{CrrInput, CrrRidgeOptions, TimeFunctions, crr_ridge};
@@ -120,7 +122,11 @@ impl NestedOofSpec {
         if !overlap.is_empty() {
             return Err(format!(
                 "columns listed in both clinical and covariates: {}",
-                overlap.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+                overlap
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ));
         }
         if !self.horizon.is_finite() || self.horizon <= 0.0 {
@@ -195,7 +201,9 @@ pub(crate) fn nested_oof_scores(
         let test_pos: Vec<usize> = (0..n).filter(|&i| outer[i] as usize == fold).collect();
         let train_pos: Vec<usize> = (0..n).filter(|&i| outer[i] as usize != fold).collect();
         if test_pos.is_empty() || train_pos.is_empty() {
-            return Err(format!("outer fold {fold} is degenerate (empty train or test)"));
+            return Err(format!(
+                "outer fold {fold} is degenerate (empty train or test)"
+            ));
         }
 
         // λ selection sees outer-training rows only.
@@ -395,7 +403,9 @@ fn build_fold_batch(outcome: &OofOutcome) -> Result<RecordBatch, DagError> {
             Field::new("converged", DataType::Boolean, false),
         ])),
         vec![
-            Arc::new(UInt32Array::from(rows.iter().map(|r| r.fold).collect::<Vec<_>>())),
+            Arc::new(UInt32Array::from(
+                rows.iter().map(|r| r.fold).collect::<Vec<_>>(),
+            )),
             Arc::new(UInt32Array::from(
                 rows.iter().map(|r| r.n_train as u32).collect::<Vec<_>>(),
             )),
@@ -403,16 +413,22 @@ fn build_fold_batch(outcome: &OofOutcome) -> Result<RecordBatch, DagError> {
                 rows.iter().map(|r| r.n_test as u32).collect::<Vec<_>>(),
             )),
             Arc::new(UInt32Array::from(
-                rows.iter().map(|r| r.n_events_train as u32).collect::<Vec<_>>(),
+                rows.iter()
+                    .map(|r| r.n_events_train as u32)
+                    .collect::<Vec<_>>(),
             )),
             Arc::new(Float64Array::from(
                 rows.iter().map(|r| r.lambda_selected).collect::<Vec<_>>(),
             )),
             Arc::new(Float64Array::from(
-                rows.iter().map(|r| r.inner_brier_at_lambda).collect::<Vec<_>>(),
+                rows.iter()
+                    .map(|r| r.inner_brier_at_lambda)
+                    .collect::<Vec<_>>(),
             )),
             Arc::new(UInt32Array::from(
-                rows.iter().map(|r| r.n_failed_inner_evals as u32).collect::<Vec<_>>(),
+                rows.iter()
+                    .map(|r| r.n_failed_inner_evals as u32)
+                    .collect::<Vec<_>>(),
             )),
             Arc::new(BooleanArray::from(
                 rows.iter().map(|r| r.converged).collect::<Vec<_>>(),
@@ -443,9 +459,7 @@ impl DagNode for NestedOofNode {
         inputs: &[NodeInput],
         _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
-        let input = inputs
-            .first()
-            .ok_or_else(|| err("no input connected"))?;
+        let input = inputs.first().ok_or_else(|| err("no input connected"))?;
         let batches = input
             .dataframe()?
             .clone()
@@ -460,7 +474,12 @@ impl DagNode for NestedOofNode {
             .map_err(|e| err(e.to_string()))?;
 
         // Design matrix in [clinical…, covariates…] layout.
-        let layout: Vec<String> = s.clinical.iter().chain(s.covariates.iter()).cloned().collect();
+        let layout: Vec<String> = s
+            .clinical
+            .iter()
+            .chain(s.covariates.iter())
+            .cloned()
+            .collect();
         let mut columns: Vec<Vec<f64>> = Vec::with_capacity(layout.len());
         for name in &layout {
             columns.push(
@@ -528,11 +547,13 @@ impl DagNode for NestedOofNode {
         let mut res = PortOutputs::new();
         res.insert(
             0,
-            ctx.read_batch(row_batch).map_err(|e| err(format!("read_batch(0): {e}")))?,
+            ctx.read_batch(row_batch)
+                .map_err(|e| err(format!("read_batch(0): {e}")))?,
         );
         res.insert(
             1,
-            ctx.read_batch(fold_batch).map_err(|e| err(format!("read_batch(1): {e}")))?,
+            ctx.read_batch(fold_batch)
+                .map_err(|e| err(format!("read_batch(1): {e}")))?,
         );
         Ok(res)
     }
@@ -618,19 +639,25 @@ mod tests {
             "omitted covariates rejected at deserialization"
         );
 
-        assert!(spec(serde_json::json!({
-            "time_column": "t", "status_column": "s", "covariates": ["x"],
-            "clinical": ["x"], "horizon": 1095.0, "lambda_grid": [1.0]
-        }))
-        .validate()
-        .is_err(), "clinical/covariates overlap rejected");
+        assert!(
+            spec(serde_json::json!({
+                "time_column": "t", "status_column": "s", "covariates": ["x"],
+                "clinical": ["x"], "horizon": 1095.0, "lambda_grid": [1.0]
+            }))
+            .validate()
+            .is_err(),
+            "clinical/covariates overlap rejected"
+        );
 
-        assert!(spec(serde_json::json!({
-            "time_column": "t", "status_column": "s", "covariates": ["x"],
-            "horizon": 1095.0, "lambda_grid": []
-        }))
-        .validate()
-        .is_err(), "empty grid rejected");
+        assert!(
+            spec(serde_json::json!({
+                "time_column": "t", "status_column": "s", "covariates": ["x"],
+                "horizon": 1095.0, "lambda_grid": []
+            }))
+            .validate()
+            .is_err(),
+            "empty grid rejected"
+        );
     }
 
     #[test]
@@ -639,7 +666,19 @@ mod tests {
         let terms: Vec<String> = (0..3).map(|j| format!("x{j}")).collect();
         let args = |seed: u64| {
             nested_oof_scores(
-                &time, &status, &cov1, &terms, 0, &[0.5, 5.0], 4, 3, 30.0, seed, true, 1e-7, 200,
+                &time,
+                &status,
+                &cov1,
+                &terms,
+                0,
+                &[0.5, 5.0],
+                4,
+                3,
+                30.0,
+                seed,
+                true,
+                1e-7,
+                200,
             )
         };
         let a = args(7).unwrap();

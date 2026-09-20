@@ -194,9 +194,9 @@ impl DagNode for MediationSerialNode {
         inputs: &[NodeInput],
         _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
-        let input = inputs
-            .first()
-            .ok_or(MediationSerialError::Column("no input connected".to_string()))?;
+        let input = inputs.first().ok_or(MediationSerialError::Column(
+            "no input connected".to_string(),
+        ))?;
         let batches = input
             .dataframe()?
             .clone()
@@ -205,8 +205,10 @@ impl DagNode for MediationSerialNode {
             .map_err(|e| MediationSerialError::Collect(e.to_string()))?;
 
         let x_raw = dag_core::arrow_util::extract_numeric_lenient(&batches, &self.exposure_column)?;
-        let m1_raw = dag_core::arrow_util::extract_numeric_lenient(&batches, &self.mediator1_column)?;
-        let m2_raw = dag_core::arrow_util::extract_numeric_lenient(&batches, &self.mediator2_column)?;
+        let m1_raw =
+            dag_core::arrow_util::extract_numeric_lenient(&batches, &self.mediator1_column)?;
+        let m2_raw =
+            dag_core::arrow_util::extract_numeric_lenient(&batches, &self.mediator2_column)?;
         let y_raw = dag_core::arrow_util::extract_numeric_lenient(&batches, &self.outcome_column)?;
         let w_raw = match &self.weight_column {
             Some(c) => Some(dag_core::arrow_util::extract_numeric_lenient(&batches, c)?),
@@ -273,12 +275,18 @@ impl DagNode for MediationSerialNode {
             w = vec![1.0; x.len()];
         }
         let strata = if s_raw.is_some() {
-            Some(to_u64_codes(&s_kept, self.strata_column.as_deref().unwrap_or(""))?)
+            Some(to_u64_codes(
+                &s_kept,
+                self.strata_column.as_deref().unwrap_or(""),
+            )?)
         } else {
             None
         };
         let psu = if p_raw.is_some() {
-            Some(to_u64_codes(&p_kept, self.psu_column.as_deref().unwrap_or(""))?)
+            Some(to_u64_codes(
+                &p_kept,
+                self.psu_column.as_deref().unwrap_or(""),
+            )?)
         } else {
             None
         };
@@ -292,8 +300,9 @@ impl DagNode for MediationSerialNode {
             seed: self.seed,
             ..Default::default()
         };
-        let result = epi::mediation_serial::mediation_serial(&x, &m1, &m2, &y, &cov_slices, &design, &opts)
-            .map_err(|e| MediationSerialError::Fit(e.to_string()))?;
+        let result =
+            epi::mediation_serial::mediation_serial(&x, &m1, &m2, &y, &cov_slices, &design, &opts)
+                .map_err(|e| MediationSerialError::Fit(e.to_string()))?;
 
         let batch = RecordBatch::try_new(
             Arc::new(Schema::new(vec![
@@ -422,7 +431,9 @@ mod tests {
     }
 
     async fn run_node(spec: serde_json::Value) -> Vec<RecordBatch> {
-        let mut node = MediationSerialNodeFactory {}.build(spec, node_ctx()).unwrap();
+        let mut node = MediationSerialNodeFactory {}
+            .build(spec, node_ctx())
+            .unwrap();
         let input = dag_core::node::NodeInput::new_dataframe(
             0,
             datafusion::prelude::SessionContext::new()
@@ -447,10 +458,7 @@ mod tests {
         if let Some(a) = col.as_any().downcast_ref::<Float64Array>() {
             a.value(0)
         } else {
-            col.as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap()
-                .value(0) as f64
+            col.as_any().downcast_ref::<Int32Array>().unwrap().value(0) as f64
         }
     }
 

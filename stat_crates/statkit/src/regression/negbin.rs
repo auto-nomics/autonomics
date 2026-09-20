@@ -128,7 +128,10 @@ pub fn negbin(
 
     let p = x.len() + usize::from(opts.intercept);
     if n <= p {
-        return Err(StatError::InsufficientData { min: p + 1, actual: n });
+        return Err(StatError::InsufficientData {
+            min: p + 1,
+            actual: n,
+        });
     }
 
     // Resolve α: fixed, or profiled over log α by golden section.
@@ -291,8 +294,7 @@ fn irls_fit(
         }
         let mu = eta.clamp(-30.0, 30.0).exp();
         let t = 1.0 / alpha;
-        loglik += y[i] * (alpha * mu).ln()
-            - (y[i] + t) * (1.0 + alpha * mu).ln()
+        loglik += y[i] * (alpha * mu).ln() - (y[i] + t) * (1.0 + alpha * mu).ln()
             + ln_gamma(y[i] + t)
             - r
             - ln_gamma(y[i] + 1.0);
@@ -512,7 +514,18 @@ mod tests {
         let y = [1.0, 2.0];
         let x = [&[0.0, 1.0][..]];
         let o = [0.0_f64, 0.0];
-        assert!(negbin(&y, &x, &o, &NegbinOptions { alpha: Some(0.0), ..NegbinOptions::default() }).is_err());
+        assert!(
+            negbin(
+                &y,
+                &x,
+                &o,
+                &NegbinOptions {
+                    alpha: Some(0.0),
+                    ..NegbinOptions::default()
+                }
+            )
+            .is_err()
+        );
         assert!(negbin(&[-1.0, 2.0], &x, &o, &NegbinOptions::default()).is_err());
         let bad_o = [0.0_f64, f64::NAN];
         assert!(negbin(&y, &x, &bad_o, &NegbinOptions::default()).is_err());

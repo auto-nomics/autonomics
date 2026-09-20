@@ -398,11 +398,7 @@ pub(crate) struct Prepared {
     pub n_events: usize,
 }
 
-pub(crate) fn prepare(
-    input: &CrrInput,
-    failcode: f64,
-    cencode: f64,
-) -> Result<Prepared> {
+pub(crate) fn prepare(input: &CrrInput, failcode: f64, cencode: f64) -> Result<Prepared> {
     let n_in = input.ftime.len();
     let nc1 = input.cov1.first().map_or(0, |r| r.len());
     let nc2 = input.cov2.first().map_or(0, |r| r.len());
@@ -447,7 +443,11 @@ pub(crate) fn prepare(
     for (k, &i) in keep.iter().enumerate() {
         let st = input.fstatus[i];
         cenind[k] = u8::from(st == cencode);
-        ici[k] = if st == failcode { 1 } else { 2 * (1 - cenind[k]) };
+        ici[k] = if st == failcode {
+            1
+        } else {
+            2 * (1 - cenind[k])
+        };
     }
 
     // ── censoring groups: match(cengroup, sort(unique(cengroup))) ───────────

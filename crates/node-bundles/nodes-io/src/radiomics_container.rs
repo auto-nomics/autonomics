@@ -1438,14 +1438,24 @@ pub fn perturb_stability_container_spec(
             allowed.join(", ")
         ));
     }
-    if spec.perturbations.len() != spec.perturbations.iter().collect::<std::collections::BTreeSet<_>>().len() {
+    if spec.perturbations.len()
+        != spec
+            .perturbations
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+    {
         return Err("perturbations must be unique".into());
     }
     if !(spec.noise_sigma_pct.is_finite() && spec.noise_sigma_pct > 0.0) {
         return Err("noise_sigma_pct must be finite and positive".into());
     }
     spec.settings.validate()?;
-    let mut container = base_spec("perturb-stability", &spec.artifact_prefix, spec.timeout_secs)?;
+    let mut container = base_spec(
+        "perturb-stability",
+        &spec.artifact_prefix,
+        spec.timeout_secs,
+    )?;
     container.env.insert(
         "RADIOMICS_EXTRACT_SETTINGS".into(),
         extraction_settings_json(&spec.settings).to_string(),
@@ -2027,10 +2037,7 @@ impl RadiomicsContainerNodeFactory {
         Self::new(RADIOMICS_DELTA_FEATURES_KIND, runtime, panel_cache)
     }
 
-    pub fn bias_correct(
-        runtime: Arc<dyn PodmanConnection>,
-        panel_cache: Arc<PanelCache>,
-    ) -> Self {
+    pub fn bias_correct(runtime: Arc<dyn PodmanConnection>, panel_cache: Arc<PanelCache>) -> Self {
         Self::new(RADIOMICS_BIAS_CORRECT_KIND, runtime, panel_cache)
     }
 
@@ -2360,75 +2367,89 @@ mod tests {
 
     #[test]
     fn rejects_invalid_preprocess_family_settings() {
-        assert!(bias_correct_container_spec(&RadiomicsBiasCorrectSpec {
-            mask_label: 1,
-            shrink_factor: 0,
-            max_iterations: default_bias_iterations(),
-            convergence_threshold: default_bias_convergence(),
-            artifact_prefix: default_bias_prefix(),
-            timeout_secs: default_timeout(),
-        })
-        .is_err());
-        assert!(bias_correct_container_spec(&RadiomicsBiasCorrectSpec {
-            mask_label: 1,
-            shrink_factor: default_bias_shrink(),
-            max_iterations: vec![],
-            convergence_threshold: default_bias_convergence(),
-            artifact_prefix: default_bias_prefix(),
-            timeout_secs: default_timeout(),
-        })
-        .is_err());
+        assert!(
+            bias_correct_container_spec(&RadiomicsBiasCorrectSpec {
+                mask_label: 1,
+                shrink_factor: 0,
+                max_iterations: default_bias_iterations(),
+                convergence_threshold: default_bias_convergence(),
+                artifact_prefix: default_bias_prefix(),
+                timeout_secs: default_timeout(),
+            })
+            .is_err()
+        );
+        assert!(
+            bias_correct_container_spec(&RadiomicsBiasCorrectSpec {
+                mask_label: 1,
+                shrink_factor: default_bias_shrink(),
+                max_iterations: vec![],
+                convergence_threshold: default_bias_convergence(),
+                artifact_prefix: default_bias_prefix(),
+                timeout_secs: default_timeout(),
+            })
+            .is_err()
+        );
 
-        assert!(robust_normalize_container_spec(&RadiomicsRobustNormalizeSpec {
-            mask_label: 1,
-            lower_percentile: 99.0,
-            upper_percentile: 1.0,
-            artifact_prefix: default_robust_normalize_prefix(),
-            timeout_secs: default_timeout(),
-        })
-        .is_err());
+        assert!(
+            robust_normalize_container_spec(&RadiomicsRobustNormalizeSpec {
+                mask_label: 1,
+                lower_percentile: 99.0,
+                upper_percentile: 1.0,
+                artifact_prefix: default_robust_normalize_prefix(),
+                timeout_secs: default_timeout(),
+            })
+            .is_err()
+        );
 
-        assert!(peritumoral_ring_container_spec(&RadiomicsPeritumoralRingSpec {
-            mask_label: 1,
-            inner_mm: 5.0,
-            outer_mm: 5.0,
-            artifact_prefix: default_ring_prefix(),
-            timeout_secs: default_timeout(),
-        })
-        .is_err());
-        assert!(peritumoral_ring_container_spec(&RadiomicsPeritumoralRingSpec {
-            mask_label: 1,
-            inner_mm: 0.0,
-            outer_mm: 60.0,
-            artifact_prefix: default_ring_prefix(),
-            timeout_secs: default_timeout(),
-        })
-        .is_err());
+        assert!(
+            peritumoral_ring_container_spec(&RadiomicsPeritumoralRingSpec {
+                mask_label: 1,
+                inner_mm: 5.0,
+                outer_mm: 5.0,
+                artifact_prefix: default_ring_prefix(),
+                timeout_secs: default_timeout(),
+            })
+            .is_err()
+        );
+        assert!(
+            peritumoral_ring_container_spec(&RadiomicsPeritumoralRingSpec {
+                mask_label: 1,
+                inner_mm: 0.0,
+                outer_mm: 60.0,
+                artifact_prefix: default_ring_prefix(),
+                timeout_secs: default_timeout(),
+            })
+            .is_err()
+        );
 
-        assert!(habitat_fit_container_spec(&RadiomicsHabitatFitSpec {
-            mask_label: 1,
-            n_habitats: 1,
-            sample_voxels_per_case: default_habitat_sample(),
-            seed: 0,
-            standardize: true,
-            n_init: default_habitat_n_init(),
-            max_iter: default_habitat_max_iter(),
-            artifact_prefix: default_habitat_fit_prefix(),
-            timeout_secs: default_timeout(),
-        })
-        .is_err());
-        assert!(habitat_fit_container_spec(&RadiomicsHabitatFitSpec {
-            mask_label: 1,
-            n_habitats: default_n_habitats(),
-            sample_voxels_per_case: 10,
-            seed: 0,
-            standardize: true,
-            n_init: default_habitat_n_init(),
-            max_iter: default_habitat_max_iter(),
-            artifact_prefix: default_habitat_fit_prefix(),
-            timeout_secs: default_timeout(),
-        })
-        .is_err());
+        assert!(
+            habitat_fit_container_spec(&RadiomicsHabitatFitSpec {
+                mask_label: 1,
+                n_habitats: 1,
+                sample_voxels_per_case: default_habitat_sample(),
+                seed: 0,
+                standardize: true,
+                n_init: default_habitat_n_init(),
+                max_iter: default_habitat_max_iter(),
+                artifact_prefix: default_habitat_fit_prefix(),
+                timeout_secs: default_timeout(),
+            })
+            .is_err()
+        );
+        assert!(
+            habitat_fit_container_spec(&RadiomicsHabitatFitSpec {
+                mask_label: 1,
+                n_habitats: default_n_habitats(),
+                sample_voxels_per_case: 10,
+                seed: 0,
+                standardize: true,
+                n_init: default_habitat_n_init(),
+                max_iter: default_habitat_max_iter(),
+                artifact_prefix: default_habitat_fit_prefix(),
+                timeout_secs: default_timeout(),
+            })
+            .is_err()
+        );
 
         let mut perturb = RadiomicsPerturbStabilitySpec {
             extraction_id: "case".into(),

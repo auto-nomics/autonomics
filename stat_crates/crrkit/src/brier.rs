@@ -259,7 +259,10 @@ mod tests {
         // A single pre-horizon censored patient carries no outcome
         // information: the score is unestimable, not zero.
         let r = ipcw_brier(&[100.0], &[0], &[0.3], 1095.75, &opts());
-        assert!(matches!(r, Err(crate::error::CrrkitError::NoOutcomeInformation { .. })));
+        assert!(matches!(
+            r,
+            Err(crate::error::CrrkitError::NoOutcomeInformation { .. })
+        ));
     }
 
     #[test]
@@ -272,8 +275,7 @@ mod tests {
         let status = [0u8, 1, 0, 2, 0];
         let prob = [0.0, 0.5, 0.0, 0.5, 0.5];
         let r = ipcw_brier(&times, &status, &prob, 1095.75, &opts()).unwrap();
-        let expected =
-            (0.25 / (4.0 / 5.0) + 0.25 / (8.0 / 15.0) + 0.25 / (8.0 / 15.0)) / 5.0;
+        let expected = (0.25 / (4.0 / 5.0) + 0.25 / (8.0 / 15.0) + 0.25 / (8.0 / 15.0)) / 5.0;
         assert!((r.brier - expected).abs() < 1e-12);
         assert!((r.g_at_horizon - 8.0 / 15.0).abs() < 1e-12);
         assert!((r.max_weight - 15.0 / 8.0).abs() < 1e-12);

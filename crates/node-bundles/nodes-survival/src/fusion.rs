@@ -98,7 +98,10 @@ pub(crate) fn fit_fusion(
     let fit = crr_ridge(
         &CrrInput {
             ftime: time,
-            fstatus: &status_code.iter().map(|&s| f64::from(s)).collect::<Vec<_>>(),
+            fstatus: &status_code
+                .iter()
+                .map(|&s| f64::from(s))
+                .collect::<Vec<_>>(),
             cov1,
             cov1_names: terms,
             cov2: &[],
@@ -136,11 +139,23 @@ fn normal_cdf(x: f64) -> f64 {
 }
 
 /// Coefficient table of `fusion_fit` port 0.
-fn build_coef_batch(kind: &str, fit: &CrrRidgeFit, n_clinical: usize) -> Result<RecordBatch, DagError> {
+fn build_coef_batch(
+    kind: &str,
+    fit: &CrrRidgeFit,
+    n_clinical: usize,
+) -> Result<RecordBatch, DagError> {
     let np = fit.ncov1;
     let se: Vec<f64> = (0..np).map(|j| fit.var[j][j].max(0.0).sqrt()).collect();
-    let z: Vec<f64> = fit.coef.iter().zip(se.iter()).map(|(&b, &s)| b / s).collect();
-    let p: Vec<f64> = z.iter().map(|&v| 2.0 * (1.0 - normal_cdf(v.abs()))).collect();
+    let z: Vec<f64> = fit
+        .coef
+        .iter()
+        .zip(se.iter())
+        .map(|(&b, &s)| b / s)
+        .collect();
+    let p: Vec<f64> = z
+        .iter()
+        .map(|&v| 2.0 * (1.0 - normal_cdf(v.abs())))
+        .collect();
     RecordBatch::try_new(
         Arc::new(Schema::new(vec![
             Field::new("term", DataType::Utf8, false),
@@ -154,7 +169,9 @@ fn build_coef_batch(kind: &str, fit: &CrrRidgeFit, n_clinical: usize) -> Result<
         vec![
             Arc::new(StringArray::from(fit.terms.clone())),
             Arc::new(Float64Array::from(fit.coef.clone())),
-            Arc::new(Float64Array::from(fit.coef.iter().map(|b| b.exp()).collect::<Vec<_>>())),
+            Arc::new(Float64Array::from(
+                fit.coef.iter().map(|b| b.exp()).collect::<Vec<_>>(),
+            )),
             Arc::new(Float64Array::from(se)),
             Arc::new(Float64Array::from(z)),
             Arc::new(Float64Array::from(p)),
@@ -269,14 +286,15 @@ fn validate_covariates(clinical: &[String], covariates: &[String]) -> Result<(),
     if covariates.is_empty() {
         return Err("covariates must be non-empty".into());
     }
-    let overlap: Vec<&String> = clinical
-        .iter()
-        .filter(|c| covariates.contains(c))
-        .collect();
+    let overlap: Vec<&String> = clinical.iter().filter(|c| covariates.contains(c)).collect();
     if !overlap.is_empty() {
         return Err(format!(
             "columns listed in both clinical and covariates: {}",
-            overlap.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+            overlap
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
         ));
     }
     Ok(())
@@ -537,15 +555,18 @@ impl DagNode for FusionFitNode {
         let mut res = PortOutputs::new();
         res.insert(
             0,
-            ctx.read_batch(coef_batch).map_err(|e| ferr(format!("read_batch(0): {e}")))?,
+            ctx.read_batch(coef_batch)
+                .map_err(|e| ferr(format!("read_batch(0): {e}")))?,
         );
         res.insert(
             1,
-            ctx.read_batch(baseline_batch).map_err(|e| ferr(format!("read_batch(1): {e}")))?,
+            ctx.read_batch(baseline_batch)
+                .map_err(|e| ferr(format!("read_batch(1): {e}")))?,
         );
         res.insert(
             2,
-            ctx.read_batch(summary_batch).map_err(|e| ferr(format!("read_batch(2): {e}")))?,
+            ctx.read_batch(summary_batch)
+                .map_err(|e| ferr(format!("read_batch(2): {e}")))?,
         );
         Ok(res)
     }
@@ -760,18 +781,25 @@ impl DagNode for LockPredictNode {
         let mut cif = Vec::with_capacity(n_target);
         for i in 0..n_target {
             let row: Vec<f64> = target_columns.iter().map(|c| c[i]).collect();
-            risk.push(fit.linear_predictor(&row).map_err(|e| lerr(e.to_string()))?);
+            risk.push(
+                fit.linear_predictor(&row)
+                    .map_err(|e| lerr(e.to_string()))?,
+            );
             cif.push(cif_at(&fit, &row, s.horizon).map_err(lerr)?);
         }
 
         // Target rows + the two prediction columns.
-        let batch0 = target_batches.first().ok_or_else(|| lerr("target has no rows"))?;
+        let batch0 = target_batches
+            .first()
+            .ok_or_else(|| lerr("target has no rows"))?;
         let schema = batch0.schema();
         let mut fields: Vec<Arc<Field>> = schema.fields().iter().cloned().collect();
         let mut arrays: Vec<ArrayRef> = Vec::with_capacity(fields.len() + 2);
         for col_i in 0..fields.len() {
-            let chunks: Vec<&dyn Array> =
-                target_batches.iter().map(|b| b.column(col_i).as_ref()).collect();
+            let chunks: Vec<&dyn Array> = target_batches
+                .iter()
+                .map(|b| b.column(col_i).as_ref())
+                .collect();
             arrays.push(
                 arrow_select::concat::concat(&chunks)
                     .map_err(|e| lerr(format!("concat target columns: {e}")))?,
@@ -779,7 +807,11 @@ impl DagNode for LockPredictNode {
         }
         fields.push(Arc::new(Field::new("risk_score", DataType::Float64, false)));
         arrays.push(Arc::new(Float64Array::from(risk)));
-        fields.push(Arc::new(Field::new("predicted_cif", DataType::Float64, false)));
+        fields.push(Arc::new(Field::new(
+            "predicted_cif",
+            DataType::Float64,
+            false,
+        )));
         arrays.push(Arc::new(Float64Array::from(cif)));
         let out_batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), arrays)
             .map_err(|e| lerr(format!("build output batch: {e}")))?;
@@ -788,7 +820,8 @@ impl DagNode for LockPredictNode {
         let mut res = PortOutputs::new();
         res.insert(
             0,
-            ctx.read_batch(out_batch).map_err(|e| lerr(format!("read_batch: {e}")))?,
+            ctx.read_batch(out_batch)
+                .map_err(|e| lerr(format!("read_batch: {e}")))?,
         );
         Ok(res)
     }
@@ -856,13 +889,32 @@ mod tests {
         let (time, status, cov1) = simulate(300, &[0.8, -0.6], 17);
         let terms = vec!["x0".to_string(), "x1".to_string()];
         let (fit, selection) = fit_fusion(
-            &time, &status, &cov1, &terms, 0, Some(1e-8), &[], 5, None, 0, 1e-8, 300,
+            &time,
+            &status,
+            &cov1,
+            &terms,
+            0,
+            Some(1e-8),
+            &[],
+            5,
+            None,
+            0,
+            1e-8,
+            300,
         )
         .unwrap();
         assert!(selection.is_none());
         assert!(fit.converged);
-        assert!(fit.coef[0] > 0.3, "positive signal recovered: {}", fit.coef[0]);
-        assert!(fit.coef[1] < -0.3, "negative signal recovered: {}", fit.coef[1]);
+        assert!(
+            fit.coef[0] > 0.3,
+            "positive signal recovered: {}",
+            fit.coef[0]
+        );
+        assert!(
+            fit.coef[1] < -0.3,
+            "negative signal recovered: {}",
+            fit.coef[1]
+        );
     }
 
     #[test]
@@ -898,10 +950,12 @@ mod tests {
             "clinical": ["age"],
             "lambda": 2.0
         });
-        assert!(serde_json::from_value::<FusionFitSpec>(base.clone())
-            .unwrap()
-            .validate()
-            .is_ok());
+        assert!(
+            serde_json::from_value::<FusionFitSpec>(base.clone())
+                .unwrap()
+                .validate()
+                .is_ok()
+        );
 
         // No fixed lambda and no grid → rejected.
         let mut no_lambda = base.clone();

@@ -280,6 +280,7 @@ pub fn container_spec(spec: &LimmaVoomContainerSpec) -> Result<ContainerCommandS
         memory: Some(DEFAULT_MEMORY.into()),
         pids_limit: Some(DEFAULT_PIDS_LIMIT),
         shm_size: Some(DEFAULT_SHM_SIZE.into()),
+        gpus: None,
         user: None,
     })
 }

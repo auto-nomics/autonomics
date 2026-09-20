@@ -164,7 +164,10 @@ pub fn rlm(
 
     let p = predictors.len() + 1; // intercept always present
     if n <= p {
-        return Err(StatError::InsufficientData { min: p + 1, actual: n });
+        return Err(StatError::InsufficientData {
+            min: p + 1,
+            actual: n,
+        });
     }
 
     // ── IRLS from the prior-weighted least-squares start ──────────────
@@ -177,7 +180,9 @@ pub fn rlm(
         let r_old = residuals(predictors, y, &beta);
         let s = wmad(&r_old, weights);
         if !s.is_finite() {
-            return Err(StatError::Numerical("residual scale is not finite".to_string()));
+            return Err(StatError::Numerical(
+                "residual scale is not finite".to_string(),
+            ));
         }
         if s < 1e-10 {
             // Residuals vanished — the current fit is exact (MASS: scale == 0).
@@ -235,15 +240,24 @@ pub fn rlm(
             .iter()
             .map(|&ri| psi_prime(opts.psi, ri / s, opts.huber_k, opts.tukey_c))
             .collect();
-        let m1 = weights.iter().zip(&psip).map(|(&wi, &pi)| wi * pi).sum::<f64>();
-        let m2 = weights.iter().zip(&psip).map(|(&wi, &pi)| wi * pi * pi).sum::<f64>();
+        let m1 = weights
+            .iter()
+            .zip(&psip)
+            .map(|(&wi, &pi)| wi * pi)
+            .sum::<f64>();
+        let m2 = weights
+            .iter()
+            .zip(&psip)
+            .map(|(&wi, &pi)| wi * pi * pi)
+            .sum::<f64>();
         let mn = m1 / nn;
-        let kappa =
-            1.0 + p as f64 * (m2 - m1 * m1 / nn) / ((nn - 1.0) * nn * mn * mn);
+        let kappa = 1.0 + p as f64 * (m2 - m1 * m1 / nn) / ((nn - 1.0) * nn * mn * mn);
         let stddev = big_s.sqrt() * (kappa / mn);
         let xtx = normal_matrix(predictors, weights, p);
         let inv = invert_symmetric(&xtx, p)?;
-        (0..p).map(|j| (stddev * stddev * inv[j][j]).max(0.0).sqrt()).collect()
+        (0..p)
+            .map(|j| (stddev * stddev * inv[j][j]).max(0.0).sqrt())
+            .collect()
     } else {
         vec![0.0; p]
     };
@@ -337,12 +351,7 @@ fn psi_prime(psi: PsiFunction, u: f64, huber_k: f64, tukey_c: f64) -> f64 {
 }
 
 /// Combined case×ψ weights at residual scale `s`.
-fn robust_weights(
-    r: &[f64],
-    prior: &[f64],
-    s: f64,
-    opts: &RlmOptions,
-) -> Vec<f64> {
+fn robust_weights(r: &[f64], prior: &[f64], s: f64, opts: &RlmOptions) -> Vec<f64> {
     r.iter()
         .zip(prior)
         .map(|(&ri, &wi)| wi * psi_weight(opts.psi, ri / s, opts.huber_k, opts.tukey_c))
@@ -408,13 +417,7 @@ fn normal_matrix(predictors: &[&[f64]], w: &[f64], p: usize) -> Vec<Vec<f64>> {
     let mut xtwx = vec![vec![0.0_f64; p]; p];
     for i in 0..n {
         // Row of the design matrix, intercept first.
-        let row = |j: usize| -> f64 {
-            if j == 0 {
-                1.0
-            } else {
-                predictors[j - 1][i]
-            }
-        };
+        let row = |j: usize| -> f64 { if j == 0 { 1.0 } else { predictors[j - 1][i] } };
         for a in 0..p {
             for b in a..p {
                 let s = w[i] * row(a) * row(b);
@@ -431,12 +434,7 @@ fn normal_matrix(predictors: &[&[f64]], w: &[f64], p: usize) -> Vec<Vec<f64>> {
 }
 
 /// Solve `(Xᵀ W X) β = Xᵀ W y` by Cholesky (intercept column first).
-fn solve_normal(
-    predictors: &[&[f64]],
-    y: &[f64],
-    w: &[f64],
-    p: usize,
-) -> Result<Vec<f64>> {
+fn solve_normal(predictors: &[&[f64]], y: &[f64], w: &[f64], p: usize) -> Result<Vec<f64>> {
     let n = y.len();
     let xtwx = normal_matrix(predictors, w, p);
     let mut xtwy = vec![0.0_f64; p];
@@ -627,7 +625,11 @@ mod tests {
         // robust_weights carry the prior, so they scale with it.
         assert_eq!(a.robust_weights.len(), b.robust_weights.len());
         for i in 0..a.robust_weights.len() {
-            assert!(approx_eq(100.0 * a.robust_weights[i], b.robust_weights[i], 1e-8));
+            assert!(approx_eq(
+                100.0 * a.robust_weights[i],
+                b.robust_weights[i],
+                1e-8
+            ));
         }
         assert!(approx_eq(a.scale, b.scale, 1e-8));
     }
@@ -636,16 +638,31 @@ mod tests {
     fn psi_weight_closed_form() {
         let o = RlmOptions::default();
         // Huber: 1 inside k, k/|u| outside.
-        assert_eq!(psi_weight(PsiFunction::Huber, 0.0, o.huber_k, o.tukey_c), 1.0);
-        assert_eq!(psi_weight(PsiFunction::Huber, o.huber_k, o.huber_k, o.tukey_c), 1.0);
-        assert!((psi_weight(PsiFunction::Huber, 2.0 * o.huber_k, o.huber_k, o.tukey_c) - 0.5).abs() < 1e-12);
+        assert_eq!(
+            psi_weight(PsiFunction::Huber, 0.0, o.huber_k, o.tukey_c),
+            1.0
+        );
+        assert_eq!(
+            psi_weight(PsiFunction::Huber, o.huber_k, o.huber_k, o.tukey_c),
+            1.0
+        );
+        assert!(
+            (psi_weight(PsiFunction::Huber, 2.0 * o.huber_k, o.huber_k, o.tukey_c) - 0.5).abs()
+                < 1e-12
+        );
         // Tukey: (1 − u²/c²)² inside c, 0 outside.
         let c = o.tukey_c;
-        assert_eq!(psi_weight(PsiFunction::TukeyBisquare, 0.0, o.huber_k, c), 1.0);
+        assert_eq!(
+            psi_weight(PsiFunction::TukeyBisquare, 0.0, o.huber_k, c),
+            1.0
+        );
         let u = c / 2.0_f64.sqrt();
         assert!((psi_weight(PsiFunction::TukeyBisquare, u, o.huber_k, c) - 0.25).abs() < 1e-12);
         assert_eq!(psi_weight(PsiFunction::TukeyBisquare, c, o.huber_k, c), 0.0);
-        assert_eq!(psi_weight(PsiFunction::TukeyBisquare, 2.0 * c, o.huber_k, c), 0.0);
+        assert_eq!(
+            psi_weight(PsiFunction::TukeyBisquare, 2.0 * c, o.huber_k, c),
+            0.0
+        );
     }
 
     #[test]
@@ -726,7 +743,11 @@ mod tests {
             rlm(&[&x[..]], &y, &neg_w, &RlmOptions::default()),
             Err(StatError::InvalidWeights)
         ));
-        let bad_y: Vec<f64> = y.iter().enumerate().map(|(i, &v)| if i == 3 { f64::NAN } else { v }).collect();
+        let bad_y: Vec<f64> = y
+            .iter()
+            .enumerate()
+            .map(|(i, &v)| if i == 3 { f64::NAN } else { v })
+            .collect();
         assert!(rlm(&[&x[..]], &bad_y, &w, &RlmOptions::default()).is_err());
     }
 }

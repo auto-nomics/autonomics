@@ -30,8 +30,7 @@ use container_runtime::ContainerExecutionInfra;
 use container_runtime::{PanelGcPolicy, WorkspaceGcPolicy, sweep_panels, sweep_workspace};
 use dag_core::{BundleRegistry, DataBundle};
 use data_catalog::{
-    CatalogConfig, CatalogRuntime, CatalogServiceTrait, S3CatalogService,
-    catalog_mount_definitions,
+    CatalogConfig, CatalogRuntime, CatalogServiceTrait, S3CatalogService, catalog_mount_definitions,
 };
 use data_engine::dag::DagHistory;
 use data_engine::data_engine::DataEngine;

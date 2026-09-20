@@ -86,10 +86,7 @@ impl ReverseKmCensoring {
             i = j;
         }
 
-        Ok(Self {
-            times: knots,
-            surv,
-        })
+        Ok(Self { times: knots, surv })
     }
 
     /// `G(t)` — right-continuous evaluation: the censoring survival after all

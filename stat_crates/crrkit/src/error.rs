@@ -17,7 +17,9 @@ pub enum CrrkitError {
     },
 
     /// An event-status code outside `{0, 1, 2}` was supplied.
-    #[error("invalid event status {got} at position {index}: expected 0 (censored), 1 (event of interest) or 2 (competing event)")]
+    #[error(
+        "invalid event status {got} at position {index}: expected 0 (censored), 1 (event of interest) or 2 (competing event)"
+    )]
     BadStatus {
         /// Position of the offending observation.
         index: usize,
@@ -51,7 +53,9 @@ pub enum CrrkitError {
     },
 
     /// No outcome was knowable at the horizon (everybody censored before it).
-    #[error("no outcome information at or beyond the horizon: every observation is censored before {horizon}")]
+    #[error(
+        "no outcome information at or beyond the horizon: every observation is censored before {horizon}"
+    )]
     NoOutcomeInformation {
         /// The evaluation horizon.
         horizon: f64,
@@ -59,7 +63,9 @@ pub enum CrrkitError {
 
     /// The reverse-KM censoring survival collapsed to zero at or before a
     /// point where a weight is needed.
-    #[error("censoring survival G collapsed to {g} at t = {t}: inverse-probability weights are undefined")]
+    #[error(
+        "censoring survival G collapsed to {g} at t = {t}: inverse-probability weights are undefined"
+    )]
     CollapsedCensoring {
         /// The value the censoring survival reached.
         g: f64,

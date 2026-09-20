@@ -21,5 +21,5 @@ pub mod client;
 pub mod error;
 pub mod nodes;
 
-pub use client::{NhanesFileLink, NhanesClient, is_soft_404, parse_listing};
+pub use client::{NhanesClient, NhanesFileLink, is_soft_404, parse_listing};
 pub use error::{NhanesError, Result};

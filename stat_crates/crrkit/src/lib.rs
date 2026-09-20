@@ -32,15 +32,15 @@
 //! that purpose.
 
 pub mod auc;
-pub mod brier;
 pub mod bootstrap;
+pub mod brier;
 pub mod calibration;
 pub mod censoring;
 pub mod error;
 
 pub use auc::{IpcwAuc, ipcw_auc};
-pub use brier::{BrierOptions, IpcwBrier, ipcw_brier};
 pub use bootstrap::{BootstrapOptions, PairedBootstrapDelta, paired_brier_delta_bootstrap};
+pub use brier::{BrierOptions, IpcwBrier, ipcw_brier};
 pub use calibration::{CalibrationGroup, CalibrationSlope, calibration_slope, grouped_calibration};
 pub use censoring::ReverseKmCensoring;
 pub use error::{CrrkitError, Result};

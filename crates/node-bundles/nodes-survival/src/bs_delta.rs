@@ -20,8 +20,8 @@ use std::sync::Arc;
 use arrow_array::{Float64Array, RecordBatch, UInt32Array};
 use arrow_schema::{DataType, Field, Schema};
 use async_trait::async_trait;
-use crrkit::brier::{BrierOptions, ipcw_brier};
 use crrkit::bootstrap::{BootstrapOptions, paired_brier_delta_bootstrap};
+use crrkit::brier::{BrierOptions, ipcw_brier};
 use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 
@@ -274,8 +274,9 @@ impl DagNode for PairedBsDeltaNode {
             seed: s.seed,
             alpha: s.alpha,
         };
-        let delta = paired_brier_delta_bootstrap(&t, &status, &pa, &pb, s.horizon, &brier_opts, &boot_opts)
-            .map_err(|e| err(format!("paired bootstrap: {e}")))?;
+        let delta =
+            paired_brier_delta_bootstrap(&t, &status, &pa, &pb, s.horizon, &brier_opts, &boot_opts)
+                .map_err(|e| err(format!("paired bootstrap: {e}")))?;
         let diag = ipcw_brier(&t, &status, &pa, s.horizon, &brier_opts)
             .map_err(|e| err(format!("censoring diagnostics: {e}")))?;
 
@@ -311,7 +312,9 @@ impl DagNode for PairedBsDeltaNode {
                 Arc::new(UInt32Array::from(vec![diag.n_cause1 as u32])),
                 Arc::new(UInt32Array::from(vec![diag.n_competing as u32])),
                 Arc::new(UInt32Array::from(vec![diag.n_beyond_horizon as u32])),
-                Arc::new(UInt32Array::from(vec![diag.n_censored_before_horizon as u32])),
+                Arc::new(UInt32Array::from(vec![
+                    diag.n_censored_before_horizon as u32,
+                ])),
                 Arc::new(Float64Array::from(vec![delta.brier_a])),
                 Arc::new(Float64Array::from(vec![delta.brier_b])),
                 Arc::new(Float64Array::from(vec![delta.point_delta])),
@@ -335,7 +338,8 @@ impl DagNode for PairedBsDeltaNode {
         let mut res = PortOutputs::new();
         res.insert(
             0,
-            ctx.read_batch(batch).map_err(|e| err(format!("read_batch: {e}")))?,
+            ctx.read_batch(batch)
+                .map_err(|e| err(format!("read_batch: {e}")))?,
         );
         Ok(res)
     }
@@ -371,7 +375,10 @@ mod tests {
 
         let mut same = base();
         same["prob_b_column"] = "p_m0".into();
-        assert!(spec(same).validate().is_err(), "identical prob columns rejected");
+        assert!(
+            spec(same).validate().is_err(),
+            "identical prob columns rejected"
+        );
 
         let mut bad_alpha = base();
         bad_alpha["alpha"] = 1.5.into();
@@ -460,7 +467,11 @@ mod tests {
         assert_eq!(a.point_delta, c.point_delta, "point estimate is seed-free");
         assert_ne!(a.p_value, c.p_value, "resampling differs across seeds");
 
-        assert!(a.point_delta > 0.0, "M3 must beat M0 here: {}", a.point_delta);
+        assert!(
+            a.point_delta > 0.0,
+            "M3 must beat M0 here: {}",
+            a.point_delta
+        );
         assert!((0.0..=1.0).contains(&a.brier_a));
         assert!((0.0..=1.0).contains(&a.brier_b));
         assert!((0.0..=1.0).contains(&a.p_value));
