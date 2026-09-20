@@ -2,3 +2,4 @@
 !Dockerfile
 !requirements.txt
 !preprocess.py
+!workflow.py

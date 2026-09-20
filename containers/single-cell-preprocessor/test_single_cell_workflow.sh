@@ -9,13 +9,13 @@ Builds the single-cell runtime and validates the H5AD-first QC, embedding,
 and reverse-subset contracts.
 
 Environment:
-  SINGLE_CELL_IMAGE  Image tag (default localhost/atc/single-cell-preprocessor:0.2.0)
+  SINGLE_CELL_IMAGE  Image tag (default localhost/atc/single-cell-preprocessor:0.2.1)
   BUILD_IMAGE=0      Skip the Podman build
 EOF
 }
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-image=${SINGLE_CELL_IMAGE:-localhost/atc/single-cell-preprocessor:0.2.0}
+image=${SINGLE_CELL_IMAGE:-localhost/atc/single-cell-preprocessor:0.2.1}
 build_image=${BUILD_IMAGE:-1}
 
 [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]] && usage && exit 0

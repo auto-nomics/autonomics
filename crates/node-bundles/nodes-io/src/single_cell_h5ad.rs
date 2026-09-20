@@ -32,7 +32,7 @@ pub const CELLTYPIST_MODEL_BUNDLE: &str = "celltypist.models.pan_immune";
 pub const DEFAULT_CELLTYPIST_MODEL_FILE: &str = "Immune_All_Low.pkl";
 pub const SINGLE_CELL_WORKFLOW_IMAGE_REPOSITORY: &str = "single-cell-preprocessor";
 pub const SINGLE_CELL_WORKFLOW_IMAGE_DIGEST: &str =
-    "sha256:7a7397f45775a4c4b6c4c220711db2b95dd37fdc40b7b7f06d181a220903e467";
+    "sha256:c34c26428d13804c2528bc734805c1ccfe909353604ac08da0ce9c68890e7e18";
 
 const DEFAULT_TIMEOUT_SECS: u64 = 3600;
 const DEFAULT_EMBED_TIMEOUT_SECS: u64 = 7200;
