@@ -224,6 +224,7 @@ pub fn container_spec(spec: &MrpressoContainerSpec) -> Result<ContainerCommandSp
         memory: None,
         pids_limit: None,
         shm_size: None,
+        gpus: None,
         user: None,
     })
 }

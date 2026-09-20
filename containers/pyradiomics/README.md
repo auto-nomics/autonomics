@@ -31,6 +31,25 @@ The local Podman build and the published ACR manifest can have different
 digests after registry normalization. Always pin the digest returned by the
 published ACR tag, not the pre-push local digest.
 
+## Commands
+
+Beyond the Phase-A ingestion, validation, extraction, QC, registration, and
+delta commands exercised by `test_radiomics_phasea.sh`, the runner provides
+the analysis-side commands used by the radiomics SAP:
+
+| Command             | Purpose                                                                                              |
+|---------------------|------------------------------------------------------------------------------------------------------|
+| `bias-correct`      | Mask-guided N4 inhomogeneity correction at a configurable shrink factor; emits corrected image, full-resolution bias field, and convergence metadata. |
+| `normalize`         | Percentile-truncated robust z-score over a tissue mask, applied to the whole image; every fitted parameter is recorded. No cohort-level statistics. |
+| `peritumoral-ring`  | Physical-radius ball dilation minus tumor and an exclusion mask (bone/air/outside-body); emits ring-only, tumor=1/ring=2, and combined masks plus volume accounting. |
+| `habitat-fit`       | Manifest-driven multi-case fit of common habitat centers: equal-size seeded voxel samples, per-case channel z-scores, pooled deterministic k-means, labels frozen by descending first-channel center. |
+| `habitat-assign`    | Assigns every tumor voxel of one case to the frozen centers; emits a labeled habitat mask and per-habitat volume fraction, dispersion, interface fraction, and raw channel statistics. |
+| `perturb-stability` | Re-runs PyRadiomics under controlled perturbations (one-voxel dilation/erosion/translations, Gaussian noise at a percentage of the ROI SD); emits per-replicate feature tables for downstream cohort-level ICC(2,1) in Rust. |
+
+All six are deterministic given their seed settings; `habitat-fit` output is
+byte-identical across runs with the same inputs and seed, which is what makes
+fold-internal common centers and frozen external-center assignment leak-free.
+
 ## Build and test
 
 ```bash

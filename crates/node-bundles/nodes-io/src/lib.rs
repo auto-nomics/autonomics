@@ -27,6 +27,7 @@ pub mod mutation_analysis_container;
 pub mod mvmr_container;
 pub mod parquet_sql;
 pub mod pathway_gsea_container;
+pub mod pathology_container;
 pub mod plink2_clump_container;
 pub mod radiomics;
 pub mod radiomics_container;
@@ -199,6 +200,88 @@ impl NodePlugin for Plugin {
                 Arc::clone(&self.container_execution.panel_cache),
             ),
         ));
+        registry.register(Box::new(
+            radiomics_container::RadiomicsContainerNodeFactory::bias_correct(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
+        registry.register(Box::new(
+            radiomics_container::RadiomicsContainerNodeFactory::robust_normalize(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
+        registry.register(Box::new(
+            radiomics_container::RadiomicsContainerNodeFactory::peritumoral_ring(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
+        registry.register(Box::new(
+            radiomics_container::RadiomicsContainerNodeFactory::habitat_fit(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
+        registry.register(Box::new(
+            radiomics_container::RadiomicsContainerNodeFactory::habitat_assign(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
+        registry.register(Box::new(
+            radiomics_container::RadiomicsContainerNodeFactory::perturb_stability(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
+        registry.register(Box::new(
+            pathology_container::PathologyContainerNodeFactory::wsi_ingest(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
+        registry.register(Box::new(
+            pathology_container::PathologyContainerNodeFactory::wsi_qc(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
+        registry.register(Box::new(
+            pathology_container::PathologyContainerNodeFactory::patch_sample(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
+        registry.register(Box::new(
+            pathology_container::PathologyContainerNodeFactory::wsi_embed(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
+        registry.register(Box::new(
+            pathology_container::PathologyContainerNodeFactory::domain_check(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
+        registry.register(Box::new(
+            pathology_container::PathologyContainerNodeFactory::ihc_quant(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
+        registry.register(Box::new(
+            pathology_container::PathologyContainerNodeFactory::qupath_import(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
+        registry.register(Box::new(container_command::ContainerCommandNodeFactory {
+            runtime: Arc::clone(&self.container_execution.runtime),
+            panel_cache: Arc::clone(&self.container_execution.panel_cache),
+        }));
         registry.register(Box::new(
             ldsc_h2_container::LdscH2ContainerNodeFactory::new(
                 Arc::clone(&self.container_execution.runtime),

@@ -148,6 +148,7 @@ pub fn container_spec(spec: &MagmaAnnotateContainerSpec) -> Result<ContainerComm
         memory: None,
         pids_limit: None,
         shm_size: None,
+        gpus: None,
         user: None,
     })
 }

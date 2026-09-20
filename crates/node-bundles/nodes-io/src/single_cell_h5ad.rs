@@ -938,6 +938,7 @@ pub fn container_spec(
         })),
         pids_limit: Some(pids_limit.unwrap_or(DEFAULT_PIDS_LIMIT)),
         shm_size: Some(shm_size),
+        gpus: None,
         user: None,
     })
 }
