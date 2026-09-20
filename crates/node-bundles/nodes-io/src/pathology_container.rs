@@ -26,10 +26,8 @@ use crate::container_command::{
 use crate::image_registry::acr_image;
 
 pub const PATHOLOGY_IMAGE_REPOSITORY: &str = "pathology";
-// TODO(pathology): placeholder until the first image is pushed to ACR; replace
-// with the post-push digest (see containers/pathology/README.md).
 pub const PATHOLOGY_IMAGE_DIGEST: &str =
-    "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+    "sha256:a0edcb6cca25f009f669723406207651284960425f7255891be5b91b29b63f2f";
 pub const PATHOLOGY_WSI_INGEST_KIND: &str = "pathology_wsi_ingest";
 pub const PATHOLOGY_WSI_QC_KIND: &str = "pathology_wsi_qc";
 pub const PATHOLOGY_PATCH_SAMPLE_KIND: &str = "pathology_patch_sample";

@@ -71,5 +71,5 @@ podman push <acr-endpoint>/autonomics/pathology:<tag>
 # then replace PATHOLOGY_IMAGE_DIGEST in pathology_container.rs with the
 # post-push manifest digest and update this section:
 #
-# Current digest: (unset — placeholder until first push)
+# Current digest: sha256:a0edcb6cca25f009f669723406207651284960425f7255891be5b91b29b63f2f (cpu-r1)
 ```
