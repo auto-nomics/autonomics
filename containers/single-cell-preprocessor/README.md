@@ -61,6 +61,11 @@ nodes:
    `obsm` keys.
 5. `h5ad_subset_by_obs`: H5AD plus selection Parquet to filtered H5AD.
 
+The scheduler also registers a native `h5ad_obs_to_dataframe` source outside
+this container image. It streams the same `/obs` projection into DataFusion and
+is preferred when the DAG can consume a DataFrame directly; the container
+Parquet bridge remains available for legacy workflows.
+
 The DAG wrapper supplies the workflow script as an inline private script and a
 JSON parameter file, so parameters are schema-validated in Rust before reaching
 the container. Expression matrices remain opaque File values.

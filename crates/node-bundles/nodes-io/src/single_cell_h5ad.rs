@@ -975,7 +975,9 @@ impl NodeFactory for SingleCellH5adContainerNodeFactory {
             Workflow::Celltypist => {
                 "Annotates an H5AD with the catalog-backed or an explicit CellTypist model."
             }
-            Workflow::ObsProjection => "Projects H5AD obs and selected obsm keys to Parquet.",
+            Workflow::ObsProjection => {
+                "Legacy bridge that projects H5AD obs and selected obsm keys to Parquet."
+            }
             Workflow::Subset => "Subsets an H5AD by cell IDs read from a Parquet sidecar.",
             Workflow::DenseIngest => {
                 "Ingests a dense CSV/TSV gene-by-cell or cell-by-gene count matrix into H5AD."
@@ -1007,7 +1009,8 @@ impl NodeFactory for SingleCellH5adContainerNodeFactory {
             }
             Workflow::ObsProjection => {
                 "Input port 0 is H5AD and the single output is cells.parquet. The first \
-                column is cell_id derived from obs_names; include_obsm projects explicit embeddings."
+                column is cell_id derived from obs_names; include_obsm projects explicit embeddings. \
+                Prefer h5ad_obs_to_dataframe followed by the DataFrame sql node for new workflows."
             }
             Workflow::Subset => {
                 "Input ports are H5AD then selection Parquet. Output ports are output.h5ad \

@@ -10,6 +10,7 @@ pub mod file_to_dataframe;
 pub mod file_transform;
 pub mod gcta_container;
 pub mod gmt_import;
+pub mod h5ad_obs_to_dataframe;
 pub mod hdl_l_container;
 pub mod hdl_l_scan_container;
 pub mod hyprcoloc_container;
@@ -106,6 +107,9 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(bundle_source::BundleSourceNodeFactory {}));
         registry.register(Box::new(file_reference::FileReferenceNodeFactory {}));
         registry.register(Box::new(file_to_dataframe::FileToDataFrameNodeFactory {}));
+        registry.register(Box::new(
+            h5ad_obs_to_dataframe::H5adObsToDataFrameNodeFactory {},
+        ));
         registry.register(Box::new(file_transform::FileTransformNodeFactory {}));
         registry.register(Box::new(script_nodes::ScriptNodeFactory::python(
             Arc::clone(&self.container_execution.runtime),

@@ -20,15 +20,20 @@ The embedding node creates `X_pca`, `X_umap`, neighbor graphs in `obsp`, paramet
 
 `sc_dense_ingest` accepts CSV/TSV (optionally gzip/BGZF) with genes in rows or cells in rows, applies optional cell/gene count filters, and retains raw counts in `layers["counts"]`. `h5ad_rank_genes_groups` supports Wilcoxon, t-tests, and logistic regression and emits a tidy `group/gene/rank/score/pvalue/pvalue_adj` table. `h5ad_cluster_mean_expression` emits one `cluster/gene` row per requested gene with optional CP10K normalization and percent expressed. `gene_set_score` adds one numeric obs column per requested module.
 
-## Parquet bypass
+## Metadata and SQL bridge
 
 | Node | Inputs | Outputs |
 | --- | --- | --- |
+| `h5ad_obs_to_dataframe` | `h5ad` | DataFrame |
+| `sql` | one or more DataFrames | DataFrame |
+| `dataframe_to_file` | DataFrame | selected file |
 | `h5ad_obs_to_parquet` | `h5ad` | `cells.parquet` |
 | `datafusion_sql` | `parquet` | result `parquet` |
 | `h5ad_subset_by_obs` | `h5ad`, `selection_parquet` | `output.h5ad`, `report.json` |
 
-`cells.parquet` starts with `cell_id` derived from `obs_names`, followed by obs columns and explicitly selected `obsm` dimensions named `obsm_{key}_{dimension}`. The SQL node registers the input as table `input` by default and materializes a single-file Parquet result. The reverse bridge keeps H5AD row order and reports matched and missing IDs.
+`h5ad_obs_to_dataframe` is the preferred path. It reads only `/obs` and explicitly selected `/obsm` matrices, emits `cell_id` first, and streams record batches into DataFusion without materializing a full `cells.parquet`. Its first release supports numeric arrays, booleans, strings, string-valued categoricals, nullable integer/boolean/string arrays, and numeric `obsm` matrices. `validate_unique_ids` can be disabled when an upstream H5AD node has already enforced the unique-ID contract.
+
+The legacy `h5ad_obs_to_parquet` path remains for compatibility. Its `cells.parquet` starts with `cell_id` derived from `obs_names`, followed by obs columns and explicitly selected `obsm` dimensions named `obsm_{key}_{dimension}`. `datafusion_sql` registers the Parquet input as table `input` and materializes a single-file result. The reverse bridge keeps H5AD row order and reports matched and missing IDs.
 
 ## Workflow shape
 
@@ -44,8 +49,9 @@ file_reference(h5ad)
   -> h5ad_celltypist_annotate
 
 h5ad_qc_filter
-  -> h5ad_obs_to_parquet
-  -> datafusion_sql
+  -> h5ad_obs_to_dataframe
+  -> sql
+  -> dataframe_to_file
   -> h5ad_subset_by_obs(h5ad=h5ad_qc_filter.output[0])
 
 h5ad_pca_neighbors_umap_leiden
