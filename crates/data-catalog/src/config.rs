@@ -12,9 +12,6 @@ pub struct CatalogConfig {
     /// Root index object name relative to `source`.
     #[serde(default = "default_index")]
     pub index: String,
-    /// Immutable entry prefix relative to `source`.
-    #[serde(default = "default_prefix")]
-    pub prefix: String,
     #[serde(default = "default_true")]
     pub enabled: bool,
     /// Expose the catalog root under `/catalog` for agent inspection.
@@ -30,10 +27,6 @@ fn default_index() -> String {
     "index.json".into()
 }
 
-fn default_prefix() -> String {
-    "entries".into()
-}
-
 fn default_true() -> bool {
     true
 }
@@ -44,7 +37,6 @@ impl Default for CatalogConfig {
             backend: String::new(),
             source: default_source(),
             index: default_index(),
-            prefix: default_prefix(),
             enabled: true,
             agent_visible: true,
         }
@@ -76,7 +68,6 @@ impl CatalogConfig {
             crate::model::validate_relative_path(self.source.trim_matches('/'))?;
         }
         crate::model::validate_relative_path(self.index.trim_start_matches('/'))?;
-        crate::model::validate_relative_path(self.prefix.trim_matches('/'))?;
         Ok(())
     }
 
@@ -119,7 +110,6 @@ mod tests {
 backend = "warehouse"
 source = "/autonomics/catalog"
 index = "index.json"
-prefix = "entries"
 "#,
         )
         .unwrap();

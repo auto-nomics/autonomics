@@ -1,4 +1,4 @@
-//! Agent-facing search and inspection tools for the object-storage catalog.
+//! Agent-facing tools for the remote catalog and the local package cache.
 
 use std::sync::Arc;
 
@@ -6,52 +6,82 @@ use agentik_core::tools::{ToolError, ToolFunction, ToolRegistration};
 use agentik_proc::tool;
 use agentik_sdk::types::ToolResult;
 use async_trait::async_trait;
-use data_catalog::{CatalogSearchQuery, CatalogServiceTrait, S3CatalogService};
+use data_catalog::{LocalCatalog, RemoteCatalog};
 use serde_json::json;
+
+/// Remote catalog access plus the runtime's local package cache.
+pub struct CatalogState {
+    pub local: Arc<LocalCatalog>,
+    pub remote: Arc<RemoteCatalog>,
+}
 
 #[tool(
     name = "catalog_search",
-    description = "Search discoverable data-catalog datasets by free text, kind, and tags. Results include stable and immutable VFS paths, descriptions, metadata, file counts, and digests."
+    description = "Search current entries in the remote catalog by free text and kind. Results include id, version, kind, digest, and generated VFS paths."
 )]
 pub struct CatalogSearchInput {
-    #[desc = "Free-text terms. All terms must match id, version, kind, metadata, payload, tags, or digest."]
+    #[desc = "Free-text terms. All terms must match id, version, kind, or digest."]
     pub query: Option<String>,
     #[desc = "Exact dataset kind, for example ldsc_ref_ld_chr."]
     pub kind: Option<String>,
-    #[desc = "Required tags; a result must contain every tag."]
-    pub tags: Option<Vec<String>>,
     #[desc = "Maximum results. Default 50, maximum 500."]
     pub limit: Option<usize>,
-    #[desc = "Reload index.json and current manifests before searching. Default false."]
-    pub refresh: Option<bool>,
 }
 
 pub struct CatalogSearchTool {
-    service: Arc<dyn CatalogServiceTrait>,
+    state: Arc<CatalogState>,
+}
+
+#[tool(
+    name = "catalog_install",
+    description = "Download and verify one package from the remote catalog into the local cache. Restart the runtime before binding newly installed entries into a DAG."
+)]
+pub struct CatalogInstallInput {
+    #[desc = "Catalog dataset id."]
+    pub id: String,
+    #[desc = "Optional exact version. Omit for the current version."]
+    pub version: Option<String>,
+    #[desc = "Optional immutable digest."]
+    pub digest: Option<String>,
+}
+
+pub struct CatalogInstallTool {
+    state: Arc<CatalogState>,
+}
+
+#[tool(
+    name = "catalog_update",
+    description = "Install remote current versions missing from the local cache. Omit id to update every installed dataset family. Restart the runtime to rebuild VFS mounts and bundle registry."
+)]
+pub struct CatalogUpdateInput {
+    #[desc = "Optional dataset id. Omit to update all current entries."]
+    pub id: Option<String>,
+}
+
+pub struct CatalogUpdateTool {
+    state: Arc<CatalogState>,
 }
 
 #[tool(
     name = "catalog_describe",
-    description = "Describe a catalog dataset from its validated manifest, including metadata, payload documentation, files, checksums, stable VFS path, and immutable digest path."
+    description = "Describe an installed catalog dataset from its validated local manifest, including metadata, payload documentation, files, and checksums."
 )]
 pub struct CatalogDescribeInput {
-    #[desc = "Catalog dataset id, for example ldsc.ref_ld.1000g_eur.basic."]
+    #[desc = "Catalog dataset id."]
     pub id: String,
     #[desc = "Optional exact version. Omit for the current version."]
     pub version: Option<String>,
-    #[desc = "Optional immutable digest. Takes precedence when combined with version."]
+    #[desc = "Optional immutable digest."]
     pub digest: Option<String>,
-    #[desc = "Reload the catalog before resolving the dataset. Default false."]
-    pub refresh: Option<bool>,
 }
 
 pub struct CatalogDescribeTool {
-    service: Arc<dyn CatalogServiceTrait>,
+    state: Arc<CatalogState>,
 }
 
 #[tool(
     name = "catalog_list_files",
-    description = "List a catalog dataset's payload files with paths, byte sizes, and SHA-256 digests."
+    description = "List an installed catalog dataset's payload files with paths, byte sizes, and SHA-256 digests."
 )]
 pub struct CatalogListFilesInput {
     #[desc = "Catalog dataset id."]
@@ -60,37 +90,23 @@ pub struct CatalogListFilesInput {
     pub version: Option<String>,
     #[desc = "Optional immutable digest."]
     pub digest: Option<String>,
-    #[desc = "Reload the catalog first. Default false."]
-    pub refresh: Option<bool>,
 }
 
 pub struct CatalogListFilesTool {
-    service: Arc<dyn CatalogServiceTrait>,
+    state: Arc<CatalogState>,
 }
 
 #[tool(
     name = "catalog_list_versions",
-    description = "List current and historical catalog versions for a dataset id, with digests and VFS paths."
+    description = "List locally installed current and historical catalog versions for a dataset id, newest first."
 )]
 pub struct CatalogListVersionsInput {
     #[desc = "Catalog dataset id."]
     pub id: String,
-    #[desc = "Reload the catalog first. Default false."]
-    pub refresh: Option<bool>,
 }
 
 pub struct CatalogListVersionsTool {
-    service: Arc<dyn CatalogServiceTrait>,
-}
-
-#[tool(
-    name = "catalog_refresh",
-    description = "Reload catalog index.json and current dataset manifests for discovery tools. This does not rebuild startup VFS mounts or the DataBundle registry; restart the runtime before binding newly published entries to a DAG node."
-)]
-pub struct CatalogRefreshInput {}
-
-pub struct CatalogRefreshTool {
-    service: Arc<dyn CatalogServiceTrait>,
+    state: Arc<CatalogState>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -103,18 +119,17 @@ fn execution_failed(error: String) -> ToolError {
     }
 }
 
-async fn refresh_if_requested(
-    service: &dyn CatalogServiceTrait,
-    refresh: bool,
-) -> Result<(), ToolError> {
-    if refresh {
-        service
-            .refresh()
-            .await
-            .map(|_| ())
-            .map_err(execution_failed)?;
-    }
-    Ok(())
+fn select_local_entry(
+    state: &CatalogState,
+    id: &str,
+    version: Option<&str>,
+    digest: Option<&str>,
+) -> Result<data_catalog::CatalogEntry, ToolError> {
+    state
+        .local
+        .index()
+        .and_then(|index| index.select(id, version, digest))
+        .map_err(|error| execution_failed(error.to_string()))
 }
 
 #[async_trait]
@@ -122,18 +137,60 @@ impl ToolFunction for CatalogSearchTool {
     type Input = CatalogSearchInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        refresh_if_requested(&*self.service, input.refresh.unwrap_or(false)).await?;
-        let records = self
-            .service
-            .search(CatalogSearchQuery {
-                query: input.query,
-                kind: input.kind,
-                tags: input.tags.unwrap_or_default(),
-                limit: input.limit,
-            })
+        let index = self
+            .state
+            .remote
+            .index()
             .await
-            .map_err(execution_failed)?;
-        Ok(ToolResult::success_json(json!({ "datasets": records })))
+            .map_err(|error| execution_failed(error.to_string()))?;
+        let entries = index.search(
+            input.query.as_deref().unwrap_or(""),
+            input.kind.as_deref(),
+            input.limit.unwrap_or(50).min(500),
+        );
+        Ok(ToolResult::success_json(json!({ "datasets": entries })))
+    }
+}
+
+#[async_trait]
+impl ToolFunction for CatalogInstallTool {
+    type Input = CatalogInstallInput;
+
+    async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
+        let entry = self
+            .state
+            .local
+            .install(
+                &self.state.remote,
+                &input.id,
+                input.version.as_deref(),
+                input.digest.as_deref(),
+            )
+            .await
+            .map_err(|error| execution_failed(error.to_string()))?;
+        Ok(ToolResult::success_json(json!({
+            "entry": entry,
+            "restart_required": true
+        })))
+    }
+}
+
+#[async_trait]
+impl ToolFunction for CatalogUpdateTool {
+    type Input = CatalogUpdateInput;
+
+    async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
+        let updated = self
+            .state
+            .local
+            .update(&self.state.remote, input.id.as_deref())
+            .await
+            .map_err(|error| execution_failed(error.to_string()))?;
+        let restart_required = !updated.is_empty();
+        Ok(ToolResult::success_json(json!({
+            "updated": updated,
+            "restart_required": restart_required
+        })))
     }
 }
 
@@ -142,13 +199,21 @@ impl ToolFunction for CatalogDescribeTool {
     type Input = CatalogDescribeInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        refresh_if_requested(&*self.service, input.refresh.unwrap_or(false)).await?;
-        let dataset = self
-            .service
-            .describe(&input.id, input.version.as_deref(), input.digest.as_deref())
-            .await
-            .map_err(execution_failed)?;
-        Ok(ToolResult::success_json(json!({ "dataset": dataset })))
+        let entry = select_local_entry(
+            &self.state,
+            &input.id,
+            input.version.as_deref(),
+            input.digest.as_deref(),
+        )?;
+        let manifest = self
+            .state
+            .local
+            .manifest(&entry)
+            .map_err(|error| execution_failed(error.to_string()))?;
+        Ok(ToolResult::success_json(json!({
+            "entry": entry,
+            "manifest": manifest
+        })))
     }
 }
 
@@ -157,13 +222,18 @@ impl ToolFunction for CatalogListFilesTool {
     type Input = CatalogListFilesInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        refresh_if_requested(&*self.service, input.refresh.unwrap_or(false)).await?;
-        let files = self
-            .service
-            .list_files(&input.id, input.version.as_deref(), input.digest.as_deref())
-            .await
-            .map_err(execution_failed)?;
-        Ok(ToolResult::success_json(json!({ "files": files })))
+        let entry = select_local_entry(
+            &self.state,
+            &input.id,
+            input.version.as_deref(),
+            input.digest.as_deref(),
+        )?;
+        let manifest = self
+            .state
+            .local
+            .manifest(&entry)
+            .map_err(|error| execution_failed(error.to_string()))?;
+        Ok(ToolResult::success_json(json!({ "files": manifest.files })))
     }
 }
 
@@ -172,46 +242,51 @@ impl ToolFunction for CatalogListVersionsTool {
     type Input = CatalogListVersionsInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        refresh_if_requested(&*self.service, input.refresh.unwrap_or(false)).await?;
-        let versions = self
-            .service
-            .list_versions(&input.id)
-            .await
-            .map_err(execution_failed)?;
-        Ok(ToolResult::success_json(json!({ "versions": versions })))
+        let index = self
+            .state
+            .local
+            .index()
+            .map_err(|error| execution_failed(error.to_string()))?;
+        let mut entries = index
+            .entries
+            .iter()
+            .filter(|entry| entry.id == input.id)
+            .cloned()
+            .collect::<Vec<_>>();
+        if entries.is_empty() {
+            return Err(execution_failed(format!(
+                "catalog dataset `{}` is not installed",
+                input.id
+            )));
+        }
+        entries.sort_by(|left, right| {
+            right
+                .created_unix_seconds
+                .cmp(&left.created_unix_seconds)
+                .then_with(|| left.version.cmp(&right.version))
+        });
+        Ok(ToolResult::success_json(json!({ "versions": entries })))
     }
 }
 
-#[async_trait]
-impl ToolFunction for CatalogRefreshTool {
-    type Input = CatalogRefreshInput;
-
-    async fn run(&self, _input: Self::Input) -> Result<ToolResult, ToolError> {
-        let snapshot = self.service.refresh().await.map_err(execution_failed)?;
-        Ok(ToolResult::success_json(json!({
-            "generation": snapshot.index.generation,
-            "current_datasets": snapshot.records.len(),
-            "vfs_mounts_refreshed": false,
-            "data_bundle_registry_refreshed": false
-        })))
-    }
-}
-
-pub fn catalog_registrations(service: Arc<dyn CatalogServiceTrait>) -> Vec<ToolRegistration> {
+pub fn catalog_registrations(state: Arc<CatalogState>) -> Vec<ToolRegistration> {
     vec![
         ToolRegistration::from(CatalogSearchTool {
-            service: Arc::clone(&service),
+            state: Arc::clone(&state),
+        }),
+        ToolRegistration::from(CatalogInstallTool {
+            state: Arc::clone(&state),
+        }),
+        ToolRegistration::from(CatalogUpdateTool {
+            state: Arc::clone(&state),
         }),
         ToolRegistration::from(CatalogDescribeTool {
-            service: Arc::clone(&service),
+            state: Arc::clone(&state),
         }),
         ToolRegistration::from(CatalogListFilesTool {
-            service: Arc::clone(&service),
+            state: Arc::clone(&state),
         }),
-        ToolRegistration::from(CatalogListVersionsTool {
-            service: Arc::clone(&service),
-        }),
-        ToolRegistration::from(CatalogRefreshTool { service }),
+        ToolRegistration::from(CatalogListVersionsTool { state }),
     ]
 }
 
@@ -219,13 +294,15 @@ pub fn catalog_registrations(service: Arc<dyn CatalogServiceTrait>) -> Vec<ToolR
 mod tests {
     use super::*;
     use data_catalog::{
-        build_package, package::BuildOptions, publish_package, storage::operator_for_backend,
+        CatalogConfig, build_package, package::BuildOptions, publish_package,
+        storage::operator_for_backend,
     };
     use vfs::{BackendConfig, BackendDefinition, MountDefinition, VfsManifest};
 
-    async fn test_service() -> S3CatalogService {
+    async fn test_state() -> CatalogState {
         let workspace = tempfile::tempdir().unwrap();
         let warehouse = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
         let input = workspace.path().join("input");
         std::fs::create_dir_all(&input).unwrap();
         std::fs::write(input.join("data.txt"), b"catalog-tools").unwrap();
@@ -252,21 +329,29 @@ mod tests {
                 read_only: true,
             }],
         };
-        let config = data_catalog::CatalogConfig {
+        let config = CatalogConfig {
             backend: "warehouse".into(),
-            source: "/catalog".into(),
             ..Default::default()
         };
         let operator = operator_for_backend(&manifest, &config.backend).unwrap();
         publish_package(package.path, &config, &operator)
             .await
             .unwrap();
-        S3CatalogService::new(&manifest, &config).await.unwrap()
+        let remote = RemoteCatalog::new(&manifest, &config).unwrap();
+        let local = LocalCatalog::open(cache.path()).unwrap();
+        local
+            .install(&remote, "catalog_tools.test", None, None)
+            .await
+            .unwrap();
+        CatalogState {
+            local: Arc::new(local),
+            remote: Arc::new(remote),
+        }
     }
 
     #[tokio::test]
-    async fn registers_five_catalog_tools() {
-        let registrations = catalog_registrations(Arc::new(test_service().await));
+    async fn registers_six_catalog_tools() {
+        let registrations = catalog_registrations(Arc::new(test_state().await));
         let names: Vec<&str> = registrations
             .iter()
             .map(|registration| registration.definition.name.as_str())
@@ -275,10 +360,11 @@ mod tests {
             names,
             [
                 "catalog_search",
+                "catalog_install",
+                "catalog_update",
                 "catalog_describe",
                 "catalog_list_files",
-                "catalog_list_versions",
-                "catalog_refresh"
+                "catalog_list_versions"
             ]
         );
     }

@@ -29,9 +29,7 @@ use arc_swap::ArcSwapOption;
 use container_runtime::ContainerExecutionInfra;
 use container_runtime::{PanelGcPolicy, WorkspaceGcPolicy, sweep_panels, sweep_workspace};
 use dag_core::{BundleRegistry, DataBundle};
-use data_catalog::{
-    CatalogConfig, CatalogRuntime, CatalogServiceTrait, S3CatalogService, catalog_mount_definitions,
-};
+use data_catalog::{CatalogConfig, LocalCatalog, RemoteCatalog};
 use data_engine::dag::DagHistory;
 use data_engine::data_engine::DataEngine;
 use data_engine::runtime::{DataEngineClient, DataEngineManager};
@@ -41,9 +39,11 @@ use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use vfs::{
-    BackendDefinition, MountDefinition, MountedObjectStore, OpendalFileStorage, VfsManifest,
+    BackendConfig, BackendDefinition, MountDefinition, MountedObjectStore, OpendalFileStorage,
+    VfsManifest,
 };
 
+use crate::catalog_tools::CatalogState;
 use crate::config::{PromptCapabilities, RuntimeConfig};
 use crate::control::{AgentExecutionHistory, AgentStatus, DelegationSnapshot, DelegationStatus};
 use crate::error::{Error, Result};
@@ -154,9 +154,9 @@ pub struct SharedInfra {
     pub file_storage: Arc<OpendalFileStorage>,
     /// Unix-style virtual filesystem mounted under `vfs://`.
     pub vfs: Arc<MountedObjectStore>,
-    /// Refreshable searchable view over the object-storage catalog. `None`
-    /// when the catalog is absent or disabled.
-    pub catalog: Option<Arc<dyn CatalogServiceTrait>>,
+    /// Remote catalog access plus the local package cache. `None` when the
+    /// catalog is absent or disabled.
+    pub catalog: Option<Arc<CatalogState>>,
     /// Process-wide Podman connection and immutable panel cache shared by
     /// all DAG sessions.
     pub container_execution: Arc<ContainerExecutionInfra>,
@@ -597,38 +597,65 @@ async fn build_vfs_with_catalog(
 ) -> Result<(
     MountedObjectStore,
     dag_core::BundleRegistry,
-    Option<Arc<dyn CatalogServiceTrait>>,
+    Option<Arc<CatalogState>>,
 )> {
     let state = load_or_create_vfs_manifest(config)?;
     let mut manifest = state.manifest;
 
     let mut catalog_registry = dag_core::BundleRegistry::new();
-    let mut catalog_service = None;
+    let mut catalog = None;
     if let Some(catalog_source) = state.catalog_source {
         let catalog_config = CatalogConfig::from_vfs_toml(&format!(
             "[[mount]]\npath=\"/\"\nbackend=\"x\"\nsource=\"/\"\n\n{catalog_source}"
         ))
         .map_err(|error| Error::Other(error.to_string()))?;
         if catalog_config.enabled {
-            let service: Arc<dyn CatalogServiceTrait> = Arc::new(
-                S3CatalogService::new(&manifest, &catalog_config)
-                    .await
-                    .map_err(|error| Error::Other(error.to_string()))?,
-            );
-            let snapshot = service.snapshot().await;
-            let mut mounts = catalog_mount_definitions(&manifest, &snapshot.index, &catalog_config)
-                .map_err(|error| Error::Other(error.to_string()))?;
-            manifest.mount.append(&mut mounts);
-            catalog_registry = CatalogRuntime {
-                index: snapshot.index,
+            const CACHE_BACKEND_ID: &str = "autonomics-catalog-cache";
+            if manifest
+                .backend
+                .iter()
+                .any(|backend| backend.id == CACHE_BACKEND_ID)
+            {
+                return Err(Error::Other(format!(
+                    "backend `{CACHE_BACKEND_ID}` is reserved for the local catalog cache"
+                )));
             }
-            .bundle_registry();
-            catalog_service = Some(service);
+            let remote = RemoteCatalog::new(&manifest, &catalog_config)
+                .map_err(|error| Error::Other(error.to_string()))?;
+            let local = LocalCatalog::open(config.state_dir.join("catalog"))
+                .map_err(|error| Error::Other(error.to_string()))?;
+            let mounts = local
+                .mount_definitions(CACHE_BACKEND_ID, catalog_config.agent_visible)
+                .map_err(|error| Error::Other(error.to_string()))?;
+            manifest.backend.push(BackendDefinition {
+                id: CACHE_BACKEND_ID.into(),
+                config: BackendConfig::local(local.root().to_string_lossy().into_owned()),
+            });
+            for mount in mounts {
+                if manifest
+                    .mount
+                    .iter()
+                    .any(|existing| existing.path == mount.path)
+                {
+                    return Err(Error::Other(format!(
+                        "catalog mount path `{}` collides with a static VFS mount",
+                        mount.path
+                    )));
+                }
+                manifest.mount.push(mount);
+            }
+            catalog_registry = local
+                .bundle_registry()
+                .map_err(|error| Error::Other(error.to_string()))?;
+            catalog = Some(Arc::new(CatalogState {
+                local: Arc::new(local),
+                remote: Arc::new(remote),
+            }));
         }
     }
     MountedObjectStore::from_manifest(&manifest)
         .map_err(|e| Error::Other(e.to_string()))
-        .map(|store| (store, catalog_registry, catalog_service))
+        .map(|store| (store, catalog_registry, catalog))
 }
 
 struct VfsManifestState {
@@ -4238,10 +4265,16 @@ backend = "warehouse"
             ),
         )
         .unwrap();
+        let remote = data_catalog::RemoteCatalog::new(&vfs_manifest, &catalog_config).unwrap();
+        let local = data_catalog::LocalCatalog::open(config.state_dir.join("catalog")).unwrap();
+        local
+            .install(&remote, "catalog_panel", None, None)
+            .await
+            .unwrap();
 
         let (store, bundles, catalog_service) = build_vfs_with_catalog(&config).await.unwrap();
-        let catalog_service = catalog_service.expect("enabled catalog service");
-        assert_eq!(catalog_service.snapshot().await.records.len(), 1);
+        let catalog_state = catalog_service.expect("enabled catalog service");
+        assert_eq!(catalog_state.local.index().unwrap().entries.len(), 1);
         let storage = Arc::new(vfs::OpendalFileStorage::with_mounts(
             &config.data_dir,
             Arc::new(store),

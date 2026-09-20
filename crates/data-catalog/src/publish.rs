@@ -15,18 +15,6 @@ pub async fn publish_package(
 ) -> Result<CatalogEntry> {
     config.validate()?;
     let manifest = validate_package(package.as_ref()).map_err(|error| error.to_string())?;
-    let digest = manifest
-        .short_digest()
-        .map_err(|error| format!("package {error}"))?
-        .to_string();
-    let entry_root = format!(
-        "{}/{}/{}/sha256-{digest}",
-        config.prefix.trim_matches('/'),
-        manifest.id,
-        manifest.version
-    );
-    let manifest_key = config.object_key(&format!("{entry_root}/manifest.json"));
-    let files_prefix = entry_root.clone();
     let entry = CatalogEntry {
         id: manifest.id.clone(),
         version: manifest.version.clone(),
@@ -35,16 +23,14 @@ pub async fn publish_package(
             .digest
             .clone()
             .expect("validated manifests have a digest"),
-        manifest: format!("{entry_root}/manifest.json"),
-        files: files_prefix.clone(),
-        vfs_alias: format!("/bundles/{}", manifest.id),
-        vfs_immutable: format!("/datasets/{}@sha256-{digest}", manifest.id),
         current: true,
         created_unix_seconds: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_secs() as i64)
             .unwrap_or_default(),
     };
+    let manifest_key = config.object_key(&entry.manifest_key());
+    let files_prefix = entry.payload_prefix();
 
     upload_payload_files(package.as_ref(), operator, &files_prefix, &manifest, config).await?;
     upload_object_if_needed(
@@ -125,14 +111,11 @@ async fn upload_object_if_needed(
 mod tests {
     use super::*;
     use crate::package::{BuildOptions, build_package};
+    use crate::remote::RemoteCatalog;
     use crate::storage::operator_for_backend;
-    use crate::{CatalogRuntime, catalog_mount_definitions};
     use std::path::Path;
     use std::path::PathBuf;
-    use vfs::{
-        BackendConfig, BackendDefinition, MountDefinition, MountedObjectStore, OpendalFileStorage,
-        VfsManifest,
-    };
+    use vfs::{BackendConfig, BackendDefinition, VfsManifest};
 
     fn make_package(parent: &Path, id: &str, version: &str, content: &[u8]) -> PathBuf {
         let input = parent.join(format!("{id}-{version}-input"));
@@ -173,32 +156,19 @@ mod tests {
         let package = make_package(workspace.path(), "panel", "v1", b"panel-v1");
 
         let entry = publish_package(&package, &config, &operator).await.unwrap();
-        assert_eq!(entry.vfs_alias, "/bundles/panel");
+        assert_eq!(entry.vfs_alias(), "/bundles/panel");
+        assert!(entry.manifest_key().ends_with("/manifest.json"));
 
-        let runtime = CatalogRuntime::load(&manifest, &config).await.unwrap();
-        assert_eq!(runtime.index.entries.len(), 1);
+        let remote = RemoteCatalog::new(&manifest, &config).unwrap();
+        let index = remote.index().await.unwrap();
+        assert_eq!(index.entries.len(), 1);
+        assert_eq!(index.generation, 2);
+        let published_manifest = remote.manifest(&entry).await.unwrap();
+        assert_eq!(published_manifest.files.len(), 1);
         assert_eq!(
-            runtime
-                .bundle_registry()
-                .get("panel")
-                .map(|bundle| bundle.vpath.as_str())
-                .unwrap(),
-            "/bundles/panel"
+            published_manifest.digest.as_deref(),
+            Some(entry.digest.as_str())
         );
-
-        let mut mounted_manifest = manifest.clone();
-        mounted_manifest
-            .mount
-            .extend(catalog_mount_definitions(&manifest, &runtime.index, &config).unwrap());
-        let mounted = MountedObjectStore::from_manifest(&mounted_manifest).unwrap();
-        let storage =
-            OpendalFileStorage::with_mounts(workspace.path(), std::sync::Arc::new(mounted));
-        let bytes = storage
-            .resolve("/bundles/panel/data.txt")
-            .read(&storage.resolve_path("/bundles/panel/data.txt"))
-            .await
-            .unwrap();
-        assert_eq!(bytes.to_vec(), b"panel-v1");
     }
 
     #[tokio::test]
@@ -233,12 +203,10 @@ mod tests {
         .await
         .unwrap();
 
-        let runtime = CatalogRuntime::load(&manifest, &config).await.unwrap();
-        assert_eq!(runtime.index.entries.len(), 2);
-        assert_eq!(runtime.index.current_entries().count(), 1);
-        assert_eq!(
-            runtime.index.current_entries().next().unwrap().version,
-            "v2"
-        );
+        let remote = RemoteCatalog::new(&manifest, &config).unwrap();
+        let index = remote.index().await.unwrap();
+        assert_eq!(index.entries.len(), 2);
+        assert_eq!(index.current_entries().count(), 1);
+        assert_eq!(index.current_entries().next().unwrap().version, "v2");
     }
 }

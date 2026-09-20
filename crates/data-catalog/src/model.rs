@@ -75,31 +75,57 @@ impl DatasetManifest {
         }
         Ok(())
     }
-
-    pub fn short_digest(&self) -> Result<&str> {
-        self.digest
-            .as_deref()
-            .and_then(|digest| digest.strip_prefix("sha256:"))
-            .ok_or_else(|| "dataset digest is missing".into())
-    }
 }
 
+/// One immutable dataset version listed by a catalog index.
+///
+/// Object paths and VFS paths follow the catalog layout convention and are
+/// derived from the identity fields instead of being stored separately.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSchema, Deserialize, Serialize)]
 pub struct CatalogEntry {
     pub id: String,
     pub version: String,
     pub kind: String,
+    /// Canonical manifest digest, including the `sha256:` prefix.
     pub digest: String,
-    /// Object key/path of the version manifest relative to the catalog backend root.
-    pub manifest: String,
-    /// Object prefix containing payload files, relative to the catalog backend root.
-    pub files: String,
-    /// Stable compatibility path, normally `/bundles/<id>`.
-    pub vfs_alias: String,
-    /// Immutable path, normally `/datasets/<id>@sha256-<digest>`.
-    pub vfs_immutable: String,
     pub current: bool,
     pub created_unix_seconds: i64,
+}
+
+impl CatalogEntry {
+    /// Digest without the `sha256:` prefix, as used in object and VFS paths.
+    pub fn short_digest(&self) -> &str {
+        self.digest.strip_prefix("sha256:").unwrap_or(&self.digest)
+    }
+
+    /// Content-addressed object root for this version, relative to the catalog
+    /// source prefix: `entries/<id>/<version>/sha256-<digest>`.
+    pub fn entry_root(&self) -> String {
+        format!(
+            "entries/{}/{}/sha256-{}",
+            self.id,
+            self.version,
+            self.short_digest()
+        )
+    }
+
+    pub fn manifest_key(&self) -> String {
+        format!("{}/manifest.json", self.entry_root())
+    }
+
+    pub fn payload_prefix(&self) -> String {
+        self.entry_root()
+    }
+
+    /// Stable compatibility path: `/bundles/<id>`.
+    pub fn vfs_alias(&self) -> String {
+        format!("/bundles/{}", self.id)
+    }
+
+    /// Immutable path: `/datasets/<id>@sha256-<digest>`.
+    pub fn vfs_immutable(&self) -> String {
+        format!("/datasets/{}@sha256-{}", self.id, self.short_digest())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, JsonSchema, Deserialize, Serialize)]
@@ -145,17 +171,6 @@ impl CatalogIndex {
             if !is_sha256(&entry.digest) {
                 return Err(format!("catalog entry `{}` has invalid digest", entry.id).into());
             }
-            validate_object_path(&entry.manifest)?;
-            validate_object_path(&entry.files)?;
-            validate_absolute_vfs_path(&entry.vfs_alias)?;
-            validate_absolute_vfs_path(&entry.vfs_immutable)?;
-            if !entry.manifest.ends_with("manifest.json") {
-                return Err(format!(
-                    "catalog entry `{}` manifest must end with manifest.json",
-                    entry.id
-                )
-                .into());
-            }
             if !identities.insert((entry.id.clone(), entry.digest.clone())) {
                 return Err(
                     format!("duplicate catalog entry `{}@{}`", entry.id, entry.digest).into(),
@@ -176,6 +191,70 @@ impl CatalogIndex {
 
     pub fn current_entries(&self) -> impl Iterator<Item = &CatalogEntry> {
         self.entries.iter().filter(|entry| entry.current)
+    }
+
+    /// Select the single entry matched by id and optional version and digest.
+    pub fn select(
+        &self,
+        id: &str,
+        version: Option<&str>,
+        digest: Option<&str>,
+    ) -> Result<CatalogEntry> {
+        let mut matched = self
+            .entries
+            .iter()
+            .filter(|entry| entry.id == id)
+            .filter(|entry| version.is_none_or(|value| entry.version == value))
+            .filter(|entry| digest.is_none_or(|value| entry.digest == value))
+            .cloned()
+            .collect::<Vec<_>>();
+        match matched.len() {
+            0 => Err(format!("catalog dataset `{id}` was not found").into()),
+            1 => Ok(matched.remove(0)),
+            _ => {
+                matched.retain(|entry| entry.current);
+                match matched.len() {
+                    1 => Ok(matched.remove(0)),
+                    0 => Err(format!(
+                        "catalog dataset `{id}` has multiple versions; specify version or digest"
+                    )
+                    .into()),
+                    _ => Err(format!("catalog dataset `{id}` has multiple current entries").into()),
+                }
+            }
+        }
+    }
+
+    /// Search current entries by free-text terms over their identity fields.
+    pub fn search(&self, query: &str, kind: Option<&str>, limit: usize) -> Vec<CatalogEntry> {
+        let terms = query
+            .split_whitespace()
+            .map(str::to_ascii_lowercase)
+            .collect::<Vec<_>>();
+        let mut matched = self
+            .current_entries()
+            .filter(|entry| kind.is_none_or(|value| entry.kind == value))
+            .filter(|entry| {
+                let haystack = format!(
+                    "{} {} {} {} {}",
+                    entry.id,
+                    entry.version,
+                    entry.kind,
+                    entry.digest,
+                    entry.short_digest()
+                )
+                .to_ascii_lowercase();
+                terms.iter().all(|term| haystack.contains(term))
+            })
+            .take(limit)
+            .cloned()
+            .collect::<Vec<_>>();
+        matched.sort_by(|left, right| {
+            left.id
+                .cmp(&right.id)
+                .then_with(|| right.created_unix_seconds.cmp(&left.created_unix_seconds))
+        });
+        matched
     }
 
     pub fn upsert_current(&mut self, entry: CatalogEntry) {
@@ -262,19 +341,6 @@ pub fn validate_object_path(value: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn validate_absolute_vfs_path(value: &str) -> Result<()> {
-    if !value.starts_with('/')
-        || value.contains('\\')
-        || value.contains('\0')
-        || value.contains("/../")
-        || value.ends_with("/..")
-        || value == "/"
-    {
-        return Err(format!("unsafe VFS path `{value}`").into());
-    }
-    Ok(())
-}
-
 pub fn is_sha256(value: &str) -> bool {
     value.len() == 71
         && value.starts_with("sha256:")
@@ -333,10 +399,6 @@ mod tests {
                         "b".repeat(64)
                     }
                 ),
-                manifest: format!("entries/panel/{version}/manifest.json"),
-                files: format!("entries/panel/{version}/files"),
-                vfs_alias: "/bundles/panel".into(),
-                vfs_immutable: format!("/datasets/panel@sha256-{version}"),
                 current: true,
                 created_unix_seconds: 1,
             });
@@ -346,5 +408,61 @@ mod tests {
 
         index.entries[0].current = true;
         assert!(index.validate().is_err());
+    }
+
+    #[test]
+    fn entry_paths_follow_the_layout_convention() {
+        let entry = CatalogEntry {
+            id: "panel".into(),
+            version: "v1".into(),
+            kind: "plink".into(),
+            digest: format!("sha256:{}", "a".repeat(64)),
+            current: true,
+            created_unix_seconds: 1,
+        };
+        assert_eq!(entry.short_digest(), "a".repeat(64));
+        assert_eq!(
+            entry.entry_root(),
+            format!("entries/panel/v1/sha256-{}", "a".repeat(64))
+        );
+        assert_eq!(
+            entry.manifest_key(),
+            format!("entries/panel/v1/sha256-{}/manifest.json", "a".repeat(64))
+        );
+        assert_eq!(entry.payload_prefix(), entry.entry_root());
+        assert_eq!(entry.vfs_alias(), "/bundles/panel");
+        assert_eq!(
+            entry.vfs_immutable(),
+            format!("/datasets/panel@sha256-{}", "a".repeat(64))
+        );
+    }
+
+    #[test]
+    fn select_and_search_current_entries() {
+        let mut index = CatalogIndex::default();
+        index.upsert_current(CatalogEntry {
+            id: "panel.eur".into(),
+            version: "v1".into(),
+            kind: "panel".into(),
+            digest: format!("sha256:{}", "a".repeat(64)),
+            current: true,
+            created_unix_seconds: 1,
+        });
+        index.upsert_current(CatalogEntry {
+            id: "panel.afr".into(),
+            version: "v2".into(),
+            kind: "panel".into(),
+            digest: format!("sha256:{}", "b".repeat(64)),
+            current: true,
+            created_unix_seconds: 2,
+        });
+
+        let selected = index.select("panel.afr", None, None).unwrap();
+        assert_eq!(selected.version, "v2");
+        assert!(index.select("missing", None, None).is_err());
+        let found = index.search("panel afr", Some("panel"), 10);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].id, "panel.afr");
+        assert!(index.search("missing", None, 10).is_empty());
     }
 }

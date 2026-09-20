@@ -4,7 +4,6 @@ use vfs::{
     BackendDefinition, MountDefinition, MountedObjectStore, OpendalFileStorage, VfsManifest,
 };
 
-use crate::config::{join_object_key, normalize_prefix};
 use crate::error::Result;
 
 pub fn operator_for_backend(manifest: &VfsManifest, backend_id: &str) -> Result<opendal::Operator> {
@@ -131,8 +130,4 @@ pub fn backend_definition(manifest: &VfsManifest, backend_id: &str) -> Result<Ba
         .find(|backend| backend.id == backend_id)
         .cloned()
         .ok_or_else(|| format!("catalog backend `{backend_id}` is not defined").into())
-}
-
-pub fn catalog_object_key(source: &str, relative: &str) -> String {
-    join_object_key(&normalize_prefix(source), relative)
 }

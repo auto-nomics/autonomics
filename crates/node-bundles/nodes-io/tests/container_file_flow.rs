@@ -17,7 +17,7 @@ use dag_core::dag::graph::PortOutputs;
 use dag_core::dag::runtime::SchedulerConfig;
 use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::registry::{NodeCtx, NodeRegistry};
-use data_catalog::{CatalogConfig, CatalogRuntime};
+use data_catalog::CatalogConfig;
 use datafusion::common::HashMap;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::prelude::SessionContext;
@@ -700,19 +700,22 @@ async fn catalog_test_fixture() -> CatalogTextFixture {
     let source = std::fs::read_to_string(&config_path).unwrap();
     let catalog_manifest = VfsManifest::from_toml(&source).unwrap();
     let catalog_config = CatalogConfig::from_vfs_toml(&source).unwrap();
-    let catalog_runtime = CatalogRuntime::load(&catalog_manifest, &catalog_config)
-        .await
-        .unwrap();
+    let cache_root = std::env::var_os("HOME")
+        .map(|home| Path::new(&home).join(".autonomics/catalog"))
+        .expect("HOME is required for the default catalog cache");
+    let catalog = data_catalog::LocalCatalog::open(&cache_root).unwrap();
+    if catalog.index().unwrap().entries.is_empty() {
+        let remote = data_catalog::RemoteCatalog::new(&catalog_manifest, &catalog_config).unwrap();
+        catalog.update(&remote, None).await.unwrap();
+    }
 
     let scratch = tempfile::tempdir().unwrap();
-    let catalog_backend = catalog_manifest
-        .backend
-        .iter()
-        .find(|backend| backend.id == catalog_config.backend)
-        .expect("catalog backend is defined");
     let mut manifest = VfsManifest {
         backend: vec![
-            catalog_backend.clone(),
+            BackendDefinition {
+                id: "catalog-cache".into(),
+                config: BackendConfig::local(cache_root.to_string_lossy().into_owned()),
+            },
             BackendDefinition {
                 id: "catalog-test-local".into(),
                 config: BackendConfig::local("/"),
@@ -725,10 +728,9 @@ async fn catalog_test_fixture() -> CatalogTextFixture {
             read_only: false,
         }],
     };
-    manifest.mount.extend(
-        data_catalog::catalog_mount_definitions(&manifest, &catalog_runtime.index, &catalog_config)
-            .unwrap(),
-    );
+    manifest
+        .mount
+        .extend(catalog.mount_definitions("catalog-cache", true).unwrap());
     let mounted = Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap());
     let storage = Arc::new(OpendalFileStorage::with_mounts(
         scratch.path(),
@@ -740,7 +742,7 @@ async fn catalog_test_fixture() -> CatalogTextFixture {
         .register_object_store(ObjectStoreUrl::parse("vfs://").unwrap().as_ref(), mounted);
     CatalogTextFixture {
         ctx: NodeCtx::new(session.runtime_env(), Some(storage)),
-        bundles: catalog_runtime.bundle_registry(),
+        bundles: catalog.bundle_registry().unwrap(),
         _scratch: scratch,
     }
 }

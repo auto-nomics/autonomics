@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use data_catalog::error::Result;
 use data_catalog::{
-    CatalogConfig, CatalogRuntime, build_package, catalog_mount_definitions, package::BuildOptions,
+    CatalogConfig, LocalCatalog, RemoteCatalog, build_package, package::BuildOptions,
     publish_package, storage::operator_for_backend, validate_package,
 };
 use vfs::VfsManifest;
@@ -13,7 +13,7 @@ use vfs::VfsManifest;
 #[command(
     name = "autonomics-catalog",
     version,
-    about = "Build and publish versioned data packages."
+    about = "Build, publish, install, and inspect versioned data packages."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -41,21 +41,54 @@ enum Command {
     },
     /// Validate a normalized package directory.
     Validate { package: PathBuf },
-    /// Publish a package and atomically advance the catalog generation.
+    /// Publish a package and atomically advance the remote catalog generation.
     Publish {
         package: PathBuf,
         #[arg(long, default_value = "~/.autonomics/vfs.toml")]
         config: PathBuf,
     },
-    /// List current catalog entries.
-    List {
+    /// Search current entries in the remote catalog.
+    Search {
+        query: Option<String>,
+        #[arg(long)]
+        kind: Option<String>,
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
         #[arg(long, default_value = "~/.autonomics/vfs.toml")]
         config: PathBuf,
     },
-    /// Show the VFS mounts that a catalog would generate.
-    Mounts {
+    /// Download and verify one package into the local cache.
+    Install {
+        id: String,
+        #[arg(long)]
+        version: Option<String>,
+        #[arg(long)]
+        digest: Option<String>,
         #[arg(long, default_value = "~/.autonomics/vfs.toml")]
         config: PathBuf,
+        #[arg(long, default_value = "~/.autonomics/catalog")]
+        cache: PathBuf,
+    },
+    /// Install remote current versions missing from the local cache.
+    Update {
+        #[arg(long)]
+        id: Option<String>,
+        #[arg(long, default_value = "~/.autonomics/vfs.toml")]
+        config: PathBuf,
+        #[arg(long, default_value = "~/.autonomics/catalog")]
+        cache: PathBuf,
+    },
+    /// List current entries installed in the local cache.
+    List {
+        #[arg(long, default_value = "~/.autonomics/catalog")]
+        cache: PathBuf,
+    },
+    /// Show the VFS mounts generated from the local cache.
+    Mounts {
+        #[arg(long, default_value = "~/.autonomics/catalog")]
+        cache: PathBuf,
+        #[arg(long, default_value = "catalog-cache")]
+        backend: String,
     },
 }
 
@@ -114,28 +147,62 @@ async fn run(cli: Cli) -> Result<()> {
             print_json(&manifest)?;
         }
         Command::Publish { package, config } => {
-            let (manifest, catalog_config, operator) = load_backend(&config).await?;
+            let (_, catalog_config, operator) = load_backend(&config).await?;
             let entry = publish_package(&package, &catalog_config, &operator).await?;
-            let _ = manifest;
             print_json(&entry)?;
         }
-        Command::List { config } => {
-            let (manifest, catalog_config, _) = load_backend(&config).await?;
-            let runtime = CatalogRuntime::load(&manifest, &catalog_config).await?;
-            let current: Vec<_> = runtime.index.current_entries().collect();
+        Command::Search {
+            query,
+            kind,
+            limit,
+            config,
+        } => {
+            let remote = load_remote(&config).await?;
+            let index = remote.index().await?;
+            let entries = index.search(query.as_deref().unwrap_or(""), kind.as_deref(), limit);
+            print_json(&entries)?;
+        }
+        Command::Install {
+            id,
+            version,
+            digest,
+            config,
+            cache,
+        } => {
+            let remote = load_remote(&config).await?;
+            let catalog = LocalCatalog::open(expand_home(cache)?)?;
+            let entry = catalog
+                .install(&remote, &id, version.as_deref(), digest.as_deref())
+                .await?;
+            print_json(&entry)?;
+        }
+        Command::Update { id, config, cache } => {
+            let remote = load_remote(&config).await?;
+            let catalog = LocalCatalog::open(expand_home(cache)?)?;
+            let updated = catalog.update(&remote, id.as_deref()).await?;
+            print_json(&updated)?;
+        }
+        Command::List { cache } => {
+            let catalog = LocalCatalog::open(expand_home(cache)?)?;
+            let index = catalog.index()?;
+            let current: Vec<_> = index.current_entries().collect();
             print_json(&current)?;
         }
-        Command::Mounts { config } => {
-            let source = std::fs::read_to_string(expand_home(config)?)
-                .map_err(|error| format!("read VFS config: {error}"))?;
-            let manifest = VfsManifest::from_toml(&source).map_err(|error| error.to_string())?;
-            let catalog_config = CatalogConfig::from_vfs_toml(&source)?;
-            let runtime = CatalogRuntime::load(&manifest, &catalog_config).await?;
-            let mounts = catalog_mount_definitions(&manifest, &runtime.index, &catalog_config)?;
+        Command::Mounts { cache, backend } => {
+            let catalog = LocalCatalog::open(expand_home(cache)?)?;
+            let mounts = catalog.mount_definitions(&backend, true)?;
             print_json(&mounts)?;
         }
     }
     Ok(())
+}
+
+async fn load_remote(config: &std::path::Path) -> Result<RemoteCatalog> {
+    let source = std::fs::read_to_string(expand_home(config)?)
+        .map_err(|error| format!("read VFS config: {error}"))?;
+    let manifest = VfsManifest::from_toml(&source).map_err(|error| error.to_string())?;
+    let catalog_config = CatalogConfig::from_vfs_toml(&source)?;
+    RemoteCatalog::new(&manifest, &catalog_config)
 }
 
 async fn load_backend(
