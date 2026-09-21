@@ -774,8 +774,7 @@ mod xpt {
             .collect();
         let mut character_columns: Vec<Vec<Option<String>>> = vec![Vec::new(); variables.len()];
         let mut numeric_columns: Vec<Vec<Option<f64>>> = vec![Vec::new(); variables.len()];
-        let mut row_number = 0usize;
-        for record in dataset.records() {
+        for (row_number, record) in dataset.records().enumerate() {
             let record =
                 record.map_err(|e| format!("failed to read XPORT record {row_number}: {e}"))?;
             for (column, value) in record.iter().enumerate() {
@@ -797,7 +796,6 @@ mod xpt {
                     }
                 }
             }
-            row_number += 1;
         }
 
         let fields: Vec<Field> = variables
