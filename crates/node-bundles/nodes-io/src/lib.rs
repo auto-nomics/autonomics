@@ -49,6 +49,7 @@ pub mod susie_rss_container;
 pub mod timesfm_container;
 pub mod twas_fusion_container;
 pub mod twosamplemr_container;
+pub mod twosamplemr_harmonise_container;
 pub mod visualization_container;
 pub mod wgcna_container;
 pub use alphafold::nodes::prediction::{AlphaFoldPredictionNode, AlphaFoldPredictionNodeFactory};
@@ -400,6 +401,12 @@ impl NodePlugin for Plugin {
         ));
         registry.register(Box::new(
             twosamplemr_container::TwoSampleMrContainerNodeFactory::new(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+        ));
+        registry.register(Box::new(
+            twosamplemr_harmonise_container::TwoSampleMrHarmoniseContainerNodeFactory::new(
                 Arc::clone(&self.container_execution.runtime),
                 Arc::clone(&self.container_execution.panel_cache),
             ),
