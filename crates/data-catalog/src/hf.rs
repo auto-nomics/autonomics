@@ -14,6 +14,17 @@ use crate::remote::ObjectSource;
 
 const INDEX_PATH: &str = "index.json";
 
+/// Resolve a Hugging Face token: explicit value, then `HUGGING_FACE_TOKEN`;
+/// `None` defers to the hf-hub defaults (`HF_TOKEN`, `HF_TOKEN_PATH`, or the
+/// cached token file).
+pub fn resolve_hf_token(explicit: Option<String>) -> Option<String> {
+    explicit.or_else(|| {
+        std::env::var("HUGGING_FACE_TOKEN")
+            .ok()
+            .filter(|token| !token.is_empty())
+    })
+}
+
 /// Where and how to publish a package on the Hugging Face Hub.
 #[derive(Debug, Clone)]
 pub struct HfPublishTarget {

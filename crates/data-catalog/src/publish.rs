@@ -157,11 +157,15 @@ mod tests {
             mount: Vec::new(),
         };
         let config = CatalogConfig {
-            backend: "warehouse".into(),
+            backend: Some("warehouse".into()),
             source: "/".into(),
             ..Default::default()
         };
-        let operator = operator_for_backend(&manifest, &config.backend).unwrap();
+        let operator = operator_for_backend(
+            &manifest,
+            config.backend.as_deref().expect("backend test config"),
+        )
+        .unwrap();
         let package = make_package(workspace.path(), "panel", "v1", b"panel-v1");
 
         let entry = publish_package(&package, &config, &operator).await.unwrap();
@@ -192,11 +196,15 @@ mod tests {
             mount: Vec::new(),
         };
         let config = CatalogConfig {
-            backend: "warehouse".into(),
+            backend: Some("warehouse".into()),
             source: "/".into(),
             ..Default::default()
         };
-        let operator = operator_for_backend(&manifest, &config.backend).unwrap();
+        let operator = operator_for_backend(
+            &manifest,
+            config.backend.as_deref().expect("backend test config"),
+        )
+        .unwrap();
         publish_package(
             make_package(workspace.path(), "panel", "v1", b"one"),
             &config,

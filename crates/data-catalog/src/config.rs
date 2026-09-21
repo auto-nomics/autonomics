@@ -4,8 +4,17 @@ use crate::error::Result;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct CatalogConfig {
-    /// Backend ID defined in the same `vfs.toml`.
-    pub backend: String,
+    /// Backend ID defined in the same `vfs.toml`. Ignored when `repository`
+    /// is set.
+    #[serde(default)]
+    pub backend: Option<String>,
+    /// Hugging Face dataset repository in `owner/name` form. When set, the
+    /// catalog is hosted on the Hub instead of object storage.
+    #[serde(default)]
+    pub repository: Option<String>,
+    /// Hugging Face revision (branch or tag); defaults to `main`.
+    #[serde(default)]
+    pub revision: Option<String>,
     /// Catalog root prefix inside that backend.
     #[serde(default = "default_source")]
     pub source: String,
@@ -34,7 +43,9 @@ fn default_true() -> bool {
 impl Default for CatalogConfig {
     fn default() -> Self {
         Self {
-            backend: String::new(),
+            backend: None,
+            repository: None,
+            revision: None,
             source: default_source(),
             index: default_index(),
             enabled: true,
@@ -58,16 +69,36 @@ impl CatalogConfig {
     }
 
     pub fn validate(&self) -> Result<()> {
-        if self.backend.trim().is_empty() {
-            return Err("catalog backend cannot be empty".into());
+        let backend = self
+            .backend
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        match (&self.repository, backend) {
+            (Some(repository), _) => {
+                let (owner, name) = repository.split_once('/').ok_or_else(|| {
+                    format!("catalog repository must be `owner/name`, got `{repository}`")
+                })?;
+                if owner.is_empty() || name.is_empty() || name.contains('/') {
+                    return Err(format!(
+                        "catalog repository must be `owner/name`, got `{repository}`"
+                    )
+                    .into());
+                }
+            }
+            (None, Some(_)) => {}
+            (None, None) => return Err("catalog backend or repository is required".into()),
         }
-        if self.source != "/" {
-            crate::model::validate_object_path(&self.source)?;
+        if self.revision.is_some() && self.repository.is_none() {
+            return Err("catalog revision requires repository".into());
         }
-        if self.source != "/" {
-            crate::model::validate_relative_path(self.source.trim_matches('/'))?;
+        if backend.is_some() {
+            if self.source != "/" {
+                crate::model::validate_object_path(&self.source)?;
+                crate::model::validate_relative_path(self.source.trim_matches('/'))?;
+            }
+            crate::model::validate_relative_path(self.index.trim_start_matches('/'))?;
         }
-        crate::model::validate_relative_path(self.index.trim_start_matches('/'))?;
         Ok(())
     }
 
@@ -117,5 +148,36 @@ index = "index.json"
             config.object_key("entries/x/files"),
             "autonomics/catalog/entries/x/files"
         );
+    }
+
+    #[test]
+    fn parses_hugging_face_repository_catalog() {
+        let config = CatalogConfig::from_vfs_toml(
+            r#"
+[catalog]
+repository = "wjixiang/autonomics-catalog-test"
+revision = "main"
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.repository.as_deref(),
+            Some("wjixiang/autonomics-catalog-test")
+        );
+        assert_eq!(config.revision.as_deref(), Some("main"));
+        assert!(config.backend.is_none());
+    }
+
+    #[test]
+    fn rejects_revision_without_repository() {
+        let error = CatalogConfig::from_vfs_toml(
+            r#"
+[catalog]
+backend = "warehouse"
+revision = "main"
+"#,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("revision requires repository"));
     }
 }

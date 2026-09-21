@@ -2,10 +2,11 @@ use std::path::PathBuf;
 
 use clap::Args;
 use data_catalog::error::Result;
-use data_catalog::hf::{HfPublishTarget, publish_package_to_hf};
+use data_catalog::hf::{HfPublishTarget, publish_package_to_hf, resolve_hf_token};
 use data_catalog::publish_package;
+use data_catalog::storage::operator_for_backend;
 
-use crate::common::{load_backend, print_json, resolve_hf_token};
+use crate::common::{load_catalog_config, print_json};
 
 #[derive(Args)]
 pub struct PublishArgs {
@@ -28,20 +29,34 @@ pub struct PublishArgs {
 
 pub async fn run(args: PublishArgs) -> Result<()> {
     let entry = if let Some(repo_id) = args.repo {
-        let token = resolve_hf_token(args.token.clone());
         publish_package_to_hf(
             &args.package,
             &HfPublishTarget {
                 repo_id,
                 revision: args.revision,
-                token,
+                token: resolve_hf_token(args.token.clone()),
                 create_repository: args.create_repo,
             },
         )
         .await?
     } else {
-        let (_, catalog_config, operator) = load_backend(&args.config).await?;
-        publish_package(&args.package, &catalog_config, &operator).await?
+        let (manifest, catalog_config) = load_catalog_config(&args.config)?;
+        if let Some(repository) = catalog_config.repository.clone() {
+            publish_package_to_hf(
+                &args.package,
+                &HfPublishTarget {
+                    repo_id: repository,
+                    revision: catalog_config.revision.clone(),
+                    token: resolve_hf_token(None),
+                    create_repository: args.create_repo,
+                },
+            )
+            .await?
+        } else {
+            let backend = catalog_config.backend.clone().unwrap_or_default();
+            let operator = operator_for_backend(&manifest, &backend)?;
+            publish_package(&args.package, &catalog_config, &operator).await?
+        }
     };
     print_json(&entry)
 }

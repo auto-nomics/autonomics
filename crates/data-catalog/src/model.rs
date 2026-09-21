@@ -227,12 +227,26 @@ impl CatalogIndex {
 
     /// Search current entries by free-text terms over their identity fields.
     pub fn search(&self, query: &str, kind: Option<&str>, limit: usize) -> Vec<CatalogEntry> {
+        self.search_entries(self.current_entries(), query, kind, limit)
+    }
+
+    /// Search every entry, including historical versions.
+    pub fn search_all(&self, query: &str, kind: Option<&str>, limit: usize) -> Vec<CatalogEntry> {
+        self.search_entries(self.entries.iter(), query, kind, limit)
+    }
+
+    fn search_entries<'a>(
+        &self,
+        entries: impl Iterator<Item = &'a CatalogEntry>,
+        query: &str,
+        kind: Option<&str>,
+        limit: usize,
+    ) -> Vec<CatalogEntry> {
         let terms = query
             .split_whitespace()
             .map(str::to_ascii_lowercase)
             .collect::<Vec<_>>();
-        let mut matched = self
-            .current_entries()
+        let mut matched = entries
             .filter(|entry| kind.is_none_or(|value| entry.kind == value))
             .filter(|entry| {
                 let haystack = format!(
@@ -464,5 +478,20 @@ mod tests {
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].id, "panel.afr");
         assert!(index.search("missing", None, 10).is_empty());
+
+        index.upsert_current(CatalogEntry {
+            id: "panel.eur".into(),
+            version: "v2".into(),
+            kind: "panel".into(),
+            digest: format!("sha256:{}", "c".repeat(64)),
+            current: true,
+            created_unix_seconds: 3,
+        });
+        assert_eq!(index.search("panel eur", None, 10).len(), 1);
+        assert_eq!(
+            index.search_all("panel eur", None, 10).len(),
+            2,
+            "search_all includes historical versions"
+        );
     }
 }

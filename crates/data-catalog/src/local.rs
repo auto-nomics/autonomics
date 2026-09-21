@@ -390,10 +390,14 @@ mod tests {
             mount: Vec::new(),
         };
         let config = CatalogConfig {
-            backend: "warehouse".into(),
+            backend: Some("warehouse".into()),
             ..Default::default()
         };
-        let operator = operator_for_backend(&manifest, &config.backend).unwrap();
+        let operator = operator_for_backend(
+            &manifest,
+            config.backend.as_deref().expect("backend test config"),
+        )
+        .unwrap();
         publish_package(package.path, &config, &operator)
             .await
             .unwrap();

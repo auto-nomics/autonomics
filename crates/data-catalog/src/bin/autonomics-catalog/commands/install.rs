@@ -3,8 +3,9 @@ use std::path::{Path, PathBuf};
 use clap::Args;
 use data_catalog::RemoteCatalog;
 use data_catalog::error::Result;
+use data_catalog::hf::resolve_hf_token;
 
-use crate::common::{default_cache_root, load_remote, open_cache, print_json, resolve_hf_token};
+use crate::common::{default_cache_root, load_remote, open_cache, print_json};
 
 #[derive(Args)]
 pub struct InstallArgs {

@@ -25,15 +25,14 @@ pub(crate) fn load_catalog_config(config: &Path) -> Result<(VfsManifest, Catalog
 
 pub(crate) async fn load_remote(config: &Path) -> Result<RemoteCatalog> {
     let (manifest, catalog_config) = load_catalog_config(config)?;
+    if let Some(repository) = &catalog_config.repository {
+        return RemoteCatalog::hf(
+            repository,
+            catalog_config.revision.clone(),
+            data_catalog::hf::resolve_hf_token(None),
+        );
+    }
     RemoteCatalog::new(&manifest, &catalog_config)
-}
-
-pub(crate) async fn load_backend(
-    config: &Path,
-) -> Result<(VfsManifest, CatalogConfig, opendal::Operator)> {
-    let (manifest, catalog_config) = load_catalog_config(config)?;
-    let operator = operator_for_backend(&manifest, &catalog_config.backend)?;
-    Ok((manifest, catalog_config, operator))
 }
 
 pub(crate) fn open_cache(path: &Path) -> Result<LocalCatalog> {
@@ -46,14 +45,6 @@ pub(crate) fn default_cache_root() -> String {
     data_catalog::default_panel_cache_root()
         .to_string_lossy()
         .into_owned()
-}
-
-pub(crate) fn resolve_hf_token(explicit: Option<String>) -> Option<String> {
-    explicit.or_else(|| {
-        std::env::var("HUGGING_FACE_TOKEN")
-            .ok()
-            .filter(|token| !token.is_empty())
-    })
 }
 
 pub(crate) fn parse_metadata(

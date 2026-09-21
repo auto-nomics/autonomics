@@ -69,10 +69,13 @@ impl RemoteCatalog {
     /// endpoints; no VFS mounts are constructed.
     pub fn new(manifest: &VfsManifest, config: &CatalogConfig) -> Result<Self> {
         config.validate()?;
-        let source = Box::new(OperatorSource(operator_for_backend(
-            manifest,
-            &config.backend,
-        )?));
+        let backend = config
+            .backend
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| "catalog backend is required in object-storage mode".to_string())?;
+        let source = Box::new(OperatorSource(operator_for_backend(manifest, backend)?));
         Ok(Self {
             config: config.clone(),
             source,
@@ -92,7 +95,9 @@ impl RemoteCatalog {
     /// Read a catalog hosted in a Hugging Face dataset repository.
     pub fn hf(repo_id: &str, revision: Option<String>, token: Option<String>) -> Result<Self> {
         let config = CatalogConfig {
-            backend: "huggingface".into(),
+            backend: Some("huggingface".into()),
+            repository: None,
+            revision: None,
             source: "/".into(),
             index: "index.json".into(),
             enabled: true,

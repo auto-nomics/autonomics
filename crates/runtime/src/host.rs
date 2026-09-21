@@ -601,8 +601,16 @@ async fn build_vfs_with_catalog(
                     "backend `{CACHE_BACKEND_ID}` is reserved for the local catalog cache"
                 )));
             }
-            let remote = RemoteCatalog::new(&manifest, &catalog_config)
-                .map_err(|error| Error::Other(error.to_string()))?;
+            let remote = if let Some(repository) = &catalog_config.repository {
+                RemoteCatalog::hf(
+                    repository,
+                    catalog_config.revision.clone(),
+                    data_catalog::hf::resolve_hf_token(None),
+                )
+            } else {
+                RemoteCatalog::new(&manifest, &catalog_config)
+            }
+            .map_err(|error| Error::Other(error.to_string()))?;
             let local = LocalCatalog::open(default_panel_cache_root())
                 .map_err(|error| Error::Other(error.to_string()))?;
             let mounts = local
@@ -4218,7 +4226,7 @@ mod vfs_tests {
             mount: Vec::new(),
         };
         let catalog_config = data_catalog::CatalogConfig {
-            backend: "warehouse".into(),
+            backend: Some("warehouse".into()),
             ..Default::default()
         };
         let operator =
