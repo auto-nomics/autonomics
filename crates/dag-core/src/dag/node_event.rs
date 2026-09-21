@@ -81,6 +81,13 @@ pub enum NodeEventKind {
     Progress { current: u64, total: u64 },
     /// A free-form log line.
     Log { level: EventLevel, message: String },
+    /// Run-level memory observation emitted by the scheduler's memory guard.
+    Resource {
+        usage_bytes: u64,
+        limit_bytes: u64,
+        usage_ratio: f64,
+        threshold_ratio: f64,
+    },
     /// Authoritative terminal result — drives the scheduler's ready-queue
     /// advancement. Sent by the dispatch wrapper after `execute` returns, not
     /// by the node itself.

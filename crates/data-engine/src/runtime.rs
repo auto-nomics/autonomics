@@ -97,8 +97,17 @@ impl SessionServer {
                         let mut engine = engine.lock().await;
                         engine.set_commit_message(commit_message);
                         match event_tx {
-                            Some(sink) => engine.run_with_events(sink).await,
-                            None => engine.run().await,
+                            Some(sink) => {
+                                engine
+                                    .run_with_events_and_cancel(sink, Some(cancel_token.clone()))
+                                    .await
+                            }
+                            None => {
+                                let (sink, _dropped_sink) = mpsc::channel(1);
+                                engine
+                                    .run_with_events_and_cancel(sink, Some(cancel_token.clone()))
+                                    .await
+                            }
                         }
                     });
 
@@ -1151,6 +1160,49 @@ mod tests {
         assert!(
             result.is_ok(),
             "second run_dag timed out — session was not freed after cancellation"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn memory_guard_returns_report_to_client() {
+        let engine = DataEngine::builder()
+            .build()
+            .with_config(crate::dag::SchedulerConfig {
+                memory_guard: dag_core::resource::MemoryGuardConfig::new(
+                    f64::MIN_POSITIVE,
+                    std::time::Duration::from_millis(1),
+                ),
+                ..crate::dag::SchedulerConfig::default()
+            });
+        let (client, _handle) = spawn_with_engine(engine);
+        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+        let csv_path = std::path::Path::new(&manifest_dir)
+            .join("test_datasets/Iris.csv")
+            .to_string_lossy()
+            .into_owned();
+        client
+            .add_node(
+                "source".to_string(),
+                "file_to_dataframe".to_string(),
+                serde_json::json!({ "path": csv_path }),
+            )
+            .await
+            .unwrap();
+
+        let report = client.run_dag().await.unwrap();
+
+        assert!(!report.ok, "{report:?}");
+        assert_eq!(
+            report.status("source"),
+            Some(crate::dag::runtime::RuntimeStatus::Cancelled)
+        );
+        assert!(report.resource.memory.trigger.is_some());
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("memory guard"))
         );
     }
 }

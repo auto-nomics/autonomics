@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use container_runtime::ContainerExecutionInfra;
 use dag_core::BundleRegistry;
+use dag_core::resource::MemoryGuardConfig;
 use datafusion::{
     execution::{object_store::ObjectStoreUrl, runtime_env::RuntimeEnv},
     prelude::SessionContext,
@@ -61,6 +62,8 @@ pub struct DataEngine {
 
 impl DataEngine {
     const DISABLED_NODE_KIND: &str = "container_command";
+    const DEFAULT_MEMORY_GUARD_RATIO: f64 = 0.90;
+    const DEFAULT_MEMORY_GUARD_INTERVAL_MS: u64 = 250;
 
     fn ensure_node_kind_allowed(kind: &str) -> Result<()> {
         if kind == Self::DISABLED_NODE_KIND {
@@ -108,11 +111,54 @@ impl DataEngine {
             dag: DAG::default(),
             node_registry: Arc::new(node_registry),
             container_execution,
-            config: SchedulerConfig::default(),
+            config: SchedulerConfig {
+                memory_guard: Self::memory_guard_from_env(),
+                ..SchedulerConfig::default()
+            },
             history: None,
             history_ref: "main".to_string(),
             pending_commit_message: None,
         }
+    }
+
+    fn memory_guard_from_env() -> Option<dag_core::resource::MemoryGuardConfig> {
+        let ratio = std::env::var_os("AUTONOMICS_DAG_MEMORY_LIMIT_RATIO")
+            .map(|value| value.to_string_lossy().into_owned())
+            .unwrap_or_else(|| Self::DEFAULT_MEMORY_GUARD_RATIO.to_string());
+        if matches!(
+            ratio.trim().to_ascii_lowercase().as_str(),
+            "0" | "false" | "off" | "disabled"
+        ) {
+            return None;
+        }
+        let Ok(ratio) = ratio.trim().parse::<f64>() else {
+            tracing::warn!(
+                value = %ratio,
+                "invalid AUTONOMICS_DAG_MEMORY_LIMIT_RATIO; using 0.90"
+            );
+            return MemoryGuardConfig::new(
+                Self::DEFAULT_MEMORY_GUARD_RATIO,
+                Self::default_memory_interval(),
+            );
+        };
+
+        let interval_ms = std::env::var_os("AUTONOMICS_DAG_MEMORY_SAMPLE_INTERVAL_MS")
+            .and_then(|value| value.to_string_lossy().parse::<u64>().ok())
+            .unwrap_or(Self::DEFAULT_MEMORY_GUARD_INTERVAL_MS)
+            .max(10);
+        let interval = std::time::Duration::from_millis(interval_ms);
+        let guard = MemoryGuardConfig::new(ratio, interval);
+        if guard.is_none() {
+            tracing::warn!(
+                value = ratio,
+                "AUTONOMICS_DAG_MEMORY_LIMIT_RATIO must be in (0, 1]; memory guard disabled"
+            );
+        }
+        guard
+    }
+
+    fn default_memory_interval() -> std::time::Duration {
+        std::time::Duration::from_millis(Self::DEFAULT_MEMORY_GUARD_INTERVAL_MS)
     }
 
     pub fn builder() -> DataEngineBuilder {
@@ -680,12 +726,35 @@ impl DataEngine {
         &mut self,
         event_sink: tokio::sync::mpsc::Sender<crate::dag::node_event::NodeEvent>,
     ) -> Result<RunReport> {
+        self.run_with_events_and_cancel(event_sink, None).await
+    }
+
+    /// Run a DAG while propagating an external cancellation token to spawned
+    /// node tasks.
+    pub async fn run_with_events_and_cancel(
+        &mut self,
+        event_sink: tokio::sync::mpsc::Sender<crate::dag::node_event::NodeEvent>,
+        external_cancel: Option<tokio_util::sync::CancellationToken>,
+    ) -> Result<RunReport> {
         let manifest = self.dag.to_manifest();
         let manifest_hash = manifest.content_hash();
-        let mut report = self
-            .dag
-            .run(&self.config, &self.engine_ctx, Some(event_sink))
-            .await?;
+        let mut report = match external_cancel {
+            Some(token) => {
+                self.dag
+                    .run_with_external_cancel(
+                        &self.config,
+                        &self.engine_ctx,
+                        Some(event_sink),
+                        token,
+                    )
+                    .await?
+            }
+            None => {
+                self.dag
+                    .run(&self.config, &self.engine_ctx, Some(event_sink))
+                    .await?
+            }
+        };
         self.commit_history_snapshot(&manifest, manifest_hash, &mut report)
             .await;
         Ok(report)

@@ -111,6 +111,8 @@ pub enum RuntimeStatus {
     Failed,
     /// Not run because an upstream predecessor failed.
     Skipped,
+    /// Interrupted by a run-level guard (currently the memory watermark).
+    Cancelled,
 }
 
 /// Per-node dirty-mark state for incremental execution.
@@ -156,6 +158,9 @@ pub struct SchedulerConfig {
     /// also manually mark nodes dirty via [`crate::dag::DAG::mark_dirty`] —
     /// useful when an external input (file or VFS dataset) has changed.
     pub incremental: bool,
+    /// Stop a DAG when sampled process/cgroup memory reaches this fraction of
+    /// its memory limit. `None` disables the guard.
+    pub memory_guard: Option<crate::resource::MemoryGuardConfig>,
 }
 
 impl Default for SchedulerConfig {
@@ -167,8 +172,50 @@ impl Default for SchedulerConfig {
             max_concurrency: cpus,
             compute_row_counts: false,
             incremental: false,
+            memory_guard: None,
         }
     }
+}
+
+/// Serializable form of one memory observation.
+#[derive(Debug, Clone, Serialize)]
+pub struct MemorySampleReport {
+    pub usage_bytes: u64,
+    pub charged_bytes: u64,
+    pub limit_bytes: u64,
+    pub usage_ratio: f64,
+    pub source: &'static str,
+}
+
+impl From<&crate::resource::MemorySample> for MemorySampleReport {
+    fn from(sample: &crate::resource::MemorySample) -> Self {
+        Self {
+            usage_bytes: sample.usage_bytes,
+            charged_bytes: sample.charged_bytes,
+            limit_bytes: sample.limit_bytes,
+            usage_ratio: sample.ratio(),
+            source: sample.source,
+        }
+    }
+}
+
+/// Memory-monitoring outcome attached to a run report.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct MemoryRunReport {
+    pub enabled: bool,
+    pub source: Option<&'static str>,
+    pub threshold_ratio: Option<f64>,
+    pub sample_interval_ms: Option<u64>,
+    pub sample_count: usize,
+    pub peak: Option<MemorySampleReport>,
+    pub trigger: Option<MemorySampleReport>,
+    pub error: Option<String>,
+}
+
+/// Resource summary returned to agents and persisted with snapshots.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ResourceRunReport {
+    pub memory: MemoryRunReport,
 }
 
 /// A serializable error summary extracted from [`DagError`].
@@ -235,6 +282,7 @@ pub struct RunReport {
     /// Snapshot id committed after this run. `None` when history is absent,
     /// the snapshot commit failed, or an unchanged manifest was skipped.
     pub snapshot_id: Option<String>,
+    pub resource: ResourceRunReport,
     /// Rich per-node reports (serializable, agent-friendly).
     pub nodes: Vec<NodeReport>,
     /// Flat status map kept for backward-compatible programmatic access.
@@ -249,10 +297,11 @@ impl Serialize for RunReport {
         serializer: S,
     ) -> std::result::Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
-        let mut st = serializer.serialize_struct("RunReport", 6)?;
+        let mut st = serializer.serialize_struct("RunReport", 7)?;
         st.serialize_field("ok", &self.ok)?;
         st.serialize_field("warnings", &self.warnings)?;
         st.serialize_field("snapshot_id", &self.snapshot_id)?;
+        st.serialize_field("resource", &self.resource)?;
         st.serialize_field("nodes", &self.nodes)?;
 
         // Convert hashbrown HashMaps to std HashMaps for serialization.

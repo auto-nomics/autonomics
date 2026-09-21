@@ -14,6 +14,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 datafusion.workspace = true
 tokio = { workspace = true }
+tokio-util = { version = "0.7", features = ["rt"] }
 arrow-array.workspace = true
 arrow-schema.workspace = true
 async-trait.workspace = true

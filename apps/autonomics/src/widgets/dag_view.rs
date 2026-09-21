@@ -669,6 +669,7 @@ fn status_marker(status: RuntimeStatus) -> (&'static str, Color) {
         RuntimeStatus::Success => ("●", Color::Green),
         RuntimeStatus::Failed => ("✗", Color::Red),
         RuntimeStatus::Skipped => ("◍", Color::DarkGray),
+        RuntimeStatus::Cancelled => ("⊘", Color::Yellow),
     }
 }
 

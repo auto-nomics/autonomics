@@ -125,6 +125,17 @@ pub enum DagError {
     /// A snapshot / history operation failed (DB I/O, serialization, etc.).
     #[error("history: {0}")]
     History(String),
+
+    /// The run-level memory guard crossed its configured watermark.
+    #[error(
+        "memory guard threshold exceeded: usage {usage_bytes} / limit {limit_bytes} bytes ({usage_ratio:.1}% >= {threshold_ratio:.1}%)"
+    )]
+    MemoryLimitExceeded {
+        usage_bytes: u64,
+        limit_bytes: u64,
+        usage_ratio: f64,
+        threshold_ratio: f64,
+    },
 }
 
 // ── NodeError trait + blanket From impl ────────────────────────────────────
@@ -255,6 +266,19 @@ impl DagError {
                 format!("no edge from `{from}.{from_port}` to `{to}.{to_port}`"),
             ),
             Self::History(msg) => ("history", msg.clone()),
+            Self::MemoryLimitExceeded {
+                usage_bytes,
+                limit_bytes,
+                usage_ratio,
+                threshold_ratio,
+            } => (
+                "memory_limit_exceeded",
+                format!(
+                    "memory guard threshold exceeded: usage {usage_bytes} / limit {limit_bytes} bytes ({:.1}% >= {:.1}%); DAG run was cancelled",
+                    usage_ratio * 100.0,
+                    threshold_ratio * 100.0
+                ),
+            ),
             Self::MissingUpstreamOutput {
                 from_node,
                 from_port,

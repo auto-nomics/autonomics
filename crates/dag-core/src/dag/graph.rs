@@ -14,6 +14,8 @@ use petgraph::dot::Dot;
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::EdgeRef;
 use tokio::sync::{Semaphore, mpsc};
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, info_span, warn};
 
 use super::utils::{build_inputs, cascade_skip};
@@ -24,6 +26,7 @@ use super::runtime::{
 };
 use super::{DagNode, NodeId};
 use crate::dag::node_event::{JobResult, NodeEvent, NodeEventKind, NodeReporter};
+use crate::resource::{MemoryGuardConfig, MemoryObservation, MemorySample, sample_memory_usage};
 use crate::value::{DataRef, FileFingerprint, FileRef, NodeValue, PortType};
 
 /// Output values keyed by output port index.
@@ -82,6 +85,96 @@ impl std::ops::Index<&u8> for PortOutputs {
 
     fn index(&self, index: &u8) -> &Self::Output {
         &self.values[index]
+    }
+}
+
+/// Cancels a still-live node task if the scheduler returns before the task.
+///
+/// Normal completed tasks ignore `abort`; a task dropped by the memory guard is
+/// explicitly cancelled instead of continuing invisibly in the background.
+struct AbortOnDropHandle(JoinHandle<()>);
+
+impl Drop for AbortOnDropHandle {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+struct MemoryGuardState {
+    config: MemoryGuardConfig,
+    sample_count: usize,
+    peak: Option<MemorySample>,
+    source: Option<&'static str>,
+    error: Option<String>,
+}
+
+impl MemoryGuardState {
+    fn new(config: MemoryGuardConfig) -> Self {
+        Self {
+            config,
+            sample_count: 0,
+            peak: None,
+            source: None,
+            error: None,
+        }
+    }
+
+    fn record(&mut self, sample: MemorySample) -> Option<MemorySample> {
+        self.sample_count += 1;
+        self.source = Some(sample.source);
+        let triggered = sample.ratio() >= self.config.threshold_ratio;
+        if self
+            .peak
+            .as_ref()
+            .is_none_or(|peak| peak.usage_bytes < sample.usage_bytes)
+        {
+            self.peak = Some(sample);
+        }
+        triggered.then_some(sample)
+    }
+
+    fn unavailable(&mut self, error: String) {
+        self.error.get_or_insert(error);
+    }
+
+    fn into_report(self, trigger: Option<MemorySample>) -> super::runtime::ResourceRunReport {
+        let memory = super::runtime::MemoryRunReport {
+            enabled: true,
+            source: self.source,
+            threshold_ratio: Some(self.config.threshold_ratio),
+            sample_interval_ms: Some(
+                self.config
+                    .sample_interval
+                    .as_millis()
+                    .min(u64::MAX as u128) as u64,
+            ),
+            sample_count: self.sample_count,
+            peak: self.peak.as_ref().map(Into::into),
+            trigger: trigger.as_ref().map(Into::into),
+            error: self.error,
+        };
+        super::runtime::ResourceRunReport { memory }
+    }
+}
+
+async fn run_memory_monitor(config: MemoryGuardConfig, tx: mpsc::Sender<MemoryObservation>) {
+    loop {
+        match sample_memory_usage() {
+            Ok(sample) => {
+                let triggered = sample.ratio() >= config.threshold_ratio;
+                if tx.send(MemoryObservation::Sample(sample)).await.is_err() {
+                    break;
+                }
+                if triggered {
+                    break;
+                }
+            }
+            Err(error) => {
+                let _ = tx.send(MemoryObservation::Unavailable(error)).await;
+                break;
+            }
+        }
+        tokio::time::sleep(config.sample_interval).await;
     }
 }
 
@@ -255,6 +348,29 @@ impl DAG {
         engine_ctx: &crate::registry::NodeCtx,
         event_sink: Option<mpsc::Sender<NodeEvent>>,
     ) -> Result<RunReport> {
+        self.run_internal(cfg, engine_ctx, event_sink, None).await
+    }
+
+    /// Execute the DAG and propagate an external cancellation token to node
+    /// tasks that have already been spawned.
+    pub async fn run_with_external_cancel(
+        &mut self,
+        cfg: &SchedulerConfig,
+        engine_ctx: &crate::registry::NodeCtx,
+        event_sink: Option<mpsc::Sender<NodeEvent>>,
+        external_cancel: CancellationToken,
+    ) -> Result<RunReport> {
+        self.run_internal(cfg, engine_ctx, event_sink, Some(external_cancel))
+            .await
+    }
+
+    async fn run_internal(
+        &mut self,
+        cfg: &SchedulerConfig,
+        engine_ctx: &crate::registry::NodeCtx,
+        event_sink: Option<mpsc::Sender<NodeEvent>>,
+        external_cancel: Option<CancellationToken>,
+    ) -> Result<RunReport> {
         let _span = info_span!("dag_execution");
         // The immutable engine ingredients, wrapped in an Arc so each spawned
         // task can hold a cheap reference for the lifetime of its `execute`
@@ -326,6 +442,55 @@ impl DAG {
         }
 
         let sem = Arc::new(Semaphore::new(cfg.max_concurrency.max(1)));
+        let run_cancel = CancellationToken::new();
+        if let Some(external_cancel) = &external_cancel {
+            let internal_cancel = run_cancel.clone();
+            let external_cancel = external_cancel.clone();
+            tokio::spawn(async move {
+                tokio::select! {
+                    _ = external_cancel.cancelled() => internal_cancel.cancel(),
+                    _ = internal_cancel.cancelled() => {}
+                }
+            });
+        }
+
+        let mut memory_guard = cfg.memory_guard.map(MemoryGuardState::new);
+        let mut memory_triggered: Option<MemorySample> = None;
+        let (memory_tx, mut memory_rx) = mpsc::channel::<MemoryObservation>(8);
+        let mut memory_monitor_active = false;
+        if let Some(config) = cfg.memory_guard {
+            match sample_memory_usage() {
+                Ok(sample) => {
+                    let triggered = memory_guard
+                        .as_mut()
+                        .expect("memory guard state follows configured guard")
+                        .record(sample);
+                    if let Some(sink) = &event_sink {
+                        let _ = sink.try_send(NodeEvent::new(
+                            "memory",
+                            NodeEventKind::Resource {
+                                usage_bytes: sample.usage_bytes,
+                                limit_bytes: sample.limit_bytes,
+                                usage_ratio: sample.ratio(),
+                                threshold_ratio: config.threshold_ratio,
+                            },
+                        ));
+                    }
+                    if let Some(trigger) = triggered {
+                        memory_triggered = Some(trigger);
+                        run_cancel.cancel();
+                    } else {
+                        tokio::spawn(run_memory_monitor(config, memory_tx));
+                        memory_monitor_active = true;
+                    }
+                }
+                Err(error) => {
+                    if let Some(state) = memory_guard.as_mut() {
+                        state.unavailable(error);
+                    }
+                }
+            }
+        }
         let dirty_count = if incremental {
             all_ids.iter().filter(|id| self.is_dirty(id)).count()
         } else {
@@ -351,8 +516,14 @@ impl DAG {
             .cloned()
             .collect();
         let mut in_flight: usize = 0;
+        let mut job_handles: Vec<AbortOnDropHandle> = Vec::new();
+        let mut external_cancellation = false;
 
         loop {
+            if memory_triggered.is_some() {
+                break;
+            }
+
             // Dispatch every currently-ready node.
             while let Some(id) = ready.pop_front() {
                 if self.statuses[&id] != RuntimeStatus::Pending {
@@ -435,17 +606,32 @@ impl DAG {
                 let job_id = id.clone();
                 let reporter = NodeReporter::new(job_id.clone(), tx.clone());
                 let engine_ctx = Arc::clone(&engine_ctx);
-                tokio::spawn(async move {
+                let task_cancel = run_cancel.clone();
+                let handle = tokio::spawn(async move {
                     // Acquire the **global** semaphore first (limits total
                     // concurrent node executions across ALL agents), then the
                     // per-run semaphore (limits concurrency within this DAG).
                     // Ordering matters: global-before-local prevents one agent's
                     // DAG from monopolising all tokio worker threads while
                     // waiting for a local permit it will never get.
-                    if let Some(gs) = &global_sem {
-                        let _global_permit = gs.acquire().await.ok();
-                    }
-                    let _permit = sem.acquire().await.ok();
+                    let _global_permit = if let Some(gs) = &global_sem {
+                        match tokio::select! {
+                            permit = gs.acquire() => permit.ok(),
+                            _ = task_cancel.cancelled() => None,
+                        } {
+                            Some(permit) => Some(permit),
+                            None => return,
+                        }
+                    } else {
+                        None
+                    };
+                    let _permit = match tokio::select! {
+                        permit = sem.acquire() => permit.ok(),
+                        _ = task_cancel.cancelled() => None,
+                    } {
+                        Some(permit) => permit,
+                        None => return,
+                    };
                     let mut node = node_box;
                     let start = std::time::Instant::now();
 
@@ -453,9 +639,24 @@ impl DAG {
                     // to a `JobResult::Failed` instead of silently dropping the
                     // `Done` signal — which would hang the scheduler (in_flight
                     // never decrements, rx.recv() blocks forever).
-                    let result = AssertUnwindSafe(node.execute(&engine_ctx, &inputs, &reporter))
-                        .catch_unwind()
-                        .await;
+                    let result = tokio::select! {
+                        result = AssertUnwindSafe(node.execute(&engine_ctx, &inputs, &reporter))
+                            .catch_unwind() => result,
+                        _ = task_cancel.cancelled() => {
+                            let duration = start.elapsed();
+                            let res = JobResult::Failed {
+                                id: job_id.clone(),
+                                error: DagError::Schedule(
+                                    "node cancelled by DAG run cancellation".into(),
+                                ),
+                                duration,
+                            };
+                            let _ = tx
+                                .send(NodeEvent::new(job_id, NodeEventKind::Done(res)))
+                                .await;
+                            return;
+                        }
+                    };
 
                     let duration = start.elapsed();
                     let res = match result {
@@ -494,18 +695,60 @@ impl DAG {
                         .send(NodeEvent::new(job_id, NodeEventKind::Done(res)))
                         .await;
                 });
+                job_handles.push(AbortOnDropHandle(handle));
             }
 
             if in_flight == 0 {
                 break;
             }
 
-            // Block until at least one dispatched job reports back.
-            let Some(msg) = rx.recv().await else {
-                return Err(DagError::Schedule(
-                    "result channel closed unexpectedly".into(),
-                ));
-            };
+            tokio::select! {
+                observation = memory_rx.recv(), if memory_monitor_active => {
+                    match observation {
+                        Some(MemoryObservation::Sample(sample)) => {
+                            let triggered = memory_guard
+                                .as_mut()
+                                .expect("memory guard state follows active monitor")
+                                .record(sample);
+                            if let Some(sink) = &event_sink {
+                                let _ = sink.try_send(NodeEvent::new(
+                                    "memory",
+                                    NodeEventKind::Resource {
+                                        usage_bytes: sample.usage_bytes,
+                                        limit_bytes: sample.limit_bytes,
+                                        usage_ratio: sample.ratio(),
+                                        threshold_ratio: cfg.memory_guard
+                                            .expect("active monitor has configured threshold")
+                                            .threshold_ratio,
+                                    },
+                                ));
+                            }
+                            if let Some(trigger) = triggered {
+                                memory_triggered = Some(trigger);
+                                run_cancel.cancel();
+                                break;
+                            }
+                        }
+                        Some(MemoryObservation::Unavailable(error)) => {
+                            if let Some(state) = memory_guard.as_mut() {
+                                state.unavailable(error);
+                            }
+                            memory_monitor_active = false;
+                        }
+                        None => memory_monitor_active = false,
+                    }
+                },
+                _ = run_cancel.cancelled(), if external_cancel.is_some() => {
+                    external_cancellation = true;
+                    break;
+                },
+                msg = rx.recv() => {
+                    // Block until at least one dispatched job reports back.
+                    let Some(msg) = msg else {
+                        return Err(DagError::Schedule(
+                            "result channel closed unexpectedly".into(),
+                        ));
+                    };
 
             // Only the authoritative `Done` drives the scheduler (decrements
             // in_flight, updates status, advances the ready queue). Ephemeral
@@ -519,7 +762,8 @@ impl DAG {
                 // internally — it is emitted to the sink in the `Done` arm below.
                 lightweight @ (NodeEventKind::Status { .. }
                 | NodeEventKind::Progress { .. }
-                | NodeEventKind::Log { .. }) => {
+                | NodeEventKind::Log { .. }
+                | NodeEventKind::Resource { .. }) => {
                     debug!(node = %msg.node_id, kind = ?lightweight, "node observation forwarded");
                     if let Some(sink) = &event_sink {
                         let _ = sink.try_send(NodeEvent::new(msg.node_id.clone(), lightweight));
@@ -639,12 +883,77 @@ impl DAG {
                     );
                 }
             }
+                }
+            }
+        }
+
+        run_cancel.cancel();
+        drop(job_handles);
+
+        let memory_trigger = memory_triggered;
+        if memory_trigger.is_some() || external_cancellation {
+            if let Some(sample) = &memory_trigger {
+                let threshold_ratio = cfg
+                    .memory_guard
+                    .expect("triggered guard has configured threshold")
+                    .threshold_ratio;
+                for (id, status) in self.statuses.iter() {
+                    if *status == RuntimeStatus::Running {
+                        self.errors.insert(
+                            id.clone(),
+                            DagError::MemoryLimitExceeded {
+                                usage_bytes: sample.usage_bytes,
+                                limit_bytes: sample.limit_bytes,
+                                usage_ratio: sample.ratio(),
+                                threshold_ratio,
+                            },
+                        );
+                    }
+                }
+            }
+
+            for (id, status) in self.statuses.iter() {
+                if *status == RuntimeStatus::Running
+                    && let Some(sink) = &event_sink
+                {
+                    let _ = sink.try_send(NodeEvent::new(
+                        id,
+                        NodeEventKind::Finished {
+                            status: RuntimeStatus::Cancelled,
+                            elapsed_ms: 0,
+                        },
+                    ));
+                }
+            }
+            for status in self.statuses.values_mut() {
+                if matches!(
+                    status,
+                    RuntimeStatus::Pending | RuntimeStatus::Ready | RuntimeStatus::Running
+                ) {
+                    *status = RuntimeStatus::Cancelled;
+                }
+            }
         }
 
         let ok = !self
             .statuses
             .values()
-            .any(|s| matches!(s, RuntimeStatus::Failed));
+            .any(|s| matches!(s, RuntimeStatus::Failed | RuntimeStatus::Cancelled));
+
+        let mut warnings = Vec::new();
+        if let Some(sample) = &memory_trigger {
+            warnings.push(format!(
+                "DAG run cancelled by memory guard: usage {} / limit {} bytes ({:.1}%); reduce node fan-out or lower max_concurrency",
+                sample.usage_bytes,
+                sample.limit_bytes,
+                sample.ratio() * 100.0
+            ));
+        }
+
+        let resource = match memory_guard {
+            Some(state) => state.into_report(memory_trigger),
+            None => super::runtime::ResourceRunReport::default(),
+        };
 
         // Build per-node reports for the agent-friendly result.
         let node_reports = self
@@ -652,14 +961,15 @@ impl DAG {
                 &all_ids,
                 &durations,
                 &skipped_because,
-                cfg.compute_row_counts,
+                cfg.compute_row_counts && memory_trigger.is_none(),
             )
             .await;
 
         Ok(RunReport {
             ok,
-            warnings: Vec::new(),
+            warnings,
             snapshot_id: None,
+            resource,
             nodes: node_reports,
             statuses: self.statuses.clone(),
             errors: self.errors.drain().collect(),
@@ -2811,6 +3121,41 @@ mod tests {
                 ev.node_id
             );
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn memory_guard_cancels_run_and_reports_trigger() {
+        let mut dag = DAG::default();
+        dag.add_node(
+            "sleep".into(),
+            Box::new(EchoNode::from_ports(NodePorts::new().add_output_port(None))),
+        )
+        .unwrap();
+
+        let cfg = SchedulerConfig {
+            memory_guard: MemoryGuardConfig::new(
+                f64::MIN_POSITIVE,
+                std::time::Duration::from_millis(1),
+            ),
+            ..SchedulerConfig::default()
+        };
+        let report = dag.run(&cfg, &test_ctx(), None).await.unwrap();
+
+        assert!(!report.ok, "memory-triggered run must not report success");
+        assert_eq!(report.status("sleep"), Some(RuntimeStatus::Cancelled));
+        let memory = report.resource.memory;
+        assert!(memory.enabled);
+        assert!(memory.trigger.is_some(), "trigger sample must be reported");
+        assert_eq!(memory.sample_count, 1);
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("memory guard")),
+            "warnings: {:?}",
+            report.warnings
+        );
     }
 
     /// Regression for the cross-run `SessionContext` leak.

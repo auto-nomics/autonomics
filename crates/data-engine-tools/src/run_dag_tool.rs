@@ -67,6 +67,22 @@ fn node_event_to_record(ev: &NodeEvent) -> Option<agentik_core::tools::ProgressR
                 .level(format!("{level:?}").to_lowercase())
                 .message(message),
         ),
+        NodeEventKind::Resource {
+            usage_bytes,
+            limit_bytes,
+            usage_ratio,
+            threshold_ratio,
+        } => Some(
+            ProgressRecord::new("resource")
+                .label("memory")
+                .current(*usage_bytes)
+                .total(*limit_bytes)
+                .message(format!(
+                    "memory {:.1}% (cancel threshold {:.1}%)",
+                    usage_ratio * 100.0,
+                    threshold_ratio * 100.0
+                )),
+        ),
         NodeEventKind::Finished { status, elapsed_ms } => Some(
             ProgressRecord::new("finished")
                 .label(label)
@@ -138,12 +154,14 @@ fn build_report_json(report: RunReport) -> serde_json::Value {
     let mut succeeded = 0usize;
     let mut failed = 0usize;
     let mut skipped = 0usize;
+    let mut cancelled = 0usize;
     for node in &nodes {
         let status = node.get("status").and_then(|v| v.as_str()).unwrap_or("");
         match status {
             "success" => succeeded += 1,
             "failed" => failed += 1,
             "skipped" => skipped += 1,
+            "cancelled" => cancelled += 1,
             _ => {}
         }
     }
@@ -153,11 +171,13 @@ fn build_report_json(report: RunReport) -> serde_json::Value {
         "ok": report.ok,
         "warnings": warnings,
         "snapshot_id": snapshot_id,
+        "resource": report.resource,
         "summary": {
             "total": total,
             "succeeded": succeeded,
             "failed": failed,
             "skipped": skipped,
+            "cancelled": cancelled,
         },
         "nodes": nodes,
     })
@@ -227,6 +247,7 @@ mod tests {
             ok: true,
             warnings: vec!["no DAG history store attached; run snapshot was not persisted".into()],
             snapshot_id: None,
+            resource: Default::default(),
             nodes: Vec::new(),
             statuses: Default::default(),
             errors: Default::default(),

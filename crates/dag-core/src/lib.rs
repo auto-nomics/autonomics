@@ -11,6 +11,7 @@ pub mod error;
 pub mod node;
 pub mod plugin;
 pub mod registry;
+pub mod resource;
 pub mod sink;
 pub mod value;
 

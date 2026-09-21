@@ -287,6 +287,11 @@ impl ToolFunction for GetOutputTool {
                      `run_dag`.",
                     input.id
                 ),
+                Some(data_engine::dag::runtime::RuntimeStatus::Cancelled) => format!(
+                    "Node '{}' has no output because the previous DAG run was cancelled \
+                     by the memory guard. Lower node fan-out or re-run after memory is available.",
+                    input.id
+                ),
                 Some(other) => format!(
                     "Node '{}' has no output (current status: {:?}). Wait for \
                      the DAG run to complete or re-run it with `run_dag`, then \
