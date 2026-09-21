@@ -95,12 +95,8 @@ mod tests {
     }
 
     #[test]
-    fn ignores_acr_endpoint() {
-        // Even when ACR_ENDPOINT is present in the process environment, the
-        // default prefix must remain GHCR. This is the core migration guard.
+    fn default_prefix_is_ghcr() {
         assert_eq!(DEFAULT_IMAGE_PREFIX, "ghcr.io/auto-nomics/autonomics");
-        assert!(!DEFAULT_IMAGE_PREFIX.contains("aliyuncs.com"));
-        assert!(!DEFAULT_IMAGE_PREFIX.contains("azurecr.io"));
     }
 
     #[test]
