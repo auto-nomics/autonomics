@@ -507,6 +507,36 @@ impl DataEngine {
         Ok(())
     }
 
+    /// Restore the head snapshot of the current history ref into the
+    /// in-memory DAG.
+    ///
+    /// A no-op (returns `Ok(false)`) when no history store is attached, the
+    /// ref has no snapshots yet, or the in-memory DAG is non-empty — never
+    /// wipes live state. Session servers call this right after a session is
+    /// created so a restarted agent resumes its previous workspace instead of
+    /// facing an empty DAG (the run snapshots were always committed; only the
+    /// in-memory graph was lost).
+    pub async fn restore_ref_head(&mut self) -> Result<bool> {
+        if !self.dag.node_ids().is_empty() {
+            return Ok(false);
+        }
+        let Some(history) = self.history.as_ref() else {
+            return Ok(false);
+        };
+        let Some(head) = history
+            .ref_head(&self.history_ref)
+            .await
+            .map_err(Error::Dag)?
+        else {
+            return Ok(false);
+        };
+        let manifest = head
+            .manifest()
+            .map_err(|e| Error::Custom(format!("manifest deserialization: {e}")))?;
+        self.rebuild_dag_from_manifest(&manifest)?;
+        Ok(true)
+    }
+
     /// Create a new ref diverging from an arbitrary snapshot, switch the
     /// engine to it, and load that snapshot's DAG into memory.
     ///
@@ -1038,6 +1068,40 @@ mod tests {
 
         assert!(Arc::ptr_eq(engine.container_execution(), &infra));
         assert!(Arc::ptr_eq(session.container_execution(), &infra));
+    }
+
+    #[tokio::test]
+    async fn restore_ref_head_materializes_the_ref_head_into_a_fresh_session() {
+        let directory = tempfile::tempdir().unwrap();
+        let history = DagHistory::open(&directory.path().join("history.db"))
+            .await
+            .unwrap();
+        let mut engine = DataEngine::builder().build().with_history(history);
+        engine
+            .add_node_from_registry(
+                "read",
+                "file_to_dataframe",
+                serde_json::json!({"path": datasets_dir().join("Iris.csv").to_string_lossy()}),
+            )
+            .unwrap();
+
+        let report = engine.run().await.unwrap();
+        assert!(report.snapshot_id.is_some(), "run must commit a snapshot");
+
+        // A fresh session starts with an empty DAG...
+        let mut session = engine.new_session();
+        assert!(!session.node_exists("read"));
+        // ...and restore_ref_head materializes the ref head into it.
+        assert!(session.restore_ref_head().await.unwrap());
+        assert!(session.node_exists("read"));
+
+        // A non-empty DAG is never clobbered by a restore.
+        assert!(!session.restore_ref_head().await.unwrap());
+        assert!(session.node_exists("read"));
+
+        // A ref with no snapshots restores nothing.
+        let mut fresh = engine.new_session().with_history_ref("never-run");
+        assert!(!fresh.restore_ref_head().await.unwrap());
     }
 
     #[tokio::test]
