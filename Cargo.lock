@@ -7773,6 +7773,7 @@ dependencies = [
  "ndarray 0.15.6",
  "nhanes",
  "openalex",
+ "opendal",
  "opentargets",
  "parquet",
  "protocolio",
