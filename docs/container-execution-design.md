@@ -77,7 +77,13 @@ built; it does not independently construct a second backend.
 AUTONOMICS_PODMAN_PROGRAM=podman
 AUTONOMICS_PODMAN_WORKSPACE_ROOT=$HOME/.local/state/autonomics/podman/workspace
 AUTONOMICS_PANEL_CACHE_ROOT=$HOME/.autonomics/panels
+AUTONOMICS_PODMAN_PULL_TIMEOUT_SECS=3600
 ```
+
+`AUTONOMICS_PODMAN_PULL_TIMEOUT_SECS` budgets the `podman create` step, which
+includes the first image pull when the image is absent. It is independent of a
+node's execution timeout so a cold GHCR pull of a multi-GB image cannot exhaust
+a short node budget. It defaults to 3600 seconds.
 
 `AUTONOMICS_CONTAINER_BACKEND` no longer selects a backend. Setting it to
 anything other than `podman` (e.g. the removed `k3s`) fails startup with an
