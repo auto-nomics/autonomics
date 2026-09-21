@@ -49,6 +49,32 @@ pub struct UpdateArgs {
 }
 
 pub async fn run_install(args: InstallArgs) -> Result<()> {
+    // A `owner/package` positional argument addresses a package repository
+    // directly and does not require the central registry first.
+    if args.id.split('/').count() == 2 {
+        let remote = RemoteCatalog::hf(
+            &args.id,
+            args.revision.clone(),
+            resolve_hf_token(args.token.clone()),
+        )?;
+        let index = remote.index().await?;
+        let entry = index.select_current()?;
+        if args
+            .version
+            .as_deref()
+            .is_some_and(|value| entry.version != value)
+            || args
+                .digest
+                .as_deref()
+                .is_some_and(|value| entry.digest != value)
+        {
+            return Err("current package entry does not match --version/--digest".into());
+        }
+        let catalog = open_cache(Path::new(&args.cache))?;
+        let entry = catalog.install_entry(&remote, &entry).await?;
+        return print_json(&entry);
+    }
+
     let remote = match args.repo {
         Some(repo_id) => RemoteCatalog::hf(
             &repo_id,

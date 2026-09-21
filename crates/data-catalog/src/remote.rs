@@ -124,7 +124,57 @@ impl RemoteCatalog {
         } else {
             self.config.object_key(&self.config.index)
         };
-        let bytes = self.source.read(&key).await?;
+        let mut index = self.read_index(&key).await?;
+
+        // A registry contains only repository references. Resolve each package
+        // repository's local index and merge its entries for search/select.
+        for repository in index.repositories.clone() {
+            let package_key = format!("{repository}/{}", self.config.index);
+            let package_index = self.read_index(&package_key).await?;
+            if !package_index.repositories.is_empty() {
+                return Err(
+                    format!("package index `{package_key}` must not itself be a registry").into(),
+                );
+            }
+            if let Some(entry) = package_index
+                .entries
+                .iter()
+                .find(|entry| entry.repo != repository)
+            {
+                return Err(format!(
+                    "package index `{package_key}` routes `{}` to `{}`",
+                    entry.id, entry.repo
+                )
+                .into());
+            }
+            index.entries.extend(package_index.entries);
+        }
+
+        index
+            .validate()
+            .map_err(|error| format!("invalid resolved catalog index `{key}`: {error}"))?;
+        Ok(index)
+    }
+
+    /// Read and validate the package-local index at `owner/name/index.json`.
+    pub async fn package_index(&self, repository: &str) -> Result<CatalogIndex> {
+        let key = format!("{repository}/{}", self.config.index);
+        let index = self.read_index(&key).await?;
+        if !index.repositories.is_empty() {
+            return Err(format!("package index `{key}` must not be a registry").into());
+        }
+        if let Some(entry) = index.entries.iter().find(|entry| entry.repo != repository) {
+            return Err(format!(
+                "package index `{key}` routes `{}` to `{}`",
+                entry.id, entry.repo
+            )
+            .into());
+        }
+        Ok(index)
+    }
+
+    async fn read_index(&self, key: &str) -> Result<CatalogIndex> {
+        let bytes = self.source.read(key).await?;
         let index: CatalogIndex = serde_json::from_slice(&bytes)
             .map_err(|error| format!("parse object `{key}`: {error}"))?;
         index
@@ -162,4 +212,66 @@ pub(crate) fn validate_entry_manifest(
         return Err(format!("catalog entry `{}` does not match its manifest", entry.id).into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_trait::async_trait;
+    use std::collections::BTreeMap;
+
+    struct MapSource(BTreeMap<String, Vec<u8>>);
+
+    #[async_trait]
+    impl ObjectSource for MapSource {
+        async fn read(&self, key: &str) -> Result<Vec<u8>> {
+            self.0
+                .get(key)
+                .cloned()
+                .ok_or_else(|| format!("missing object `{key}`").into())
+        }
+
+        async fn read_range(&self, key: &str, offset: u64, len: u64) -> Result<Vec<u8>> {
+            let bytes = self.read(key).await?;
+            let start = offset as usize;
+            let end = (offset + len) as usize;
+            bytes
+                .get(start..end)
+                .map(|value| value.to_vec())
+                .ok_or_else(|| format!("invalid range for object `{key}`").into())
+        }
+    }
+
+    #[tokio::test]
+    async fn registry_resolves_package_local_indexes() {
+        let entry = CatalogEntry {
+            id: "cache.panel".into(),
+            repo: "owner/cache-panel".into(),
+            version: "v1".into(),
+            kind: "panel".into(),
+            digest: format!("sha256:{}", "a".repeat(64)),
+            current: true,
+            created_unix_seconds: 1,
+        };
+        let registry = CatalogIndex {
+            repositories: vec!["owner/cache-panel".into()],
+            ..CatalogIndex::default()
+        };
+        let package_index = CatalogIndex {
+            entries: vec![entry.clone()],
+            ..CatalogIndex::default()
+        };
+        let mut objects = BTreeMap::new();
+        objects.insert("index.json".into(), serde_json::to_vec(&registry).unwrap());
+        objects.insert(
+            "owner/cache-panel/index.json".into(),
+            serde_json::to_vec(&package_index).unwrap(),
+        );
+        let mut config = CatalogConfig::default();
+        config.backend = Some("memory".into());
+        let remote = RemoteCatalog::from_source(&config, Box::new(MapSource(objects))).unwrap();
+
+        let resolved = remote.index().await.unwrap();
+        assert_eq!(resolved.current_entries().next(), Some(&entry));
+    }
 }

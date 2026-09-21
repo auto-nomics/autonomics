@@ -91,9 +91,23 @@ impl CatalogConfig {
                     )
                     .into());
                 }
+                if let Some(prefix) = &self.repository_prefix {
+                    let (owner, name) = prefix.split_once('/').ok_or_else(|| {
+                        format!("catalog repository prefix must be `owner/name`, got `{prefix}`")
+                    })?;
+                    if owner.is_empty() || name.is_empty() || name.contains('/') {
+                        return Err(format!(
+                            "catalog repository prefix must be `owner/name`, got `{prefix}`"
+                        )
+                        .into());
+                    }
+                }
             }
             (None, Some(_)) => {}
             (None, None) => return Err("catalog backend or repository is required".into()),
+        }
+        if self.repository.is_none() && self.repository_prefix.is_some() {
+            return Err("catalog repository prefix requires repository".into());
         }
         if self.revision.is_some() && self.repository.is_none() {
             return Err("catalog revision requires repository".into());
@@ -172,6 +186,36 @@ revision = "main"
         );
         assert_eq!(config.revision.as_deref(), Some("main"));
         assert!(config.backend.is_none());
+    }
+
+    #[test]
+    fn parses_and_validates_package_repository_prefix() {
+        let config = CatalogConfig::from_vfs_toml(
+            r#"
+[catalog]
+repository = "wjixiang/catalog-index"
+repository_prefix = "wjixiang/catalog"
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.repository_prefix.as_deref(),
+            Some("wjixiang/catalog")
+        );
+
+        let error = CatalogConfig::from_vfs_toml(
+            r#"
+[catalog]
+backend = "warehouse"
+repository_prefix = "wjixiang/catalog"
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("repository prefix requires repository")
+        );
     }
 
     #[test]

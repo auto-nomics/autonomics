@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 
 use crate::error::Result;
 
-pub const CATALOG_SCHEMA_VERSION: u8 = 1;
+pub const CATALOG_SCHEMA_VERSION: u8 = 2;
 pub const DATASET_SCHEMA_VERSION: u8 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, JsonSchema, Deserialize, Serialize)]
@@ -149,8 +149,7 @@ impl CatalogEntry {
         if self.repo.is_empty() {
             format!("{}/{}", self.payload_prefix(), relative)
         } else {
-            format!("{}/{}", self.repo, self.package_payload_prefix())
-                + "/" + relative
+            format!("{}/{}", self.repo, self.package_payload_prefix()) + "/" + relative
         }
     }
 
@@ -170,6 +169,14 @@ pub struct CatalogIndex {
     #[serde(default = "default_catalog_schema_version")]
     pub schema_version: u8,
     pub generation: u64,
+    /// Package repository references in `owner/name` form.
+    ///
+    /// A registry index normally contains only this list. A package-local
+    /// index contains resolved `entries` instead. Local cache keeps both: the
+    /// repository list is the user-facing dependency declaration, while entries
+    /// are the resolved, verified installations used by the runtime.
+    #[serde(default)]
+    pub repositories: Vec<String>,
     #[serde(default)]
     pub entries: Vec<CatalogEntry>,
 }
@@ -183,6 +190,7 @@ impl Default for CatalogIndex {
         Self {
             schema_version: CATALOG_SCHEMA_VERSION,
             generation: 1,
+            repositories: Vec::new(),
             entries: Vec::new(),
         }
     }
@@ -190,13 +198,30 @@ impl Default for CatalogIndex {
 
 impl CatalogIndex {
     pub fn validate(&self) -> Result<()> {
-        if self.schema_version != CATALOG_SCHEMA_VERSION {
+        // Version 1 is the legacy central-entry index. It remains readable so
+        // existing local caches can be upgraded lazily on the next write.
+        if !matches!(self.schema_version, 1 | 2) {
             return Err(
                 format!("unsupported catalog schema version {}", self.schema_version).into(),
             );
         }
         if self.generation == 0 {
             return Err("catalog generation must be greater than zero".into());
+        }
+
+        let mut repositories = std::collections::BTreeSet::new();
+        for repository in &self.repositories {
+            let (owner, name) = repository
+                .split_once('/')
+                .ok_or_else(|| format!("catalog repository `{repository}` must be `owner/name`"))?;
+            if owner.is_empty() || name.is_empty() || name.contains('/') {
+                return Err(
+                    format!("catalog repository `{repository}` must be `owner/name`").into(),
+                );
+            }
+            if !repositories.insert(repository.clone()) {
+                return Err(format!("duplicate catalog repository `{repository}`").into());
+            }
         }
 
         let mut identities = std::collections::BTreeSet::new();
@@ -224,6 +249,12 @@ impl CatalogIndex {
             }
         }
         Ok(())
+    }
+
+    pub fn record_repository(&mut self, repository: &str) {
+        if !self.repositories.iter().any(|value| value == repository) {
+            self.repositories.push(repository.to_string());
+        }
     }
 
     pub fn current_entries(&self) -> impl Iterator<Item = &CatalogEntry> {
@@ -260,6 +291,18 @@ impl CatalogIndex {
                 }
             }
         }
+    }
+
+    /// Select the sole current entry, typically from a package-local index.
+    pub fn select_current(&self) -> Result<CatalogEntry> {
+        let mut current = self.current_entries();
+        let entry = current
+            .next()
+            .ok_or_else(|| "catalog has no current entry".to_string())?;
+        if current.next().is_some() {
+            return Err("catalog has multiple current entries".into());
+        }
+        Ok(entry.clone())
     }
 
     /// Search current entries by free-text terms over their identity fields.
@@ -309,6 +352,10 @@ impl CatalogIndex {
     }
 
     pub fn upsert_current(&mut self, entry: CatalogEntry) {
+        if !entry.repo.is_empty() {
+            self.record_repository(&entry.repo);
+        }
+        self.schema_version = CATALOG_SCHEMA_VERSION;
         self.entries
             .retain(|existing| existing.id != entry.id || existing.digest != entry.digest);
         for existing in &mut self.entries {

@@ -60,12 +60,22 @@ impl LocalCatalog {
         let path = self.root.join("index.json");
         match std::fs::read(&path) {
             Ok(bytes) => {
-                let index: CatalogIndex = serde_json::from_slice(&bytes).map_err(|error| {
+                let mut index: CatalogIndex = serde_json::from_slice(&bytes).map_err(|error| {
                     format!("parse catalog cache index `{}`: {error}", path.display())
                 })?;
                 index.validate().map_err(|error| {
                     format!("invalid catalog cache index `{}`: {error}", path.display())
                 })?;
+                index.schema_version = CatalogIndex::default().schema_version;
+                let repositories = index
+                    .entries
+                    .iter()
+                    .filter(|entry| !entry.repo.is_empty())
+                    .map(|entry| entry.repo.clone())
+                    .collect::<Vec<_>>();
+                for repository in repositories {
+                    index.record_repository(&repository);
+                }
                 Ok(index)
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -124,8 +134,32 @@ impl LocalCatalog {
         version: Option<&str>,
         digest: Option<&str>,
     ) -> Result<CatalogEntry> {
+        if id.split('/').count() == 2 {
+            if version.is_some() || digest.is_some() {
+                return Err(
+                    "repository installs currently resolve the package-local current entry".into(),
+                );
+            }
+            return self.install_repository(remote, id).await;
+        }
         let index = remote.index().await?;
         let entry = index.select(id, version, digest)?;
+        self.install_entry(remote, &entry).await
+    }
+
+    /// Resolve and install the current entry from one package repository.
+    pub async fn install_repository(
+        &self,
+        remote: &RemoteCatalog,
+        repository: &str,
+    ) -> Result<CatalogEntry> {
+        let entry = remote
+            .package_index(repository)
+            .await?
+            .select_current()
+            .map_err(|error| {
+                format!("package repository `{repository}` has no current entry: {error}")
+            })?;
         self.install_entry(remote, &entry).await
     }
 
@@ -173,27 +207,26 @@ impl LocalCatalog {
 
     /// Install remote current versions that are missing from this cache.
     ///
-    /// When `id` is `None`, every current remote entry is considered.
+    /// Only repositories declared by this local index are considered. An old
+    /// v1 index is upgraded in memory, so its entry repositories remain declared.
     pub async fn update(
         &self,
         remote: &RemoteCatalog,
         id: Option<&str>,
     ) -> Result<Vec<CatalogEntry>> {
-        let remote_index = remote.index().await?;
         let local_index = self.index()?;
         let mut updated = Vec::new();
-        for entry in remote_index.current_entries() {
-            if let Some(id) = id {
-                if entry.id != id {
-                    continue;
-                }
+        for repository in local_index.repositories.clone() {
+            let entry = remote.package_index(&repository).await?.select_current()?;
+            if id.is_some_and(|value| entry.id != value) {
+                continue;
             }
             let installed = local_index
                 .entries
                 .iter()
                 .any(|existing| existing.id == entry.id && existing.digest == entry.digest);
             if !installed {
-                updated.push(self.install_entry(remote, entry).await?);
+                updated.push(self.install_entry(remote, &entry).await?);
             }
         }
         Ok(updated)
