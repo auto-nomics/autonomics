@@ -351,6 +351,50 @@ fn str_or<'a>(v: &'a serde_json::Value, key: &str, default: &'a str) -> &'a str 
     v.get(key).and_then(|v| v.as_str()).unwrap_or(default)
 }
 
+// ── Summary-statistics file listing (FTP mirror) ───────────────────────────
+
+/// Format a study's summary-statistics file listing (structured as
+/// `{ accession, study_url, count, files: [{ name, url, variant }] }`),
+/// as produced by the summary-statistics discovery tools.
+pub fn format_summary_files(value: &serde_json::Value) -> String {
+    let accession = str_or(value, "accession", "-");
+    let study_url = str_or(value, "study_url", "-");
+    let count = value.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
+    let files = value
+        .get("files")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    let mut out = format!(
+        "**{count} summary-statistics file(s) for {accession}**\n\n\
+         Browse: {study_url}\n\n"
+    );
+
+    if files.is_empty() {
+        out.push_str(
+            "No downloadable files were found. Fetch them with \
+             `gwascatalog_download_summary_stats`.\n",
+        );
+        return out;
+    }
+
+    out.push_str("| File | Variant | URL |\n|-----|---------|-----|\n");
+    for f in &files {
+        out.push_str(&format!(
+            "| {} | {} | {} |\n",
+            str_or(f, "name", "-"),
+            str_or(f, "variant", "-"),
+            str_or(f, "url", "-"),
+        ));
+    }
+    out.push_str(
+        "\nFetch with `gwascatalog_download_summary_stats` \
+         (harmonised files are recommended for cross-study analysis).\n",
+    );
+    out
+}
+
 /// Format bytes into a human-readable string.
 fn format_bytes(bytes: u64) -> String {
     if bytes == 0 {
