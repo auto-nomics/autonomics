@@ -171,8 +171,14 @@ fn init_gateway_logging(state_dir: &std::path::Path, foreground: bool) -> color_
         format_description!("[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:3]"),
     );
 
+    // Targets are `module_path!()` strings, so a hyphenated crate name appears
+    // with an underscore (`data_engine::...`) — match that spelling here,
+    // exactly as agentik_core is spelled below.
     let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-        EnvFilter::new("gateway=debug,runtime=debug,agentik_core=debug,agentik_sdk=debug")
+        EnvFilter::new(
+            "gateway=debug,runtime=debug,agentik_core=debug,agentik_sdk=debug,\
+             data_engine=info",
+        )
     });
 
     let subscriber = tracing_subscriber::fmt()
