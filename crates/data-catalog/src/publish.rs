@@ -44,6 +44,7 @@ pub async fn publish_package(
 pub(crate) fn build_entry(manifest: &DatasetManifest) -> CatalogEntry {
     CatalogEntry {
         id: manifest.id.clone(),
+        repo: String::new(),
         version: manifest.version.clone(),
         kind: manifest.kind.clone(),
         digest: manifest

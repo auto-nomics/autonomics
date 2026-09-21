@@ -12,6 +12,11 @@ pub struct CatalogConfig {
     /// catalog is hosted on the Hub instead of object storage.
     #[serde(default)]
     pub repository: Option<String>,
+    /// Prefix for per-package dataset repositories in `owner/name` form.
+    /// The index lives at `repository`; each package lives at
+    /// `{repository_prefix}-{sanitized-id}`.
+    #[serde(default)]
+    pub repository_prefix: Option<String>,
     /// Hugging Face revision (branch or tag); defaults to `main`.
     #[serde(default)]
     pub revision: Option<String>,
@@ -45,6 +50,7 @@ impl Default for CatalogConfig {
         Self {
             backend: None,
             repository: None,
+            repository_prefix: None,
             revision: None,
             source: default_source(),
             index: default_index(),

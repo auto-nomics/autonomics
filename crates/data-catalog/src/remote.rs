@@ -4,7 +4,7 @@ use vfs::VfsManifest;
 
 use crate::config::CatalogConfig;
 use crate::error::Result;
-use crate::hf::HfSource;
+use crate::hf::MultiRepoHfSource;
 use crate::model::{CatalogEntry, CatalogIndex, DatasetManifest};
 use crate::storage::operator_for_backend;
 
@@ -96,14 +96,18 @@ impl RemoteCatalog {
     pub fn hf(repo_id: &str, revision: Option<String>, token: Option<String>) -> Result<Self> {
         let config = CatalogConfig {
             backend: Some("huggingface".into()),
-            repository: None,
+            repository: Some(repo_id.to_string()),
+            repository_prefix: None,
             revision: None,
             source: "/".into(),
             index: "index.json".into(),
             enabled: true,
             agent_visible: false,
         };
-        Self::from_source(&config, Box::new(HfSource::new(repo_id, revision, token)?))
+        Self::from_source(
+            &config,
+            Box::new(MultiRepoHfSource::new(repo_id, revision, token)?),
+        )
     }
 
     pub fn config(&self) -> &CatalogConfig {
@@ -115,7 +119,11 @@ impl RemoteCatalog {
     }
 
     pub async fn index(&self) -> Result<CatalogIndex> {
-        let key = self.config.object_key(&self.config.index);
+        let key = if let Some(repository) = &self.config.repository {
+            format!("{}/{}", repository, self.config.index)
+        } else {
+            self.config.object_key(&self.config.index)
+        };
         let bytes = self.source.read(&key).await?;
         let index: CatalogIndex = serde_json::from_slice(&bytes)
             .map_err(|error| format!("parse object `{key}`: {error}"))?;
@@ -126,7 +134,11 @@ impl RemoteCatalog {
     }
 
     pub async fn manifest(&self, entry: &CatalogEntry) -> Result<DatasetManifest> {
-        let key = self.config.object_key(&entry.manifest_key());
+        let key = if entry.repo.is_empty() {
+            self.config.object_key(&entry.manifest_key())
+        } else {
+            entry.source_manifest_key()
+        };
         let bytes = self.source.read(&key).await?;
         let manifest: DatasetManifest = serde_json::from_slice(&bytes)
             .map_err(|error| format!("parse object `{key}`: {error}"))?;

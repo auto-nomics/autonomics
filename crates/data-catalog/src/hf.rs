@@ -28,7 +28,9 @@ pub fn resolve_hf_token(explicit: Option<String>) -> Option<String> {
 /// Where and how to publish a package on the Hugging Face Hub.
 #[derive(Debug, Clone)]
 pub struct HfPublishTarget {
-    /// Dataset repository id in `owner/name` form.
+    /// Prefix for per-package dataset repositories in `owner/name` form.
+    /// The index lives at this repository; each package lives at
+    /// `{repo_id}-{sanitized-id}`.
     pub repo_id: String,
     /// Branch to commit to; `None` uses the repository main branch.
     pub revision: Option<String>,
@@ -37,6 +39,98 @@ pub struct HfPublishTarget {
     pub token: Option<String>,
     /// Create the dataset repository first when it does not exist yet.
     pub create_repository: bool,
+}
+
+/// Derive the per-package repository ID from a prefix and package ID.
+///
+/// Only lowercase alphanumeric characters and hyphens are preserved; all
+/// other characters become hyphens. This matches HF's repo naming rules.
+pub fn package_repo_id(prefix: &str, package_id: &str) -> String {
+    let sanitized = package_id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    format!("{prefix}-{sanitized}")
+}
+
+/// Object source that routes `owner/repo/path` keys to the correct HF dataset.
+///
+/// The key format uses the full HF repo ID as the first two path components:
+/// `owner/repo-name/path/to/file`.
+pub struct MultiRepoHfSource {
+    client: HFClient,
+    revision: String,
+}
+
+impl MultiRepoHfSource {
+    pub fn new(
+        _index_repo: &str,
+        revision: Option<String>,
+        token: Option<String>,
+    ) -> Result<Self> {
+        let mut builder = HFClientBuilder::new();
+        if let Some(token) = token {
+            builder = builder.token(token);
+        }
+        let client = builder
+            .build()
+            .map_err(|error| format!("build Hugging Face client: {error}"))?;
+        Ok(Self {
+            client,
+            revision: revision.unwrap_or_else(|| "main".to_string()),
+        })
+    }
+
+    fn resolve(&self, key: &str) -> Result<(HFRepository<RepoTypeDataset>, String)> {
+        let parts: Vec<&str> = key.splitn(3, '/').collect();
+        if parts.len() < 3 || parts[0].is_empty() || parts[1].is_empty() {
+            return Err(format!(
+                "HF multi-repo key must be `owner/repo/path`, got `{key}`"
+            )
+            .into());
+        }
+        let repo = self.client.dataset(parts[0], parts[1]);
+        Ok((repo, parts[2].to_string()))
+    }
+}
+
+#[async_trait]
+impl ObjectSource for MultiRepoHfSource {
+    async fn read(&self, key: &str) -> Result<Vec<u8>> {
+        let (repository, path) = self.resolve(key)?;
+        let bytes = repository
+            .download_file_to_bytes()
+            .filename(path)
+            .revision(self.revision.clone())
+            .send()
+            .await
+            .map_err(|error| format!("read Hugging Face object `{key}`: {error}"))?;
+        Ok(bytes.to_vec())
+    }
+
+    async fn read_range(&self, key: &str, offset: u64, len: u64) -> Result<Vec<u8>> {
+        if len == 0 {
+            return Ok(Vec::new());
+        }
+        let (repository, path) = self.resolve(key)?;
+        let bytes = repository
+            .download_file_to_bytes()
+            .filename(path)
+            .revision(self.revision.clone())
+            .range(offset..offset + len)
+            .send()
+            .await
+            .map_err(|error| {
+                format!("read Hugging Face object `{key}` at {offset}: {error}")
+            })?;
+        Ok(bytes.to_vec())
+    }
 }
 
 /// Object source reading catalog objects from a Hugging Face dataset repo.
@@ -113,9 +207,11 @@ pub async fn publish_package_to_hf(
 ) -> Result<CatalogEntry> {
     let package = package.as_ref();
     let manifest = validate_package(package).map_err(|error| error.to_string())?;
-    let entry = build_entry(&manifest);
+    let mut entry = build_entry(&manifest);
+    entry.repo = package_repo_id(&target.repo_id, &entry.id);
 
-    let (owner, name) = split_repo_id(&target.repo_id)?;
+    let (pkg_owner, pkg_name) = split_repo_id(&entry.repo)?;
+    let (index_owner, index_name) = split_repo_id(&target.repo_id)?;
     let mut builder = HFClientBuilder::new();
     if let Some(token) = &target.token {
         builder = builder.token(token.clone());
@@ -125,6 +221,16 @@ pub async fn publish_package_to_hf(
         .map_err(|error| format!("build Hugging Face client: {error}"))?;
 
     if target.create_repository {
+        client
+            .create_repository()
+            .repo_id(entry.repo.as_str())
+            .repo_type(RepoTypeDataset)
+            .exist_ok(true)
+            .send()
+            .await
+            .map_err(|error| {
+                format!("create package repository `{}`: {error}", entry.repo)
+            })?;
         client
             .create_repository()
             .repo_id(target.repo_id.as_str())
@@ -140,19 +246,32 @@ pub async fn publish_package_to_hf(
             })?;
     }
 
-    let repository = client.dataset(owner, name);
-    let index = read_remote_index(&repository, target.revision.as_deref()).await?;
-    let index = upsert_entry(index, &entry)?;
-    let index_bytes = serde_json::to_vec_pretty(&index).map_err(|error| error.to_string())?;
-
+    // Phase 1: commit manifest + payload to the per-package repository.
+    let package_repository = client.dataset(pkg_owner, pkg_name);
     let revision = target
         .revision
         .clone()
         .unwrap_or_else(|| "main".to_string());
-    repository
+    package_repository
         .create_commit()
-        .operations(commit_operations(package, &entry, &manifest, index_bytes))
+        .operations(package_commit_operations(package, &entry, &manifest))
         .commit_message(format!("Publish {}@{}", entry.id, entry.version))
+        .revision(revision.clone())
+        .send()
+        .await
+        .map_err(|error| {
+            format!("publish package to `{}`: {error}", entry.repo)
+        })?;
+
+    // Phase 2: atomically update the index in the index repository.
+    let index_repository = client.dataset(index_owner, index_name);
+    let index = read_remote_index(&index_repository, target.revision.as_deref()).await?;
+    let index = upsert_entry(index, &entry)?;
+    let index_bytes = serde_json::to_vec_pretty(&index).map_err(|error| error.to_string())?;
+    index_repository
+        .create_commit()
+        .operations(vec![CommitOperation::add_bytes(INDEX_PATH, index_bytes)])
+        .commit_message(format!("Index {}@{}", entry.id, entry.version))
         .revision(revision)
         .send()
         .await
@@ -203,23 +322,21 @@ async fn read_remote_index(
     }
 }
 
-fn commit_operations(
+fn package_commit_operations(
     package: &Path,
     entry: &CatalogEntry,
     manifest: &DatasetManifest,
-    index_bytes: Vec<u8>,
 ) -> Vec<CommitOperation> {
     let mut operations = vec![CommitOperation::add_file(
-        entry.manifest_key(),
+        entry.package_manifest_key(),
         package.join(PACKAGE_MANIFEST),
     )];
     for file in &manifest.files {
         operations.push(CommitOperation::add_file(
-            format!("{}/{}", entry.payload_prefix(), file.path),
+            format!("{}/{}", entry.package_payload_prefix(), file.path),
             package.join(PAYLOAD_DIR).join(&file.path),
         ));
     }
-    operations.push(CommitOperation::add_bytes(INDEX_PATH, index_bytes));
     operations
 }
 
@@ -273,17 +390,17 @@ mod tests {
         let manifest = validate_package(&package.path).unwrap();
         let entry = build_entry(&manifest);
         let index = upsert_entry(CatalogIndex::default(), &entry).unwrap();
-        let index_bytes = serde_json::to_vec_pretty(&index).unwrap();
+        let _index_bytes = serde_json::to_vec_pretty(&index).unwrap();
 
-        let operations = commit_operations(&package.path, &entry, &manifest, index_bytes.clone());
-        assert_eq!(operations.len(), 3);
+        let operations = package_commit_operations(&package.path, &entry, &manifest);
+        assert_eq!(operations.len(), 2);
 
         match &operations[0] {
             CommitOperation::Add {
                 path_in_repo,
                 source: AddSource::File(source),
             } => {
-                assert_eq!(path_in_repo, &entry.manifest_key());
+                assert_eq!(path_in_repo, &entry.package_manifest_key());
                 assert_eq!(source, &package.path.join(PACKAGE_MANIFEST));
             }
             other => panic!("expected manifest add, got {other:?}"),
@@ -295,21 +412,11 @@ mod tests {
             } => {
                 assert_eq!(
                     path_in_repo,
-                    &format!("{}/data.txt", entry.payload_prefix())
+                    &format!("{}/data.txt", entry.package_payload_prefix())
                 );
                 assert_eq!(source, &package.path.join(PAYLOAD_DIR).join("data.txt"));
             }
             other => panic!("expected payload add, got {other:?}"),
-        }
-        match &operations[2] {
-            CommitOperation::Add {
-                path_in_repo,
-                source: AddSource::Bytes(bytes),
-            } => {
-                assert_eq!(path_in_repo, INDEX_PATH);
-                assert_eq!(bytes.as_ref(), index_bytes.as_slice());
-            }
-            other => panic!("expected index add, got {other:?}"),
         }
     }
 }

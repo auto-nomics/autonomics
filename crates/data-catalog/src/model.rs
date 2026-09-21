@@ -84,6 +84,10 @@ impl DatasetManifest {
 #[derive(Debug, Clone, PartialEq, Eq, JsonSchema, Deserialize, Serialize)]
 pub struct CatalogEntry {
     pub id: String,
+    /// Hugging Face dataset repository hosting this package version.
+    /// Empty when the catalog is served from object storage.
+    #[serde(default)]
+    pub repo: String,
     pub version: String,
     pub kind: String,
     /// Canonical manifest digest, including the `sha256:` prefix.
@@ -98,8 +102,8 @@ impl CatalogEntry {
         self.digest.strip_prefix("sha256:").unwrap_or(&self.digest)
     }
 
-    /// Content-addressed object root for this version, relative to the catalog
-    /// source prefix: `entries/<id>/<version>/sha256-<digest>`.
+    /// Content-addressed root for this version in object-storage catalogs:
+    /// `entries/<id>/<version>/sha256-<digest>`.
     pub fn entry_root(&self) -> String {
         format!(
             "entries/{}/{}/sha256-{}",
@@ -109,12 +113,45 @@ impl CatalogEntry {
         )
     }
 
+    /// Content-addressed root within a per-package HF repository:
+    /// `<version>/sha256-<digest>`.
+    pub fn package_root(&self) -> String {
+        format!("{}/sha256-{}", self.version, self.short_digest())
+    }
+
     pub fn manifest_key(&self) -> String {
         format!("{}/manifest.json", self.entry_root())
     }
 
+    pub fn package_manifest_key(&self) -> String {
+        format!("{}/manifest.json", self.package_root())
+    }
+
     pub fn payload_prefix(&self) -> String {
         self.entry_root()
+    }
+
+    pub fn package_payload_prefix(&self) -> String {
+        self.package_root()
+    }
+
+    /// Full ObjectSource key for the manifest, routing to the correct repo.
+    pub fn source_manifest_key(&self) -> String {
+        if self.repo.is_empty() {
+            self.manifest_key()
+        } else {
+            format!("{}/{}", self.repo, self.package_manifest_key())
+        }
+    }
+
+    /// Full ObjectSource key for a payload file, routing to the correct repo.
+    pub fn source_payload_path(&self, relative: &str) -> String {
+        if self.repo.is_empty() {
+            format!("{}/{}", self.payload_prefix(), relative)
+        } else {
+            format!("{}/{}", self.repo, self.package_payload_prefix())
+                + "/" + relative
+        }
     }
 
     /// Stable compatibility path: `/bundles/<id>`.
@@ -403,6 +440,7 @@ mod tests {
         for version in ["v1", "v2"] {
             index.upsert_current(CatalogEntry {
                 id: "panel".into(),
+                repo: String::new(),
                 version: version.into(),
                 kind: "plink".into(),
                 digest: format!(
@@ -428,6 +466,7 @@ mod tests {
     fn entry_paths_follow_the_layout_convention() {
         let entry = CatalogEntry {
             id: "panel".into(),
+            repo: "wjixiang/catalog-panel".into(),
             version: "v1".into(),
             kind: "plink".into(),
             digest: format!("sha256:{}", "a".repeat(64)),
@@ -443,6 +482,17 @@ mod tests {
             entry.manifest_key(),
             format!("entries/panel/v1/sha256-{}/manifest.json", "a".repeat(64))
         );
+        assert_eq!(
+            entry.package_root(),
+            format!("v1/sha256-{}", "a".repeat(64))
+        );
+        assert_eq!(
+            entry.source_manifest_key(),
+            format!(
+                "wjixiang/catalog-panel/v1/sha256-{}/manifest.json",
+                "a".repeat(64)
+            )
+        );
         assert_eq!(entry.payload_prefix(), entry.entry_root());
         assert_eq!(entry.vfs_alias(), "/bundles/panel");
         assert_eq!(
@@ -456,6 +506,7 @@ mod tests {
         let mut index = CatalogIndex::default();
         index.upsert_current(CatalogEntry {
             id: "panel.eur".into(),
+            repo: "wjixiang/catalog-panel-eur".into(),
             version: "v1".into(),
             kind: "panel".into(),
             digest: format!("sha256:{}", "a".repeat(64)),
@@ -464,6 +515,7 @@ mod tests {
         });
         index.upsert_current(CatalogEntry {
             id: "panel.afr".into(),
+            repo: "wjixiang/catalog-panel-afr".into(),
             version: "v2".into(),
             kind: "panel".into(),
             digest: format!("sha256:{}", "b".repeat(64)),
@@ -481,6 +533,7 @@ mod tests {
 
         index.upsert_current(CatalogEntry {
             id: "panel.eur".into(),
+            repo: "wjixiang/catalog-panel-eur".into(),
             version: "v2".into(),
             kind: "panel".into(),
             digest: format!("sha256:{}", "c".repeat(64)),

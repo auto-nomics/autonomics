@@ -212,10 +212,13 @@ impl LocalCatalog {
             uuid::Uuid::new_v4()
         ));
         for file in &manifest.files {
-            let key =
+            let key = if entry.repo.is_empty() {
                 remote
                     .config()
-                    .object_key(&format!("{}/{}", entry.payload_prefix(), file.path));
+                    .object_key(&format!("{}/{}", entry.payload_prefix(), file.path))
+            } else {
+                entry.source_payload_path(&file.path)
+            };
             let target = staged.join(&file.path);
             if let Some(parent) = target.parent() {
                 tokio::fs::create_dir_all(parent).await.map_err(|error| {
