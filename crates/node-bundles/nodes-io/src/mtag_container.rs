@@ -15,7 +15,7 @@ use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
     ContainerPanelBundleSpec,
 };
-use crate::image_registry::acr_image;
+use crate::image_registry::registry_image;
 use container_runtime::{PanelCache, PodmanConnection, PullPolicy};
 
 pub const MTAG_CONTAINER_KIND: &str = "mtag_container";
@@ -173,7 +173,7 @@ pub fn container_spec(spec: &MtagContainerSpec) -> Result<ContainerCommandSpec, 
     );
 
     Ok(ContainerCommandSpec {
-        image: acr_image(MTAG_ORIGINAL_IMAGE_REPOSITORY, MTAG_ORIGINAL_IMAGE_DIGEST)?,
+        image: registry_image(MTAG_ORIGINAL_IMAGE_REPOSITORY, MTAG_ORIGINAL_IMAGE_DIGEST)?,
         command: vec!["sh".into()],
         script: Some(script),
         files: Default::default(),
@@ -321,7 +321,7 @@ mod tests {
         let container = container_spec(&spec()).unwrap();
         assert_eq!(
             container.image,
-            acr_image(MTAG_ORIGINAL_IMAGE_REPOSITORY, MTAG_ORIGINAL_IMAGE_DIGEST).unwrap()
+            registry_image(MTAG_ORIGINAL_IMAGE_REPOSITORY, MTAG_ORIGINAL_IMAGE_DIGEST).unwrap()
         );
         assert_eq!(container.pull_policy, PullPolicy::Missing);
         assert_eq!(container.panel_bundles.len(), 1);

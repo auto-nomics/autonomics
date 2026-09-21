@@ -19,7 +19,7 @@ use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
     ContainerPanelBundleSpec,
 };
-use crate::image_registry::acr_image;
+use crate::image_registry::registry_image;
 use crate::lava_container;
 use crate::lava_container::{
     LAVA_ORIGINAL_IMAGE_DIGEST, LAVA_ORIGINAL_IMAGE_REPOSITORY, LAVA_TUTORIAL_REF_PANEL,
@@ -521,7 +521,7 @@ pub fn container_spec(spec: &LavaScanContainerSpec) -> Result<ContainerCommandSp
         .unwrap_or_else(|| panel.mount_path.to_string());
 
     Ok(ContainerCommandSpec {
-        image: acr_image(LAVA_ORIGINAL_IMAGE_REPOSITORY, LAVA_ORIGINAL_IMAGE_DIGEST)?,
+        image: registry_image(LAVA_ORIGINAL_IMAGE_REPOSITORY, LAVA_ORIGINAL_IMAGE_DIGEST)?,
         command: vec!["Rscript".into()],
         script: Some(build_script(spec)),
         files: Default::default(),
@@ -689,7 +689,7 @@ mod tests {
         let container = container_spec(&spec()).unwrap();
         assert_eq!(
             container.image,
-            acr_image(LAVA_ORIGINAL_IMAGE_REPOSITORY, LAVA_ORIGINAL_IMAGE_DIGEST).unwrap()
+            registry_image(LAVA_ORIGINAL_IMAGE_REPOSITORY, LAVA_ORIGINAL_IMAGE_DIGEST).unwrap()
         );
         assert_eq!(container.panel_bundles.len(), 1);
         assert_eq!(container.panel_bundles[0].panel_id, LAVA_TUTORIAL_REF_PANEL);

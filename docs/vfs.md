@@ -1,6 +1,6 @@
 # Virtual File System
 
-Autonomics exposes storage resources through one Unix-style namespace. The runtime mounts local directories, S3-compatible buckets, and Aliyun OSS buckets under `vfs://`; DataFusion then reads them with ordinary paths.
+Autonomics exposes storage resources through one Unix-style namespace. The runtime mounts local directories, S3-compatible buckets, and GitHub Container Registry OSS buckets under `vfs://`; DataFusion then reads them with ordinary paths.
 
 ## Concurrent writes
 

@@ -175,8 +175,11 @@ async fn stages_two_inputs_and_publishes_five_outputs() {
     let request = runtime.requests.lock().unwrap()[0].clone();
     assert_eq!(
         request.image,
-        nodes_io::image_registry::acr_image(LIMMA_VOOM_IMAGE_REPOSITORY, LIMMA_VOOM_IMAGE_DIGEST)
-            .unwrap()
+        nodes_io::image_registry::registry_image(
+            LIMMA_VOOM_IMAGE_REPOSITORY,
+            LIMMA_VOOM_IMAGE_DIGEST
+        )
+        .unwrap()
     );
     assert_eq!(
         request.network,

@@ -5,7 +5,7 @@
 # module eigengenes), copies the two runner scripts and verifies the
 # resulting package set before publishing.
 
-FROM crpi-isjkczwpadlvr9i3.cn-hongkong.personal.cr.aliyuncs.com/autonomics/deseq2@sha256:8b2e2a78d87293e6cae6dbed2e283dff1dd8461a7f993cb347ca9810698b2b3e
+FROM ghcr.io/auto-nomics/autonomics/deseq2@sha256:8b2e2a78d87293e6cae6dbed2e283dff1dd8461a7f993cb347ca9810698b2b3e
 
 LABEL org.opencontainers.image.title="autonomics-bulk-rnaseq" \
       org.opencontainers.image.description="limma + edgeR + voom/eBayes + WGCNA runtime for the autonomics bulk-rnaseq wrapper nodes" \

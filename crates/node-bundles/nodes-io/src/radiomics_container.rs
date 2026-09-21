@@ -15,7 +15,7 @@ use dag_core::{DataBundle, dag::DagError, dag::graph::PortOutputs};
 use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
 };
-use crate::image_registry::acr_image;
+use crate::image_registry::registry_image;
 
 pub const PYRADIOMICS_IMAGE_REPOSITORY: &str = "pyradiomics";
 pub const PYRADIOMICS_IMAGE_DIGEST: &str =
@@ -783,7 +783,7 @@ impl RadiomicsContainerNodeFactory {
 
 fn base_spec(command: &str, prefix: &str, timeout: u64) -> Result<ContainerCommandSpec, String> {
     Ok(ContainerCommandSpec {
-        image: acr_image(PYRADIOMICS_IMAGE_REPOSITORY, PYRADIOMICS_IMAGE_DIGEST)?,
+        image: registry_image(PYRADIOMICS_IMAGE_REPOSITORY, PYRADIOMICS_IMAGE_DIGEST)?,
         command: vec![
             "python".into(),
             "/opt/radiomics/radiomics_runner.py".into(),
@@ -2104,7 +2104,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             image.image,
-            acr_image(PYRADIOMICS_IMAGE_REPOSITORY, PYRADIOMICS_IMAGE_DIGEST).unwrap()
+            registry_image(PYRADIOMICS_IMAGE_REPOSITORY, PYRADIOMICS_IMAGE_DIGEST).unwrap()
         );
         assert_eq!(image.command[2], "ingest-image");
         assert_eq!(image.outputs.len(), 2);
@@ -2316,7 +2316,7 @@ mod tests {
         for (container, output_count) in contracts {
             assert_eq!(
                 container.image,
-                acr_image(PYRADIOMICS_IMAGE_REPOSITORY, PYRADIOMICS_IMAGE_DIGEST).unwrap()
+                registry_image(PYRADIOMICS_IMAGE_REPOSITORY, PYRADIOMICS_IMAGE_DIGEST).unwrap()
             );
             assert_eq!(container.outputs.len(), output_count);
             assert_eq!(container.network, "isolated");

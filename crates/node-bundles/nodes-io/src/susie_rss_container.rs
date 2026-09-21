@@ -22,7 +22,7 @@ use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
     ContainerPanelBundleSpec,
 };
-use crate::image_registry::acr_image;
+use crate::image_registry::registry_image;
 use container_runtime::{PanelCache, PodmanConnection, PullPolicy};
 
 pub const SUSIE_RSS_CONTAINER_KIND: &str = "susie_rss_container";
@@ -283,7 +283,7 @@ pub fn container_spec(spec: &SusieRssContainerSpec) -> Result<ContainerCommandSp
     }
 
     Ok(ContainerCommandSpec {
-        image: acr_image(SUSIE_ORIGINAL_IMAGE_REPOSITORY, SUSIE_ORIGINAL_IMAGE_DIGEST)?,
+        image: registry_image(SUSIE_ORIGINAL_IMAGE_REPOSITORY, SUSIE_ORIGINAL_IMAGE_DIGEST)?,
         command: vec!["Rscript".into(), "/opt/susie/bin/run_susie_rss.R".into()],
         script: None,
         files: BTreeMap::new(),
@@ -429,7 +429,7 @@ mod tests {
         let container = container_spec(&spec()).unwrap();
         assert_eq!(
             container.image,
-            acr_image(SUSIE_ORIGINAL_IMAGE_REPOSITORY, SUSIE_ORIGINAL_IMAGE_DIGEST).unwrap()
+            registry_image(SUSIE_ORIGINAL_IMAGE_REPOSITORY, SUSIE_ORIGINAL_IMAGE_DIGEST).unwrap()
         );
         assert_eq!(
             container.command,

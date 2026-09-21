@@ -10,8 +10,8 @@ need() {
 
 need podman
 
-ACR_ENDPOINT=${ACR_ENDPOINT:-crpi-isjkczwpadlvr9i3.cn-hongkong.personal.cr.aliyuncs.com}
-IMAGE_NAME=${IMAGE_NAME:-"$ACR_ENDPOINT/autonomics/bulk-rnaseq:1.0.0"}
+image_prefix=${AUTONOMICS_IMAGE_PREFIX:-ghcr.io/auto-nomics/autonomics}
+IMAGE_NAME=${IMAGE_NAME:-"$image_prefix/bulk-rnaseq:1.0.0"}
 LOCAL_TAG=${LOCAL_TAG:-"localhost/autonomics/bulk-rnaseq:1.0.0"}
 BUILD_FLAGS=${BUILD_FLAGS:---no-cache}
 
@@ -33,7 +33,7 @@ podman run --rm --network=none --entrypoint Rscript "$LOCAL_TAG" --vanilla -e '
   )
 '
 
-# Publish to the configured ACR, then resolve the immutable manifest digest
+# Publish to the configured registry, then resolve the immutable manifest digest
 # from the local image's repository-digest reference.
 echo ">>> podman push $IMAGE_NAME"
 podman tag "$LOCAL_TAG" "$IMAGE_NAME"

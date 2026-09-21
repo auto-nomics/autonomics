@@ -18,3 +18,5 @@ or runtime configuration, not in an image.
 
 For the end-to-end migration workflow, see
 [Container Node Migration Workflow](../docs/container-node-migration.md).
+For the published GHCR image inventory and copy procedure, see
+[GHCR container migration](../docs/ghcr-migration.md).

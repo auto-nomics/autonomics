@@ -35,7 +35,7 @@ The two runner scripts are copied into `/opt/autonomics/`:
 ```
 
 The script builds the image, verifies the exact R and package versions in an
-isolated Podman container, pushes it to the configured `ACR_ENDPOINT`, and
+isolated Podman container, pushes it to the configured `GHCR_ENDPOINT`, and
 prints the immutable manifest digest. The default build uses `--no-cache`;
 set `BUILD_FLAGS` explicitly when reusing local layers during development.
 

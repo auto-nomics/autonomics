@@ -9,11 +9,11 @@ the image.
 Published immutable image:
 
 ```text
-crpi-isjkczwpadlvr9i3.cn-hongkong.personal.cr.aliyuncs.com/autonomics/single-cell-preprocessor@sha256:c34c26428d13804c2528bc734805c1ccfe909353604ac08da0ce9c68890e7e18
+ghcr.io/auto-nomics/autonomics/single-cell-preprocessor@sha256:c34c26428d13804c2528bc734805c1ccfe909353604ac08da0ce9c68890e7e18
 ```
 
 The DAG wrapper combines this digest with the repository above through
-`$ACR_ENDPOINT/autonomics/single-cell-preprocessor`. The image uses the
+`$AUTONOMICS_IMAGE_PREFIX/single-cell-preprocessor`. The image uses the
 digest-pinned Python 3.11.11 slim base, runs as UID/GID 1000, and expects the
 Podman backend's read-only root filesystem, `/tmp` tmpfs, and isolated network.
 

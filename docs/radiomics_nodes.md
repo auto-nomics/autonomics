@@ -180,7 +180,7 @@ feature_set.parquet
 All container nodes use:
 
 ```text
-$ACR_ENDPOINT/autonomics/pyradiomics@sha256:4ef0fc2abbd5a85812b04bceef70b03f207494dbaa53a06c1a3eb9e24b3e7392
+ghcr.io/auto-nomics/autonomics/pyradiomics@sha256:bccbe15b2ec8d079e1bf869c4f06bfe4143642015394453c584dc981e5403fbe
 ```
 
 The image is built from the official PyRadiomics `v3.1.0` source release and
@@ -229,5 +229,5 @@ IBSI numerical compliance for every feature.
   PyRadiomics feature implementations are not automatically IBSI-compliant.
 - Training-set normalization, batch-effect correction, feature selection, and
   predictive modeling remain Stage-B operations.
-- The published ACR image must be available to the local Podman runtime; the
+- The published GHCR image must be available to the local Podman runtime; the
   digest-pinned reference is intentional.

@@ -13,7 +13,7 @@ network, read-only root filesystem, and `/work` scratch mount.
 Published immutable image:
 
 ```text
-crpi-isjkczwpadlvr9i3.cn-hongkong.personal.cr.aliyuncs.com/autonomics/pathway-gsea@sha256:1eb3a32abe2f910e8a3e2c7b5cd8d9f45bf267dc7c57605103e5c30310740275
+ghcr.io/auto-nomics/autonomics/pathway-gsea@sha256:1eb3a32abe2f910e8a3e2c7b5cd8d9f45bf267dc7c57605103e5c30310740275
 ```
 
 ## Build
@@ -35,14 +35,14 @@ podman run --rm autonomics/pathway-gsea:draft \
 
 Do not publish an image as a side effect of ordinary code development. After
 reviewing the build, tag the immutable manifest, push it to the configured
-Aliyun ACR namespace, and copy the manifest digest into
+GHCR namespace, and copy the manifest digest into
 `PATHWAY_GSEA_IMAGE_DIGEST` in `crates/node-bundles/nodes-io/src/pathway_gsea_container.rs`.
 
 ```sh
-ACR_REGISTRY=crpi-isjkczwpadlvr9i3.cn-hongkong.personal.cr.aliyuncs.com
+AUTONOMICS_IMAGE_PREFIX=ghcr.io/auto-nomics/autonomics
 podman tag autonomics/pathway-gsea:draft \
-  "$ACR_REGISTRY/autonomics/pathway-gsea:v0.1.0"
-podman push "$ACR_REGISTRY/autonomics/pathway-gsea:v0.1.0"
+  "$AUTONOMICS_IMAGE_PREFIX/pathway-gsea:0.1.0"
+podman push "$AUTONOMICS_IMAGE_PREFIX/pathway-gsea:0.1.0"
 podman inspect --format '{{index .RepoDigests 0}}' \
-  "$ACR_REGISTRY/autonomics/pathway-gsea:v0.1.0"
+  "$AUTONOMICS_IMAGE_PREFIX/pathway-gsea:0.1.0"
 ```

@@ -16,7 +16,7 @@ use serde::Deserialize;
 use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
 };
-use crate::image_registry::acr_image;
+use crate::image_registry::registry_image;
 use container_runtime::{PanelCache, PodmanConnection, PullPolicy};
 
 pub const DESEQ2_DE_CONTAINER_KIND: &str = "deseq2_de_container";
@@ -222,7 +222,7 @@ pub fn container_spec(spec: &Deseq2DeContainerSpec) -> Result<ContainerCommandSp
     ]);
 
     Ok(ContainerCommandSpec {
-        image: acr_image(DESEQ2_IMAGE_REPOSITORY, DESEQ2_IMAGE_DIGEST)?,
+        image: registry_image(DESEQ2_IMAGE_REPOSITORY, DESEQ2_IMAGE_DIGEST)?,
         command: vec![
             "Rscript".into(),
             "--vanilla".into(),
@@ -358,7 +358,7 @@ mod tests {
         let container = container_spec(&spec()).unwrap();
         assert_eq!(
             container.image,
-            acr_image(DESEQ2_IMAGE_REPOSITORY, DESEQ2_IMAGE_DIGEST).unwrap()
+            registry_image(DESEQ2_IMAGE_REPOSITORY, DESEQ2_IMAGE_DIGEST).unwrap()
         );
         assert_eq!(
             container.command,

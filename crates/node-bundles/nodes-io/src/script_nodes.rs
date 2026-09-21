@@ -20,7 +20,7 @@ use crate::container_command::{
 use crate::file_to_dataframe::{
     FileFormat, FileToDataFrameNode, FileToDataFrameNodeFactory, TabularReadOptions,
 };
-use crate::image_registry::acr_image;
+use crate::image_registry::registry_image;
 use crate::single_cell_h5ad::{
     SINGLE_CELL_WORKFLOW_IMAGE_DIGEST, SINGLE_CELL_WORKFLOW_IMAGE_REPOSITORY,
 };
@@ -510,11 +510,13 @@ pub fn container_spec(
 ) -> Result<ContainerCommandSpec, String> {
     validate(spec)?;
     let image = match runtime {
-        ScriptRuntime::Python => acr_image(
+        ScriptRuntime::Python => registry_image(
             SINGLE_CELL_WORKFLOW_IMAGE_REPOSITORY,
             SINGLE_CELL_WORKFLOW_IMAGE_DIGEST,
         )?,
-        ScriptRuntime::R => acr_image(VISUALIZATION_IMAGE_REPOSITORY, VISUALIZATION_IMAGE_DIGEST)?,
+        ScriptRuntime::R => {
+            registry_image(VISUALIZATION_IMAGE_REPOSITORY, VISUALIZATION_IMAGE_DIGEST)?
+        }
     };
     let command = match runtime {
         ScriptRuntime::Python => vec!["python".into()],

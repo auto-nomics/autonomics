@@ -4,7 +4,7 @@
 # Reference single-cell expression, cell metadata, optional cell sizes, and
 # optional markers are staged by the DAG for every run.
 
-FROM crpi-isjkczwpadlvr9i3.cn-hongkong.personal.cr.aliyuncs.com/autonomics/bulk-rnaseq@sha256:fc0e90c2883a799db1e2c8934589ab7addd44a6edd1769d50f9d2e668925a66e
+FROM ghcr.io/auto-nomics/autonomics/bulk-rnaseq@sha256:c63fb113760b97bad1b1761d1daf4ad3241aa32e054ab20dd3a6bced4a552a6d
 
 LABEL org.opencontainers.image.title="autonomics-music-deconvolution" \
       org.opencontainers.image.description="Pinned MuSiC bulk RNA-seq deconvolution runtime" \

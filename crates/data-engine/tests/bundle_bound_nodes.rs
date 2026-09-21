@@ -117,13 +117,13 @@ fn registry() -> data_engine::node_registry::NodeRegistry {
 
 #[test]
 fn all_bundle_bound_node_kinds_build_from_runtime_catalog() {
-    // Tool-container factories resolve their immutable ACR paths through the
-    // deployment endpoint; use a deterministic host for build-contract tests.
-    // SAFETY: no other test in this binary reads ACR_ENDPOINT concurrently.
+    // Tool-container factories resolve immutable images through the deployment
+    // registry prefix; use a deterministic namespace for build-contract tests.
+    // SAFETY: no other test in this binary reads this variable concurrently.
     unsafe {
         std::env::set_var(
-            nodes_io::image_registry::ACR_ENDPOINT_ENV,
-            "test-registry.invalid",
+            nodes_io::image_registry::IMAGE_PREFIX_ENV,
+            "test-registry.invalid/autonomics",
         );
     }
     let cases = [

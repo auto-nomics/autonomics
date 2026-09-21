@@ -16,13 +16,13 @@ use serde::Deserialize;
 use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
 };
-use crate::image_registry::acr_image;
+use crate::image_registry::registry_image;
 use container_runtime::{PanelCache, PodmanConnection, PullPolicy};
 
 pub const MUSIC_DECONVOLUTION_CONTAINER_KIND: &str = "music_deconvolution_container";
 pub const MUSIC_DECONVOLUTION_IMAGE_REPOSITORY: &str = "music-deconvolution";
 pub const MUSIC_DECONVOLUTION_IMAGE_DIGEST: &str =
-    "sha256:311e32ba2b0e0ce81715bc72f17342604086faeb7eb4964f706f83dcff53c971";
+    "sha256:886b83135179a48fffe2009238eb7d45ec89d32713cc1a2370078583e3bbfeaf";
 
 const DEFAULT_ARTIFACT_PREFIX: &str = "/artifacts/music_deconvolution_container";
 const DEFAULT_TIMEOUT_SECS: u64 = 7200;
@@ -233,7 +233,7 @@ pub fn container_spec(
     ]);
 
     Ok(ContainerCommandSpec {
-        image: acr_image(
+        image: registry_image(
             MUSIC_DECONVOLUTION_IMAGE_REPOSITORY,
             MUSIC_DECONVOLUTION_IMAGE_DIGEST,
         )?,
@@ -381,7 +381,7 @@ mod tests {
         let container = container_spec(&spec()).unwrap();
         assert_eq!(
             container.image,
-            acr_image(
+            registry_image(
                 MUSIC_DECONVOLUTION_IMAGE_REPOSITORY,
                 MUSIC_DECONVOLUTION_IMAGE_DIGEST
             )

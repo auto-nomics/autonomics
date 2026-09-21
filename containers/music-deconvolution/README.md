@@ -57,4 +57,4 @@ python3 containers/music-deconvolution/generate_fixtures.py
 ```
 
 Current immutable manifest digest:
-`sha256:311e32ba2b0e0ce81715bc72f17342604086faeb7eb4964f706f83dcff53c971`.
+`sha256:886b83135179a48fffe2009238eb7d45ec89d32713cc1a2370078583e3bbfeaf`.

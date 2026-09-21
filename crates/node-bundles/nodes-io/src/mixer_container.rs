@@ -15,7 +15,7 @@ use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
     ContainerPanelBundleSpec,
 };
-use crate::image_registry::acr_image;
+use crate::image_registry::registry_image;
 use container_runtime::{PanelCache, PodmanConnection, PullPolicy};
 
 pub const MIXER_FIT1_CONTAINER_KIND: &str = "mixer_fit1_container";
@@ -249,7 +249,7 @@ fn container_spec(
 ) -> Result<ContainerCommandSpec, String> {
     validate(spec)?;
     Ok(ContainerCommandSpec {
-        image: acr_image(MIXER_ORIGINAL_IMAGE_REPOSITORY, MIXER_ORIGINAL_IMAGE_DIGEST)?,
+        image: registry_image(MIXER_ORIGINAL_IMAGE_REPOSITORY, MIXER_ORIGINAL_IMAGE_DIGEST)?,
         command: vec!["sh".into()],
         script: Some(script(spec, if fit2 { "fit2" } else { "fit1" })),
         files: Default::default(),
@@ -545,7 +545,7 @@ mod tests {
         let value = container_spec(&spec, false, "mixer_fit1").unwrap();
         assert_eq!(
             value.image,
-            acr_image(MIXER_ORIGINAL_IMAGE_REPOSITORY, MIXER_ORIGINAL_IMAGE_DIGEST).unwrap()
+            registry_image(MIXER_ORIGINAL_IMAGE_REPOSITORY, MIXER_ORIGINAL_IMAGE_DIGEST).unwrap()
         );
         assert_eq!(value.pull_policy, PullPolicy::Missing);
         assert_eq!(value.panel_bundles.len(), 1);

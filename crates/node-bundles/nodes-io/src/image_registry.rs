@@ -1,48 +1,60 @@
 //! Registry-agnostic image references for official tool containers.
 //!
-//! Tool nodes pin the repository and manifest digest, while deployment is
-//! free to select the ACR endpoint through the process environment. Production
-//! uses the configured Aliyun registry when no override is present.
+//! Tool nodes pin the repository and manifest digest, while deployment is free
+//! to select a full registry namespace through `AUTONOMICS_IMAGE_PREFIX`.
+//! Production always uses GHCR when that variable is not set.
 
-pub const ACR_ENDPOINT_ENV: &str = "ACR_ENDPOINT";
-pub const ACR_NAMESPACE: &str = "autonomics";
-pub const DEFAULT_ACR_ENDPOINT: &str = "crpi-isjkczwpadlvr9i3.cn-hongkong.personal.cr.aliyuncs.com";
+pub const IMAGE_PREFIX_ENV: &str = "AUTONOMICS_IMAGE_PREFIX";
+pub const DEFAULT_IMAGE_PREFIX: &str = "ghcr.io/auto-nomics/autonomics";
 
-pub fn acr_image(repository: &str, digest: &str) -> Result<String, String> {
-    let endpoint = endpoint_from_env(std::env::var_os(ACR_ENDPOINT_ENV));
-    if endpoint.is_empty() {
-        return Err(format!("`{ACR_ENDPOINT_ENV}` cannot be empty"));
-    }
-    acr_image_for_endpoint(&endpoint, repository, digest)
+pub fn registry_image(repository: &str, digest: &str) -> Result<String, String> {
+    let prefix = image_prefix_from_env()?;
+    image_for_prefix(&prefix, repository, digest)
 }
 
-fn endpoint_from_env(value: Option<std::ffi::OsString>) -> String {
+fn image_prefix_from_env() -> Result<String, String> {
+    image_prefix_from_value(std::env::var_os(IMAGE_PREFIX_ENV).as_deref())
+}
+
+fn image_prefix_from_value(value: Option<&std::ffi::OsStr>) -> Result<String, String> {
     match value {
-        Some(value) => value.to_string_lossy().trim().to_string(),
-        None => DEFAULT_ACR_ENDPOINT.into(),
+        Some(value) => normalize_prefix(&value.to_string_lossy()),
+        None => Ok(DEFAULT_IMAGE_PREFIX.into()),
     }
 }
 
-fn acr_image_for_endpoint(
-    endpoint: &str,
-    repository: &str,
-    digest: &str,
-) -> Result<String, String> {
-    let endpoint = endpoint.trim();
-    if endpoint.is_empty() {
-        return Err(format!("`{ACR_ENDPOINT_ENV}` cannot be empty"));
+fn normalize_prefix(value: &str) -> Result<String, String> {
+    let prefix = value.trim().trim_end_matches('/');
+    if prefix.is_empty() {
+        return Err(format!("`{IMAGE_PREFIX_ENV}` cannot be empty"));
     }
-    if endpoint.contains("://")
-        || endpoint.contains('/')
-        || endpoint.contains('\\')
-        || endpoint.chars().any(char::is_whitespace)
+    if prefix.contains("://")
+        || prefix.contains('\\')
+        || prefix.contains('@')
+        || prefix.chars().any(char::is_whitespace)
+        || prefix.split('/').any(str::is_empty)
     {
         return Err(format!(
-            "`{ACR_ENDPOINT_ENV}` must be a registry host without scheme or path, got `{endpoint}`"
+            "`{IMAGE_PREFIX_ENV}` must be a registry prefix without a scheme, empty segments, or whitespace, got `{prefix}`"
         ));
     }
 
-    Ok(format!("{endpoint}/{ACR_NAMESPACE}/{repository}@{digest}"))
+    Ok(prefix.to_string())
+}
+
+fn image_for_prefix(prefix: &str, repository: &str, digest: &str) -> Result<String, String> {
+    let prefix = normalize_prefix(prefix)?;
+    if repository.is_empty() || repository.contains(['/', '@', '\\']) {
+        return Err("repository must be a single lowercase path component".into());
+    }
+    if digest.is_empty() {
+        return Err("digest cannot be empty".into());
+    }
+    if digest == format!("sha256:{}", "0".repeat(64)) {
+        return Err("placeholder digest must be replaced".into());
+    }
+
+    Ok(format!("{prefix}/{repository}@{digest}"))
 }
 
 #[cfg(test)]
@@ -50,62 +62,82 @@ mod tests {
     use super::*;
 
     #[test]
-    fn builds_an_immutable_acr_reference() {
-        let image = acr_image_for_endpoint(
-            "registry.example.invalid",
+    fn builds_an_immutable_ghcr_reference() {
+        let image = image_for_prefix(
+            "ghcr.io/example/autonomics",
             "lava",
             "sha256:b7dd1d3a3493cc32af2dc286f2aace77036b1fd806bee4f14a4ff67509268be7",
         )
         .unwrap();
         assert_eq!(
             image,
-            "registry.example.invalid/autonomics/lava@sha256:b7dd1d3a3493cc32af2dc286f2aace77036b1fd806bee4f14a4ff67509268be7"
+            "ghcr.io/example/autonomics/lava@sha256:b7dd1d3a3493cc32af2dc286f2aace77036b1fd806bee4f14a4ff67509268be7"
         );
     }
 
     #[test]
-    fn falls_back_to_the_default_acr_endpoint() {
-        let endpoint = endpoint_from_env(None);
-        assert_eq!(endpoint, DEFAULT_ACR_ENDPOINT);
-        let image = acr_image_for_endpoint(
-            &endpoint,
-            "pyradiomics",
-            "sha256:4ef0fc2abbd5a85812b04bceef70b03f207494dbaa53a06c1a3eb9e24b3e7392",
-        )
-        .unwrap();
+    fn falls_back_to_the_default_ghcr_prefix() {
+        let prefix = image_prefix_from_value(None).unwrap();
+        assert_eq!(prefix, DEFAULT_IMAGE_PREFIX);
+        let digest = "sha256:bccbe15b2ec8d079e1bf869c4f06bfe4143642015394453c584dc981e5403fbe";
         assert_eq!(
-            image,
-            format!(
-                "{DEFAULT_ACR_ENDPOINT}/autonomics/pyradiomics@sha256:\
-                 4ef0fc2abbd5a85812b04bceef70b03f207494dbaa53a06c1a3eb9e24b3e7392"
-            )
+            image_for_prefix(&prefix, "pyradiomics", digest).unwrap(),
+            format!("{DEFAULT_IMAGE_PREFIX}/pyradiomics@{digest}")
         );
     }
 
     #[test]
-    fn rejects_registry_endpoints_with_a_scheme_or_path() {
-        let error = acr_image_for_endpoint(
-            "https://acr.example",
-            "lava",
-            "sha256:91d11747476967b0131571308f2a64bb12aa459205f282103f6bed4fb69ca0bf",
-        )
-        .unwrap_err();
-        assert!(error.contains("without scheme or path"));
+    fn normalizes_a_trailing_separator() {
+        let prefix =
+            image_prefix_from_value(Some(std::ffi::OsStr::new("ghcr.io/example/autonomics/")))
+                .unwrap();
+        assert_eq!(prefix, "ghcr.io/example/autonomics");
+    }
 
-        let error = acr_image_for_endpoint(
-            "acr.example/autonomics",
-            "lava",
-            "sha256:91d11747476967b0131571308f2a64bb12aa459205f282103f6bed4fb69ca0bf",
-        )
-        .unwrap_err();
-        assert!(error.contains("without scheme or path"));
+    #[test]
+    fn ignores_acr_endpoint() {
+        // Even when ACR_ENDPOINT is present in the process environment, the
+        // default prefix must remain GHCR. This is the core migration guard.
+        assert_eq!(DEFAULT_IMAGE_PREFIX, "ghcr.io/auto-nomics/autonomics");
+        assert!(!DEFAULT_IMAGE_PREFIX.contains("aliyuncs.com"));
+        assert!(!DEFAULT_IMAGE_PREFIX.contains("azurecr.io"));
+    }
 
-        let error = acr_image_for_endpoint(
-            "",
-            "lava",
-            "sha256:91d11747476967b0131571308f2a64bb12aa459205f282103f6bed4fb69ca0bf",
-        )
-        .unwrap_err();
+    #[test]
+    fn rejects_invalid_registry_prefixes() {
+        let error = image_prefix_from_value(Some(std::ffi::OsStr::new("https://ghcr.io/example")))
+            .unwrap_err();
+        assert!(error.contains("without a scheme"));
+
+        let error =
+            image_prefix_from_value(Some(std::ffi::OsStr::new("ghcr.io/example//autonomics")))
+                .unwrap_err();
+        assert!(error.contains("empty segments"));
+
+        let error = image_prefix_from_value(Some(std::ffi::OsStr::new(""))).unwrap_err();
         assert!(error.contains("cannot be empty"));
+    }
+
+    #[test]
+    fn rejects_invalid_image_parts() {
+        let prefix = "ghcr.io/example/autonomics";
+        assert!(
+            image_for_prefix(prefix, "nested/lava", "sha256:test")
+                .unwrap_err()
+                .contains("single lowercase path component")
+        );
+        assert_eq!(
+            image_for_prefix(prefix, "lava", "").unwrap_err(),
+            "digest cannot be empty"
+        );
+        assert_eq!(
+            image_for_prefix(
+                prefix,
+                "timesfm",
+                "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+            )
+            .unwrap_err(),
+            "placeholder digest must be replaced"
+        );
     }
 }

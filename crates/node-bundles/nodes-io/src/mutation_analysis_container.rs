@@ -19,7 +19,7 @@ use serde::Deserialize;
 use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
 };
-use crate::image_registry::acr_image;
+use crate::image_registry::registry_image;
 use container_runtime::{PanelCache, PodmanConnection, PullPolicy};
 
 pub const MUTATION_ANALYSIS_CONTAINER_KIND: &str = "mutation_analysis_container";
@@ -388,7 +388,7 @@ pub fn container_spec(
     let env = BTreeMap::from([("MUTATION_CONFIG".into(), config.to_string())]);
 
     Ok(ContainerCommandSpec {
-        image: acr_image(
+        image: registry_image(
             MUTATION_ANALYSIS_IMAGE_REPOSITORY,
             MUTATION_ANALYSIS_IMAGE_DIGEST,
         )?,

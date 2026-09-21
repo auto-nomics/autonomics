@@ -19,13 +19,13 @@ use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
     ContainerPanelBundleSpec,
 };
-use crate::image_registry::acr_image;
+use crate::image_registry::registry_image;
 use container_runtime::{PanelCache, PodmanConnection, PullPolicy};
 
 pub const HDL_L_CONTAINER_KIND: &str = "hdl_l_container";
 pub const HDL_ORIGINAL_IMAGE_REPOSITORY: &str = "hdl";
 pub const HDL_ORIGINAL_IMAGE_DIGEST: &str =
-    "sha256:1ba46cf2f480ffb4e0f9845911029e71f2fc9fd89dab19bdd81a60a3b5babf45";
+    "sha256:cbce3f3e4037b8c53c59275240f4449f2041de39aa95a4b5d9e588b9a75b18ea";
 pub const HDL_UKB_EUR_PANEL: &str = "hdl.ref.ukb_eur";
 
 const DEFAULT_ARTIFACT_PREFIX: &str = "/artifacts/hdl_l_container";
@@ -295,7 +295,7 @@ saveRDS(result, Sys.getenv("AUTONOMICS_OUTPUT1"))
 pub fn container_spec(spec: &HdlLContainerSpec) -> Result<ContainerCommandSpec, String> {
     validate(spec)?;
     Ok(ContainerCommandSpec {
-        image: acr_image(HDL_ORIGINAL_IMAGE_REPOSITORY, HDL_ORIGINAL_IMAGE_DIGEST)?,
+        image: registry_image(HDL_ORIGINAL_IMAGE_REPOSITORY, HDL_ORIGINAL_IMAGE_DIGEST)?,
         command: vec!["Rscript".into()],
         script: Some(build_script(spec)),
         files: Default::default(),
@@ -451,7 +451,7 @@ mod tests {
         let container = container_spec(&spec()).unwrap();
         assert_eq!(
             container.image,
-            acr_image(HDL_ORIGINAL_IMAGE_REPOSITORY, HDL_ORIGINAL_IMAGE_DIGEST).unwrap()
+            registry_image(HDL_ORIGINAL_IMAGE_REPOSITORY, HDL_ORIGINAL_IMAGE_DIGEST).unwrap()
         );
         assert_eq!(container.panel_bundles.len(), 1);
         assert_eq!(container.panel_bundles[0].panel_id, HDL_UKB_EUR_PANEL);

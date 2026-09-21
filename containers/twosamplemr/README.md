@@ -5,10 +5,10 @@ for the Podman-backed DAG runtime. The image also carries the official PLINK2
 2.0.0-a.6.26 binary used for deterministic offline instrument clumping.
 
 The image is published as
-`$ACR_ENDPOINT/autonomics/twosamplemr:0.7.9` with immutable manifest digest
+`$AUTONOMICS_IMAGE_PREFIX/twosamplemr:0.7.9` with immutable manifest digest
 `sha256:c270de9978906ee48cbba2ac484ba3df9e86dddc69efd908c6f908963114002a`.
-The production wrapper pins this digest and resolves the registry host from
-`ACR_ENDPOINT`.
+The production wrapper pins this digest and resolves the registry namespace
+from `AUTONOMICS_IMAGE_PREFIX`.
 
 ## Provenance
 

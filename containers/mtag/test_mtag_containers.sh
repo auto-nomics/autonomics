@@ -125,7 +125,7 @@ python3 containers/mtag/make_baseline_fixture.py \
   --max-variants "$variants"
 
 export AUTONOMICS_TEST_VFS_CONFIG=$config
-export AUTONOMICS_MTAG_IMAGE_ENDPOINT=localhost
+export AUTONOMICS_MTAG_IMAGE_PREFIX=localhost/autonomics
 export AUTONOMICS_MTAG_IT_SUMSTATS1="$fixture_root/trait1.sumstats.tsv"
 export AUTONOMICS_MTAG_IT_SUMSTATS2="$fixture_root/trait2.sumstats.tsv"
 

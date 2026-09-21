@@ -173,7 +173,7 @@ async fn stages_two_inputs_and_publishes_five_outputs() {
     let request = runtime.requests.lock().unwrap()[0].clone();
     assert_eq!(
         request.image,
-        nodes_io::image_registry::acr_image(
+        nodes_io::image_registry::registry_image(
             nodes_io::deseq2_container::DESEQ2_IMAGE_REPOSITORY,
             nodes_io::deseq2_container::DESEQ2_IMAGE_DIGEST
         )
@@ -230,9 +230,9 @@ async fn stages_two_inputs_and_publishes_five_outputs() {
 async fn real_official_deseq2_runs_in_podman_and_matches_baseline() {
     unsafe {
         std::env::set_var(
-            nodes_io::image_registry::ACR_ENDPOINT_ENV,
-            std::env::var("AUTONOMICS_DESEQ2_IMAGE_ENDPOINT")
-                .unwrap_or_else(|_| "localhost".into()),
+            nodes_io::image_registry::IMAGE_PREFIX_ENV,
+            std::env::var("AUTONOMICS_DESEQ2_IMAGE_PREFIX")
+                .unwrap_or_else(|_| "localhost/autonomics".into()),
         );
     }
 

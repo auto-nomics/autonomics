@@ -1,0 +1,61 @@
+name: GHCR container migration
+
+on:
+  workflow_dispatch:
+    inputs:
+      repositories:
+        description: "Comma-separated repositories (empty copies the full inventory)"
+        required: false
+        default: ""
+      dry_run:
+        description: "Print planned copies without pushing"
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: ghcr-container-migration
+  cancel-in-progress: false
+
+env:
+  SOURCE_PREFIX: crpi-isjkczwpadlvr9i3.cn-hongkong.personal.cr.aliyuncs.com/autonomics
+  DESTINATION_PREFIX: ghcr.io/auto-nomics/autonomics
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: Install crane
+        run: go install github.com/google/go-containerregistry/cmd/crane@v0.20.3
+      - name: Login to GHCR
+        run: |
+          set -euo pipefail
+          printf '%s' "${{ github.token }}" |
+            crane auth login ghcr.io -u '${{ github.actor }}' --password-stdin
+      - name: Migrate immutable images
+        env:
+          CRANE: /home/runner/go/bin/crane
+          SELECTED_REPOSITORIES: ${{ inputs.repositories }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [[ "${{ inputs.dry_run }}" == true ]]; then
+            args+=(--dry-run)
+          fi
+          IFS=',' read -r -a repositories <<< "$SELECTED_REPOSITORIES"
+          for repository in "${repositories[@]}"; do
+            [[ -n "$repository" ]] || continue
+            containers/migrate-to-ghcr.sh --only "$repository" "${args[@]}"
+          done
+          if [[ -z "$SELECTED_REPOSITORIES" ]]; then
+            containers/migrate-to-ghcr.sh "${args[@]}"
+          fi
