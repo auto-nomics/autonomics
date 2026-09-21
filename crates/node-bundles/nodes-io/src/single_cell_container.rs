@@ -407,10 +407,7 @@ mod tests {
         let mut auto_spec = spec();
         auto_spec.metadata_separator = MetadataSeparator::Auto;
         let container = container_spec(&auto_spec).unwrap();
-        assert_eq!(
-            container.env["AUTONOMICS_SINGLE_CELL_METADATA_SEP"],
-            "auto"
-        );
+        assert_eq!(container.env["AUTONOMICS_SINGLE_CELL_METADATA_SEP"], "auto");
     }
 
     #[test]
