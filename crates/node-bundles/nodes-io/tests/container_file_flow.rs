@@ -698,14 +698,19 @@ async fn catalog_test_fixture() -> CatalogTextFixture {
         })
         .expect("HOME or AUTONOMICS_TEST_VFS_CONFIG is required");
     let source = std::fs::read_to_string(&config_path).unwrap();
-    let catalog_manifest = VfsManifest::from_toml(&source).unwrap();
     let catalog_config = CatalogConfig::from_vfs_toml(&source).unwrap();
     let cache_root = std::env::var_os("HOME")
         .map(|home| Path::new(&home).join(".autonomics/catalog"))
         .expect("HOME is required for the default catalog cache");
     let catalog = data_catalog::LocalCatalog::open(&cache_root).unwrap();
     if catalog.index().unwrap().entries.is_empty() {
-        let remote = data_catalog::RemoteCatalog::new(&catalog_manifest, &catalog_config).unwrap();
+        let repository = catalog_config
+            .repository
+            .as_deref()
+            .expect("catalog repository is required");
+        let remote =
+            data_catalog::RemoteCatalog::hf(repository, catalog_config.revision.clone(), None)
+                .unwrap();
         catalog.update(&remote, None).await.unwrap();
     }
 

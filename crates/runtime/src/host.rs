@@ -601,15 +601,15 @@ async fn build_vfs_with_catalog(
                     "backend `{CACHE_BACKEND_ID}` is reserved for the local catalog cache"
                 )));
             }
-            let remote = if let Some(repository) = &catalog_config.repository {
-                RemoteCatalog::hf(
-                    repository,
-                    catalog_config.revision.clone(),
-                    data_catalog::hf::resolve_hf_token(None),
-                )
-            } else {
-                RemoteCatalog::new(&manifest, &catalog_config)
-            }
+            let repository = catalog_config
+                .repository
+                .as_deref()
+                .ok_or_else(|| Error::Other("catalog repository is required".to_string()))?;
+            let remote = RemoteCatalog::hf(
+                repository,
+                catalog_config.revision.clone(),
+                data_catalog::hf::resolve_hf_token(None),
+            )
             .map_err(|error| Error::Other(error.to_string()))?;
             let local = LocalCatalog::open(default_panel_cache_root())
                 .map_err(|error| Error::Other(error.to_string()))?;
@@ -752,7 +752,7 @@ struct DataBundleManifest {
 /// Load user-provided bundle registry entries from `state_dir/data_bundles.toml`.
 ///
 /// A missing file yields an empty registry. Entries returned here override
-/// object-storage catalog entries, while built-in entries are layered beneath
+/// Hugging Face catalog entries, while built-in entries are layered beneath
 /// both when the engine is constructed.
 fn build_bundle_registry(config: &RuntimeConfig) -> Result<BundleRegistry> {
     let manifest_path = config.state_dir.join("data_bundles.toml");
@@ -4200,7 +4200,6 @@ mod vfs_tests {
     async fn build_vfs_mounts_catalog_entries_and_preserves_catalog_config() {
         let state = tempfile::tempdir().unwrap();
         let data = tempfile::tempdir().unwrap();
-        let warehouse = tempfile::tempdir().unwrap();
         let scratch = tempfile::tempdir().unwrap();
         let input = scratch.path().join("input");
         std::fs::create_dir_all(&input).unwrap();
@@ -4218,43 +4217,17 @@ mod vfs_tests {
         )
         .unwrap();
 
-        let vfs_manifest = vfs::VfsManifest {
-            backend: vec![vfs::BackendDefinition {
-                id: "warehouse".into(),
-                config: vfs::BackendConfig::local(warehouse.path().to_string_lossy().to_string()),
-            }],
-            mount: Vec::new(),
-        };
-        let catalog_config = data_catalog::CatalogConfig {
-            backend: Some("warehouse".into()),
-            ..Default::default()
-        };
-        let operator =
-            data_catalog::storage::operator_for_backend(&vfs_manifest, "warehouse").unwrap();
-        data_catalog::publish_package(package, &catalog_config, &operator)
-            .await
-            .unwrap();
-
         let mut config = RuntimeConfig::default();
         config.data_dir = data.path().to_path_buf();
         config.state_dir = state.path().to_path_buf();
         std::fs::write(
             config.state_dir.join("vfs.toml"),
-            format!(
-                r#"
-[[backend]]
-id = "warehouse"
-type = "local"
-root = "{root}"
-
+            r#"
 [catalog]
-backend = "warehouse"
+repository = "owner/catalog-index"
 "#,
-                root = warehouse.path().display()
-            ),
         )
         .unwrap();
-        let remote = data_catalog::RemoteCatalog::new(&vfs_manifest, &catalog_config).unwrap();
         struct PanelCacheRootEnv;
         impl Drop for PanelCacheRootEnv {
             fn drop(&mut self) {
@@ -4266,11 +4239,46 @@ backend = "warehouse"
         let _panel_env = PanelCacheRootEnv;
         // SAFETY: the host resolves this variable in build_vfs_with_catalog below.
         unsafe { std::env::set_var("AUTONOMICS_PANEL_CACHE_ROOT", panel_root.path()) };
-        let local = data_catalog::LocalCatalog::open(panel_root.path()).unwrap();
-        local
-            .install(&remote, "catalog_panel", None, None)
-            .await
-            .unwrap();
+        let manifest: data_catalog::DatasetManifest =
+            serde_json::from_slice(&std::fs::read(package.join("manifest.json")).unwrap()).unwrap();
+        let entry = data_catalog::CatalogEntry {
+            id: "catalog_panel".into(),
+            repo: "owner/catalog-panel".into(),
+            version: manifest.version.clone(),
+            kind: manifest.kind.clone(),
+            digest: manifest.digest.clone().expect("test package has digest"),
+            current: true,
+            created_unix_seconds: 1,
+        };
+        let cache_index = data_catalog::CatalogIndex {
+            repositories: vec![entry.repo.clone()],
+            entries: vec![entry.clone()],
+            ..data_catalog::CatalogIndex::default()
+        };
+        let entry_root = panel_root
+            .path()
+            .join(format!("catalog_panel@{}", entry.digest));
+        std::fs::create_dir_all(&entry_root).unwrap();
+        std::fs::copy(
+            package.join("payload").join("data.txt"),
+            entry_root.join("data.txt"),
+        )
+        .unwrap();
+        std::fs::write(
+            entry_root.join("manifest.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            entry_root.join(".autonomics-panel-complete"),
+            format!("digest={}\n", entry.digest),
+        )
+        .unwrap();
+        std::fs::write(
+            panel_root.path().join("index.json"),
+            serde_json::to_vec(&cache_index).unwrap(),
+        )
+        .unwrap();
 
         let (store, bundles, catalog_service) = build_vfs_with_catalog(&config).await.unwrap();
         let catalog_state = catalog_service.expect("enabled catalog service");

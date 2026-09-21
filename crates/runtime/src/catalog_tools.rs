@@ -293,60 +293,13 @@ pub fn catalog_registrations(state: Arc<CatalogState>) -> Vec<ToolRegistration> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use data_catalog::{
-        CatalogConfig, build_package, package::BuildOptions, publish_package,
-        storage::operator_for_backend,
-    };
-    use vfs::{BackendConfig, BackendDefinition, MountDefinition, VfsManifest};
 
-    async fn test_state() -> CatalogState {
+    fn test_state() -> CatalogState {
         let workspace = tempfile::tempdir().unwrap();
-        let warehouse = tempfile::tempdir().unwrap();
         let cache = tempfile::tempdir().unwrap();
-        let input = workspace.path().join("input");
-        std::fs::create_dir_all(&input).unwrap();
-        std::fs::write(input.join("data.txt"), b"catalog-tools").unwrap();
-        let package = build_package(
-            &input,
-            workspace.path().join("package"),
-            BuildOptions {
-                id: Some("catalog_tools.test".into()),
-                version: Some("v1".into()),
-                kind: Some("table".into()),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let manifest = VfsManifest {
-            backend: vec![BackendDefinition {
-                id: "warehouse".into(),
-                config: BackendConfig::local(warehouse.path().to_string_lossy().into_owned()),
-            }],
-            mount: vec![MountDefinition {
-                path: "/".into(),
-                backend: "warehouse".into(),
-                source: "/".into(),
-                read_only: true,
-            }],
-        };
-        let config = CatalogConfig {
-            backend: Some("warehouse".into()),
-            ..Default::default()
-        };
-        let operator = operator_for_backend(
-            &manifest,
-            config.backend.as_deref().expect("backend test config"),
-        )
-        .unwrap();
-        publish_package(package.path, &config, &operator)
-            .await
-            .unwrap();
-        let remote = RemoteCatalog::new(&manifest, &config).unwrap();
+        let _ = workspace;
         let local = LocalCatalog::open(cache.path()).unwrap();
-        local
-            .install(&remote, "catalog_tools.test", None, None)
-            .await
-            .unwrap();
+        let remote = RemoteCatalog::hf("owner/catalog-index", None, None).unwrap();
         CatalogState {
             local: Arc::new(local),
             remote: Arc::new(remote),
@@ -355,7 +308,7 @@ mod tests {
 
     #[tokio::test]
     async fn registers_six_catalog_tools() {
-        let registrations = catalog_registrations(Arc::new(test_state().await));
+        let registrations = catalog_registrations(Arc::new(test_state()));
         let names: Vec<&str> = registrations
             .iter()
             .map(|registration| registration.definition.name.as_str())

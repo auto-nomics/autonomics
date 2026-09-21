@@ -60,22 +60,12 @@ impl LocalCatalog {
         let path = self.root.join("index.json");
         match std::fs::read(&path) {
             Ok(bytes) => {
-                let mut index: CatalogIndex = serde_json::from_slice(&bytes).map_err(|error| {
+                let index: CatalogIndex = serde_json::from_slice(&bytes).map_err(|error| {
                     format!("parse catalog cache index `{}`: {error}", path.display())
                 })?;
                 index.validate().map_err(|error| {
                     format!("invalid catalog cache index `{}`: {error}", path.display())
                 })?;
-                index.schema_version = CatalogIndex::default().schema_version;
-                let repositories = index
-                    .entries
-                    .iter()
-                    .filter(|entry| !entry.repo.is_empty())
-                    .map(|entry| entry.repo.clone())
-                    .collect::<Vec<_>>();
-                for repository in repositories {
-                    index.record_repository(&repository);
-                }
                 Ok(index)
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -205,10 +195,7 @@ impl LocalCatalog {
         Ok(entry.clone())
     }
 
-    /// Install remote current versions that are missing from this cache.
-    ///
-    /// Only repositories declared by this local index are considered. An old
-    /// v1 index is upgraded in memory, so its entry repositories remain declared.
+    /// Install current versions missing from repositories declared locally.
     pub async fn update(
         &self,
         remote: &RemoteCatalog,
@@ -245,13 +232,7 @@ impl LocalCatalog {
             uuid::Uuid::new_v4()
         ));
         for file in &manifest.files {
-            let key = if entry.repo.is_empty() {
-                remote
-                    .config()
-                    .object_key(&format!("{}/{}", entry.payload_prefix(), file.path))
-            } else {
-                entry.source_payload_path(&file.path)
-            };
+            let key = entry.source_payload_path(&file.path);
             let target = staged.join(&file.path);
             if let Some(parent) = target.parent() {
                 tokio::fs::create_dir_all(parent).await.map_err(|error| {
@@ -374,10 +355,8 @@ async fn download_and_verify(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::CatalogConfig;
     use crate::package::{BuildOptions, build_package};
-    use crate::publish::publish_package;
-    use crate::storage::operator_for_backend;
+    use crate::remote::test_utils::MapSource;
     use vfs::{
         BackendConfig, BackendDefinition, MountedObjectStore, OpendalFileStorage, VfsManifest,
     };
@@ -402,8 +381,6 @@ mod tests {
 
     async fn published_fixture(id: &str) -> (RemoteCatalog, tempfile::TempDir) {
         let workspace = tempfile::tempdir().unwrap();
-        let warehouse = workspace.path().join("warehouse");
-        std::fs::create_dir_all(&warehouse).unwrap();
         let input = workspace.path().join("input");
         std::fs::create_dir_all(&input).unwrap();
         std::fs::write(input.join("data.txt"), b"local-cache-data").unwrap();
@@ -418,26 +395,46 @@ mod tests {
             },
         )
         .unwrap();
-        let manifest = VfsManifest {
-            backend: vec![BackendDefinition {
-                id: "warehouse".into(),
-                config: BackendConfig::local(warehouse.to_string_lossy().into_owned()),
-            }],
-            mount: Vec::new(),
+        let manifest = package.manifest;
+        let entry = CatalogEntry {
+            id: id.into(),
+            repo: "owner/cache-panel".into(),
+            version: manifest.version.clone(),
+            kind: manifest.kind.clone(),
+            digest: manifest.digest.clone().expect("fixture has digest"),
+            current: true,
+            created_unix_seconds: 1,
         };
-        let config = CatalogConfig {
-            backend: Some("warehouse".into()),
-            ..Default::default()
+        let package_index = CatalogIndex {
+            entries: vec![entry.clone()],
+            ..CatalogIndex::default()
         };
-        let operator = operator_for_backend(
-            &manifest,
-            config.backend.as_deref().expect("backend test config"),
-        )
-        .unwrap();
-        publish_package(package.path, &config, &operator)
-            .await
-            .unwrap();
-        let remote = RemoteCatalog::new(&manifest, &config).unwrap();
+        let registry = CatalogIndex {
+            repositories: vec![entry.repo.clone()],
+            ..CatalogIndex::default()
+        };
+        let mut objects = MapSource::default();
+        objects.0.insert(
+            "owner/catalog-index/index.json".into(),
+            serde_json::to_vec(&registry).unwrap(),
+        );
+        objects.0.insert(
+            entry.source_manifest_key(),
+            serde_json::to_vec(&manifest).unwrap(),
+        );
+        objects.0.insert(
+            entry.source_payload_path("data.txt"),
+            b"local-cache-data".to_vec(),
+        );
+        objects.0.insert(
+            format!("{}/index.json", entry.repo),
+            serde_json::to_vec(&package_index).unwrap(),
+        );
+        let config = crate::CatalogConfig {
+            repository: Some("owner/catalog-index".into()),
+            ..crate::CatalogConfig::default()
+        };
+        let remote = RemoteCatalog::from_source(config, Box::new(objects));
         (remote, workspace)
     }
 

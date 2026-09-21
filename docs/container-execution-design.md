@@ -4,9 +4,9 @@
 
 `container_command` is the DAG engine's execution path for external
 bioinformatics tools. It runs one OCI image per node as a zero-retry ephemeral
-container, uses object storage as the authoritative panel and artifact source,
-and keeps a shared POSIX data plane for tools that require ordinary file
-access.
+container, keeps verified local panel packages as the authoritative reference
+data source, publishes artifacts through VFS, and retains a shared POSIX data
+plane for tools that require ordinary file access.
 
 Podman is the single execution backend: a rootless-friendly, single-host
 runtime driven through the local Podman CLI. The `PodmanConnection` trait in
@@ -17,7 +17,7 @@ the connection layer, and `PodmanRuntime` is its production implementation.
 
 ### PanelRef
 
-A panel is an immutable object-store prefix:
+A panel is an immutable package-cache prefix:
 
 ```json
 {
@@ -120,7 +120,7 @@ endpoint; the default TUI container does not mount a Podman socket.
 ## Catalog-backed panels
 
 `container_command.panel_bundles` references a runtime DataBundle id. The
-bundle carries an immutable catalog source and digest without exposing object
+bundle carries an immutable catalog source and digest without exposing remote
 keys in the DAG. At execution the node converts it to the same `PanelRef` used
 by the inline transition form, verifies its `manifest.json`, materializes it in
 the shared panel cache, and mounts it read-only.

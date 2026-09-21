@@ -9,7 +9,6 @@ use hf_hub::{HFClient, HFClientBuilder, HFError, HFRepository, RepoTypeDataset};
 use crate::error::Result;
 use crate::model::{CATALOG_SCHEMA_VERSION, CatalogEntry, CatalogIndex, DatasetManifest};
 use crate::package::{PACKAGE_MANIFEST, PAYLOAD_DIR, validate_package};
-use crate::publish::{build_entry, upsert_entry};
 use crate::remote::ObjectSource;
 
 const INDEX_PATH: &str = "index.json";
@@ -135,64 +134,6 @@ impl ObjectSource for MultiRepoHfSource {
         let bytes = repository
             .download_file_to_bytes()
             .filename(path)
-            .revision(self.revision.clone())
-            .range(offset..offset + len)
-            .send()
-            .await
-            .map_err(|error| format!("read Hugging Face object `{key}` at {offset}: {error}"))?;
-        Ok(bytes.to_vec())
-    }
-}
-
-/// Object source reading catalog objects from a Hugging Face dataset repo.
-pub struct HfSource {
-    repository: HFRepository<RepoTypeDataset>,
-    revision: String,
-}
-
-impl HfSource {
-    pub fn new(repo_id: &str, revision: Option<String>, token: Option<String>) -> Result<Self> {
-        let (owner, name) = split_repo_id(repo_id)?;
-        let mut builder = HFClientBuilder::new();
-        if let Some(token) = token {
-            builder = builder.token(token);
-        }
-        let client = builder
-            .build()
-            .map_err(|error| format!("build Hugging Face client: {error}"))?;
-        Ok(Self {
-            repository: client.dataset(owner, name),
-            revision: revision.unwrap_or_else(|| "main".to_string()),
-        })
-    }
-
-    pub fn revision(&self) -> &str {
-        &self.revision
-    }
-}
-
-#[async_trait]
-impl ObjectSource for HfSource {
-    async fn read(&self, key: &str) -> Result<Vec<u8>> {
-        let bytes = self
-            .repository
-            .download_file_to_bytes()
-            .filename(key.to_string())
-            .revision(self.revision.clone())
-            .send()
-            .await
-            .map_err(|error| format!("read Hugging Face object `{key}`: {error}"))?;
-        Ok(bytes.to_vec())
-    }
-
-    async fn read_range(&self, key: &str, offset: u64, len: u64) -> Result<Vec<u8>> {
-        if len == 0 {
-            return Ok(Vec::new());
-        }
-        let bytes = self
-            .repository
-            .download_file_to_bytes()
-            .filename(key.to_string())
             .revision(self.revision.clone())
             .range(offset..offset + len)
             .send()
@@ -342,6 +283,30 @@ pub async fn publish_package_to_hf(
     Ok(entry)
 }
 
+fn build_entry(manifest: &DatasetManifest) -> CatalogEntry {
+    CatalogEntry {
+        id: manifest.id.clone(),
+        repo: String::new(),
+        version: manifest.version.clone(),
+        kind: manifest.kind.clone(),
+        digest: manifest
+            .digest
+            .clone()
+            .expect("validated manifests have a digest"),
+        current: true,
+        created_unix_seconds: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_secs() as i64)
+            .unwrap_or_default(),
+    }
+}
+
+fn upsert_entry(mut index: CatalogIndex, entry: &CatalogEntry) -> Result<CatalogIndex> {
+    index.upsert_current(entry.clone());
+    index.validate()?;
+    Ok(index)
+}
+
 fn split_repo_id(repo_id: &str) -> Result<(&str, &str)> {
     let (owner, name) = repo_id.split_once('/').ok_or_else(|| {
         format!("Hugging Face repository id must be `owner/name`, got `{repo_id}`")
@@ -444,13 +409,7 @@ mod tests {
 
     #[test]
     fn remote_catalog_hf_construction_is_lazy() {
-        let catalog = RemoteCatalog::hf("owner/catalog", None, None).unwrap();
-        assert!(
-            catalog
-                .config()
-                .object_key("entries/x")
-                .starts_with("entries/")
-        );
+        assert!(RemoteCatalog::hf("owner/catalog", None, None).is_ok());
     }
 
     #[test]
@@ -471,7 +430,8 @@ mod tests {
         )
         .unwrap();
         let manifest = validate_package(&package.path).unwrap();
-        let entry = build_entry(&manifest);
+        let mut entry = build_entry(&manifest);
+        entry.repo = "owner/catalog-panel".into();
         let index = upsert_entry(CatalogIndex::default(), &entry).unwrap();
         let _index_bytes = serde_json::to_vec_pretty(&index).unwrap();
 

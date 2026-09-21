@@ -1,22 +1,16 @@
 use async_trait::async_trait;
-use opendal::Operator;
-use vfs::VfsManifest;
 
 use crate::config::CatalogConfig;
 use crate::error::Result;
 use crate::hf::MultiRepoHfSource;
 use crate::model::{CatalogEntry, CatalogIndex, DatasetManifest};
-use crate::storage::operator_for_backend;
 
-/// Minimal byte-source seam used by the remote catalog.
-///
-/// Today the only implementation wraps an opendal [`Operator`] (S3, OSS, or a
-/// local test backend). When packages move to Hugging Face, an implementation
-/// over the HF Hub repository API can slot in here without changing the index
-/// layout, checksum verification, local cache, or runtime integration.
+const INDEX_NAME: &str = "index.json";
+
+/// Minimal byte-source seam used by the Hugging Face catalog client.
 #[async_trait]
 pub trait ObjectSource: Send + Sync {
-    /// Read the complete object stored at `key`.
+    /// Read the complete object stored at `owner/repo/path`.
     async fn read(&self, key: &str) -> Result<Vec<u8>>;
 
     /// Read `len` bytes starting at `offset`, enabling bounded-memory
@@ -24,152 +18,65 @@ pub trait ObjectSource: Send + Sync {
     async fn read_range(&self, key: &str, offset: u64, len: u64) -> Result<Vec<u8>>;
 }
 
-/// Object-storage source backed directly by an opendal operator.
-pub struct OperatorSource(Operator);
-
-#[async_trait]
-impl ObjectSource for OperatorSource {
-    async fn read(&self, key: &str) -> Result<Vec<u8>> {
-        let buffer = self
-            .0
-            .read(key)
-            .await
-            .map_err(|error| format!("read object `{key}`: {error}"))?;
-        Ok(buffer.to_vec())
-    }
-
-    async fn read_range(&self, key: &str, offset: u64, len: u64) -> Result<Vec<u8>> {
-        let reader = self
-            .0
-            .reader(key)
-            .await
-            .map_err(|error| format!("open object `{key}`: {error}"))?;
-        let buffer = reader
-            .read(offset..offset + len)
-            .await
-            .map_err(|error| format!("read object `{key}` at {offset}: {error}"))?;
-        Ok(buffer.to_vec())
-    }
-}
-
-/// Read-only accessor for a catalog published in object storage.
+/// Read-only accessor for a Hugging Face catalog registry.
 ///
-/// The layout is one root `index.json` plus a content-addressed directory per
-/// entry. Data is never served to the VFS directly; use
-/// [`crate::LocalCatalog`] to install selected packages first.
+/// The registry contains repository references. Each referenced package
+/// repository owns its local index and immutable payload versions.
 pub struct RemoteCatalog {
-    config: CatalogConfig,
+    registry_repo: String,
     source: Box<dyn ObjectSource>,
 }
 
 impl RemoteCatalog {
-    /// Build from a backend definition in the `vfs.toml` backend table.
-    ///
-    /// The manifest is only consulted to find backend credentials and
-    /// endpoints; no VFS mounts are constructed.
-    pub fn new(manifest: &VfsManifest, config: &CatalogConfig) -> Result<Self> {
-        config.validate()?;
-        let backend = config
-            .backend
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| "catalog backend is required in object-storage mode".to_string())?;
-        let source = Box::new(OperatorSource(operator_for_backend(manifest, backend)?));
-        Ok(Self {
-            config: config.clone(),
-            source,
-        })
-    }
-
-    /// Build over a custom source, for remotes that are not object stores
-    /// (for example a Hugging Face Hub repository client).
-    pub fn from_source(config: &CatalogConfig, source: Box<dyn ObjectSource>) -> Result<Self> {
-        config.validate()?;
-        Ok(Self {
-            config: config.clone(),
-            source,
-        })
-    }
-
     /// Read a catalog hosted in a Hugging Face dataset repository.
     pub fn hf(repo_id: &str, revision: Option<String>, token: Option<String>) -> Result<Self> {
         let config = CatalogConfig {
-            backend: Some("huggingface".into()),
             repository: Some(repo_id.to_string()),
-            repository_prefix: None,
-            revision: None,
-            source: "/".into(),
-            index: "index.json".into(),
-            enabled: true,
-            agent_visible: false,
+            ..CatalogConfig::default()
         };
-        Self::from_source(
-            &config,
-            Box::new(MultiRepoHfSource::new(repo_id, revision, token)?),
-        )
+        config.validate()?;
+        Ok(Self {
+            registry_repo: repo_id.to_string(),
+            source: Box::new(MultiRepoHfSource::new(repo_id, revision, token)?),
+        })
     }
 
-    pub fn config(&self) -> &CatalogConfig {
-        &self.config
+    #[cfg(test)]
+    pub(crate) fn from_source(config: CatalogConfig, source: Box<dyn ObjectSource>) -> Self {
+        Self {
+            registry_repo: config.repository.expect("test catalog has repository"),
+            source,
+        }
     }
 
-    pub fn source(&self) -> &dyn ObjectSource {
+    pub(crate) fn source(&self) -> &dyn ObjectSource {
         self.source.as_ref()
     }
 
     pub async fn index(&self) -> Result<CatalogIndex> {
-        let key = if let Some(repository) = &self.config.repository {
-            format!("{}/{}", repository, self.config.index)
-        } else {
-            self.config.object_key(&self.config.index)
-        };
-        let mut index = self.read_index(&key).await?;
+        let registry_key = format!("{}/{INDEX_NAME}", self.registry_repo);
+        let mut index = self.read_index(&registry_key).await?;
 
         // A registry contains only repository references. Resolve each package
         // repository's local index and merge its entries for search/select.
         for repository in index.repositories.clone() {
-            let package_key = format!("{repository}/{}", self.config.index);
+            let package_key = format!("{repository}/{INDEX_NAME}");
             let package_index = self.read_index(&package_key).await?;
-            if !package_index.repositories.is_empty() {
-                return Err(
-                    format!("package index `{package_key}` must not itself be a registry").into(),
-                );
-            }
-            if let Some(entry) = package_index
-                .entries
-                .iter()
-                .find(|entry| entry.repo != repository)
-            {
-                return Err(format!(
-                    "package index `{package_key}` routes `{}` to `{}`",
-                    entry.id, entry.repo
-                )
-                .into());
-            }
+            validate_package_index(&package_index, &repository, &package_key)?;
             index.entries.extend(package_index.entries);
         }
 
         index
             .validate()
-            .map_err(|error| format!("invalid resolved catalog index `{key}`: {error}"))?;
+            .map_err(|error| format!("invalid resolved catalog registry: {error}"))?;
         Ok(index)
     }
 
     /// Read and validate the package-local index at `owner/name/index.json`.
     pub async fn package_index(&self, repository: &str) -> Result<CatalogIndex> {
-        let key = format!("{repository}/{}", self.config.index);
+        let key = format!("{repository}/{INDEX_NAME}");
         let index = self.read_index(&key).await?;
-        if !index.repositories.is_empty() {
-            return Err(format!("package index `{key}` must not be a registry").into());
-        }
-        if let Some(entry) = index.entries.iter().find(|entry| entry.repo != repository) {
-            return Err(format!(
-                "package index `{key}` routes `{}` to `{}`",
-                entry.id, entry.repo
-            )
-            .into());
-        }
+        validate_package_index(&index, repository, &key)?;
         Ok(index)
     }
 
@@ -184,11 +91,7 @@ impl RemoteCatalog {
     }
 
     pub async fn manifest(&self, entry: &CatalogEntry) -> Result<DatasetManifest> {
-        let key = if entry.repo.is_empty() {
-            self.config.object_key(&entry.manifest_key())
-        } else {
-            entry.source_manifest_key()
-        };
+        let key = entry.source_manifest_key();
         let bytes = self.source.read(&key).await?;
         let manifest: DatasetManifest = serde_json::from_slice(&bytes)
             .map_err(|error| format!("parse object `{key}`: {error}"))?;
@@ -198,6 +101,20 @@ impl RemoteCatalog {
         validate_entry_manifest(entry, &manifest)?;
         Ok(manifest)
     }
+}
+
+fn validate_package_index(index: &CatalogIndex, repository: &str, key: &str) -> Result<()> {
+    if !index.repositories.is_empty() {
+        return Err(format!("package index `{key}` must not be a registry").into());
+    }
+    if let Some(entry) = index.entries.iter().find(|entry| entry.repo != repository) {
+        return Err(format!(
+            "package index `{key}` routes `{}` to `{}`",
+            entry.id, entry.repo
+        )
+        .into());
+    }
+    Ok(())
 }
 
 pub(crate) fn validate_entry_manifest(
@@ -215,12 +132,12 @@ pub(crate) fn validate_entry_manifest(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod test_utils {
     use super::*;
-    use async_trait::async_trait;
     use std::collections::BTreeMap;
 
-    struct MapSource(BTreeMap<String, Vec<u8>>);
+    #[derive(Default)]
+    pub(crate) struct MapSource(pub(crate) BTreeMap<String, Vec<u8>>);
 
     #[async_trait]
     impl ObjectSource for MapSource {
@@ -261,15 +178,20 @@ mod tests {
             entries: vec![entry.clone()],
             ..CatalogIndex::default()
         };
-        let mut objects = BTreeMap::new();
-        objects.insert("index.json".into(), serde_json::to_vec(&registry).unwrap());
-        objects.insert(
+        let mut objects = MapSource::default();
+        objects.0.insert(
+            "owner/catalog-index/index.json".into(),
+            serde_json::to_vec(&registry).unwrap(),
+        );
+        objects.0.insert(
             "owner/cache-panel/index.json".into(),
             serde_json::to_vec(&package_index).unwrap(),
         );
-        let mut config = CatalogConfig::default();
-        config.backend = Some("memory".into());
-        let remote = RemoteCatalog::from_source(&config, Box::new(MapSource(objects))).unwrap();
+        let config = CatalogConfig {
+            repository: Some("owner/catalog-index".into()),
+            ..CatalogConfig::default()
+        };
+        let remote = RemoteCatalog::from_source(config, Box::new(objects));
 
         let resolved = remote.index().await.unwrap();
         assert_eq!(resolved.current_entries().next(), Some(&entry));

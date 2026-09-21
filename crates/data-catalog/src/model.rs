@@ -78,14 +78,10 @@ impl DatasetManifest {
 }
 
 /// One immutable dataset version listed by a catalog index.
-///
-/// Object paths and VFS paths follow the catalog layout convention and are
-/// derived from the identity fields instead of being stored separately.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSchema, Deserialize, Serialize)]
 pub struct CatalogEntry {
     pub id: String,
     /// Hugging Face dataset repository hosting this package version.
-    /// Empty when the catalog is served from object storage.
     #[serde(default)]
     pub repo: String,
     pub version: String,
@@ -97,20 +93,9 @@ pub struct CatalogEntry {
 }
 
 impl CatalogEntry {
-    /// Digest without the `sha256:` prefix, as used in object and VFS paths.
+    /// Digest without the `sha256:` prefix, as used in package and VFS paths.
     pub fn short_digest(&self) -> &str {
         self.digest.strip_prefix("sha256:").unwrap_or(&self.digest)
-    }
-
-    /// Content-addressed root for this version in object-storage catalogs:
-    /// `entries/<id>/<version>/sha256-<digest>`.
-    pub fn entry_root(&self) -> String {
-        format!(
-            "entries/{}/{}/sha256-{}",
-            self.id,
-            self.version,
-            self.short_digest()
-        )
     }
 
     /// Content-addressed root within a per-package HF repository:
@@ -119,16 +104,8 @@ impl CatalogEntry {
         format!("{}/sha256-{}", self.version, self.short_digest())
     }
 
-    pub fn manifest_key(&self) -> String {
-        format!("{}/manifest.json", self.entry_root())
-    }
-
     pub fn package_manifest_key(&self) -> String {
         format!("{}/manifest.json", self.package_root())
-    }
-
-    pub fn payload_prefix(&self) -> String {
-        self.entry_root()
     }
 
     pub fn package_payload_prefix(&self) -> String {
@@ -137,20 +114,17 @@ impl CatalogEntry {
 
     /// Full ObjectSource key for the manifest, routing to the correct repo.
     pub fn source_manifest_key(&self) -> String {
-        if self.repo.is_empty() {
-            self.manifest_key()
-        } else {
-            format!("{}/{}", self.repo, self.package_manifest_key())
-        }
+        format!("{}/{}", self.repo, self.package_manifest_key())
     }
 
     /// Full ObjectSource key for a payload file, routing to the correct repo.
     pub fn source_payload_path(&self, relative: &str) -> String {
-        if self.repo.is_empty() {
-            format!("{}/{}", self.payload_prefix(), relative)
-        } else {
-            format!("{}/{}", self.repo, self.package_payload_prefix()) + "/" + relative
-        }
+        format!(
+            "{}/{}/{}",
+            self.repo,
+            self.package_payload_prefix(),
+            relative
+        )
     }
 
     /// Stable compatibility path: `/bundles/<id>`.
@@ -198,9 +172,7 @@ impl Default for CatalogIndex {
 
 impl CatalogIndex {
     pub fn validate(&self) -> Result<()> {
-        // Version 1 is the legacy central-entry index. It remains readable so
-        // existing local caches can be upgraded lazily on the next write.
-        if !matches!(self.schema_version, 1 | 2) {
+        if self.schema_version != CATALOG_SCHEMA_VERSION {
             return Err(
                 format!("unsupported catalog schema version {}", self.schema_version).into(),
             );
@@ -230,6 +202,7 @@ impl CatalogIndex {
             validate_id(&entry.id)?;
             validate_version(&entry.version)?;
             validate_kind(&entry.kind)?;
+            validate_repo_ref(&entry.repo)?;
             if !is_sha256(&entry.digest) {
                 return Err(format!("catalog entry `{}` has invalid digest", entry.id).into());
             }
@@ -330,8 +303,9 @@ impl CatalogIndex {
             .filter(|entry| kind.is_none_or(|value| entry.kind == value))
             .filter(|entry| {
                 let haystack = format!(
-                    "{} {} {} {} {}",
+                    "{} {} {} {} {} {}",
                     entry.id,
+                    entry.repo,
                     entry.version,
                     entry.kind,
                     entry.digest,
@@ -352,9 +326,7 @@ impl CatalogIndex {
     }
 
     pub fn upsert_current(&mut self, entry: CatalogEntry) {
-        if !entry.repo.is_empty() {
-            self.record_repository(&entry.repo);
-        }
+        self.record_repository(&entry.repo);
         self.schema_version = CATALOG_SCHEMA_VERSION;
         self.entries
             .retain(|existing| existing.id != entry.id || existing.digest != entry.digest);
@@ -371,6 +343,16 @@ impl CatalogIndex {
         });
         self.generation = self.generation.saturating_add(1);
     }
+}
+
+fn validate_repo_ref(value: &str) -> Result<()> {
+    let (owner, name) = value
+        .split_once('/')
+        .ok_or_else(|| format!("catalog repository `{value}` must be `owner/name`"))?;
+    if owner.is_empty() || name.is_empty() || name.contains('/') {
+        return Err(format!("catalog repository `{value}` must be `owner/name`").into());
+    }
+    Ok(())
 }
 
 pub fn manifest_digest(manifest: &DatasetManifest) -> String {
@@ -431,14 +413,6 @@ pub fn validate_relative_path(value: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn validate_object_path(value: &str) -> Result<()> {
-    validate_relative_path(value.trim_start_matches('/'))?;
-    if value.is_empty() || value.contains('\\') || value.contains('\0') {
-        return Err(format!("unsafe object path `{value}`").into());
-    }
-    Ok(())
-}
-
 pub fn is_sha256(value: &str) -> bool {
     value.len() == 71
         && value.starts_with("sha256:")
@@ -487,7 +461,7 @@ mod tests {
         for version in ["v1", "v2"] {
             index.upsert_current(CatalogEntry {
                 id: "panel".into(),
-                repo: String::new(),
+                repo: "owner/catalog-panel".into(),
                 version: version.into(),
                 kind: "plink".into(),
                 digest: format!(
@@ -522,14 +496,6 @@ mod tests {
         };
         assert_eq!(entry.short_digest(), "a".repeat(64));
         assert_eq!(
-            entry.entry_root(),
-            format!("entries/panel/v1/sha256-{}", "a".repeat(64))
-        );
-        assert_eq!(
-            entry.manifest_key(),
-            format!("entries/panel/v1/sha256-{}/manifest.json", "a".repeat(64))
-        );
-        assert_eq!(
             entry.package_root(),
             format!("v1/sha256-{}", "a".repeat(64))
         );
@@ -540,7 +506,13 @@ mod tests {
                 "a".repeat(64)
             )
         );
-        assert_eq!(entry.payload_prefix(), entry.entry_root());
+        assert_eq!(
+            entry.source_payload_path("data.txt"),
+            format!(
+                "wjixiang/catalog-panel/v1/sha256-{}/data.txt",
+                "a".repeat(64)
+            )
+        );
         assert_eq!(entry.vfs_alias(), "/bundles/panel");
         assert_eq!(
             entry.vfs_immutable(),

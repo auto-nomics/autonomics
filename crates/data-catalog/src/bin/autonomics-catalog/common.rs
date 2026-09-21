@@ -1,9 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use data_catalog::error::Result;
-use data_catalog::storage::operator_for_backend;
 use data_catalog::{CatalogConfig, LocalCatalog, RemoteCatalog};
-use vfs::VfsManifest;
 
 pub(crate) fn expand_home(path: impl AsRef<Path>) -> Result<PathBuf> {
     let path = path.as_ref().to_path_buf();
@@ -15,32 +13,30 @@ pub(crate) fn expand_home(path: impl AsRef<Path>) -> Result<PathBuf> {
     Ok(path)
 }
 
-pub(crate) fn load_catalog_config(config: &Path) -> Result<(VfsManifest, CatalogConfig)> {
+pub(crate) fn load_catalog_config(config: &Path) -> Result<CatalogConfig> {
     let source = std::fs::read_to_string(expand_home(config)?)
         .map_err(|error| format!("read VFS config: {error}"))?;
-    let manifest = VfsManifest::from_toml(&source).map_err(|error| error.to_string())?;
-    let catalog_config = CatalogConfig::from_vfs_toml(&source)?;
-    Ok((manifest, catalog_config))
+    CatalogConfig::from_vfs_toml(&source)
 }
 
 pub(crate) async fn load_remote(config: &Path) -> Result<RemoteCatalog> {
-    let (manifest, catalog_config) = load_catalog_config(config)?;
-    if let Some(repository) = &catalog_config.repository {
-        return RemoteCatalog::hf(
-            repository,
-            catalog_config.revision.clone(),
-            data_catalog::hf::resolve_hf_token(None),
-        );
-    }
-    RemoteCatalog::new(&manifest, &catalog_config)
+    let catalog_config = load_catalog_config(config)?;
+    let repository = catalog_config
+        .repository
+        .as_deref()
+        .ok_or_else(|| "catalog repository is required".to_string())?;
+    RemoteCatalog::hf(
+        repository,
+        catalog_config.revision.clone(),
+        data_catalog::hf::resolve_hf_token(None),
+    )
 }
 
 pub(crate) fn open_cache(path: &Path) -> Result<LocalCatalog> {
     LocalCatalog::open(expand_home(path)?)
 }
 
-/// Default package cache: the shared panel cache root, so installed packages
-/// participate in the panel LRU sweeper.
+/// Default package cache: the shared panel cache root.
 pub(crate) fn default_cache_root() -> String {
     data_catalog::default_panel_cache_root()
         .to_string_lossy()
