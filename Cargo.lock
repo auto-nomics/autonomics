@@ -2776,7 +2776,6 @@ dependencies = [
  "dag-core",
  "flate2",
  "hf-hub",
- "opendal",
  "schemars",
  "serde",
  "serde_json",

@@ -36,16 +36,17 @@ pub struct BuildOptions {
     pub force: bool,
 }
 
+/// Authoring spec stored as `package.json` inside a package directory.
 #[derive(Debug, Clone, Deserialize, Serialize)]
-struct PackageSpec {
-    schema_version: u8,
-    id: String,
-    version: String,
-    kind: String,
+pub struct PackageSpec {
+    pub schema_version: u8,
+    pub id: String,
+    pub version: String,
+    pub kind: String,
     #[serde(default)]
-    metadata: BTreeMap<String, String>,
+    pub metadata: BTreeMap<String, String>,
     #[serde(default)]
-    payload: serde_json::Map<String, serde_json::Value>,
+    pub payload: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Debug)]
@@ -75,8 +76,8 @@ pub fn build_package(
     }
     let output_parent = output
         .parent()
-        .ok_or_else(|| PackageError::Invalid("output has no parent".into()))?
-        .to_path_buf();
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .map_or_else(|| Path::new(".").to_path_buf(), Path::to_path_buf);
     fs::create_dir_all(&output_parent)?;
     let output_parent = output_parent.canonicalize()?;
     let output = output_parent.join(output.file_name().ok_or_else(|| {
@@ -116,7 +117,8 @@ pub fn build_package(
                 .map_err(|_| PackageError::Invalid("payload path escapes package".into()))?
                 .to_string_lossy()
                 .replace('\\', "/");
-            validate_relative_path(&relative).map_err(PackageError::Invalid)?;
+            validate_relative_path(&relative)
+                .map_err(|error| PackageError::Invalid(error.to_string()))?;
             let destination = payload_destination.join(&relative);
             if let Some(parent) = destination.parent() {
                 fs::create_dir_all(parent)?;
@@ -146,7 +148,9 @@ pub fn build_package(
         digest: None,
     };
     manifest.digest = Some(manifest_digest(&manifest));
-    manifest.validate().map_err(PackageError::Invalid)?;
+    manifest
+        .validate()
+        .map_err(|error| PackageError::Invalid(error.to_string()))?;
     fs::write(
         staging.path().join(PACKAGE_MANIFEST),
         serde_json::to_vec_pretty(&manifest)?,
@@ -170,7 +174,9 @@ pub fn validate_package(path: impl AsRef<Path>) -> Result<DatasetManifest, Packa
     let path = path.as_ref().canonicalize()?;
     let manifest_path = path.join(PACKAGE_MANIFEST);
     let manifest: DatasetManifest = serde_json::from_slice(&fs::read(&manifest_path)?)?;
-    manifest.validate().map_err(PackageError::Invalid)?;
+    manifest
+        .validate()
+        .map_err(|error| PackageError::Invalid(error.to_string()))?;
     for file in &manifest.files {
         let payload = path.join(PAYLOAD_DIR).join(&file.path);
         let metadata = fs::metadata(&payload).map_err(|error| {
@@ -315,7 +321,8 @@ fn unpack_tar<R: Read>(reader: R, destination: &Path) -> Result<(), PackageError
             .to_path_buf()
             .to_string_lossy()
             .replace('\\', "/");
-        validate_relative_path(&relative).map_err(PackageError::Invalid)?;
+        validate_relative_path(&relative)
+            .map_err(|error| PackageError::Invalid(error.to_string()))?;
         let target = destination.join(
             Path::new(&relative)
                 .components()
@@ -363,9 +370,10 @@ fn resolve_spec(
     for (key, value) in options.payload.clone() {
         resolved.payload.insert(key, value);
     }
-    validate_id(&resolved.id).map_err(PackageError::Invalid)?;
-    validate_version(&resolved.version).map_err(PackageError::Invalid)?;
-    validate_kind(&resolved.kind).map_err(PackageError::Invalid)?;
+    validate_id(&resolved.id).map_err(|error| PackageError::Invalid(error.to_string()))?;
+    validate_version(&resolved.version)
+        .map_err(|error| PackageError::Invalid(error.to_string()))?;
+    validate_kind(&resolved.kind).map_err(|error| PackageError::Invalid(error.to_string()))?;
     Ok(resolved)
 }
 

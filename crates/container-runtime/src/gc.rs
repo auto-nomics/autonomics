@@ -1,15 +1,15 @@
 //! Garbage collection for the container data plane.
 //!
-//! Two caches grow without bound by design:
+//! One cache grows without bound by design:
 //!
 //! * the workspace root accumulates one ephemeral scratch directory per
 //!   container run (`autonomics-container-command-{pid}-{nanos}`), and
-//! * the panel cache accumulates immutable `{id}@{digest}` bundles.
-//!
 //! Successful runs remove their own scratch inline (see `container_command`);
-//! the sweeper here reclaims the rest: crash residue, failed-run scratch kept
-//! for debugging, `AUTONOMICS_KEEP_WORKSPACE` leftovers, and panel entries
-//! beyond a byte budget.
+//! the sweeper here reclaims the rest: crash residue, failed-run scratch
+//! kept for debugging, and `AUTONOMICS_KEEP_WORKSPACE` leftovers.
+//!
+//! The panel data cache is deliberately outside this module's boundary; its
+//! lifecycle is owned by the data-catalog layer.
 //!
 //! Safety rests on three checks, in order of strength:
 //!
@@ -344,194 +344,6 @@ fn sweep_workspace_blocking(root: &Path, policy: &WorkspaceGcPolicy) -> Workspac
     report
 }
 
-// ──────────────────────────── panel sweep ──────────────────────────
-
-/// Tuning for [`sweep_panels`]. Removal is disabled when `max_bytes` is zero.
-#[derive(Debug, Clone)]
-pub struct PanelGcPolicy {
-    /// Total cache budget in bytes; `0` disables entry removal (interrupted
-    /// `.downloading-*` directories are still cleared).
-    pub max_bytes: u64,
-    /// Entries whose last use (mtime touched on cache hit) is more recent
-    /// than this are never removed, even under budget pressure. Long genetics
-    /// runs hold panels mounted for hours, so this must cover the longest
-    /// expected container run.
-    pub min_age: Duration,
-    /// Report what would happen without deleting anything.
-    pub dry_run: bool,
-}
-
-impl Default for PanelGcPolicy {
-    fn default() -> Self {
-        Self {
-            max_bytes: 0,
-            min_age: Duration::from_secs(DEFAULT_WORKSPACE_GC_AGE_SECS),
-            dry_run: false,
-        }
-    }
-}
-
-/// Outcome of one panel cache sweep.
-#[derive(Debug, Default, Clone, Serialize)]
-pub struct PanelGcReport {
-    /// Complete `{id}@{digest}` entries found.
-    pub entries: usize,
-    pub bytes_total: u64,
-    /// Entries removed (or that would be, under `dry_run`).
-    pub removed: usize,
-    pub bytes_freed: u64,
-    /// Skipped because they were used within [`PanelGcPolicy::min_age`].
-    pub retained_recent: usize,
-    /// Skipped because a live run holds their lock.
-    pub retained_in_use: usize,
-    /// Interrupted `.downloading-*` directories cleared.
-    pub downloading_cleared: usize,
-    /// Leftover `.gc-*` staging names cleared.
-    pub pending_cleared: usize,
-    pub errors: Vec<String>,
-}
-
-/// Enforce the panel cache byte budget with a grace window, oldest first.
-///
-/// Panel entries are immutable and rebuildable from object storage, so
-/// removal is always *correct*; the lock and grace checks only avoid
-/// yanking a bundle out from under a running container.
-pub async fn sweep_panels(panel_root: &Path, policy: &PanelGcPolicy) -> PanelGcReport {
-    let root = panel_root.to_path_buf();
-    let policy = policy.clone();
-    tokio::task::spawn_blocking(move || sweep_panels_blocking(&root, &policy))
-        .await
-        .unwrap_or_else(|join_error| {
-            let mut report = PanelGcReport::default();
-            report
-                .errors
-                .push(format!("panel sweep task failed: {join_error}"));
-            report
-        })
-}
-
-fn sweep_panels_blocking(root: &Path, policy: &PanelGcPolicy) -> PanelGcReport {
-    let mut report = PanelGcReport::default();
-    let Ok(entries) = fs::read_dir(root) else {
-        return report; // no cache yet — nothing to sweep
-    };
-
-    let now = SystemTime::now();
-    struct Entry {
-        path: PathBuf,
-        name: String,
-        bytes: u64,
-        used_at: SystemTime,
-    }
-    let mut complete: Vec<Entry> = Vec::new();
-    let mut bytes_total: u64 = 0;
-
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if !entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
-            continue;
-        }
-        if name.starts_with(GC_PENDING_PREFIX) {
-            // Residue of a panel removal interrupted mid-delete.
-            if policy.dry_run {
-                report.pending_cleared += 1;
-            } else {
-                match fs::remove_dir_all(entry.path()) {
-                    Ok(()) => report.pending_cleared += 1,
-                    Err(error) => report.errors.push(format!(
-                        "cannot clear pending `{}`: {error}",
-                        entry.path().display()
-                    )),
-                }
-            }
-            continue;
-        }
-        if name.starts_with(".downloading-") {
-            // Crash residue from an interrupted download; the live download
-            // holds no lock, so rely on the age window alone.
-            let path = entry.path();
-            let age = metadata_age(&path, now);
-            if age >= policy.min_age {
-                if policy.dry_run {
-                    report.downloading_cleared += 1;
-                } else {
-                    match fs::remove_dir_all(&path) {
-                        Ok(()) => report.downloading_cleared += 1,
-                        Err(error) => report.errors.push(format!(
-                            "cannot clear download `{}`: {error}",
-                            path.display()
-                        )),
-                    }
-                }
-            }
-            continue;
-        }
-        if name.starts_with('.') {
-            continue; // `.locks` and other dot-prefixed state
-        }
-        let path = entry.path();
-        let bytes = dir_size(&path);
-        let used_at = fs::metadata(&path)
-            .and_then(|metadata| metadata.modified())
-            .unwrap_or(UNIX_EPOCH);
-        bytes_total += bytes;
-        complete.push(Entry {
-            path,
-            name,
-            bytes,
-            used_at,
-        });
-    }
-
-    report.entries = complete.len();
-    report.bytes_total = bytes_total;
-    if policy.max_bytes == 0 || bytes_total <= policy.max_bytes {
-        return report;
-    }
-
-    // Oldest use first; ties break on name for determinism.
-    complete.sort_by(|a, b| a.used_at.cmp(&b.used_at).then_with(|| a.name.cmp(&b.name)));
-    for entry in complete {
-        if bytes_total <= policy.max_bytes {
-            break;
-        }
-        if now.duration_since(entry.used_at).unwrap_or_default() < policy.min_age {
-            report.retained_recent += 1;
-            continue;
-        }
-        match try_lock_exclusive(&panel_lock_path(root, &entry.name)) {
-            Ok(false) => {
-                report.retained_in_use += 1;
-                continue;
-            }
-            Err(error) => {
-                report
-                    .errors
-                    .push(format!("cannot lock panel `{}`: {error}", entry.name));
-                continue;
-            }
-            Ok(true) => {}
-        }
-        if policy.dry_run {
-            report.removed += 1;
-            report.bytes_freed += entry.bytes;
-            bytes_total = bytes_total.saturating_sub(entry.bytes);
-            continue;
-        }
-        match remove_dir_atomically(root, &entry.path) {
-            Ok(bytes) => {
-                report.removed += 1;
-                report.bytes_freed += bytes;
-                bytes_total = bytes_total.saturating_sub(entry.bytes);
-            }
-            Err(error) => report
-                .errors
-                .push(format!("cannot remove panel `{}`: {error}", entry.name)),
-        }
-    }
-    report
-}
-
 // ─────────────────────────── shared helpers ────────────────────────
 
 /// `rename` the directory under a fresh `.gc-{nanos}` name, then delete it.
@@ -550,14 +362,6 @@ fn remove_dir_atomically(root: &Path, dir: &Path) -> Result<u64, io::Error> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(bytes),
         Err(error) => Err(error),
     }
-}
-
-fn metadata_age(path: &Path, now: SystemTime) -> Duration {
-    fs::metadata(path)
-        .and_then(|metadata| metadata.modified())
-        .ok()
-        .and_then(|modified| now.duration_since(modified).ok())
-        .unwrap_or_default()
 }
 
 /// Recursive directory size. Symlinks count as their link size, never their
@@ -738,91 +542,6 @@ mod tests {
 
         assert_eq!(report.removed, 1);
         assert!(!dir.exists());
-    }
-
-    #[tokio::test]
-    async fn panel_sweep_enforces_budget_oldest_first() {
-        let root = tempfile::tempdir().unwrap();
-        let old = root.path().join("panel_a@sha256:1");
-        let new = root.path().join("panel_b@sha256:2");
-        for dir in [&old, &new] {
-            std::fs::create_dir_all(dir).unwrap();
-            write_file(&dir.join("data.bin"), 1_000);
-        }
-        set_old_mtime(&old);
-
-        let policy = PanelGcPolicy {
-            max_bytes: 1_500,
-            min_age: Duration::from_secs(3_600),
-            dry_run: false,
-        };
-        let report = sweep_panels(root.path(), &policy).await;
-
-        assert_eq!(report.entries, 2);
-        assert_eq!(report.bytes_total, 2_000);
-        assert_eq!(report.removed, 1);
-        assert!(!old.exists());
-        assert!(new.exists());
-    }
-
-    #[tokio::test]
-    async fn panel_sweep_keeps_recent_entries_even_over_budget() {
-        let root = tempfile::tempdir().unwrap();
-        let entry = root.path().join("panel_a@sha256:1");
-        std::fs::create_dir_all(&entry).unwrap();
-        write_file(&entry.join("data.bin"), 1_000);
-
-        let policy = PanelGcPolicy {
-            max_bytes: 1,
-            min_age: Duration::from_secs(3_600),
-            dry_run: false,
-        };
-        let report = sweep_panels(root.path(), &policy).await;
-
-        assert_eq!(report.retained_recent, 1);
-        assert_eq!(report.removed, 0);
-        assert!(entry.exists());
-    }
-
-    #[tokio::test]
-    async fn panel_sweep_skips_locked_entries() {
-        let root = tempfile::tempdir().unwrap();
-        let entry = root.path().join("panel_a@sha256:1");
-        std::fs::create_dir_all(&entry).unwrap();
-        write_file(&entry.join("data.bin"), 1_000);
-        set_old_mtime(&entry);
-        let _guard = acquire_panel_lock_shared(root.path(), "panel_a@sha256:1").unwrap();
-
-        let policy = PanelGcPolicy {
-            max_bytes: 1,
-            min_age: Duration::from_secs(0),
-            dry_run: false,
-        };
-        let report = sweep_panels(root.path(), &policy).await;
-
-        assert_eq!(report.retained_in_use, 1);
-        assert!(entry.exists());
-    }
-
-    #[tokio::test]
-    async fn panel_sweep_clears_stale_downloading_dirs() {
-        let root = tempfile::tempdir().unwrap();
-        let stale = root.path().join(".downloading-panel@sha256:1-1-1");
-        std::fs::create_dir_all(&stale).unwrap();
-        set_old_mtime(&stale);
-
-        let report = sweep_panels(
-            root.path(),
-            &PanelGcPolicy {
-                max_bytes: 0,
-                min_age: Duration::from_secs(3_600),
-                dry_run: false,
-            },
-        )
-        .await;
-
-        assert_eq!(report.downloading_cleared, 1);
-        assert!(!stale.exists());
     }
 
     #[test]

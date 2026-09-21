@@ -1,35 +1,23 @@
 use serde::{Deserialize, Serialize};
 
+use crate::error::Result;
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct CatalogConfig {
-    /// Backend ID defined in the same `vfs.toml`.
-    pub backend: String,
-    /// Catalog root prefix inside that backend.
-    #[serde(default = "default_source")]
-    pub source: String,
-    /// Root index object name relative to `source`.
-    #[serde(default = "default_index")]
-    pub index: String,
-    /// Immutable entry prefix relative to `source`.
-    #[serde(default = "default_prefix")]
-    pub prefix: String,
+    /// Hugging Face registry repository in `owner/name` form.
+    #[serde(default)]
+    pub repository: Option<String>,
+    /// Prefix for per-package Hugging Face repositories in `owner/name` form.
+    #[serde(default)]
+    pub repository_prefix: Option<String>,
+    /// Hugging Face revision; defaults to `main`.
+    #[serde(default)]
+    pub revision: Option<String>,
     #[serde(default = "default_true")]
     pub enabled: bool,
-    /// Expose the catalog root under `/catalog` for agent inspection.
+    /// Expose the local catalog cache under `/catalog` for agent inspection.
     #[serde(default = "default_true")]
     pub agent_visible: bool,
-}
-
-fn default_source() -> String {
-    "/".into()
-}
-
-fn default_index() -> String {
-    "index.json".into()
-}
-
-fn default_prefix() -> String {
-    "entries".into()
 }
 
 fn default_true() -> bool {
@@ -39,10 +27,9 @@ fn default_true() -> bool {
 impl Default for CatalogConfig {
     fn default() -> Self {
         Self {
-            backend: String::new(),
-            source: default_source(),
-            index: default_index(),
-            prefix: default_prefix(),
+            repository: None,
+            repository_prefix: None,
+            revision: None,
             enabled: true,
             agent_visible: true,
         }
@@ -50,7 +37,7 @@ impl Default for CatalogConfig {
 }
 
 impl CatalogConfig {
-    pub fn from_vfs_toml(source: &str) -> Result<Self, String> {
+    pub fn from_vfs_toml(source: &str) -> Result<Self> {
         #[derive(Deserialize)]
         struct Wrapper {
             #[serde(default)]
@@ -63,41 +50,40 @@ impl CatalogConfig {
         Ok(config)
     }
 
-    pub fn validate(&self) -> Result<(), String> {
-        if self.backend.trim().is_empty() {
-            return Err("catalog backend cannot be empty".into());
+    pub fn validate(&self) -> Result<()> {
+        let Some(repository) = self
+            .repository
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            if self.enabled {
+                return Err("catalog repository is required".into());
+            }
+            return Ok(());
+        };
+
+        validate_repo_id(repository, "catalog repository")?;
+        if let Some(prefix) = self
+            .repository_prefix
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            validate_repo_id(prefix, "catalog repository prefix")?;
         }
-        if self.source != "/" {
-            crate::model::validate_object_path(&self.source)?;
-        }
-        if self.source != "/" {
-            crate::model::validate_relative_path(self.source.trim_matches('/'))?;
-        }
-        crate::model::validate_relative_path(self.index.trim_start_matches('/'))?;
-        crate::model::validate_relative_path(self.prefix.trim_matches('/'))?;
         Ok(())
     }
-
-    pub fn source_prefix(&self) -> String {
-        normalize_prefix(&self.source)
-    }
-
-    pub fn object_key(&self, relative: &str) -> String {
-        join_object_key(&self.source_prefix(), relative)
-    }
 }
 
-pub fn normalize_prefix(value: &str) -> String {
-    value.trim_matches('/').to_string()
-}
-
-pub fn join_object_key(prefix: &str, relative: &str) -> String {
-    let relative = relative.trim_start_matches('/');
-    if prefix.is_empty() {
-        relative.to_string()
-    } else {
-        format!("{prefix}/{relative}")
+fn validate_repo_id(value: &str, field: &str) -> Result<()> {
+    let (owner, name) = value
+        .split_once('/')
+        .ok_or_else(|| format!("{field} must be `owner/name`, got `{value}`"))?;
+    if owner.is_empty() || name.is_empty() || name.contains('/') {
+        return Err(format!("{field} must be `owner/name`, got `{value}`").into());
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -105,25 +91,57 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_optional_catalog_section() {
+    fn catalog_repository_is_required() {
         assert!(
             CatalogConfig::from_vfs_toml("[[mount]]\npath=\"/\"\nbackend=\"x\"\nsource=\"/\"\n")
                 .is_err()
         );
 
+        CatalogConfig {
+            repository: None,
+            enabled: false,
+            ..CatalogConfig::default()
+        }
+        .validate()
+        .unwrap();
+    }
+
+    #[test]
+    fn parses_hugging_face_repository_catalog() {
         let config = CatalogConfig::from_vfs_toml(
             r#"
 [catalog]
-backend = "warehouse"
-source = "/autonomics/catalog"
-index = "index.json"
-prefix = "entries"
+repository = "wjixiang/catalog-index"
+revision = "main"
+"#,
+        )
+        .unwrap();
+        assert_eq!(config.repository.as_deref(), Some("wjixiang/catalog-index"));
+        assert_eq!(config.revision.as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn parses_and_validates_package_repository_prefix() {
+        let config = CatalogConfig::from_vfs_toml(
+            r#"
+[catalog]
+repository = "wjixiang/catalog-index"
+repository_prefix = "wjixiang/catalog"
 "#,
         )
         .unwrap();
         assert_eq!(
-            config.object_key("entries/x/files"),
-            "autonomics/catalog/entries/x/files"
+            config.repository_prefix.as_deref(),
+            Some("wjixiang/catalog")
         );
+
+        let error = CatalogConfig::from_vfs_toml(
+            r#"
+[catalog]
+repository = "invalid/repo/id"
+"#,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("catalog repository must be"));
     }
 }

@@ -15,7 +15,7 @@ fn bundle(id: &str, desc: &str, vpath: &str) -> DataBundle {
 /// Build the registry of bundles embedded with the data engine.
 ///
 /// These mappings keep registry-backed tests and embedded engines usable
-/// before an object-storage catalog has been deployed.
+/// before a Hugging Face catalog package has been installed.
 pub fn builtin_bundle_registry() -> BundleRegistry {
     let mut bundles = Vec::new();
     bundles.extend([

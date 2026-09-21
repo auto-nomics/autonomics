@@ -59,7 +59,7 @@ BioMNI 的论文贡献顺序是：定义问题、构建动作空间、提出 Age
 2. **可审计执行协议**：每次运行保存完整 node/edge/spec/run report snapshot；支持 ref、history log、snapshot diff、checkout 和 branch。这直接对应科研工作流的可追溯性。
 3. **受控外部分析执行**：外部生物信息工具通过 Podman 一次性容器运行，默认隔离网络、只读 rootfs、禁用 privilege escalation，输入输出显式声明，输出上传 VFS 并计算 SHA-256 指纹。
 4. **不可变数据和参考面板**：data catalog 使用 manifest、版本目录和 canonical digest；panel cache 校验每个文件的大小和 SHA-256 后才原子暴露；DAG 可引用 `/datasets/<id>@sha256-<digest>`。
-5. **统一数据面**：VFS 将 local、S3、OSS 和 catalog 挂载到统一命名空间，避免 Agent 直接处理部署路径和凭据。
+5. **统一数据面**：VFS 将 local、S3、OSS 和本地 catalog 缓存挂载到统一命名空间；远端数据包由 data-catalog 从 Hugging Face 解析和校验，避免 Agent 直接处理部署路径和凭据。
 6. **科研闭环**：生物医学 API、文献库、全文、引文、LaTeX/写作工具、图表/表格节点和 KMS 位于同一运行时，支持从数据到文献支撑稿件的材料流。
 
 ## 与 BioMNI 的对照

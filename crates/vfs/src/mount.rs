@@ -146,7 +146,11 @@ impl BackendConfig {
         }
     }
 
-    fn build(&self) -> Result<opendal::Operator, opendal::Error> {
+    /// Build the object-store operator for this backend definition.
+    ///
+    /// This constructs the raw storage client only; it does not create VFS
+    /// mounts or path mappings.
+    pub fn build(&self) -> Result<opendal::Operator, opendal::Error> {
         match self {
             Self::Local { root } => {
                 opendal::Operator::new(opendal::services::Fs::default().root(root))

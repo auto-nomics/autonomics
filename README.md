@@ -58,8 +58,8 @@ Node registry + DAG scheduler
               artifact publication to VFS
 
 Shared data plane:
-  VFS (OpenDAL) -> local, S3, OSS, and catalog-backed mounts
-  data catalog  -> immutable, versioned data packages
+  VFS (OpenDAL) -> local and optional S3/OSS mounts
+  data catalog  -> immutable, versioned Hugging Face packages
   biofusion     -> VCF/BCF/FASTA/FASTQ/BED/GTF/GFF/SAM/BAM/CRAM/BigWig/BigBed readers
 ```
 
@@ -78,7 +78,7 @@ Two mechanisms make the harness trustworthy for biomedical work:
 | --- | --- | --- |
 | Model orchestration | `agentik-sdk`, `agentik-types`, `agentik-proc`, `agentik-core`, `agentik-network`, `runtime` | Streaming LLM clients, tool schemas and calls, persistent memory, lifecycle, multi-agent topology, and a sync-to-async host. |
 | Analysis execution | `dag-core`, `data-engine`, `data-engine-tools`, `crates/node-bundles/*`, `workflow-editor` | Node traits, plugin registry, typed ports, scheduler, JSON-schema specs, agent tools, snapshots, and reusable workflow skills. |
-| Data infrastructure | `vfs`, `data-catalog`, `container-runtime`, `biofusion` | OpenDAL-backed VFS, versioned object-storage packages, Podman execution, immutable panel caches, and biological-format DataFusion readers. |
+| Data infrastructure | `vfs`, `data-catalog`, `container-runtime`, `biofusion` | OpenDAL-backed VFS, Hugging Face-hosted versioned packages, Podman execution, immutable panel caches, and biological-format DataFusion readers. |
 | Statistics and epidemiology | `statkit`, `epi`, `hypothesize`, `cmprsk`, `survey`, `mice`, `hierint` | Descriptive statistics and regression; causal inference and mediation; composable tests and p-value workflows; competing risks; survey designs; imputation; hierarchical interaction models. |
 | Machine learning and deep learning | `ml`, `dl`, `grf`, `grf-sys` | Preprocessing, feature engineering, clustering, supervised models, ensembles, anomaly detection, dimensionality reduction; Burn-based MLP, DeepSurv, DeepHit, RNN, Transformer, and autoencoder workflows; generalized random forests through the vendored C++ core. |
 | Statistical genetics | `ldsc`, `mr`, `lava`, `mrlap`, `lcv`, `cpassoc`, `magma`, `coloc`, `bkmr`, `evalue`, `genomic_sem`, `lcmm` | LD score regression, Mendelian randomization, local genetic correlation, colocalization, Bayesian kernel-machine regression, E-value analysis, Genomic SEM, latent-class mixed models, and related ports. |
@@ -166,7 +166,7 @@ Scientific API credentials must be present in the process environment. The repos
 - `PROTOCOLS_IO_ACCESS_TOKEN`
 - `EMBASE_API_KEY`, `EMBASE_INSTTOKEN`, and related Embase tokens
 - `UMLS_API_KEY`
-- OSS/S3 credentials for catalog and VFS backends
+- `HUGGING_FACE_TOKEN` or `HF_TOKEN` for the data catalog; S3/OSS credentials are needed only for optional non-catalog VFS backends
 
 By default, state is stored under `~/.autonomics`, downloaded files under `~/.autonomics/data`, and VFS mounts are read from `$AUTONOMICS_STATE_DIR/vfs.toml`. Use `AUTONOMICS_STATE_DIR`, `AUTONOMICS_DATA_DIR`, `AUTONOMICS_BIB_DB`, and `AUTONOMICS_WRITING_DB` to relocate state.
 

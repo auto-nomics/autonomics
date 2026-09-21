@@ -27,11 +27,9 @@ use agentik_sdk::model::Model;
 use agentik_sdk::types::{AgentEvent, ContentBlock};
 use arc_swap::ArcSwapOption;
 use container_runtime::ContainerExecutionInfra;
-use container_runtime::{PanelGcPolicy, WorkspaceGcPolicy, sweep_panels, sweep_workspace};
+use container_runtime::{WorkspaceGcPolicy, sweep_workspace};
 use dag_core::{BundleRegistry, DataBundle};
-use data_catalog::{
-    CatalogConfig, CatalogRuntime, CatalogServiceTrait, S3CatalogService, catalog_mount_definitions,
-};
+use data_catalog::{CatalogConfig, LocalCatalog, RemoteCatalog, default_panel_cache_root};
 use data_engine::dag::DagHistory;
 use data_engine::data_engine::DataEngine;
 use data_engine::runtime::{DataEngineClient, DataEngineManager};
@@ -41,9 +39,11 @@ use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use vfs::{
-    BackendDefinition, MountDefinition, MountedObjectStore, OpendalFileStorage, VfsManifest,
+    BackendConfig, BackendDefinition, MountDefinition, MountedObjectStore, OpendalFileStorage,
+    VfsManifest,
 };
 
+use crate::catalog_tools::CatalogState;
 use crate::config::{PromptCapabilities, RuntimeConfig};
 use crate::control::{AgentExecutionHistory, AgentStatus, DelegationSnapshot, DelegationStatus};
 use crate::error::{Error, Result};
@@ -54,17 +54,11 @@ use crate::memory_kms::KmsMemoryGrounding;
 /// (`AUTONOMICS_WORKSPACE_GC_INTERVAL_SECS`, `0` disables the loop).
 ///
 /// The sweeper never removes a directory a live run holds a lock on, a
-/// scratch owned by a live process younger than the GC age, user-declared
-/// workdirs, or panel entries beyond the configured byte budget
-/// (`AUTONOMICS_PANEL_CACHE_MAX_BYTES`, unset keeps panels forever).
+/// scratch owned by a live process younger than the GC age, or user-declared
+/// workdirs. The panel data cache is not managed here.
 fn spawn_container_gc(infra: &Arc<ContainerExecutionInfra>) {
     let config = infra.config.clone();
     let workspace_policy = WorkspaceGcPolicy {
-        min_age: container_runtime::workspace_gc_age(),
-        dry_run: false,
-    };
-    let panel_policy = PanelGcPolicy {
-        max_bytes: container_runtime::panel_cache_max_bytes(),
         min_age: container_runtime::workspace_gc_age(),
         dry_run: false,
     };
@@ -83,19 +77,6 @@ fn spawn_container_gc(infra: &Arc<ContainerExecutionInfra>) {
                 foreign = workspace.foreign_entries,
                 pending_cleared = workspace.pending_cleared,
                 "container workspace GC"
-            );
-            let panels = sweep_panels(&config.panel_cache_root, &panel_policy).await;
-            if !panels.errors.is_empty() {
-                tracing::warn!(errors = ?panels.errors, "panel cache GC errors");
-            }
-            tracing::info!(
-                entries = panels.entries,
-                bytes_total = panels.bytes_total,
-                removed = panels.removed,
-                bytes_freed = panels.bytes_freed,
-                in_use = panels.retained_in_use,
-                recent = panels.retained_recent,
-                "panel cache GC"
             );
             let Some(interval) = interval else {
                 break;
@@ -154,9 +135,9 @@ pub struct SharedInfra {
     pub file_storage: Arc<OpendalFileStorage>,
     /// Unix-style virtual filesystem mounted under `vfs://`.
     pub vfs: Arc<MountedObjectStore>,
-    /// Refreshable searchable view over the object-storage catalog. `None`
-    /// when the catalog is absent or disabled.
-    pub catalog: Option<Arc<dyn CatalogServiceTrait>>,
+    /// Remote catalog access plus the local package cache. `None` when the
+    /// catalog is absent or disabled.
+    pub catalog: Option<Arc<CatalogState>>,
     /// Process-wide Podman connection and immutable panel cache shared by
     /// all DAG sessions.
     pub container_execution: Arc<ContainerExecutionInfra>,
@@ -597,37 +578,73 @@ async fn build_vfs_with_catalog(
 ) -> Result<(
     MountedObjectStore,
     dag_core::BundleRegistry,
-    Option<Arc<dyn CatalogServiceTrait>>,
+    Option<Arc<CatalogState>>,
 )> {
     let state = load_or_create_vfs_manifest(config)?;
     let mut manifest = state.manifest;
 
     let mut catalog_registry = dag_core::BundleRegistry::new();
-    let mut catalog_service = None;
+    let mut catalog = None;
     if let Some(catalog_source) = state.catalog_source {
         let catalog_config = CatalogConfig::from_vfs_toml(&format!(
             "[[mount]]\npath=\"/\"\nbackend=\"x\"\nsource=\"/\"\n\n{catalog_source}"
-        ))?;
+        ))
+        .map_err(|error| Error::Other(error.to_string()))?;
         if catalog_config.enabled {
-            let service: Arc<dyn CatalogServiceTrait> = Arc::new(
-                S3CatalogService::new(&manifest, &catalog_config)
-                    .await
-                    .map_err(Error::Other)?,
-            );
-            let snapshot = service.snapshot().await;
-            let mut mounts = catalog_mount_definitions(&manifest, &snapshot.index, &catalog_config)
-                .map_err(Error::Other)?;
-            manifest.mount.append(&mut mounts);
-            catalog_registry = CatalogRuntime {
-                index: snapshot.index,
+            const CACHE_BACKEND_ID: &str = "autonomics-catalog-cache";
+            if manifest
+                .backend
+                .iter()
+                .any(|backend| backend.id == CACHE_BACKEND_ID)
+            {
+                return Err(Error::Other(format!(
+                    "backend `{CACHE_BACKEND_ID}` is reserved for the local catalog cache"
+                )));
             }
-            .bundle_registry();
-            catalog_service = Some(service);
+            let repository = catalog_config
+                .repository
+                .as_deref()
+                .ok_or_else(|| Error::Other("catalog repository is required".to_string()))?;
+            let remote = RemoteCatalog::hf(
+                repository,
+                catalog_config.revision.clone(),
+                data_catalog::hf::resolve_hf_token(None),
+            )
+            .map_err(|error| Error::Other(error.to_string()))?;
+            let local = LocalCatalog::open(default_panel_cache_root())
+                .map_err(|error| Error::Other(error.to_string()))?;
+            let mounts = local
+                .mount_definitions(CACHE_BACKEND_ID, catalog_config.agent_visible)
+                .map_err(|error| Error::Other(error.to_string()))?;
+            manifest.backend.push(BackendDefinition {
+                id: CACHE_BACKEND_ID.into(),
+                config: BackendConfig::local(local.root().to_string_lossy().into_owned()),
+            });
+            for mount in mounts {
+                if manifest
+                    .mount
+                    .iter()
+                    .any(|existing| existing.path == mount.path)
+                {
+                    return Err(Error::Other(format!(
+                        "catalog mount path `{}` collides with a static VFS mount",
+                        mount.path
+                    )));
+                }
+                manifest.mount.push(mount);
+            }
+            catalog_registry = local
+                .bundle_registry()
+                .map_err(|error| Error::Other(error.to_string()))?;
+            catalog = Some(Arc::new(CatalogState {
+                local: Arc::new(local),
+                remote: Arc::new(remote),
+            }));
         }
     }
     MountedObjectStore::from_manifest(&manifest)
         .map_err(|e| Error::Other(e.to_string()))
-        .map(|store| (store, catalog_registry, catalog_service))
+        .map(|store| (store, catalog_registry, catalog))
 }
 
 struct VfsManifestState {
@@ -735,7 +752,7 @@ struct DataBundleManifest {
 /// Load user-provided bundle registry entries from `state_dir/data_bundles.toml`.
 ///
 /// A missing file yields an empty registry. Entries returned here override
-/// object-storage catalog entries, while built-in entries are layered beneath
+/// Hugging Face catalog entries, while built-in entries are layered beneath
 /// both when the engine is constructed.
 fn build_bundle_registry(config: &RuntimeConfig) -> Result<BundleRegistry> {
     let manifest_path = config.state_dir.join("data_bundles.toml");
@@ -4183,7 +4200,6 @@ mod vfs_tests {
     async fn build_vfs_mounts_catalog_entries_and_preserves_catalog_config() {
         let state = tempfile::tempdir().unwrap();
         let data = tempfile::tempdir().unwrap();
-        let warehouse = tempfile::tempdir().unwrap();
         let scratch = tempfile::tempdir().unwrap();
         let input = scratch.path().join("input");
         std::fs::create_dir_all(&input).unwrap();
@@ -4201,46 +4217,72 @@ mod vfs_tests {
         )
         .unwrap();
 
-        let vfs_manifest = vfs::VfsManifest {
-            backend: vec![vfs::BackendDefinition {
-                id: "warehouse".into(),
-                config: vfs::BackendConfig::local(warehouse.path().to_string_lossy().to_string()),
-            }],
-            mount: Vec::new(),
-        };
-        let catalog_config = data_catalog::CatalogConfig {
-            backend: "warehouse".into(),
-            ..Default::default()
-        };
-        let operator =
-            data_catalog::storage::operator_for_backend(&vfs_manifest, "warehouse").unwrap();
-        data_catalog::publish_package(package, &catalog_config, &operator)
-            .await
-            .unwrap();
-
         let mut config = RuntimeConfig::default();
         config.data_dir = data.path().to_path_buf();
         config.state_dir = state.path().to_path_buf();
         std::fs::write(
             config.state_dir.join("vfs.toml"),
-            format!(
-                r#"
-[[backend]]
-id = "warehouse"
-type = "local"
-root = "{root}"
-
+            r#"
 [catalog]
-backend = "warehouse"
+repository = "owner/catalog-index"
 "#,
-                root = warehouse.path().display()
-            ),
+        )
+        .unwrap();
+        struct PanelCacheRootEnv;
+        impl Drop for PanelCacheRootEnv {
+            fn drop(&mut self) {
+                // SAFETY: no other host test reads this variable concurrently.
+                unsafe { std::env::remove_var("AUTONOMICS_PANEL_CACHE_ROOT") };
+            }
+        }
+        let panel_root = tempfile::tempdir().unwrap();
+        let _panel_env = PanelCacheRootEnv;
+        // SAFETY: the host resolves this variable in build_vfs_with_catalog below.
+        unsafe { std::env::set_var("AUTONOMICS_PANEL_CACHE_ROOT", panel_root.path()) };
+        let manifest: data_catalog::DatasetManifest =
+            serde_json::from_slice(&std::fs::read(package.join("manifest.json")).unwrap()).unwrap();
+        let entry = data_catalog::CatalogEntry {
+            id: "catalog_panel".into(),
+            repo: "owner/catalog-panel".into(),
+            version: manifest.version.clone(),
+            kind: manifest.kind.clone(),
+            digest: manifest.digest.clone().expect("test package has digest"),
+            current: true,
+            created_unix_seconds: 1,
+        };
+        let cache_index = data_catalog::CatalogIndex {
+            repositories: vec![entry.repo.clone()],
+            entries: vec![entry.clone()],
+            ..data_catalog::CatalogIndex::default()
+        };
+        let entry_root = panel_root
+            .path()
+            .join(format!("catalog_panel@{}", entry.digest));
+        std::fs::create_dir_all(&entry_root).unwrap();
+        std::fs::copy(
+            package.join("payload").join("data.txt"),
+            entry_root.join("data.txt"),
+        )
+        .unwrap();
+        std::fs::write(
+            entry_root.join("manifest.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            entry_root.join(".autonomics-panel-complete"),
+            format!("digest={}\n", entry.digest),
+        )
+        .unwrap();
+        std::fs::write(
+            panel_root.path().join("index.json"),
+            serde_json::to_vec(&cache_index).unwrap(),
         )
         .unwrap();
 
         let (store, bundles, catalog_service) = build_vfs_with_catalog(&config).await.unwrap();
-        let catalog_service = catalog_service.expect("enabled catalog service");
-        assert_eq!(catalog_service.snapshot().await.records.len(), 1);
+        let catalog_state = catalog_service.expect("enabled catalog service");
+        assert_eq!(catalog_state.local.index().unwrap().entries.len(), 1);
         let storage = Arc::new(vfs::OpendalFileStorage::with_mounts(
             &config.data_dir,
             Arc::new(store),

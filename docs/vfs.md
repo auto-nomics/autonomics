@@ -85,9 +85,9 @@ Credentials remain runtime configuration in `vfs.toml`.
 
 ## Unified catalog mounts
 
-A `[catalog]` section in `vfs.toml` selects one configured backend as the
-authoritative data-catalog source. At startup the runtime reads `index.json`
-and adds these read-only mounts:
+A `[catalog]` section in `vfs.toml` selects a Hugging Face registry repository.
+The runtime resolves packages into the shared panel cache and adds these
+read-only local mounts:
 
 ```text
 /catalog                                  catalog index and version manifests

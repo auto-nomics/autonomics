@@ -57,9 +57,6 @@ pub const KEEP_WORKSPACE_ENV: &str = "AUTONOMICS_KEEP_WORKSPACE";
 pub const WORKSPACE_GC_AGE_ENV: &str = "AUTONOMICS_WORKSPACE_GC_AGE_SECS";
 /// Delay between background sweeps (seconds); `0` disables the periodic task.
 pub const WORKSPACE_GC_INTERVAL_ENV: &str = "AUTONOMICS_WORKSPACE_GC_INTERVAL_SECS";
-/// Total panel cache budget in bytes; `0` (default) disables budget-driven
-/// panel removal.
-pub const PANEL_CACHE_MAX_BYTES_ENV: &str = "AUTONOMICS_PANEL_CACHE_MAX_BYTES";
 
 /// Whether successful runs must keep their scratch directory.
 pub fn keep_workspace_enabled() -> bool {
@@ -83,11 +80,6 @@ pub fn workspace_gc_interval() -> Option<Duration> {
     (secs.as_secs() > 0).then_some(secs)
 }
 
-/// Panel cache byte budget; `0` disables budget-driven removal.
-pub fn panel_cache_max_bytes() -> u64 {
-    parse_env_bytes(std::env::var_os(PANEL_CACHE_MAX_BYTES_ENV).as_deref())
-}
-
 pub(crate) fn parse_env_flag(raw: Option<&OsStr>) -> bool {
     raw.is_some_and(|value| {
         matches!(
@@ -102,11 +94,6 @@ pub(crate) fn parse_env_secs(raw: Option<&OsStr>, default: u64) -> Duration {
         .filter(|secs| *secs > 0)
         .map(Duration::from_secs)
         .unwrap_or_else(|| Duration::from_secs(default))
-}
-
-pub(crate) fn parse_env_bytes(raw: Option<&OsStr>) -> u64 {
-    raw.and_then(|value| value.to_string_lossy().trim().parse::<u64>().ok())
-        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -156,12 +143,5 @@ mod tests {
             Duration::from_secs(60)
         );
         assert_eq!(parse_env_secs(None, 60), Duration::from_secs(60));
-
-        assert_eq!(
-            parse_env_bytes(Some(OsStr::new("107374182400"))),
-            107374182400
-        );
-        assert_eq!(parse_env_bytes(Some(OsStr::new("junk"))), 0);
-        assert_eq!(parse_env_bytes(None), 0);
     }
 }
