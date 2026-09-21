@@ -31,7 +31,7 @@ use container_runtime::{
 };
 
 pub const CONTAINER_COMMAND_KIND: &str = "container_command";
-const FAILURE_CAPTURE_PREVIEW_CHARS: usize = 400;
+const FAILURE_CAPTURE_PREVIEW_CHARS: usize = 1000;
 const FAILURE_OUTPUT_PREVIEW_BYTES: u64 = 8 * 1024;
 
 pub(crate) fn decompress_gzip_inputs(count: usize) -> String {
@@ -148,6 +148,37 @@ fn capture_declared_output_logs(
         }
     }
     logs
+}
+
+fn capture_input_manifest(staged_inputs: &[NodeInput]) -> Vec<(String, String)> {
+    staged_inputs
+        .iter()
+        .filter_map(|input| {
+            let path = match &input.data {
+                NodeValue::File(f) => PathBuf::from(&f.path),
+                NodeValue::Data(d) => PathBuf::from(&d.vpath),
+                NodeValue::FileSet(files) if let Some(first) = files.first() => {
+                    PathBuf::from(&first.path)
+                }
+                _ => return None,
+            };
+            let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            Some((path.to_string_lossy().into_owned(), bytes.to_string()))
+        })
+        .collect()
+}
+
+fn write_failure_logs(workspace_path: &Path, stdout: &str, stderr: &str) {
+    let log_dir = workspace_path.join(".autonomics").join("failure-logs");
+    if std::fs::create_dir_all(&log_dir).is_err() {
+        return;
+    }
+    if !stdout.is_empty() {
+        let _ = std::fs::write(log_dir.join("stdout.log"), stdout);
+    }
+    if !stderr.is_empty() {
+        let _ = std::fs::write(log_dir.join("stderr.log"), stderr);
+    }
 }
 
 fn read_text_tail(path: &Path, max_bytes: u64) -> Option<String> {
@@ -1010,12 +1041,17 @@ impl DagNode for ContainerCommandNode {
                         exit_code,
                         stderr,
                         stdout,
-                    } => ContainerCommandError::ExitStatus {
-                        exit_code,
-                        stderr,
-                        stdout,
-                        output_logs: capture_declared_output_logs(&resolved_outputs),
-                    },
+                    } => {
+                        write_failure_logs(&workspace_path, &stdout, &stderr);
+                        let mut logs = capture_declared_output_logs(&resolved_outputs);
+                        logs.extend(capture_input_manifest(&staged_inputs));
+                        ContainerCommandError::ExitStatus {
+                            exit_code,
+                            stderr,
+                            stdout,
+                            output_logs: logs,
+                        }
+                    }
                     error => ContainerCommandError::Runtime(error),
                 };
                 reporter.error(error.diagnostic_message());

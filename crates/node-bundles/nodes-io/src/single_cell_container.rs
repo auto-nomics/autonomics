@@ -256,7 +256,8 @@ impl NodeFactory for SingleCellPreprocessorContainerNodeFactory {
         metadata. The default inspect operation reads only the matrix header, \
         validates companion-table alignment, and emits a JSON report plus a \
         metadata-only H5AD. The ingest operation loads expression values in a \
-        pinned Scanpy image and emits a full H5AD. The network is disabled and \
+        pinned Scanpy image and emits a full H5AD. Both operations validate \
+        metadata-table alignment with barcodes. The network is disabled and \
         the root filesystem is read-only."
     }
 

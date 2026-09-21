@@ -170,7 +170,7 @@ impl<E: NodeError> From<E> for DagError {
 /// cause chains). Stuffing those verbatim into a [`super::runtime::NodeReport`]
 /// bloats the run result the agent has to read. We keep a generous head (so
 /// the actionable cause stays visible) and drop the tail, marking the cut.
-const ERROR_MESSAGE_MAX_CHARS: usize = 1000;
+const ERROR_MESSAGE_MAX_CHARS: usize = 2000;
 
 /// Truncate `msg` to [`ERROR_MESSAGE_MAX_CHARS`] characters, appending a
 /// marker when content was dropped so the reader knows the message is partial.
