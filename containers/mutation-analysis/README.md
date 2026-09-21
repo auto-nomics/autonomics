@@ -4,14 +4,14 @@ This image packages the Bioconductor official runtime with `maftools` for
 mutation-analysis operations. Mutation and clinical tables remain outside the
 image; the Rust wrapper stages them through the existing container contract.
 
-Published immutable ACR image digest:
+Published immutable GHCR image digest:
 
 ```text
 sha256:6f33327237fb5b5cb01b65b194244a742d791a0466844a6f5a9e18af2f99158a
 ```
 
 The wrapper combines this digest with
-`$ACR_ENDPOINT/autonomics/mutation-analysis`.
+`$AUTONOMICS_IMAGE_PREFIX/mutation-analysis`.
 
 ## Operations
 
@@ -51,15 +51,13 @@ Set `BUILD_IMAGE=0` to reuse the existing
 ## Publish and verify
 
 ```bash
-ACR_ENDPOINT=${ACR_ENDPOINT:-crpi-isjkczwpadlvr9i3.cn-hongkong.personal.cr.aliyuncs.com}
-ACR_IMAGE="$ACR_ENDPOINT/autonomics/mutation-analysis:0.1.0"
-podman tag localhost/atc/mutation-analysis:0.1.0 "$ACR_IMAGE"
-podman push "$ACR_IMAGE"
-# Aliyun can normalize the pushed manifest, so inspect the remote tag rather
-# than relying on the pre-push local image digest.
-REMOTE_DIGEST=$(skopeo inspect "docker://$ACR_IMAGE" | jq -r .Digest)
+AUTONOMICS_IMAGE_PREFIX=${AUTONOMICS_IMAGE_PREFIX:-ghcr.io/auto-nomics/autonomics}
+GHCR_IMAGE="$AUTONOMICS_IMAGE_PREFIX/mutation-analysis:0.1.0"
+podman tag localhost/atc/mutation-analysis:0.1.0 "$GHCR_IMAGE"
+podman push "$GHCR_IMAGE"
+REMOTE_DIGEST=$(skopeo inspect "docker://$GHCR_IMAGE" | jq -r .Digest)
 printf 'published digest: %s\n' "$REMOTE_DIGEST"
-podman pull "$ACR_ENDPOINT/autonomics/mutation-analysis@$REMOTE_DIGEST"
+podman pull "$GHCR_IMAGE@$REMOTE_DIGEST"
 ```
 
 Always publish the digest returned by the remote tag after registry

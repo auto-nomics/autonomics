@@ -16,7 +16,7 @@ use serde::Deserialize;
 use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
 };
-use crate::image_registry::acr_image;
+use crate::image_registry::registry_image;
 use container_runtime::{PanelCache, PodmanConnection, PullPolicy};
 
 pub const HYPRCOLOC_CONTAINER_KIND: &str = "hyprcoloc_container";
@@ -413,7 +413,7 @@ pub fn container_spec(spec: &HyPrColocContainerSpec) -> Result<ContainerCommandS
         .replace("__OPTIONAL_ARGS__", &optional_args);
 
     Ok(ContainerCommandSpec {
-        image: acr_image(
+        image: registry_image(
             HYPRCOLOC_ORIGINAL_IMAGE_REPOSITORY,
             HYPRCOLOC_ORIGINAL_IMAGE_DIGEST,
         )?,
@@ -559,7 +559,7 @@ mod tests {
         let container = container_spec(&spec()).unwrap();
         assert_eq!(
             container.image,
-            acr_image(
+            registry_image(
                 HYPRCOLOC_ORIGINAL_IMAGE_REPOSITORY,
                 HYPRCOLOC_ORIGINAL_IMAGE_DIGEST
             )

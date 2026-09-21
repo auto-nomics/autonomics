@@ -22,7 +22,7 @@ use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
     ContainerPanelBundleSpec,
 };
-use crate::image_registry::acr_image;
+use crate::image_registry::registry_image;
 use container_runtime::{PanelCache, PodmanConnection, PullPolicy};
 
 pub const SMR_HEIDI_CONTAINER_KIND: &str = "smr_heidi_container";
@@ -340,7 +340,7 @@ pub fn container_spec(spec: &SmrHeidiContainerSpec) -> Result<ContainerCommandSp
     validate(spec)?;
     let eqtl_panel_id = spec.eqtl_source.panel_id();
     Ok(ContainerCommandSpec {
-        image: acr_image(SMR_ORIGINAL_IMAGE_REPOSITORY, SMR_ORIGINAL_IMAGE_DIGEST)?,
+        image: registry_image(SMR_ORIGINAL_IMAGE_REPOSITORY, SMR_ORIGINAL_IMAGE_DIGEST)?,
         command: vec!["sh".into(), "-c".into()],
         script: Some(build_script(spec)),
         files: Default::default(),
@@ -511,7 +511,7 @@ mod tests {
         let container = container_spec(&spec()).unwrap();
         assert_eq!(
             container.image,
-            acr_image(SMR_ORIGINAL_IMAGE_REPOSITORY, SMR_ORIGINAL_IMAGE_DIGEST).unwrap()
+            registry_image(SMR_ORIGINAL_IMAGE_REPOSITORY, SMR_ORIGINAL_IMAGE_DIGEST).unwrap()
         );
         assert_eq!(container.pull_policy, PullPolicy::Missing);
         assert_eq!(container.network, "isolated");

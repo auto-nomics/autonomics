@@ -17,19 +17,19 @@ pinned medical-imaging stack. It is used by every radiomics container node in
 - scikit-image: `0.22.0`
 - trimesh: `4.6.13`
 
-Published immutable ACR image digest:
+Published immutable GHCR image digest:
 
 ```text
 sha256:bccbe15b2ec8d079e1bf869c4f06bfe4143642015394453c584dc981e5403fbe
 ```
 
-The wrapper combines this digest with `$ACR_ENDPOINT/autonomics/pyradiomics`.
+The wrapper combines this digest with `$AUTONOMICS_IMAGE_PREFIX/pyradiomics`.
 Rebuild, retag, republish, and update both this file and
 `PYRADIOMICS_IMAGE_DIGEST` whenever any dependency changes.
 
-The local Podman build and the published ACR manifest can have different
+The local Podman build and the published GHCR manifest can have different
 digests after registry normalization. Always pin the digest returned by the
-published ACR tag, not the pre-push local digest.
+published GHCR tag, not the pre-push local digest.
 
 ## Commands
 
@@ -71,12 +71,12 @@ AUTONOMICS_IBSI_DIR=/mnt/data/ibsi_dataset \
 containers/pyradiomics/test_radiomics_phasea.sh
 ```
 
-Publish the build to the configured Aliyun ACR registry:
+Publish the build to the configured GitHub Container Registry GHCR registry:
 
 ```bash
-ACR_IMAGE="$ACR_ENDPOINT/autonomics/pyradiomics:3.1.0-r2"
-podman tag localhost/atc/pyradiomics:3.1.0-r2 "$ACR_IMAGE"
-podman push "$ACR_IMAGE"
+GHCR_IMAGE="$AUTONOMICS_IMAGE_PREFIX/pyradiomics:3.1.0-r2"
+podman tag localhost/atc/pyradiomics:3.1.0-r2 "$GHCR_IMAGE"
+podman push "$GHCR_IMAGE"
 ```
 
 `test_radiomics_nifti.sh` performs geometry validation and a shape/first-order

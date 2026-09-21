@@ -466,8 +466,9 @@ async fn real_catalog_backed_official_mtag_runs_in_podman() {
     // SAFETY: ignored E2E tests are run one at a time by the MTAG test script.
     unsafe {
         std::env::set_var(
-            nodes_io::image_registry::ACR_ENDPOINT_ENV,
-            std::env::var("AUTONOMICS_MTAG_IMAGE_ENDPOINT").unwrap_or_else(|_| "localhost".into()),
+            nodes_io::image_registry::IMAGE_PREFIX_ENV,
+            std::env::var("AUTONOMICS_MTAG_IMAGE_PREFIX")
+                .unwrap_or_else(|_| "localhost/autonomics".into()),
         );
     }
     let mtag = registry
@@ -618,8 +619,9 @@ async fn real_catalog_backed_ldsc_rg_tolerates_incompatible_allele_pairs() {
     // SAFETY: ignored E2E tests are run one at a time by the LDSC test script.
     unsafe {
         std::env::set_var(
-            nodes_io::image_registry::ACR_ENDPOINT_ENV,
-            std::env::var("AUTONOMICS_LDSC_IMAGE_ENDPOINT").unwrap_or_else(|_| "localhost".into()),
+            nodes_io::image_registry::IMAGE_PREFIX_ENV,
+            std::env::var("AUTONOMICS_LDSC_IMAGE_PREFIX")
+                .unwrap_or_else(|_| "localhost/autonomics".into()),
         );
     }
     let rg = registry
@@ -753,7 +755,7 @@ async fn catalog_test_fixture() -> CatalogTextFixture {
 }
 
 #[tokio::test]
-#[ignore = "requires rootless Podman and the pinned ACR HDL image"]
+#[ignore = "requires rootless Podman and the pinned GHCR HDL image"]
 async fn real_official_hdl_l_runs_in_podman_with_local_panel() {
     let scratch = tempfile::tempdir().unwrap();
     let fixture_root = scratch.path().join("official-fixture");
@@ -805,7 +807,7 @@ write.table(gwas2, "/work/gwas2.tsv", sep = "\t", quote = FALSE, row.names = FAL
     let podman_program =
         std::env::var("AUTONOMICS_PODMAN_PROGRAM").unwrap_or_else(|_| "podman".into());
     let image = std::env::var("AUTONOMICS_HDL_IMAGE").unwrap_or_else(|_| {
-        nodes_io::image_registry::acr_image(
+        nodes_io::image_registry::registry_image(
             HDL_ORIGINAL_IMAGE_REPOSITORY,
             HDL_ORIGINAL_IMAGE_DIGEST,
         )
@@ -1313,7 +1315,7 @@ async fn real_catalog_backed_official_hdl_l_scan_runs_in_podman_with_published_p
 }
 
 #[tokio::test]
-#[ignore = "requires the Garage LAVA tutorial panel, rootless Podman, and the pinned ACR LAVA image"]
+#[ignore = "requires the Garage LAVA tutorial panel, rootless Podman, and the pinned GHCR LAVA image"]
 async fn real_catalog_backed_official_lava_scan_runs_in_podman() {
     let fixture = catalog_test_fixture().await;
     assert!(fixture.bundles.get(LAVA_TUTORIAL_REF_PANEL).is_some());
@@ -1440,7 +1442,7 @@ async fn real_catalog_backed_official_lava_scan_runs_in_podman() {
 }
 
 #[tokio::test]
-#[ignore = "requires the official gsa-mixer fixtures, rootless Podman, and the ACR MiXeR image"]
+#[ignore = "requires the official gsa-mixer fixtures, rootless Podman, and the GHCR MiXeR image"]
 async fn real_official_mixer_fit1_and_fit2_run_in_podman_and_match_baselines() {
     let source = std::env::var_os("AUTONOMICS_MIXER_IT_SOURCE")
         .map(PathBuf::from)

@@ -18,13 +18,13 @@ use serde::Deserialize;
 use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
 };
-use crate::image_registry::acr_image;
+use crate::image_registry::registry_image;
 use container_runtime::{PanelCache, PodmanConnection, PullPolicy};
 
 pub const WGCNA_CONTAINER_KIND: &str = "wgcna_container";
 pub const WGCNA_IMAGE_REPOSITORY: &str = "bulk-rnaseq";
 pub const WGCNA_IMAGE_DIGEST: &str =
-    "sha256:fc0e90c2883a799db1e2c8934589ab7addd44a6edd1769d50f9d2e668925a66e";
+    "sha256:c63fb113760b97bad1b1761d1daf4ad3241aa32e054ab20dd3a6bced4a552a6d";
 
 const DEFAULT_ARTIFACT_PREFIX: &str = "/artifacts/wgcna_container";
 const DEFAULT_TIMEOUT_SECS: u64 = 7200;
@@ -199,7 +199,7 @@ pub fn container_spec(spec: &WgcnaContainerSpec) -> Result<ContainerCommandSpec,
         ),
     ]);
     Ok(ContainerCommandSpec {
-        image: acr_image(WGCNA_IMAGE_REPOSITORY, WGCNA_IMAGE_DIGEST)?,
+        image: registry_image(WGCNA_IMAGE_REPOSITORY, WGCNA_IMAGE_DIGEST)?,
         command: vec![
             "Rscript".to_string(),
             "--vanilla".to_string(),
@@ -329,7 +329,7 @@ mod tests {
         let container = container_spec(&spec()).unwrap();
         assert_eq!(
             container.image,
-            acr_image(WGCNA_IMAGE_REPOSITORY, WGCNA_IMAGE_DIGEST).unwrap()
+            registry_image(WGCNA_IMAGE_REPOSITORY, WGCNA_IMAGE_DIGEST).unwrap()
         );
         assert_eq!(container.command[2], "/opt/autonomics/wgcna_runner.R");
         assert!(container.read_only_rootfs);

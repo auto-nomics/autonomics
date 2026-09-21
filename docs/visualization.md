@@ -54,6 +54,6 @@ podman build \
 ```
 
 Run `containers/visualization/test_visualization.sh` for the package-version and
-PNG smoke baseline. The node binds the published immutable ACR manifest
+PNG smoke baseline. The node binds the published immutable GHCR manifest
 `autonomics/visualization@sha256:ee9592b77bc5ea0cebfafafbe39550c377204019f451d7a37e13e4ce2e884f15`;
-`ACR_ENDPOINT` may override the registry host.
+`AUTONOMICS_IMAGE_PREFIX` may override the registry namespace.

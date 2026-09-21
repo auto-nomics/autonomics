@@ -28,6 +28,13 @@ use crate::types::{
 const CLEANUP_TIMEOUT_SECS: u64 = 30;
 const HOST_CWD: &str = "/";
 
+/// Budget for `podman create`, which also performs the image pull when the
+/// image is absent locally. It is deliberately decoupled from
+/// [`ContainerRunRequest::timeout_secs`]: a first pull on a fresh host can take
+/// far longer than a node's execution budget, especially for multi-GB images.
+const DEFAULT_PULL_TIMEOUT_SECS: u64 = 3600;
+const PULL_TIMEOUT_ENV: &str = "AUTONOMICS_PODMAN_PULL_TIMEOUT_SECS";
+
 #[derive(Debug, Clone)]
 pub struct PodmanConfig {
     pub program: String,
@@ -184,8 +191,9 @@ async fn create_container(
     request: &ContainerRunRequest,
     args: Vec<String>,
 ) -> Result<(), ContainerRuntimeError> {
+    let timeout_secs = pull_timeout_secs();
     let created = tokio::time::timeout(
-        Duration::from_secs(request.timeout_secs),
+        Duration::from_secs(timeout_secs),
         async_podman_command(program)
             .arg("create")
             .args(args)
@@ -205,12 +213,10 @@ async fn create_container(
         Err(_) => {
             let cleanup = remove_container(program, &request.name).await;
             return Err(match cleanup {
-                Ok(()) => ContainerRuntimeError::Timeout {
-                    timeout_secs: request.timeout_secs,
-                },
+                Ok(()) => ContainerRuntimeError::Timeout { timeout_secs },
                 Err(error) => ContainerRuntimeError::Invalid(format!(
                     "Podman create timed out after {}s and container cleanup failed: {error}",
-                    request.timeout_secs
+                    timeout_secs
                 )),
             });
         }
@@ -470,6 +476,20 @@ fn podman_pull_policy(policy: PullPolicy) -> &'static str {
     }
 }
 
+/// Budget for `podman create`, which performs the initial image pull when the
+/// image is absent. Tunable through `AUTONOMICS_PODMAN_PULL_TIMEOUT_SECS`.
+fn pull_timeout_secs() -> u64 {
+    let value = std::env::var(PULL_TIMEOUT_ENV).ok();
+    pull_timeout_from(value.as_deref())
+}
+
+fn pull_timeout_from(value: Option<&str>) -> u64 {
+    value
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(DEFAULT_PULL_TIMEOUT_SECS)
+}
+
 fn user_value(request: &ContainerRunRequest) -> String {
     let (uid, gid) = request_user_ids(request);
     format!("{uid}:{gid}")
@@ -579,6 +599,28 @@ mod tests {
         assert!(podman_size("-1Gi").is_err());
         assert!(podman_size("1Xi").is_err());
         assert!(podman_size("Gi").is_err());
+    }
+
+    #[test]
+    fn pull_timeout_uses_default_for_unset_invalid_or_zero_values() {
+        assert_eq!(pull_timeout_from(None), DEFAULT_PULL_TIMEOUT_SECS);
+        assert_eq!(pull_timeout_from(Some("")), DEFAULT_PULL_TIMEOUT_SECS);
+        assert_eq!(pull_timeout_from(Some("0")), DEFAULT_PULL_TIMEOUT_SECS);
+        assert_eq!(
+            pull_timeout_from(Some("not-a-number")),
+            DEFAULT_PULL_TIMEOUT_SECS
+        );
+    }
+
+    #[test]
+    fn pull_timeout_accepts_explicit_override() {
+        assert_eq!(pull_timeout_from(Some("7200")), 7200);
+        assert_eq!(pull_timeout_from(Some(" 1800 ")), 1800);
+    }
+
+    #[test]
+    fn default_pull_timeout_is_generous_enough_for_multi_gigabyte_images() {
+        assert!(DEFAULT_PULL_TIMEOUT_SECS >= 3600);
     }
 
     #[test]

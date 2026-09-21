@@ -91,8 +91,8 @@ cluster configuration.
 - Make the primary entrypoint deterministic.
 - Include only files required at runtime.
 - Prefer a digest-pinned image reference once the workflow leaves local
-  development. Official tool wrappers pin their digest and resolve the ACR
-  registry host from `ACR_ENDPOINT`.
+  development. Official tool wrappers pin their digest and resolve the GHCR
+  registry namespace from `AUTONOMICS_IMAGE_PREFIX`.
 
 ### Build and validate
 
@@ -365,8 +365,9 @@ the official gsa-mixer `libbgmg` helper needed to query signed LD pairs. The
 `susieR::susie_rss()`, and emits TSV/RDS/log artifacts to VFS.
 
 The production wrapper pins the image repository and manifest digest, while
-the runtime resolves the ACR endpoint from `ACR_ENDPOINT`. This keeps the exact
-image immutable without embedding a deployment-specific registry host.
+the runtime resolves the registry prefix from `AUTONOMICS_IMAGE_PREFIX`. This
+keeps the exact image immutable without embedding a deployment-specific
+registry namespace.
 
 LAVA also has the official multiple-locus scan case:
 
@@ -451,7 +452,7 @@ crates/node-bundles/nodes-io/src/hdl_l_scan_container.rs
 ```
 
 The image installs official `HDL` 1.4.3 at commit `e6b055d`, is published as
-`$ACR_ENDPOINT/autonomics/hdl:1.4.3`, and is pinned by immutable manifest
+`$AUTONOMICS_IMAGE_PREFIX/hdl:1.4.3`, and is pinned by immutable manifest
 digest. The official Zenodo UKB EUR payload is normalized into
 one catalog package with `LD/*_LDSVD.rda`, `LD/HDLL_LOC_snps.RData`, and
 matching per-block BIM files. The wrapper takes two official-format GWAS
@@ -563,5 +564,5 @@ Files:
 The deterministic fixture has four donors, two cell types, 80 reference cells,
 and six pseudo-bulk samples with known neuron fractions from 0.70 through
 0.20. MuSiC recovers 0.709, 0.603, 0.500, 0.397, 0.296 and 0.196 when both
-cell sizes and markers are supplied. The image pins immutable ACR manifest
-digest `sha256:311e32ba2b0e0ce81715bc72f17342604086faeb7eb4964f706f83dcff53c971`.
+cell sizes and markers are supplied. The image pins immutable GHCR manifest
+digest `sha256:886b83135179a48fffe2009238eb7d45ec89d32713cc1a2370078583e3bbfeaf`.

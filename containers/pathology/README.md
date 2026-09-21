@@ -66,8 +66,8 @@ is needed; the production UNI checkpoint follows the staging flow above.
 ## Publish
 
 ```bash
-podman tag localhost/pathology:cpu <acr-endpoint>/autonomics/pathology:<tag>
-podman push <acr-endpoint>/autonomics/pathology:<tag>
+podman tag localhost/pathology:cpu ghcr.io/auto-nomics/autonomics/pathology:<tag>
+podman push ghcr.io/auto-nomics/autonomics/pathology:<tag>
 # then replace PATHOLOGY_IMAGE_DIGEST in pathology_container.rs with the
 # post-push manifest digest and update this section:
 #

@@ -11,7 +11,7 @@ use serde::Deserialize;
 use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec, decompress_gzip_inputs,
 };
-use crate::image_registry::acr_image;
+use crate::image_registry::registry_image;
 use crate::ldsc_h2_container::{LDSC_ORIGINAL_IMAGE_DIGEST, LDSC_ORIGINAL_IMAGE_REPOSITORY};
 use container_runtime::{PanelCache, PodmanConnection, PullPolicy};
 
@@ -382,7 +382,7 @@ pub fn container_spec(spec: &LdscMungeContainerSpec) -> Result<ContainerCommandS
     );
 
     Ok(ContainerCommandSpec {
-        image: acr_image(LDSC_ORIGINAL_IMAGE_REPOSITORY, LDSC_ORIGINAL_IMAGE_DIGEST)?,
+        image: registry_image(LDSC_ORIGINAL_IMAGE_REPOSITORY, LDSC_ORIGINAL_IMAGE_DIGEST)?,
         command: vec!["sh".into()],
         script: Some(script),
         files: Default::default(),
@@ -611,7 +611,7 @@ mod tests {
         let container = container_spec(&spec()).unwrap();
         assert_eq!(
             container.image,
-            acr_image(LDSC_ORIGINAL_IMAGE_REPOSITORY, LDSC_ORIGINAL_IMAGE_DIGEST).unwrap()
+            registry_image(LDSC_ORIGINAL_IMAGE_REPOSITORY, LDSC_ORIGINAL_IMAGE_DIGEST).unwrap()
         );
         assert!(container.panel_bundles.is_empty());
         assert_eq!(container.outputs.len(), 2);

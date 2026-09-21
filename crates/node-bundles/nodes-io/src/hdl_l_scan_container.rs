@@ -22,7 +22,7 @@ use crate::hdl_l_container::{
     HDL_ORIGINAL_IMAGE_DIGEST, HDL_ORIGINAL_IMAGE_REPOSITORY, HDL_UKB_EUR_PANEL,
     MissingSampleSizePolicy,
 };
-use crate::image_registry::acr_image;
+use crate::image_registry::registry_image;
 use container_runtime::{PanelCache, PodmanConnection, PullPolicy};
 
 pub const HDL_L_SCAN_CONTAINER_KIND: &str = "hdl_l_scan";
@@ -361,7 +361,7 @@ saveRDS(results, Sys.getenv("AUTONOMICS_OUTPUT1"))
 pub fn container_spec(spec: &HdlLScanContainerSpec) -> Result<ContainerCommandSpec, String> {
     validate(spec)?;
     Ok(ContainerCommandSpec {
-        image: acr_image(HDL_ORIGINAL_IMAGE_REPOSITORY, HDL_ORIGINAL_IMAGE_DIGEST)?,
+        image: registry_image(HDL_ORIGINAL_IMAGE_REPOSITORY, HDL_ORIGINAL_IMAGE_DIGEST)?,
         command: vec!["Rscript".into()],
         script: Some(build_script(spec)),
         files: Default::default(),
@@ -516,7 +516,7 @@ mod tests {
         let container = container_spec(&spec()).unwrap();
         assert_eq!(
             container.image,
-            acr_image(HDL_ORIGINAL_IMAGE_REPOSITORY, HDL_ORIGINAL_IMAGE_DIGEST).unwrap()
+            registry_image(HDL_ORIGINAL_IMAGE_REPOSITORY, HDL_ORIGINAL_IMAGE_DIGEST).unwrap()
         );
         assert_eq!(container.panel_bundles.len(), 1);
         assert_eq!(container.panel_bundles[0].panel_id, HDL_UKB_EUR_PANEL);

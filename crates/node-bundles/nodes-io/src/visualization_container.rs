@@ -19,7 +19,7 @@ use serde::Deserialize;
 use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
 };
-use crate::image_registry::acr_image;
+use crate::image_registry::registry_image;
 use container_runtime::{PanelCache, PodmanConnection, PullPolicy};
 
 pub const VISUALIZATION_CONTAINER_KIND: &str = "visualization_container";
@@ -619,7 +619,7 @@ pub fn container_spec(spec: &VisualizationContainerSpec) -> Result<ContainerComm
     ]);
 
     Ok(ContainerCommandSpec {
-        image: acr_image(VISUALIZATION_IMAGE_REPOSITORY, VISUALIZATION_IMAGE_DIGEST)?,
+        image: registry_image(VISUALIZATION_IMAGE_REPOSITORY, VISUALIZATION_IMAGE_DIGEST)?,
         command: vec!["Rscript".into(), "/opt/autonomics/render.R".into()],
         script: None,
         files: Default::default(),
@@ -734,7 +734,7 @@ mod tests {
 
         assert_eq!(
             container.image,
-            acr_image(VISUALIZATION_IMAGE_REPOSITORY, VISUALIZATION_IMAGE_DIGEST).unwrap()
+            registry_image(VISUALIZATION_IMAGE_REPOSITORY, VISUALIZATION_IMAGE_DIGEST).unwrap()
         );
         assert_eq!(container.network, "isolated");
         assert!(container.read_only_rootfs);

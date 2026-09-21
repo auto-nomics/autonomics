@@ -51,13 +51,13 @@ async fn read_text(ctx: &NodeCtx, path: &str) -> String {
 }
 
 #[tokio::test]
-#[ignore = "requires Podman and the pinned TimesFM ACR image"]
+#[ignore = "requires Podman and the pinned TimesFM GHCR image"]
 async fn real_official_timesfm_forecast_runs_in_podman() {
     unsafe {
         std::env::set_var(
-            nodes_io::image_registry::ACR_ENDPOINT_ENV,
-            std::env::var("AUTONOMICS_TIMESFM_IMAGE_ENDPOINT")
-                .unwrap_or_else(|_| nodes_io::image_registry::DEFAULT_ACR_ENDPOINT.into()),
+            nodes_io::image_registry::IMAGE_PREFIX_ENV,
+            std::env::var("AUTONOMICS_TIMESFM_IMAGE_PREFIX")
+                .unwrap_or_else(|_| nodes_io::image_registry::DEFAULT_IMAGE_PREFIX.into()),
         );
     }
 

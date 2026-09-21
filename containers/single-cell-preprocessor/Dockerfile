@@ -1,4 +1,4 @@
-FROM crpi-isjkczwpadlvr9i3.cn-hongkong.personal.cr.aliyuncs.com/autonomics/single-cell-preprocessor@sha256:7a7397f45775a4c4b6c4c220711db2b95dd37fdc40b7b7f06d181a220903e467
+FROM ghcr.io/auto-nomics/autonomics/single-cell-preprocessor@sha256:e61d857ebc3825e2aa7a698e9d46d8108d5980cafeb5ab783121f7a5b13d8b0b
 
 LABEL org.opencontainers.image.title="autonomics-single-cell-preprocessor" \
       org.opencontainers.image.description="Pinned scverse runtime for MatrixMarket and H5AD single-cell workflows" \

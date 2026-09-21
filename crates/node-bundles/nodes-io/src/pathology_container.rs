@@ -23,7 +23,7 @@ use dag_core::{DataBundle, dag::DagError, dag::graph::PortOutputs};
 use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
 };
-use crate::image_registry::acr_image;
+use crate::image_registry::registry_image;
 
 pub const PATHOLOGY_IMAGE_REPOSITORY: &str = "pathology";
 pub const PATHOLOGY_IMAGE_DIGEST: &str =
@@ -441,7 +441,7 @@ impl PathologyContainerNodeFactory {
 
 fn base_spec(command: &str, prefix: &str, timeout: u64) -> Result<ContainerCommandSpec, String> {
     Ok(ContainerCommandSpec {
-        image: acr_image(PATHOLOGY_IMAGE_REPOSITORY, PATHOLOGY_IMAGE_DIGEST)?,
+        image: registry_image(PATHOLOGY_IMAGE_REPOSITORY, PATHOLOGY_IMAGE_DIGEST)?,
         command: vec![
             "python".into(),
             "/opt/pathology/pathology_runner.py".into(),
@@ -897,7 +897,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             ingest.image,
-            acr_image(PATHOLOGY_IMAGE_REPOSITORY, PATHOLOGY_IMAGE_DIGEST).unwrap()
+            registry_image(PATHOLOGY_IMAGE_REPOSITORY, PATHOLOGY_IMAGE_DIGEST).unwrap()
         );
         assert_eq!(ingest.command[2], "wsi-ingest");
         assert_eq!(ingest.outputs.len(), 2);

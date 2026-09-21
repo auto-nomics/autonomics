@@ -9,8 +9,8 @@ command -v podman >/dev/null 2>&1 || {
   exit 1
 }
 
-ACR_ENDPOINT=${ACR_ENDPOINT:-crpi-isjkczwpadlvr9i3.cn-hongkong.personal.cr.aliyuncs.com}
-IMAGE_NAME=${IMAGE_NAME:-"$ACR_ENDPOINT/autonomics/music-deconvolution:1.0.0"}
+image_prefix=${AUTONOMICS_IMAGE_PREFIX:-ghcr.io/auto-nomics/autonomics}
+IMAGE_NAME=${IMAGE_NAME:-"$image_prefix/music-deconvolution:1.0.0"}
 LOCAL_TAG=${LOCAL_TAG:-"localhost/autonomics/music-deconvolution:1.0.0"}
 BUILD_FLAGS=${BUILD_FLAGS:---no-cache}
 

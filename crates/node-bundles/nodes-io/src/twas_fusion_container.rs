@@ -15,7 +15,7 @@ use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
     ContainerPanelBundleSpec,
 };
-use crate::image_registry::acr_image;
+use crate::image_registry::registry_image;
 use container_runtime::{PanelCache, PodmanConnection, PullPolicy};
 
 pub const TWAS_FUSION_CONTAINER_KIND: &str = "twas_fusion_container";
@@ -221,7 +221,7 @@ pub fn container_spec(spec: &TwasFusionContainerSpec) -> Result<ContainerCommand
     }
 
     Ok(ContainerCommandSpec {
-        image: acr_image(
+        image: registry_image(
             FUSION_ORIGINAL_IMAGE_REPOSITORY,
             FUSION_ORIGINAL_IMAGE_DIGEST,
         )?,
@@ -374,7 +374,7 @@ mod tests {
         let container = container_spec(&spec()).unwrap();
         assert_eq!(
             container.image,
-            acr_image(
+            registry_image(
                 FUSION_ORIGINAL_IMAGE_REPOSITORY,
                 FUSION_ORIGINAL_IMAGE_DIGEST
             )

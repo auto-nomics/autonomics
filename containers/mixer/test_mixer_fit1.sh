@@ -3,8 +3,8 @@ set -eu
 
 TOOL_ROOT=${TOOL_ROOT:-"$(dirname "$0")/gsa-mixer"}
 PODMAN=${PODMAN:-podman}
-ACR_ENDPOINT=${ACR_ENDPOINT:-crpi-isjkczwpadlvr9i3.cn-hongkong.personal.cr.aliyuncs.com}
-IMAGE=${IMAGE:-"$ACR_ENDPOINT/autonomics/mixer:2.2.1"}
+IMAGE_PREFIX=${AUTONOMICS_IMAGE_PREFIX:-ghcr.io/auto-nomics/autonomics}
+IMAGE=${IMAGE:-"$IMAGE_PREFIX/mixer:2.2.1"}
 EXPECTED_DIGEST=${MIXER_IMAGE_DIGEST:-sha256:3bd67cccf298bd3c9af3d2b013dd7dfacde9ad13d51bc78b2f7f1315f01bebb7}
 BUILD_IMAGE=${BUILD_IMAGE:-0}
 PUSH_IMAGE=${PUSH_IMAGE:-0}

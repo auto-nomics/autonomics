@@ -20,7 +20,7 @@ use serde::Deserialize;
 use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
 };
-use crate::image_registry::acr_image;
+use crate::image_registry::registry_image;
 use container_runtime::{PanelCache, PodmanConnection, PullPolicy};
 
 pub const COLOC_ABF_CONTAINER_KIND: &str = "coloc_abf_container";
@@ -349,7 +349,7 @@ pub fn container_spec(spec: &ColocAbfContainerSpec) -> Result<ContainerCommandSp
         .replace("__P12__", &format!("{}", spec.p12));
 
     Ok(ContainerCommandSpec {
-        image: acr_image(COLOC_ORIGINAL_IMAGE_REPOSITORY, COLOC_ORIGINAL_IMAGE_DIGEST)?,
+        image: registry_image(COLOC_ORIGINAL_IMAGE_REPOSITORY, COLOC_ORIGINAL_IMAGE_DIGEST)?,
         command: vec!["Rscript".into()],
         script: Some(r_code),
         files: Default::default(),
@@ -486,7 +486,7 @@ mod tests {
         let container = container_spec(&spec()).unwrap();
         assert_eq!(
             container.image,
-            acr_image(COLOC_ORIGINAL_IMAGE_REPOSITORY, COLOC_ORIGINAL_IMAGE_DIGEST).unwrap()
+            registry_image(COLOC_ORIGINAL_IMAGE_REPOSITORY, COLOC_ORIGINAL_IMAGE_DIGEST).unwrap()
         );
         assert!(container.panel_bundles.is_empty());
         assert!(container.panels.is_empty());

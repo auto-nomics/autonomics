@@ -20,7 +20,7 @@ use dag_core::value::{FileRef, PortType};
 use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
 };
-use crate::image_registry::acr_image;
+use crate::image_registry::registry_image;
 use container_runtime::{PanelCache, PodmanConnection, PullPolicy};
 
 pub const PATHWAY_GSEA_CONTAINER_KIND: &str = "pathway_gsea_container";
@@ -263,7 +263,7 @@ pub fn container_spec(spec: &PathwayGseaContainerSpec) -> Result<ContainerComman
         ("AUTONOMICS_EPS", spec.eps.to_string()),
     ];
     Ok(ContainerCommandSpec {
-        image: acr_image(PATHWAY_GSEA_IMAGE_REPOSITORY, PATHWAY_GSEA_IMAGE_DIGEST)?,
+        image: registry_image(PATHWAY_GSEA_IMAGE_REPOSITORY, PATHWAY_GSEA_IMAGE_DIGEST)?,
         command: vec!["Rscript".into()],
         script: Some(R_SCRIPT.into()),
         files: Default::default(),

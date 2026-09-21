@@ -140,11 +140,11 @@ read-only root filesystem.
 Published immutable image:
 
 ```text
-$ACR_ENDPOINT/autonomics/deseq2@sha256:8b2e2a78d87293e6cae6dbed2e283dff1dd8461a7f993cb347ca9810698b2b3e
+$AUTONOMICS_IMAGE_PREFIX/deseq2@sha256:8b2e2a78d87293e6cae6dbed2e283dff1dd8461a7f993cb347ca9810698b2b3e
 ```
 
-The tag `$ACR_ENDPOINT/autonomics/deseq2:1.50.2` resolves to this digest. The
-thin wrapper pins the digest and resolves the registry host from `ACR_ENDPOINT`,
+The tag `$AUTONOMICS_IMAGE_PREFIX/deseq2:1.50.2` resolves to this digest. The
+thin wrapper pins the digest and resolves the registry host from `GHCR_ENDPOINT`,
 matching the other official-tool container nodes.
 
 ## Data-Package Decision
@@ -208,8 +208,8 @@ For a localhost-image real Podman test, first materialize the published digest
 under the equivalently named local repository:
 
 ```sh
-podman pull "$ACR_ENDPOINT/autonomics/deseq2@sha256:8b2e2a78d87293e6cae6dbed2e283dff1dd8461a7f993cb347ca9810698b2b3e"
-podman tag "$ACR_ENDPOINT/autonomics/deseq2@sha256:8b2e2a78d87293e6cae6dbed2e283dff1dd8461a7f993cb347ca9810698b2b3e" \
+podman pull "$AUTONOMICS_IMAGE_PREFIX/deseq2@sha256:8b2e2a78d87293e6cae6dbed2e283dff1dd8461a7f993cb347ca9810698b2b3e"
+podman tag "$AUTONOMICS_IMAGE_PREFIX/deseq2@sha256:8b2e2a78d87293e6cae6dbed2e283dff1dd8461a7f993cb347ca9810698b2b3e" \
   localhost/autonomics/deseq2:1.50.2
 AUTONOMICS_DESEQ2_IMAGE_ENDPOINT=localhost \
   cargo test -p nodes-io real_official_deseq2_runs_in_podman_and_matches_baseline -- --ignored

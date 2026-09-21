@@ -16,13 +16,13 @@ use serde::Deserialize;
 use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
 };
-use crate::image_registry::acr_image;
+use crate::image_registry::registry_image;
 use container_runtime::{PanelCache, PodmanConnection, PullPolicy};
 
 pub const TIMESFM_FORECAST_CONTAINER_KIND: &str = "timesfm_forecast_container";
 pub const TIMESFM_ORIGINAL_IMAGE_REPOSITORY: &str = "timesfm";
 pub const TIMESFM_ORIGINAL_IMAGE_DIGEST: &str =
-    "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+    "sha256:9fa439cb6b84df08bf686e4e9e69993ec9223b2f713a6b205c2dce373ca33991";
 
 const DEFAULT_HORIZON: u16 = 12;
 const DEFAULT_MAX_CONTEXT: u32 = 1024;
@@ -134,7 +134,7 @@ pub fn validate(spec: &TimesfmForecastContainerSpec) -> Result<(), String> {
 pub fn container_spec(spec: &TimesfmForecastContainerSpec) -> Result<ContainerCommandSpec, String> {
     validate(spec)?;
     Ok(ContainerCommandSpec {
-        image: acr_image(
+        image: registry_image(
             TIMESFM_ORIGINAL_IMAGE_REPOSITORY,
             TIMESFM_ORIGINAL_IMAGE_DIGEST,
         )?,
@@ -265,7 +265,7 @@ mod tests {
 
         assert_eq!(
             container.image,
-            acr_image(
+            registry_image(
                 TIMESFM_ORIGINAL_IMAGE_REPOSITORY,
                 TIMESFM_ORIGINAL_IMAGE_DIGEST
             )

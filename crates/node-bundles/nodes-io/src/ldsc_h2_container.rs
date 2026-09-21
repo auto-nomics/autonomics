@@ -19,13 +19,13 @@ use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
     ContainerPanelBundleSpec, decompress_gzip_inputs,
 };
-use crate::image_registry::acr_image;
+use crate::image_registry::registry_image;
 use container_runtime::{PanelCache, PodmanConnection, PullPolicy};
 
 pub const LDSC_H2_CONTAINER_KIND: &str = "ldsc_h2_container";
 pub const LDSC_ORIGINAL_IMAGE_REPOSITORY: &str = "ldsc";
 pub const LDSC_ORIGINAL_IMAGE_DIGEST: &str =
-    "sha256:6ba8941a8f628dcdb8a77c1134b36e9c905495017f1f75616903e70cd32673fe";
+    "sha256:2dad70a9583f93db1dcc9a560b7d5b309af4a5151dfaf615f80d059a0925d78c";
 pub const LDSC_REF_LD_PANEL: &str = "ldsc.ref_ld.1000g_eur.basic";
 pub const LDSC_W_LD_PANEL: &str = "ldsc.w_ld.1000g_eur_hm3_no_mhc";
 
@@ -158,7 +158,7 @@ pub fn container_spec(spec: &LdscH2ContainerSpec) -> Result<ContainerCommandSpec
         decompress_gzip_inputs(1)
     );
     Ok(ContainerCommandSpec {
-        image: acr_image(LDSC_ORIGINAL_IMAGE_REPOSITORY, LDSC_ORIGINAL_IMAGE_DIGEST)?,
+        image: registry_image(LDSC_ORIGINAL_IMAGE_REPOSITORY, LDSC_ORIGINAL_IMAGE_DIGEST)?,
         command: vec!["sh".into()],
         script: Some(script),
         files: Default::default(),
@@ -330,7 +330,7 @@ mod tests {
         let container = container_spec(&spec).unwrap();
         assert_eq!(
             container.image,
-            acr_image(LDSC_ORIGINAL_IMAGE_REPOSITORY, LDSC_ORIGINAL_IMAGE_DIGEST).unwrap()
+            registry_image(LDSC_ORIGINAL_IMAGE_REPOSITORY, LDSC_ORIGINAL_IMAGE_DIGEST).unwrap()
         );
         assert_eq!(container.pull_policy, PullPolicy::Missing);
         assert_eq!(container.panel_bundles.len(), 2);

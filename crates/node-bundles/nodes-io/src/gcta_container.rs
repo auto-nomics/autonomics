@@ -19,7 +19,7 @@ use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
     ContainerPanelBundleSpec,
 };
-use crate::image_registry::acr_image;
+use crate::image_registry::registry_image;
 use container_runtime::{PanelCache, PodmanConnection, PullPolicy};
 
 pub const GCTA_COJO_SELECT_CONTAINER_KIND: &str = "gcta_cojo_select_container";
@@ -279,7 +279,7 @@ fn command_spec(
     panels: Vec<ContainerPanelBundleSpec>,
 ) -> Result<ContainerCommandSpec, String> {
     Ok(ContainerCommandSpec {
-        image: acr_image(GCTA_ORIGINAL_IMAGE_REPOSITORY, GCTA_ORIGINAL_IMAGE_DIGEST)?,
+        image: registry_image(GCTA_ORIGINAL_IMAGE_REPOSITORY, GCTA_ORIGINAL_IMAGE_DIGEST)?,
         command: vec!["sh".into(), "-c".into()],
         script: Some(script),
         files: Default::default(),
@@ -804,7 +804,7 @@ mod tests {
         let value = cojo_select_container_spec(&spec).unwrap();
         assert_eq!(
             value.image,
-            acr_image(GCTA_ORIGINAL_IMAGE_REPOSITORY, GCTA_ORIGINAL_IMAGE_DIGEST).unwrap()
+            registry_image(GCTA_ORIGINAL_IMAGE_REPOSITORY, GCTA_ORIGINAL_IMAGE_DIGEST).unwrap()
         );
         assert_eq!(value.panel_bundles.len(), 1);
         assert_eq!(value.outputs.len(), 4);

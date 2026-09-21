@@ -11,7 +11,7 @@ use serde::Deserialize;
 use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
 };
-use crate::image_registry::acr_image;
+use crate::image_registry::registry_image;
 use container_runtime::{PanelCache, PodmanConnection, PullPolicy};
 
 pub const MRPRESSO_CONTAINER_KIND: &str = "mrpresso_container";
@@ -194,7 +194,7 @@ pub fn container_spec(spec: &MrpressoContainerSpec) -> Result<ContainerCommandSp
     );
 
     Ok(ContainerCommandSpec {
-        image: acr_image(
+        image: registry_image(
             MRPRESSO_ORIGINAL_IMAGE_REPOSITORY,
             MRPRESSO_ORIGINAL_IMAGE_DIGEST,
         )?,
@@ -313,7 +313,7 @@ mod tests {
         let container = container_spec(&spec()).unwrap();
         assert_eq!(
             container.image,
-            acr_image(
+            registry_image(
                 MRPRESSO_ORIGINAL_IMAGE_REPOSITORY,
                 MRPRESSO_ORIGINAL_IMAGE_DIGEST
             )

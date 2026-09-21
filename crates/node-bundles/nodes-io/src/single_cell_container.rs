@@ -16,13 +16,13 @@ use serde::Deserialize;
 use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
 };
-use crate::image_registry::acr_image;
+use crate::image_registry::registry_image;
 use container_runtime::{PanelCache, PodmanConnection, PullPolicy};
 
 pub const SINGLE_CELL_PREPROCESSOR_CONTAINER_KIND: &str = "single_cell_preprocessor_container";
 pub const SINGLE_CELL_PREPROCESSOR_IMAGE_REPOSITORY: &str = "single-cell-preprocessor";
 pub const SINGLE_CELL_PREPROCESSOR_IMAGE_DIGEST: &str =
-    "sha256:53fd628049d4b115b8fb805edfaf45905d4f5a60f87e4fcd2cf6acf8b378e940";
+    "sha256:c34c26428d13804c2528bc734805c1ccfe909353604ac08da0ce9c68890e7e18";
 
 const DEFAULT_ARTIFACT_PREFIX: &str = "/artifacts/single_cell_preprocessor_container";
 const DEFAULT_TIMEOUT_SECS: u64 = 3600;
@@ -197,7 +197,7 @@ pub fn container_spec(
     ]);
 
     Ok(ContainerCommandSpec {
-        image: acr_image(
+        image: registry_image(
             SINGLE_CELL_PREPROCESSOR_IMAGE_REPOSITORY,
             SINGLE_CELL_PREPROCESSOR_IMAGE_DIGEST,
         )?,
@@ -321,7 +321,7 @@ mod tests {
         let container = container_spec(&spec()).unwrap();
         assert_eq!(
             container.image,
-            acr_image(
+            registry_image(
                 SINGLE_CELL_PREPROCESSOR_IMAGE_REPOSITORY,
                 SINGLE_CELL_PREPROCESSOR_IMAGE_DIGEST
             )

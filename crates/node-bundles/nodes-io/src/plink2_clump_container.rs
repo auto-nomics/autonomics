@@ -24,7 +24,7 @@ use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
     ContainerPanelBundleSpec,
 };
-use crate::image_registry::acr_image;
+use crate::image_registry::registry_image;
 use container_runtime::{PanelCache, PodmanConnection, PullPolicy};
 
 pub const PLINK2_CLUMP_CONTAINER_KIND: &str = "plink2_clump_container";
@@ -268,7 +268,7 @@ pub fn container_spec(spec: &Plink2ClumpContainerSpec) -> Result<ContainerComman
     validate(spec)?;
     let script = build_script(spec);
     Ok(ContainerCommandSpec {
-        image: acr_image(
+        image: registry_image(
             PLINK2_ORIGINAL_IMAGE_REPOSITORY,
             PLINK2_ORIGINAL_IMAGE_DIGEST,
         )?,
@@ -420,7 +420,7 @@ mod tests {
         let container = container_spec(&spec()).unwrap();
         assert_eq!(
             container.image,
-            acr_image(
+            registry_image(
                 PLINK2_ORIGINAL_IMAGE_REPOSITORY,
                 PLINK2_ORIGINAL_IMAGE_DIGEST
             )

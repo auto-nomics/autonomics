@@ -180,7 +180,7 @@ async fn stages_five_inputs_and_publishes_five_outputs() {
     let request = runtime.requests.lock().unwrap()[0].clone();
     assert_eq!(
         request.image,
-        nodes_io::image_registry::acr_image(
+        nodes_io::image_registry::registry_image(
             MUSIC_DECONVOLUTION_IMAGE_REPOSITORY,
             MUSIC_DECONVOLUTION_IMAGE_DIGEST
         )

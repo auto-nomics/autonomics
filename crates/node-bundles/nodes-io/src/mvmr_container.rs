@@ -11,7 +11,7 @@ use serde::Deserialize;
 use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
 };
-use crate::image_registry::acr_image;
+use crate::image_registry::registry_image;
 use container_runtime::{PanelCache, PodmanConnection, PullPolicy};
 
 pub const MVMR_CONTAINER_KIND: &str = "mvmr_container";
@@ -279,7 +279,7 @@ pub fn container_spec(spec: &MvmrContainerSpec) -> Result<ContainerCommandSpec, 
     );
 
     Ok(ContainerCommandSpec {
-        image: acr_image(MVMR_ORIGINAL_IMAGE_REPOSITORY, MVMR_ORIGINAL_IMAGE_DIGEST)?,
+        image: registry_image(MVMR_ORIGINAL_IMAGE_REPOSITORY, MVMR_ORIGINAL_IMAGE_DIGEST)?,
         command: vec!["Rscript".into()],
         script: Some(r_code),
         files: Default::default(),
@@ -399,7 +399,7 @@ mod tests {
         let container = container_spec(&spec()).unwrap();
         assert_eq!(
             container.image,
-            acr_image(MVMR_ORIGINAL_IMAGE_REPOSITORY, MVMR_ORIGINAL_IMAGE_DIGEST).unwrap()
+            registry_image(MVMR_ORIGINAL_IMAGE_REPOSITORY, MVMR_ORIGINAL_IMAGE_DIGEST).unwrap()
         );
         assert!(container.panel_bundles.is_empty());
         assert!(

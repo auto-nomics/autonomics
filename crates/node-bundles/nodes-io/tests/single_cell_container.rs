@@ -164,7 +164,7 @@ async fn stages_four_files_and_publishes_two_outputs() {
     assert!(h5ad_file.path.ends_with("/preprocessed.h5ad"));
 }
 
-#[ignore = "requires rootless Podman and the pinned ACR image"]
+#[ignore = "requires rootless Podman and the pinned GHCR image"]
 #[tokio::test]
 async fn real_podman_runs_the_pinned_inspect_contract() {
     let root = tempfile::tempdir().unwrap();

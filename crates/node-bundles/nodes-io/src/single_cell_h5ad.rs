@@ -17,7 +17,7 @@ use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
 };
 use crate::file_reference::FileReferenceNode;
-use crate::image_registry::acr_image;
+use crate::image_registry::registry_image;
 use container_runtime::{PanelCache, PodmanConnection, PullPolicy};
 
 pub const H5AD_QC_FILTER_KIND: &str = "h5ad_qc_filter";
@@ -851,7 +851,7 @@ pub fn container_spec(
         ),
     ]);
     Ok(ContainerCommandSpec {
-        image: acr_image(
+        image: registry_image(
             SINGLE_CELL_WORKFLOW_IMAGE_REPOSITORY,
             SINGLE_CELL_WORKFLOW_IMAGE_DIGEST,
         )?,

@@ -147,7 +147,8 @@ async fn stages_one_input_and_publishes_six_outputs() {
     let request = runtime.requests.lock().unwrap()[0].clone();
     assert_eq!(
         request.image,
-        nodes_io::image_registry::acr_image(WGCNA_IMAGE_REPOSITORY, WGCNA_IMAGE_DIGEST).unwrap()
+        nodes_io::image_registry::registry_image(WGCNA_IMAGE_REPOSITORY, WGCNA_IMAGE_DIGEST)
+            .unwrap()
     );
     assert_eq!(
         request.network,

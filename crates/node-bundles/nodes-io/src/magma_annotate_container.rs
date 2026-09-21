@@ -15,7 +15,7 @@ use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
     ContainerPanelBundleSpec,
 };
-use crate::image_registry::acr_image;
+use crate::image_registry::registry_image;
 use container_runtime::{PanelCache, PodmanConnection, PullPolicy};
 
 pub const MAGMA_ANNOTATE_CONTAINER_KIND: &str = "magma_annotate_container";
@@ -112,7 +112,7 @@ pub fn validate(spec: &MagmaAnnotateContainerSpec) -> Result<(), String> {
 pub fn container_spec(spec: &MagmaAnnotateContainerSpec) -> Result<ContainerCommandSpec, String> {
     validate(spec)?;
     Ok(ContainerCommandSpec {
-        image: acr_image(
+        image: registry_image(
             MAGMA_ORIGINAL_IMAGE_REPOSITORY,
             MAGMA_ORIGINAL_IMAGE_DIGEST,
         )?,
@@ -250,7 +250,7 @@ mod tests {
         let container = container_spec(&spec).unwrap();
         assert_eq!(
             container.image,
-            acr_image(MAGMA_ORIGINAL_IMAGE_REPOSITORY, MAGMA_ORIGINAL_IMAGE_DIGEST).unwrap()
+            registry_image(MAGMA_ORIGINAL_IMAGE_REPOSITORY, MAGMA_ORIGINAL_IMAGE_DIGEST).unwrap()
         );
         assert_eq!(container.pull_policy, PullPolicy::Missing);
         assert_eq!(container.panel_bundles.len(), 1);

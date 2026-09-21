@@ -20,7 +20,7 @@ use crate::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
     ContainerPanelBundleSpec,
 };
-use crate::image_registry::acr_image;
+use crate::image_registry::registry_image;
 use crate::plink2_clump_container::PLINK2_REF_BINARY_PANEL;
 use container_runtime::{PanelCache, PodmanConnection, PullPolicy};
 
@@ -329,7 +329,7 @@ RSCRIPT
 pub fn container_spec(spec: &TwoSampleMrContainerSpec) -> Result<ContainerCommandSpec, String> {
     validate(spec)?;
     Ok(ContainerCommandSpec {
-        image: acr_image(
+        image: registry_image(
             TWOSAMPLEMR_ORIGINAL_IMAGE_REPOSITORY,
             TWOSAMPLEMR_ORIGINAL_IMAGE_DIGEST,
         )?,
@@ -489,7 +489,7 @@ mod tests {
         let container = container_spec(&spec()).unwrap();
         assert_eq!(
             container.image,
-            acr_image(
+            registry_image(
                 TWOSAMPLEMR_ORIGINAL_IMAGE_REPOSITORY,
                 TWOSAMPLEMR_ORIGINAL_IMAGE_DIGEST
             )

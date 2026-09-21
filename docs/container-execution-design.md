@@ -77,7 +77,13 @@ built; it does not independently construct a second backend.
 AUTONOMICS_PODMAN_PROGRAM=podman
 AUTONOMICS_PODMAN_WORKSPACE_ROOT=$HOME/.local/state/autonomics/podman/workspace
 AUTONOMICS_PANEL_CACHE_ROOT=$HOME/.autonomics/panels
+AUTONOMICS_PODMAN_PULL_TIMEOUT_SECS=3600
 ```
+
+`AUTONOMICS_PODMAN_PULL_TIMEOUT_SECS` budgets the `podman create` step, which
+includes the first image pull when the image is absent. It is independent of a
+node's execution timeout so a cold GHCR pull of a multi-GB image cannot exhaust
+a short node budget. It defaults to 3600 seconds.
 
 `AUTONOMICS_CONTAINER_BACKEND` no longer selects a backend. Setting it to
 anything other than `podman` (e.g. the removed `k3s`) fails startup with an
@@ -139,8 +145,8 @@ cataloged data package, and a thin DAG wrapper, see
 `ldsc_h2_container` is the first such wrapper. It accepts one tab-separated
 LDSC sumstats File with `SNP`, `A1`, `A2`, `N`, and `Z` columns; plain `.tsv`
 and gzip-compressed `.sumstats.gz` are both accepted. It internally binds
-the pinned `autonomics/ldsc` manifest digest, with the ACR host supplied by
-`ACR_ENDPOINT`, to:
+the pinned `autonomics/ldsc` manifest digest, with the GHCR namespace supplied
+by `AUTONOMICS_IMAGE_PREFIX`, to:
 
 - `ldsc.ref_ld.1000g_eur.basic` at `/panels/ref_ld`
 - `ldsc.w_ld.1000g_eur_hm3_no_mhc` at `/panels/w_ld`
