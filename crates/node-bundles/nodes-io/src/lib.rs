@@ -520,6 +520,14 @@ impl NodePlugin for Plugin {
                 Arc::clone(&self.container_execution.runtime),
                 Arc::clone(&self.container_execution.panel_cache),
             ),
+            single_cell_h5ad::SingleCellH5adContainerNodeFactory::marker_annotate(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
+            single_cell_h5ad::SingleCellH5adContainerNodeFactory::ucell_score(
+                Arc::clone(&self.container_execution.runtime),
+                Arc::clone(&self.container_execution.panel_cache),
+            ),
         ] {
             registry.register(Box::new(factory));
         }

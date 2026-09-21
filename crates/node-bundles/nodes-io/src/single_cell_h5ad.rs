@@ -28,6 +28,8 @@ pub const SC_DENSE_INGEST_KIND: &str = "sc_dense_ingest";
 pub const H5AD_RANK_GENES_GROUPS_KIND: &str = "h5ad_rank_genes_groups";
 pub const H5AD_CLUSTER_MEAN_EXPRESSION_KIND: &str = "h5ad_cluster_mean_expression";
 pub const H5AD_GENE_SET_SCORE_KIND: &str = "gene_set_score";
+pub const H5AD_MARKER_ANNOTATE_KIND: &str = "h5ad_marker_annotate";
+pub const H5AD_UCELL_SCORE_KIND: &str = "h5ad_ucell_score";
 pub const CELLTYPIST_MODEL_BUNDLE: &str = "celltypist.models.pan_immune";
 pub const DEFAULT_CELLTYPIST_MODEL_FILE: &str = "Immune_All_Low.pkl";
 pub const SINGLE_CELL_WORKFLOW_IMAGE_REPOSITORY: &str = "single-cell-preprocessor";
@@ -54,6 +56,8 @@ pub enum Workflow {
     RankGenesGroups,
     ClusterMeanExpression,
     GeneSetScore,
+    MarkerAnnotate,
+    UcellScore,
 }
 
 impl Workflow {
@@ -67,6 +71,8 @@ impl Workflow {
             Self::RankGenesGroups => H5AD_RANK_GENES_GROUPS_KIND,
             Self::ClusterMeanExpression => H5AD_CLUSTER_MEAN_EXPRESSION_KIND,
             Self::GeneSetScore => H5AD_GENE_SET_SCORE_KIND,
+            Self::MarkerAnnotate => H5AD_MARKER_ANNOTATE_KIND,
+            Self::UcellScore => H5AD_UCELL_SCORE_KIND,
         }
     }
 
@@ -80,6 +86,8 @@ impl Workflow {
             Self::RankGenesGroups => "rank_genes_groups",
             Self::ClusterMeanExpression => "cluster_mean_expression",
             Self::GeneSetScore => "gene_set_score",
+            Self::MarkerAnnotate => "marker_annotate",
+            Self::UcellScore => "ucell_score",
         }
     }
 
@@ -112,7 +120,12 @@ impl Workflow {
 
     fn output_specs(self) -> Vec<ContainerCommandOutputSpec> {
         match self {
-            Self::Subset | Self::QcFilter | Self::EmbedCluster | Self::Celltypist => vec![
+            Self::Subset
+            | Self::QcFilter
+            | Self::EmbedCluster
+            | Self::Celltypist
+            | Self::MarkerAnnotate
+            | Self::UcellScore => vec![
                 ContainerCommandOutputSpec {
                     path: "output.h5ad".into(),
                     format: Some("h5ad".into()),
@@ -357,6 +370,52 @@ pub struct H5adGeneSetScoreSpec {
     pub pids_limit: Option<i64>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct H5adMarkerAnnotateSpec {
+    /// Cell-type label → marker gene panel. Every cell (or cluster) is scored
+    /// against each panel and assigned the best-scoring label.
+    pub marker_sets: BTreeMap<String, Vec<String>>,
+    /// Optional obs column (e.g. `leiden`). When set, labels are decided per
+    /// cluster (mean score over its cells) and propagated to every cell.
+    #[serde(default)]
+    pub groupby: Option<String>,
+    /// Input scaling before scoring: `log_cp10k` (default) or `none` (raw).
+    #[serde(default = "default_annotate_normalize")]
+    pub normalize: String,
+    /// Cells/clusters whose best score is not strictly above this get
+    /// `unknown_label`.
+    #[serde(default)]
+    pub min_score: f64,
+    #[serde(default = "default_unknown_label")]
+    pub unknown_label: String,
+    #[serde(default = "default_artifact_prefix_marker")]
+    pub artifact_prefix: String,
+    #[serde(default = "default_timeout")]
+    pub timeout_secs: u64,
+    #[serde(default)]
+    pub cpus: Option<f64>,
+    #[serde(default)]
+    pub memory: Option<String>,
+    #[serde(default)]
+    pub pids_limit: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct H5adUcellScoreSpec {
+    /// Gene-set name → signature genes; each becomes a per-cell obs column.
+    pub gene_sets: BTreeMap<String, Vec<String>>,
+    #[serde(default = "default_artifact_prefix_ucell")]
+    pub artifact_prefix: String,
+    #[serde(default = "default_timeout")]
+    pub timeout_secs: u64,
+    #[serde(default)]
+    pub cpus: Option<f64>,
+    #[serde(default)]
+    pub memory: Option<String>,
+    #[serde(default)]
+    pub pids_limit: Option<i64>,
+}
+
 fn default_max_percent() -> f64 {
     100.0
 }
@@ -416,6 +475,18 @@ fn default_artifact_prefix_mean() -> String {
 }
 fn default_artifact_prefix_score() -> String {
     format!("/artifacts/{H5AD_GENE_SET_SCORE_KIND}")
+}
+fn default_artifact_prefix_marker() -> String {
+    format!("/artifacts/{H5AD_MARKER_ANNOTATE_KIND}")
+}
+fn default_artifact_prefix_ucell() -> String {
+    format!("/artifacts/{H5AD_UCELL_SCORE_KIND}")
+}
+fn default_annotate_normalize() -> String {
+    "log_cp10k".into()
+}
+fn default_unknown_label() -> String {
+    "Unknown".into()
 }
 fn default_timeout() -> u64 {
     DEFAULT_TIMEOUT_SECS
@@ -566,6 +637,17 @@ impl SingleCellH5adContainerNodeFactory {
         panel_cache: Arc<PanelCache>,
     ) -> Self {
         Self::new(Workflow::GeneSetScore, runtime, panel_cache)
+    }
+
+    pub fn marker_annotate(
+        runtime: Arc<dyn PodmanConnection>,
+        panel_cache: Arc<PanelCache>,
+    ) -> Self {
+        Self::new(Workflow::MarkerAnnotate, runtime, panel_cache)
+    }
+
+    pub fn ucell_score(runtime: Arc<dyn PodmanConnection>, panel_cache: Arc<PanelCache>) -> Self {
+        Self::new(Workflow::UcellScore, runtime, panel_cache)
     }
 
     fn new(
@@ -804,6 +886,63 @@ pub fn validate(workflow: Workflow, spec: &serde_json::Value) -> Result<(), Stri
                 return Err("ctrl_size must be greater than zero".into());
             }
         }
+        Workflow::MarkerAnnotate => {
+            let spec: H5adMarkerAnnotateSpec =
+                serde_json::from_value(spec.clone()).map_err(|e| e.to_string())?;
+            validate_resource(
+                &spec.artifact_prefix,
+                spec.timeout_secs,
+                spec.cpus,
+                spec.memory.as_deref(),
+                spec.pids_limit,
+            )?;
+            if spec.marker_sets.is_empty() {
+                return Err("marker_sets cannot be empty".into());
+            }
+            for (name, genes) in &spec.marker_sets {
+                if name.trim().is_empty() {
+                    return Err("marker set names must be nonempty".into());
+                }
+                if genes.is_empty() {
+                    return Err(format!(
+                        "marker set `{name}` must contain at least one gene"
+                    ));
+                }
+            }
+            if !matches!(spec.normalize.as_str(), "log_cp10k" | "none") {
+                return Err(format!(
+                    "unsupported normalize mode `{}`; expected log_cp10k or none",
+                    spec.normalize
+                ));
+            }
+            if spec
+                .groupby
+                .as_deref()
+                .is_some_and(|groupby| groupby.trim().is_empty())
+            {
+                return Err("groupby cannot be empty when provided".into());
+            }
+            if !spec.min_score.is_finite() {
+                return Err("min_score must be finite".into());
+            }
+            if spec.unknown_label.trim().is_empty() {
+                return Err("unknown_label cannot be empty".into());
+            }
+        }
+        Workflow::UcellScore => {
+            let spec: H5adUcellScoreSpec =
+                serde_json::from_value(spec.clone()).map_err(|e| e.to_string())?;
+            validate_resource(
+                &spec.artifact_prefix,
+                spec.timeout_secs,
+                spec.cpus,
+                spec.memory.as_deref(),
+                spec.pids_limit,
+            )?;
+            if spec.gene_sets.is_empty() {
+                return Err("gene_sets cannot be empty".into());
+            }
+        }
     }
     Ok(())
 }
@@ -899,6 +1038,8 @@ fn default_artifact_prefix(workflow: Workflow) -> String {
         Workflow::RankGenesGroups => default_artifact_prefix_rank(),
         Workflow::ClusterMeanExpression => default_artifact_prefix_mean(),
         Workflow::GeneSetScore => default_artifact_prefix_score(),
+        Workflow::MarkerAnnotate => default_artifact_prefix_marker(),
+        Workflow::UcellScore => default_artifact_prefix_ucell(),
     }
 }
 
@@ -931,6 +1072,10 @@ impl NodeFactory for SingleCellH5adContainerNodeFactory {
                 "Exports cluster-by-gene mean expression and optionally expression fractions."
             }
             Workflow::GeneSetScore => "Scores per-cell gene sets with Scanpy score_genes.",
+            Workflow::MarkerAnnotate => {
+                "Annotates cells or clusters with cell-type labels from a marker-gene dictionary."
+            }
+            Workflow::UcellScore => "Scores per-cell gene sets with rank-based UCell statistics.",
         }
     }
 
@@ -970,6 +1115,20 @@ impl NodeFactory for SingleCellH5adContainerNodeFactory {
                 "Input port 0 is H5AD. Output ports are output.h5ad then report.json; each \
                 score is added to obs using the configured gene-set key."
             }
+            Workflow::MarkerAnnotate => {
+                "Input port 0 is H5AD. Output ports are output.h5ad then report.json. Each \
+                marker set is scored per cell (mean marker expression after normalization; \
+                `groupby` averages over cluster members instead) and the best label wins: \
+                obs gains marker_label, marker_score, and marker_margin; labels whose best \
+                score is not above min_score fall back to unknown_label."
+            }
+            Workflow::UcellScore => {
+                "Input port 0 is H5AD. Output ports are output.h5ad then report.json. Each \
+                gene set gets a UCell rank-based score in obs: mean of margin/(margin+rank) \
+                over the signature (rank 1 = highest expression, margin = (n_genes - \
+                signature size)/2), bounded 0-1, library-size independent, computed on the \
+                raw matrix without normalization."
+            }
         }
     }
 
@@ -983,6 +1142,8 @@ impl NodeFactory for SingleCellH5adContainerNodeFactory {
             Workflow::RankGenesGroups => schema_for!(H5adRankGenesGroupsSpec),
             Workflow::ClusterMeanExpression => schema_for!(H5adClusterMeanExpressionSpec),
             Workflow::GeneSetScore => schema_for!(H5adGeneSetScoreSpec),
+            Workflow::MarkerAnnotate => schema_for!(H5adMarkerAnnotateSpec),
+            Workflow::UcellScore => schema_for!(H5adUcellScoreSpec),
         }
     }
 
@@ -1193,5 +1354,65 @@ mod tests {
         let mut spec = resource_json();
         spec["n_neighbors"] = serde_json::json!(1);
         assert!(validate(Workflow::EmbedCluster, &spec).is_err());
+    }
+
+    #[test]
+    fn marker_and_ucell_workflows_declare_h5ad_report_contract() {
+        let marker = container_spec(
+            Workflow::MarkerAnnotate,
+            &serde_json::json!({"marker_sets": {"T cell": ["CD3D", "CD3E"]}}),
+        )
+        .unwrap();
+        assert_eq!(
+            marker.env["AUTONOMICS_SINGLE_CELL_WORKFLOW"],
+            "marker_annotate"
+        );
+        assert_eq!(marker.outputs[0].path, "output.h5ad");
+        assert_eq!(marker.outputs[1].path, "report.json");
+        assert_eq!(marker.artifact_prefix, "/artifacts/h5ad_marker_annotate");
+        assert!(marker.network == "isolated" && marker.read_only_rootfs);
+
+        let ucell = container_spec(
+            Workflow::UcellScore,
+            &serde_json::json!({"gene_sets": {"cytotoxic": ["NKG7", "GNLY"]}}),
+        )
+        .unwrap();
+        assert_eq!(ucell.env["AUTONOMICS_SINGLE_CELL_WORKFLOW"], "ucell_score");
+        assert_eq!(ucell.outputs[0].path, "output.h5ad");
+        assert_eq!(ucell.outputs[1].path, "report.json");
+        assert_eq!(ucell.artifact_prefix, "/artifacts/h5ad_ucell_score");
+    }
+
+    #[test]
+    fn marker_and_ucell_parameters_are_rejected() {
+        assert!(
+            validate(
+                Workflow::MarkerAnnotate,
+                &serde_json::json!({"marker_sets": {}})
+            )
+            .is_err()
+        );
+        assert!(
+            validate(
+                Workflow::MarkerAnnotate,
+                &serde_json::json!({"marker_sets": {"T cell": ["CD3D"]}, "normalize": "bogus"})
+            )
+            .is_err()
+        );
+        assert!(
+            validate(
+                Workflow::MarkerAnnotate,
+                &serde_json::json!({"marker_sets": {"T cell": ["CD3D", "CD3E"]}, "groupby": " "})
+            )
+            .is_err()
+        );
+        assert!(validate(Workflow::UcellScore, &serde_json::json!({"gene_sets": {}})).is_err());
+        let defaults: H5adMarkerAnnotateSpec = serde_json::from_value(
+            serde_json::json!({"marker_sets": {"B cell": ["MS4A1", "CD79A"]}}),
+        )
+        .unwrap();
+        assert_eq!(defaults.normalize, "log_cp10k");
+        assert_eq!(defaults.unknown_label, "Unknown");
+        assert!(defaults.groupby.is_none());
     }
 }
