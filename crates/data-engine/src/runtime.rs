@@ -55,6 +55,7 @@ struct SessionServer {
 
 impl SessionServer {
     async fn run(mut self) {
+        Self::restore_session_workspace(&self.engine, &self.session_id).await;
         while let Some(msg) = self.rx.recv().await {
             if let Err(panic) = AssertUnwindSafe(self.handle(msg)).catch_unwind().await {
                 tracing::error!(
@@ -65,6 +66,27 @@ impl SessionServer {
             }
         }
         tracing::debug!(session_id = %self.session_id, "session actor exited");
+    }
+
+    /// Materialize the history ref's head snapshot into a freshly created
+    /// session so a restarted agent resumes its previous DAG instead of an
+    /// empty workspace. Runs before the actor loop, so it can never race a
+    /// client command. Failures are logged and swallowed: an unrestorable
+    /// history must not stop the session from serving commands.
+    async fn restore_session_workspace(engine: &tokio::sync::Mutex<DataEngine>, session_id: &str) {
+        if !session_auto_restore_enabled() {
+            return;
+        }
+        let mut engine = engine.lock().await;
+        match engine.restore_ref_head().await {
+            Ok(true) => tracing::info!(session_id, "restored DAG from history ref head"),
+            Ok(false) => {}
+            Err(error) => tracing::warn!(
+                session_id,
+                error = %error,
+                "could not restore DAG from history ref head; starting with an empty workspace"
+            ),
+        }
     }
 
     async fn handle(&self, msg: EngineMsg) {
@@ -472,6 +494,28 @@ impl SessionServer {
             }
         }
     }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Session workspace auto-restore
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Env gate for the session-start auto-restore (default on). Set
+/// `AUTONOMICS_SESSION_AUTO_RESTORE=0|false|off|disabled` to start every
+/// session with an empty DAG regardless of snapshot history.
+const SESSION_AUTO_RESTORE_ENV: &str = "AUTONOMICS_SESSION_AUTO_RESTORE";
+
+fn session_auto_restore_enabled() -> bool {
+    session_auto_restore_from(std::env::var_os(SESSION_AUTO_RESTORE_ENV).as_deref())
+}
+
+fn session_auto_restore_from(value: Option<&std::ffi::OsStr>) -> bool {
+    !value.is_some_and(|value| {
+        matches!(
+            value.to_string_lossy().trim().to_ascii_lowercase().as_str(),
+            "0" | "false" | "off" | "disabled"
+        )
+    })
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -1103,6 +1147,57 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             Ok(PortOutputs::new())
         }
+    }
+
+    #[test]
+    fn auto_restore_env_defaults_on_and_parses_off_values() {
+        use std::ffi::OsStr;
+        assert!(session_auto_restore_from(None));
+        assert!(session_auto_restore_from(Some(OsStr::new("1"))));
+        assert!(session_auto_restore_from(Some(OsStr::new(" on "))));
+        for off in ["0", "false", "OFF", "disabled", " off "] {
+            assert!(
+                !session_auto_restore_from(Some(OsStr::new(off))),
+                "`{off}` must disable auto-restore"
+            );
+        }
+    }
+
+    /// A brand-new session must already see the ref's head snapshot in its
+    /// first command: `SessionServer` restores the workspace before entering
+    /// its recv loop, so nothing can race ahead of it.
+    #[tokio::test]
+    async fn session_start_restores_history_ref_head() {
+        use crate::dag::DagHistory;
+
+        let directory = tempfile::tempdir().unwrap();
+        let history = DagHistory::open(&directory.path().join("history.db"))
+            .await
+            .unwrap();
+        let mut engine = DataEngine::builder().build().with_history(history);
+        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+        let csv_path = std::path::Path::new(&manifest_dir)
+            .join("test_datasets/Iris.csv")
+            .to_string_lossy()
+            .into_owned();
+        engine
+            .add_node_from_registry(
+                "src",
+                "file_to_dataframe",
+                serde_json::json!({ "path": csv_path }),
+            )
+            .unwrap();
+        let report = engine.run().await.unwrap();
+        assert!(report.snapshot_id.is_some(), "run must commit a snapshot");
+
+        let manager = DataEngineManager::new(engine);
+        let client = manager.client_for_session_with_ref("agent-restore", "main");
+
+        let dot = client.view_dag().await.unwrap();
+        assert!(
+            dot.contains("src"),
+            "restored DAG should contain `src`: {dot}"
+        );
     }
 
     #[tokio::test]

@@ -296,10 +296,6 @@ impl NodePlugin for Plugin {
                 Arc::clone(&self.container_execution.panel_cache),
             ),
         ));
-        registry.register(Box::new(container_command::ContainerCommandNodeFactory {
-            runtime: Arc::clone(&self.container_execution.runtime),
-            panel_cache: Arc::clone(&self.container_execution.panel_cache),
-        }));
         registry.register(Box::new(
             ldsc_h2_container::LdscH2ContainerNodeFactory::new(
                 Arc::clone(&self.container_execution.runtime),

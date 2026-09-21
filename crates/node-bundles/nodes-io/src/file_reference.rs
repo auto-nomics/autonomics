@@ -4,6 +4,8 @@ use async_trait::async_trait;
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 
+use opendal::ErrorKind;
+
 use dag_core::dag::{DagError, graph::PortOutputs};
 use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::registry::{NodeCtx, NodeFactory};
@@ -130,7 +132,17 @@ async fn vfs_file(
     let operator = storage.resolve(virtual_path).clone();
     let key = storage.resolve_path(virtual_path);
     let metadata = operator.stat(&key).await.map_err(|error| {
-        DagError::Schedule(format!("cannot stat file `{output_path}`: {error}"))
+        if error.kind() == ErrorKind::NotFound {
+            DagError::Schedule(format!(
+                "file `{output_path}` does not exist. `file_reference` resolves its \
+                 path at execution time and expects the file to exist already; if \
+                 another node in this DAG writes the file, connect that node's \
+                 output port directly instead of referencing the path \
+                 (underlying error: {error})"
+            ))
+        } else {
+            DagError::Schedule(format!("cannot stat file `{output_path}`: {error}"))
+        }
     })?;
     if metadata.is_dir() {
         return Err(DagError::Schedule(format!(
@@ -192,7 +204,10 @@ impl NodeFactory for FileReferenceNodeFactory {
         `file_to_dataframe`, it never reads the payload into a DataFrame. This is \
         the intended input node for file-backed dedicated container nodes such as \
         `ldsc_h2_container`. Set `format` whenever it is known; downstream ports \
-        can reject mismatched files before execution."
+        can reject mismatched files before execution. The path is resolved when \
+        the node executes, so it must already exist: use this node for external \
+        inputs, and wire files produced inside the DAG through output-port \
+        edges instead."
     }
 
     fn spec_schema(&self) -> schemars::Schema {
@@ -297,8 +312,13 @@ mod tests {
             .execute(&ctx, &[], &dag_core::dag::node_event::NodeReporter::noop())
             .await
             .unwrap_err();
+        let message = error.to_string();
 
-        assert!(error.to_string().contains("cannot stat file"));
+        assert!(message.contains("does not exist"), "{message}");
+        assert!(
+            message.contains("output port"),
+            "not-found error should point at port wiring: {message}"
+        );
     }
 
     #[tokio::test]

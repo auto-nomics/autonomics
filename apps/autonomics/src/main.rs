@@ -66,10 +66,13 @@ fn init_logging(nocapture: bool) -> color_eyre::Result<()> {
         let _ = std::io::Write::flush(&mut std::io::stderr());
     }));
 
+    // Targets are `module_path!()` strings, so a hyphenated crate name appears
+    // with an underscore (`data_engine::runtime`) — match that spelling here,
+    // exactly as agentik_core is spelled below.
     let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         EnvFilter::new(
             "autonomics=debug,agentik_core=debug,agentik_sdk=debug,runtime=debug,\
-             nodes_ldsc=debug,ldsc=debug",
+             data_engine=info,nodes_ldsc=debug,ldsc=debug",
         )
     });
 
