@@ -50,3 +50,4 @@ infra/docker/.data/
 infra/docker/garage/data/
 infra/docker/garage/meta/
 infra/docker/garage/snapshots/
+__pycache__/

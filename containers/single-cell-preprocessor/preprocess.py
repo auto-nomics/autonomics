@@ -4,9 +4,12 @@
 from __future__ import annotations
 
 import gzip
+import hashlib
 import json
 import os
+import platform
 import sys
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TextIO
@@ -40,6 +43,40 @@ def required_path(name: str) -> Path:
     if not value:
         raise ContractError(f"missing required environment variable: {name}")
     return Path(value)
+
+
+def _check_exists(path: Path, label: str) -> None:
+    if not path.exists():
+        raise ContractError(f"{label} file does not exist: {path}")
+    if not path.is_file():
+        raise ContractError(f"{label} is not a regular file: {path}")
+    if path.stat().st_size == 0:
+        raise ContractError(f"{label} file is empty (0 bytes): {path}")
+
+
+def _file_probe(path: Path) -> dict[str, object]:
+    """Collect diagnostic metadata for error messages."""
+    info: dict[str, object] = {"bytes": path.stat().st_size}
+    raw = path.read_bytes()[:512]
+    info["preview"] = raw.decode("utf-8", errors="replace").splitlines()[:3]
+    info["line_count"] = raw.count(b"\n")
+    return info
+
+
+def _wrap_parse_error(path: Path, error: Exception, phase: str) -> ContractError:
+    probe = _file_probe(path)
+    return ContractError(
+        f"{path.name}: {phase} failed ({type(error).__name__}): {error}; "
+        f"file probe: {json.dumps(probe, ensure_ascii=False)}"
+    )
+
+
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def open_text(path: Path) -> TextIO:
@@ -89,14 +126,17 @@ def parse_matrix_header(path: Path) -> MatrixHeader:
 
 
 def read_barcodes(path: Path) -> pd.DataFrame:
-    frame = pd.read_csv(
-        path,
-        sep="\t",
-        header=None,
-        names=["cell_barcode"],
-        dtype={"cell_barcode": str},
-        keep_default_na=False,
-    )
+    try:
+        frame = pd.read_csv(
+            path,
+            sep="\t",
+            header=None,
+            names=["cell_barcode"],
+            dtype={"cell_barcode": str},
+            keep_default_na=False,
+        )
+    except (pd.errors.EmptyDataError, pd.errors.ParserError, UnicodeDecodeError) as e:
+        raise _wrap_parse_error(path, e, "barcode parse") from e
     if frame.empty:
         raise ContractError(f"{path.name}: barcode file is empty")
     if frame["cell_barcode"].isna().any():
@@ -109,7 +149,10 @@ def read_barcodes(path: Path) -> pd.DataFrame:
 
 
 def read_features(path: Path) -> pd.DataFrame:
-    frame = pd.read_csv(path, sep="\t", header=None, dtype=str, keep_default_na=False)
+    try:
+        frame = pd.read_csv(path, sep="\t", header=None, dtype=str, keep_default_na=False)
+    except (pd.errors.EmptyDataError, pd.errors.ParserError, UnicodeDecodeError) as e:
+        raise _wrap_parse_error(path, e, "feature parse") from e
     if frame.shape[1] not in {2, 3}:
         raise ContractError(
             f"{path.name}: feature file must have two or three columns, "
@@ -127,17 +170,40 @@ def read_features(path: Path) -> pd.DataFrame:
     return frame
 
 
+def _detect_separator(path: Path) -> str:
+    """Return a pd.read_csv sep value based on the metadata_separator env var."""
+    mode = os.environ.get("AUTONOMICS_SINGLE_CELL_METADATA_SEP", "auto").lower()
+    if mode == "tab":
+        return "\t"
+    if mode == "comma":
+        return ","
+    # auto: look at the first non-blank line
+    with open_text(path) as handle:
+        for line in handle:
+            if line.strip():
+                return "\t" if "\t" in line else ","
+    return "\t"
+
+
 def read_metadata(path: Path, barcodes: pd.DataFrame) -> tuple[pd.DataFrame, bool]:
-    frame = pd.read_csv(
-        path,
-        sep=r"\s+",
-        engine="python",
-        index_col=0,
-        dtype=str,
-        keep_default_na=False,
-    )
+    sep = _detect_separator(path)
+    try:
+        frame = pd.read_csv(
+            path,
+            sep=sep,
+            engine="python",
+            index_col=0,
+            dtype=str,
+            keep_default_na=False,
+        )
+    except (pd.errors.EmptyDataError, pd.errors.ParserError, UnicodeDecodeError) as e:
+        raise _wrap_parse_error(path, e, "metadata parse") from e
     if frame.empty or frame.shape[1] == 0:
-        raise ContractError(f"{path.name}: metadata file has no data rows")
+        probe = _file_probe(path)
+        raise ContractError(
+            f"{path.name}: metadata parsed to 0 rows x {frame.shape[1]} cols; "
+            f"file probe: {json.dumps(probe, ensure_ascii=False)}"
+        )
     frame.index = frame.index.astype(str)
     metadata_ids = frame.index.astype(str)
     if metadata_ids.has_duplicates:
@@ -190,13 +256,17 @@ def parse_bool(name: str, default: str = "false") -> bool:
     raise ContractError(f"{name} must be a boolean")
 
 
-def run() -> None:
+def _run() -> tuple[dict[str, object], Path, Path]:
     matrix_path = required_path(MATRIX_ENV)
     barcodes_path = required_path(BARCODES_ENV)
     features_path = required_path(FEATURES_ENV)
     metadata_path = required_path(METADATA_ENV)
     report_path = required_path(REPORT_ENV)
     h5ad_path = required_path(H5AD_ENV)
+    _check_exists(matrix_path, "matrix")
+    _check_exists(barcodes_path, "barcode")
+    _check_exists(features_path, "feature")
+    _check_exists(metadata_path, "metadata")
     operation = os.environ.get("AUTONOMICS_SINGLE_CELL_OPERATION", "inspect").lower()
     if operation not in {"inspect", "ingest"}:
         raise ContractError(f"unsupported operation `{operation}`")
@@ -227,6 +297,15 @@ def run() -> None:
     report: dict[str, object] = {
         "schema_version": "1.0",
         "operation": operation,
+        "tool_versions": {
+            "python": platform.python_version(),
+            "pandas": pd.__version__,
+            "anndata": ad.__version__,
+        },
+        "inputs": [
+            {"name": p.name, "sha256": _sha256(p), "bytes": p.stat().st_size}
+            for p in [matrix_path, barcodes_path, features_path, metadata_path]
+        ],
         "matrix": {
             "format": "matrix_market_coordinate",
             "field": header.field,
@@ -253,6 +332,8 @@ def run() -> None:
 
     if operation == "ingest":
         import scanpy as sc
+
+        report["tool_versions"]["scanpy"] = sc.__version__  # type: ignore[attr-defined]
 
         raw_matrix = sc.read_mtx(matrix_path)
         if raw_matrix.shape != (header.rows, header.columns):
@@ -281,6 +362,20 @@ def run() -> None:
 
     h5ad_path.parent.mkdir(parents=True, exist_ok=True)
     adata.write_h5ad(h5ad_path, compression="lzf")
+    return report, report_path, h5ad_path
+
+
+def run() -> None:
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        report, report_path, h5ad_path = _run()
+    report["warnings"] = [
+        f"{w.category.__name__}: {w.message}" for w in caught
+    ]
+    report["outputs"] = [
+        {"name": p.name, "sha256": _sha256(p), "bytes": p.stat().st_size}
+        for p in [report_path, h5ad_path] if p.is_file()
+    ]
     write_report(report_path, report)
 
 
