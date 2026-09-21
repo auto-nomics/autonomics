@@ -758,11 +758,7 @@ extern "C" fn set_local_lzf(dcpl_id: hid_t, type_id: hid_t, _space_id: hid_t) ->
     if chunk_size > u32::MAX as usize {
         return -1;
     }
-    let values = [
-        LZF_FILTER_VERSION,
-        u32::from(LZF_VERSION),
-        chunk_size as u32,
-    ];
+    let values = [LZF_FILTER_VERSION, LZF_VERSION, chunk_size as u32];
     let result = unsafe { H5Pmodify_filter(dcpl_id, LZF_FILTER_ID, 0, 3, values.as_ptr()) };
     if result < 0 { -1 } else { 1 }
 }

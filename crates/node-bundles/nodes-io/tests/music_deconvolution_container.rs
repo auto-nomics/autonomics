@@ -157,14 +157,14 @@ async fn stages_five_inputs_and_publishes_five_outputs() {
     dag.add_node("music".into(), node).unwrap();
     for (index, path) in inputs.iter().enumerate() {
         dag.add_node(
-            format!("input{index}").into(),
+            format!("input{index}"),
             Box::new(FileReferenceNode::new(
                 path.to_string_lossy().into_owned(),
                 Some("music-input".into()),
             )),
         )
         .unwrap();
-        dag.add_edge(&format!("input{index}"), "music", 0, index as u8)
+        dag.add_edge(format!("input{index}"), "music", 0, index as u8)
             .unwrap();
     }
     let report = dag
@@ -263,14 +263,14 @@ async fn real_podman_runs_music_deconvolution_with_known_mixtures() {
     dag.add_node("music".into(), node).unwrap();
     for (index, path) in inputs.iter().enumerate() {
         dag.add_node(
-            format!("input{index}").into(),
+            format!("input{index}"),
             Box::new(FileReferenceNode::new(
                 path.to_string_lossy().into_owned(),
                 Some("music-input".into()),
             )),
         )
         .unwrap();
-        dag.add_edge(&format!("input{index}"), "music", 0, index as u8)
+        dag.add_edge(format!("input{index}"), "music", 0, index as u8)
             .unwrap();
     }
     let report = dag
