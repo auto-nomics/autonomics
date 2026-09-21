@@ -139,6 +139,8 @@ fn stabilize_daemon_cwd(config: &mut gateway::RuntimeConfig) -> color_eyre::Resu
 
     config.data_dir = absolute(&config.data_dir);
     config.state_dir = absolute(&config.state_dir);
+
+    setup_network_allowlist(&config.state_dir)?;
     config.dag_history_db = absolute(&config.dag_history_db);
     config.bib_db_path = absolute(&config.bib_db_path);
     config.writing_db_path = absolute(&config.writing_db_path);
@@ -152,6 +154,33 @@ fn stabilize_daemon_cwd(config: &mut gateway::RuntimeConfig) -> color_eyre::Resu
     std::env::set_current_dir("/").map_err(|error| {
         color_eyre::eyre::eyre!("cannot move gateway daemon to stable working directory: {error}")
     })
+}
+
+/// Materialize the deny-by-default HTTP fetch allowlist for the `http_fetch`
+/// node: create the commented template on first launch and point the node's
+/// environment variable at it, so every fetch names the file it must be
+/// added to.
+fn setup_network_allowlist(state_dir: &std::path::Path) -> color_eyre::Result<()> {
+    let allowlist_path = state_dir.join(nodes_io::http_fetch::ALLOWLIST_FILE_NAME);
+    if !allowlist_path.exists() {
+        std::fs::write(
+            &allowlist_path,
+            nodes_io::http_fetch::default_allowlist_toml(),
+        )
+        .map_err(|error| {
+            color_eyre::eyre::eyre!("cannot write {}: {error}", allowlist_path.display())
+        })?;
+        tracing::info!(
+            allowlist = %allowlist_path.display(),
+            "created default HTTP fetch network allowlist (deny-by-default)"
+        );
+    }
+    // SAFETY: single-threaded daemon startup — no worker threads exist yet to
+    // race this write, matching set_current_dir above.
+    unsafe {
+        std::env::set_var(nodes_io::http_fetch::ENV_NETWORK_ALLOWLIST, &allowlist_path);
+    }
+    Ok(())
 }
 
 /// File log under the absolute state dir (independent of the launcher's

@@ -13,6 +13,7 @@ pub mod gmt_import;
 pub mod h5ad_obs_to_dataframe;
 pub mod hdl_l_container;
 pub mod hdl_l_scan_container;
+pub mod http_fetch;
 pub mod hyprcoloc_container;
 pub mod image_registry;
 pub mod lava_container;
@@ -108,6 +109,7 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(bundle_source::BundleSourceNodeFactory {}));
         registry.register(Box::new(file_reference::FileReferenceNodeFactory {}));
         registry.register(Box::new(file_to_dataframe::FileToDataFrameNodeFactory {}));
+        registry.register(Box::new(http_fetch::HttpFetchNodeFactory));
         registry.register(Box::new(
             h5ad_obs_to_dataframe::H5adObsToDataFrameNodeFactory {},
         ));
