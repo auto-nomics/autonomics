@@ -9,6 +9,7 @@ import json
 import os
 import platform
 import sys
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TextIO
@@ -169,11 +170,27 @@ def read_features(path: Path) -> pd.DataFrame:
     return frame
 
 
+def _detect_separator(path: Path) -> str:
+    """Return a pd.read_csv sep value based on the metadata_separator env var."""
+    mode = os.environ.get("AUTONOMICS_SINGLE_CELL_METADATA_SEP", "auto").lower()
+    if mode == "tab":
+        return "\t"
+    if mode == "comma":
+        return ","
+    # auto: look at the first non-blank line
+    with open_text(path) as handle:
+        for line in handle:
+            if line.strip():
+                return "\t" if "\t" in line else ","
+    return "\t"
+
+
 def read_metadata(path: Path, barcodes: pd.DataFrame) -> tuple[pd.DataFrame, bool]:
+    sep = _detect_separator(path)
     try:
         frame = pd.read_csv(
             path,
-            sep="\t",
+            sep=sep,
             engine="python",
             index_col=0,
             dtype=str,
@@ -239,7 +256,7 @@ def parse_bool(name: str, default: str = "false") -> bool:
     raise ContractError(f"{name} must be a boolean")
 
 
-def run() -> None:
+def _run() -> tuple[dict[str, object], Path, Path]:
     matrix_path = required_path(MATRIX_ENV)
     barcodes_path = required_path(BARCODES_ENV)
     features_path = required_path(FEATURES_ENV)
@@ -345,6 +362,20 @@ def run() -> None:
 
     h5ad_path.parent.mkdir(parents=True, exist_ok=True)
     adata.write_h5ad(h5ad_path, compression="lzf")
+    return report, report_path, h5ad_path
+
+
+def run() -> None:
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        report, report_path, h5ad_path = _run()
+    report["warnings"] = [
+        f"{w.category.__name__}: {w.message}" for w in caught
+    ]
+    report["outputs"] = [
+        {"name": p.name, "sha256": _sha256(p), "bytes": p.stat().st_size}
+        for p in [report_path, h5ad_path] if p.is_file()
+    ]
     write_report(report_path, report)
 
 

@@ -50,6 +50,27 @@ impl SingleCellOperation {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MetadataSeparator {
+    /// Detect from the first non-empty line: tab if it contains a tab,
+    /// otherwise comma.
+    #[default]
+    Auto,
+    Tab,
+    Comma,
+}
+
+impl MetadataSeparator {
+    pub fn as_label(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Tab => "tab",
+            Self::Comma => "comma",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct SingleCellPreprocessorContainerSpec {
     #[serde(default = "default_operation")]
@@ -60,6 +81,8 @@ pub struct SingleCellPreprocessorContainerSpec {
     pub min_cells: u32,
     #[serde(default)]
     pub normalize_total: bool,
+    #[serde(default)]
+    pub metadata_separator: MetadataSeparator,
     #[serde(default = "default_artifact_prefix")]
     pub artifact_prefix: String,
     #[serde(default = "default_timeout_secs")]
@@ -194,6 +217,10 @@ pub fn container_spec(
             "AUTONOMICS_SINGLE_CELL_NORMALIZE_TOTAL".into(),
             spec.normalize_total.to_string(),
         ),
+        (
+            "AUTONOMICS_SINGLE_CELL_METADATA_SEP".into(),
+            spec.metadata_separator.as_label().into(),
+        ),
     ]);
 
     Ok(ContainerCommandSpec {
@@ -309,6 +336,7 @@ mod tests {
             min_genes: 0,
             min_cells: 0,
             normalize_total: false,
+            metadata_separator: MetadataSeparator::default(),
             artifact_prefix: default_artifact_prefix(),
             timeout_secs: default_timeout_secs(),
             cpus: None,
@@ -364,6 +392,71 @@ mod tests {
             container.env["AUTONOMICS_SINGLE_CELL_NORMALIZE_TOTAL"],
             "true"
         );
+    }
+
+    #[test]
+    fn metadata_separator_is_passed_as_env() {
+        let mut comma = spec();
+        comma.metadata_separator = MetadataSeparator::Comma;
+        let container = container_spec(&comma).unwrap();
+        assert_eq!(
+            container.env["AUTONOMICS_SINGLE_CELL_METADATA_SEP"],
+            "comma"
+        );
+
+        let mut auto_spec = spec();
+        auto_spec.metadata_separator = MetadataSeparator::Auto;
+        let container = container_spec(&auto_spec).unwrap();
+        assert_eq!(
+            container.env["AUTONOMICS_SINGLE_CELL_METADATA_SEP"],
+            "auto"
+        );
+    }
+
+    #[test]
+    fn resource_constraints_reject_invalid_values() {
+        let mut invalid = spec();
+        invalid.timeout_secs = 0;
+        assert!(validate(&invalid).is_err());
+
+        let mut invalid = spec();
+        invalid.cpus = Some(0.0);
+        assert!(validate(&invalid).is_err());
+
+        let mut invalid = spec();
+        invalid.cpus = Some(-1.0);
+        assert!(validate(&invalid).is_err());
+
+        let mut invalid = spec();
+        invalid.cpus = Some(f64::NAN);
+        assert!(validate(&invalid).is_err());
+
+        let mut invalid = spec();
+        invalid.memory = Some(String::new());
+        assert!(validate(&invalid).is_err());
+
+        let mut invalid = spec();
+        invalid.pids_limit = Some(0);
+        assert!(validate(&invalid).is_err());
+
+        let mut invalid = spec();
+        invalid.pids_limit = Some(-1);
+        assert!(validate(&invalid).is_err());
+    }
+
+    #[test]
+    fn valid_resource_constraints_are_accepted() {
+        let mut valid = spec();
+        valid.cpus = Some(4.0);
+        valid.memory = Some("16Gi".into());
+        valid.pids_limit = Some(256);
+        valid.timeout_secs = 7200;
+        assert!(validate(&valid).is_ok());
+        let container = container_spec(&valid).unwrap();
+        assert_eq!(container.cpus, Some(4.0));
+        assert_eq!(container.memory.as_deref(), Some("16Gi"));
+        assert_eq!(container.pids_limit, Some(256));
+        assert_eq!(container.timeout_secs, 7200);
     }
 
     #[test]
