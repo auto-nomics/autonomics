@@ -200,6 +200,20 @@ fn per_million(v: &Option<String>) -> f64 {
         .unwrap_or(0.0)
 }
 
+/// Ceiling applied to a catalogue entry's advertised max output at ingest.
+///
+/// OpenRouter fills `top_provider.max_completion_tokens` with ~90 % of the
+/// context window for models whose provider declares no explicit cap (live
+/// examples: `z-ai/glm-5.3-flash` advertises 943,718 against a 1,310,720
+/// window; many 262,144-window entries advertise 235,929). That figure is a
+/// display ceiling, not a recommendation: requesting it verbatim as
+/// `max_tokens` leaves only ~10 % of the window for input, so any real
+/// conversation fails the provider's `input + completion ≤ context` check
+/// with a 400 ("Requested token count exceeds the model's maximum context
+/// length"). 131,072 matches the largest explicit cap in the built-in
+/// presets (GLM's 128K), which long agent turns demonstrably fit inside.
+const MAX_OUTPUT_TOKENS_CEILING: u64 = 131_072;
+
 /// Map decoded catalogue entries to metadata-only [`ModelInfo`]s.
 /// Batch (`:batch`) routing variants are filtered out; `:free` variants are
 /// kept (they are genuinely distinct — zero cost).
@@ -222,7 +236,8 @@ fn map_remote(data: Vec<RemoteModel>) -> Vec<ModelInfo> {
             let max_output = top_provider
                 .and_then(|t| t.max_completion_tokens)
                 .filter(|t| *t > 0)
-                .unwrap_or(context_length);
+                .unwrap_or(context_length)
+                .min(MAX_OUTPUT_TOKENS_CEILING);
             let (input_price, output_price) = pricing
                 .map(|p| (per_million(&p.prompt), per_million(&p.completion)))
                 .unwrap_or((0.0, 0.0));
@@ -306,11 +321,15 @@ mod tests {
         }, {
             "id": "vendor/model-y",
             "name": "missing everything else"
+        }, {
+            "id": "vendor/model-junk",
+            "context_length": 1310720,
+            "top_provider": {"max_completion_tokens": 943718}
         }]}"#;
         let cat: RemoteModelsResponse = serde_json::from_str(json).unwrap();
         let models = map_remote(cat.data);
 
-        assert_eq!(models.len(), 2, ":batch variant filtered");
+        assert_eq!(models.len(), 3, ":batch variant filtered");
 
         let x = &models[0];
         assert_eq!(x.model_name, "vendor/model-x");
@@ -327,5 +346,12 @@ mod tests {
         assert!(!y.vision_ability);
         assert_eq!(y.max_output_tokens, 0);
         assert_eq!(y.input_token_price, 0.0);
+
+        // OpenRouter's 90 %-of-context default cap is clamped at ingest:
+        // requesting it verbatim leaves ~10 % of the window for input, so
+        // any substantial conversation 400s the provider's input+completion
+        // ≤ context check.
+        let junk = &models[2];
+        assert_eq!(junk.max_output_tokens, 131_072);
     }
 }
