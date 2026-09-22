@@ -484,6 +484,23 @@ const PROMPT_DAG_ENGINE: &str = "\n\
   schema handling, or computation, tell the user that the operation is unsupported instead of \
   assembling an equivalent manually.\n\
 \n\
+- **Script-node gate**: `python_script` and `r_script` are restricted escape hatches, not \
+  general computation nodes. Before adding either one, inspect the registry for a dedicated \
+  source, transform, analysis, or external-tool node and prefer SQL for deterministic schema \
+  reshaping. Add a script node only when the operation is a small, single-purpose \
+  DataFrame/File conversion or interface bridge that those nodes cannot express. It must not \
+  fit a model, estimate statistics, implement a domain algorithm, reproduce a published \
+  method, or perform a multi-step workflow. If that dedicated node is missing, report the \
+  analysis as unsupported instead of writing an ad-hoc implementation. Do not choose a script \
+  node merely because the request looks code-shaped or because the relevant dedicated node is \
+  unfamiliar; inspect its documentation first.\n\
+\n\
+- **Python bridge only**: `python_script` is only for lightweight DataFrame/File \
+  format conversion and interoperability bridging. Do not use it to apply actual \
+  analysis methods or reimplement an algorithm. Search the registry and use the \
+  dedicated analysis DAG node; if that node is unavailable, report the analysis as \
+  unsupported.\n\
+\n\
 - **Terminal visualization only**: `visualization_container` is a final sink for \
   plot-ready data. Perform filtering, aggregation, normalization, modeling, and all \
   other computation in upstream dedicated or SQL nodes. The node rejects arbitrary \
@@ -1180,6 +1197,11 @@ mod tests {
         let prompt = RuntimeConfig::default().system_prompt_or_default();
 
         assert!(prompt.contains("**Prefer dedicated nodes**"));
+        assert!(prompt.contains("**Script-node gate**"));
+        assert!(prompt.contains("not general computation nodes"));
+        assert!(prompt.contains("fit a model, estimate statistics, implement a domain algorithm"));
+        assert!(prompt.contains("**Python bridge only**"));
+        assert!(prompt.contains("not use it to apply actual analysis methods"));
         assert!(!prompt.contains("container_command"));
     }
 

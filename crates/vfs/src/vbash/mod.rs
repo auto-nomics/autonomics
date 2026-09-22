@@ -70,10 +70,11 @@ pub struct VfsBashInput {
         Set true to force insensitive, false to force sensitive."]
     pub case_insensitive: Option<bool>,
     #[desc = "Starting line number, 1-indexed (for cat/read/head/tail), \
-        or number of entries to skip (for ls pagination)."]
+        or number of entries to skip (for ls/tree pagination)."]
     pub offset: Option<usize>,
-    #[desc = "Max lines/entries to return (for cat/read/head/tail/ls). \
-        ls defaults to 200; use with offset to page through large listings."]
+    #[desc = "Max lines/entries to return (for cat/read/head/tail/ls/tree). \
+        ls defaults to 200 and tree defaults to 500; use with offset to page \
+        through large listings. tree is capped at 1000 entries per response."]
     pub limit: Option<usize>,
     #[desc = "Maximum file size in bytes for cat. Defaults to 10 MiB; values \
         above 10 MiB are rejected so large files are never fully downloaded."]
@@ -146,7 +147,7 @@ impl ToolFunction for VfsBashTool {
             "cp" => ops::op_cp(storage, input.src.as_deref(), input.dst.as_deref()).await,
             "mv" => ops::op_mv(storage, input.src.as_deref(), input.dst.as_deref()).await,
             "wc" => ops::op_wc(storage, input.path.as_deref()).await,
-            "tree" => ops::op_tree(storage, input.path.as_deref(), input.limit).await,
+            "tree" => ops::op_tree(storage, input.path.as_deref(), input.limit, input.offset).await,
 
             // ── search ──
             "grep" => {
@@ -1265,6 +1266,70 @@ mod tests {
         assert!(content.contains("d/"), "expected 'd/' marker in: {content}");
         assert!(content.contains("a.txt"), "expected a.txt in: {content}");
         assert!(content.contains("b.txt"), "expected b.txt in: {content}");
+    }
+
+    #[tokio::test]
+    async fn tree_truncates_and_reports_truncated() {
+        let tool = make_tool();
+        for i in 0..12 {
+            let mut w = input("write");
+            w.path = Some(format!("/t{i:02}.txt"));
+            w.content = Some(String::new());
+            tool.run(w).await.unwrap();
+        }
+
+        let mut first = input("tree");
+        first.path = Some("/".into());
+        first.limit = Some(10);
+        let first = result_json(tool.run(first).await.unwrap());
+        assert_eq!(first["returned"].as_u64().unwrap(), 10);
+        assert_eq!(first["truncated"], true);
+        assert_eq!(first["next_offset"].as_u64().unwrap(), 10);
+        assert!(
+            first["content"]
+                .as_str()
+                .unwrap()
+                .contains("next_offset=10")
+        );
+
+        let mut second = input("tree");
+        second.path = Some("/".into());
+        second.limit = Some(10);
+        second.offset = Some(10);
+        let second = result_json(tool.run(second).await.unwrap());
+        assert_eq!(second["returned"].as_u64().unwrap(), 2);
+        assert_eq!(second["truncated"], false);
+        assert!(second.get("next_offset").is_none());
+    }
+
+    #[tokio::test]
+    async fn tree_pagination_keeps_ancestor_context() {
+        let tool = make_tool();
+        for path in [
+            "/alpha/beta/one.txt",
+            "/alpha/beta/two.txt",
+            "/alpha/gamma.txt",
+            "/delta.txt",
+        ] {
+            let mut w = input("write");
+            w.path = Some(path.into());
+            w.content = Some(String::new());
+            tool.run(w).await.unwrap();
+        }
+
+        let mut page = input("tree");
+        page.path = Some("/".into());
+        page.limit = Some(2);
+        page.offset = Some(2);
+        let page = result_json(tool.run(page).await.unwrap());
+        let content = page["content"].as_str().unwrap();
+        assert_eq!(page["returned"].as_u64().unwrap(), 2);
+        assert_eq!(page["truncated"], true);
+        assert_eq!(page["next_offset"].as_u64().unwrap(), 4);
+        assert!(
+            content.contains("alpha/") && content.contains("beta/") && content.contains("two.txt"),
+            "expected ancestor context in tree page: {content}"
+        );
     }
 
     #[tokio::test]

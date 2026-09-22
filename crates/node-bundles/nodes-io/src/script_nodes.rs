@@ -1,4 +1,6 @@
-//! Isolated arbitrary Python/R DataFrame escape hatches.
+//! Isolated script nodes. Python is reserved by Agent guidance for lightweight
+//! DataFrame/File format conversion and interoperability bridging; substantive
+//! analysis methods belong in dedicated DAG nodes.
 //!
 //! Rust materializes the upstream DataFrame as CSV, the pinned container reads
 //! it as `input_table`, and user code must leave `output_table` in the global
@@ -811,20 +813,42 @@ impl NodeFactory for ScriptNodeFactory {
     fn desc(&self) -> &'static str {
         match self.runtime {
             ScriptRuntime::Python => {
-                "Runs inline Python over DataFrame/File inputs in an isolated image."
+                "Runs inline Python in an isolated image only for DataFrame/File \
+                 format conversion or interoperability bridging. Use a dedicated \
+                 DAG node for actual analysis methods."
             }
             ScriptRuntime::R => "Runs inline R over DataFrame/File inputs in an isolated image.",
         }
     }
 
     fn doc(&self) -> &'static str {
-        "Legacy mode keeps input_table/file_input and output_table/CSV outputs. \
+        match self.runtime {
+            ScriptRuntime::Python => {
+                "**Scope**: Use `python_script` only for lightweight data-format \
+        conversion or bridging between DataFrame/File representations. It is not \
+        appropriate for applying actual analysis methods. Before using it, inspect \
+        the registry and choose the dedicated DAG node for the required analysis; \
+        if that node does not exist, report the analysis as unsupported rather than \
+        reimplementing it in Python.\n\
+\n\
+        Legacy mode keeps input_table/file_input and output_table/CSV outputs. \
         Generic mode is selected by a non-empty outputs array: each input or output \
         spec creates a DAG port and exposes `<name>` plus `<name>_path` variables \
         to user code. DataFrame inputs are materialized as csv/tsv/parquet; \
         DataFrame outputs may be returned as `<name>` or written to \
         `<name>_path`; File outputs must be written to `<name>_path`. Packages are \
         preinstalled declarations only; runtime installation and network are disabled."
+            }
+            ScriptRuntime::R => {
+                "Legacy mode keeps input_table/file_input and output_table/CSV outputs. \
+        Generic mode is selected by a non-empty outputs array: each input or output \
+        spec creates a DAG port and exposes `<name>` plus `<name>_path` variables \
+        to user code. DataFrame inputs are materialized as csv/tsv/parquet; \
+        DataFrame outputs may be returned as `<name>` or written to \
+        `<name>_path`; File outputs must be written to `<name>_path`. Packages are \
+        preinstalled declarations only; runtime installation and network are disabled."
+            }
+        }
     }
 
     fn spec_schema(&self) -> schemars::Schema {
@@ -880,6 +904,41 @@ impl NodeFactory for ScriptNodeFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct NoopConnection;
+
+    #[async_trait::async_trait]
+    impl container_runtime::PodmanConnection for NoopConnection {
+        async fn run(
+            &self,
+            _request: container_runtime::ContainerRunRequest,
+        ) -> Result<container_runtime::ContainerRunResult, container_runtime::ContainerRuntimeError>
+        {
+            Err(container_runtime::ContainerRuntimeError::Invalid(
+                "metadata tests do not run containers".into(),
+            ))
+        }
+
+        fn workspace_root(&self) -> &std::path::Path {
+            std::path::Path::new("/tmp")
+        }
+    }
+
+    #[test]
+    fn python_metadata_limits_scope_to_format_bridging() {
+        let factory = ScriptNodeFactory::python(
+            std::sync::Arc::new(NoopConnection),
+            std::sync::Arc::new(container_runtime::PanelCache::new("/tmp")),
+        );
+
+        assert!(factory.desc().contains("format conversion"));
+        assert!(factory.desc().contains("dedicated DAG node"));
+        assert!(
+            factory
+                .doc()
+                .contains("not appropriate for applying actual analysis methods")
+        );
+    }
 
     #[test]
     fn builds_isolated_python_contract() {

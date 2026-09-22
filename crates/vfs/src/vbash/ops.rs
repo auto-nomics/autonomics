@@ -61,6 +61,23 @@ fn local_backend_root(op: &opendal::Operator) -> Option<PathBuf> {
     (op.info().scheme() == "fs").then(|| PathBuf::from(op.info().root().trim_end_matches('/')))
 }
 
+/// Compare paths by component so pagination follows rendered tree order.
+fn tree_path_cmp(left: &str, right: &str) -> std::cmp::Ordering {
+    let mut left = left.trim_matches('/').split('/');
+    let mut right = right.trim_matches('/').split('/');
+    loop {
+        match (left.next(), right.next()) {
+            (Some(left_part), Some(right_part)) => match left_part.cmp(right_part) {
+                std::cmp::Ordering::Equal => continue,
+                ordering => return ordering,
+            },
+            (None, None) => return std::cmp::Ordering::Equal,
+            (None, Some(_)) => return std::cmp::Ordering::Less,
+            (Some(_), None) => return std::cmp::Ordering::Greater,
+        }
+    }
+}
+
 fn safe_local_join(root: &Path, remote: &str) -> PathBuf {
     let mut path = root.to_path_buf();
     for component in Path::new(remote).components() {
@@ -107,60 +124,85 @@ async fn collect_followed_entries(
         .map_err(|e| e.to_string())?;
     visited.insert(root_canonical);
 
-    let mut pending = vec![(physical_root, remote.trim_matches('/').to_string())];
-    while let Some((directory, logical_directory)) = pending.pop() {
-        let mut reader = tokio::fs::read_dir(&directory)
-            .await
-            .map_err(|e| e.to_string())?;
+    collect_followed_directory(
+        &physical_root,
+        remote.trim_matches('/'),
+        limit,
+        &mut entries,
+        &mut visited,
+    )
+    .await?;
 
-        let mut children = Vec::new();
-        while let Some(child) = reader.next_entry().await.map_err(|e| e.to_string())? {
-            let physical = child.path();
-            let link_metadata = child.metadata().await.map_err(|e| e.to_string())?;
-            let followed_metadata = tokio::fs::metadata(&physical).await;
-            let metadata = match followed_metadata {
-                Ok(metadata) => metadata,
-                Err(error)
-                    if error.kind() == std::io::ErrorKind::NotFound
-                        && link_metadata.is_symlink() =>
-                {
-                    link_metadata
-                }
+    Ok(entries)
+}
+
+/// Walk local directories depth-first in deterministic path order. Early
+/// stopping is safe for pagination because collected paths are already in
+/// the same order used by the rendered tree.
+async fn collect_followed_directory(
+    directory: &Path,
+    logical_directory: &str,
+    limit: usize,
+    entries: &mut Vec<FollowedEntry>,
+    visited: &mut HashSet<PathBuf>,
+) -> Result<(), String> {
+    let mut reader = tokio::fs::read_dir(directory)
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut children = Vec::new();
+    while let Some(child) = reader.next_entry().await.map_err(|e| e.to_string())? {
+        let physical = child.path();
+        let link_metadata = child.metadata().await.map_err(|e| e.to_string())?;
+        let followed_metadata = tokio::fs::metadata(&physical).await;
+        let metadata = match followed_metadata {
+            Ok(metadata) => metadata,
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound && link_metadata.is_symlink() =>
+            {
+                link_metadata
+            }
+            Err(error) => return Err(error.to_string()),
+        };
+
+        let name = child.file_name().to_string_lossy().to_string();
+        let mut path = logical_directory.trim_end_matches('/').to_string();
+        if !path.is_empty() {
+            path.push('/');
+        }
+        path.push_str(&name);
+        let is_dir = metadata.is_dir();
+        children.push((FollowedEntry { path, is_dir }, physical, is_dir));
+    }
+    children.sort_by(|a, b| tree_path_cmp(&a.0.path, &b.0.path));
+
+    for (entry, physical, is_dir) in children {
+        if entries.len() >= limit {
+            return Ok(());
+        }
+        let should_descend = is_dir
+            && match tokio::fs::canonicalize(&physical).await {
+                Ok(canonical) => visited.insert(canonical),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
                 Err(error) => return Err(error.to_string()),
             };
-
-            let name = child.file_name().to_string_lossy().to_string();
-            let mut path = logical_directory.trim_end_matches('/').to_string();
-            if !path.is_empty() {
-                path.push('/');
-            }
-            path.push_str(&name);
-            let is_dir = metadata.is_dir();
-            if is_dir {
-                path.push('/');
-            }
-            children.push((FollowedEntry { path, is_dir }, physical, is_dir));
+        let child_directory = entry.path.trim_end_matches('/').to_string();
+        entries.push(entry);
+        if entries.len() >= limit {
+            return Ok(());
         }
-
-        for (entry, physical, is_dir) in children {
-            let should_descend = is_dir
-                && match tokio::fs::canonicalize(&physical).await {
-                    Ok(canonical) => visited.insert(canonical),
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
-                    Err(error) => return Err(error.to_string()),
-                };
-            let child_directory = entry.path.trim_end_matches('/').to_string();
-            entries.push(entry);
-            if entries.len() >= limit {
-                return Ok(entries);
-            }
-            if should_descend {
-                pending.push((physical, child_directory));
-            }
+        if should_descend {
+            Box::pin(collect_followed_directory(
+                &physical,
+                &child_directory,
+                limit,
+                entries,
+                visited,
+            ))
+            .await?;
         }
     }
 
-    Ok(entries)
+    Ok(())
 }
 
 async fn followed_entry_metadata(
@@ -749,6 +791,9 @@ pub async fn op_touch(
 /// Kept modest so a single listing does not flood the agent's context
 /// window. Callers may raise it via `limit`, or page with `offset`.
 const DEFAULT_LS_LIMIT: usize = 200;
+/// Default and hard maximum entry counts for a paginated `tree` response.
+const DEFAULT_TREE_LIMIT: usize = 500;
+const TREE_MAX_LIMIT: usize = 1000;
 
 /// `ls` — list directory entries.
 ///
@@ -1348,9 +1393,13 @@ pub async fn op_tree(
     storage: &OpendalFileStorage,
     path: Option<&str>,
     limit: Option<usize>,
+    offset: Option<usize>,
 ) -> Result<AgentToolResult, ToolError> {
     let vpath = OpendalFileStorage::normalize_path(path.unwrap_or("/"));
-    let max_entries = limit.unwrap_or(500);
+    let max_entries = limit.unwrap_or(DEFAULT_TREE_LIMIT).clamp(1, TREE_MAX_LIMIT);
+    let skip = offset.unwrap_or(0);
+    // One extra entry makes `truncated` exact even when a page is full.
+    let collection_limit = skip.saturating_add(max_entries).saturating_add(1);
 
     // Dispatch through the mount table: the operator plus the
     // backend-local key it expects.
@@ -1370,7 +1419,7 @@ pub async fn op_tree(
     let prefix = vpath.trim_end_matches('/');
     let scan_root = remote.trim_end_matches('/').to_string();
     let followed_entries = if local_backend_root(&op).is_some() {
-        collect_followed_entries(&op, &remote, max_entries.max(1)).await?
+        collect_followed_entries(&op, &remote, collection_limit).await?
     } else {
         let mut lister = op
             .lister_with(&scan)
@@ -1386,14 +1435,14 @@ pub async fn op_tree(
                 continue;
             }
             followed.push(FollowedEntry { path, is_dir });
-            if followed.len() >= max_entries {
+            if followed.len() >= collection_limit {
                 break;
             }
         }
         followed
     };
 
-    let mut entries: Vec<(usize, String, bool)> = Vec::new();
+    let mut all_entries: Vec<(usize, String, bool)> = Vec::new();
     for followed in followed_entries {
         let p_raw = followed.path;
         let is_dir = followed.is_dir;
@@ -1402,58 +1451,65 @@ pub async fn op_tree(
         // namespace (e.g. `mnt/.../parquet/1000g_eur.parquet` →
         // `/data/ldsc/1000g_eur.parquet`).
         let remapped = storage.remap_entry_to_virtual(&vpath, &p_raw);
-        let p = if remapped.starts_with('/') {
-            remapped
-        } else {
-            format!("/{remapped}")
-        };
+        let normalized = remapped.trim_end_matches('/');
+        let p = format!("/{}", normalized.trim_start_matches('/'));
         let rel = if prefix.is_empty() {
             p.as_str()
         } else {
             p.strip_prefix(prefix).unwrap_or(&p).trim_start_matches('/')
         };
         let depth = rel.matches('/').count();
-        entries.push((depth, format!("/{rel}"), is_dir));
-        if entries.len() >= max_entries {
-            break;
+        all_entries.push((depth, format!("/{rel}"), is_dir));
+    }
+
+    all_entries.sort_by(|a, b| tree_path_cmp(&a.1, &b.1));
+    let start = skip.min(all_entries.len());
+    let end = start.saturating_add(max_entries).min(all_entries.len());
+    let entries: Vec<(usize, String, bool)> = all_entries[start..end].to_vec();
+    let truncated = end < all_entries.len();
+    let returned = entries.len();
+    let next_offset = truncated.then_some(skip + returned);
+
+    // A page can begin at a nested entry. Keep its known ancestors in the
+    // rendering graph (without counting them in this page) so paths remain
+    // readable and directory metadata is not lost.
+    let known_by_path: std::collections::HashMap<String, (usize, bool)> = all_entries
+        .iter()
+        .map(|(depth, path, is_dir)| (path.clone(), (*depth, *is_dir)))
+        .collect();
+    let selected_paths: std::collections::HashSet<&str> =
+        entries.iter().map(|(_, path, _)| path.as_str()).collect();
+    let mut render_paths: Vec<String> = entries.iter().map(|(_, path, _)| path.clone()).collect();
+    for path in &selected_paths {
+        let mut ancestor: &str = path;
+        while let Some(index) = ancestor.rfind('/') {
+            ancestor = &ancestor[..index];
+            if ancestor.is_empty() {
+                break;
+            }
+            if known_by_path.contains_key(ancestor) && !selected_paths.contains(ancestor) {
+                render_paths.push(ancestor.to_string());
+            }
         }
     }
+    render_paths.sort_by(|a, b| tree_path_cmp(a, b));
+    render_paths.dedup();
+    let render_entries: Vec<(usize, String, bool)> = render_paths
+        .into_iter()
+        .map(|path| {
+            let (depth, is_dir) = known_by_path[&path];
+            (depth, path, is_dir)
+        })
+        .collect();
 
-    entries.sort_by(|a, b| a.1.cmp(&b.1));
-
-    // Index immediate children by parent path. Top-level entries
-    // (depth == 1 relative to the scan root) are always parented to '/'.
-    // OpenDAL returns each top-level directory as a trailing-slash
-    // entry like 'd/', so computing parent from `rfind('/')` would
-    // wrongly assign `d/` as a child of `d` (its own directory name).
-    // Using the recorded depth sidesteps that.
-    let mut children_of: std::collections::BTreeMap<String, Vec<String>> =
-        std::collections::BTreeMap::new();
-    children_of.insert("/".to_string(), Vec::new());
-    for (depth, p, _) in &entries {
-        let parent = if *depth == 1 {
-            "/".to_string()
-        } else if let Some(idx) = p.rfind('/') {
-            if idx == 0 {
-                "/".to_string()
-            } else {
-                p[..idx].to_string()
-            }
-        } else {
-            "/".to_string()
-        };
-        children_of.entry(parent).or_default().push(p.clone());
-    }
-    for v in children_of.values_mut() {
-        v.sort();
-    }
-
-    let meta_by_path: std::collections::HashMap<String, bool> =
-        entries.iter().map(|(_, p, d)| (p.clone(), *d)).collect();
+    let meta_by_path: std::collections::HashMap<String, bool> = render_entries
+        .iter()
+        .map(|(_, p, d)| (p.clone(), *d))
+        .collect();
 
     // Collect all entry paths and the parent-directory path each one
     // belongs to. The walker below uses these to render the tree.
-    let all_paths: Vec<String> = entries.iter().map(|(_, p, _)| p.clone()).collect();
+    let all_paths: Vec<String> = render_entries.iter().map(|(_, p, _)| p.clone()).collect();
 
     fn walk(
         parent: &str,
@@ -1494,7 +1550,7 @@ pub async fn op_tree(
                 }
             })
             .collect();
-        children.sort();
+        children.sort_by(|a, b| tree_path_cmp(a, b));
         if children.is_empty() {
             return;
         }
@@ -1550,13 +1606,25 @@ pub async fn op_tree(
         &mut out,
     );
 
-    Ok(AgentToolResult::success_json(serde_json::json!({
+    if truncated {
+        let next = next_offset.unwrap_or_default();
+        out.push_str(&format!(
+            "... [truncated after {returned} entries; next_offset={next}]\n"
+        ));
+    }
+
+    let mut payload = serde_json::json!({
         "path": vpath,
         "content": out,
-        "entries": entries.len(),
-        "_dbg_co": format!("{:?}", children_of),
-        "_dbg_meta": format!("{:?}", meta_by_path),
-    })))
+        "entries": returned,
+        "returned": returned,
+        "truncated": truncated,
+    });
+    if let Some(offset) = next_offset {
+        payload["next_offset"] = serde_json::json!(offset);
+    }
+
+    Ok(AgentToolResult::success_json(payload))
 }
 
 // ══════════════════ private helpers ══════════════════
