@@ -1286,11 +1286,12 @@ pub fn robust_normalize_container_spec(
     if spec.mask_label <= 0 {
         return Err("mask_label must be positive".into());
     }
-    if !(spec.lower_percentile.is_finite() && spec.upper_percentile.is_finite())
-        || !(0.0..=100.0).contains(&spec.lower_percentile)
-        || !(0.0..=100.0).contains(&spec.upper_percentile)
-        || spec.lower_percentile >= spec.upper_percentile
-    {
+    let percentiles_valid = spec.lower_percentile.is_finite()
+        && spec.upper_percentile.is_finite()
+        && (0.0..=100.0).contains(&spec.lower_percentile)
+        && (0.0..=100.0).contains(&spec.upper_percentile)
+        && spec.lower_percentile < spec.upper_percentile;
+    if !percentiles_valid {
         return Err("percentiles must be finite, in [0, 100], and ordered".into());
     }
     let mut container = base_spec("normalize", &spec.artifact_prefix, spec.timeout_secs)?;
@@ -1317,11 +1318,12 @@ pub fn peritumoral_ring_container_spec(
     if spec.mask_label <= 0 {
         return Err("mask_label must be positive".into());
     }
-    if !(spec.inner_mm.is_finite() && spec.outer_mm.is_finite())
-        || !(0.0..=50.0).contains(&spec.inner_mm)
-        || !(0.0..=50.0).contains(&spec.outer_mm)
-        || spec.inner_mm >= spec.outer_mm
-    {
+    let radii_valid = spec.inner_mm.is_finite()
+        && spec.outer_mm.is_finite()
+        && (0.0..=50.0).contains(&spec.inner_mm)
+        && (0.0..=50.0).contains(&spec.outer_mm)
+        && spec.inner_mm < spec.outer_mm;
+    if !radii_valid {
         return Err("radii must be finite, in [0, 50] millimeters, and ordered".into());
     }
     let mut container = base_spec("peritumoral-ring", &spec.artifact_prefix, spec.timeout_secs)?;

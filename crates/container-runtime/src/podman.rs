@@ -620,7 +620,7 @@ mod tests {
 
     #[test]
     fn default_pull_timeout_is_generous_enough_for_multi_gigabyte_images() {
-        assert!(DEFAULT_PULL_TIMEOUT_SECS >= 3600);
+        const { assert!(DEFAULT_PULL_TIMEOUT_SECS >= 3600) };
     }
 
     #[test]

@@ -277,7 +277,7 @@ mod tests {
         let status = [1u8, 2];
         let prob = [0.4, 0.6];
         let groups = grouped_calibration(&times, &status, &prob, 1095.75, 5, &opts()).unwrap();
-        assert!(groups.len() >= 1 && groups.len() <= 2);
+        assert!(!groups.is_empty() && groups.len() <= 2);
     }
 
     #[test]
