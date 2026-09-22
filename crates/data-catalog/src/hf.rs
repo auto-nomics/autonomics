@@ -1,12 +1,15 @@
 //! Publish data packages to a Hugging Face dataset repository.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use hf_hub::repository::CommitOperation;
 use hf_hub::{HFClient, HFClientBuilder, HFError, HFRepository, RepoTypeDataset};
 
 use crate::error::Result;
+use crate::migrate::{
+    PlannedEntryMigration, RawCatalogIndex, RawDatasetManifest, plan_entry_migration,
+};
 use crate::model::{CATALOG_SCHEMA_VERSION, CatalogEntry, CatalogIndex, DatasetManifest};
 use crate::package::{PACKAGE_MANIFEST, PAYLOAD_DIR, validate_package};
 use crate::remote::ObjectSource;
@@ -341,7 +344,12 @@ pub async fn publish_package_to_hf(
 
     // Phase 2: update the package-local index, then the thin registry.
     let index_repository = client.dataset(index_owner, index_name);
-    let package_index = read_remote_index(&package_repository, target.revision.as_deref()).await?;
+    let (package_index, _) = read_remote_index(
+        &package_repository,
+        &target.index_repo_id,
+        target.revision.as_deref(),
+    )
+    .await?;
     let package_index = upsert_entry(package_index, &entry)?;
     let package_index_bytes =
         serde_json::to_vec_pretty(&package_index).map_err(|error| error.to_string())?;
@@ -357,7 +365,12 @@ pub async fn publish_package_to_hf(
         .await
         .map_err(|error| format!("update package index in `{}`: {error}", entry.repo))?;
 
-    let mut registry = read_remote_index(&index_repository, target.revision.as_deref()).await?;
+    let (mut registry, _) = read_remote_index(
+        &index_repository,
+        &target.index_repo_id,
+        target.revision.as_deref(),
+    )
+    .await?;
     registry.schema_version = CATALOG_SCHEMA_VERSION;
     let legacy_repositories = registry
         .entries
@@ -423,10 +436,22 @@ fn split_repo_id(repo_id: &str) -> Result<(&str, &str)> {
     Ok((owner, name))
 }
 
+/// Read and validate (migrating v2 payloads on read) a remote catalog index.
+///
+/// Returns the migrated index plus the schema version as stored remotely —
+/// callers that rewrite the remote layout (the migration command) need the
+/// on-disk version to decide whether a commit is required; every other
+/// caller ignores it.
+///
+/// `prefix_repo` is the repository whose package prefix recovers the `repo`
+/// of v2 entries that only carry a legacy `id` — normally the index
+/// repository, so `owner/catalog-index` maps `panel.a` to
+/// `owner/catalog-panel-a`.
 async fn read_remote_index(
     repository: &HFRepository<RepoTypeDataset>,
+    prefix_repo: &str,
     revision: Option<&str>,
-) -> Result<CatalogIndex> {
+) -> Result<(CatalogIndex, u8)> {
     let revision = revision.unwrap_or("main");
     let request = repository
         .download_file_to_bytes()
@@ -434,19 +459,547 @@ async fn read_remote_index(
         .revision(revision.to_string());
     match request.send().await {
         Ok(bytes) => {
-            let index: CatalogIndex = serde_json::from_slice(&bytes).map_err(|error| {
+            let prefix = package_repo_prefix_for_index(prefix_repo).ok();
+            let raw: RawCatalogIndex = serde_json::from_slice(&bytes).map_err(|error| {
                 format!("parse Hugging Face catalog index `{INDEX_PATH}`: {error}")
+            })?;
+            let raw_schema_version = raw.schema_version();
+            let index = raw.into_v3(prefix.as_deref()).map_err(|error| {
+                format!("migrate Hugging Face catalog index `{INDEX_PATH}`: {error}")
             })?;
             index.validate().map_err(|error| {
                 format!("invalid Hugging Face catalog index `{INDEX_PATH}`: {error}")
             })?;
-            Ok(index)
+            Ok((index, raw_schema_version))
         }
-        Err(HFError::EntryNotFound { .. }) => Ok(CatalogIndex::default()),
+        Err(HFError::EntryNotFound { .. }) => Ok((CatalogIndex::default(), CATALOG_SCHEMA_VERSION)),
         Err(error) => {
             Err(format!("read Hugging Face catalog index `{INDEX_PATH}`: {error}").into())
         }
     }
+}
+
+/// Read one file from a repository; `None` when it does not exist.
+async fn read_remote_file(
+    repository: &HFRepository<RepoTypeDataset>,
+    path: &str,
+    revision: &str,
+) -> Result<Option<Vec<u8>>> {
+    match repository
+        .download_file_to_bytes()
+        .filename(path)
+        .revision(revision.to_string())
+        .send()
+        .await
+    {
+        Ok(bytes) => Ok(Some(bytes.to_vec())),
+        Err(HFError::EntryNotFound { .. }) => Ok(None),
+        Err(error) => Err(format!("read Hugging Face object `{path}`: {error}").into()),
+    }
+}
+
+/// Per-entry outcome of a package-repository migration.
+#[derive(Debug, serde::Serialize)]
+pub struct EntryMigrationReport {
+    pub version: String,
+    pub from_digest: String,
+    pub to_digest: String,
+    pub current: bool,
+    pub files: usize,
+    pub bytes: u64,
+}
+
+/// Outcome of migrating one package repository to the current formats.
+#[derive(Debug, serde::Serialize)]
+pub struct PackageMigrationReport {
+    pub repo: String,
+    pub dry_run: bool,
+    /// `false` when the repository already held only current-format data.
+    pub changed: bool,
+    pub migrated: Vec<EntryMigrationReport>,
+    pub unchanged: usize,
+    pub index_schema_version: u8,
+}
+
+/// Migrate one package repository from legacy formats to the current ones.
+///
+/// Legacy layouts handled: v2 package index, v1 manifests (legacy `id`, no
+/// `repo`). For every entry whose manifest moves to the current format the
+/// payload is re-committed under the new digest's content-addressed path —
+/// each file is downloaded, checksum-verified against the manifest, and
+/// re-added (the Hub's content-addressed transfer deduplicates identical
+/// bytes). Commits are ordered so the index flips only after the new layout
+/// is complete; the legacy layout is deleted in a final commit, so an
+/// interrupted migration never leaves the index pointing at missing files.
+///
+/// Idempotent: repositories already on current formats report
+/// `changed == false` and perform no commits.
+pub async fn migrate_package_repository(
+    client: &HFClient,
+    repo_id: &str,
+    revision: Option<&str>,
+    dry_run: bool,
+) -> Result<PackageMigrationReport> {
+    let revision = revision.unwrap_or("main");
+    let (owner, name) = split_repo_id(repo_id)?;
+    let repository = client.dataset(owner, name);
+
+    let (index, index_schema_version) =
+        read_remote_index(&repository, repo_id, Some(revision)).await?;
+    crate::remote::validate_package_index(&index, repo_id, &format!("{repo_id}/{INDEX_PATH}"))?;
+
+    let mut planned = Vec::with_capacity(index.entries.len());
+    for entry in index.entries.clone() {
+        let manifest_bytes = read_remote_file(&repository, &entry.package_manifest_key(), revision)
+            .await?
+            .ok_or_else(|| {
+                format!(
+                    "manifest `{}` is missing in `{repo_id}`",
+                    entry.package_manifest_key()
+                )
+            })?;
+        let raw: RawDatasetManifest = serde_json::from_slice(&manifest_bytes).map_err(|error| {
+            format!(
+                "parse manifest `{}` in `{repo_id}`: {error}",
+                entry.package_manifest_key()
+            )
+        })?;
+        planned.push(plan_entry_migration(repo_id, entry, raw)?);
+    }
+
+    let new_index = CatalogIndex {
+        schema_version: CATALOG_SCHEMA_VERSION,
+        generation: index.generation,
+        repositories: Vec::new(),
+        entries: planned.iter().map(|plan| plan.new_entry.clone()).collect(),
+    };
+    new_index.validate()?;
+    let changed =
+        index_schema_version != CATALOG_SCHEMA_VERSION || planned.iter().any(|plan| plan.changed);
+
+    let migrated = planned
+        .iter()
+        .filter(|plan| plan.changed)
+        .map(|plan| EntryMigrationReport {
+            version: plan.new_entry.version.clone(),
+            from_digest: plan.from_digest.clone(),
+            to_digest: plan.new_entry.digest.clone(),
+            current: plan.new_entry.current,
+            files: plan.new_manifest.files.len(),
+            bytes: plan.new_manifest.files.iter().map(|file| file.size).sum(),
+        })
+        .collect();
+    let report = PackageMigrationReport {
+        repo: repo_id.to_string(),
+        dry_run,
+        changed,
+        migrated,
+        unchanged: planned.iter().filter(|plan| !plan.changed).count(),
+        index_schema_version,
+    };
+    if !changed || dry_run {
+        return Ok(report);
+    }
+
+    // Phase A: per entry, stage the payload locally (verifying each file
+    // checksum), re-commit it under the new digest path, then the manifest.
+    for plan in planned.iter().filter(|plan| plan.changed) {
+        stage_and_recommit_entry(client, owner, name, plan, revision).await?;
+    }
+    // The index is the publication boundary: it flips only when every new
+    // layout is complete.
+    let index_bytes = serde_json::to_vec_pretty(&new_index).map_err(|error| error.to_string())?;
+    repository
+        .create_commit()
+        .operations(vec![CommitOperation::add_bytes(INDEX_PATH, index_bytes)])
+        .commit_message(format!("Migrate {repo_id} to schema v3"))
+        .revision(revision.to_string())
+        .send()
+        .await
+        .map_err(|error| format!("migrate index of `{repo_id}`: {error}"))?;
+
+    // Phase B: delete the legacy layout. Unreachable garbage if interrupted;
+    // the index already points at the fully verified new layout.
+    let mut deletes = Vec::new();
+    for plan in planned.iter().filter(|plan| plan.changed) {
+        deletes.push(CommitOperation::delete(&plan.old_manifest_key));
+        for file in &plan.new_manifest.files {
+            deletes.push(CommitOperation::delete(format!(
+                "{}/{}",
+                plan.old_payload_prefix, file.path
+            )));
+        }
+    }
+    for batch in deletes.chunks(HF_COMMIT_BATCH_FILES) {
+        repository
+            .create_commit()
+            .operations(batch.to_vec())
+            .commit_message(format!("Remove legacy layout from {repo_id}"))
+            .revision(revision.to_string())
+            .send()
+            .await
+            .map_err(|error| format!("delete legacy layout of `{repo_id}`: {error}"))?;
+    }
+
+    Ok(report)
+}
+
+/// Concurrent transfer streams used while staging payload files. A single
+/// stream rarely saturates the Hub CDN; several parallel range requests
+/// multiply throughput for both many-file and single-huge-file entries.
+const PARALLEL_TRANSFERS: usize = 8;
+/// Ranged-download chunk size. Files at or below this size download as one
+/// unit; larger files are split so several streams can work one file
+/// concurrently. Bounds peak memory at `PARALLEL_TRANSFERS ×` this size.
+///
+/// Every chunk costs one Hub resolver request, and anonymous accounts are
+/// capped at 5000 resolver requests per 5 minutes — keep chunks large
+/// enough that a full catalog migration stays comfortably under the cap.
+const TRANSFER_CHUNK_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Byte ranges covering `size` in [`TRANSFER_CHUNK_BYTES`] units.
+fn transfer_chunks(size: u64) -> Vec<std::ops::Range<u64>> {
+    let mut chunks = Vec::new();
+    let mut offset = 0;
+    while offset < size {
+        let end = (offset + TRANSFER_CHUNK_BYTES).min(size);
+        chunks.push(offset..end);
+        offset = end;
+    }
+    chunks
+}
+
+/// Write one fetched chunk at its offset in the staged target file.
+async fn write_chunk(path: PathBuf, offset: u64, bytes: Vec<u8>) -> Result<()> {
+    use tokio::io::{AsyncSeekExt, AsyncWriteExt};
+
+    // The target file is pre-created by the staging loop; chunk writers only
+    // seek and write, never truncate — a later chunk must not wipe the data
+    // earlier chunks already wrote.
+    let mut file = tokio::fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .await
+        .map_err(|error| format!("open staged file `{}`: {error}", path.display()))?;
+    file.seek(std::io::SeekFrom::Start(offset))
+        .await
+        .map_err(|error| format!("seek staged file `{}`: {error}", path.display()))?;
+    file.write_all(&bytes)
+        .await
+        .map_err(|error| format!("write staged file `{}`: {error}", path.display()))?;
+    file.flush()
+        .await
+        .map_err(|error| format!("flush staged file `{}`: {error}", path.display()))?;
+    Ok(())
+}
+
+/// Stream one whole object to `target`, retrying transient failures.
+///
+/// Some Hub backends (the api resolve-cache) serve ranged requests badly —
+/// partial bodies that stall mid-stream — while whole-object streams work.
+/// When a file's ranged chunks keep failing, staging falls back to this
+/// single-stream download. The per-file checksum check afterwards still
+/// guards the result.
+async fn download_whole_file(
+    client: &HFClient,
+    owner: &str,
+    name: &str,
+    old_key: &str,
+    target: &Path,
+    size: u64,
+    revision: &str,
+) -> Result<()> {
+    const ATTEMPTS: usize = 3;
+    // Headroom for a slow-but-healthy stream: at least 5 minutes, sized so
+    // even 250 KiB/s finishes in time.
+    let timeout = std::time::Duration::from_secs(((size / 250_000) + 1).max(300));
+    let mut delay = std::time::Duration::from_millis(500);
+    let mut last = None;
+    for attempt in 0..ATTEMPTS {
+        if attempt > 0 {
+            tokio::time::sleep(delay).await;
+            delay = delay.saturating_mul(2);
+        }
+        let scratch = tempfile::tempdir()
+            .map_err(|error| format!("create fallback staging directory: {error}"))?;
+        let repository = client.dataset(owner, name);
+        let sent = tokio::time::timeout(
+            timeout,
+            repository
+                .download_file()
+                .filename(old_key)
+                .local_dir(scratch.path())
+                .revision(revision.to_string())
+                .send(),
+        )
+        .await;
+        match sent {
+            Ok(Ok(local)) => {
+                tokio::fs::rename(&local, target).await.map_err(|error| {
+                    format!(
+                        "move fallback download `{}` to `{}`: {error}",
+                        local.display(),
+                        target.display()
+                    )
+                })?;
+                return Ok(());
+            }
+            Ok(Err(error)) => last = Some(error.to_string()),
+            Err(_) => last = Some(format!("request timed out after {timeout:?}")),
+        }
+    }
+    Err(format!(
+        "download `{old_key}` as a whole file after ranged chunks failed: {}",
+        last.unwrap_or_else(|| "unknown error".to_string())
+    )
+    .into())
+}
+
+/// Download one entry's legacy payload, verify every file checksum, and
+/// commit it under the new digest's content-addressed path.
+///
+/// Chunks of all payload files flow through one semaphore-bounded transfer
+/// pool ([`PARALLEL_TRANSFERS`] concurrent streams), each written at its
+/// offset as it arrives; files are checksum-verified only once fully
+/// assembled, so an interrupted or short chunk can never be committed.
+/// Files whose ranged chunks keep failing fall back to a streamed
+/// whole-file download one at a time.
+async fn stage_and_recommit_entry(
+    client: &HFClient,
+    owner: &str,
+    name: &str,
+    plan: &PlannedEntryMigration,
+    revision: &str,
+) -> Result<()> {
+    let staging = tempfile::tempdir()
+        .map_err(|error| format!("create migration staging directory: {error}"))?;
+
+    // Pre-create the payload tree so chunk tasks only seek-and-write.
+    for file in &plan.new_manifest.files {
+        let target = staging.path().join(&file.path);
+        if let Some(parent) = target.parent() {
+            tokio::fs::create_dir_all(parent).await.map_err(|error| {
+                format!("create staging directory `{}`: {error}", parent.display())
+            })?;
+        }
+        tokio::fs::File::create(&target)
+            .await
+            .map_err(|error| format!("create staged file `{}`: {error}", target.display()))?;
+    }
+
+    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(PARALLEL_TRANSFERS));
+    let mut transfers = tokio::task::JoinSet::new();
+    for (file_index, file) in plan.new_manifest.files.iter().enumerate() {
+        let old_key = format!("{}/{}", plan.old_payload_prefix, file.path);
+        let target = staging.path().join(&file.path);
+        let chunks = transfer_chunks(file.size);
+        // Single-chunk files fetch as one whole-object request (no Range
+        // header): several Hub backends serve ranged requests badly while
+        // plain streams work everywhere. Ranged requests remain for
+        // splitting large files across parallel streams.
+        let whole_object = chunks.len() == 1;
+        for range in chunks {
+            let permit = semaphore
+                .clone()
+                .acquire_owned()
+                .await
+                .expect("transfer semaphore is never closed");
+            let (client, owner, name) = (client.clone(), owner.to_string(), name.to_string());
+            let (path, revision, target) = (old_key.clone(), revision.to_string(), target.clone());
+            let fetch_range = if whole_object {
+                None
+            } else {
+                Some(range.clone())
+            };
+            transfers.spawn(async move {
+                let _permit = permit;
+                let repository = client.dataset(&owner, &name);
+                let expected = range.end - range.start;
+                let bytes = fetch_retried(&repository, &path, fetch_range, &revision)
+                    .await
+                    .map_err(|error| {
+                        (
+                            file_index,
+                            format!("download `{path}` at {}: {error}", range.start),
+                        )
+                    })?;
+                if bytes.len() as u64 != expected {
+                    return Err((
+                        file_index,
+                        format!(
+                            "short read for `{path}`: got {} of {expected} bytes",
+                            bytes.len()
+                        ),
+                    ));
+                }
+                write_chunk(target, range.start, bytes)
+                    .await
+                    .map_err(|error| (file_index, error.to_string()))
+            });
+        }
+    }
+    // Ranged failures are collected, not fatal: the affected files get a
+    // streamed whole-file fallback before verification.
+    let mut failed_files: std::collections::BTreeMap<usize, String> =
+        std::collections::BTreeMap::new();
+    while let Some(joined) = transfers.join_next().await {
+        match joined.map_err(|error| format!("staging transfer task failed: {error}")) {
+            Ok(Ok(())) => {}
+            Ok(Err((file_index, error))) => {
+                failed_files.entry(file_index).or_insert(error);
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    for (file_index, chunk_error) in &failed_files {
+        let file = &plan.new_manifest.files[*file_index];
+        let old_key = format!("{}/{}", plan.old_payload_prefix, file.path);
+        download_whole_file(
+            client,
+            owner,
+            name,
+            &old_key,
+            &staging.path().join(&file.path),
+            file.size,
+            revision,
+        )
+        .await
+        .map_err(|error| format!("{error} (ranged chunks failed with: {chunk_error})"))?;
+    }
+
+    for file in &plan.new_manifest.files {
+        verify_file_sha256(&staging.path().join(&file.path), &file.sha256).await?;
+    }
+
+    let mut operations = Vec::with_capacity(plan.new_manifest.files.len() + 1);
+    for file in &plan.new_manifest.files {
+        operations.push(CommitOperation::add_file(
+            format!("{}/{}", plan.new_entry.package_payload_prefix(), file.path),
+            staging.path().join(&file.path),
+        ));
+    }
+    let manifest_bytes =
+        serde_json::to_vec_pretty(&plan.new_manifest).map_err(|error| error.to_string())?;
+    operations.push(CommitOperation::add_bytes(
+        plan.new_entry.package_manifest_key(),
+        manifest_bytes,
+    ));
+
+    let batch_count = operations.len().div_ceil(HF_COMMIT_BATCH_FILES);
+    let repository = client.dataset(owner, name);
+    for (batch_index, batch) in operations.chunks(HF_COMMIT_BATCH_FILES).enumerate() {
+        repository
+            .create_commit()
+            .operations(batch.to_vec())
+            .commit_message(format!(
+                "Migrate {}@{} ({}/{})",
+                plan.new_entry.repo,
+                plan.new_entry.version,
+                batch_index + 1,
+                batch_count
+            ))
+            .revision(revision.to_string())
+            .send()
+            .await
+            .map_err(|error| {
+                format!(
+                    "commit migrated payload for `{}`: {error}",
+                    plan.new_entry.repo
+                )
+            })?;
+    }
+    Ok(())
+}
+
+/// Stream a file through SHA-256 and compare against a `sha256:<hex>` value.
+async fn verify_file_sha256(path: &Path, expected: &str) -> Result<()> {
+    use sha2::Digest;
+    use tokio::io::AsyncReadExt;
+
+    let mut file = tokio::fs::File::open(path)
+        .await
+        .map_err(|error| format!("open staged file `{}`: {error}", path.display()))?;
+    let mut hasher = sha2::Sha256::new();
+    let mut buffer = vec![0_u8; 1024 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .await
+            .map_err(|error| format!("read staged file `{}`: {error}", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    let actual = format!("sha256:{}", crate::model::hex(&hasher.finalize()));
+    if actual != expected {
+        return Err(format!(
+            "staged file `{}` checksum mismatch: expected {expected}, got {actual}",
+            path.display()
+        )
+        .into());
+    }
+    Ok(())
+}
+
+/// Outcome of migrating the registry repository to the current format.
+#[derive(Debug, serde::Serialize)]
+pub struct RegistryMigrationReport {
+    pub repo: String,
+    pub dry_run: bool,
+    pub changed: bool,
+    pub repositories: Vec<String>,
+    pub index_schema_version: u8,
+}
+
+/// Rewrite a v2 registry index as v3: entries fold into repository
+/// references and the generation advances. No-op on current-format
+/// registries.
+pub async fn migrate_registry_repository(
+    client: &HFClient,
+    repo_id: &str,
+    revision: Option<&str>,
+    dry_run: bool,
+) -> Result<RegistryMigrationReport> {
+    let revision = revision.unwrap_or("main");
+    let (owner, name) = split_repo_id(repo_id)?;
+    let repository = client.dataset(owner, name);
+
+    let (index, index_schema_version) =
+        read_remote_index(&repository, repo_id, Some(revision)).await?;
+    let changed = index_schema_version != CATALOG_SCHEMA_VERSION || !index.entries.is_empty();
+
+    let mut registry = CatalogIndex {
+        schema_version: CATALOG_SCHEMA_VERSION,
+        generation: index.generation.saturating_add(1),
+        repositories: index.repositories.clone(),
+        entries: Vec::new(),
+    };
+    for entry in &index.entries {
+        registry.record_repository(&entry.repo);
+    }
+    registry.validate()?;
+    let report = RegistryMigrationReport {
+        repo: repo_id.to_string(),
+        dry_run,
+        changed,
+        repositories: registry.repositories.clone(),
+        index_schema_version,
+    };
+    if !changed || dry_run {
+        return Ok(report);
+    }
+
+    let bytes = serde_json::to_vec_pretty(&registry).map_err(|error| error.to_string())?;
+    repository
+        .create_commit()
+        .operations(vec![CommitOperation::add_bytes(INDEX_PATH, bytes)])
+        .commit_message("Migrate registry to schema v3".to_string())
+        .revision(revision.to_string())
+        .send()
+        .await
+        .map_err(|error| format!("migrate registry `{repo_id}`: {error}"))?;
+    Ok(report)
 }
 
 fn package_commit_operations(
@@ -474,6 +1027,34 @@ mod tests {
     use crate::package::{BuildOptions, build_package};
     use crate::remote::RemoteCatalog;
     use hf_hub::repository::AddSource;
+
+    #[test]
+    fn transfer_chunks_split_at_the_chunk_size() {
+        assert!(transfer_chunks(0).is_empty());
+        // At or below the chunk size: one unit covering the whole file.
+        assert_eq!(
+            transfer_chunks(TRANSFER_CHUNK_BYTES),
+            vec![0..TRANSFER_CHUNK_BYTES]
+        );
+        // Above it: full chunks plus a short tail.
+        let size = TRANSFER_CHUNK_BYTES * 2 + 1024;
+        assert_eq!(
+            transfer_chunks(size),
+            vec![
+                0..TRANSFER_CHUNK_BYTES,
+                TRANSFER_CHUNK_BYTES..TRANSFER_CHUNK_BYTES * 2,
+                TRANSFER_CHUNK_BYTES * 2..size
+            ]
+        );
+        // Coverage is gap-free and exactly sized.
+        for size in [1_u64, 4096, TRANSFER_CHUNK_BYTES + 1] {
+            let covered: u64 = transfer_chunks(size)
+                .iter()
+                .map(|range| range.end - range.start)
+                .sum();
+            assert_eq!(covered, size);
+        }
+    }
 
     #[test]
     fn split_repo_id_requires_owner_and_name() {

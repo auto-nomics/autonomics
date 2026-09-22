@@ -4,7 +4,7 @@ use sha2::{Digest, Sha256};
 use vfs::MountDefinition;
 
 use crate::error::Result;
-use crate::hf::package_repo_id;
+use crate::migrate::RawCatalogIndex;
 use crate::model::{CatalogEntry, CatalogIndex, DatasetManifest, hex};
 use crate::remote::{ObjectSource, RemoteCatalog, validate_entry_manifest};
 
@@ -382,120 +382,6 @@ fn short_name_alias<'a>(repo: &'a str, prefix: Option<&str>) -> Option<&'a str> 
     let prefix = prefix?;
     let prefix_with_dash = format!("{prefix}-");
     repo.strip_prefix(prefix_with_dash.as_str())
-}
-
-/// Indexed view of `CatalogIndex` used to migrate v2 indexes on read.
-///
-/// v2 entries carry an `id` field plus `repo`. v3 only needs `repo`. If `repo`
-/// is empty on a v2 entry the prefix is required to derive one; otherwise we
-/// keep whatever `repo` was already populated with.
-#[derive(Debug, serde::Deserialize)]
-struct RawCatalogIndex {
-    #[serde(default = "default_schema")]
-    schema_version: u8,
-    #[serde(default)]
-    generation: u64,
-    #[serde(default)]
-    repositories: Vec<String>,
-    #[serde(default)]
-    entries: Vec<RawCatalogEntry>,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct RawCatalogEntry {
-    #[serde(default)]
-    id: Option<String>,
-    #[serde(default)]
-    repo: Option<String>,
-    #[serde(default)]
-    version: String,
-    #[serde(default)]
-    kind: String,
-    digest: String,
-    #[serde(default)]
-    current: bool,
-    #[serde(default)]
-    created_unix_seconds: i64,
-}
-
-fn default_schema() -> u8 {
-    3
-}
-
-impl RawCatalogIndex {
-    fn into_v3(self, prefix: Option<&str>) -> Result<CatalogIndex> {
-        if self.schema_version == 3 {
-            // No id field any more; the v3 struct deserializes fine from
-            // a payload that may have been written by older code paths.
-            let entries = self
-                .entries
-                .into_iter()
-                .map(|raw| raw.into_v3_entry(prefix))
-                .collect::<Result<Vec<_>>>()?;
-            return Ok(CatalogIndex {
-                schema_version: 3,
-                generation: self.generation,
-                repositories: self.repositories,
-                entries,
-            });
-        }
-        if self.schema_version == 2 {
-            let entries = self
-                .entries
-                .into_iter()
-                .map(|raw| raw.into_v3_entry_from_v2(prefix))
-                .collect::<Result<Vec<_>>>()?;
-            return Ok(CatalogIndex {
-                schema_version: 3,
-                generation: self.generation,
-                repositories: self.repositories,
-                entries,
-            });
-        }
-        Err(format!("unsupported catalog schema version {}", self.schema_version).into())
-    }
-}
-
-impl RawCatalogEntry {
-    fn into_v3_entry(self, _prefix: Option<&str>) -> Result<CatalogEntry> {
-        let repo = self
-            .repo
-            .ok_or_else(|| "catalog entry is missing required `repo`".to_string())?;
-        if repo.is_empty() {
-            return Err("catalog entry has empty `repo`".into());
-        }
-        Ok(CatalogEntry {
-            repo,
-            version: self.version,
-            kind: self.kind,
-            digest: self.digest,
-            current: self.current,
-            created_unix_seconds: self.created_unix_seconds,
-        })
-    }
-
-    fn into_v3_entry_from_v2(self, prefix: Option<&str>) -> Result<CatalogEntry> {
-        let repo = if let Some(repo) = self.repo.filter(|value| !value.is_empty()) {
-            repo
-        } else {
-            let id = self.id.ok_or_else(|| {
-                "v2 catalog entry is missing both `id` and `repo`; cannot migrate".to_string()
-            })?;
-            let prefix = prefix.ok_or_else(|| {
-                "v2 catalog entry has empty `repo` and no prefix is configured to derive one"
-                    .to_string()
-            })?;
-            package_repo_id(prefix, &id)
-        };
-        Ok(CatalogEntry {
-            repo,
-            version: self.version,
-            kind: self.kind,
-            digest: self.digest,
-            current: self.current,
-            created_unix_seconds: self.created_unix_seconds,
-        })
-    }
 }
 
 async fn download_and_verify(
