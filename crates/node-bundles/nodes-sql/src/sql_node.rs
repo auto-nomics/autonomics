@@ -81,7 +81,12 @@ impl NodeFactory for SqlNodeFactory {
         table, e.g. SELECT 1. Single untyped output port. Unquoted SQL \
         identifiers are case-folded \
         (usually to lowercase); quote aliases such as z AS \"Z\" when a \
-        downstream node requires an exact uppercase field name."
+        downstream node requires an exact uppercase field name. \
+        Each execution runs in an isolated SQL context whose only tables are \
+        this node's own direct upstream inputs: information_schema.tables, \
+        information_schema.columns, and SHOW TABLES list exactly those \
+        port_N tables — not workspace-wide data files. An empty listing \
+        therefore means the node has no upstream inputs connected."
     }
 
     fn spec_schema(&self) -> schemars::Schema {
@@ -241,6 +246,31 @@ mod tests {
             .await
             .unwrap();
         dbg!(output);
+    }
+
+    /// A standalone sql node (no upstream) sees NO data tables in
+    /// information_schema: the isolated context only knows the catalog's own
+    /// tables, and zero `port%` rows is the documented signal for "no
+    /// upstream inputs connected" — not a broken catalog.
+    #[tokio::test]
+    async fn test_information_schema_is_empty_without_upstream_inputs() {
+        let mut node = SqlNode::new(
+            "SELECT table_name FROM information_schema.tables \
+             WHERE table_name LIKE 'port%'"
+                .to_string(),
+        );
+        let output = node
+            .execute(
+                &node_ctx(),
+                &[],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            output.dataframe(0).unwrap().clone().count().await.unwrap(),
+            0
+        );
     }
 
     #[tokio::test]
