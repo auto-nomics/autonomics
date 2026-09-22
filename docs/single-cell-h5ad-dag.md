@@ -13,12 +13,16 @@ The main data path is opaque H5AD. Rust owns scheduling, caching, VFS artifacts,
 | `h5ad_rank_genes_groups` | `h5ad` | `rank_genes_groups.parquet`, `report.json`, `output.h5ad` |
 | `h5ad_cluster_mean_expression` | `h5ad` | `cluster_mean_expression.parquet` |
 | `gene_set_score` | `h5ad` | `output.h5ad`, `report.json` |
+| `h5ad_marker_annotate` | `h5ad` | `output.h5ad`, `report.json` |
+| `h5ad_ucell_score` | `h5ad` | `output.h5ad`, `report.json` |
 
 All artifacts are written beneath the node-specific `/artifacts/{kind}/{run_id}/` prefix. Existing H5AD inputs are staged as private container inputs and are not copied to the output prefix. Each H5AD node preserves unique `obs_names` and `var_names`, keeps sparse CSR data sparse, and retains `layers["counts"]` when it slices or normalizes an existing counts layer.
 
 The embedding node creates `X_pca`, `X_umap`, neighbor graphs in `obsp`, parameters in `uns`, and `obs["leiden"]`. If `X_pca` is already present, it is reused rather than recomputed; this allows a corrected embedding from a future integration node to stay the single source of truth.
 
 `sc_dense_ingest` accepts CSV/TSV (optionally gzip/BGZF) with genes in rows or cells in rows, applies optional cell/gene count filters, and retains raw counts in `layers["counts"]`. `h5ad_rank_genes_groups` supports Wilcoxon, t-tests, and logistic regression and emits a tidy `group/gene/rank/score/pvalue/pvalue_adj` table. `h5ad_cluster_mean_expression` emits one `cluster/gene` row per requested gene with optional CP10K normalization and percent expressed. `gene_set_score` adds one numeric obs column per requested module.
+
+`h5ad_marker_annotate` scores a cell-type → marker-gene dictionary per cell (mean marker expression after `log_cp10k` or on raw data) and writes `marker_label`/`marker_score`/`marker_margin` to obs; an optional `groupby` column decides one label per cluster and propagates it, and scores not above `min_score` fall back to `unknown_label`. `h5ad_ucell_score` computes rank-based UCell signatures (mean of `margin/(margin+rank)` per cell, bounded 0–1, library-size independent) directly on the raw matrix, one obs column per gene set.
 
 ## Metadata and SQL bridge
 

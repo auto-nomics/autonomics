@@ -2,6 +2,15 @@
 //!
 //! <https://www.ebi.ac.uk/gwas/summary-statistics/docs/>
 //!
+//! **DEPRECATED UPSTREAM:** EBI has turned this API off — every endpoint
+//! answers `410 Gone` and points at
+//! <https://www.ebi.ac.uk/gwas/docs/methods/summary-statistics>, which names
+//! the FTP mirror as the sanctioned access path (no replacement API yet).
+//! The agent-facing tools no longer call these methods; they list the study's
+//! files on the FTP mirror instead (see `tools::summary_associations`). The
+//! methods stay for callers pinning `ENDPOINT_GWASCATALOG_SS_URL` at a live
+//! mirror.
+//!
 //! All endpoints are read-only (`GET`). Responses use HAL format with
 //! `_links` (pagination: `first`, `next`) and `_embedded` (data).
 

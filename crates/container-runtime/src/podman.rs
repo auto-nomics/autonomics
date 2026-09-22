@@ -35,6 +35,12 @@ const HOST_CWD: &str = "/";
 const DEFAULT_PULL_TIMEOUT_SECS: u64 = 3600;
 const PULL_TIMEOUT_ENV: &str = "AUTONOMICS_PODMAN_PULL_TIMEOUT_SECS";
 
+/// Podman's SQLite-backed container store wedges permanently when several
+/// `create` invocations (each of which may also pull) race each other, so
+/// storage-mutating creates are serialized process-wide. `start --attach`
+/// stays parallel: by then the container already exists.
+static CREATE_GATE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+
 #[derive(Debug, Clone)]
 pub struct PodmanConfig {
     pub program: String,
@@ -192,6 +198,11 @@ async fn create_container(
     args: Vec<String>,
 ) -> Result<(), ContainerRuntimeError> {
     let timeout_secs = pull_timeout_secs();
+    // Queue here, before the timeout below: a queued create must not burn its
+    // pull budget while another create is pulling multi-GB layers.
+    let _create_permit = CREATE_GATE.acquire().await.map_err(|error| {
+        ContainerRuntimeError::Invalid(format!("podman create gate closed: {error}"))
+    })?;
     let created = tokio::time::timeout(
         Duration::from_secs(timeout_secs),
         async_podman_command(program)
@@ -620,7 +631,7 @@ mod tests {
 
     #[test]
     fn default_pull_timeout_is_generous_enough_for_multi_gigabyte_images() {
-        const { assert!(DEFAULT_PULL_TIMEOUT_SECS >= 3600) };
+        const { assert_eq!(DEFAULT_PULL_TIMEOUT_SECS, 3600) };
     }
 
     #[test]

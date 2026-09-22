@@ -143,6 +143,12 @@ def sparse_or_dense_axis_sum(value: Any, axis: int) -> np.ndarray:
     return np.asarray(result, dtype=float)
 
 
+def sparse_or_dense_axis_mean(value: Any, axis: int) -> np.ndarray:
+    if sp.issparse(value):
+        return np.asarray(value.mean(axis=axis)).ravel()
+    return np.asarray(value, dtype=float).mean(axis=axis)
+
+
 def row_counts(value: Any) -> np.ndarray:
     if sp.issparse(value):
         return np.asarray(value.getnnz(axis=1), dtype=float)
@@ -649,6 +655,198 @@ def cluster_mean_expression(params: dict[str, Any]) -> Path:
     return output_path
 
 
+def normalize_log_cp10k(x: Any) -> Any:
+    counts = np.asarray(x.sum(axis=1)).ravel()
+    scale = np.zeros_like(counts, dtype=float)
+    nonzero = counts > 0
+    scale[nonzero] = 1e4 / counts[nonzero]
+    if sp.issparse(x):
+        return (sp.diags(scale) @ x).log1p()
+    return np.log1p(x * scale[:, None])
+
+
+def marker_annotate(params: dict[str, Any]) -> tuple[ad.AnnData, Path, Path]:
+    input_path = required_path(H5AD_INPUT)
+    output_path = required_output(H5AD_OUTPUT)
+    report_path = required_output(REPORT_OUTPUT)
+    marker_sets = params.get("marker_sets")
+    if not isinstance(marker_sets, dict) or not marker_sets:
+        raise ContractError("marker_sets must be a nonempty object")
+    groupby = params.get("groupby")
+    if groupby is not None and (not isinstance(groupby, str) or not groupby.strip()):
+        raise ContractError("groupby must be a nonempty string when provided")
+    normalize = params.get("normalize", "log_cp10k")
+    if normalize not in {"log_cp10k", "none"}:
+        raise ContractError("normalize must be `log_cp10k` or `none`")
+    min_score = params.get("min_score", 0.0)
+    if isinstance(min_score, bool) or not isinstance(min_score, (int, float)):
+        raise ContractError("min_score must be a number")
+    unknown_label = require_str(params, "unknown_label", "Unknown")
+    adata = read_h5ad(input_path)
+    known = set(str(value) for value in adata.var_names)
+    summaries: dict[str, dict[str, Any]] = {}
+    indices: dict[str, np.ndarray] = {}
+    for name, genes in marker_sets.items():
+        if not isinstance(name, str) or not name:
+            raise ContractError(f"marker set name `{name}` is empty")
+        if not isinstance(genes, list) or any(not isinstance(gene, str) or not gene for gene in genes):
+            raise ContractError(f"marker set `{name}` must be an array of nonempty strings")
+        present = [gene for gene in genes if gene in known]
+        if not present:
+            raise ContractError(f"marker set `{name}` has no genes present in the H5AD")
+        indices[name] = np.asarray([adata.var_names.get_loc(gene) for gene in present], dtype=int)
+        summaries[name] = {
+            "genes_requested": int(len(genes)),
+            "genes_present": int(len(present)),
+            "missing_genes": sorted(set(genes) - known),
+        }
+    x = adata.X
+    if normalize == "log_cp10k":
+        x = normalize_log_cp10k(x)
+    names = list(indices)
+    score_matrix = np.column_stack([
+        sparse_or_dense_axis_mean(x[:, index], axis=1) for index in indices.values()
+    ])
+    rows = np.arange(score_matrix.shape[0])
+    top_index = score_matrix.argmax(axis=1)
+    top = score_matrix[rows, top_index]
+    masked = score_matrix.copy()
+    masked[rows, top_index] = -np.inf
+    second = masked.max(axis=1)
+    # With a single marker set there is no runner-up: report the margin as the
+    # top score itself (report JSON forbids inf).
+    margin = np.where(np.isfinite(second), top - second, top)
+    cluster_labels: dict[str, str] | None = None
+    if groupby is None:
+        labels = np.where(top > min_score, np.asarray(names)[top_index], unknown_label).astype(str)
+        cell_scores = top
+        cell_margins = margin
+    else:
+        if groupby not in adata.obs:
+            raise ContractError(f"H5AD obs has no `{groupby}` column")
+        group_keys = adata.obs[groupby].astype(str).to_numpy()
+        frame = pd.DataFrame(score_matrix, columns=names)
+        frame["__group__"] = group_keys
+        cluster_scores = frame.groupby("__group__", sort=True)[names].mean()
+        cvals = cluster_scores.to_numpy(dtype=float)
+        c_rows = np.arange(cvals.shape[0])
+        c_top_index = cvals.argmax(axis=1)
+        c_top = cvals[c_rows, c_top_index]
+        c_masked = cvals.copy()
+        c_masked[c_rows, c_top_index] = -np.inf
+        c_second = c_masked.max(axis=1)
+        c_margin = np.where(np.isfinite(c_second), c_top - c_second, c_top)
+        c_labels = np.where(
+            c_top > min_score, np.asarray(cluster_scores.columns)[c_top_index], unknown_label
+        ).astype(str)
+        label_by_group = dict(zip(cluster_scores.index.astype(str), c_labels))
+        margin_by_group = dict(zip(cluster_scores.index.astype(str), c_margin))
+        assigned = np.asarray([label_by_group[key] for key in group_keys])
+        column_by_name = {name: position for position, name in enumerate(names)}
+        # Labeled cells keep their own score for the assigned label; cells under
+        # the unknown fallback report their own best score as evidence.
+        fallback = assigned == unknown_label
+        own = score_matrix[rows, np.asarray([column_by_name[label] for label in assigned])]
+        labels = assigned
+        cell_scores = np.where(fallback, top, own)
+        cell_margins = np.asarray([margin_by_group[key] for key in group_keys])
+        cluster_labels = {key: str(value) for key, value in label_by_group.items()}
+    adata.obs["marker_label"] = labels
+    adata.obs["marker_score"] = cell_scores.astype(float)
+    adata.obs["marker_margin"] = cell_margins.astype(float)
+    adata.uns["marker_annotate_params"] = {
+        "normalize": normalize,
+        "groupby": groupby,
+        "min_score": float(min_score),
+        "unknown_label": unknown_label,
+    }
+    report = {
+        "schema_version": "1.0",
+        "operation": "marker_annotate",
+        "cells": int(adata.n_obs),
+        "mode": "cluster" if groupby is not None else "per_cell",
+        "groupby": groupby,
+        "normalize": normalize,
+        "min_score": float(min_score),
+        "unknown_label": unknown_label,
+        "marker_sets": summaries,
+        "label_counts": {
+            str(key): int(value)
+            for key, value in adata.obs["marker_label"].value_counts().items()
+        },
+    }
+    if cluster_labels is not None:
+        report["cluster_labels"] = cluster_labels
+    write_json(report, report_path)
+    return adata, output_path, report_path
+
+
+def ucell_score(params: dict[str, Any]) -> tuple[ad.AnnData, Path, Path]:
+    from scipy.stats import rankdata
+
+    input_path = required_path(H5AD_INPUT)
+    output_path = required_output(H5AD_OUTPUT)
+    report_path = required_output(REPORT_OUTPUT)
+    gene_sets = params.get("gene_sets")
+    if not isinstance(gene_sets, dict) or not gene_sets:
+        raise ContractError("gene_sets must be a nonempty object")
+    adata = read_h5ad(input_path)
+    known = set(str(value) for value in adata.var_names)
+    summaries: dict[str, dict[str, Any]] = {}
+    indices: dict[str, np.ndarray] = {}
+    for name, genes in gene_sets.items():
+        if not isinstance(name, str) or not name or name in adata.obs:
+            raise ContractError(f"gene set name `{name}` is empty or already present in obs")
+        if not isinstance(genes, list) or any(not isinstance(gene, str) or not gene for gene in genes):
+            raise ContractError(f"gene set `{name}` must be an array of nonempty strings")
+        present = [gene for gene in genes if gene in known]
+        if not present:
+            raise ContractError(f"gene set `{name}` has no genes present in the H5AD")
+        indices[name] = np.asarray([adata.var_names.get_loc(gene) for gene in present], dtype=int)
+        missing = sorted(set(genes) - known)
+        summaries[name] = {
+            "genes_requested": int(len(genes)),
+            "genes_present": int(len(present)),
+            "missing_genes": missing,
+        }
+    n_genes = int(adata.n_vars)
+    scores = {name: np.empty(adata.n_obs, dtype=float) for name in indices}
+    chunk_cells = max(1, min(1000, adata.n_obs))
+    for start in range(0, adata.n_obs, chunk_cells):
+        stop = min(start + chunk_cells, adata.n_obs)
+        block = adata.X[start:stop]
+        dense = (
+            block.toarray().astype(np.float64)
+            if sp.issparse(block)
+            else np.asarray(block, dtype=np.float64)
+        )
+        # UCell: rank genes within each cell, rank 1 = highest expression
+        # (average ranks break ties), then score = mean(margin/(margin+rank))
+        # over the signature with margin = (n_genes - signature size) / 2.
+        descending = (n_genes + 1) - rankdata(dense, axis=1, method="average")
+        for name, index in indices.items():
+            rank_margin = max(1.0, (n_genes - len(index)) / 2.0)
+            contribution = rank_margin / (rank_margin + descending[:, index])
+            scores[name][start:stop] = contribution.mean(axis=1)
+    for name, values in scores.items():
+        adata.obs[name] = values
+        summaries[name]["mean"] = float(np.mean(values))
+        summaries[name].update(percentile_summary(values))
+    adata.uns["ucell_params"] = {
+        "method": "ucell",
+        "gene_sets": {name: int(len(index)) for name, index in indices.items()},
+    }
+    report = {
+        "schema_version": "1.0",
+        "operation": "ucell_score",
+        "cells": int(adata.n_obs),
+        "genes": n_genes,
+        "gene_sets": summaries,
+    }
+    write_json(report, report_path)
+    return adata, output_path, report_path
+
+
 def gene_set_score(params: dict[str, Any]) -> tuple[ad.AnnData, Path, Path]:
     import scanpy as sc
 
@@ -731,6 +929,12 @@ def run() -> None:
             raise ContractError("cluster_mean_expression did not produce Parquet output")
     elif workflow == "gene_set_score":
         adata, h5ad_path, report_path = gene_set_score(params)
+        write_h5ad(adata, h5ad_path)
+    elif workflow == "marker_annotate":
+        adata, h5ad_path, report_path = marker_annotate(params)
+        write_h5ad(adata, h5ad_path)
+    elif workflow == "ucell_score":
+        adata, h5ad_path, report_path = ucell_score(params)
         write_h5ad(adata, h5ad_path)
     else:
         raise ContractError(f"unsupported single-cell workflow `{workflow}`")

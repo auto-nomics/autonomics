@@ -35,7 +35,8 @@ impl ::dag_core::dag::NodeError for SqlNodeError {
 }
 
 /// A transform node: registers each upstream input as a named table and runs a
-/// SQL query over them. Single output port, variadic input.
+/// SQL query over them. Single output port, variadic input; zero inputs is
+/// legal for queries that reference no input table.
 ///
 /// Each upstream input arriving on port `N` is registered as the table
 /// `port_{N}`, so the SQL references it as e.g. `FROM port_0` (or
@@ -75,10 +76,17 @@ impl NodeFactory for SqlNodeFactory {
     fn doc(&self) -> &'static str {
         "A transform node that registers each upstream input as a named table \
         (port_0, port_1, …) and runs a user-supplied SQL query over them. \
-        Supports variadic inputs for multi-table joins and set operations. \
-        Single untyped output port. Unquoted SQL identifiers are case-folded \
+        Supports variadic inputs for multi-table joins and set operations, and \
+        also runs standalone (no upstream) for queries that reference no input \
+        table, e.g. SELECT 1. Single untyped output port. Unquoted SQL \
+        identifiers are case-folded \
         (usually to lowercase); quote aliases such as z AS \"Z\" when a \
-        downstream node requires an exact uppercase field name."
+        downstream node requires an exact uppercase field name. \
+        Each execution runs in an isolated SQL context whose only tables are \
+        this node's own direct upstream inputs: information_schema.tables, \
+        information_schema.columns, and SHOW TABLES list exactly those \
+        port_N tables — not workspace-wide data files. An empty listing \
+        therefore means the node has no upstream inputs connected."
     }
 
     fn spec_schema(&self) -> schemars::Schema {
@@ -146,13 +154,10 @@ impl DagNode for SqlNode {
         inputs: &[NodeInput],
         _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
-        if inputs.is_empty() {
-            return Err(SqlNodeError::InvalidInput {
-                message: "SqlNode requires at least one upstream input".to_string(),
-            }
-            .into());
-        }
-
+        // Zero inputs is legal: queries that reference no input table (e.g.
+        // `SELECT 1`) run standalone. A query naming `port_N` without the
+        // matching upstream fails below with DataFusion's own table-not-found
+        // planning error, which names the missing table.
         // Build a fresh, isolated context per execution — no shared CatalogList,
         // so concurrent SqlNodes never collide on `port_N` registrations.
         let ctx = node_ctx.session();
@@ -241,6 +246,31 @@ mod tests {
             .await
             .unwrap();
         dbg!(output);
+    }
+
+    /// A standalone sql node (no upstream) sees NO data tables in
+    /// information_schema: the isolated context only knows the catalog's own
+    /// tables, and zero `port%` rows is the documented signal for "no
+    /// upstream inputs connected" — not a broken catalog.
+    #[tokio::test]
+    async fn test_information_schema_is_empty_without_upstream_inputs() {
+        let mut node = SqlNode::new(
+            "SELECT table_name FROM information_schema.tables \
+             WHERE table_name LIKE 'port%'"
+                .to_string(),
+        );
+        let output = node
+            .execute(
+                &node_ctx(),
+                &[],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            output.dataframe(0).unwrap().clone().count().await.unwrap(),
+            0
+        );
     }
 
     #[tokio::test]
@@ -506,5 +536,45 @@ mod tests {
 
         let scores = rb.column(2).as_any().downcast_ref::<Int32Array>().unwrap();
         assert_eq!(scores.values(), &[90, 85]);
+    }
+
+    /// A standalone SqlNode (zero upstream inputs) runs queries that
+    /// reference no input table. The previous precondition error made
+    /// literal/scalar SQL (`SELECT 1`, `generate_series`, …) impossible.
+    #[tokio::test]
+    async fn test_standalone_query_without_inputs() {
+        let mut node = SqlNode::new("SELECT 1 + 1 AS two".into());
+        let output = node
+            .execute(
+                &node_ctx(),
+                &[],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap();
+        let batches = output
+            .dataframe(0)
+            .unwrap()
+            .clone()
+            .collect()
+            .await
+            .unwrap();
+        assert_eq!(batches[0].num_rows(), 1);
+    }
+
+    /// Referencing `port_0` with no upstream fails with DataFusion's own
+    /// table-not-found planning error — actionable, and names the table.
+    #[tokio::test]
+    async fn test_missing_table_reference_without_inputs_fails_at_planning() {
+        let mut node = SqlNode::new("SELECT * FROM port_0".into());
+        let error = node
+            .execute(
+                &node_ctx(),
+                &[],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("port_0"), "{error}");
     }
 }
