@@ -77,7 +77,7 @@ if [[ "$publish_panel" == 1 ]]; then
   cp "$source_root/resources/genes/NCBI37.3.gene.loc" "$work/gene-location/"
 
   catalog build "$work/gene-location" "$work/package" \
-    --id magma.gene_loc.ncbi37_3 --version v1 --kind magma_gene_loc \
+    --repo wjixiang/catalog-magma-gene-loc-ncbi37-3 --version v1 --kind magma_gene_loc \
     --metadata population=multi --metadata genome_build=GRCh37 \
     --metadata release=NCBI37.3 \
     --metadata description="Official MAGMA NCBI37.3 gene location table"
@@ -94,8 +94,8 @@ else
 fi
 
 current=$(catalog list --config "$config")
-grep -q '"id": "magma.gene_loc.ncbi37_3"' <<<"$current" || {
-  echo "catalog current index is missing magma.gene_loc.ncbi37_3" >&2
+grep -q '"repo": "wjixiang/catalog-magma-gene-loc-ncbi37-3"' <<<"$current" || {
+  echo "catalog current index is missing wjixiang/catalog-magma-gene-loc-ncbi37-3" >&2
   exit 1
 }
 

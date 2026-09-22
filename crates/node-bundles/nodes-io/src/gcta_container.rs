@@ -29,8 +29,8 @@ pub const GCTA_ACAT_CONTAINER_KIND: &str = "gcta_acat_container";
 pub const GCTA_ORIGINAL_IMAGE_REPOSITORY: &str = "gcta";
 pub const GCTA_ORIGINAL_IMAGE_DIGEST: &str =
     "sha256:4cbf8c91376f7b314eebf1dfa02ad44028575991cd3d4c4e81b5324942bec20b";
-pub const GCTA_REF_BINARY_PANEL: &str = "plink.ref.1000g_eur.binary";
-pub const GCTA_GENE_LIST_PANEL: &str = "gcta.gene_list.hg19";
+pub const GCTA_REF_BINARY_PANEL: &str = "wjixiang/catalog-plink-ref-1000g-eur-binary";
+pub const GCTA_GENE_LIST_PANEL: &str = "wjixiang/catalog-gcta-gene-list-hg19";
 
 const DEFAULT_MAF: f64 = 0.01;
 const DEFAULT_COJO_P: f64 = 5e-8;

@@ -2,8 +2,9 @@
 
 The data catalog turns externally prepared files and directories into immutable,
 versioned Hugging Face datasets. The runtime resolves catalog entries into the
-shared local panel cache and exposes stable `/bundles/<id>` VFS paths. Container
-nodes bind those cached panels without mounting remote storage directly.
+shared local panel cache and exposes stable `/bundles/<owner>/<name>` VFS
+paths. Container nodes bind those cached panels without mounting remote
+storage directly.
 
 ## Repository layout
 
@@ -24,7 +25,7 @@ The registry `index.json` is a thin dependency list:
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "generation": 30,
   "repositories": ["wjixiang/catalog-gcta-gene-list-hg19"],
   "entries": []
@@ -32,8 +33,19 @@ The registry `index.json` is a thin dependency list:
 ```
 
 Each package repository owns its full version index. A package entry records
-its package id, HF repository, version, kind, canonical manifest digest, and
-current pointer. Payload paths are content-addressed by version and digest.
+its Hugging Face repo (`owner/name`), version, kind, canonical manifest digest,
+and current pointer. Payload paths are content-addressed by version and digest.
+
+The Hugging Face repo (`owner/name`) is the durable primary identity of a
+package. Node bindings and DAG specs reference packages by their full
+`owner/name` repo (e.g. `wjixiang/catalog-plink-ref-1000g-eur-binary`). Each
+repo is its own unit — two packages under the same owner live at distinct VFS
+paths and cache subdirectories, never sharing a parent directory.
+
+Forks that want to republish the panel set under a different HF owner
+search-and-replace `wjixiang` in the `*_PANEL` constants of
+`crates/node-bundles/nodes-io/` (and the cross-crate panel constants in
+`nodes-mr`, `nodes-sql`, `nodes-genetics`).
 
 ## Runtime configuration
 

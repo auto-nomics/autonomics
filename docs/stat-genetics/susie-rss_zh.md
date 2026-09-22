@@ -2,11 +2,11 @@
 
 `susie_rss_container` 使用官方 `susieR` R 包对 GWAS 汇总统计执行贝叶斯
 精细定位。注册节点在临时 Podman 容器中运行 `susieR` 0.16.6，并挂载目录化的
-`mixer.g1000_eur` signed-LD 面板。
+`wjixiang/catalog-mixer-g1000-eur` signed-LD 面板。
 
 ## 运行时与参考面板
 
-`mixer.g1000_eur` 包固定了 GRCh37 EUR 面板、逐染色体 PLINK BIM、signed
+`wjixiang/catalog-mixer-g1000-eur` 包固定了 GRCh37 EUR 面板、逐染色体 PLINK BIM、signed
 Pearson-r LD 矩阵以及 `libbgmg.so` checksum。容器通过 gsa-MiXeR 引擎查询
 signed LD pair，并把相关矩阵直接传给 `susieR::susie_rss()`；不会用 GWAS
 z-score 符号重建 LD 方向。

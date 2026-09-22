@@ -44,8 +44,8 @@ ref_url=https://alkesgroup.broadinstitute.org/downloads/LDSCORE/1000G_Phase3_pli
 gene_url=https://yanglab.westlake.edu.cn/software/gcta/res/glist-hg19.txt
 ref_sha256=18383e998035521270d158b0aa4e546d269fc938f6e8490ff6916b644330f5df
 gene_sha256=5ee4dbf367912ea4c1ddda3e187e85882a485f4b0aa1b24b61bcb8a4882f404e
-plink_panel=plink.ref.1000g_eur.binary
-gene_panel=gcta.gene_list.hg19
+plink_panel=wjixiang/catalog-plink-ref-1000g-eur-binary
+gene_panel=wjixiang/catalog-gcta-gene-list-hg19
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   usage

@@ -148,8 +148,8 @@ and gzip-compressed `.sumstats.gz` are both accepted. It internally binds
 the pinned `autonomics/ldsc` manifest digest, with the GHCR namespace supplied
 by `AUTONOMICS_IMAGE_PREFIX`, to:
 
-- `ldsc.ref_ld.1000g_eur.basic` at `/panels/ref_ld`
-- `ldsc.w_ld.1000g_eur_hm3_no_mhc` at `/panels/w_ld`
+- `wjixiang/catalog-ldsc-ref-ld-1000g-eur-basic` at `/panels/ref_ld`
+- `wjixiang/catalog-ldsc-w-ld-1000g-eur-hm3-no-mhc` at `/panels/w_ld`
 
 It emits `ldsc_h2.log` as a VFS File artifact. The original Rust `ldsc` h²
 and `ldsc_rg` node factories are removed. `ldsc_rg_container` follows the same
@@ -157,7 +157,7 @@ two-File official command pattern and emits `ldsc_rg.log`; `sldsc` and the
 other analysis nodes remain unchanged during this staged migration.
 
 `magma_annotate_container` runs the official v1.10 static MAGMA executable and
-binds `magma.gene_loc.ncbi37_3`; its native factory is unregistered.
+binds `wjixiang/catalog-magma-gene-loc-ncbi37-3`; its native factory is unregistered.
 `mrpresso_container` runs the pinned official R MRPRESSO package and emits its
 native result object and printed log; its native factory is also unregistered.
 `mvmr_container` follows the same file-to-file pattern for the pinned official

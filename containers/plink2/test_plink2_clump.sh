@@ -77,7 +77,7 @@ trap cleanup EXIT
 # -----------------------------------------------------------------------------
 # Stage 2: build and publish the 1000G EUR Phase3 PLINK binary catalog package.
 # -----------------------------------------------------------------------------
-panel_id=plink.ref.1000g_eur.binary
+panel_repo=wjixiang/catalog-plink-ref-1000g-eur-binary
 panel_version=v1
 
 if [[ "$publish_panel" == 1 ]]; then
@@ -101,7 +101,7 @@ if [[ "$publish_panel" == 1 ]]; then
   fi
 
   catalog build "$staging" "$work/package" \
-    --id "$panel_id" --version "$panel_version" --kind plink_ref_binary \
+    --repo "$panel_repo" --version "$panel_version" --kind plink_ref_binary \
     --metadata population=EUR --metadata genome_build=GRCh37 \
     --metadata reference=1000G_Phase3 \
     --metadata build_origin=official_1000g_phase3_plinkfiles \
@@ -111,8 +111,8 @@ if [[ "$publish_panel" == 1 ]]; then
 fi
 
 current=$(catalog list --config "$config")
-if ! grep -q "\"id\": \"$panel_id\"" <<<"$current"; then
-  echo "catalog current index is missing $panel_id" >&2
+if ! grep -q "\"repo\": \"$panel_repo\"" <<<"$current"; then
+  echo "catalog current index is missing $panel_repo" >&2
   exit 1
 fi
 

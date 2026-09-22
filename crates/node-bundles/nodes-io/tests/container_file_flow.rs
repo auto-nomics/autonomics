@@ -842,7 +842,7 @@ write.table(gwas2, "/work/gwas2.tsv", sep = "\t", quote = FALSE, row.names = FAL
         &panel_staging,
         &panel_package,
         data_catalog::package::BuildOptions {
-            id: Some(HDL_UKB_EUR_PANEL.to_string()),
+            repo: Some(format!("wjixiang/catalog-{}", HDL_UKB_EUR_PANEL)),
             version: Some("v1.0-podman-fixture".to_string()),
             kind: Some("hdl_ld_svd_ref".to_string()),
             metadata,
@@ -1484,7 +1484,7 @@ async fn real_official_mixer_fit1_and_fit2_run_in_podman_and_match_baselines() {
         &panel_staging,
         &panel_package,
         data_catalog::package::BuildOptions {
-            id: Some(MIXER_G1000_EUR_RSID_PANEL.to_string()),
+            repo: Some(format!("wjixiang/catalog-{}", MIXER_G1000_EUR_RSID_PANEL)),
             version: Some("v2.2.1-fixture".to_string()),
             kind: Some("mixer_reference".to_string()),
             metadata,

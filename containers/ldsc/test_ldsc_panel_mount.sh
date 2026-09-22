@@ -108,20 +108,20 @@ if [[ "$publish_panels" == 1 ]]; then
     -exec cp {} "$work/wld-input/" \;
 
   catalog build "$work/ref-input" "$work/ref-package" \
-    --id ldsc.ref_ld.1000g_eur.basic --version v1 --kind ldsc_ref_ld_chr \
+    --id wjixiang/catalog-ldsc-ref-ld-1000g-eur-basic --version v1 --kind ldsc_ref_ld_chr \
     --metadata population=EUR --metadata genome_build=GRCh37
   catalog validate "$work/ref-package"
   catalog publish "$work/ref-package" --config "$config"
 
   catalog build "$work/wld-input" "$work/wld-package" \
-    --id ldsc.w_ld.1000g_eur_hm3_no_mhc --version v1 --kind ldsc_w_ld_chr \
+    --id wjixiang/catalog-ldsc-w-ld-1000g-eur-hm3-no-mhc --version v1 --kind ldsc_w_ld_chr \
     --metadata population=EUR --metadata genome_build=GRCh37
   catalog validate "$work/wld-package"
   catalog publish "$work/wld-package" --config "$config"
 fi
 
 current=$(catalog list --config "$config")
-for panel_id in ldsc.ref_ld.1000g_eur.basic ldsc.w_ld.1000g_eur_hm3_no_mhc; do
+for panel_id in wjixiang/catalog-ldsc-ref-ld-1000g-eur-basic wjixiang/catalog-ldsc-w-ld-1000g-eur-hm3-no-mhc; do
   if ! grep -q "\"id\": \"$panel_id\"" <<<"$current"; then
     echo "catalog current index is missing $panel_id" >&2
     exit 1

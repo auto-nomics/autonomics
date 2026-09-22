@@ -49,12 +49,12 @@ export AUTONOMICS_PANEL_CACHE_ROOT=${AUTONOMICS_PANEL_CACHE_ROOT:-$HOME/.autonom
 
 catalog_json=$(cargo run -p data-catalog --bin autonomics-catalog -- \
   list --config ~/.autonomics/vfs.toml)
-grep -q '"id": "smr.eqtl.westra_hg19"' <<<"$catalog_json" || {
-  echo "catalog current index is missing smr.eqtl.westra_hg19" >&2
+grep -q '"repo": "wjixiang/catalog-smr-eqtl-westra-hg19"' <<<"$catalog_json" || {
+  echo "catalog current index is missing wjixiang/catalog-smr-eqtl-westra-hg19" >&2
   exit 1
 }
-grep -q '"id": "plink.ref.1000g_eur.binary"' <<<"$catalog_json" || {
-  echo "catalog current index is missing plink.ref.1000g_eur.binary" >&2
+grep -q '"repo": "wjixiang/catalog-plink-ref-1000g-eur-binary"' <<<"$catalog_json" || {
+  echo "catalog current index is missing wjixiang/catalog-plink-ref-1000g-eur-binary" >&2
   exit 1
 }
 

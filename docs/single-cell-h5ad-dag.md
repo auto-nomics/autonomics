@@ -62,7 +62,7 @@ h5ad_pca_neighbors_umap_leiden
   -> lr_communication_score(cluster_mean_table=port_1; lr_table defaults to CellPhoneDB v5)
 ```
 
-Use `file_reference` with format `h5ad` for an existing VFS or local input. Container network access is disabled. `h5ad_celltypist_annotate` defaults to `celltypist.models.pan_immune/Immune_All_Low.pkl`; an explicit model File input still takes precedence. Set `model_path`, `model_bundle`, `model_file`, or `use_catalog_model=false` to override the default. A model must match the input feature space expected by its trained model, and expression should follow that model's preprocessing contract.
+Use `file_reference` with format `h5ad` for an existing VFS or local input. Container network access is disabled. `h5ad_celltypist_annotate` defaults to `wjixiang/catalog-celltypist-models-pan-immune/Immune_All_Low.pkl`; an explicit model File input still takes precedence. Set `model_path`, `model_bundle`, `model_file`, or `use_catalog_model=false` to override the default. A model must match the input feature space expected by its trained model, and expression should follow that model's preprocessing contract.
 
 ## Reference data packages
 
@@ -71,13 +71,13 @@ Current catalog IDs are:
 
 | Dataset | Stable path | Payload |
 | --- | --- | --- |
-| `lrdb.cellphonedb.v5` | `/bundles/lrdb.cellphonedb.v5` | Official v5 inputs plus normalized `lr_pairs.parquet` |
+| `wjixiang/catalog-lrdb-cellphonedb-v5` | `/bundles/wjixiang/catalog-lrdb-cellphonedb-v5` | Official v5 inputs plus normalized `lr_pairs.parquet` |
 | `lrdb.ramilowski2015` | `/bundles/lrdb.ramilowski2015` | OmniPath/Ramilowski raw and normalized LR tables |
 | `genecards.hgnc_symbols` | `/bundles/genecards.hgnc_symbols` | HGNC complete set and exploded alias dictionary |
-| `celltypist.models.pan_immune` | `/bundles/celltypist.models.pan_immune` | `Immune_All_Low.pkl` and `Immune_All_High.pkl` |
+| `wjixiang/catalog-celltypist-models-pan-immune` | `/bundles/wjixiang/catalog-celltypist-models-pan-immune` | `Immune_All_Low.pkl` and `Immune_All_High.pkl` |
 
 `lr_communication_score` defaults its optional LR-table input to
-`lrdb.cellphonedb.v5/lr_pairs.parquet`. A wired input port 0 takes precedence;
+`wjixiang/catalog-lrdb-cellphonedb-v5/lr_pairs.parquet`. A wired input port 0 takes precedence;
 `lr_table_path`, `lr_table_bundle`, `lr_table_file`, or
 `use_catalog_lr_table=false` provide explicit overrides.
 

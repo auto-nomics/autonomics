@@ -47,7 +47,10 @@ fn catalog() -> BundleRegistry {
             nodes_io::mixer_container::MIXER_G1000_EUR_RSID_PANEL,
             "/catalog/mixer-g1000-eur",
         ),
-        catalog_panel("mixer.g1000_eur", "/catalog/mixer-g1000-eur-coordinate"),
+        catalog_panel(
+            nodes_io::susie_rss_container::SUSIE_REF_PANEL,
+            "/catalog/mixer-g1000-eur-coordinate",
+        ),
         catalog_panel(
             nodes_io::mtag_container::MTAG_LD_REF_PANEL,
             "/catalog/mtag-ld-ref",
@@ -80,8 +83,8 @@ fn catalog() -> BundleRegistry {
             nodes_ldsc::ldsc_common::BUNDLE_LDSCORE_UKBB_EUR,
             "/bundles/ldsc/ukbb.parquet",
         ),
-        bundle("ldmatrix.1000g_eur", "/bundles/ldmatrix/chr{N}"),
-        bundle("g1000_eur", "/bundles/magma/g1000_eur"),
+        bundle("ldmatrix-1000g-eur", "/bundles/ldmatrix/chr{N}"),
+        bundle("g1000-eur", "/bundles/magma/g1000_eur"),
         bundle(
             nodes_genetics::magma_kegg::GENE_LOC_BUNDLE,
             "/bundles/magma/gene_loc.parquet",
@@ -163,14 +166,14 @@ fn all_bundle_bound_node_kinds_build_from_runtime_catalog() {
             "lava_container",
             serde_json::json!({
                 "analysis": "univ",
-                "panel_id": "lava.ref.ukb_eur",
+                "panel_id": "wjixiang/catalog-lava-ref-ukb-eur",
                 "phenotypes": ["bmi"]
             }),
         ),
         (
             "lava_scan_container",
             serde_json::json!({
-                "panel_id": "lava.ref.ukb_eur",
+                "panel_id": "wjixiang/catalog-lava-ref-ukb-eur",
                 "phenotypes": ["bmi", "depression"],
                 "locus_ids": ["100"]
             }),

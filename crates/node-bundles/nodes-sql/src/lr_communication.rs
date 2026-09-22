@@ -15,7 +15,7 @@ use dag_core::registry::{NodeCtx, NodeFactory};
 use dag_core::value::PortType;
 
 pub const LR_COMMUNICATION_SCORE_KIND: &str = "lr_communication_score";
-pub const DEFAULT_LR_TABLE_BUNDLE: &str = "lrdb.cellphonedb.v5";
+pub const DEFAULT_LR_TABLE_BUNDLE: &str = "wjixiang/catalog-lrdb-cellphonedb-v5";
 pub const DEFAULT_LR_TABLE_FILE: &str = "lr_pairs.parquet";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]

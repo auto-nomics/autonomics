@@ -29,7 +29,7 @@ pub const SUSIE_RSS_CONTAINER_KIND: &str = "susie_rss_container";
 pub const SUSIE_ORIGINAL_IMAGE_REPOSITORY: &str = "susie";
 pub const SUSIE_ORIGINAL_IMAGE_DIGEST: &str =
     "sha256:8a72a443461add5c94c4907f9a1d6106b989850e93217a95587d9095542febe8";
-pub const SUSIE_REF_PANEL: &str = "mixer.g1000_eur";
+pub const SUSIE_REF_PANEL: &str = "wjixiang/catalog-mixer-g1000-eur";
 
 const DEFAULT_ARTIFACT_PREFIX: &str = "/artifacts/susie_rss_container";
 const DEFAULT_TIMEOUT_SECS: u64 = 1800;

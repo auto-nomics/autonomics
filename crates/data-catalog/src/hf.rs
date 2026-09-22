@@ -32,12 +32,6 @@ pub fn resolve_hf_token(explicit: Option<String>) -> Option<String> {
 pub struct HfPublishTarget {
     /// Repository containing the global `index.json`.
     pub index_repo_id: String,
-    /// Explicit package repository in `owner/name` form. If omitted, it is
-    /// derived from `package_repo_prefix` and the package ID.
-    pub package_repo: Option<String>,
-    /// Prefix for per-package dataset repositories in `owner/name` form.
-    /// Each package lives at `{package_repo_prefix}-{sanitized-id}`.
-    pub package_repo_prefix: String,
     /// Branch to commit to; `None` uses the repository main branch.
     pub revision: Option<String>,
     /// Bearer token. `None` falls back to the hf-hub defaults: `HF_TOKEN`,
@@ -47,10 +41,12 @@ pub struct HfPublishTarget {
     pub create_repository: bool,
 }
 
-/// Derive the per-package repository ID from a prefix and package ID.
+/// Derive a per-package HF repo name (`{prefix}-{sanitized-id}`) from a
+/// package prefix in `owner/name` form and a legacy display id.
 ///
-/// Only lowercase alphanumeric characters and hyphens are preserved; all
-/// other characters become hyphens. This matches HF's repo naming rules.
+/// Used only by the v2→v3 index migration to recover the repo for entries
+/// that were published before the repo field was always populated. New
+/// packages set `manifest.repo` directly and never call this.
 pub fn package_repo_id(prefix: &str, package_id: &str) -> String {
     let sanitized = package_id
         .chars()
@@ -65,10 +61,11 @@ pub fn package_repo_id(prefix: &str, package_id: &str) -> String {
     format!("{prefix}-{}", sanitized.trim_matches('-'))
 }
 
-/// Derive a conventional package prefix from an index repository ID.
+/// Derive the canonical package prefix (`owner/name` without the trailing
+/// `-<sanitized-id>` part) from an index repository ID.
 ///
-/// `owner/catalog-index` uses `owner/catalog`; other index names append
-/// `-packages` so packages never collide with the index repository.
+/// `owner/catalog-index` yields `owner/catalog`. Other index names append
+/// `-packages` so package repositories never collide with the index.
 pub fn package_repo_prefix_for_index(index_repo_id: &str) -> Result<String> {
     let (owner, name) = split_repo_id(index_repo_id)?;
     let prefix_name = match name.strip_suffix("-index") {
@@ -156,13 +153,7 @@ pub async fn publish_package_to_hf(
 ) -> Result<CatalogEntry> {
     let package = package.as_ref();
     let manifest = validate_package(package).map_err(|error| error.to_string())?;
-    let mut entry = build_entry(&manifest);
-
-    let package_repo = target
-        .package_repo
-        .clone()
-        .unwrap_or_else(|| package_repo_id(&target.package_repo_prefix, &entry.id));
-    entry.repo = package_repo;
+    let entry = build_entry(&manifest);
 
     let (pkg_owner, pkg_name) = split_repo_id(&entry.repo)?;
     let (index_owner, index_name) = split_repo_id(&target.index_repo_id)?;
@@ -215,7 +206,7 @@ pub async fn publish_package_to_hf(
             .operations(batch.to_vec())
             .commit_message(format!(
                 "Publish {}@{} ({}/{})",
-                entry.id,
+                entry.repo,
                 entry.version,
                 batch_index + 1,
                 batch_count
@@ -226,7 +217,7 @@ pub async fn publish_package_to_hf(
             .map_err(|error| {
                 format!(
                     "publish package `{}` to `{}` batch {}/{}: {error}",
-                    entry.id,
+                    entry.repo,
                     entry.repo,
                     batch_index + 1,
                     batch_count
@@ -246,7 +237,7 @@ pub async fn publish_package_to_hf(
             INDEX_PATH,
             package_index_bytes,
         )])
-        .commit_message(format!("Index {}@{}", entry.id, entry.version))
+        .commit_message(format!("Index {}@{}", entry.repo, entry.version))
         .revision(revision.clone())
         .send()
         .await
@@ -285,8 +276,7 @@ pub async fn publish_package_to_hf(
 
 fn build_entry(manifest: &DatasetManifest) -> CatalogEntry {
     CatalogEntry {
-        id: manifest.id.clone(),
-        repo: String::new(),
+        repo: manifest.repo.clone(),
         version: manifest.version.clone(),
         kind: manifest.kind.clone(),
         digest: manifest
@@ -422,7 +412,7 @@ mod tests {
             &input,
             workspace.path().join("package"),
             BuildOptions {
-                id: Some("hf.panel".into()),
+                repo: Some("owner/catalog-panel".into()),
                 version: Some("v1".into()),
                 kind: Some("panel".into()),
                 ..Default::default()
@@ -430,8 +420,7 @@ mod tests {
         )
         .unwrap();
         let manifest = validate_package(&package.path).unwrap();
-        let mut entry = build_entry(&manifest);
-        entry.repo = "owner/catalog-panel".into();
+        let entry = build_entry(&manifest);
         let index = upsert_entry(CatalogIndex::default(), &entry).unwrap();
         let _index_bytes = serde_json::to_vec_pretty(&index).unwrap();
 

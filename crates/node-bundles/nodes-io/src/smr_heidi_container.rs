@@ -29,9 +29,9 @@ pub const SMR_HEIDI_CONTAINER_KIND: &str = "smr_heidi_container";
 pub const SMR_ORIGINAL_IMAGE_REPOSITORY: &str = "smr";
 pub const SMR_ORIGINAL_IMAGE_DIGEST: &str =
     "sha256:40c0db3c71eda506913c376ab939027fff8ce8eb55c262fd1e5da2fe4c351b6d";
-pub const SMR_WESTRA_EQTL_PANEL: &str = "smr.eqtl.westra_hg19";
-pub const SMR_EQTLGEN_PANEL: &str = "smr.eqtl.eqtlgen_hg19";
-pub const SMR_REF_BINARY_PANEL: &str = "plink.ref.1000g_eur.binary";
+pub const SMR_WESTRA_EQTL_PANEL: &str = "wjixiang/catalog-smr-eqtl-westra-hg19";
+pub const SMR_EQTLGEN_PANEL: &str = "wjixiang/catalog-smr-eqtl-eqtlgen-hg19";
+pub const SMR_REF_BINARY_PANEL: &str = "wjixiang/catalog-plink-ref-1000g-eur-binary";
 
 const DEFAULT_ARTIFACT_PREFIX: &str = "/artifacts/smr_heidi_container";
 const DEFAULT_TIMEOUT_SECS: u64 = 3600;

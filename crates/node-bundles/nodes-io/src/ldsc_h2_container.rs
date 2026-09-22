@@ -26,8 +26,8 @@ pub const LDSC_H2_CONTAINER_KIND: &str = "ldsc_h2_container";
 pub const LDSC_ORIGINAL_IMAGE_REPOSITORY: &str = "ldsc";
 pub const LDSC_ORIGINAL_IMAGE_DIGEST: &str =
     "sha256:2dad70a9583f93db1dcc9a560b7d5b309af4a5151dfaf615f80d059a0925d78c";
-pub const LDSC_REF_LD_PANEL: &str = "ldsc.ref_ld.1000g_eur.basic";
-pub const LDSC_W_LD_PANEL: &str = "ldsc.w_ld.1000g_eur_hm3_no_mhc";
+pub const LDSC_REF_LD_PANEL: &str = "wjixiang/catalog-ldsc-ref-ld-1000g-eur-basic";
+pub const LDSC_W_LD_PANEL: &str = "wjixiang/catalog-ldsc-w-ld-1000g-eur-hm3-no-mhc";
 
 const DEFAULT_ARTIFACT_PREFIX: &str = "/artifacts/ldsc_h2_container";
 const DEFAULT_TIMEOUT_SECS: u64 = 900;

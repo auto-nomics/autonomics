@@ -4209,7 +4209,7 @@ mod vfs_tests {
             input,
             &package,
             data_catalog::package::BuildOptions {
-                id: Some("catalog_panel".into()),
+                repo: Some("owner/catalog-panel".into()),
                 version: Some("v1".into()),
                 kind: Some("table".into()),
                 ..Default::default()
@@ -4242,7 +4242,6 @@ repository = "owner/catalog-index"
         let manifest: data_catalog::DatasetManifest =
             serde_json::from_slice(&std::fs::read(package.join("manifest.json")).unwrap()).unwrap();
         let entry = data_catalog::CatalogEntry {
-            id: "catalog_panel".into(),
             repo: "owner/catalog-panel".into(),
             version: manifest.version.clone(),
             kind: manifest.kind.clone(),
@@ -4257,7 +4256,7 @@ repository = "owner/catalog-index"
         };
         let entry_root = panel_root
             .path()
-            .join(format!("catalog_panel@{}", entry.digest));
+            .join(format!("{}@{}", entry.repo, entry.digest));
         std::fs::create_dir_all(&entry_root).unwrap();
         std::fs::copy(
             package.join("payload").join("data.txt"),
@@ -4288,17 +4287,17 @@ repository = "owner/catalog-index"
             Arc::new(store),
         ));
         let bytes = storage
-            .resolve("/bundles/catalog_panel/data.txt")
-            .read(&storage.resolve_path("/bundles/catalog_panel/data.txt"))
+            .resolve("/bundles/owner/catalog-panel/data.txt")
+            .read(&storage.resolve_path("/bundles/owner/catalog-panel/data.txt"))
             .await
             .unwrap();
         assert_eq!(bytes.to_vec(), b"catalog-data");
         assert_eq!(
             bundles
-                .get("catalog_panel")
+                .get("owner/catalog-panel")
                 .map(|bundle| bundle.vpath.as_str())
                 .unwrap(),
-            "/bundles/catalog_panel"
+            "/bundles/owner/catalog-panel"
         );
         let persisted = std::fs::read_to_string(config.state_dir.join("vfs.toml")).unwrap();
         assert!(persisted.contains("[catalog]"));
