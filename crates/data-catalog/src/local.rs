@@ -291,21 +291,46 @@ impl LocalCatalog {
     }
 
     /// Build the DAG bundle registry from installed current entries.
+    ///
+    /// Each entry is registered twice: once under its Hugging Face repo
+    /// (`owner/name`, the durable catalog identity) and once under its legacy
+    /// display `id`. This lets new node bindings address packages by repo
+    /// while existing id-form bindings keep resolving unchanged.
+    ///
+    /// `validate_id` rejects ids that contain `/`, so the repo key never
+    /// collides with the id alias. `CatalogIndex::validate` rejects empty
+    /// repos, so every current entry has both fields populated.
     pub fn bundle_registry(&self) -> Result<dag_core::BundleRegistry> {
         let index = self.index()?;
-        let mut bundles = Vec::new();
+        let mut primary = Vec::new();
+        let mut aliases = Vec::new();
         for entry in index.current_entries() {
             let mut bundle = dag_core::DataBundle::new(
-                entry.id.clone(),
+                entry.repo.clone(),
                 format!("{} {} catalog dataset", entry.id, entry.version),
                 entry.vfs_alias(),
             );
             bundle.source = Some(format!("/catalog/{}@{}", entry.id, entry.digest));
             bundle.digest = Some(entry.digest.clone());
-            bundles.push(bundle);
+            primary.push(bundle.clone());
+            if bundle.ident != entry.id {
+                bundle.ident = entry.id.clone();
+                aliases.push(bundle);
+            }
         }
-        Ok(dag_core::BundleRegistry::from_bundles(bundles)
-            .expect("validated catalog entries have unique current ids"))
+        let registry = dag_core::BundleRegistry::from_bundles(primary)
+            .map_err(|error| {
+                crate::error::Error::from(format!(
+                    "build primary catalog bundle registry: {error}"
+                ))
+            })?;
+        registry
+            .with_overriding_bundles(aliases)
+            .map_err(|error| {
+                crate::error::Error::from(format!(
+                    "register catalog bundle id aliases: {error}"
+                ))
+            })
     }
 }
 
@@ -502,5 +527,31 @@ mod tests {
         let bundle = registry.get("cache.panel").unwrap();
         assert_eq!(bundle.vpath.as_str(), "/bundles/cache.panel");
         assert_eq!(bundle.digest.as_deref(), Some(entry.digest.as_str()));
+    }
+
+    #[tokio::test]
+    async fn bundle_registry_resolves_under_both_repo_and_id() {
+        let (remote, _warehouse) = published_fixture("cache.panel").await;
+        let cache_root = tempfile::tempdir().unwrap();
+        let catalog = LocalCatalog::open(cache_root.path()).unwrap();
+
+        let entry = catalog
+            .install(&remote, "cache.panel", None, None)
+            .await
+            .unwrap();
+
+        let registry = catalog.bundle_registry().unwrap();
+
+        // Primary key: the HF repo (owner/name) is the canonical identity.
+        let by_repo = registry.get(&entry.repo).expect("repo key resolves");
+        assert_eq!(by_repo.ident, entry.repo);
+        assert_eq!(by_repo.vpath.as_str(), "/bundles/cache.panel");
+        assert_eq!(by_repo.digest.as_deref(), Some(entry.digest.as_str()));
+
+        // Alias key: the legacy id keeps resolving for existing node bindings.
+        let by_id = registry.get("cache.panel").expect("id alias resolves");
+        assert_eq!(by_id.ident, "cache.panel");
+        assert_eq!(by_id.vpath.as_str(), by_repo.vpath.as_str());
+        assert_eq!(by_id.digest.as_deref(), Some(entry.digest.as_str()));
     }
 }

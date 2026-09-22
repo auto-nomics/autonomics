@@ -278,6 +278,25 @@ impl CatalogIndex {
         Ok(entry.clone())
     }
 
+    /// Find the current entry whose Hugging Face repo is `repo`.
+    ///
+    /// `repo` is the canonical `owner/name` identifier of the per-package
+    /// dataset repository. It is the durable identity of a catalog version;
+    /// the legacy `id` field is kept as a display alias for backward
+    /// compatibility. Multiple historical versions in the same repo are
+    /// allowed; only the current one is returned.
+    pub fn find_current_by_repo(&self, repo: &str) -> Option<&CatalogEntry> {
+        self.current_entries().find(|entry| entry.repo == repo)
+    }
+
+    /// Select the current entry for an HF repo. Symmetric with [`Self::select`]
+    /// but takes `owner/name` instead of the legacy display id.
+    pub fn select_by_repo(&self, repo: &str) -> Result<CatalogEntry> {
+        self.find_current_by_repo(repo)
+            .cloned()
+            .ok_or_else(|| format!("catalog has no current entry for HF repo `{repo}`").into())
+    }
+
     /// Search current entries by free-text terms over their identity fields.
     pub fn search(&self, query: &str, kind: Option<&str>, limit: usize) -> Vec<CatalogEntry> {
         self.search_entries(self.current_entries(), query, kind, limit)
@@ -565,5 +584,42 @@ mod tests {
             2,
             "search_all includes historical versions"
         );
+    }
+
+    #[test]
+    fn lookup_by_hf_repo_resolves_to_current_entry() {
+        let mut index = CatalogIndex::default();
+        index.upsert_current(CatalogEntry {
+            id: "panel.eur".into(),
+            repo: "wjixiang/catalog-panel-eur".into(),
+            version: "v2".into(),
+            kind: "panel".into(),
+            digest: format!("sha256:{}", "c".repeat(64)),
+            current: true,
+            created_unix_seconds: 3,
+        });
+        // Older version shares the same repo but is no longer current.
+        index.entries.push(CatalogEntry {
+            id: "panel.eur".into(),
+            repo: "wjixiang/catalog-panel-eur".into(),
+            version: "v1".into(),
+            kind: "panel".into(),
+            digest: format!("sha256:{}", "a".repeat(64)),
+            current: false,
+            created_unix_seconds: 1,
+        });
+
+        let found = index
+            .find_current_by_repo("wjixiang/catalog-panel-eur")
+            .expect("repo present");
+        assert_eq!(found.version, "v2");
+        assert_eq!(found.digest, format!("sha256:{}", "c".repeat(64)));
+        assert!(index.find_current_by_repo("wjixiang/missing").is_none());
+
+        let selected = index
+            .select_by_repo("wjixiang/catalog-panel-eur")
+            .unwrap();
+        assert_eq!(selected.version, "v2");
+        assert!(index.select_by_repo("wjixiang/missing").is_err());
     }
 }

@@ -35,6 +35,12 @@ Each package repository owns its full version index. A package entry records
 its package id, HF repository, version, kind, canonical manifest digest, and
 current pointer. Payload paths are content-addressed by version and digest.
 
+The Hugging Face repo (`owner/name`) is the durable identity of a package.
+The `id` field is kept as a display alias for backward compatibility with
+existing DAG bindings; new code can address a package by its repo instead.
+[`CatalogIndex`] lookups accept either form: `select(id, ...)` for legacy
+lookups and `select_by_repo(owner/name)` for repo-based lookups.
+
 ## Runtime configuration
 
 Add a `[catalog]` section to `state_dir/vfs.toml`:
