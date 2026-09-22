@@ -95,9 +95,11 @@ impl LocalCatalog {
                 let raw: RawCatalogIndex = serde_json::from_slice(&bytes).map_err(|error| {
                     format!("parse catalog cache index `{}`: {error}", path.display())
                 })?;
-                let index = raw.into_v3(self.repository_prefix.as_deref()).map_err(|error| {
-                    format!("migrate catalog cache index `{}`: {error}", path.display())
-                })?;
+                let index = raw
+                    .into_v3(self.repository_prefix.as_deref())
+                    .map_err(|error| {
+                        format!("migrate catalog cache index `{}`: {error}", path.display())
+                    })?;
                 index.validate().map_err(|error| {
                     format!("invalid catalog cache index `{}`: {error}", path.display())
                 })?;
@@ -450,11 +452,7 @@ impl RawCatalogIndex {
                 entries,
             });
         }
-        Err(format!(
-            "unsupported catalog schema version {}",
-            self.schema_version
-        )
-        .into())
+        Err(format!("unsupported catalog schema version {}", self.schema_version).into())
     }
 }
 
@@ -708,11 +706,9 @@ mod tests {
     async fn bundle_registry_resolves_under_both_repo_and_short_name() {
         let (remote, _warehouse) = published_fixture("owner/cache-cache-panel").await;
         let cache_root = tempfile::tempdir().unwrap();
-        let catalog = LocalCatalog::open_with_prefix(
-            cache_root.path(),
-            Some("owner/cache".to_string()),
-        )
-        .unwrap();
+        let catalog =
+            LocalCatalog::open_with_prefix(cache_root.path(), Some("owner/cache".to_string()))
+                .unwrap();
 
         let entry = catalog
             .install(&remote, "owner/cache-cache-panel", None, None)

@@ -372,8 +372,7 @@ fn resolve_spec(
     for (key, value) in options.payload.clone() {
         resolved.payload.insert(key, value);
     }
-    validate_repo_ref(&resolved.repo)
-        .map_err(|error| PackageError::Invalid(error.to_string()))?;
+    validate_repo_ref(&resolved.repo).map_err(|error| PackageError::Invalid(error.to_string()))?;
     validate_version(&resolved.version)
         .map_err(|error| PackageError::Invalid(error.to_string()))?;
     validate_kind(&resolved.kind).map_err(|error| PackageError::Invalid(error.to_string()))?;

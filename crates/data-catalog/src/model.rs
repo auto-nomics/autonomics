@@ -226,11 +226,9 @@ impl CatalogIndex {
                 .into());
             }
             if !identities.insert((entry.repo.clone(), entry.digest.clone())) {
-                return Err(format!(
-                    "duplicate catalog entry `{}@{}`",
-                    entry.repo, entry.digest
-                )
-                .into());
+                return Err(
+                    format!("duplicate catalog entry `{}@{}`", entry.repo, entry.digest).into(),
+                );
             }
             if entry.current {
                 if let Some(previous) = current_by_repo.insert(entry.repo.clone(), index) {
@@ -281,7 +279,9 @@ impl CatalogIndex {
                         "catalog dataset `{repo}` has multiple versions; specify version or digest"
                     )
                     .into()),
-                    _ => Err(format!("catalog dataset `{repo}` has multiple current entries").into()),
+                    _ => {
+                        Err(format!("catalog dataset `{repo}` has multiple current entries").into())
+                    }
                 }
             }
         }
@@ -546,10 +546,7 @@ mod tests {
         assert_eq!(entry.vfs_alias(), "/bundles/wjixiang/catalog-panel");
         assert_eq!(
             entry.vfs_immutable(),
-            format!(
-                "/datasets/wjixiang/catalog-panel@sha256-{}",
-                "a".repeat(64)
-            )
+            format!("/datasets/wjixiang/catalog-panel@sha256-{}", "a".repeat(64))
         );
         assert_eq!(
             entry.cache_dir_name(),
@@ -631,9 +628,7 @@ mod tests {
         assert_eq!(found.digest, format!("sha256:{}", "c".repeat(64)));
         assert!(index.find_current_by_repo("wjixiang/missing").is_none());
 
-        let selected = index
-            .select_by_repo("wjixiang/catalog-panel-eur")
-            .unwrap();
+        let selected = index.select_by_repo("wjixiang/catalog-panel-eur").unwrap();
         assert_eq!(selected.version, "v2");
         assert!(index.select_by_repo("wjixiang/missing").is_err());
     }

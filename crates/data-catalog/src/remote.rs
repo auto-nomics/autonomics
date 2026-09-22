@@ -126,11 +126,7 @@ pub(crate) fn validate_entry_manifest(
         || manifest.kind != entry.kind
         || manifest.digest.as_deref() != Some(entry.digest.as_str())
     {
-        return Err(format!(
-            "catalog entry `{}` does not match its manifest",
-            entry.repo
-        )
-        .into());
+        return Err(format!("catalog entry `{}` does not match its manifest", entry.repo).into());
     }
     Ok(())
 }

@@ -35,8 +35,7 @@ pub const PLINK2_ORIGINAL_IMAGE_DIGEST: &str =
 /// Phase3 PLINK binary reference. Other forks should publish their panel
 /// set under their own HF owner and update this constant — `wjixiang`
 /// is the canonical owner for the upstream deployment.
-pub const PLINK2_REF_BINARY_PANEL: &str =
-    "wjixiang/catalog-plink-ref-1000g-eur-binary";
+pub const PLINK2_REF_BINARY_PANEL: &str = "wjixiang/catalog-plink-ref-1000g-eur-binary";
 
 const DEFAULT_ARTIFACT_PREFIX: &str = "/artifacts/plink2_clump_container";
 const DEFAULT_TIMEOUT_SECS: u64 = 1800;

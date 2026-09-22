@@ -29,7 +29,10 @@ pub struct InitArgs {
 }
 
 pub fn run_init(args: InitArgs) -> Result<()> {
-    let default_name = args.repo.rsplit_once('/').map(|(_, name)| name.to_string())
+    let default_name = args
+        .repo
+        .rsplit_once('/')
+        .map(|(_, name)| name.to_string())
         .unwrap_or_else(|| args.repo.clone());
     let target = args.path.unwrap_or_else(|| PathBuf::from(&default_name));
     let mut metadata = parse_metadata(&args.metadata)?;
