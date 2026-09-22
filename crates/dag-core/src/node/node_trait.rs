@@ -63,6 +63,21 @@ pub trait DagNode: Send + Sync {
     fn is_terminal(&self) -> bool {
         false
     }
+
+    /// File paths this node reads from the filesystem by configured path
+    /// instead of through an input port (`file_reference`-style path
+    /// dependencies).
+    ///
+    /// Validation intersects these with the write paths other nodes declare
+    /// via [`DagNode::sink_path`](DagNode::sink_path) /
+    /// [`DagNode::artifact_path`](DagNode::artifact_path): a node that reads
+    /// by path a file another node in the same DAG writes has no ordering the
+    /// port graph could enforce, so the read would race the write — a
+    /// missing-file error, or worse, a silent read of a stale file left by an
+    /// earlier run.
+    fn referenced_file_paths(&self) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 impl Clone for Box<dyn DagNode> {

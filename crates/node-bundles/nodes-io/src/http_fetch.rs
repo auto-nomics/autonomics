@@ -407,6 +407,10 @@ impl DagNode for HttpFetchNode {
         HTTP_FETCH_KIND
     }
 
+    fn sink_path(&self) -> Option<&str> {
+        Some(&self.spec.path)
+    }
+
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
