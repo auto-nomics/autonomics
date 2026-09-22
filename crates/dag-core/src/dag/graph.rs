@@ -1543,6 +1543,43 @@ impl DAG {
         }
         self.validate_port_wiring()?;
         self.validate_schemas()?;
+        self.validate_path_dependencies()?;
+        Ok(())
+    }
+
+    /// Reject `file_reference`-style path reads that alias a file another node
+    /// in this DAG declares as its output. The port graph cannot order such a
+    /// pair, so the read races the write: it fails with a missing-file error,
+    /// or silently reads a stale file left by an earlier run.
+    fn validate_path_dependencies(&self) -> Result<()> {
+        // Paths this DAG's nodes write, from the static sink/artifact hooks.
+        let mut writers: Vec<(String, &str)> = Vec::new();
+        for (id, node) in &self.nodes {
+            if let Some(path) = node.sink_path() {
+                writers.push((canonical_file_path(path).to_string(), id));
+            }
+            if let Some(path) = node.artifact_path() {
+                writers.push((canonical_file_path(path).to_string(), id));
+            }
+        }
+        if writers.is_empty() {
+            return Ok(());
+        }
+        for (id, node) in &self.nodes {
+            for path in node.referenced_file_paths() {
+                if let Some((_, writer)) = writers
+                    .iter()
+                    .find(|(written, _)| *written == canonical_file_path(&path))
+                {
+                    return Err(DagError::Schedule(format!(
+                        "node `{id}` references file `{path}` by path, but node `{writer}` \
+                         writes that same file in this DAG; connect the writer's output \
+                         port to the reader instead — path references carry no ordering \
+                         and would race the write"
+                    )));
+                }
+            }
+        }
         Ok(())
     }
 
@@ -1922,6 +1959,15 @@ fn cached_file_changed(file: &FileRef) -> bool {
         return false;
     }
     FileFingerprint::from_path(&file.path).as_ref() != Some(expected)
+}
+
+/// Canonical spelling for path-dependency comparison: `file://` prefixes are
+/// dropped and `//`-prefixed paths collapse, mirroring `file_reference`'s own
+/// local-path resolution. Everything else compares as written.
+fn canonical_file_path(path: &str) -> &str {
+    path.strip_prefix("file://")
+        .unwrap_or(path)
+        .trim_start_matches("//")
 }
 
 #[cfg(test)]
@@ -2478,6 +2524,142 @@ mod tests {
             report.errors.get("bad"),
             Some(DagError::PortTypeMismatch { .. })
         );
+    }
+
+    /// Declares a sink path statically — the shape `dataframe_to_file` and
+    /// other file sinks expose through `sink_path`.
+    #[derive(Clone)]
+    struct DeclaredSinkNode {
+        path: String,
+        ports: NodePorts,
+    }
+
+    impl DeclaredSinkNode {
+        fn new(path: &str) -> Self {
+            Self {
+                path: path.to_string(),
+                ports: NodePorts::new().add_output_port_of_type(None, PortType::File),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl DagNode for DeclaredSinkNode {
+        fn ports(&self) -> &NodePorts {
+            &self.ports
+        }
+
+        async fn execute(
+            &mut self,
+            _ctx: &crate::registry::NodeCtx,
+            _inputs: &[NodeInput],
+            _reporter: &NodeReporter,
+        ) -> std::result::Result<PortOutputs, DagError> {
+            let mut outputs = PortOutputs::new();
+            outputs.insert_file(0, FileRef::new(self.path.clone(), None));
+            Ok(outputs)
+        }
+
+        fn clone_box(&self) -> Box<dyn DagNode> {
+            Box::new((*self).clone())
+        }
+
+        fn kind(&self) -> &'static str {
+            "declared_sink"
+        }
+
+        fn sink_path(&self) -> Option<&str> {
+            Some(&self.path)
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    /// Reads a file by configured path — the `file_reference` shape.
+    #[derive(Clone)]
+    struct PathReaderNode {
+        path: String,
+        ports: NodePorts,
+    }
+
+    impl PathReaderNode {
+        fn new(path: &str) -> Self {
+            Self {
+                path: path.to_string(),
+                ports: NodePorts::new().add_output_port_of_type(None, PortType::File),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl DagNode for PathReaderNode {
+        fn ports(&self) -> &NodePorts {
+            &self.ports
+        }
+
+        async fn execute(
+            &mut self,
+            _ctx: &crate::registry::NodeCtx,
+            _inputs: &[NodeInput],
+            _reporter: &NodeReporter,
+        ) -> std::result::Result<PortOutputs, DagError> {
+            Ok(PortOutputs::new())
+        }
+
+        fn clone_box(&self) -> Box<dyn DagNode> {
+            Box::new((*self).clone())
+        }
+
+        fn kind(&self) -> &'static str {
+            "path_reader"
+        }
+
+        fn referenced_file_paths(&self) -> Vec<String> {
+            vec![self.path.clone()]
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    #[test]
+    fn validation_rejects_path_reference_aliased_to_an_in_dag_sink() {
+        let mut dag = DAG::default();
+        dag.add_node(
+            "writer".into(),
+            Box::new(DeclaredSinkNode::new("/data/out.parquet")),
+        )
+        .unwrap();
+        dag.add_node(
+            "reader".into(),
+            Box::new(PathReaderNode::new("file:///data/out.parquet")),
+        )
+        .unwrap();
+
+        let error = dag.validate().unwrap_err().to_string();
+        assert!(error.contains("`reader` references file"), "{error}");
+        assert!(error.contains("`writer`"), "{error}");
+        assert!(error.contains("output port"), "{error}");
+    }
+
+    #[test]
+    fn validation_allows_path_references_to_external_files() {
+        let mut dag = DAG::default();
+        dag.add_node(
+            "writer".into(),
+            Box::new(DeclaredSinkNode::new("/data/out.parquet")),
+        )
+        .unwrap();
+        // Different path — an external input, exactly the intended use.
+        dag.add_node(
+            "reader".into(),
+            Box::new(PathReaderNode::new("/data/external.parquet")),
+        )
+        .unwrap();
+        dag.validate().unwrap();
     }
 
     #[derive(Clone)]

@@ -84,6 +84,10 @@ impl DagNode for FileReferenceNode {
         FILE_REFERENCE_KIND
     }
 
+    fn referenced_file_paths(&self) -> Vec<String> {
+        vec![self.path.clone()]
+    }
+
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }

@@ -631,7 +631,10 @@ mod tests {
 
     #[test]
     fn default_pull_timeout_is_generous_enough_for_multi_gigabyte_images() {
-        const { assert_eq!(DEFAULT_PULL_TIMEOUT_SECS, 3600) };
+        // Compile-time check in the `const _` form: `assert_eq!` inside an
+        // inline const block needs a const `assert_failed`, which the pinned
+        // 1.96 toolchain does not provide yet.
+        const _: () = assert!(DEFAULT_PULL_TIMEOUT_SECS == 3600);
     }
 
     #[test]
