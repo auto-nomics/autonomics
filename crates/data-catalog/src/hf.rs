@@ -113,14 +113,10 @@ impl MultiRepoHfSource {
 impl ObjectSource for MultiRepoHfSource {
     async fn read(&self, key: &str) -> Result<Vec<u8>> {
         let (repository, path) = self.resolve(key)?;
-        let bytes = repository
-            .download_file_to_bytes()
-            .filename(path)
-            .revision(self.revision.clone())
-            .send()
+        let bytes = fetch_retried(&repository, &path, None, &self.revision)
             .await
             .map_err(|error| format!("read Hugging Face object `{key}`: {error}"))?;
-        Ok(bytes.to_vec())
+        Ok(bytes)
     }
 
     async fn read_range(&self, key: &str, offset: u64, len: u64) -> Result<Vec<u8>> {
@@ -128,16 +124,134 @@ impl ObjectSource for MultiRepoHfSource {
             return Ok(Vec::new());
         }
         let (repository, path) = self.resolve(key)?;
-        let bytes = repository
-            .download_file_to_bytes()
-            .filename(path)
-            .revision(self.revision.clone())
-            .range(offset..offset + len)
-            .send()
-            .await
-            .map_err(|error| format!("read Hugging Face object `{key}` at {offset}: {error}"))?;
-        Ok(bytes.to_vec())
+        let bytes = fetch_retried(
+            &repository,
+            &path,
+            Some(offset..offset + len),
+            &self.revision,
+        )
+        .await
+        .map_err(|error| format!("read Hugging Face object `{key}` at {offset}: {error}"))?;
+        Ok(bytes)
     }
+}
+
+/// Outcome of one fetch attempt: deterministic not-found (never retried)
+/// or a retryable transport failure, including a request exceeding its
+/// total timeout.
+enum FetchFailure {
+    NotFound,
+    Transport(String),
+}
+
+impl std::fmt::Display for FetchFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotFound => write!(formatter, "entry not found"),
+            Self::Transport(reason) => write!(formatter, "{reason}"),
+        }
+    }
+}
+
+/// Fetch one object (optionally a byte range), retrying transient transport
+/// failures.
+///
+/// hf-hub retries only the request handshake — response-body decode errors
+/// surface unretried, and the underlying HTTP client has no total timeout,
+/// so a stalled-but-open connection hangs forever. Every attempt is
+/// therefore bounded by [`FETCH_REQUEST_TIMEOUT`]; a timeout counts as a
+/// retryable failure. Large installs and migrations issue hundreds of
+/// requests, so a rare per-request hiccup must not abort the whole
+/// transfer. Deterministic failures (`EntryNotFound`) return immediately.
+async fn fetch_retried(
+    repository: &HFRepository<RepoTypeDataset>,
+    path: &str,
+    range: Option<std::ops::Range<u64>>,
+    revision: &str,
+) -> std::result::Result<Vec<u8>, FetchFailure> {
+    /// Total time one HTTP attempt may take, however slow the stream. A
+    /// 64 MiB chunk needs ~360 KiB/s to stay under this — anything slower
+    /// is treated as a stall, not throughput.
+    const FETCH_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
+    const ATTEMPTS: usize = 4;
+    /// Rate-limit waits are server-paced and do not burn the retry budget;
+    /// cap them per chunk so a persistently limited run fails loudly
+    /// instead of looping forever.
+    const MAX_RATE_LIMIT_WAITS: usize = 3;
+    /// Fallback pause when the Hub rate-limits without a `Retry-After`.
+    const RATE_LIMIT_FALLBACK_WAIT: std::time::Duration = std::time::Duration::from_secs(120);
+    let mut delay = std::time::Duration::from_millis(400);
+    let mut rate_limit_waits = 0;
+    let mut last = None;
+    let mut attempt = 0;
+    while attempt < ATTEMPTS {
+        if attempt > 0 {
+            tokio::time::sleep(delay).await;
+            delay = delay.saturating_mul(2);
+        }
+        let request = async {
+            if let Some(range) = range.clone() {
+                repository
+                    .download_file_to_bytes()
+                    .filename(path)
+                    .revision(revision.to_string())
+                    .range(range)
+                    .send()
+                    .await
+            } else {
+                repository
+                    .download_file_to_bytes()
+                    .filename(path)
+                    .revision(revision.to_string())
+                    .send()
+                    .await
+            }
+        };
+        let sent = tokio::time::timeout(FETCH_REQUEST_TIMEOUT, request).await;
+        let sent = match sent {
+            Ok(result) => result,
+            Err(_) => {
+                last = Some(FetchFailure::Transport(format!(
+                    "request timed out after {FETCH_REQUEST_TIMEOUT:?}"
+                )));
+                attempt += 1;
+                continue;
+            }
+        };
+        match sent {
+            Ok(bytes) => return Ok(bytes.to_vec()),
+            Err(HFError::EntryNotFound { .. }) => {
+                return Err(FetchFailure::NotFound);
+            }
+            Err(HFError::RateLimited {
+                retry_after,
+                context: _,
+            }) => {
+                if rate_limit_waits >= MAX_RATE_LIMIT_WAITS {
+                    last = Some(FetchFailure::Transport(
+                        "rate limited; wait budget exhausted".to_string(),
+                    ));
+                    attempt += 1;
+                    continue;
+                }
+                // The quota window is minutes long; exponential backoff is
+                // useless here. Sleep the server-directed delay without
+                // consuming a retry attempt.
+                rate_limit_waits += 1;
+                let wait = retry_after
+                    .filter(|delay| !delay.is_zero())
+                    .unwrap_or(RATE_LIMIT_FALLBACK_WAIT)
+                    .min(std::time::Duration::from_secs(300));
+                tokio::time::sleep(wait).await;
+                continue;
+            }
+            Err(error) => {
+                last = Some(FetchFailure::Transport(error.to_string()));
+                attempt += 1;
+            }
+        }
+    }
+    Err(last.expect("at least one attempt ran"))
 }
 
 /// Publish a validated local package to a Hugging Face dataset repository.
