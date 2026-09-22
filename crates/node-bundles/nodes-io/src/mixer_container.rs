@@ -23,7 +23,7 @@ pub const MIXER_FIT2_CONTAINER_KIND: &str = "mixer_fit2_container";
 pub const MIXER_ORIGINAL_IMAGE_REPOSITORY: &str = "mixer";
 pub const MIXER_ORIGINAL_IMAGE_DIGEST: &str =
     "sha256:3bd67cccf298bd3c9af3d2b013dd7dfacde9ad13d51bc78b2f7f1315f01bebb7";
-pub const MIXER_G1000_EUR_RSID_PANEL: &str = "mixer.g1000_eur_rsid";
+pub const MIXER_G1000_EUR_RSID_PANEL: &str = "wjixiang/catalog-mixer-g1000-eur-rsid";
 
 const DEFAULT_ARTIFACT_PREFIX: &str = "/artifacts/mixer_container";
 const DEFAULT_TIMEOUT_SECS: u64 = 21_600;

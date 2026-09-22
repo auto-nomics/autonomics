@@ -5,7 +5,7 @@ usage() {
   cat >&2 <<'EOF'
 Usage: test_fusion_twas.sh
 
-Builds the official FUSION image, verifies the fusion.gtex_v8 catalog panel,
+Builds the official FUSION image, verifies the wjixiang/catalog-fusion-gtex-v8 catalog panel,
 pushes the image to the local registry, and smoke-tests it.
 
 Environment:
@@ -51,8 +51,8 @@ export AUTONOMICS_PANEL_CACHE_ROOT=${AUTONOMICS_PANEL_CACHE_ROOT:-$HOME/.autonom
 export AUTONOMICS_FUSION_IT_LDREF=$ldref
 
 current=$(cargo run -q -p data-catalog -- list)
-grep -q '"id": "fusion.gtex_v8"' <<<"$current" || {
-  echo "catalog current index is missing fusion.gtex_v8" >&2
+grep -q '"repo": "wjixiang/catalog-fusion-gtex-v8"' <<<"$current" || {
+  echo "catalog current index is missing wjixiang/catalog-fusion-gtex-v8" >&2
   exit 1
 }
 

@@ -22,7 +22,7 @@ pub const MTAG_CONTAINER_KIND: &str = "mtag_container";
 pub const MTAG_ORIGINAL_IMAGE_REPOSITORY: &str = "mtag";
 pub const MTAG_ORIGINAL_IMAGE_DIGEST: &str =
     "sha256:28ac0a0a0ee741340390b7588bf8ba36e6b316d62adc0cab7fd4494f5dd6a90c";
-pub const MTAG_LD_REF_PANEL: &str = "mtag.ld_ref.1000g_eur_w_ld";
+pub const MTAG_LD_REF_PANEL: &str = "wjixiang/catalog-mtag-ld-ref-1000g-eur-w-ld";
 
 const DEFAULT_ARTIFACT_PREFIX: &str = "/artifacts/mtag_container";
 const DEFAULT_TIMEOUT_SECS: u64 = 3600;

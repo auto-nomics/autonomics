@@ -2,9 +2,7 @@ use std::path::PathBuf;
 
 use clap::Args;
 use data_catalog::error::Result;
-use data_catalog::hf::{
-    HfPublishTarget, package_repo_prefix_for_index, publish_package_to_hf, resolve_hf_token,
-};
+use data_catalog::hf::{HfPublishTarget, publish_package_to_hf, resolve_hf_token};
 
 use crate::common::{load_catalog_config, print_json};
 
@@ -16,12 +14,6 @@ pub struct PublishArgs {
     /// Hugging Face registry repository (`owner/name`).
     #[arg(long, value_name = "REPO")]
     pub repo: Option<String>,
-    /// Publish to this exact package repository (`owner/name`).
-    #[arg(long, value_name = "REPO")]
-    pub package_repo: Option<String>,
-    /// Prefix for per-package Hugging Face repositories (`owner/name`).
-    #[arg(long, value_name = "PREFIX")]
-    pub package_prefix: Option<String>,
     /// Hugging Face branch; defaults to the repository main branch.
     #[arg(long)]
     pub revision: Option<String>,
@@ -51,23 +43,8 @@ fn resolve_hf_target(args: &PublishArgs) -> Result<HfPublishTarget> {
         (index_repo_id, config.revision)
     };
 
-    let package_repo_prefix = match args.package_prefix.as_deref() {
-        Some(prefix) => prefix.to_string(),
-        None => {
-            let configured = load_catalog_config(&args.config)
-                .ok()
-                .and_then(|config| config.repository_prefix);
-            match configured {
-                Some(prefix) => prefix,
-                None => package_repo_prefix_for_index(&index_repo_id)?,
-            }
-        }
-    };
-
     Ok(HfPublishTarget {
         index_repo_id,
-        package_repo: args.package_repo.clone(),
-        package_repo_prefix,
         revision,
         token: resolve_hf_token(args.token.clone()),
         create_repository: args.create_repo,

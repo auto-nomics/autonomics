@@ -98,11 +98,11 @@ fn node_ports() -> NodePorts {
 
 pub struct MagmaKeggAlignNodeFactory;
 
-pub const GENE_LOC_BUNDLE: &str = "magma.gene_loc";
-pub const KEGG_GENES_BUNDLE: &str = "kegg.genes";
-pub const KEGG_PATHWAY_KO_BUNDLE: &str = "kegg.pathway_ko";
-pub const KEGG_PATHWAYS_BUNDLE: &str = "kegg.pathways";
-pub const KEGG_GENOME_PATHWAYS_BUNDLE: &str = "kegg.genome_pathways";
+pub const GENE_LOC_BUNDLE: &str = "magma-gene-loc";
+pub const KEGG_GENES_BUNDLE: &str = "kegg-genes";
+pub const KEGG_PATHWAY_KO_BUNDLE: &str = "kegg-pathway-ko";
+pub const KEGG_PATHWAYS_BUNDLE: &str = "kegg-pathways";
+pub const KEGG_GENOME_PATHWAYS_BUNDLE: &str = "kegg-genome-pathways";
 
 fn storage_url(bundle: &DataBundle) -> String {
     format!("vfs://{}", bundle.vpath)

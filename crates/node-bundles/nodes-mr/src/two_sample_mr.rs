@@ -947,7 +947,7 @@ impl NodeFactory for TwoSampleMrNodeFactory {
     ) -> dag_core::registry::error::Result<Vec<DataBundleBinding>> {
         let spec: TwoSampleMrNodeSpec = serde_json::from_value(spec)?;
         Ok(match spec.clump.mode {
-            ClumpMode::LocalLd => vec![DataBundleBinding::new("ld_matrix", "ldmatrix.1000g_eur")],
+            ClumpMode::LocalLd => vec![DataBundleBinding::new("ld_matrix", "wjixiang/catalog-ldmatrix-1000g-eur")],
             ClumpMode::Opengwas => Vec::new(),
         })
     }

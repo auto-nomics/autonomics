@@ -28,11 +28,11 @@ vpath = "/bundles/ldsc/1000g.parquet"
 - `ldscore.baselineLD_v2_2_eur`
 - `ldscore.baselineLD_v2_2_eur_m`
 - `ldscore.ukbb_eur`
-- `ldmatrix.1000g_eur`: vpath may contain `{N}` for chromosome-specific tables
-- `mixer.g1000_eur`: MiXeR signed-LD/engine bundle root
+- `wjixiang/catalog-ldmatrix-1000g-eur`: vpath may contain `{N}` for chromosome-specific tables
+- `wjixiang/catalog-mixer-g1000-eur`: MiXeR signed-LD/engine bundle root
 - MAGMA population panel IDs such as `g1000_eur`, `g1000_eas`, `g1000_afr`,
   `g1000_amr`, and `g1000_sas`
-- `magma.gene_loc`
+- `wjixiang/catalog-magma-gene-loc`
 - `als_cns.cell_markers`: ALS / CNS cell-marker bundle (astrocyte, microglia, oligodendrocyte, neuron)
 - `kegg.genes`
 - `kegg.pathway_ko`
@@ -45,21 +45,21 @@ Custom `bundle_source` nodes may reference any additional registry ID.
 
 When `vfs.toml` contains a `[catalog]` section, entries published by
 `autonomics-catalog` are added to this registry automatically. Their stable
-alias is `/bundles/<id>`, while their immutable version path is
-`/datasets/<id>@sha256-<digest>`. Local `data_bundles.toml` entries still take
-precedence, so rollout does not change existing nodes. See
+alias is `/bundles/<owner>/<name>`, while their immutable version path is
+`/datasets/<owner>/<name>@sha256-<digest>`. Local `data_bundles.toml` entries
+still take precedence, so rollout does not change existing nodes. See
 [Unified Data Catalog](data-catalog.md).
 
-For `ldsc_h2_container`, the required current catalog IDs are:
+For `ldsc_h2_container`, the required current catalog repos are:
 
-- `ldsc.ref_ld.1000g_eur.basic`
-- `ldsc.w_ld.1000g_eur_hm3_no_mhc`
+- `wjixiang/catalog-ldsc-ref-ld-1000g-eur-basic`
+- `wjixiang/catalog-ldsc-w-ld-1000g-eur-hm3-no-mhc`
 
-For the GCTA summary-statistics nodes, the required current catalog IDs are:
+For the GCTA summary-statistics nodes, the required current catalog repo is:
 
-- `plink.ref.1000g_eur.binary`
-- `gcta.gene_list.hg19`
+- `wjixiang/catalog-plink-ref-1000g-eur-binary`
+- `wjixiang/catalog-gcta-gene-list-hg19`
 
 For the HDL-L region and scan containers, the required current catalog ID is:
 
-- `hdl.ref.ukb_eur`
+- `wjixiang/catalog-hdl-ref-ukb-eur`

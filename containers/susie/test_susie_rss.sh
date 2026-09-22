@@ -5,7 +5,7 @@ usage() {
   cat >&2 <<'EOF'
 Usage: test_susie_rss.sh
 
-Builds the official susieR 0.16.6 image, verifies the catalog mixer.g1000_eur
+Builds the official susieR 0.16.6 image, verifies the catalog wjixiang/catalog-mixer-g1000-eur
 panel, pushes the image to the local registry, and smoke-tests it.
 
 Environment:
@@ -67,8 +67,8 @@ catalog() {
 }
 
 current=$(catalog list --config "$config")
-if ! grep -q '"id": "mixer.g1000_eur"' <<<"$current"; then
-  echo "catalog current index is missing mixer.g1000_eur" >&2
+if ! grep -q '"id": "wjixiang/catalog-mixer-g1000-eur"' <<<"$current"; then
+  echo "catalog current index is missing wjixiang/catalog-mixer-g1000-eur" >&2
   exit 1
 fi
 

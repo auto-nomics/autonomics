@@ -6,8 +6,8 @@ use sha2::{Digest, Sha256};
 
 use crate::error::Result;
 
-pub const CATALOG_SCHEMA_VERSION: u8 = 2;
-pub const DATASET_SCHEMA_VERSION: u8 = 1;
+pub const CATALOG_SCHEMA_VERSION: u8 = 3;
+pub const DATASET_SCHEMA_VERSION: u8 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, JsonSchema, Deserialize, Serialize)]
 pub struct DatasetFile {
@@ -21,7 +21,10 @@ pub struct DatasetFile {
 pub struct DatasetManifest {
     #[serde(default = "default_dataset_schema_version")]
     pub schema_version: u8,
-    pub id: String,
+    /// Hugging Face dataset repository in `owner/name` form. Required and
+    /// durable: the catalog uses it as the primary identity for both
+    /// indexes and VFS paths. Replaces the legacy `id` field.
+    pub repo: String,
     pub version: String,
     pub kind: String,
     #[serde(default)]
@@ -46,7 +49,7 @@ impl DatasetManifest {
                 format!("unsupported dataset schema version {}", self.schema_version).into(),
             );
         }
-        validate_id(&self.id)?;
+        validate_repo_ref(&self.repo)?;
         validate_version(&self.version)?;
         validate_kind(&self.kind)?;
         let digest = self
@@ -78,11 +81,15 @@ impl DatasetManifest {
 }
 
 /// One immutable dataset version listed by a catalog index.
+///
+/// Each entry is identified by its Hugging Face repo (`owner/name`); that
+/// field is the catalog's primary key. The repository namespace guarantees
+/// global uniqueness across owners: two packages with identical short names
+/// under different owners remain distinct entries.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSchema, Deserialize, Serialize)]
 pub struct CatalogEntry {
-    pub id: String,
-    /// Hugging Face dataset repository hosting this package version.
-    #[serde(default)]
+    /// Hugging Face dataset repository in `owner/name` form. The durable
+    /// primary identity of the entry.
     pub repo: String,
     pub version: String,
     pub kind: String,
@@ -127,14 +134,23 @@ impl CatalogEntry {
         )
     }
 
-    /// Stable compatibility path: `/bundles/<id>`.
+    /// Stable mutable alias: `/bundles/<owner>/<name>`.
     pub fn vfs_alias(&self) -> String {
-        format!("/bundles/{}", self.id)
+        format!("/bundles/{}", self.repo)
     }
 
-    /// Immutable path: `/datasets/<id>@sha256-<digest>`.
+    /// Immutable versioned path: `/datasets/<owner>/<name>@sha256-<digest>`.
     pub fn vfs_immutable(&self) -> String {
-        format!("/datasets/{}@sha256-{}", self.id, self.short_digest())
+        format!("/datasets/{}@sha256-{}", self.repo, self.short_digest())
+    }
+
+    /// Local cache directory name: `<owner>/<name>@<digest>`.
+    ///
+    /// The owner part forms a subdirectory so multiple owners can coexist on
+    /// disk without any package ever sharing its parent path with another
+    /// package from the same owner.
+    pub fn cache_dir_name(&self) -> String {
+        format!("{}@{}", self.repo, self.digest)
     }
 }
 
@@ -197,25 +213,30 @@ impl CatalogIndex {
         }
 
         let mut identities = std::collections::BTreeSet::new();
-        let mut current_by_id: BTreeMap<String, usize> = BTreeMap::new();
+        let mut current_by_repo: BTreeMap<String, usize> = BTreeMap::new();
         for (index, entry) in self.entries.iter().enumerate() {
-            validate_id(&entry.id)?;
+            validate_repo_ref(&entry.repo)?;
             validate_version(&entry.version)?;
             validate_kind(&entry.kind)?;
-            validate_repo_ref(&entry.repo)?;
             if !is_sha256(&entry.digest) {
-                return Err(format!("catalog entry `{}` has invalid digest", entry.id).into());
+                return Err(format!(
+                    "catalog entry `{}/{}` has invalid digest",
+                    entry.repo, entry.version
+                )
+                .into());
             }
-            if !identities.insert((entry.id.clone(), entry.digest.clone())) {
-                return Err(
-                    format!("duplicate catalog entry `{}@{}`", entry.id, entry.digest).into(),
-                );
+            if !identities.insert((entry.repo.clone(), entry.digest.clone())) {
+                return Err(format!(
+                    "duplicate catalog entry `{}@{}`",
+                    entry.repo, entry.digest
+                )
+                .into());
             }
             if entry.current {
-                if let Some(previous) = current_by_id.insert(entry.id.clone(), index) {
+                if let Some(previous) = current_by_repo.insert(entry.repo.clone(), index) {
                     return Err(format!(
-                        "catalog id `{}` has multiple current entries at indexes {previous} and {index}",
-                        entry.id
+                        "catalog repo `{}` has multiple current entries at indexes {previous} and {index}",
+                        entry.repo
                     )
                     .into());
                 }
@@ -234,33 +255,33 @@ impl CatalogIndex {
         self.entries.iter().filter(|entry| entry.current)
     }
 
-    /// Select the single entry matched by id and optional version and digest.
+    /// Select the single entry matched by HF repo and optional version/digest.
     pub fn select(
         &self,
-        id: &str,
+        repo: &str,
         version: Option<&str>,
         digest: Option<&str>,
     ) -> Result<CatalogEntry> {
         let mut matched = self
             .entries
             .iter()
-            .filter(|entry| entry.id == id)
+            .filter(|entry| entry.repo == repo)
             .filter(|entry| version.is_none_or(|value| entry.version == value))
             .filter(|entry| digest.is_none_or(|value| entry.digest == value))
             .cloned()
             .collect::<Vec<_>>();
         match matched.len() {
-            0 => Err(format!("catalog dataset `{id}` was not found").into()),
+            0 => Err(format!("catalog dataset `{repo}` was not found").into()),
             1 => Ok(matched.remove(0)),
             _ => {
                 matched.retain(|entry| entry.current);
                 match matched.len() {
                     1 => Ok(matched.remove(0)),
                     0 => Err(format!(
-                        "catalog dataset `{id}` has multiple versions; specify version or digest"
+                        "catalog dataset `{repo}` has multiple versions; specify version or digest"
                     )
                     .into()),
-                    _ => Err(format!("catalog dataset `{id}` has multiple current entries").into()),
+                    _ => Err(format!("catalog dataset `{repo}` has multiple current entries").into()),
                 }
             }
         }
@@ -281,16 +302,13 @@ impl CatalogIndex {
     /// Find the current entry whose Hugging Face repo is `repo`.
     ///
     /// `repo` is the canonical `owner/name` identifier of the per-package
-    /// dataset repository. It is the durable identity of a catalog version;
-    /// the legacy `id` field is kept as a display alias for backward
-    /// compatibility. Multiple historical versions in the same repo are
+    /// dataset repository. Multiple historical versions in the same repo are
     /// allowed; only the current one is returned.
     pub fn find_current_by_repo(&self, repo: &str) -> Option<&CatalogEntry> {
         self.current_entries().find(|entry| entry.repo == repo)
     }
 
-    /// Select the current entry for an HF repo. Symmetric with [`Self::select`]
-    /// but takes `owner/name` instead of the legacy display id.
+    /// Select the current entry for an HF repo.
     pub fn select_by_repo(&self, repo: &str) -> Result<CatalogEntry> {
         self.find_current_by_repo(repo)
             .cloned()
@@ -322,8 +340,7 @@ impl CatalogIndex {
             .filter(|entry| kind.is_none_or(|value| entry.kind == value))
             .filter(|entry| {
                 let haystack = format!(
-                    "{} {} {} {} {} {}",
-                    entry.id,
+                    "{} {} {} {} {}",
                     entry.repo,
                     entry.version,
                     entry.kind,
@@ -337,8 +354,8 @@ impl CatalogIndex {
             .cloned()
             .collect::<Vec<_>>();
         matched.sort_by(|left, right| {
-            left.id
-                .cmp(&right.id)
+            left.repo
+                .cmp(&right.repo)
                 .then_with(|| right.created_unix_seconds.cmp(&left.created_unix_seconds))
         });
         matched
@@ -348,23 +365,23 @@ impl CatalogIndex {
         self.record_repository(&entry.repo);
         self.schema_version = CATALOG_SCHEMA_VERSION;
         self.entries
-            .retain(|existing| existing.id != entry.id || existing.digest != entry.digest);
+            .retain(|existing| existing.repo != entry.repo || existing.digest != entry.digest);
         for existing in &mut self.entries {
-            if existing.id == entry.id {
+            if existing.repo == entry.repo {
                 existing.current = false;
             }
         }
         self.entries.push(entry);
         self.entries.sort_by(|left, right| {
-            left.id
-                .cmp(&right.id)
+            left.repo
+                .cmp(&right.repo)
                 .then_with(|| left.created_unix_seconds.cmp(&right.created_unix_seconds))
         });
         self.generation = self.generation.saturating_add(1);
     }
 }
 
-fn validate_repo_ref(value: &str) -> Result<()> {
+pub fn validate_repo_ref(value: &str) -> Result<()> {
     let (owner, name) = value
         .split_once('/')
         .ok_or_else(|| format!("catalog repository `{value}` must be `owner/name`"))?;
@@ -381,10 +398,6 @@ pub fn manifest_digest(manifest: &DatasetManifest) -> String {
     };
     let bytes = serde_json::to_vec(&unsigned).expect("manifest is JSON serializable");
     format!("sha256:{}", hex(&Sha256::digest(&bytes)))
-}
-
-pub fn validate_id(value: &str) -> Result<()> {
-    valid_token(value, "id")
 }
 
 pub fn validate_version(value: &str) -> Result<()> {
@@ -449,7 +462,7 @@ mod tests {
     fn manifest() -> DatasetManifest {
         DatasetManifest {
             schema_version: DATASET_SCHEMA_VERSION,
-            id: "1000g_eur".into(),
+            repo: "wjixiang/catalog-1000g-eur".into(),
             version: "v3".into(),
             kind: "vcf".into(),
             metadata: BTreeMap::new(),
@@ -475,11 +488,10 @@ mod tests {
     }
 
     #[test]
-    fn catalog_rejects_multiple_current_versions() {
+    fn catalog_rejects_multiple_current_versions_in_same_repo() {
         let mut index = CatalogIndex::default();
         for version in ["v1", "v2"] {
             index.upsert_current(CatalogEntry {
-                id: "panel".into(),
                 repo: "owner/catalog-panel".into(),
                 version: version.into(),
                 kind: "plink".into(),
@@ -505,7 +517,6 @@ mod tests {
     #[test]
     fn entry_paths_follow_the_layout_convention() {
         let entry = CatalogEntry {
-            id: "panel".into(),
             repo: "wjixiang/catalog-panel".into(),
             version: "v1".into(),
             kind: "plink".into(),
@@ -532,10 +543,17 @@ mod tests {
                 "a".repeat(64)
             )
         );
-        assert_eq!(entry.vfs_alias(), "/bundles/panel");
+        assert_eq!(entry.vfs_alias(), "/bundles/wjixiang/catalog-panel");
         assert_eq!(
             entry.vfs_immutable(),
-            format!("/datasets/panel@sha256-{}", "a".repeat(64))
+            format!(
+                "/datasets/wjixiang/catalog-panel@sha256-{}",
+                "a".repeat(64)
+            )
+        );
+        assert_eq!(
+            entry.cache_dir_name(),
+            format!("wjixiang/catalog-panel@sha256:{}", "a".repeat(64))
         );
     }
 
@@ -543,7 +561,6 @@ mod tests {
     fn select_and_search_current_entries() {
         let mut index = CatalogIndex::default();
         index.upsert_current(CatalogEntry {
-            id: "panel.eur".into(),
             repo: "wjixiang/catalog-panel-eur".into(),
             version: "v1".into(),
             kind: "panel".into(),
@@ -552,7 +569,6 @@ mod tests {
             created_unix_seconds: 1,
         });
         index.upsert_current(CatalogEntry {
-            id: "panel.afr".into(),
             repo: "wjixiang/catalog-panel-afr".into(),
             version: "v2".into(),
             kind: "panel".into(),
@@ -561,16 +577,17 @@ mod tests {
             created_unix_seconds: 2,
         });
 
-        let selected = index.select("panel.afr", None, None).unwrap();
+        let selected = index
+            .select("wjixiang/catalog-panel-afr", None, None)
+            .unwrap();
         assert_eq!(selected.version, "v2");
         assert!(index.select("missing", None, None).is_err());
-        let found = index.search("panel afr", Some("panel"), 10);
+        let found = index.search("catalog-panel-afr", Some("panel"), 10);
         assert_eq!(found.len(), 1);
-        assert_eq!(found[0].id, "panel.afr");
+        assert_eq!(found[0].repo, "wjixiang/catalog-panel-afr");
         assert!(index.search("missing", None, 10).is_empty());
 
         index.upsert_current(CatalogEntry {
-            id: "panel.eur".into(),
             repo: "wjixiang/catalog-panel-eur".into(),
             version: "v2".into(),
             kind: "panel".into(),
@@ -578,9 +595,9 @@ mod tests {
             current: true,
             created_unix_seconds: 3,
         });
-        assert_eq!(index.search("panel eur", None, 10).len(), 1);
+        assert_eq!(index.search("catalog-panel-eur", None, 10).len(), 1);
         assert_eq!(
-            index.search_all("panel eur", None, 10).len(),
+            index.search_all("catalog-panel-eur", None, 10).len(),
             2,
             "search_all includes historical versions"
         );
@@ -590,7 +607,6 @@ mod tests {
     fn lookup_by_hf_repo_resolves_to_current_entry() {
         let mut index = CatalogIndex::default();
         index.upsert_current(CatalogEntry {
-            id: "panel.eur".into(),
             repo: "wjixiang/catalog-panel-eur".into(),
             version: "v2".into(),
             kind: "panel".into(),
@@ -600,7 +616,6 @@ mod tests {
         });
         // Older version shares the same repo but is no longer current.
         index.entries.push(CatalogEntry {
-            id: "panel.eur".into(),
             repo: "wjixiang/catalog-panel-eur".into(),
             version: "v1".into(),
             kind: "panel".into(),

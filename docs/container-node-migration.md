@@ -269,8 +269,8 @@ The LDSC migration is the reference case:
 
 ```text
 containers/ldsc/Dockerfile
-ldsc.ref_ld.1000g_eur.basic
-ldsc.w_ld.1000g_eur_hm3_no_mhc
+wjixiang/catalog-ldsc-ref-ld-1000g-eur-basic
+wjixiang/catalog-ldsc-w-ld-1000g-eur-hm3-no-mhc
 crates/node-bundles/nodes-io/src/ldsc_h2_container.rs
 crates/node-bundles/nodes-io/src/ldsc_munge_container.rs
 crates/node-bundles/nodes-io/src/ldsc_rg_container.rs
@@ -293,7 +293,7 @@ MAGMA annotation is the second reference case:
 
 ```text
 containers/magma/Dockerfile
-magma.gene_loc.ncbi37_3
+wjixiang/catalog-magma-gene-loc-ncbi37-3
 crates/node-bundles/nodes-io/src/magma_annotate_container.rs
 ```
 
@@ -326,7 +326,7 @@ MiXeR is the source-backed Python/C++ reference case:
 
 ```text
 containers/mixer/Dockerfile
-mixer.g1000_eur_rsid
+wjixiang/catalog-mixer-g1000-eur-rsid
 crates/node-bundles/nodes-io/src/mixer_container.rs
 ```
 
@@ -339,7 +339,7 @@ PLINK2 is the offline LD-clumping reference case:
 
 ```text
 containers/plink2/Dockerfile
-plink.ref.1000g_eur.binary
+wjixiang/catalog-plink-ref-1000g-eur-binary
 containers/plink2/fixtures/chr22.sumstats.tsv
 crates/node-bundles/nodes-io/src/plink2_clump_container.rs
 ```
@@ -353,7 +353,7 @@ SuSiE-RSS is the R + signed-LD panel reference case:
 
 ```text
 containers/susie/Dockerfile
-mixer.g1000_eur
+wjixiang/catalog-mixer-g1000-eur
 containers/susie/fixtures/chr21.sumstats.tsv
 crates/node-bundles/nodes-io/src/susie_rss_container.rs
 ```
@@ -361,7 +361,7 @@ crates/node-bundles/nodes-io/src/susie_rss_container.rs
 The image installs official `susieR` 0.16.6 at commit `ef213fe` and compiles
 the official gsa-mixer `libbgmg` helper needed to query signed LD pairs. The
 1000G EUR signed-LD panel stays in the catalog. The wrapper takes one
-`snp/chrom/z` sumstats File, mounts `mixer.g1000_eur`, calls
+`snp/chrom/z` sumstats File, mounts `wjixiang/catalog-mixer-g1000-eur`, calls
 `susieR::susie_rss()`, and emits TSV/RDS/log artifacts to VFS.
 
 The production wrapper pins the image repository and manifest digest, while
@@ -381,16 +381,16 @@ locus with `process.locus()`, and invokes the official `run.univ.bivar()`
 workflow. `locus_ids` and `chr` subset the scan; process and analysis failures
 are logged and skipped per locus. The node emits combined univariate and
 bivariate TSVs, an RDS result object, and the complete log. It binds exactly
-the same `lava.ref.ukb_eur` or tutorial panel contract as `lava_container`.
+the same `wjixiang/catalog-lava-ref-ukb-eur` or tutorial panel contract as `lava_container`.
 The local Podman baseline scans official tutorial loci `100` and `230`.
 
 SMR/HEIDI is the BESD eQTL plus PLINK LD-panel reference case:
 
 ```text
 containers/smr/Dockerfile
-smr.eqtl.westra_hg19
-smr.eqtl.eqtlgen_hg19
-plink.ref.1000g_eur.binary
+wjixiang/catalog-smr-eqtl-westra-hg19
+wjixiang/catalog-smr-eqtl-eqtlgen-hg19
+wjixiang/catalog-plink-ref-1000g-eur-binary
 containers/smr/fixtures/chr22.westra.ma
 crates/node-bundles/nodes-io/src/smr_heidi_container.rs
 ```
@@ -422,8 +422,8 @@ GCTA is the official executable plus mixed-panel summary-statistics case:
 
 ```text
 containers/gcta/Dockerfile
-plink.ref.1000g_eur.binary
-gcta.gene_list.hg19
+wjixiang/catalog-plink-ref-1000g-eur-binary
+wjixiang/catalog-gcta-gene-list-hg19
 containers/gcta/fixtures/chr22.ma
 containers/gcta/fixtures/chr22.fastGWA
 crates/node-bundles/nodes-io/src/gcta_container.rs
@@ -444,7 +444,7 @@ HDL-L is the official R block-LD SVD case:
 
 ```text
 containers/hdl-l/Dockerfile
-hdl.ref.ukb_eur
+wjixiang/catalog-hdl-ref-ukb-eur
 containers/hdl-l/test_hdl_l_podman.sh
 scripts/build_hdl_ukb_panel.sh
 crates/node-bundles/nodes-io/src/hdl_l_container.rs
@@ -461,8 +461,8 @@ and the official log. The registered `hdl_l_scan` runtime uses the same image
 and panel binding, reads `NEWLOC` from `HDLL_LOC_snps.RData`, iterates official
 `chr/piece` blocks, isolates per-block failures, and emits a combined TSV, an
 RDS result list, and the official log. This panel is not interchangeable with
-`lava.ref.ukb_eur`, `lava.ref.1000g_test`, `plink.1000g_eur`, or the native
-LAVA PLINK contract. The full official package is published as `hdl.ref.ukb_eur`
+`wjixiang/catalog-lava-ref-ukb-eur`, `wjixiang/catalog-lava-ref-1000g-test`, `plink.1000g_eur`, or the native
+LAVA PLINK contract. The full official package is published as `wjixiang/catalog-hdl-ref-ukb-eur`
 v1.0 with digest `sha256:411c7ae1db876ec3e17941367a74567175ca151f8f93dc6e5e1d06bb8f3a3f54`;
 the published panel has passed chr1/piece9 region and scan Podman baselines.
 The native Rust HDL-L crate and both native nodes are removed.
@@ -471,7 +471,7 @@ MTAG is the official Python 2 plus single-prefix LD Score case:
 
 ```text
 containers/mtag/Dockerfile
-mtag.ld_ref.1000g_eur_w_ld
+wjixiang/catalog-mtag-ld-ref-1000g-eur-w-ld
 containers/mtag/test_mtag_containers.sh
 crates/node-bundles/nodes-io/src/mtag_container.rs
 ```
@@ -480,7 +480,7 @@ The image carries the official MTAG 1.0.8 source at commit `9e17f3c`, its
 pinned Python 2 dependencies, and no reference data. MTAG's embedded LDSC API
 binds one directory prefix to both `ref_ld_chr` and `w_ld_chr`, so the upstream
 1000G EUR `eur_w_ld_chr` LD Score/`M_5_50` payload is published as the
-dedicated catalog package `mtag.ld_ref.1000g_eur_w_ld`. The split LDSC ref/w-LD
+dedicated catalog package `wjixiang/catalog-mtag-ld-ref-1000g-eur-w-ld`. The split LDSC ref/w-LD
 packages and the LAVA UKBB eigen `.bcor` panel are not interchangeable with
 that contract. The rootless-Podman baseline verifies a deterministic two-trait
 GWAS fixture, catalog panel materialization, both official result tables, and

@@ -13,7 +13,7 @@ Environment:
   VFS_CONFIG                 Catalog config (default ~/.autonomics/vfs.toml)
   MTAG_IMAGE                 Local image tag (default localhost/atc/mtag:1.0.8)
   BUILD_IMAGE=1              Build the local image
-  PUBLISH_PANEL=0            Build/publish mtag.ld_ref.1000g_eur_w_ld
+  PUBLISH_PANEL=0            Build/publish wjixiang/catalog-mtag-ld-ref-1000g-eur-w-ld
   RUN_TEST=1                 Run the ignored Rust E2E test
   MTAG_IT_VARIANTS           Fixture variant count (default 200000)
   MTAG_IT_INPUT1             First LDSC standard sumstats
@@ -92,7 +92,7 @@ if [[ "$publish_panel" == 1 ]]; then
        -o -name '1[0-9].l2.M_5_50' -o -name '2[0-2].l2.M_5_50' \) \
     -exec cp {} "$work/payload/" \;
   catalog build "$work/payload" "$work/package" \
-    --id mtag.ld_ref.1000g_eur_w_ld --version v1 --kind mtag_ld_ref_chr \
+    --repo wjixiang/catalog-mtag-ld-ref-1000g-eur-w-ld --version v1 --kind mtag_ld_ref_chr \
     --metadata population=EUR --metadata genome_build=GRCh37 \
     --metadata 'description=Official MTAG 1.0.8 1000G EUR eur_w_ld_chr LD Score panel' \
     --metadata "source_commit=$commit"
@@ -100,7 +100,7 @@ if [[ "$publish_panel" == 1 ]]; then
   catalog publish "$work/package" --config "$config"
 fi
 
-catalog list --config "$config" | grep -q '"id": "mtag.ld_ref.1000g_eur_w_ld"'
+catalog list --config "$config" | grep -q '"repo": "wjixiang/catalog-mtag-ld-ref-1000g-eur-w-ld"'
 
 if [[ "$build_image" == 1 ]]; then
   podman build --layers -f containers/mtag/Dockerfile -t "$image" containers/mtag

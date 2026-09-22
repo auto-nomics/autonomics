@@ -50,7 +50,7 @@ need sha256sum
 input=${EQTLGEN_INPUT:-/mnt/data/eqtlgen/2019-12-11-cis-eQTLsFDR-ProbeLevel-CohortInfoRemoved-BonferroniAdded.txt.gz}
 parquet=${EQTLGEN_PARQUET:-/mnt/data/eqtlgen/cis-eqtlgen.parquet}
 use_parquet=${USE_PARQUET:-0}
-ref_root=${REF_ROOT:-"/home/wjx/.autonomics/panels/plink.ref.1000g_eur.binary@sha256:80597da4137e90c3c312c9fa37a4dae9d29f18b7a8b12576ae502941bb1a558d"}
+ref_root=${REF_ROOT:-"/home/wjx/.autonomics/panels/wjixiang/catalog-plink-ref-1000g-eur-binary@sha256:80597da4137e90c3c312c9fa37a4dae9d29f18b7a8b12576ae502941bb1a558d"}
 work=${WORK:-/mnt/data/eqtlgen/smr_build}
 threads=${THREADS:-4}
 duckdb_memory_gb=${DUCKDB_MEMORY_GB:-6}

@@ -44,7 +44,7 @@ SNP-merged tab-separated File containing:
 - `effect_allele_outcome`, `other_allele_outcome`, `eaf_outcome`
 - optional `pval_exposure`
 
-It binds `plink.ref.1000g_eur.binary`, clumps instruments with official
+It binds `wjixiang/catalog-plink-ref-1000g-eur-binary`, clumps instruments with official
 PLINK2, then executes `TwoSampleMR::harmonise_data()` and
 `TwoSampleMR::mr()`. The node publishes the MR result table, harmonised table,
 complete RDS result, and combined PLINK2/R log. The committed chr22 fixture

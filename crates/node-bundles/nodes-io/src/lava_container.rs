@@ -27,8 +27,8 @@ pub const LAVA_CONTAINER_KIND: &str = "lava_container";
 pub const LAVA_ORIGINAL_IMAGE_REPOSITORY: &str = "lava";
 pub const LAVA_ORIGINAL_IMAGE_DIGEST: &str =
     "sha256:b7dd1d3a3493cc32af2dc286f2aace77036b1fd806bee4f14a4ff67509268be7";
-pub const LAVA_TUTORIAL_REF_PANEL: &str = "lava.ref.1000g_test";
-pub const LAVA_UKB_EUR_PANEL: &str = "lava.ref.ukb_eur";
+pub const LAVA_TUTORIAL_REF_PANEL: &str = "wjixiang/catalog-lava-ref-1000g-test";
+pub const LAVA_UKB_EUR_PANEL: &str = "wjixiang/catalog-lava-ref-ukb-eur";
 
 const DEFAULT_ARTIFACT_PREFIX: &str = "/artifacts/lava_container";
 const DEFAULT_TIMEOUT_SECS: u64 = 1800;

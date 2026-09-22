@@ -7,7 +7,7 @@ logic is reimplemented.
 
 ## Runtime Data
 
-The node mounts the immutable `fusion.gtex_v8` catalog package. The current
+The node mounts the immutable `wjixiang/catalog-fusion-gtex-v8` catalog package. The current
 package is `v1.0.0` with digest
 `sha256:22ad786d571ca9cb24279a7ca433d7e2c1c9c978d1b5e0d5385a4e15bb22ef93`.
 It contains:

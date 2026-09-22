@@ -8,8 +8,8 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::model::{
-    DatasetFile, DatasetManifest, manifest_digest, validate_id, validate_kind,
-    validate_relative_path, validate_version,
+    DatasetFile, DatasetManifest, manifest_digest, validate_kind, validate_relative_path,
+    validate_repo_ref, validate_version,
 };
 
 pub const PACKAGE_MANIFEST: &str = "manifest.json";
@@ -28,7 +28,9 @@ pub enum PackageError {
 
 #[derive(Debug, Clone, Default)]
 pub struct BuildOptions {
-    pub id: Option<String>,
+    /// Hugging Face dataset repository in `owner/name` form. Required and
+    /// durable; this is the package's primary identity.
+    pub repo: Option<String>,
     pub version: Option<String>,
     pub kind: Option<String>,
     pub metadata: BTreeMap<String, String>,
@@ -40,7 +42,7 @@ pub struct BuildOptions {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PackageSpec {
     pub schema_version: u8,
-    pub id: String,
+    pub repo: String,
     pub version: String,
     pub kind: String,
     #[serde(default)]
@@ -139,7 +141,7 @@ pub fn build_package(
 
     let mut manifest = DatasetManifest {
         schema_version: crate::model::DATASET_SCHEMA_VERSION,
-        id: spec.id,
+        repo: spec.repo,
         version: spec.version,
         kind: spec.kind,
         metadata: spec.metadata,
@@ -346,7 +348,7 @@ fn resolve_spec(
 ) -> Result<PackageSpec, PackageError> {
     let mut resolved = spec.cloned().unwrap_or(PackageSpec {
         schema_version: 1,
-        id: String::new(),
+        repo: String::new(),
         version: String::new(),
         kind: String::new(),
         metadata: BTreeMap::new(),
@@ -357,8 +359,8 @@ fn resolve_spec(
             "unsupported package spec schema version".into(),
         ));
     }
-    if let Some(id) = &options.id {
-        resolved.id = id.clone();
+    if let Some(repo) = &options.repo {
+        resolved.repo = repo.clone();
     }
     if let Some(version) = &options.version {
         resolved.version = version.clone();
@@ -370,7 +372,8 @@ fn resolve_spec(
     for (key, value) in options.payload.clone() {
         resolved.payload.insert(key, value);
     }
-    validate_id(&resolved.id).map_err(|error| PackageError::Invalid(error.to_string()))?;
+    validate_repo_ref(&resolved.repo)
+        .map_err(|error| PackageError::Invalid(error.to_string()))?;
     validate_version(&resolved.version)
         .map_err(|error| PackageError::Invalid(error.to_string()))?;
     validate_kind(&resolved.kind).map_err(|error| PackageError::Invalid(error.to_string()))?;
@@ -408,7 +411,7 @@ mod tests {
             input.path(),
             &output,
             BuildOptions {
-                id: Some("1000g_eur".into()),
+                repo: Some("wjixiang/catalog-1000g-eur".into()),
                 version: Some("v3".into()),
                 kind: Some("vcf".into()),
                 metadata: BTreeMap::from([("population".into(), "EUR".into())]),
@@ -420,7 +423,7 @@ mod tests {
 
         assert!(output.join("manifest.json").is_file());
         assert!(output.join("payload/chr22/panel.vcf.gz").is_file());
-        assert_eq!(built.manifest.id, "1000g_eur");
+        assert_eq!(built.manifest.repo, "wjixiang/catalog-1000g-eur");
         let validated = validate_package(&output).unwrap();
         assert_eq!(validated, built.manifest);
     }
@@ -435,7 +438,7 @@ mod tests {
             input.path(),
             &output,
             BuildOptions {
-                id: Some("panel".into()),
+                repo: Some("wjixiang/catalog-panel".into()),
                 version: Some("v1".into()),
                 kind: Some("table".into()),
                 ..Default::default()
@@ -468,7 +471,7 @@ mod tests {
             source,
             &output,
             BuildOptions {
-                id: Some("archive_panel".into()),
+                repo: Some("wjixiang/catalog-archive-panel".into()),
                 version: Some("v1".into()),
                 kind: Some("plink".into()),
                 ..Default::default()

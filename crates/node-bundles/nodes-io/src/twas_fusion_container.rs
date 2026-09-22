@@ -22,7 +22,7 @@ pub const TWAS_FUSION_CONTAINER_KIND: &str = "twas_fusion_container";
 pub const FUSION_ORIGINAL_IMAGE_REPOSITORY: &str = "fusion";
 pub const FUSION_ORIGINAL_IMAGE_DIGEST: &str =
     "sha256:91d11747476967b0131571308f2a64bb12aa459205f282103f6bed4fb69ca0bf";
-pub const FUSION_GTEX_V8_PANEL: &str = "fusion.gtex_v8";
+pub const FUSION_GTEX_V8_PANEL: &str = "wjixiang/catalog-fusion-gtex-v8";
 
 const DEFAULT_ARTIFACT_PREFIX: &str = "/artifacts/twas_fusion_container";
 const DEFAULT_TIMEOUT_SECS: u64 = 3600;

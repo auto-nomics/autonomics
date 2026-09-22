@@ -31,7 +31,12 @@ pub const PLINK2_CLUMP_CONTAINER_KIND: &str = "plink2_clump_container";
 pub const PLINK2_ORIGINAL_IMAGE_REPOSITORY: &str = "plink2";
 pub const PLINK2_ORIGINAL_IMAGE_DIGEST: &str =
     "sha256:998315bf1c34c1c7ef276e93ca6c043dd1982c027c7264325505a9a0adc6d1d2";
-pub const PLINK2_REF_BINARY_PANEL: &str = "plink.ref.1000g_eur.binary";
+/// Hugging Face repository (canonical `owner/name`) hosting the 1000G EUR
+/// Phase3 PLINK binary reference. Other forks should publish their panel
+/// set under their own HF owner and update this constant — `wjixiang`
+/// is the canonical owner for the upstream deployment.
+pub const PLINK2_REF_BINARY_PANEL: &str =
+    "wjixiang/catalog-plink-ref-1000g-eur-binary";
 
 const DEFAULT_ARTIFACT_PREFIX: &str = "/artifacts/plink2_clump_container";
 const DEFAULT_TIMEOUT_SECS: u64 = 1800;

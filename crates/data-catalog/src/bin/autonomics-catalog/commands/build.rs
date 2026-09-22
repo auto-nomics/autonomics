@@ -11,8 +11,10 @@ use crate::common::{parse_metadata, print_json};
 pub struct BuildArgs {
     pub input: PathBuf,
     pub output: PathBuf,
+    /// Hugging Face repo in `owner/name` form. Overrides the `repo` field in
+    /// `package.json` if both are set.
     #[arg(long)]
-    pub id: Option<String>,
+    pub repo: Option<String>,
     #[arg(long)]
     pub version: Option<String>,
     #[arg(long)]
@@ -42,7 +44,7 @@ pub fn run_build(args: BuildArgs) -> Result<()> {
         args.input,
         args.output,
         BuildOptions {
-            id: args.id,
+            repo: args.repo,
             version: args.version,
             kind: args.kind,
             metadata,

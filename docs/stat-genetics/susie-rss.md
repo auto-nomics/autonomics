@@ -3,11 +3,11 @@
 `susie_rss_container` performs Bayesian fine-mapping from GWAS summary
 statistics with the official `susieR` R package. The registered node runs
 `susieR` 0.16.6 in an ephemeral OCI container and mounts the cataloged
-`mixer.g1000_eur` signed-LD panel.
+`wjixiang/catalog-mixer-g1000-eur` signed-LD panel.
 
 ## Runtime And Reference
 
-The `mixer.g1000_eur` package pins the GRCh37 EUR panel, per-chromosome PLINK
+The `wjixiang/catalog-mixer-g1000-eur` package pins the GRCh37 EUR panel, per-chromosome PLINK
 BIM files, signed Pearson-r LD matrices, and the `libbgmg.so` checksum. The
 container queries signed LD pairs through the gsa-MiXeR engine and passes the
 correlation matrix directly to `susieR::susie_rss()`. LD signs are never

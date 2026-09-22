@@ -15,15 +15,15 @@ no native Rust MiXeR nodes.
 immutable VFS Files. `mixer_fit2_container` takes trait1 sumstats, trait2
 sumstats, trait1 fit1 JSON, and trait2 fit1 JSON, in that order, and emits the
 official bivariate JSON plus log. Both bind the catalog package
-`mixer.g1000_eur_rsid`; callers do not select images or mount panels.
+`wjixiang/catalog-mixer-g1000-eur-rsid`; callers do not select images or mount panels.
 
-The production package is `mixer.g1000_eur_rsid`, version
+The production package is `wjixiang/catalog-mixer-g1000-eur-rsid`, version
 `v2.2.1-rsid1`, digest
 `sha256:46a73e2e4faac1fc216e1d5918257546c87dae727a0f7a55cca39d87bdf4b1ca`.
 It contains the GRCh37 EUR BIM, unchanged LD matrices, and rsID-addressed
 tag-SNP templates. IDs were translated from the coordinate-addressed source
 panel with an exact allele-aware match against
-`plink.ref.1000g_eur.binary`; 6,844,696 of 9,588,757 BIM variants and 7,906
+`wjixiang/catalog-plink-ref-1000g-eur-binary`; 6,844,696 of 9,588,757 BIM variants and 7,906
 of 18,269 tag SNPs have rsID addresses. The official chr21-22 migration
 fixture is retained in
 `containers/mixer/fixtures/mixer-test-data`; its fit1 result is bit-identical

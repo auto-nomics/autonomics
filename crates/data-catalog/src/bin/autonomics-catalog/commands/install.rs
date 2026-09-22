@@ -9,10 +9,10 @@ use crate::common::{default_cache_root, load_remote, open_cache, print_json};
 
 #[derive(Args)]
 pub struct InstallArgs {
-    pub id: String,
-    /// Hugging Face dataset repository (`owner/name`); read it instead of vfs.toml.
-    #[arg(long, value_name = "REPO")]
-    pub repo: Option<String>,
+    /// Hugging Face dataset repository (`owner/name`) identifying the package
+    /// to install. With the central registry this is resolved against
+    /// `index.json`; without it, the repo is read directly.
+    pub repo: String,
     /// Hugging Face branch; defaults to the repository main branch.
     #[arg(long)]
     pub revision: Option<String>,
@@ -40,8 +40,10 @@ pub struct UpdateArgs {
     /// Hugging Face token; defaults to $HUGGING_FACE_TOKEN, then $HF_TOKEN.
     #[arg(long, value_name = "TOKEN")]
     pub token: Option<String>,
+    /// Optional HF repo to limit the update to a single package; defaults to
+    /// updating every declared repository.
     #[arg(long)]
-    pub id: Option<String>,
+    pub repo_filter: Option<String>,
     #[arg(long, default_value = "~/.autonomics/vfs.toml")]
     pub config: PathBuf,
     #[arg(long, default_value_t = default_cache_root())]
@@ -49,45 +51,19 @@ pub struct UpdateArgs {
 }
 
 pub async fn run_install(args: InstallArgs) -> Result<()> {
-    // A `owner/package` positional argument addresses a package repository
-    // directly and does not require the central registry first.
-    if args.id.split('/').count() == 2 {
-        let remote = RemoteCatalog::hf(
-            &args.id,
-            args.revision.clone(),
-            resolve_hf_token(args.token.clone()),
-        )?;
-        let index = remote.index().await?;
-        let entry = index.select_current()?;
-        if args
-            .version
-            .as_deref()
-            .is_some_and(|value| entry.version != value)
-            || args
-                .digest
-                .as_deref()
-                .is_some_and(|value| entry.digest != value)
-        {
-            return Err("current package entry does not match --version/--digest".into());
-        }
-        let catalog = open_cache(Path::new(&args.cache))?;
-        let entry = catalog.install_entry(&remote, &entry).await?;
-        return print_json(&entry);
-    }
-
-    let remote = match args.repo {
-        Some(repo_id) => RemoteCatalog::hf(
-            &repo_id,
-            args.revision.clone(),
-            resolve_hf_token(args.token.clone()),
-        )?,
-        None => load_remote(&args.config).await?,
-    };
+    // Resolve from the central registry when the configured index exists;
+    // otherwise read the package repo directly. Both branches land in the
+    // same cache directory.
+    let remote = RemoteCatalog::hf(
+        &args.repo,
+        args.revision.clone(),
+        resolve_hf_token(args.token.clone()),
+    )?;
     let catalog = open_cache(Path::new(&args.cache))?;
     let entry = catalog
         .install(
             &remote,
-            &args.id,
+            &args.repo,
             args.version.as_deref(),
             args.digest.as_deref(),
         )
@@ -105,6 +81,6 @@ pub async fn run_update(args: UpdateArgs) -> Result<()> {
         None => load_remote(&args.config).await?,
     };
     let catalog = open_cache(Path::new(&args.cache))?;
-    let updated = catalog.update(&remote, args.id.as_deref()).await?;
+    let updated = catalog.update(&remote, args.repo_filter.as_deref()).await?;
     print_json(&updated)
 }

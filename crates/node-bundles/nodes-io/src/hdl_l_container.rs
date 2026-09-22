@@ -26,7 +26,7 @@ pub const HDL_L_CONTAINER_KIND: &str = "hdl_l_container";
 pub const HDL_ORIGINAL_IMAGE_REPOSITORY: &str = "hdl";
 pub const HDL_ORIGINAL_IMAGE_DIGEST: &str =
     "sha256:cbce3f3e4037b8c53c59275240f4449f2041de39aa95a4b5d9e588b9a75b18ea";
-pub const HDL_UKB_EUR_PANEL: &str = "hdl.ref.ukb_eur";
+pub const HDL_UKB_EUR_PANEL: &str = "wjixiang/catalog-hdl-ref-ukb-eur";
 
 const DEFAULT_ARTIFACT_PREFIX: &str = "/artifacts/hdl_l_container";
 const DEFAULT_TIMEOUT_SECS: u64 = 1800;

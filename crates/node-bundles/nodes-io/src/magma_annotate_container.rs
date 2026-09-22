@@ -22,7 +22,7 @@ pub const MAGMA_ANNOTATE_CONTAINER_KIND: &str = "magma_annotate_container";
 pub const MAGMA_ORIGINAL_IMAGE_REPOSITORY: &str = "magma";
 pub const MAGMA_ORIGINAL_IMAGE_DIGEST: &str =
     "sha256:2ca8540251ee9201f3b7b6ac2596daa2c95bd77eb314305dac61beb9b4d85342";
-pub const MAGMA_GENE_LOC_PANEL: &str = "magma.gene_loc.ncbi37_3";
+pub const MAGMA_GENE_LOC_PANEL: &str = "wjixiang/catalog-magma-gene-loc-ncbi37-3";
 
 const DEFAULT_ARTIFACT_PREFIX: &str = "/artifacts/magma_annotate_container";
 const DEFAULT_TIMEOUT_SECS: u64 = 300;

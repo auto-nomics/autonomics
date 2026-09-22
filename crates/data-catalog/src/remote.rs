@@ -109,8 +109,8 @@ fn validate_package_index(index: &CatalogIndex, repository: &str, key: &str) -> 
     }
     if let Some(entry) = index.entries.iter().find(|entry| entry.repo != repository) {
         return Err(format!(
-            "package index `{key}` routes `{}` to `{}`",
-            entry.id, entry.repo
+            "package index `{key}` routes an entry to a different repo `{}`",
+            entry.repo
         )
         .into());
     }
@@ -121,12 +121,16 @@ pub(crate) fn validate_entry_manifest(
     entry: &CatalogEntry,
     manifest: &DatasetManifest,
 ) -> Result<()> {
-    if manifest.id != entry.id
+    if manifest.repo != entry.repo
         || manifest.version != entry.version
         || manifest.kind != entry.kind
         || manifest.digest.as_deref() != Some(entry.digest.as_str())
     {
-        return Err(format!("catalog entry `{}` does not match its manifest", entry.id).into());
+        return Err(format!(
+            "catalog entry `{}` does not match its manifest",
+            entry.repo
+        )
+        .into());
     }
     Ok(())
 }
@@ -162,7 +166,6 @@ pub(crate) mod test_utils {
     #[tokio::test]
     async fn registry_resolves_package_local_indexes() {
         let entry = CatalogEntry {
-            id: "cache.panel".into(),
             repo: "owner/cache-panel".into(),
             version: "v1".into(),
             kind: "panel".into(),
