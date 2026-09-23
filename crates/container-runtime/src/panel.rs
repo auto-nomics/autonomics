@@ -27,6 +27,8 @@ pub struct PanelFile {
 pub struct PanelManifest {
     #[serde(default = "default_schema_version")]
     pub schema_version: u8,
+    /// Legacy panel id, or the catalog repository from schema v2 manifests.
+    #[serde(alias = "repo")]
     pub id: String,
     pub version: String,
     pub digest: String,
@@ -40,7 +42,7 @@ fn default_schema_version() -> u8 {
 
 impl PanelManifest {
     pub fn validate(&self) -> Result<(), String> {
-        if self.schema_version != 1 {
+        if !matches!(self.schema_version, 1 | 2) {
             return Err(format!(
                 "unsupported schema version {}",
                 self.schema_version
@@ -140,6 +142,9 @@ impl PanelCache {
         )
         .await?;
         tokio::fs::create_dir_all(&self.root).await?;
+        if let Some(parent) = destination.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
         match tokio::fs::rename(&temporary, &destination).await {
             Ok(()) => {}
             Err(_error) if destination.exists() => {
@@ -364,6 +369,59 @@ mod tests {
             format!("1000g_eur@{}", manifest.digest)
         );
         assert!(cached.host_path.join(PANEL_CACHE_COMPLETE_MARKER).is_file());
+    }
+
+    #[tokio::test]
+    async fn materializes_catalog_schema_v2_manifest() {
+        let object_root = tempfile::tempdir().unwrap();
+        let cache_root = tempfile::tempdir().unwrap();
+        let storage = OpendalFileStorage::new(object_root.path());
+        let content = b"catalog-panel";
+        let digest = format!("sha256:{}", "4".repeat(64));
+        let manifest = serde_json::json!({
+            "schema_version": 2,
+            "repo": "owner/catalog-panel",
+            "version": "v1",
+            "kind": "reference_panel",
+            "files": [{
+                "path": "panel.txt",
+                "size": content.len(),
+                "sha256": content_digest(content),
+            }],
+            "digest": digest,
+        });
+        let source_root = object_root
+            .path()
+            .join("datasets/owner/catalog-panel@sha256-4444");
+        tokio::fs::create_dir_all(&source_root).await.unwrap();
+        tokio::fs::write(source_root.join("panel.txt"), content)
+            .await
+            .unwrap();
+        storage
+            .write_bytes(
+                "/datasets/owner/catalog-panel@sha256-4444/manifest.json",
+                serde_json::to_vec(&manifest).unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let panel = PanelRef {
+            id: "owner/catalog-panel".into(),
+            digest,
+            source: "/datasets/owner/catalog-panel@sha256-4444".into(),
+            mount_path: "/panels/catalog-panel".into(),
+        };
+        let cached = PanelCache::new(cache_root.path())
+            .ensure(&storage, &panel)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            tokio::fs::read(cached.host_path.join("panel.txt"))
+                .await
+                .unwrap(),
+            content
+        );
     }
 
     #[tokio::test]

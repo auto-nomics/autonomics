@@ -353,7 +353,7 @@ impl LocalCatalog {
                 format!("{} {} catalog dataset", entry.repo, entry.version),
                 entry.vfs_alias(),
             );
-            bundle.source = Some(format!("/datasets/{}@{}", entry.repo, entry.digest));
+            bundle.source = Some(entry.vfs_immutable());
             bundle.digest = Some(entry.digest.clone());
             registry.register(bundle.clone()).map_err(|err| {
                 crate::error::Error::from(format!(
@@ -585,6 +585,10 @@ mod tests {
         let registry = catalog.bundle_registry().unwrap();
         let bundle = registry.get("owner/cache-panel").unwrap();
         assert_eq!(bundle.vpath.as_str(), "/bundles/owner/cache-panel");
+        assert_eq!(
+            bundle.source.as_deref(),
+            Some(entry.vfs_immutable().as_str())
+        );
         assert_eq!(bundle.digest.as_deref(), Some(entry.digest.as_str()));
     }
 
