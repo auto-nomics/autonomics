@@ -226,14 +226,13 @@ pub(crate) mod test_utils {
             }}"#,
             "a".repeat(64)
         );
-        let v2_registry = format!(
-            r#"{{
-                "schema_version": 2,
-                "generation": 1,
-                "repositories": ["owner/catalog-plink-ref"],
-                "entries": []
-            }}"#
-        );
+        let v2_registry = r#"{
+            "schema_version": 2,
+            "generation": 1,
+            "repositories": ["owner/catalog-plink-ref"],
+            "entries": []
+        }"#
+        .to_string();
         let v2_package_index = format!(
             r#"{{
                 "schema_version": 2,
