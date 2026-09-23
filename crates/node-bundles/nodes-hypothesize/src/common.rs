@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use arrow_array::{Array, ArrayRef, Float64Array, Int32Array, NullArray, RecordBatch, StringArray};
+use arrow_array::{Array, ArrayRef, Float64Array, Int32Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use thiserror::Error;
 
@@ -26,6 +26,8 @@ pub enum HypoNodeError {
     Spec(String),
     #[error("test failed: {0}")]
     Test(String),
+    #[error("test-row output assembly failed: {0}")]
+    Output(String),
     #[error("collect failed: {0}")]
     Collect(String),
     #[error("read_batch failed: {0}")]
@@ -78,7 +80,7 @@ pub fn test_to_batch(
             opt_i32_array(n),
         ],
     )
-    .expect("schema mismatch in hypothesize test-row output");
+    .map_err(|e| HypoNodeError::Output(e.to_string()))?;
     Ok(batch)
 }
 
@@ -104,10 +106,10 @@ fn opt_f64_array(v: Option<f64>) -> ArrayRef {
 }
 
 fn opt_i32_array(v: Option<i32>) -> ArrayRef {
-    match v {
-        Some(x) => Arc::new(Int32Array::from(vec![x])),
-        None => Arc::new(NullArray::new(1)),
-    }
+    // A missing value must still produce an Int32-typed array (null slot),
+    // never a NullArray: RecordBatch::try_new requires the column's physical
+    // type to match the schema's `Int32`, even for an all-null column.
+    Arc::new(Int32Array::from(vec![v]))
 }
 
 // ─── Column extraction helpers ──────────────────────────────────────────────

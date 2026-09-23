@@ -204,6 +204,7 @@ pub fn ks_two_sample(x: &[f64], y: &[f64], alt: Alternative) -> Result<Hypothesi
         "Two-sample Kolmogorov-Smirnov test",
         extras([
             (KEY_KIND, json!("ks_test")),
+            ("n", json!((n1 + n2) as u64)),
             ("n1", json!(n1 as u64)),
             ("n2", json!(n2 as u64)),
         ]),

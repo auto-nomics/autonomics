@@ -57,6 +57,7 @@ pub fn var_test(x: &[f64], y: &[f64], ratio: f64, alt: Alternative) -> Result<Hy
             ("null_value", json!(ratio)),
             ("df1", json!(df1)),
             ("df2", json!(df2)),
+            ("n", json!((n1 + n2) as u64)),
             ("n1", json!(n1 as u64)),
             ("n2", json!(n2 as u64)),
         ]),
@@ -123,6 +124,7 @@ pub fn bartlett_test(groups: &[&[f64]]) -> Result<HypothesisTest> {
         extras([
             (KEY_KIND, json!("bartlett_test")),
             ("k", json!(k as u64)),
+            ("n", json!(n_total as u64)),
             ("n_total", json!(n_total as u64)),
             ("pooled_var", json!(sp2)),
         ]),
@@ -211,6 +213,7 @@ pub fn levene_test(groups: &[&[f64]], center: Center) -> Result<HypothesisTest> 
             (KEY_KIND, json!("levene_test")),
             ("center", json!(format!("{center:?}").to_lowercase())),
             ("k", json!(k as u64)),
+            ("n", json!(n_total as u64)),
             ("n_total", json!(n_total as u64)),
             ("df1", json!(df1)),
             ("df2", json!(df2)),
@@ -308,6 +311,7 @@ pub fn fligner_test(groups: &[&[f64]]) -> Result<HypothesisTest> {
         extras([
             (KEY_KIND, json!("fligner_test")),
             ("k", json!(k as u64)),
+            ("n", json!(n as u64)),
             ("n_total", json!(n as u64)),
             ("group_sizes", json!(group_ns)),
         ]),
