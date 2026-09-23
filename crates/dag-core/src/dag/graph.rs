@@ -3,6 +3,7 @@
 use std::collections::VecDeque;
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
+use std::time::Duration;
 
 use futures::FutureExt;
 
@@ -92,11 +93,23 @@ impl std::ops::Index<&u8> for PortOutputs {
 ///
 /// Normal completed tasks ignore `abort`; a task dropped by the memory guard is
 /// explicitly cancelled instead of continuing invisibly in the background.
-struct AbortOnDropHandle(JoinHandle<()>);
+struct AbortOnDropHandle(Option<JoinHandle<()>>);
+
+impl AbortOnDropHandle {
+    /// Consume the wrapper, returning the inner handle without firing the
+    /// Drop-based `abort`. Callers take responsibility for joining (and may
+    /// still abort explicitly). Returning `None` means the handle was
+    /// already taken — `into_join` should only be called once.
+    fn into_join(mut self) -> JoinHandle<()> {
+        self.0.take().expect("AbortOnDropHandle::into_join called twice")
+    }
+}
 
 impl Drop for AbortOnDropHandle {
     fn drop(&mut self) {
-        self.0.abort();
+        if let Some(handle) = self.0.take() {
+            handle.abort();
+        }
     }
 }
 
@@ -695,7 +708,7 @@ impl DAG {
                         .send(NodeEvent::new(job_id, NodeEventKind::Done(res)))
                         .await;
                 });
-                job_handles.push(AbortOnDropHandle(handle));
+                job_handles.push(AbortOnDropHandle(Some(handle)));
             }
 
             if in_flight == 0 {
@@ -888,7 +901,22 @@ impl DAG {
         }
 
         run_cancel.cancel();
-        drop(job_handles);
+        // Give cancelled node tasks a chance to actually unwind so any
+        // Arrow buffers they hold locally get dropped before the scheduler
+        // returns. Without this grace, dropped `AbortOnDropHandle`s fire
+        // `.abort()` and immediately detach — the cancelled futures keep
+        // their Arrow `RecordBatch` `Arc`s alive out-of-band and the next
+        // `run()` starts with the previous run's memory still pinned
+        // (which is why the guard re-trips at the first sample on retry).
+        const ABORT_GRACE: Duration = Duration::from_secs(2);
+        let pending_joins: Vec<JoinHandle<()>> =
+            job_handles.drain(..).map(|h| h.into_join()).collect();
+        for join in &pending_joins {
+            join.abort();
+        }
+        for join in pending_joins {
+            let _ = tokio::time::timeout(ABORT_GRACE, join).await;
+        }
 
         let memory_trigger = memory_triggered;
         if memory_trigger.is_some() || external_cancellation {
@@ -932,6 +960,28 @@ impl DAG {
                 ) {
                     *status = RuntimeStatus::Cancelled;
                 }
+            }
+
+            // Drop outputs that this run produced. `self.outputs.insert` is
+            // only called for dirty Success nodes (see the Success arm of
+            // the dispatch loop), so iterating the dirty map is exact:
+            //   - `!incremental` ⇒ every node was dirty ⇒ every output
+            //     is from this (cancelled) run and must be released;
+            //   - `incremental` ⇒ only dirty outputs are from this run;
+            //     clean nodes' outputs are the previous run's cache and
+            //     must be preserved for the next incremental run.
+            // Cancelled / Failed / Running nodes have nothing in
+            // `self.outputs`, so removing dirty entries is the same as
+            // removing "this run's outputs".
+            let dirty_ids: Vec<NodeId> = self
+                .dirty
+                .iter()
+                .filter_map(|(id, state)| {
+                    matches!(state, DirtyState::Dirty).then(|| id.clone())
+                })
+                .collect();
+            for id in dirty_ids {
+                self.outputs.remove(&id);
             }
         }
 
