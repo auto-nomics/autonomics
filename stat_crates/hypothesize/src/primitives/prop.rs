@@ -107,6 +107,7 @@ pub fn prop_test_two(x1: u32, n1: u32, x2: u32, n2: u32, correct: bool) -> Resul
             ("estimate2", json!(p2)),
             ("pooled", json!(p_pool)),
             ("x1", json!(x1)),
+            ("n", json!(n1 + n2)),
             ("n1", json!(n1)),
             ("x2", json!(x2)),
             ("n2", json!(n2)),

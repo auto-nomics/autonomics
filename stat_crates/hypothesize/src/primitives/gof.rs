@@ -204,6 +204,7 @@ pub fn ks_two_sample(x: &[f64], y: &[f64], alt: Alternative) -> Result<Hypothesi
         "Two-sample Kolmogorov-Smirnov test",
         extras([
             (KEY_KIND, json!("ks_test")),
+            ("n", json!((n1 + n2) as u64)),
             ("n1", json!(n1 as u64)),
             ("n2", json!(n2 as u64)),
         ]),
@@ -259,12 +260,13 @@ fn ks_asymptotic_two_sided(lambda: f64) -> f64 {
 
 // ─── Shapiro–Wilk normality test ────────────────────────────────────────────
 
-/// Shapiro–Wilk test for normality.
+/// Shapiro–Francia test for normality.
 ///
-/// Implements Royston's AS R94 algorithm (the same one R uses for
-/// `shapiro.test`). Valid for 3 ≤ n ≤ 5000.
-///
-/// Mirrors `shapiro.test(x)`.
+/// Computes the W' statistic from Blom normal scores (equivalent to
+/// `cor(x, qnorm(ppoints(n, 3/8)))²`) and the p-value via Royston's (1993)
+/// normalising transformation — the same algorithm as `nortest::sf.test`.
+/// Valid for 3 ≤ n ≤ 5000 (the p-value approximation is calibrated for
+/// 5 ≤ n ≤ 5000).
 pub fn shapiro_wilk(x: &[f64]) -> Result<HypothesisTest> {
     let n = x.len();
     if n < 3 {
@@ -296,20 +298,25 @@ pub fn shapiro_wilk(x: &[f64]) -> Result<HypothesisTest> {
     let mx_dot: f64 = m.iter().zip(&sorted).map(|(mi, &xi)| mi * xi).sum();
     let w = mx_dot * mx_dot / (m_star * ss);
 
-    // TODO: Royston (1993b) normalising transformation for the p-value.
-    // The polynomial coefficients need calibration against R's swilk.c for
-    // the exact Shapiro–Wilk (not W') p-value. For now we report the W
-    // statistic correctly and leave the p-value as NaN so callers know it is
-    // not yet available. The W statistic itself is meaningful: W → 1 under
-    // normality, W << 1 for non-normal data.
-    let p_value = f64::NAN;
+    // Royston (1993) normalising transformation, as in `nortest::sf.test`:
+    // log(1 − W') is approximately Normal(μ, σ²) under H₀, with
+    //   u = ln n, v = ln u,
+    //   μ  = −1.2725 + 1.0521 (v − u),
+    //   σ  = 1.0308 − 0.26758 (v + 2/u).
+    let u = nf.ln();
+    let v = u.ln();
+    let mu = -1.2725 + 1.0521 * (v - u);
+    let sig = 1.0308 - 0.26758 * (v + 2.0 / u);
+    // w == 1 → ln(0) = −∞ → z = −∞ → p = 1 (perfect normal-probability plot).
+    let z = ((1.0 - w).ln() - mu) / sig;
+    let p_value = 1.0 - normal_cdf(z);
 
     Ok(HypothesisTest::new(
         w,
         p_value,
         f64::INFINITY,
         Alternative::TwoSided,
-        "Shapiro-Wilk normality test",
+        "Shapiro-Francia normality test",
         extras([(KEY_KIND, json!("shapiro_test")), ("n", json!(n as u64))]),
     ))
 }
@@ -507,13 +514,15 @@ mod tests {
         assert!(t.stat > 0.0 && t.stat <= 1.0, "W = {}", t.stat);
         // For normal data W should be fairly close to 1.
         assert!(t.stat > 0.8, "W should be high for normal data: {}", t.stat);
-        // p_value is NaN until Royston transformation is calibrated (TODO).
-        assert!(t.p_value.is_nan());
+        // Royston (1993) p-value must be a real number now, not NaN, and
+        // must not reject for normal-looking data.
+        assert!(!t.p_value.is_nan(), "p_value = {}", t.p_value);
+        assert!(t.p_value > 0.05, "p = {}", t.p_value);
     }
 
     #[test]
     fn shapiro_rejects_nonnormal() {
-        // Very skewed data — W should be low even without the p-value.
+        // Very skewed data — W should be low and the p-value tiny.
         let x: Vec<f64> = vec![1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 100.0];
         let t = shapiro_wilk(&x).unwrap();
         assert!(
@@ -521,6 +530,7 @@ mod tests {
             "W should be low for non-normal data: {}",
             t.stat
         );
+        assert!(t.p_value < 0.001, "p = {}", t.p_value);
     }
 
     #[test]
@@ -528,6 +538,43 @@ mod tests {
         assert!(shapiro_wilk(&[1.0, 2.0]).is_err());
         assert!(shapiro_wilk(&[]).is_err());
         assert!(shapiro_wilk(&[1.0; 5001]).is_err());
+    }
+
+    #[test]
+    fn shapiro_pvalue_calibrated_under_h0() {
+        // Deterministic LCG + Box–Muller: under exact H₀ the Royston (1993)
+        // p-value must be ~U(0,1). A mis-calibrated μ/σ would push the
+        // rejection rate at α = 0.05 away from 0.05.
+        let mut seed = 0x2545F4914F6CDD1D_u64;
+        let mut lcg = move || {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (seed >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let mut normal = move || {
+            let (a, b) = (lcg(), lcg());
+            (-2.0 * a.ln()).sqrt() * (std::f64::consts::TAU * b).cos()
+        };
+
+        for n in [30_usize, 200, 965] {
+            let mut rejections = 0_usize;
+            let trials = 2_000_usize;
+            for _ in 0..trials {
+                let x: Vec<f64> = (0..n).map(|_| normal()).collect();
+                let p = shapiro_wilk(&x).unwrap().p_value;
+                if p < 0.05 {
+                    rejections += 1;
+                }
+            }
+            let rate = rejections as f64 / trials as f64;
+            // 3σ band around α = 0.05 for the binomial noise at 2000 trials.
+            let band = 3.0 * (0.05 * 0.95 / trials as f64).sqrt();
+            assert!(
+                (rate - 0.05).abs() < band,
+                "n = {n}: rejection rate {rate} outside 0.05 ± {band}"
+            );
+        }
     }
 
     #[test]

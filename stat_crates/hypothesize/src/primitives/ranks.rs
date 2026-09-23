@@ -196,6 +196,7 @@ pub fn mann_whitney(
             (KEY_KIND, json!("mann_whitney")),
             ("W", json!(r1)), // R's W = rank sum for x
             ("U", json!(u)),
+            ("n", json!((n1 + n2) as u64)),
             ("n1", json!(n1 as u64)),
             ("n2", json!(n2 as u64)),
             ("corrected", json!(correct)),
@@ -271,6 +272,7 @@ pub fn kruskal_wallis(groups: &[&[f64]]) -> Result<HypothesisTest> {
         extras([
             (KEY_KIND, json!("kruskal_wallis")),
             ("k", json!(k as u64)),
+            ("n", json!(n_total as u64)),
             ("n_total", json!(n_total as u64)),
             ("rank_sums", json!(rank_sums)),
             ("group_sizes", json!(group_sizes)),
@@ -331,6 +333,7 @@ pub fn friedman_test(data: &[&[f64]]) -> Result<HypothesisTest> {
             (KEY_KIND, json!("friedman_test")),
             ("blocks", json!(b as u64)),
             ("treatments", json!(t as u64)),
+            ("n", json!((b * t) as u64)),
             ("rank_sums", json!(rank_sums)),
         ]),
     ))
@@ -410,6 +413,7 @@ mod tests {
         let y = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         let t = mann_whitney(&x, &y, Alternative::TwoSided, true).unwrap();
         assert!(t.p_value < 0.02, "p = {}", t.p_value);
+        assert_eq!(t.extra_f64("n"), Some(10.0));
     }
 
     #[test]
@@ -429,6 +433,7 @@ mod tests {
         let g3 = [7.0_f64, 8.0, 9.0];
         let t = kruskal_wallis(&[&g1, &g2, &g3]).unwrap();
         assert!((t.dof - 2.0).abs() < 1e-12);
+        assert_eq!(t.extra_f64("n"), Some(9.0));
         // Fully separated → H ≈ 7.2 (max), p very small
         assert!(t.p_value < 0.05, "p = {}", t.p_value);
     }
@@ -450,6 +455,7 @@ mod tests {
         let b3 = [1.0_f64, 2.0, 3.0];
         let b4 = [1.0_f64, 2.0, 3.0];
         let t = friedman_test(&[&b1, &b2, &b3, &b4]).unwrap();
+        assert_eq!(t.extra_f64("n"), Some(12.0)); // blocks × treatments
         // All blocks rank treatment 1 as best → χ² large
         assert!(t.stat > 5.0, "χ² = {}", t.stat);
         assert!((t.dof - 2.0).abs() < 1e-12);

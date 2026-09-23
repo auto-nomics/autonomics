@@ -152,6 +152,7 @@ pub fn t_test_two(
             ("estimate1", json!(m1)),
             ("estimate2", json!(m2)),
             ("stderr", json!(se)),
+            ("n", json!((n1 + n2) as u64)),
             ("n1", json!(n1 as u64)),
             ("n2", json!(n2 as u64)),
             ("var_equal", json!(var_equal)),
@@ -207,6 +208,7 @@ mod tests {
         // mean diff = -1, both groups same variance → Welch = pooled here
         assert!((t.stat + 1.0_f64).abs() < 0.5); // roughly t≈-1
         assert!(t.dof < 8.5 && t.dof > 7.5); // ≈8
+        assert_eq!(t.extra_f64("n"), Some(10.0)); // total n1 + n2
     }
 
     #[test]
@@ -215,6 +217,7 @@ mod tests {
         let y = vec![2.0, 3.0, 4.0, 5.0, 6.0];
         let t = t_test_two(&x, &y, true, Alternative::TwoSided).unwrap();
         assert!((t.dof - 8.0).abs() < 1e-12);
+        assert_eq!(t.extra_f64("n"), Some(10.0));
     }
 
     #[test]

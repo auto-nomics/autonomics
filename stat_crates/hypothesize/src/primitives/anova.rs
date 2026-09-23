@@ -86,6 +86,7 @@ fn classical_anova(
             (KEY_KIND, json!("oneway_anova")),
             ("var_equal", json!(true)),
             ("k", json!(k as u64)),
+            ("n", json!(n_total as u64)),
             ("n_total", json!(n_total as u64)),
             ("df1", json!(df1)),
             ("df2", json!(df2)),
@@ -106,6 +107,7 @@ fn welch_anova(
     k: usize,
 ) -> Result<HypothesisTest> {
     let kf = k as f64;
+    let n_total: usize = group_n.iter().sum();
 
     // Per-group variances and weights.
     let group_vars: Vec<f64> = groups.iter().map(|g| crate::extras_var(g)).collect();
@@ -157,6 +159,8 @@ fn welch_anova(
             (KEY_KIND, json!("oneway_anova")),
             ("var_equal", json!(false)),
             ("k", json!(k as u64)),
+            ("n", json!(n_total as u64)),
+            ("n_total", json!(n_total as u64)),
             ("df1", json!(df1)),
             ("df2", json!(df2)),
             ("group_means", json!(group_means)),
@@ -190,6 +194,7 @@ mod tests {
         // Clear between-group differences → F large
         assert!(t.stat > 10.0, "F = {}", t.stat);
         assert!(t.p_value < 0.01);
+        assert_eq!(t.extra_f64("n"), Some(9.0));
     }
 
     #[test]
@@ -199,6 +204,7 @@ mod tests {
         let t = oneway_anova(&[&g1, &g2], false).unwrap();
         assert!((t.dof - 1.0).abs() < 1e-9);
         assert!(t.extra_f64("df2").unwrap() > 0.0);
+        assert_eq!(t.extra_f64("n"), Some(10.0));
     }
 
     #[test]
