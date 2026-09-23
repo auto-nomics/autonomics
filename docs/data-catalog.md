@@ -145,6 +145,31 @@ cargo run -p data-catalog -- list
 cargo run -p data-catalog -- mounts
 ```
 
+## Migrating legacy remote layouts
+
+Repositories published before the repo-name migration carry legacy formats:
+v2 indexes (legacy `id` field) and v1 manifests (no `repo` field). v2 indexes
+are migrated transparently on every read path, but v1 manifests cannot be —
+the manifest `digest` hashes the manifest's own canonical bytes, so changing
+the shape changes the digest and with it the content-addressed payload path.
+Those repositories need a one-time remote rewrite:
+
+```bash
+# One package repository (prints the plan, no commits, when --dry-run):
+cargo run -p data-catalog -- migrate --repo wjixiang/catalog-plink-ref-1000g-eur-binary --dry-run
+cargo run -p data-catalog -- migrate --repo wjixiang/catalog-plink-ref-1000g-eur-binary
+
+# The registry from ~/.autonomics/vfs.toml plus every package it references:
+cargo run -p data-catalog -- migrate
+```
+
+The migration downloads each entry's payload, verifies every file checksum,
+re-commits it under the new digest's content-addressed path (the Hub's
+content-addressed transfer deduplicates identical bytes), flips the index
+only after the new layout is complete, and finally deletes the legacy
+layout. It is idempotent — current-format repositories report
+`changed: false` and perform no commits.
+
 ## Container panel references
 
 Container commands use stable panel ids:

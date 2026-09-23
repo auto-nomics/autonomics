@@ -114,14 +114,12 @@ impl NodePlugin for Plugin {
             h5ad_obs_to_dataframe::H5adObsToDataFrameNodeFactory {},
         ));
         registry.register(Box::new(file_transform::FileTransformNodeFactory {}));
-        registry.register(Box::new(script_nodes::ScriptNodeFactory::python(
-            Arc::clone(&self.container_execution.runtime),
-            Arc::clone(&self.container_execution.panel_cache),
-        )));
-        registry.register(Box::new(script_nodes::ScriptNodeFactory::r(
-            Arc::clone(&self.container_execution.runtime),
-            Arc::clone(&self.container_execution.panel_cache),
-        )));
+        // `python_script` and `r_script` are intentionally NOT registered — they
+        // are removed from the DAG surface so the Agent cannot list or add them.
+        // The `script_nodes` module is retained for unit/integration tests of
+        // the underlying ScriptNodeFactory implementation; constructing one
+        // directly still works, but `NodeRegistry::build_node(...)` will return
+        // `Error::FactoryNotFound` for these kinds.
         registry.register(Box::new(gmt_import::GmtImportNodeFactory {}));
         registry.register(Box::new(dataframe_to_file::DataFrameToFileNodeFactory {}));
         registry.register(Box::new(parquet_sql::DataFusionSqlNodeFactory {}));

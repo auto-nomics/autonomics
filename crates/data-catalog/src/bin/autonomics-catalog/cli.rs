@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 
-use crate::commands::{build, init, inspect, install, publish, search};
+use crate::commands::{build, init, inspect, install, migrate, publish, search};
 
 #[derive(Parser)]
 #[command(
@@ -27,6 +27,8 @@ pub enum Command {
     Install(install::InstallArgs),
     /// Install remote current versions missing from the local cache.
     Update(install::UpdateArgs),
+    /// Rewrite legacy remote layouts (v2 indexes, v1 manifests) in place.
+    Migrate(migrate::MigrateArgs),
     /// List current entries installed in the local cache.
     List(inspect::ListArgs),
     /// Show the VFS mounts generated from the local cache.

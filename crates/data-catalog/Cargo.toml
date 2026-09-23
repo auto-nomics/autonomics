@@ -24,6 +24,8 @@ tokio = { workspace = true, features = [
   "io-util",
   "macros",
   "rt-multi-thread",
+  "sync",
+  "time",
 ] }
 toml.workspace = true
 uuid.workspace = true

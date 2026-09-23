@@ -23,6 +23,7 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Search(args) => commands::search::run(args).await,
         Command::Install(args) => commands::install::run_install(args).await,
         Command::Update(args) => commands::install::run_update(args).await,
+        Command::Migrate(args) => commands::migrate::run(args).await,
         Command::List(args) => commands::inspect::run_list(args),
         Command::Mounts(args) => commands::inspect::run_mounts(args),
         Command::Init(args) => commands::init::run_init(args),

@@ -9,12 +9,16 @@ pub mod config;
 pub mod error;
 pub mod hf;
 pub mod local;
+mod migrate;
 pub mod model;
 pub mod package;
 pub mod remote;
 
 pub use config::CatalogConfig;
-pub use hf::{HfPublishTarget, MultiRepoHfSource, publish_package_to_hf};
+pub use hf::{
+    HfPublishTarget, MultiRepoHfSource, PackageMigrationReport, RegistryMigrationReport,
+    migrate_package_repository, migrate_registry_repository, publish_package_to_hf,
+};
 pub use local::{LocalCatalog, default_panel_cache_root};
 pub use model::{CatalogEntry, CatalogIndex, DatasetFile, DatasetManifest};
 pub use package::{build_package, validate_package};

@@ -2,7 +2,8 @@ use async_trait::async_trait;
 
 use crate::config::CatalogConfig;
 use crate::error::Result;
-use crate::hf::MultiRepoHfSource;
+use crate::hf::{MultiRepoHfSource, package_repo_prefix_for_index};
+use crate::migrate::RawCatalogIndex;
 use crate::model::{CatalogEntry, CatalogIndex, DatasetManifest};
 
 const INDEX_NAME: &str = "index.json";
@@ -82,8 +83,16 @@ impl RemoteCatalog {
 
     async fn read_index(&self, key: &str) -> Result<CatalogIndex> {
         let bytes = self.source.read(key).await?;
-        let index: CatalogIndex = serde_json::from_slice(&bytes)
+        // v2 indexes are migrated on read; entries missing `repo` fall back
+        // to the package prefix derived from the registry repository. When
+        // that derivation fails the prefix is `None` and every entry must
+        // carry its own `repo`.
+        let prefix = package_repo_prefix_for_index(&self.registry_repo).ok();
+        let raw: RawCatalogIndex = serde_json::from_slice(&bytes)
             .map_err(|error| format!("parse object `{key}`: {error}"))?;
+        let index = raw
+            .into_v3(prefix.as_deref())
+            .map_err(|error| format!("migrate catalog index `{key}`: {error}"))?;
         index
             .validate()
             .map_err(|error| format!("invalid catalog index `{key}`: {error}"))?;
@@ -103,7 +112,11 @@ impl RemoteCatalog {
     }
 }
 
-fn validate_package_index(index: &CatalogIndex, repository: &str, key: &str) -> Result<()> {
+pub(crate) fn validate_package_index(
+    index: &CatalogIndex,
+    repository: &str,
+    key: &str,
+) -> Result<()> {
     if !index.repositories.is_empty() {
         return Err(format!("package index `{key}` must not be a registry").into());
     }
@@ -194,5 +207,121 @@ pub(crate) mod test_utils {
 
         let resolved = remote.index().await.unwrap();
         assert_eq!(resolved.current_entries().next(), Some(&entry));
+    }
+
+    #[tokio::test]
+    async fn v2_indexes_are_migrated_on_read() {
+        // Mirrors repositories published before the v2→v3 migration: both the
+        // registry and the package-local index still carry schema_version 2,
+        // with entries holding a legacy `id` next to a populated `repo`.
+        let v2_entry = format!(
+            r#"{{
+                "id": "plink.ref.1000g_eur.binary",
+                "repo": "owner/catalog-plink-ref",
+                "version": "v1",
+                "kind": "plink_ref_binary",
+                "digest": "sha256:{}",
+                "current": true,
+                "created_unix_seconds": 1789930111
+            }}"#,
+            "a".repeat(64)
+        );
+        let v2_registry = format!(
+            r#"{{
+                "schema_version": 2,
+                "generation": 1,
+                "repositories": ["owner/catalog-plink-ref"],
+                "entries": []
+            }}"#
+        );
+        let v2_package_index = format!(
+            r#"{{
+                "schema_version": 2,
+                "generation": 1,
+                "repositories": [],
+                "entries": [{v2_entry}]
+            }}"#
+        );
+        let mut objects = MapSource::default();
+        objects.0.insert(
+            "owner/catalog-index/index.json".into(),
+            v2_registry.into_bytes(),
+        );
+        objects.0.insert(
+            "owner/catalog-plink-ref/index.json".into(),
+            v2_package_index.into_bytes(),
+        );
+        let config = CatalogConfig {
+            repository: Some("owner/catalog-index".into()),
+            ..CatalogConfig::default()
+        };
+        let remote = RemoteCatalog::from_source(config, Box::new(objects));
+
+        let index = remote.index().await.unwrap();
+        let entry = index.current_entries().next().unwrap();
+        assert_eq!(entry.repo, "owner/catalog-plink-ref");
+        assert_eq!(entry.version, "v1");
+
+        let package = remote
+            .package_index("owner/catalog-plink-ref")
+            .await
+            .unwrap();
+        assert_eq!(package.entries.len(), 1);
+        assert_eq!(package.entries[0].repo, "owner/catalog-plink-ref");
+    }
+
+    #[tokio::test]
+    async fn v2_entry_without_repo_recovers_repo_from_index_prefix() {
+        let v2_entry = format!(
+            r#"{{
+                "id": "plink.ref.1000g_eur.binary",
+                "version": "v1",
+                "kind": "plink_ref_binary",
+                "digest": "sha256:{}",
+                "current": true,
+                "created_unix_seconds": 1789930111
+            }}"#,
+            "b".repeat(64)
+        );
+        let package_index = format!(
+            r#"{{
+                "schema_version": 2,
+                "generation": 1,
+                "repositories": [],
+                "entries": [{v2_entry}]
+            }}"#
+        );
+        let mut objects = MapSource::default();
+        // Registry prefix `owner/catalog-index` → `owner/catalog`; the legacy
+        // id `plink.ref.1000g_eur.binary` recovers to the canonical package
+        // repo `owner/catalog-plink-ref-1000g-eur-binary`.
+        let repo = "owner/catalog-plink-ref-1000g-eur-binary";
+        objects.0.insert(
+            format!("{repo}/index.json"),
+            package_index.clone().into_bytes(),
+        );
+        objects.0.insert(
+            "owner/other-repo/index.json".into(),
+            package_index.into_bytes(),
+        );
+        let config = CatalogConfig {
+            repository: Some("owner/catalog-index".into()),
+            ..CatalogConfig::default()
+        };
+        let remote = RemoteCatalog::from_source(config, Box::new(objects));
+
+        let package = remote.package_index(repo).await.unwrap();
+        assert_eq!(package.entries[0].repo, repo);
+
+        // The recovered repo must still route consistently for package indexes.
+        let error = remote
+            .package_index("owner/other-repo")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("routes an entry to a different repo"),
+            "{error}"
+        );
     }
 }
