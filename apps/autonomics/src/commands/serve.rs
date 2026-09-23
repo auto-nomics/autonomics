@@ -9,6 +9,7 @@
 //! null).
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use time::macros::format_description;
 use tokio_util::sync::CancellationToken;
@@ -75,7 +76,17 @@ pub fn run_serve(args: ServeArgs) -> color_eyre::Result<()> {
                 .await
             }
         }
-    })
+    })?;
+    // Bound the time the runtime waits for background tasks once the
+    // foreground future returns. Without this, `Runtime::drop` blocks
+    // indefinitely on tasks that don't observe the daemon's
+    // `CancellationToken` — e.g. `spawn_container_gc`'s infinite sleep
+    // loop — pinning the 25 GB `SharedInfra` and preventing the process
+    // from exiting after a graceful `serve stop`. Five seconds is enough
+    // for `bib-extraction-sweep` (one-shot) and the GC's current sweep;
+    // anything still running is forcibly cancelled.
+    runtime.shutdown_timeout(Duration::from_secs(5));
+    Ok(())
 }
 
 async fn run_foreground_or_daemon(
