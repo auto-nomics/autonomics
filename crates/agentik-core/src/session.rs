@@ -1552,7 +1552,8 @@ impl Session {
                     .input
                     .get("timeout_seconds")
                     .and_then(|v| v.as_u64())
-                    .unwrap_or(120);
+                    .unwrap_or(600)
+                    .max(300); // floor: 别让模型传小值反复空醒烧 turn
 
                 // Cancel any existing watcher for this task before spawning a
                 // new one. This prevents duplicate message injection when the
@@ -1840,8 +1841,9 @@ impl Session {
                 .unwrap_or_else(|| format!("#{task_seq}"));
             format!(
                 "Background task '{name}' (#{task_seq}) did not complete within {timeout_secs} seconds. \
-                 It is still running. You can check its status with `view_task_status` or \
-                 wait again with `wait_task`."
+                 It is still running. Check its status with `view_task_status`, or `wait_task` again \
+                 with a LARGER timeout_seconds (e.g. 1800) — you are woken the moment it finishes, \
+                 so a large timeout costs nothing."
             )
         };
 

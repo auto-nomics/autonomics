@@ -19,8 +19,11 @@ use crate::tools::{ToolError, ToolFunction};
 pub struct WaitTaskInput {
     #[desc = "Task number (#N) of the background task to wait for, as shown when it was spawned"]
     task: u64,
-    #[desc = "Maximum seconds to wait for the task to finish. Defaults to 120."]
-    #[default = 120]
+    #[desc = "Maximum seconds to sleep before checking in on a still-running task. \
+              You are woken IMMEDIATELY when the task finishes — this value does NOT \
+              delay the result, it only caps the idle sleep. For delegate_to analyses \
+              use 1800 or more. Defaults to 600."]
+    #[default = 600]
     timeout_seconds: Option<u64>,
 }
 
@@ -96,7 +99,7 @@ impl ToolFunction for WaitTaskTool {
     }
 
     async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
-        let timeout_secs = input.timeout_seconds.unwrap_or(120);
+        let timeout_secs = input.timeout_seconds.unwrap_or(600);
 
         let tasks = self.tasks.read().await;
         let Some(task) = tasks.iter().find(|t| t.seq() == input.task) else {
