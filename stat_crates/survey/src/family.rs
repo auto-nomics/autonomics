@@ -304,10 +304,18 @@ impl FamilySpec {
     }
 
     /// Validate that the response `y` is valid for this family.
+    ///
+    /// NaN entries are **skipped**: callers routinely NaN-mark observations
+    /// they want excluded (e.g. survey-domain filters) and rely on
+    /// `svyglm`'s later na.action filter to drop them — pre-validating NaN
+    /// would falsely reject those rows before they can be filtered.
     pub fn validate_y(&self, y: &[f64]) -> std::result::Result<(), String> {
         match self.family {
             Family::Binomial | Family::QuasiBinomial => {
                 for (i, &v) in y.iter().enumerate() {
+                    if v.is_nan() {
+                        continue;
+                    }
                     if !(0.0..=1.0).contains(&v) {
                         return Err(format!("y[{i}] = {v} is outside [0,1] for binomial family"));
                     }
@@ -315,6 +323,9 @@ impl FamilySpec {
             }
             Family::Poisson | Family::QuasiPoisson => {
                 for (i, &v) in y.iter().enumerate() {
+                    if v.is_nan() {
+                        continue;
+                    }
                     if v < 0.0 {
                         return Err(format!("y[{i}] = {v} < 0 for poisson family"));
                     }
@@ -322,6 +333,9 @@ impl FamilySpec {
             }
             Family::Gamma => {
                 for (i, &v) in y.iter().enumerate() {
+                    if v.is_nan() {
+                        continue;
+                    }
                     if v <= 0.0 {
                         return Err(format!("y[{i}] = {v} <= 0 for Gamma family"));
                     }
@@ -329,6 +343,9 @@ impl FamilySpec {
             }
             Family::InverseGaussian => {
                 for (i, &v) in y.iter().enumerate() {
+                    if v.is_nan() {
+                        continue;
+                    }
                     if v <= 0.0 {
                         return Err(format!("y[{i}] = {v} <= 0 for inverse.gaussian family"));
                     }
@@ -625,5 +642,23 @@ mod tests {
         let s = FamilySpec::canonical(Family::Gamma);
         assert!(s.validate_y(&[0.0, 1.0]).is_err());
         assert!(s.validate_y(&[1.0, 2.0]).is_ok());
+    }
+
+    #[test]
+    fn validate_y_skips_nan_entries() {
+        // Binomial: NaN must NOT be reported as outside [0,1].
+        let s = FamilySpec::canonical(Family::Binomial);
+        assert!(s.validate_y(&[0.0, f64::NAN, 1.0]).is_ok());
+        assert!(s.validate_y(&[f64::NAN, 1.5]).is_err()); // 1.5 still flagged
+        // Quasibinomial shares the same range.
+        let s = FamilySpec::canonical(Family::QuasiBinomial);
+        assert!(s.validate_y(&[f64::NAN, 0.5]).is_ok());
+        // Non-binomial families also tolerate NaN.
+        let s = FamilySpec::canonical(Family::Poisson);
+        assert!(s.validate_y(&[f64::NAN, 2.0]).is_ok());
+        let s = FamilySpec::canonical(Family::Gamma);
+        assert!(s.validate_y(&[f64::NAN, 1.0]).is_ok());
+        let s = FamilySpec::canonical(Family::Gaussian);
+        assert!(s.validate_y(&[f64::NAN, 1.0]).is_ok());
     }
 }

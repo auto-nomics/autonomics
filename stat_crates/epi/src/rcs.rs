@@ -27,21 +27,43 @@ fn default_knot_percentiles(n_knots: usize) -> Option<&'static [f64]> {
     }
 }
 
-/// Compute knot locations from percentiles of the data.
-fn knot_positions(x: &[f64], n_knots: usize) -> Result<Vec<f64>> {
+fn knot_positions_weighted(x: &[f64], weights: Option<&[f64]>, n_knots: usize) -> Result<Vec<f64>> {
     let percentiles = default_knot_percentiles(n_knots)
         .ok_or_else(|| EpiError::Numerical(format!("unsupported knot count: {n_knots}")))?;
 
-    let mut sorted = x.to_vec();
-    sorted.sort_by(|a, b| a.total_cmp(b));
+    let unit_weights = vec![1.0; x.len()];
+    let weights = weights.unwrap_or(&unit_weights);
 
-    Ok(percentiles
+    if x.is_empty() {
+        return Err(EpiError::Numerical("RCS requires observations".to_string()));
+    }
+
+    let mut rows: Vec<(f64, f64)> = x.iter().copied().zip(weights.iter().copied()).collect();
+    rows.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let n_sorted = rows.len();
+    let sorted_x: Vec<f64> = rows.iter().map(|&(x, _)| x).collect();
+    let weight_total = rows.iter().map(|&(_, weight)| weight).sum::<f64>();
+    let weight_scale = n_sorted as f64 / weight_total;
+    let sorted_weights: Vec<f64> = rows
         .iter()
-        .map(|&p| {
-            let idx = ((sorted.len() as f64 - 1.0) * p).round() as usize;
-            sorted[idx.min(sorted.len() - 1)]
-        })
-        .collect())
+        .map(|&(_, weight)| weight * weight_scale)
+        .collect();
+    let mut knots = Vec::with_capacity(percentiles.len());
+    let mut prefix = 0.0;
+    let mut rank = 0;
+    let total = sorted_weights.iter().sum::<f64>();
+    for &p in percentiles {
+        // Offset by one half-observation so unit weights reproduce the
+        // rounded-index percentile rule used by the original RCS fit.
+        let target = p * (total - 1.0) + 0.5;
+        while rank < n_sorted && prefix < target {
+            prefix += sorted_weights[rank];
+            rank += 1;
+        }
+        let idx = rank.min(n_sorted) - 1;
+        knots.push(sorted_x[idx]);
+    }
+    Ok(knots)
 }
 
 /// Generate the restricted cubic spline basis expansion for a single variable.
@@ -120,9 +142,40 @@ pub fn rcs_logistic(
     n_knots: usize,
     covariates: &[&[f64]],
 ) -> Result<RcsResult> {
+    rcs_logistic_weighted(x, y, n_knots, covariates, None)
+}
+
+/// Fit a sampling-weighted RCS logistic regression.
+///
+/// Weights affect knot placement as weighted percentiles, coefficient
+/// estimation, and pseudo-likelihood tests. Inference remains model-based;
+/// stratum and PSU design variance must be handled by a survey-design
+/// estimator.
+pub fn rcs_logistic_weighted(
+    x: &[f64],
+    y: &[u64],
+    n_knots: usize,
+    covariates: &[&[f64]],
+    weights: Option<&[f64]>,
+) -> Result<RcsResult> {
     let n = x.len();
     if n != y.len() {
         return Err(EpiError::DimensionMismatch { a: n, b: y.len() });
+    }
+    if let Some(weights) = weights
+        && weights.len() != n
+    {
+        return Err(EpiError::DimensionMismatch {
+            a: n,
+            b: weights.len(),
+        });
+    }
+    if let Some(weights) = weights
+        && weights.iter().any(|&w| !w.is_finite() || w <= 0.0)
+    {
+        return Err(EpiError::Numerical(
+            "RCS weights must be finite and positive".to_string(),
+        ));
     }
     if n_knots < 3 {
         return Err(EpiError::Numerical(
@@ -130,7 +183,7 @@ pub fn rcs_logistic(
         ));
     }
 
-    let knots = knot_positions(x, n_knots)?;
+    let knots = knot_positions_weighted(x, weights, n_knots)?;
     let basis = rcs_basis(x, &knots); // k−2 nonlinear columns
 
     // y as f64 for statkit.
@@ -140,7 +193,7 @@ pub fn rcs_logistic(
     let mut linear_preds: Vec<&[f64]> = Vec::with_capacity(1 + covariates.len());
     linear_preds.push(x);
     linear_preds.extend_from_slice(covariates);
-    let linear_fit = regression::logistic(&linear_preds, &y_f64, true)
+    let linear_fit = regression::logistic_weighted(&linear_preds, &y_f64, weights, true)
         .map_err(|e| EpiError::Numerical(e.to_string()))?;
 
     // --- Full spline model: x + basis + covariates ---
@@ -153,7 +206,7 @@ pub fn rcs_logistic(
         spline_preds.push(col.as_slice());
     }
     spline_preds.extend_from_slice(covariates);
-    let spline_fit = regression::logistic(&spline_preds, &y_f64, true)
+    let spline_fit = regression::logistic_weighted(&spline_preds, &y_f64, weights, true)
         .map_err(|e| EpiError::Numerical(e.to_string()))?;
 
     // --- LR test for nonlinearity ---
@@ -289,7 +342,7 @@ mod tests {
     #[test]
     fn knot_placement_3_knots() {
         let x: Vec<f64> = (0..100).map(|i| i as f64).collect();
-        let knots = knot_positions(&x, 3).unwrap();
+        let knots = knot_positions_weighted(&x, None, 3).unwrap();
         assert_eq!(knots.len(), 3);
         // 10th percentile ≈ 9.9, median ≈ 49.5, 90th ≈ 89.1
         assert!(approx_eq(knots[0], 10.0, 2.0));
@@ -327,6 +380,46 @@ mod tests {
 
         let res = rcs_logistic(&x, &y, 3, &[]).unwrap();
         assert!(res.p_overall < 0.1 || res.p_nonlinear >= 0.0);
+    }
+
+    #[test]
+    fn weighted_knots_use_weighted_percentiles() {
+        let x: Vec<f64> = (0..100).map(|i| i as f64).collect();
+        let mut weights = vec![1.0; 100];
+        for weight in weights.iter_mut().skip(50) {
+            *weight = 2.0;
+        }
+        let knots = knot_positions_weighted(&x, Some(&weights), 3).unwrap();
+        assert_eq!(knots.len(), 3);
+        assert_eq!(knots[0], 15.0);
+        assert_eq!(knots[1], 62.0);
+        assert_eq!(knots[2], 92.0);
+    }
+
+    #[test]
+    fn constant_rcs_weights_match_unweighted_fit() {
+        let x: Vec<f64> = (0..120).map(|i| i as f64 / 12.0).collect();
+        let y: Vec<u64> = x
+            .iter()
+            .map(|&xi| {
+                if xi > 5.0 && (xi * 11.0) % 3.0 < 1.5 {
+                    1
+                } else {
+                    0
+                }
+            })
+            .collect();
+        let weights = vec![4.0; x.len()];
+        let unweighted = rcs_logistic(&x, &y, 3, &[]).unwrap();
+        let weighted = rcs_logistic_weighted(&x, &y, 3, &[], Some(&weights)).unwrap();
+        for (a, b) in unweighted
+            .spline_fit
+            .coefficients
+            .iter()
+            .zip(&weighted.spline_fit.coefficients)
+        {
+            assert!((a - b).abs() < 1e-9, "{a} vs {b}");
+        }
     }
 
     #[test]

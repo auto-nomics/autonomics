@@ -109,6 +109,9 @@
 - **API**：`rcs_logistic(x, y, n_knots, covariates)` 返回 `RcsResult`。
 - **算法**：Harrell 限制性立方样条基（Stone 1986 尾部约束），拟合逻辑回归，
   并对样条 vs 线性做 **LR 检验**（非线性检验）。
+- **调查选项**：`survey_domain = {column, values}` 限定分析子域；
+  `weight_column` 启用加权 knot 分位数与加权伪似然拟合（模型化推断，
+  不额外引入 stratum/PSU 设计方差）。
 - **节点位置**：端口 0：非线性检验；端口 1：拟合曲线（plot 用）。
 - **交叉验证**：与 R `splines::ns + glm` 匹配（结构推断一致）。
 
@@ -304,7 +307,7 @@
 | `cox_regression` | `predictors, time_column, event_column` | term, coef, SE, z, p, HR, HR CI, LL, n, n_events, converged | ✅ |
 | `chi_square` | `row_column, col_column` | χ², df, p, n, small_expected | ✅ |
 | `epi_roc` | `score1_column, label_column, score2_column?, n_bootstrap, seed` | auc1, auc1 CI, auc2?, delong_z?, delong_p?, n_pos, n_neg | ✅ |
-| `epi_rcs` | `x_column, outcome_column, covariates?, n_knots, n_grid_points` | lr_stat, df_nonlinear, p_nonlinear, p_overall, n_knots, n_obs (port 1: curve) | ✅ |
+| `epi_rcs` | `x_column, outcome_column, covariates?, n_knots, n_grid_points, survey_domain?, weight_column?` | lr_stat, df_nonlinear, p_nonlinear, p_overall, n_knots, n_obs (port 1: curve) | ✅ |
 | `epi_lasso` | `predictors, outcome_column, n_lambda, cv_folds, n_bootstrap, seed` | feature, selected_min, selected_1se, coef_min, coef_1se, λ_min, λ_1se, bootstrap_freq | ✅ |
 | `epi_wqs` | `exposures, outcome_column, covariates?, n_quantiles, train_frac, n_bootstrap, seed` | feature, weight, bootstrap_mean, bootstrap_se (port 1: β, OR, p, n_train, n_test) | ✅ |
 | `survival` | `time_column, event_column, group_column?` | port 0: time, survival, std_error, n_at_risk, n_events; port 1: χ², df, p, n_groups, n_obs, n_events | ✅ |

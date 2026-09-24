@@ -131,6 +131,10 @@ modules. Three regression engines and one descriptive-statistics module.
 - **Algorithm**: Builds Harrell's restricted cubic spline basis (tail
   constraints per Stone 1986), fits logistic regression, and runs a **LR
   test** (spline vs linear) for nonlinearity.
+- **Survey options**: `survey_domain = {column, values}` restricts the
+  analysis domain; `weight_column` enables weighted-percentile knots and
+  weighted pseudo-likelihood fitting (model-based inference, without adding
+  stratum/PSU design variance).
 - **Knot placement**: Default Harrell percentiles (3→10/50/90, 4→5/35/65/95, …).
 - **Cross-validation**: matches R `splines::ns + glm` (basis differs, but
   structural inferences agree).
@@ -390,7 +394,7 @@ Validation traces are preserved in the repo at:
 | `cox_regression` | `predictors, time_column, event_column` | term, coef, SE, z, p, HR, HR CI, LL, n, n_events, converged | ✅ |
 | `chi_square` | `row_column, col_column` | χ², df, p, n, small_expected | ✅ |
 | `epi_roc` | `score1_column, label_column, score2_column?, n_bootstrap, seed` | auc1, auc1 CI, auc2?, delong_z?, delong_p?, n_pos, n_neg | ✅ |
-| `epi_rcs` | `x_column, outcome_column, covariates?, n_knots, n_grid_points` | lr_stat, df_nonlinear, p_nonlinear, p_overall, n_knots, n_obs | (port 1: curve) |
+| `epi_rcs` | `x_column, outcome_column, covariates?, n_knots, n_grid_points, survey_domain?, weight_column?` | lr_stat, df_nonlinear, p_nonlinear, p_overall, n_knots, n_obs | (port 1: curve) |
 | `epi_lasso` | `predictors, outcome_column, n_lambda, cv_folds, n_bootstrap, seed` | feature, selected_min, selected_1se, coef_min, coef_1se, λ_min, λ_1se, bootstrap_freq | ✅ |
 | `epi_wqs` | `exposures, outcome_column, covariates?, n_quantiles, train_frac, n_bootstrap, seed` | feature, weight, bootstrap_mean, bootstrap_se (port 1: β, OR, p, n_train, n_test) | ✅ |
 | `survival` | `time_column, event_column, group_column?` | port 0: time, survival, std_error, n_at_risk, n_events; port 1: χ², df, p, n_groups, n_obs, n_events | ✅ |

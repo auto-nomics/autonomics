@@ -35,7 +35,7 @@ use dag_core::{
 /// For calibration chaining (`calibrate` → `svymean`), the calibration node
 /// outputs data with an updated weight column, and the downstream node
 /// references that column in `weights`.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub struct SurveyDesignSpec {
     /// Cluster / PSU identifier column name(s). Use `[]` (R `~1`) for
     /// independent samples (no clustering). Multiple columns indicate
@@ -79,6 +79,17 @@ pub struct SurveyDesignSpec {
     /// `options(survey.lonely.psu = ...)`.
     #[serde(default)]
     pub lonely_psu: Option<String>,
+}
+
+/// Survey domain (subpopulation) filter.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct SurveyDomainSpec {
+    /// Domain/subpopulation column name.
+    pub column: String,
+    /// Domain levels to retain. Null and unmatched rows are excluded while
+    /// the original design structure is retained for degree-of-freedom
+    /// bookkeeping.
+    pub values: Vec<String>,
 }
 
 fn default_pps() -> String {
@@ -194,7 +205,9 @@ where
 // Arrow → survey::SurveyDesign builder
 // =====================================================================
 
-use arrow_array::{Array, RecordBatch, StringArray, StringViewArray};
+use arrow_array::{
+    Array, BooleanArray, LargeStringArray, RecordBatch, StringArray, StringViewArray,
+};
 
 use survey::{LonelyPsu, SurveyDesign, SurveyDesignBuilder};
 
@@ -223,6 +236,96 @@ pub fn extract_string_column_pub(
     name: &str,
 ) -> Result<Vec<String>, SurveyNodeError> {
     extract_string_column(batches, name)
+}
+
+fn format_domain_number(value: f64) -> String {
+    if value.fract() == 0.0 && value.abs() < i64::MAX as f64 {
+        format!("{}", value as i64)
+    } else {
+        value.to_string()
+    }
+}
+
+/// Build a row inclusion mask for a survey domain.
+pub fn survey_domain_mask(
+    batches: &[RecordBatch],
+    spec: &SurveyDomainSpec,
+) -> Result<Vec<bool>, SurveyNodeError> {
+    if spec.values.is_empty() {
+        return Err(SurveyNodeError(
+            "survey_domain.values must contain at least one level".to_string(),
+        ));
+    }
+
+    let schema = batches
+        .first()
+        .map(|batch| batch.schema())
+        .ok_or_else(|| SurveyNodeError("empty input".to_string()))?;
+    let idx = schema
+        .index_of(&spec.column)
+        .map_err(|_| SurveyNodeError(format!("missing column '{}'", spec.column)))?;
+    let dtype = schema.field(idx).data_type().clone();
+
+    let values: Vec<Option<String>> = if matches!(
+        dtype,
+        arrow_schema::DataType::Utf8
+            | arrow_schema::DataType::LargeUtf8
+            | arrow_schema::DataType::Utf8View
+    ) {
+        let mut values = Vec::new();
+        for batch in batches {
+            let col = batch.column(idx);
+            if let Some(array) = col.as_any().downcast_ref::<StringArray>() {
+                values.extend(array.iter().map(|v| v.map(str::to_string)));
+            } else if let Some(array) = col.as_any().downcast_ref::<LargeStringArray>() {
+                values.extend(array.iter().map(|v| v.map(str::to_string)));
+            } else if let Some(array) = col.as_any().downcast_ref::<StringViewArray>() {
+                values.extend(array.iter().map(|v| v.map(str::to_string)));
+            } else {
+                return Err(SurveyNodeError(format!(
+                    "column '{}' has unexpected string representation",
+                    spec.column
+                )));
+            }
+        }
+        values
+    } else if dtype == arrow_schema::DataType::Boolean {
+        let mut values = Vec::new();
+        for batch in batches {
+            let col = batch.column(idx);
+            let Some(array) = col.as_any().downcast_ref::<BooleanArray>() else {
+                return Err(SurveyNodeError(format!(
+                    "column '{}' has unexpected boolean representation",
+                    spec.column
+                )));
+            };
+            values.extend(array.iter().map(|v| v.map(|v| v.to_string())));
+        }
+        values
+    } else {
+        extract_f64_column(batches, &spec.column)?
+            .into_iter()
+            .map(|v| v.is_finite().then(|| format_domain_number(v)))
+            .collect()
+    };
+
+    if values
+        .iter()
+        .flatten()
+        .any(|value| !value.is_empty() && spec.values.contains(value))
+    {
+        Ok(values
+            .into_iter()
+            .map(|value| {
+                value.is_some_and(|value| !value.is_empty() && spec.values.contains(&value))
+            })
+            .collect())
+    } else {
+        Err(SurveyNodeError(format!(
+            "survey domain '{}' contains none of the requested levels",
+            spec.column
+        )))
+    }
 }
 
 /// Extract a categorical column from Arrow batches as `Vec<String>`,

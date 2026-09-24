@@ -757,7 +757,9 @@ fn default_gaussian() -> String {
     "gaussian".to_string()
 }
 
-/// Regression term test node — **implemented** (Wald, Gaussian).
+/// Regression term test node — implements Wald and Working Wald on a
+/// Gaussian survey GLM. LRT is rejected at build time because the Rust
+/// backend does not yet expose a log-likelihood.
 #[derive(Clone)]
 pub struct RegTermTestNode {
     meta: NodePorts,
@@ -794,16 +796,35 @@ impl DagNode for RegTermTestNode {
         inputs: &[NodeInput],
         _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
-        if self.spec.method != "Wald" {
-            return Err(DagError::NodeError {
-                node_type: "reg_term_test".into(),
-                msg: format!(
-                    "Rust execution only supports method='Wald', requested '{}'. \
-                     Provide a supported method.",
-                    self.spec.method
-                ),
-            });
-        }
+        // Resolve the method into the survey-crate enum so the unsupported
+        // path fails with a single, descriptive error rather than a silent
+        // fallback to Wald.
+        let method_enum = match self.spec.method.as_str() {
+            "Wald" => survey::RegTermTestMethod::Wald,
+            "WorkingWald" => survey::RegTermTestMethod::WorkingWald,
+            "LRT" => {
+                return Err(DagError::NodeError {
+                    node_type: "reg_term_test".into(),
+                    msg: "method='LRT' is not yet implemented in the Rust \
+                         backend: svyglm does not expose a log-likelihood, \
+                         so the node cannot compare a reduced-model fit to \
+                         the full one. Use method='Wald' (default) or \
+                         'WorkingWald' instead. As a workaround, run two \
+                         svyglm fits yourself and feed the deviance \
+                         difference to a hypothesize.lrt node."
+                        .into(),
+                });
+            }
+            other => {
+                return Err(DagError::NodeError {
+                    node_type: "reg_term_test".into(),
+                    msg: format!(
+                        "unknown method='{other}'. Supported: 'Wald', \
+                         'WorkingWald' (LRT is not yet implemented)."
+                    ),
+                });
+            }
+        };
         let input = inputs.first().ok_or_else(|| DagError::NodeError {
             node_type: "reg_term_test".into(),
             msg: "no input data".into(),
@@ -845,9 +866,11 @@ impl DagNode for RegTermTestNode {
             test_indices.push(pos + 1); // +1 for intercept
         }
 
-        let test = survey::reg_term_test(&fit, &test_indices).map_err(|e| DagError::NodeError {
-            node_type: "reg_term_test".into(),
-            msg: e.to_string(),
+        let test = survey::reg_term_test_with(&fit, &test_indices, method_enum).map_err(|e| {
+            DagError::NodeError {
+                node_type: "reg_term_test".into(),
+                msg: e.to_string(),
+            }
         })?;
 
         // Output: statistic, ndf, ddf, p_value.
@@ -891,12 +914,13 @@ impl NodeFactory for RegTermTestFactory {
         "reg_term_test"
     }
     fn desc(&self) -> &'static str {
-        "Test regression terms in a survey model (Wald / LRT)"
+        "Test regression terms in a survey model (Wald / WorkingWald)"
     }
     fn doc(&self) -> &'static str {
         "Fits a survey GLM and tests whether specified terms can be dropped, \
-         using a Wald, Working Wald, or LRT (saddlepoint-approximated) test. \
-         Wraps survey::regTermTest."
+         using a Wald (design-based) or Working Wald (model-based) test. \
+         LRT is not yet implemented in the Rust backend because svyglm does \
+         not expose a log-likelihood. Wraps survey::reg_term_test."
     }
     fn spec_schema(&self) -> schemars::Schema {
         schema_for!(RegTermTestSpec)
@@ -910,6 +934,32 @@ impl NodeFactory for RegTermTestFactory {
         _node_ctx: dag_core::registry::NodeCtx,
     ) -> dag_core::registry::error::Result<Box<dyn dag_core::dag::DagNode>> {
         let node_spec: RegTermTestSpec = serde_json::from_value(spec)?;
+        // Validate method at build time so the user sees a clear spec
+        // rejection rather than an execute-time crash.
+        match node_spec.method.as_str() {
+            "Wald" | "WorkingWald" => {}
+            "LRT" => {
+                return Err(dag_core::registry::error::Error::SpecRejection {
+                    kind: "reg_term_test".to_string(),
+                    reason: "method='LRT' is not yet implemented in the Rust \
+                             backend (svyglm does not expose a \
+                             log-likelihood, so reduced-model fits cannot be \
+                             compared). Use method='Wald' (default) or \
+                             'WorkingWald'."
+                        .to_string(),
+                    schema_pretty: serde_json::to_string_pretty(&self.spec_schema())
+                        .unwrap_or_default(),
+                });
+            }
+            other => {
+                return Err(dag_core::registry::error::Error::SpecRejection {
+                    kind: "reg_term_test".to_string(),
+                    reason: format!("unknown method='{other}'. Supported: 'Wald', 'WorkingWald'"),
+                    schema_pretty: serde_json::to_string_pretty(&self.spec_schema())
+                        .unwrap_or_default(),
+                });
+            }
+        }
         Ok(Box::new(RegTermTestNode::new(node_spec)))
     }
 }
@@ -942,6 +992,72 @@ mod tests {
         let s: RegTermTestSpec = serde_json::from_value(json).unwrap();
         assert_eq!(s.method, "Wald");
         assert_eq!(s.test_terms, vec!["x2", "x3"]);
+    }
+
+    #[test]
+    fn reg_term_test_factory_rejects_lrt() {
+        // Build-time spec rejection: LRT is not yet implemented, so the
+        // factory must surface a clear SpecRejection rather than silently
+        // building a node that will fail at execute time.
+        let bad = serde_json::json!({
+            "design": {"ids": ["psu"]},
+            "response": "y",
+            "predictors": ["x1", "x2"],
+            "test_terms": ["x2"],
+            "method": "LRT",
+        });
+        let err = RegTermTestFactory
+            .build(
+                bad,
+                dag_core::registry::NodeCtx::new(
+                    datafusion::prelude::SessionContext::new().runtime_env(),
+                    None,
+                ),
+            )
+            .err()
+            .expect("LRT must be rejected at build time");
+        let msg = format!("{err}");
+        assert!(msg.contains("LRT"), "error should mention LRT: {msg}");
+
+        // Unknown methods are also rejected.
+        let unknown = serde_json::json!({
+            "design": {"ids": ["psu"]},
+            "response": "y",
+            "predictors": ["x1"],
+            "test_terms": ["x1"],
+            "method": "Score",
+        });
+        assert!(
+            RegTermTestFactory
+                .build(
+                    unknown,
+                    dag_core::registry::NodeCtx::new(
+                        datafusion::prelude::SessionContext::new().runtime_env(),
+                        None,
+                    ),
+                )
+                .is_err()
+        );
+
+        // WorkingWald is accepted.
+        let ok = serde_json::json!({
+            "design": {"ids": ["psu"]},
+            "response": "y",
+            "predictors": ["x1"],
+            "test_terms": ["x1"],
+            "method": "WorkingWald",
+        });
+        assert!(
+            RegTermTestFactory
+                .build(
+                    ok,
+                    dag_core::registry::NodeCtx::new(
+                        datafusion::prelude::SessionContext::new().runtime_env(),
+                        None,
+                    ),
+                )
+                .is_ok()
+        );
     }
 
     // ── End-to-end svyby test ────────────────────────────────────────────────

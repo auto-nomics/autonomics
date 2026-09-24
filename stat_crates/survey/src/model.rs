@@ -766,7 +766,22 @@ pub struct RegTermTest {
     pub p_value: f64,
 }
 
-/// Wald test for a subset of regression terms (R `regTermTest`).
+/// Which covariance matrix the term test is computed from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RegTermTestMethod {
+    /// Design-based covariance `design_cov` — the survey default.
+    Wald,
+    /// Model-based (naïve) covariance `naive_cov` — Working Wald.
+    ///
+    /// Ignores clustering/stratification, so SE is the ordinary GLM SE.
+    WorkingWald,
+}
+
+/// Wald / Working-Wald test for a subset of regression terms (R
+/// `regTermTest`). LRT is not supported because `svyglm` does not yet expose
+/// a log-likelihood — to compute LRT the caller must refit the reduced
+/// model and compare deviances, which is the job of the higher-level
+/// `reg_term_test` node, not this primitive.
 ///
 /// Tests H₀ that the coefficients at `test_indices` are jointly zero:
 ///   chi-sq = β_test' V_test^{-1} β_test,  F = chi-sq / q,
@@ -776,17 +791,39 @@ pub struct RegTermTest {
 /// - `fit`: a [`SvyGlmFit`] (from [`svyglm`] or [`svyglm_linear`]).
 /// - `test_indices`: indices of the coefficient subset to test.
 pub fn reg_term_test(fit: &SvyGlmFit, test_indices: &[usize]) -> Result<RegTermTest> {
+    reg_term_test_with(fit, test_indices, RegTermTestMethod::Wald)
+}
+
+/// Like [`reg_term_test`], but with an explicit [`RegTermTestMethod`].
+pub fn reg_term_test_with(
+    fit: &SvyGlmFit,
+    test_indices: &[usize],
+    method: RegTermTestMethod,
+) -> Result<RegTermTest> {
     let q = test_indices.len();
     if q == 0 {
         return Err(SurveyError::InvalidInput("no terms to test".into()));
     }
+    // Materialise the requested covariance into a fresh matrix so the
+    // dispatch is a single uniform loop below.
+    let full_cov: Vec<Vec<f64>> = match method {
+        RegTermTestMethod::Wald => fit.design_cov.clone(),
+        // `naive_cov` is the unscaled (X'WX)^{-1}; multiply by the
+        // dispersion estimate so WorkingWald matches the model-based
+        // t-statistic squared (analogous to R's `vcov(model)`).
+        RegTermTestMethod::WorkingWald => fit
+            .naive_cov
+            .iter()
+            .map(|row| row.iter().map(|&v| v * fit.dispersion).collect())
+            .collect(),
+    };
     // Extract β_test and V_test.
     let mut beta = Vec::with_capacity(q);
     let mut v = vec![vec![0.0_f64; q]; q];
     for (a, &i) in test_indices.iter().enumerate() {
         beta.push(fit.coefficients[i]);
         for (b, &j) in test_indices.iter().enumerate() {
-            v[a][b] = fit.design_cov[i][j];
+            v[a][b] = full_cov[i][j];
         }
     }
     // chi-sq = β' V^{-1} β.
@@ -876,6 +913,80 @@ mod tests {
         assert_eq!(test.ndf, 1);
         assert!(test.statistic > 100.0, "F: {}", test.statistic);
         assert!(test.p_value < 1e-5, "p: {}", test.p_value);
+    }
+
+    #[test]
+    fn reg_term_test_working_wald_close_to_wald_when_no_cluster() {
+        // With no clustering/stratification, the design-based sandwich
+        // reduces to the model-based covariance up to a finite-sample
+        // correction. WorkingWald multiplies `naive_cov` by `dispersion`,
+        // so it should sit within a small multiplicative factor of Wald.
+        let x: Vec<f64> = (0..40).map(|i| i as f64).collect();
+        let y: Vec<f64> = x
+            .iter()
+            .enumerate()
+            .map(|(i, &xi)| 2.0 * xi + 0.5 + ((i % 7) as f64 - 3.0) * 0.3)
+            .collect();
+        let n = x.len();
+        let design = SurveyDesignBuilder::new()
+            .strata(vec!["1".to_string(); n])
+            .cluster((0..n).map(|i| i.to_string()).collect())
+            .weights(vec![1.0; n])
+            .build()
+            .unwrap();
+        let fit = svyglm_linear(&y, &vec![x.clone()], &design, true, None).unwrap();
+        let wald = reg_term_test_with(&fit, &[1], RegTermTestMethod::Wald).unwrap();
+        let working = reg_term_test_with(&fit, &[1], RegTermTestMethod::WorkingWald).unwrap();
+        assert_eq!(wald.ndf, working.ndf);
+        assert_eq!(wald.ddf, working.ddf);
+        // With no clustering, the design-based and model-based estimators
+        // should agree up to finite-sample corrections (typically within
+        // ~25% for the small-n cases we test here). The factor would be
+        // tighter with larger n; the loose bound catches gross regressions.
+        let ratio = wald.statistic / working.statistic;
+        assert!(
+            (0.75..=1.30).contains(&ratio),
+            "Wald/WorkingWald ratio {ratio:.3} (Wald={}, WorkingWald={})",
+            wald.statistic,
+            working.statistic
+        );
+    }
+
+    #[test]
+    fn reg_term_test_working_wald_ignores_design_effect() {
+        // With strong intra-cluster correlation the design-based Wald
+        // should be larger than the model-based WorkingWald.
+        let n_per = 5;
+        let n_psu = 8;
+        let n = n_per * n_psu;
+        let mut y = Vec::with_capacity(n);
+        let mut x = Vec::with_capacity(n);
+        let mut cluster = Vec::with_capacity(n);
+        for p in 0..n_psu {
+            for i in 0..n_per {
+                let offset = if p % 2 == 0 { 5.0 } else { -5.0 };
+                y.push((i as f64) + offset + (i as f64).sin());
+                x.push(i as f64);
+                cluster.push(p.to_string());
+            }
+        }
+        let design = SurveyDesignBuilder::new()
+            .strata(vec!["1".to_string(); n])
+            .cluster(cluster)
+            .weights(vec![1.0; n])
+            .lonely_psu(LonelyPsu::Remove)
+            .build()
+            .unwrap();
+        let fit = svyglm_linear(&y, &vec![x], &design, true, None).unwrap();
+        let wald = reg_term_test_with(&fit, &[1], RegTermTestMethod::Wald).unwrap();
+        let working = reg_term_test_with(&fit, &[1], RegTermTestMethod::WorkingWald).unwrap();
+        assert!(
+            wald.statistic >= working.statistic,
+            "Wald should not be smaller than WorkingWald under ICC>0: \
+             Wald={} WorkingWald={}",
+            wald.statistic,
+            working.statistic
+        );
     }
 
     #[test]

@@ -461,6 +461,82 @@ fn ensure_directory_path(path: String, partitioned: bool) -> String {
     }
 }
 
+/// True if `path` contains shell-glob metacharacters.
+///
+/// We only recognise the subset that DataFusion's ListingTable understands
+/// (`*`, `?`, `[`, `]`). Brace-expansion like `{a,b}` is **not** expanded
+/// here — users must list each period explicitly. That keeps the error
+/// message honest: a `{a,b}` path would otherwise silently match nothing
+/// and return a zero-row DataFrame.
+fn has_glob_metachars(path: &str) -> bool {
+    path.contains('*') || path.contains('?') || path.contains('[')
+}
+
+/// Pre-validate a local filesystem path before handing it to DataFusion.
+///
+/// DataFusion's `ListingTable` will silently return a zero-row DataFrame
+/// when a glob pattern matches no files, or when a non-glob path is
+/// missing. That "success" looks indistinguishable from a real empty file
+/// to downstream nodes — a silent-wrong-data footgun. This helper catches
+/// both cases up front with an actionable error message.
+///
+/// `partitioned=true` relaxes the regular-file check (the path may be a
+/// directory of hive-partitioned files).
+fn validate_local_path(path: &str, partitioned: bool) -> std::result::Result<(), String> {
+    let p = std::path::Path::new(path);
+    if has_glob_metachars(path) {
+        // Glob: ensure at least one match exists.
+        let pattern =
+            glob::Pattern::new(path).map_err(|e| format!("invalid glob pattern '{path}': {e}"))?;
+        let mut count = 0usize;
+        for entry in glob::glob(path).map_err(|e| format!("glob '{path}' failed: {e}"))? {
+            let entry = entry.map_err(|e| format!("glob '{path}' entry error: {e}"))?;
+            if entry.is_file() && pattern.matches_path(&entry) {
+                count += 1;
+                if count > 0 {
+                    break;
+                }
+            }
+        }
+        if count == 0 {
+            return Err(format!(
+                "glob pattern '{path}' matched no readable files. Check the \
+                 directory and pattern, or list files explicitly."
+            ));
+        }
+        return Ok(());
+    }
+    // Non-glob: require the path to exist and be the expected kind.
+    let meta = match p.symlink_metadata() {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(format!("path '{path}' does not exist"));
+        }
+        Err(e) => return Err(format!("cannot stat '{path}': {e}")),
+    };
+    let ft = meta.file_type();
+    if partitioned {
+        if !ft.is_dir() {
+            return Err(format!(
+                "path '{path}' is not a directory; partition_by requires a \
+                 hive-partitioned directory"
+            ));
+        }
+    } else if ft.is_dir() {
+        return Err(format!(
+            "path '{path}' is a directory; pass a file path, or set \
+             partition_by to read a hive-partitioned directory, or use a \
+             glob like '{path}/*.parquet' if you meant to enumerate files"
+        ));
+    } else if !ft.is_file() {
+        return Err(format!(
+            "path '{path}' is not a regular file (broken symlink, socket, \
+             or special device?)"
+        ));
+    }
+    Ok(())
+}
+
 /// DataFusion treats `file://` paths as its built-in local filesystem even
 /// when an OpenDAL-backed store is registered under that URL. Mounted virtual
 /// paths therefore must be addressed through the dedicated `vfs://` store.
@@ -526,6 +602,13 @@ impl DagNode for FileToDataFrameNode {
             source_path(node_ctx, &normalize_path(&path)),
             !self.partition_by.is_empty(),
         );
+        // Pre-validate local paths so we never silently hand back a
+        // zero-row DataFrame for a typo'd glob or missing file. vfs://
+        // paths go through OpenDAL and don't have local fs access.
+        if !path.starts_with("vfs://") {
+            validate_local_path(&path, !self.partition_by.is_empty())
+                .map_err(|e| FileToDataFrameError::InvalidInput(e))?;
+        }
         let inferred_fmt = self
             .format
             .or_else(|| {
@@ -2172,6 +2255,125 @@ mod tests {
                 "unexpected row count for {path}"
             );
         }
+    }
+
+    fn build_node(path: Option<String>) -> FileToDataFrameNode {
+        FileToDataFrameNode::new(path, None)
+    }
+
+    fn ctx() -> dag_core::registry::NodeCtx {
+        dag_core::registry::NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        )
+    }
+
+    fn input_from_string() -> dag_core::node::NodeInput {
+        // The execute path accepts either an upstream file value or a
+        // fallback path. We feed it a single-column DataFrame whose schema
+        // is irrelevant — the failure should happen before the read.
+        use arrow_array::{Float64Array, RecordBatch};
+        use arrow_schema::{DataType, Field, Schema};
+        use std::sync::Arc;
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("x", DataType::Float64, false)])),
+            vec![Arc::new(Float64Array::from(vec![0.0]))],
+        )
+        .unwrap();
+        let df = datafusion::prelude::SessionContext::new()
+            .read_batch(batch)
+            .unwrap();
+        dag_core::node::NodeInput::new_dataframe(0, df)
+    }
+
+    #[tokio::test]
+    async fn file_to_dataframe_rejects_missing_path() {
+        // A path that does not exist must surface an explicit error, not a
+        // silent zero-row DataFrame.
+        let mut node = build_node(Some("/tmp/definitely-not-a-real-path-xyzzy.parquet".into()));
+        let err = node
+            .execute(
+                &ctx(),
+                &[input_from_string()],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .err()
+            .expect("missing path must error");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("does not exist"),
+            "expected 'does not exist' in error, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn file_to_dataframe_rejects_directory_without_partition() {
+        // A directory path with no `partition_by` is almost always a
+        // mistake (e.g. user passed a directory expecting the engine to
+        // enumerate it). Fail fast instead of silently returning 0 cols.
+        let dir = tempfile::tempdir().unwrap();
+        let mut node = build_node(Some(dir.path().to_string_lossy().into_owned()));
+        let err = node
+            .execute(
+                &ctx(),
+                &[input_from_string()],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .err()
+            .expect("directory path must error");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("is a directory"),
+            "expected 'is a directory' in error, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn file_to_dataframe_rejects_unmatched_glob() {
+        // A glob with no matches used to silently succeed with a 0-row,
+        // 0-column DataFrame — a dangerous silent-wrong-data footgun.
+        // Pre-validation must surface a clear error.
+        let dir = tempfile::tempdir().unwrap();
+        // The directory exists but contains no .parquet files.
+        let pattern = format!("{}/*.parquet", dir.path().to_string_lossy());
+        let mut node = build_node(Some(pattern.clone()));
+        let err = node
+            .execute(
+                &ctx(),
+                &[input_from_string()],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .err()
+            .expect("unmatched glob must error");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("matched no readable files"),
+            "expected 'matched no readable files' in error, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn file_to_dataframe_accepts_matched_glob() {
+        // A glob with at least one match should still pass pre-validation
+        // and reach DataFusion.
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("a.csv");
+        std::fs::write(&p, "id\n1\n2\n").unwrap();
+        let pattern = format!("{}/*.csv", dir.path().to_string_lossy());
+        let mut node = build_node(Some(pattern));
+        let outs = node
+            .execute(
+                &ctx(),
+                &[input_from_string()],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .expect("matched glob should succeed");
+        let df = outs.dataframe(0).unwrap().clone().collect().await.unwrap();
+        assert_eq!(df[0].num_rows(), 2);
     }
 }
 

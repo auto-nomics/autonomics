@@ -17,7 +17,7 @@ mod ols;
 mod rlm;
 
 pub use cox::{CoxResult, cox};
-pub use logistic::{LogisticResult, logistic};
+pub use logistic::{LogisticResult, logistic, logistic_weighted};
 pub use negbin::{NegbinOptions, NegbinResult, negbin};
 pub use ols::{Regression, ols, wls};
 pub use rlm::{PsiFunction, RlmOptions, RlmResult, rlm};
