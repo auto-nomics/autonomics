@@ -107,9 +107,16 @@ impl OpenrouterProvider {
                 .pricing(1.25, 10.0)
                 .build(),
             // ── Open-weight / China ecosystem ──────────────────────────
-            // Kimi K3 — 1M context, vision + video input, 943K max output.
+            // Kimi K3 — 1M context, vision + video input. Output capped at
+            // 131,072 (preset-wide sane ceiling): OpenRouter's catalogue
+            // advertises 943,718 for this model, but that is its 90 %-of-
+            // context default, not a vendor-declared cap — requesting it
+            // verbatim leaves only ~10 % of the window for input and 400s
+            // any substantial conversation (same class as the glm-5.3
+            // incident; presets resolve ahead of the DB, so the ingest
+            // clamp alone cannot protect this path).
             ModelInfoBuilder::new(MODEL_KIMI_K3)
-                .context(1_048_576, 943_718)
+                .context(1_048_576, 131_072)
                 .capabilities(true, true, true, true)
                 .thinking_enabled(None)
                 .pricing(3.0, 15.0)
@@ -121,16 +128,18 @@ impl OpenrouterProvider {
                 .thinking_enabled(None)
                 .pricing(0.60, 1.92)
                 .build(),
-            // MiniMax M3 — 1M context, vision + video input.
+            // MiniMax M3 — 1M context, vision + video input. Output capped
+            // at 131,072 like Kimi K3 above (catalogue default 512,000).
             ModelInfoBuilder::new(MODEL_MINIMAX_M3)
-                .context(1_048_576, 512_000)
+                .context(1_048_576, 131_072)
                 .capabilities(true, true, true, true)
                 .thinking_enabled(None)
                 .pricing(0.30, 1.20)
                 .build(),
-            // DeepSeek V4 Pro — flagship reasoning, text-only.
+            // DeepSeek V4 Pro — flagship reasoning, text-only. Output capped
+            // at 131,072 like Kimi K3 above (catalogue default 384,000).
             ModelInfoBuilder::new(MODEL_DEEPSEEK_V4_PRO)
-                .context(1_048_576, 384_000)
+                .context(1_048_576, 131_072)
                 .capabilities(false, true, true, true)
                 .thinking_enabled(None)
                 .pricing(1.04, 2.08)

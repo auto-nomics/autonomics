@@ -101,7 +101,9 @@ impl AbortOnDropHandle {
     /// still abort explicitly). Returning `None` means the handle was
     /// already taken — `into_join` should only be called once.
     fn into_join(mut self) -> JoinHandle<()> {
-        self.0.take().expect("AbortOnDropHandle::into_join called twice")
+        self.0
+            .take()
+            .expect("AbortOnDropHandle::into_join called twice")
     }
 }
 
@@ -976,9 +978,7 @@ impl DAG {
             let dirty_ids: Vec<NodeId> = self
                 .dirty
                 .iter()
-                .filter_map(|(id, state)| {
-                    matches!(state, DirtyState::Dirty).then(|| id.clone())
-                })
+                .filter_map(|(id, state)| matches!(state, DirtyState::Dirty).then(|| id.clone()))
                 .collect();
             for id in dirty_ids {
                 self.outputs.remove(&id);
