@@ -1393,6 +1393,153 @@ mod tests {
         assert!((estimates[1] - 2.0).abs() < 1e-8);
     }
 
+    #[tokio::test]
+    async fn svyglm_binomial_domain_excludes_rows_without_nan_panic() {
+        // Regression for the NaN-clobbering binomial NaN bug: the DAG node
+        // marks domain-out rows by setting their response to NaN, and the
+        // inner survey::svyglm must not pre-reject NaN as outside [0,1].
+        // Domain-out rows here contain "illegal" y values (5.0); if the
+        // pre-filter were not NaN-aware the binomial validator would refuse.
+        let n_in = 20;
+        let n_out = 10;
+        let x: Vec<f64> = (0..n_in + n_out).map(|i| (i as f64) * 0.1).collect();
+        // Domain-in rows: Bernoulli with p = sigmoid(1 + x)
+        let y_in: Vec<f64> = (0..n_in)
+            .map(|i| {
+                let p = 1.0 / (1.0 + (-(1.0 + x[i])).exp());
+                if p > 0.5 { 1.0 } else { 0.0 }
+            })
+            .collect();
+        // Domain-out rows: response would be 5.0 — outside [0,1] but masked
+        // by the domain filter (NaN-ed before validation).
+        let y_out: Vec<f64> = vec![5.0; n_out];
+        let mut y = y_in.clone();
+        y.extend(y_out);
+        let domain: Vec<String> = (0..n_in)
+            .map(|_| "study".to_string())
+            .chain((0..n_out).map(|_| "exclude".to_string()))
+            .collect();
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("x", DataType::Float64, false),
+            Field::new("y", DataType::Float64, false),
+            Field::new("domain", DataType::Utf8, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Float64Array::from(x)),
+                Arc::new(Float64Array::from(y)),
+                Arc::new(StringArray::from(domain)),
+            ],
+        )
+        .unwrap();
+        let df = datafusion::prelude::SessionContext::new()
+            .read_batch(batch)
+            .unwrap();
+
+        let spec = SvyGlmSpec {
+            design: crate::survey_common::SurveyDesignSpec::default(),
+            survey_domain: Some(crate::survey_common::SurveyDomainSpec {
+                column: "domain".into(),
+                values: vec!["study".into()],
+            }),
+            weight_column: None,
+            response: "y".into(),
+            predictors: vec!["x".into()],
+            intercept: true,
+            family: "binomial".into(),
+            link: None,
+            std_errors: "linearized".into(),
+        };
+        let mut node = SvyGlmNode::new(spec);
+        let outs = node
+            .execute(
+                &node_ctx(),
+                &[NodeInput::new_dataframe(0, df)],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .expect("svyglm binomial + survey_domain must not fail at validation");
+        let result = outs.dataframe(0).unwrap().clone().collect().await.unwrap();
+        // The x coefficient should be positive (more x → higher p).
+        let estimates: Vec<f64> = result[0]
+            .column(1)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap()
+            .iter()
+            .map(|v| v.unwrap())
+            .collect();
+        assert!(
+            estimates[1] > 0.0,
+            "x estimate should be positive: {estimates:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn svyglm_quasibinomial_domain_excludes_rows() {
+        // Same regression but quasibinomial — same y range validator.
+        let n_in = 12;
+        let n_out = 6;
+        let x: Vec<f64> = (0..n_in + n_out).map(|i| i as f64).collect();
+        let y_in: Vec<f64> = x
+            .iter()
+            .take(n_in)
+            .map(|&xi| if xi > 5.0 { 1.0 } else { 0.0 })
+            .collect();
+        let y_out: Vec<f64> = vec![5.0; n_out];
+        let mut y = y_in;
+        y.extend(y_out);
+        let domain: Vec<String> = (0..n_in)
+            .map(|_| "in".to_string())
+            .chain((0..n_out).map(|_| "out".to_string()))
+            .collect();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("x", DataType::Float64, false),
+            Field::new("y", DataType::Float64, false),
+            Field::new("domain", DataType::Utf8, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Float64Array::from(x)),
+                Arc::new(Float64Array::from(y)),
+                Arc::new(StringArray::from(domain)),
+            ],
+        )
+        .unwrap();
+        let df = datafusion::prelude::SessionContext::new()
+            .read_batch(batch)
+            .unwrap();
+
+        let spec = SvyGlmSpec {
+            design: crate::survey_common::SurveyDesignSpec::default(),
+            survey_domain: Some(crate::survey_common::SurveyDomainSpec {
+                column: "domain".into(),
+                values: vec!["in".into()],
+            }),
+            weight_column: None,
+            response: "y".into(),
+            predictors: vec!["x".into()],
+            intercept: true,
+            family: "quasibinomial".into(),
+            link: None,
+            std_errors: "linearized".into(),
+        };
+        let mut node = SvyGlmNode::new(spec);
+        let outs = node
+            .execute(
+                &node_ctx(),
+                &[NodeInput::new_dataframe(0, df)],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .expect("quasibinomial + domain must work");
+        let result = outs.dataframe(0).unwrap().clone().collect().await.unwrap();
+        assert!(result[0].num_rows() >= 2);
+    }
+
     #[test]
     fn svycoxph_spec() {
         let json = serde_json::json!({
