@@ -978,8 +978,8 @@ impl DAG {
             let dirty_ids: Vec<NodeId> = self
                 .dirty
                 .iter()
-                .filter(|&(id, state)| matches!(state, DirtyState::Dirty))
-                .map(|(id, _state)| id.clone())
+                .filter(|&(_, state)| matches!(state, DirtyState::Dirty))
+                .map(|(id, _)| id.clone())
                 .collect();
             for id in dirty_ids {
                 self.outputs.remove(&id);
