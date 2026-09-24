@@ -15,7 +15,7 @@ use arrow_array::{Float64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 use async_trait::async_trait;
 
-use crate::survey_common::{SurveyDesignSpec, one_in_one_out};
+use crate::survey_common::{SurveyDesignSpec, SurveyDomainSpec, one_in_one_out};
 use dag_core::dag::{DagError, graph::PortOutputs};
 use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::registry::{NodeCtx, NodeFactory};
@@ -32,6 +32,14 @@ fn default_family() -> String {
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct SvyGlmSpec {
     pub design: SurveyDesignSpec,
+    /// Optional survey domain (subpopulation) filter.
+    #[serde(default)]
+    pub survey_domain: Option<SurveyDomainSpec>,
+    /// Sampling-weight column name. This is a top-level convenience alias for
+    /// `design.weights`; it is mutually exclusive with `design.weights` and
+    /// `design.probs`.
+    #[serde(default)]
+    pub weight_column: Option<String>,
     /// Response variable column name.
     pub response: String,
     /// Predictor variable column names.
@@ -122,16 +130,52 @@ impl DagNode for SvyGlmNode {
                     msg: format!("collect failed: {e}"),
                 })?;
 
-        let design = crate::survey_common::build_survey_design(&self.spec.design, &batches)?;
-        let y = crate::survey_common::extract_variables(&batches, &[self.spec.response.clone()])?;
+        if self.spec.weight_column.is_some()
+            && (self.spec.design.weights.is_some() || !self.spec.design.probs.is_empty())
+        {
+            return Err(DagError::NodeError {
+                node_type: "svyglm".into(),
+                msg: "weight_column cannot be combined with design.weights or design.probs".into(),
+            });
+        }
+
+        let domain_mask = match &self.spec.survey_domain {
+            Some(spec) => crate::survey_common::survey_domain_mask(&batches, spec)?,
+            None => vec![true; batches.iter().map(|batch| batch.num_rows()).sum()],
+        };
+        if !domain_mask.iter().any(|&keep| keep) {
+            return Err(DagError::NodeError {
+                node_type: "svyglm".into(),
+                msg: "survey domain selected no rows".into(),
+            });
+        }
+
+        let mut design_spec = self.spec.design.clone();
+        if let Some(weight_column) = &self.spec.weight_column {
+            design_spec.weights = Some(weight_column.clone());
+        }
+        let design = crate::survey_common::build_survey_design(&design_spec, &batches)?;
+        let mut y =
+            crate::survey_common::extract_variables(&batches, &[self.spec.response.clone()])?;
         let x = crate::survey_common::extract_variables(&batches, &self.spec.predictors)?;
 
         // Validate response for the chosen family (e.g. binomial needs y in [0,1]).
-        if let Err(msg) = family_spec.validate_y(&y[0]) {
+        let domain_y: Vec<f64> = y[0]
+            .iter()
+            .zip(&domain_mask)
+            .filter(|(_, keep)| **keep)
+            .map(|(value, _)| *value)
+            .collect();
+        if let Err(msg) = family_spec.validate_y(&domain_y) {
             return Err(DagError::NodeError {
                 node_type: "svyglm".into(),
                 msg,
             });
+        }
+        for (value, keep) in y[0].iter_mut().zip(domain_mask) {
+            if !keep {
+                *value = f64::NAN;
+            }
         }
 
         let fit = survey::svyglm(
@@ -231,6 +275,29 @@ impl NodeFactory for SvyGlmFactory {
         _node_ctx: dag_core::registry::NodeCtx,
     ) -> dag_core::registry::error::Result<Box<dyn dag_core::dag::DagNode>> {
         let node_spec: SvyGlmSpec = serde_json::from_value(spec)?;
+        if node_spec.weight_column.is_some()
+            && (node_spec.design.weights.is_some() || !node_spec.design.probs.is_empty())
+        {
+            return Err(dag_core::registry::error::Error::SpecRejection {
+                kind: "svyglm".to_string(),
+                reason: "weight_column cannot be combined with design.weights or design.probs"
+                    .to_string(),
+                schema_pretty: serde_json::to_string_pretty(&self.spec_schema())
+                    .unwrap_or_default(),
+            });
+        }
+        if node_spec
+            .survey_domain
+            .as_ref()
+            .is_some_and(|domain| domain.values.is_empty())
+        {
+            return Err(dag_core::registry::error::Error::SpecRejection {
+                kind: "svyglm".to_string(),
+                reason: "survey_domain.values must contain at least one level".to_string(),
+                schema_pretty: serde_json::to_string_pretty(&self.spec_schema())
+                    .unwrap_or_default(),
+            });
+        }
         Ok(Box::new(SvyGlmNode::new(node_spec)))
     }
 }
@@ -1166,6 +1233,8 @@ mod tests {
                 variance: "HT".into(),
                 lonely_psu: Some("remove".into()),
             },
+            survey_domain: None,
+            weight_column: None,
             response: "api99".into(),
             predictors: vec!["ell".into(), "meals".into()],
             intercept: true,
@@ -1237,10 +1306,91 @@ mod tests {
             "predictors": ["x1", "x2"]
         });
         let s: SvyGlmSpec = serde_json::from_value(json).unwrap();
+        assert!(s.survey_domain.is_none());
+        assert!(s.weight_column.is_none());
         assert!(s.intercept);
         assert_eq!(s.family, "gaussian");
         assert!(s.link.is_none());
         assert_eq!(s.std_errors, "linearized");
+    }
+
+    #[test]
+    fn svyglm_schema_exposes_domain_and_weight_options() {
+        let schema = serde_json::to_value(SvyGlmFactory.spec_schema()).unwrap();
+        assert!(schema["properties"].get("survey_domain").is_some());
+        assert!(schema["properties"].get("weight_column").is_some());
+    }
+
+    #[tokio::test]
+    async fn svyglm_domain_and_weight_column_restrict_fit() {
+        let x_domain: Vec<f64> = (0..10).map(|i| i as f64).collect();
+        let y_domain: Vec<f64> = x_domain.iter().map(|&x| 1.0 + 2.0 * x).collect();
+        let x_excluded: Vec<f64> = (0..10).map(|i| 10.0 + i as f64).collect();
+        let y_excluded: Vec<f64> = x_excluded.iter().map(|&x| 100.0 + 20.0 * x).collect();
+        let domain = vec!["analysis"; 10]
+            .into_iter()
+            .chain(vec!["excluded"; 10])
+            .collect::<Vec<_>>();
+        let weights = vec![1.0; 20];
+
+        let mut x = x_domain.clone();
+        x.extend(x_excluded);
+        let mut y = y_domain.clone();
+        y.extend(y_excluded);
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("x", DataType::Float64, false),
+            Field::new("y", DataType::Float64, false),
+            Field::new("domain", DataType::Utf8, false),
+            Field::new("wt", DataType::Float64, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Float64Array::from(x)),
+                Arc::new(Float64Array::from(y)),
+                Arc::new(StringArray::from(domain)),
+                Arc::new(Float64Array::from(weights)),
+            ],
+        )
+        .unwrap();
+        let df = datafusion::prelude::SessionContext::new()
+            .read_batch(batch)
+            .unwrap();
+
+        let spec = SvyGlmSpec {
+            design: crate::survey_common::SurveyDesignSpec::default(),
+            survey_domain: Some(crate::survey_common::SurveyDomainSpec {
+                column: "domain".into(),
+                values: vec!["analysis".into()],
+            }),
+            weight_column: Some("wt".into()),
+            response: "y".into(),
+            predictors: vec!["x".into()],
+            intercept: true,
+            family: "gaussian".into(),
+            link: None,
+            std_errors: "linearized".into(),
+        };
+        let mut node = SvyGlmNode::new(spec);
+        let outs = node
+            .execute(
+                &node_ctx(),
+                &[NodeInput::new_dataframe(0, df)],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap();
+        let result = outs.dataframe(0).unwrap().clone().collect().await.unwrap();
+        let estimates: Vec<f64> = result[0]
+            .column(1)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap()
+            .iter()
+            .map(|v| v.unwrap())
+            .collect();
+        assert!((estimates[0] - 1.0).abs() < 1e-8);
+        assert!((estimates[1] - 2.0).abs() < 1e-8);
     }
 
     #[test]

@@ -69,10 +69,44 @@ pub struct LogisticResult {
 /// numeric columns each of length `y.len()`. When `intercept = true` a
 /// column of ones is prepended (so `coefficients[0]` is the intercept).
 pub fn logistic(predictors: &[&[f64]], y: &[f64], intercept: bool) -> Result<LogisticResult> {
+    logistic_weighted(predictors, y, None, intercept)
+}
+
+/// Fit a weighted binary logistic regression by maximizing the weighted
+/// pseudo-likelihood.
+///
+/// Weights must be finite and positive. They are normalized to mean one,
+/// matching the rescaling used by survey-weighted GLM implementations. The
+/// returned covariance is model-based; it does not include design-based
+/// variance for strata or clusters.
+pub fn logistic_weighted(
+    predictors: &[&[f64]],
+    y: &[f64],
+    weights: Option<&[f64]>,
+    intercept: bool,
+) -> Result<LogisticResult> {
     let n = y.len();
     if n == 0 {
         return Err(StatError::EmptyInput);
     }
+    let weights = match weights {
+        Some(weights) => {
+            if weights.len() != n {
+                return Err(StatError::LengthMismatch {
+                    a: n,
+                    b: weights.len(),
+                });
+            }
+            if weights.iter().any(|&w| !w.is_finite() || w <= 0.0) {
+                return Err(StatError::Numerical(
+                    "logistic weights must be finite and positive".to_string(),
+                ));
+            }
+            let mean = weights.iter().sum::<f64>() / n as f64;
+            weights.iter().map(|&w| w / mean).collect::<Vec<_>>()
+        }
+        None => vec![1.0; n],
+    };
     // Validate binary outcome.
     for &v in y {
         if v != 0.0 && v != 1.0 {
@@ -96,9 +130,10 @@ pub fn logistic(predictors: &[&[f64]], y: &[f64], intercept: bool) -> Result<Log
     let p = cols.len();
 
     // Null (intercept-only) log-likelihood.
-    let n1: f64 = y.iter().copied().sum();
-    let n0 = n as f64 - n1;
-    let p_bar = n1 / n as f64;
+    let sum_w: f64 = weights.iter().sum();
+    let n1: f64 = y.iter().zip(&weights).map(|(&v, &w)| v * w).sum();
+    let n0 = sum_w - n1;
+    let p_bar = n1 / sum_w;
     let null_ll = if p_bar > 0.0 && p_bar < 1.0 {
         n1 * p_bar.ln() + n0 * (1.0 - p_bar).ln()
     } else {
@@ -115,8 +150,9 @@ pub fn logistic(predictors: &[&[f64]], y: &[f64], intercept: bool) -> Result<Log
         n_iter = iter + 1;
 
         // Current log-likelihood (for step-halving).
-        let ll_current =
-            compensated_sum((0..n).map(|k| y[k] * mu[k].ln() + (1.0 - y[k]) * (1.0 - mu[k]).ln()));
+        let ll_current = compensated_sum(
+            (0..n).map(|k| weights[k] * (y[k] * mu[k].ln() + (1.0 - y[k]) * (1.0 - mu[k]).ln())),
+        );
 
         // Working weights w_i = μ_i (1 − μ_i), gradient g = Xᵀ(y − μ).
         let mut xtwx = vec![vec![0.0; p]; p];
@@ -124,13 +160,13 @@ pub fn logistic(predictors: &[&[f64]], y: &[f64], intercept: bool) -> Result<Log
         for i in 0..p {
             for j in i..p {
                 let s = compensated_sum((0..n).map(|k| {
-                    let w = mu[k] * (1.0 - mu[k]);
+                    let w = weights[k] * mu[k] * (1.0 - mu[k]);
                     w * cols[i][k] * cols[j][k]
                 }));
                 xtwx[i][j] = s;
                 xtwx[j][i] = s;
             }
-            grad[i] = compensated_sum((0..n).map(|k| cols[i][k] * (y[k] - mu[k])));
+            grad[i] = compensated_sum((0..n).map(|k| weights[k] * cols[i][k] * (y[k] - mu[k])));
         }
 
         // Solve (XᵀWX) Δ = gradient for the Newton update.
@@ -154,9 +190,9 @@ pub fn logistic(predictors: &[&[f64]], y: &[f64], intercept: bool) -> Result<Log
                     sigmoid(eta).clamp(MU_EPS, 1.0 - MU_EPS)
                 })
                 .collect();
-            let ll_trial = compensated_sum(
-                (0..n).map(|k| y[k] * mu_trial[k].ln() + (1.0 - y[k]) * (1.0 - mu_trial[k]).ln()),
-            );
+            let ll_trial = compensated_sum((0..n).map(|k| {
+                weights[k] * (y[k] * mu_trial[k].ln() + (1.0 - y[k]) * (1.0 - mu_trial[k]).ln())
+            }));
             if ll_trial >= ll_current || step < 1e-6 {
                 beta = beta_trial;
                 mu = mu_trial;
@@ -169,8 +205,9 @@ pub fn logistic(predictors: &[&[f64]], y: &[f64], intercept: bool) -> Result<Log
 
         // Convergence: R's `glm` uses relative deviance change.
         // Deviance D = −2·LL, so |ΔD|/(|D|+0.1) = 2|ΔLL|/(2|LL|+0.1).
-        let ll_new =
-            compensated_sum((0..n).map(|k| y[k] * mu[k].ln() + (1.0 - y[k]) * (1.0 - mu[k]).ln()));
+        let ll_new = compensated_sum(
+            (0..n).map(|k| weights[k] * (y[k] * mu[k].ln() + (1.0 - y[k]) * (1.0 - mu[k]).ln())),
+        );
         let dev_change = 2.0 * (ll_new - ll_current).abs();
         let dev_scale = 2.0 * ll_new.abs() + 0.1;
         if dev_change / dev_scale < TOL {
@@ -191,7 +228,7 @@ pub fn logistic(predictors: &[&[f64]], y: &[f64], intercept: bool) -> Result<Log
     for i in 0..p {
         for j in i..p {
             let s = compensated_sum((0..n).map(|k| {
-                let w = mu[k] * (1.0 - mu[k]);
+                let w = weights[k] * mu[k] * (1.0 - mu[k]);
                 w * cols[i][k] * cols[j][k]
             }));
             xtwx[i][j] = s;
@@ -205,7 +242,9 @@ pub fn logistic(predictors: &[&[f64]], y: &[f64], intercept: bool) -> Result<Log
     let inv_mat = llt.inverse();
 
     // Log-likelihood at convergence.
-    let ll = compensated_sum((0..n).map(|k| y[k] * mu[k].ln() + (1.0 - y[k]) * (1.0 - mu[k]).ln()));
+    let ll = compensated_sum(
+        (0..n).map(|k| weights[k] * (y[k] * mu[k].ln() + (1.0 - y[k]) * (1.0 - mu[k]).ln())),
+    );
 
     // Wald inference.
     let normal = Normal::new(0.0, 1.0).map_err(|e| StatError::Numerical(format!("Normal: {e}")))?;
@@ -315,6 +354,27 @@ mod tests {
         assert!(res.converged);
         assert!(approx_eq(res.coefficients[0], 0.0, 1e-6));
         assert!(approx_eq(res.fitted[0], 0.5, 1e-6));
+    }
+
+    #[test]
+    fn weighted_intercept_matches_weighted_odds() {
+        let y = vec![0.0, 1.0];
+        let weights = [1.0, 4.0];
+        let res = logistic_weighted(&[], &y, Some(&weights), true).unwrap();
+        assert!(approx_eq(res.coefficients[0], (4.0_f64 / 1.0).ln(), 1e-8));
+        assert!(approx_eq(res.fitted[0], 0.8, 1e-8));
+    }
+
+    #[test]
+    fn constant_weights_match_unweighted_logistic() {
+        let x = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
+        let y = vec![0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 1.0, 1.0];
+        let weights = [3.5; 10];
+        let unweighted = logistic(&[&x[..]], &y, true).unwrap();
+        let weighted = logistic_weighted(&[&x[..]], &y, Some(&weights), true).unwrap();
+        for (a, b) in unweighted.coefficients.iter().zip(&weighted.coefficients) {
+            assert!((a - b).abs() < 1e-10);
+        }
     }
 
     #[test]
