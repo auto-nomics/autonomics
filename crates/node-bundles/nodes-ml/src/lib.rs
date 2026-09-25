@@ -49,18 +49,21 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(cluster_nodes::HierarchicalFactory));
         registry.register(Box::new(cluster_nodes::SpectralClusteringFactory));
 
-        // ── Split & CV (3) ──────────────────────────────────────────────────
+        // ── Split & CV (4) ──────────────────────────────────────────────────
         registry.register(Box::new(split_nodes::TrainTestSplitFactory));
         registry.register(Box::new(split_nodes::KFoldFactory));
         registry.register(Box::new(split_nodes::StratifiedKFoldFactory));
+        registry.register(Box::new(split_nodes::GroupKFoldFactory));
 
-        // ── Metrics (2) ─────────────────────────────────────────────────────
+        // ── Metrics (3) ─────────────────────────────────────────────────────
         registry.register(Box::new(metrics_nodes::ClassificationMetricsFactory));
         registry.register(Box::new(metrics_nodes::RegressionMetricsFactory));
+        registry.register(Box::new(metrics_nodes::MulticlassMetricsFactory));
 
         // ── Model artifact (2) ──────────────────────────────────────────────
         registry.register(Box::new(model_nodes::ModelSaveFactory));
         registry.register(Box::new(model_nodes::ModelLoadFactory));
+        registry.register(Box::new(model_nodes::FrozenPredictFactory));
 
         // ── Dimensionality reduction (5) ────────────────────────────────────
         registry.register(Box::new(dimred_nodes::PcaFactory));
@@ -74,11 +77,13 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(feat_select_nodes::SelectKBestFactory));
         registry.register(Box::new(feat_select_nodes::CorrelationRankFactory));
 
-        // ── Supervised — classification (4) ─────────────────────────────────
+        // ── Supervised — classification (6) ─────────────────────────────────
         registry.register(Box::new(supervised_nodes::LogisticFactory));
         registry.register(Box::new(supervised_nodes::GaussianNbFactory));
         registry.register(Box::new(supervised_nodes::KnnFactory));
         registry.register(Box::new(supervised_nodes::DecisionTreeFactory));
+        registry.register(Box::new(supervised_nodes::PamFitFactory));
+        registry.register(Box::new(supervised_nodes::MnetFitFactory));
 
         // ── Supervised — regression (2) ─────────────────────────────────────
         registry.register(Box::new(supervised_nodes::LinearRegressFactory));

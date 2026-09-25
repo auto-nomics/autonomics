@@ -1,8 +1,13 @@
 use super::*;
 
 // ═══════════════════════════════════════════════════════════════════════
-// ModelLoad
+// ModelLoad — read a persisted ModelArtifact back onto an edge
 // ═══════════════════════════════════════════════════════════════════════
+//
+// Emits the canonical single-row artifact table (artifact_bytes + kind +
+// human-readable metadata) on port 0.  `ml_frozen_predict` consumes only
+// `artifact_bytes`; the extra columns make the frozen model inspectable
+// at DAG-view time.
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct ModelLoadSpec {
@@ -15,10 +20,12 @@ impl NodeFactory for ModelLoadFactory {
         "ml_model_load"
     }
     fn desc(&self) -> &'static str {
-        "Load a model artifact from storage."
+        "Load a fitted-model artifact from storage."
     }
     fn doc(&self) -> &'static str {
-        "ModelLoad: reads a bincode-serialised ModelArtifact and returns its metadata."
+        "ml_model_load: reads a bincode-serialised ModelArtifact from the specified URI and \
+        emits it as a single-row artifact table (artifact_bytes Binary + kind + metadata) \
+        that prediction nodes can consume."
     }
     fn spec_schema(&self) -> schemars::Schema {
         schema_for!(ModelLoadSpec)
@@ -65,39 +72,18 @@ impl DagNode for ModelLoadNode {
         _inputs: &[NodeInput],
         _r: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
-        let bytes = std::fs::read(&self.uri).map_err(|e| DagError::NodeError {
+        let raw = std::fs::read(&self.uri).map_err(|e| DagError::NodeError {
             node_type: "ml_model_load".into(),
             msg: format!("fs read: {e}"),
         })?;
-        let artifact = ml::ModelArtifact::from_bytes(&bytes).map_err(|e| DagError::NodeError {
+        let artifact = ml::ModelArtifact::from_bytes(&raw).map_err(|e| DagError::NodeError {
             node_type: "ml_model_load".into(),
-            msg: e.to_string(),
+            msg: format!("invalid ModelArtifact: {e}"),
         })?;
 
-        let feature_names = artifact.feature_names.join(", ");
-        let training_meta = serde_json::to_string(&artifact.training_meta).unwrap_or_default();
-        let batch = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![
-                Field::new("model_uri", DataType::Utf8, false),
-                Field::new("kind", DataType::Utf8, false),
-                Field::new("feature_names", DataType::Utf8, false),
-                Field::new("training_meta", DataType::Utf8, false),
-                Field::new("n_bytes", DataType::Utf8, false),
-            ])),
-            vec![
-                Arc::new(StringArray::from(vec![self.uri.clone()])),
-                Arc::new(StringArray::from(vec![artifact.kind.clone()])),
-                Arc::new(StringArray::from(vec![feature_names])),
-                Arc::new(StringArray::from(vec![training_meta])),
-                Arc::new(StringArray::from(vec![format!(
-                    "{}",
-                    artifact.fitted.len()
-                )])),
-            ],
-        )
-        .map_err(|e| DagError::NodeError {
+        let batch = artifact_to_batch(&artifact, &raw).map_err(|e| DagError::NodeError {
             node_type: "ml_model_load".into(),
-            msg: e.to_string(),
+            msg: e,
         })?;
         let df = ctx
             .session()
@@ -109,5 +95,16 @@ impl DagNode for ModelLoadNode {
         let mut res = PortOutputs::new();
         res.insert(0, df);
         Ok(res)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_spec_deserialize() {
+        let spec: ModelLoadSpec = serde_json::from_str(r#"{"uri": "/tmp/m.bin"}"#).unwrap();
+        assert_eq!(spec.uri, "/tmp/m.bin");
     }
 }

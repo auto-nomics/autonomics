@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use arrow_array::{Array, Float64Array, Int32Array, RecordBatch, UInt32Array};
+use arrow_array::{Array, Float64Array, Int32Array, RecordBatch, StringArray, UInt32Array};
 use arrow_schema::{DataType, Field, Schema};
 use async_trait::async_trait;
 use schemars::{JsonSchema, schema_for};
@@ -56,6 +56,12 @@ pub use knn::KnnFactory;
 
 mod decision_tree;
 pub use decision_tree::DecisionTreeFactory;
+
+mod pam_fit;
+pub use pam_fit::PamFitFactory;
+
+mod mnet_fit;
+pub use mnet_fit::MnetFitFactory;
 
 mod linear_regress;
 pub use linear_regress::LinearRegressFactory;
