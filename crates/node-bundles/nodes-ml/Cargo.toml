@@ -21,6 +21,7 @@ faer.workspace = true
 
 [dev-dependencies]
 datafusion.workspace = true
+tokio = { workspace = true }
 
 [lints]
 workspace = true

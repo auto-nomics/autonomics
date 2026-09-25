@@ -193,6 +193,6 @@ R 参考脚本放 `stat_crates/ml/tests/golden/`（statkit/tests/xval 先例；
 | 3 | metrics 库+节点 | 1.5 d | R 对齐 3 组 golden | ✅ 完成 |
 | 4 | PAM 库+节点 | 2 d | pamr 对齐；panel 非空 | ✅ 完成 |
 | 5 | multinomial EN 库+节点 | 3 d | glmnet 对齐；λ 热启动收敛 | ✅ 完成 |
-| 6 | `ml_frozen_predict` + 端到端 fixture | 1 d | 合成三分类数据全链路 + OOF/全拟合分离断言 | 未开始 |
+| 6 | `ml_frozen_predict` + 端到端 fixture | 1 d | 合成三分类数据全链路 + OOF/全拟合分离断言 | ✅ 完成 |
 
 每步独立 PR。#1、#2 无依赖可先行；#4、#5 可并行。

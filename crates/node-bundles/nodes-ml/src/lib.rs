@@ -63,6 +63,7 @@ impl NodePlugin for Plugin {
         // ── Model artifact (2) ──────────────────────────────────────────────
         registry.register(Box::new(model_nodes::ModelSaveFactory));
         registry.register(Box::new(model_nodes::ModelLoadFactory));
+        registry.register(Box::new(model_nodes::FrozenPredictFactory));
 
         // ── Dimensionality reduction (5) ────────────────────────────────────
         registry.register(Box::new(dimred_nodes::PcaFactory));

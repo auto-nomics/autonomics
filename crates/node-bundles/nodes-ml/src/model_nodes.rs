@@ -21,6 +21,9 @@ pub use model_save::ModelSaveFactory;
 mod model_load;
 pub use model_load::ModelLoadFactory;
 
+mod frozen_predict;
+pub use frozen_predict::FrozenPredictFactory;
+
 // ── shared artifact-row helpers (used by save and load) ─────────────────
 
 pub(super) async fn collect_artifact_input(
