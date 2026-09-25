@@ -48,12 +48,18 @@ pub struct SurveyDesignSpec {
     pub strata: Vec<String>,
 
     /// Sampling probability column name(s) (multi-stage: one column per stage).
-    /// Mutually exclusive with `weights`.
+    /// Mutually exclusive with `weights`. Values must be > 0 (`+inf` marks a
+    /// zero-weight row); rows with prob = 0 must be filtered out before
+    /// design.
     #[serde(default)]
     pub probs: Vec<String>,
 
     /// Sampling weight column name (single column). Mutually exclusive with
-    /// `probs`.
+    /// `probs`. Zero weights are allowed: the rows stay in the design
+    /// (stratum/PSU structure) but contribute nothing to estimates and are
+    /// excluded from degrees of freedom, matching R. When zeros mean "not
+    /// sampled" (e.g. NHANES subsample weights), filter `WT > 0` before
+    /// design to also remove them from the variance.
     #[serde(default)]
     pub weights: Option<String>,
 
@@ -764,6 +770,7 @@ pub fn student_t_two_sided_p(t: f64, df: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow_array::Float64Array;
 
     #[test]
     fn design_spec_deserializes() {
@@ -795,5 +802,89 @@ mod tests {
         // qt(-0.414, df=7): two-sided p is approximately 0.691.
         let p = student_t_two_sided_p(-0.414, 7.0);
         assert!((p - 0.691).abs() < 0.001, "p={p}");
+    }
+
+    /// 4-row batch: strata/psu/wt/x with one zero-weight row (row 3).
+    fn zero_weight_batch(wt: Option<Float64Array>) -> RecordBatch {
+        use arrow_schema::{DataType, Field, Schema};
+        use std::sync::Arc;
+        let wt = wt.unwrap_or_else(|| Float64Array::from(vec![3.0, 3.0, 4.0, 0.0]));
+        RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("st", DataType::Utf8, false),
+                Field::new("psu", DataType::Utf8, false),
+                Field::new("wt", DataType::Float64, true),
+                Field::new("x", DataType::Float64, false),
+            ])),
+            vec![
+                Arc::new(StringArray::from(vec!["A", "A", "B", "B"])),
+                Arc::new(StringArray::from(vec!["1", "2", "3", "4"])),
+                Arc::new(wt),
+                Arc::new(Float64Array::from(vec![2.8, 6.8, 3.7, 5.0])),
+            ],
+        )
+        .unwrap()
+    }
+
+    fn design_spec(weights: &str) -> SurveyDesignSpec {
+        serde_json::from_value(serde_json::json!({
+            "ids": ["psu"],
+            "strata": ["st"],
+            "weights": weights
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn build_design_accepts_zero_weights() {
+        let batches = vec![zero_weight_batch(None)];
+        let d = build_survey_design(&design_spec("wt"), &batches).unwrap();
+        // Zero-weight row is stored as prob = +inf and weighs 0, but keeps
+        // its PSU slot for variance structure.
+        assert_eq!(d.weights(), vec![3.0, 3.0, 4.0, 0.0]);
+        assert_eq!(d.n_psu.get("B"), Some(&2));
+    }
+
+    #[test]
+    fn build_design_null_weight_error_has_hint() {
+        let wt = Float64Array::from(vec![Some(3.0), Some(3.0), Some(4.0), None]);
+        let batches = vec![zero_weight_batch(Some(wt))];
+        let err = build_survey_design(&design_spec("wt"), &batches).unwrap_err();
+        let msg = err.0;
+        assert!(msg.contains("row 3"), "msg: {msg}");
+        assert!(msg.contains("na_weights"), "msg: {msg}");
+    }
+
+    #[test]
+    fn build_design_negative_weight_error_has_hint() {
+        let wt = Float64Array::from(vec![3.0, 3.0, 4.0, -2.0]);
+        let batches = vec![zero_weight_batch(Some(wt))];
+        let err = build_survey_design(&design_spec("wt"), &batches).unwrap_err();
+        assert!(err.0.contains("filter WT > 0"), "msg: {}", err.0);
+    }
+
+    #[test]
+    fn build_design_zero_prob_error_has_hint() {
+        use arrow_schema::{DataType, Field, Schema};
+        use std::sync::Arc;
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("st", DataType::Utf8, false),
+                Field::new("psu", DataType::Utf8, false),
+                Field::new("pr", DataType::Float64, false),
+            ])),
+            vec![
+                Arc::new(StringArray::from(vec!["A", "A"])),
+                Arc::new(StringArray::from(vec!["1", "2"])),
+                Arc::new(Float64Array::from(vec![0.5, 0.0])),
+            ],
+        )
+        .unwrap();
+        let spec: SurveyDesignSpec = serde_json::from_value(
+            serde_json::json!({ "ids": ["psu"], "strata": ["st"], "probs": ["pr"] }),
+        )
+        .unwrap();
+        let err = build_survey_design(&spec, &[batch]).unwrap_err();
+        assert!(err.0.contains("filter WT > 0"), "msg: {}", err.0);
     }
 }

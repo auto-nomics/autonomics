@@ -1256,6 +1256,58 @@ mod tests {
         }
     }
 
+    /// svyglm with zero-weight rows (R's `prob = Inf` sentinel): the rows
+    /// must not break the fit. Golden values from R survey 4.5
+    /// (`svyglm(y ~ x, svydesign(ids=~psu, strata=~st, weights=~wt))` with
+    /// PSU 4 zero-weighted).
+    #[test]
+    fn svyglm_zero_weight_rows_match_r() {
+        let y = vec![1.2, 2.1, 3.9, 4.2, 1.7, 3.1, 9.9, 8.8];
+        let x = vec![2.8, 4.1, 6.8, 6.8, 3.7, 6.6, 5.0, 2.0];
+        let design = SurveyDesignBuilder::new()
+            .strata(vec![
+                "A".to_string(),
+                "A".to_string(),
+                "A".to_string(),
+                "A".to_string(),
+                "B".to_string(),
+                "B".to_string(),
+                "B".to_string(),
+                "B".to_string(),
+            ])
+            .cluster(vec![
+                "1".to_string(),
+                "1".to_string(),
+                "2".to_string(),
+                "2".to_string(),
+                "3".to_string(),
+                "3".to_string(),
+                "4".to_string(),
+                "4".to_string(),
+            ])
+            .weights(vec![3.0, 3.0, 3.0, 3.0, 4.0, 4.0, 0.0, 0.0])
+            .build()
+            .unwrap();
+
+        let spec = FamilySpec::canonical(crate::family::Family::Gaussian);
+        let fit = svyglm(&y, &[x], &design, true, None, &spec, None).unwrap();
+        // R: Estimate (Intercept) -0.6168532, x 0.6400883.
+        assert!(
+            (fit.coefficients[0] - -0.6168532).abs() < 1e-6,
+            "intercept: {}",
+            fit.coefficients[0]
+        );
+        assert!(
+            (fit.coefficients[1] - 0.6400883).abs() < 1e-6,
+            "slope: {}",
+            fit.coefficients[1]
+        );
+        // R: Std. Error (Intercept) 0.30933650, x 0.08462118 (design-based).
+        let se: Vec<f64> = (0..2).map(|j| fit.design_cov[j][j].sqrt()).collect();
+        assert!((se[0] - 0.30933650).abs() < 1e-7, "se0: {}", se[0]);
+        assert!((se[1] - 0.08462118).abs() < 1e-7, "se1: {}", se[1]);
+    }
+
     /// Test probit link with binomial.
     #[test]
     fn svyglm_probit_runs() {

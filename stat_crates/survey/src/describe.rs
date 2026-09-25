@@ -995,6 +995,76 @@ mod tests {
         assert!(mean.is_finite());
     }
 
+    // Zero-weight dataset: 2 strata × 2 PSUs; PSU 4 in stratum B has zero
+    // weights (e.g. NHANES subsample weights). Golden values from R survey
+    // 4.5, where the rows are kept in the design (prob = Inf).
+    fn zero_weight_design() -> SurveyDesign {
+        SurveyDesignBuilder::new()
+            .strata(vec![
+                "A".into(),
+                "A".into(),
+                "A".into(),
+                "A".into(),
+                "B".into(),
+                "B".into(),
+                "B".into(),
+                "B".into(),
+            ])
+            .cluster(vec![
+                "1".into(),
+                "1".into(),
+                "2".into(),
+                "2".into(),
+                "3".into(),
+                "3".into(),
+                "4".into(),
+                "4".into(),
+            ])
+            .weights(vec![3.0, 3.0, 3.0, 3.0, 4.0, 4.0, 0.0, 0.0])
+            .build()
+            .unwrap()
+    }
+
+    const ZERO_WT_X: [f64; 8] = [2.8, 4.1, 6.8, 6.8, 3.7, 6.6, 5.0, 2.0];
+
+    #[test]
+    fn svymean_zero_weight_rows_match_r() {
+        let d = zero_weight_design();
+        let stat = svymean(&[ZERO_WT_X.to_vec()], &d, false).unwrap();
+        let (mean, se, df) = stat.univariate();
+        // R: svymean(~x, svydesign(ids=~psu, strata=~st, weights=~wt)) with
+        // zeros kept → 5.135, SE 1.005018, degf 1 (zero-weight PSU excluded).
+        assert!((mean - 5.135).abs() < 1e-10, "mean: {mean}");
+        assert!((se - 1.005018).abs() < 1e-5, "se: {se}");
+        assert_eq!(df, 1);
+    }
+
+    #[test]
+    fn svytotal_zero_weight_rows_match_r() {
+        let d = zero_weight_design();
+        let stat = svytotal(&[ZERO_WT_X.to_vec()], &d, false).unwrap();
+        let (total, se, _df) = stat.univariate();
+        // R keeps the zero-weight PSU in the variance: SE 45.84158 (vs
+        // 21.27309 for a pre-filtered WT > 0 design) — the reason to
+        // filter WT > 0 before design when zeros mean "not sampled".
+        assert!((total - 102.7).abs() < 1e-10, "total: {total}");
+        assert!((se - 45.84158).abs() < 1e-4, "se: {se}");
+    }
+
+    #[test]
+    fn svymean_all_zero_weights_errors() {
+        // A design with only zero weights builds fine (R allows it) but
+        // svymean rejects it instead of returning NaN like R.
+        let d = SurveyDesignBuilder::new()
+            .strata(vec!["A".into(), "A".into()])
+            .cluster(vec!["1".into(), "2".into()])
+            .weights(vec![0.0, 0.0])
+            .build()
+            .unwrap();
+        let err = svymean(&[vec![1.0, 2.0]], &d, false).unwrap_err();
+        assert!(err.to_string().contains("all weights are zero"));
+    }
+
     #[test]
     fn svytotal_matches_r_se() {
         let d = fpc_design(false);

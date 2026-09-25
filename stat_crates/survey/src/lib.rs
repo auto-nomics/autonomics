@@ -16,6 +16,15 @@
 //!
 //! See memory `survey-crate-scope` for the full porting plan.
 //!
+//! ## Zero-weight rows
+//!
+//! Designs accept zero-weight rows (stored as `prob = +inf`, R's sentinel
+//! for excluded rows — e.g. NHANES subsample weights). They contribute
+//! nothing to point estimates and are excluded from degrees of freedom,
+//! but keep their stratum/PSU slot in the variance, matching R. When zeros
+//! mean "not sampled", filter `WT > 0` before design to drop them from the
+//! variance as well.
+//!
 //! ## Golden validation
 //!
 //! All computations are validated against R `survey` v4.5 output using the
