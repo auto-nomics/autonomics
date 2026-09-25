@@ -60,6 +60,9 @@ pub use decision_tree::DecisionTreeFactory;
 mod pam_fit;
 pub use pam_fit::PamFitFactory;
 
+mod mnet_fit;
+pub use mnet_fit::MnetFitFactory;
+
 mod linear_regress;
 pub use linear_regress::LinearRegressFactory;
 

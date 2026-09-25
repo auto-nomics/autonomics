@@ -26,6 +26,7 @@
 //! | [`anomaly`] | Isolation Forest, LOF, OCSVM |
 //! | [`assoc`] | Apriori, FP-Growth, ALS recommender |
 //! | [`timeseries`] | ARIMA, Kalman, Holt-Winters, PELT |
+//! | [`multinomial`] | Multinomial logistic elastic-net (glmnet-aligned) |
 //! | [`metrics`] | Classification + regression metrics |
 //! | [`split`] | Train/test split, K-Fold, CV |
 //! | [`deep`] | MLP, CNN, LSTM, Transformer (feature `deep`) |
@@ -40,6 +41,7 @@ pub mod deep;
 pub mod dimred;
 pub mod feat_select;
 pub mod metrics;
+pub mod multinomial;
 pub mod preprocess;
 pub mod regress;
 pub mod split;
@@ -49,4 +51,5 @@ pub mod timeseries;
 pub use artifact::ModelArtifact;
 pub use centroid::CentroidError;
 pub use metrics::MetricsError;
+pub use multinomial::MultinomialError;
 pub use split::SplitError;

@@ -165,12 +165,20 @@ XGBoost/GBM、ComBat/批次桥接、SMOTE、Platt/isotonic 校准（后续可加
 
 ## 6. 数值验证
 
-R 参考脚本放 `stat_crates/ml/tests/reference/`（statkit/tests/xval 先例）：
+R 参考脚本放 `stat_crates/ml/tests/golden/`（statkit/tests/xval 先例；
+`reference/` 目录名被未锚定的 gitignore 规则吞掉，改为 golden）：
 
 | 组件 | R 参考 | 对齐目标 |
 |---|---|---|
 | PAM | `pamr` | 同 Δ 后验 1e-4；CV 曲线形状；signature 集合 |
-| multinomial EN | `glmnet(family="multinomial")` | 固定 λ 系数相对 ≤1e-3；CV error 差 ≤1e-2 |
+| multinomial EN | `glmnet(family="multinomial")` | λ_max/网格公式 1e-10；支撑集精确；目标函数值单侧 ≤1e-5；概率 ≤2e-3；CV deviance 差 ≤1e-2（系数见下方注记） |
+
+> **平坦谷注记（2026-09-25 实测，glmnet 5.1）**：多项逻辑回归目标函数存在
+> 平坦方向（给所有类别得分加公共 v(x) 似然不变），等效参数化下两次
+> glmnet 拟合系数可差 2e-2 而目标函数仅差 1e-7——原定"固定 λ 系数
+> ≤1e-3"数学上不可达（glmnet 自身也做不到）。golden 改为比较可识别量：
+> λ 网格（公式精确）、支撑集（精确）、z 尺度目标函数值（单侧，更紧求解器
+> 应更低）、概率（~3e-4）、CV deviance 曲线（1e-2 容差）。
 | OvR AUC/Brier/log loss | 解析公式 + `pROC` | 1e-6 / 1e-10 / 1e-10 |
 | group_kfold | 纯 Rust | 组完整性、并集完备 |
 
@@ -184,7 +192,7 @@ R 参考脚本放 `stat_crates/ml/tests/reference/`（statkit/tests/xval 先例�
 | 2 | `ml_group_kfold` 节点 | 0.5 d | 组完整性测试 + spec 单测 | ✅ 完成 |
 | 3 | metrics 库+节点 | 1.5 d | R 对齐 3 组 golden | ✅ 完成 |
 | 4 | PAM 库+节点 | 2 d | pamr 对齐；panel 非空 | ✅ 完成 |
-| 5 | multinomial EN 库+节点 | 3 d | glmnet 对齐；λ 热启动收敛 | 未开始 |
+| 5 | multinomial EN 库+节点 | 3 d | glmnet 对齐；λ 热启动收敛 | ✅ 完成 |
 | 6 | `ml_frozen_predict` + 端到端 fixture | 1 d | 合成三分类数据全链路 + OOF/全拟合分离断言 | 未开始 |
 
 每步独立 PR。#1、#2 无依赖可先行；#4、#5 可并行。
