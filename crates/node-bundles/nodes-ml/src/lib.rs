@@ -49,10 +49,11 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(cluster_nodes::HierarchicalFactory));
         registry.register(Box::new(cluster_nodes::SpectralClusteringFactory));
 
-        // ── Split & CV (3) ──────────────────────────────────────────────────
+        // ── Split & CV (4) ──────────────────────────────────────────────────
         registry.register(Box::new(split_nodes::TrainTestSplitFactory));
         registry.register(Box::new(split_nodes::KFoldFactory));
         registry.register(Box::new(split_nodes::StratifiedKFoldFactory));
+        registry.register(Box::new(split_nodes::GroupKFoldFactory));
 
         // ── Metrics (2) ─────────────────────────────────────────────────────
         registry.register(Box::new(metrics_nodes::ClassificationMetricsFactory));

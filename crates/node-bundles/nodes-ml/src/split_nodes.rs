@@ -78,6 +78,9 @@ pub use k_fold::KFoldFactory;
 mod stratified_k_fold;
 pub use stratified_k_fold::StratifiedKFoldFactory;
 
+mod group_k_fold;
+pub use group_k_fold::GroupKFoldFactory;
+
 // ═══════════════════════════════════════════════════════════════════════
 // Shared batch helpers
 // ═══════════════════════════════════════════════════════════════════════
