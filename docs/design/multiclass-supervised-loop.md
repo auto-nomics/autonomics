@@ -59,15 +59,21 @@ save/load 校验并透传字节（`ModelArtifact::from_bytes`），另附
 
 ### 2.1 `ml/src/centroid.rs` — nearest shrunken centroid（PAM）
 
-pamr（Tibshirani et al. 2002 PNAS）公式：
+pamr（Tibshirani et al. 2002 PNAS）公式（2026-09-25 对 pamr 源码逐项实证，
+后验对齐至 2.2e-16；三处与 pamr 实现差异见标注）：
 
-- 类内合并 SD `s_j`（floor 保护），`m_k = √(1/n_k − 1/N)`；
-- 中心 `d_kj = (x̄_kj − x̄_j)/(m_k·s_j)`，收缩
-  `d'_kj = sign(d)·max(|d| − Δ, 0)`；
-- 判别分数 `δ_k(i) = Σ_j ((x_ij − x̄'_kj)/s_j)² + 2·log π_k`，
-  其中 `x̄'_kj = x̄_j + m_k·s_j·d'_kj`；后验 = `softmax(−δ/2)`；
-- Δ 网格默认 30 点线性（0..max|d|），K 折 CV error 曲线；
-  选择默认 min-error，1SE 备选（spec 可切换）；
+- 类内合并 SD `s_j`（除数 n−K，**再加 offset = median(s)**，即 pamr
+  `offset.percent=50` 默认——设计初稿漏了此项）；
+- `m_k = √(1/n_k − 1/n)`（pamr 实现为**减号**；PNAS 原文印的是加号，
+  以 pamr 为准）；
+- 中心 `d_kj = (x̄_kj − x̄_j)/(s_j·m_k)`，收缩
+  `d'_kj = sign(d)·max(|d| − Δ, 0)`，z 空间收缩中心 `c_kj = d'_kj·m_k`；
+- 判别分数 `disc_k(i) = Σ_j z_ij·c_kj − ½Σ_j c_kj² + log π_k`（**+log π_k 取
+  argmax**——初稿的 `+2·log π_k` 符号反了），`z_ij = (x_ij−x̄_j)/s_j`；
+  后验 = `exp(clamp(disc, ±500))` 归一化，并列取首个最大；
+- Δ 网格默认 30 点线性（0..max|d|），**全网格保留**（pamr 的 `$nonzero`
+  只是诊断，不做尾部截断）；K 折 CV error 曲线；
+  选择默认 min-error（并列取大 Δ），1SE 备选（spec 可切换）；
 - signature panel = `d'_kj ≠ 0` 的 (class, feature) 对；
 - 输入 z-score 参数随模型序列化（apply 端同变换 = 锁定预处理）。
 
@@ -177,7 +183,7 @@ R 参考脚本放 `stat_crates/ml/tests/reference/`（statkit/tests/xval 先例�
 | 1 | save/load 修复 | 0.5 d | fit→save→load→predict 概率一致（roundtrip 单测） | ✅ 完成 |
 | 2 | `ml_group_kfold` 节点 | 0.5 d | 组完整性测试 + spec 单测 | ✅ 完成 |
 | 3 | metrics 库+节点 | 1.5 d | R 对齐 3 组 golden | ✅ 完成 |
-| 4 | PAM 库+节点 | 2 d | pamr 对齐；panel 非空 | 未开始 |
+| 4 | PAM 库+节点 | 2 d | pamr 对齐；panel 非空 | ✅ 完成 |
 | 5 | multinomial EN 库+节点 | 3 d | glmnet 对齐；λ 热启动收敛 | 未开始 |
 | 6 | `ml_frozen_predict` + 端到端 fixture | 1 d | 合成三分类数据全链路 + OOF/全拟合分离断言 | 未开始 |
 

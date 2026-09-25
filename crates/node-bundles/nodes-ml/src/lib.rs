@@ -76,11 +76,12 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(feat_select_nodes::SelectKBestFactory));
         registry.register(Box::new(feat_select_nodes::CorrelationRankFactory));
 
-        // ── Supervised — classification (4) ─────────────────────────────────
+        // ── Supervised — classification (5) ─────────────────────────────────
         registry.register(Box::new(supervised_nodes::LogisticFactory));
         registry.register(Box::new(supervised_nodes::GaussianNbFactory));
         registry.register(Box::new(supervised_nodes::KnnFactory));
         registry.register(Box::new(supervised_nodes::DecisionTreeFactory));
+        registry.register(Box::new(supervised_nodes::PamFitFactory));
 
         // ── Supervised — regression (2) ─────────────────────────────────────
         registry.register(Box::new(supervised_nodes::LinearRegressFactory));

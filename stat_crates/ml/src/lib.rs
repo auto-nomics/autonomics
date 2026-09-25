@@ -20,6 +20,7 @@
 //! | [`cluster`] | K-means, hierarchical, DBSCAN, GMM, spectral |
 //! | [`dimred`] | PCA, t-SNE, ICA, NMF, MDS |
 //! | [`classify`] | SVM, NB, KNN, LDA/QDA |
+//! | [`centroid`] | PAM — nearest shrunken centroid (multiclass) |
 //! | [`regress`] | Ridge, Lasso, ElasticNet, LARS, PLS |
 //! | [`ensemble`] | Random Forest, GBM, AdaBoost, stacking |
 //! | [`anomaly`] | Isolation Forest, LOF, OCSVM |
@@ -32,6 +33,7 @@
 pub mod anomaly;
 pub mod artifact;
 pub mod assoc_recsys;
+pub mod centroid;
 pub mod classify;
 pub mod cluster;
 pub mod deep;
@@ -45,5 +47,6 @@ pub mod svm_ensemble;
 pub mod timeseries;
 
 pub use artifact::ModelArtifact;
+pub use centroid::CentroidError;
 pub use metrics::MetricsError;
 pub use split::SplitError;
