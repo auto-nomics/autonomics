@@ -55,9 +55,10 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(split_nodes::StratifiedKFoldFactory));
         registry.register(Box::new(split_nodes::GroupKFoldFactory));
 
-        // ── Metrics (2) ─────────────────────────────────────────────────────
+        // ── Metrics (3) ─────────────────────────────────────────────────────
         registry.register(Box::new(metrics_nodes::ClassificationMetricsFactory));
         registry.register(Box::new(metrics_nodes::RegressionMetricsFactory));
+        registry.register(Box::new(metrics_nodes::MulticlassMetricsFactory));
 
         // ── Model artifact (2) ──────────────────────────────────────────────
         registry.register(Box::new(model_nodes::ModelSaveFactory));

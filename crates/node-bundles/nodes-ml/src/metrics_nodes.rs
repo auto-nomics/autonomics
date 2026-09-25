@@ -19,6 +19,9 @@ pub use classification_metrics::ClassificationMetricsFactory;
 mod regression_metrics;
 pub use regression_metrics::RegressionMetricsFactory;
 
+mod multiclass_metrics;
+pub use multiclass_metrics::MulticlassMetricsFactory;
+
 // ── helpers ──────────────────────────────────────────────────────────────
 
 async fn collect_batches(inputs: &[NodeInput]) -> Result<Vec<RecordBatch>, DagError> {

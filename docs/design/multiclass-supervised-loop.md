@@ -176,7 +176,7 @@ R 参考脚本放 `stat_crates/ml/tests/reference/`（statkit/tests/xval 先例�
 |---|---|---|---|---|
 | 1 | save/load 修复 | 0.5 d | fit→save→load→predict 概率一致（roundtrip 单测） | ✅ 完成 |
 | 2 | `ml_group_kfold` 节点 | 0.5 d | 组完整性测试 + spec 单测 | ✅ 完成 |
-| 3 | metrics 库+节点 | 1.5 d | R 对齐 3 组 golden | 未开始 |
+| 3 | metrics 库+节点 | 1.5 d | R 对齐 3 组 golden | ✅ 完成 |
 | 4 | PAM 库+节点 | 2 d | pamr 对齐；panel 非空 | 未开始 |
 | 5 | multinomial EN 库+节点 | 3 d | glmnet 对齐；λ 热启动收敛 | 未开始 |
 | 6 | `ml_frozen_predict` + 端到端 fixture | 1 d | 合成三分类数据全链路 + OOF/全拟合分离断言 | 未开始 |

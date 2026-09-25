@@ -101,6 +101,77 @@ pub fn extract_string_column(batches: &[RecordBatch], name: &str) -> Result<Vec<
     Ok(values)
 }
 
+/// Canonical string keys for a string-or-numeric group column, concatenated
+/// across batches in row order.
+///
+/// Strings pass through verbatim; numerics render via Arrow's display
+/// formatting so mixed numeric types compare consistently.  Grouping nodes
+/// rank these keys lexicographically into dense ids.
+pub fn group_keys(batches: &[RecordBatch], name: &str) -> Result<Vec<String>, String> {
+    let mut keys: Vec<String> = Vec::new();
+    for batch in batches {
+        let idx = batch
+            .schema()
+            .index_of(name)
+            .map_err(|_| format!("group column '{name}' not found"))?;
+        let col = batch.column(idx);
+        match col.data_type() {
+            DataType::Utf8 => {
+                let s = col
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .ok_or("group column cast failed")?;
+                for i in 0..s.len() {
+                    keys.push(s.value(i).to_string());
+                }
+            }
+            DataType::LargeUtf8 => {
+                let s = col
+                    .as_any()
+                    .downcast_ref::<arrow_array::LargeStringArray>()
+                    .ok_or("group column cast failed")?;
+                for i in 0..s.len() {
+                    keys.push(s.value(i).to_string());
+                }
+            }
+            DataType::Float32
+            | DataType::Float64
+            | DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64 => {
+                for i in 0..col.len() {
+                    let key = arrow::util::display::array_value_to_string(col, i)
+                        .map_err(|e| format!("group value: {e}"))?;
+                    keys.push(key);
+                }
+            }
+            other => {
+                return Err(format!(
+                    "group column must be string or numeric, got {other}"
+                ));
+            }
+        }
+    }
+    Ok(keys)
+}
+
+/// Dense `0..n_groups` ids following lexicographic order of the keys,
+/// independent of row order (two passes: collect the set, then map).
+pub fn dense_group_ids(keys: &[String]) -> Vec<usize> {
+    let sorted: std::collections::BTreeSet<&str> = keys.iter().map(|s| s.as_str()).collect();
+    let rank: std::collections::HashMap<&str, usize> = sorted
+        .into_iter()
+        .enumerate()
+        .map(|(i, k)| (k, i))
+        .collect();
+    keys.iter().map(|k| rank[k.as_str()]).collect()
+}
+
 /// Check if an Arrow data type is numeric.
 pub fn is_numeric(dtype: &DataType) -> bool {
     matches!(

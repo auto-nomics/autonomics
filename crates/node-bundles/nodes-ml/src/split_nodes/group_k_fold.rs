@@ -111,78 +111,17 @@ impl DagNode for GroupKFoldNode {
 
 /// Map a string-or-numeric column to dense `0..n_groups` ids (usize).
 ///
-/// Values are canonicalised to strings first (strings verbatim, numerics
-/// via Arrow's display rendering) so mixed numeric types across batches
-/// compare consistently; ids follow lexicographic order of those keys.
+/// Keys are canonicalised by [`common::group_keys`]; ids follow their
+/// lexicographic order, independent of row order.
 fn group_ids(batches: &[RecordBatch], name: &str) -> Result<Vec<usize>, DagError> {
-    use std::collections::BTreeMap;
-
     fn err(msg: impl Into<String>) -> DagError {
         DagError::NodeError {
             node_type: "ml_group_kfold".into(),
             msg: msg.into(),
         }
     }
-
-    let mut keys: Vec<String> = Vec::new();
-    for batch in batches {
-        let idx = batch
-            .schema()
-            .index_of(name)
-            .map_err(|_| err(format!("group column '{name}' not found")))?;
-        let col = batch.column(idx);
-        match col.data_type() {
-            DataType::Utf8 => {
-                let s = col
-                    .as_any()
-                    .downcast_ref::<StringArray>()
-                    .ok_or_else(|| err("group column cast failed"))?;
-                for i in 0..s.len() {
-                    keys.push(s.value(i).to_string());
-                }
-            }
-            DataType::LargeUtf8 => {
-                let s = col
-                    .as_any()
-                    .downcast_ref::<arrow_array::LargeStringArray>()
-                    .ok_or_else(|| err("group column cast failed"))?;
-                for i in 0..s.len() {
-                    keys.push(s.value(i).to_string());
-                }
-            }
-            DataType::Float32
-            | DataType::Float64
-            | DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::UInt8
-            | DataType::UInt16
-            | DataType::UInt32
-            | DataType::UInt64 => {
-                for i in 0..col.len() {
-                    let key = arrow::util::display::array_value_to_string(col, i)
-                        .map_err(|e| err(format!("group value: {e}")))?;
-                    keys.push(key);
-                }
-            }
-            other => {
-                return Err(err(format!(
-                    "group column must be string or numeric, got {other}"
-                )));
-            }
-        }
-    }
-
-    // Two passes: dense ids follow lexicographic order of the canonical
-    // keys, independent of row order (first pass collects, second maps).
-    let sorted: std::collections::BTreeSet<&str> = keys.iter().map(|s| s.as_str()).collect();
-    let rank: std::collections::HashMap<&str, usize> = sorted
-        .into_iter()
-        .enumerate()
-        .map(|(i, k)| (k, i))
-        .collect();
-    Ok(keys.iter().map(|k| rank[k.as_str()]).collect())
+    let keys = common::group_keys(batches, name).map_err(err)?;
+    Ok(common::dense_group_ids(&keys))
 }
 
 #[cfg(test)]
