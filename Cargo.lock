@@ -2812,6 +2812,7 @@ dependencies = [
  "datafusion",
  "evalue",
  "futures",
+ "libc",
  "nodes-causal",
  "nodes-coloc",
  "nodes-dl",

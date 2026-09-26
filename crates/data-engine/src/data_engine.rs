@@ -2,9 +2,12 @@ use std::sync::Arc;
 
 use container_runtime::ContainerExecutionInfra;
 use dag_core::BundleRegistry;
-use dag_core::resource::MemoryGuardConfig;
+use dag_core::resource::{MemoryGuardConfig, sample_memory_usage};
 use datafusion::{
-    execution::{object_store::ObjectStoreUrl, runtime_env::RuntimeEnv},
+    execution::{
+        object_store::ObjectStoreUrl,
+        runtime_env::{RuntimeEnv, RuntimeEnvBuilder},
+    },
     prelude::SessionContext,
 };
 use serde::Serialize;
@@ -62,6 +65,8 @@ pub struct DataEngine {
 
 impl DataEngine {
     const DISABLED_NODE_KIND: &str = "container_command";
+    const MIN_DATAFUSION_MEMORY_POOL_BYTES: u64 = 256 * 1024 * 1024;
+    const MAX_DATAFUSION_MEMORY_POOL_BYTES: u64 = 8 * 1024 * 1024 * 1024;
     const DEFAULT_MEMORY_GUARD_RATIO: f64 = 0.90;
     const DEFAULT_MEMORY_GUARD_INTERVAL_MS: u64 = 250;
 
@@ -160,6 +165,19 @@ impl DataEngine {
     fn default_memory_interval() -> std::time::Duration {
         std::time::Duration::from_millis(Self::DEFAULT_MEMORY_GUARD_INTERVAL_MS)
     }
+
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    fn trim_released_heap() {
+        // DataFusion's pool releases operator reservations, but glibc may keep
+        // those pages in per-thread arenas after Arrow buffers are dropped.
+        let released = unsafe { libc::malloc_trim(0) };
+        if released != 0 {
+            tracing::debug!("returned freed glibc heap memory to the OS");
+        }
+    }
+
+    #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+    fn trim_released_heap() {}
 
     pub fn builder() -> DataEngineBuilder {
         DataEngineBuilder::default()
@@ -743,9 +761,16 @@ impl DataEngine {
     pub async fn run(&mut self) -> Result<RunReport> {
         let manifest = self.dag.to_manifest();
         let manifest_hash = manifest.content_hash();
-        let mut report = self.dag.run(&self.config, &self.engine_ctx, None).await?;
+        let mut report = match self.dag.run(&self.config, &self.engine_ctx, None).await {
+            Ok(report) => report,
+            Err(error) => {
+                Self::trim_released_heap();
+                return Err(error.into());
+            }
+        };
         self.commit_history_snapshot(&manifest, manifest_hash, &mut report)
             .await;
+        Self::trim_released_heap();
         Ok(report)
     }
 
@@ -768,7 +793,7 @@ impl DataEngine {
     ) -> Result<RunReport> {
         let manifest = self.dag.to_manifest();
         let manifest_hash = manifest.content_hash();
-        let mut report = match external_cancel {
+        let run_result = match external_cancel {
             Some(token) => {
                 self.dag
                     .run_with_external_cancel(
@@ -777,16 +802,24 @@ impl DataEngine {
                         Some(event_sink),
                         token,
                     )
-                    .await?
+                    .await
             }
             None => {
                 self.dag
                     .run(&self.config, &self.engine_ctx, Some(event_sink))
-                    .await?
+                    .await
+            }
+        };
+        let mut report = match run_result {
+            Ok(report) => report,
+            Err(error) => {
+                Self::trim_released_heap();
+                return Err(error.into());
             }
         };
         self.commit_history_snapshot(&manifest, manifest_hash, &mut report)
             .await;
+        Self::trim_released_heap();
         Ok(report)
     }
 
@@ -888,8 +921,7 @@ pub struct DataEngineBuilder {
 
 impl Default for DataEngineBuilder {
     fn default() -> Self {
-        let ctx = SessionContext::new();
-        let runtime_env = ctx.runtime_env();
+        let runtime_env = Self::default_runtime_env();
         Self {
             runtime_env,
             opendal: None,
@@ -900,6 +932,66 @@ impl Default for DataEngineBuilder {
 }
 
 impl DataEngineBuilder {
+    const DEFAULT_DATAFUSION_TEMP_DIR_BYTES: u64 = 100 * 1024 * 1024 * 1024;
+
+    fn memory_pool_budget() -> usize {
+        if let Some(value) = std::env::var_os("AUTONOMICS_DATAFUSION_MEMORY_POOL_BYTES") {
+            let value = value.to_string_lossy();
+            match parse_size_bytes(&value) {
+                Some(bytes) if bytes > 0 => return bytes,
+                parsed => {
+                    tracing::warn!(
+                        value = %value,
+                        parsed = parsed.is_some(),
+                        "invalid AUTONOMICS_DATAFUSION_MEMORY_POOL_BYTES; using derived budget"
+                    );
+                }
+            }
+        }
+
+        let limit = sample_memory_usage()
+            .map(|sample| sample.limit_bytes)
+            .unwrap_or(DataEngine::MAX_DATAFUSION_MEMORY_POOL_BYTES);
+        usize::try_from(limit.saturating_mul(1_000) / 2_000)
+            .unwrap_or(usize::MAX)
+            .clamp(
+                usize::try_from(DataEngine::MIN_DATAFUSION_MEMORY_POOL_BYTES)
+                    .expect("minimum budget fits usize"),
+                usize::try_from(DataEngine::MAX_DATAFUSION_MEMORY_POOL_BYTES)
+                    .expect("maximum budget fits usize"),
+            )
+    }
+
+    fn default_runtime_env() -> Arc<RuntimeEnv> {
+        let budget = Self::memory_pool_budget();
+        let builder = RuntimeEnvBuilder::new()
+            .with_memory_limit(budget, 1.0)
+            // DataFusion's OS temporary-directory DiskManager supports spill
+            // files for external sort, aggregation, and join operators.
+            .with_max_temp_directory_size(Self::DEFAULT_DATAFUSION_TEMP_DIR_BYTES);
+        if let Some(path) =
+            std::env::var_os("AUTONOMICS_DATAFUSION_TEMP_DIR").filter(|value| !value.is_empty())
+        {
+            let path = std::path::PathBuf::from(path);
+            match builder
+                .clone()
+                .with_temp_file_path(path.clone())
+                .build_arc()
+            {
+                Ok(runtime_env) => return runtime_env,
+                Err(error) => tracing::warn!(
+                    path = %path.display(),
+                    error = %error,
+                    "cannot create DataFusion spill directory; using OS temporary directory"
+                ),
+            }
+        }
+
+        builder
+            .build_arc()
+            .expect("default DataFusion runtime environment is valid")
+    }
+
     pub fn register_opendal_fs(self, file_session: Arc<OpendalFileStorage>) -> Result<Self> {
         let object_url = ObjectStoreUrl::parse("file://")
             .map_err(|e| Error::Custom(format!("cannot parse datafusion url: {e}")))?;
@@ -979,6 +1071,45 @@ impl DataEngineBuilder {
     }
 }
 
+fn parse_size_bytes(input: &str) -> Option<usize> {
+    let normalized = input.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return None;
+    }
+
+    let unit_multipliers: &[(&str, u128)] = &[
+        ("tib", 1 << 40),
+        ("t", 1 << 40),
+        ("gib", 1 << 30),
+        ("g", 1 << 30),
+        ("gb", 1 << 30),
+        ("mib", 1 << 20),
+        ("m", 1 << 20),
+        ("mb", 1 << 20),
+        ("kib", 1 << 10),
+        ("k", 1 << 10),
+        ("kb", 1 << 10),
+        ("b", 1),
+    ];
+    let (number, multiplier) = unit_multipliers
+        .iter()
+        .find_map(|(suffix, multiplier)| {
+            normalized
+                .strip_suffix(suffix)
+                .map(|number| (number, *multiplier))
+        })
+        .unwrap_or((normalized.as_str(), 1));
+    let value: f64 = number.trim().parse().ok()?;
+    if !value.is_finite() || value <= 0.0 {
+        return None;
+    }
+    let bytes = (value * multiplier as f64).floor();
+    if !(0.0..=usize::MAX as f64).contains(&bytes) {
+        return None;
+    }
+    Some(bytes as usize)
+}
+
 /// Produce a human-readable diff between two manifests.
 fn format_manifest_diff(old: &crate::dag::DagManifest, new: &crate::dag::DagManifest) -> String {
     use std::collections::{HashMap as StdHashMap, HashSet};
@@ -1048,12 +1179,37 @@ mod tests {
     use crate::dag::{DagError, DagHistory, RuntimeStatus, SchedulerConfig};
     use crate::error::Error;
     use crate::nodes::{DagNode, NodeInput, NodePorts};
+    use datafusion::execution::memory_pool::MemoryLimit;
     use datafusion::execution::object_store::ObjectStoreUrl;
     use datafusion::prelude::CsvReadOptions;
     use vfs::{MountedObjectStore, OpendalFileStorage, VfsManifest};
 
     fn datasets_dir() -> std::path::PathBuf {
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test_datasets")
+    }
+
+    #[test]
+    fn datafusion_size_overrides_accept_binary_units() {
+        assert_eq!(super::parse_size_bytes("1024"), Some(1024));
+        assert_eq!(
+            super::parse_size_bytes("2GiB"),
+            Some(2 * 1024 * 1024 * 1024)
+        );
+        assert_eq!(super::parse_size_bytes("768MiB"), Some(768 * 1024 * 1024));
+        assert_eq!(super::parse_size_bytes("8GB"), Some(8 * 1024 * 1024 * 1024));
+        assert_eq!(super::parse_size_bytes("0"), None);
+        assert_eq!(super::parse_size_bytes("8GB?"), None);
+    }
+
+    #[test]
+    fn datafusion_builder_uses_a_bounded_memory_pool() {
+        let runtime_env = super::DataEngineBuilder::default_runtime_env();
+        match runtime_env.memory_pool.memory_limit() {
+            MemoryLimit::Finite(limit) => assert!(limit > 0),
+            MemoryLimit::Infinite | MemoryLimit::Unknown => {
+                panic!("expected finite DataFusion memory limit")
+            }
+        }
     }
 
     #[test]

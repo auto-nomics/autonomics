@@ -292,7 +292,7 @@ impl DAG {
     }
 
     /// Mark **every** node dirty — forces a full re-run on the next
-    /// incremental `run`. Equivalent to the default (non-incremental) behavior.
+    /// incremental `run`.
     pub fn mark_all_dirty(&mut self) {
         for id in self.nodes.keys() {
             self.dirty.insert(id.clone(), DirtyState::Dirty);
@@ -3844,7 +3844,10 @@ mod tests {
         dag.add_edge("a", "b", 0, 0).unwrap();
 
         let ctx = test_ctx();
-        let cfg = SchedulerConfig::default(); // incremental = false
+        let cfg = SchedulerConfig {
+            incremental: false,
+            ..SchedulerConfig::default()
+        };
 
         // First run.
         dag.run(&cfg, &ctx, None).await.unwrap();
@@ -3855,5 +3858,10 @@ mod tests {
         dag.run(&cfg, &ctx, None).await.unwrap();
         assert_eq!(cnt(&ctr_a), 2, "a should re-execute (non-incremental)");
         assert_eq!(cnt(&ctr_b), 2, "b should re-execute (non-incremental)");
+    }
+
+    #[test]
+    fn scheduler_defaults_to_incremental_execution() {
+        assert!(SchedulerConfig::default().incremental);
     }
 }

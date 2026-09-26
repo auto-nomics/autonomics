@@ -150,8 +150,9 @@ pub struct SchedulerConfig {
     pub compute_row_counts: bool,
     /// When `true`, `run` only re-executes nodes marked [`DirtyState::Dirty`]
     /// and skips `Clean` nodes whose cached outputs are retained from a
-    /// previous successful run. When `false` (default), every node is
-    /// re-executed unconditionally (current behavior).
+    /// previous successful run. Defaults to `true` so iterative workflows do
+    /// not replay unchanged upstream work. When `false`, every node is
+    /// re-executed unconditionally.
     ///
     /// Mutations (`replace_node`, `add_edge`, `delete_edge`, …) automatically
     /// mark affected nodes and their transitive descendants dirty. Callers can
@@ -171,7 +172,7 @@ impl Default for SchedulerConfig {
         Self {
             max_concurrency: cpus,
             compute_row_counts: false,
-            incremental: false,
+            incremental: true,
             memory_guard: None,
         }
     }
