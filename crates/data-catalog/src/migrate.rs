@@ -23,9 +23,9 @@
 //! the remote reader derives it from its registry repository via
 //! [`crate::hf::package_repo_prefix_for_index`].
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::hf::package_repo_id;
-use crate::model::{CatalogEntry, CatalogIndex, DatasetManifest, manifest_digest};
+use crate::model::{CatalogEntry, CatalogIndex, DatasetManifest, HfRepoId, manifest_digest};
 
 /// Indexed view of [`CatalogIndex`] that accepts v2 payloads on read.
 #[derive(Debug, serde::Deserialize)]
@@ -76,10 +76,15 @@ impl RawCatalogIndex {
                 .into_iter()
                 .map(|raw| raw.into_v3_entry())
                 .collect::<Result<Vec<_>>>()?;
+            let repositories = self
+                .repositories
+                .into_iter()
+                .map(|repository| HfRepoId::new(&repository).map_err(Error::from))
+                .collect::<Result<Vec<_>>>()?;
             return Ok(CatalogIndex {
                 schema_version: 3,
                 generation: self.generation,
-                repositories: self.repositories,
+                repositories,
                 entries,
             });
         }
@@ -89,10 +94,15 @@ impl RawCatalogIndex {
                 .into_iter()
                 .map(|raw| raw.into_v3_entry_from_v2(prefix))
                 .collect::<Result<Vec<_>>>()?;
+            let repositories = self
+                .repositories
+                .into_iter()
+                .map(|repository| HfRepoId::new(&repository).map_err(Error::from))
+                .collect::<Result<Vec<_>>>()?;
             return Ok(CatalogIndex {
                 schema_version: 3,
                 generation: self.generation,
-                repositories: self.repositories,
+                repositories,
                 entries,
             });
         }
@@ -108,6 +118,7 @@ impl RawCatalogEntry {
         if repo.is_empty() {
             return Err("catalog entry has empty `repo`".into());
         }
+        let repo = HfRepoId::new(&repo).map_err(Error::from)?;
         Ok(crate::model::CatalogEntry {
             repo,
             version: self.version,
@@ -131,6 +142,7 @@ impl RawCatalogEntry {
             })?;
             package_repo_id(prefix, &id)
         };
+        let repo = HfRepoId::new(&repo).map_err(Error::from)?;
         Ok(crate::model::CatalogEntry {
             repo,
             version: self.version,
@@ -200,7 +212,7 @@ impl RawDatasetManifest {
         }
         let mut manifest = DatasetManifest {
             schema_version: crate::model::DATASET_SCHEMA_VERSION,
-            repo: repo.to_string(),
+            repo: HfRepoId::new(repo).map_err(Error::from)?,
             version: self.version,
             kind: self.kind,
             metadata: self.metadata,
@@ -231,7 +243,7 @@ impl RawDatasetManifest {
         }
         let manifest = DatasetManifest {
             schema_version: self.schema_version,
-            repo: manifest_repo.to_string(),
+            repo: HfRepoId::new(manifest_repo).map_err(Error::from)?,
             version: self.version.clone(),
             kind: self.kind.clone(),
             metadata: self.metadata.clone(),
@@ -324,7 +336,7 @@ mod tests {
         let raw: RawCatalogIndex = serde_json::from_str(&index_json(2, &entry)).unwrap();
         let index = raw.into_v3(None).unwrap();
         assert_eq!(index.schema_version, 3);
-        assert_eq!(index.entries[0].repo, "owner/catalog-panel-a");
+        assert_eq!(index.entries[0].repo.as_str(), "owner/catalog-panel-a");
         index.validate().unwrap();
     }
 
@@ -333,7 +345,10 @@ mod tests {
         let entry = format!(r#"{{ "id": "hdl.ref.ukb_eur", "digest": "{DIGEST}"{ENTRY_TAIL} }}"#);
         let raw: RawCatalogIndex = serde_json::from_str(&index_json(2, &entry)).unwrap();
         let index = raw.into_v3(Some("wjixiang/catalog")).unwrap();
-        assert_eq!(index.entries[0].repo, "wjixiang/catalog-hdl-ref-ukb-eur");
+        assert_eq!(
+            index.entries[0].repo.as_str(),
+            "wjixiang/catalog-hdl-ref-ukb-eur"
+        );
         index.validate().unwrap();
     }
 
@@ -362,7 +377,7 @@ mod tests {
             format!(r#"{{ "repo": "owner/catalog-panel-a", "digest": "{DIGEST}"{ENTRY_TAIL} }}"#);
         let raw: RawCatalogIndex = serde_json::from_str(&index_json(3, &entry)).unwrap();
         let index = raw.into_v3(None).unwrap();
-        assert_eq!(index.entries[0].repo, "owner/catalog-panel-a");
+        assert_eq!(index.entries[0].repo.as_str(), "owner/catalog-panel-a");
         index.validate().unwrap();
     }
 
@@ -392,7 +407,7 @@ mod tests {
 
     fn entry_with(digest: &str) -> CatalogEntry {
         CatalogEntry {
-            repo: "owner/catalog-plink-ref".into(),
+            repo: HfRepoId::new("owner/catalog-plink-ref").unwrap(),
             version: "v1".into(),
             kind: "plink_ref_binary".into(),
             digest: digest.into(),
@@ -414,7 +429,7 @@ mod tests {
             plan.new_entry.digest,
             plan.new_manifest.digest.clone().unwrap()
         );
-        assert_eq!(plan.new_manifest.repo, "owner/catalog-plink-ref");
+        assert_eq!(plan.new_manifest.repo.as_str(), "owner/catalog-plink-ref");
         assert_eq!(
             plan.new_manifest.schema_version,
             crate::model::DATASET_SCHEMA_VERSION

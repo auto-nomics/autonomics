@@ -91,8 +91,8 @@ cluster configuration.
 - Make the primary entrypoint deterministic.
 - Include only files required at runtime.
 - Prefer a digest-pinned image reference once the workflow leaves local
-  development. Official tool wrappers pin their digest and resolve the GHCR
-  registry namespace from `AUTONOMICS_IMAGE_PREFIX`.
+  development. Official tool wrappers pin their digest and resolve the fixed
+  GHCR registry namespace `ghcr.io/auto-nomics/autonomics`.
 
 ### Build and validate
 
@@ -364,10 +364,10 @@ the official gsa-mixer `libbgmg` helper needed to query signed LD pairs. The
 `snp/chrom/z` sumstats File, mounts `wjixiang/catalog-mixer-g1000-eur`, calls
 `susieR::susie_rss()`, and emits TSV/RDS/log artifacts to VFS.
 
-The production wrapper pins the image repository and manifest digest, while
-the runtime resolves the registry prefix from `AUTONOMICS_IMAGE_PREFIX`. This
-keeps the exact image immutable without embedding a deployment-specific
-registry namespace.
+The production wrapper pins the image repository and manifest digest and
+resolves the fixed GHCR namespace `ghcr.io/auto-nomics/autonomics`. The exact
+image stays immutable; pointing a deployment at another registry rewrites the
+address fields while digests survive unchanged.
 
 LAVA also has the official multiple-locus scan case:
 
@@ -452,7 +452,7 @@ crates/node-bundles/nodes-io/src/hdl_l_scan_container.rs
 ```
 
 The image installs official `HDL` 1.4.3 at commit `e6b055d`, is published as
-`$AUTONOMICS_IMAGE_PREFIX/hdl:1.4.3`, and is pinned by immutable manifest
+`ghcr.io/auto-nomics/autonomics/hdl:1.4.3`, and is pinned by immutable manifest
 digest. The official Zenodo UKB EUR payload is normalized into
 one catalog package with `LD/*_LDSVD.rda`, `LD/HDLL_LOC_snps.RData`, and
 matching per-block BIM files. The wrapper takes two official-format GWAS

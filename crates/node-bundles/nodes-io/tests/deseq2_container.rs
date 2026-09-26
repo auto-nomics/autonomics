@@ -228,14 +228,8 @@ async fn stages_two_inputs_and_publishes_five_outputs() {
 #[ignore = "requires rootless Podman and the local pinned DESeq2 image"]
 #[tokio::test]
 async fn real_official_deseq2_runs_in_podman_and_matches_baseline() {
-    unsafe {
-        std::env::set_var(
-            nodes_io::image_registry::IMAGE_PREFIX_ENV,
-            std::env::var("AUTONOMICS_DESEQ2_IMAGE_PREFIX")
-                .unwrap_or_else(|_| "localhost/autonomics".into()),
-        );
-    }
-
+    // The wrapper pins the manifest digest and resolves it against the fixed
+    // GHCR namespace; this ignored E2E test pulls the published image.
     let root = tempfile::tempdir().unwrap();
     let storage = Arc::new(OpendalFileStorage::new(root.path()));
     let ctx = NodeCtx::new(

@@ -1,10 +1,11 @@
 use std::collections::BTreeMap;
+use std::fmt;
 
-use schemars::JsonSchema;
+use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 
 pub const CATALOG_SCHEMA_VERSION: u8 = 3;
 pub const DATASET_SCHEMA_VERSION: u8 = 2;
@@ -24,7 +25,7 @@ pub struct DatasetManifest {
     /// Hugging Face dataset repository in `owner/name` form. Required and
     /// durable: the catalog uses it as the primary identity for both
     /// indexes and VFS paths. Replaces the legacy `id` field.
-    pub repo: String,
+    pub repo: HfRepoId,
     pub version: String,
     pub kind: String,
     #[serde(default)]
@@ -49,7 +50,6 @@ impl DatasetManifest {
                 format!("unsupported dataset schema version {}", self.schema_version).into(),
             );
         }
-        validate_repo_ref(&self.repo)?;
         validate_version(&self.version)?;
         validate_kind(&self.kind)?;
         let digest = self
@@ -90,7 +90,7 @@ impl DatasetManifest {
 pub struct CatalogEntry {
     /// Hugging Face dataset repository in `owner/name` form. The durable
     /// primary identity of the entry.
-    pub repo: String,
+    pub repo: HfRepoId,
     pub version: String,
     pub kind: String,
     /// Canonical manifest digest, including the `sha256:` prefix.
@@ -166,7 +166,7 @@ pub struct CatalogIndex {
     /// repository list is the user-facing dependency declaration, while entries
     /// are the resolved, verified installations used by the runtime.
     #[serde(default)]
-    pub repositories: Vec<String>,
+    pub repositories: Vec<HfRepoId>,
     #[serde(default)]
     pub entries: Vec<CatalogEntry>,
 }
@@ -199,15 +199,7 @@ impl CatalogIndex {
 
         let mut repositories = std::collections::BTreeSet::new();
         for repository in &self.repositories {
-            let (owner, name) = repository
-                .split_once('/')
-                .ok_or_else(|| format!("catalog repository `{repository}` must be `owner/name`"))?;
-            if owner.is_empty() || name.is_empty() || name.contains('/') {
-                return Err(
-                    format!("catalog repository `{repository}` must be `owner/name`").into(),
-                );
-            }
-            if !repositories.insert(repository.clone()) {
+            if !repositories.insert(repository.as_str()) {
                 return Err(format!("duplicate catalog repository `{repository}`").into());
             }
         }
@@ -215,7 +207,6 @@ impl CatalogIndex {
         let mut identities = std::collections::BTreeSet::new();
         let mut current_by_repo: BTreeMap<String, usize> = BTreeMap::new();
         for (index, entry) in self.entries.iter().enumerate() {
-            validate_repo_ref(&entry.repo)?;
             validate_version(&entry.version)?;
             validate_kind(&entry.kind)?;
             if !is_sha256(&entry.digest) {
@@ -225,13 +216,13 @@ impl CatalogIndex {
                 )
                 .into());
             }
-            if !identities.insert((entry.repo.clone(), entry.digest.clone())) {
+            if !identities.insert((entry.repo.to_string(), entry.digest.clone())) {
                 return Err(
                     format!("duplicate catalog entry `{}@{}`", entry.repo, entry.digest).into(),
                 );
             }
             if entry.current {
-                if let Some(previous) = current_by_repo.insert(entry.repo.clone(), index) {
+                if let Some(previous) = current_by_repo.insert(entry.repo.to_string(), index) {
                     return Err(format!(
                         "catalog repo `{}` has multiple current entries at indexes {previous} and {index}",
                         entry.repo
@@ -243,9 +234,9 @@ impl CatalogIndex {
         Ok(())
     }
 
-    pub fn record_repository(&mut self, repository: &str) {
+    pub fn record_repository(&mut self, repository: &HfRepoId) {
         if !self.repositories.iter().any(|value| value == repository) {
-            self.repositories.push(repository.to_string());
+            self.repositories.push(repository.clone());
         }
     }
 
@@ -263,7 +254,7 @@ impl CatalogIndex {
         let mut matched = self
             .entries
             .iter()
-            .filter(|entry| entry.repo == repo)
+            .filter(|entry| entry.repo.as_str() == repo)
             .filter(|entry| version.is_none_or(|value| entry.version == value))
             .filter(|entry| digest.is_none_or(|value| entry.digest == value))
             .cloned()
@@ -305,7 +296,8 @@ impl CatalogIndex {
     /// dataset repository. Multiple historical versions in the same repo are
     /// allowed; only the current one is returned.
     pub fn find_current_by_repo(&self, repo: &str) -> Option<&CatalogEntry> {
-        self.current_entries().find(|entry| entry.repo == repo)
+        self.current_entries()
+            .find(|entry| entry.repo.as_str() == repo)
     }
 
     /// Select the current entry for an HF repo.
@@ -381,14 +373,84 @@ impl CatalogIndex {
     }
 }
 
-pub fn validate_repo_ref(value: &str) -> Result<()> {
-    let (owner, name) = value
-        .split_once('/')
-        .ok_or_else(|| format!("catalog repository `{value}` must be `owner/name`"))?;
-    if owner.is_empty() || name.is_empty() || name.contains('/') {
-        return Err(format!("catalog repository `{value}` must be `owner/name`").into());
+/// A Hugging Face dataset repository identity in `owner/name` form.
+///
+/// The durable primary key of a catalog package: the repository namespace
+/// guarantees global uniqueness across owners. Constructed only through
+/// [`HfRepoId::new`], so an invalid reference cannot travel toward the Hub
+/// or the local cache.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String")]
+pub struct HfRepoId(String);
+
+// Hand-written instead of derived: schemars does not mirror serde's
+// `try_from`, and the derived newtype schema would not be a plain string.
+// Repos are strings on the wire and in every agent-facing schema, so
+// `inline_schema = true` inlines our string shape wherever the type
+// appears, sidestepping the `$ref` / `definitions` machinery entirely.
+impl JsonSchema for HfRepoId {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "HfRepoId".into()
     }
-    Ok(())
+
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
+        json_schema!({ "type": "string", "minLength": 3 })
+    }
+}
+
+impl HfRepoId {
+    /// Validate `owner/name`: exactly one `/`, both parts non-empty.
+    pub fn new(value: &str) -> std::result::Result<Self, String> {
+        let invalid = || format!("Hugging Face repository id must be `owner/name`, got `{value}`");
+        let (owner, name) = value.split_once('/').ok_or_else(invalid)?;
+        if owner.is_empty() || name.is_empty() || name.contains('/') {
+            return Err(invalid());
+        }
+        Ok(Self(value.to_string()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Split the validated value into borrowed `(owner, name)` parts.
+    pub fn owner_name(&self) -> (&str, &str) {
+        self.0
+            .split_once('/')
+            .expect("HfRepoId guarantees `owner/name`")
+    }
+
+    pub fn owner(&self) -> &str {
+        self.owner_name().0
+    }
+
+    pub fn name(&self) -> &str {
+        self.owner_name().1
+    }
+}
+
+impl TryFrom<String> for HfRepoId {
+    type Error = String;
+
+    fn try_from(value: String) -> std::result::Result<Self, Self::Error> {
+        Self::new(&value)
+    }
+}
+
+impl fmt::Display for HfRepoId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// Check-only wrapper kept for existing call sites; canonical validation
+/// lives in [`HfRepoId::new`].
+pub fn validate_repo_ref(value: &str) -> Result<()> {
+    HfRepoId::new(value).map_err(Error::from).map(|_| ())
 }
 
 pub fn manifest_digest(manifest: &DatasetManifest) -> String {
@@ -459,10 +521,57 @@ pub fn hex(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn hf_repo_ids_validate_owner_name_form() {
+        let repo =
+            HfRepoId::new("wjixiang/catalog-mtag-ld-ref-1000g-eur-w-ld").unwrap();
+        assert_eq!(repo.as_str(), "wjixiang/catalog-mtag-ld-ref-1000g-eur-w-ld");
+        assert_eq!(repo.owner(), "wjixiang");
+        assert_eq!(repo.name(), "catalog-mtag-ld-ref-1000g-eur-w-ld");
+        assert_eq!(repo.to_string(), "wjixiang/catalog-mtag-ld-ref-1000g-eur-w-ld");
+        for bad in ["", "catalog", "/catalog", "wjx/", "a/b/c", "wjx//panel"] {
+            assert!(HfRepoId::new(bad).is_err(), "`{bad}` must be rejected");
+        }
+        assert!(validate_repo_ref("wjixiang/panel").is_ok());
+        assert!(validate_repo_ref("panel").is_err());
+    }
+
+    #[test]
+    fn hf_repo_ids_parse_through_serde() {
+        let repo: HfRepoId = serde_json::from_str("\"wjixiang/panel\"").unwrap();
+        assert_eq!(repo.as_str(), "wjixiang/panel");
+        assert!(serde_json::from_str::<HfRepoId>("\"panel\"").is_err());
+        assert_eq!(serde_json::to_string(&repo).unwrap(), "\"wjixiang/panel\"");
+    }
+
+    #[test]
+    fn typed_repo_fields_keep_their_string_json_shape() {
+        // `repo` serializes as a plain string and the generated JSON Schema
+        // stays a string type, so remote index/manifest payloads and any
+        // agent-facing schemas are unchanged by the typing.
+        let entry = CatalogEntry {
+            repo: HfRepoId::new("wjixiang/panel").unwrap(),
+            version: "v1".into(),
+            kind: "panel".into(),
+            digest: format!("sha256:{}", "a".repeat(64)),
+            current: true,
+            created_unix_seconds: 1,
+        };
+        let json = serde_json::to_value(&entry).unwrap();
+        assert_eq!(json["repo"], "wjixiang/panel");
+
+        let schema = serde_json::to_value(schemars::schema_for!(CatalogEntry)).unwrap();
+        assert_eq!(
+            schema["properties"]["repo"]["type"], "string",
+            "HfRepoId must surface inline as a string schema, got {}",
+            schema["properties"]["repo"],
+        );
+    }
+
     fn manifest() -> DatasetManifest {
         DatasetManifest {
             schema_version: DATASET_SCHEMA_VERSION,
-            repo: "wjixiang/catalog-1000g-eur".into(),
+            repo: HfRepoId::new("wjixiang/catalog-1000g-eur").unwrap(),
             version: "v3".into(),
             kind: "vcf".into(),
             metadata: BTreeMap::new(),
@@ -492,7 +601,7 @@ mod tests {
         let mut index = CatalogIndex::default();
         for version in ["v1", "v2"] {
             index.upsert_current(CatalogEntry {
-                repo: "owner/catalog-panel".into(),
+                repo: HfRepoId::new("owner/catalog-panel").unwrap(),
                 version: version.into(),
                 kind: "plink".into(),
                 digest: format!(
@@ -517,7 +626,7 @@ mod tests {
     #[test]
     fn entry_paths_follow_the_layout_convention() {
         let entry = CatalogEntry {
-            repo: "wjixiang/catalog-panel".into(),
+            repo: HfRepoId::new("wjixiang/catalog-panel").unwrap(),
             version: "v1".into(),
             kind: "plink".into(),
             digest: format!("sha256:{}", "a".repeat(64)),
@@ -558,7 +667,7 @@ mod tests {
     fn select_and_search_current_entries() {
         let mut index = CatalogIndex::default();
         index.upsert_current(CatalogEntry {
-            repo: "wjixiang/catalog-panel-eur".into(),
+            repo: HfRepoId::new("wjixiang/catalog-panel-eur").unwrap(),
             version: "v1".into(),
             kind: "panel".into(),
             digest: format!("sha256:{}", "a".repeat(64)),
@@ -566,7 +675,7 @@ mod tests {
             created_unix_seconds: 1,
         });
         index.upsert_current(CatalogEntry {
-            repo: "wjixiang/catalog-panel-afr".into(),
+            repo: HfRepoId::new("wjixiang/catalog-panel-afr").unwrap(),
             version: "v2".into(),
             kind: "panel".into(),
             digest: format!("sha256:{}", "b".repeat(64)),
@@ -581,11 +690,11 @@ mod tests {
         assert!(index.select("missing", None, None).is_err());
         let found = index.search("catalog-panel-afr", Some("panel"), 10);
         assert_eq!(found.len(), 1);
-        assert_eq!(found[0].repo, "wjixiang/catalog-panel-afr");
+        assert_eq!(found[0].repo.as_str(), "wjixiang/catalog-panel-afr");
         assert!(index.search("missing", None, 10).is_empty());
 
         index.upsert_current(CatalogEntry {
-            repo: "wjixiang/catalog-panel-eur".into(),
+            repo: HfRepoId::new("wjixiang/catalog-panel-eur").unwrap(),
             version: "v2".into(),
             kind: "panel".into(),
             digest: format!("sha256:{}", "c".repeat(64)),
@@ -604,7 +713,7 @@ mod tests {
     fn lookup_by_hf_repo_resolves_to_current_entry() {
         let mut index = CatalogIndex::default();
         index.upsert_current(CatalogEntry {
-            repo: "wjixiang/catalog-panel-eur".into(),
+            repo: HfRepoId::new("wjixiang/catalog-panel-eur").unwrap(),
             version: "v2".into(),
             kind: "panel".into(),
             digest: format!("sha256:{}", "c".repeat(64)),
@@ -613,7 +722,7 @@ mod tests {
         });
         // Older version shares the same repo but is no longer current.
         index.entries.push(CatalogEntry {
-            repo: "wjixiang/catalog-panel-eur".into(),
+            repo: HfRepoId::new("wjixiang/catalog-panel-eur").unwrap(),
             version: "v1".into(),
             kind: "panel".into(),
             digest: format!("sha256:{}", "a".repeat(64)),

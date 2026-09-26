@@ -120,15 +120,8 @@ fn registry() -> data_engine::node_registry::NodeRegistry {
 
 #[test]
 fn all_bundle_bound_node_kinds_build_from_runtime_catalog() {
-    // Tool-container factories resolve immutable images through the deployment
-    // registry prefix; use a deterministic namespace for build-contract tests.
-    // SAFETY: no other test in this binary reads this variable concurrently.
-    unsafe {
-        std::env::set_var(
-            nodes_io::image_registry::IMAGE_PREFIX_ENV,
-            "test-registry.invalid/autonomics",
-        );
-    }
+    // Tool-container factories resolve immutable images against the fixed
+    // GHCR namespace, so builds are deterministic without environment setup.
     let cases = [
         (
             "file_reference",

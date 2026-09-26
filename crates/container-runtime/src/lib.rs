@@ -10,6 +10,7 @@ pub mod connection;
 pub mod error;
 pub mod execution;
 pub mod gc;
+pub mod image;
 pub mod panel;
 pub mod podman;
 pub mod types;
@@ -18,6 +19,10 @@ pub use config::{
     KEEP_WORKSPACE_ENV, REMOVED_BACKEND_ENV, WORKSPACE_GC_AGE_ENV, WORKSPACE_GC_INTERVAL_ENV,
     ensure_backend_env_removed, keep_workspace_enabled, parse_removed_backend_env,
     workspace_gc_age, workspace_gc_interval,
+};
+pub use image::{
+    GHCR_NAMESPACE, GHCR_REGISTRY, ImageReference, ImageRepo, ManifestDigest, RegistryHost,
+    RepositoryPath, registry_image,
 };
 pub use connection::{
     DEFAULT_CONTAINER_WORKDIR, DEFAULT_TIMEOUT_SECS, MAX_CAPTURED_OUTPUT_BYTES, PodmanConnection,

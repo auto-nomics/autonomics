@@ -36,7 +36,8 @@ pub fn init_plugin_project(plugin_name: &str, path: Option<PathBuf>) -> Result<(
         source,
     })?;
 
-    let manifest = PluginManifest::default();
+    let mut manifest = PluginManifest::default();
+    manifest.plugin_name = plugin_name.to_string();
     let manifest_text = toml::to_string_pretty(&manifest)?;
     let manifest_path = project_path.join("manifest.toml");
     fs::write(&manifest_path, manifest_text).map_err(|source| Error::WriteFile {
@@ -51,15 +52,14 @@ pub fn init_plugin_project(plugin_name: &str, path: Option<PathBuf>) -> Result<(
 /// lowercase letter, ends with a lowercase letter or digit, and contains
 /// only `[a-z0-9-]` in between.
 fn validate_plugin_name(name: &str) -> Result<()> {
-    let valid = name
-        .chars()
-        .next()
-        .is_some_and(|c| c.is_ascii_lowercase())
+    let valid = name.chars().next().is_some_and(|c| c.is_ascii_lowercase())
         && name
             .chars()
             .next_back()
             .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
-        && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
     if valid {
         Ok(())
     } else {
@@ -83,8 +83,19 @@ mod tests {
 
     #[test]
     fn rejects_traversal_absolute_and_cased_names() {
-        for bad in ["../evil", "/tmp/evil", "", "Demo-Tool", "demo_tool", "-demo", "demo-"] {
-            assert!(validate_plugin_name(bad).is_err(), "`{bad}` must be rejected");
+        for bad in [
+            "../evil",
+            "/tmp/evil",
+            "",
+            "Demo-Tool",
+            "demo_tool",
+            "-demo",
+            "demo-",
+        ] {
+            assert!(
+                validate_plugin_name(bad).is_err(),
+                "`{bad}` must be rejected"
+            );
         }
     }
 }

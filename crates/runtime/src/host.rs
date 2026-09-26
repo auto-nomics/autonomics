@@ -4242,7 +4242,7 @@ repository = "owner/catalog-index"
         let manifest: data_catalog::DatasetManifest =
             serde_json::from_slice(&std::fs::read(package.join("manifest.json")).unwrap()).unwrap();
         let entry = data_catalog::CatalogEntry {
-            repo: "owner/catalog-panel".into(),
+            repo: data_catalog::HfRepoId::new("owner/catalog-panel").unwrap(),
             version: manifest.version.clone(),
             kind: manifest.kind.clone(),
             digest: manifest.digest.clone().expect("test package has digest"),

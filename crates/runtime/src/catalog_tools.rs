@@ -250,7 +250,7 @@ impl ToolFunction for CatalogListVersionsTool {
         let mut entries = index
             .entries
             .iter()
-            .filter(|entry| entry.repo == input.id)
+            .filter(|entry| entry.repo.as_str() == input.id)
             .cloned()
             .collect::<Vec<_>>();
         if entries.is_empty() {

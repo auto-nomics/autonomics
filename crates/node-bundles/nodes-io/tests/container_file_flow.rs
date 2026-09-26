@@ -461,16 +461,8 @@ async fn real_catalog_backed_official_mtag_runs_in_podman() {
         runtime,
         panel_cache,
     )));
-    // The production wrapper always pins the manifest digest. Local Podman
-    // tests resolve that digest through the equivalently named localhost repo.
-    // SAFETY: ignored E2E tests are run one at a time by the MTAG test script.
-    unsafe {
-        std::env::set_var(
-            nodes_io::image_registry::IMAGE_PREFIX_ENV,
-            std::env::var("AUTONOMICS_MTAG_IMAGE_PREFIX")
-                .unwrap_or_else(|_| "localhost/autonomics".into()),
-        );
-    }
+    // The wrapper pins the manifest digest and resolves it against the fixed
+    // GHCR namespace; this ignored E2E test pulls the published image.
     let mtag = registry
         .build_node(MTAG_CONTAINER_KIND, serde_json::json!({}))
         .unwrap();
@@ -614,16 +606,8 @@ async fn real_catalog_backed_ldsc_rg_tolerates_incompatible_allele_pairs() {
         runtime,
         panel_cache,
     )));
-    // The production wrapper pins a manifest digest. Local E2E runs resolve
-    // that digest through a localhost repository with the same name.
-    // SAFETY: ignored E2E tests are run one at a time by the LDSC test script.
-    unsafe {
-        std::env::set_var(
-            nodes_io::image_registry::IMAGE_PREFIX_ENV,
-            std::env::var("AUTONOMICS_LDSC_IMAGE_PREFIX")
-                .unwrap_or_else(|_| "localhost/autonomics".into()),
-        );
-    }
+    // The wrapper pins a manifest digest and resolves it against the fixed
+    // GHCR namespace; this ignored E2E test pulls the published image.
     let rg = registry
         .build_node(
             LDSC_RG_CONTAINER_KIND,

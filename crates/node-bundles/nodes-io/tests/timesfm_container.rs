@@ -53,14 +53,8 @@ async fn read_text(ctx: &NodeCtx, path: &str) -> String {
 #[tokio::test]
 #[ignore = "requires Podman and the pinned TimesFM GHCR image"]
 async fn real_official_timesfm_forecast_runs_in_podman() {
-    unsafe {
-        std::env::set_var(
-            nodes_io::image_registry::IMAGE_PREFIX_ENV,
-            std::env::var("AUTONOMICS_TIMESFM_IMAGE_PREFIX")
-                .unwrap_or_else(|_| nodes_io::image_registry::DEFAULT_IMAGE_PREFIX.into()),
-        );
-    }
-
+    // The wrapper pins the manifest digest and resolves it against the fixed
+    // GHCR namespace; this ignored E2E test pulls the published image.
     let scratch = tempfile::tempdir().unwrap();
     let ctx = workspace_ctx(scratch.path());
     let workspace_root = scratch.path().join("podman-workspace");

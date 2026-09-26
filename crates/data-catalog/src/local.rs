@@ -248,8 +248,11 @@ impl LocalCatalog {
         let local_index = self.index()?;
         let mut updated = Vec::new();
         for repository in local_index.repositories.clone() {
-            let entry = remote.package_index(&repository).await?.select_current()?;
-            if repo.is_some_and(|value| entry.repo != value) {
+            let entry = remote
+                .package_index(repository.as_str())
+                .await?
+                .select_current()?;
+            if repo.is_some_and(|value| entry.repo.as_str() != value) {
                 continue;
             }
             let installed = local_index
@@ -349,7 +352,7 @@ impl LocalCatalog {
         let mut registry = dag_core::BundleRegistry::new();
         for entry in index.current_entries() {
             let mut bundle = dag_core::DataBundle::new(
-                entry.repo.clone(),
+                entry.repo.to_string(),
                 format!("{} {} catalog dataset", entry.repo, entry.version),
                 entry.vfs_alias(),
             );
@@ -361,7 +364,9 @@ impl LocalCatalog {
                     entry.repo
                 ))
             })?;
-            if let Some(alias) = short_name_alias(&entry.repo, self.repository_prefix.as_deref()) {
+            if let Some(alias) =
+                short_name_alias(entry.repo.as_str(), self.repository_prefix.as_deref())
+            {
                 let mut alias_bundle = bundle;
                 alias_bundle.ident = alias.to_string();
                 // Alias is best-effort: if another owner happens to share the
@@ -472,7 +477,7 @@ mod tests {
         .unwrap();
         let manifest = package.manifest;
         let entry = CatalogEntry {
-            repo: repo.into(),
+            repo: crate::model::HfRepoId::new(repo).unwrap(),
             version: manifest.version.clone(),
             kind: manifest.kind.clone(),
             digest: manifest.digest.clone().expect("fixture has digest"),
@@ -608,8 +613,8 @@ mod tests {
         let registry = catalog.bundle_registry().unwrap();
 
         // Primary: HF repo (owner/name) is the canonical identity.
-        let by_repo = registry.get(&entry.repo).expect("repo key resolves");
-        assert_eq!(by_repo.ident, entry.repo);
+        let by_repo = registry.get(entry.repo.as_str()).expect("repo key resolves");
+        assert_eq!(by_repo.ident, entry.repo.as_str());
         assert_eq!(by_repo.vpath.as_str(), "/bundles/owner/cache-cache-panel");
         assert_eq!(by_repo.digest.as_deref(), Some(entry.digest.as_str()));
 
