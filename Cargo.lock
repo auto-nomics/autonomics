@@ -7988,6 +7988,7 @@ dependencies = [
  "async-trait",
  "dag-core",
  "datafusion",
+ "epi",
  "schemars",
  "serde",
  "serde_json",
@@ -11599,6 +11600,7 @@ name = "survey"
 version = "0.1.0"
 dependencies = [
  "faer",
+ "serde_json",
  "statkit",
  "statrs",
  "thiserror 2.0.20",

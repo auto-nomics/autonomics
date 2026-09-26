@@ -41,6 +41,10 @@ pub struct SvyGlmFit {
     pub df: usize,
     /// Residual sum of squares (for Gaussian) or deviance (for other families).
     pub rss: f64,
+    /// Deviance with rescaled (mean-1) weights — R `rescale=TRUE` semantics.
+    /// For Gaussian this is `Σ w̃·r²` (unlike `rss`, which is unweighted);
+    /// for other families it equals `rss`. Used by [`svy_lrt`].
+    pub deviance: f64,
     /// Number of effective observations (non-zero weight).
     pub n: usize,
     /// Fitted values (μ = linkinv(η)).
@@ -564,6 +568,9 @@ pub fn svyglm(
         converged: irls_res.converged,
         dispersion,
         family: *spec,
+        // IRLS deviance is already weighted by the rescaled prior weights
+        // (dev_resid multiplies by `wt`), matching R's `rescale=TRUE`.
+        deviance: irls_res.deviance,
     })
 }
 
@@ -734,12 +741,21 @@ pub fn svyglm_linear(
         1.0
     };
 
+    // R-parity deviance for the Gaussian family: weighted RSS with the
+    // rescaled (mean-1) weights — R `rescale=TRUE` (unlike `rss` above).
+    let deviance: f64 = w_scaled
+        .iter()
+        .zip(&resid)
+        .map(|(&wi, &ri)| wi * ri * ri)
+        .sum();
+
     Ok(SvyGlmFit {
         coefficients: coeffs,
         naive_cov,
         design_cov,
         df,
         rss,
+        deviance,
         n: n_eff,
         fitted,
         n_iter: 1,
@@ -778,10 +794,8 @@ pub enum RegTermTestMethod {
 }
 
 /// Wald / Working-Wald test for a subset of regression terms (R
-/// `regTermTest`). LRT is not supported because `svyglm` does not yet expose
-/// a log-likelihood — to compute LRT the caller must refit the reduced
-/// model and compare deviances, which is the job of the higher-level
-/// `reg_term_test` node, not this primitive.
+/// `regTermTest`). The LRT variant lives in [`svy_lrt`], which additionally
+/// needs the reduced-model refit (deviance difference), not just this fit.
 ///
 /// Tests H₀ that the coefficients at `test_indices` are jointly zero:
 ///   chi-sq = β_test' V_test^{-1} β_test,  F = chi-sq / q,
@@ -839,7 +853,10 @@ pub fn reg_term_test_with(
     }
     let statistic = chisq / q as f64;
     let ndf = q;
-    let ddf = fit.df;
+    // R regTermTest uses the model's df.residual = degf(design) + 1 − p
+    // (verified against survey 4.5; identical for all svyglm families).
+    let p_len = fit.coefficients.len();
+    let ddf = (fit.df + 1).saturating_sub(p_len).max(1);
     let p_value = f_dist_surv(statistic, ndf as f64, ddf as f64);
     Ok(RegTermTest {
         statistic,
@@ -855,6 +872,106 @@ fn f_dist_surv(x: f64, df1: f64, df2: f64) -> f64 {
     FisherSnedecor::new(df1, df2)
         .map(|d| d.sf(x))
         .unwrap_or(0.0)
+}
+
+// =====================================================================
+// Survey LRT (regTermTest method="LRT" / anova.svyglm method="LRT")
+// =====================================================================
+
+/// Survey likelihood-ratio test for nested models — R
+/// `regTermTest(model, terms, method = "LRT")` / `anova.svyglm(method =
+/// "LRT")` equivalent.
+///
+/// The deviance difference between the reduced and full fits (weighted,
+/// rescaled-weight deviances — see [`SvyGlmFit::deviance`]) is compared to
+/// the weighted chi-square sum `Q = Σ λᵢ·χ²₁`, where `λ` are the
+/// eigenvalues of `V₀⁻¹·V` on the tested coefficient block: `V` is the
+/// design-based covariance and `V₀` the **unscaled** inverse information
+/// `(XᵀWX)⁻¹` (R's `naive.cov` — deliberately NOT dispersion-scaled, unlike
+/// [`RegTermTestMethod::WorkingWald`]). The p-value uses the saddlepoint
+/// approximation [`crate::pfsum::pfsum_saddlepoint`] with denominator df
+/// `ddf = degf(design) + 1 − p_full` (R's `df.residual`, verified against
+/// survey 4.5 on a stratified-clustered design).
+///
+/// Both fits must have been computed on the **same rows** (enforced by the
+/// `n`/`df` equality check): the node layer guarantees this by NaN-ing the
+/// response wherever any full-model predictor is missing, so the reduced
+/// refit drops exactly the same observations.
+///
+/// The returned `statistic` is the raw chi-square-type deviance difference
+/// (not divided by `ndf`).
+pub fn svy_lrt(
+    fit_full: &SvyGlmFit,
+    fit_reduced: &SvyGlmFit,
+    test_indices: &[usize],
+) -> Result<RegTermTest> {
+    let q = test_indices.len();
+    if q == 0 {
+        return Err(SurveyError::InvalidInput("no terms to test".into()));
+    }
+    let p_full = fit_full.coefficients.len();
+    let p_red = fit_reduced.coefficients.len();
+    if p_red + q != p_full {
+        return Err(SurveyError::InvalidInput(format!(
+            "models are not nested: reduced has {p_red} coefficients, {q} tested, full has {p_full}"
+        )));
+    }
+    if let Some(&i) = test_indices.iter().find(|&&i| i >= p_full) {
+        return Err(SurveyError::InvalidInput(format!(
+            "test index {i} out of range (full model has {p_full} coefficients)"
+        )));
+    }
+    if fit_reduced.n != fit_full.n || fit_reduced.df != fit_full.df {
+        return Err(SurveyError::InvalidInput(
+            "LRT requires both fits on the same rows/design: n and design df \
+             differ. Refit with the response NaN-ed wherever any full-model \
+             predictor is missing so both fits drop identical rows."
+                .into(),
+        ));
+    }
+
+    // Deviance difference; clamp tiny negatives from IRLS tolerance.
+    let chisq = (fit_reduced.deviance - fit_full.deviance).max(0.0);
+
+    // λ = eigenvalues of V0⁻¹·V on the tested block.
+    let v0 = faer::Mat::from_fn(q, q, |i, j| {
+        fit_full.naive_cov[test_indices[i]][test_indices[j]]
+    });
+    let v = faer::Mat::from_fn(q, q, |i, j| {
+        fit_full.design_cov[test_indices[i]][test_indices[j]]
+    });
+    let llt = Llt::new(v0.as_ref(), faer::Side::Lower)
+        .ok()
+        .ok_or_else(|| SurveyError::InvalidInput("singular naive covariance in LRT".into()))?;
+    let m = llt.solve(&v);
+    // The plain product is near-symmetric; average it so the self-adjoint
+    // eigen-solver (like R's eigen on the unsymmetric product) is stable.
+    let m_sym = faer::Mat::from_fn(q, q, |i, j| 0.5 * (m[(i, j)] + m[(j, i)]));
+    let e = m_sym
+        .as_ref()
+        .self_adjoint_eigen(faer::Side::Lower)
+        .map_err(|e| SurveyError::InvalidInput(format!("eigen failed in LRT: {e:?}")))?;
+    let sv = e.S().column_vector();
+    let mut lambda: Vec<f64> = (0..q).map(|i| sv[i]).collect();
+    lambda.reverse(); // faer returns nondecreasing; R eigen returns nonincreasing
+    // Clip eigenvalues that are slightly negative from round-off (both
+    // covariance matrices are PSD).
+    for l in lambda.iter_mut() {
+        if *l < 0.0 && *l > -1e-10 {
+            *l = 0.0;
+        }
+    }
+
+    // R df.residual = degf(design) + 1 - p (verified: survey 4.5 prints
+    // df.residual = degf + 1 - p for gaussian and quasibinomial svyglm).
+    let ddf = (fit_full.df + 1).saturating_sub(p_full).max(1);
+    let p_value = crate::pfsum::pfsum_saddlepoint(chisq, &lambda, ddf);
+    Ok(RegTermTest {
+        statistic: chisq,
+        ndf: q,
+        ddf,
+        p_value,
+    })
 }
 
 /// Student-t survival function via statrs.

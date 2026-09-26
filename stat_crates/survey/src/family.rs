@@ -271,21 +271,23 @@ impl FamilySpec {
         match self.family {
             Family::Gaussian => wt * (y - mu) * (y - mu),
             Family::Binomial | Family::QuasiBinomial => {
+                // R binomial$dev.resids: 2*wt*(y*log(y/mu) + (1-y)*log((1-y)/(1-mu)))
                 let mu_c = mu.clamp(EPS, 1.0 - EPS);
                 if y == 1.0 {
-                    wt * (y / mu_c).ln()
+                    2.0 * wt * (y / mu_c).ln()
                 } else if y == 0.0 {
-                    wt * ((1.0 - y) / (1.0 - mu_c)).ln()
+                    2.0 * wt * ((1.0 - y) / (1.0 - mu_c)).ln()
                 } else {
                     // For binomial with proportions (y in (0,1) with weights > 1)
-                    wt * (y * (y / mu_c).ln() + (1.0 - y) * ((1.0 - y) / (1.0 - mu_c)).ln())
+                    2.0 * wt * (y * (y / mu_c).ln() + (1.0 - y) * ((1.0 - y) / (1.0 - mu_c)).ln())
                 }
             }
             Family::Poisson | Family::QuasiPoisson => {
+                // R poisson$dev.resids: 2*wt*(y*log(y/mu) - (y-mu))
                 if y == 0.0 {
-                    wt * m
+                    2.0 * wt * m
                 } else {
-                    wt * (y * (y / m).ln() - (y - m))
+                    2.0 * wt * (y * (y / m).ln() - (y - m))
                 }
             }
             Family::Gamma => {
@@ -595,11 +597,11 @@ mod tests {
     #[test]
     fn poisson_dev_resid() {
         let s = FamilySpec::canonical(Family::Poisson);
-        // y=0: deviance contribution = wt * mu
-        assert!((s.dev_resid(0.0, 2.0, 1.0) - 2.0).abs() < 1e-10);
-        // y=5, mu=3: wt * [y*log(y/mu) - (y-mu)]
+        // y=0: deviance contribution = 2 * wt * mu (R poisson$dev.resids)
+        assert!((s.dev_resid(0.0, 2.0, 1.0) - 4.0).abs() < 1e-10);
+        // y=5, mu=3: 2 * wt * [y*log(y/mu) - (y-mu)]
         let d = s.dev_resid(5.0, 3.0, 1.0);
-        let expected: f64 = 1.0 * (5.0 * (5.0_f64 / 3.0).ln() - (5.0 - 3.0));
+        let expected: f64 = 2.0 * (5.0 * (5.0_f64 / 3.0).ln() - (5.0 - 3.0));
         assert!((d - expected).abs() < 1e-10);
     }
 

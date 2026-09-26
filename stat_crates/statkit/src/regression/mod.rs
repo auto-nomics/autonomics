@@ -15,9 +15,11 @@ mod logistic;
 mod negbin;
 mod ols;
 mod rlm;
+mod rrr;
 
 pub use cox::{CoxResult, cox};
 pub use logistic::{LogisticResult, logistic, logistic_weighted};
 pub use negbin::{NegbinOptions, NegbinResult, negbin};
 pub use ols::{Regression, ols, wls};
 pub use rlm::{PsiFunction, RlmOptions, RlmResult, rlm};
+pub use rrr::{RrrResult, reduced_rank_regression};

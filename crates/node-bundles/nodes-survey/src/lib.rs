@@ -4,6 +4,7 @@ pub mod survey_calibrate;
 pub mod survey_common;
 pub mod survey_describe;
 pub mod survey_model;
+pub mod survey_rcs;
 pub mod survey_survival;
 pub mod survey_test;
 pub mod survey_utility;
@@ -44,5 +45,6 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(survey_utility::SvyContrastFactory {}));
         registry.register(Box::new(survey_utility::SvyStandardizeFactory {}));
         registry.register(Box::new(survey_utility::RegTermTestFactory {}));
+        registry.register(Box::new(survey_rcs::SvyRcsFactory {}));
     }
 }

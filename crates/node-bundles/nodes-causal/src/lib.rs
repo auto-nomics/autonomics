@@ -6,6 +6,7 @@ pub mod mediation;
 pub mod mediation_moderated;
 pub mod mediation_serial;
 pub mod mediation_weighted;
+pub mod mediation_weighted_binary;
 
 use dag_core::{NodePlugin, NodeRegistry};
 
@@ -18,6 +19,9 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(mediation::MediationNodeFactory {}));
         registry.register(Box::new(
             mediation_weighted::MediationWeightedNodeFactory {},
+        ));
+        registry.register(Box::new(
+            mediation_weighted_binary::MediationWeightedBinaryNodeFactory {},
         ));
         registry.register(Box::new(mediation_serial::MediationSerialNodeFactory {}));
         registry.register(Box::new(

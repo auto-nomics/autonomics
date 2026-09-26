@@ -39,6 +39,7 @@ pub mod error;
 pub mod family;
 pub mod model;
 pub mod nonlinear;
+pub mod pfsum;
 pub mod survival;
 pub mod test;
 pub mod variance;
@@ -52,7 +53,7 @@ pub use design::{LonelyPsu, SurveyDesign, SurveyDesignBuilder};
 pub use error::{Result, SurveyError};
 pub use family::{Family, FamilySpec, Link};
 pub use model::{
-    RegTermTest, RegTermTestMethod, SvyGlmFit, reg_term_test, reg_term_test_with, svyglm,
+    RegTermTest, RegTermTestMethod, SvyGlmFit, reg_term_test, reg_term_test_with, svy_lrt, svyglm,
     svyglm_linear,
 };
 pub use nonlinear::{

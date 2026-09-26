@@ -1,0 +1,64 @@
+{
+ "survey_version": "4.5",
+ "ddf_check": {
+  "gaussian": {
+   "df_residual": 29,
+   "degf": 32,
+   "p": 4,
+   "degf_plus_1_minus_p": 29
+  },
+  "binomial": {
+   "df_residual": 29,
+   "degf": 32,
+   "p": 4,
+   "degf_plus_1_minus_p": 29
+  }
+ },
+ "lrt": {
+  "gaussian": {
+   "chisq": 246.56702566816716,
+   "p": 2.595679082053161e-08,
+   "ndf": 2,
+   "ddf": 29,
+   "lambda": [
+    4.208618947773619,
+    1.255172388464238
+   ],
+   "deviance_full": 954.7675056680346,
+   "deviance_reduced": 1201.3345313362017
+  },
+  "binomial": {
+   "chisq": 71.2080623806985,
+   "p": 4.446777469763958e-09,
+   "ndf": 2,
+   "ddf": 29,
+   "lambda": [
+    0.9954952783301148,
+    0.565136825807839
+   ],
+   "deviance_full": 470.1408178262932,
+   "deviance_reduced": 541.3488802069917
+  }
+ },
+ "wald": {
+  "gaussian": {
+   "chisq": [],
+   "p": 5.911454925293596e-10,
+   "ndf": 2,
+   "ddf": 29
+  },
+  "binomial": {
+   "chisq": [],
+   "p": 1.1676806491403083e-09,
+   "ndf": 2,
+   "ddf": 29
+  }
+ },
+ "anova_lrt": {
+  "gaussian": {
+   "chisq": 246.56702566816716,
+   "p": 2.595679082053161e-08,
+   "ddf": 29
+  }
+ }
+}

@@ -1,4 +1,5 @@
-//! Dimensionality reduction DAG nodes — PCA, ICA, t-SNE, NMF, Truncated SVD.
+//! Dimensionality reduction DAG nodes — PCA, ICA, t-SNE, NMF, Truncated SVD,
+//! factor rotation.
 
 use std::sync::Arc;
 
@@ -80,3 +81,6 @@ pub use nmf::NmfFactory;
 
 mod truncated_svd;
 pub use truncated_svd::TruncatedSvdFactory;
+
+mod factor_rotation;
+pub use factor_rotation::FactorRotationFactory;

@@ -17,3 +17,6 @@ statrs = "0.18"
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+serde_json = { workspace = true }

@@ -12,7 +12,7 @@ use arrow_array::{Float64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 use async_trait::async_trait;
 
-use crate::survey_common::{SurveyDesignSpec, one_in_one_out};
+use crate::survey_common::{SurveyDesignSpec, SurveyDomainSpec, one_in_one_out};
 use dag_core::dag::{DagError, graph::PortOutputs};
 use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::registry::{NodeCtx, NodeFactory};
@@ -745,21 +745,33 @@ pub struct RegTermTestSpec {
     pub predictors: Vec<String>,
     /// Term(s) to test (must be a subset of `predictors`).
     pub test_terms: Vec<String>,
-    /// Method: `"Wald"` (default), `"WorkingWald"`, `"LRT"`.
+    /// Method: `"Wald"` (default, design-based), `"WorkingWald"` (model-based),
+    /// or `"LRT"` (survey likelihood-ratio test — refits the reduced model and
+    /// compares weighted deviances with a Rao–Scott saddlepoint correction,
+    /// the `regTermTest(method="LRT")` / `anova.svyglm(method="LRT")` equivalent).
     #[serde(default = "default_regterm_method")]
     pub method: String,
-    /// GLM family (default `"gaussian"`).
+    /// GLM family (default `"gaussian"`); e.g. `"binomial"`, `"quasibinomial"`,
+    /// `"poisson"`, `"Gamma"`.
     #[serde(default = "default_gaussian")]
     pub family: String,
+    /// Optional non-canonical link (e.g. `"log"` for Gamma).
+    #[serde(default)]
+    pub link: Option<String>,
+    /// Restrict the analysis (and the design) to rows where this column holds
+    /// one of the listed values — the `subset=` semantics of R svyglm domains.
+    #[serde(default)]
+    pub survey_domain: Option<SurveyDomainSpec>,
 }
 
 fn default_gaussian() -> String {
     "gaussian".to_string()
 }
 
-/// Regression term test node — implements Wald and Working Wald on a
-/// Gaussian survey GLM. LRT is rejected at build time because the Rust
-/// backend does not yet expose a log-likelihood.
+/// Regression term test node — Wald / WorkingWald / survey-LRT on a survey
+/// GLM. The LRT refits the model without the tested terms and compares the
+/// weighted deviance difference against the design-corrected weighted
+/// chi-square distribution (survey's misspecification-eigenvalue saddlepoint).
 #[derive(Clone)]
 pub struct RegTermTestNode {
     meta: NodePorts,
@@ -796,35 +808,32 @@ impl DagNode for RegTermTestNode {
         inputs: &[NodeInput],
         _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
-        // Resolve the method into the survey-crate enum so the unsupported
-        // path fails with a single, descriptive error rather than a silent
-        // fallback to Wald.
+        // Resolve the method into the survey-crate enum.
         let method_enum = match self.spec.method.as_str() {
             "Wald" => survey::RegTermTestMethod::Wald,
             "WorkingWald" => survey::RegTermTestMethod::WorkingWald,
-            "LRT" => {
-                return Err(DagError::NodeError {
-                    node_type: "reg_term_test".into(),
-                    msg: "method='LRT' is not yet implemented in the Rust \
-                         backend: svyglm does not expose a log-likelihood, \
-                         so the node cannot compare a reduced-model fit to \
-                         the full one. Use method='Wald' (default) or \
-                         'WorkingWald' instead. As a workaround, run two \
-                         svyglm fits yourself and feed the deviance \
-                         difference to a hypothesize.lrt node."
-                        .into(),
-                });
-            }
+            "LRT" => survey::RegTermTestMethod::Wald, // placeholder; LRT handled below
             other => {
                 return Err(DagError::NodeError {
                     node_type: "reg_term_test".into(),
                     msg: format!(
-                        "unknown method='{other}'. Supported: 'Wald', \
-                         'WorkingWald' (LRT is not yet implemented)."
+                        "unknown method='{other}'. Supported: 'Wald', 'WorkingWald', 'LRT'."
                     ),
                 });
             }
         };
+        let is_lrt = self.spec.method == "LRT";
+
+        // Parse the family + link specification.
+        let family_spec = survey::FamilySpec::new(&self.spec.family, self.spec.link.as_deref())
+            .ok_or_else(|| DagError::NodeError {
+                node_type: "reg_term_test".into(),
+                msg: format!(
+                    "unsupported family='{}' link='{:?}'",
+                    self.spec.family, self.spec.link
+                ),
+            })?;
+
         let input = inputs.first().ok_or_else(|| DagError::NodeError {
             node_type: "reg_term_test".into(),
             msg: "no input data".into(),
@@ -840,16 +849,59 @@ impl DagNode for RegTermTestNode {
                     msg: format!("collect failed: {e}"),
                 })?;
 
+        let domain_mask = match &self.spec.survey_domain {
+            Some(spec) => crate::survey_common::survey_domain_mask(&batches, spec)?,
+            None => vec![true; batches.iter().map(|batch| batch.num_rows()).sum()],
+        };
+        if !domain_mask.iter().any(|&keep| keep) {
+            return Err(DagError::NodeError {
+                node_type: "reg_term_test".into(),
+                msg: "survey domain selected no rows".into(),
+            });
+        }
+
         let design = crate::survey_common::build_survey_design(&self.spec.design, &batches)?;
-        let y = crate::survey_common::extract_variables(&batches, &[self.spec.response.clone()])?;
+        let mut y =
+            crate::survey_common::extract_variables(&batches, &[self.spec.response.clone()])?;
         let x = crate::survey_common::extract_variables(&batches, &self.spec.predictors)?;
 
-        let fit = survey::svyglm_linear(&y[0], &x, &design, true, None).map_err(|e| {
-            DagError::NodeError {
+        // Validate the in-domain response for the chosen family.
+        let domain_y: Vec<f64> = y[0]
+            .iter()
+            .zip(&domain_mask)
+            .filter(|(_, keep)| **keep)
+            .map(|(value, _)| *value)
+            .collect();
+        if let Err(msg) = family_spec.validate_y(&domain_y) {
+            return Err(DagError::NodeError {
                 node_type: "reg_term_test".into(),
-                msg: e.to_string(),
+                msg,
+            });
+        }
+
+        // NaN the response outside the domain and — crucially for the LRT —
+        // wherever ANY full-model predictor is missing, so the full and
+        // reduced fits drop exactly the same rows (svyglm NaN-filters each
+        // fit independently; a dropped-but-NaN predictor would otherwise
+        // shrink the full fit's row set and corrupt the deviance contrast).
+        for (value, keep) in y[0].iter_mut().zip(domain_mask) {
+            if !keep {
+                *value = f64::NAN;
             }
-        })?;
+        }
+        for row in 0..y[0].len() {
+            if x.iter().any(|col| col[row].is_nan()) {
+                y[0][row] = f64::NAN;
+            }
+        }
+
+        let fit_full =
+            survey::svyglm(&y[0], &x, &design, true, None, &family_spec, None).map_err(|e| {
+                DagError::NodeError {
+                    node_type: "reg_term_test".into(),
+                    msg: e.to_string(),
+                }
+            })?;
 
         // Map test_terms to coefficient indices (after intercept).
         let mut test_indices: Vec<usize> = Vec::new();
@@ -866,12 +918,38 @@ impl DagNode for RegTermTestNode {
             test_indices.push(pos + 1); // +1 for intercept
         }
 
-        let test = survey::reg_term_test_with(&fit, &test_indices, method_enum).map_err(|e| {
-            DagError::NodeError {
-                node_type: "reg_term_test".into(),
-                msg: e.to_string(),
-            }
-        })?;
+        let test = if is_lrt {
+            // Reduced model: full predictor set minus the tested terms,
+            // order-preserving so full-model indices remain valid.
+            let reduced: Vec<Vec<f64>> = self
+                .spec
+                .predictors
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| !self.spec.test_terms.iter().any(|t| t == *p))
+                .map(|(i, _)| x[i].clone())
+                .collect();
+            let fit_reduced =
+                survey::svyglm(&y[0], &reduced, &design, true, None, &family_spec, None).map_err(
+                    |e| DagError::NodeError {
+                        node_type: "reg_term_test".into(),
+                        msg: format!("reduced-model refit failed: {e}"),
+                    },
+                )?;
+            survey::svy_lrt(&fit_full, &fit_reduced, &test_indices).map_err(|e| {
+                DagError::NodeError {
+                    node_type: "reg_term_test".into(),
+                    msg: e.to_string(),
+                }
+            })?
+        } else {
+            survey::reg_term_test_with(&fit_full, &test_indices, method_enum).map_err(|e| {
+                DagError::NodeError {
+                    node_type: "reg_term_test".into(),
+                    msg: e.to_string(),
+                }
+            })?
+        };
 
         // Output: statistic, ndf, ddf, p_value.
         use arrow_array::RecordBatch;
@@ -914,13 +992,16 @@ impl NodeFactory for RegTermTestFactory {
         "reg_term_test"
     }
     fn desc(&self) -> &'static str {
-        "Test regression terms in a survey model (Wald / WorkingWald)"
+        "Test regression terms in a survey model (Wald / WorkingWald / LRT)"
     }
     fn doc(&self) -> &'static str {
-        "Fits a survey GLM and tests whether specified terms can be dropped, \
-         using a Wald (design-based) or Working Wald (model-based) test. \
-         LRT is not yet implemented in the Rust backend because svyglm does \
-         not expose a log-likelihood. Wraps survey::reg_term_test."
+        "Fits a survey GLM and tests whether specified terms can be dropped: \
+         Wald (design-based, default), Working Wald (model-based), or LRT — \
+         the survey likelihood-ratio test that refits the reduced model and \
+         compares the weighted deviance difference against a Rao–Scott \
+         design-corrected distribution (the regTermTest(method=\"LRT\") / \
+         anova.svyglm(method=\"LRT\") equivalent). Wraps \
+         survey::reg_term_test_with and survey::svy_lrt."
     }
     fn spec_schema(&self) -> schemars::Schema {
         schema_for!(RegTermTestSpec)
@@ -934,31 +1015,30 @@ impl NodeFactory for RegTermTestFactory {
         _node_ctx: dag_core::registry::NodeCtx,
     ) -> dag_core::registry::error::Result<Box<dyn dag_core::dag::DagNode>> {
         let node_spec: RegTermTestSpec = serde_json::from_value(spec)?;
-        // Validate method at build time so the user sees a clear spec
-        // rejection rather than an execute-time crash.
+        // Validate method + family at build time so the user sees a clear
+        // spec rejection rather than an execute-time crash.
+        let reject = |reason: String| dag_core::registry::error::Error::SpecRejection {
+            kind: "reg_term_test".to_string(),
+            reason,
+            schema_pretty: serde_json::to_string_pretty(&self.spec_schema()).unwrap_or_default(),
+        };
         match node_spec.method.as_str() {
-            "Wald" | "WorkingWald" => {}
-            "LRT" => {
-                return Err(dag_core::registry::error::Error::SpecRejection {
-                    kind: "reg_term_test".to_string(),
-                    reason: "method='LRT' is not yet implemented in the Rust \
-                             backend (svyglm does not expose a \
-                             log-likelihood, so reduced-model fits cannot be \
-                             compared). Use method='Wald' (default) or \
-                             'WorkingWald'."
-                        .to_string(),
-                    schema_pretty: serde_json::to_string_pretty(&self.spec_schema())
-                        .unwrap_or_default(),
-                });
-            }
+            "Wald" | "WorkingWald" | "LRT" => {}
             other => {
-                return Err(dag_core::registry::error::Error::SpecRejection {
-                    kind: "reg_term_test".to_string(),
-                    reason: format!("unknown method='{other}'. Supported: 'Wald', 'WorkingWald'"),
-                    schema_pretty: serde_json::to_string_pretty(&self.spec_schema())
-                        .unwrap_or_default(),
-                });
+                return Err(reject(format!(
+                    "unknown method='{other}'. Supported: 'Wald' (default), \
+                     'WorkingWald', 'LRT'."
+                )));
             }
+        }
+        if survey::FamilySpec::new(&node_spec.family, node_spec.link.as_deref()).is_none() {
+            return Err(reject(format!(
+                "unsupported family='{}' link='{:?}'",
+                node_spec.family, node_spec.link
+            )));
+        }
+        if node_spec.test_terms.is_empty() {
+            return Err(reject("test_terms must name at least one predictor".into()));
         }
         Ok(Box::new(RegTermTestNode::new(node_spec)))
     }
@@ -995,31 +1075,28 @@ mod tests {
     }
 
     #[test]
-    fn reg_term_test_factory_rejects_lrt() {
-        // Build-time spec rejection: LRT is not yet implemented, so the
-        // factory must surface a clear SpecRejection rather than silently
-        // building a node that will fail at execute time.
-        let bad = serde_json::json!({
+    fn reg_term_test_factory_method_and_family_validation() {
+        // LRT is now accepted at build time (survey::svy_lrt implements it).
+        let lrt = serde_json::json!({
             "design": {"ids": ["psu"]},
             "response": "y",
             "predictors": ["x1", "x2"],
             "test_terms": ["x2"],
             "method": "LRT",
         });
-        let err = RegTermTestFactory
-            .build(
-                bad,
-                dag_core::registry::NodeCtx::new(
-                    datafusion::prelude::SessionContext::new().runtime_env(),
-                    None,
-                ),
-            )
-            .err()
-            .expect("LRT must be rejected at build time");
-        let msg = format!("{err}");
-        assert!(msg.contains("LRT"), "error should mention LRT: {msg}");
+        assert!(
+            RegTermTestFactory
+                .build(
+                    lrt,
+                    dag_core::registry::NodeCtx::new(
+                        datafusion::prelude::SessionContext::new().runtime_env(),
+                        None,
+                    ),
+                )
+                .is_ok()
+        );
 
-        // Unknown methods are also rejected.
+        // Unknown methods are still rejected.
         let unknown = serde_json::json!({
             "design": {"ids": ["psu"]},
             "response": "y",
@@ -1031,6 +1108,26 @@ mod tests {
             RegTermTestFactory
                 .build(
                     unknown,
+                    dag_core::registry::NodeCtx::new(
+                        datafusion::prelude::SessionContext::new().runtime_env(),
+                        None,
+                    ),
+                )
+                .is_err()
+        );
+
+        // Unsupported families are rejected at build time.
+        let bad_family = serde_json::json!({
+            "design": {"ids": ["psu"]},
+            "response": "y",
+            "predictors": ["x1"],
+            "test_terms": ["x1"],
+            "family": "weibull",
+        });
+        assert!(
+            RegTermTestFactory
+                .build(
+                    bad_family,
                     dag_core::registry::NodeCtx::new(
                         datafusion::prelude::SessionContext::new().runtime_env(),
                         None,
@@ -1058,6 +1155,127 @@ mod tests {
                 )
                 .is_ok()
         );
+    }
+
+    /// Stratified-clustered synthetic table with a strong x1 effect.
+    fn lrt_fixture() -> RecordBatch {
+        let n = 120;
+        let strata: Vec<i64> = (0..n as i64).map(|i| i / 20).collect(); // 6 strata
+        let psu: Vec<i64> = (0..n as i64).map(|i| i / 5).collect(); // 24 PSUs
+        // Golden-ratio low-discrepancy sequences keep x2 and the noise
+        // decorrelated from x1 (naive i-modular patterns cross-correlate).
+        let x1: Vec<f64> = (0..n).map(|i| ((i * 7) % 13) as f64 / 13.0).collect();
+        let x2: Vec<f64> = (0..n)
+            .map(|i| (i as f64 * 0.6180339887498949).fract())
+            .collect();
+        let y: Vec<f64> = (0..n)
+            .map(|i| {
+                let noise = ((i as f64 * 0.4142135623730951).fract() - 0.5) * 0.4;
+                1.0 + 0.8 * x1[i] + noise
+            })
+            .collect();
+        let wt: Vec<f64> = (0..n).map(|i| 1000.0 + 100.0 * (i % 5) as f64).collect();
+        let to_arr = |v: Vec<f64>| Arc::new(Float64Array::from(v)) as Arc<dyn arrow_array::Array>;
+        let to_int =
+            |v: Vec<i64>| Arc::new(arrow_array::Int64Array::from(v)) as Arc<dyn arrow_array::Array>;
+        RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("strata", DataType::Int64, false),
+                Field::new("psu", DataType::Int64, false),
+                Field::new("x1", DataType::Float64, false),
+                Field::new("x2", DataType::Float64, false),
+                Field::new("y", DataType::Float64, false),
+                Field::new("wt", DataType::Float64, false),
+            ])),
+            vec![
+                to_int(strata),
+                to_int(psu),
+                to_arr(x1),
+                to_arr(x2),
+                to_arr(y),
+                to_arr(wt),
+            ],
+        )
+        .unwrap()
+    }
+
+    async fn run_reg_term_test(spec: serde_json::Value) -> (f64, f64, f64, f64) {
+        let mut node = RegTermTestFactory
+            .build(
+                spec,
+                dag_core::registry::NodeCtx::new(
+                    datafusion::prelude::SessionContext::new().runtime_env(),
+                    None,
+                ),
+            )
+            .unwrap();
+        let input = dag_core::node::NodeInput::new_dataframe(
+            0,
+            datafusion::prelude::SessionContext::new()
+                .read_batch(lrt_fixture())
+                .unwrap(),
+        );
+        let outs = node
+            .execute(
+                &dag_core::registry::NodeCtx::new(
+                    datafusion::prelude::SessionContext::new().runtime_env(),
+                    None,
+                ),
+                &[input],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap();
+        let batches = outs.dataframe(0).unwrap().clone().collect().await.unwrap();
+        let row = &batches[0];
+        let f = |name: &str| {
+            let col = row.column(row.schema().index_of(name).unwrap());
+            col.as_any()
+                .downcast_ref::<Float64Array>()
+                .unwrap()
+                .value(0)
+        };
+        (f("statistic"), f("ndf"), f("ddf"), f("p_value"))
+    }
+
+    #[tokio::test]
+    async fn reg_term_test_lrt_end_to_end() {
+        // Strong x1 effect: the LRT must reject H0 (drop x1) decisively and
+        // report ddf = degf + 1 − p = (24 − 6) + 1 − 3 = 16.
+        let spec = serde_json::json!({
+            "design": {"ids": ["psu"], "strata": ["strata"], "weights": "wt"},
+            "response": "y",
+            "predictors": ["x1", "x2"],
+            "test_terms": ["x1"],
+            "method": "LRT",
+        });
+        let (stat, ndf, ddf, p) = run_reg_term_test(spec).await;
+        assert_eq!(ndf as usize, 1);
+        assert_eq!(ddf as usize, 16, "ddf = degf + 1 - p");
+        assert!(stat > 4.0, "chisq {stat}");
+        assert!(p < 0.05, "p {p}");
+
+        // A noise predictor must NOT be rejected by the LRT.
+        let spec_null = serde_json::json!({
+            "design": {"ids": ["psu"], "strata": ["strata"], "weights": "wt"},
+            "response": "y",
+            "predictors": ["x1", "x2"],
+            "test_terms": ["x2"],
+            "method": "LRT",
+        });
+        let (_, _, _, p_null) = run_reg_term_test(spec_null).await;
+        assert!(p_null > 0.05, "p_null {p_null}");
+
+        // Gaussian Wald unchanged by the upgrade (still runs, still small p).
+        let spec_wald = serde_json::json!({
+            "design": {"ids": ["psu"], "strata": ["strata"], "weights": "wt"},
+            "response": "y",
+            "predictors": ["x1", "x2"],
+            "test_terms": ["x1"],
+            "method": "Wald",
+        });
+        let (_, _, _, p_wald) = run_reg_term_test(spec_wald).await;
+        assert!(p_wald < 0.01, "p_wald {p_wald}");
     }
 
     // ── End-to-end svyby test ────────────────────────────────────────────────
