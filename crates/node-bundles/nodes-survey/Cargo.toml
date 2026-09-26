@@ -9,6 +9,7 @@ description = "Survey analysis DAG node bundle (R survey package port)."
 [dependencies]
 dag-core = { path = "../../dag-core" }
 survey = { path = "../../../stat_crates/survey" }
+epi = { path = "../../../stat_crates/epi" }
 arrow-array.workspace = true
 arrow-schema.workspace = true
 async-trait.workspace = true

@@ -27,7 +27,11 @@ fn default_knot_percentiles(n_knots: usize) -> Option<&'static [f64]> {
     }
 }
 
-fn knot_positions_weighted(x: &[f64], weights: Option<&[f64]>, n_knots: usize) -> Result<Vec<f64>> {
+pub fn knot_positions_weighted(
+    x: &[f64],
+    weights: Option<&[f64]>,
+    n_knots: usize,
+) -> Result<Vec<f64>> {
     let percentiles = default_knot_percentiles(n_knots)
         .ok_or_else(|| EpiError::Numerical(format!("unsupported knot count: {n_knots}")))?;
 

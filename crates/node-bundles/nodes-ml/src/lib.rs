@@ -71,6 +71,7 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(dimred_nodes::TsneFactory));
         registry.register(Box::new(dimred_nodes::NmfFactory));
         registry.register(Box::new(dimred_nodes::TruncatedSvdFactory));
+        registry.register(Box::new(dimred_nodes::FactorRotationFactory));
 
         // ── Feature selection (3) ───────────────────────────────────────────
         registry.register(Box::new(feat_select_nodes::VarianceThresholdFactory));

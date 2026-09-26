@@ -44,6 +44,7 @@ pub mod metrics;
 pub mod multinomial;
 pub mod preprocess;
 pub mod regress;
+pub mod rotation;
 pub mod split;
 pub mod svm_ensemble;
 pub mod timeseries;

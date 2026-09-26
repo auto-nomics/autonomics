@@ -16,6 +16,15 @@
 //!
 //! See memory `survey-crate-scope` for the full porting plan.
 //!
+//! ## Zero-weight rows
+//!
+//! Designs accept zero-weight rows (stored as `prob = +inf`, R's sentinel
+//! for excluded rows — e.g. NHANES subsample weights). They contribute
+//! nothing to point estimates and are excluded from degrees of freedom,
+//! but keep their stratum/PSU slot in the variance, matching R. When zeros
+//! mean "not sampled", filter `WT > 0` before design to drop them from the
+//! variance as well.
+//!
 //! ## Golden validation
 //!
 //! All computations are validated against R `survey` v4.5 output using the
@@ -30,6 +39,7 @@ pub mod error;
 pub mod family;
 pub mod model;
 pub mod nonlinear;
+pub mod pfsum;
 pub mod survival;
 pub mod test;
 pub mod variance;
@@ -43,7 +53,7 @@ pub use design::{LonelyPsu, SurveyDesign, SurveyDesignBuilder};
 pub use error::{Result, SurveyError};
 pub use family::{Family, FamilySpec, Link};
 pub use model::{
-    RegTermTest, RegTermTestMethod, SvyGlmFit, reg_term_test, reg_term_test_with, svyglm,
+    RegTermTest, RegTermTestMethod, SvyGlmFit, reg_term_test, reg_term_test_with, svy_lrt, svyglm,
     svyglm_linear,
 };
 pub use nonlinear::{
