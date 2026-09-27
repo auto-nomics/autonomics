@@ -164,7 +164,7 @@ mod tests {
     }
 
     #[test]
-    fn visualization_container_factory_is_registered() {
+    fn visualization_wrapper_is_unregistered() {
         let runtime_env = datafusion::prelude::SessionContext::new().runtime_env();
         let container_execution =
             Arc::new(container_runtime::ContainerExecutionInfra::from_config(
@@ -182,42 +182,16 @@ mod tests {
             None,
         );
 
-        let ports = registry
-            .get_node_ports("visualization_container")
-            .expect("visualization_container is registered");
+        // The wrapper moved to the manifest plugin: neither the wrapper
+        // kind nor the plugin kind appears in a plugin-free default
+        // registry build.
+        assert!(registry.get_node_ports("visualization_container").is_err());
         assert!(
             registry.get_node_ports("visualization").is_err(),
             "the legacy host-R visualization node must not be registered"
         );
-        assert_eq!(ports.input_ports().len(), 2);
-        assert_eq!(ports.output_ports().len(), 1);
     }
 
-    #[test]
-    fn timesfm_container_factory_is_registered() {
-        let runtime_env = datafusion::prelude::SessionContext::new().runtime_env();
-        let container_execution =
-            Arc::new(container_runtime::ContainerExecutionInfra::from_config(
-                container_runtime::PodmanConfig {
-                    program: "podman".into(),
-                    workspace_root: "/tmp/autonomics-timesfm-registry-workspace".into(),
-                    panel_cache_root: "/tmp/autonomics-timesfm-registry-panels".into(),
-                },
-            ));
-        let registry = build_default_registry_with_container_execution(
-            runtime_env,
-            None,
-            Arc::new(BundleRegistry::new()),
-            container_execution,
-            None,
-        );
-
-        let ports = registry
-            .get_node_ports("timesfm_forecast_container")
-            .expect("timesfm_forecast_container is registered");
-        assert_eq!(ports.input_ports().len(), 1);
-        assert_eq!(ports.output_ports().len(), 2);
-    }
 
     #[test]
     fn string_source_factories_are_registered() {

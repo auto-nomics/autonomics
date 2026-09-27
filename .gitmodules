@@ -1,3 +1,0 @@
-[submodule "mtag"]
-	path = containers/mtag/mtag
-	url = https://github.com/JonJala/mtag.git

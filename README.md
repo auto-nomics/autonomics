@@ -304,7 +304,7 @@ bun run build
 - [TUI HTTP API](docs/tui-http-api_zh.md) (Chinese)
 - [Writing-system design](docs/writing-system-design.md)
 - [Dendrite knowledge-management workspace](dendrite/README.md)
-- [TimesFM service](containers/timesfm/README.md)
+- [TimesFM service](../../node-plugins/timesfm/README.md) (timesfm plugin checkout)
 - [Local infrastructure](infra/README.md)
 
 ## Scope and Boundaries

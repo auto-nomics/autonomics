@@ -306,7 +306,7 @@ bun run build
 - [TUI HTTP API](docs/tui-http-api_zh.md)
 - [写作系统设计](docs/writing-system-design.md)
 - [Dendrite 知识管理工作空间](dendrite/README.md)
-- [TimesFM 服务](containers/timesfm/README.md)
+- [TimesFM 服务](../../node-plugins/timesfm/README.md)（timesfm 插件目录）
 - [本地基础设施](infra/README.md)
 
 ## 范围与边界

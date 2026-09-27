@@ -1,60 +1,19 @@
-# autonomics music-deconvolution image
+# MuSiC deconvolution fixture (residue)
 
-Pinned MuSiC 1.0.0 runtime for reference-based bulk RNA-seq deconvolution.
-The image is layered on the published `autonomics/bulk-rnaseq:1.0.0` image and
-adds:
+The MuSiC image build tree (Dockerfile, `music_runner.R`, `.dockerignore`,
+`test_smoke.sh`, and the original README) moved to the music manifest
+plugin at `/mnt/projects/node-plugins/music/`, which is the single source
+of truth for the tool.
 
-- `SingleCellExperiment` 1.32.0
-- `TOAST` 1.24.0
-- `MCMCpack` 1.7-1
-- `nnls` 1.6
-- `MuSiC` 1.0.0 at commit `f21fe67f5670d5e9fca0ad7550abaae3423eb59c`
-
-The MuSiC source archive is downloaded from the GitHub commit API and verified
-with SHA-256. No reference dataset is embedded.
-
-## Node contract
-
-`music_deconvolution_container` is a compute node, not a source node.
-
-Required File inputs:
-
-1. gene-by-bulk-sample expression/count matrix
-2. gene-by-cell single-cell count matrix
-3. cell metadata beginning with `cell_id`
-
-Optional File inputs:
-
-4. `cell_type` / `cell_size` table
-5. marker gene table
-
-Outputs:
-
-- `cell_type_proportions.tsv`
-- `nnls_proportions.tsv`
-- `gene_weights.tsv`
-- `diagnostics.tsv`
-- `run_report.json`
-
-## Fixture
-
-`fixtures/` contains a deterministic 120-gene reference with four donors, two
-cell types, ten cells per donor/type, and six pseudo-bulk samples with known
-neuron fractions from 0.70 to 0.20. MuSiC estimates approximately
-0.711, 0.613, 0.514, 0.413, 0.312, and 0.209 respectively; every proportion
-row sums to one and R-squared is approximately 0.9999.
+Only the smoke fixture stays here — `fixtures/` and its generator —
+because the still-live Rust test
+`crates/node-bundles/nodes-io/tests/music_deconvolution_container.rs`
+reads it from this path. That test is deleted together with the
+`music_deconvolution_container` wrapper; when it goes, this directory can
+move under the plugin (see that plugin's README) or be removed.
 
 Regenerate the fixture with:
 
 ```bash
 python3 containers/music-deconvolution/generate_fixtures.py
 ```
-
-## Build and publish
-
-```bash
-./containers/music-deconvolution/test_smoke.sh
-```
-
-Current immutable manifest digest:
-`sha256:886b83135179a48fffe2009238eb7d45ec89d32713cc1a2370078583e3bbfeaf`.

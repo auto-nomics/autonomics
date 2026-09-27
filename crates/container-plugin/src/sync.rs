@@ -192,7 +192,7 @@ fn sync_git(name: &str, url: &str, rev: &str, target: &Path) -> Result<EntryOutc
     }
 
     if !target.join(".git").exists() {
-        run_git(
+        run_git_retry(
             name,
             target.parent().unwrap(),
             &["clone", "--no-checkout", url, &target.to_string_lossy()],
@@ -221,7 +221,7 @@ fn checkout_pinned(name: &str, target: &Path, rev: &str) -> Result<()> {
     let have_it = run_git_capture(name, target, &["cat-file", "-e", rev])
         .is_ok();
     if !have_it {
-        run_git(name, target, &["fetch", "--all", "--tags"])?;
+        run_git_retry(name, target, &["fetch", "--all", "--tags"])?;
     }
     run_git(name, target, &["checkout", "--detach", rev])?;
     run_git(name, target, &["reset", "--hard", rev])?;
@@ -271,6 +271,22 @@ fn sync_symlink(name: &str, source: &Path, target: &Path) -> Result<EntryOutcome
         ))
     })?;
     Ok(EntryOutcome::Installed)
+}
+
+/// Run a git command, retrying once on transient network failures. SSH
+/// connections to git hosts are routinely dropped mid-transfer by NATs and
+/// proxies; a single retry converts those into successes without masking
+/// real errors (auth, missing repo), which fail identically twice.
+fn run_git_retry(name: &str, dir: &Path, args: &[&str]) -> Result<()> {
+    run_git(name, dir, args).or_else(|first| match args.first() {
+        Some(&"clone") | Some(&"fetch") | Some(&"ls-remote") => {
+            run_git(name, dir, args).map_err(|second| {
+                let _ = first;
+                second
+            })
+        }
+        _ => Err(first),
+    })
 }
 
 fn run_git(name: &str, dir: &Path, args: &[&str]) -> Result<()> {

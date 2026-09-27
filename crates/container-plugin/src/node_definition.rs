@@ -312,6 +312,18 @@ pub fn validate(node: &NodeDefinition) -> Result<(), String> {
             .map_err(|error| format!("node `{}` output `{}`: {error}", node.kind, output.path))?;
     }
     for (name, spec) in &node.params {
+        // min_len/max_len measure arrays only (check_bounds reads them via
+        // as_array); on any other type they would reject every value while
+        // the compiled schema still advertises minLength/maxLength. Reject
+        // that combination at load time instead.
+        if spec.r#type != ParamType::StringArray
+            && (spec.min_len.is_some() || spec.max_len.is_some())
+        {
+            return Err(format!(
+                "node `{}` param `{name}`: min_len/max_len are only valid on string_array params",
+                node.kind
+            ));
+        }
         for target in &spec.requires {
             let target_spec = node.params.get(target).ok_or_else(|| {
                 format!(

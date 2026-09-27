@@ -31,6 +31,10 @@ Provenance:
 `pasilla_baseline.json` records the lightweight result baseline from two
 repeated runs with the pinned local DESeq2 image: output SHA-256 values,
 independent-filtering counts, direction counts, size factors, and the estimates
-for two genes. `containers/deseq2/test_deseq2_fixture.sh` checks the input
-checksums and structural contract; `containers/deseq2/test_deseq2.sh` checks
+for two genes. The fixture and image test scripts moved with the DESeq2
+image build tree to the deseq2 manifest plugin
+(`/mnt/projects/node-plugins/deseq2/test_deseq2_fixture.sh` and
+`test_deseq2.sh` by default; the plugin directory is the single source of
+truth for the tool). `test_deseq2_fixture.sh` checks the input
+checksums and structural contract; `test_deseq2.sh` checks
 the full numerical baseline and independently recomputes normalization.

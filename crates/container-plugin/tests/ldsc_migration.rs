@@ -46,7 +46,7 @@ fn ldsc_h2_plugin_compiles_to_the_legacy_wrapper_contract() {
         return;
     };
     let manifest = load_manifest(&root);
-    let node = node_by_kind(&manifest, "ldsc_h2_container");
+    let node = node_by_kind(&manifest, "ldsc_h2");
 
     let compiled = compile_container_spec(
         node,
@@ -70,7 +70,7 @@ fn ldsc_h2_plugin_compiles_to_the_legacy_wrapper_contract() {
         container_runtime::PullPolicy::Missing
     ));
     assert_eq!(compiled.timeout_secs, 900);
-    assert_eq!(compiled.artifact_prefix, "/artifacts/ldsc_h2_container");
+    assert_eq!(compiled.artifact_prefix, "/artifacts/ldsc_h2");
     assert_eq!(compiled.workdir, None);
     assert!(compiled.panels.is_empty());
     let panel_ids: Vec<&str> = compiled
@@ -98,7 +98,7 @@ fn ldsc_h2_plugin_renders_submitted_values_into_env() {
         return;
     };
     let manifest = load_manifest(&root);
-    let node = node_by_kind(&manifest, "ldsc_h2_container");
+    let node = node_by_kind(&manifest, "ldsc_h2");
 
     let compiled = compile_container_spec(
         node,
@@ -120,7 +120,7 @@ fn ldsc_h2_plugin_schema_marks_optionals_not_required() {
         return;
     };
     let manifest = load_manifest(&root);
-    let node = node_by_kind(&manifest, "ldsc_h2_container");
+    let node = node_by_kind(&manifest, "ldsc_h2");
 
     let schema =
         serde_json::to_value(container_plugin::compile::compile_schema(&node.params)).unwrap();
@@ -137,7 +137,7 @@ fn ldsc_munge_plugin_compiles_to_the_legacy_wrapper_contract() {
         return;
     };
     let manifest = load_manifest(&root);
-    let node = node_by_kind(&manifest, "ldsc_munge_container");
+    let node = node_by_kind(&manifest, "ldsc_munge");
 
     let compiled = compile_container_spec(
         node,
@@ -189,7 +189,7 @@ fn ldsc_rg_plugin_compiles_to_the_legacy_wrapper_contract() {
         return;
     };
     let manifest = load_manifest(&root);
-    let node = node_by_kind(&manifest, "ldsc_rg_container");
+    let node = node_by_kind(&manifest, "ldsc_rg");
 
     let compiled = compile_container_spec(
         node,

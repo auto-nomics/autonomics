@@ -1,7 +1,7 @@
 //! MAGMA gene-based GWAS analysis nodes (summary-stats pipeline).
 //!
 //! Three nodes covering the retained summary-stats pipeline. Official MAGMA
-//! annotation runs through `nodes_io::magma_annotate_container`.
+//! annotation runs through `the `magma_annotate` manifest plugin`.
 //!
 //! | Node | Kind | Input | Output |
 //! |------|------|-------|--------|

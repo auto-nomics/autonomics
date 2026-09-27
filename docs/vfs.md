@@ -226,7 +226,7 @@ coordinate-addressed signed-LD package. The MiXeR and SuSiE-RSS OCI images
 carry their official engines and pinned runtimes; DAG specs never reference
 raw panel paths.
 
-`susie_rss_container` reuses the cataloged `wjixiang/catalog-mixer-g1000-eur` package for signed
+`susie_rss` reuses the cataloged `wjixiang/catalog-mixer-g1000-eur` package for signed
 Pearson-r LD lookup. The wrapper owns the panel binding and does not expose raw
 engine or panel paths in DAG specs.
 

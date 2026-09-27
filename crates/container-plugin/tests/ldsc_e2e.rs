@@ -84,7 +84,7 @@ async fn ldsc_plugin_installs_from_git_and_executes() {
 [[plugin]]
 name = "ldsc"
 git = "git@github.com:auto-nomics/ldsc-plugin.git"
-rev = "15264fa24a273e2655ba2f887949ff5a9bdeee0d"
+rev = "6f7118d61dd60ca7ce95d7d524ccec3880d96026"
 "#,
     )
     .unwrap();
@@ -161,7 +161,7 @@ rev = "15264fa24a273e2655ba2f887949ff5a9bdeee0d"
     std::fs::write(&input, "SNP\tA1\tA2\tN\tZ\nrs1\tA\tG\t1000\t2.0\n").unwrap();
     let mut node = registry
         .build_node(
-            "ldsc_h2_container",
+            "ldsc_h2",
             serde_json::json!({"n_blocks": 150, "intercept_h2": 1.1}),
         )
         .expect("plugin node builds");

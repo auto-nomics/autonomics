@@ -294,7 +294,7 @@ mount = "/panels/w_ld"
 bundle = "wjixiang/catalog-ldsc-w-ld-1000g-eur-hm3-no-mhc"
 
 [[nodes]]
-kind = "ldsc_h2_container"
+kind = "ldsc_h2"
 desc = "Runs official LDSC 3.0.1 h2 on one GWAS sumstats file."
 doc = "Estimates SNP heritability with the official LDSC continuation. The input is one tab-separated sumstats File with SNP, A1, A2, N, and Z columns; plain .tsv and gzip .sumstats.gz are both accepted."
 timeout_secs = 3600
@@ -360,7 +360,7 @@ ldsc --h2 "$AUTONOMICS_INPUT0" \
             registry
                 .list_nodes()
                 .iter()
-                .any(|node| node.kind == "ldsc_h2_container"),
+                .any(|node| node.kind == "ldsc_h2"),
             "the manifest kind must appear in the registry"
         );
     }
@@ -372,7 +372,7 @@ ldsc --h2 "$AUTONOMICS_INPUT0" \
             requests: Mutex::new(Vec::new()),
         });
         let registry = registry_with_plugin(runtime);
-        let schema = serde_json::to_value(registry.get_node_spec("ldsc_h2_container").unwrap())
+        let schema = serde_json::to_value(registry.get_node_spec("ldsc_h2").unwrap())
             .unwrap();
         assert_eq!(schema["type"], "object");
         assert_eq!(schema["additionalProperties"], false);
@@ -433,7 +433,7 @@ ldsc --h2 "$AUTONOMICS_INPUT0" \
 
         let mut node = registry
             .build_node(
-                "ldsc_h2_container",
+                "ldsc_h2",
                 serde_json::json!({"intercept": 2.0}),
             )
             .expect("manifest node builds");

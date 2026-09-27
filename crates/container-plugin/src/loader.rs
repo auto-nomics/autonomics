@@ -244,7 +244,7 @@ plugin_name = "ldsc"
 reference = "ghcr.io/auto-nomics/autonomics/ldsc@sha256:2dad70a9583f93db1dcc9a560b7d5b309af4a5151dfaf615f80d059a0925d78c"
 
 [[nodes]]
-kind = "ldsc_h2_container"
+kind = "ldsc_h2"
 desc = "d"
 doc = "doc"
 timeout_secs = 3600
@@ -278,7 +278,7 @@ script_file = "scripts/h2.sh"
         assert_eq!(plugins[0].name(), "ldsc");
         assert_eq!(
             plugins[0].registered_kinds(),
-            vec!["ldsc_h2_container"],
+            vec!["ldsc_h2"],
             "script_file contents are inlined before validation, so the \
              template-closure check runs over the real script"
         );
@@ -352,7 +352,7 @@ script_file = "scripts/h2.sh"
         }
 
         let error = load(&plugins_root, runtime, cache).unwrap_err();
-        assert!(error.to_string().contains("ldsc_h2_container"), "{error}");
+        assert!(error.to_string().contains("ldsc_h2"), "{error}");
         assert!(error.to_string().contains("ldsc-fork"), "{error}");
     }
 
