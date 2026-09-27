@@ -64,7 +64,10 @@ pub struct PluginManifest {
     pub schema_version: u32,
     pub plugin_name: String,
     pub image: ImageMetadata,
+    /// Panel-free families (mrpresso, mvmr) legitimately omit this.
+    #[serde(default)]
     pub panels: Vec<PanelBinding>,
+    #[serde(default)]
     pub nodes: Vec<NodeDefinition>,
 }
 

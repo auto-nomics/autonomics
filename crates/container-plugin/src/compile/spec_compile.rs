@@ -37,10 +37,20 @@ pub fn compile_container_spec(
             .get(key)
             .cloned()
             .or_else(|| field.default.clone())
+            .or_else(|| {
+                field.optional.then(|| serde_json::Value::Null)
+            })
             .ok_or_else(|| Error::MissingParam {
                 kind: node.kind.clone(),
                 name: key.clone(),
             })?;
+
+        if resolved_field.is_null() {
+            // Optional-and-absent: no type or bounds apply. Renders as an
+            // empty string on every surface.
+            resolved.insert(key.clone(), resolved_field);
+            continue;
+        }
 
         super::utils::check_bounds(&node.kind, key, field, &resolved_field)?;
         super::utils::check_type(&node.kind, key, field, &resolved_field)?;

@@ -40,7 +40,7 @@ pub fn compile_schema(params: &BTreeMap<String, ParamSpec>) -> Schema {
 
     for (name, spec) in params {
         properties.insert(name.clone(), param_value(spec));
-        if spec.default.is_none() {
+        if spec.default.is_none() && !spec.optional {
             required.push(name.clone());
         }
     }
@@ -186,6 +186,7 @@ mod tests {
                 ParamSpec {
                     r#type: ParamType::Bool,
                     default: Some(json!(false)),
+                    optional: false,
                     doc: None,
                     min: None,
                     max: None,
@@ -201,6 +202,7 @@ mod tests {
                 ParamSpec {
                     r#type: ParamType::String,
                     default: None,
+                    optional: false,
                     doc: None,
                     min: None,
                     max: None,
@@ -227,6 +229,7 @@ mod tests {
             ParamSpec {
                 r#type: ParamType::Bool,
                 default: Some(json!(false)),
+                optional: false,
                 doc: Some("Continue on mean-chi-square rejection".into()),
                 min: None,
                 max: None,
@@ -250,6 +253,7 @@ mod tests {
             ParamSpec {
                 r#type: ParamType::Number,
                 default: Some(json!(1.0)),
+                optional: false,
                 doc: None,
                 min: Some(0.0),
                 max: Some(24.0),
@@ -275,6 +279,7 @@ mod tests {
             ParamSpec {
                 r#type: ParamType::Int,
                 default: None,
+                optional: false,
                 doc: None,
                 min: Some(1000.0),
                 max: None,
@@ -297,6 +302,7 @@ mod tests {
             ParamSpec {
                 r#type: ParamType::StringArray,
                 default: None,
+                optional: false,
                 doc: None,
                 min: None,
                 max: None,
@@ -321,6 +327,7 @@ mod tests {
             ParamSpec {
                 r#type: ParamType::Bool,
                 default: Some(json!(false)),
+                optional: false,
                 doc: None,
                 min: None,
                 max: None,
@@ -346,6 +353,7 @@ mod tests {
                 ParamSpec {
                     r#type: ParamType::Number,
                     default: Some(json!(1.0)),
+                    optional: false,
                     doc: Some("Optimizer time limit".into()),
                     min: None,
                     max: None,
@@ -361,6 +369,7 @@ mod tests {
                 ParamSpec {
                     r#type: ParamType::Bool,
                     default: Some(json!(false)),
+                    optional: false,
                     doc: None,
                     min: None,
                     max: None,
@@ -376,6 +385,7 @@ mod tests {
                 ParamSpec {
                     r#type: ParamType::Bool,
                     default: Some(json!(false)),
+                    optional: false,
                     doc: None,
                     min: None,
                     max: None,

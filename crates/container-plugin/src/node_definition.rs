@@ -95,9 +95,16 @@ pub struct OutputSpec {
 #[serde(deny_unknown_fields)]
 pub struct ParamSpec {
     pub r#type: ParamType,
-    /// JSON-typed default. `None` marks a required parameter.
+    /// JSON-typed default. `None` plus `optional = false` marks a required
+    /// parameter.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<serde_json::Value>,
+    /// May be absent without a default: resolves to null, which renders
+    /// as an empty string on every surface. The canonical v0 pattern for
+    /// optional tool flags: pass the param through `env`, let the script
+    /// test `[ -n "$VAR" ]` and build its own flag list.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub optional: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub doc: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -156,9 +163,17 @@ pub struct CommandSpec {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub argv: Vec<String>,
     /// Inline script; inserted right after the interpreter, matching the
-    /// `container_command` contract.
+    /// `container_command` contract. Mutually exclusive with
+    /// [`CommandSpec::script_file`]; the loader inlines `script_file`
+    /// contents into this field before any validation runs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub script: Option<String>,
+    /// Path to a script file inside the plugin directory (e.g.
+    /// `scripts/h2.sh`), resolved by the loader relative to the plugin
+    /// root. Authors prefer this over inline scripts for anything longer
+    /// than a few lines: editors highlight it and diffs stay clean.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub script_file: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
     /// Inline text files materialized under `/work/.autonomics/files`.
@@ -168,7 +183,7 @@ pub struct CommandSpec {
 
 /// Resource and security profile. Reuses the runtime's own enums where
 /// they exist; unknown TOML values fail at parse time.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Resources {
     /// `None` keeps the runtime default (isolated, no network devices).
@@ -196,6 +211,26 @@ pub struct Resources {
 
 fn default_true() -> bool {
     true
+}
+
+impl Default for Resources {
+    /// A missing `[nodes.resources]` table must mean the hardened
+    /// defaults, not the zero values: `#[serde(default)]` on the field
+    /// goes through here, and `Default::derive` would flip
+    /// `read_only_rootfs` to `false`.
+    fn default() -> Self {
+        Self {
+            network: None,
+            read_only_rootfs: true,
+            pull_policy: None,
+            cpus: None,
+            memory: None,
+            pids_limit: None,
+            shm_size: None,
+            gpus: None,
+            user: None,
+        }
+    }
 }
 
 /// Compile the declarative layout into the runtime port contract. The only

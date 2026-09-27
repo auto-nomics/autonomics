@@ -192,6 +192,25 @@ impl NodePlugin for Plugin {
     }
 }
 
+impl Plugin {
+    /// The node kinds this family contributes; used by the loader for
+    /// cross-family duplicate detection.
+    pub fn registered_kinds(&self) -> Vec<&'static str> {
+        self.factories.iter().map(|factory| factory.kind()).collect()
+    }
+}
+
+impl std::fmt::Debug for Plugin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Factories carry runtime handles and full definitions; summarize
+        // instead of dumping them.
+        f.debug_struct("Plugin")
+            .field("name", &self.name)
+            .field("kinds", &self.registered_kinds())
+            .finish()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

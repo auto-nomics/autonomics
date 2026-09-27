@@ -37,6 +37,9 @@ fn resolve_token(token: &str, resolved: &BTreeMap<String, Value>) -> Result<Stri
 /// argv, and env values pass through `execve`'s raw byte buffer).
 fn serialise_value(value: &Value) -> Option<String> {
     Some(match value {
+        // Optional-and-absent params resolve to null and render as an
+        // empty string: env consumers see "" and `[ -n "$VAR" ]` is false.
+        Value::Null => String::new(),
         Value::Bool(b) => b.to_string(),
         Value::Number(n) => n.to_string(),
         Value::String(s) => s.clone(),
@@ -180,11 +183,27 @@ pub fn render_script(
             continue;
         }
 
-        // Bare token: collect until the next whitespace, quote, or shell
-        // comment marker. Only this region can host `{{param}}`.
-        if bytes[i].is_ascii_whitespace() || bytes[i] == b'#' {
+        // Whitespace passes through one byte at a time.
+        if bytes[i].is_ascii_whitespace() {
             out.push(bytes[i] as char);
             i += 1;
+            continue;
+        }
+
+        // A `#` at a token boundary starts a comment: consume through the
+        // end of the line verbatim. Shell semantics — quotes and template
+        // markers inside comments are inert, which matters because prose
+        // comments routinely contain apostrophes.
+        if bytes[i] == b'#' {
+            let mut end = i;
+            while end < bytes.len() && bytes[end] != b'\n' {
+                end += 1;
+            }
+            if end < bytes.len() {
+                end += 1; // include the newline
+            }
+            out.push_str(&text[i..end]);
+            i = end;
             continue;
         }
 

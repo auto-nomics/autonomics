@@ -29,6 +29,7 @@ pub fn build_default_registry(
         opendal,
         bundle_registry,
         Arc::new(container_runtime::ContainerExecutionInfra::from_env()),
+        None,
     )
 }
 
@@ -39,6 +40,7 @@ pub fn build_default_registry_with_container_execution(
     opendal: Option<Arc<vfs::OpendalFileStorage>>,
     bundle_registry: Arc<BundleRegistry>,
     container_execution: Arc<container_runtime::ContainerExecutionInfra>,
+    plugins_root: Option<std::path::PathBuf>,
 ) -> NodeRegistry {
     let bundle_registry = crate::data_bundles::registry_with_builtins(&bundle_registry);
     let mut registry = NodeRegistry::new(
@@ -68,7 +70,7 @@ pub fn build_default_registry_with_container_execution(
 
     // ── Phase 3: IO, causal, lcmm, mr, survey bundles ──────────────────
     #[cfg(feature = "bundle-io")]
-    registry.register_plugin(&nodes_io::Plugin::new(container_execution));
+    registry.register_plugin(&nodes_io::Plugin::new(Arc::clone(&container_execution)));
     #[cfg(feature = "bundle-opengwas")]
     registry.register_plugin(&nodes_opengwas::Plugin);
     #[cfg(feature = "bundle-causal")]
@@ -102,6 +104,29 @@ pub fn build_default_registry_with_container_execution(
     #[cfg(feature = "bundle-dl")]
     registry.register_plugin(&nodes_dl::Plugin);
 
+    // ── Manifest plugin families (opt-in) ─────────────────────────────
+    // A missing plugins root means "nothing installed" and is skipped;
+    // an existing root with invalid manifests aborts startup, naming the
+    // offending plugin. The root is admin-controlled host state: agents
+    // have no path that reaches it.
+    {
+        let root = plugins_root
+            .unwrap_or_else(container_plugin::loader::default_plugins_root);
+        if root.is_dir() {
+            let plugins = container_plugin::loader::load(
+                &root,
+                Arc::clone(&container_execution.runtime),
+                Arc::clone(&container_execution.panel_cache),
+            )
+            .unwrap_or_else(|error| {
+                panic!("invalid plugin under `{}`: {error}", root.display())
+            });
+            for plugin in plugins {
+                registry.register_plugin(&plugin);
+            }
+        }
+    }
+
     registry
 }
 
@@ -125,6 +150,7 @@ mod tests {
             None,
             Arc::new(BundleRegistry::new()),
             container_execution,
+            None,
         );
 
         assert!(
@@ -153,6 +179,7 @@ mod tests {
             None,
             Arc::new(BundleRegistry::new()),
             container_execution,
+            None,
         );
 
         let ports = registry
@@ -182,6 +209,7 @@ mod tests {
             None,
             Arc::new(BundleRegistry::new()),
             container_execution,
+            None,
         );
 
         let ports = registry
@@ -225,6 +253,7 @@ mod tests {
             None,
             Arc::new(BundleRegistry::new()),
             container_execution,
+            None,
         );
 
         let search = registry
@@ -244,5 +273,72 @@ mod tests {
             .expect("source_kegg_gene_pathways is registered");
         assert_eq!(pathways.input_ports().len(), 1);
         assert_eq!(pathways.output_ports().len(), 2);
+    }
+
+    #[test]
+    fn manifest_plugins_register_alongside_builtin_bundles() {
+        // The root is passed explicitly: no process-global env mutation,
+        // so parallel registry builds in other tests are unaffected.
+        let plugins_root = tempfile::tempdir().unwrap();
+        let ldsc_dir = plugins_root.path().join("ldsc");
+        std::fs::create_dir_all(ldsc_dir.join("scripts")).unwrap();
+        std::fs::write(
+            ldsc_dir.join("scripts/h2.sh"),
+            "set -eu\nldsc --h2 \"$AUTONOMICS_INPUT0\" > \"$AUTONOMICS_OUTPUT0\" 2>&1\n",
+        )
+        .unwrap();
+        std::fs::write(
+            ldsc_dir.join(container_plugin::loader::MANIFEST_FILE),
+            r#"
+schema_version = 1
+plugin_name = "ldsc"
+
+[image]
+reference = "ghcr.io/auto-nomics/autonomics/ldsc@sha256:2dad70a9583f93db1dcc9a560b7d5b309af4a5151dfaf615f80d059a0925d78c"
+
+[[nodes]]
+kind = "ldsc_h2_plugin_test"
+desc = "d"
+doc = "doc"
+timeout_secs = 3600
+
+[nodes.ports]
+inputs = [{ type = "file" }]
+outputs = [{ path = "out.log", format = "ldsc_log" }]
+
+[nodes.command]
+interpreter = "sh"
+script_file = "scripts/h2.sh"
+"#,
+        )
+        .unwrap();
+
+        let runtime_env = datafusion::prelude::SessionContext::new().runtime_env();
+        let container_execution =
+            Arc::new(container_runtime::ContainerExecutionInfra::from_config(
+                container_runtime::PodmanConfig {
+                    program: "podman".into(),
+                    workspace_root: plugins_root.path().join("workspace"),
+                    panel_cache_root: plugins_root.path().join("panels"),
+                },
+            ));
+        let registry = build_default_registry_with_container_execution(
+            runtime_env,
+            None,
+            Arc::new(dag_core::BundleRegistry::new()),
+            container_execution,
+            Some(plugins_root.path().to_path_buf()),
+        );
+
+        // The manifest kind is registered alongside every builtin bundle...
+        assert!(
+            registry
+                .list_nodes()
+                .iter()
+                .any(|node| node.kind == "ldsc_h2_plugin_test"),
+            "manifest plugin kind must appear in the registry"
+        );
+        // ...and the curation gate still hides the generic primitive.
+        assert!(registry.get_node_ports("container_command").is_err());
     }
 }

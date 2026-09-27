@@ -159,6 +159,7 @@ mod tests {
         ParamSpec {
             r#type,
             default: None,
+            optional: false,
             doc: None,
             min: None,
             max: None,
@@ -274,6 +275,7 @@ mod tests {
                 interpreter: "sh".into(),
                 argv: Vec::new(),
                 script: None,
+                script_file: None,
                 env: Default::default(),
                 files: Default::default(),
             },

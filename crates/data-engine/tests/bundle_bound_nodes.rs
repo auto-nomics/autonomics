@@ -20,14 +20,6 @@ fn catalog_panel(id: &str, source: &str) -> DataBundle {
 fn catalog() -> BundleRegistry {
     BundleRegistry::from_bundles([
         catalog_panel(
-            nodes_io::ldsc_h2_container::LDSC_REF_LD_PANEL,
-            "/catalog/ref-ld",
-        ),
-        catalog_panel(
-            nodes_io::ldsc_h2_container::LDSC_W_LD_PANEL,
-            "/catalog/w-ld",
-        ),
-        catalog_panel(
             nodes_io::magma_annotate_container::MAGMA_GENE_LOC_PANEL,
             "/catalog/magma-gene-loc",
         ),
@@ -130,20 +122,6 @@ fn all_bundle_bound_node_kinds_build_from_runtime_catalog() {
                 "format": "sumstats_gz"
             }),
         ),
-        (
-            "ldsc_h2_container",
-            serde_json::json!({"n_blocks": 5, "intercept_h2": null}),
-        ),
-        (
-            "ldsc_munge_container",
-            serde_json::json!({
-                "snp": "variant",
-                "p": "pval",
-                "signed_sumstats": {"column": "beta", "null_value": 0.0},
-                "n": 100000.0
-            }),
-        ),
-        ("ldsc_rg_container", serde_json::json!({"n_blocks": 5})),
         ("mtag_container", serde_json::json!({})),
         ("magma_annotate_container", serde_json::json!({})),
         (
@@ -318,17 +296,6 @@ fn default_data_engine_uses_builtin_bundle_catalog() {
         .unwrap();
 }
 
-#[test]
-fn node_listing_exposes_static_bundle_requirements() {
-    let registry = registry();
-    let ldsc = registry
-        .list_nodes()
-        .into_iter()
-        .find(|node| node.kind == "ldsc_h2_container")
-        .unwrap();
-
-    assert_eq!(ldsc.data_bundles.len(), 2);
-}
 
 #[test]
 fn native_hdl_l_nodes_are_removed() {

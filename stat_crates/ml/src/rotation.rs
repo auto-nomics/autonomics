@@ -77,9 +77,8 @@ pub fn varimax(x: &Mat<f64>, normalize: bool, eps: f64) -> Result<RotationResult
     // (R: for i in 1:1000, then z <- x %*% TT with the final TT).
     let mut tt = Mat::identity(k, k);
     let mut d_past = 0.0_f64;
-    let mut z = Mat::zeros(p, k);
     for _ in 0..1000 {
-        z = &work * &tt;
+        let z = &work * &tt;
         // Column sums of z² (variance per factor).
         let z2_colsum: Vec<f64> = (0..k)
             .map(|j| (0..p).map(|i| z[(i, j)] * z[(i, j)]).sum::<f64>())
@@ -108,7 +107,7 @@ pub fn varimax(x: &Mat<f64>, normalize: bool, eps: f64) -> Result<RotationResult
         }
         d_past = d;
     }
-    z = &work * &tt;
+    let z = &work * &tt;
 
     // Un-normalise and return.
     let loadings = Mat::from_fn(p, k, |i, j| {

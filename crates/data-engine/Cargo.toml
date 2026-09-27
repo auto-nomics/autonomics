@@ -44,6 +44,7 @@ nodes-writing = { path = "../node-bundles/nodes-writing", optional = true }
 nodes-grf = { path = "../node-bundles/nodes-grf", optional = true }
 nodes-rd = { path = "../node-bundles/nodes-rd", optional = true }
 nodes-dl = { path = "../node-bundles/nodes-dl", optional = true }
+container-plugin = { path = "../container-plugin" }
 
 [features]
 default = ["bundle-hypothesize", "bundle-ml", "bundle-sql", "bundle-regression", "bundle-survival", "bundle-coloc", "bundle-epi", "bundle-io", "bundle-opengwas", "bundle-causal", "bundle-lcmm", "bundle-mr", "bundle-survey", "bundle-ldsc", "bundle-genetics", "bundle-mice", "bundle-writing", "bundle-grf", "bundle-rd", "bundle-dl"]

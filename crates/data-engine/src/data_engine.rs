@@ -104,6 +104,7 @@ impl DataEngine {
                 opendal.clone(),
                 bundle_registry,
                 Arc::clone(&container_execution),
+                None,
             );
         Self {
             ctx,
@@ -1749,7 +1750,6 @@ mod tests {
             "sql",
             "file_to_dataframe",
             "dataframe_to_file",
-            "ldsc_h2_container",
             "linear_regression",
             "echo",
             "two_sample_mr",
@@ -1770,7 +1770,6 @@ mod tests {
             "sql",
             "file_to_dataframe",
             "dataframe_to_file",
-            "ldsc_h2_container",
             "linear_regression",
             "echo",
             "two_sample_mr",

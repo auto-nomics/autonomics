@@ -18,9 +18,6 @@ pub mod hyprcoloc_container;
 pub mod image_registry;
 pub mod lava_container;
 pub mod lava_scan_container;
-pub mod ldsc_h2_container;
-pub mod ldsc_munge_container;
-pub mod ldsc_rg_container;
 pub mod limma_voom_container;
 pub mod magma_annotate_container;
 pub mod mixer_container;
@@ -296,24 +293,9 @@ impl NodePlugin for Plugin {
                 Arc::clone(&self.container_execution.panel_cache),
             ),
         ));
-        registry.register(Box::new(
-            ldsc_h2_container::LdscH2ContainerNodeFactory::new(
-                Arc::clone(&self.container_execution.runtime),
-                Arc::clone(&self.container_execution.panel_cache),
-            ),
-        ));
-        registry.register(Box::new(
-            ldsc_munge_container::LdscMungeContainerNodeFactory::new(
-                Arc::clone(&self.container_execution.runtime),
-                Arc::clone(&self.container_execution.panel_cache),
-            ),
-        ));
-        registry.register(Box::new(
-            ldsc_rg_container::LdscRgContainerNodeFactory::new(
-                Arc::clone(&self.container_execution.runtime),
-                Arc::clone(&self.container_execution.panel_cache),
-            ),
-        ));
+        // `ldsc_h2_container`, `ldsc_munge_container`, and `ldsc_rg_container`
+        // moved to the manifest plugin at `/mnt/projects/node-plugins/ldsc`;
+        // their kinds are registered by the plugin loader at startup.
         registry.register(Box::new(
             magma_annotate_container::MagmaAnnotateContainerNodeFactory::new(
                 Arc::clone(&self.container_execution.runtime),
