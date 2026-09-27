@@ -79,13 +79,24 @@ pub fn compile_container_spec(
         Some(container_runtime::ContainerNetwork::Egress) => "egress".into(),
     };
 
-    // TODO: render `command.argv`, `script`, `env`, `files` against `resolved`.
+    let argv = super::render::render_argv(&node.command.argv, &resolved)?;
+    let env = super::render::render_env(&node.command.env, &resolved)?;
+    let files = super::render::render_files(&node.command.files, &resolved);
+    let script = node
+        .command
+        .script
+        .as_deref()
+        .map(|text| super::render::render_script(text, &node.command.interpreter, &resolved))
+        .transpose()?;
+
     let spec = ContainerCommandSpec {
         image: image.reference.as_str().to_string(),
-        command: vec![node.command.interpreter.clone()],
-        script: node.command.script.clone(),
-        files: node.command.files.clone(),
-        env: node.command.env.clone(),
+        command: std::iter::once(node.command.interpreter.clone())
+            .chain(argv)
+            .collect(),
+        script,
+        files,
+        env,
         outputs,
         workdir: None,
         artifact_prefix: node

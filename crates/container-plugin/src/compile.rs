@@ -11,6 +11,7 @@
 //!   panels → `ContainerCommandSpec` ready for podman.
 
 pub mod error;
+pub mod render;
 pub mod spec_compile;
 mod utils;
 
