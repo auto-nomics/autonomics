@@ -29,4 +29,16 @@ pub enum Error {
     // before any path is opened. `#[from]` keeps `?` working at the call site.
     #[error("cannot serialize manifest: {0}")]
     TomlSerialize(#[from] toml::ser::Error),
+
+    #[error("compile error - {0}")]
+    Compile(#[from] crate::compile::error::Error),
+
+    #[error("{0}")]
+    Other(String),
+}
+
+impl From<&str> for Error {
+    fn from(value: &str) -> Self {
+        Self::Other(value.to_string())
+    }
 }

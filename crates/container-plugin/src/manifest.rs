@@ -1,5 +1,5 @@
 use container_runtime::image::ImageReference;
-use dag_core::dag::history::NodeEntry;
+use crate::node_definition::NodeDefinition;
 use data_catalog::model::HfRepoId;
 use serde::{Deserialize, Serialize};
 
@@ -65,7 +65,7 @@ pub struct PluginManifest {
     pub plugin_name: String,
     pub image: ImageMetadata,
     pub panels: Vec<PanelBinding>,
-    pub nodes: Vec<NodeEntry>,
+    pub nodes: Vec<NodeDefinition>,
 }
 
 impl Default for PluginManifest {

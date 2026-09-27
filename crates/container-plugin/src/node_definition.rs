@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 /// in the family TOML maps to one of these.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct NodeEntry {
+pub struct NodeDefinition {
     /// Registry kind, unique workspace-wide (e.g. `mtag_container`).
     pub kind: String,
     /// One-line description shown in node listings (`NodeFactory::desc`).
@@ -131,6 +131,19 @@ pub enum ParamType {
     StringArray,
 }
 
+impl std::fmt::Display for ParamType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = match self {
+            Self::Bool => "boolean",
+            Self::Int => "integer",
+            Self::Number => "number",
+            Self::String => "string",
+            Self::StringArray => "array of strings",
+        };
+        f.write_str(name)
+    }
+}
+
 /// How the container is invoked. `script`/`env`/`argv` values go through
 /// the M2 template renderer with the params in scope (v0: `{{name}}`
 /// substitution only, no control flow).
@@ -233,7 +246,7 @@ fn default_label(path: &str) -> String {
 
 /// Cross-field validation over one node entry. Pure: reused by the M4
 /// loader and the `nodedev validate` subcommand.
-pub fn validate(node: &NodeEntry) -> Result<(), String> {
+pub fn validate(node: &NodeDefinition) -> Result<(), String> {
     if node.kind.is_empty()
         || !node
             .kind
@@ -311,7 +324,7 @@ fn validate_workspace_relative_path(path: &str) -> Result<(), String> {
 /// Collect `{{param}}` references across every templatable command surface.
 /// Byte-based scan: `{{` positions are always UTF-8 char boundaries because
 /// multibyte sequences never contain ASCII bytes.
-fn scan_template_refs(node: &NodeEntry) -> Vec<String> {
+fn scan_template_refs(node: &NodeDefinition) -> Vec<String> {
     let mut refs = Vec::new();
     let mut scan = |text: &str| {
         let bytes = text.as_bytes();
@@ -378,7 +391,7 @@ mtag --time_limit {{ time_limit_hours }} --out "$AUTONOMICS_OUTPUT2"
 """
 "#;
 
-    fn mtag_entry() -> NodeEntry {
+    fn mtag_entry() -> NodeDefinition {
         toml::from_str(MTAG_ENTRY_TOML).unwrap()
     }
 
@@ -403,7 +416,7 @@ mtag --time_limit {{ time_limit_hours }} --out "$AUTONOMICS_OUTPUT2"
     fn unknown_fields_fail_at_parse_time() {
         let broken = MTAG_ENTRY_TOML.replacen("desc =", "description =", 1);
         assert!(
-            toml::from_str::<NodeEntry>(&broken).is_err(),
+            toml::from_str::<NodeDefinition>(&broken).is_err(),
             "misspelled fields must be rejected with a field path"
         );
     }
@@ -411,7 +424,7 @@ mtag --time_limit {{ time_limit_hours }} --out "$AUTONOMICS_OUTPUT2"
     #[test]
     fn unknown_port_kinds_fail_at_parse_time() {
         let broken = MTAG_ENTRY_TOML.replacen("type = \"file\" }", "type = \"dataframe\" }", 1);
-        assert!(toml::from_str::<NodeEntry>(&broken).is_err());
+        assert!(toml::from_str::<NodeDefinition>(&broken).is_err());
     }
 
     #[test]
@@ -441,7 +454,7 @@ mtag --time_limit {{ time_limit_hours }} --out "$AUTONOMICS_OUTPUT2"
     #[test]
     fn validation_rejects_undeclared_template_refs() {
         let broken = MTAG_ENTRY_TOML.replacen("{{ time_limit_hours }}", "{{ undeclared_param }}", 1);
-        let node: NodeEntry = toml::from_str(&broken).unwrap();
+        let node: NodeDefinition = toml::from_str(&broken).unwrap();
         assert!(
             validate(&node).unwrap_err().contains("undeclared param"),
             "undeclared template refs must fail at load, not inside the container"

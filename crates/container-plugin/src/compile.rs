@@ -10,13 +10,17 @@
 //! - [`compile_container_spec`] (future) — node entry + param values +
 //!   panels → `ContainerCommandSpec` ready for podman.
 
+pub mod error;
+pub mod spec_compile;
+mod utils;
+
 use std::collections::BTreeMap;
 
 use schemars::Schema;
 use schemars::json_schema;
 use serde_json::{Map, Value, json};
 
-use crate::node_entry::{ParamSpec, ParamType};
+use crate::node_definition::{ParamSpec, ParamType};
 
 /// Compile the node's parameter DSL into a single JSON Schema of the form
 /// `{"type":"object","properties":{...},"required":[...],"additionalProperties":false}`.
@@ -162,7 +166,7 @@ fn insert_number(node: &mut Value, key: &str, value: f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_entry::ParamSpec;
+    use crate::node_definition::ParamSpec;
     use serde_json::json;
 
     fn compile(params: &[(&str, ParamSpec)]) -> Value {
@@ -394,4 +398,3 @@ mod tests {
         );
     }
 }
-
