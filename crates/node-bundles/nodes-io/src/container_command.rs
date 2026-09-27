@@ -105,9 +105,12 @@ impl ContainerCommandError {
         message
     }
 
-    fn into_dag_error(self) -> DagError {
+    /// Convert into a [`DagError`] carrying the node's real kind. Wrapper
+    /// nodes built with their own kind report it here instead of the generic
+    /// `container_command` marker.
+    fn into_dag_error(self, kind: &'static str) -> DagError {
         DagError::NodeError {
-            node_type: CONTAINER_COMMAND_KIND.into(),
+            node_type: kind.to_string(),
             msg: self.diagnostic_message(),
         }
     }
@@ -192,6 +195,10 @@ fn read_text_tail(path: &Path, max_bytes: u64) -> Option<String> {
 }
 
 impl dag_core::dag::NodeError for ContainerCommandError {
+    // Generic kind for the blanket `From` path. The authoritative funnel is
+    // [`ContainerCommandError::into_dag_error`], which `execute` calls with
+    // the node's real kind; this impl only serves conversions that lack that
+    // context.
     fn node_type(&self) -> &str {
         CONTAINER_COMMAND_KIND
     }
@@ -293,6 +300,7 @@ fn default_true() -> bool {
 }
 
 pub struct ContainerCommandNode {
+    kind: &'static str,
     ports: NodePorts,
     image: String,
     command: Vec<String>,
@@ -326,14 +334,16 @@ struct ResolvedPanelBundle {
 
 impl ContainerCommandNode {
     pub fn new(
+        kind: &'static str,
         spec: ContainerCommandSpec,
         runtime: Arc<dyn PodmanConnection>,
         panel_cache: Arc<PanelCache>,
     ) -> Result<Self, ContainerCommandError> {
-        Self::new_with_catalog_panels(spec, runtime, panel_cache, Vec::new())
+        Self::new_with_catalog_panels(kind, spec, runtime, panel_cache, Vec::new())
     }
 
     pub fn new_with_catalog_panels(
+        kind: &'static str,
         spec: ContainerCommandSpec,
         runtime: Arc<dyn PodmanConnection>,
         panel_cache: Arc<PanelCache>,
@@ -361,6 +371,7 @@ impl ContainerCommandNode {
             }
         }
         Ok(Self {
+            kind,
             ports,
             image: spec.image,
             command: spec.command,
@@ -808,6 +819,7 @@ impl DagNode for ContainerCommandNode {
 
     fn clone_box(&self) -> Box<dyn DagNode> {
         Box::new(Self {
+            kind: self.kind,
             ports: self.ports.clone(),
             image: self.image.clone(),
             command: self.command.clone(),
@@ -835,7 +847,7 @@ impl DagNode for ContainerCommandNode {
     }
 
     fn kind(&self) -> &'static str {
-        CONTAINER_COMMAND_KIND
+        self.kind
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -851,7 +863,7 @@ impl DagNode for ContainerCommandNode {
         let workspace_root = self.runtime.workspace_root().to_path_buf();
         let workspace_path = self
             .resolve_workdir(&workspace_root)
-            .map_err(ContainerCommandError::into_dag_error)?;
+            .map_err(|error| error.into_dag_error(self.kind))?;
         // Hold the scratch lock for the whole run: the GC sweeper takes the
         // same lock exclusively and therefore never reclaims a live run's
         // workspace. Released on drop, on every early return below.
@@ -862,7 +874,7 @@ impl DagNode for ContainerCommandNode {
                     workspace_path.display()
                 ))
             })
-            .map_err(ContainerCommandError::into_dag_error)?;
+            .map_err(|error| error.into_dag_error(self.kind))?;
         let mut panel_refs = self.panels.clone();
         panel_refs.extend(self.panel_bundles.iter().map(|panel| {
             PanelRef {
@@ -884,19 +896,19 @@ impl DagNode for ContainerCommandNode {
             materialize_panels(ctx, self.panel_cache.as_ref(), &panel_refs)
                 .await
                 .map_err(ContainerCommandError::Invalid)
-                .map_err(ContainerCommandError::into_dag_error)?;
+                .map_err(|error| error.into_dag_error(self.kind))?;
 
         let mut staged_inputs = stage_inputs(ctx, &workspace_path, inputs)
             .await
             .map_err(ContainerCommandError::Invalid)
-            .map_err(ContainerCommandError::into_dag_error)?;
+            .map_err(|error| error.into_dag_error(self.kind))?;
         staged_inputs.sort_by_key(|input| input.port);
         let host_input_paths = staged_inputs
             .iter()
             .map(|input| input_path(&input.data))
             .collect::<Result<Vec<_>, _>>()
             .map_err(ContainerCommandError::Invalid)
-            .map_err(ContainerCommandError::into_dag_error)?;
+            .map_err(|error| error.into_dag_error(self.kind))?;
         let container_input_paths = host_input_paths
             .iter()
             .map(|path| container_path(&workspace_path, path))
@@ -916,7 +928,7 @@ impl DagNode for ContainerCommandNode {
                             parent.display()
                         ))
                     })
-                    .map_err(ContainerCommandError::into_dag_error)?;
+                    .map_err(|error| error.into_dag_error(self.kind))?;
             }
         }
         let container_output_paths = resolved_outputs
@@ -933,7 +945,7 @@ impl DagNode for ContainerCommandNode {
         if let Some(script) = &self.script {
             let script_path = write_strictly_within(&workspace_path, ".autonomics/script", script)
                 .map_err(ContainerCommandError::Invalid)
-                .map_err(ContainerCommandError::into_dag_error)?;
+                .map_err(|error| error.into_dag_error(self.kind))?;
             let files_dir = workspace_path.join(".autonomics/files");
             std::fs::create_dir_all(&files_dir)
                 .map_err(|e| {
@@ -942,11 +954,11 @@ impl DagNode for ContainerCommandNode {
                         files_dir.display()
                     ))
                 })
-                .map_err(ContainerCommandError::into_dag_error)?;
+                .map_err(|error| error.into_dag_error(self.kind))?;
             for (relative, content) in &self.files {
                 write_strictly_within(&files_dir, relative, content)
                     .map_err(ContainerCommandError::Invalid)
-                    .map_err(ContainerCommandError::into_dag_error)?;
+                    .map_err(|error| error.into_dag_error(self.kind))?;
             }
             let script_arg = container_path(&workspace_path, &script_path.to_string_lossy());
             command.insert(1, script_arg);
@@ -1009,7 +1021,7 @@ impl DagNode for ContainerCommandNode {
             command,
             workspace: workspace_ref(&workspace_root, &workspace_path, DEFAULT_CONTAINER_WORKDIR)
                 .map_err(ContainerCommandError::from)
-                .map_err(ContainerCommandError::into_dag_error)?,
+                .map_err(|error| error.into_dag_error(self.kind))?,
             env,
             panels,
             network: self.network,
@@ -1055,7 +1067,7 @@ impl DagNode for ContainerCommandNode {
                     error => ContainerCommandError::Runtime(error),
                 };
                 reporter.error(error.diagnostic_message());
-                return Err(error.into_dag_error());
+                return Err(error.into_dag_error(self.kind));
             }
         };
         if !result.stdout.trim().is_empty() {
@@ -1071,12 +1083,12 @@ impl DagNode for ContainerCommandNode {
                 return Err(ContainerCommandError::MissingOutput {
                     path: host_path.to_string_lossy().into_owned(),
                 }
-                .into_dag_error());
+                .into_dag_error(self.kind));
             }
             let file = publish_output(ctx, &self.artifact_prefix, &request_name, spec, host_path)
                 .await
                 .map_err(ContainerCommandError::Invalid)
-                .map_err(ContainerCommandError::into_dag_error)?;
+                .map_err(|error| error.into_dag_error(self.kind))?;
             outputs.insert_file(index as u8, file);
         }
 
@@ -1355,6 +1367,7 @@ impl NodeFactory for ContainerCommandNodeFactory {
             })
             .collect::<dag_core::registry::error::Result<Vec<_>>>()?;
         let node = ContainerCommandNode::new_with_catalog_panels(
+            CONTAINER_COMMAND_KIND,
             node_spec,
             Arc::clone(&self.runtime) as Arc<dyn PodmanConnection>,
             Arc::clone(&self.panel_cache),
@@ -1628,6 +1641,7 @@ mod tests {
         );
         node_spec.workdir = Some(dir.to_string_lossy().into_owned());
         let mut node = ContainerCommandNode::new(
+            "container_command",
             node_spec,
             runtime.clone(),
             Arc::new(PanelCache::new(env.workspace.path().join("cache"))),
@@ -1708,6 +1722,7 @@ mod tests {
         node_spec.script = Some("cat \"$AUTONOMICS_INPUT0\" > \"$AUTONOMICS_OUTPUT0\"".into());
         node_spec.files.insert("helper.txt".into(), "helper".into());
         let mut node = ContainerCommandNode::new(
+            "container_command",
             node_spec,
             runtime.clone(),
             Arc::new(PanelCache::new(env.workspace.path().join("cache"))),
@@ -1755,6 +1770,7 @@ mod tests {
         let env = test_env();
         let runtime = Arc::new(FakeRuntime::new(env.workspace.path()));
         let mut node = ContainerCommandNode::new(
+            "container_command",
             spec("quay.io/example/tool", vec!["tool".into()], "out.txt"),
             runtime,
             Arc::new(PanelCache::new(env.workspace.path().join("cache"))),
@@ -1788,6 +1804,7 @@ mod tests {
         let env = test_env();
         let runtime = Arc::new(FakeRuntime::new(env.workspace.path()));
         let mut node = ContainerCommandNode::new(
+            "container_command",
             spec("quay.io/example/tool", vec!["tool".into()], "out.txt"),
             runtime,
             Arc::new(PanelCache::new(env.workspace.path().join("cache"))),
@@ -1813,6 +1830,7 @@ mod tests {
     #[test]
     fn rejects_output_path_escape() {
         let error = match ContainerCommandNode::new(
+            "container_command",
             spec("tool", vec!["tool".into()], "../escape.txt"),
             Arc::new(FakeRuntime::default()),
             Arc::new(PanelCache::new("/tmp/autonomics-cache")),
@@ -1852,6 +1870,7 @@ mod tests {
             node_spec.workdir = Some(dir.to_string_lossy().into_owned());
             nodes.push(
                 ContainerCommandNode::new(
+                    "container_command",
                     node_spec,
                     runtime.clone(),
                     Arc::new(PanelCache::new(env.workspace.path().join("cache"))),
@@ -1922,6 +1941,7 @@ mod tests {
 
         let runtime = Arc::new(FakeRuntime::new(env.workspace.path()));
         let mut node = ContainerCommandNode::new_with_catalog_panels(
+            "container_command",
             node_spec,
             runtime.clone(),
             Arc::new(PanelCache::new(env.workspace.path().join("cache"))),
@@ -1984,7 +2004,10 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let mut node_spec = spec("tool", vec!["tool".into()], "missing.txt");
         node_spec.workdir = Some(dir.to_string_lossy().into_owned());
+        // A wrapper-style kind must travel into the DagError instead of the
+        // generic `container_command` marker.
         let mut node = ContainerCommandNode::new(
+            "mtag_container",
             node_spec,
             Arc::new(MissingOutputRuntime {
                 workspace_root: env.workspace.path().to_path_buf(),
@@ -2002,6 +2025,10 @@ mod tests {
             .unwrap_err();
 
         assert!(error.to_string().contains("missing.txt"));
+        let dag_core::dag::DagError::NodeError { node_type, .. } = &error else {
+            panic!("missing output must surface as a NodeError, got {error:?}");
+        };
+        assert_eq!(node_type, "mtag_container");
     }
 
     #[tokio::test]
@@ -2047,6 +2074,7 @@ mod tests {
         // A persistent workspace makes this test independent of scratch naming.
         node_spec.workdir = Some(dir.to_string_lossy().into_owned());
         let mut node = ContainerCommandNode::new(
+            "container_command",
             node_spec,
             Arc::new(FailingRuntime {
                 workspace_root: env.workspace.path().to_path_buf(),
@@ -2116,6 +2144,7 @@ mod tests {
             panel_cache_root: state.path().join("panels"),
         });
         let mut node = ContainerCommandNode::new(
+            "container_command",
             node_spec,
             Arc::new(runtime),
             Arc::new(PanelCache::new(state.path().join("panels"))),

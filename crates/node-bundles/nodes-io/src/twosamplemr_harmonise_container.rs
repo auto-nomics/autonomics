@@ -289,6 +289,7 @@ impl NodeFactory for TwoSampleMrHarmoniseContainerNodeFactory {
             container_spec(&spec).map_err(dag_core::registry::error::Error::Unknown)?;
         let runtime: Arc<dyn container_runtime::PodmanConnection> = self.runtime.clone();
         let node = ContainerCommandNode::new_with_catalog_panels(
+            self.kind(),
             container_spec,
             runtime,
             Arc::clone(&self.panel_cache),

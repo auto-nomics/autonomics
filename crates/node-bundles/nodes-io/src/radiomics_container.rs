@@ -775,7 +775,7 @@ impl RadiomicsContainerNodeFactory {
         &self,
         spec: ContainerCommandSpec,
     ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
-        let node = ContainerCommandNode::new(spec, self.runtime.clone(), self.panel_cache.clone())
+        let node = ContainerCommandNode::new(self.kind(), spec, self.runtime.clone(), self.panel_cache.clone())
             .map_err(|error| dag_core::registry::error::Error::Unknown(error.to_string()))?;
         Ok(Box::new(node))
     }

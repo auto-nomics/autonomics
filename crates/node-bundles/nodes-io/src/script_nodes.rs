@@ -886,6 +886,7 @@ impl NodeFactory for ScriptNodeFactory {
         let container = container_spec(self.runtime, &parsed)
             .map_err(dag_core::registry::error::Error::Unknown)?;
         let inner = ContainerCommandNode::new(
+            self.kind(),
             container,
             Arc::clone(&self.runtime_connection),
             Arc::clone(&self.panel_cache),

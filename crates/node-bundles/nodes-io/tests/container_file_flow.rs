@@ -352,6 +352,7 @@ async fn dataframe_to_file_output_flows_through_container_command_in_dag() {
         "container".into(),
         Box::new(
             ContainerCommandNode::new(
+                "container_command",
                 spec,
                 runtime.clone(),
                 Arc::new(PanelCache::new(workspace.path().join("panels"))),

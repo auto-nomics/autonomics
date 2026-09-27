@@ -381,6 +381,7 @@ impl NodeFactory for Plink2ClumpContainerNodeFactory {
             .collect::<dag_core::registry::error::Result<Vec<_>>>()?;
         let runtime: Arc<dyn container_runtime::PodmanConnection> = self.runtime.clone();
         let node = ContainerCommandNode::new_with_catalog_panels(
+            self.kind(),
             container_spec,
             runtime,
             Arc::clone(&self.panel_cache),

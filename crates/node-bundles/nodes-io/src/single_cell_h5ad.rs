@@ -1188,6 +1188,7 @@ impl NodeFactory for SingleCellH5adContainerNodeFactory {
         let spec = container_spec(self.workflow, &spec)
             .map_err(dag_core::registry::error::Error::Unknown)?;
         let node = ContainerCommandNode::new(
+            self.kind(),
             spec,
             Arc::clone(&self.runtime),
             Arc::clone(&self.panel_cache),

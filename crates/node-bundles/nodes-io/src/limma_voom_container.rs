@@ -331,6 +331,7 @@ impl NodeFactory for LimmaVoomContainerNodeFactory {
         let container_spec =
             container_spec(&spec).map_err(dag_core::registry::error::Error::Unknown)?;
         let node = ContainerCommandNode::new(
+            self.kind(),
             container_spec,
             Arc::clone(&self.runtime),
             Arc::clone(&self.panel_cache),

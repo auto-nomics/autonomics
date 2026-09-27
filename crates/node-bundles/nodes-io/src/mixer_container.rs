@@ -400,6 +400,7 @@ fn build_node(
         .collect::<dag_core::registry::error::Result<Vec<_>>>()?;
     let runtime: Arc<dyn container_runtime::PodmanConnection> = infra.runtime.clone();
     let node = ContainerCommandNode::new_with_catalog_panels(
+        if fit2 { "mixer_fit2" } else { "mixer_fit1" },
         value,
         runtime,
         Arc::clone(&infra.panel_cache),

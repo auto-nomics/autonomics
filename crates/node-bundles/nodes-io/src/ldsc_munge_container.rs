@@ -463,7 +463,7 @@ impl NodeFactory for LdscMungeContainerNodeFactory {
             container_spec(&spec).map_err(dag_core::registry::error::Error::Unknown)?;
         let runtime: Arc<dyn container_runtime::PodmanConnection> = self.runtime.clone();
         let node =
-            ContainerCommandNode::new(container_spec, runtime, Arc::clone(&self.panel_cache))
+            ContainerCommandNode::new(self.kind(), container_spec, runtime, Arc::clone(&self.panel_cache))
                 .map_err(|error| dag_core::registry::error::Error::Unknown(error.to_string()))?;
         Ok(Box::new(LdscMungeContainerNode {
             inner: Box::new(node),
@@ -523,6 +523,7 @@ mod tests {
         let mut container = container_spec(&munge_spec).unwrap();
         container.workdir = Some(workspace.to_string_lossy().into_owned());
         let mut node = ContainerCommandNode::new(
+            LDSC_MUNGE_CONTAINER_KIND,
             container,
             Arc::new(PodmanRuntime::new(PodmanConfig {
                 program: "podman".into(),

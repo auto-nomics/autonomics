@@ -468,6 +468,7 @@ impl NodeFactory for HdlLScanContainerNodeFactory {
             .map(|binding| node_ctx.bound_data_bundle(&binding.binding).cloned())
             .collect::<dag_core::registry::error::Result<Vec<_>>>()?;
         let node = ContainerCommandNode::new_with_catalog_panels(
+            self.kind(),
             container_spec,
             Arc::clone(&self.runtime) as Arc<dyn PodmanConnection>,
             Arc::clone(&self.panel_cache),

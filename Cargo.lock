@@ -2190,7 +2190,9 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "container-runtime",
+ "dag-core",
  "data-catalog",
+ "nodes-io",
  "serde",
  "thiserror 2.0.20",
  "toml 1.1.6+spec-1.1.0",

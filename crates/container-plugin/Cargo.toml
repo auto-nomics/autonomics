@@ -13,6 +13,8 @@ toml.workspace = true
 
 container-runtime = { path = "../container-runtime" }
 data-catalog = { path = "../data-catalog" }
+dag-core = { path = "../dag-core" }
+nodes-io = { path = "../node-bundles/nodes-io" }
 
 [lints]
 workspace = true
