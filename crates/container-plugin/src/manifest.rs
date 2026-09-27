@@ -1,4 +1,5 @@
 use container_runtime::image::ImageReference;
+use dag_core::dag::history::NodeEntry;
 use data_catalog::model::HfRepoId;
 use serde::{Deserialize, Serialize};
 
@@ -64,7 +65,7 @@ pub struct PluginManifest {
     pub plugin_name: String,
     pub image: ImageMetadata,
     pub panels: Vec<PanelBinding>,
-    pub nodes: Vec<String>,
+    pub nodes: Vec<NodeEntry>,
 }
 
 impl Default for PluginManifest {
@@ -102,10 +103,7 @@ bundle = "wjixiang/catalog-mtag-ld-ref-1000g-eur-w-ld"
         let manifest: PluginManifest = toml::from_str(MANIFEST_TOML).unwrap();
         let reference = &manifest.image.reference;
         assert_eq!(reference.registry().as_str(), "ghcr.io");
-        assert_eq!(
-            reference.path().as_str(),
-            "auto-nomics/autonomics/mtag"
-        );
+        assert_eq!(reference.path().as_str(), "auto-nomics/autonomics/mtag");
         assert_eq!(
             reference.digest().as_str(),
             "sha256:28ac0a0a0ee741340390b7588bf8ba36e6b316d62adc0cab7fd4494f5dd6a90c"
@@ -161,3 +159,4 @@ bundle = "wjixiang/catalog-mtag-ld-ref-1000g-eur-w-ld"
         );
     }
 }
+

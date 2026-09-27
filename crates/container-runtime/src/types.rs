@@ -41,7 +41,8 @@ pub enum PullPolicy {
 ///
 /// `Isolated` runs with no network devices at all (`podman --network none`).
 /// `Egress` uses the host's default container networking.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum ContainerNetwork {
     #[default]
     Isolated,
