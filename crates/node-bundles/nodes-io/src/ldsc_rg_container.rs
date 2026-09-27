@@ -11,9 +11,12 @@ use dag_core::{
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 
+use crate::container_command::decompress_gzip_inputs;
 use crate::container_command::{
-    ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
-    ContainerPanelBundleSpec, decompress_gzip_inputs,
+    ContainerCommandNode,
+    ContainerCommandOutputSpec,
+    ContainerCommandSpec,
+    ContainerPanelBundleSpec
 };
 use crate::image_registry::registry_image;
 use crate::ldsc_h2_container::{
