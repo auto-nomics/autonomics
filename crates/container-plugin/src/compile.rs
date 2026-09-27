@@ -244,7 +244,7 @@ mod tests {
     }
 
     #[test]
-    fn numeric_bounds_emit_minimum_maximum_exclusiveMinimum_exclusiveMaximum() {
+    fn numeric_bounds_emit_minimum_maximum_exclusive_minimum_exclusive_maximum() {
         let schema = compile(&[(
             "time_limit_hours",
             ParamSpec {

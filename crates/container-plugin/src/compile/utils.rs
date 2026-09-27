@@ -254,10 +254,8 @@ mod tests {
         assert!(check_bounds("k", "p", &mixed, &json!(["a"])).is_ok());
     }
 
-    fn node_with(
-        params: Vec<(&str, ParamSpec)>,
-    ) -> crate::node_definition::NodeDefinition {
-        let mut node = crate::node_definition::NodeDefinition {
+    fn node_with(params: Vec<(&str, ParamSpec)>) -> crate::node_definition::NodeDefinition {
+        crate::node_definition::NodeDefinition {
             kind: "test_kind".into(),
             desc: String::new(),
             doc: String::new(),
@@ -280,8 +278,7 @@ mod tests {
                 files: Default::default(),
             },
             resources: Default::default(),
-        };
-        node
+        }
     }
 
     fn bool_param() -> ParamSpec {
@@ -322,7 +319,7 @@ mod tests {
         let mut gate = bool_param();
         gate.requires = vec!["target".into()];
         let node = node_with(vec![
-            ("target", bool_param()),         // no default ⇒ false at runtime
+            ("target", bool_param()), // no default ⇒ false at runtime
             ("gate", gate),
         ]);
 

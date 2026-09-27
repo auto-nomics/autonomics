@@ -42,7 +42,7 @@ fn serialise_value(value: &Value) -> Option<String> {
         Value::String(s) => s.clone(),
         Value::Array(items) => items
             .iter()
-            .map(|item| serialise_value(item))
+            .map(serialise_value)
             .collect::<Option<Vec<_>>>()?
             .join(" "),
         // Everything else (Null / Object / unexpected scalars) is rejected;
@@ -394,8 +394,10 @@ mod tests {
         // passthrough nor bare-collection boundary, leaving `i` stuck and
         // hanging the test runner. `render_script` must accept lone braces.
         let resolved = resolved(&[]);
-        assert_eq!(render_script("echo {not-a-template}", "sh", &resolved).unwrap(),
-                   "echo {not-a-template}");
+        assert_eq!(
+            render_script("echo {not-a-template}", "sh", &resolved).unwrap(),
+            "echo {not-a-template}"
+        );
     }
 
     #[test]
@@ -461,4 +463,3 @@ mod tests {
         assert!(error.to_string().contains("unclosed"));
     }
 }
-

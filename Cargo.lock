@@ -2188,16 +2188,21 @@ checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
 name = "container-plugin"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "clap",
  "container-runtime",
  "dag-core",
  "data-catalog",
+ "datafusion",
  "nodes-io",
  "schemars",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.20",
+ "tokio",
  "toml 1.1.6+spec-1.1.0",
+ "vfs",
 ]
 
 [[package]]
