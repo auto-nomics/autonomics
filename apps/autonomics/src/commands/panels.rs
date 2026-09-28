@@ -26,7 +26,12 @@ pub fn run_panels(args: PanelsArgs) -> Result<()> {
             let runtime = tokio::runtime::Runtime::new()
                 .map_err(|e| color_eyre::eyre::eyre!("failed to build tokio runtime: {e}"))?;
             let state_dir = gateway::RuntimeConfig::builder().build().state_dir;
-            runtime.block_on(async move { sync_command(&state_dir).await })
+            let result = runtime.block_on(async move { sync_command(&state_dir).await });
+            // Bounded shutdown: the HF client's idle keep-alive connections
+            // would otherwise pin the runtime and hang the process after
+            // the summary has already printed (mirrors `serve`).
+            runtime.shutdown_timeout(std::time::Duration::from_secs(5));
+            result
         }
     }
 }
