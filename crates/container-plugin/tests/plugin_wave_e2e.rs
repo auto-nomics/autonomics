@@ -202,6 +202,18 @@ const FAMILIES: &[(&str, &str, &str, &[&str])] = &[
             "pathology_qupath_import",
         ],
     ),
+    (
+        "bulk-rnaseq",
+        "https://github.com/auto-nomics/bulk-rnaseq-plugin.git",
+        "178e71c7cc8d82f9f4bacd16f009530c7813e717",
+        &["limma_voom", "wgcna"],
+    ),
+    (
+        "hyprcoloc",
+        "https://github.com/auto-nomics/hyprcoloc-plugin.git",
+        "c876b5a55ad2a6258b1304e827d6a92bfe1cf7a6",
+        &["hyprcoloc"],
+    ),
 ];
 
 #[test]
