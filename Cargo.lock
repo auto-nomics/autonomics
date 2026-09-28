@@ -861,6 +861,8 @@ dependencies = [
  "chrono",
  "clap",
  "color-eyre",
+ "container-plugin",
+ "container-runtime",
  "crossterm",
  "dag-core",
  "fuzzy-matcher",

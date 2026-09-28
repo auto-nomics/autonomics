@@ -20,6 +20,8 @@ agentik-core = { path = "../../crates/agentik-core" }
 agentik-sdk = { path = "../../crates/agentik-sdk" }
 agentik-types = { path = "../../crates/agentik-types" }
 gateway = { path = "../../crates/gateway" }
+container-plugin = { path = "../../crates/container-plugin" }
+container-runtime = { path = "../../crates/container-runtime" }
 tokio-util = { version = "0.7", features = ["rt"] }
 headless = { path = "../../crates/headless" }
 kms = { path = "../../crates/kms" }

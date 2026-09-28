@@ -23,6 +23,10 @@ use tracing_subscriber::fmt::writer::MakeWriterExt;
 use gateway::daemon::{DaemonOptions, run_daemon};
 use gateway::manager;
 
+use container_plugin::loader;
+use dag_core::NodePlugin;
+use container_plugin::sync::{self, EntryOutcome};
+
 use crate::cli::{ServeAction, ServeArgs};
 
 pub fn run_serve(args: ServeArgs) -> color_eyre::Result<()> {
@@ -95,6 +99,13 @@ async fn run_foreground_or_daemon(
 ) -> color_eyre::Result<()> {
     init_gateway_logging(&config.state_dir, daemon)?;
 
+    // Plugin self-check phase: install every declared family and report
+    // what registered, before the daemon owns the process. Fail-closed —
+    // a declared-but-broken plugin aborts startup naming the offender.
+    // (SharedInfra::open repeats the sync inside the daemon; it is
+    // idempotent and offline-safe once everything is installed.)
+    plugin_preflight(&config).await?;
+
     let shutdown = CancellationToken::new();
     if !daemon {
         // Foreground: Ctrl+C is a graceful stop (same as POST
@@ -130,6 +141,69 @@ async fn run_foreground_or_daemon(
             std::process::exit(1);
         }
     }
+}
+
+/// Plugin preflight: sync every declared family into the plugin root, then
+/// load the root to validate every manifest and report the registered kinds.
+/// Runs in the launcher process so the report is visible even in `--daemon`
+/// mode (before stdio detaches). A missing `plugins.toml` is not an error —
+/// the deployment simply starts with built-in nodes only.
+async fn plugin_preflight(config: &gateway::RuntimeConfig) -> color_eyre::Result<()> {
+    let config_path = config.state_dir.join(sync::PLUGIN_CONFIG_FILE);
+    let root = config.state_dir.join("plugins");
+
+    if !config_path.is_file() {
+        println!(
+            "plugins: {} not present — starting with built-in nodes only",
+            config_path.display()
+        );
+        return Ok(());
+    }
+
+    println!("plugins: syncing from {}", config_path.display());
+    let report = sync::sync(&config_path, &root)
+        .map_err(|error| color_eyre::eyre::eyre!("plugin sync failed: {error}"))?;
+    for (name, outcome) in &report.outcomes {
+        match outcome {
+            EntryOutcome::Installed => println!("  + {name} installed"),
+            EntryOutcome::Updated => println!("  ~ {name} updated"),
+            EntryOutcome::Unchanged => {}
+        }
+    }
+    if report.outcomes.is_empty() {
+        println!("  (no plugin sources declared)");
+    }
+
+    // Loading validates every manifest fail-closed and constructs the
+    // families; the connection is only carried for factory construction,
+    // no container is spawned here.
+    let connection: std::sync::Arc<dyn container_runtime::PodmanConnection> =
+        std::sync::Arc::new(container_runtime::PodmanRuntime::new(
+            container_runtime::PodmanConfig {
+                program: "podman".into(),
+                workspace_root: root.join("workspace"),
+                panel_cache_root: root.join("panels"),
+            },
+        ));
+    let panel_cache = std::sync::Arc::new(container_runtime::PanelCache::new(
+        root.join("panels"),
+    ));
+    let plugins = loader::load(&root, connection, panel_cache)
+        .map_err(|error| color_eyre::eyre::eyre!("plugin load failed: {error}"))?;
+
+    let mut total_kinds = 0usize;
+    for plugin in &plugins {
+        let kinds = plugin.registered_kinds();
+        println!("  ok {} [{}]", plugin.name(), kinds.join(", "));
+        total_kinds += kinds.len();
+    }
+    println!(
+        "plugins: {} famil{} verified, {} node kinds",
+        plugins.len(),
+        if plugins.len() == 1 { "y" } else { "ies" },
+        total_kinds
+    );
+    Ok(())
 }
 
 /// Resolve launcher-relative paths before moving the long-lived daemon to a

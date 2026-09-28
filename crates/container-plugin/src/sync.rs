@@ -191,6 +191,18 @@ fn sync_git(name: &str, url: &str, rev: &str, target: &Path) -> Result<EntryOutc
         ));
     }
 
+    // A target that exists but cannot resolve HEAD is an interrupted
+    // clone (killed mid-checkout). Wipe it and re-clone rather than
+    // failing forever on the broken state.
+    if target.join(".git").exists()
+        && run_git_capture(name, target, &["rev-parse", "HEAD"]).is_err()
+    {
+        std::fs::remove_dir_all(target).map_err(|source| invalid(format!(
+            "cannot remove interrupted clone `{}`: {source}",
+            target.display()
+        )))?;
+    }
+
     if !target.join(".git").exists() {
         run_git_retry(
             name,
