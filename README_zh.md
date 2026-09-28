@@ -101,7 +101,7 @@ catalog 缓存缺失的 dataset；启动自检只做本地存在性检查（有�
 daemon 就绪永不等待网络。无人值守部署可设 `AUTONOMICS_PANEL_SYNC=1` 让
 `autonomics serve` 启动时内联完成供给。
 
-当前发布 24 个家族 / 71 个节点 kind：
+当前发布 26 个家族 / 74 个节点 kind：
 
 | 家族 | 节点 kind | 工具 |
 | --- | --- | --- |
@@ -129,6 +129,8 @@ daemon 就绪永不等待网络。无人值守部署可设 `AUTONOMICS_PANEL_SYN
 | [single-cell](https://github.com/auto-nomics/single-cell-plugin) | `single_cell_preprocessor`、10 个 `h5ad_*` / `gene_set_score` / `sc_dense_ingest` 变体 | scRNA 预处理与 H5AD 分析 |
 | [radiomics](https://github.com/auto-nomics/radiomics-plugin) | 21 个 `radiomics_*` / `pyradiomics_*` 变体 | 影像特征提取流水线 |
 | [pathology](https://github.com/auto-nomics/pathology-plugin) | 7 个 `pathology_*` 变体 | WSI 切片摄取 / QC / 嵌入 / IHC |
+| [bulk-rnaseq](https://github.com/auto-nomics/bulk-rnaseq-plugin) | `limma_voom`, `wgcna` | limma+voom 差异表达、WGCNA 模块分析 |
+| [hyprcoloc](https://github.com/auto-nomics/hyprcoloc-plugin) | `hyprcoloc` | HyPrColoc 多性状共定位 |
 
 ### 安装插件
 

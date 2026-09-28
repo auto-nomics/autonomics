@@ -104,7 +104,7 @@ only checks presence locally (bounded, offline-safe), so daemon readiness
 never waits on the network. Set `AUTONOMICS_PANEL_SYNC=1` to run the
 provisioning inline during `autonomics serve` for unattended deployments.
 
-24 families / 71 node kinds are currently published:
+26 families / 74 node kinds are currently published:
 
 | Family | Node kinds | Tool |
 | --- | --- | --- |
@@ -132,6 +132,8 @@ provisioning inline during `autonomics serve` for unattended deployments.
 | [single-cell](https://github.com/auto-nomics/single-cell-plugin) | `single_cell_preprocessor`, 10 `h5ad_*` / `gene_set_score` / `sc_dense_ingest` variants | scRNA preprocessing and H5AD analyses |
 | [radiomics](https://github.com/auto-nomics/radiomics-plugin) | 21 `radiomics_*` / `pyradiomics_*` variants | imaging feature extraction pipeline |
 | [pathology](https://github.com/auto-nomics/pathology-plugin) | 7 `pathology_*` variants | WSI ingest / QC / embedding / IHC |
+| [bulk-rnaseq](https://github.com/auto-nomics/bulk-rnaseq-plugin) | `limma_voom`, `wgcna` | limma+voom differential expression, WGCNA modules |
+| [hyprcoloc](https://github.com/auto-nomics/hyprcoloc-plugin) | `hyprcoloc` | HyPrColoc multi-trait colocalization |
 
 ### Installing plugins
 

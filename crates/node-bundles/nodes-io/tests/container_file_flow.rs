@@ -29,7 +29,6 @@ use nodes_io::container_command::{
 use nodes_io::dataframe_to_file::{DataFrameToFileNode, WriteFormat};
 use nodes_io::file_reference::FileReferenceNode;
 use nodes_io::file_to_dataframe::FileToDataFrameNode;
-use nodes_io::hyprcoloc_container::{HYPRCOLOC_CONTAINER_KIND, HyPrColocContainerNodeFactory};
 use sha2::{Digest, Sha256};
 use vfs::{
     BackendConfig, BackendDefinition, MountDefinition, MountedObjectStore, OpendalFileStorage,

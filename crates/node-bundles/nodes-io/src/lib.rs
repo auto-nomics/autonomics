@@ -9,9 +9,7 @@ pub mod file_transform;
 pub mod gmt_import;
 pub mod h5ad_obs_to_dataframe;
 pub mod http_fetch;
-pub mod hyprcoloc_container;
 pub mod image_registry;
-pub mod limma_voom_container;
 pub mod multiomic_concordance;
 pub mod parquet_sql;
 pub mod radiomics;
@@ -22,7 +20,6 @@ pub mod source_openalex;
 pub mod source_opentargets;
 pub mod source_semantic_scholar;
 pub mod spreadsheet;
-pub mod wgcna_container;
 pub use alphafold::nodes::prediction::{AlphaFoldPredictionNode, AlphaFoldPredictionNodeFactory};
 pub use clinicaltrials::nodes::study::{ClinicalTrialsStudyNode, ClinicalTrialsStudyNodeFactory};
 pub use crossref::nodes::works::{CrossrefWorksNode, CrossrefWorksNodeFactory};
@@ -107,22 +104,9 @@ impl NodePlugin for Plugin {
         // the ten `h5ad_*` variants, the radiomics container variants, and
         // the seven `pathology_*` variants likewise moved to manifest
         // plugins under `/mnt/projects/node-plugins/`.
-        registry.register(Box::new(
-            hyprcoloc_container::HyPrColocContainerNodeFactory::new(
-                Arc::clone(&self.container_execution.runtime),
-                Arc::clone(&self.container_execution.panel_cache),
-            ),
-        ));
-        registry.register(Box::new(
-            limma_voom_container::LimmaVoomContainerNodeFactory::new(
-                Arc::clone(&self.container_execution.runtime),
-                Arc::clone(&self.container_execution.panel_cache),
-            ),
-        ));
-        registry.register(Box::new(wgcna_container::WgcnaContainerNodeFactory::new(
-            Arc::clone(&self.container_execution.runtime),
-            Arc::clone(&self.container_execution.panel_cache),
-        )));
+        // `limma_voom` and `wgcna` (bulk-rnaseq family) and `hyprcoloc`
+        // completed the sweep: every container-backed node now ships as a
+        // manifest plugin, and this registry holds only in-process nodes.
         registry.register(Box::new(
             multiomic_concordance::MultiomicConcordanceNodeFactory,
         ));
