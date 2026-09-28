@@ -10,7 +10,6 @@ mod utils;
 
 pub use error::ContainerCommandError;
 pub use node::ContainerCommandNode;
-pub(crate) use utils::decompress_gzip_inputs;
 
 use std::collections::BTreeMap;
 use std::path::Path;

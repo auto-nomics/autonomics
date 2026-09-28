@@ -12,26 +12,6 @@ use container_runtime::DEFAULT_CONTAINER_WORKDIR;
 use super::ContainerCommandOutputSpec;
 use super::error::{FAILURE_CAPTURE_PREVIEW_CHARS, FAILURE_OUTPUT_PREVIEW_BYTES};
 
-pub(crate) fn decompress_gzip_inputs(count: usize) -> String {
-    let mut script = String::from(
-        "prepare_input() {\n\
-         \x20 case \"$2\" in\n\
-         \x20 *.gz)\n\
-         \x20   local destination=\"$AUTONOMICS_WORKDIR/.autonomics/input-$1.tsv\"\n\
-         \x20   gzip -dc -- \"$2\" > \"$destination\"\n\
-         \x20   export \"$1=$destination\"\n\
-         \x20   ;;\n\
-         \x20 esac\n\
-         }\n",
-    );
-    for index in 0..count {
-        script.push_str(&format!(
-            "prepare_input AUTONOMICS_INPUT{index} \"$AUTONOMICS_INPUT{index}\"\n"
-        ));
-    }
-    script
-}
-
 pub(crate) fn capture_preview(label: &str, capture: &str) -> String {
     let total_chars = capture.chars().count();
     if total_chars <= FAILURE_CAPTURE_PREVIEW_CHARS {
