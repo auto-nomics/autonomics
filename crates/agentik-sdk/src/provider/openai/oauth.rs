@@ -15,6 +15,7 @@ use sha2::{Digest, Sha256};
 
 use crate::wire::openai::chatgpt::ORIGINATOR;
 
+pub const CALLBACK_ADDR: &str = "OPENAI_CALLBACK_ADDR";
 /// 授权服务器。Codex CLI 同款。
 pub const AUTH_ISSUER: &str = "https://auth.openai.com";
 /// ⚠️ Codex CLI 的公开 OAuth client_id（第三方复用的通行做法）。
@@ -356,7 +357,10 @@ pub fn blob_from_exchange(exchange: TokenExchange) -> Result<TokenBlob, String> 
 /// 绑定回调端口：先试 [`CALLBACK_PORT`]，被占则用 [`CALLBACK_PORT_FALLBACK`]。
 pub fn bind_callback_server() -> Result<(tiny_http::Server, u16), String> {
     for port in [CALLBACK_PORT, CALLBACK_PORT_FALLBACK] {
-        if let Ok(server) = tiny_http::Server::http(format!("127.0.0.1:{port}")) {
+        if let Ok(server) = tiny_http::Server::http(format!(
+            "{}:{port}",
+            std::env::var(CALLBACK_ADDR).unwrap_or("0.0.0.0".to_string())
+        )) {
             return Ok((server, port));
         }
     }

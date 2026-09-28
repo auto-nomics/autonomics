@@ -58,9 +58,12 @@ impl WireProtocol for ChatgptResponsesWire {
         {
             object.remove("max_output_tokens");
             // Codex keeps routing stable with a session/thread-scoped cache
-            // key. The HTTP adapter has no session handle, so hash the stable
-            // request prefix (model, instructions, tools, and first history
-            // item) instead of changing it on every appended turn.
+            // key. The wire layer has no session handle, so derive the key
+            // from the conversation's opening message — the one request
+            // element that never changes mid-conversation. Model, system
+            // (instructions) and tools are deliberately excluded: any of
+            // them changing (e.g. dynamic plan/skill state) must not rotate
+            // the routing key and evict cache affinity.
             object.insert(
                 "prompt_cache_key".to_string(),
                 serde_json::Value::String(prompt_cache_key(params)),
@@ -90,21 +93,16 @@ impl WireProtocol for ChatgptResponsesWire {
     }
 }
 
+/// Conversation 级 prompt-cache 路由键(Codex CLI 的 session id 同款
+/// 语义:会话内恒定)。
+///
+/// 键 = 首条消息的哈希。wire 层拿不到 session 标识,而首条消息是对话
+/// 中唯一的不变量,充当会话身份;model / system / tools 的任何变化
+/// 都不再轮换键,路由亲和在整个会话内保持。两条对话若恰好以相同消息
+/// 开头则共享键——无害,键只是路由提示,缓存本身按内容前缀寻址。
 fn prompt_cache_key(params: &MessageCreateParams) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(b"agentik-chatgpt-responses-v1\0");
-    hasher.update(params.model.as_bytes());
-    hasher.update([0]);
-    hasher.update(params.system.as_deref().unwrap_or_default().as_bytes());
-    hasher.update([0]);
-
-    if let Some(tools) = &params.tools
-        && let Ok(bytes) = serde_json::to_vec(tools)
-    {
-        hasher.update(bytes);
-    }
-    hasher.update([0]);
-
+    hasher.update(b"agentik-chatgpt-session-v2\0");
     if let Some(first_message) = params.messages.first()
         && let Ok(bytes) = serde_json::to_vec(first_message)
     {
@@ -114,7 +112,7 @@ fn prompt_cache_key(params: &MessageCreateParams) -> String {
     let digest = hasher.finalize();
     let hash: String = digest
         .iter()
-        .take(24)
+        .take(12)
         .map(|byte| format!("{byte:02x}"))
         .collect();
     format!("agk-{hash}")
@@ -197,5 +195,25 @@ mod tests {
             .build();
 
         assert_ne!(prompt_cache_key(&first), prompt_cache_key(&second));
+    }
+
+    #[test]
+    fn prompt_cache_key_ignores_system_and_model_changes() {
+        // system 的动态 section(plan/skill)或模型热切换都不得轮换
+        // conversation 键——路由亲和必须覆盖整个会话。
+        let before = MessageCreateBuilder::new("gpt-6-astra", 1024)
+            .system("system v1")
+            .user("opening message")
+            .build();
+        let after = MessageCreateBuilder::new("gpt-6-luna", 1024)
+            .system("system v2 — plan/skill state rewritten")
+            .user("opening message")
+            .build();
+
+        assert_eq!(
+            prompt_cache_key(&before),
+            prompt_cache_key(&after),
+            "system/model changes must not rotate the conversation key"
+        );
     }
 }
