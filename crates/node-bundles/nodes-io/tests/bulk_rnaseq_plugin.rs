@@ -20,9 +20,9 @@ fn plugin_registers_limma_voom_wgcna_and_multiomic_concordance() {
     for kind in [
         "limma_voom_container",
         "wgcna_container",
-        "music_deconvolution_container",
+        // deseq2_de moved to the manifest plugin; it registers only when a
+        // plugins root is configured (see plugin_wave_e2e).
         "multiomic_concordance",
-        "deseq2_de_container",
     ] {
         assert!(
             kinds.iter().any(|k| k == kind),

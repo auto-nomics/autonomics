@@ -49,4 +49,4 @@ podman build \
 运行 `containers/visualization/test_visualization.sh` 可执行包版本与 PNG 冒烟
 基线。节点绑定已发布的不可变 GHCR manifest
 `autonomics/visualization@sha256:ee9592b77bc5ea0cebfafafbe39550c377204019f451d7a37e13e4ce2e884f15`；
-可通过 `AUTONOMICS_IMAGE_PREFIX` 覆盖 registry namespace。
+registry namespace 固定不变，没有运行时覆盖机制。

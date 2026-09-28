@@ -10,7 +10,7 @@ use crate::error::Result;
 use crate::migrate::{
     PlannedEntryMigration, RawCatalogIndex, RawDatasetManifest, plan_entry_migration,
 };
-use crate::model::{CATALOG_SCHEMA_VERSION, CatalogEntry, CatalogIndex, DatasetManifest};
+use crate::model::{CATALOG_SCHEMA_VERSION, CatalogEntry, CatalogIndex, DatasetManifest, HfRepoId};
 use crate::package::{PACKAGE_MANIFEST, PAYLOAD_DIR, validate_package};
 use crate::remote::ObjectSource;
 
@@ -272,7 +272,7 @@ pub async fn publish_package_to_hf(
     let manifest = validate_package(package).map_err(|error| error.to_string())?;
     let entry = build_entry(&manifest);
 
-    let (pkg_owner, pkg_name) = split_repo_id(&entry.repo)?;
+    let (pkg_owner, pkg_name) = entry.repo.owner_name();
     let (index_owner, index_name) = split_repo_id(&target.index_repo_id)?;
     let mut builder = HFClientBuilder::new();
     if let Some(token) = &target.token {
@@ -375,7 +375,7 @@ pub async fn publish_package_to_hf(
     let legacy_repositories = registry
         .entries
         .iter()
-        .filter(|entry| !entry.repo.is_empty())
+        .filter(|entry| !entry.repo.as_str().is_empty())
         .map(|entry| entry.repo.clone())
         .collect::<Vec<_>>();
     for repository in legacy_repositories {
@@ -425,14 +425,10 @@ fn upsert_entry(mut index: CatalogIndex, entry: &CatalogEntry) -> Result<Catalog
 }
 
 fn split_repo_id(repo_id: &str) -> Result<(&str, &str)> {
-    let (owner, name) = repo_id.split_once('/').ok_or_else(|| {
-        format!("Hugging Face repository id must be `owner/name`, got `{repo_id}`")
-    })?;
-    if owner.is_empty() || name.is_empty() || name.contains('/') {
-        return Err(
-            format!("Hugging Face repository id must be `owner/name`, got `{repo_id}`").into(),
-        );
-    }
+    HfRepoId::new(repo_id).map_err(crate::error::Error::from)?;
+    let (owner, name) = repo_id
+        .split_once('/')
+        .expect("HfRepoId guarantees `owner/name`");
     Ok((owner, name))
 }
 
@@ -983,7 +979,11 @@ pub async fn migrate_registry_repository(
         repo: repo_id.to_string(),
         dry_run,
         changed,
-        repositories: registry.repositories.clone(),
+        repositories: registry
+            .repositories
+            .iter()
+            .map(|repo| repo.to_string())
+            .collect(),
         index_schema_version,
     };
     if !changed || dry_run {

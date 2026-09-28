@@ -21,8 +21,8 @@ Every edge connects one named output port to one named input port. The public co
 | `FileToDataFrameNode` | 0/1 → 1 | Reads an external path or upstream file as CSV/TSV/Parquet, JSON/NDJSON, XLS/XLSX, or a biological file (VCF, BAM, BED, ...) and emits a DataFusion `DataFrame`. |
 | `SqlNode` | 1+ → 1 | Runs a DataFusion SQL query. Inputs are registered in an isolated context as `port_0`, `port_1`, and so on. |
 | `LinearRegressionNode` | 1 → 1 | Fits an OLS regression with configurable predictor columns and optional intercept. |
-| `ldsc_h2_container` | 1 → 1 | Runs the official LDSC h² CLI with cataloged EUR reference panels. |
-| `ldsc_rg_container` | 2 → 1 | Runs the official LDSC rg CLI with the same image and panel contract. |
+| `ldsc_h2` | 1 → 1 | Runs the official LDSC h² CLI with cataloged EUR reference panels. |
+| `ldsc_rg` | 2 → 1 | Runs the official LDSC rg CLI with the same image and panel contract. |
 | `LdscSldscNode` | 1 → 1 | Stratified LD Score Regression (S-LDSC). Reads multi-annotation baselineLD from files (`ref_ld_chr` / `w_ld_chr` config prefixes). Outputs a per-annotation result table. |
 | `TwasFusionNode` | 1 → 3 | Runs official FUSION TWAS association testing with GTEx v8 weights and 1000G EUR LDREF. |
 | `DataFrameToFileNode` | 1 → 1 | Writes CSV, TSV, or Parquet to a local path or configured VFS mount and emits a file reference. |

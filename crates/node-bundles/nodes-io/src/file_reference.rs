@@ -207,7 +207,7 @@ impl NodeFactory for FileReferenceNodeFactory {
         attaches size/mtime metadata, and emits a FileRef. Unlike \
         `file_to_dataframe`, it never reads the payload into a DataFrame. This is \
         the intended input node for file-backed dedicated container nodes such as \
-        `ldsc_h2_container`. Set `format` whenever it is known; downstream ports \
+        `ldsc_h2`. Set `format` whenever it is known; downstream ports \
         can reject mismatched files before execution. The path is resolved when \
         the node executes, so it must already exist: use this node for external \
         inputs, and wire files produced inside the DAG through output-port \

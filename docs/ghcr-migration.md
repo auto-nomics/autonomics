@@ -10,12 +10,15 @@ Every published tool image is public and pinned by immutable manifest digest.
 `containers/image-inventory.tsv` lists each repository together with its pinned
 digest and published tag.
 
-## Runtime override
+## Reference resolution
 
-`AUTONOMICS_IMAGE_PREFIX` selects the registry namespace, for example
-`ghcr.io/auto-nomics/autonomics` (the production default) or
-`localhost/autonomics` for local image tests. It is the only registry variable
-consulted when building image references.
+Image references are fully determined by their source data; there is no
+deployment-time registry override. The legacy wrapper constants resolve
+against the fixed `ghcr.io/auto-nomics/autonomics` namespace, and
+manifest-level `[image]` blocks carry the registry host, namespace path, and
+digest explicitly. To run against another registry (a local test registry, a
+mirror), rewrite the address fields — a manifest digest is a content address
+and survives the copy unchanged.
 
 ## Publishing an image
 

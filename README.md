@@ -89,6 +89,73 @@ Two mechanisms make the harness trustworthy for biomedical work:
 
 The default `data-engine` build enables all node-bundle Cargo features. A library consumer can disable default features and select only needed `bundle-*` features.
 
+## Plugin Families
+
+All containerized analysis nodes ship as **manifest plugins**: one directory
+per family holding `manifest.toml` (the node contract: params, ports,
+panels, image provenance), execution scripts, and the image build tree.
+Plugins are installed from git repositories pinned to a commit SHA and
+loaded at daemon startup by the plugin preflight — see
+[Plugin Node Migration](docs/plugin-node-migration.md) for the format and
+the workflow. Panel data bundles are provisioned by `autonomics panels
+sync`, which downloads and checksum-verifies every `[[panels]]` dataset
+reference missing from the local catalog cache; the startup preflight
+only checks presence locally (bounded, offline-safe), so daemon readiness
+never waits on the network. Set `AUTONOMICS_PANEL_SYNC=1` to run the
+provisioning inline during `autonomics serve` for unattended deployments.
+
+24 families / 71 node kinds are currently published:
+
+| Family | Node kinds | Tool |
+| --- | --- | --- |
+| [ldsc](https://github.com/auto-nomics/ldsc-plugin) | `ldsc_h2`, `ldsc_munge`, `ldsc_rg` | LD score regression (h2 / munge / rg) |
+| [magma](https://github.com/auto-nomics/magma-plugin) | `magma_annotate` | MAGMA SNP-to-gene annotation |
+| [mrpresso](https://github.com/auto-nomics/mrpresso-plugin) | `mrpresso` | MR-PRESSO heterogeneity / outlier test |
+| [mvmr](https://github.com/auto-nomics/mvmr-plugin) | `mvmr` | multivariable Mendelian randomization |
+| [coloc](https://github.com/auto-nomics/coloc-plugin) | `coloc_abf` | colocalization (coloc.abf) |
+| [deseq2](https://github.com/auto-nomics/deseq2-plugin) | `deseq2_de` | differential expression (DESeq2) |
+| [gcta](https://github.com/auto-nomics/gcta-plugin) | `gcta_cojo_select`, `gcta_sblup`, `gcta_fastbat`, `gcta_acat` | GCTA summary-statistics suite |
+| [pathway-gsea](https://github.com/auto-nomics/pathway-gsea-plugin) | `pathway_gsea` | fgsea pathway enrichment |
+| [plink2](https://github.com/auto-nomics/plink2-plugin) | `plink2_clump` | LD clumping (PLINK2) |
+| [visualization](https://github.com/auto-nomics/visualization-plugin) | `visualization` | R plot rendering from user scripts |
+| [mtag](https://github.com/auto-nomics/mtag-plugin) | `mtag` | multi-trait analysis of GWAS |
+| [smr](https://github.com/auto-nomics/smr-plugin) | `smr_heidi`, `smr_heidi_eqtlgen` | SMR & HEIDI (Westra / eQTLGen) |
+| [susie](https://github.com/auto-nomics/susie-plugin) | `susie_rss` | SuSiE fine-mapping (RSS) |
+| [twosamplemr](https://github.com/auto-nomics/twosamplemr-plugin) | `twosamplemr`, `twosamplemr_harmonise` | TwoSampleMR + harmonisation |
+| [mixer](https://github.com/auto-nomics/mixer-plugin) | `mixer_fit1`, `mixer_fit2` | gsa-mixer fit1 / fit2 |
+| [music](https://github.com/auto-nomics/music-plugin) | `music_deconvolution` | MuSiC cell-type deconvolution |
+| [mutation](https://github.com/auto-nomics/mutation-plugin) | `mutation_analysis`, `mutation_analysis_clinical` | maftools mutation landscapes |
+| [timesfm](https://github.com/auto-nomics/timesfm-plugin) | `timesfm_forecast` | TimesFM forecasting (offline checkpoint) |
+| [twas](https://github.com/auto-nomics/twas-plugin) | `twas_fusion` | FUSION TWAS gene expression |
+| [hdl](https://github.com/auto-nomics/hdl-plugin) | `hdl_l`, `hdl_l_scan` | HDL-L heritability + chromosome scan |
+| [lava](https://github.com/auto-nomics/lava-plugin) | `lava`, `lava_scan` | local genetic correlation + scan |
+| [single-cell](https://github.com/auto-nomics/single-cell-plugin) | `single_cell_preprocessor`, 10 `h5ad_*` / `gene_set_score` / `sc_dense_ingest` variants | scRNA preprocessing and H5AD analyses |
+| [radiomics](https://github.com/auto-nomics/radiomics-plugin) | 21 `radiomics_*` / `pyradiomics_*` variants | imaging feature extraction pipeline |
+| [pathology](https://github.com/auto-nomics/pathology-plugin) | 7 `pathology_*` variants | WSI ingest / QC / embedding / IHC |
+
+### Installing plugins
+
+Declare families in `~/.autonomics/plugins.toml`; `autonomics serve`
+runs a preflight before the daemon starts that installs each family at
+its pinned revision (git clone or local `path` symlink), validates every
+manifest fail-closed, and reports the registered kinds:
+
+```toml
+[[plugin]]
+name = "ldsc"
+git = "https://github.com/auto-nomics/ldsc-plugin.git"
+rev = "6f7118d61dd60ca7ce95d7d524ccec3880d96026"   # pinned commit SHA
+```
+
+Local development uses a `path` source (symlinked — edits apply on the
+next restart without reinstalling):
+
+```toml
+[[plugin]]
+name = "mtag"
+path = "/mnt/projects/node-plugins/mtag"
+```
+
 ## Harness Workspace Layout
 
 ```text
@@ -304,7 +371,7 @@ bun run build
 - [TUI HTTP API](docs/tui-http-api_zh.md) (Chinese)
 - [Writing-system design](docs/writing-system-design.md)
 - [Dendrite knowledge-management workspace](dendrite/README.md)
-- [TimesFM service](containers/timesfm/README.md)
+- [TimesFM service](../../node-plugins/timesfm/README.md) (timesfm plugin checkout)
 - [Local infrastructure](infra/README.md)
 
 ## Scope and Boundaries

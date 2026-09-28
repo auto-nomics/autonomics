@@ -23,10 +23,16 @@ use crate::file_to_dataframe::{
     FileFormat, FileToDataFrameNode, FileToDataFrameNodeFactory, TabularReadOptions,
 };
 use crate::image_registry::registry_image;
-use crate::single_cell_h5ad::{
-    SINGLE_CELL_WORKFLOW_IMAGE_DIGEST, SINGLE_CELL_WORKFLOW_IMAGE_REPOSITORY,
-};
-use crate::visualization_container::{VISUALIZATION_IMAGE_DIGEST, VISUALIZATION_IMAGE_REPOSITORY};
+// The single-cell family moved to the manifest plugin; these pins stay
+// because the generic Python scripting runtime renders onto the same image.
+const SINGLE_CELL_WORKFLOW_IMAGE_REPOSITORY: &str = "single-cell-preprocessor";
+const SINGLE_CELL_WORKFLOW_IMAGE_DIGEST: &str =
+    "sha256:c34c26428d13804c2528bc734805c1ccfe909353604ac08da0ce9c68890e7e18";
+// The visualization family moved to the manifest plugin; these pins stay
+// because the generic R scripting runtime renders onto the same image.
+const VISUALIZATION_IMAGE_REPOSITORY: &str = "visualization";
+const VISUALIZATION_IMAGE_DIGEST: &str =
+    "sha256:ee9592b77bc5ea0cebfafafbe39550c377204019f451d7a37e13e4ce2e884f15";
 use container_runtime::{PanelCache, PodmanConnection, PullPolicy};
 use dag_core::dag::{DagError, graph::PortOutputs};
 use dag_core::node::{DagNode, NodeInput, NodePorts};
@@ -886,6 +892,7 @@ impl NodeFactory for ScriptNodeFactory {
         let container = container_spec(self.runtime, &parsed)
             .map_err(dag_core::registry::error::Error::Unknown)?;
         let inner = ContainerCommandNode::new(
+            self.kind(),
             container,
             Arc::clone(&self.runtime_connection),
             Arc::clone(&self.panel_cache),

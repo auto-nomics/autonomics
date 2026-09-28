@@ -111,7 +111,7 @@ mod tests {
         .unwrap();
 
         let manifest = validate_package(&target).unwrap();
-        assert_eq!(manifest.repo, "wjixiang/catalog-demo-panel");
+        assert_eq!(manifest.repo.as_str(), "wjixiang/catalog-demo-panel");
         assert_eq!(
             manifest.metadata.get("description").map(String::as_str),
             Some("demo panel")
@@ -123,7 +123,10 @@ mod tests {
         let rebuilt = directory.path().join("rebuilt");
         build_package(&target, &rebuilt, BuildOptions::default()).unwrap();
         let rebuilt_manifest = validate_package(&rebuilt).unwrap();
-        assert_eq!(rebuilt_manifest.repo, "wjixiang/catalog-demo-panel");
+        assert_eq!(
+            rebuilt_manifest.repo.as_str(),
+            "wjixiang/catalog-demo-panel"
+        );
         assert_eq!(
             rebuilt_manifest
                 .metadata

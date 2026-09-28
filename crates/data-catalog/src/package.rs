@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::model::{
-    DatasetFile, DatasetManifest, manifest_digest, validate_kind, validate_relative_path,
+    DatasetFile, DatasetManifest, HfRepoId, manifest_digest, validate_kind, validate_relative_path,
     validate_repo_ref, validate_version,
 };
 
@@ -141,7 +141,7 @@ pub fn build_package(
 
     let mut manifest = DatasetManifest {
         schema_version: crate::model::DATASET_SCHEMA_VERSION,
-        repo: spec.repo,
+        repo: HfRepoId::new(&spec.repo).map_err(PackageError::Invalid)?,
         version: spec.version,
         kind: spec.kind,
         metadata: spec.metadata,
@@ -422,7 +422,7 @@ mod tests {
 
         assert!(output.join("manifest.json").is_file());
         assert!(output.join("payload/chr22/panel.vcf.gz").is_file());
-        assert_eq!(built.manifest.repo, "wjixiang/catalog-1000g-eur");
+        assert_eq!(built.manifest.repo.as_str(), "wjixiang/catalog-1000g-eur");
         let validated = validate_package(&output).unwrap();
         assert_eq!(validated, built.manifest);
     }

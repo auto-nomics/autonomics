@@ -861,8 +861,11 @@ dependencies = [
  "chrono",
  "clap",
  "color-eyre",
+ "container-plugin",
+ "container-runtime",
  "crossterm",
  "dag-core",
+ "data-catalog",
  "fuzzy-matcher",
  "gateway",
  "headless",
@@ -2185,6 +2188,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
 
 [[package]]
+name = "container-plugin"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "clap",
+ "container-runtime",
+ "dag-core",
+ "data-catalog",
+ "datafusion",
+ "futures",
+ "nodes-io",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "toml 1.1.6+spec-1.1.0",
+ "vfs",
+]
+
+[[package]]
 name = "container-runtime"
 version = "0.1.0"
 dependencies = [
@@ -2776,6 +2802,7 @@ dependencies = [
  "clap",
  "dag-core",
  "flate2",
+ "futures",
  "hf-hub",
  "schemars",
  "serde",
@@ -2806,6 +2833,7 @@ dependencies = [
  "arrow-buffer",
  "arrow-schema",
  "async-trait",
+ "container-plugin",
  "container-runtime",
  "csv",
  "dag-core",
@@ -10527,6 +10555,7 @@ dependencies = [
  "chembl",
  "chrono",
  "clinicaltrials",
+ "container-plugin",
  "container-runtime",
  "dag-core",
  "data-catalog",

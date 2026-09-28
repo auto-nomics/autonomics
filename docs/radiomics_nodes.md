@@ -185,8 +185,10 @@ ghcr.io/auto-nomics/autonomics/pyradiomics@sha256:bccbe15b2ec8d079e1bf869c4f06bf
 
 The image is built from the official PyRadiomics `v3.1.0` source release and
 contains no user data or reference panels. It uses an isolated network and a
-read-only root filesystem. See `containers/pyradiomics/README.md` for the
-pinned dependency stack.
+read-only root filesystem. See the `radiomics` plugin's README under the
+node-plugins checkout (`/mnt/projects/node-plugins/radiomics/README.md`) for
+the pinned dependency stack; the image build tree moved there when the
+container family became a manifest plugin.
 
 ## Validation baseline
 

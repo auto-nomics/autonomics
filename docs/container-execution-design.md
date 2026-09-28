@@ -145,8 +145,8 @@ cataloged data package, and a thin DAG wrapper, see
 `ldsc_h2_container` is the first such wrapper. It accepts one tab-separated
 LDSC sumstats File with `SNP`, `A1`, `A2`, `N`, and `Z` columns; plain `.tsv`
 and gzip-compressed `.sumstats.gz` are both accepted. It internally binds
-the pinned `autonomics/ldsc` manifest digest, with the GHCR namespace supplied
-by `AUTONOMICS_IMAGE_PREFIX`, to:
+the pinned `autonomics/ldsc` manifest digest under the fixed GHCR namespace
+to:
 
 - `wjixiang/catalog-ldsc-ref-ld-1000g-eur-basic` at `/panels/ref_ld`
 - `wjixiang/catalog-ldsc-w-ld-1000g-eur-hm3-no-mhc` at `/panels/w_ld`

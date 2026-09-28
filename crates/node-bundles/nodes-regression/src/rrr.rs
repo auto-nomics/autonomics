@@ -217,7 +217,7 @@ impl DagNode for RrrNode {
         let subset = |c: &Vec<f64>| -> Vec<f64> { keep.iter().map(|&i| c[i]).collect() };
         let x: Vec<Vec<f64>> = x_raw.iter().map(subset).collect();
         let y: Vec<Vec<f64>> = y_raw.iter().map(subset).collect();
-        let w = w_raw.as_ref().map(|c| subset(c));
+        let w = w_raw.as_ref().map(subset);
 
         let x_refs: Vec<&[f64]> = x.iter().map(|v| v.as_slice()).collect();
         let y_refs: Vec<&[f64]> = y.iter().map(|v| v.as_slice()).collect();

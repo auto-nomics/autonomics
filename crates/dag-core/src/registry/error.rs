@@ -178,11 +178,11 @@ mod tests {
             serde_err.to_string(),
             "invalid type: map, expected a sequence"
         );
-        let err = Error::spec_rejection_from("ldsc_rg_container", &schema, serde_err);
+        let err = Error::spec_rejection_from("ldsc_rg", &schema, serde_err);
         let msg = format!("{err}");
 
         assert!(
-            msg.contains("`ldsc_rg_container`"),
+            msg.contains("`ldsc_rg`"),
             "message must name the kind: {msg}"
         );
         assert!(

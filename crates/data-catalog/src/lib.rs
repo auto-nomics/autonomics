@@ -19,7 +19,7 @@ pub use hf::{
     HfPublishTarget, MultiRepoHfSource, PackageMigrationReport, RegistryMigrationReport,
     migrate_package_repository, migrate_registry_repository, publish_package_to_hf,
 };
-pub use local::{LocalCatalog, default_panel_cache_root};
-pub use model::{CatalogEntry, CatalogIndex, DatasetFile, DatasetManifest};
+pub use local::{LocalCatalog, ProgressSink, TransferProgress, default_panel_cache_root};
+pub use model::{CatalogEntry, CatalogIndex, DatasetFile, DatasetManifest, HfRepoId};
 pub use package::{build_package, validate_package};
 pub use remote::RemoteCatalog;

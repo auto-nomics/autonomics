@@ -28,7 +28,7 @@ MVMR/
 reference/
 
 # Official source checkouts used only for local provenance/image builds.
-containers/hdl-l/HDL-L/
+# (hdl-l's vendored HDL-L checkout moved to the node-plugins/hdl plugin.)
 containers/mixer/gsa-mixer/
 containers/mixer/mixer/
 

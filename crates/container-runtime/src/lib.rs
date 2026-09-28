@@ -10,6 +10,7 @@ pub mod connection;
 pub mod error;
 pub mod execution;
 pub mod gc;
+pub mod image;
 pub mod panel;
 pub mod podman;
 pub mod types;
@@ -26,6 +27,10 @@ pub use connection::{
 pub use error::ContainerRuntimeError;
 pub use execution::ContainerExecutionInfra;
 pub use gc::{WorkspaceGcPolicy, WorkspaceGcReport, sweep_workspace};
+pub use image::{
+    GHCR_NAMESPACE, GHCR_REGISTRY, ImageReference, ImageRepo, ManifestDigest, RegistryHost,
+    RepositoryPath, registry_image,
+};
 pub use panel::{PanelCache, PanelFile, PanelManifest};
 pub use podman::{PodmanConfig, PodmanRuntime};
 pub use types::{

@@ -134,6 +134,7 @@ fn main() -> color_eyre::Result<()> {
             CacheAction::RefreshOpengwas(args) => commands::cache::run_refresh_opengwas(args),
             CacheAction::ClearOpengwas(args) => commands::cache::run_clear_opengwas(args),
         },
+        Command::Panels(args) => commands::panels::run_panels(args),
         Command::Bib(bib) => {
             let runtime = tokio::runtime::Runtime::new()
                 .map_err(|e| color_eyre::eyre::eyre!("failed to build tokio runtime: {e}"))?;

@@ -1,9 +1,10 @@
 # TWAS / FUSION
 
-`twas_fusion_container` performs transcriptome-wide association testing with
-the official FUSION `FUSION.assoc_test.R` script. The image pins the upstream
-`fusion_twas` commit `9346c1222bffbb34499fa7a8e23c1b701b55cb05`; no numerical
-logic is reimplemented.
+The `twas_fusion` node (`twas` plugin) performs transcriptome-wide
+association testing with the official FUSION `FUSION.assoc_test.R` script.
+The image pins the upstream `fusion_twas` commit
+`9346c1222bffbb34499fa7a8e23c1b701b55cb05`; no numerical logic is
+reimplemented.
 
 ## Runtime Data
 
@@ -50,8 +51,11 @@ orientation differs from LDREF.
 | `min_r2pred` | `0.7` | Minimum mean LD imputation accuracy |
 | `perm` | `0` | Maximum permutations; zero disables |
 | `perm_minp` | `0.05` | P-value threshold for starting permutations |
-| `artifact_prefix` | `/artifacts/twas_fusion_container` | Immutable output prefix |
-| `timeout_secs` | `3600` | Container timeout |
+
+Two further settings are node-level constants of the plugin manifest
+rather than per-instance parameters: `artifact_prefix`
+(`/artifacts/twas_fusion`, immutable output prefix) and `timeout_secs`
+(`3600`, container timeout).
 
 ## Outputs
 
@@ -73,10 +77,11 @@ chromosome, and coordinates provide stable feature identity.
 {
   "tissue": "Whole_Blood",
   "chr": 21,
-  "force_model": "top1",
-  "timeout_secs": 3600
+  "force_model": "top1"
 }
 ```
 
-Run `containers/fusion/test_fusion_twas.sh` to rebuild the image, verify the
-catalog panel and registry digest, and execute the real container regression.
+Run `test_fusion_twas.sh` from the `twas` plugin checkout
+(`/mnt/projects/node-plugins/twas`) to rebuild the image, verify the
+catalog panel and registry digest, and execute the real container
+regression.

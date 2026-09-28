@@ -9,7 +9,7 @@
 //! correlation, and per-trait h² z-scores.
 //!
 //! The joined inputs feed the native LCV estimator; official LDSC rg runs in
-//! `nodes_io::ldsc_rg_container`.
+//! the `ldsc_rg` manifest plugin.
 
 use std::sync::Arc;
 

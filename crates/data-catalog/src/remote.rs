@@ -4,7 +4,7 @@ use crate::config::CatalogConfig;
 use crate::error::Result;
 use crate::hf::{MultiRepoHfSource, package_repo_prefix_for_index};
 use crate::migrate::RawCatalogIndex;
-use crate::model::{CatalogEntry, CatalogIndex, DatasetManifest};
+use crate::model::{CatalogEntry, CatalogIndex, DatasetManifest, HfRepoId};
 
 const INDEX_NAME: &str = "index.json";
 
@@ -42,8 +42,10 @@ impl RemoteCatalog {
         })
     }
 
-    #[cfg(test)]
-    pub(crate) fn from_source(config: CatalogConfig, source: Box<dyn ObjectSource>) -> Self {
+    /// Construct a catalog over a custom byte source. Test-only: real
+    /// deployments always read from Hugging Face via [`Self::hf`].
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn from_source(config: CatalogConfig, source: Box<dyn ObjectSource>) -> Self {
         Self {
             registry_repo: config.repository.expect("test catalog has repository"),
             source,
@@ -63,7 +65,7 @@ impl RemoteCatalog {
         for repository in index.repositories.clone() {
             let package_key = format!("{repository}/{INDEX_NAME}");
             let package_index = self.read_index(&package_key).await?;
-            validate_package_index(&package_index, &repository, &package_key)?;
+            validate_package_index(&package_index, repository.as_str(), &package_key)?;
             index.entries.extend(package_index.entries);
         }
 
@@ -120,7 +122,11 @@ pub(crate) fn validate_package_index(
     if !index.repositories.is_empty() {
         return Err(format!("package index `{key}` must not be a registry").into());
     }
-    if let Some(entry) = index.entries.iter().find(|entry| entry.repo != repository) {
+    if let Some(entry) = index
+        .entries
+        .iter()
+        .find(|entry| entry.repo.as_str() != repository)
+    {
         return Err(format!(
             "package index `{key}` routes an entry to a different repo `{}`",
             entry.repo
@@ -144,13 +150,15 @@ pub(crate) fn validate_entry_manifest(
     Ok(())
 }
 
-#[cfg(test)]
-pub(crate) mod test_utils {
+/// In-memory [`ObjectSource`] fixtures shared by data-catalog's own tests
+/// and downstream crates via the `test-util` feature.
+#[cfg(any(test, feature = "test-util"))]
+pub mod test_utils {
     use super::*;
     use std::collections::BTreeMap;
 
     #[derive(Default)]
-    pub(crate) struct MapSource(pub(crate) BTreeMap<String, Vec<u8>>);
+    pub struct MapSource(pub BTreeMap<String, Vec<u8>>);
 
     #[async_trait]
     impl ObjectSource for MapSource {
@@ -172,10 +180,11 @@ pub(crate) mod test_utils {
         }
     }
 
+    #[cfg(test)]
     #[tokio::test]
     async fn registry_resolves_package_local_indexes() {
         let entry = CatalogEntry {
-            repo: "owner/cache-panel".into(),
+            repo: HfRepoId::new("owner/cache-panel").unwrap(),
             version: "v1".into(),
             kind: "panel".into(),
             digest: format!("sha256:{}", "a".repeat(64)),
@@ -183,7 +192,7 @@ pub(crate) mod test_utils {
             created_unix_seconds: 1,
         };
         let registry = CatalogIndex {
-            repositories: vec!["owner/cache-panel".into()],
+            repositories: vec![HfRepoId::new("owner/cache-panel").unwrap()],
             ..CatalogIndex::default()
         };
         let package_index = CatalogIndex {
@@ -209,6 +218,7 @@ pub(crate) mod test_utils {
         assert_eq!(resolved.current_entries().next(), Some(&entry));
     }
 
+    #[cfg(test)]
     #[tokio::test]
     async fn v2_indexes_are_migrated_on_read() {
         // Mirrors repositories published before the v2→v3 migration: both the
@@ -258,7 +268,7 @@ pub(crate) mod test_utils {
 
         let index = remote.index().await.unwrap();
         let entry = index.current_entries().next().unwrap();
-        assert_eq!(entry.repo, "owner/catalog-plink-ref");
+        assert_eq!(entry.repo.as_str(), "owner/catalog-plink-ref");
         assert_eq!(entry.version, "v1");
 
         let package = remote
@@ -266,9 +276,10 @@ pub(crate) mod test_utils {
             .await
             .unwrap();
         assert_eq!(package.entries.len(), 1);
-        assert_eq!(package.entries[0].repo, "owner/catalog-plink-ref");
+        assert_eq!(package.entries[0].repo.as_str(), "owner/catalog-plink-ref");
     }
 
+    #[cfg(test)]
     #[tokio::test]
     async fn v2_entry_without_repo_recovers_repo_from_index_prefix() {
         let v2_entry = format!(
@@ -310,7 +321,7 @@ pub(crate) mod test_utils {
         let remote = RemoteCatalog::from_source(config, Box::new(objects));
 
         let package = remote.package_index(repo).await.unwrap();
-        assert_eq!(package.entries[0].repo, repo);
+        assert_eq!(package.entries[0].repo.as_str(), repo);
 
         // The recovered repo must still route consistently for package indexes.
         let error = remote

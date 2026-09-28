@@ -89,6 +89,68 @@ Node registry + DAG scheduler
 
 默认 `data-engine` 构建启用全部 node-bundle Cargo feature。库使用者可以关闭默认 feature，再按需选择 `bundle-*`。
 
+## 插件家族
+
+所有容器化分析节点都以**清单插件**（manifest plugin）形式交付：每个家族
+一个目录，包含 `manifest.toml`（节点契约：参数、端口、面板、镜像溯源）、
+执行脚本和镜像构建树。插件从钉死 commit SHA 的 git 仓库安装，daemon 启动
+前的插件自检阶段完成安装、校验与汇报——格式与工作流见
+[节点插件化迁移](docs/plugin-node-migration_zh.md)。面板数据包由
+`autonomics panels sync` 独立供给：下载并校验 `[[panels]]` 引用中本地
+catalog 缓存缺失的 dataset；启动自检只做本地存在性检查（有界、离线安全），
+daemon 就绪永不等待网络。无人值守部署可设 `AUTONOMICS_PANEL_SYNC=1` 让
+`autonomics serve` 启动时内联完成供给。
+
+当前发布 24 个家族 / 71 个节点 kind：
+
+| 家族 | 节点 kind | 工具 |
+| --- | --- | --- |
+| [ldsc](https://github.com/auto-nomics/ldsc-plugin) | `ldsc_h2`、`ldsc_munge`、`ldsc_rg` | LD score 回归（h2 / munge / rg） |
+| [magma](https://github.com/auto-nomics/magma-plugin) | `magma_annotate` | MAGMA SNP-基因注释 |
+| [mrpresso](https://github.com/auto-nomics/mrpresso-plugin) | `mrpresso` | MR-PRESSO 异质性/离群检验 |
+| [mvmr](https://github.com/auto-nomics/mvmr-plugin) | `mvmr` | 多变量孟德尔随机化 |
+| [coloc](https://github.com/auto-nomics/coloc-plugin) | `coloc_abf` | 共定位（coloc.abf） |
+| [deseq2](https://github.com/auto-nomics/deseq2-plugin) | `deseq2_de` | 差异表达（DESeq2） |
+| [gcta](https://github.com/auto-nomics/gcta-plugin) | `gcta_cojo_select`、`gcta_sblup`、`gcta_fastbat`、`gcta_acat` | GCTA 汇总统计套件 |
+| [pathway-gsea](https://github.com/auto-nomics/pathway-gsea-plugin) | `pathway_gsea` | fgsea 通路富集 |
+| [plink2](https://github.com/auto-nomics/plink2-plugin) | `plink2_clump` | LD clumping（PLINK2） |
+| [visualization](https://github.com/auto-nomics/visualization-plugin) | `visualization` | 用户 R 脚本绘图渲染 |
+| [mtag](https://github.com/auto-nomics/mtag-plugin) | `mtag` | 多性状 GWAS 分析 |
+| [smr](https://github.com/auto-nomics/smr-plugin) | `smr_heidi`、`smr_heidi_eqtlgen` | SMR 与 HEIDI（Westra / eQTLGen） |
+| [susie](https://github.com/auto-nomics/susie-plugin) | `susie_rss` | SuSiE 精细定位（RSS） |
+| [twosamplemr](https://github.com/auto-nomics/twosamplemr-plugin) | `twosamplemr`、`twosamplemr_harmonise` | TwoSampleMR 与协调 |
+| [mixer](https://github.com/auto-nomics/mixer-plugin) | `mixer_fit1`、`mixer_fit2` | gsa-mixer fit1 / fit2 |
+| [music](https://github.com/auto-nomics/music-plugin) | `music_deconvolution` | MuSiC 细胞类型去卷积 |
+| [mutation](https://github.com/auto-nomics/mutation-plugin) | `mutation_analysis`、`mutation_analysis_clinical` | maftools 突变图谱 |
+| [timesfm](https://github.com/auto-nomics/timesfm-plugin) | `timesfm_forecast` | TimesFM 预测（离线 checkpoint） |
+| [twas](https://github.com/auto-nomics/twas-plugin) | `twas_fusion` | FUSION TWAS 基因表达 |
+| [hdl](https://github.com/auto-nomics/hdl-plugin) | `hdl_l`、`hdl_l_scan` | HDL-L 遗传力与染色体扫描 |
+| [lava](https://github.com/auto-nomics/lava-plugin) | `lava`、`lava_scan` | 局部遗传相关与扫描 |
+| [single-cell](https://github.com/auto-nomics/single-cell-plugin) | `single_cell_preprocessor`、10 个 `h5ad_*` / `gene_set_score` / `sc_dense_ingest` 变体 | scRNA 预处理与 H5AD 分析 |
+| [radiomics](https://github.com/auto-nomics/radiomics-plugin) | 21 个 `radiomics_*` / `pyradiomics_*` 变体 | 影像特征提取流水线 |
+| [pathology](https://github.com/auto-nomics/pathology-plugin) | 7 个 `pathology_*` 变体 | WSI 切片摄取 / QC / 嵌入 / IHC |
+
+### 安装插件
+
+在 `~/.autonomics/plugins.toml` 声明家族；`autonomics serve` 在 daemon
+启动前运行自检阶段：按钉死的 rev 安装每个家族（git clone 或本地 `path`
+符号链接）、以 fail-closed 方式校验全部清单、汇报注册的 kind：
+
+```toml
+[[plugin]]
+name = "ldsc"
+git = "https://github.com/auto-nomics/ldsc-plugin.git"
+rev = "6f7118d61dd60ca7ce95d7d524ccec3880d96026"   # 钉死的 commit SHA
+```
+
+本地开发使用 `path` 源（符号链接——改文件后重启即生效，无需重装）：
+
+```toml
+[[plugin]]
+name = "mtag"
+path = "/mnt/projects/node-plugins/mtag"
+```
+
 ## Harness 工作空间结构
 
 ```text
@@ -306,7 +368,7 @@ bun run build
 - [TUI HTTP API](docs/tui-http-api_zh.md)
 - [写作系统设计](docs/writing-system-design.md)
 - [Dendrite 知识管理工作空间](dendrite/README.md)
-- [TimesFM 服务](containers/timesfm/README.md)
+- [TimesFM 服务](../../node-plugins/timesfm/README.md)（timesfm 插件目录）
 - [本地基础设施](infra/README.md)
 
 ## 范围与边界

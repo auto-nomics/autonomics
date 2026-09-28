@@ -176,6 +176,22 @@ impl SharedInfra {
     pub async fn open(config: &RuntimeConfig) -> Result<Self> {
         tracing::info!("SharedInfra::open: starting");
 
+        // Materialize declared plugins before anything scans for them:
+        // `state_dir/plugins.toml` lists installation sources (git pins or
+        // local symlinks) and lands under `state_dir/plugins`, which the
+        // data-engine registry then loads. Missing config = nothing
+        // declared; a declared-but-broken plugin aborts startup.
+        let plugin_report = container_plugin::sync::sync(
+            &config
+                .state_dir
+                .join(container_plugin::sync::PLUGIN_CONFIG_FILE),
+            &config.state_dir.join("plugins"),
+        )
+        .map_err(|error| crate::error::Error::Other(error.to_string()))?;
+        if !plugin_report.outcomes.is_empty() {
+            tracing::info!("plugins: {}", plugin_report.summary());
+        }
+
         // Build the VFS mount table first so we can attach it to the
         // agent-facing `OpendalFileStorage`. This makes the `vfs`
         // tool see mounted paths (otherwise it would only see the
@@ -4242,7 +4258,7 @@ repository = "owner/catalog-index"
         let manifest: data_catalog::DatasetManifest =
             serde_json::from_slice(&std::fs::read(package.join("manifest.json")).unwrap()).unwrap();
         let entry = data_catalog::CatalogEntry {
-            repo: "owner/catalog-panel".into(),
+            repo: data_catalog::HfRepoId::new("owner/catalog-panel").unwrap(),
             version: manifest.version.clone(),
             kind: manifest.kind.clone(),
             digest: manifest.digest.clone().expect("test package has digest"),

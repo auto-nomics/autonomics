@@ -13,6 +13,7 @@ clap.workspace = true
 async-trait.workspace = true
 dag-core = { path = "../dag-core" }
 flate2 = "1.1"
+futures.workspace = true
 schemars.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
@@ -34,6 +35,12 @@ zstd = "0.13"
 tempfile = "3"
 [dev-dependencies]
 tempfile = "3"
+
+[features]
+# Exposes `RemoteCatalog::from_source` and the in-memory `MapSource` fixture
+# so downstream crates (container-plugin) can unit-test catalog flows
+# without network access.
+test-util = []
 
 [lints]
 workspace = true
