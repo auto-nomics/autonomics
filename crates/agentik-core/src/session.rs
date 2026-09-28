@@ -1914,19 +1914,15 @@ impl Session {
             }
         }
 
-        if let Some(rt) = &self.shared.skill_runtime {
-            let section = rt.lock().await.current_prompt_section();
-            if !section.is_empty() {
-                builder = builder.with_extra_section(section);
-            }
-        }
-
-        let plan = self.shared.plan_snapshot();
-        if !plan.is_empty() {
-            builder = builder.with_extra_section(render_plan_prompt_section(&plan));
-        }
-
+        // 注:plan 与 skill 状态不再进 system——它们随任务推进高频变化,
+        // 每次变化都会重写 instructions(请求体最头部),使 prompt-cache
+        // 的最长公共前缀归零,并轮换 ChatGPT wire 的 prompt_cache_key。
+        // 改为变更时向消息流尾部注入通知(inject_state_notices),system
+        // 在会话内保持逐字节稳定。
         let system_prompt = builder.parse();
+
+        self.inject_state_notices().await;
+
         let context_messages = self.render_context()?.to_vec();
 
         // Store system prompt on the session so request() can pass it
@@ -1934,6 +1930,40 @@ impl Session {
         self.pending_system_prompt = Some(system_prompt);
 
         Ok(context_messages)
+    }
+
+    /// 将 plan / skill 状态以**消息流尾部通知**同步给模型:仅当状态与
+    /// 历史中最近一条同类通知不一致时追加一条 user 消息(前缀
+    /// [`PLAN_NOTICE_PREFIX`] / [`SKILL_NOTICE_PREFIX`]);状态未变则不
+    /// 注入——幂等,重试与 snapshot 恢复安全。
+    ///
+    /// 通知经 `remember` 落库;压缩把旧通知摘要掉后,下次构建在历史中
+    /// 找不到匹配通知,即按当前状态重发(自愈)。
+    async fn inject_state_notices(&mut self) {
+        // plan
+        let plan = self.shared.plan_snapshot();
+        let plan_section = (!plan.is_empty()).then(|| render_plan_prompt_section(&plan));
+        if !notice_matches(&self.messages, PLAN_NOTICE_PREFIX, plan_section.as_deref()) {
+            let _ = self.remember(Message::user(notice_text(
+                PLAN_NOTICE_PREFIX,
+                plan_section.as_deref(),
+            )));
+        }
+
+        // skill
+        let skill_section = match &self.shared.skill_runtime {
+            Some(rt) => {
+                let section = rt.lock().await.current_prompt_section();
+                (!section.is_empty()).then_some(section)
+            }
+            None => None,
+        };
+        if !notice_matches(&self.messages, SKILL_NOTICE_PREFIX, skill_section.as_deref()) {
+            let _ = self.remember(Message::user(notice_text(
+                SKILL_NOTICE_PREFIX,
+                skill_section.as_deref(),
+            )));
+        }
     }
 
     async fn request(&mut self, allowed: Option<&[String]>) -> Result<Message> {
@@ -2120,6 +2150,53 @@ fn render_plan_prompt_section(plan: &AgentPlan) -> String {
     }
 
     s
+}
+
+// ── Tail-injected state notices (plan / skill) ─────────────────────
+//
+// 这些状态随任务推进高频变化,放进 system 会打掉 prompt-cache 前缀
+// (见 build_context 注释)。改为:变化时在消息流尾部追加一条带前缀
+// 标记的 user 通知;未变化时不追加。
+
+/// 尾部通知:plan 状态通知的前缀(同时也是历史扫描标记)。
+const PLAN_NOTICE_PREFIX: &str = "[plan-status]\n";
+/// 尾部通知:skill 状态通知的前缀。
+const SKILL_NOTICE_PREFIX: &str = "[skill-status]\n";
+/// 通知正文里表示"状态已清空"的哨兵;历史中出现它等价于当前无状态。
+const NOTICE_CLEARED_BODY: &str = "(cleared — no longer active)";
+
+/// 历史中最近一条该前缀通知所反映的状态正文;外层 `None` = 从未注入。
+/// `(cleared)` 哨兵归一化为内层 `None`,使"注入过清空通知"与"当前无
+/// 状态"可以判等。
+fn last_notice_state<'a>(messages: &'a [Message], prefix: &str) -> Option<Option<&'a str>> {
+    messages
+        .iter()
+        .rev()
+        .flat_map(|m| m.content.iter())
+        .filter_map(|c| match c {
+            ContentBlock::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .find_map(|t| t.strip_prefix(prefix))
+        .map(|body| (body != NOTICE_CLEARED_BODY).then_some(body))
+}
+
+/// 当前状态(`current`,`None` = 未激活)是否已被历史中最近一条通知
+/// 如实反映。从未注入且未激活视为一致(不注入)。
+fn notice_matches(messages: &[Message], prefix: &str, current: Option<&str>) -> bool {
+    match (last_notice_state(messages, prefix), current) {
+        (None, None) | (Some(None), None) => true,
+        (Some(Some(last)), Some(current)) => last == current,
+        _ => false,
+    }
+}
+
+/// 组装一条通知消息的全文。
+fn notice_text(prefix: &str, current: Option<&str>) -> String {
+    match current {
+        Some(body) => format!("{prefix}{body}"),
+        None => format!("{prefix}{NOTICE_CLEARED_BODY}"),
+    }
 }
 
 // ── Compaction helper functions (moved from memory.rs) ─────────────
@@ -2825,6 +2902,167 @@ mod tests {
             session.messages.len(),
             3,
             "same text after an interleaved message is not a duplicate"
+        );
+    }
+
+    // ── System prompt per-turn hashing (cache prefix stability) ─────
+
+    /// system 稳定性 + plan 尾部通知注入实证:在模型调用边界
+    /// (MockApiClient)捕获每次实际传出的 `system` 与消息列表,验证:
+    /// 1. system 在**整个会话**内逐字节稳定(plan/skill 状态变化不再
+    ///    重写 instructions——prompt-cache 前缀的关键不变量);
+    /// 2. `update_plan` 执行后,plan 状态以**消息流尾部通知**出现在
+    ///    同一回合内的下一次请求里(携带渲染后的 plan);
+    /// 3. 状态未变的后续回合不重复注入(历史中恰好一条通知)。
+    #[tokio::test]
+    async fn plan_state_injects_as_tail_notice_and_keeps_system_stable() {
+        use agentik_sdk::model::Model;
+        use agentik_sdk::provider::client::MockApiClient;
+        use agentik_sdk::streaming::MessageStream;
+        use crate::testing::dummy_model_info;
+        use std::hash::{Hash, Hasher};
+
+        let captured: Arc<std::sync::Mutex<Vec<(Vec<Message>, Option<String>)>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+
+        let responses = [
+            Message::assistant_text("hi there"),
+            Message::assistant_tool_use(
+                "call_plan_1",
+                "update_plan",
+                serde_json::json!({
+                    "plan": [
+                        {"step": "Investigate cache prefix", "status": "in_progress"},
+                        {"step": "Write fix", "status": "pending"}
+                    ]
+                }),
+            ),
+            Message::assistant_text("plan saved"),
+            Message::assistant_text("done"),
+        ];
+        let mut mock = MockApiClient::new();
+        for resp in responses {
+            let cap = Arc::clone(&captured);
+            mock.expect_request_stream_with_system()
+                .times(1)
+                .returning(move |messages, _, _, system| {
+                    cap.lock().unwrap().push((messages, system));
+                    Ok(MessageStream::from_events(Vec::new(), resp.clone()))
+                });
+        }
+        let model = Model::with_client(dummy_model_info("sys-hash"), mock);
+
+        // 与 AgentBuilder 相同的方式注册 update_plan(PlanHandle 指向
+        // shared.plan 的同一个 ArcSwap)。
+        let plan_state = Arc::new(arc_swap::ArcSwap::new(std::sync::Arc::new(
+            agentik_types::AgentPlan::new(),
+        )));
+        let mut registry = crate::tools::ToolRegistry::new();
+        registry
+            .register_all(crate::tools::plan_registrations(
+                crate::tools::builtins::PlanHandle::new(
+                    Arc::clone(&plan_state),
+                    Uuid::new_v4(),
+                    None,
+                    None,
+                ),
+            ))
+            .unwrap();
+        let shared = Arc::new(AgentShared {
+            id: Uuid::new_v4(),
+            path: agentik_types::AgentPath::root(),
+            config_json: serde_json::json!({}),
+            model: Arc::new(arc_swap::ArcSwapOption::from_pointee(Some(model))),
+            config: AgentConfig::default(),
+            storage: None,
+            context_provider: None,
+            system_prompt_section: None,
+            system_prompt_identity: None,
+            memory: None,
+            skill_runtime: None,
+            tool_registry: Arc::new(registry),
+            tasks: Arc::new(tokio::sync::RwLock::new(
+                crate::tools::task_runtime::TaskStore::new(),
+            )),
+            event_tx: arc_swap::ArcSwapOption::empty(),
+            persist_tx: std::sync::OnceLock::new(),
+            plan: plan_state,
+        });
+
+        let (internal_tx, _internal_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut session = Session::new_for_tests(shared, agentik_types::AgentPath::root());
+
+        session.remember(Message::user("hello")).unwrap();
+        session.agent_workflow(&internal_tx, None).await.unwrap();
+        session.remember(Message::user("now make a plan")).unwrap();
+        session.agent_workflow(&internal_tx, None).await.unwrap();
+        session.agent_workflow(&internal_tx, None).await.unwrap();
+        session.remember(Message::user("thanks")).unwrap();
+        session.agent_workflow(&internal_tx, None).await.unwrap();
+
+        let calls = std::mem::take(&mut *captured.lock().unwrap());
+        assert_eq!(calls.len(), 4, "exactly 4 model calls expected");
+
+        let hash_of = |s: &Option<String>| {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            s.as_deref().unwrap_or("<none>").hash(&mut h);
+            format!("{:016x}", h.finish())
+        };
+        let notice_count = |messages: &[Message]| {
+            messages
+                .iter()
+                .flat_map(|m| m.text())
+                .filter(|t| t.starts_with(PLAN_NOTICE_PREFIX))
+                .count()
+        };
+        for (i, (messages, system)) in calls.iter().enumerate() {
+            println!(
+                "call{} system_hash={} system_len={:4} plan_notices={}",
+                i + 1,
+                hash_of(system),
+                system.as_deref().map(str::len).unwrap_or(0),
+                notice_count(messages),
+            );
+        }
+
+        // 1. system 全程逐字节稳定,且 plan 不再进 system。
+        assert!(
+            calls.iter().all(|(_, s)| s == &calls[0].1),
+            "system must stay byte-identical across the whole conversation"
+        );
+        assert!(
+            !calls
+                .iter()
+                .any(|(_, s)| s.as_deref().is_some_and(|s| s.contains("## Current plan status"))),
+            "plan section must not leak into system"
+        );
+
+        // 2. update_plan 执行后的下一次请求以尾部通知携带 plan。
+        assert_eq!(notice_count(&calls[0].0), 0, "cold call has no notice");
+        assert_eq!(
+            notice_count(&calls[1].0),
+            0,
+            "pre-tool call has no notice"
+        );
+        assert_eq!(
+            notice_count(&calls[2].0),
+            1,
+            "post-update_plan continuation must carry exactly one plan notice"
+        );
+        assert!(
+            calls[2].0.iter().any(|m| {
+                m.text()
+                    .iter()
+                    .any(|t| t.contains("## Current plan status"))
+            }),
+            "the notice must carry the rendered plan"
+        );
+
+        // 3. 状态未变 → 不重复注入。
+        assert_eq!(
+            notice_count(&calls[3].0),
+            1,
+            "unchanged plan must not trigger a second notice"
         );
     }
 

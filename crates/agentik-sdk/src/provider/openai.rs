@@ -18,7 +18,7 @@ use crate::wire::WireProtocolKind;
 // 实测自 GET /backend-api/codex/models（2026-09，Plus 账号）。此处为离线
 // 兜底目录；登录后由 [`OpenaiProvider::fetch_remote_catalog`] 自动拉全量。
 pub const MODEL_GPT_6_ASTRA: &str = "gpt-6-astra"; // 旗舰
-pub const MODEL_GPT_5_5: &str = "gpt-5.5";
+pub const MODEL_GPT_6_LUNA: &str = "gpt-6-luna";
 const LARGE_CONTEXT_WINDOW: u64 = 1_050_000;
 const MAX_OUTPUT_TOKENS: u64 = 128_000;
 
@@ -82,7 +82,11 @@ impl OpenaiProvider {
             // GPT-5.6-Luna — 快且便宜的 agentic 编码模型。
             entry("gpt-5.6-luna", LARGE_CONTEXT_WINDOW, ReasoningEffort::Max),
             // GPT-5.5 — 上代通用模型。
-            entry(MODEL_GPT_5_5, LARGE_CONTEXT_WINDOW, ReasoningEffort::Xhigh),
+            entry(
+                MODEL_GPT_6_LUNA,
+                LARGE_CONTEXT_WINDOW,
+                ReasoningEffort::Xhigh,
+            ),
             // GPT-5.4-Mini — 小型快速模型。
             entry("gpt-5.4-mini", 400_000, ReasoningEffort::Xhigh),
             // GPT-Reserve — 备用容量档。
@@ -220,13 +224,13 @@ mod tests {
         let models = OpenaiProvider::preset_models();
         assert!(models.len() >= 7);
         assert!(models.iter().any(|m| m.model_name == MODEL_GPT_6_ASTRA));
-        assert!(models.iter().any(|m| m.model_name == MODEL_GPT_5_5));
+        assert!(models.iter().any(|m| m.model_name == MODEL_GPT_6_LUNA));
         for (name, context_length) in [
             (MODEL_GPT_6_ASTRA, 1_050_000),
             ("gpt-5.6-sol", 1_050_000),
             ("gpt-5.6-terra", 1_050_000),
             ("gpt-5.6-luna", 1_050_000),
-            (MODEL_GPT_5_5, 1_050_000),
+            (MODEL_GPT_6_LUNA, 1_050_000),
             ("gpt-5.4-mini", 400_000),
             ("gpt-reserve", 272_000),
         ] {
