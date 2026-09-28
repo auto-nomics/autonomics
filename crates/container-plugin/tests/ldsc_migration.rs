@@ -33,8 +33,13 @@ fn load_manifest(root: &PathBuf) -> PluginManifest {
     manifest
 }
 
-fn node_by_kind<'a>(manifest: &'a PluginManifest, kind: &str) -> &'a container_plugin::node_definition::NodeDefinition {
-    manifest.nodes.iter()
+fn node_by_kind<'a>(
+    manifest: &'a PluginManifest,
+    kind: &str,
+) -> &'a container_plugin::node_definition::NodeDefinition {
+    manifest
+        .nodes
+        .iter()
         .find(|n| n.kind == kind)
         .unwrap_or_else(|| panic!("{kind} missing from manifest"))
 }
@@ -48,13 +53,8 @@ fn ldsc_h2_plugin_compiles_to_the_legacy_wrapper_contract() {
     let manifest = load_manifest(&root);
     let node = node_by_kind(&manifest, "ldsc_h2");
 
-    let compiled = compile_container_spec(
-        node,
-        &manifest.image,
-        &manifest.panels,
-        &json!({}),
-    )
-    .unwrap();
+    let compiled =
+        compile_container_spec(node, &manifest.image, &manifest.panels, &json!({})).unwrap();
 
     assert_eq!(
         compiled.image,
@@ -139,13 +139,8 @@ fn ldsc_munge_plugin_compiles_to_the_legacy_wrapper_contract() {
     let manifest = load_manifest(&root);
     let node = node_by_kind(&manifest, "ldsc_munge");
 
-    let compiled = compile_container_spec(
-        node,
-        &manifest.image,
-        &manifest.panels,
-        &json!({}),
-    )
-    .unwrap();
+    let compiled =
+        compile_container_spec(node, &manifest.image, &manifest.panels, &json!({})).unwrap();
 
     assert_eq!(
         compiled.image,
@@ -163,7 +158,7 @@ fn ldsc_munge_plugin_compiles_to_the_legacy_wrapper_contract() {
     assert_eq!(compiled.outputs[1].format.as_deref(), Some("ldsc_log"));
 
     let script = compiled.script.as_deref().unwrap();
-        // munge.sh does its own gzip handling in a sh case statement, so the
+    // munge.sh does its own gzip handling in a sh case statement, so the
     // legacy "prepare_input" helper is not present. The plugin's
     // equivalent markers are the .gz branch and the gzip -dc command.
     assert!(script.contains("*.gz"));
@@ -191,13 +186,8 @@ fn ldsc_rg_plugin_compiles_to_the_legacy_wrapper_contract() {
     let manifest = load_manifest(&root);
     let node = node_by_kind(&manifest, "ldsc_rg");
 
-    let compiled = compile_container_spec(
-        node,
-        &manifest.image,
-        &manifest.panels,
-        &json!({}),
-    )
-    .unwrap();
+    let compiled =
+        compile_container_spec(node, &manifest.image, &manifest.panels, &json!({})).unwrap();
 
     assert_eq!(compiled.panel_bundles.len(), 2);
     let panel_ids: Vec<&str> = compiled

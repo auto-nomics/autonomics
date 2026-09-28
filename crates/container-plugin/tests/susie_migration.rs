@@ -26,8 +26,7 @@ fn load_manifest(root: &PathBuf) -> PluginManifest {
     let mut manifest: PluginManifest = toml::from_str(&text).unwrap();
     for node in manifest.nodes.iter_mut() {
         if let Some(relative) = node.command.script_file.clone() {
-            let source =
-                std::fs::read_to_string(root.join("susie").join(&relative)).unwrap();
+            let source = std::fs::read_to_string(root.join("susie").join(&relative)).unwrap();
             node.command.script = Some(source);
             node.command.script_file = None;
         }
@@ -55,13 +54,8 @@ fn susie_rss_plugin_compiles_to_the_legacy_wrapper_contract() {
     let manifest = load_manifest(&root);
     let node = node_by_kind(&manifest, "susie_rss");
 
-    let compiled = compile_container_spec(
-        node,
-        &manifest.image,
-        &manifest.panels,
-        &json!({}),
-    )
-    .unwrap();
+    let compiled =
+        compile_container_spec(node, &manifest.image, &manifest.panels, &json!({})).unwrap();
 
     assert_eq!(
         compiled.image,
@@ -119,7 +113,10 @@ fn susie_rss_plugin_compiles_to_the_legacy_wrapper_contract() {
     // `nzchar(Sys.getenv("SUSIE_N", unset = ""))` treats both as "read the n
     // column".
     assert_eq!(compiled.env.get("SUSIE_L").unwrap(), "10");
-    assert_eq!(compiled.env.get("SUSIE_ESTIMATE_PRIOR_METHOD").unwrap(), "optim");
+    assert_eq!(
+        compiled.env.get("SUSIE_ESTIMATE_PRIOR_METHOD").unwrap(),
+        "optim"
+    );
     assert_eq!(
         compiled
             .env
@@ -166,13 +163,8 @@ fn susie_rss_plugin_runner_keeps_the_legacy_call_semantics() {
     let manifest = load_manifest(&root);
     let node = node_by_kind(&manifest, "susie_rss");
 
-    let compiled = compile_container_spec(
-        node,
-        &manifest.image,
-        &manifest.panels,
-        &json!({}),
-    )
-    .unwrap();
+    let compiled =
+        compile_container_spec(node, &manifest.image, &manifest.panels, &json!({})).unwrap();
 
     // The full susie_rss(...) argument list is token-identical to the baked
     // runner: same parameters, same order, same env-var sources.
@@ -242,7 +234,10 @@ fn susie_rss_plugin_renders_submitted_values_into_env() {
     assert_eq!(compiled.env.get("SUSIE_L").unwrap(), "4");
     assert_eq!(compiled.env.get("SUSIE_MAX_ITER").unwrap(), "500");
     assert_eq!(compiled.env.get("SUSIE_N").unwrap(), "987");
-    assert_eq!(compiled.env.get("SUSIE_ESTIMATE_PRIOR_METHOD").unwrap(), "EM");
+    assert_eq!(
+        compiled.env.get("SUSIE_ESTIMATE_PRIOR_METHOD").unwrap(),
+        "EM"
+    );
     assert_eq!(
         compiled
             .env
@@ -256,13 +251,8 @@ fn susie_rss_plugin_renders_submitted_values_into_env() {
 
     // A second L variation: the minimal single-effect fit, with n left
     // absent so SUSIE_N renders empty ("read the n column").
-    let compiled = compile_container_spec(
-        node,
-        &manifest.image,
-        &manifest.panels,
-        &json!({"l": 1}),
-    )
-    .unwrap();
+    let compiled =
+        compile_container_spec(node, &manifest.image, &manifest.panels, &json!({"l": 1})).unwrap();
     assert_eq!(compiled.env.get("SUSIE_L").unwrap(), "1");
     assert_eq!(compiled.env.get("SUSIE_N").unwrap(), "");
 }
@@ -336,7 +326,10 @@ fn susie_rss_plugin_schema_marks_optionals_and_bounds() {
     );
     assert_eq!(schema["properties"]["n"]["type"], "number");
     assert!(schema["properties"]["n"].get("default").is_none());
-    assert_eq!(schema["properties"]["estimate_residual_variance"]["type"], "boolean");
+    assert_eq!(
+        schema["properties"]["estimate_residual_variance"]["type"],
+        "boolean"
+    );
 }
 
 #[test]

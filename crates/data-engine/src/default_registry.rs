@@ -110,17 +110,14 @@ pub fn build_default_registry_with_container_execution(
     // offending plugin. The root is admin-controlled host state: agents
     // have no path that reaches it.
     {
-        let root = plugins_root
-            .unwrap_or_else(container_plugin::loader::default_plugins_root);
+        let root = plugins_root.unwrap_or_else(container_plugin::loader::default_plugins_root);
         if root.is_dir() {
             let plugins = container_plugin::loader::load(
                 &root,
                 Arc::clone(&container_execution.runtime),
                 Arc::clone(&container_execution.panel_cache),
             )
-            .unwrap_or_else(|error| {
-                panic!("invalid plugin under `{}`: {error}", root.display())
-            });
+            .unwrap_or_else(|error| panic!("invalid plugin under `{}`: {error}", root.display()));
             for plugin in plugins {
                 registry.register_plugin(&plugin);
             }
@@ -191,7 +188,6 @@ mod tests {
             "the legacy host-R visualization node must not be registered"
         );
     }
-
 
     #[test]
     fn string_source_factories_are_registered() {

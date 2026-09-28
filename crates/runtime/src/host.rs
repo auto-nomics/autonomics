@@ -182,7 +182,9 @@ impl SharedInfra {
         // data-engine registry then loads. Missing config = nothing
         // declared; a declared-but-broken plugin aborts startup.
         let plugin_report = container_plugin::sync::sync(
-            &config.state_dir.join(container_plugin::sync::PLUGIN_CONFIG_FILE),
+            &config
+                .state_dir
+                .join(container_plugin::sync::PLUGIN_CONFIG_FILE),
             &config.state_dir.join("plugins"),
         )
         .map_err(|error| crate::error::Error::Other(error.to_string()))?;

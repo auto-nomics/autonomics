@@ -10,13 +10,13 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
+use container_runtime::{
+    ContainerRunRequest, ContainerRunResult, ContainerRuntimeError, DEFAULT_CONTAINER_WORKDIR,
+    PanelCache, PodmanConnection,
+};
 use dag_core::registry::NodeRegistry;
 use dag_core::value::{FileRef, NodeValue};
 use dag_core::{NodeCtx, NodeInput, NodePlugin};
-use container_runtime::{
-    ContainerRunRequest, ContainerRunResult, ContainerRuntimeError, PanelCache,
-    PodmanConnection, DEFAULT_CONTAINER_WORKDIR,
-};
 
 struct FakeRuntime {
     workspace_root: PathBuf,
@@ -94,7 +94,10 @@ rev = "6f7118d61dd60ca7ce95d7d524ccec3880d96026"
     let report = container_plugin::sync::sync(&config_path, &root).unwrap();
     assert_eq!(report.outcomes.len(), 1);
     assert_eq!(report.outcomes[0].0, "ldsc");
-    assert!(root.join("ldsc/manifest.toml").is_file(), "plugin tree cloned");
+    assert!(
+        root.join("ldsc/manifest.toml").is_file(),
+        "plugin tree cloned"
+    );
     assert!(root.join("ldsc/scripts/h2.sh").is_file(), "script present");
 
     // 2. Load with a hermetic fake runtime; register through the real
@@ -129,7 +132,13 @@ rev = "6f7118d61dd60ca7ce95d7d524ccec3880d96026"
                 files: vec![container_runtime::PanelFile {
                     path: "chr22/panel.txt".into(),
                     size: payload.len() as u64,
-                    sha256: format!("sha256:{}", Sha256::digest(payload).iter().map(|b| format!("{b:02x}")).collect::<String>()),
+                    sha256: format!(
+                        "sha256:{}",
+                        Sha256::digest(payload)
+                            .iter()
+                            .map(|b| format!("{b:02x}"))
+                            .collect::<String>()
+                    ),
                 }],
             })
             .unwrap(),
@@ -144,8 +153,16 @@ rev = "6f7118d61dd60ca7ce95d7d524ccec3880d96026"
     let objects = tempfile::tempdir().unwrap();
     let storage = Arc::new(vfs::OpendalFileStorage::new(objects.path()));
     let mut bundles = dag_core::BundleRegistry::new();
-    let ref_ld = materialize_panel(objects.path(), "wjixiang/catalog-ldsc-ref-ld-1000g-eur-basic", b"ref-ld-scores");
-    let w_ld = materialize_panel(objects.path(), "wjixiang/catalog-ldsc-w-ld-1000g-eur-hm3-no-mhc", b"w-ld-weight".as_slice());
+    let ref_ld = materialize_panel(
+        objects.path(),
+        "wjixiang/catalog-ldsc-ref-ld-1000g-eur-basic",
+        b"ref-ld-scores",
+    );
+    let w_ld = materialize_panel(
+        objects.path(),
+        "wjixiang/catalog-ldsc-w-ld-1000g-eur-hm3-no-mhc",
+        b"w-ld-weight".as_slice(),
+    );
     bundles.register(ref_ld).unwrap();
     bundles.register(w_ld).unwrap();
     let ctx = NodeCtx::new(

@@ -20,10 +20,6 @@ pub use config::{
     ensure_backend_env_removed, keep_workspace_enabled, parse_removed_backend_env,
     workspace_gc_age, workspace_gc_interval,
 };
-pub use image::{
-    GHCR_NAMESPACE, GHCR_REGISTRY, ImageReference, ImageRepo, ManifestDigest, RegistryHost,
-    RepositoryPath, registry_image,
-};
 pub use connection::{
     DEFAULT_CONTAINER_WORKDIR, DEFAULT_TIMEOUT_SECS, MAX_CAPTURED_OUTPUT_BYTES, PodmanConnection,
     unique_container_name, workspace_ref,
@@ -31,6 +27,10 @@ pub use connection::{
 pub use error::ContainerRuntimeError;
 pub use execution::ContainerExecutionInfra;
 pub use gc::{WorkspaceGcPolicy, WorkspaceGcReport, sweep_workspace};
+pub use image::{
+    GHCR_NAMESPACE, GHCR_REGISTRY, ImageReference, ImageRepo, ManifestDigest, RegistryHost,
+    RepositoryPath, registry_image,
+};
 pub use panel::{PanelCache, PanelFile, PanelManifest};
 pub use podman::{PodmanConfig, PodmanRuntime};
 pub use types::{

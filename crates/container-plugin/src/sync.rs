@@ -124,14 +124,13 @@ pub fn sync(config_path: &Path, root: &Path) -> Result<SyncReport> {
             return Err(SyncError::ReadConfig {
                 path: config_path.to_path_buf(),
                 source,
-            })
+            });
         }
     };
-    let config: PluginsConfig =
-        toml::from_str(&text).map_err(|error| SyncError::ParseConfig {
-            path: config_path.to_path_buf(),
-            detail: error.to_string(),
-        })?;
+    let config: PluginsConfig = toml::from_str(&text).map_err(|error| SyncError::ParseConfig {
+        path: config_path.to_path_buf(),
+        detail: error.to_string(),
+    })?;
 
     std::fs::create_dir_all(root).map_err(|source| SyncError::Invalid {
         name: "<root>".into(),
@@ -197,10 +196,12 @@ fn sync_git(name: &str, url: &str, rev: &str, target: &Path) -> Result<EntryOutc
     if target.join(".git").exists()
         && run_git_capture(name, target, &["rev-parse", "HEAD"]).is_err()
     {
-        std::fs::remove_dir_all(target).map_err(|source| invalid(format!(
-            "cannot remove interrupted clone `{}`: {source}",
-            target.display()
-        )))?;
+        std::fs::remove_dir_all(target).map_err(|source| {
+            invalid(format!(
+                "cannot remove interrupted clone `{}`: {source}",
+                target.display()
+            ))
+        })?;
     }
 
     if !target.join(".git").exists() {
@@ -230,8 +231,7 @@ fn is_commit_sha(rev: &str) -> bool {
 /// Fetch (offline-tolerant when the rev is already local) and hard-checkout
 /// the pinned rev: the installed tree must be exactly the pinned commit.
 fn checkout_pinned(name: &str, target: &Path, rev: &str) -> Result<()> {
-    let have_it = run_git_capture(name, target, &["cat-file", "-e", rev])
-        .is_ok();
+    let have_it = run_git_capture(name, target, &["cat-file", "-e", rev]).is_ok();
     if !have_it {
         run_git_retry(name, target, &["fetch", "--all", "--tags"])?;
     }
@@ -261,10 +261,12 @@ fn sync_symlink(name: &str, source: &Path, target: &Path) -> Result<EntryOutcome
 
     match std::fs::symlink_metadata(target) {
         Ok(meta) if meta.file_type().is_symlink() => {
-            std::fs::remove_file(target).map_err(|source_err| invalid(format!(
-                "cannot replace stale symlink `{}`: {source_err}",
-                target.display()
-            )))?;
+            std::fs::remove_file(target).map_err(|source_err| {
+                invalid(format!(
+                    "cannot replace stale symlink `{}`: {source_err}",
+                    target.display()
+                ))
+            })?;
         }
         Ok(_) => {
             return Err(invalid(format!(
@@ -291,12 +293,10 @@ fn sync_symlink(name: &str, source: &Path, target: &Path) -> Result<EntryOutcome
 /// real errors (auth, missing repo), which fail identically twice.
 fn run_git_retry(name: &str, dir: &Path, args: &[&str]) -> Result<()> {
     run_git(name, dir, args).or_else(|first| match args.first() {
-        Some(&"clone") | Some(&"fetch") | Some(&"ls-remote") => {
-            run_git(name, dir, args).map_err(|second| {
+        Some(&"clone") | Some(&"fetch") | Some(&"ls-remote") => run_git(name, dir, args)
+            .inspect_err(|_second| {
                 let _ = first;
-                second
-            })
-        }
+            }),
         _ => Err(first),
     })
 }
@@ -399,7 +399,15 @@ script = "true"
         run_git(
             name,
             &repo,
-            &["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "init"],
+            &[
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "user.name=t",
+                "commit",
+                "-m",
+                "init",
+            ],
         )
         .unwrap();
         let rev = run_git_capture(name, &repo, &["rev-parse", "HEAD"]).unwrap();
@@ -409,8 +417,11 @@ script = "true"
     #[test]
     fn missing_config_is_a_noop() {
         let dir = tempfile::tempdir().unwrap();
-        let report = sync(&dir.path().join("plugins.toml"), &dir.path().join("plugins"))
-            .unwrap();
+        let report = sync(
+            &dir.path().join("plugins.toml"),
+            &dir.path().join("plugins"),
+        )
+        .unwrap();
         assert!(report.outcomes.is_empty());
     }
 
@@ -503,7 +514,10 @@ path = "{}"
             ),
         );
         let error = sync(&config, &root).unwrap_err();
-        assert!(error.to_string().contains("refusing to overwrite"), "{error}");
+        assert!(
+            error.to_string().contains("refusing to overwrite"),
+            "{error}"
+        );
         // The foreign content is intact.
         assert!(root.join("occupied/stub.txt").is_file());
     }

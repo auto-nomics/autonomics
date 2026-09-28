@@ -7,8 +7,8 @@
 
 use std::sync::Arc;
 
-use dag_core::registry::NodeRegistry;
 use dag_core::NodePlugin;
+use dag_core::registry::NodeRegistry;
 
 /// (plugin name, git url, pinned rev, expected kinds)
 const FAMILIES: &[(&str, &str, &str, &[&str])] = &[
@@ -52,7 +52,12 @@ const FAMILIES: &[(&str, &str, &str, &[&str])] = &[
         "gcta",
         "git@github.com:auto-nomics/gcta-plugin.git",
         "401479d95c9442387ece637f589d448f4eddbbc2",
-        &["gcta_cojo_select", "gcta_sblup", "gcta_fastbat", "gcta_acat"],
+        &[
+            "gcta_cojo_select",
+            "gcta_sblup",
+            "gcta_fastbat",
+            "gcta_acat",
+        ],
     ),
     (
         "pathway-gsea",
@@ -87,7 +92,7 @@ const FAMILIES: &[(&str, &str, &str, &[&str])] = &[
     (
         "susie",
         "git@github.com:auto-nomics/susie-plugin.git",
-        "be1f86194002424ada9339d97ddffe950557f874",
+        "7d45f9918d16c1307d52f6f6d3c14df2debe682e",
         &["susie_rss"],
     ),
     (
@@ -142,30 +147,60 @@ const FAMILIES: &[(&str, &str, &str, &[&str])] = &[
         "single-cell",
         "git@github.com:auto-nomics/single-cell-plugin.git",
         "1d681eac33fe7fbde125a67924284270d737b6b2",
-        &["single_cell_preprocessor", "h5ad_pca_neighbors_umap_leiden",
-          "h5ad_celltypist_annotate", "h5ad_subset_by_obs", "sc_dense_ingest",
-          "h5ad_rank_genes_groups", "h5ad_cluster_mean_expression",
-          "gene_set_score", "h5ad_marker_annotate", "h5ad_ucell_score"],
+        &[
+            "single_cell_preprocessor",
+            "h5ad_pca_neighbors_umap_leiden",
+            "h5ad_celltypist_annotate",
+            "h5ad_subset_by_obs",
+            "sc_dense_ingest",
+            "h5ad_rank_genes_groups",
+            "h5ad_cluster_mean_expression",
+            "gene_set_score",
+            "h5ad_marker_annotate",
+            "h5ad_ucell_score",
+        ],
     ),
     (
         "radiomics",
         "git@github.com:auto-nomics/radiomics-plugin.git",
         "a6a7d659d6b702572b77c5390f54ff2da768ce85",
-        &["radiomics_image_ingest", "radiomics_mask_ingest", "radiomics_pair_validate",
-          "radiomics_preprocess", "pyradiomics_extract", "pyradiomics_batch_extract",
-          "radiomics_dicom_metadata", "radiomics_phi_scrub", "radiomics_voi_dice_hausdorff",
-          "radiomics_image_qc", "radiomics_rtstruct_geometry", "radiomics_ivh_extract",
-          "radiomics_shape_topology", "radiomics_register", "radiomics_delta_features",
-          "radiomics_bias_correct", "radiomics_robust_normalize", "radiomics_peritumoral_ring",
-          "radiomics_habitat_fit", "radiomics_habitat_assign", "radiomics_perturb_stability"],
+        &[
+            "radiomics_image_ingest",
+            "radiomics_mask_ingest",
+            "radiomics_pair_validate",
+            "radiomics_preprocess",
+            "pyradiomics_extract",
+            "pyradiomics_batch_extract",
+            "radiomics_dicom_metadata",
+            "radiomics_phi_scrub",
+            "radiomics_voi_dice_hausdorff",
+            "radiomics_image_qc",
+            "radiomics_rtstruct_geometry",
+            "radiomics_ivh_extract",
+            "radiomics_shape_topology",
+            "radiomics_register",
+            "radiomics_delta_features",
+            "radiomics_bias_correct",
+            "radiomics_robust_normalize",
+            "radiomics_peritumoral_ring",
+            "radiomics_habitat_fit",
+            "radiomics_habitat_assign",
+            "radiomics_perturb_stability",
+        ],
     ),
     (
         "pathology",
         "git@github.com:auto-nomics/pathology-plugin.git",
         "641fe464d478f07235657a962db791c5603d9ab9",
-        &["pathology_wsi_ingest", "pathology_wsi_qc", "pathology_patch_sample",
-          "pathology_wsi_embed", "pathology_domain_check", "pathology_ihc_quant",
-          "pathology_qupath_import"],
+        &[
+            "pathology_wsi_ingest",
+            "pathology_wsi_qc",
+            "pathology_patch_sample",
+            "pathology_wsi_embed",
+            "pathology_domain_check",
+            "pathology_ihc_quant",
+            "pathology_qupath_import",
+        ],
     ),
 ];
 
@@ -187,7 +222,11 @@ fn all_wave_families_install_from_git_and_register() {
     let report = container_plugin::sync::sync(&config_path, &root).unwrap();
     assert_eq!(report.outcomes.len(), FAMILIES.len());
     for (name, outcome) in &report.outcomes {
-        assert_eq!(*outcome, container_plugin::sync::EntryOutcome::Installed, "{name}");
+        assert_eq!(
+            *outcome,
+            container_plugin::sync::EntryOutcome::Installed,
+            "{name}"
+        );
     }
 
     // 2. Load: one Plugin per family, all kinds present.
@@ -199,8 +238,7 @@ fn all_wave_families_install_from_git_and_register() {
         }),
     );
     let panel_cache = Arc::new(container_runtime::PanelCache::new(root.join("panels")));
-    let plugins =
-        container_plugin::loader::load(&root, runtime, panel_cache).unwrap();
+    let plugins = container_plugin::loader::load(&root, runtime, panel_cache).unwrap();
     assert_eq!(plugins.len(), FAMILIES.len());
 
     let ctx = dag_core::NodeCtx::new(

@@ -42,8 +42,10 @@ impl RemoteCatalog {
         })
     }
 
-    #[cfg(test)]
-    pub(crate) fn from_source(config: CatalogConfig, source: Box<dyn ObjectSource>) -> Self {
+    /// Construct a catalog over a custom byte source. Test-only: real
+    /// deployments always read from Hugging Face via [`Self::hf`].
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn from_source(config: CatalogConfig, source: Box<dyn ObjectSource>) -> Self {
         Self {
             registry_repo: config.repository.expect("test catalog has repository"),
             source,
@@ -148,13 +150,15 @@ pub(crate) fn validate_entry_manifest(
     Ok(())
 }
 
-#[cfg(test)]
-pub(crate) mod test_utils {
+/// In-memory [`ObjectSource`] fixtures shared by data-catalog's own tests
+/// and downstream crates via the `test-util` feature.
+#[cfg(any(test, feature = "test-util"))]
+pub mod test_utils {
     use super::*;
     use std::collections::BTreeMap;
 
     #[derive(Default)]
-    pub(crate) struct MapSource(pub(crate) BTreeMap<String, Vec<u8>>);
+    pub struct MapSource(pub BTreeMap<String, Vec<u8>>);
 
     #[async_trait]
     impl ObjectSource for MapSource {
@@ -176,6 +180,7 @@ pub(crate) mod test_utils {
         }
     }
 
+    #[cfg(test)]
     #[tokio::test]
     async fn registry_resolves_package_local_indexes() {
         let entry = CatalogEntry {
@@ -213,6 +218,7 @@ pub(crate) mod test_utils {
         assert_eq!(resolved.current_entries().next(), Some(&entry));
     }
 
+    #[cfg(test)]
     #[tokio::test]
     async fn v2_indexes_are_migrated_on_read() {
         // Mirrors repositories published before the v2→v3 migration: both the
@@ -273,6 +279,7 @@ pub(crate) mod test_utils {
         assert_eq!(package.entries[0].repo.as_str(), "owner/catalog-plink-ref");
     }
 
+    #[cfg(test)]
     #[tokio::test]
     async fn v2_entry_without_repo_recovers_repo_from_index_prefix() {
         let v2_entry = format!(

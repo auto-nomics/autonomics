@@ -42,8 +42,13 @@ fn load_manifest(root: &PathBuf) -> PluginManifest {
     manifest
 }
 
-fn node_by_kind<'a>(manifest: &'a PluginManifest, kind: &str) -> &'a container_plugin::node_definition::NodeDefinition {
-    manifest.nodes.iter()
+fn node_by_kind<'a>(
+    manifest: &'a PluginManifest,
+    kind: &str,
+) -> &'a container_plugin::node_definition::NodeDefinition {
+    manifest
+        .nodes
+        .iter()
         .find(|n| n.kind == kind)
         .unwrap_or_else(|| panic!("{kind} missing from manifest"))
 }
@@ -76,7 +81,10 @@ fn lava_plugin_compiles_to_the_legacy_wrapper_contract() {
     );
     assert_eq!(compiled.outputs.len(), 3);
     assert_eq!(compiled.outputs[0].path, "lava.tsv");
-    assert_eq!(compiled.outputs[0].format.as_deref(), Some("lava_result_tsv"));
+    assert_eq!(
+        compiled.outputs[0].format.as_deref(),
+        Some("lava_result_tsv")
+    );
     assert_eq!(compiled.outputs[1].path, "lava.RDS");
     assert_eq!(compiled.outputs[1].format.as_deref(), Some("r_rds"));
     assert_eq!(compiled.outputs[2].path, "lava.log");
@@ -170,7 +178,10 @@ fn lava_plugin_renders_submitted_values_into_env() {
     // c("bmi", "depression") straight into the R source.
     assert_eq!(compiled.env.get("LAVA_PHENOS").unwrap(), "bmi depression");
     assert_eq!(compiled.env.get("LAVA_TARGET").unwrap(), "depression bmi");
-    assert_eq!(compiled.env.get("LAVA_ADAP_THRESH").unwrap(), "0.0001 1e-06");
+    assert_eq!(
+        compiled.env.get("LAVA_ADAP_THRESH").unwrap(),
+        "0.0001 1e-06"
+    );
     assert_eq!(compiled.env.get("LAVA_LOCUS_ID").unwrap(), "230");
     assert_eq!(compiled.env.get("LAVA_LOCUS_INDEX").unwrap(), "1");
     // serde_json renders f64 0.9 as "0.9".
@@ -221,9 +232,15 @@ fn lava_scan_plugin_compiles_to_the_legacy_wrapper_contract() {
     );
     assert_eq!(compiled.outputs.len(), 4);
     assert_eq!(compiled.outputs[0].path, "lava_scan.univ.tsv");
-    assert_eq!(compiled.outputs[0].format.as_deref(), Some("lava_univ_result_tsv"));
+    assert_eq!(
+        compiled.outputs[0].format.as_deref(),
+        Some("lava_univ_result_tsv")
+    );
     assert_eq!(compiled.outputs[1].path, "lava_scan.bivar.tsv");
-    assert_eq!(compiled.outputs[1].format.as_deref(), Some("lava_bivar_result_tsv"));
+    assert_eq!(
+        compiled.outputs[1].format.as_deref(),
+        Some("lava_bivar_result_tsv")
+    );
     assert_eq!(compiled.outputs[2].path, "lava_scan.RDS");
     assert_eq!(compiled.outputs[2].format.as_deref(), Some("r_rds"));
     assert_eq!(compiled.outputs[3].path, "lava_scan.log");
@@ -239,11 +256,17 @@ fn lava_scan_plugin_compiles_to_the_legacy_wrapper_contract() {
     );
     assert_eq!(compiled.panel_bundles[0].mount_path, "/panels/lava_ref");
     assert_eq!(compiled.command, vec!["Rscript".to_string()]);
-    assert_eq!(compiled.env.get("LAVA_SCAN_PHENOS").unwrap(), "depression neuro");
+    assert_eq!(
+        compiled.env.get("LAVA_SCAN_PHENOS").unwrap(),
+        "depression neuro"
+    );
     assert_eq!(compiled.env.get("LAVA_SCAN_TARGET").unwrap(), "");
     assert_eq!(compiled.env.get("LAVA_SCAN_LOCUS_IDS").unwrap(), "");
     assert_eq!(compiled.env.get("LAVA_SCAN_CHR").unwrap(), "");
-    assert_eq!(compiled.env.get("LAVA_SCAN_UNIV_THRESHOLD").unwrap(), "0.05");
+    assert_eq!(
+        compiled.env.get("LAVA_SCAN_UNIV_THRESHOLD").unwrap(),
+        "0.05"
+    );
     assert_eq!(compiled.env.get("LAVA_SCAN_ADAP_THRESH").unwrap(), "");
     assert_eq!(compiled.env.get("LAVA_SCAN_P_VALUES").unwrap(), "true");
     assert_eq!(compiled.env.get("LAVA_SCAN_CIS").unwrap(), "true");
@@ -292,7 +315,10 @@ fn lava_scan_plugin_renders_submitted_values_into_env() {
     )
     .unwrap();
 
-    assert_eq!(compiled.env.get("LAVA_SCAN_PHENOS").unwrap(), "depression neuro");
+    assert_eq!(
+        compiled.env.get("LAVA_SCAN_PHENOS").unwrap(),
+        "depression neuro"
+    );
     assert_eq!(compiled.env.get("LAVA_SCAN_TARGET").unwrap(), "depression");
     assert_eq!(compiled.env.get("LAVA_SCAN_LOCUS_IDS").unwrap(), "100 230");
     assert_eq!(compiled.env.get("LAVA_SCAN_CHR").unwrap(), "7");
@@ -316,6 +342,9 @@ fn lava_scan_plugin_schema_marks_phenotypes_required_with_bounds() {
     assert_eq!(schema["properties"]["phenotypes"]["maxItems"], 2.0);
     assert_eq!(schema["properties"]["chr"]["minimum"], 1.0);
     assert_eq!(schema["properties"]["chr"]["maximum"], 23.0);
-    assert_eq!(schema["properties"]["univ_threshold"]["exclusiveMinimum"], 0.0);
+    assert_eq!(
+        schema["properties"]["univ_threshold"]["exclusiveMinimum"],
+        0.0
+    );
     assert_eq!(schema["properties"]["univ_threshold"]["maximum"], 1.0);
 }

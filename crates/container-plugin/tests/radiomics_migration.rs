@@ -19,8 +19,7 @@ use container_plugin::compile::spec_compile::compile_container_spec;
 use container_plugin::manifest::PluginManifest;
 use serde_json::json;
 
-const IMAGE_REFERENCE: &str =
-    "ghcr.io/auto-nomics/autonomics/pyradiomics@sha256:bccbe15b2ec8d079e1bf869c4f06bfe4143642015394453c584dc981e5403fbe";
+const IMAGE_REFERENCE: &str = "ghcr.io/auto-nomics/autonomics/pyradiomics@sha256:bccbe15b2ec8d079e1bf869c4f06bfe4143642015394453c584dc981e5403fbe";
 const RUNNER: &str = "/opt/radiomics/radiomics_runner.py";
 const TIMEOUT_SECS: u64 = 3600;
 
@@ -284,10 +283,7 @@ const CONTRACTS: &[Contract] = &[
     Contract {
         kind: "radiomics_robust_normalize",
         artifact_prefix: "/artifacts/radiomics_robust_normalize",
-        outputs: &[
-            ("normalized.mha", "mha"),
-            ("normalize_meta.json", "json"),
-        ],
+        outputs: &[("normalized.mha", "mha"), ("normalize_meta.json", "json")],
         runner_command: "normalize",
         env: &[
             ("RADIOMICS_MASK_LABEL", "1"),
@@ -447,14 +443,13 @@ fn every_kind_compiles_to_the_legacy_wrapper_contract() {
 
     for contract in CONTRACTS {
         let node = node_by_kind(&manifest, contract.kind);
-        let compiled =
-            compile_container_spec(
-                node,
-                &manifest.image,
-                &manifest.panels,
-                &stand_in_required_values(node),
-            )
-            .unwrap_or_else(|error| panic!("{} failed to compile: {error}", contract.kind));
+        let compiled = compile_container_spec(
+            node,
+            &manifest.image,
+            &manifest.panels,
+            &stand_in_required_values(node),
+        )
+        .unwrap_or_else(|error| panic!("{} failed to compile: {error}", contract.kind));
 
         assert_eq!(compiled.image, IMAGE_REFERENCE, "{}", contract.kind);
         assert_eq!(compiled.timeout_secs, TIMEOUT_SECS, "{}", contract.kind);
@@ -493,9 +488,11 @@ fn every_kind_compiles_to_the_legacy_wrapper_contract() {
             .collect();
         assert_eq!(outputs, expected, "{} output contract moved", contract.kind);
 
-        // The interpreter is the entrypoint override; the script carries
-        // the runner invocation the legacy command vec baked in.
-        assert_eq!(compiled.command, vec!["python".to_string()]);
+        // The published plugin runs every kind through a shell wrapper
+        // (`interpreter = "sh"`): each script rebuilds the legacy settings
+        // blob with `python -c` and then execs the pinned runner, where the
+        // legacy command vec passed `python` as the entrypoint directly.
+        assert_eq!(compiled.command, vec!["sh".to_string()]);
         let script = compiled.script.as_deref().unwrap();
         assert!(
             script.contains(RUNNER),

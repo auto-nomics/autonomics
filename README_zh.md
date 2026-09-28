@@ -95,7 +95,11 @@ Node registry + DAG scheduler
 一个目录，包含 `manifest.toml`（节点契约：参数、端口、面板、镜像溯源）、
 执行脚本和镜像构建树。插件从钉死 commit SHA 的 git 仓库安装，daemon 启动
 前的插件自检阶段完成安装、校验与汇报——格式与工作流见
-[节点插件化迁移](docs/plugin-node-migration_zh.md)。
+[节点插件化迁移](docs/plugin-node-migration_zh.md)。面板数据包由
+`autonomics panels sync` 独立供给：下载并校验 `[[panels]]` 引用中本地
+catalog 缓存缺失的 dataset；启动自检只做本地存在性检查（有界、离线安全），
+daemon 就绪永不等待网络。无人值守部署可设 `AUTONOMICS_PANEL_SYNC=1` 让
+`autonomics serve` 启动时内联完成供给。
 
 当前发布 24 个家族 / 71 个节点 kind：
 

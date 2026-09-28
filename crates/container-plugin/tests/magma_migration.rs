@@ -34,8 +34,13 @@ fn load_manifest(root: &PathBuf) -> PluginManifest {
     manifest
 }
 
-fn node_by_kind<'a>(manifest: &'a PluginManifest, kind: &str) -> &'a container_plugin::node_definition::NodeDefinition {
-    manifest.nodes.iter()
+fn node_by_kind<'a>(
+    manifest: &'a PluginManifest,
+    kind: &str,
+) -> &'a container_plugin::node_definition::NodeDefinition {
+    manifest
+        .nodes
+        .iter()
         .find(|n| n.kind == kind)
         .unwrap_or_else(|| panic!("{kind} missing from manifest"))
 }
@@ -56,13 +61,8 @@ fn magma_annotate_plugin_compiles_to_the_legacy_wrapper_contract() {
     let manifest = load_manifest(&root);
     let node = node_by_kind(&manifest, "magma_annotate");
 
-    let compiled = compile_container_spec(
-        node,
-        &manifest.image,
-        &manifest.panels,
-        &json!({}),
-    )
-    .unwrap();
+    let compiled =
+        compile_container_spec(node, &manifest.image, &manifest.panels, &json!({})).unwrap();
 
     assert_eq!(
         compiled.image,
@@ -72,7 +72,10 @@ fn magma_annotate_plugin_compiles_to_the_legacy_wrapper_contract() {
     assert_eq!(compiled.outputs[0].path, "magma_annotate.log");
     assert_eq!(compiled.outputs[0].format.as_deref(), Some("magma_log"));
     assert_eq!(compiled.outputs[1].path, "magma_annotate.genes.annot");
-    assert_eq!(compiled.outputs[1].format.as_deref(), Some("magma_genes_annot"));
+    assert_eq!(
+        compiled.outputs[1].format.as_deref(),
+        Some("magma_genes_annot")
+    );
     assert_eq!(compiled.network, "isolated");
     assert!(compiled.read_only_rootfs);
     assert!(matches!(
@@ -127,13 +130,8 @@ fn magma_annotate_plugin_submitted_values_render_and_reject_unknown_params() {
     // node-level manifest values, so the node has zero params: the only
     // accepted submitted value is the empty object, and nothing renders
     // into env.
-    let compiled = compile_container_spec(
-        node,
-        &manifest.image,
-        &manifest.panels,
-        &json!({}),
-    )
-    .unwrap();
+    let compiled =
+        compile_container_spec(node, &manifest.image, &manifest.panels, &json!({})).unwrap();
     assert!(compiled.env.is_empty());
     assert!(compiled.files.is_empty());
 
@@ -146,7 +144,11 @@ fn magma_annotate_plugin_submitted_values_render_and_reject_unknown_params() {
         &json!({"artifact_prefix": "/artifacts/other"}),
     )
     .unwrap_err();
-    assert!(error.to_string().contains("unknown param `artifact_prefix`"));
+    assert!(
+        error
+            .to_string()
+            .contains("unknown param `artifact_prefix`")
+    );
 
     let error = compile_container_spec(
         node,

@@ -74,13 +74,8 @@ fn twosamplemr_plugin_compiles_to_the_legacy_wrapper_contract() {
     let manifest = load_manifest(&root);
     let node = node_by_kind(&manifest, "twosamplemr");
 
-    let compiled = compile_container_spec(
-        node,
-        &manifest.image,
-        &manifest.panels,
-        &main_values(),
-    )
-    .unwrap();
+    let compiled =
+        compile_container_spec(node, &manifest.image, &manifest.panels, &main_values()).unwrap();
 
     // Byte-exact contract: image, outputs, panel bundle, resources,
     // timeout, prefix.
@@ -134,7 +129,10 @@ fn twosamplemr_plugin_compiles_to_the_legacy_wrapper_contract() {
         compiled.env.get("TWOSAMPLEMR_METHOD_LIST").unwrap(),
         "mr_egger_regression mr_weighted_median mr_ivw mr_simple_mode mr_weighted_mode"
     );
-    assert_eq!(compiled.env.get("TWOSAMPLEMR_HARMONISE_ACTION").unwrap(), "2");
+    assert_eq!(
+        compiled.env.get("TWOSAMPLEMR_HARMONISE_ACTION").unwrap(),
+        "2"
+    );
     assert_eq!(compiled.env.get("TWOSAMPLEMR_CLUMP").unwrap(), "true");
     // serde_json/ryu spellings of the legacy defaults (the legacy script
     // rendered the p thresholds via `{:.0e}` as `5e-08`/`1e-06`; equal
@@ -172,7 +170,10 @@ fn twosamplemr_plugin_compiles_to_the_legacy_wrapper_contract() {
     assert!(script.contains("if [ \"$TWOSAMPLEMR_CLUMP\" = \"true\" ]; then"));
     // The p-value derivation and prep stanza are byte-identical to the
     // legacy stage.
-    assert!(script.contains("Rscript --vanilla -e 'data <- read.delim(Sys.getenv(\"AUTONOMICS_INPUT0\")"));
+    assert!(
+        script
+            .contains("Rscript --vanilla -e 'data <- read.delim(Sys.getenv(\"AUTONOMICS_INPUT0\")")
+    );
     assert!(script.contains("2 * pnorm(-abs(data$beta_exposure / data$se_exposure))"));
     // The R stage keeps the official TwoSampleMR calls; labels travel
     // through env where the legacy source baked Rust-quoted literals.
@@ -183,7 +184,11 @@ fn twosamplemr_plugin_compiles_to_the_legacy_wrapper_contract() {
     ));
     assert!(script.contains("estimates <- TwoSampleMR::mr(harmonised, method_list = method_list)"));
     assert!(script.contains("read.delim(\"/work/all.clumps\""));
-    assert!(script.contains("exposure_dat <- exposure_dat[exposure_dat$SNP %in% selected, , drop = FALSE]"));
+    assert!(
+        script.contains(
+            "exposure_dat <- exposure_dat[exposure_dat$SNP %in% selected, , drop = FALSE]"
+        )
+    );
     // The SUPPORTED_METHODS membership gate moves into the R stage (the
     // v0 param DSL has no enum type).
     assert!(script.contains("unsupported TwoSampleMR method"));
@@ -237,7 +242,10 @@ fn twosamplemr_plugin_renders_submitted_values_into_env() {
 
     // Labels travel verbatim through env (the legacy wrapper Rust-quoted
     // them into the R source).
-    assert_eq!(compiled.env.get("TWOSAMPLEMR_ID_EXPOSURE").unwrap(), "ieu-a-2");
+    assert_eq!(
+        compiled.env.get("TWOSAMPLEMR_ID_EXPOSURE").unwrap(),
+        "ieu-a-2"
+    );
     assert_eq!(
         compiled.env.get("TWOSAMPLEMR_EXPOSURE").unwrap(),
         "Body mass index"
@@ -248,7 +256,10 @@ fn twosamplemr_plugin_renders_submitted_values_into_env() {
         compiled.env.get("TWOSAMPLEMR_METHOD_LIST").unwrap(),
         "mr_ivw mr_wald_ratio"
     );
-    assert_eq!(compiled.env.get("TWOSAMPLEMR_HARMONISE_ACTION").unwrap(), "3");
+    assert_eq!(
+        compiled.env.get("TWOSAMPLEMR_HARMONISE_ACTION").unwrap(),
+        "3"
+    );
     assert_eq!(compiled.env.get("TWOSAMPLEMR_CLUMP").unwrap(), "false");
     assert_eq!(compiled.env.get("TWOSAMPLEMR_CLUMP_P1").unwrap(), "1e-7");
     assert_eq!(compiled.env.get("TWOSAMPLEMR_CLUMP_P2").unwrap(), "2e-6");
@@ -272,13 +283,9 @@ fn twosamplemr_harmonise_plugin_compiles_to_the_legacy_wrapper_contract() {
     let manifest = load_manifest(&root);
     let node = node_by_kind(&manifest, "twosamplemr_harmonise");
 
-    let compiled = compile_container_spec(
-        node,
-        &manifest.image,
-        &manifest.panels,
-        &harmonise_values(),
-    )
-    .unwrap();
+    let compiled =
+        compile_container_spec(node, &manifest.image, &manifest.panels, &harmonise_values())
+            .unwrap();
 
     // Byte-exact contract.
     assert_eq!(
@@ -301,10 +308,7 @@ fn twosamplemr_harmonise_plugin_compiles_to_the_legacy_wrapper_contract() {
     ));
     assert_eq!(compiled.timeout_secs, 600);
     // Same `_container`-suffix drop as the main kind.
-    assert_eq!(
-        compiled.artifact_prefix,
-        "/artifacts/twosamplemr_harmonise"
-    );
+    assert_eq!(compiled.artifact_prefix, "/artifacts/twosamplemr_harmonise");
     assert_eq!(compiled.workdir, None);
     assert!(compiled.panels.is_empty());
     // Deliberate delta (not parity): the legacy harmonise wrapper
@@ -324,10 +328,16 @@ fn twosamplemr_harmonise_plugin_compiles_to_the_legacy_wrapper_contract() {
     // like the legacy script insertion.
     assert_eq!(compiled.command, vec!["Rscript".to_string()]);
     // Defaults: action 2, units unset (render empty).
-    assert_eq!(compiled.env.get("TWOSAMPLEMR_HARMONISE_ACTION").unwrap(), "2");
+    assert_eq!(
+        compiled.env.get("TWOSAMPLEMR_HARMONISE_ACTION").unwrap(),
+        "2"
+    );
     assert_eq!(compiled.env.get("TWOSAMPLEMR_UNITS_EXPOSURE").unwrap(), "");
     assert_eq!(compiled.env.get("TWOSAMPLEMR_UNITS_OUTCOME").unwrap(), "");
-    assert_eq!(compiled.env.get("TWOSAMPLEMR_ID_EXPOSURE").unwrap(), "ieu-a-2");
+    assert_eq!(
+        compiled.env.get("TWOSAMPLEMR_ID_EXPOSURE").unwrap(),
+        "ieu-a-2"
+    );
 
     // Semantic script markers (not byte equality): the plugin drives the
     // R source through env instead of Rust __PLACEHOLDER__ substitution.
@@ -337,7 +347,11 @@ fn twosamplemr_harmonise_plugin_compiles_to_the_legacy_wrapper_contract() {
     assert!(script.contains("harm_path <- Sys.getenv(\"AUTONOMICS_OUTPUT0\")"));
     assert!(script.contains("log_path <- Sys.getenv(\"AUTONOMICS_OUTPUT1\")"));
     assert!(script.contains("sink(log_path, split = TRUE)"));
-    assert!(script.contains("cat(\"TwoSampleMR:\", as.character(packageVersion(\"TwoSampleMR\")), \"\\n\")"));
+    assert!(
+        script.contains(
+            "cat(\"TwoSampleMR:\", as.character(packageVersion(\"TwoSampleMR\")), \"\\n\")"
+        )
+    );
     assert!(script.contains("exp <- TwoSampleMR::read_exposure_data(exp_path)"));
     assert!(script.contains("out <- TwoSampleMR::read_outcome_data(out_path)"));
     assert!(script.contains(
@@ -351,9 +365,11 @@ fn twosamplemr_harmonise_plugin_compiles_to_the_legacy_wrapper_contract() {
     ));
     assert!(script.contains("names(harm)[names(harm) == \"SNP\"] <- \"snp\""));
     assert!(script.contains("gsub(\"\\\\.\", \"_\""));
-    assert!(script.contains(
-        "write.table(harm, harm_path, sep = \"\\t\", quote = FALSE, row.names = FALSE)"
-    ));
+    assert!(
+        script.contains(
+            "write.table(harm, harm_path, sep = \"\\t\", quote = FALSE, row.names = FALSE)"
+        )
+    );
     // The label-emptiness rules the legacy validate() enforced before the
     // container started are mirrored inside the script.
     assert!(script.contains("id_exposure cannot be empty"));
@@ -393,10 +409,19 @@ fn twosamplemr_harmonise_plugin_renders_submitted_values_into_env() {
     )
     .unwrap();
 
-    assert_eq!(compiled.env.get("TWOSAMPLEMR_ID_EXPOSURE").unwrap(), "bbj-a-100");
+    assert_eq!(
+        compiled.env.get("TWOSAMPLEMR_ID_EXPOSURE").unwrap(),
+        "bbj-a-100"
+    );
     assert_eq!(compiled.env.get("TWOSAMPLEMR_EXPOSURE").unwrap(), "Height");
-    assert_eq!(compiled.env.get("TWOSAMPLEMR_HARMONISE_ACTION").unwrap(), "1");
-    assert_eq!(compiled.env.get("TWOSAMPLEMR_UNITS_EXPOSURE").unwrap(), "SD");
+    assert_eq!(
+        compiled.env.get("TWOSAMPLEMR_HARMONISE_ACTION").unwrap(),
+        "1"
+    );
+    assert_eq!(
+        compiled.env.get("TWOSAMPLEMR_UNITS_EXPOSURE").unwrap(),
+        "SD"
+    );
     assert_eq!(
         compiled.env.get("TWOSAMPLEMR_UNITS_OUTCOME").unwrap(),
         "log odds"
@@ -448,7 +473,10 @@ fn twosamplemr_plugin_schema_and_bounds_reject_the_legacy_invalid_specs() {
     assert_eq!(schema["properties"]["clump"]["default"], json!(true));
     // method_list keeps the legacy default order and the non-empty rule.
     assert_eq!(schema["properties"]["method_list"]["type"], "array");
-    assert_eq!(schema["properties"]["method_list"]["items"]["type"], "string");
+    assert_eq!(
+        schema["properties"]["method_list"]["items"]["type"],
+        "string"
+    );
     assert_eq!(schema["properties"]["method_list"]["minItems"], 1.0);
     assert_eq!(
         schema["properties"]["method_list"]["default"],
@@ -464,8 +492,7 @@ fn twosamplemr_plugin_schema_and_bounds_reject_the_legacy_invalid_specs() {
     // Harmonise node: the four labels were required (no serde default)
     // in TwoSampleMrHarmoniseContainerSpec.
     let harmonise_schema =
-        serde_json::to_value(container_plugin::compile::compile_schema(&harmonise.params))
-            .unwrap();
+        serde_json::to_value(container_plugin::compile::compile_schema(&harmonise.params)).unwrap();
     let required = harmonise_schema["required"].as_array().unwrap();
     assert_eq!(
         required
@@ -475,7 +502,10 @@ fn twosamplemr_plugin_schema_and_bounds_reject_the_legacy_invalid_specs() {
         vec!["exposure", "id_exposure", "id_outcome", "outcome"]
     );
     assert_eq!(harmonise_schema["additionalProperties"], false);
-    assert_eq!(harmonise_schema["properties"]["units_exposure"]["type"], "string");
+    assert_eq!(
+        harmonise_schema["properties"]["units_exposure"]["type"],
+        "string"
+    );
 
     // Mirrors the legacy wrapper test `rejects_unsupported_method_and_
     // bad_thresholds` bounds half: clump thresholds outside (0, 1] are

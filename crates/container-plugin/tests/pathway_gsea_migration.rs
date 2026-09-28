@@ -26,7 +26,8 @@ fn load_manifest(root: &PathBuf) -> PluginManifest {
     let mut manifest: PluginManifest = toml::from_str(&text).unwrap();
     for node in manifest.nodes.iter_mut() {
         if let Some(relative) = node.command.script_file.clone() {
-            let source = std::fs::read_to_string(root.join("pathway-gsea").join(&relative)).unwrap();
+            let source =
+                std::fs::read_to_string(root.join("pathway-gsea").join(&relative)).unwrap();
             node.command.script = Some(source);
             node.command.script_file = None;
         }
@@ -64,9 +65,15 @@ fn pathway_gsea_plugin_compiles_to_the_legacy_wrapper_contract() {
     assert_eq!(compiled.command, vec!["Rscript".to_string()]);
     assert_eq!(compiled.outputs.len(), 2);
     assert_eq!(compiled.outputs[0].path, "fgsea_report.tsv");
-    assert_eq!(compiled.outputs[0].format.as_deref(), Some("fgsea_report_tsv"));
+    assert_eq!(
+        compiled.outputs[0].format.as_deref(),
+        Some("fgsea_report_tsv")
+    );
     assert_eq!(compiled.outputs[1].path, "fgsea_report.json");
-    assert_eq!(compiled.outputs[1].format.as_deref(), Some("fgsea_report_json"));
+    assert_eq!(
+        compiled.outputs[1].format.as_deref(),
+        Some("fgsea_report_json")
+    );
     assert_eq!(compiled.network, "isolated");
     assert!(compiled.read_only_rootfs);
     assert!(matches!(
@@ -129,7 +136,9 @@ fn pathway_gsea_plugin_compiles_to_the_legacy_wrapper_contract() {
     assert!(script.contains("stop(\"pathway_gene_col cannot be empty\")"));
     assert!(script.contains("stop(\"max_size must be at least min_size\")"));
     // Rank table: unique non-empty genes, non-null scores.
-    assert!(script.contains("rank_table <- data.table::fread(Sys.getenv(\"AUTONOMICS_INPUT0\"), check.names = FALSE)"));
+    assert!(script.contains(
+        "rank_table <- data.table::fread(Sys.getenv(\"AUTONOMICS_INPUT0\"), check.names = FALSE)"
+    ));
     assert!(script.contains("stats <- setNames(scores, genes)"));
     // The GMT/TSV gene-set branch on input 1.
     assert!(script.contains("grepl(\"\\\\.gmt$\", Sys.getenv(\"AUTONOMICS_INPUT1\"))"));
@@ -143,15 +152,13 @@ fn pathway_gsea_plugin_compiles_to_the_legacy_wrapper_contract() {
     assert!(script.contains(
         "result$leadingEdge <- vapply(result$leadingEdge, paste, character(1), collapse = \";\")"
     ));
-    assert!(script.contains(
-        "report <- result[, .(pathway, pval, padj, NES, size, leadingEdge)]"
-    ));
+    assert!(script.contains("report <- result[, .(pathway, pval, padj, NES, size, leadingEdge)]"));
     assert!(script.contains(
         "data.table::fwrite(report, Sys.getenv(\"AUTONOMICS_OUTPUT0\"), sep = \"\\t\", quote = FALSE)"
     ));
-    assert!(script.contains(
-        "jsonlite::toJSON(json, auto_unbox = TRUE, pretty = TRUE, na = \"null\")"
-    ));
+    assert!(
+        script.contains("jsonlite::toJSON(json, auto_unbox = TRUE, pretty = TRUE, na = \"null\")")
+    );
     assert!(script.contains("Sys.getenv(\"AUTONOMICS_OUTPUT1\")"));
 }
 
@@ -182,7 +189,10 @@ fn pathway_gsea_plugin_renders_submitted_values_into_env() {
 
     assert_eq!(compiled.env.get("AUTONOMICS_GENE_COL").unwrap(), "SYMBOL");
     assert_eq!(compiled.env.get("AUTONOMICS_SCORE_COL").unwrap(), "t_stat");
-    assert_eq!(compiled.env.get("AUTONOMICS_PATHWAY_COL").unwrap(), "set_name");
+    assert_eq!(
+        compiled.env.get("AUTONOMICS_PATHWAY_COL").unwrap(),
+        "set_name"
+    );
     assert_eq!(
         compiled.env.get("AUTONOMICS_PATHWAY_GENE_COL").unwrap(),
         "ensembl_id"

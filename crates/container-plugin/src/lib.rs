@@ -1,6 +1,7 @@
 //! Crate for developing DAG container nodes
 //!
 
+pub mod bundles;
 pub mod compile;
 pub mod error;
 pub mod factory;

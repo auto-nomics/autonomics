@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use futures::StreamExt as _;
+use futures::TryStreamExt as _;
 use sha2::{Digest, Sha256};
 use vfs::MountDefinition;
 
@@ -31,6 +33,24 @@ pub fn default_panel_cache_root() -> PathBuf {
     std::env::temp_dir().join("autonomics").join("panels")
 }
 
+/// One live byte-accounting tick for an in-flight bundle download.
+///
+/// `downloaded_bytes` is cumulative across the bundle's concurrently
+/// downloading files; `total_bytes` is the sum of its manifest file sizes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransferProgress {
+    /// Bundle identity (`owner/name`).
+    pub repo: String,
+    /// Bytes staged so far for the bundle.
+    pub downloaded_bytes: u64,
+    /// Total expected bytes for the bundle.
+    pub total_bytes: u64,
+}
+
+/// Callback receiving [`TransferProgress`] ticks while
+/// [`LocalCatalog::install_repository_with_progress`] streams a bundle.
+pub type ProgressSink<'a> = std::sync::Arc<dyn Fn(TransferProgress) + Send + Sync + 'a>;
+
 /// Local cache of selected catalog packages.
 ///
 /// Layout (schema v3+):
@@ -50,6 +70,10 @@ pub fn default_panel_cache_root() -> PathBuf {
 pub struct LocalCatalog {
     root: PathBuf,
     repository_prefix: Option<String>,
+    /// Serializes index read-modify-write cycles during concurrent installs.
+    /// The network phase of [`Self::install_entry`] runs outside the lock;
+    /// only the publish phase (directory rename + index rewrite) holds it.
+    index_lock: tokio::sync::Mutex<()>,
 }
 
 impl LocalCatalog {
@@ -72,6 +96,7 @@ impl LocalCatalog {
         Ok(Self {
             root,
             repository_prefix,
+            index_lock: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -142,6 +167,22 @@ impl LocalCatalog {
         dir.join("manifest.json").is_file() && dir.join(PANEL_CACHE_COMPLETE_MARKER).is_file()
     }
 
+    /// Whether the current entry for `repo` is fully installed in this cache
+    /// (manifest plus completion marker), matching what [`Self::bundle_registry`]
+    /// exposes to the DAG runtime. Purely local — never touches the network,
+    /// so a provisioned deployment can be checked offline.
+    ///
+    /// An unreadable index reports `false`; the subsequent install attempt
+    /// re-reads the index and surfaces the real error.
+    pub fn is_repository_installed(&self, repo: &str) -> bool {
+        let Ok(index) = self.index() else {
+            return false;
+        };
+        index
+            .current_entries()
+            .any(|entry| entry.repo.as_str() == repo && self.is_installed(entry))
+    }
+
     /// Read and validate the cached manifest for an installed entry.
     pub fn manifest(&self, entry: &CatalogEntry) -> Result<DatasetManifest> {
         let path = self.entry_path(entry).join("manifest.json");
@@ -179,6 +220,19 @@ impl LocalCatalog {
         remote: &RemoteCatalog,
         repository: &str,
     ) -> Result<CatalogEntry> {
+        self.install_repository_with_progress(remote, repository, None)
+            .await
+    }
+
+    /// [`Self::install_repository`] with live byte-level progress: the
+    /// sink receives cumulative `downloaded_bytes` for the bundle as its
+    /// files stream in (throttling is the caller's concern).
+    pub async fn install_repository_with_progress(
+        &self,
+        remote: &RemoteCatalog,
+        repository: &str,
+        progress: Option<ProgressSink<'_>>,
+    ) -> Result<CatalogEntry> {
         let entry = remote
             .package_index(repository)
             .await?
@@ -186,7 +240,8 @@ impl LocalCatalog {
             .map_err(|error| {
                 format!("package repository `{repository}` has no current entry: {error}")
             })?;
-        self.install_entry(remote, &entry).await
+        self.install_entry_with_progress(remote, &entry, progress)
+            .await
     }
 
     /// Download, verify, and install one already-resolved remote entry.
@@ -194,29 +249,54 @@ impl LocalCatalog {
     /// Installing an entry whose repo and digest are already indexed is
     /// idempotent: the existing payload directory is kept and only the
     /// current-version pointer may be refreshed.
+    ///
+    /// Safe under concurrent installs: the network phase (manifest fetch +
+    /// staging download into a private UUID directory) runs without the
+    /// index lock; the publish phase (atomic rename + index rewrite) is
+    /// serialized so concurrent read-modify-write cycles cannot lose
+    /// entries.
     pub async fn install_entry(
         &self,
         remote: &RemoteCatalog,
         entry: &CatalogEntry,
     ) -> Result<CatalogEntry> {
-        let mut index = self.index()?;
-        let known = index
-            .entries
-            .iter()
-            .any(|existing| existing.repo == entry.repo && existing.digest == entry.digest);
-        if known && self.is_installed(entry) {
-            let current_is_entry = index.entries.iter().any(|existing| {
-                existing.repo == entry.repo && entry.current && existing.digest == entry.digest
-            });
-            if !current_is_entry {
-                index.upsert_current(entry.clone());
-                self.write_index(&index)?;
+        self.install_entry_with_progress(remote, entry, None).await
+    }
+
+    /// [`Self::install_entry`] with live byte-level progress.
+    pub async fn install_entry_with_progress(
+        &self,
+        remote: &RemoteCatalog,
+        entry: &CatalogEntry,
+        progress: Option<ProgressSink<'_>>,
+    ) -> Result<CatalogEntry> {
+        {
+            let _guard = self.index_lock.lock().await;
+            let mut index = self.index()?;
+            let known = index
+                .entries
+                .iter()
+                .any(|existing| existing.repo == entry.repo && existing.digest == entry.digest);
+            if known && self.is_installed(entry) {
+                let current_is_entry = index.entries.iter().any(|existing| {
+                    existing.repo == entry.repo && entry.current && existing.digest == entry.digest
+                });
+                if !current_is_entry {
+                    index.upsert_current(entry.clone());
+                    self.write_index(&index)?;
+                }
+                return Ok(entry.clone());
             }
-            return Ok(entry.clone());
         }
 
+        // Network phase — concurrent-safe: staging is a private directory.
         let manifest = remote.manifest(entry).await?;
-        let staged = self.stage_entry(remote, entry, &manifest).await?;
+        let staged = self
+            .stage_entry_with_progress(remote, entry, &manifest, progress)
+            .await?;
+
+        // Publish phase — serialized: rename plus index read-modify-write.
+        let _guard = self.index_lock.lock().await;
         let final_dir = self.entry_path(entry);
         if let Some(parent) = final_dir.parent() {
             std::fs::create_dir_all(parent).map_err(|error| {
@@ -234,6 +314,7 @@ impl LocalCatalog {
         std::fs::rename(&staged, &final_dir)
             .map_err(|error| format!("publish cached entry `{}`: {error}", final_dir.display()))?;
 
+        let mut index = self.index()?;
         index.upsert_current(entry.clone());
         self.write_index(&index)?;
         Ok(entry.clone())
@@ -266,11 +347,17 @@ impl LocalCatalog {
         Ok(updated)
     }
 
-    async fn stage_entry(
+    /// Number of payload files downloaded concurrently while staging one
+    /// entry. Files are independent objects; parallel fetch multiplies the
+    /// effective throughput of large multi-file packages.
+    const STAGE_FILE_CONCURRENCY: usize = 4;
+
+    async fn stage_entry_with_progress(
         &self,
         remote: &RemoteCatalog,
         entry: &CatalogEntry,
         manifest: &DatasetManifest,
+        progress: Option<ProgressSink<'_>>,
     ) -> Result<PathBuf> {
         let staged = self.root.join(format!(
             ".downloading-{}@{}-{}",
@@ -278,15 +365,73 @@ impl LocalCatalog {
             entry.digest,
             uuid::Uuid::new_v4()
         ));
-        for file in &manifest.files {
-            let key = entry.source_payload_path(&file.path);
-            let target = staged.join(&file.path);
-            if let Some(parent) = target.parent() {
-                tokio::fs::create_dir_all(parent).await.map_err(|error| {
-                    format!("create staging directory `{}`: {error}", parent.display())
-                })?;
-            }
-            download_and_verify(remote.source(), &key, &target, file.size, &file.sha256).await?;
+        // Cumulative per-bundle byte accounting across concurrently
+        // downloading files, folded into `TransferProgress` ticks.
+        let bundle_total: u64 = manifest.files.iter().map(|file| file.size).sum();
+        let per_file: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, u64>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+        let repo = entry.repo.to_string();
+        // Resolve borrowed manifest data into owned per-file jobs before
+        // building futures: a closure borrowing `&DatasetFile` that returns
+        // an async block trips `FnOnce`-is-not-general-enough once the
+        // future crosses an async-trait boundary.
+        let jobs: Vec<(String, PathBuf, u64, String)> = manifest
+            .files
+            .iter()
+            .map(|file| {
+                (
+                    entry.source_payload_path(&file.path),
+                    staged.join(&file.path),
+                    file.size,
+                    file.sha256.clone(),
+                )
+            })
+            .collect();
+        let downloads = futures::stream::iter(jobs)
+            .map(|(key, target, size, sha256)| {
+                let progress = progress.clone();
+                let per_file = per_file.clone();
+                let repo = repo.clone();
+                let file_path = key.rsplit('/').next().unwrap_or(&key).to_string();
+                async move {
+                    if let Some(parent) = target.parent() {
+                        tokio::fs::create_dir_all(parent).await.map_err(|error| {
+                            format!("create staging directory `{}`: {error}", parent.display())
+                        })?;
+                    }
+                    let reporter = progress.map(|sink| {
+                        let per_file = per_file.clone();
+                        let repo = repo.clone();
+                        let report = move |bytes: u64| {
+                            let mut files = per_file.lock().unwrap();
+                            files.insert(file_path.clone(), bytes);
+                            let downloaded = files.values().sum::<u64>();
+                            sink(TransferProgress {
+                                repo: repo.clone(),
+                                downloaded_bytes: downloaded,
+                                total_bytes: bundle_total,
+                            });
+                        };
+                        std::sync::Arc::new(report) as std::sync::Arc<dyn Fn(u64) + Send + Sync>
+                    });
+                    download_and_verify(
+                        remote.source(),
+                        &key,
+                        &target,
+                        size,
+                        &sha256,
+                        reporter.as_ref().map(|report| report.as_ref()),
+                    )
+                    .await
+                }
+            })
+            .buffer_unordered(Self::STAGE_FILE_CONCURRENCY);
+        if let Err(error) = downloads.try_collect::<Vec<()>>().await {
+            // A failed or cancelled staging leaves no partial directory
+            // behind; the UUID naming only tolerated orphans, it never
+            // reused them.
+            let _ = std::fs::remove_dir_all(&staged);
+            return Err(error);
         }
         let manifest_bytes = serde_json::to_vec_pretty(manifest)
             .map_err(|error| format!("encode local manifest: {error}"))?;
@@ -395,6 +540,7 @@ async fn download_and_verify(
     target: &Path,
     expected_size: u64,
     expected_sha256: &str,
+    report: Option<&(dyn Fn(u64) + Send + Sync)>,
 ) -> Result<()> {
     use tokio::io::AsyncWriteExt;
 
@@ -418,6 +564,9 @@ async fn download_and_verify(
             .await
             .map_err(|error| format!("write cached file `{}`: {error}", target.display()))?;
         offset += chunk_len;
+        if let Some(report) = report {
+            report(offset);
+        }
     }
     file.flush()
         .await
@@ -598,6 +747,89 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn is_repository_installed_reflects_cache_state_without_network() {
+        let (remote, _warehouse) = published_fixture("owner/probe-panel").await;
+        let cache_root = tempfile::tempdir().unwrap();
+        let catalog = LocalCatalog::open(cache_root.path()).unwrap();
+
+        assert!(!catalog.is_repository_installed("owner/probe-panel"));
+        catalog
+            .install_repository(&remote, "owner/probe-panel")
+            .await
+            .unwrap();
+        assert!(catalog.is_repository_installed("owner/probe-panel"));
+        assert!(!catalog.is_repository_installed("owner/other-panel"));
+    }
+
+    #[tokio::test]
+    async fn progress_ticks_report_cumulative_bytes_up_to_total() {
+        let (remote, _warehouse) = published_fixture("owner/progress-panel").await;
+        let cache_root = tempfile::tempdir().unwrap();
+        let catalog = LocalCatalog::open(cache_root.path()).unwrap();
+
+        let ticks: std::sync::Arc<std::sync::Mutex<Vec<TransferProgress>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorder = ticks.clone();
+        let sink: ProgressSink<'_> = std::sync::Arc::new(move |tick| {
+            recorder.lock().unwrap().push(tick);
+        });
+        let entry = catalog
+            .install_repository_with_progress(&remote, "owner/progress-panel", Some(sink))
+            .await
+            .unwrap();
+
+        let ticks = ticks.lock().unwrap();
+        assert!(!ticks.is_empty(), "download must produce at least one tick");
+        assert!(ticks.iter().all(|tick| tick.repo == entry.repo.as_str()));
+        assert!(
+            ticks
+                .iter()
+                .all(|tick| tick.downloaded_bytes <= tick.total_bytes),
+            "cumulative bytes never exceed the bundle total"
+        );
+        let last = ticks.last().unwrap();
+        assert_eq!(last.downloaded_bytes, last.total_bytes);
+        assert_eq!(
+            last.total_bytes,
+            catalog
+                .manifest(&entry)
+                .unwrap()
+                .files
+                .iter()
+                .map(|f| f.size)
+                .sum::<u64>()
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_installs_keep_all_index_entries() {
+        // Two installs racing on one cache: the publish phase is
+        // serialized by the index lock, so neither read-modify-write
+        // cycle can drop the other's entry.
+        let (remote_a, _warehouse_a) = published_fixture("owner/parallel-a").await;
+        let (remote_b, _warehouse_b) = published_fixture("owner/parallel-b").await;
+        let cache_root = tempfile::tempdir().unwrap();
+        let catalog = LocalCatalog::open(cache_root.path()).unwrap();
+
+        let (first, second) = tokio::join!(
+            catalog.install_repository(&remote_a, "owner/parallel-a"),
+            catalog.install_repository(&remote_b, "owner/parallel-b"),
+        );
+        first.unwrap();
+        second.unwrap();
+
+        let index = catalog.index().unwrap();
+        for repo in ["owner/parallel-a", "owner/parallel-b"] {
+            assert!(
+                index
+                    .current_entries()
+                    .any(|entry| entry.repo.as_str() == repo),
+                "`{repo}` must survive the concurrent install"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn bundle_registry_resolves_under_both_repo_and_short_name() {
         let (remote, _warehouse) = published_fixture("owner/cache-cache-panel").await;
         let cache_root = tempfile::tempdir().unwrap();
@@ -613,7 +845,9 @@ mod tests {
         let registry = catalog.bundle_registry().unwrap();
 
         // Primary: HF repo (owner/name) is the canonical identity.
-        let by_repo = registry.get(entry.repo.as_str()).expect("repo key resolves");
+        let by_repo = registry
+            .get(entry.repo.as_str())
+            .expect("repo key resolves");
         assert_eq!(by_repo.ident, entry.repo.as_str());
         assert_eq!(by_repo.vpath.as_str(), "/bundles/owner/cache-cache-panel");
         assert_eq!(by_repo.digest.as_deref(), Some(entry.digest.as_str()));

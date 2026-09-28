@@ -23,9 +23,11 @@ use tracing_subscriber::fmt::writer::MakeWriterExt;
 use gateway::daemon::{DaemonOptions, run_daemon};
 use gateway::manager;
 
-use container_plugin::loader;
-use dag_core::NodePlugin;
+use container_plugin::bundles;
+use container_plugin::factory::Plugin;
 use container_plugin::sync::{self, EntryOutcome};
+use dag_core::NodePlugin;
+use data_catalog::LocalCatalog;
 
 use crate::cli::{ServeAction, ServeArgs};
 
@@ -177,19 +179,7 @@ async fn plugin_preflight(config: &gateway::RuntimeConfig) -> color_eyre::Result
     // Loading validates every manifest fail-closed and constructs the
     // families; the connection is only carried for factory construction,
     // no container is spawned here.
-    let connection: std::sync::Arc<dyn container_runtime::PodmanConnection> =
-        std::sync::Arc::new(container_runtime::PodmanRuntime::new(
-            container_runtime::PodmanConfig {
-                program: "podman".into(),
-                workspace_root: root.join("workspace"),
-                panel_cache_root: root.join("panels"),
-            },
-        ));
-    let panel_cache = std::sync::Arc::new(container_runtime::PanelCache::new(
-        root.join("panels"),
-    ));
-    let plugins = loader::load(&root, connection, panel_cache)
-        .map_err(|error| color_eyre::eyre::eyre!("plugin load failed: {error}"))?;
+    let plugins = crate::commands::panels::load_installed_plugins(&config.state_dir)?;
 
     let mut total_kinds = 0usize;
     for plugin in &plugins {
@@ -202,6 +192,86 @@ async fn plugin_preflight(config: &gateway::RuntimeConfig) -> color_eyre::Result
         plugins.len(),
         if plugins.len() == 1 { "y" } else { "ies" },
         total_kinds
+    );
+    // Mirror the headline to the tracing log: a daemon auto-spawned by a
+    // frontend runs with nulled stdio, so its println report would vanish.
+    tracing::info!(
+        families = plugins.len(),
+        kinds = total_kinds,
+        "plugin preflight verified"
+    );
+
+    panel_bundle_preflight(&plugins, &config.state_dir).await?;
+    Ok(())
+}
+
+/// Environment opt-in that runs the full panel-bundle provisioning phase
+/// inline during startup (truthy: `1`/`true`/`yes`/`on`), before the daemon
+/// builds its bundle registry. Unattended deployments get a one-command
+/// cold start; interactive ones should prefer `autonomics panels sync`.
+pub const PANEL_SYNC_ENV: &str = "AUTONOMICS_PANEL_SYNC";
+
+/// Panel-bundle preflight: a **local-only** presence check of every
+/// `[[panels]]` bundle against the verified catalog cache. Zero network
+/// access, so daemon readiness stays bounded no matter the network state —
+/// frontends auto-starting the daemon (`gateway::manager::ensure_running`)
+/// rely on that.
+///
+/// Missing bundles are reported with a pointer at the independent
+/// provisioning phase (`autonomics panels sync`); the affected nodes fail
+/// closed at build time and remain installable at runtime via the catalog
+/// tools. `AUTONOMICS_PANEL_SYNC=1` switches this phase to full inline
+/// provisioning instead (`panels::provision_missing_bundles`).
+async fn panel_bundle_preflight(
+    plugins: &[Plugin],
+    state_dir: &std::path::Path,
+) -> color_eyre::Result<()> {
+    let bundle_ids = bundles::collect_panel_bundles(plugins);
+    if bundle_ids.is_empty() {
+        return Ok(());
+    }
+    if let Some(value) = std::env::var_os(PANEL_SYNC_ENV) {
+        if matches!(
+            value.to_string_lossy().trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ) {
+            crate::commands::panels::provision_missing_bundles(state_dir).await?;
+            return Ok(());
+        }
+    }
+
+    let local = LocalCatalog::open(data_catalog::default_panel_cache_root())
+        .map_err(|error| color_eyre::eyre::eyre!("cannot open panel cache: {error}"))?;
+    let report = bundles::check_panel_bundles(&bundle_ids, &local);
+    let counts = report.counts();
+    if counts.unavailable == 0 {
+        println!(
+            "panels: {} data bundle{} cached",
+            bundle_ids.len(),
+            if bundle_ids.len() == 1 { "" } else { "s" }
+        );
+        tracing::info!(bundles = bundle_ids.len(), "panel bundles all cached");
+        return Ok(());
+    }
+    // Mirror to tracing: an auto-spawned daemon's stdio is nulled, and
+    // missing bundles are exactly what its operator needs to learn about.
+    for repo in report.missing_repos() {
+        println!("  ! {repo} not cached");
+        tracing::warn!(
+            repo,
+            "panel bundle not cached — 'autonomics panels sync' fetches it"
+        );
+    }
+    println!(
+        "panels: {} of {} data bundles cached — run 'autonomics panels sync' to fetch the rest \
+         (nodes needing them fail at build time until then)",
+        counts.cached,
+        bundle_ids.len()
+    );
+    tracing::warn!(
+        cached = counts.cached,
+        total = bundle_ids.len(),
+        "panel bundles incomplete — run 'autonomics panels sync'"
     );
     Ok(())
 }
@@ -291,7 +361,7 @@ fn init_gateway_logging(state_dir: &std::path::Path, foreground: bool) -> color_
     let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         EnvFilter::new(
             "gateway=debug,runtime=debug,agentik_core=debug,agentik_sdk=debug,\
-             data_engine=info",
+             data_engine=info,autonomics=info",
         )
     });
 

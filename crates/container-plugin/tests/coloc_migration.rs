@@ -34,8 +34,13 @@ fn load_manifest(root: &PathBuf) -> PluginManifest {
     manifest
 }
 
-fn node_by_kind<'a>(manifest: &'a PluginManifest, kind: &str) -> &'a container_plugin::node_definition::NodeDefinition {
-    manifest.nodes.iter()
+fn node_by_kind<'a>(
+    manifest: &'a PluginManifest,
+    kind: &str,
+) -> &'a container_plugin::node_definition::NodeDefinition {
+    manifest
+        .nodes
+        .iter()
         .find(|n| n.kind == kind)
         .unwrap_or_else(|| panic!("{kind} missing from manifest"))
 }
@@ -64,13 +69,8 @@ fn coloc_abf_plugin_compiles_to_the_legacy_wrapper_contract() {
     let manifest = load_manifest(&root);
     let node = node_by_kind(&manifest, "coloc_abf");
 
-    let compiled = compile_container_spec(
-        node,
-        &manifest.image,
-        &manifest.panels,
-        &base_values(),
-    )
-    .unwrap();
+    let compiled =
+        compile_container_spec(node, &manifest.image, &manifest.panels, &base_values()).unwrap();
 
     assert_eq!(
         compiled.image,
@@ -112,7 +112,10 @@ fn coloc_abf_plugin_compiles_to_the_legacy_wrapper_contract() {
     assert_eq!(compiled.env.get("COLOC_P2").unwrap(), "0.0001");
     assert_eq!(compiled.env.get("COLOC_P12").unwrap(), "0.00001");
     assert_eq!(compiled.env.get("COLOC_DATASET1_BETA").unwrap(), "beta1");
-    assert_eq!(compiled.env.get("COLOC_DATASET1_VARBETA").unwrap(), "varbeta1");
+    assert_eq!(
+        compiled.env.get("COLOC_DATASET1_VARBETA").unwrap(),
+        "varbeta1"
+    );
     assert_eq!(compiled.env.get("COLOC_DATASET2_BETA").unwrap(), "beta2");
     // Optional-and-absent params render as empty strings.
     assert_eq!(compiled.env.get("COLOC_DATASET1_PVALUES").unwrap(), "");
@@ -131,9 +134,9 @@ fn coloc_abf_plugin_compiles_to_the_legacy_wrapper_contract() {
     assert!(script.contains("input <- Sys.getenv(\"AUTONOMICS_INPUT0\")"));
     assert!(script.contains("result_path <- Sys.getenv(\"AUTONOMICS_OUTPUT0\")"));
     assert!(script.contains("log_path <- Sys.getenv(\"AUTONOMICS_OUTPUT1\")"));
-    assert!(script.contains(
-        "data <- read.delim(input, check.names = FALSE, stringsAsFactors = FALSE)"
-    ));
+    assert!(
+        script.contains("data <- read.delim(input, check.names = FALSE, stringsAsFactors = FALSE)")
+    );
     // The coloc.abf() call keeps its named-argument structure; the
     // legacy literal priors p1 = 0.0001 become env reads (same values
     // after as.numeric()).
@@ -175,9 +178,7 @@ fn coloc_abf_plugin_compiles_to_the_legacy_wrapper_contract() {
     assert!(script.contains("nzchar(Sys.getenv(\"COLOC_DATASET2_PVALUES\"))"));
     // The cross-field rules the legacy Rust validate() enforced before
     // the container started are mirrored verbatim inside the script.
-    assert!(script.contains(
-        "dataset1 must supply exactly one of (beta+varbeta) or pvalues"
-    ));
+    assert!(script.contains("dataset1 must supply exactly one of (beta+varbeta) or pvalues"));
     assert!(script.contains("dataset1.maf is required when using dataset1.pvalues"));
     assert!(script.contains("dataset2.s is required for cc + pvalues"));
     assert!(script.contains("dataset1.type must be quant or cc"));
@@ -264,7 +265,12 @@ fn coloc_abf_plugin_schema_marks_optionals_not_required() {
             .iter()
             .map(|v| v.as_str().unwrap())
             .collect::<Vec<_>>(),
-        vec!["dataset1_snp", "dataset1_type", "dataset2_snp", "dataset2_type"]
+        vec![
+            "dataset1_snp",
+            "dataset1_type",
+            "dataset2_snp",
+            "dataset2_type"
+        ]
     );
     assert_eq!(schema["additionalProperties"], false);
     // The legacy ColocTraitType enum flattens to a documented string.
@@ -302,10 +308,7 @@ fn coloc_abf_plugin_rejects_out_of_range_priors_and_missing_required_params() {
     // Mirrors the legacy serde enforcement of the required
     // ColocDatasetSpec fields: an absent SNP column is a MissingParam.
     let mut missing = base_values();
-    missing
-        .as_object_mut()
-        .unwrap()
-        .remove("dataset1_snp");
+    missing.as_object_mut().unwrap().remove("dataset1_snp");
     let error = compile_container_spec(node, &manifest.image, &manifest.panels, &missing)
         .unwrap_err()
         .to_string();

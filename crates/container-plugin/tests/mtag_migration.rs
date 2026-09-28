@@ -33,8 +33,13 @@ fn load_manifest(root: &PathBuf) -> PluginManifest {
     manifest
 }
 
-fn node_by_kind<'a>(manifest: &'a PluginManifest, kind: &str) -> &'a container_plugin::node_definition::NodeDefinition {
-    manifest.nodes.iter()
+fn node_by_kind<'a>(
+    manifest: &'a PluginManifest,
+    kind: &str,
+) -> &'a container_plugin::node_definition::NodeDefinition {
+    manifest
+        .nodes
+        .iter()
         .find(|n| n.kind == kind)
         .unwrap_or_else(|| panic!("{kind} missing from manifest"))
 }
@@ -48,13 +53,8 @@ fn mtag_plugin_compiles_to_the_legacy_wrapper_contract() {
     let manifest = load_manifest(&root);
     let node = node_by_kind(&manifest, "mtag");
 
-    let compiled = compile_container_spec(
-        node,
-        &manifest.image,
-        &manifest.panels,
-        &json!({}),
-    )
-    .unwrap();
+    let compiled =
+        compile_container_spec(node, &manifest.image, &manifest.panels, &json!({})).unwrap();
 
     // Byte-exact contract with the legacy wrapper.
     assert_eq!(

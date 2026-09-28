@@ -33,8 +33,13 @@ fn load_manifest(root: &PathBuf) -> PluginManifest {
     manifest
 }
 
-fn node_by_kind<'a>(manifest: &'a PluginManifest, kind: &str) -> &'a container_plugin::node_definition::NodeDefinition {
-    manifest.nodes.iter()
+fn node_by_kind<'a>(
+    manifest: &'a PluginManifest,
+    kind: &str,
+) -> &'a container_plugin::node_definition::NodeDefinition {
+    manifest
+        .nodes
+        .iter()
         .find(|n| n.kind == kind)
         .unwrap_or_else(|| panic!("{kind} missing from manifest"))
 }
@@ -59,13 +64,9 @@ fn mvmr_plugin_compiles_to_the_legacy_wrapper_contract() {
     let manifest = load_manifest(&root);
     let node = node_by_kind(&manifest, "mvmr");
 
-    let compiled = compile_container_spec(
-        node,
-        &manifest.image,
-        &manifest.panels,
-        &required_columns(),
-    )
-    .unwrap();
+    let compiled =
+        compile_container_spec(node, &manifest.image, &manifest.panels, &required_columns())
+            .unwrap();
 
     assert_eq!(
         compiled.image,
@@ -101,7 +102,10 @@ fn mvmr_plugin_compiles_to_the_legacy_wrapper_contract() {
     // params absent from the submitted spec render as empty strings.
     assert_eq!(compiled.env.get("MVMR_BETA_YG").unwrap(), "SBP_beta");
     assert_eq!(compiled.env.get("MVMR_SEBETA_YG").unwrap(), "SBP_se");
-    assert_eq!(compiled.env.get("MVMR_BETA_XG").unwrap(), "LDL_beta HDL_beta");
+    assert_eq!(
+        compiled.env.get("MVMR_BETA_XG").unwrap(),
+        "LDL_beta HDL_beta"
+    );
     assert_eq!(compiled.env.get("MVMR_SEBETA_XG").unwrap(), "LDL_se HDL_se");
     assert_eq!(compiled.env.get("MVMR_LABEL_COLUMN").unwrap(), "");
     assert_eq!(compiled.env.get("MVMR_STRENGTH").unwrap(), "true");
@@ -118,22 +122,25 @@ fn mvmr_plugin_compiles_to_the_legacy_wrapper_contract() {
     // "HDL_beta")]`, `data$SBP_beta`, `RSID = "SNP"`); the plugin rebuilds
     // the identical calls from env — `data[[name]]` is the `data$name`
     // codegen in indexing form.
-    assert!(script.contains("data <- read.delim(input, check.names = FALSE, stringsAsFactors = FALSE)"));
+    assert!(
+        script.contains("data <- read.delim(input, check.names = FALSE, stringsAsFactors = FALSE)")
+    );
     assert!(script.contains("MVMR::format_mvmr("));
     assert!(script.contains("BXGs = as.matrix(data[, beta_xg, drop = FALSE])"));
     assert!(script.contains("BYG = data[[beta_yg]]"));
     assert!(script.contains("seBXGs = as.matrix(data[, sebeta_xg, drop = FALSE])"));
     assert!(script.contains("seBYG = data[[sebeta_yg]]"));
-    assert!(script.contains(
-        "RSID = if (nzchar(label_column)) data[[label_column]] else rownames(data)"
-    ));
+    assert!(
+        script
+            .contains("RSID = if (nzchar(label_column)) data[[label_column]] else rownames(data)")
+    );
     // pcor handling: legacy emitted either `pcor <- NULL; gencov <- 0` or a
     // baked `matrix(c(1, 0.25, ...), nrow = p, ncol = p, byrow = TRUE)` plus
     // phenocov_mvmr; the script selects at runtime from the serialized
     // MVMR_PCOR value and rebuilds the same byrow = TRUE matrix.
-    assert!(script.contains(
-        "matrix(as.numeric(unlist(pcor_cells)), nrow = p, ncol = p, byrow = TRUE)"
-    ));
+    assert!(
+        script.contains("matrix(as.numeric(unlist(pcor_cells)), nrow = p, ncol = p, byrow = TRUE)")
+    );
     assert!(script.contains(
         "gencov <- MVMR::phenocov_mvmr(pcor, as.matrix(data[, sebeta_xg, drop = FALSE]))"
     ));
@@ -146,7 +153,9 @@ fn mvmr_plugin_compiles_to_the_legacy_wrapper_contract() {
     // The legacy compile-time call-or-NULL dispatch became script-side
     // if/else over the same booleans (assigning NULL drops the slot,
     // exactly like the legacy emitted `result$x <- NULL`).
-    assert!(script.contains("result$strength <- if (strength) MVMR::strength_mvmr(mvmr_input, gencov) else NULL"));
+    assert!(script.contains(
+        "result$strength <- if (strength) MVMR::strength_mvmr(mvmr_input, gencov) else NULL"
+    ));
     assert!(script.contains("result$covariance <- list(pcor = pcor, source = if (is.null(pcor)) \"zero\" else \"phenocov_mvmr\")"));
     // Log epilogue and RDS output, byte-faithful to the legacy program.
     assert!(script.contains("sink(log_path, split = TRUE)"));
@@ -172,8 +181,8 @@ fn mvmr_plugin_requires_the_legacy_required_params() {
     // The legacy spec deserialized beta_yg/sebeta_yg/beta_xg/sebeta_xg as
     // mandatory fields; the plugin enforces the same through the required
     // list (first missing param is named).
-    let error = compile_container_spec(node, &manifest.image, &manifest.panels, &json!({}))
-        .unwrap_err();
+    let error =
+        compile_container_spec(node, &manifest.image, &manifest.panels, &json!({})).unwrap_err();
     assert!(error.to_string().contains("beta_xg"), "{error}");
 }
 
@@ -205,13 +214,19 @@ fn mvmr_plugin_renders_submitted_values_into_env() {
     )
     .unwrap();
 
-    assert_eq!(compiled.env.get("MVMR_BETA_XG").unwrap(), "LDL_beta HDL_beta TG_beta");
+    assert_eq!(
+        compiled.env.get("MVMR_BETA_XG").unwrap(),
+        "LDL_beta HDL_beta TG_beta"
+    );
     assert_eq!(compiled.env.get("MVMR_LABEL_COLUMN").unwrap(), "SNP");
     assert_eq!(compiled.env.get("MVMR_STRENGTH").unwrap(), "false");
     // Unsubmitted booleans keep their defaults.
     assert_eq!(compiled.env.get("MVMR_STRHET").unwrap(), "true");
     assert_eq!(compiled.env.get("MVMR_QHET").unwrap(), "true");
-    assert_eq!(compiled.env.get("MVMR_PCOR").unwrap(), "1,0.25,0.1;0.25,1,0.2;0.1,0.2,1");
+    assert_eq!(
+        compiled.env.get("MVMR_PCOR").unwrap(),
+        "1,0.25,0.1;0.25,1,0.2;0.1,0.2,1"
+    );
 }
 
 #[test]

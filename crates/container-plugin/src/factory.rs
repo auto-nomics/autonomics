@@ -19,8 +19,8 @@ use dag_core::registry::{NodeCtx, NodeFactory, NodeRegistry};
 use dag_core::{DataBundle, DataBundleBinding, NodePlugin, NodePorts};
 use nodes_io::container_command::ContainerCommandNode;
 
-use crate::compile::spec_compile::compile_container_spec;
 use crate::compile::compile_schema;
+use crate::compile::spec_compile::compile_container_spec;
 use crate::manifest::{ImageMetadata, PanelBinding, PluginManifest};
 use crate::node_definition::{NodeDefinition, compile_ports};
 
@@ -112,12 +112,19 @@ impl NodeFactory for ManifestNodeFactory {
         self.panel_bindings()
     }
 
-    fn data_bundles_for_spec(&self, _spec: serde_json::Value) -> RegistryResult<Vec<DataBundleBinding>> {
+    fn data_bundles_for_spec(
+        &self,
+        _spec: serde_json::Value,
+    ) -> RegistryResult<Vec<DataBundleBinding>> {
         // v0 panels are static; `from_param` selection arrives later.
         Ok(self.data_bundles())
     }
 
-    fn build(&self, spec: serde_json::Value, node_ctx: NodeCtx) -> RegistryResult<Box<dyn DagNode>> {
+    fn build(
+        &self,
+        spec: serde_json::Value,
+        node_ctx: NodeCtx,
+    ) -> RegistryResult<Box<dyn DagNode>> {
         // `spec` arrives post-normalization: NodeRegistry::build_node has
         // already repaired common LLM pathologies against our compiled
         // schema. Everything below is strict.
@@ -127,11 +134,7 @@ impl NodeFactory for ManifestNodeFactory {
         let bundles = self
             .panels
             .iter()
-            .map(|panel| {
-                node_ctx
-                    .bound_data_bundle(&panel.binding)
-                    .cloned()
-            })
+            .map(|panel| node_ctx.bound_data_bundle(&panel.binding).cloned())
             .collect::<RegistryResult<Vec<DataBundle>>>()?;
 
         let node = ContainerCommandNode::new_with_catalog_panels(
@@ -151,6 +154,7 @@ impl NodeFactory for ManifestNodeFactory {
 /// [`ManifestNodeFactory`] per `[[nodes]]` entry.
 pub struct Plugin {
     name: &'static str,
+    panels: Vec<PanelBinding>,
     factories: Vec<ManifestNodeFactory>,
 }
 
@@ -163,6 +167,7 @@ impl Plugin {
         panel_cache: Arc<container_runtime::PanelCache>,
     ) -> Self {
         let name: &'static str = Box::leak(manifest.plugin_name.clone().into_boxed_str());
+        let panels = manifest.panels.clone();
         let factories = manifest
             .nodes
             .into_iter()
@@ -176,7 +181,11 @@ impl Plugin {
                 )
             })
             .collect();
-        Self { name, factories }
+        Self {
+            name,
+            panels,
+            factories,
+        }
     }
 }
 
@@ -196,7 +205,17 @@ impl Plugin {
     /// The node kinds this family contributes; used by the loader for
     /// cross-family duplicate detection.
     pub fn registered_kinds(&self) -> Vec<&'static str> {
-        self.factories.iter().map(|factory| factory.kind()).collect()
+        self.factories
+            .iter()
+            .map(|factory| factory.kind())
+            .collect()
+    }
+
+    /// The family-level `[[panels]]` bindings. Every node in the family
+    /// mounts all of these; the startup preflight uses the list to
+    /// provision the referenced catalog bundles.
+    pub fn panels(&self) -> &[PanelBinding] {
+        &self.panels
     }
 }
 
@@ -223,8 +242,8 @@ mod tests {
     use std::sync::Mutex;
 
     use container_runtime::{
-        ContainerRunRequest, ContainerRunResult, ContainerRuntimeError, PanelCache,
-        PodmanConnection, DEFAULT_CONTAINER_WORKDIR,
+        ContainerRunRequest, ContainerRunResult, ContainerRuntimeError, DEFAULT_CONTAINER_WORKDIR,
+        PanelCache, PodmanConnection,
     };
 
     /// Minimal fake: records every request, copies the first input to the
@@ -327,7 +346,11 @@ ldsc --h2 "$AUTONOMICS_INPUT0" \
     fn registry_with_plugin(runtime: Arc<FakeRuntime>) -> NodeRegistry {
         let workspace = tempfile::tempdir().unwrap();
         let panel_cache = Arc::new(PanelCache::new(workspace.path().join("panels")));
-        let plugin = Plugin::new(test_manifest(), runtime as Arc<dyn PodmanConnection>, panel_cache);
+        let plugin = Plugin::new(
+            test_manifest(),
+            runtime as Arc<dyn PodmanConnection>,
+            panel_cache,
+        );
         let ctx = NodeCtx::new(
             datafusion::prelude::SessionContext::new().runtime_env(),
             None,
@@ -372,8 +395,7 @@ ldsc --h2 "$AUTONOMICS_INPUT0" \
             requests: Mutex::new(Vec::new()),
         });
         let registry = registry_with_plugin(runtime);
-        let schema = serde_json::to_value(registry.get_node_spec("ldsc_h2").unwrap())
-            .unwrap();
+        let schema = serde_json::to_value(registry.get_node_spec("ldsc_h2").unwrap()).unwrap();
         assert_eq!(schema["type"], "object");
         assert_eq!(schema["additionalProperties"], false);
         assert!(schema["properties"]["intercept"]["type"] == "number");
@@ -432,10 +454,7 @@ ldsc --h2 "$AUTONOMICS_INPUT0" \
         let input_ref = FileRef::local(&input, Some("mtag_sumstats".into())).unwrap();
 
         let mut node = registry
-            .build_node(
-                "ldsc_h2",
-                serde_json::json!({"intercept": 2.0}),
-            )
+            .build_node("ldsc_h2", serde_json::json!({"intercept": 2.0}))
             .expect("manifest node builds");
 
         let outputs = node
@@ -453,13 +472,14 @@ ldsc --h2 "$AUTONOMICS_INPUT0" \
         let request = runtime.requests.lock().unwrap().last().unwrap().clone();
         // Image and kind are the manifest's, the renderer's output is in
         // the staged script, and both declared outputs were produced.
-        assert!(request
-            .image
-            .starts_with("ghcr.io/auto-nomics/autonomics/ldsc@sha256:"));
-        let script = std::fs::read_to_string(
-            request.workspace.host_path.join(".autonomics/script"),
-        )
-        .unwrap();
+        assert!(
+            request
+                .image
+                .starts_with("ghcr.io/auto-nomics/autonomics/ldsc@sha256:")
+        );
+        let script =
+            std::fs::read_to_string(request.workspace.host_path.join(".autonomics/script"))
+                .unwrap();
         assert!(
             script.contains("--intercept 2.0"),
             "renderer output must appear in the staged script: {script}"

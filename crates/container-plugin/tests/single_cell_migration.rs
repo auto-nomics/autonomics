@@ -11,8 +11,7 @@ use container_plugin::compile::spec_compile::compile_container_spec;
 use container_plugin::manifest::PluginManifest;
 use serde_json::json;
 
-const IMAGE: &str =
-    "ghcr.io/auto-nomics/autonomics/single-cell-preprocessor@sha256:c34c26428d13804c2528bc734805c1ccfe909353604ac08da0ce9c68890e7e18";
+const IMAGE: &str = "ghcr.io/auto-nomics/autonomics/single-cell-preprocessor@sha256:c34c26428d13804c2528bc734805c1ccfe909353604ac08da0ce9c68890e7e18";
 const CELLTYPIST_MODEL_BUNDLE: &str = "wjixiang/catalog-celltypist-models-pan-immune";
 
 fn plugin_root() -> Option<PathBuf> {
@@ -101,13 +100,34 @@ fn single_cell_preprocessor_plugin_compiles_to_the_legacy_wrapper_contract() {
     // precedent).
     assert_eq!(compiled.panel_bundles.len(), 1);
     assert_eq!(compiled.panel_bundles[0].panel_id, CELLTYPIST_MODEL_BUNDLE);
-    assert_eq!(compiled.panel_bundles[0].mount_path, "/panels/celltypist_model");
+    assert_eq!(
+        compiled.panel_bundles[0].mount_path,
+        "/panels/celltypist_model"
+    );
     // Byte-exact env map: the same five keys with the same default values
     // the legacy wrapper built.
     assert_eq!(compiled.env.len(), 5);
-    assert_eq!(compiled.env.get("AUTONOMICS_SINGLE_CELL_OPERATION").unwrap(), "inspect");
-    assert_eq!(compiled.env.get("AUTONOMICS_SINGLE_CELL_MIN_GENES").unwrap(), "0");
-    assert_eq!(compiled.env.get("AUTONOMICS_SINGLE_CELL_MIN_CELLS").unwrap(), "0");
+    assert_eq!(
+        compiled
+            .env
+            .get("AUTONOMICS_SINGLE_CELL_OPERATION")
+            .unwrap(),
+        "inspect"
+    );
+    assert_eq!(
+        compiled
+            .env
+            .get("AUTONOMICS_SINGLE_CELL_MIN_GENES")
+            .unwrap(),
+        "0"
+    );
+    assert_eq!(
+        compiled
+            .env
+            .get("AUTONOMICS_SINGLE_CELL_MIN_CELLS")
+            .unwrap(),
+        "0"
+    );
     assert_eq!(
         compiled
             .env
@@ -147,9 +167,27 @@ fn single_cell_preprocessor_plugin_renders_submitted_values_into_env() {
     )
     .unwrap();
 
-    assert_eq!(compiled.env.get("AUTONOMICS_SINGLE_CELL_OPERATION").unwrap(), "ingest");
-    assert_eq!(compiled.env.get("AUTONOMICS_SINGLE_CELL_MIN_GENES").unwrap(), "10");
-    assert_eq!(compiled.env.get("AUTONOMICS_SINGLE_CELL_MIN_CELLS").unwrap(), "20");
+    assert_eq!(
+        compiled
+            .env
+            .get("AUTONOMICS_SINGLE_CELL_OPERATION")
+            .unwrap(),
+        "ingest"
+    );
+    assert_eq!(
+        compiled
+            .env
+            .get("AUTONOMICS_SINGLE_CELL_MIN_GENES")
+            .unwrap(),
+        "10"
+    );
+    assert_eq!(
+        compiled
+            .env
+            .get("AUTONOMICS_SINGLE_CELL_MIN_CELLS")
+            .unwrap(),
+        "20"
+    );
     assert_eq!(
         compiled
             .env
@@ -194,7 +232,10 @@ fn family_expectations() -> Vec<Expected> {
             memory: "8Gi",
             shm_size: "1Gi",
             artifact_prefix: "/artifacts/h5ad_qc_filter",
-            outputs: &[("output.h5ad", "h5ad"), ("report.json", "single_cell_workflow_report_json")],
+            outputs: &[
+                ("output.h5ad", "h5ad"),
+                ("report.json", "single_cell_workflow_report_json"),
+            ],
             values: json!({}),
             env: &[
                 ("SC_P_INT_MIN_GENES", "0"),
@@ -211,7 +252,10 @@ fn family_expectations() -> Vec<Expected> {
             memory: "16Gi",
             shm_size: "2Gi",
             artifact_prefix: "/artifacts/h5ad_pca_neighbors_umap_leiden",
-            outputs: &[("output.h5ad", "h5ad"), ("report.json", "single_cell_workflow_report_json")],
+            outputs: &[
+                ("output.h5ad", "h5ad"),
+                ("report.json", "single_cell_workflow_report_json"),
+            ],
             values: json!({}),
             env: &[
                 ("SC_P_INT_N_PCS", "30"),
@@ -228,7 +272,10 @@ fn family_expectations() -> Vec<Expected> {
             memory: "8Gi",
             shm_size: "1Gi",
             artifact_prefix: "/artifacts/h5ad_celltypist_annotate",
-            outputs: &[("output.h5ad", "h5ad"), ("report.json", "single_cell_workflow_report_json")],
+            outputs: &[
+                ("output.h5ad", "h5ad"),
+                ("report.json", "single_cell_workflow_report_json"),
+            ],
             values: json!({}),
             env: &[
                 ("SC_P_BOOL_MAJORITY_VOTING", "false"),
@@ -244,7 +291,10 @@ fn family_expectations() -> Vec<Expected> {
             memory: "8Gi",
             shm_size: "1Gi",
             artifact_prefix: "/artifacts/h5ad_subset_by_obs",
-            outputs: &[("output.h5ad", "h5ad"), ("report.json", "single_cell_workflow_report_json")],
+            outputs: &[
+                ("output.h5ad", "h5ad"),
+                ("report.json", "single_cell_workflow_report_json"),
+            ],
             values: json!({}),
             env: &[("SC_P_STR_JOIN_COLUMN", "cell_id")],
         },
@@ -256,7 +306,10 @@ fn family_expectations() -> Vec<Expected> {
             memory: "8Gi",
             shm_size: "1Gi",
             artifact_prefix: "/artifacts/sc_dense_ingest",
-            outputs: &[("output.h5ad", "h5ad"), ("report.json", "single_cell_workflow_report_json")],
+            outputs: &[
+                ("output.h5ad", "h5ad"),
+                ("report.json", "single_cell_workflow_report_json"),
+            ],
             values: json!({"orientation": "genes_by_cells"}),
             env: &[
                 ("SC_P_STR_ORIENTATION", "genes_by_cells"),
@@ -315,10 +368,16 @@ fn family_expectations() -> Vec<Expected> {
             memory: "8Gi",
             shm_size: "1Gi",
             artifact_prefix: "/artifacts/gene_set_score",
-            outputs: &[("output.h5ad", "h5ad"), ("report.json", "single_cell_workflow_report_json")],
+            outputs: &[
+                ("output.h5ad", "h5ad"),
+                ("report.json", "single_cell_workflow_report_json"),
+            ],
             values: json!({"gene_sets": "{\"cytotoxic\": [\"NKG7\", \"GNLY\"]}"}),
             env: &[
-                ("SC_P_JSON_GENE_SETS", "{\"cytotoxic\": [\"NKG7\", \"GNLY\"]}"),
+                (
+                    "SC_P_JSON_GENE_SETS",
+                    "{\"cytotoxic\": [\"NKG7\", \"GNLY\"]}",
+                ),
                 ("SC_P_INT_CTRL_SIZE", "50"),
                 ("SC_P_INT_RANDOM_STATE", "0"),
             ],
@@ -331,10 +390,16 @@ fn family_expectations() -> Vec<Expected> {
             memory: "8Gi",
             shm_size: "1Gi",
             artifact_prefix: "/artifacts/h5ad_marker_annotate",
-            outputs: &[("output.h5ad", "h5ad"), ("report.json", "single_cell_workflow_report_json")],
+            outputs: &[
+                ("output.h5ad", "h5ad"),
+                ("report.json", "single_cell_workflow_report_json"),
+            ],
             values: json!({"marker_sets": "{\"T cell\": [\"CD3D\", \"CD3E\"]}"}),
             env: &[
-                ("SC_P_JSON_MARKER_SETS", "{\"T cell\": [\"CD3D\", \"CD3E\"]}"),
+                (
+                    "SC_P_JSON_MARKER_SETS",
+                    "{\"T cell\": [\"CD3D\", \"CD3E\"]}",
+                ),
                 ("SC_P_STR_GROUPBY", ""),
                 ("SC_P_NUM_MIN_SCORE", "0.0"),
                 ("SC_P_STR_UNKNOWN_LABEL", "Unknown"),
@@ -348,9 +413,15 @@ fn family_expectations() -> Vec<Expected> {
             memory: "8Gi",
             shm_size: "1Gi",
             artifact_prefix: "/artifacts/h5ad_ucell_score",
-            outputs: &[("output.h5ad", "h5ad"), ("report.json", "single_cell_workflow_report_json")],
+            outputs: &[
+                ("output.h5ad", "h5ad"),
+                ("report.json", "single_cell_workflow_report_json"),
+            ],
             values: json!({"gene_sets": "{\"cytotoxic\": [\"NKG7\", \"GNLY\"]}"}),
-            env: &[("SC_P_JSON_GENE_SETS", "{\"cytotoxic\": [\"NKG7\", \"GNLY\"]}")],
+            env: &[(
+                "SC_P_JSON_GENE_SETS",
+                "{\"cytotoxic\": [\"NKG7\", \"GNLY\"]}",
+            )],
         },
     ]
 }
@@ -373,10 +444,16 @@ fn single_cell_h5ad_family_compiles_to_the_legacy_wrapper_contracts() {
         // Injected-script style: bare interpreter argv, shim staged at
         // /work/.autonomics/script by the runtime (the legacy shape was
         // `python` plus the staged workflow.py).
-        assert_eq!(compiled.command, vec!["python".to_string()], "{}", expected.kind);
-        let script = compiled.script.as_deref().unwrap_or_else(|| {
-            panic!("{} must stage the runner shim", expected.kind)
-        });
+        assert_eq!(
+            compiled.command,
+            vec!["python".to_string()],
+            "{}",
+            expected.kind
+        );
+        let script = compiled
+            .script
+            .as_deref()
+            .unwrap_or_else(|| panic!("{} must stage the runner shim", expected.kind));
         // Semantic shim markers, not byte equality with the legacy
         // injected workflow.py: params travel as typed SC_P_ env vars and
         // control hands off to the image-baked runner.
@@ -387,7 +464,8 @@ fn single_cell_h5ad_family_compiles_to_the_legacy_wrapper_contracts() {
             expected.kind
         );
         assert!(
-            script.contains("runpy.run_path(\"/opt/autonomics/workflow.py\", run_name=\"__main__\")"),
+            script
+                .contains("runpy.run_path(\"/opt/autonomics/workflow.py\", run_name=\"__main__\")"),
             "{}",
             expected.kind
         );
@@ -401,12 +479,30 @@ fn single_cell_h5ad_family_compiles_to_the_legacy_wrapper_contracts() {
         );
         assert_eq!(compiled.workdir, None, "{}", expected.kind);
         assert!(compiled.panels.is_empty(), "{}", expected.kind);
-        assert_eq!(compiled.timeout_secs, expected.timeout_secs, "{}", expected.kind);
-        assert_eq!(compiled.artifact_prefix, expected.artifact_prefix, "{}", expected.kind);
+        assert_eq!(
+            compiled.timeout_secs, expected.timeout_secs,
+            "{}",
+            expected.kind
+        );
+        assert_eq!(
+            compiled.artifact_prefix, expected.artifact_prefix,
+            "{}",
+            expected.kind
+        );
         assert_eq!(compiled.cpus, Some(expected.cpus), "{}", expected.kind);
-        assert_eq!(compiled.memory.as_deref(), Some(expected.memory), "{}", expected.kind);
+        assert_eq!(
+            compiled.memory.as_deref(),
+            Some(expected.memory),
+            "{}",
+            expected.kind
+        );
         assert_eq!(compiled.pids_limit, Some(512), "{}", expected.kind);
-        assert_eq!(compiled.shm_size.as_deref(), Some(expected.shm_size), "{}", expected.kind);
+        assert_eq!(
+            compiled.shm_size.as_deref(),
+            Some(expected.shm_size),
+            "{}",
+            expected.kind
+        );
 
         let outputs: Vec<(&str, Option<&str>)> = compiled
             .outputs
@@ -425,13 +521,19 @@ fn single_cell_h5ad_family_compiles_to_the_legacy_wrapper_contracts() {
         );
 
         assert_eq!(
-            compiled.env.get("AUTONOMICS_SINGLE_CELL_WORKFLOW").map(String::as_str),
+            compiled
+                .env
+                .get("AUTONOMICS_SINGLE_CELL_WORKFLOW")
+                .map(String::as_str),
             Some(expected.operation),
             "{}",
             expected.kind
         );
         assert_eq!(
-            compiled.env.get("AUTONOMICS_SINGLE_CELL_PARAMS").map(String::as_str),
+            compiled
+                .env
+                .get("AUTONOMICS_SINGLE_CELL_PARAMS")
+                .map(String::as_str),
             Some("/work/.autonomics/files/params.json"),
             "{}",
             expected.kind
@@ -451,7 +553,12 @@ fn single_cell_h5ad_family_compiles_to_the_legacy_wrapper_contracts() {
             .iter()
             .map(|p| p.panel_id.as_str())
             .collect();
-        assert_eq!(panel_ids, vec![CELLTYPIST_MODEL_BUNDLE], "{}", expected.kind);
+        assert_eq!(
+            panel_ids,
+            vec![CELLTYPIST_MODEL_BUNDLE],
+            "{}",
+            expected.kind
+        );
     }
 }
 
@@ -524,25 +631,24 @@ fn single_cell_h5ad_plugin_schema_marks_required_and_optional_params() {
     };
     let manifest = load_manifest(&root);
 
-    let dense =
-        serde_json::to_value(container_plugin::compile::compile_schema(
-            &node_by_kind(&manifest, "sc_dense_ingest").params,
-        ))
-        .unwrap();
+    let dense = serde_json::to_value(container_plugin::compile::compile_schema(
+        &node_by_kind(&manifest, "sc_dense_ingest").params,
+    ))
+    .unwrap();
     let required = dense["required"].as_array().unwrap();
     assert!(required.contains(&json!("orientation")));
-    assert_eq!(
-        dense["properties"]["sample_label"]["type"],
-        "string"
+    assert_eq!(dense["properties"]["sample_label"]["type"], "string");
+    assert!(
+        dense["properties"]["sample_label"]
+            .get("minItems")
+            .is_none()
     );
-    assert!(dense["properties"]["sample_label"].get("minItems").is_none());
     assert_eq!(dense["properties"]["min_genes"]["type"], "integer");
 
-    let marker =
-        serde_json::to_value(container_plugin::compile::compile_schema(
-            &node_by_kind(&manifest, "h5ad_marker_annotate").params,
-        ))
-        .unwrap();
+    let marker = serde_json::to_value(container_plugin::compile::compile_schema(
+        &node_by_kind(&manifest, "h5ad_marker_annotate").params,
+    ))
+    .unwrap();
     let required = marker["required"].as_array().unwrap();
     assert!(required.contains(&json!("marker_sets")));
     assert!(
@@ -550,20 +656,23 @@ fn single_cell_h5ad_plugin_schema_marks_required_and_optional_params() {
         "groupby is optional in the legacy spec"
     );
 
-    let mean =
-        serde_json::to_value(container_plugin::compile::compile_schema(
-            &node_by_kind(&manifest, "h5ad_cluster_mean_expression").params,
-        ))
-        .unwrap();
+    let mean = serde_json::to_value(container_plugin::compile::compile_schema(
+        &node_by_kind(&manifest, "h5ad_cluster_mean_expression").params,
+    ))
+    .unwrap();
     assert_eq!(mean["properties"]["genes"]["type"], "array");
     assert_eq!(mean["properties"]["genes"]["items"]["type"], "string");
 
-    let ucell =
-        serde_json::to_value(container_plugin::compile::compile_schema(
-            &node_by_kind(&manifest, "h5ad_ucell_score").params,
-        ))
-        .unwrap();
-    assert!(ucell["required"].as_array().unwrap().contains(&json!("gene_sets")));
+    let ucell = serde_json::to_value(container_plugin::compile::compile_schema(
+        &node_by_kind(&manifest, "h5ad_ucell_score").params,
+    ))
+    .unwrap();
+    assert!(
+        ucell["required"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("gene_sets"))
+    );
 }
 
 #[test]

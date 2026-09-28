@@ -26,8 +26,6 @@ fn main() {
 
 fn run() -> container_plugin::error::Result<()> {
     match Cli::parse().command {
-        Commands::Init(init) => {
-            init_command::init_plugin_project(&init.plugin_name, init.dir_path)
-        }
+        Commands::Init(init) => init_command::init_plugin_project(&init.plugin_name, init.dir_path),
     }
 }

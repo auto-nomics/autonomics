@@ -607,7 +607,7 @@ impl DagNode for FileToDataFrameNode {
         // paths go through OpenDAL and don't have local fs access.
         if !path.starts_with("vfs://") {
             validate_local_path(&path, !self.partition_by.is_empty())
-                .map_err(|e| FileToDataFrameError::InvalidInput(e))?;
+                .map_err(FileToDataFrameError::InvalidInput)?;
         }
         let inferred_fmt = self
             .format

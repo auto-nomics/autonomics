@@ -69,13 +69,9 @@ fn deseq2_de_plugin_compiles_to_the_legacy_wrapper_contract() {
     let manifest = load_manifest(&root);
     let node = node_by_kind(&manifest, "deseq2_de");
 
-    let compiled = compile_container_spec(
-        node,
-        &manifest.image,
-        &manifest.panels,
-        &required_params(),
-    )
-    .unwrap();
+    let compiled =
+        compile_container_spec(node, &manifest.image, &manifest.panels, &required_params())
+            .unwrap();
 
     assert_eq!(
         compiled.image,
@@ -83,7 +79,10 @@ fn deseq2_de_plugin_compiles_to_the_legacy_wrapper_contract() {
     );
     assert_eq!(compiled.outputs.len(), 5);
     assert_eq!(compiled.outputs[0].path, "results.tsv");
-    assert_eq!(compiled.outputs[0].format.as_deref(), Some("deseq2_results_tsv"));
+    assert_eq!(
+        compiled.outputs[0].format.as_deref(),
+        Some("deseq2_results_tsv")
+    );
     assert_eq!(compiled.outputs[1].path, "normalized_counts.tsv");
     assert_eq!(
         compiled.outputs[1].format.as_deref(),
@@ -151,15 +150,24 @@ fn deseq2_de_plugin_compiles_to_the_legacy_wrapper_contract() {
     );
     assert_eq!(compiled.env.get("AUTONOMICS_DESEQ2_ALPHA").unwrap(), "0.1");
     assert_eq!(
-        compiled.env.get("AUTONOMICS_DESEQ2_CONDITION_REFERENCE").unwrap(),
+        compiled
+            .env
+            .get("AUTONOMICS_DESEQ2_CONDITION_REFERENCE")
+            .unwrap(),
         "untreated"
     );
     assert_eq!(
-        compiled.env.get("AUTONOMICS_DESEQ2_CONDITION_TEST").unwrap(),
+        compiled
+            .env
+            .get("AUTONOMICS_DESEQ2_CONDITION_TEST")
+            .unwrap(),
         "treated"
     );
     // Legacy `spec.covariates.join(",")` of the empty default: "".
-    assert_eq!(compiled.env.get("AUTONOMICS_DESEQ2_COVARIATES").unwrap(), "");
+    assert_eq!(
+        compiled.env.get("AUTONOMICS_DESEQ2_COVARIATES").unwrap(),
+        ""
+    );
     assert_eq!(
         compiled.env.get("AUTONOMICS_DESEQ2_FIT_TYPE").unwrap(),
         "parametric"
@@ -212,14 +220,23 @@ fn deseq2_de_plugin_renders_submitted_values_into_env() {
         "type,batch"
     );
     assert_eq!(
-        compiled.env.get("AUTONOMICS_DESEQ2_CONDITION_REFERENCE").unwrap(),
+        compiled
+            .env
+            .get("AUTONOMICS_DESEQ2_CONDITION_REFERENCE")
+            .unwrap(),
         "control"
     );
     assert_eq!(
-        compiled.env.get("AUTONOMICS_DESEQ2_CONDITION_TEST").unwrap(),
+        compiled
+            .env
+            .get("AUTONOMICS_DESEQ2_CONDITION_TEST")
+            .unwrap(),
         "knockout"
     );
-    assert_eq!(compiled.env.get("AUTONOMICS_DESEQ2_FIT_TYPE").unwrap(), "local");
+    assert_eq!(
+        compiled.env.get("AUTONOMICS_DESEQ2_FIT_TYPE").unwrap(),
+        "local"
+    );
     assert_eq!(compiled.env.get("AUTONOMICS_DESEQ2_ALPHA").unwrap(), "0.05");
     assert_eq!(compiled.env.get("AUTONOMICS_DESEQ2_THREADS").unwrap(), "1");
 }
@@ -276,8 +293,8 @@ fn deseq2_de_plugin_enforces_the_legacy_validate_bounds() {
 
     // The legacy spec demanded the condition levels; the plugin names the
     // first missing param instead of rendering an empty env.
-    let error = compile_container_spec(node, &manifest.image, &manifest.panels, &json!({}))
-        .unwrap_err();
+    let error =
+        compile_container_spec(node, &manifest.image, &manifest.panels, &json!({})).unwrap_err();
     assert!(error.to_string().contains("condition_reference"), "{error}");
 
     // Legacy "alpha must be finite and lie strictly between 0 and 1":

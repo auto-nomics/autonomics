@@ -41,16 +41,15 @@ impl RegistryHost {
         let port_valid = match host_port.as_slice() {
             [host] => host.len() == value.len(),
             [host, port] => {
-                !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit())
-                    && !host.is_empty()
+                !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) && !host.is_empty()
             }
             _ => false,
         };
         let valid = port_valid
             && !value.contains(['/', '\\', '@'])
-            && value
-                .chars()
-                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '-' | ':'));
+            && value.chars().all(|c| {
+                c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '-' | ':')
+            });
         if !valid {
             return Err(format!(
                 "registry host must be a lowercase host with an optional port, got `{value}`"
@@ -267,9 +266,9 @@ impl ImageReference {
         let (address, digest) = value
             .rsplit_once('@')
             .ok_or_else(|| format!("image reference must contain `@digest`, got `{value}`"))?;
-        let (registry, path) = address
-            .split_once('/')
-            .ok_or_else(|| format!("image reference must contain a registry host, got `{value}`"))?;
+        let (registry, path) = address.split_once('/').ok_or_else(|| {
+            format!("image reference must contain a registry host, got `{value}`")
+        })?;
         Self::new(registry, path, digest)
     }
 
@@ -364,7 +363,10 @@ mod tests {
             "auto-nomics/../mtag",
             "Auto-Nomics/mtag",
         ] {
-            assert!(RepositoryPath::new(bad).is_err(), "`{bad}` must be rejected");
+            assert!(
+                RepositoryPath::new(bad).is_err(),
+                "`{bad}` must be rejected"
+            );
         }
     }
 
@@ -391,9 +393,7 @@ mod tests {
         let bad_hex = format!("sha256:{}", "z".repeat(64));
         assert!(ManifestDigest::new(&bad_hex).is_err());
         assert!(ManifestDigest::new("sha256:short").is_err());
-        assert!(
-            ManifestDigest::new(LAVA_DIGEST.strip_prefix("sha256:").unwrap()).is_err()
-        );
+        assert!(ManifestDigest::new(LAVA_DIGEST.strip_prefix("sha256:").unwrap()).is_err());
         assert!(ManifestDigest::new("").is_err());
         assert_eq!(
             ManifestDigest::new(PLACEHOLDER).unwrap_err(),
@@ -403,14 +403,13 @@ mod tests {
 
     #[test]
     fn references_roundtrip_through_their_string_form() {
-        let reference = ImageReference::new(
-            "ghcr.io",
-            "auto-nomics/autonomics/lava",
-            LAVA_DIGEST,
-        )
-        .unwrap();
+        let reference =
+            ImageReference::new("ghcr.io", "auto-nomics/autonomics/lava", LAVA_DIGEST).unwrap();
         let text = reference.as_str();
-        assert_eq!(text, format!("ghcr.io/auto-nomics/autonomics/lava@{LAVA_DIGEST}"));
+        assert_eq!(
+            text,
+            format!("ghcr.io/auto-nomics/autonomics/lava@{LAVA_DIGEST}")
+        );
         assert_eq!(ImageReference::parse(&text).unwrap(), reference);
         assert_eq!(reference.to_string(), text);
 
@@ -456,9 +455,12 @@ mod tests {
         );
 
         let reference_text = format!("ghcr.io/auto-nomics/autonomics/lava@{LAVA_DIGEST}");
-        let reference: ImageReference = serde_json::from_str(&format!("\"{reference_text}\""))
-            .unwrap();
+        let reference: ImageReference =
+            serde_json::from_str(&format!("\"{reference_text}\"")).unwrap();
         assert_eq!(reference.as_str(), reference_text);
-        assert_eq!(serde_json::to_string(&reference).unwrap(), format!("\"{reference_text}\""));
+        assert_eq!(
+            serde_json::to_string(&reference).unwrap(),
+            format!("\"{reference_text}\"")
+        );
     }
 }

@@ -123,7 +123,10 @@ mod tests {
         let rebuilt = directory.path().join("rebuilt");
         build_package(&target, &rebuilt, BuildOptions::default()).unwrap();
         let rebuilt_manifest = validate_package(&rebuilt).unwrap();
-        assert_eq!(rebuilt_manifest.repo.as_str(), "wjixiang/catalog-demo-panel");
+        assert_eq!(
+            rebuilt_manifest.repo.as_str(),
+            "wjixiang/catalog-demo-panel"
+        );
         assert_eq!(
             rebuilt_manifest
                 .metadata

@@ -60,13 +60,8 @@ fn music_deconvolution_plugin_compiles_to_the_legacy_wrapper_contract() {
     let manifest = load_manifest(&root);
     let node = node_by_kind(&manifest, "music_deconvolution");
 
-    let compiled = compile_container_spec(
-        node,
-        &manifest.image,
-        &manifest.panels,
-        &json!({}),
-    )
-    .unwrap();
+    let compiled =
+        compile_container_spec(node, &manifest.image, &manifest.panels, &json!({})).unwrap();
 
     assert_eq!(
         compiled.image,
@@ -154,10 +149,22 @@ fn music_deconvolution_plugin_compiles_to_the_legacy_wrapper_contract() {
         compiled.env.get("AUTONOMICS_MUSIC_CELL_TYPE_COL").unwrap(),
         "cell_type"
     );
-    assert_eq!(compiled.env.get("AUTONOMICS_MUSIC_CENTERED").unwrap(), "false");
-    assert_eq!(compiled.env.get("AUTONOMICS_MUSIC_CT_COV").unwrap(), "false");
-    assert_eq!(compiled.env.get("AUTONOMICS_MUSIC_EPSILON").unwrap(), "0.01");
-    assert_eq!(compiled.env.get("AUTONOMICS_MUSIC_ITER_MAX").unwrap(), "1000");
+    assert_eq!(
+        compiled.env.get("AUTONOMICS_MUSIC_CENTERED").unwrap(),
+        "false"
+    );
+    assert_eq!(
+        compiled.env.get("AUTONOMICS_MUSIC_CT_COV").unwrap(),
+        "false"
+    );
+    assert_eq!(
+        compiled.env.get("AUTONOMICS_MUSIC_EPSILON").unwrap(),
+        "0.01"
+    );
+    assert_eq!(
+        compiled.env.get("AUTONOMICS_MUSIC_ITER_MAX").unwrap(),
+        "1000"
+    );
     assert_eq!(
         compiled.env.get("AUTONOMICS_MUSIC_NORMALIZE").unwrap(),
         "false"
@@ -244,12 +251,21 @@ fn music_deconvolution_plugin_renders_submitted_values_into_env() {
         compiled.env.get("AUTONOMICS_MUSIC_SUBJECT_COL").unwrap(),
         "Donor"
     );
-    assert_eq!(compiled.env.get("AUTONOMICS_MUSIC_ITER_MAX").unwrap(), "500");
+    assert_eq!(
+        compiled.env.get("AUTONOMICS_MUSIC_ITER_MAX").unwrap(),
+        "500"
+    );
     // serde_json renders f64 0.0005 as "0.0005", identical to the legacy
     // `spec.nu.to_string()` for the same value.
     assert_eq!(compiled.env.get("AUTONOMICS_MUSIC_NU").unwrap(), "0.0005");
-    assert_eq!(compiled.env.get("AUTONOMICS_MUSIC_EPSILON").unwrap(), "0.005");
-    assert_eq!(compiled.env.get("AUTONOMICS_MUSIC_CENTERED").unwrap(), "true");
+    assert_eq!(
+        compiled.env.get("AUTONOMICS_MUSIC_EPSILON").unwrap(),
+        "0.005"
+    );
+    assert_eq!(
+        compiled.env.get("AUTONOMICS_MUSIC_CENTERED").unwrap(),
+        "true"
+    );
     assert_eq!(
         compiled.env.get("AUTONOMICS_MUSIC_NORMALIZE").unwrap(),
         "false"
@@ -323,13 +339,9 @@ fn music_deconvolution_plugin_enforces_the_legacy_validate_bounds() {
 
     // Legacy "nu must be finite and greater than zero": exclusive_min
     // rejects 0 at compile time.
-    let error = compile_container_spec(
-        node,
-        &manifest.image,
-        &manifest.panels,
-        &json!({"nu": 0.0}),
-    )
-    .unwrap_err();
+    let error =
+        compile_container_spec(node, &manifest.image, &manifest.panels, &json!({"nu": 0.0}))
+            .unwrap_err();
     assert!(error.to_string().contains("nu"), "{error}");
     assert!(error.to_string().contains("exclusiveMinimum"), "{error}");
 

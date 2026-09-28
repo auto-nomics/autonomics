@@ -33,8 +33,13 @@ fn load_manifest(root: &PathBuf) -> PluginManifest {
     manifest
 }
 
-fn node_by_kind<'a>(manifest: &'a PluginManifest, kind: &str) -> &'a container_plugin::node_definition::NodeDefinition {
-    manifest.nodes.iter()
+fn node_by_kind<'a>(
+    manifest: &'a PluginManifest,
+    kind: &str,
+) -> &'a container_plugin::node_definition::NodeDefinition {
+    manifest
+        .nodes
+        .iter()
         .find(|n| n.kind == kind)
         .unwrap_or_else(|| panic!("{kind} missing from manifest"))
 }
@@ -48,13 +53,8 @@ fn mixer_fit1_plugin_compiles_to_the_legacy_wrapper_contract() {
     let manifest = load_manifest(&root);
     let node = node_by_kind(&manifest, "mixer_fit1");
 
-    let compiled = compile_container_spec(
-        node,
-        &manifest.image,
-        &manifest.panels,
-        &json!({}),
-    )
-    .unwrap();
+    let compiled =
+        compile_container_spec(node, &manifest.image, &manifest.panels, &json!({})).unwrap();
 
     assert_eq!(
         compiled.image,
@@ -62,7 +62,10 @@ fn mixer_fit1_plugin_compiles_to_the_legacy_wrapper_contract() {
     );
     assert_eq!(compiled.outputs.len(), 2);
     assert_eq!(compiled.outputs[0].path, "mixer_fit1.json");
-    assert_eq!(compiled.outputs[0].format.as_deref(), Some("mixer_fit_json"));
+    assert_eq!(
+        compiled.outputs[0].format.as_deref(),
+        Some("mixer_fit_json")
+    );
     assert_eq!(compiled.outputs[1].path, "mixer_fit1.log");
     assert_eq!(compiled.outputs[1].format.as_deref(), Some("mixer_log"));
     assert_eq!(compiled.network, "isolated");
@@ -93,7 +96,10 @@ fn mixer_fit1_plugin_compiles_to_the_legacy_wrapper_contract() {
     // stringified them.
     assert_eq!(compiled.env.get("MIXER_CHR2USE").unwrap(), "1-22");
     assert_eq!(compiled.env.get("MIXER_SEED").unwrap(), "123");
-    assert_eq!(compiled.env.get("MIXER_DIFFEVO_FAST_REPEATS").unwrap(), "20");
+    assert_eq!(
+        compiled.env.get("MIXER_DIFFEVO_FAST_REPEATS").unwrap(),
+        "20"
+    );
     assert_eq!(compiled.env.get("MIXER_FAST_RUN").unwrap(), "true");
     assert_eq!(compiled.env.get("MIXER_KMAX_PDF").unwrap(), "10");
     assert_eq!(compiled.env.get("MIXER_DOWNSAMPLE_FACTOR").unwrap(), "1000");
@@ -133,13 +139,8 @@ fn mixer_fit2_plugin_compiles_to_the_legacy_wrapper_contract() {
     let manifest = load_manifest(&root);
     let node = node_by_kind(&manifest, "mixer_fit2");
 
-    let compiled = compile_container_spec(
-        node,
-        &manifest.image,
-        &manifest.panels,
-        &json!({}),
-    )
-    .unwrap();
+    let compiled =
+        compile_container_spec(node, &manifest.image, &manifest.panels, &json!({})).unwrap();
 
     assert_eq!(
         compiled.image,
@@ -147,7 +148,10 @@ fn mixer_fit2_plugin_compiles_to_the_legacy_wrapper_contract() {
     );
     assert_eq!(compiled.outputs.len(), 2);
     assert_eq!(compiled.outputs[0].path, "mixer_fit2.json");
-    assert_eq!(compiled.outputs[0].format.as_deref(), Some("mixer_fit_json"));
+    assert_eq!(
+        compiled.outputs[0].format.as_deref(),
+        Some("mixer_fit_json")
+    );
     assert_eq!(compiled.outputs[1].path, "mixer_fit2.log");
     assert_eq!(compiled.outputs[1].format.as_deref(), Some("mixer_log"));
     assert_eq!(compiled.timeout_secs, 21_600);

@@ -245,13 +245,9 @@ fn gcta_fastbat_plugin_compiles_to_the_legacy_wrapper_contract() {
     let manifest = load_manifest(&root);
     let node = node_by_kind(&manifest, "gcta_fastbat");
 
-    let compiled = compile_container_spec(
-        node,
-        &manifest.image,
-        &manifest.panels,
-        &json!({"chr": 22}),
-    )
-    .unwrap();
+    let compiled =
+        compile_container_spec(node, &manifest.image, &manifest.panels, &json!({"chr": 22}))
+            .unwrap();
 
     assert_eq!(compiled.image, GCTA_IMAGE);
     assert_eq!(compiled.outputs.len(), 2);
@@ -294,13 +290,8 @@ fn gcta_acat_plugin_compiles_to_the_legacy_wrapper_contract() {
 
     // ACAT has no required params: the empty spec is exactly the legacy
     // default spec (max_maf 0.01, min_mac 20, gene_flank_kb 0).
-    let compiled = compile_container_spec(
-        node,
-        &manifest.image,
-        &manifest.panels,
-        &json!({}),
-    )
-    .unwrap();
+    let compiled =
+        compile_container_spec(node, &manifest.image, &manifest.panels, &json!({})).unwrap();
 
     assert_eq!(compiled.image, GCTA_IMAGE);
     assert_eq!(compiled.outputs.len(), 2);

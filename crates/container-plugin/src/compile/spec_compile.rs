@@ -37,9 +37,7 @@ pub fn compile_container_spec(
             .get(key)
             .cloned()
             .or_else(|| field.default.clone())
-            .or_else(|| {
-                field.optional.then(|| serde_json::Value::Null)
-            })
+            .or_else(|| field.optional.then_some(serde_json::Value::Null))
             .ok_or_else(|| Error::MissingParam {
                 kind: node.kind.clone(),
                 name: key.clone(),

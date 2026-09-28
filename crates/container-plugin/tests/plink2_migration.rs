@@ -54,13 +54,8 @@ fn plink2_clump_plugin_compiles_to_the_legacy_wrapper_contract() {
     let manifest = load_manifest(&root);
     let node = node_by_kind(&manifest, "plink2_clump");
 
-    let compiled = compile_container_spec(
-        node,
-        &manifest.image,
-        &manifest.panels,
-        &json!({}),
-    )
-    .unwrap();
+    let compiled =
+        compile_container_spec(node, &manifest.image, &manifest.panels, &json!({})).unwrap();
 
     // Byte-exact contract: image, outputs, panels, resources, timeout.
     assert_eq!(
@@ -69,7 +64,10 @@ fn plink2_clump_plugin_compiles_to_the_legacy_wrapper_contract() {
     );
     assert_eq!(compiled.outputs.len(), 3);
     assert_eq!(compiled.outputs[0].path, "plink2_clump.log");
-    assert_eq!(compiled.outputs[0].format.as_deref(), Some("plink2_clump_log"));
+    assert_eq!(
+        compiled.outputs[0].format.as_deref(),
+        Some("plink2_clump_log")
+    );
     assert_eq!(compiled.outputs[1].path, "plink2_clump.clumps");
     assert_eq!(compiled.outputs[1].format.as_deref(), Some("plink2_clumps"));
     assert_eq!(compiled.outputs[2].path, "plink2_clump.chromosomes.tsv");
@@ -209,7 +207,11 @@ fn plink2_clump_plugin_rejects_unknown_params_and_bad_input_format_is_script_own
         &json!({"artifact_prefix": "/artifacts/other"}),
     )
     .unwrap_err();
-    assert!(error.to_string().contains("unknown param `artifact_prefix`"));
+    assert!(
+        error
+            .to_string()
+            .contains("unknown param `artifact_prefix`")
+    );
 
     let error = compile_container_spec(
         node,

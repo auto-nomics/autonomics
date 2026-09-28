@@ -236,7 +236,11 @@ Rules of thumb:
 - `image.reference` is the full `host/path@sha256:` string; no implicit
   namespace, no env override.
 - `panel.bundle` is an `HfRepoId` (`owner/name`); it resolves through the
-  runtime `DataBundle` directory, never a raw object key.
+  runtime `DataBundle` directory, never a raw object key. The bundle
+  itself is **not** shipped in the plugin: `autonomics panels sync`
+  downloads the current entry for each referenced repo into the local
+  catalog cache (the startup preflight only checks presence locally and
+  points at that command when bundles are missing).
 - Params with a `default` appear in the schema's `properties`; params
   without a default and without `optional` appear in `required`; `optional`
   params resolve to null and render as empty strings.

@@ -50,6 +50,26 @@ impl CatalogConfig {
         Ok(config)
     }
 
+    /// Parse the `[catalog]` section out of a full `vfs.toml` document.
+    ///
+    /// `Ok(None)` when the document declares no catalog section (catalog
+    /// absent for the deployment); a present-but-invalid section is an
+    /// error, matching [`Self::from_vfs_toml`]. Unknown sections such as
+    /// `[[backend]]` and `[[mount]]` are ignored.
+    pub fn from_vfs_toml_optional(source: &str) -> Result<Option<Self>> {
+        let document: toml::Value =
+            toml::from_str(source).map_err(|error| format!("parse catalog config: {error}"))?;
+        let Some(section) = document.get("catalog") else {
+            return Ok(None);
+        };
+        let config: CatalogConfig = section
+            .clone()
+            .try_into()
+            .map_err(|error| format!("parse catalog config: {error}"))?;
+        config.validate()?;
+        Ok(Some(config))
+    }
+
     pub fn validate(&self) -> Result<()> {
         let Some(repository) = self
             .repository
@@ -136,6 +156,59 @@ repository_prefix = "wjixiang/catalog"
         );
 
         let error = CatalogConfig::from_vfs_toml(
+            r#"
+[catalog]
+repository = "invalid/repo/id"
+"#,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("catalog repository must be"));
+    }
+
+    #[test]
+    fn optional_parse_absent_section_is_none() {
+        let config = CatalogConfig::from_vfs_toml_optional(
+            r#"
+[[backend]]
+id = "default"
+
+[[mount]]
+path = "/"
+backend = "default"
+"#,
+        )
+        .unwrap();
+        assert!(config.is_none());
+    }
+
+    #[test]
+    fn optional_parse_finds_catalog_among_other_sections() {
+        let config = CatalogConfig::from_vfs_toml_optional(
+            r#"
+[[backend]]
+id = "default"
+
+[catalog]
+repository = "wjixiang/catalog-index"
+
+[[mount]]
+path = "/"
+backend = "default"
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            config
+                .expect("catalog section present")
+                .repository
+                .as_deref(),
+            Some("wjixiang/catalog-index")
+        );
+    }
+
+    #[test]
+    fn optional_parse_invalid_section_is_an_error() {
+        let error = CatalogConfig::from_vfs_toml_optional(
             r#"
 [catalog]
 repository = "invalid/repo/id"

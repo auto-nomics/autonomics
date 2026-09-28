@@ -72,13 +72,9 @@ fn smr_heidi_plugin_compiles_to_the_legacy_wrapper_contract() {
     let manifest = load_manifest(&root);
     let node = node_by_kind(&manifest, "smr_heidi");
 
-    let compiled = compile_container_spec(
-        node,
-        &manifest.image,
-        &manifest.panels,
-        &json!({"chr": 22}),
-    )
-    .unwrap();
+    let compiled =
+        compile_container_spec(node, &manifest.image, &manifest.panels, &json!({"chr": 22}))
+            .unwrap();
 
     assert_eq!(
         compiled.image,
@@ -300,8 +296,8 @@ fn smr_heidi_plugin_fails_closed_on_missing_required_chr() {
 
     // The legacy wrapper validated `chr` before building the spec; the
     // plugin enforces the same at compile time through the required param.
-    let error = compile_container_spec(node, &manifest.image, &manifest.panels, &json!({}))
-        .unwrap_err();
+    let error =
+        compile_container_spec(node, &manifest.image, &manifest.panels, &json!({})).unwrap_err();
     assert!(
         error.to_string().contains("chr"),
         "missing chr must be reported: {error}"

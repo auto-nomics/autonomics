@@ -1,5 +1,5 @@
-use container_runtime::image::ImageReference;
 use crate::node_definition::NodeDefinition;
+use container_runtime::image::ImageReference;
 use data_catalog::model::HfRepoId;
 use serde::{Deserialize, Serialize};
 
@@ -162,4 +162,3 @@ bundle = "wjixiang/catalog-mtag-ld-ref-1000g-eur-w-ld"
         );
     }
 }
-

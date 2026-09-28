@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 use std::path::{Component, Path};
 
-use container_runtime::{DEFAULT_TIMEOUT_SECS, ContainerNetwork, PullPolicy};
+use container_runtime::{ContainerNetwork, DEFAULT_TIMEOUT_SECS, PullPolicy};
 use dag_core::NodePorts;
 use dag_core::value::PortType;
 use serde::{Deserialize, Serialize};
@@ -245,19 +245,20 @@ pub fn compile_ports(layout: &PortLayout) -> NodePorts {
             (Some(label), None) => {
                 ports.add_input_port_of_type_with_label(None, PortType::File, label.clone())
             }
-            (Some(label), Some(primary)) => {
-                ports.add_input_port_of_type_with_accepted_formats(
-                    None,
-                    PortType::File,
-                    label.clone(),
-                    primary.clone(),
-                    input.accepted_formats.iter().skip(1).cloned(),
-                )
-            }
+            (Some(label), Some(primary)) => ports.add_input_port_of_type_with_accepted_formats(
+                None,
+                PortType::File,
+                label.clone(),
+                primary.clone(),
+                input.accepted_formats.iter().skip(1).cloned(),
+            ),
         };
     }
     for output in &layout.outputs {
-        let label = output.label.clone().unwrap_or_else(|| default_label(&output.path));
+        let label = output
+            .label
+            .clone()
+            .unwrap_or_else(|| default_label(&output.path));
         ports = match &output.format {
             Some(format) => ports.add_output_port_of_type_with_label_and_format(
                 None,
@@ -305,7 +306,10 @@ pub fn validate(node: &NodeDefinition) -> Result<(), String> {
         ));
     }
     if node.ports.outputs.is_empty() {
-        return Err(format!("node `{}` must declare at least one output", node.kind));
+        return Err(format!(
+            "node `{}` must declare at least one output",
+            node.kind
+        ));
     }
     for output in &node.ports.outputs {
         validate_workspace_relative_path(&output.path)
@@ -380,8 +384,7 @@ fn scan_template_refs(node: &NodeDefinition) -> Vec<String> {
             if bytes[i] == b'{' && bytes[i + 1] == b'{' && text[i + 2..].find("}}").is_some() {
                 let end = text[i + 2..].find("}}").unwrap();
                 let token = text[i + 2..i + 2 + end].trim();
-                if !token.is_empty()
-                    && token.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                if !token.is_empty() && token.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
                 {
                     refs.push(token.to_string());
                 }
@@ -449,14 +452,23 @@ mtag --time_limit {{ time_limit_hours }} --out "$AUTONOMICS_OUTPUT2"
         assert_eq!(node.ports.inputs.len(), 2);
         assert_eq!(node.ports.outputs.len(), 2);
         assert_eq!(node.ports.outputs[0].path, "mtag_trait_1.txt");
-        assert_eq!(node.ports.outputs[0].format.as_deref(), Some("mtag_results"));
+        assert_eq!(
+            node.ports.outputs[0].format.as_deref(),
+            Some("mtag_results")
+        );
         assert_eq!(node.params["force"].r#type, ParamType::Bool);
         assert_eq!(
             node.params["time_limit_hours"].default,
             Some(serde_json::json!(1.0))
         );
         assert_eq!(node.command.interpreter, "sh");
-        assert!(node.command.script.as_deref().unwrap().contains("{{ time_limit_hours }}"));
+        assert!(
+            node.command
+                .script
+                .as_deref()
+                .unwrap()
+                .contains("{{ time_limit_hours }}")
+        );
     }
 
     #[test]
@@ -500,7 +512,8 @@ mtag --time_limit {{ time_limit_hours }} --out "$AUTONOMICS_OUTPUT2"
 
     #[test]
     fn validation_rejects_undeclared_template_refs() {
-        let broken = MTAG_ENTRY_TOML.replacen("{{ time_limit_hours }}", "{{ undeclared_param }}", 1);
+        let broken =
+            MTAG_ENTRY_TOML.replacen("{{ time_limit_hours }}", "{{ undeclared_param }}", 1);
         let node: NodeDefinition = toml::from_str(&broken).unwrap();
         assert!(
             validate(&node).unwrap_err().contains("undeclared param"),

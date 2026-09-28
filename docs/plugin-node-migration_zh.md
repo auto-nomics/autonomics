@@ -211,7 +211,9 @@ LDSC_INTERCEPT_H2 = "{{ intercept_h2 }}"
 - `image.reference` 是完整 `host/path@sha256:` 字符串；没有隐式命名空间，
   没有 env 覆盖。
 - `panel.bundle` 是 `HfRepoId`（`owner/name`）；经运行时 `DataBundle` 目录
-  解析，从不裸写对象键。
+  解析，从不裸写对象键。数据包本身**不随插件分发**：`autonomics panels
+  sync` 会把引用仓库的当前条目下载进本地 catalog 缓存（启动自检只做本地
+  存在性检查，缺包时提示执行该命令）。
 - 有 `default` 的参数进 schema 的 `properties`；无 default 且无 `optional`
   的参数进 `required`；`optional` 参数解析为 null、渲染为空字符串。
 - 几行以上的脚本优先 `script_file` 而非内联 `script`；loader 在校验前内联

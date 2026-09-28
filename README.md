@@ -97,7 +97,12 @@ panels, image provenance), execution scripts, and the image build tree.
 Plugins are installed from git repositories pinned to a commit SHA and
 loaded at daemon startup by the plugin preflight — see
 [Plugin Node Migration](docs/plugin-node-migration.md) for the format and
-the workflow.
+the workflow. Panel data bundles are provisioned by `autonomics panels
+sync`, which downloads and checksum-verifies every `[[panels]]` dataset
+reference missing from the local catalog cache; the startup preflight
+only checks presence locally (bounded, offline-safe), so daemon readiness
+never waits on the network. Set `AUTONOMICS_PANEL_SYNC=1` to run the
+provisioning inline during `autonomics serve` for unattended deployments.
 
 24 families / 71 node kinds are currently published:
 

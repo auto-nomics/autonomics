@@ -8,8 +8,8 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::model::{
-    DatasetFile, DatasetManifest, HfRepoId, manifest_digest, validate_kind,
-    validate_relative_path, validate_repo_ref, validate_version,
+    DatasetFile, DatasetManifest, HfRepoId, manifest_digest, validate_kind, validate_relative_path,
+    validate_repo_ref, validate_version,
 };
 
 pub const PACKAGE_MANIFEST: &str = "manifest.json";

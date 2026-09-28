@@ -343,16 +343,15 @@ impl NodeFactory for ContainerCommandNodeFactory {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::node::stage_inputs;
     use super::utils::{container_path, hex, staged_path};
+    use super::*;
     use std::path::PathBuf;
     use std::sync::Mutex;
 
     use async_trait::async_trait;
     use container_runtime::{
-        ContainerRunRequest, ContainerRunResult, ContainerRuntimeError, PodmanConfig,
-        PodmanRuntime,
+        ContainerRunRequest, ContainerRunResult, ContainerRuntimeError, PodmanConfig, PodmanRuntime,
     };
     use dag_core::node::NodeInput;
     use dag_core::value::{FileRef, NodeValue};

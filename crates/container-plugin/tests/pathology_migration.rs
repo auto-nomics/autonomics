@@ -54,8 +54,7 @@ fn node_by_kind<'a>(
         .unwrap_or_else(|| panic!("{kind} missing from manifest"))
 }
 
-const IMAGE: &str =
-    "ghcr.io/auto-nomics/autonomics/pathology@sha256:a0edcb6cca25f009f669723406207651284960425f7255891be5b91b29b63f2f";
+const IMAGE: &str = "ghcr.io/auto-nomics/autonomics/pathology@sha256:a0edcb6cca25f009f669723406207651284960425f7255891be5b91b29b63f2f";
 const RUNNER: &str = "/opt/pathology/pathology_runner.py";
 
 struct Expected {
@@ -148,7 +147,10 @@ fn expected_cases() -> Vec<Expected> {
             command: &["sh"],
             settings_key: "PATHOLOGY_IHC_ROI_LABEL",
             settings_default: "",
-            outputs: &[("tile_ihc.parquet", "parquet"), ("ihc_summary.json", "json")],
+            outputs: &[
+                ("tile_ihc.parquet", "parquet"),
+                ("ihc_summary.json", "json"),
+            ],
             timeout_secs: 3600,
             artifact_prefix: "/artifacts/pathology_ihc_quant",
             gpus: None,
@@ -195,12 +197,19 @@ fn pathology_nodes_compile_to_the_legacy_wrapper_contract() {
         assert_eq!(compiled.image, IMAGE, "{}", case.kind);
         assert_eq!(
             compiled.command,
-            case.command.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+            case.command
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>(),
             "{}",
             case.kind
         );
         assert_eq!(compiled.timeout_secs, case.timeout_secs, "{}", case.kind);
-        assert_eq!(compiled.artifact_prefix, case.artifact_prefix, "{}", case.kind);
+        assert_eq!(
+            compiled.artifact_prefix, case.artifact_prefix,
+            "{}",
+            case.kind
+        );
         assert_eq!(compiled.workdir, None, "{}", case.kind);
         assert!(compiled.files.is_empty(), "{}", case.kind);
         assert_eq!(compiled.network, "isolated", "{}", case.kind);
@@ -218,12 +227,7 @@ fn pathology_nodes_compile_to_the_legacy_wrapper_contract() {
         assert!(compiled.panels.is_empty(), "{}", case.kind);
         assert!(compiled.panel_bundles.is_empty(), "{}", case.kind);
 
-        assert_eq!(
-            compiled.outputs.len(),
-            case.outputs.len(),
-            "{}",
-            case.kind
-        );
+        assert_eq!(compiled.outputs.len(), case.outputs.len(), "{}", case.kind);
         for (output, (path, format)) in compiled.outputs.iter().zip(case.outputs) {
             assert_eq!(output.path, *path, "{}", case.kind);
             assert_eq!(output.format.as_deref(), Some(*format), "{}", case.kind);
@@ -256,8 +260,8 @@ fn pathology_ihc_quant_script_assembles_the_legacy_settings_blob() {
     let manifest = load_manifest(&root);
     let node = node_by_kind(&manifest, "pathology_ihc_quant");
 
-    let compiled = compile_container_spec(node, &manifest.image, &manifest.panels, &json!({}))
-        .unwrap();
+    let compiled =
+        compile_container_spec(node, &manifest.image, &manifest.panels, &json!({})).unwrap();
     let script = compiled.script.as_deref().unwrap();
 
     // The script dispatches the baked runner itself (the semantic equivalent
@@ -281,11 +285,17 @@ fn pathology_ihc_quant_script_assembles_the_legacy_settings_blob() {
         "16.0"
     );
     assert_eq!(
-        compiled.env.get("PATHOLOGY_IHC_DAB_WEAK_THRESHOLD").unwrap(),
+        compiled
+            .env
+            .get("PATHOLOGY_IHC_DAB_WEAK_THRESHOLD")
+            .unwrap(),
         "0.15"
     );
     assert_eq!(compiled.env.get("PATHOLOGY_IHC_TILE_SIZE").unwrap(), "512");
-    assert_eq!(compiled.env.get("PATHOLOGY_IHC_MAX_TILES").unwrap(), "20000");
+    assert_eq!(
+        compiled.env.get("PATHOLOGY_IHC_MAX_TILES").unwrap(),
+        "20000"
+    );
 }
 
 #[test]
@@ -380,7 +390,10 @@ fn pathology_schema_marks_roi_label_optional_and_surfaces_bounds() {
     ))
     .unwrap();
     let required = ihc["required"].as_array().unwrap();
-    assert!(required.is_empty(), "every ihc param has a default or is optional");
+    assert!(
+        required.is_empty(),
+        "every ihc param has a default or is optional"
+    );
     assert_eq!(ihc["properties"]["roi_label"]["type"], "integer");
     assert!(ihc["properties"]["roi_label"].get("default").is_none());
     assert_eq!(
@@ -413,13 +426,37 @@ fn pathology_bounds_reject_the_values_the_wrapper_rejected() {
 
     // Legacy: shrinkage must lie in [0, 1).
     let domain = node_by_kind(&manifest, "pathology_domain_check");
-    assert!(compile_container_spec(domain, &manifest.image, &manifest.panels, &json!({"shrinkage": 1.0})).is_err());
+    assert!(
+        compile_container_spec(
+            domain,
+            &manifest.image,
+            &manifest.panels,
+            &json!({"shrinkage": 1.0})
+        )
+        .is_err()
+    );
 
     // Legacy: mask_max_width must be at least 256.
     let patch = node_by_kind(&manifest, "pathology_patch_sample");
-    assert!(compile_container_spec(patch, &manifest.image, &manifest.panels, &json!({"mask_max_width": 128})).is_err());
+    assert!(
+        compile_container_spec(
+            patch,
+            &manifest.image,
+            &manifest.panels,
+            &json!({"mask_max_width": 128})
+        )
+        .is_err()
+    );
 
     // Legacy: max_downsample must be >= 1.
     let qc = node_by_kind(&manifest, "pathology_wsi_qc");
-    assert!(compile_container_spec(qc, &manifest.image, &manifest.panels, &json!({"max_downsample": 0.5})).is_err());
+    assert!(
+        compile_container_spec(
+            qc,
+            &manifest.image,
+            &manifest.panels,
+            &json!({"max_downsample": 0.5})
+        )
+        .is_err()
+    );
 }

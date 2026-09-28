@@ -60,13 +60,9 @@ fn twas_fusion_plugin_compiles_to_the_legacy_wrapper_contract() {
     let manifest = load_manifest(&root);
     let node = node_by_kind(&manifest, "twas_fusion");
 
-    let compiled = compile_container_spec(
-        node,
-        &manifest.image,
-        &manifest.panels,
-        &required_params(),
-    )
-    .unwrap();
+    let compiled =
+        compile_container_spec(node, &manifest.image, &manifest.panels, &required_params())
+            .unwrap();
 
     assert_eq!(
         compiled.image,
@@ -149,9 +145,11 @@ fn twas_fusion_plugin_compiles_to_the_legacy_wrapper_contract() {
     assert!(script.contains("A-Za-z0-9_-"));
     assert!(script.contains("GTExv8.ALL."));
     // nofilter selection: boolean spelled "true" on the plugin env channel.
-    assert!(script.contains(
-        "\"${FUSION_USE_NOFILTER_WEIGHTS:-false}\" = \"true\" ] && printf nofilter.pos"
-    ));
+    assert!(
+        script.contains(
+            "\"${FUSION_USE_NOFILTER_WEIGHTS:-false}\" = \"true\" ] && printf nofilter.pos"
+        )
+    );
     // Weight archive extraction, identical to the legacy runner.
     assert!(script.contains("tar --no-same-owner -xzf"));
     // Optional force_model flag with the enum guard.

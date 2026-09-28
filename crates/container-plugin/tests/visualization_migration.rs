@@ -26,8 +26,8 @@ fn load_manifest(root: &PathBuf) -> PluginManifest {
     let mut manifest: PluginManifest = toml::from_str(&text).unwrap();
     for node in manifest.nodes.iter_mut() {
         if let Some(relative) = node.command.script_file.clone() {
-            let source = std::fs::read_to_string(root.join("visualization").join(&relative))
-                .unwrap();
+            let source =
+                std::fs::read_to_string(root.join("visualization").join(&relative)).unwrap();
             node.command.script = Some(source);
             node.command.script_file = None;
         }
@@ -88,7 +88,10 @@ fn visualization_plugin_compiles_to_the_legacy_wrapper_contract() {
     // The legacy DEFAULT_ARTIFACT_PREFIX is kept verbatim; the manifest-level
     // default would have derived `/artifacts/visualization` (kind minus the
     // `_container` suffix).
-    assert_eq!(compiled.artifact_prefix, "/artifacts/visualization_container");
+    assert_eq!(
+        compiled.artifact_prefix,
+        "/artifacts/visualization_container"
+    );
     assert_eq!(compiled.workdir, None);
     assert!(compiled.panels.is_empty());
     assert!(compiled.panel_bundles.is_empty());

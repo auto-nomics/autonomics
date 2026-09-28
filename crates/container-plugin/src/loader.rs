@@ -17,8 +17,8 @@ use std::sync::Arc;
 use thiserror::Error;
 
 use crate::factory::Plugin;
-use dag_core::NodePlugin;
 use crate::manifest::PluginManifest;
+use dag_core::NodePlugin;
 
 pub const MANIFEST_FILE: &str = "manifest.toml";
 pub const PLUGIN_ROOT_ENV: &str = "AUTONOMICS_PLUGIN_ROOT";
@@ -167,9 +167,8 @@ fn load_one(
                 )));
             }
             (None, Some(relative)) => {
-                let source = read_script_file(dir, relative).map_err(|message| {
-                    invalid(format!("nodes[{index}] script_file: {message}"))
-                })?;
+                let source = read_script_file(dir, relative)
+                    .map_err(|message| invalid(format!("nodes[{index}] script_file: {message}")))?;
                 node.command.script = Some(source);
                 node.command.script_file = None;
             }
@@ -218,14 +217,13 @@ mod tests {
         tempfile::TempDir,
     ) {
         let state = tempfile::tempdir().unwrap();
-        let runtime: Arc<dyn container_runtime::PodmanConnection> =
-            Arc::new(container_runtime::PodmanRuntime::new(
-                container_runtime::PodmanConfig {
-                    program: "podman".into(),
-                    workspace_root: state.path().join("workspace"),
-                    panel_cache_root: state.path().join("panels"),
-                },
-            ));
+        let runtime: Arc<dyn container_runtime::PodmanConnection> = Arc::new(
+            container_runtime::PodmanRuntime::new(container_runtime::PodmanConfig {
+                program: "podman".into(),
+                workspace_root: state.path().join("workspace"),
+                panel_cache_root: state.path().join("panels"),
+            }),
+        );
         let cache = Arc::new(PanelCache::new(state.path().join("panels")));
         (runtime, cache, state)
     }
@@ -306,7 +304,10 @@ script_file = "scripts/h2.sh"
         let plugins_root = state.path().join("plugins");
         let both = format!(
             "{}\nscript = \"inline\"\n",
-            GOOD_LDSC.replace("script_file = \"scripts/h2.sh\"", "script_file = \"scripts/h2.sh\"")
+            GOOD_LDSC.replace(
+                "script_file = \"scripts/h2.sh\"",
+                "script_file = \"scripts/h2.sh\""
+            )
         );
         write_plugin(
             &plugins_root,
@@ -315,7 +316,12 @@ script_file = "scripts/h2.sh"
         );
 
         let error = load(&plugins_root, runtime, cache).unwrap_err();
-        assert!(error.to_string().contains("both `script` and `script_file`"), "{error}");
+        assert!(
+            error
+                .to_string()
+                .contains("both `script` and `script_file`"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -326,7 +332,10 @@ script_file = "scripts/h2.sh"
         write_plugin(&plugins_root, "ldsc", GOOD_LDSC);
 
         let error = load(&plugins_root, runtime, cache).unwrap_err();
-        assert!(error.to_string().contains("cannot read `scripts/h2.sh`"), "{error}");
+        assert!(
+            error.to_string().contains("cannot read `scripts/h2.sh`"),
+            "{error}"
+        );
     }
 
     #[test]

@@ -34,8 +34,13 @@ fn load_manifest(root: &PathBuf) -> PluginManifest {
     manifest
 }
 
-fn node_by_kind<'a>(manifest: &'a PluginManifest, kind: &str) -> &'a container_plugin::node_definition::NodeDefinition {
-    manifest.nodes.iter()
+fn node_by_kind<'a>(
+    manifest: &'a PluginManifest,
+    kind: &str,
+) -> &'a container_plugin::node_definition::NodeDefinition {
+    manifest
+        .nodes
+        .iter()
         .find(|n| n.kind == kind)
         .unwrap_or_else(|| panic!("{kind} missing from manifest"))
 }
@@ -56,13 +61,8 @@ fn mutation_analysis_plugin_compiles_to_the_legacy_wrapper_contract() {
     let manifest = load_manifest(&root);
     let node = node_by_kind(&manifest, "mutation_analysis");
 
-    let compiled = compile_container_spec(
-        node,
-        &manifest.image,
-        &manifest.panels,
-        &base_params(),
-    )
-    .unwrap();
+    let compiled =
+        compile_container_spec(node, &manifest.image, &manifest.panels, &base_params()).unwrap();
 
     assert_eq!(
         compiled.image,
@@ -120,7 +120,10 @@ fn mutation_analysis_plugin_compiles_to_the_legacy_wrapper_contract() {
     assert_eq!(compiled.env.get("MUTATION_TMB_GROUP_COL").unwrap(), "group");
     assert_eq!(compiled.env.get("MUTATION_TMB_GROUPS").unwrap(), "");
     assert_eq!(compiled.env.get("MUTATION_TOP_N").unwrap(), "20");
-    assert_eq!(compiled.env.get("MUTATION_GENE_COL").unwrap(), "Hugo_Symbol");
+    assert_eq!(
+        compiled.env.get("MUTATION_GENE_COL").unwrap(),
+        "Hugo_Symbol"
+    );
     assert_eq!(
         compiled.env.get("MUTATION_VARIANT_COL").unwrap(),
         "Variant_Classification"
@@ -171,9 +174,7 @@ fn mutation_analysis_plugin_compiles_to_the_legacy_wrapper_contract() {
     assert!(script.contains("tmb groups require a clinical input"));
     // String arrays: the env channel space-joins; a single-space fixed
     // strsplit is the exact inverse of that join.
-    assert!(script.contains(
-        "strsplit(Sys.getenv(\"MUTATION_TMB_GROUPS\"), \" \", fixed = TRUE)"
-    ));
+    assert!(script.contains("strsplit(Sys.getenv(\"MUTATION_TMB_GROUPS\"), \" \", fixed = TRUE)"));
     // Legacy validate() checks the DSL cannot express live as guards with
     // the legacy error messages.
     assert!(script.contains("MAF column mappings must be unique"));
@@ -188,9 +189,7 @@ fn mutation_analysis_plugin_compiles_to_the_legacy_wrapper_contract() {
     assert!(script.contains("wilcox.test(first, second"));
     // Epilogue: the same report/JSON artifact writes.
     assert!(script.contains("write.table(report, env_value(\"AUTONOMICS_OUTPUT0\")"));
-    assert!(script.contains(
-        "jsonlite::write_json(details, env_value(\"AUTONOMICS_OUTPUT1\")"
-    ));
+    assert!(script.contains("jsonlite::write_json(details, env_value(\"AUTONOMICS_OUTPUT1\")"));
 }
 
 #[test]
@@ -244,27 +243,17 @@ fn mutation_analysis_clinical_kind_differs_only_in_ports() {
     let clinical = node_by_kind(&manifest, "mutation_analysis_clinical");
 
     let base_ports = container_plugin::node_definition::compile_ports(&base.ports);
-    let clinical_ports =
-        container_plugin::node_definition::compile_ports(&clinical.ports);
+    let clinical_ports = container_plugin::node_definition::compile_ports(&clinical.ports);
     assert_eq!(base_ports.input_ports().len(), 1);
     assert_eq!(clinical_ports.input_ports().len(), 2);
     assert_eq!(base_ports.output_ports().len(), 2);
     assert_eq!(clinical_ports.output_ports().len(), 2);
 
-    let base_compiled = compile_container_spec(
-        base,
-        &manifest.image,
-        &manifest.panels,
-        &base_params(),
-    )
-    .unwrap();
-    let clinical_compiled = compile_container_spec(
-        clinical,
-        &manifest.image,
-        &manifest.panels,
-        &base_params(),
-    )
-    .unwrap();
+    let base_compiled =
+        compile_container_spec(base, &manifest.image, &manifest.panels, &base_params()).unwrap();
+    let clinical_compiled =
+        compile_container_spec(clinical, &manifest.image, &manifest.panels, &base_params())
+            .unwrap();
 
     // Same image, outputs, resources, env, and script; only the port
     // layout and the derived artifact prefix differ. (ContainerCommandSpec
@@ -308,7 +297,11 @@ fn mutation_analysis_plugin_schema_marks_provenance_labels_per_spec() {
     assert_eq!(required, &vec![json!("maf_path")]);
     assert_eq!(schema["properties"]["maf_path"]["type"], "string");
     assert_eq!(schema["properties"]["clinical_path"]["type"], "string");
-    assert!(schema["properties"]["clinical_path"].get("default").is_none());
+    assert!(
+        schema["properties"]["clinical_path"]
+            .get("default")
+            .is_none()
+    );
     // operation: the legacy enum as a string with the legacy default; the
     // switch in the script rejects unsupported values at run time.
     assert_eq!(schema["properties"]["operation"]["type"], "string");

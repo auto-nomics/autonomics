@@ -186,7 +186,6 @@ fn default_data_engine_uses_builtin_bundle_catalog() {
         .unwrap();
 }
 
-
 #[test]
 fn native_hdl_l_nodes_are_removed() {
     let registry = registry();

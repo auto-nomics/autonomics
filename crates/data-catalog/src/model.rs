@@ -523,12 +523,14 @@ mod tests {
 
     #[test]
     fn hf_repo_ids_validate_owner_name_form() {
-        let repo =
-            HfRepoId::new("wjixiang/catalog-mtag-ld-ref-1000g-eur-w-ld").unwrap();
+        let repo = HfRepoId::new("wjixiang/catalog-mtag-ld-ref-1000g-eur-w-ld").unwrap();
         assert_eq!(repo.as_str(), "wjixiang/catalog-mtag-ld-ref-1000g-eur-w-ld");
         assert_eq!(repo.owner(), "wjixiang");
         assert_eq!(repo.name(), "catalog-mtag-ld-ref-1000g-eur-w-ld");
-        assert_eq!(repo.to_string(), "wjixiang/catalog-mtag-ld-ref-1000g-eur-w-ld");
+        assert_eq!(
+            repo.to_string(),
+            "wjixiang/catalog-mtag-ld-ref-1000g-eur-w-ld"
+        );
         for bad in ["", "catalog", "/catalog", "wjx/", "a/b/c", "wjx//panel"] {
             assert!(HfRepoId::new(bad).is_err(), "`{bad}` must be rejected");
         }

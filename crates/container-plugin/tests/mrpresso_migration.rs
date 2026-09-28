@@ -33,8 +33,13 @@ fn load_manifest(root: &PathBuf) -> PluginManifest {
     manifest
 }
 
-fn node_by_kind<'a>(manifest: &'a PluginManifest, kind: &str) -> &'a container_plugin::node_definition::NodeDefinition {
-    manifest.nodes.iter()
+fn node_by_kind<'a>(
+    manifest: &'a PluginManifest,
+    kind: &str,
+) -> &'a container_plugin::node_definition::NodeDefinition {
+    manifest
+        .nodes
+        .iter()
         .find(|n| n.kind == kind)
         .unwrap_or_else(|| panic!("{kind} missing from manifest"))
 }
@@ -60,13 +65,9 @@ fn mrpresso_plugin_compiles_to_the_legacy_wrapper_contract() {
     let manifest = load_manifest(&root);
     let node = node_by_kind(&manifest, "mrpresso");
 
-    let compiled = compile_container_spec(
-        node,
-        &manifest.image,
-        &manifest.panels,
-        &required_params(),
-    )
-    .unwrap();
+    let compiled =
+        compile_container_spec(node, &manifest.image, &manifest.panels, &required_params())
+            .unwrap();
 
     assert_eq!(
         compiled.image,
@@ -99,14 +100,29 @@ fn mrpresso_plugin_compiles_to_the_legacy_wrapper_contract() {
     // Defaults render through the env channel: booleans as true/false
     // (R's as.logical() accepts both spellings where the legacy script
     // embedded TRUE/FALSE), numbers with their serde_json spelling.
-    assert_eq!(compiled.env.get("MRPRESSO_BETA_OUTCOME").unwrap(), "Y_effect");
+    assert_eq!(
+        compiled.env.get("MRPRESSO_BETA_OUTCOME").unwrap(),
+        "Y_effect"
+    );
     assert_eq!(compiled.env.get("MRPRESSO_SD_OUTCOME").unwrap(), "Y_se");
-    assert_eq!(compiled.env.get("MRPRESSO_BETA_EXPOSURE").unwrap(), "E1_effect");
+    assert_eq!(
+        compiled.env.get("MRPRESSO_BETA_EXPOSURE").unwrap(),
+        "E1_effect"
+    );
     assert_eq!(compiled.env.get("MRPRESSO_SD_EXPOSURE").unwrap(), "E1_se");
     assert_eq!(compiled.env.get("MRPRESSO_OUTLIER_TEST").unwrap(), "false");
-    assert_eq!(compiled.env.get("MRPRESSO_DISTORTION_TEST").unwrap(), "false");
-    assert_eq!(compiled.env.get("MRPRESSO_SIGNIF_THRESHOLD").unwrap(), "0.05");
-    assert_eq!(compiled.env.get("MRPRESSO_NB_DISTRIBUTION").unwrap(), "1000");
+    assert_eq!(
+        compiled.env.get("MRPRESSO_DISTORTION_TEST").unwrap(),
+        "false"
+    );
+    assert_eq!(
+        compiled.env.get("MRPRESSO_SIGNIF_THRESHOLD").unwrap(),
+        "0.05"
+    );
+    assert_eq!(
+        compiled.env.get("MRPRESSO_NB_DISTRIBUTION").unwrap(),
+        "1000"
+    );
     assert_eq!(compiled.env.get("MRPRESSO_SEED").unwrap(), "123");
 
     // Script parity is semantic, not byte-exact: the plugin reads every
@@ -118,9 +134,9 @@ fn mrpresso_plugin_compiles_to_the_legacy_wrapper_contract() {
     assert!(script.contains("input <- Sys.getenv(\"AUTONOMICS_INPUT0\")"));
     assert!(script.contains("result_path <- Sys.getenv(\"AUTONOMICS_OUTPUT0\")"));
     assert!(script.contains("log_path <- Sys.getenv(\"AUTONOMICS_OUTPUT1\")"));
-    assert!(script.contains(
-        "data <- read.delim(input, check.names = FALSE, stringsAsFactors = FALSE)"
-    ));
+    assert!(
+        script.contains("data <- read.delim(input, check.names = FALSE, stringsAsFactors = FALSE)")
+    );
     // Legacy validate() checks the DSL cannot express live as stop() guards
     // with the legacy error messages.
     assert!(script.contains("stop(\"beta_outcome and sd_outcome cannot be empty\")"));
@@ -132,31 +148,27 @@ fn mrpresso_plugin_compiles_to_the_legacy_wrapper_contract() {
     assert!(script.contains("set.seed(as.numeric(Sys.getenv(\"MRPRESSO_SEED\")))"));
     // String arrays: the env channel space-joins; a single-space fixed
     // strsplit is the exact inverse of that join.
-    assert!(script.contains(
-        "strsplit(Sys.getenv(\"MRPRESSO_BETA_EXPOSURE\"), \" \", fixed = TRUE)"
-    ));
-    assert!(script.contains(
-        "strsplit(Sys.getenv(\"MRPRESSO_SD_EXPOSURE\"), \" \", fixed = TRUE)"
-    ));
+    assert!(
+        script.contains("strsplit(Sys.getenv(\"MRPRESSO_BETA_EXPOSURE\"), \" \", fixed = TRUE)")
+    );
+    assert!(script.contains("strsplit(Sys.getenv(\"MRPRESSO_SD_EXPOSURE\"), \" \", fixed = TRUE)"));
     // The official call: same argument names, same order, same values.
     assert!(script.contains("result <- MRPRESSO::mr_presso("));
     assert!(script.contains("BetaOutcome = beta_outcome"));
     assert!(script.contains("BetaExposure = beta_exposure"));
     assert!(script.contains("SdOutcome = sd_outcome"));
     assert!(script.contains("SdExposure = sd_exposure"));
+    assert!(script.contains("OUTLIERtest = as.logical(Sys.getenv(\"MRPRESSO_OUTLIER_TEST\"))"));
     assert!(
-        script.contains("OUTLIERtest = as.logical(Sys.getenv(\"MRPRESSO_OUTLIER_TEST\"))")
+        script.contains("DISTORTIONtest = as.logical(Sys.getenv(\"MRPRESSO_DISTORTION_TEST\"))")
     );
-    assert!(script.contains(
-        "DISTORTIONtest = as.logical(Sys.getenv(\"MRPRESSO_DISTORTION_TEST\"))"
-    ));
     assert!(script.contains("data = data"));
-    assert!(script.contains(
-        "NbDistribution = as.numeric(Sys.getenv(\"MRPRESSO_NB_DISTRIBUTION\"))"
-    ));
-    assert!(script.contains(
-        "SignifThreshold = as.numeric(Sys.getenv(\"MRPRESSO_SIGNIF_THRESHOLD\"))"
-    ));
+    assert!(
+        script.contains("NbDistribution = as.numeric(Sys.getenv(\"MRPRESSO_NB_DISTRIBUTION\"))")
+    );
+    assert!(
+        script.contains("SignifThreshold = as.numeric(Sys.getenv(\"MRPRESSO_SIGNIF_THRESHOLD\"))")
+    );
     // Epilogue: identical sink/log and saveRDS stanzas.
     assert!(script.contains("sink(log_path, split = TRUE)"));
     assert!(script.contains("print(result)"));
@@ -193,12 +205,27 @@ fn mrpresso_plugin_renders_submitted_values_into_env() {
 
     // Arrays render space-joined on the env channel; the script re-splits
     // on a single space, preserving the legacy c("a", "b") semantics.
-    assert_eq!(compiled.env.get("MRPRESSO_BETA_EXPOSURE").unwrap(), "E1_effect E2_effect");
-    assert_eq!(compiled.env.get("MRPRESSO_SD_EXPOSURE").unwrap(), "E1_se E2_se");
+    assert_eq!(
+        compiled.env.get("MRPRESSO_BETA_EXPOSURE").unwrap(),
+        "E1_effect E2_effect"
+    );
+    assert_eq!(
+        compiled.env.get("MRPRESSO_SD_EXPOSURE").unwrap(),
+        "E1_se E2_se"
+    );
     assert_eq!(compiled.env.get("MRPRESSO_OUTLIER_TEST").unwrap(), "true");
-    assert_eq!(compiled.env.get("MRPRESSO_DISTORTION_TEST").unwrap(), "false");
-    assert_eq!(compiled.env.get("MRPRESSO_SIGNIF_THRESHOLD").unwrap(), "0.01");
-    assert_eq!(compiled.env.get("MRPRESSO_NB_DISTRIBUTION").unwrap(), "5000");
+    assert_eq!(
+        compiled.env.get("MRPRESSO_DISTORTION_TEST").unwrap(),
+        "false"
+    );
+    assert_eq!(
+        compiled.env.get("MRPRESSO_SIGNIF_THRESHOLD").unwrap(),
+        "0.01"
+    );
+    assert_eq!(
+        compiled.env.get("MRPRESSO_NB_DISTRIBUTION").unwrap(),
+        "5000"
+    );
     assert_eq!(compiled.env.get("MRPRESSO_SEED").unwrap(), "999");
 }
 

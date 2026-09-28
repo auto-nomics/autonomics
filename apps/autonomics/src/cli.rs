@@ -14,6 +14,7 @@
 mod bib;
 mod cache;
 mod kms;
+mod panels;
 mod run;
 mod serve;
 mod tui;
@@ -25,6 +26,7 @@ pub use bib::{
 };
 pub use cache::{CacheAction, CacheArgs, ClearOpengwasArgs, RefreshOpengwasArgs};
 pub use kms::KmsArgs;
+pub use panels::{PanelsAction, PanelsArgs};
 pub use run::RunArgs;
 pub use serve::{ServeAction, ServeArgs};
 pub use tui::TuiArgs;
@@ -45,6 +47,9 @@ pub enum Command {
 
     /// Local cache management helpers (refresh, inspect, purge).
     Cache(CacheArgs),
+
+    /// Provision plugin panel data bundles (see `sync`).
+    Panels(PanelsArgs),
 
     /// Bibliography management — upload full-text PDFs, list pending requests.
     Bib(BibArgs),
