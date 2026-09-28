@@ -372,3 +372,113 @@ async fn session_resume_continues_the_same_session() {
         "run 2 resumed run 1's session; events:\n{second_jsonl}"
     );
 }
+
+/// Compaction progress events translate to the JSONL surface as follows:
+/// Start/Finish become informative notices; phase ticks and summary
+/// deltas are TUI-only detail and must not flood the stream.
+#[test]
+fn translation_renders_compact_progress() {
+    use agentik_types::{CompactPlan, CompactStats};
+    let ts = chrono::Utc::now();
+    let mut state = TranslationState::default();
+
+    let start = state.translate(
+        "agent",
+        AgentEvent::Compact {
+            event: CompactEvent::CompactStart {
+                ts,
+                plan: Some(CompactPlan {
+                    trigger: agentik_types::CompactTrigger::Manual,
+                    head_messages: 12,
+                    head_tokens: 38_412,
+                    tail_messages: 8,
+                }),
+            },
+        },
+    );
+    assert_eq!(start.len(), 1);
+    match &start[0] {
+        RunEvent::Notice(n) => {
+            assert_eq!(n.kind, NoticeKind::Compact);
+            assert!(
+                n.message.contains("12 messages") && n.message.contains("38412"),
+                "start notice carries the scale: {}",
+                n.message
+            );
+        }
+        other => panic!("expected notice, got {other:?}"),
+    }
+
+    // Phase ticks and throttled summary deltas are swallowed — the JSONL
+    // stream would otherwise mirror the SSE delta flood.
+    assert!(state
+        .translate(
+            "agent",
+            AgentEvent::Compact {
+                event: CompactEvent::CompactPhase {
+                    ts,
+                    phase: agentik_types::CompactPhase::Summarizing,
+                },
+            },
+        )
+        .is_empty());
+    assert!(state
+        .translate(
+            "agent",
+            AgentEvent::Compact {
+                event: CompactEvent::CompactSummaryDelta {
+                    ts,
+                    text: "## Progress".into(),
+                },
+            },
+        )
+        .is_empty());
+
+    let finish = state.translate(
+        "agent",
+        AgentEvent::Compact {
+            event: CompactEvent::CompactFinish {
+                ts,
+                stats: Some(CompactStats {
+                    messages_before: 45,
+                    messages_after: 12,
+                    summary_tokens: 1_204,
+                    freed_tokens: 36_800,
+                    duration_ms: 12_345,
+                    usage: Default::default(),
+                }),
+                error: None,
+            },
+        },
+    );
+    assert_eq!(finish.len(), 1);
+    match &finish[0] {
+        RunEvent::Notice(n) => {
+            assert_eq!(n.kind, NoticeKind::Compact);
+            assert!(
+                n.message.contains("45 → 12") && n.message.contains("36800"),
+                "finish notice carries the outcome: {}",
+                n.message
+            );
+        }
+        other => panic!("expected notice, got {other:?}"),
+    }
+
+    // Failure path surfaces as a notice too — headless consumers see why
+    // the compaction gave up without parsing the error channel.
+    let failed = state.translate(
+        "agent",
+        AgentEvent::Compact {
+            event: CompactEvent::CompactFinish {
+                ts,
+                stats: None,
+                error: Some("model offline".into()),
+            },
+        },
+    );
+    assert_eq!(failed.len(), 1);
+    match &failed[0] {
+        RunEvent::Notice(n) => assert!(n.message.contains("model offline")),
+        other => panic!("expected notice, got {other:?}"),
+    }
+}

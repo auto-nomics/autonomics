@@ -4,7 +4,7 @@ use ratatui::{
     text::{Line, Span},
 };
 
-use crate::state::{ChatLine, DisplaySettings, TurnUsage};
+use crate::state::{ChatLine, CompactResult, DisplaySettings, TurnUsage};
 use crate::widgets::status_bar::format_tokens;
 
 /// Try to parse `text` as JSON and return a pretty-printed version.
@@ -172,6 +172,27 @@ pub(crate) fn render_line_owned(msg: &ChatLine, area: Rect) -> Vec<Line<'static>
             }
             lines
         }
+        ChatLine::Compact(result) => vec![match result {
+            CompactResult::Done(stats) => Line::from(Span::styled(
+                format!(
+                    "✦ compacted {} msgs → {} msgs · summary {} tok · freed {} · {:.1}s",
+                    stats.messages_before,
+                    stats.messages_after,
+                    format_tokens(stats.summary_tokens),
+                    format_tokens(stats.freed_tokens),
+                    stats.duration_ms as f64 / 1000.0,
+                ),
+                Style::default().fg(Color::Magenta),
+            )),
+            CompactResult::Failed(error) => Line::from(Span::styled(
+                format!("✗ compaction failed: {error}"),
+                Style::default().fg(Color::Red),
+            )),
+            CompactResult::Skipped => Line::from(Span::styled(
+                "✦ compaction skipped — conversation too short",
+                Style::default().fg(Color::DarkGray),
+            )),
+        }],
         ChatLine::Separator => {
             vec![Line::from(Span::styled(
                 "─".repeat(area.width as usize),

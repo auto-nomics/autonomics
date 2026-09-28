@@ -5384,6 +5384,7 @@ version = "0.1.0"
 dependencies = [
  "agentik-core",
  "agentik-types",
+ "chrono",
  "eventsource-stream",
  "futures",
  "gateway",

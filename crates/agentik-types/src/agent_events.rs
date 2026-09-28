@@ -166,10 +166,107 @@ pub struct SessionInfo {
     pub telemetry: SessionTelemetry,
 }
 
+/// Progress reporting for one context-compaction pass.
+///
+/// A pass always emits a `CompactStart` / `CompactFinish` pair — including
+/// on failure and when the conversation turns out to be too short to
+/// compact — so frontends can drive their progress UI from a closed event
+/// pair and never hang in a "compacting" state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum CompactEvent {
-    CompactStart { ts: DateTime<Utc> },
-    CompactFinish { ts: DateTime<Utc> },
+    /// Compaction began. `plan` describes what is about to happen; it is
+    /// `None` when the conversation is too short to compact (the pass ends
+    /// immediately with a stats-less `CompactFinish`).
+    CompactStart {
+        ts: DateTime<Utc>,
+        #[serde(default)]
+        plan: Option<CompactPlan>,
+    },
+
+    /// A phase transition inside the pass. `Summarizing` precedes the LLM
+    /// summarization call (the slow part); `Rebuilding` precedes the
+    /// in-place message-list rewrite. The local head/tail selection is
+    /// millisecond-scale and folded into `CompactStart`'s `plan`.
+    CompactPhase {
+        ts: DateTime<Utc>,
+        phase: CompactPhase,
+    },
+
+    /// A throttled chunk of the compaction summary being generated, for
+    /// live preview in frontends. Coalesced at the source (~120 chars or
+    /// ~200 ms) so the event channel and SSE replay ring are not flooded.
+    CompactSummaryDelta {
+        ts: DateTime<Utc>,
+        text: String,
+    },
+
+    /// Compaction ended — successfully (`stats`), without work to do
+    /// (neither field), or with an error (`error`).
+    CompactFinish {
+        ts: DateTime<Utc>,
+        #[serde(default)]
+        stats: Option<CompactStats>,
+        #[serde(default)]
+        error: Option<String>,
+    },
+}
+
+/// What initiated a compaction pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompactTrigger {
+    /// User-issued compact command.
+    Manual,
+    /// Context pressure detected after tool execution, before the
+    /// follow-up request. `used_pct` is the estimated context fill.
+    MidTurn { used_pct: u64 },
+    /// Context pressure detected before a request (at or above the
+    /// auto-compact threshold of the model's context window).
+    PreRequest { used_pct: u64 },
+}
+
+/// Coarse phase of an in-flight compaction pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompactPhase {
+    /// The LLM is generating the head summary (the slow part).
+    Summarizing,
+    /// The head/tail split is applied and the session rebuilt + persisted.
+    Rebuilding,
+}
+
+/// Snapshot of what a compaction pass will do, emitted with
+/// `CompactEvent::CompactStart`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompactPlan {
+    /// What initiated this pass.
+    pub trigger: CompactTrigger,
+    /// Number of head messages that will be summarized away.
+    pub head_messages: usize,
+    /// Estimated tokens of the summarized head.
+    pub head_tokens: u64,
+    /// Number of recent tail messages kept verbatim.
+    pub tail_messages: usize,
+}
+
+/// Outcome statistics of a completed compaction pass, emitted with
+/// `CompactEvent::CompactFinish`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CompactStats {
+    /// Conversation length (messages) before the pass.
+    pub messages_before: usize,
+    /// Conversation length (messages) after the pass.
+    pub messages_after: usize,
+    /// Estimated tokens of the generated summary.
+    pub summary_tokens: u64,
+    /// Estimated tokens removed from the model context
+    /// (`head_tokens` minus preserved user messages minus the summary).
+    pub freed_tokens: u64,
+    /// Wall-clock duration of the whole pass.
+    pub duration_ms: u64,
+    /// Actual API usage of the summarization call.
+    #[serde(default)]
+    pub usage: crate::shared::Usage,
 }
 
 /// Terminal status of an explicitly tracked conversation turn.
@@ -256,6 +353,94 @@ impl AgentEvent {
                 // The agent emits `Done` based on lifecycle, not on the SSE protocol.
                 None
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod compact_event_tests {
+    use super::*;
+
+    /// Events serialized by an older build (no `plan` / `stats` / `error`
+    /// fields) must still deserialize — persisted logs and in-flight SSE
+    /// payloads outlive the binary that emitted them.
+    #[test]
+    fn compact_events_deserialize_from_legacy_payloads() {
+        let ts = "2026-09-28T12:00:00Z";
+        let start: CompactEvent =
+            serde_json::from_str(&format!("{{\"CompactStart\":{{\"ts\":\"{ts}\"}}}}")).unwrap();
+        assert!(matches!(start, CompactEvent::CompactStart { plan: None, .. }));
+
+        let finish: CompactEvent =
+            serde_json::from_str(&format!("{{\"CompactFinish\":{{\"ts\":\"{ts}\"}}}}")).unwrap();
+        assert!(matches!(
+            finish,
+            CompactEvent::CompactFinish { stats: None, error: None, .. }
+        ));
+    }
+
+    /// The full progress sequence survives a JSON round trip.
+    #[test]
+    fn compact_progress_events_round_trip() {
+        let ts = Utc::now();
+        let events = vec![
+            CompactEvent::CompactStart {
+                ts,
+                plan: Some(CompactPlan {
+                    trigger: CompactTrigger::PreRequest { used_pct: 93 },
+                    head_messages: 12,
+                    head_tokens: 38_412,
+                    tail_messages: 8,
+                }),
+            },
+            CompactEvent::CompactPhase {
+                ts,
+                phase: CompactPhase::Summarizing,
+            },
+            CompactEvent::CompactSummaryDelta {
+                ts,
+                text: "## Progress".into(),
+            },
+            CompactEvent::CompactPhase {
+                ts,
+                phase: CompactPhase::Rebuilding,
+            },
+            CompactEvent::CompactFinish {
+                ts,
+                stats: Some(CompactStats {
+                    messages_before: 45,
+                    messages_after: 12,
+                    summary_tokens: 1_204,
+                    freed_tokens: 36_800,
+                    duration_ms: 12_345,
+                    usage: Default::default(),
+                }),
+                error: None,
+            },
+        ];
+        for event in events {
+            let json = serde_json::to_string(&event).unwrap();
+            let back: CompactEvent = serde_json::from_str(&json).unwrap();
+            let same = match (&event, &back) {
+                (
+                    CompactEvent::CompactStart { plan: a, .. },
+                    CompactEvent::CompactStart { plan: b, .. },
+                ) => a == b,
+                (
+                    CompactEvent::CompactPhase { phase: a, .. },
+                    CompactEvent::CompactPhase { phase: b, .. },
+                ) => a == b,
+                (
+                    CompactEvent::CompactSummaryDelta { text: a, .. },
+                    CompactEvent::CompactSummaryDelta { text: b, .. },
+                ) => a == b,
+                (
+                    CompactEvent::CompactFinish { stats: a, error: x, .. },
+                    CompactEvent::CompactFinish { stats: b, error: y, .. },
+                ) => a == b && x == y,
+                _ => false,
+            };
+            assert!(same, "round-trip mismatch: {event:?} vs {back:?}");
         }
     }
 }

@@ -345,8 +345,31 @@ impl TranslationState {
 
             AgentEvent::Compact { event } => {
                 let message = match event {
-                    CompactEvent::CompactStart { .. } => "context compaction started".to_string(),
-                    CompactEvent::CompactFinish { .. } => "context compaction finished".to_string(),
+                    CompactEvent::CompactStart { plan, .. } => match plan {
+                        Some(plan) => format!(
+                            "context compaction started: summarizing {} messages (~{} tokens)",
+                            plan.head_messages, plan.head_tokens
+                        ),
+                        None => "context compaction skipped — conversation too short".to_string(),
+                    },
+                    // Phase ticks and throttled summary deltas are TUI-only
+                    // detail; emitting them here would flood the JSONL stream.
+                    CompactEvent::CompactPhase { .. } | CompactEvent::CompactSummaryDelta { .. } => {
+                        return vec![]
+                    }
+                    CompactEvent::CompactFinish { stats, error, .. } => match (stats, error) {
+                        (Some(stats), _) => format!(
+                            "context compaction finished: {} → {} messages, ~{} token summary, \
+                             freed ~{} tokens in {} ms",
+                            stats.messages_before,
+                            stats.messages_after,
+                            stats.summary_tokens,
+                            stats.freed_tokens,
+                            stats.duration_ms
+                        ),
+                        (None, Some(error)) => format!("context compaction failed: {error}"),
+                        (None, None) => "context compaction finished".to_string(),
+                    },
                 };
                 vec![notice(NoticeKind::Compact, message)]
             }

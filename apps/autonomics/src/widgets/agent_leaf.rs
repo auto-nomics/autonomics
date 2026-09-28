@@ -69,6 +69,8 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
             area.width,
             area.height,
         ));
+        let compact_constraint =
+            Constraint::Length(compact_preview_height(&ts.compact_state, area.height));
 
         // ── Top-level vertical split ──
         let layout = Layout::default()
@@ -77,6 +79,7 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
                 Constraint::Length(1), // StatusBar (full width)
                 Constraint::Min(3),    // Middle: Chat + Sidebar (horizontal split)
                 pending_constraint,    // Runtime-bound input awaiting commit
+                compact_constraint,    // Live compaction preview
                 input_constraint,      // Input (full width)
                 Constraint::Length(1), // Footer hints
             ])
@@ -92,6 +95,8 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
             context_used: ts.latest_turn_context_used,
             context_window: self.context_window,
             model_name: self.active_model,
+            compact: Some(&ts.compact_state),
+            frame: ts.frame,
         };
         status_bar.render(layout[0], buf);
 
@@ -182,6 +187,11 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
             render_pending_queue(layout[2], buf, &pending_texts);
         }
 
+        // ── Live compaction preview (summary tail while compacting) ──
+        if ts.compact_state.is_compacting {
+            render_compact_preview(layout[3], buf, &ts.compact_state);
+        }
+
         // ── Input area (boxed composer, ❯ prompt) ──
         let queued = ts.pending_queue_len();
         let placeholder: &str = if running {
@@ -245,16 +255,16 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
         let mut input_state = InputWidgetState {
             input: &mut ts.input,
         };
-        input_widget.render(layout[3], buf, &mut input_state);
+        input_widget.render(layout[4], buf, &mut input_state);
 
         // ── Animated loading bar on the input box bottom border ──
         if running {
-            render_loading_bar(layout[3], buf, ts.frame);
+            render_loading_bar(layout[4], buf, ts.frame);
         }
 
         // ── Footer hint line ──
         render_footer_hint(
-            layout[4],
+            layout[5],
             buf,
             ts.input_mode,
             running,
@@ -269,6 +279,80 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
 
 /// Braille spinner frames for the loading indicator.
 const BRAILLE_SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/// Rows of the live compaction preview: header + up to 3 summary tail
+/// lines. Zero (collapsed) unless a pass is in flight.
+fn compact_preview_height(compact: &crate::state::CompactState, total_height: u16) -> u16 {
+    if !compact.is_compacting || total_height < 10 {
+        return 0;
+    }
+    1 + COMPACT_PREVIEW_LINES.min(
+        compact
+            .summary
+            .lines()
+            .count()
+            .max(if compact.phase.is_some() { 1 } else { 0 }),
+    ) as u16
+}
+
+/// Rows of summary text shown in the preview block.
+const COMPACT_PREVIEW_LINES: usize = 3;
+
+/// Live view of an in-flight compaction: pass header (trigger + scale) and
+/// the tail of the summary being generated.
+fn render_compact_preview(area: Rect, buf: &mut Buffer, compact: &crate::state::CompactState) {
+    use agentik_types::{CompactPhase, CompactTrigger};
+
+    if area.width < 8 || area.height == 0 {
+        return;
+    }
+
+    let phase = match compact.phase {
+        Some(CompactPhase::Summarizing) => "summarizing",
+        Some(CompactPhase::Rebuilding) => "rebuilding",
+        None => "preparing",
+    };
+    let trigger = compact
+        .plan
+        .as_ref()
+        .map(|p| match p.trigger {
+            CompactTrigger::Manual => "manual".to_string(),
+            CompactTrigger::MidTurn { used_pct } => format!("auto · mid-turn · ctx {used_pct}%"),
+            CompactTrigger::PreRequest { used_pct } => {
+                format!("auto · pre-request · ctx {used_pct}%")
+            }
+        })
+        .unwrap_or_default();
+
+    let header_style = Style::default()
+        .fg(Color::Magenta)
+        .add_modifier(Modifier::BOLD);
+    let summary_style = Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC);
+
+    let mut lines = vec![Line::styled(format!("⟳ compacting — {phase}  ({trigger})"), header_style)];
+    if compact.summary.is_empty() {
+        if compact.phase.is_some() {
+            lines.push(Line::styled("  …", summary_style));
+        }
+    } else {
+        let tail: Vec<&str> = compact
+            .summary
+            .lines()
+            .rev()
+            .take(area.height as usize - 1)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        for line in tail {
+            lines.push(Line::styled(format!("  {line}"), summary_style));
+        }
+    }
+    // Clip to the allotted area — the height calc and the tail extraction
+    // can disagree by a row on mid-flight resizes.
+    lines.truncate(area.height as usize);
+    Paragraph::new(lines).render(area, buf);
+}
 
 const PENDING_PREVIEW_LIMIT: usize = 3;
 

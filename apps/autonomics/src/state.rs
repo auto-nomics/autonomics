@@ -1,8 +1,10 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, RwLock};
+use std::time::Instant;
 
 use crate::widgets::input_area::InputArea;
 use agentik_sdk::types::{AgentEvent, CompactEvent};
+use agentik_types::{CompactPhase, CompactPlan, CompactStats};
 use ratatui::text::Line;
 
 // ── Tool task tracking ─────────────────────────────────
@@ -93,6 +95,8 @@ pub enum ChatLine {
         attempt: u32,
         max_retries: u32,
     },
+    /// Context-compaction outcome (persistent transcript record).
+    Compact(CompactResult),
     Separator,
 }
 
@@ -213,9 +217,33 @@ pub struct AgentTabState {
     pub cancel_pending: bool,
 }
 
+/// Live state of an in-flight context compaction.
+///
+/// Fed by `AgentEvent::Compact` progress events; drives the status-bar
+/// detail line and the compact preview block above the composer. The
+/// backend guarantees a closed `CompactStart`/`CompactFinish` pair (also
+/// on failure and on the too-short skip), so `is_compacting` always
+/// returns to `false`.
 #[derive(Debug, Default)]
 pub struct CompactState {
     pub is_compacting: bool,
+    /// Active pass's plan (trigger + head/tail split), from `CompactStart`.
+    pub plan: Option<CompactPlan>,
+    /// Latest phase tick of the active pass.
+    pub phase: Option<CompactPhase>,
+    /// Summary text accumulated from throttled `CompactSummaryDelta`s.
+    pub summary: String,
+    /// Wall-clock start of the active pass — drives the elapsed readout.
+    pub started_at: Option<Instant>,
+}
+
+/// Terminal outcome of a compaction pass, kept as a transcript line.
+#[derive(Debug, Clone)]
+pub enum CompactResult {
+    Done(CompactStats),
+    Failed(String),
+    /// Conversation was too short to compact.
+    Skipped,
 }
 
 impl Default for AgentTabState {
@@ -343,6 +371,46 @@ impl AgentTabState {
         self.msg_version_counter = self.msg_version_counter.wrapping_add(1);
         self.messages.push(line);
         self.msg_versions.push(self.msg_version_counter);
+    }
+
+    /// Feed one compaction progress event into the tab state.
+    ///
+    /// `CompactStart` resets the live view (plan, phase, summary buffer,
+    /// elapsed clock); phase ticks and throttled summary deltas update it
+    /// in place; `CompactFinish` closes the pass and appends a transcript
+    /// line with the outcome. Preview bookkeeping only — the transcript
+    /// line is the durable record.
+    pub fn apply_compact_event(&mut self, event: CompactEvent) {
+        match event {
+            CompactEvent::CompactStart { plan, .. } => {
+                self.compact_state = CompactState {
+                    is_compacting: true,
+                    plan,
+                    phase: None,
+                    summary: String::new(),
+                    started_at: Some(Instant::now()),
+                };
+            }
+            CompactEvent::CompactPhase { phase, .. } => {
+                self.compact_state.phase = Some(phase);
+            }
+            CompactEvent::CompactSummaryDelta { text, .. } => {
+                self.compact_state.summary.push_str(&text);
+            }
+            CompactEvent::CompactFinish { stats, error, .. } => {
+                self.compact_state.is_compacting = false;
+                self.compact_state.phase = None;
+                let result = match (stats, error) {
+                    (Some(stats), _) => CompactResult::Done(stats),
+                    (None, Some(error)) => CompactResult::Failed(error),
+                    (None, None) => CompactResult::Skipped,
+                };
+                self.push_line(ChatLine::Compact(result));
+                if self.auto_scroll {
+                    self.scroll_to_bottom();
+                }
+            }
+        }
     }
 
     /// Replace the entire message list in one shot, keeping `msg_versions`,
@@ -599,10 +667,7 @@ pub fn apply_event(state: &mut AgentTabState, event: AgentEvent) {
         | AgentEvent::ContentBlockStart { .. }
         | AgentEvent::ContentBlockStop { .. }
         | AgentEvent::StreamDelta { .. } => {}
-        AgentEvent::Compact { event } => match event {
-            CompactEvent::CompactStart { .. } => state.compact_state.is_compacting = true,
-            CompactEvent::CompactFinish { .. } => state.compact_state.is_compacting = false,
-        },
+        AgentEvent::Compact { event } => state.apply_compact_event(event),
         // Session lifecycle events — handled at the AppState level (these
         // need access to the full AgentSession, not just the chat view).
         AgentEvent::SessionActivated { .. }

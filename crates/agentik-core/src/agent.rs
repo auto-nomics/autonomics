@@ -699,6 +699,26 @@ impl TokenBudget {
         self.last_api_total.saturating_add(self.pending_tokens)
     }
 
+    /// Estimated context fill percentage, using the same total that
+    /// [`should_compact`](Self::should_compact) considers. Returns 0 when
+    /// the model's context length is unknown — display-only, never a
+    /// compaction trigger.
+    pub fn context_fill_pct(
+        &self,
+        messages: &[agentik_sdk::types::Message],
+        context_length: u64,
+    ) -> u64 {
+        if context_length == 0 {
+            return 0;
+        }
+        let total = if self.last_api_total > 0 {
+            self.current_total()
+        } else {
+            self.estimate_messages_tokens(messages)
+        };
+        total.saturating_mul(100) / context_length
+    }
+
     /// Fallback: estimate tokens by iterating messages (chars/4 heuristic).
     pub fn estimate_messages_tokens(&self, messages: &[agentik_sdk::types::Message]) -> u64 {
         messages
