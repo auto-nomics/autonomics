@@ -40,7 +40,10 @@ pub use tools::{
     tool_definition_from_schema,
 };
 
-pub use agent_events::{AgentEvent, CompactEvent, ContentBlockKind, TurnExecutionStatus};
+pub use agent_events::{
+    AgentEvent, CompactEvent, CompactPhase, CompactPlan, CompactStats, CompactTrigger,
+    ContentBlockKind, TurnExecutionStatus,
+};
 
 pub use lifecycle::AgentLifecycleStatus;
 

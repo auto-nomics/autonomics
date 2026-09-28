@@ -3568,9 +3568,39 @@ mod status_derivation_tests {
     #[test]
     fn compact_flips_to_running() {
         let (s, _) = derive_agent_status(&AgentEvent::Compact {
-            event: CompactEvent::CompactStart { ts: Utc::now() },
+            event: CompactEvent::CompactStart {
+                ts: Utc::now(),
+                plan: None,
+            },
         });
         assert_eq!(s, AgentStatus::Running);
+    }
+
+    /// All compaction progress events (phases, summary deltas, failure
+    /// finishes) must keep the agent in `Running` — the TUI drives its
+    /// compacting overlay from the Compact events, not the agent status.
+    #[test]
+    fn compact_progress_events_keep_running() {
+        let cases = vec![
+            CompactEvent::CompactPhase {
+                ts: Utc::now(),
+                phase: agentik_types::CompactPhase::Summarizing,
+            },
+            CompactEvent::CompactSummaryDelta {
+                ts: Utc::now(),
+                text: "chunk".into(),
+            },
+            CompactEvent::CompactFinish {
+                ts: Utc::now(),
+                stats: None,
+                error: Some("boom".into()),
+            },
+        ];
+        for event in cases {
+            let (s, ev) = derive_agent_status(&AgentEvent::Compact { event });
+            assert_eq!(s, AgentStatus::Running, "status for {ev:?}");
+            assert!(ev.is_none(), "no status detail expected");
+        }
     }
 
     // ── Intra-stream noise ──

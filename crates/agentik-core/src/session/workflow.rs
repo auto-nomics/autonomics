@@ -9,8 +9,7 @@ use agentik_sdk::model::sanitize::sanitize_messages;
 use agentik_sdk::types::messages::{ContentBlock, Message};
 use agentik_sdk::types::tools::ToolUse;
 use agentik_sdk::types::{AgentEvent, AnthropicError, ToolDefinition};
-use agentik_types::CompactEvent;
-use chrono::Utc;
+use agentik_types::CompactTrigger;
 use futures::StreamExt;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio_util::sync::CancellationToken;
@@ -537,20 +536,20 @@ impl Session {
                 let model = self.shared.model.load_full().ok_or_else(|| {
                     AgentError::MissingConfig("no active model configured".into())
                 })?;
+                let used_pct = self
+                    .token_budget
+                    .context_fill_pct(&conversation_msgs, context_length);
                 tracing::debug!(
                     context_length,
                     current_total = self.token_budget.current_total(),
                     "mid-turn context pressure detected, compacting before next iteration"
                 );
-                self.set_lifecycle(agentik_types::AgentLifecycleStatus::Compacting);
-                self.shared.send_event(AgentEvent::Compact {
-                    event: CompactEvent::CompactStart { ts: Utc::now() },
-                });
-                self.compact(model.as_ref()).await?;
-                self.shared.send_event(AgentEvent::Compact {
-                    event: CompactEvent::CompactFinish { ts: Utc::now() },
-                });
-                self.set_lifecycle(agentik_types::AgentLifecycleStatus::Requesting);
+                self.compact(
+                    model.as_ref(),
+                    CompactTrigger::MidTurn { used_pct },
+                    agentik_types::AgentLifecycleStatus::Requesting,
+                )
+                .await?;
             }
         }
 
@@ -625,20 +624,21 @@ impl Session {
             .token_budget
             .should_compact(&conversation_msgs, model.model_info.context_length)
         {
+            let used_pct = self
+                .token_budget
+                .context_fill_pct(&conversation_msgs, model.model_info.context_length);
             tracing::debug!(
                 context_length = model.model_info.context_length,
                 current_total = self.token_budget.current_total(),
                 "pre-request context pressure detected (≥90% of context window), compacting"
             );
-            self.set_lifecycle(agentik_types::AgentLifecycleStatus::Compacting);
-            self.shared.send_event(AgentEvent::Compact {
-                event: CompactEvent::CompactStart { ts: Utc::now() },
-            });
-            let compacted = self.compact(model.as_ref()).await?;
-            self.shared.send_event(AgentEvent::Compact {
-                event: CompactEvent::CompactFinish { ts: Utc::now() },
-            });
-            self.set_lifecycle(agentik_types::AgentLifecycleStatus::Requesting);
+            let compacted = self
+                .compact(
+                    model.as_ref(),
+                    CompactTrigger::PreRequest { used_pct },
+                    agentik_types::AgentLifecycleStatus::Requesting,
+                )
+                .await?;
             if !compacted {
                 tracing::warn!(
                     "context pressure detected but nothing to compact; \
