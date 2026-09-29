@@ -132,7 +132,13 @@ pub fn install_from_local(
     if !source.is_dir() {
         return Err(SkillError::BadSource(source.display().to_string()));
     }
-    let candidates = find_skill_dirs(source);
+    // The source may itself be a skill directory…
+    let candidates = if source.join("SKILL.md").is_file() {
+        vec![source.to_path_buf()]
+    } else {
+        // …or a parent holding skills one or two levels down (a pack).
+        find_skill_dirs(source)
+    };
     if candidates.is_empty() {
         return Err(SkillError::MissingSkillMd(source.to_path_buf()));
     }
@@ -497,6 +503,25 @@ mod tests {
         // Re-install replaces cleanly.
         install_from_local(&src.0.join("pack"), &dest.0, Some(&record)).unwrap();
         assert!(alpha.join("SKILL.md").is_file());
+    }
+
+    #[test]
+    fn installs_single_skill_directory_directly() {
+        // `install <skill-dir>` (not a pack parent) must install the
+        // directory itself.
+        let src = Scratch(tempfile::tempdir().unwrap().keep());
+        let dest = Scratch(tempfile::tempdir().unwrap().keep());
+        let dir = src.0.join("my-skill");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("SKILL.md"),
+            "---\nname: my-skill\ndescription: d\n---\nb\n",
+        )
+        .unwrap();
+
+        let outcome = install_from_local(&dir, &dest.0, None).unwrap();
+        assert_eq!(outcome.installed.len(), 1);
+        assert!(dest.0.join("my-skill").join("SKILL.md").is_file());
     }
 
     #[test]

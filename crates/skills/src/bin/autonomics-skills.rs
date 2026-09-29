@@ -49,6 +49,11 @@ enum Command {
     },
     /// Remove an installed skill by name (global or workspace tier).
     Uninstall { name: String },
+    /// List a skill's workflow templates and their parameter schemas.
+    Workflows { name: String },
+    /// Validate a skill directory before installing: SKILL.md format,
+    /// every workflow template, every eval file.
+    Validate { path: PathBuf },
 }
 
 fn main() -> ExitCode {
@@ -75,6 +80,8 @@ fn main() -> ExitCode {
             to_workspace,
         ),
         Command::Uninstall { name } => uninstall_cmd(&registry, &name),
+        Command::Workflows { name } => workflows_cmd(&registry, &name),
+        Command::Validate { path } => validate_cmd(&path),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -194,4 +201,114 @@ fn shellexpand_home(source: &str) -> String {
         }
     }
     source.to_string()
+}
+
+fn workflows_cmd(registry: &SkillRegistry, name: &str) -> Result<(), String> {
+    let doc = registry
+        .get(name)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("no skill named {name:?}"))?;
+    if doc.workflows.is_empty() {
+        println!("Skill {name:?} bundles no workflow templates.");
+        return Ok(());
+    }
+    let dir = doc
+        .dir
+        .ok_or_else(|| format!("skill {name:?} is builtin; no workflows"))?;
+    for stem in &doc.workflows {
+        match skills::WorkflowTemplate::load(&dir, stem) {
+            Ok(template) => {
+                println!("workflow {stem} — {}", template.description);
+                println!(
+                    "  nodes: {}",
+                    template
+                        .nodes
+                        .iter()
+                        .map(|n| n.id.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+                for (pname, spec) in &template.params {
+                    println!(
+                        "  param {pname}: {} ({}{})",
+                        spec.kind,
+                        if spec.required {
+                            "required"
+                        } else {
+                            "optional"
+                        },
+                        spec.default
+                            .as_ref()
+                            .map(|d| format!(", default {d}"))
+                            .unwrap_or_default()
+                    );
+                }
+            }
+            Err(e) => eprintln!("workflow {stem}: INVALID — {e}"),
+        }
+    }
+    if !doc.evals.is_empty() {
+        println!("evals: {}", doc.evals.join(", "));
+    }
+    Ok(())
+}
+
+/// Author-side validation: everything a skill declares must parse and
+/// hold together before it is installed or published.
+fn validate_cmd(path: &std::path::Path) -> Result<(), String> {
+    if !path.is_dir() {
+        return Err(format!("{} is not a directory", path.display()));
+    }
+    let mut problems: Vec<String> = Vec::new();
+
+    let (meta, _body) =
+        skills::format::parse_skill_file(&path.join("SKILL.md")).map_err(|e| e.to_string())?;
+    match skills::format::validate_meta(&meta) {
+        Ok(()) => println!("SKILL.md: ok (name {:?})", meta.name),
+        Err(e) => problems.push(format!("SKILL.md: {e}")),
+    }
+
+    let workflow_stems = skills::WorkflowTemplate::stems_in_dir(path);
+    let mut known = Vec::new();
+    for stem in &workflow_stems {
+        match skills::WorkflowTemplate::load(path, stem) {
+            Ok(template) => {
+                println!(
+                    "workflow {stem}: ok ({} node(s), {} param(s))",
+                    template.nodes.len(),
+                    template.params.len()
+                );
+                known.push(stem.clone());
+            }
+            Err(e) => problems.push(format!("workflow {stem}: {e}")),
+        }
+    }
+
+    for stem in skills::eval::eval_stems_in_dir(path) {
+        match skills::eval::load_cases(path, &stem) {
+            Ok(cases) => {
+                for case in &cases {
+                    if !known.contains(&case.workflow) {
+                        problems.push(format!(
+                            "eval {stem:?} case {:?}: references unknown workflow {:?}",
+                            case.name, case.workflow
+                        ));
+                    } else {
+                        println!("eval {stem} case {}: ok", case.name);
+                    }
+                }
+            }
+            Err(e) => problems.push(format!("eval {stem}: {e}")),
+        }
+    }
+
+    if !problems.is_empty() {
+        eprintln!("\n{} problem(s):", problems.len());
+        for p in &problems {
+            eprintln!("  - {p}");
+        }
+        return Err("validation failed".into());
+    }
+    println!("\n{} valid.", meta.name);
+    Ok(())
 }

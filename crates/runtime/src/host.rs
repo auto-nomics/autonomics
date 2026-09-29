@@ -523,7 +523,15 @@ impl SharedInfra {
             tools.extend(kegg_tools());
         }
 
-        tools.extend(data_engine_tools::registrations(Arc::new(engine_client)));
+        let engine_client = Arc::new(engine_client);
+        tools.extend(data_engine_tools::registrations(Arc::clone(&engine_client)));
+        // Engine-bound skill tools (workflow instantiation, evals) share
+        // the registry with the pure skill tools and the session's DAG
+        // client, so template-built DAGs are ordinary session DAGs.
+        tools.extend(crate::skill_workflow_tools::skill_workflow_registrations(
+            self.skills.clone(),
+            engine_client,
+        ));
 
         if profile.enable_bibliography {
             let bib_shared = self.bib.clone();

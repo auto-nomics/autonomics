@@ -55,6 +55,9 @@ enum SkillOrigin {
 pub struct SkillEntry {
     pub meta: SkillMeta,
     pub tier: SkillTier,
+    /// The skill bundles instantiable workflow templates
+    /// (`workflow/*.toml`).
+    pub has_workflows: bool,
     origin: SkillOrigin,
 }
 
@@ -78,6 +81,7 @@ impl SkillEntry {
         Self {
             meta,
             tier,
+            has_workflows: false,
             origin: SkillOrigin::Embedded {
                 body: String::new(),
             },
@@ -86,12 +90,20 @@ impl SkillEntry {
 }
 
 /// A skill document returned by [`SkillRegistry::get`]: metadata plus
-/// the post-frontmatter body.
+/// the post-frontmatter body, plus the directory-backed extras
+/// (workflow templates, eval files) when the skill comes from a tier.
 #[derive(Debug, Clone)]
 pub struct SkillDocument {
     pub meta: SkillMeta,
     pub tier: SkillTier,
     pub body: String,
+    /// On-disk skill directory for tier-backed skills; `None` for
+    /// builtin embedded skills (which carry no workflows today).
+    pub dir: Option<PathBuf>,
+    /// Workflow template stems under `workflow/`, sorted.
+    pub workflows: Vec<String>,
+    /// Eval file stems under `evals/`, sorted.
+    pub evals: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -139,6 +151,7 @@ impl SkillRegistry {
             insert(SkillEntry {
                 meta: e.meta.clone(),
                 tier: SkillTier::Builtin,
+                has_workflows: false,
                 origin: SkillOrigin::Embedded {
                     body: e.body.clone(),
                 },
@@ -157,14 +170,27 @@ impl SkillRegistry {
         let Some(entry) = self.list().into_iter().find(|e| e.meta.name == name) else {
             return Ok(None);
         };
-        let body = match &entry.origin {
-            SkillOrigin::Embedded { body } => body.clone(),
-            SkillOrigin::Dir(dir) => parse_skill_file(&dir.join("SKILL.md"))?.1,
+        let (body, dir) = match &entry.origin {
+            SkillOrigin::Embedded { body } => (body.clone(), None),
+            SkillOrigin::Dir(dir) => (
+                parse_skill_file(&dir.join("SKILL.md"))?.1,
+                Some(dir.clone()),
+            ),
+        };
+        let (workflows, evals) = match &dir {
+            Some(dir) => (
+                crate::workflow::WorkflowTemplate::stems_in_dir(dir),
+                crate::eval::eval_stems_in_dir(dir),
+            ),
+            None => (Vec::new(), Vec::new()),
         };
         Ok(Some(SkillDocument {
             meta: entry.meta,
             tier: entry.tier,
             body,
+            dir,
+            workflows,
+            evals,
         }))
     }
 
@@ -220,6 +246,7 @@ fn scan_root(tier: SkillTier, root: &Path) -> Vec<SkillEntry> {
             Ok((meta, _body)) => out.push(SkillEntry {
                 meta,
                 tier,
+                has_workflows: path.join(crate::workflow::WORKFLOW_DIR).is_dir(),
                 origin: SkillOrigin::Dir(path),
             }),
             Err(e) => {

@@ -25,12 +25,20 @@ pub fn prompt_section(entries: &[SkillEntry]) -> String {
          name and when to use it. Before multi-step work, search for \
          coverage with `skill_search`; when one matches, fetch it with \
          `skill_get <name>` and follow its SKILL.md instead of improvising \
-         an equivalent procedure.\n\n",
+         an equivalent procedure. Skills marked [workflow] also bundle \
+         parameterized DAG templates — inspect them with `skill_workflows` \
+         and instantiate with `skill_run_workflow`.\n\n",
     );
     for entry in entries {
+        let marker = if entry.has_workflows {
+            " [workflow]"
+        } else {
+            ""
+        };
         out.push_str(&format!(
-            "- {} — {}\n",
+            "- {}{} — {}\n",
             entry.meta.name,
+            marker,
             crate::format::prompt_safe_description(&entry.meta.description, 240)
         ));
     }

@@ -30,6 +30,19 @@ document you load on demand.
 4. When a skill turns out to be wrong or incomplete, say so in your
    final answer; the user maintains the library.
 
+## Workflows
+
+Skills marked `[workflow]` bundle parameterized DAG templates —
+reusable node/edge graphs over the registered node kinds.
+
+1. `skill_workflows <name>` lists the templates and their parameter
+   schemas (type, required, default).
+2. `skill_run_workflow <skill> <workflow> <params>` instantiates a
+   template into the session DAG (nodes created, edges wired). It does
+   not run the DAG by default — review with `view_dag`, then `run_dag`.
+3. Prefer a bundled workflow over hand-assembling an equivalent DAG:
+   it encodes proven port wiring and defaults.
+
 ## When not to use a skill
 
 - The task is a single trivial step no skill covers — proceed directly.

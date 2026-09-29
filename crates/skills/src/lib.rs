@@ -11,8 +11,12 @@
 //! - [`registry`] — tiered scan (builtin / global / workspace) with
 //!   name-based shadowing; always fresh, never cached
 //! - [`inject`] — the one-line-per-skill system-prompt index
-//! - [`tools`] — `skill_list` / `skill_get` / `skill_search` agent
-//!   tools
+//! - [`tools`] — `skill_list` / `skill_get` / `skill_search` /
+//!   `skill_workflows` agent tools
+//! - [`workflow`] — parameterized DAG templates (`workflow/*.toml`):
+//!   parse, validate, render with checked params
+//! - [`eval`] — eval cases (`evals/*.toml`): run a workflow with fixed
+//!   params and check the run report
 //! - [`install`] — install from local paths or git, with a
 //!   `.installed.toml` provenance sidecar per tier
 //! - [`builtin`] — skills compiled into the binary
@@ -23,17 +27,21 @@
 
 pub mod builtin;
 pub mod error;
+pub mod eval;
 pub mod format;
 pub mod inject;
 pub mod install;
 pub mod registry;
 pub mod tools;
+pub mod workflow;
 
 pub use error::SkillError;
+pub use eval::{Check, EvalCase, EvalReport};
 pub use format::SkillMeta;
 pub use inject::prompt_section;
 pub use registry::{SkillDocument, SkillEntry, SkillRegistry, SkillTier};
 pub use tools::skill_registrations;
+pub use workflow::{RenderedWorkflow, WorkflowTemplate};
 
 /// Resolve the default skills state directory: `$AUTONOMICS_STATE_DIR`
 /// or `~/.autonomics`, mirroring the runtime config precedence.

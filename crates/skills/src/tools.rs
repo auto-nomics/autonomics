@@ -192,6 +192,104 @@ impl ToolFunction for SkillSearchTool {
     }
 }
 
+// ────────────────────────── workflows ──────────────────────────
+
+#[tool(
+    name = "skill_workflows",
+    description = "List the workflow templates bundled by one skill, with each \
+        template's description and parameter schema (name, type, required, \
+        default). Use before skill_run_workflow to see exactly which params \
+        to supply. Only tier-backed skills (global/workspace) carry \
+        workflows."
+)]
+pub struct SkillWorkflowsInput {
+    #[desc = "Exact skill name from skill_list / skill_search."]
+    pub name: String,
+}
+
+pub struct SkillWorkflowsTool {
+    pub registry: Arc<SkillRegistry>,
+}
+
+#[async_trait::async_trait]
+impl ToolFunction for SkillWorkflowsTool {
+    type Input = SkillWorkflowsInput;
+
+    async fn run(&self, input: SkillWorkflowsInput) -> Result<ToolResult, ToolError> {
+        let name = input.name.trim();
+        let Some(doc) = self.registry.get(name).unwrap_or_else(|e| {
+            tracing::warn!(skill = name, error = %e, "skill_workflows: unreadable skill");
+            None
+        }) else {
+            return Ok(ToolResult::error(format!(
+                "skill_workflows: no skill named {name:?}"
+            )));
+        };
+        if doc.workflows.is_empty() {
+            return Ok(ToolResult::success(format!(
+                "Skill {name:?} bundles no workflow templates."
+            )));
+        }
+        let Some(dir) = &doc.dir else {
+            return Ok(ToolResult::success(format!(
+                "Skill {name:?} is builtin; workflows require a tier-backed skill."
+            )));
+        };
+        let mut out = format!(
+            "Skill {name:?} bundles {} workflow(s):\n",
+            doc.workflows.len()
+        );
+        for stem in &doc.workflows {
+            match crate::workflow::WorkflowTemplate::load(dir, stem) {
+                Ok(template) => {
+                    out.push_str(&format!("\nworkflow {stem:?} — {}\n", template.description));
+                    if template.params.is_empty() {
+                        out.push_str("  params: none\n");
+                    } else {
+                        out.push_str("  params:\n");
+                        for (pname, spec) in &template.params {
+                            let required = if spec.required {
+                                "required"
+                            } else {
+                                "optional"
+                            };
+                            let default = spec
+                                .default
+                                .as_ref()
+                                .map(|d| format!(", default {d}"))
+                                .unwrap_or_default();
+                            let desc = if spec.description.is_empty() {
+                                String::new()
+                            } else {
+                                format!(" — {}", spec.description)
+                            };
+                            out.push_str(&format!(
+                                "  - {pname}: {} ({required}{default}){desc}\n",
+                                spec.kind
+                            ));
+                        }
+                    }
+                    out.push_str(&format!(
+                        "  nodes: {} ({})\n",
+                        template.nodes.len(),
+                        template
+                            .nodes
+                            .iter()
+                            .map(|n| n.id.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+                }
+                Err(e) => {
+                    out.push_str(&format!("\nworkflow {stem:?}: INVALID — {e}\n"));
+                }
+            }
+        }
+        out.push_str("\nInstantiate with skill_run_workflow (skill, workflow, params).");
+        Ok(ToolResult::success(out))
+    }
+}
+
 // ────────────────────────── registration ──────────────────────────
 
 /// Build the skill tool registrations around one shared registry.
@@ -204,6 +302,9 @@ pub fn skill_registrations(registry: Arc<SkillRegistry>) -> Vec<ToolRegistration
             registry: registry.clone(),
         }),
         ToolRegistration::from(SkillGetTool {
+            registry: registry.clone(),
+        }),
+        ToolRegistration::from(SkillWorkflowsTool {
             registry: registry.clone(),
         }),
         ToolRegistration::from(SkillSearchTool { registry }),
