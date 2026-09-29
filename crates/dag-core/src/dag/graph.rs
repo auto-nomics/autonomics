@@ -29,7 +29,7 @@ use super::runtime::{
 use super::{DagNode, NodeId};
 use crate::dag::node_event::{JobResult, NodeEvent, NodeEventKind, NodeReporter};
 use crate::resource::{MemoryGuardConfig, MemoryObservation, MemorySample, sample_memory_usage};
-use crate::value::{DataRef, FileFingerprint, FileRef, NodeValue, PortType};
+use crate::value::{FileFingerprint, FileRef, NodeValue, PortType};
 
 /// Output values keyed by output port index.
 #[derive(Debug, Clone, Default)]
@@ -48,10 +48,6 @@ impl PortOutputs {
 
     pub fn insert_file(&mut self, port: u8, file: FileRef) -> Option<NodeValue> {
         self.values.insert(port, NodeValue::File(file))
-    }
-
-    pub fn insert_data(&mut self, port: u8, data: DataRef) -> Option<NodeValue> {
-        self.values.insert(port, NodeValue::Data(data))
     }
 
     pub fn get(&self, port: &u8) -> Option<&NodeValue> {
@@ -324,7 +320,6 @@ impl DAG {
                 outputs.values().any(|value| match value {
                     NodeValue::File(file) => cached_file_changed(file),
                     NodeValue::FileSet(files) => files.iter().any(cached_file_changed),
-                    NodeValue::Data(_) | NodeValue::DataSet(_) => false,
                     NodeValue::DataFrame(_) => false,
                 })
             })
@@ -1140,10 +1135,6 @@ impl DAG {
                             .flat_map(|value| match value {
                                 NodeValue::File(file) => vec![file.clone()],
                                 NodeValue::FileSet(files) => files.clone(),
-                                NodeValue::Data(data) => vec![data.to_file_ref()],
-                                NodeValue::DataSet(data) => {
-                                    data.iter().map(DataRef::to_file_ref).collect()
-                                }
                                 NodeValue::DataFrame(_) => Vec::new(),
                             })
                             .collect()

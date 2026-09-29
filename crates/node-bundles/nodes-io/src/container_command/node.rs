@@ -318,30 +318,6 @@ pub(super) async fn stage_inputs(
                 }
                 NodeValue::FileSet(staged_files)
             }
-            NodeValue::Data(data) => {
-                let file = data.to_file_ref();
-                let path = stage_input_file(ctx, &staging_dir, index, &file).await?;
-                index += 1;
-                NodeValue::File(FileRef {
-                    path: path.to_string_lossy().into_owned(),
-                    format: file.format,
-                    fingerprint: file.fingerprint,
-                })
-            }
-            NodeValue::DataSet(data) => {
-                let mut staged_files = Vec::with_capacity(data.len());
-                for data in data {
-                    let file = data.to_file_ref();
-                    let path = stage_input_file(ctx, &staging_dir, index, &file).await?;
-                    index += 1;
-                    staged_files.push(FileRef {
-                        path: path.to_string_lossy().into_owned(),
-                        format: file.format,
-                        fingerprint: file.fingerprint,
-                    });
-                }
-                NodeValue::FileSet(staged_files)
-            }
             NodeValue::DataFrame(_) => {
                 return Err("container_command inputs must be File or FileSet values".into());
             }

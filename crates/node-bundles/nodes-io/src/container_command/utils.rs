@@ -55,7 +55,6 @@ pub(crate) fn capture_input_manifest(staged_inputs: &[NodeInput]) -> Vec<(String
         .filter_map(|input| {
             let path = match &input.data {
                 NodeValue::File(f) => PathBuf::from(&f.path),
-                NodeValue::Data(d) => PathBuf::from(&d.vpath),
                 NodeValue::FileSet(files) if let Some(first) = files.first() => {
                     PathBuf::from(&first.path)
                 }
@@ -145,13 +144,6 @@ pub(crate) fn input_path(value: &NodeValue) -> Result<String, String> {
         NodeValue::DataFrame(_) => {
             Err("container_command inputs must be File or FileSet values".into())
         }
-        NodeValue::Data(data) => Ok(data.vpath.clone()),
-        NodeValue::DataSet(data) if !data.is_empty() => Ok(data
-            .iter()
-            .map(|data| data.vpath.as_str())
-            .collect::<Vec<_>>()
-            .join(",")),
-        NodeValue::DataSet(_) => Err("an empty DataSet cannot be bound to a command input".into()),
     }
 }
 

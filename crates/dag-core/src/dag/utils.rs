@@ -83,8 +83,6 @@ fn value_kind(value: &NodeValue) -> &'static str {
         NodeValue::DataFrame(_) => "DataFrame",
         NodeValue::File(_) => "File",
         NodeValue::FileSet(_) => "FileSet",
-        NodeValue::Data(_) => "Data",
-        NodeValue::DataSet(_) => "DataSet",
     }
 }
 
@@ -94,8 +92,6 @@ fn bound_path(value: &NodeValue) -> Option<String> {
     match value {
         NodeValue::File(file) => Some(file.path.clone()),
         NodeValue::FileSet(files) => files.first().map(|file| file.path.clone()),
-        NodeValue::Data(data) => Some(data.vpath.clone()),
-        NodeValue::DataSet(entries) => entries.first().map(|data| data.vpath.clone()),
         NodeValue::DataFrame(_) => None,
     }
 }
@@ -105,8 +101,6 @@ fn bound_fingerprint(value: &NodeValue) -> Option<&FileFingerprint> {
     match value {
         NodeValue::File(file) => file.fingerprint.as_ref(),
         NodeValue::FileSet(files) => files.first().and_then(|file| file.fingerprint.as_ref()),
-        NodeValue::Data(data) => data.fingerprint.as_ref(),
-        NodeValue::DataSet(entries) => entries.first().and_then(|data| data.fingerprint.as_ref()),
         NodeValue::DataFrame(_) => None,
     }
 }

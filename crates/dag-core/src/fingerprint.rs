@@ -63,12 +63,6 @@ pub enum IdentityValue {
     },
     /// One entry per file, in order.
     FileSet(Vec<(String, Option<FileFingerprint>)>),
-    Data {
-        vpath: String,
-        fingerprint: Option<FileFingerprint>,
-    },
-    /// One entry per data ref, in order.
-    DataSet(Vec<(String, Option<FileFingerprint>)>),
     /// Chain identity: the upstream node's execution fingerprint. `None`
     /// when the upstream fingerprint is unavailable (first incremental run
     /// after an upgrade, spec-less test nodes) — encoded as an explicit
@@ -106,16 +100,6 @@ pub fn collect_input_identities(
                 files
                     .iter()
                     .map(|file| (file.path.clone(), file.fingerprint.clone()))
-                    .collect(),
-            ),
-            NodeValue::Data(data) => IdentityValue::Data {
-                vpath: data.vpath.clone(),
-                fingerprint: data.fingerprint.clone(),
-            },
-            NodeValue::DataSet(entries) => IdentityValue::DataSet(
-                entries
-                    .iter()
-                    .map(|data| (data.vpath.clone(), data.fingerprint.clone()))
                     .collect(),
             ),
             NodeValue::DataFrame(_) => IdentityValue::DataFrame {
@@ -206,22 +190,6 @@ fn encode_value(feed: &mut dyn FnMut(&[u8]), identity: &InputIdentity) {
             for (path, fingerprint) in entries {
                 feed(&[0]);
                 feed(path.as_bytes());
-                feed(&[0]);
-                encode_fingerprint(feed, fingerprint.as_ref());
-            }
-        }
-        IdentityValue::Data { vpath, fingerprint } => {
-            feed(b"data:");
-            feed(vpath.as_bytes());
-            feed(&[0]);
-            encode_fingerprint(feed, fingerprint.as_ref());
-        }
-        IdentityValue::DataSet(entries) => {
-            feed(b"dataset:");
-            feed(entries.len().to_string().as_bytes());
-            for (vpath, fingerprint) in entries {
-                feed(&[0]);
-                feed(vpath.as_bytes());
                 feed(&[0]);
                 encode_fingerprint(feed, fingerprint.as_ref());
             }
@@ -332,14 +300,6 @@ pub async fn upgrade_identities_with_content_hashes(
             IdentityValue::FileSet(entries) => {
                 for (path, fingerprint) in entries.iter_mut() {
                     upgrade_one(path, fingerprint, storage).await;
-                }
-            }
-            IdentityValue::Data { vpath, fingerprint } => {
-                upgrade_one(vpath, fingerprint, storage).await;
-            }
-            IdentityValue::DataSet(entries) => {
-                for (vpath, fingerprint) in entries.iter_mut() {
-                    upgrade_one(vpath, fingerprint, storage).await;
                 }
             }
             IdentityValue::DataFrame { .. } => {}
