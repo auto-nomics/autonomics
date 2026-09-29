@@ -929,7 +929,9 @@ impl Session {
             builder = builder.with_extra_section(extra);
         }
 
-        // Inject corss-session memory
+        // Inject cross-session memory. with_extra_section appends, so the
+        // memory summary supplements the agent's profile section above
+        // instead of replacing it.
         if let Some(memory) = &self.shared.memory {
             if let Some(section) = memory.prompt_section().await {
                 builder = builder.with_extra_section(section);
@@ -1228,6 +1230,97 @@ mod tests {
             notice_count(&calls[3].0),
             1,
             "unchanged plan must not trigger a second notice"
+        );
+    }
+
+    /// Regression: the memory summary section must *supplement* the agent's
+    /// configured `system_prompt_section`, not replace it. The builder's
+    /// `with_extra_section` used to overwrite, so any agent with a memory
+    /// summary silently lost its profile prompt.
+    #[tokio::test]
+    async fn memory_summary_appends_to_custom_system_section() {
+        use agentik_sdk::model::Model;
+        use agentik_sdk::provider::client::MockApiClient;
+        use agentik_sdk::streaming::MessageStream;
+        use crate::memory::{MemoryBackend, MemoryConfig, MemoryStore, MEMORY_SCOPE_ID};
+        use crate::testing::dummy_model_info;
+
+        let captured: Arc<std::sync::Mutex<Vec<Option<String>>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut mock = MockApiClient::new();
+        let cap = Arc::clone(&captured);
+        mock.expect_request_stream_with_system()
+            .times(1)
+            .returning(move |_, _, _, system| {
+                cap.lock().unwrap().push(system);
+                Ok(MessageStream::from_events(
+                    Vec::new(),
+                    Message::assistant_text("ok"),
+                ))
+            });
+        let model = Model::with_client(dummy_model_info("mem-section"), mock);
+
+        // Seed a memory summary the way phase 2 consolidation would.
+        let store: Arc<dyn MemoryStore> =
+            Arc::new(crate::TursoAgentStorage::open_in_memory().await.unwrap());
+        store
+            .complete_phase2(
+                MEMORY_SCOPE_ID,
+                "test-source",
+                Vec::new(),
+                "v1\n\nPrefer targeted tests.",
+                Vec::new(),
+                Vec::new(),
+            )
+            .await
+            .unwrap();
+        let memory = Arc::new(MemoryBackend::new(MemoryConfig::new(), store, None));
+
+        let registry = crate::tools::ToolRegistry::new();
+        let shared = Arc::new(AgentShared {
+            id: Uuid::new_v4(),
+            path: agentik_types::AgentPath::root(),
+            config_json: serde_json::json!({}),
+            model: Arc::new(arc_swap::ArcSwapOption::from_pointee(Some(model))),
+            config: AgentConfig::default(),
+            storage: None,
+            context_provider: None,
+            system_prompt_section: Some("## Profile\nYou are the orchestrator agent.".into()),
+            system_prompt_identity: None,
+            memory: Some(memory),
+            skill_runtime: None,
+            tool_registry: Arc::new(registry),
+            tasks: Arc::new(tokio::sync::RwLock::new(
+                crate::tools::task_runtime::TaskStore::new(),
+            )),
+            event_tx: arc_swap::ArcSwapOption::empty(),
+            persist_tx: std::sync::OnceLock::new(),
+            plan: Arc::new(arc_swap::ArcSwap::new(std::sync::Arc::new(
+                agentik_types::AgentPlan::new(),
+            ))),
+        });
+
+        let (internal_tx, _internal_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut session = Session::new_for_tests(shared, agentik_types::AgentPath::root());
+        session.remember(Message::user("hello")).unwrap();
+        session.agent_workflow(&internal_tx, None).await.unwrap();
+
+        let calls = std::mem::take(&mut *captured.lock().unwrap());
+        assert_eq!(calls.len(), 1, "exactly 1 model call expected");
+        let system = calls[0].as_deref().expect("system prompt must be sent");
+        let profile_at = system
+            .find("## Profile\nYou are the orchestrator agent.")
+            .expect("profile section must survive memory injection");
+        let memory_at = system
+            .find("## Persistent memory")
+            .expect("memory section must be injected");
+        assert!(
+            system.contains("Prefer targeted tests."),
+            "memory summary body must be in system"
+        );
+        assert!(
+            profile_at < memory_at,
+            "profile section must render before the memory section"
         );
     }
 }

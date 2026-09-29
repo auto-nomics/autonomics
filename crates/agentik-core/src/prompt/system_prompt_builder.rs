@@ -6,7 +6,7 @@
 pub struct SystemPromptBuilder {
     identity: String,
     tooluse_guidance: String,
-    extra_section: String,
+    extra_sections: Vec<String>,
 }
 impl SystemPromptBuilder {
     pub fn with_identity(mut self, identity: impl Into<String>) -> Self {
@@ -14,8 +14,11 @@ impl SystemPromptBuilder {
         self
     }
 
+    /// Append an extra section. Sections render in insertion order, so a
+    /// later section (e.g. memory) supplements — never replaces — an
+    /// earlier one (e.g. the agent's profile prompt).
     pub fn with_extra_section(mut self, section: impl Into<String>) -> Self {
-        self.extra_section = section.into();
+        self.extra_sections.push(section.into());
         self
     }
 
@@ -43,8 +46,8 @@ impl SystemPromptBuilder {
             system_prompt.push_str(&self.identity);
             system_prompt.push('\n');
         }
-        if !self.extra_section.is_empty() {
-            system_prompt.push_str(&self.extra_section);
+        for section in &self.extra_sections {
+            system_prompt.push_str(section);
             system_prompt.push('\n');
         }
         if !self.tooluse_guidance.is_empty() {
