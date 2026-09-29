@@ -141,6 +141,11 @@ fn main() -> color_eyre::Result<()> {
             runtime.block_on(commands::bib::run_bib(bib))
         }
         Command::Run(args) => commands::run::run_headless(args),
+        Command::ExportRun(args) => {
+            let runtime = tokio::runtime::Runtime::new()
+                .map_err(|e| color_eyre::eyre::eyre!("failed to build tokio runtime: {e}"))?;
+            runtime.block_on(commands::export::run_export_run(args))
+        }
         Command::Serve(_) => unreachable!("dispatched before init_logging"),
     }
 }

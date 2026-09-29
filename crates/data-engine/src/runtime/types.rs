@@ -124,6 +124,16 @@ pub enum DataEngineCmd {
         run_id: Option<String>,
         reply: oneshot::Sender<EngineResult<Vec<crate::dag::RunRecord>>>,
     },
+    /// Export one recorded run as provenance evidence (PROV-JSON / RO-Crate).
+    ExportRun {
+        /// Run id (unique prefix accepted).
+        run_id: String,
+        /// `prov` or `crate`.
+        format: String,
+        /// Absolute output directory.
+        out_dir: std::path::PathBuf,
+        reply: oneshot::Sender<EngineResult<crate::dag::ExportSummary>>,
+    },
     /// Load a snapshot's DAG into memory without moving the ref.
     CheckoutDag {
         snapshot_id: String,

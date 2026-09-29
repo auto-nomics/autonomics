@@ -466,6 +466,61 @@ impl DataEngine {
         history.get_run(run_id).await.map_err(Error::Dag)
     }
 
+    /// Export one recorded run as deliverable provenance evidence — a W3C
+    /// PROV-JSON document or an RO-Crate 1.1 directory (result files pulled
+    /// from the object store, content-verified). See
+    /// [`crate::dag::export`]. `run_id` accepts a unique id prefix.
+    pub async fn export_run(
+        &self,
+        run_id: &str,
+        format: crate::dag::ExportFormat,
+        out_dir: std::path::PathBuf,
+    ) -> Result<crate::dag::ExportSummary> {
+        use crate::dag::export as dag_export;
+
+        let history = self
+            .history
+            .as_ref()
+            .ok_or_else(|| Error::Custom("no history store attached".into()))?;
+        let run = dag_export::resolve_run(history, run_id)
+            .await
+            .map_err(Error::Custom)?;
+        // Engine-level error rows carry no run report; export what exists.
+        let report: serde_json::Value = run
+            .run_report_json
+            .as_deref()
+            .and_then(|json| serde_json::from_str(json).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+        let manifest = match &run.snapshot_id {
+            Some(snapshot_id) => history
+                .get_snapshot(snapshot_id)
+                .await
+                .map_err(Error::Dag)?
+                .map(|snapshot| snapshot.manifest_json),
+            None => None,
+        };
+        match format {
+            crate::dag::ExportFormat::Prov => dag_export::write_prov_document(
+                &run,
+                &report,
+                manifest.as_deref(),
+                &out_dir,
+            )
+            .map_err(Error::Custom),
+            crate::dag::ExportFormat::Crate => {
+                dag_export::export_ro_crate(
+                    &run,
+                    &report,
+                    manifest.as_deref(),
+                    &out_dir,
+                    self.engine_ctx.opendal.as_deref(),
+                )
+                .await
+                .map_err(Error::Custom)
+            }
+        }
+    }
+
     /// Fetch a single snapshot by id or short-hash prefix.
     pub async fn get_snapshot(&self, snapshot_id: &str) -> Result<Option<crate::dag::Snapshot>> {
         let history = self

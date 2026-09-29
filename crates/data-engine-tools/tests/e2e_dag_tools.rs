@@ -1035,3 +1035,145 @@ async fn test_dag_runs_log_records_execution_audit_trail() {
         "scheduler-captured input binding is surfaced"
     );
 }
+
+#[tokio::test]
+async fn test_dag_export_run_produces_evidence_crate() {
+    // Same mounted-VFS arrangement as the audit-trail test, plus a file sink
+    // so the run actually produces packaged artifacts.
+    let mounted_root = tempfile::tempdir().unwrap();
+    let data_root = tempfile::tempdir().unwrap();
+    let manifest = VfsManifest {
+        backend: vec![BackendDefinition {
+            id: "default".into(),
+            config: BackendConfig::local("/"),
+        }],
+        mount: vec![MountDefinition {
+            path: "/".into(),
+            backend: "default".into(),
+            source: mounted_root.path().to_string_lossy().to_string(),
+            read_only: false,
+        }],
+    };
+    let mounted = Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap());
+    let file_storage = Arc::new(OpendalFileStorage::with_mounts(
+        data_root.path(),
+        mounted.clone(),
+    ));
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    let csv_path = std::path::Path::new(&manifest_dir)
+        .join("../data-engine/test_datasets/insurance.csv");
+    let csv_data = std::fs::read(csv_path).unwrap();
+    file_storage
+        .resolve("/insurance.csv")
+        .write(&file_storage.resolve_path("/insurance.csv"), csv_data)
+        .await
+        .unwrap();
+
+    let history = data_engine::dag::DagHistory::open_in_memory()
+        .await
+        .unwrap();
+    let engine = DataEngine::builder()
+        .register_opendal_fs(file_storage.clone())
+        .unwrap()
+        .with_vfs((*mounted).clone())
+        .build()
+        .with_history(history);
+    let (client, _handle) = spawn_with_engine(engine);
+
+    let tools = data_engine_tools::registrations(Arc::new(client.clone()));
+    let mut registry = agentik_core::tools::ToolRegistry::new();
+    registry.register_all(tools).unwrap();
+    let toolset = Toolset::from_registry(Arc::new(registry), None);
+
+    let steps: Vec<(&str, &str, serde_json::Value)> = vec![
+        (
+            "x1",
+            "add_node",
+            json!({"id": "src", "kind": "file_to_dataframe", "spec": {"path": "/insurance.csv"}}),
+        ),
+        (
+            "x2",
+            "add_node",
+            json!({"id": "sink", "kind": "dataframe_to_file",
+                   "spec": {"path": "/exports/out.csv", "format": "csv", "mode": "overwrite"}}),
+        ),
+        (
+            "x3",
+            "add_edge",
+            json!({"from": "src", "from_port": 0, "to": "sink", "to_port": 0}),
+        ),
+    ];
+    for (call, name, input) in steps {
+        let results = toolset
+            .execute(&[build_tooluse(call, name, input)], None)
+            .await
+            .unwrap();
+        check_ok(&results[0], name);
+    }
+    let results = toolset
+        .execute(&[build_tooluse("xr", "run_dag", json!({}))], None)
+        .await
+        .unwrap();
+    check_ok(&results[0], "run_dag");
+
+    // Export the run through the agent tool.
+    let out = tempfile::tempdir().unwrap();
+    let results = toolset
+        .execute(
+            &[build_tooluse(
+                "xe",
+                "dag_export_run",
+                json!({"run_id": "", "format": "crate", "out_dir": out.path().to_string_lossy()}),
+            )],
+            None,
+        )
+        .await
+        .unwrap();
+    check_ok(&results[0], "dag_export_run");
+    let summary = result_json(&results[0]);
+    let exported: Vec<&str> = summary["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|file| file["exported_path"].as_str())
+        .collect();
+    assert!(
+        exported.iter().any(|path| path.ends_with("exports/out.csv")),
+        "sink output packaged: {exported:?}"
+    );
+    assert!(
+        exported.contains(&"workflow/manifest.json"),
+        "snapshot manifest packaged: {exported:?}"
+    );
+    // Crate structure on disk.
+    assert!(out.path().join("ro-crate-metadata.json").exists());
+    let crate_doc: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(out.path().join("ro-crate-metadata.json")).unwrap(),
+    )
+    .unwrap();
+    let actions = crate_doc["@graph"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|entry| entry["@type"] == json!("CreateAction"))
+        .count();
+    assert_eq!(actions, 2, "one CreateAction per node");
+    // PROV export through the same tool.
+    let results = toolset
+        .execute(
+            &[build_tooluse(
+                "xp",
+                "dag_export_run",
+                json!({"run_id": "", "format": "prov", "out_dir": out.path().to_string_lossy()}),
+            )],
+            None,
+        )
+        .await
+        .unwrap();
+    check_ok(&results[0], "dag_export_run prov");
+    let prov_summary = result_json(&results[0]);
+    let prov_path = prov_summary["out"].as_str().unwrap();
+    let prov: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(prov_path).unwrap()).unwrap();
+    assert!(prov["activity"].as_object().unwrap().len() >= 2);
+}

@@ -443,6 +443,28 @@ impl SessionServer {
                 };
                 let _ = reply.send(result);
             }
+            DataEngineCmd::ExportRun {
+                run_id,
+                format,
+                out_dir,
+                reply,
+            } => {
+                if self.running.load(Ordering::SeqCst) {
+                    let _ = reply.send(Err(crate::error::Error::Custom(
+                        "DAG is currently running; try again after completion".to_string(),
+                    )));
+                    return;
+                }
+                let engine = self
+                    .engine
+                    .try_lock()
+                    .expect("uncontended: running flag is false");
+                let result = match crate::dag::ExportFormat::parse(&format) {
+                    Ok(format) => engine.export_run(&run_id, format, out_dir).await,
+                    Err(error) => Err(crate::error::Error::Custom(error)),
+                };
+                let _ = reply.send(result);
+            }
             DataEngineCmd::CheckoutDag { snapshot_id, reply } => {
                 if self.running.load(Ordering::SeqCst) {
                     let _ = reply.send(Err(crate::error::Error::Custom(
@@ -950,6 +972,27 @@ impl DataEngineClient {
                 ref_name,
                 limit,
                 run_id,
+                reply: reply_tx,
+            },
+            reply_rx,
+        )
+        .await
+    }
+
+    /// Export one recorded run as provenance evidence (PROV-JSON / RO-Crate).
+    /// `format` is `prov` or `crate`; `out_dir` must be absolute.
+    pub async fn export_run(
+        &self,
+        run_id: String,
+        format: String,
+        out_dir: std::path::PathBuf,
+    ) -> Result<crate::dag::ExportSummary> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.request(
+            DataEngineCmd::ExportRun {
+                run_id,
+                format,
+                out_dir,
                 reply: reply_tx,
             },
             reply_rx,
