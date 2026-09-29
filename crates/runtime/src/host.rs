@@ -161,9 +161,13 @@ pub struct SharedInfra {
     /// Central skill manager (tiered registry + generation counter +
     /// change broadcast + usage telemetry). Initialized as the
     /// process-wide singleton so every mutation path — agent tools,
-    /// the future skill-smith, gateway handlers — shares one
-    /// notification invariant.
+    /// eval auto-capture, gateway handlers — shares one notification
+    /// invariant.
     pub skills: Arc<skills::SkillManager>,
+    /// The evolution service trigger handle, when enabled. `None`
+    /// means the loop still runs on demand (CLI, `skill_evolve`
+    /// tool) but nothing fires it in the background.
+    pub skill_evolution: Option<skills::evolution::EvolutionHandle>,
     /// The tokio runtime handle (for spawning agent tasks).
     pub runtime_handle: tokio::runtime::Handle,
     /// Optional host control for agent tools. Set by RuntimeHost when
@@ -348,6 +352,39 @@ impl SharedInfra {
 
         tracing::info!("SharedInfra::open: all infrastructure ready");
 
+        // ── Skill evolution service ────────────────────────────────
+        // The trigger half of the evolution loop: observation events
+        // and a periodic sweep wake the idempotent workflow (distill
+        // → propose → policy). The manager is the process-wide
+        // singleton so every observation-recording path — agent tool,
+        // eval auto-capture — reaches the worker.
+        let skills = skills::SkillManager::init(skills::SkillManager::new(&config.state_dir));
+        let skill_evolution = if config.enable_skill_evolution {
+            let handle = skills::evolution::start(
+                skills.clone(),
+                skills::evolution::EvolutionOptions {
+                    policy: skills::evolution::EvolutionPolicy {
+                        auto_approve: config.skill_evolution_auto_approve,
+                        ..Default::default()
+                    },
+                    quiet_window: std::time::Duration::from_millis(500),
+                    timer: Some(std::time::Duration::from_secs(
+                        config.skill_evolution_interval_secs.max(60),
+                    )),
+                },
+            );
+            skills.attach_evolution(&handle);
+            tracing::info!(
+                auto_approve = config.skill_evolution_auto_approve,
+                interval_secs = config.skill_evolution_interval_secs,
+                "SharedInfra::open: skill evolution service started"
+            );
+            Some(handle)
+        } else {
+            tracing::info!("SharedInfra::open: skill evolution disabled");
+            None
+        };
+
         Ok(Self {
             engine_manager,
             file_storage,
@@ -361,7 +398,8 @@ impl SharedInfra {
             writing,
             memory,
             kms,
-            skills: skills::SkillManager::init(skills::SkillManager::new(&config.state_dir)),
+            skills,
+            skill_evolution,
             runtime_handle: tokio::runtime::Handle::current(),
             host_control: None,
         })
