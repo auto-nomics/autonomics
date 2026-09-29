@@ -9,7 +9,7 @@ async fn test_sdk_mimo_stream_smoke() {
     use agentik_sdk::model::Model;
     use agentik_sdk::model::ProviderConfig;
     use agentik_sdk::provider::mimo::{
-        MODEL_MIMO_V2_5_PRO, MimoEndpoint, MimoProvider, TokenPlanRegion,
+        MODEL_MIMO_V2_6_PRO, MimoEndpoint, MimoProvider, TokenPlanRegion,
     };
     use futures::StreamExt;
 
@@ -26,7 +26,7 @@ async fn test_sdk_mimo_stream_smoke() {
 
     let mut model_info = MimoProvider::preset_models()
         .into_iter()
-        .find(|m| m.model_name == MODEL_MIMO_V2_5_PRO)
+        .find(|m| m.model_name == MODEL_MIMO_V2_6_PRO)
         .expect("preset model not found");
     model_info.provider_id = provider.id;
 

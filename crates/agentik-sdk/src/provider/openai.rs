@@ -75,6 +75,9 @@ impl OpenaiProvider {
                 .max_reasoning_effort(ReasoningEffort::Max)
                 .pricing(0.0, 0.0)
                 .build(),
+            // GPT-6-Sol — GPT-6 代日常 agentic 主力（effort 六档至 max，
+            // 默认 medium；text+image 输入，1.05M 上下文）。
+            entry("gpt-6-sol", LARGE_CONTEXT_WINDOW, ReasoningEffort::Max),
             // GPT-5.6-Sol — 可靠的日常 agentic 主力。
             entry("gpt-5.6-sol", LARGE_CONTEXT_WINDOW, ReasoningEffort::Max),
             // GPT-5.6-Terra — 均衡的 agentic 编码模型。
@@ -227,6 +230,7 @@ mod tests {
         assert!(models.iter().any(|m| m.model_name == MODEL_GPT_6_LUNA));
         for (name, context_length) in [
             (MODEL_GPT_6_ASTRA, 1_050_000),
+            ("gpt-6-sol", 1_050_000),
             ("gpt-5.6-sol", 1_050_000),
             ("gpt-5.6-terra", 1_050_000),
             ("gpt-5.6-luna", 1_050_000),
