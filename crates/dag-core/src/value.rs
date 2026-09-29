@@ -249,6 +249,15 @@ pub struct FileFingerprint {
     pub size: u64,
     pub mtime_ns: i128,
     pub content_hash: Option<String>,
+    /// Declared at the value's **birth** (publish/staging point): the content
+    /// lives on the immutable object store, so a recorded content hash makes
+    /// the file permanently clean for incremental invalidation — regardless
+    /// of how the path is spelled (with or without the `vfs://` prefix).
+    ///
+    /// Deliberately excluded from equality reasoning by consumers: freshness
+    /// checks compare fields explicitly rather than through [`PartialEq`].
+    #[serde(default)]
+    pub immutable_remote: bool,
 }
 
 impl FileFingerprint {
@@ -262,6 +271,7 @@ impl FileFingerprint {
                 .map(|duration| duration.as_nanos() as i128)
                 .unwrap_or_default(),
             content_hash: None,
+            immutable_remote: false,
         }
     }
 
@@ -275,6 +285,7 @@ impl FileFingerprint {
             size,
             mtime_ns: 0,
             content_hash: sha256,
+            immutable_remote: true,
         }
     }
 }
@@ -323,6 +334,7 @@ mod tests {
                 size: 10,
                 mtime_ns: 20,
                 content_hash: None,
+                immutable_remote: false,
             }),
         };
 

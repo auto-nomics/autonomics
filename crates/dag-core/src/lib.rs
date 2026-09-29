@@ -8,6 +8,7 @@ pub mod arrow_util;
 pub mod dag;
 pub mod dataset;
 pub mod error;
+pub mod fingerprint;
 pub mod node;
 pub mod plugin;
 pub mod registry;
