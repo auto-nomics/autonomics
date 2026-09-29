@@ -76,6 +76,12 @@ pub struct Proposal {
     pub updated_at: i64,
     #[serde(default)]
     pub source_observation_ids: Vec<String>,
+    /// True when this proposal updates an already-installed skill
+    /// instead of creating one. The ids then record the FULL cluster
+    /// membership at update time, so the delta against the previous
+    /// manifest is exactly the new evidence.
+    #[serde(default)]
+    pub update: bool,
     /// Set on approval: where the skill landed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approved_path: Option<String>,
@@ -100,6 +106,16 @@ fn unix_now() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+/// Snapshot the skill's current SKILL.md into `<skill>/.history/`
+/// before an update overlays it — the rollback material.
+fn archive_current(skill_dir: &Path) -> Result<(), SkillError> {
+    let history = skill_dir.join(".history");
+    std::fs::create_dir_all(&history)?;
+    let archive = history.join(format!("{}.md", unix_now()));
+    std::fs::copy(skill_dir.join("SKILL.md"), archive)?;
+    Ok(())
 }
 
 /// The proposal area rooted at `<state_dir>/skill-proposals/`.
@@ -130,15 +146,22 @@ impl Proposals {
     }
 
     /// Register a proposal directory written by a distiller: validate
-    /// strictly, then write the manifest. An existing rejected or
-    /// approved proposal under the same name is refused — statuses
-    /// are terminal (EvoScientist contract, kept).
+    /// strictly, then write the manifest.
+    ///
+    /// Lifecycle (the EvoScientist contract, kept and tightened):
+    /// - no existing proposal → register as pending
+    /// - existing **approved** proposal → only an `update` proposal may
+    ///   re-register; the skill's status resets to pending for
+    ///   re-review (the continuing-evolution channel)
+    /// - existing **pending** or **rejected** → refused (no duplicate
+    ///   review, rejected patterns never revive)
     pub fn submit(
         &self,
         name: &str,
         cluster_hash_value: &str,
         rationale: &str,
         source_observation_ids: Vec<String>,
+        update: bool,
     ) -> Result<Proposal, SkillError> {
         let errors = self.validate_dir(name);
         if !errors.is_empty() {
@@ -148,13 +171,17 @@ impl Proposals {
             ));
         }
         if let Some(existing) = self.load(name)? {
-            return Err(SkillError::invalid_frontmatter(
-                self.root.join(name),
-                format!(
-                    "a proposal named {name:?} already exists with status {}",
-                    existing.status.as_str()
-                ),
-            ));
+            let allowed = existing.status == ProposalStatus::Approved && update;
+            if !allowed {
+                return Err(SkillError::invalid_frontmatter(
+                    self.root.join(name),
+                    format!(
+                        "a proposal named {name:?} already exists with status {} \
+                         (only update proposals may follow an approved one)",
+                        existing.status.as_str()
+                    ),
+                ));
+            }
         }
         let now = unix_now();
         let proposal = Proposal {
@@ -165,10 +192,26 @@ impl Proposals {
             created_at: now,
             updated_at: now,
             source_observation_ids,
+            update,
             approved_path: None,
         };
         self.save(&proposal)?;
         Ok(proposal)
+    }
+
+    /// The stored proposal by name, when its manifest exists and
+    /// parses.
+    pub fn find(&self, name: &str) -> Option<Proposal> {
+        self.load(name).ok().flatten()
+    }
+
+    /// The full observation-id set the latest manifest for `name`
+    /// covers — the baseline an update proposal's delta is measured
+    /// against.
+    pub fn covered_observation_ids(&self, name: &str) -> BTreeSet<String> {
+        self.find(name)
+            .map(|p| p.source_observation_ids.into_iter().collect())
+            .unwrap_or_default()
     }
 
     /// Strict validation of a proposal directory: kebab-case name
@@ -272,14 +315,21 @@ impl Proposals {
         Ok(())
     }
 
-    /// Approve a pending proposal: re-validate, copy into the global
-    /// tier, flip the status, consume the cluster. Bumps nothing
-    /// itself — the caller (the manager) owns the generation.
-    pub fn approve(
-        &self,
-        name: &str,
-        global_skills_root: &Path,
-    ) -> Result<ApproveOutcome, SkillError> {
+    /// Approve a pending proposal into `dest_root`, flip the status,
+    /// consume the cluster. Bumps nothing itself — the caller (the
+    /// manager) owns the generation.
+    ///
+    /// Two promotion shapes, by manifest:
+    ///
+    /// - **create** — refuses when the destination already exists, then
+    ///   replaces-installs the proposal directory (minus the manifest).
+    /// - **update** — requires the destination to exist, archives the
+    ///   current `SKILL.md` to `<skill>/.history/<ts>.md`, then
+    ///   overlays: same-relative-path files replace, omitted files are
+    ///   preserved. Where EvoScientist loses the previous version on a
+    ///   workspace-tier update, every update here is reversible by
+    ///   restoring the archive.
+    pub fn approve(&self, name: &str, dest_root: &Path) -> Result<ApproveOutcome, SkillError> {
         let Some(mut proposal) = self
             .load(name)?
             .filter(|p| p.status == ProposalStatus::Pending)
@@ -297,8 +347,19 @@ impl Proposals {
             ));
         }
         let source = self.root.join(name);
-        let destination = global_skills_root.join(name);
-        if destination.exists() {
+        let destination = dest_root.join(name);
+        if proposal.update {
+            if !destination.join("SKILL.md").is_file() {
+                return Err(SkillError::invalid_frontmatter(
+                    source,
+                    format!(
+                        "update proposal for {name:?} but no installed skill at {}",
+                        destination.display()
+                    ),
+                ));
+            }
+            archive_current(&destination)?;
+        } else if destination.exists() {
             return Err(SkillError::invalid_frontmatter(
                 source,
                 format!(
@@ -307,7 +368,7 @@ impl Proposals {
                 ),
             ));
         }
-        install::install_from_local(&source, global_skills_root, None)?;
+        install::install_overlay(&source, &destination, &[MANIFEST_FILE])?;
         proposal.status = ProposalStatus::Approved;
         proposal.updated_at = unix_now();
         proposal.approved_path = Some(destination.display().to_string());
@@ -396,6 +457,7 @@ mod tests {
                 "c-abc",
                 "three observations",
                 vec!["O-1".into(), "O-2".into()],
+                false,
             )
             .unwrap();
         assert_eq!(proposal.status, ProposalStatus::Pending);
@@ -403,7 +465,7 @@ mod tests {
 
         // Duplicate submit over a terminal/pending proposal refused.
         assert!(
-            area.submit("file-to-dataframe-schema", "c-abc", "again", vec![])
+            area.submit("file-to-dataframe-schema", "c-abc", "again", vec![], false)
                 .is_err()
         );
     }
@@ -420,12 +482,16 @@ mod tests {
             "---\nname: other-name\ndescription: d\n---\nb\n",
         )
         .unwrap();
-        let err = area.submit("mismatch", "c-1", "r", vec![]).unwrap_err();
+        let err = area
+            .submit("mismatch", "c-1", "r", vec![], false)
+            .unwrap_err();
         assert!(err.to_string().contains("frontmatter name"));
 
         // TODO in body.
         write_proposal(&area, "has-todo", " <!-- TODO --> ");
-        let err = area.submit("has-todo", "c-2", "r", vec![]).unwrap_err();
+        let err = area
+            .submit("has-todo", "c-2", "r", vec![], false)
+            .unwrap_err();
         assert!(err.to_string().contains("TODO"));
     }
 
@@ -435,7 +501,7 @@ mod tests {
         let area = area(tmp.path());
         let global = tmp.path().join("skills");
         write_proposal(&area, "good-fix", "");
-        area.submit("good-fix", "c-good", "r", vec!["O-a".into()])
+        area.submit("good-fix", "c-good", "r", vec!["O-a".into()], false)
             .unwrap();
 
         let outcome = area.approve("good-fix", &global).unwrap();
@@ -457,7 +523,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let area = area(tmp.path());
         write_proposal(&area, "bad-fix", "");
-        area.submit("bad-fix", "c-bad", "r", vec![]).unwrap();
+        area.submit("bad-fix", "c-bad", "r", vec![], false).unwrap();
         let rejected = area.reject("bad-fix").unwrap();
         assert_eq!(rejected.status, ProposalStatus::Rejected);
         assert!(area.processed_clusters().contains("c-bad"));
@@ -476,7 +542,7 @@ mod tests {
         )
         .unwrap();
         write_proposal(&area, "clash", "");
-        area.submit("clash", "c-clash", "r", vec![]).unwrap();
+        area.submit("clash", "c-clash", "r", vec![], false).unwrap();
         assert!(area.approve("clash", &global).is_err());
     }
 
@@ -486,7 +552,8 @@ mod tests {
         let area = area(tmp.path());
         let global = tmp.path().join("skills");
         write_proposal(&area, "editable", "");
-        area.submit("editable", "c-edit", "r", vec![]).unwrap();
+        area.submit("editable", "c-edit", "r", vec![], false)
+            .unwrap();
         // Tamper after submit: break the body contract.
         std::fs::write(
             area.root.join("editable").join("SKILL.md"),

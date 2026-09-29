@@ -275,6 +275,40 @@ fn install_one(
     Ok(InstalledSkill { name, path: target })
 }
 
+/// Overlay `src` onto `dest` without deleting anything already there:
+/// files with the same relative path replace their destination,
+/// omitted destination files are preserved. Top-level entries named
+/// in `skip` are not copied (the proposal manifest never lands in a
+/// skill directory).
+///
+/// This is the update-promotion primitive — the EvoScientist overlay
+/// contract, plus one thing it lacks: the caller archives before
+/// overlaying, so every update is reversible.
+pub fn install_overlay(src: &Path, dest: &Path, skip: &[&str]) -> Result<(), SkillError> {
+    copy_tree_filtered(src, dest, skip)
+}
+
+/// Recursive copy used by both the replace-installer (`copy_tree`)
+/// and the overlay-installer. `.git` directories are always skipped.
+fn copy_tree_filtered(src: &Path, dst: &Path, skip_top_level: &[&str]) -> Result<(), SkillError> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy().to_string();
+        let path = entry.path();
+        if path.is_dir() {
+            if name_str == ".git" {
+                continue;
+            }
+            copy_tree_filtered(&path, &dst.join(&name), &[])?;
+        } else if !skip_top_level.contains(&name_str.as_str()) {
+            std::fs::copy(&path, dst.join(&name))?;
+        }
+    }
+    Ok(())
+}
+
 /// Find skill directories under `root`: direct children with SKILL.md,
 /// plus grandchildren inside non-skill child directories (packs one
 /// level deep, matching the layout both upstream ecosystems use).
@@ -328,6 +362,45 @@ fn copy_tree(src: &Path, dst: &Path) -> std::io::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod overlay_tests {
+    use super::*;
+
+    #[test]
+    fn overlay_replaces_named_files_and_preserves_others() {
+        let src = tempfile::tempdir().unwrap();
+        let dest = tempfile::tempdir().unwrap();
+        std::fs::write(src.path().join("SKILL.md"), "new body").unwrap();
+        std::fs::write(src.path().join("proposal.toml"), "manifest").unwrap();
+
+        std::fs::write(dest.path().join("SKILL.md"), "old body").unwrap();
+        std::fs::write(dest.path().join("references.md"), "kept").unwrap();
+
+        install_overlay(src.path(), dest.path(), &["proposal.toml"]).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dest.path().join("SKILL.md")).unwrap(),
+            "new body"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dest.path().join("references.md")).unwrap(),
+            "kept"
+        );
+        assert!(!dest.path().join("proposal.toml").exists());
+    }
+
+    #[test]
+    fn overlay_into_missing_destination_creates_it() {
+        let src = tempfile::tempdir().unwrap();
+        let dest = tempfile::tempdir().unwrap().keep().join("fresh");
+        std::fs::write(src.path().join("SKILL.md"), "body").unwrap();
+        install_overlay(src.path(), &dest, &[]).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dest.join("SKILL.md")).unwrap(),
+            "body"
+        );
+    }
 }
 
 /// Records for one tier root, keyed by skill name. A corrupt sidecar

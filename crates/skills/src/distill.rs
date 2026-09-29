@@ -92,6 +92,8 @@ fn slug(text: &str) -> String {
 pub struct DistillReport {
     pub candidates_considered: usize,
     pub proposals_written: Vec<String>,
+    /// Proposals that revise an already-installed auto skill.
+    pub updated_existing: Vec<String>,
     /// (cluster hash, reason) — skipped clusters.
     pub skipped: Vec<(String, String)>,
 }
@@ -205,15 +207,41 @@ pub fn render_skill_md(candidate: &Candidate) -> String {
     out
 }
 
+/// Render an update proposal: the current SKILL.md (frontmatter and
+/// human edits preserved verbatim) plus one appended section holding
+/// only the NEW observations.
+pub fn render_update_md(current: &str, fresh: &[&Observation]) -> String {
+    let mut out = String::from(current.trim_end());
+    out.push_str(&format!(
+        "\n\n## Update: {} new observation(s)\n\n",
+        fresh.len()
+    ));
+    for observation in fresh {
+        out.push_str(&format!(
+            "- **{}** — {}\n",
+            observation.summary,
+            observation.body.trim()
+        ));
+    }
+    out.push_str(
+        "\nArchived revision of the previous version sits in this skill's \
+         `.history/`.\n",
+    );
+    out
+}
+
 /// One full distillation pass: cluster → filter consumed → write
-/// proposals. Pure with respect to the stores — callers pass the
-/// observation list and the proposal area.
+/// proposals (create or update). Pure with respect to the stores —
+/// callers pass the observation list, the proposal area, and a
+/// registry view for existing-skill resolution.
 pub fn distill(
     observations: &[Observation],
     proposals: &Proposals,
+    registry: &crate::registry::SkillRegistry,
 ) -> Result<DistillReport, SkillError> {
     let mut report = DistillReport::default();
     let processed = proposals.processed_clusters();
+    let installed = registry.list();
     for candidate in candidates(observations) {
         report.candidates_considered += 1;
         let hash = candidate.hash();
@@ -230,9 +258,89 @@ pub fn distill(
                 .push((hash, "no valid name derivable".into()));
             continue;
         };
-        // A proposal whose target name collides with an installed
-        // skill or an existing proposal is skipped and consumed —
-        // forcing it would shadow or double a human decision.
+        // Deterministic create-vs-update resolution — no LLM judgment
+        // anywhere. The derived name either matches an installed skill
+        // or it does not.
+        let existing = installed.iter().find(|e| e.meta.name == name);
+        if let Some(entry) = existing
+            && let Some(dir) = entry.dir()
+        {
+            if !entry.meta.tags.iter().any(|t| t == "auto") {
+                // Human-owned name: the loop never overwrites a human
+                // decision. Consume the cluster — re-surfacing it every
+                // pass would only add noise.
+                proposals.mark_processed(&hash)?;
+                report.skipped.push((
+                    hash,
+                    format!(
+                        "name {name:?} belongs to a human-installed skill \
+                         (no auto tag); update it manually"
+                    ),
+                ));
+                continue;
+            }
+            // Update path: only NEW evidence (not covered by the last
+            // manifest for this name) justifies a revision, and the
+            // same MIN_CLUSTER bar applies to the delta as to a fresh
+            // skill.
+            let covered = proposals.covered_observation_ids(&name);
+            let fresh: Vec<&Observation> = candidate
+                .observations
+                .iter()
+                .filter(|o| !covered.contains(&o.id))
+                .collect();
+            if fresh.len() < MIN_CLUSTER {
+                report.skipped.push((
+                    hash,
+                    format!(
+                        "only {} new observation(s) for {name:?}; need {MIN_CLUSTER}",
+                        fresh.len()
+                    ),
+                ));
+                continue;
+            }
+            let current = std::fs::read_to_string(dir.join("SKILL.md")).map_err(|e| {
+                SkillError::Unreadable {
+                    path: dir.join("SKILL.md"),
+                    reason: e.to_string(),
+                }
+            })?;
+            let dir_proposal = proposals.root().join(&name);
+            std::fs::create_dir_all(&dir_proposal)?;
+            std::fs::write(
+                dir_proposal.join("SKILL.md"),
+                render_update_md(&current, &fresh),
+            )?;
+            let rationale = format!(
+                "update: {} new observation(s) on `{}`{}",
+                fresh.len(),
+                candidate.node_kind,
+                if candidate.error_signature.is_empty() {
+                    String::new()
+                } else {
+                    format!(" / `{}`", candidate.error_signature)
+                }
+            );
+            proposals.submit(
+                &name,
+                &hash,
+                &rationale,
+                // The manifest records the FULL cluster membership so
+                // the next delta is measured against this update.
+                candidate
+                    .observations
+                    .iter()
+                    .map(|o| o.id.clone())
+                    .collect(),
+                true,
+            )?;
+            report.proposals_written.push(name.clone());
+            report.updated_existing.push(name);
+            continue;
+        }
+        // Create path: a proposal whose target name already has a
+        // pending proposal is skipped and consumed — forcing it would
+        // double a review already in flight.
         if proposals.meta(&name).is_some() {
             proposals.mark_processed(&hash)?;
             report
@@ -262,6 +370,7 @@ pub fn distill(
                 .iter()
                 .map(|o| o.id.clone())
                 .collect(),
+            false,
         )?;
         report.proposals_written.push(name);
     }
@@ -343,7 +452,11 @@ mod tests {
         observe(&store, "boom at step N", "restart, bump timeout, verify");
         let proposals = Proposals::open(tmp.path());
 
-        let report = distill(&store.list(), &proposals).unwrap();
+        let registry = crate::registry::SkillRegistry::empty().with_root(
+            crate::registry::SkillTier::Global,
+            tmp.path().join("skills"),
+        );
+        let report = distill(&store.list(), &proposals, &registry).unwrap();
         assert_eq!(report.proposals_written.len(), 1);
         let name = &report.proposals_written[0];
         assert!(proposals.root().join(name).join("SKILL.md").is_file());
@@ -353,8 +466,134 @@ mod tests {
 
         // Second pass: nothing new — the pending proposal blocks its
         // own cluster (listed as a proposal with that name).
-        let again = distill(&store.list(), &proposals).unwrap();
+        let again = distill(&store.list(), &proposals, &registry).unwrap();
         assert!(again.proposals_written.is_empty());
         assert_eq!(again.skipped.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod update_tests {
+    use super::*;
+    use crate::observation::{
+        ObservationInput, ObservationKind, ObservationSource, ObservationStore,
+    };
+    use crate::registry::{SkillRegistry, SkillTier};
+
+    fn observe(store: &ObservationStore, error: &str, body: &str) {
+        store
+            .record(ObservationInput {
+                kind: ObservationKind::Failure,
+                source: ObservationSource::Agent,
+                summary: format!("fix for {error}"),
+                body: body.into(),
+                node_kind: Some("sql".into()),
+                error: Some(error.into()),
+            })
+            .unwrap();
+    }
+
+    /// The full evolution arc of one pattern: three observations
+    /// create the skill, three more revise it, and the revision is
+    /// an overlay with the previous version archived.
+    #[test]
+    fn create_then_update_full_arc() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = ObservationStore::open(tmp.path());
+        let proposals = Proposals::open(tmp.path());
+        let registry =
+            SkillRegistry::empty().with_root(SkillTier::Global, tmp.path().join("skills"));
+        let global = tmp.path().join("skills");
+
+        // Round 1: three observations → create proposal → approve.
+        observe(&store, "syntax error near N", "fix one");
+        observe(&store, "syntax error near N", "fix two");
+        observe(&store, "syntax error near N", "fix three");
+        let report = distill(&store.list(), &proposals, &registry).unwrap();
+        assert_eq!(report.proposals_written.len(), 1);
+        let name = report.proposals_written[0].clone();
+
+        proposals.approve(&name, &global).unwrap();
+        let skill_md = global.join(&name).join("SKILL.md");
+        let content = std::fs::read_to_string(&skill_md).unwrap();
+        assert!(content.contains("fix one"));
+        assert!(content.contains("fix three"));
+
+        // Round 2: three NEW observations on the same anchor → an
+        // update proposal whose body appends only the new evidence.
+        observe(&store, "syntax error near N", "fix four");
+        observe(&store, "syntax error near N", "fix five");
+        observe(&store, "syntax error near N", "fix six");
+        let updated = distill(&store.list(), &proposals, &registry).unwrap();
+        assert_eq!(updated.updated_existing, vec![name.clone()]);
+        assert!(updated.proposals_written.contains(&name));
+
+        let proposal = proposals.find(&name).unwrap();
+        assert!(proposal.update);
+        assert_eq!(proposal.status, crate::ProposalStatus::Pending);
+
+        // Approve the update: overlay lands, previous version archived.
+        proposals.approve(&name, &global).unwrap();
+        let content = std::fs::read_to_string(&skill_md).unwrap();
+        assert!(content.contains("fix one"));
+        assert!(content.contains("fix six"));
+        assert!(content.contains("## Update: 3 new observation(s)"));
+        let history = global.join(&name).join(".history");
+        assert!(history.read_dir().expect("history dir").count() >= 1);
+
+        // Round 3: only two new observations — below the delta
+        // threshold, no proposal.
+        observe(&store, "syntax error near N", "fix seven");
+        observe(&store, "syntax error near N", "fix eight");
+        let quiet = distill(&store.list(), &proposals, &registry).unwrap();
+        assert!(quiet.proposals_written.is_empty());
+    }
+
+    /// A human-installed skill without the `auto` tag is never
+    /// touched by the loop, and its cluster is consumed so it does
+    /// not resurface every pass.
+    #[test]
+    fn human_owned_names_are_protected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let global = tmp.path().join("skills");
+        let human = global.join("sql-syntax-error-near-n");
+        std::fs::create_dir_all(&human).unwrap();
+        std::fs::write(
+            human.join("SKILL.md"),
+            "---\nname: sql-syntax-error-near-n\ndescription: Hand-written.\ntags: [handmade]\n---\nprecious hand-written content\n",
+        )
+        .unwrap();
+
+        let store = ObservationStore::open(tmp.path());
+        for i in 0..4 {
+            observe(&store, "syntax error near N", &format!("fix {i}"));
+        }
+        let proposals = Proposals::open(tmp.path());
+        let registry = SkillRegistry::empty().with_root(SkillTier::Global, global.clone());
+
+        let report = distill(&store.list(), &proposals, &registry).unwrap();
+        assert!(report.proposals_written.is_empty());
+        assert!(
+            report
+                .skipped
+                .iter()
+                .any(|(_, reason)| reason.contains("human-installed"))
+        );
+        // Consumed: a second pass considers the cluster but skips it
+        // as already consumed — no proposal, no noise.
+        let again = distill(&store.list(), &proposals, &registry).unwrap();
+        assert!(again.proposals_written.is_empty());
+        assert!(
+            again
+                .skipped
+                .iter()
+                .any(|(_, reason)| reason.contains("already consumed"))
+        );
+        // And the hand-written content is intact.
+        assert!(
+            std::fs::read_to_string(human.join("SKILL.md"))
+                .unwrap()
+                .contains("precious hand-written content")
+        );
     }
 }

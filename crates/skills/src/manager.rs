@@ -285,19 +285,43 @@ impl SkillManager {
     /// observations, write proposals for unconsumed clusters.
     pub fn distill(&self) -> Result<crate::distill::DistillReport, SkillError> {
         let observations = self.observations().list();
-        crate::distill::distill(&observations, &self.proposals())
+        crate::distill::distill(&observations, &self.proposals(), &self.registry())
     }
 
     /// Approve a pending proposal into the global tier. Bumps the
     /// generation — the approved skill is live for the next agent
     /// build and every cached view invalidates.
+    /// Approve a pending proposal. Creates land in the global tier;
+    /// updates overlay the tier where the existing skill lives (its
+    /// previous SKILL.md archived first). Either way the generation
+    /// advances — the change is live for the next agent build.
     pub fn approve_proposal(
         &self,
         name: &str,
     ) -> Result<crate::proposals::ApproveOutcome, SkillError> {
-        let outcome = self
-            .proposals()
-            .approve(name, &self.state_dir.join("skills"))?;
+        let proposals = self.proposals();
+        // Route by manifest: an update targets the installed skill's
+        // own tier so the overlay lands where the skill actually
+        // lives (and tier shadowing keeps any deeper copy intact).
+        let dest_root = match proposals.find(name) {
+            Some(proposal) if proposal.update => {
+                let entry = self
+                    .registry()
+                    .list()
+                    .into_iter()
+                    .find(|e| e.meta.name == name)
+                    .ok_or_else(|| SkillError::NotFound(name.to_string()))?;
+                let dir = entry
+                    .dir()
+                    .ok_or_else(|| SkillError::NotFound(name.to_string()))?
+                    .to_path_buf();
+                dir.parent()
+                    .ok_or_else(|| SkillError::NotFound(name.to_string()))?
+                    .to_path_buf()
+            }
+            _ => self.state_dir.join("skills"),
+        };
+        let outcome = proposals.approve(name, &dest_root)?;
         self.notify();
         Ok(outcome)
     }
