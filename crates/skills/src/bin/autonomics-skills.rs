@@ -74,9 +74,15 @@ enum Command {
         #[arg(long)]
         error: Option<String>,
     },
-    /// Cluster anchored observations and write skill proposals for
-    /// repeated patterns (>= 3 occurrences, deterministic).
-    Distill,
+    /// Run one evolution cycle: cluster anchored observations, write
+    /// proposals (>= 3 occurrences, deterministic), revise installed
+    /// auto-skills with new evidence.
+    Distill {
+        /// Auto-approve eligible proposals this cycle (explicit human
+        /// action; capped per cycle, human-owned names never touched).
+        #[arg(long)]
+        auto: bool,
+    },
     /// List proposals, optionally filtered by status.
     Proposals { status: Option<String> },
     /// Approve a pending proposal into the global tier.
@@ -120,7 +126,7 @@ fn main() -> ExitCode {
             node_kind,
             error,
         } => observe_cmd(&manager, &summary, &body, kind, node_kind, error),
-        Command::Distill => distill_cmd(&manager),
+        Command::Distill { auto } => distill_cmd(&manager, auto),
         Command::Proposals { status } => proposals_cmd(&manager, status.as_deref()),
         Command::Approve { name } => approve_cmd(&manager, &name),
         Command::Reject { name } => reject_cmd(&manager, &name),
@@ -405,15 +411,26 @@ fn observe_cmd(
     Ok(())
 }
 
-fn distill_cmd(manager: &SkillManager) -> Result<(), String> {
-    let report = manager.distill().map_err(|e| e.to_string())?;
+fn distill_cmd(manager: &SkillManager, auto: bool) -> Result<(), String> {
+    let policy = skills::EvolutionPolicy {
+        auto_approve: auto,
+        ..Default::default()
+    };
+    let report = skills::run_evolution_cycle(manager, &policy).map_err(|e| e.to_string())?;
     println!(
         "{} candidate cluster(s) considered, {} proposal(s) written",
-        report.candidates_considered,
+        report.clusters_considered,
         report.proposals_written.len()
     );
     for name in &report.proposals_written {
-        println!("  proposed {name} (pending review)");
+        if report.updated_existing.contains(name) {
+            println!("  update proposal for {name} (pending review)");
+        } else {
+            println!("  proposed {name} (pending review)");
+        }
+    }
+    for name in &report.auto_approved {
+        println!("  auto-approved {name}");
     }
     for (hash, reason) in &report.skipped {
         println!("  skipped {hash}: {reason}");

@@ -41,7 +41,7 @@ use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 
 use crate::error::SkillError;
 use crate::install::{self, InstallOutcome};
@@ -106,6 +106,11 @@ pub struct SkillManager {
     generation: AtomicU64,
     changes: broadcast::Sender<u64>,
     usage: RwLock<HashMap<String, UsageRecord>>,
+    /// Optional forwarder to the evolution service — set by
+    /// [`SkillManager::attach_evolution`]. Storing just the sender
+    /// (not the handle) keeps the manager free of any service
+    /// lifetime coupling.
+    evolution_tx: RwLock<Option<mpsc::Sender<crate::evolution::EvolutionTrigger>>>,
 }
 
 static GLOBAL: arc_swap::ArcSwapOption<SkillManager> = arc_swap::ArcSwapOption::const_empty();
@@ -137,6 +142,7 @@ impl SkillManager {
             generation: AtomicU64::new(1),
             changes: broadcast::channel(16).0,
             usage: RwLock::new(HashMap::new()),
+            evolution_tx: RwLock::new(None),
         }
     }
 
@@ -269,11 +275,28 @@ impl SkillManager {
     /// Record one observation (idempotent on content). This is the
     /// feedstock call for the whole evolution loop — agent tool,
     /// automatic failure capture, and CLI all land here.
+    /// Forward observation events to the evolution service, when one
+    /// is attached. Never blocks: a full or absent channel only means
+    /// this observation rides the next timer/startup sweep instead.
+    pub fn attach_evolution(&self, handle: &crate::evolution::EvolutionHandle) {
+        if let Ok(mut slot) = self.evolution_tx.write() {
+            *slot = Some(handle.sender_for_manager());
+        }
+    }
+
     pub fn record_observation(
         &self,
         input: crate::observation::ObservationInput,
     ) -> Result<crate::observation::Observation, SkillError> {
-        self.observations().record(input)
+        let observation = self.observations().record(input)?;
+        if let Ok(slot) = self.evolution_tx.read()
+            && let Some(tx) = slot.as_ref()
+        {
+            let _ = tx.try_send(crate::evolution::EvolutionTrigger::ObservationRecorded {
+                id: observation.id.clone(),
+            });
+        }
+        Ok(observation)
     }
 
     /// The proposal area under this manager's state dir.

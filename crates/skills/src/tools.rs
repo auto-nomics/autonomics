@@ -380,6 +380,71 @@ impl ToolFunction for SkillObserveTool {
     }
 }
 
+// ────────────────────────── evolution ──────────────────────────
+
+#[tool(
+    name = "skill_evolve",
+    description = "Run one skill-evolution cycle now: cluster anchored \
+        observations, write skill proposals for repeated patterns, and \
+        revise installed auto-skills with new evidence. Deliberately \
+        propose-only — the cycle never auto-approves; a human reviews \
+        pending proposals. Use after recording several observations, or \
+        to check whether accumulated failures have distilled into \
+        something reusable."
+)]
+pub struct SkillEvolveInput {
+    #[desc = "Unused placeholder — the cycle takes no parameters. Kept as a \
+        named field because tool inputs are field-carrying structs."]
+    pub _unused: Option<String>,
+}
+
+pub struct SkillEvolveTool {
+    pub manager: Arc<SkillManager>,
+}
+
+#[async_trait::async_trait]
+impl ToolFunction for SkillEvolveTool {
+    type Input = SkillEvolveInput;
+
+    async fn run(&self, _input: SkillEvolveInput) -> Result<ToolResult, ToolError> {
+        // Propose-only by construction: an agent may trigger the
+        // workflow but never lift the review gate — auto-approval is
+        // a daemon-level configuration, not a model decision.
+        let policy = crate::evolution::EvolutionPolicy::default();
+        match crate::evolution::run_evolution_cycle(&self.manager, &policy) {
+            Ok(report) => {
+                let mut out = format!(
+                    "Evolution cycle: {} cluster(s) considered.\n",
+                    report.clusters_considered
+                );
+                for name in &report.proposals_written {
+                    if report.updated_existing.contains(name) {
+                        out.push_str(&format!("- updated proposal for {name}\n"));
+                    } else {
+                        out.push_str(&format!("- new proposal {name} (pending review)\n"));
+                    }
+                }
+                for (hash, reason) in &report.skipped {
+                    out.push_str(&format!("- skipped {hash}: {reason}\n"));
+                }
+                if report.proposals_written.is_empty() {
+                    out.push_str(
+                        "No new patterns. Anchored failure patterns propose at >= 3 \
+                         occurrences; record more with skill_observe.",
+                    );
+                } else {
+                    out.push_str(
+                        "\nA human reviews pending proposals (autonomics-skills \
+                         proposals / approve).",
+                    );
+                }
+                Ok(ToolResult::success(out))
+            }
+            Err(e) => Ok(ToolResult::error(format!("skill_evolve: {e}"))),
+        }
+    }
+}
+
 // ────────────────────────── registration ──────────────────────────
 
 /// Build the skill tool registrations around one shared manager.
@@ -401,7 +466,10 @@ pub fn skill_registrations(manager: Arc<SkillManager>) -> Vec<ToolRegistration> 
         ToolRegistration::from(SkillSearchTool {
             manager: manager.clone(),
         }),
-        ToolRegistration::from(SkillObserveTool { manager }),
+        ToolRegistration::from(SkillObserveTool {
+            manager: manager.clone(),
+        }),
+        ToolRegistration::from(SkillEvolveTool { manager }),
     ]
 }
 

@@ -38,6 +38,7 @@ pub mod builtin;
 pub mod distill;
 pub mod error;
 pub mod eval;
+pub mod evolution;
 pub mod format;
 pub mod inject;
 pub mod install;
@@ -51,6 +52,10 @@ pub mod workflow;
 pub use distill::{Candidate, DistillReport, distill};
 pub use error::SkillError;
 pub use eval::{Check, EvalCase, EvalReport};
+pub use evolution::{
+    EvolutionHandle, EvolutionOptions, EvolutionPolicy, EvolutionReport, EvolutionTrigger,
+    run_evolution_cycle,
+};
 pub use format::SkillMeta;
 pub use inject::prompt_section;
 pub use manager::{SkillManager, UsageKind, UsageRecord};
