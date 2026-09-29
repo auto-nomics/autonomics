@@ -22,6 +22,8 @@ tracing.workspace = true
 futures.workspace = true
 schemars.workspace = true
 turso.workspace = true
+uuid = { workspace = true, features = ["v4"] }
+chrono.workspace = true
 
 # ── Node bundle plugins (optional) ────────────────────────────────────────
 nodes-hypothesize = { path = "../node-bundles/nodes-hypothesize", optional = true }

@@ -5,7 +5,9 @@ use datafusion::common::HashMap;
 use crate::dag::{
     NodeId, NodeInput, RuntimeStatus,
     graph::{EdgeLabel, PortOutputs},
+    runtime::InputBinding,
 };
+use crate::value::{FileFingerprint, NodeValue};
 
 /// Gather a node's predecessor outputs into [`NodeInput`]s, one per connected
 /// input port, in declared edge order. DataFrame handles remain cheap to clone;
@@ -41,6 +43,72 @@ pub fn build_inputs(
         }
     }
     inputs
+}
+
+/// Record the resolved upstream bindings of a node at dispatch time — the
+/// audit-side counterpart of [`build_inputs`]. Mirrors its edge iteration
+/// (including the "upstream output not yet produced / port absent → skip"
+/// semantics) so the recorded set matches exactly what was injected.
+pub fn build_input_bindings(
+    id: &str,
+    incoming: &HashMap<NodeId, Vec<(NodeId, EdgeLabel)>>,
+    outputs: &HashMap<NodeId, PortOutputs>,
+) -> Vec<InputBinding> {
+    let mut bindings = Vec::new();
+    let Some(edges) = incoming.get(id) else {
+        return bindings;
+    };
+    for (from, edge) in edges {
+        let Some(pred_outputs) = outputs.get(from) else {
+            continue;
+        };
+        let Some(value) = pred_outputs.get(&edge.from_port) else {
+            continue;
+        };
+        bindings.push(InputBinding {
+            from: from.clone(),
+            from_port: edge.from_port,
+            to_port: edge.to_port,
+            kind: value_kind(value).to_string(),
+            path: bound_path(value),
+            fingerprint: bound_fingerprint(value).cloned(),
+        });
+    }
+    bindings
+}
+
+/// Variant name of a [`NodeValue`], for audit records.
+fn value_kind(value: &NodeValue) -> &'static str {
+    match value {
+        NodeValue::DataFrame(_) => "DataFrame",
+        NodeValue::File(_) => "File",
+        NodeValue::FileSet(_) => "FileSet",
+        NodeValue::Data(_) => "Data",
+        NodeValue::DataSet(_) => "DataSet",
+    }
+}
+
+/// First path/URI of a file-like value (`None` for DataFrame handles, which
+/// have no stable address).
+fn bound_path(value: &NodeValue) -> Option<String> {
+    match value {
+        NodeValue::File(file) => Some(file.path.clone()),
+        NodeValue::FileSet(files) => files.first().map(|file| file.path.clone()),
+        NodeValue::Data(data) => Some(data.vpath.clone()),
+        NodeValue::DataSet(entries) => entries.first().map(|data| data.vpath.clone()),
+        NodeValue::DataFrame(_) => None,
+    }
+}
+
+/// Fingerprint of the first entry of a file-like value, when recorded.
+fn bound_fingerprint(value: &NodeValue) -> Option<&FileFingerprint> {
+    match value {
+        NodeValue::File(file) => file.fingerprint.as_ref(),
+        NodeValue::FileSet(files) => files.first().and_then(|file| file.fingerprint.as_ref()),
+        NodeValue::Data(data) => data.fingerprint.as_ref(),
+        NodeValue::DataSet(entries) => entries.first().and_then(|data| data.fingerprint.as_ref()),
+        NodeValue::DataFrame(_) => None,
+    }
 }
 
 /// Mark every transitive descendant of `failed` as [`RuntimeStatus::Skipped`].

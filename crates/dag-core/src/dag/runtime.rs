@@ -232,6 +232,54 @@ pub struct DagErrorReport {
     pub message: String,
 }
 
+/// Execution-level evidence a node reports about its own run, beyond what the
+/// scheduler can observe generically.
+///
+/// Populated via
+/// [`crate::dag::node_event::NodeReporter::set_run_details`] and carried to
+/// [`NodeReport::execution`] through the terminal `JobResult` — so it survives
+/// both the success and the failure path.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct NodeRunDetails {
+    /// Full container image reference used for the execution, if any.
+    pub image: Option<String>,
+    /// The `sha256:` digest parsed from `image`, when the reference is
+    /// digest-pinned.
+    pub image_digest: Option<String>,
+    /// Process exit code (`0` on the success path).
+    pub exit_code: Option<i32>,
+    /// Per-execution identity shared with the run's artifact directory (for
+    /// container nodes: the container name, which also names the scratch
+    /// directory and the `{artifact_prefix}/{run_name}/` output subtree).
+    pub run_name: Option<String>,
+    /// Persisted stdout capture (`vfs://` URI + sha256), when non-empty.
+    pub stdout_log: Option<crate::value::FileRef>,
+    /// Persisted stderr capture (`vfs://` URI + sha256), when non-empty.
+    pub stderr_log: Option<crate::value::FileRef>,
+}
+
+/// One resolved upstream input of a node, recorded at dispatch time.
+///
+/// Captured generically by the scheduler from the wiring edges — nodes need no
+/// cooperation — so every [`NodeReport`] can answer "which upstream values, at
+/// which paths, fed this execution".
+#[derive(Debug, Clone, Serialize)]
+pub struct InputBinding {
+    /// Id of the upstream node that produced the value.
+    pub from: String,
+    /// Output port on the upstream node.
+    pub from_port: u8,
+    /// Input port on the consuming node.
+    pub to_port: u8,
+    /// [`crate::value::NodeValue`] variant name (`"DataFrame"`, `"File"`, …).
+    pub kind: String,
+    /// Path / URI of the bound value when it is file-like (first entry for
+    /// set-valued inputs).
+    pub path: Option<String>,
+    /// Fingerprint of the bound value, when one is recorded.
+    pub fingerprint: Option<crate::value::FileFingerprint>,
+}
+
 /// Per-node execution summary produced by [`super::graph::DAG::run`].
 ///
 /// Contains everything an agent needs to understand what each node did
@@ -269,6 +317,13 @@ pub struct NodeReport {
     pub error: Option<DagErrorReport>,
     /// For `Skipped` nodes: the id of the root-cause failed node.
     pub skipped_because: Option<String>,
+    /// Node-reported execution evidence (image, exit code, persisted logs).
+    /// See [`NodeRunDetails`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub execution: Option<NodeRunDetails>,
+    /// Upstream inputs resolved at dispatch time. See [`InputBinding`].
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub inputs: Vec<InputBinding>,
 }
 
 /// Result of a `DAG::run` invocation: the final status of every node and

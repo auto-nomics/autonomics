@@ -15,7 +15,7 @@ use tokio::sync::mpsc;
 use crate::dag::DagError;
 use crate::dag::NodeId;
 use crate::dag::graph::PortOutputs;
-use crate::dag::runtime::RuntimeStatus;
+use crate::dag::runtime::{NodeRunDetails, RuntimeStatus};
 
 // NOTE: `NodeEvent`/`NodeEventKind` deliberately do NOT derive `Serialize` —
 // `Done(JobResult)` carries a `DagError` (which wraps the non-Serializable
@@ -32,11 +32,18 @@ pub enum JobResult {
         id: NodeId,
         outputs: PortOutputs,
         duration: std::time::Duration,
+        /// Execution evidence the node attached via
+        /// [`NodeReporter::set_run_details`], harvested when the terminal
+        /// result is built.
+        details: Option<NodeRunDetails>,
     },
     Failed {
         id: NodeId,
         error: DagError,
         duration: std::time::Duration,
+        /// Same as [`JobResult::Success::details`] — kept on the failure path
+        /// so a failed execution still carries its exit code / logs.
+        details: Option<NodeRunDetails>,
     },
 }
 
@@ -131,6 +138,10 @@ impl NodeEvent {
 pub struct NodeReporter {
     node_id: NodeId,
     tx: mpsc::Sender<NodeEvent>,
+    /// Side channel for execution-level evidence (image digest, exit code,
+    /// persisted log URIs). Shared across clones but scoped to a single
+    /// dispatch — the scheduler creates a fresh reporter per node execution.
+    run_details: std::sync::Arc<std::sync::Mutex<Option<NodeRunDetails>>>,
 }
 
 impl NodeReporter {
@@ -140,6 +151,7 @@ impl NodeReporter {
         Self {
             node_id: node_id.into(),
             tx,
+            run_details: std::sync::Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -186,5 +198,28 @@ impl NodeReporter {
 
     pub fn error(&self, message: impl Into<String>) {
         self.log(EventLevel::Error, message);
+    }
+
+    /// Attach execution-level evidence (image, exit code, persisted log
+    /// URIs, …) to this dispatch. Called by the node; harvested by the
+    /// scheduler when the terminal `JobResult` is built, so the details
+    /// survive both success and failure.
+    ///
+    /// First write wins — a node calling this twice keeps the earliest
+    /// record, matching the "evidence at time of execution" audit intent.
+    pub fn set_run_details(&self, details: NodeRunDetails) {
+        let mut slot = self.run_details.lock().unwrap_or_else(|e| e.into_inner());
+        if slot.is_none() {
+            *slot = Some(details);
+        }
+    }
+
+    /// Drain the recorded details. Called once by the scheduler after
+    /// `execute` resolves (or the dispatch is cancelled).
+    pub fn take_run_details(&self) -> Option<NodeRunDetails> {
+        self.run_details
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
     }
 }

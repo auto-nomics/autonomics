@@ -171,12 +171,19 @@ mod tests {
                     panel_cache_root: "/tmp/autonomics-visualization-panels".into(),
                 },
             ));
+        // Pin the plugins root to a path that does not exist: the assertion
+        // below is about a *plugin-free* registry build, and the default
+        // root (`~/.autonomics/plugins`) exists on dev machines with
+        // plugins installed — where the manifest `visualization` plugin
+        // legitimately registers its kind.
+        let plugins_parent = tempfile::tempdir().unwrap();
+        let plugins_root = plugins_parent.path().join("absent");
         let registry = build_default_registry_with_container_execution(
             runtime_env,
             None,
             Arc::new(BundleRegistry::new()),
             container_execution,
-            None,
+            Some(plugins_root),
         );
 
         // The wrapper moved to the manifest plugin: neither the wrapper

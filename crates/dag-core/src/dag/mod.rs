@@ -22,6 +22,8 @@ pub use crate::node::{DagNode, NodeId, NodeInput, NodePorts};
 
 pub use error::{DagError, NodeError};
 pub use graph::DAG;
-pub use history::{DagHistory, DagManifest, Snapshot};
-pub use runtime::{DirtyState, RunReport, RuntimeStatus, SchedulerConfig};
+pub use history::{DagHistory, DagManifest, RunRecord, Snapshot};
+pub use runtime::{
+    DirtyState, InputBinding, NodeRunDetails, RunReport, RuntimeStatus, SchedulerConfig,
+};
 pub use view::{DagEdgeView, DagNodeView, DagPortView, DagTuiSnapshot};

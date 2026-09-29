@@ -6,6 +6,10 @@
 //! track lineage heads. The connection is opened once at engine-init time and
 //! lives for the engine's lifetime — callers never touch raw SQL.
 //!
+//! Snapshots version the DAG *definition*; executions are versioned separately
+//! in the append-only `runs` table (see [`RunRecord`]) so that every
+//! invocation of a run leaves a trace even when the manifest is unchanged.
+//!
 //! # Schema
 //!
 //! ```sql
@@ -24,6 +28,23 @@
 //!     name         TEXT PRIMARY KEY,      -- e.g. "main"
 //!     snapshot_id  TEXT NOT NULL,         -- head of this lineage
 //!     pinned       INTEGER DEFAULT 0      -- 1 = tag (immutable ref)
+//! );
+//!
+//! CREATE TABLE runs (                     -- one row per execution, never updated
+//!     id              TEXT PRIMARY KEY,   -- uuid minted by the engine per run
+//!     ref_name        TEXT NOT NULL,
+//!     snapshot_id     TEXT,               -- executed definition (new commit or existing head)
+//!     manifest_hash   TEXT NOT NULL,
+//!     trigger_source  TEXT,               -- e.g. "agent:/root/researcher"; NULL = internal
+//!     started_at      TEXT NOT NULL,      -- ISO 8601 UTC
+//!     finished_at     TEXT NOT NULL,
+//!     ok              INTEGER NOT NULL,
+//!     cancelled       INTEGER NOT NULL DEFAULT 0,
+//!     error           TEXT,               -- top-level error summary, if the run errored
+//!     message         TEXT,               -- commit message used (or pending), if any
+//!     engine_version  TEXT NOT NULL,
+//!     source_revision TEXT NOT NULL,      -- git short sha at build time
+//!     run_report_json TEXT                -- serialized RunReport (snapshot_id backfilled)
 //! );
 //! ```
 
@@ -107,6 +128,46 @@ impl Snapshot {
     pub fn manifest(&self) -> Result<DagManifest, serde_json::Error> {
         serde_json::from_str(&self.manifest_json)
     }
+}
+
+/// One append-only execution record.
+///
+/// Where a [`Snapshot`] captures a DAG *definition* change, a `RunRecord`
+/// captures a single *execution*: which definition it ran (newly committed
+/// snapshot or unchanged head), who triggered it, and the full `RunReport`
+/// with per-node execution evidence. Rows are never updated — a re-run is a
+/// new row.
+#[derive(Debug, Clone, Serialize)]
+pub struct RunRecord {
+    /// Engine-minted uuid for this execution.
+    pub id: String,
+    /// Ref lineage the engine was on (`history_ref`), e.g. `"main"`.
+    pub ref_name: String,
+    /// Snapshot of the executed manifest: the id committed by this run, or
+    /// the existing head when the manifest was unchanged. `None` only when no
+    /// history store resolved a head.
+    pub snapshot_id: Option<String>,
+    pub manifest_hash: String,
+    /// Who initiated the run, e.g. `"agent:/root/researcher"`. `None` for
+    /// internal / unattributed executions (tests, direct embeds).
+    pub trigger: Option<String>,
+    /// ISO 8601 UTC, taken when the engine entered the run.
+    pub started_at: String,
+    /// ISO 8601 UTC, taken after the run (and snapshot commit) resolved.
+    pub finished_at: String,
+    pub ok: bool,
+    pub cancelled: bool,
+    /// Top-level error summary when the run itself returned `Err` (as opposed
+    /// to a node failure, which lives inside `run_report_json`).
+    pub error: Option<String>,
+    /// Commit message associated with the run, if any.
+    pub message: Option<String>,
+    pub engine_version: String,
+    /// Git short sha of the build (`crate::source_revision`).
+    pub source_revision: String,
+    /// Serialized `RunReport` with `snapshot_id` backfilled, when the run
+    /// produced one.
+    pub run_report_json: Option<String>,
 }
 
 // ── history store ─────────────────────────────────────────────────────────────
@@ -216,6 +277,27 @@ impl DagHistory {
                     snapshot_id  TEXT NOT NULL,
                     pinned       INTEGER DEFAULT 0
                 );
+
+                CREATE TABLE IF NOT EXISTS runs (
+                    id              TEXT PRIMARY KEY,
+                    ref_name        TEXT NOT NULL,
+                    snapshot_id     TEXT,
+                    manifest_hash   TEXT NOT NULL,
+                    trigger_source  TEXT,
+                    started_at      TEXT NOT NULL,
+                    finished_at     TEXT NOT NULL,
+                    ok              INTEGER NOT NULL,
+                    cancelled       INTEGER NOT NULL DEFAULT 0,
+                    error           TEXT,
+                    message         TEXT,
+                    engine_version  TEXT NOT NULL,
+                    source_revision TEXT NOT NULL,
+                    run_report_json TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_runs_snapshot
+                    ON runs(snapshot_id);
+                CREATE INDEX IF NOT EXISTS idx_runs_started
+                    ON runs(started_at);
                 ",
             )
             .await
@@ -255,7 +337,7 @@ impl DagHistory {
         let parent_str = parent_id.as_deref().unwrap_or("");
 
         let timestamp = chrono::Utc::now().to_rfc3339();
-        let engine_version = env!("CARGO_PKG_VERSION").to_string();
+        let engine_version = crate::engine_version().to_string();
 
         // Snapshot id = blake3(parent_id || manifest_hash || timestamp || message).
         let mut hasher = Hasher::new();
@@ -512,6 +594,94 @@ impl DagHistory {
         Ok(refs)
     }
 
+    /// Append one execution record. Runs are an append-only audit trail —
+    /// this is a pure INSERT; corrections are new rows, never updates.
+    pub async fn record_run(&self, run: &RunRecord) -> Result<(), DagError> {
+        self.conn
+            .execute(
+                "INSERT INTO runs
+                    (id, ref_name, snapshot_id, manifest_hash, trigger_source,
+                     started_at, finished_at, ok, cancelled, error, message,
+                     engine_version, source_revision, run_report_json)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                params_from_iter([
+                    Value::Text(run.id.clone()),
+                    Value::Text(run.ref_name.clone()),
+                    opt_text(run.snapshot_id.clone()),
+                    Value::Text(run.manifest_hash.clone()),
+                    opt_text(run.trigger.clone()),
+                    Value::Text(run.started_at.clone()),
+                    Value::Text(run.finished_at.clone()),
+                    Value::Integer(run.ok as i64),
+                    Value::Integer(run.cancelled as i64),
+                    opt_text(run.error.clone()),
+                    opt_text(run.message.clone()),
+                    Value::Text(run.engine_version.clone()),
+                    Value::Text(run.source_revision.clone()),
+                    opt_text(run.run_report_json.clone()),
+                ]),
+            )
+            .await
+            .map_err(|e| DagError::History(format!("run insert failed: {e}")))?;
+        Ok(())
+    }
+
+    /// List recent runs, newest first. `ref_name = None` spans all refs.
+    pub async fn list_runs(
+        &self,
+        limit: usize,
+        ref_name: Option<&str>,
+    ) -> Result<Vec<RunRecord>, DagError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT id, ref_name, snapshot_id, manifest_hash, trigger_source,
+                        started_at, finished_at, ok, cancelled, error, message,
+                        engine_version, source_revision, run_report_json
+                 FROM runs
+                 WHERE (?1 IS NULL OR ref_name = ?1)
+                 ORDER BY started_at DESC
+                 LIMIT ?2",
+                params_from_iter([
+                    opt_text(ref_name.map(|name| name.to_string())),
+                    Value::Integer(limit as i64),
+                ]),
+            )
+            .await
+            .map_err(|e| DagError::History(format!("list_runs query: {e}")))?;
+
+        let mut runs = Vec::new();
+        loop {
+            match rows.next().await {
+                Ok(Some(row)) => runs.push(row_to_run(&row)?),
+                Ok(None) => break,
+                Err(e) => return Err(DagError::History(format!("list_runs row: {e}"))),
+            }
+        }
+        Ok(runs)
+    }
+
+    /// Fetch a single run by id.
+    pub async fn get_run(&self, id: &str) -> Result<Option<RunRecord>, DagError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT id, ref_name, snapshot_id, manifest_hash, trigger_source,
+                        started_at, finished_at, ok, cancelled, error, message,
+                        engine_version, source_revision, run_report_json
+                 FROM runs WHERE id = ?1",
+                params_from_iter([Value::Text(id.to_string())]),
+            )
+            .await
+            .map_err(|e| DagError::History(format!("get_run query: {e}")))?;
+
+        match rows.next().await {
+            Ok(Some(row)) => Ok(Some(row_to_run(&row)?)),
+            Ok(None) => Ok(None),
+            Err(e) => Err(DagError::History(format!("get_run row: {e}"))),
+        }
+    }
+
     // ── helpers ───────────────────────────────────────────────────────────────
 
     fn row_to_snapshot(&self, row: &turso::Row) -> Result<Snapshot, DagError> {
@@ -552,6 +722,39 @@ fn opt_text_value(row: &turso::Row, idx: usize) -> Result<Option<String>, DagErr
 
 fn val_err(e: turso::Error) -> DagError {
     DagError::History(format!("column read error: {e}"))
+}
+
+/// Map an `Option<String>` to a turso parameter value.
+fn opt_text(value: Option<String>) -> Value {
+    value.map(Value::Text).unwrap_or(Value::Null)
+}
+
+fn row_to_run(row: &turso::Row) -> Result<RunRecord, DagError> {
+    let bool_value = |idx: usize| -> Result<bool, DagError> {
+        match row.get_value(idx).map_err(val_err)? {
+            turso::Value::Integer(v) => Ok(v != 0),
+            turso::Value::Null => Ok(false),
+            other => Err(DagError::History(format!(
+                "expected INTEGER at column {idx}, got {other:?}"
+            ))),
+        }
+    };
+    Ok(RunRecord {
+        id: text_value(row, 0)?,
+        ref_name: text_value(row, 1)?,
+        snapshot_id: opt_text_value(row, 2)?,
+        manifest_hash: text_value(row, 3)?,
+        trigger: opt_text_value(row, 4)?,
+        started_at: text_value(row, 5)?,
+        finished_at: text_value(row, 6)?,
+        ok: bool_value(7)?,
+        cancelled: bool_value(8)?,
+        error: opt_text_value(row, 9)?,
+        message: opt_text_value(row, 10)?,
+        engine_version: text_value(row, 11)?,
+        source_revision: text_value(row, 12)?,
+        run_report_json: opt_text_value(row, 13)?,
+    })
 }
 
 fn is_torn_wal_error(error: &DagError) -> bool {
@@ -787,5 +990,99 @@ mod tests {
     #[derive(Serialize)]
     struct RunReportStub {
         ok: bool,
+    }
+
+    fn sample_run(id: &str, ok: bool, snapshot_id: Option<String>) -> RunRecord {
+        RunRecord {
+            id: id.to_string(),
+            ref_name: "main".to_string(),
+            snapshot_id,
+            manifest_hash: "abc123".to_string(),
+            trigger: Some("agent:/root/researcher".to_string()),
+            started_at: format!("2026-09-29T10:00:{id}Z"),
+            finished_at: format!("2026-09-29T10:01:{id}Z"),
+            ok,
+            cancelled: false,
+            error: if ok { None } else { Some("boom".to_string()) },
+            message: Some("auto-snapshot after run".to_string()),
+            engine_version: env!("CARGO_PKG_VERSION").to_string(),
+            source_revision: crate::source_revision().to_string(),
+            run_report_json: Some(r#"{"ok":false}"#.to_string()),
+        }
+    }
+
+    #[tokio::test]
+    async fn record_run_and_list_runs_roundtrip() {
+        let history = DagHistory::open_in_memory().await.unwrap();
+        let manifest = DagManifest {
+            nodes: vec![NodeEntry {
+                id: "a".into(),
+                kind: "echo".into(),
+                spec: serde_json::json!({}),
+            }],
+            edges: vec![],
+        };
+        let snapshot_id = history
+            .commit("main", &manifest, None::<&RunReportStub>, "v1")
+            .await
+            .unwrap();
+
+        history
+            .record_run(&sample_run("111", true, Some(snapshot_id.clone())))
+            .await
+            .unwrap();
+        // Second execution of the *same* manifest — no new snapshot, run row
+        // still links to the existing head.
+        history
+            .record_run(&sample_run("222", false, Some(snapshot_id.clone())))
+            .await
+            .unwrap();
+
+        let runs = history.list_runs(10, None).await.unwrap();
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].id, "222", "newest first");
+        assert_eq!(runs[1].id, "111");
+        assert!(runs.iter().all(|run| run.snapshot_id.as_deref() == Some(snapshot_id.as_str())));
+        assert_eq!(runs[0].trigger.as_deref(), Some("agent:/root/researcher"));
+        assert!(!runs[0].ok);
+        assert!(runs[0].error.is_some());
+        assert!(runs[1].ok);
+        assert_eq!(runs[1].error, None);
+
+        let fetched = history.get_run("111").await.unwrap().unwrap();
+        assert_eq!(fetched.id, "111");
+        assert_eq!(fetched.source_revision, crate::source_revision());
+        assert!(history.get_run("missing").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn list_runs_filters_by_ref() {
+        let history = DagHistory::open_in_memory().await.unwrap();
+        let manifest = DagManifest {
+            nodes: vec![],
+            edges: vec![],
+        };
+        let _ = history
+            .commit("main", &manifest, None::<&RunReportStub>, "v1")
+            .await
+            .unwrap();
+        let _ = history
+            .commit("other", &manifest, None::<&RunReportStub>, "v1")
+            .await
+            .unwrap();
+
+        let mut main_run = sample_run("111", true, None);
+        main_run.ref_name = "main".to_string();
+        let mut other_run = sample_run("222", true, None);
+        other_run.ref_name = "other".to_string();
+        history.record_run(&main_run).await.unwrap();
+        history.record_run(&other_run).await.unwrap();
+
+        let main_runs = history.list_runs(10, Some("main")).await.unwrap();
+        assert_eq!(main_runs.len(), 1);
+        assert_eq!(main_runs[0].id, "111");
+
+        let all = history.list_runs(10, None).await.unwrap();
+        assert_eq!(all.len(), 2);
     }
 }

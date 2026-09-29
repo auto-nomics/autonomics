@@ -19,11 +19,12 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info_span, warn};
 
-use super::utils::{build_inputs, cascade_skip};
+use super::utils::{build_input_bindings, build_inputs, cascade_skip};
 
 use super::error::DagError;
 use super::runtime::{
-    DirtyState, NodeReport, RunReport, RuntimeStatus, SchedulerConfig, SchemaReport,
+    DirtyState, InputBinding, NodeReport, NodeRunDetails, RunReport, RuntimeStatus,
+    SchedulerConfig, SchemaReport,
 };
 use super::{DagNode, NodeId};
 use crate::dag::node_event::{JobResult, NodeEvent, NodeEventKind, NodeReporter};
@@ -248,6 +249,14 @@ pub struct DAG {
     /// successful execution. `run` with `SchedulerConfig::incremental = true`
     /// skips `Clean` nodes and reuses their cached outputs.
     dirty: HashMap<NodeId, DirtyState>,
+    /// Upstream bindings captured at dispatch time, for the run report's
+    /// audit trail. Cleared at the start of every run so the report expresses
+    /// exactly what *this* run injected.
+    input_bindings: HashMap<NodeId, Vec<InputBinding>>,
+    /// Node-reported execution evidence harvested from terminal results
+    /// (see [`NodeReporter::set_run_details`]). Same per-run lifetime as
+    /// `input_bindings`.
+    node_run_details: HashMap<NodeId, NodeRunDetails>,
 }
 
 impl DAG {
@@ -337,6 +346,8 @@ impl DAG {
         self.errors.clear();
         self.specs.clear();
         self.dirty.clear();
+        self.input_bindings.clear();
+        self.node_run_details.clear();
     }
 
     /// Reset all node statuses to [`RuntimeStatus::Pending`] and mark every
@@ -396,6 +407,12 @@ impl DAG {
         let engine_ctx = Arc::new(engine_ctx.clone());
 
         let incremental = cfg.incremental;
+
+        // Audit state is per-run in both modes: a report must express what
+        // *this* run injected and what *this* run's nodes reported — clean
+        // nodes skipped by an incremental run contribute neither.
+        self.input_bindings.clear();
+        self.node_run_details.clear();
 
         if !incremental {
             // Full re-run: clear all cached state.
@@ -553,6 +570,8 @@ impl DAG {
                     continue;
                 };
                 let inputs = build_inputs(&id, &incoming, &self.outputs);
+                let bindings = build_input_bindings(&id, &incoming, &self.outputs);
+                self.input_bindings.insert(id.clone(), bindings);
                 if let Some(node) = self.nodes.get(&id) {
                     for input in &inputs {
                         let Some(port) = node.ports().input_port(input.port) else {
@@ -665,6 +684,10 @@ impl DAG {
                                     "node cancelled by DAG run cancellation".into(),
                                 ),
                                 duration,
+                                // The `execute` future is dropped at this
+                                // point, so partial evidence the node already
+                                // recorded is still worth harvesting.
+                                details: reporter.take_run_details(),
                             };
                             let _ = tx
                                 .send(NodeEvent::new(job_id, NodeEventKind::Done(res)))
@@ -674,11 +697,13 @@ impl DAG {
                     };
 
                     let duration = start.elapsed();
+                    let details = reporter.take_run_details();
                     let res = match result {
                         Ok(Ok(outs)) => JobResult::Success {
                             id: job_id.clone(),
                             outputs: outs,
                             duration,
+                            details,
                         },
                         Ok(Err(error)) => {
                             warn!(node = %job_id, error = %error, "node failed");
@@ -686,6 +711,7 @@ impl DAG {
                                 id: job_id.clone(),
                                 error,
                                 duration,
+                                details,
                             }
                         }
                         Err(panic_payload) => {
@@ -699,6 +725,7 @@ impl DAG {
                                 id: job_id.clone(),
                                 error: DagError::Schedule(format!("node panicked: {msg}")),
                                 duration,
+                                details,
                             }
                         }
                     };
@@ -794,7 +821,15 @@ impl DAG {
                     id,
                     outputs: outs,
                     duration,
+                    details,
                 } => {
+                    // Record execution evidence before the port-validation
+                    // branch below: a node whose declared ports reject its own
+                    // output is re-classified as Failed, but the evidence of
+                    // what actually ran must survive that re-classification.
+                    if let Some(details) = details {
+                        self.node_run_details.insert(id.clone(), details);
+                    }
                     let output_type_error = self.nodes.get(&id).and_then(|node| {
                         outs.iter().find_map(|(port, value)| {
                             let declared = node.ports().output_port(*port)?;
@@ -874,7 +909,11 @@ impl DAG {
                     id,
                     error,
                     duration,
+                    details,
                 } => {
+                    if let Some(details) = details {
+                        self.node_run_details.insert(id.clone(), details);
+                    }
                     self.statuses.insert(id.clone(), RuntimeStatus::Failed);
                     durations.insert(id.clone(), duration);
                     debug!(node = %id, error = %error, "node failed; cascading skip to descendants");
@@ -1141,6 +1180,11 @@ impl DAG {
                 let error = self.errors.get(id).map(|e| e.to_report());
                 let skipped_because = skipped_because.get(id).cloned();
 
+                // Audit trail: what the node reported about its own
+                // execution, and which upstream values were injected into it.
+                let execution = self.node_run_details.get(id).cloned();
+                let inputs = self.input_bindings.get(id).cloned().unwrap_or_default();
+
                 NodeReport {
                     id: id.clone(),
                     status,
@@ -1155,6 +1199,8 @@ impl DAG {
                     file_path,
                     error,
                     skipped_because,
+                    execution,
+                    inputs,
                 }
             })
             .collect()
@@ -2818,6 +2864,129 @@ mod tests {
             node.port_assignments[&1].format.as_deref(),
             Some("ldsc_log")
         );
+    }
+
+    #[tokio::test]
+    async fn run_report_records_input_bindings() {
+        let mut dag = DAG::default();
+        add(&mut dag, "a");
+        add(&mut dag, "b");
+        dag.add_edge("a", "b", 0, 0).unwrap();
+
+        let report = dag
+            .run(&SchedulerConfig::default(), &test_ctx(), None)
+            .await
+            .unwrap();
+
+        let node_a = report.nodes.iter().find(|node| node.id == "a").unwrap();
+        let node_b = report.nodes.iter().find(|node| node.id == "b").unwrap();
+        assert!(node_a.inputs.is_empty(), "source node has no bindings");
+        assert_eq!(node_b.inputs.len(), 1);
+        let binding = &node_b.inputs[0];
+        assert_eq!(binding.from, "a");
+        assert_eq!(binding.from_port, 0);
+        assert_eq!(binding.to_port, 0);
+        assert_eq!(binding.kind, "DataFrame");
+        assert_eq!(binding.path, None, "DataFrame handles have no stable address");
+    }
+
+    /// A node that reports execution evidence through the reporter side
+    /// channel, then optionally fails — mirroring how container nodes attach
+    /// image/exit-code/log evidence before returning.
+    #[derive(Clone)]
+    struct DetailedNode {
+        fail: bool,
+        ports: NodePorts,
+    }
+
+    #[async_trait::async_trait]
+    impl DagNode for DetailedNode {
+        fn ports(&self) -> &NodePorts {
+            &self.ports
+        }
+
+        async fn execute(
+            &mut self,
+            _ctx: &crate::registry::NodeCtx,
+            _inputs: &[NodeInput],
+            reporter: &crate::dag::node_event::NodeReporter,
+        ) -> std::result::Result<PortOutputs, DagError> {
+            reporter.set_run_details(NodeRunDetails {
+                image: Some("localhost/test@sha256:abc".into()),
+                image_digest: Some("sha256:abc".into()),
+                exit_code: Some(if self.fail { 42 } else { 0 }),
+                run_name: Some("autonomics-container-command-1-1".into()),
+                stdout_log: None,
+                stderr_log: None,
+            });
+            if self.fail {
+                return Err(DagError::Schedule("intentional failure".into()));
+            }
+            let mut outputs = PortOutputs::new();
+            outputs.insert(
+                0,
+                crate::value::NodeValue::File(FileRef {
+                    path: "/tmp/out.csv".into(),
+                    format: Some("csv".into()),
+                    fingerprint: None,
+                }),
+            );
+            Ok(outputs)
+        }
+
+        fn clone_box(&self) -> Box<dyn DagNode> {
+            Box::new((*self).clone())
+        }
+
+        fn kind(&self) -> &'static str {
+            "detailed"
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    #[tokio::test]
+    async fn node_report_carries_execution_details() {
+        let mut dag = DAG::default();
+        for (id, fail) in [("ok", false), ("bad", true)] {
+            dag.add_node(
+                id.into(),
+                Box::new(DetailedNode {
+                    fail,
+                    ports: NodePorts::new().add_output_port_of_type(None, PortType::File),
+                }),
+            )
+            .unwrap();
+        }
+
+        let report = dag
+            .run(&SchedulerConfig::default(), &test_ctx(), None)
+            .await
+            .unwrap();
+        assert!(!report.ok, "the failing node marks the run as failed");
+
+        let ok = report.nodes.iter().find(|node| node.id == "ok").unwrap();
+        assert_eq!(ok.status, RuntimeStatus::Success);
+        let details = ok
+            .execution
+            .as_ref()
+            .expect("success node carries its execution details");
+        assert_eq!(details.exit_code, Some(0));
+        assert_eq!(details.image_digest.as_deref(), Some("sha256:abc"));
+        assert_eq!(
+            details.run_name.as_deref(),
+            Some("autonomics-container-command-1-1")
+        );
+
+        let bad = report.nodes.iter().find(|node| node.id == "bad").unwrap();
+        assert_eq!(bad.status, RuntimeStatus::Failed);
+        let details = bad
+            .execution
+            .as_ref()
+            .expect("failed node still carries its execution details");
+        assert_eq!(details.exit_code, Some(42));
     }
 
     #[derive(Clone)]

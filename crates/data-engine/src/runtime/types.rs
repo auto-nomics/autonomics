@@ -47,6 +47,9 @@ pub enum DataEngineCmd {
         event_tx: Option<mpsc::Sender<NodeEvent>>,
         /// Commit message for the history snapshot. If `None`, a default is used.
         commit_message: Option<String>,
+        /// Who initiated the run (e.g. `"agent:/root/researcher"`), recorded
+        /// in the run's audit trail. `None` leaves the run unattributed.
+        trigger: Option<String>,
         reply: oneshot::Sender<EngineResult<RunReport>>,
         /// Cancellation token shared with the caller. When the caller drops
         /// the reply receiver (e.g. the agent task is cancelled), this token
@@ -111,6 +114,15 @@ pub enum DataEngineCmd {
         ref_name: Option<String>,
         limit: usize,
         reply: oneshot::Sender<EngineResult<Vec<crate::dag::Snapshot>>>,
+    },
+    /// Query the execution audit trail: recent runs, or one run by id.
+    DagRunsLog {
+        ref_name: Option<String>,
+        limit: usize,
+        /// When set, fetch this single run (with its full run report)
+        /// instead of listing.
+        run_id: Option<String>,
+        reply: oneshot::Sender<EngineResult<Vec<crate::dag::RunRecord>>>,
     },
     /// Load a snapshot's DAG into memory without moving the ref.
     CheckoutDag {

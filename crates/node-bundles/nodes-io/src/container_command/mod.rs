@@ -1071,6 +1071,141 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn container_publishes_logs_and_details_on_success() {
+        let env = test_env();
+        let dir = env.workspace.path().join("logs-ok");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut node_spec = spec(
+            &format!("registry.example/test/tool@sha256:{}", "a".repeat(64)),
+            vec!["tool".into()],
+            "result.txt",
+        );
+        node_spec.workdir = Some(dir.to_string_lossy().into_owned());
+        let mut node = ContainerCommandNode::new(
+            "container_command",
+            node_spec,
+            Arc::new(FakeRuntime::new(env.workspace.path())),
+            Arc::new(PanelCache::new(env.workspace.path().join("cache"))),
+        )
+        .unwrap();
+
+        let (event_tx, _event_rx) = tokio::sync::mpsc::channel(8);
+        let reporter = dag_core::dag::node_event::NodeReporter::new("container", event_tx);
+        node.execute(&env.ctx, &[], &reporter).await.unwrap();
+
+        let details = reporter.take_run_details().expect("run details recorded");
+        assert_eq!(details.exit_code, Some(0));
+        assert_eq!(
+            details.image_digest.as_deref(),
+            Some(format!("sha256:{}", "a".repeat(64)).as_str())
+        );
+        let run_name = details.run_name.clone().unwrap();
+        assert!(run_name.starts_with("autonomics-container-command-"));
+
+        // FakeRuntime emits stdout and a blank stderr → exactly one log file.
+        let stdout_log = details.stdout_log.expect("stdout persisted");
+        assert!(
+            stdout_log
+                .path
+                .ends_with(&format!("{run_name}/.autonomics-logs/stdout.log")),
+            "unexpected log path {}",
+            stdout_log.path
+        );
+        assert!(details.stderr_log.is_none(), "blank stderr must be skipped");
+
+        // The persisted object is readable through the same VFS path and its
+        // recorded fingerprint matches the content.
+        let virtual_path = stdout_log.path.strip_prefix("vfs://").unwrap();
+        let storage = env.ctx.opendal.as_ref().unwrap();
+        let length = storage.content_length(virtual_path).await.unwrap();
+        let stored = storage.read_range(virtual_path, 0..length).await.unwrap();
+        assert_eq!(stored.to_vec(), b"container stdout");
+        let fingerprint = stdout_log.fingerprint.as_ref().unwrap();
+        assert_eq!(fingerprint.size, "container stdout".len() as u64);
+        assert_eq!(
+            fingerprint.content_hash.as_deref(),
+            Some(format!("sha256:{}", hex(&Sha256::digest(b"container stdout"))).as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn container_failure_publishes_logs_and_details() {
+        struct FailingWithOutputRuntime {
+            workspace_root: PathBuf,
+        }
+        #[async_trait]
+        impl PodmanConnection for FailingWithOutputRuntime {
+            async fn run(
+                &self,
+                _request: ContainerRunRequest,
+            ) -> Result<ContainerRunResult, ContainerRuntimeError> {
+                Err(ContainerRuntimeError::ExitStatus {
+                    exit_code: 42,
+                    stderr: "boom".into(),
+                    stdout: "partial output".into(),
+                })
+            }
+            fn workspace_root(&self) -> &Path {
+                &self.workspace_root
+            }
+        }
+
+        let env = test_env();
+        let dir = env.workspace.path().join("logs-failed");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut node_spec = spec("tool", vec!["tool".into()], "result.txt");
+        node_spec.workdir = Some(dir.to_string_lossy().into_owned());
+        let mut node = ContainerCommandNode::new(
+            "container_command",
+            node_spec,
+            Arc::new(FailingWithOutputRuntime {
+                workspace_root: env.workspace.path().to_path_buf(),
+            }),
+            Arc::new(PanelCache::new(env.workspace.path().join("cache"))),
+        )
+        .unwrap();
+
+        let (event_tx, _event_rx) = tokio::sync::mpsc::channel(8);
+        let reporter = dag_core::dag::node_event::NodeReporter::new("container", event_tx);
+        let error = node.execute(&env.ctx, &[], &reporter).await.unwrap_err();
+        assert!(error.to_string().contains("42"));
+
+        // A failed execution is as auditable as a successful one: exit code,
+        // both captured streams persisted, and the scratch failure-logs still
+        // written for the diagnostic message.
+        let details = reporter.take_run_details().expect("failed run records details");
+        assert_eq!(details.exit_code, Some(42));
+        let stdout_log = details.stdout_log.expect("stdout persisted on failure");
+        let stderr_log = details.stderr_log.expect("stderr persisted on failure");
+        let storage = env.ctx.opendal.as_ref().unwrap();
+        let stdout_path = stdout_log.path.strip_prefix("vfs://").unwrap();
+        let stderr_path = stderr_log.path.strip_prefix("vfs://").unwrap();
+        let stdout_len = storage.content_length(stdout_path).await.unwrap();
+        let stderr_len = storage.content_length(stderr_path).await.unwrap();
+        assert_eq!(
+            storage
+                .read_range(stdout_path, 0..stdout_len)
+                .await
+                .unwrap()
+                .to_vec(),
+            b"partial output"
+        );
+        assert_eq!(
+            storage
+                .read_range(stderr_path, 0..stderr_len)
+                .await
+                .unwrap()
+                .to_vec(),
+            b"boom"
+        );
+        assert!(dir
+            .join(".autonomics")
+            .join("failure-logs")
+            .join("stdout.log")
+            .exists());
+    }
+
+    #[tokio::test]
     #[ignore = "requires a working rootless Podman runtime and may pull an OCI image"]
     async fn real_podman_copies_input_to_declared_output() {
         let image = std::env::var("AUTONOMICS_CONTAINER_IT_IMAGE")

@@ -893,3 +893,145 @@ fn parse_tool_json(content: &agentik_sdk::types::tools::ToolResultContent) -> se
         }
     }
 }
+
+#[tokio::test]
+async fn test_dag_runs_log_records_execution_audit_trail() {
+    // Mounted-VFS storage arrangement (as in
+    // `test_get_output_file_to_dataframe_csv_parquet_json`) so the source
+    // node's path resolves through the mount.
+    let mounted_root = tempfile::tempdir().unwrap();
+    let data_root = tempfile::tempdir().unwrap();
+    let manifest = VfsManifest {
+        backend: vec![BackendDefinition {
+            id: "default".into(),
+            config: BackendConfig::local("/"),
+        }],
+        mount: vec![MountDefinition {
+            path: "/".into(),
+            backend: "default".into(),
+            source: mounted_root.path().to_string_lossy().to_string(),
+            read_only: false,
+        }],
+    };
+    let mounted = Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap());
+    let file_storage = Arc::new(OpendalFileStorage::with_mounts(
+        data_root.path(),
+        mounted.clone(),
+    ));
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    let csv_path = std::path::Path::new(&manifest_dir)
+        .join("../data-engine/test_datasets/insurance.csv");
+    let csv_data = std::fs::read(csv_path).unwrap();
+    file_storage
+        .resolve("/insurance.csv")
+        .write(&file_storage.resolve_path("/insurance.csv"), csv_data)
+        .await
+        .unwrap();
+
+    let history = data_engine::dag::DagHistory::open_in_memory()
+        .await
+        .unwrap();
+    let engine = DataEngine::builder()
+        .register_opendal_fs(file_storage.clone())
+        .unwrap()
+        .with_vfs((*mounted).clone())
+        .build()
+        .with_history(history);
+    let (client, _handle) = spawn_with_engine(engine);
+
+    let tools = data_engine_tools::registrations(Arc::new(client.clone()));
+    let mut registry = agentik_core::tools::ToolRegistry::new();
+    registry.register_all(tools).unwrap();
+    let toolset = Toolset::from_registry(Arc::new(registry), None);
+
+    // Minimal pipeline: source -> sql (sequential calls, matching the
+    // established e2e flow).
+    let steps: Vec<(&str, &str, serde_json::Value)> = vec![
+        (
+            "a1",
+            "add_node",
+            json!({"id": "src", "kind": "file_to_dataframe", "spec": {"path": "/insurance.csv"}}),
+        ),
+        (
+            "a2",
+            "add_node",
+            json!({"id": "sql", "kind": "sql", "spec": {"sql_query": "SELECT age FROM port_0 LIMIT 3"}}),
+        ),
+        (
+            "a3",
+            "add_edge",
+            json!({"from": "src", "from_port": 0, "to": "sql", "to_port": 0}),
+        ),
+    ];
+    for (call, name, input) in steps {
+        let results = toolset
+            .execute(&[build_tooluse(call, name, input)], None)
+            .await
+            .unwrap();
+        check_ok(&results[0], name);
+    }
+
+    // Two executions through the tool — the audit path under test.
+    for call in ["r1", "r2"] {
+        let results = toolset
+            .execute(
+                &[build_tooluse(call, "run_dag", json!({"commit_message": "audit e2e"}))],
+                None,
+            )
+            .await
+            .unwrap();
+        check_ok(&results[0], "run_dag");
+        let report = result_json(&results[0]);
+        assert_eq!(report["ok"], json!(true), "run failed: {report}");
+    }
+
+    // Both executions left a run row, attributed to the session that ran
+    // them, against a single deduplicated snapshot.
+    let runs = client.dag_runs_log(None, 10, None).await.unwrap();
+    assert_eq!(runs.len(), 2, "every execution leaves a run row");
+    assert_eq!(runs[0].trigger.as_deref(), Some("agent:default"));
+    assert_eq!(runs[1].trigger.as_deref(), Some("agent:default"));
+    assert!(runs[0].snapshot_id.is_some());
+    assert_eq!(runs[0].snapshot_id, runs[1].snapshot_id);
+    assert!(runs.iter().all(|run| run.ok));
+    assert_eq!(runs[0].message.as_deref(), Some("audit e2e"));
+
+    // The listing tool surfaces the audit trail as text.
+    let results = toolset
+        .execute(
+            &[build_tooluse("l1", "dag_runs_log", json!({"limit": 5}))],
+            None,
+        )
+        .await
+        .unwrap();
+    check_ok(&results[0], "dag_runs_log");
+
+    // The detail view decodes the per-node report, including the input
+    // bindings the scheduler captured for the sql node.
+    let results = toolset
+        .execute(
+            &[build_tooluse(
+                "l2",
+                "dag_runs_log",
+                json!({"run_id": runs[0].id}),
+            )],
+            None,
+        )
+        .await
+        .unwrap();
+    check_ok(&results[0], "dag_runs_log detail");
+    let detail = result_json(&results[0]);
+    assert_eq!(detail["trigger"], json!("agent:default"));
+    assert!(detail["source_revision"].is_string());
+    let sql_node = detail["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["id"] == json!("sql"))
+        .expect("sql node in run detail");
+    assert_eq!(
+        sql_node["inputs"][0]["from"],
+        json!("src"),
+        "scheduler-captured input binding is surfaced"
+    );
+}

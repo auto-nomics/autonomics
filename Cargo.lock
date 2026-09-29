@@ -2833,6 +2833,7 @@ dependencies = [
  "arrow-buffer",
  "arrow-schema",
  "async-trait",
+ "chrono",
  "container-plugin",
  "container-runtime",
  "csv",
@@ -2870,6 +2871,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "turso",
+ "uuid",
  "vfs",
 ]
 
