@@ -13,6 +13,10 @@
 //! - [`manager`] — the central process-wide manager: generation
 //!   counter, change broadcast on every mutation, usage telemetry
 //!   (the evolution fitness signal)
+//! - [`evolution`] — the loop in two halves: an idempotent workflow
+//!   (distill → propose → policy) and tokio event-driven triggers
+//!   (manual / observation / startup / timer) bridged by a bounded
+//!   channel; bursts coalesce, drops are counted, never blocking
 //! - [`observation`] — the distillation feedstock: durable
 //!   content-hashed records of failures/fixes/recipes
 //! - [`distill`] — deterministic clustering and proposal synthesis

@@ -53,6 +53,11 @@ failures cluster deterministically and surface as skill proposals the
 user reviews — your observations are the raw material of new skills.
 Failing evals feed the same channel automatically.
 
+`skill_evolve` runs one evolution cycle immediately instead of
+waiting for the background sweep. It is propose-only by design: it
+writes and revises proposals for the user to review, and never
+approves them itself.
+
 ## When not to use a skill
 
 - The task is a single trivial step no skill covers — proceed directly.

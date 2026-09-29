@@ -41,6 +41,7 @@ use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
 
 use crate::error::SkillError;
@@ -70,8 +71,9 @@ impl UsageKind {
 }
 
 /// Per-skill usage counters. In-memory for now; the evolution loop
-/// (V2) will persist a snapshot alongside proposals.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// Serialized in `<state_dir>/skill-usage.toml`; loading merges by
+/// per-field maxima so restarts never lose counts.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UsageRecord {
     pub gets: u64,
     pub search_hits: u64,
@@ -96,6 +98,9 @@ impl UsageRecord {
         self.gets + self.search_hits + self.runs + self.evals
     }
 }
+
+/// Persisted usage table filename under the state dir.
+const USAGE_FILE: &str = "skill-usage.toml";
 
 /// The central manager. Cloning the `Arc` is how it is shared.
 pub struct SkillManager {
@@ -244,7 +249,9 @@ impl SkillManager {
     // ── telemetry: the evolution fitness signal ──
 
     /// Record one use of a skill. Unknown names are recorded too —
-    /// usage of a shadowed-away skill is still signal.
+    /// usage of a shadowed-away skill is still signal. In-memory on
+    /// the hot path; the evolution cycle persists the table (see
+    /// [`SkillManager::persist_usage`]).
     pub fn record_usage(&self, name: &str, kind: UsageKind) {
         let now = unix_now();
         if let Ok(mut usage) = self.usage.write() {
@@ -263,6 +270,51 @@ impl SkillManager {
             usage.iter().map(|(k, v)| (k.clone(), *v)).collect();
         rows.sort_by(|a, b| b.1.total().cmp(&a.1.total()).then(a.0.cmp(&b.0)));
         rows
+    }
+
+    /// Persist the usage table to `<state_dir>/skill-usage.toml` so
+    /// the fitness signal survives daemon restarts. Called by each
+    /// evolution cycle; atomic-ish via temp-file + rename because a
+    /// torn table must never block the loop.
+    pub fn persist_usage(&self) -> Result<(), SkillError> {
+        let Ok(usage) = self.usage.read() else {
+            return Ok(());
+        };
+        let path = self.state_dir.join(USAGE_FILE);
+        std::fs::create_dir_all(&self.state_dir)?;
+        let text =
+            toml::to_string_pretty(&*usage).map_err(|_| SkillError::BadManifest(path.clone()))?;
+        let tmp = self
+            .state_dir
+            .join(format!(".{USAGE_FILE}.{}.tmp", std::process::id()));
+        std::fs::write(&tmp, text)?;
+        std::fs::rename(&tmp, &path)?;
+        Ok(())
+    }
+
+    /// Load a persisted usage table, **merging** into the in-memory
+    /// one (per-field maxima) so restarts never lose counts and
+    /// concurrent CLI usage and daemon usage both survive. A corrupt
+    /// or missing file reads as empty.
+    pub fn load_usage(&self) {
+        let path = self.state_dir.join(USAGE_FILE);
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            return;
+        };
+        let Ok(persisted) = toml::from_str::<HashMap<String, UsageRecord>>(&text) else {
+            tracing::warn!(path = %path.display(), "malformed usage table; starting fresh");
+            return;
+        };
+        if let Ok(mut usage) = self.usage.write() {
+            for (name, record) in persisted {
+                let slot = usage.entry(name).or_default();
+                slot.gets = slot.gets.max(record.gets);
+                slot.search_hits = slot.search_hits.max(record.search_hits);
+                slot.runs = slot.runs.max(record.runs);
+                slot.evals = slot.evals.max(record.evals);
+                slot.last_used = slot.last_used.max(record.last_used);
+            }
+        }
     }
 
     // ── evolution loop: observations, distillation, proposals ──
@@ -475,5 +527,48 @@ mod tests {
         );
         let registry = manager.registry();
         assert_eq!(registry.roots().len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod usage_persistence_tests {
+    use super::*;
+
+    #[test]
+    fn usage_survives_restart_by_field_maxima() {
+        let tmp = tempfile::tempdir().unwrap();
+        let first = SkillManager::new(tmp.path());
+        first.record_usage("skill-a", UsageKind::Run);
+        first.record_usage("skill-a", UsageKind::Get);
+        first.record_usage("skill-b", UsageKind::Get);
+        first.persist_usage().unwrap();
+        assert!(tmp.path().join("skill-usage.toml").is_file());
+
+        // A fresh manager (restart) loads and keeps the ranking.
+        let second = SkillManager::new(tmp.path());
+        second.load_usage();
+        let snapshot = second.usage_snapshot();
+        assert_eq!(snapshot[0].0, "skill-a");
+        assert_eq!(snapshot[0].1.runs, 1);
+
+        // Concurrent growth in both processes merges by maxima: the
+        // in-memory manager had 1 get, the persisted one 1 get, and a
+        // new run on the fresh manager pushes runs to 2.
+        second.record_usage("skill-a", UsageKind::Run);
+        second.persist_usage().unwrap();
+        let third = SkillManager::new(tmp.path());
+        third.load_usage();
+        let record = &third.usage_snapshot()[0].1;
+        assert_eq!(record.runs, 2);
+        assert_eq!(record.gets, 1);
+    }
+
+    #[test]
+    fn corrupt_usage_table_reads_as_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("skill-usage.toml"), "not [ valid").unwrap();
+        let manager = SkillManager::new(tmp.path());
+        manager.load_usage();
+        assert!(manager.usage_snapshot().is_empty());
     }
 }

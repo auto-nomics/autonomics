@@ -192,6 +192,12 @@ pub fn run_evolution_cycle_labeled(
         }
     }
     report.left_pending = pending.len() - report.auto_approved.len();
+    // Persist the fitness signal as part of every cycle — the
+    // natural checkpoint cadence, and the restart boundary for
+    // usage data.
+    if let Err(e) = manager.persist_usage() {
+        tracing::warn!(error = %e, "cannot persist usage table");
+    }
     Ok(report)
 }
 
@@ -491,5 +497,37 @@ mod tests {
         assert_eq!(manager.observations().list().len(), 0);
         observe_three(&manager, "x");
         assert_eq!(manager.observations().list().len(), 3);
+    }
+}
+
+#[cfg(test)]
+mod timer_tests {
+    use super::*;
+
+    /// The timer trigger path: with no events arriving, the periodic
+    /// sweep alone produces cycles.
+    #[tokio::test]
+    async fn timer_sweeps_without_events() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manager = Arc::new(SkillManager::new(tmp.path().join("state")));
+        let options = EvolutionOptions {
+            quiet_window: Duration::from_millis(20),
+            timer: Some(Duration::from_millis(120)),
+            policy: EvolutionPolicy::default(),
+        };
+        let handle = start(manager, options);
+        let mut reports = handle.subscribe_reports();
+        // Startup report first…
+        let _ = tokio::time::timeout(Duration::from_secs(2), reports.recv()).await;
+        // …then at least one timer report within a generous window.
+        let timer_report = tokio::time::timeout(Duration::from_secs(3), reports.recv())
+            .await
+            .expect("timer report")
+            .expect("channel open");
+        assert!(
+            timer_report.triggers.contains(&"timer"),
+            "{:?}",
+            timer_report.triggers
+        );
     }
 }

@@ -359,6 +359,8 @@ impl SharedInfra {
         // singleton so every observation-recording path — agent tool,
         // eval auto-capture — reaches the worker.
         let skills = skills::SkillManager::init(skills::SkillManager::new(&config.state_dir));
+        // Reclaim the fitness signal from the previous process.
+        skills.load_usage();
         let skill_evolution = if config.enable_skill_evolution {
             let handle = skills::evolution::start(
                 skills.clone(),
