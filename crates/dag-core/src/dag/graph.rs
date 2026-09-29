@@ -23,7 +23,7 @@ use super::utils::{build_input_bindings, build_inputs, cascade_skip};
 
 use super::error::DagError;
 use super::runtime::{
-    DirtyState, InputBinding, NodeReport, NodeRunDetails, RunReport, RuntimeStatus,
+    InputBinding, InputHashing, NodeReport, NodeRunDetails, RunReport, RuntimeStatus,
     SchedulerConfig, SchemaReport,
 };
 use super::{DagNode, NodeId};
@@ -240,11 +240,15 @@ pub struct DAG {
     /// / [`Self::replace_node_with_spec`]. Enables manifest export for
     /// snapshot persistence without modifying the `DagNode` trait.
     specs: HashMap<NodeId, (String, serde_json::Value)>,
-    /// Per-node dirty-mark state for incremental execution. A node is `Dirty`
-    /// when its spec/payload/topology/upstream has changed since its last
-    /// successful execution. `run` with `SchedulerConfig::incremental = true`
-    /// skips `Clean` nodes and reuses their cached outputs.
-    dirty: HashMap<NodeId, DirtyState>,
+    /// Execution fingerprint of each node's last successful execution
+    /// (see [`crate::fingerprint::compute_node_fingerprint`]). The reuse key
+    /// for incremental runs: at dispatch a node whose candidate fingerprint
+    /// matches the recorded one — and whose cached outputs are still present
+    /// — is skipped. Mutations drop the affected node's entry; staleness of
+    /// cached file outputs drops it at run start; descendants never need
+    /// explicit invalidation because their identities chain through upstream
+    /// fingerprints.
+    fingerprints: HashMap<NodeId, String>,
     /// Upstream bindings captured at dispatch time, for the run report's
     /// audit trail. Cleared at the start of every run so the report expresses
     /// exactly what *this* run injected.
@@ -266,68 +270,79 @@ impl DAG {
         self.outputs.get(id).cloned()
     }
 
-    // ── dirty-mark API (incremental execution) ──────────────────────────
+    // ── incremental-execution API (fingerprint reuse) ───────────────────
 
-    /// Whether `id` is marked dirty (needs re-execution in an incremental run).
+    /// Whether `id` will re-execute on the next incremental run, to the
+    /// extent knowable without dispatching: a node is reusable only when it
+    /// has both a recorded fingerprint and cached outputs.
     ///
-    /// A node with no dirty entry (e.g. freshly constructed DAG) is considered
-    /// dirty — it has no cached output.
+    /// This is a cheap approximation — a node whose *upstream* identity has
+    /// changed stays `false` until dispatch computes its candidate
+    /// fingerprint and finds the mismatch (and if the upstream reproduces
+    /// identical outputs, the node is correctly *not* re-executed).
     pub fn is_dirty(&self, id: &str) -> bool {
-        self.dirty.get(id) != Some(&DirtyState::Clean)
+        !(self.fingerprints.contains_key(id) && self.outputs.contains_key(id))
     }
 
-    /// Mark `id` **and all its transitive descendants** as [`DirtyState::Dirty`].
+    /// Drop `id`'s recorded fingerprint, forcing its re-execution on the next
+    /// incremental run.
     ///
-    /// This is the core propagation primitive: any mutation that could
-    /// invalidate a node's cached output calls this to ensure the node and
-    /// everything downstream will be re-executed on the next incremental run.
-    ///
-    /// Stops at nodes already dirty (no redundant re-propagation).
+    /// Descendants are deliberately **not** touched: their identities chain
+    /// through this node's fingerprint / output content, so they re-evaluate
+    /// naturally at dispatch — and are correctly reused when this node
+    /// reproduces identical outputs. Use this when an external input (file,
+    /// VFS dataset, API response) has changed outside the engine.
     pub fn mark_dirty(&mut self, id: &str) {
-        let mut queue: VecDeque<NodeId> = VecDeque::from([id.to_string()]);
-        while let Some(nid) = queue.pop_front() {
-            if self.dirty.get(&nid) == Some(&DirtyState::Dirty) {
-                continue;
-            }
-            self.dirty.insert(nid.clone(), DirtyState::Dirty);
-            for succ in self.successors(&nid) {
-                queue.push_back(succ);
-            }
-        }
+        self.fingerprints.remove(id);
     }
 
-    /// Mark **every** node dirty — forces a full re-run on the next
+    /// Drop **every** recorded fingerprint — forces a full re-run on the next
     /// incremental `run`. Equivalent to the default (non-incremental) behavior.
     pub fn mark_all_dirty(&mut self) {
-        for id in self.nodes.keys() {
-            self.dirty.insert(id.clone(), DirtyState::Dirty);
+        self.fingerprints.clear();
+    }
+
+    /// Drop the recorded fingerprints of nodes whose cached file outputs no
+    /// longer match their recorded identity.
+    ///
+    /// Three-stage freshness per file: declared-immutable remotes are clean
+    /// outright; matching size + mtime is clean; a recorded `sha256:` hash is
+    /// re-computed and compared so a touched-but-unchanged file stays clean.
+    async fn invalidate_stale_file_outputs(&mut self, storage: Option<&vfs::OpendalFileStorage>) {
+        let mut stale = Vec::new();
+        for (id, outputs) in self.outputs.iter() {
+            let mut changed = false;
+            for value in outputs.values() {
+                match value {
+                    NodeValue::File(file) => {
+                        if crate::fingerprint::cached_file_changed(file, storage).await {
+                            changed = true;
+                        }
+                    }
+                    NodeValue::FileSet(files) => {
+                        for file in files {
+                            if crate::fingerprint::cached_file_changed(file, storage).await {
+                                changed = true;
+                            }
+                        }
+                    }
+                    NodeValue::DataFrame(_) => {}
+                }
+                if changed {
+                    break;
+                }
+            }
+            if changed {
+                stale.push(id.clone());
+            }
         }
-    }
-
-    /// Mark a single node [`DirtyState::Clean`] after it has been successfully
-    /// executed. Internal — called from the scheduler loop.
-    fn mark_clean(&mut self, id: &str) {
-        self.dirty.insert(id.to_string(), DirtyState::Clean);
-    }
-
-    /// Mark clean file-producing nodes dirty when cached local artifacts no
-    /// longer match their recorded fingerprints.
-    fn invalidate_stale_file_outputs(&mut self) {
-        let stale: Vec<NodeId> = self
-            .outputs
-            .iter()
-            .filter(|(_, outputs)| {
-                outputs.values().any(|value| match value {
-                    NodeValue::File(file) => cached_file_changed(file),
-                    NodeValue::FileSet(files) => files.iter().any(cached_file_changed),
-                    NodeValue::DataFrame(_) => false,
-                })
-            })
-            .map(|(id, _)| id.clone())
-            .collect();
 
         for id in stale {
-            self.mark_dirty(&id);
+            // The cached outputs no longer match their recorded identity:
+            // drop the fingerprint so the node re-executes. Descendants
+            // re-evaluate through the identity chain — if this node
+            // reproduces identical outputs, they stay reused.
+            self.fingerprints.remove(&id);
         }
     }
 
@@ -340,13 +355,13 @@ impl DAG {
         self.outputs.clear();
         self.errors.clear();
         self.specs.clear();
-        self.dirty.clear();
+        self.fingerprints.clear();
         self.input_bindings.clear();
         self.node_run_details.clear();
     }
 
-    /// Reset all node statuses to [`RuntimeStatus::Pending`] and mark every
-    /// node dirty, preparing for a full re-run.
+    /// Reset all node statuses to [`RuntimeStatus::Pending`] and drop every
+    /// recorded fingerprint, preparing for a full re-run.
     pub fn reset(&mut self) {
         for id in self.nodes.keys() {
             self.statuses.insert(id.clone(), RuntimeStatus::Pending);
@@ -410,17 +425,20 @@ impl DAG {
         self.node_run_details.clear();
 
         if !incremental {
-            // Full re-run: clear all cached state.
+            // Full re-run: clear all cached state. Recorded fingerprints must
+            // not survive — every node re-executes.
             self.outputs.clear();
             self.statuses.clear();
-            self.mark_all_dirty();
+            self.fingerprints.clear();
             tracing::info!("Full re-run");
         }
-        // In incremental mode, keep cached outputs + statuses for clean nodes.
-        // Only dirty nodes will be re-executed; clean nodes retain their
-        // `Success` status and cached `outputs` from the previous run.
+        // In incremental mode, keep cached outputs + fingerprints; the
+        // staleness check below drops fingerprints whose cached file outputs
+        // no longer match their recorded identity, and the dispatch-time
+        // fingerprint comparison decides reuse per node.
         if incremental {
-            self.invalidate_stale_file_outputs();
+            self.invalidate_stale_file_outputs(engine_ctx.opendal.as_deref())
+                .await;
             tracing::info!("Incremental execution");
         }
 
@@ -436,36 +454,23 @@ impl DAG {
         let mut successors: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
         // (predecessor id, edge port label) per node, in declared edge order
         let mut incoming: HashMap<NodeId, Vec<(NodeId, super::graph::EdgeLabel)>> = HashMap::new();
-        // unresolved-predecessor count per node
+        // unresolved-predecessor count per node. Every predecessor counts:
+        // each completes either by executing or by fingerprint reuse, and
+        // unblocks its successors.
         let mut pending: HashMap<NodeId, usize> = HashMap::new();
         for id in &all_ids {
             successors.insert(id.clone(), self.successors(id));
             let preds = self.predecessors(id);
-            // In incremental mode, only dirty predecessors count as
-            // "unresolved" — clean predecessors already have cached outputs.
-            let pending_count = if incremental {
-                preds.iter().filter(|p| self.is_dirty(p)).count()
-            } else {
-                preds.len()
-            };
-            pending.insert(id.clone(), pending_count);
+            pending.insert(id.clone(), preds.len());
             let inc = self.incoming_edges_with_ports(id);
             incoming.insert(id.clone(), inc);
         }
 
-        // Initialise runtime state for nodes that will execute.
-        if incremental {
-            // Only dirty nodes get reset to Pending; clean nodes keep Success.
-            for id in &all_ids {
-                if self.is_dirty(id) {
-                    self.statuses.insert(id.clone(), RuntimeStatus::Pending);
-                }
-            }
-        } else {
-            self.statuses.clear();
-            for id in &all_ids {
-                self.statuses.insert(id.clone(), RuntimeStatus::Pending);
-            }
+        // Every node starts Pending; a reused node flips back to Success at
+        // its dispatch turn.
+        self.statuses.clear();
+        for id in &all_ids {
+            self.statuses.insert(id.clone(), RuntimeStatus::Pending);
         }
 
         let sem = Arc::new(Semaphore::new(cfg.max_concurrency.max(1)));
@@ -518,31 +523,24 @@ impl DAG {
                 }
             }
         }
-        let dirty_count = if incremental {
-            all_ids.iter().filter(|id| self.is_dirty(id)).count()
-        } else {
-            all_ids.len()
-        };
-        let (tx, mut rx) = mpsc::channel::<NodeEvent>(dirty_count.max(1));
+        let (tx, mut rx) = mpsc::channel::<NodeEvent>(all_ids.len().max(1));
 
         // Per-node execution duration and skip root-cause tracking.
         let mut durations: HashMap<NodeId, std::time::Duration> = HashMap::new();
         let mut skipped_because: HashMap<NodeId, NodeId> = HashMap::new();
 
-        // Seed the ready queue: dirty nodes whose dirty predecessors have all
-        // completed (pending == 0). In non-incremental mode every node is
-        // dirty, so this is equivalent to the original "source nodes first".
+        // Seed the ready queue with source nodes; every other node enters as
+        // its predecessors complete (by execution or fingerprint reuse).
         let mut ready: VecDeque<NodeId> = all_ids
             .iter()
-            .filter(|id| {
-                if incremental && !self.is_dirty(id) {
-                    return false; // clean node — skip dispatch entirely
-                }
-                pending[*id] == 0
-            })
+            .filter(|id| pending[*id] == 0)
             .cloned()
             .collect();
         let mut in_flight: usize = 0;
+        // Nodes actually dispatched for execution this run — the rollback set
+        // when a cancellation must release this run's outputs. Reused nodes
+        // keep their cached outputs and fingerprints.
+        let mut executed_ids: Vec<NodeId> = Vec::new();
         let mut job_handles: Vec<AbortOnDropHandle> = Vec::new();
         let mut external_cancellation = false;
 
@@ -627,6 +625,67 @@ impl DAG {
                         }
                     }
                 }
+
+                // ── Fingerprint gate ─────────────────────────────────────
+                // Compute this execution's identity from the current spec,
+                // wiring, and upstream values. In incremental mode a node
+                // whose candidate fingerprint matches the one recorded at its
+                // last successful execution — and whose cached outputs are
+                // still present — is reused without re-executing. This is
+                // the hash comparison that replaces dirty-mark propagation:
+                // spec edits, rewiring, and upstream changes all yield a
+                // different fingerprint and force execution.
+                let mut identities = crate::fingerprint::collect_input_identities(
+                    &id,
+                    &incoming,
+                    &self.outputs,
+                    &self.fingerprints,
+                );
+                if cfg.input_hashing == InputHashing::Content {
+                    crate::fingerprint::upgrade_identities_with_content_hashes(
+                        &mut identities,
+                        engine_ctx.opendal.as_deref(),
+                    )
+                    .await;
+                }
+                let (kind, spec) = self.specs.get(&id).cloned().unwrap_or_else(|| {
+                    (
+                        self.nodes
+                            .get(&id)
+                            .map(|node| node.kind().to_string())
+                            .unwrap_or_default(),
+                        serde_json::Value::Null,
+                    )
+                });
+                let candidate = crate::fingerprint::compute_node_fingerprint(
+                    &kind,
+                    Some(&spec),
+                    crate::engine_version(),
+                    &identities,
+                );
+                if incremental
+                    && self.fingerprints.get(&id) == Some(&candidate)
+                    && self.outputs.contains_key(&id)
+                {
+                    debug!(node = %id, "fingerprint unchanged; reusing cached output");
+                    self.statuses.insert(id.clone(), RuntimeStatus::Success);
+                    for succ in &successors[&id] {
+                        let left = {
+                            let count = pending.entry(succ.clone()).or_insert(0);
+                            *count = count.saturating_sub(1);
+                            *count
+                        };
+                        if left == 0 && self.statuses[succ] == RuntimeStatus::Pending {
+                            ready.push_back(succ.clone());
+                        }
+                    }
+                    continue;
+                }
+                // Provisional: replaced by the outputs of this execution on
+                // Success, removed again on failure/cancellation.
+                self.fingerprints.insert(id.clone(), candidate);
+                executed_ids.push(id.clone());
+
                 self.statuses.insert(id.clone(), RuntimeStatus::Running);
                 in_flight += 1;
                 let tx = tx.clone();
@@ -869,7 +928,6 @@ impl DAG {
                     } else {
                         self.outputs.insert(id.clone(), outs);
                         self.statuses.insert(id.clone(), RuntimeStatus::Success);
-                        self.mark_clean(&id);
                         self.errors.remove(&id);
                         durations.insert(id.clone(), duration);
                         debug!(node = %id, "node succeeded");
@@ -884,11 +942,6 @@ impl DAG {
                             ));
                         }
                         for succ in &successors[&id] {
-                            // In incremental mode, clean successors are never
-                            // dispatched — only decrement pending for dirty ones.
-                            if incremental && !self.is_dirty(succ) {
-                                continue;
-                            }
                             let left = {
                                 let c = pending.entry(succ.clone()).or_insert(0);
                                 *c = c.saturating_sub(1);
@@ -910,6 +963,9 @@ impl DAG {
                         self.node_run_details.insert(id.clone(), details);
                     }
                     self.statuses.insert(id.clone(), RuntimeStatus::Failed);
+                    // A failed execution produces no valid outputs: drop the
+                    // provisional fingerprint so the node re-executes next run.
+                    self.fingerprints.remove(&id);
                     durations.insert(id.clone(), duration);
                     debug!(node = %id, error = %error, "node failed; cascading skip to descendants");
                     // External terminal observation (no DataFrame payload).
@@ -998,25 +1054,15 @@ impl DAG {
                 }
             }
 
-            // Drop outputs that this run produced. `self.outputs.insert` is
-            // only called for dirty Success nodes (see the Success arm of
-            // the dispatch loop), so iterating the dirty map is exact:
-            //   - `!incremental` ⇒ every node was dirty ⇒ every output
-            //     is from this (cancelled) run and must be released;
-            //   - `incremental` ⇒ only dirty outputs are from this run;
-            //     clean nodes' outputs are the previous run's cache and
-            //     must be preserved for the next incremental run.
-            // Cancelled / Failed / Running nodes have nothing in
-            // `self.outputs`, so removing dirty entries is the same as
-            // removing "this run's outputs".
-            let dirty_ids: Vec<NodeId> = self
-                .dirty
-                .iter()
-                .filter(|&(_, state)| matches!(state, DirtyState::Dirty))
-                .map(|(id, _)| id.clone())
-                .collect();
-            for id in dirty_ids {
-                self.outputs.remove(&id);
+            // Drop outputs that this run produced. `executed_ids` tracks
+            // exactly the nodes dispatched for execution this run; reused
+            // nodes (fingerprint match) keep their cached outputs and
+            // fingerprints for the next incremental attempt. Nodes that were
+            // cancelled mid-flight get their provisional fingerprints
+            // dropped along with any outputs they managed to publish.
+            for id in &executed_ids {
+                self.outputs.remove(id);
+                self.fingerprints.remove(id);
             }
         }
 
@@ -1175,6 +1221,7 @@ impl DAG {
                 // execution, and which upstream values were injected into it.
                 let execution = self.node_run_details.get(id).cloned();
                 let inputs = self.input_bindings.get(id).cloned().unwrap_or_default();
+                let fingerprint = self.fingerprints.get(id).cloned();
 
                 NodeReport {
                     id: id.clone(),
@@ -1192,6 +1239,7 @@ impl DAG {
                     skipped_because,
                     execution,
                     inputs,
+                    fingerprint,
                 }
             })
             .collect()
@@ -1264,8 +1312,8 @@ impl DAG {
         let idx = self.graph.add_node(id.clone());
         self.id_to_idx.insert(id.clone(), idx);
         self.nodes.insert(id.clone(), node);
-        // New node has no cached output — must be executed.
-        self.dirty.insert(id, DirtyState::Dirty);
+        // New node has no recorded fingerprint — must be executed.
+        self.fingerprints.remove(&id);
         Ok(())
     }
 
@@ -1343,8 +1391,8 @@ impl DAG {
             }
             self.graph.add_edge(a, b, EdgeLabel { from_port, to_port });
         }
-        // The target node's input set changed — it and all descendants need
-        // re-execution.
+        // The target node's input identity changed — drop its fingerprint so
+        // it re-executes. Descendants re-evaluate through the identity chain.
         self.mark_dirty(&to);
         Ok(())
     }
@@ -1403,7 +1451,7 @@ impl DAG {
         self.statuses.remove(id);
         self.outputs.remove(id);
         self.specs.remove(id);
-        self.dirty.remove(id);
+        self.fingerprints.remove(id);
         Ok(())
     }
 
@@ -1444,7 +1492,8 @@ impl DAG {
         match edge_id {
             Some(id) => {
                 self.graph.remove_edge(id);
-                // The target lost an input — it and its descendants are stale.
+                // The target lost an input — its identity changed, so drop
+                // its fingerprint. Descendants re-evaluate naturally.
                 self.mark_dirty(&to);
                 Ok(())
             }
@@ -1544,7 +1593,8 @@ impl DAG {
         self.outputs.remove(id);
         self.errors.remove(id);
         self.statuses.insert(id.to_string(), RuntimeStatus::Pending);
-        // Propagate dirty to this node + all transitive descendants.
+        // The node's identity changed — drop its fingerprint. Descendants
+        // re-evaluate through the identity chain at dispatch.
         self.mark_dirty(id);
         Ok(())
     }
@@ -2035,18 +2085,6 @@ fn schema_compatible(
         }
     }
     Ok(())
-}
-
-fn cached_file_changed(file: &FileRef) -> bool {
-    let Some(expected) = file.fingerprint.as_ref() else {
-        return false;
-    };
-    // Remote artifacts are immutable and addressed by a unique object path;
-    // their content hash is authoritative across workers and local mtimes.
-    if file.path.starts_with("vfs://") && expected.content_hash.is_some() {
-        return false;
-    }
-    FileFingerprint::from_path(&file.path).as_ref() != Some(expected)
 }
 
 /// Canonical spelling for path-dependency comparison: `file://` prefixes are
@@ -2878,7 +2916,10 @@ mod tests {
         assert_eq!(binding.from_port, 0);
         assert_eq!(binding.to_port, 0);
         assert_eq!(binding.kind, "DataFrame");
-        assert_eq!(binding.path, None, "DataFrame handles have no stable address");
+        assert_eq!(
+            binding.path, None,
+            "DataFrame handles have no stable address"
+        );
     }
 
     /// A node that reports execution evidence through the reporter side
@@ -3625,13 +3666,33 @@ mod tests {
         }
         async fn execute(
             &mut self,
-            _ctx: &crate::registry::NodeCtx,
+            ctx: &crate::registry::NodeCtx,
             inputs: &[NodeInput],
             _reporter: &NodeReporter,
         ) -> std::result::Result<PortOutputs, DagError> {
             self.counter
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let mut out: PortOutputs = PortOutputs::new();
+            if inputs.is_empty() {
+                // Source mode: publish a placeholder DataFrame on every
+                // declared output port (mirroring EchoNode) so edges from
+                // this node actually carry values — the identity chain that
+                // drives incremental reuse rides on values, not topology.
+                for port in self.meta.output_ports().iter() {
+                    let batch = arrow_array::RecordBatch::try_from_iter([(
+                        "value",
+                        std::sync::Arc::new(arrow_array::Int64Array::from(Vec::<i64>::new()))
+                            as std::sync::Arc<dyn arrow_array::Array>,
+                    )])
+                    .map_err(|e| DagError::Schedule(e.to_string()))?;
+                    let df = ctx
+                        .session()
+                        .read_batch(batch)
+                        .map_err(|e| DagError::Schedule(e.to_string()))?;
+                    out.insert(port.index, crate::value::NodeValue::DataFrame(df));
+                }
+                return Ok(out);
+            }
             for inp in inputs {
                 out.insert(inp.port, inp.data.clone());
             }
@@ -3721,8 +3782,9 @@ mod tests {
         assert!(dag.output("b").is_some());
     }
 
-    /// After `replace_node` on `a`, only `a` and its descendant `b` should
-    /// re-execute; `c` (an independent branch) should be skipped.
+    /// After a **spec-changing** replace on `a`, `a` re-executes and its
+    /// descendant `b` cascades through the identity chain (its input
+    /// references `a`'s new fingerprint); `c` (independent branch) reuses.
     #[tokio::test]
     async fn incremental_replace_reexecutes_only_descendants() {
         let mut dag = DAG::default();
@@ -3730,8 +3792,13 @@ mod tests {
         let ctr_b = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let ctr_c = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
-        dag.add_node("a".into(), Box::new(CountingEcho::new(ctr_a.clone())))
-            .unwrap();
+        dag.add_node_with_spec(
+            "a".into(),
+            Box::new(CountingEcho::new(ctr_a.clone())),
+            "counting-echo".into(),
+            serde_json::json!({"v": 1}),
+        )
+        .unwrap();
         dag.add_node("b".into(), Box::new(CountingEcho::new(ctr_b.clone())))
             .unwrap();
         dag.add_node("c".into(), Box::new(CountingEcho::new(ctr_c.clone())))
@@ -3748,28 +3815,69 @@ mod tests {
         assert_eq!(cnt(&ctr_b), 1);
         assert_eq!(cnt(&ctr_c), 1);
 
-        // Replace node "a" with a fresh CountingEcho (new counter).
+        // Replace node "a" with a fresh CountingEcho (new counter) and a
+        // changed spec — the identity change is what cascades downstream.
         let ctr_a2 = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        dag.replace_node("a", Box::new(CountingEcho::new(ctr_a2.clone())))
-            .unwrap();
+        dag.replace_node_with_spec(
+            "a",
+            Box::new(CountingEcho::new(ctr_a2.clone())),
+            "counting-echo".into(),
+            serde_json::json!({"v": 2}),
+        )
+        .unwrap();
 
-        // "a" and "b" should be dirty; "c" should be clean.
-        assert!(dag.is_dirty("a"), "a should be dirty after replace");
-        assert!(dag.is_dirty("b"), "b (descendant) should be dirty");
+        assert!(dag.is_dirty("a"), "a should re-execute after replace");
+        // `b` still holds its recorded fingerprint: whether it re-executes is
+        // decided at dispatch, when `a`'s new fingerprint enters `b`'s
+        // candidate identity.
+        assert!(!dag.is_dirty("b"), "descendants re-evaluate at dispatch");
         assert!(!dag.is_dirty("c"), "c (independent) should be clean");
 
         // Second run.
         dag.run(&cfg, &ctx, None).await.unwrap();
         assert_eq!(cnt(&ctr_a2), 1, "replaced a should execute once");
-        assert_eq!(
-            cnt(&ctr_b),
-            2,
-            "b should re-execute (descendant of replaced a)"
-        );
+        assert_eq!(cnt(&ctr_b), 2, "b should re-execute (a's identity changed)");
         assert_eq!(
             cnt(&ctr_c),
             1,
             "c should NOT re-execute (independent branch)"
+        );
+    }
+
+    /// A payload-only swap (same kind + spec) re-executes just the swapped
+    /// node: its re-execution reproduces an identical identity, so
+    /// descendants are correctly reused instead of eagerly invalidated.
+    #[tokio::test]
+    async fn incremental_payload_swap_reruns_only_the_node() {
+        let mut dag = DAG::default();
+        let ctr_a = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let ctr_b = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        dag.add_node("a".into(), Box::new(CountingEcho::new(ctr_a.clone())))
+            .unwrap();
+        dag.add_node("b".into(), Box::new(CountingEcho::new(ctr_b.clone())))
+            .unwrap();
+        dag.add_edge("a", "b", 0, 0).unwrap();
+
+        let ctx = test_ctx();
+        let cfg = incremental_cfg();
+
+        dag.run(&cfg, &ctx, None).await.unwrap();
+        assert_eq!(cnt(&ctr_a), 1);
+        assert_eq!(cnt(&ctr_b), 1);
+
+        // Same kind, same (absent) spec — identity unchanged.
+        let ctr_a2 = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        dag.replace_node("a", Box::new(CountingEcho::new(ctr_a2.clone())))
+            .unwrap();
+        assert!(dag.is_dirty("a"), "the swapped node re-executes");
+
+        dag.run(&cfg, &ctx, None).await.unwrap();
+        assert_eq!(cnt(&ctr_a2), 1, "swapped a should execute once");
+        assert_eq!(
+            cnt(&ctr_b),
+            1,
+            "b should be reused — a reproduced an identical identity"
         );
     }
 
@@ -3833,7 +3941,8 @@ mod tests {
         // Delete edge a → b.
         dag.delete_edge("a", "b", 0, 0).unwrap();
         assert!(dag.is_dirty("b"), "b should be dirty after delete_edge");
-        assert!(dag.is_dirty("c"), "c (descendant) should be dirty");
+        // c re-evaluates at dispatch: b's new identity (one fewer input)
+        // enters c's candidate fingerprint there.
         assert!(!dag.is_dirty("a"), "a should remain clean");
 
         // Second run — only b and c should re-execute.
@@ -3843,9 +3952,11 @@ mod tests {
         assert_eq!(cnt(&ctr_c), 2, "c should re-execute");
     }
 
-    /// Manual `mark_dirty` propagates to all transitive descendants.
+    /// Manual `mark_dirty` re-executes the marked node; descendants are
+    /// reused when the node reproduces an identical identity (the
+    /// fingerprint-model improvement over eager propagation).
     #[tokio::test]
-    async fn incremental_manual_mark_dirty_propagates() {
+    async fn incremental_manual_mark_dirty_reruns_marked_node() {
         let mut dag = DAG::default();
         // a → b → c → d (linear chain)
         let ctrs: Vec<Arc<std::sync::atomic::AtomicUsize>> = (0..4)
@@ -3868,14 +3979,18 @@ mod tests {
             assert_eq!(ctr.load(std::sync::atomic::Ordering::SeqCst), 1);
         }
 
-        // Manually mark "b" dirty — should propagate to c and d, not a.
+        // Manually mark "b" — e.g. an external input it reads has changed.
         dag.mark_dirty("b");
         assert!(!dag.is_dirty("a"));
         assert!(dag.is_dirty("b"));
-        assert!(dag.is_dirty("c"));
-        assert!(dag.is_dirty("d"));
+        // c and d still hold recorded fingerprints: they re-evaluate at
+        // dispatch through the identity chain.
+        assert!(!dag.is_dirty("c"));
+        assert!(!dag.is_dirty("d"));
 
-        // Second run.
+        // Second run. b re-executes; because b is a pure echo its
+        // re-execution reproduces the identical identity, so c and d are
+        // correctly reused instead of eagerly invalidated.
         dag.run(&cfg, &ctx, None).await.unwrap();
         assert_eq!(
             ctrs[0].load(std::sync::atomic::Ordering::SeqCst),
@@ -3889,13 +4004,13 @@ mod tests {
         );
         assert_eq!(
             ctrs[2].load(std::sync::atomic::Ordering::SeqCst),
-            2,
-            "c should re-execute"
+            1,
+            "c should be reused (b reproduced identical identity)"
         );
         assert_eq!(
             ctrs[3].load(std::sync::atomic::Ordering::SeqCst),
-            2,
-            "d should re-execute"
+            1,
+            "d should be reused (identity chain unchanged)"
         );
     }
 
@@ -3931,8 +4046,8 @@ mod tests {
         assert_eq!(cnt(&ctr_b), 2);
     }
 
-    /// Incremental mode with a diamond DAG: marking one branch dirty re-runs
-    /// only that branch + the merge node, not the other branch.
+    /// Incremental mode with a diamond DAG: a spec change on one branch
+    /// re-runs only that branch + the merge node, not the other branch.
     #[tokio::test]
     async fn incremental_diamond_partial_rerun() {
         let mut dag = DAG::default();
@@ -3940,8 +4055,15 @@ mod tests {
         let ctrs: Vec<Arc<std::sync::atomic::AtomicUsize>> = (0..4)
             .map(|_| Arc::new(std::sync::atomic::AtomicUsize::new(0)))
             .collect();
-        for (i, id) in ["a", "b", "c", "d"].iter().enumerate() {
-            dag.add_node((*id).into(), Box::new(CountingEcho::new(ctrs[i].clone())))
+        dag.add_node_with_spec(
+            "b".into(),
+            Box::new(CountingEcho::new(ctrs[1].clone())),
+            "counting-echo".into(),
+            serde_json::json!({"v": 1}),
+        )
+        .unwrap();
+        for (id, idx) in [("a", 0), ("c", 2), ("d", 3)] {
+            dag.add_node(id.into(), Box::new(CountingEcho::new(ctrs[idx].clone())))
                 .unwrap();
         }
         dag.add_edge("a", "b", 0, 0).unwrap();
@@ -3960,15 +4082,23 @@ mod tests {
             assert_eq!(ctr.load(std::sync::atomic::Ordering::SeqCst), 1);
         }
 
-        // Replace "b" — should mark b + d dirty (not a, not c).
+        // Replace "b" with a changed spec — b re-executes and d cascades
+        // through the identity chain (not a, not c).
         let ctr_b2 = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        dag.replace_node("b", Box::new(CountingEcho::new(ctr_b2.clone())))
-            .unwrap();
+        dag.replace_node_with_spec(
+            "b",
+            Box::new(CountingEcho::new(ctr_b2.clone())),
+            "counting-echo".into(),
+            serde_json::json!({"v": 2}),
+        )
+        .unwrap();
 
         assert!(!dag.is_dirty("a"));
         assert!(dag.is_dirty("b"));
         assert!(!dag.is_dirty("c"));
-        assert!(dag.is_dirty("d"));
+        // d re-evaluates at dispatch, when b's new fingerprint enters its
+        // candidate identity.
+        assert!(!dag.is_dirty("d"), "merge node re-evaluates at dispatch");
 
         // Second run.
         dag.run(&cfg, &ctx, None).await.unwrap();
@@ -3986,7 +4116,7 @@ mod tests {
         assert_eq!(
             ctrs[3].load(std::sync::atomic::Ordering::SeqCst),
             2,
-            "d should re-execute (merge of dirty b + clean c)"
+            "d should re-execute (merge of changed b + reused c)"
         );
     }
 

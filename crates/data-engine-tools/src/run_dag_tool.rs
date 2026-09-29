@@ -151,6 +151,9 @@ fn build_report_json(report: RunReport) -> serde_json::Value {
             if !nr.inputs.is_empty() {
                 obj.insert("inputs".into(), serde_json::json!(nr.inputs));
             }
+            if let Some(fingerprint) = nr.fingerprint {
+                obj.insert("fingerprint".into(), serde_json::json!(fingerprint));
+            }
 
             serde_json::Value::Object(obj)
         })

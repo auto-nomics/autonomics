@@ -968,32 +968,46 @@ impl DataEngine {
 
     // ── incremental execution API ──────────────────────────────────────
 
-    /// Mark a node (and all its transitive descendants) as dirty, so the next
-    /// [`Self::run`] will re-execute them even in incremental mode.
+    /// Drop a node's recorded execution fingerprint, so the next
+    /// [`Self::run`] re-executes it even in incremental mode.
     ///
     /// Use this when an external input (file, VFS dataset, API response) has
     /// changed outside the engine and the node's cached output is stale.
+    /// Descendants are deliberately not invalidated: they re-evaluate through
+    /// the identity chain, and are correctly reused when this node reproduces
+    /// identical outputs.
     pub fn mark_node_dirty(&mut self, node_id: &str) {
         self.dag.mark_dirty(node_id);
     }
 
-    /// Mark every node dirty — forces a full re-run on the next [`Self::run`]
-    /// regardless of incremental mode.
+    /// Drop every recorded fingerprint — forces a full re-run on the next
+    /// [`Self::run`] regardless of incremental mode.
     pub fn mark_all_dirty(&mut self) {
         self.dag.mark_all_dirty();
     }
 
-    /// Whether a node is currently marked dirty (needs re-execution).
+    /// Whether a node will re-execute on the next incremental run, to the
+    /// extent knowable without dispatching (no recorded fingerprint or no
+    /// cached outputs).
     pub fn is_node_dirty(&self, node_id: &str) -> bool {
         self.dag.is_dirty(node_id)
     }
 
     /// Enable or disable incremental execution mode.
     ///
-    /// When enabled, subsequent [`Self::run`] calls only re-execute dirty nodes
-    /// and skip clean nodes whose outputs are cached from a previous run.
+    /// When enabled, subsequent [`Self::run`] calls reuse the cached outputs
+    /// of nodes whose computed execution fingerprint matches the one recorded
+    /// at their last successful execution.
     pub fn set_incremental(&mut self, enabled: bool) {
         self.config.incremental = enabled;
+    }
+
+    /// Set the input identity depth for fingerprint computation (see
+    /// [`dag_core::dag::InputHashing`]). `Content` additionally hashes
+    /// file-like inputs that lack a recorded content hash — full
+    /// Nextflow-style semantics at the cost of reading those inputs.
+    pub fn set_input_hashing(&mut self, hashing: crate::dag::InputHashing) {
+        self.config.input_hashing = hashing;
     }
 
     /// Query a node's runtime status. Returns `None` when the DAG has never

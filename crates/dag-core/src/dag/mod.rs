@@ -24,6 +24,6 @@ pub use error::{DagError, NodeError};
 pub use graph::DAG;
 pub use history::{DagHistory, DagManifest, RunRecord, Snapshot};
 pub use runtime::{
-    DirtyState, InputBinding, NodeRunDetails, RunReport, RuntimeStatus, SchedulerConfig,
+    InputBinding, InputHashing, NodeRunDetails, RunReport, RuntimeStatus, SchedulerConfig,
 };
 pub use view::{DagEdgeView, DagNodeView, DagPortView, DagTuiSnapshot};

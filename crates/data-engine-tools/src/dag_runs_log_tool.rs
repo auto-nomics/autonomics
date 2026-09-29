@@ -133,6 +133,7 @@ fn run_detail_json(run: &data_engine::dag::RunRecord) -> serde_json::Value {
                             "status": node.get("status"),
                             "node_type": node.get("node_type"),
                             "elapsed_ms": node.get("elapsed_ms"),
+                            "fingerprint": node.get("fingerprint"),
                             "execution": node.get("execution"),
                             "inputs": node.get("inputs"),
                             "error": node.get("error"),
