@@ -43,6 +43,16 @@ reusable node/edge graphs over the registered node kinds.
 3. Prefer a bundled workflow over hand-assembling an equivalent DAG:
    it encodes proven port wiring and defaults.
 
+## Growing the library (observations)
+
+When you learn something a future session would otherwise rediscover
+the hard way, record it with `skill_observe`: a failure and its fix
+(`--kind failure`, anchored with the node kind and error text), a
+verified recipe (`recipe`), or a caveat (`caveat`). Repeated anchored
+failures cluster deterministically and surface as skill proposals the
+user reviews — your observations are the raw material of new skills.
+Failing evals feed the same channel automatically.
+
 ## When not to use a skill
 
 - The task is a single trivial step no skill covers — proceed directly.

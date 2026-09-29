@@ -24,7 +24,7 @@
 //!
 //! [[case.checks]]
 //! node = "fit"
-//! status = "succeeded"
+//! status = "success"
 //! rows_max = 1
 //! ```
 //!
@@ -44,12 +44,14 @@ use crate::workflow::list_toml_stems;
 pub const EVALS_DIR: &str = "evals";
 
 /// One declared check. Every field except `node` is optional; a check
-/// with only `node` asserts the node ran and succeeded.
+/// with only `node` asserts the node ran and succeeded (the engine
+/// serializes `RuntimeStatus::Success` as `success`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct Check {
     pub node: String,
-    /// Expected node status (default `succeeded` when no other
-    /// assertion is present).
+    /// Expected node status. The engine's `RuntimeStatus` serializes
+    /// snake_case (`success`, `failed`, `skipped`, `cancelled`); the
+    /// default expectation is `success`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
     /// Inclusive lower bound on the primary output's row count.
@@ -80,7 +82,11 @@ pub struct EvalCase {
     /// Concrete parameters for the render.
     #[serde(default)]
     pub params: Value,
-    #[serde(default, rename = "check")]
+    // Field name is the TOML key: `[[case.checks]]`. An earlier
+    // rename to "check" silently dropped every check block — unknown
+    // TOML keys are ignored — so evals ran with zero checks and
+    // passed trivially. Caught by the RSI loop's failing-eval test.
+    #[serde(default)]
     pub checks: Vec<Check>,
 }
 
@@ -223,8 +229,9 @@ fn evaluate_check(check: &Check, report: Option<&Value>) -> (bool, String) {
 
     let status = report.get("status").and_then(Value::as_str).unwrap_or("");
     // A check listing only `node` means "ran fine": status defaults to
-    // `succeeded`. With other assertions present, status is checked
-    // only when explicitly declared.
+    // `success` (the engine's snake_case serialization). With other
+    // assertions present, status is checked only when explicitly
+    // declared.
     let status_only = check.status.is_none()
         && check.rows_min.is_none()
         && check.rows_max.is_none()
@@ -235,7 +242,7 @@ fn evaluate_check(check: &Check, report: Option<&Value>) -> (bool, String) {
         check
             .status
             .as_deref()
-            .or(if status_only { Some("succeeded") } else { None });
+            .or(if status_only { Some("success") } else { None });
     if let Some(expected) = expected_status
         && !status.eq_ignore_ascii_case(expected)
     {
@@ -357,26 +364,30 @@ rows_max = 0
         let cases = parse_cases(text).unwrap();
         assert_eq!(cases.len(), 2);
         assert_eq!(cases[0].params["input"], json!("/fixtures/a.csv"));
+        // Regression: checks must actually parse (they were silently
+        // dropped by a field rename once).
+        assert_eq!(cases[0].checks.len(), 1);
+        assert_eq!(cases[0].checks[0].rows_min, Some(1));
         assert!(parse_cases("").is_err());
         assert!(parse_cases("[[case]]\nname = \"x\"\nworkflow = \"main\"\n[[case]]\nname = \"x\"\nworkflow = \"main\"\n").is_err());
     }
 
     #[test]
-    fn default_check_is_succeeded() {
-        let reports = vec![node("read", "Succeeded", Some(3), vec![])];
+    fn default_check_is_success() {
+        let reports = vec![node("read", "success", Some(3), vec![])];
         let ok = case(vec![Check {
             node: "read".into(),
             ..Default::default()
         }]);
         assert!(evaluate_case(&ok, &reports).passed);
 
-        let failed = vec![node("read", "Failed", None, vec![])];
+        let failed = vec![node("read", "failed", None, vec![])];
         assert!(!evaluate_case(&ok, &failed).passed);
     }
 
     #[test]
     fn rows_bounds_and_missing_node() {
-        let reports = vec![node("read", "Succeeded", Some(3), vec![])];
+        let reports = vec![node("read", "success", Some(3), vec![])];
         let min4 = case(vec![Check {
             node: "read".into(),
             rows_min: Some(4),
@@ -402,7 +413,7 @@ rows_max = 0
 
     #[test]
     fn output_type_files_and_path_contains() {
-        let reports = vec![node("out", "Succeeded", None, vec!["/vfs/out/result.csv"])];
+        let reports = vec![node("out", "success", None, vec!["/vfs/out/result.csv"])];
         let good = case(vec![Check {
             node: "out".into(),
             files: Some(1),
@@ -428,13 +439,22 @@ rows_max = 0
 
     #[test]
     fn explicit_non_success_status_is_checkable() {
-        let reports = vec![node("may_fail", "Failed", None, vec![])];
+        let reports = vec![node("may_fail", "failed", None, vec![])];
         let expect_failed = case(vec![Check {
             node: "may_fail".into(),
             status: Some("failed".into()),
             ..Default::default()
         }]);
         assert!(evaluate_case(&expect_failed, &reports).passed);
+
+        // Engine statuses are snake_case; a stale "succeeded" phrasing
+        // must fail loudly rather than silently pass everything.
+        let stale = case(vec![Check {
+            node: "may_fail".into(),
+            status: Some("succeeded".into()),
+            ..Default::default()
+        }]);
+        assert!(!evaluate_case(&stale, &reports).passed);
     }
 
     #[test]
@@ -445,14 +465,14 @@ rows_max = 0
                     node: "a".into(),
                     ..Default::default()
                 }]),
-                vec![node("a", "Succeeded", None, vec![])],
+                vec![node("a", "success", None, vec![])],
             ),
             (
                 case(vec![Check {
                     node: "b".into(),
                     ..Default::default()
                 }]),
-                vec![node("b", "Failed", None, vec![])],
+                vec![node("b", "failed", None, vec![])],
             ),
         ];
         let report = evaluate_all(&pairs);

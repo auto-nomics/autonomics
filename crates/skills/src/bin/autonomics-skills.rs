@@ -56,6 +56,33 @@ enum Command {
     /// Show the in-process usage telemetry (empty for a fresh process;
     /// meaningful inside the daemon, exposed here for smoke tests).
     Usage,
+    /// Record one observation feeding the skill evolution loop.
+    Observe {
+        /// One line a future search would find.
+        #[arg(short, long)]
+        summary: String,
+        /// The reusable pattern, fix, or condition.
+        #[arg(short, long)]
+        body: String,
+        /// failure | recipe | caveat (default failure).
+        #[arg(short, long)]
+        kind: Option<String>,
+        /// Node kind anchor, when applicable.
+        #[arg(long)]
+        node_kind: Option<String>,
+        /// Error text anchor, when applicable.
+        #[arg(long)]
+        error: Option<String>,
+    },
+    /// Cluster anchored observations and write skill proposals for
+    /// repeated patterns (>= 3 occurrences, deterministic).
+    Distill,
+    /// List proposals, optionally filtered by status.
+    Proposals { status: Option<String> },
+    /// Approve a pending proposal into the global tier.
+    Approve { name: String },
+    /// Reject a pending proposal; its pattern will not re-propose.
+    Reject { name: String },
 }
 
 fn main() -> ExitCode {
@@ -86,6 +113,17 @@ fn main() -> ExitCode {
         Command::Workflows { name } => workflows_cmd(&manager, &name),
         Command::Validate { path } => validate_cmd(&path),
         Command::Usage => usage_cmd(&manager),
+        Command::Observe {
+            summary,
+            body,
+            kind,
+            node_kind,
+            error,
+        } => observe_cmd(&manager, &summary, &body, kind, node_kind, error),
+        Command::Distill => distill_cmd(&manager),
+        Command::Proposals { status } => proposals_cmd(&manager, status.as_deref()),
+        Command::Approve { name } => approve_cmd(&manager, &name),
+        Command::Reject { name } => reject_cmd(&manager, &name),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -335,5 +373,110 @@ fn usage_cmd(manager: &SkillManager) -> Result<(), String> {
         );
     }
     println!("generation: {}", manager.generation());
+    Ok(())
+}
+
+fn observe_cmd(
+    manager: &SkillManager,
+    summary: &str,
+    body: &str,
+    kind: Option<String>,
+    node_kind: Option<String>,
+    error: Option<String>,
+) -> Result<(), String> {
+    let kind = match kind.as_deref() {
+        None => skills::ObservationKind::Failure,
+        Some("failure") => skills::ObservationKind::Failure,
+        Some("recipe") => skills::ObservationKind::Recipe,
+        Some("caveat") => skills::ObservationKind::Caveat,
+        Some(other) => return Err(format!("unknown kind {other:?} (failure|recipe|caveat)")),
+    };
+    let observation = manager
+        .record_observation(skills::ObservationInput {
+            kind,
+            source: skills::ObservationSource::Cli,
+            summary: summary.into(),
+            body: body.into(),
+            node_kind,
+            error,
+        })
+        .map_err(|e| e.to_string())?;
+    println!("recorded {}", observation.id);
+    Ok(())
+}
+
+fn distill_cmd(manager: &SkillManager) -> Result<(), String> {
+    let report = manager.distill().map_err(|e| e.to_string())?;
+    println!(
+        "{} candidate cluster(s) considered, {} proposal(s) written",
+        report.candidates_considered,
+        report.proposals_written.len()
+    );
+    for name in &report.proposals_written {
+        println!("  proposed {name} (pending review)");
+    }
+    for (hash, reason) in &report.skipped {
+        println!("  skipped {hash}: {reason}");
+    }
+    if report.proposals_written.is_empty() {
+        println!(
+            "\nNo new patterns. Observations cluster at >= {} anchored \
+             occurrences; record more via `observe` or let failing evals \
+             accumulate.",
+            skills::distill::MIN_CLUSTER
+        );
+    } else {
+        println!("\nReview with `proposals`, then `approve <name>` or `reject <name>`.");
+    }
+    Ok(())
+}
+
+fn proposals_cmd(manager: &SkillManager, status: Option<&str>) -> Result<(), String> {
+    let proposals = manager.proposals().list();
+    let filtered: Vec<_> = proposals
+        .iter()
+        .filter(|p| status.is_none_or(|s| p.status.as_str() == s))
+        .collect();
+    if filtered.is_empty() {
+        println!(
+            "No proposals{}.",
+            status.map(|s| format!(" ({s})")).unwrap_or_default()
+        );
+        return Ok(());
+    }
+    for proposal in &filtered {
+        println!(
+            "{} [{}] — {}",
+            proposal.name,
+            proposal.status.as_str(),
+            if proposal.rationale.is_empty() {
+                "(no rationale)".to_string()
+            } else {
+                proposal.rationale.clone()
+            }
+        );
+        println!(
+            "  cluster {} from {} observation(s)",
+            proposal.cluster_hash,
+            proposal.source_observation_ids.len()
+        );
+    }
+    Ok(())
+}
+
+fn approve_cmd(manager: &SkillManager, name: &str) -> Result<(), String> {
+    let outcome = manager.approve_proposal(name).map_err(|e| e.to_string())?;
+    println!(
+        "approved {} → {} (generation {})",
+        outcome.name,
+        outcome.destination.display(),
+        manager.generation()
+    );
+    Ok(())
+}
+
+fn reject_cmd(manager: &SkillManager, name: &str) -> Result<(), String> {
+    manager.reject_proposal(name).map_err(|e| e.to_string())?;
+    println!("rejected {name}; its pattern will not re-propose");
     Ok(())
 }

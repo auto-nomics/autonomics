@@ -258,6 +258,57 @@ impl SkillManager {
         rows.sort_by(|a, b| b.1.total().cmp(&a.1.total()).then(a.0.cmp(&b.0)));
         rows
     }
+
+    // ── evolution loop: observations, distillation, proposals ──
+
+    /// The observation store under this manager's state dir.
+    pub fn observations(&self) -> crate::observation::ObservationStore {
+        crate::observation::ObservationStore::open(&self.state_dir)
+    }
+
+    /// Record one observation (idempotent on content). This is the
+    /// feedstock call for the whole evolution loop — agent tool,
+    /// automatic failure capture, and CLI all land here.
+    pub fn record_observation(
+        &self,
+        input: crate::observation::ObservationInput,
+    ) -> Result<crate::observation::Observation, SkillError> {
+        self.observations().record(input)
+    }
+
+    /// The proposal area under this manager's state dir.
+    pub fn proposals(&self) -> crate::proposals::Proposals {
+        crate::proposals::Proposals::open(&self.state_dir)
+    }
+
+    /// Run one deterministic distillation pass: cluster anchored
+    /// observations, write proposals for unconsumed clusters.
+    pub fn distill(&self) -> Result<crate::distill::DistillReport, SkillError> {
+        let observations = self.observations().list();
+        crate::distill::distill(&observations, &self.proposals())
+    }
+
+    /// Approve a pending proposal into the global tier. Bumps the
+    /// generation — the approved skill is live for the next agent
+    /// build and every cached view invalidates.
+    pub fn approve_proposal(
+        &self,
+        name: &str,
+    ) -> Result<crate::proposals::ApproveOutcome, SkillError> {
+        let outcome = self
+            .proposals()
+            .approve(name, &self.state_dir.join("skills"))?;
+        self.notify();
+        Ok(outcome)
+    }
+
+    /// Reject a pending proposal; its cluster is consumed and will
+    /// not re-propose.
+    pub fn reject_proposal(&self, name: &str) -> Result<crate::proposals::Proposal, SkillError> {
+        let proposal = self.proposals().reject(name)?;
+        self.notify();
+        Ok(proposal)
+    }
 }
 
 fn unix_now() -> i64 {

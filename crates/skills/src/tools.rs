@@ -297,6 +297,89 @@ impl ToolFunction for SkillWorkflowsTool {
     }
 }
 
+// ────────────────────────── observation ──────────────────────────
+
+#[tool(
+    name = "skill_observe",
+    description = "Record one durable, reusable observation for the skill \
+        evolution loop: a failure and its fix, a verified recipe, or a caveat \
+        where a usual approach breaks. Observations are clustered \
+        deterministically by node kind and error signature; a pattern seen \
+        three or more times becomes a skill proposal for human review. \
+        Record only what future work would otherwise repeat: name the \
+        component, state the reusable fix or condition — never run \
+        transcripts or one-off facts."
+)]
+pub struct SkillObserveInput {
+    #[desc = "One line a future search would find; name the component, command, or interface."]
+    pub summary: String,
+    #[desc = "The reusable pattern, fix, or condition. Not a run transcript."]
+    pub body: String,
+    #[desc = "Observation kind: failure (a fix for an error), recipe (verified how-to), or caveat (where an approach breaks)."]
+    pub kind: Option<String>,
+    #[desc = "DAG node kind involved, when the observation is anchored to one (e.g. file_to_dataframe). Anchored failures drive auto-distillation."]
+    pub node_kind: Option<String>,
+    #[desc = "The error text when this is a failure observation. Distillation clusters by its signature."]
+    pub error: Option<String>,
+}
+
+pub struct SkillObserveTool {
+    pub manager: Arc<SkillManager>,
+}
+
+#[async_trait::async_trait]
+impl ToolFunction for SkillObserveTool {
+    type Input = SkillObserveInput;
+
+    async fn run(&self, input: SkillObserveInput) -> Result<ToolResult, ToolError> {
+        let summary = input.summary.trim();
+        let body = input.body.trim();
+        if summary.is_empty() || body.is_empty() {
+            return Ok(ToolResult::error(
+                "skill_observe: 'summary' and 'body' must be non-empty",
+            ));
+        }
+        let kind = match input.kind.as_deref().map(str::trim) {
+            None | Some("") | Some("failure") => crate::ObservationKind::Failure,
+            Some("recipe") => crate::ObservationKind::Recipe,
+            Some("caveat") => crate::ObservationKind::Caveat,
+            Some(other) => {
+                return Ok(ToolResult::error(format!(
+                    "skill_observe: unknown kind {other:?} \
+                     (use failure, recipe, or caveat)"
+                )));
+            }
+        };
+        let observation_input = crate::ObservationInput {
+            kind,
+            source: crate::ObservationSource::Agent,
+            summary: summary.to_string(),
+            body: body.to_string(),
+            node_kind: input
+                .node_kind
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string),
+            error: input
+                .error
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string),
+        };
+        match self.manager.record_observation(observation_input) {
+            Ok(observation) => Ok(ToolResult::success(format!(
+                "recorded observation {} ({}). Repeated patterns surface as \
+                 skill proposals via `autonomics-skills distill`.",
+                observation.id,
+                observation.kind_label(),
+            ))),
+            Err(e) => Ok(ToolResult::error(format!("skill_observe: {e}"))),
+        }
+    }
+}
+
 // ────────────────────────── registration ──────────────────────────
 
 /// Build the skill tool registrations around one shared manager.
@@ -315,7 +398,10 @@ pub fn skill_registrations(manager: Arc<SkillManager>) -> Vec<ToolRegistration> 
         ToolRegistration::from(SkillWorkflowsTool {
             manager: manager.clone(),
         }),
-        ToolRegistration::from(SkillSearchTool { manager }),
+        ToolRegistration::from(SkillSearchTool {
+            manager: manager.clone(),
+        }),
+        ToolRegistration::from(SkillObserveTool { manager }),
     ]
 }
 

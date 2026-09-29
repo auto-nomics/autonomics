@@ -13,9 +13,15 @@
 //! - [`manager`] — the central process-wide manager: generation
 //!   counter, change broadcast on every mutation, usage telemetry
 //!   (the evolution fitness signal)
+//! - [`observation`] — the distillation feedstock: durable
+//!   content-hashed records of failures/fixes/recipes
+//! - [`distill`] — deterministic clustering and proposal synthesis
+//!   (the RSI loop's no-LLM core)
+//! - [`proposals`] — the staging area and approve/reject lifecycle
+//!   between distillation and the live library
 //! - [`inject`] — the one-line-per-skill system-prompt index
 //! - [`tools`] — `skill_list` / `skill_get` / `skill_search` /
-//!   `skill_workflows` agent tools
+//!   `skill_workflows` / `skill_observe` agent tools
 //! - [`workflow`] — parameterized DAG templates (`workflow/*.toml`):
 //!   parse, validate, render with checked params
 //! - [`eval`] — eval cases (`evals/*.toml`): run a workflow with fixed
@@ -29,21 +35,29 @@
 //! access point for future usage telemetry.
 
 pub mod builtin;
+pub mod distill;
 pub mod error;
 pub mod eval;
 pub mod format;
 pub mod inject;
 pub mod install;
 pub mod manager;
+pub mod observation;
+pub mod proposals;
 pub mod registry;
 pub mod tools;
 pub mod workflow;
 
+pub use distill::{Candidate, DistillReport, distill};
 pub use error::SkillError;
 pub use eval::{Check, EvalCase, EvalReport};
 pub use format::SkillMeta;
 pub use inject::prompt_section;
 pub use manager::{SkillManager, UsageKind, UsageRecord};
+pub use observation::{
+    Observation, ObservationInput, ObservationKind, ObservationSource, ObservationStore,
+};
+pub use proposals::{Proposal, ProposalStatus, Proposals};
 pub use registry::{SkillDocument, SkillEntry, SkillRegistry, SkillTier};
 pub use tools::skill_registrations;
 pub use workflow::{RenderedWorkflow, WorkflowTemplate};
