@@ -2701,6 +2701,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
@@ -2833,6 +2834,7 @@ dependencies = [
  "arrow-buffer",
  "arrow-schema",
  "async-trait",
+ "chrono",
  "container-plugin",
  "container-runtime",
  "csv",
@@ -2870,6 +2872,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "turso",
+ "uuid",
  "vfs",
 ]
 
@@ -13179,6 +13182,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",

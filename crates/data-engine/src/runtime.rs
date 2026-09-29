@@ -97,6 +97,7 @@ impl SessionServer {
             DataEngineCmd::RunDag {
                 event_tx,
                 commit_message,
+                trigger,
                 reply,
                 cancel_token,
             } => {
@@ -118,6 +119,7 @@ impl SessionServer {
                     let run_fut = AssertUnwindSafe(async {
                         let mut engine = engine.lock().await;
                         engine.set_commit_message(commit_message);
+                        engine.set_run_trigger(trigger);
                         match event_tx {
                             Some(sink) => {
                                 engine
@@ -418,6 +420,51 @@ impl SessionServer {
                     .expect("uncontended: running flag is false");
                 let _ = reply.send(engine.dag_log(ref_name.as_deref(), limit).await);
             }
+            DataEngineCmd::DagRunsLog {
+                ref_name,
+                limit,
+                run_id,
+                reply,
+            } => {
+                if self.running.load(Ordering::SeqCst) {
+                    let _ = reply.send(Err(crate::error::Error::Custom(
+                        "DAG is currently running; try again after completion".to_string(),
+                    )));
+                    return;
+                }
+                let engine = self
+                    .engine
+                    .try_lock()
+                    .expect("uncontended: running flag is false");
+                let result = if let Some(run_id) = run_id {
+                    engine.get_run(&run_id).await.map(|run| run.into_iter().collect())
+                } else {
+                    engine.list_runs(limit, ref_name.as_deref()).await
+                };
+                let _ = reply.send(result);
+            }
+            DataEngineCmd::ExportRun {
+                run_id,
+                format,
+                out_dir,
+                reply,
+            } => {
+                if self.running.load(Ordering::SeqCst) {
+                    let _ = reply.send(Err(crate::error::Error::Custom(
+                        "DAG is currently running; try again after completion".to_string(),
+                    )));
+                    return;
+                }
+                let engine = self
+                    .engine
+                    .try_lock()
+                    .expect("uncontended: running flag is false");
+                let result = match crate::dag::ExportFormat::parse(&format) {
+                    Ok(format) => engine.export_run(&run_id, format, out_dir).await,
+                    Err(error) => Err(crate::error::Error::Custom(error)),
+                };
+                let _ = reply.send(result);
+            }
             DataEngineCmd::CheckoutDag { snapshot_id, reply } => {
                 if self.running.load(Ordering::SeqCst) {
                     let _ = reply.send(Err(crate::error::Error::Custom(
@@ -704,7 +751,7 @@ impl DataEngineClient {
         .await
     }
 
-    pub async fn run_dag(&self) -> Result<crate::dag::RunReport> {
+    pub async fn run_dag(&self, trigger: Option<String>) -> Result<crate::dag::RunReport> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         let cancel = CancellationToken::new();
         let wrapped = CancelOnDropReceiver {
@@ -715,6 +762,7 @@ impl DataEngineClient {
             DataEngineCmd::RunDag {
                 event_tx: None,
                 commit_message: None,
+                trigger,
                 reply: reply_tx,
                 cancel_token: cancel,
             },
@@ -736,6 +784,7 @@ impl DataEngineClient {
     pub fn run_dag_stream(
         &self,
         commit_message: Option<String>,
+        trigger: Option<String>,
     ) -> (
         mpsc::Receiver<crate::dag::node_event::NodeEvent>,
         CancelOnDropReceiver,
@@ -748,6 +797,7 @@ impl DataEngineClient {
             cmd: DataEngineCmd::RunDag {
                 event_tx: Some(event_tx),
                 commit_message,
+                trigger,
                 reply: reply_tx,
                 cancel_token: cancel.clone(),
             },
@@ -900,6 +950,49 @@ impl DataEngineClient {
             DataEngineCmd::DagLog {
                 ref_name,
                 limit,
+                reply: reply_tx,
+            },
+            reply_rx,
+        )
+        .await
+    }
+
+    /// Query the execution audit trail. Without `run_id`: recent runs
+    /// (newest-first, optionally filtered by `ref_name`). With `run_id`: that
+    /// single run, including its full run report.
+    pub async fn dag_runs_log(
+        &self,
+        ref_name: Option<String>,
+        limit: usize,
+        run_id: Option<String>,
+    ) -> Result<Vec<crate::dag::RunRecord>> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.request(
+            DataEngineCmd::DagRunsLog {
+                ref_name,
+                limit,
+                run_id,
+                reply: reply_tx,
+            },
+            reply_rx,
+        )
+        .await
+    }
+
+    /// Export one recorded run as provenance evidence (PROV-JSON / RO-Crate).
+    /// `format` is `prov` or `crate`; `out_dir` must be absolute.
+    pub async fn export_run(
+        &self,
+        run_id: String,
+        format: String,
+        out_dir: std::path::PathBuf,
+    ) -> Result<crate::dag::ExportSummary> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.request(
+            DataEngineCmd::ExportRun {
+                run_id,
+                format,
+                out_dir,
                 reply: reply_tx,
             },
             reply_rx,
@@ -1239,7 +1332,7 @@ mod tests {
 
         // Start a streaming DAG run, then immediately drop the receiver —
         // simulating agent task cancellation.
-        let (_event_rx, reply_rx) = client.run_dag_stream(None);
+        let (_event_rx, reply_rx) = client.run_dag_stream(None, None);
         drop(reply_rx);
 
         // Give the actor + spawned task a moment to process the cancellation.
@@ -1250,7 +1343,7 @@ mod tests {
         // The session must be usable again — the `running` flag is reset and
         // the mutex is released. A second run should not get "already running".
         let result =
-            tokio::time::timeout(std::time::Duration::from_secs(5), client.run_dag()).await;
+            tokio::time::timeout(std::time::Duration::from_secs(5), client.run_dag(None)).await;
 
         assert!(
             result.is_ok(),
@@ -1285,7 +1378,7 @@ mod tests {
             .await
             .unwrap();
 
-        let report = client.run_dag().await.unwrap();
+        let report = client.run_dag(None).await.unwrap();
 
         assert!(!report.ok, "{report:?}");
         assert_eq!(

@@ -145,6 +145,15 @@ fn build_report_json(report: RunReport) -> serde_json::Value {
             if let Some(cause) = nr.skipped_because {
                 obj.insert("skipped_because".into(), serde_json::json!(cause));
             }
+            if let Some(execution) = nr.execution {
+                obj.insert("execution".into(), serde_json::json!(execution));
+            }
+            if !nr.inputs.is_empty() {
+                obj.insert("inputs".into(), serde_json::json!(nr.inputs));
+            }
+            if let Some(fingerprint) = nr.fingerprint {
+                obj.insert("fingerprint".into(), serde_json::json!(fingerprint));
+            }
 
             serde_json::Value::Object(obj)
         })
@@ -195,7 +204,12 @@ impl ToolFunction for RunDagTool {
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
         // Non-streaming path (used when called directly, not via the toolset).
-        let report = self.client.run_dag().await.map_err(ExecError::from)?;
+        let trigger = Some(format!("agent:{}", self.client.session_id()));
+        let report = self
+            .client
+            .run_dag(trigger)
+            .await
+            .map_err(ExecError::from)?;
         let _ = input; // commit_message only used in streaming path
         Ok(ToolResult::success_json(build_report_json(report)))
     }
@@ -211,7 +225,10 @@ impl ToolFunction for RunDagTool {
     ) -> Result<ToolResult, ToolError> {
         let parsed = serde_json::from_value::<Self::Input>(input)?;
 
-        let (mut event_rx, reply_rx) = self.client.run_dag_stream(parsed.commit_message);
+        let trigger = Some(format!("agent:{}", self.client.session_id()));
+        let (mut event_rx, reply_rx) =
+            self.client
+                .run_dag_stream(parsed.commit_message, trigger);
         // Pin the reply future so it can be polled across loop iterations.
         tokio::pin!(reply_rx);
 

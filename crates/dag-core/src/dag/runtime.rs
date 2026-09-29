@@ -115,21 +115,20 @@ pub enum RuntimeStatus {
     Cancelled,
 }
 
-/// Per-node dirty-mark state for incremental execution.
-///
-/// A node is `Dirty` when its spec, payload, wiring, or an upstream output has
-/// changed since its last successful run. An incremental `run` (see
-/// [`super::SchedulerConfig::incremental`]) skips `Clean` nodes and reuses
-/// their cached outputs instead of re-executing them.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DirtyState {
-    /// Output is cached and up-to-date. An incremental run skips this node.
+/// How input values contribute their identity to a node's execution
+/// fingerprint.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum InputHashing {
+    /// Use whatever identity evidence is already recorded on the values —
+    /// content hashes where publishers computed them, size + mtime
+    /// (`meta:`) otherwise. Zero extra I/O; the default.
     #[default]
-    Clean,
-    /// Needs re-execution. Set by mutations and propagated to all transitive
-    /// descendants.
-    Dirty,
+    Metadata,
+    /// Additionally compute sha256 for file-like inputs that lack a content
+    /// hash, reading them through the object store / host filesystem. Full
+    /// Nextflow-style semantics at the cost of reading every unhashed input
+    /// on every run.
+    Content,
 }
 
 /// Scheduler tuning knobs.
@@ -148,16 +147,21 @@ pub struct SchedulerConfig {
     /// schema without doing the I/O. Enable explicitly when downstream tooling
     /// (agents, dashboards, callers) needs row counts.
     pub compute_row_counts: bool,
-    /// When `true`, `run` only re-executes nodes marked [`DirtyState::Dirty`]
-    /// and skips `Clean` nodes whose cached outputs are retained from a
-    /// previous successful run. When `false` (default), every node is
-    /// re-executed unconditionally (current behavior).
+    /// When `true`, nodes whose computed execution fingerprint matches the
+    /// fingerprint recorded at their last successful execution — and whose
+    /// cached outputs are still present — are skipped and their outputs
+    /// reused. When `false` (default), every node is re-executed
+    /// unconditionally.
     ///
-    /// Mutations (`replace_node`, `add_edge`, `delete_edge`, …) automatically
-    /// mark affected nodes and their transitive descendants dirty. Callers can
-    /// also manually mark nodes dirty via [`crate::dag::DAG::mark_dirty`] —
-    /// useful when an external input (file or VFS dataset) has changed.
+    /// The fingerprint covers kind + spec + input identities + engine
+    /// version, so spec edits, rewiring, and upstream changes all produce a
+    /// different fingerprint and force re-execution without any explicit
+    /// dirty propagation. External file changes are detected separately by
+    /// the run-start staleness check (content-hash confirmed when recorded).
     pub incremental: bool,
+    /// Input identity depth for fingerprint computation (see
+    /// [`InputHashing`]). Defaults to [`InputHashing::Metadata`].
+    pub input_hashing: InputHashing,
     /// Stop a DAG when sampled process/cgroup memory reaches this fraction of
     /// its memory limit. `None` disables the guard.
     pub memory_guard: Option<crate::resource::MemoryGuardConfig>,
@@ -172,6 +176,7 @@ impl Default for SchedulerConfig {
             max_concurrency: cpus,
             compute_row_counts: false,
             incremental: false,
+            input_hashing: InputHashing::Metadata,
             memory_guard: None,
         }
     }
@@ -232,6 +237,54 @@ pub struct DagErrorReport {
     pub message: String,
 }
 
+/// Execution-level evidence a node reports about its own run, beyond what the
+/// scheduler can observe generically.
+///
+/// Populated via
+/// [`crate::dag::node_event::NodeReporter::set_run_details`] and carried to
+/// [`NodeReport::execution`] through the terminal `JobResult` — so it survives
+/// both the success and the failure path.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct NodeRunDetails {
+    /// Full container image reference used for the execution, if any.
+    pub image: Option<String>,
+    /// The `sha256:` digest parsed from `image`, when the reference is
+    /// digest-pinned.
+    pub image_digest: Option<String>,
+    /// Process exit code (`0` on the success path).
+    pub exit_code: Option<i32>,
+    /// Per-execution identity shared with the run's artifact directory (for
+    /// container nodes: the container name, which also names the scratch
+    /// directory and the `{artifact_prefix}/{run_name}/` output subtree).
+    pub run_name: Option<String>,
+    /// Persisted stdout capture (`vfs://` URI + sha256), when non-empty.
+    pub stdout_log: Option<crate::value::FileRef>,
+    /// Persisted stderr capture (`vfs://` URI + sha256), when non-empty.
+    pub stderr_log: Option<crate::value::FileRef>,
+}
+
+/// One resolved upstream input of a node, recorded at dispatch time.
+///
+/// Captured generically by the scheduler from the wiring edges — nodes need no
+/// cooperation — so every [`NodeReport`] can answer "which upstream values, at
+/// which paths, fed this execution".
+#[derive(Debug, Clone, Serialize)]
+pub struct InputBinding {
+    /// Id of the upstream node that produced the value.
+    pub from: String,
+    /// Output port on the upstream node.
+    pub from_port: u8,
+    /// Input port on the consuming node.
+    pub to_port: u8,
+    /// [`crate::value::NodeValue`] variant name (`"DataFrame"`, `"File"`, …).
+    pub kind: String,
+    /// Path / URI of the bound value when it is file-like (first entry for
+    /// set-valued inputs).
+    pub path: Option<String>,
+    /// Fingerprint of the bound value, when one is recorded.
+    pub fingerprint: Option<crate::value::FileFingerprint>,
+}
+
 /// Per-node execution summary produced by [`super::graph::DAG::run`].
 ///
 /// Contains everything an agent needs to understand what each node did
@@ -269,6 +322,20 @@ pub struct NodeReport {
     pub error: Option<DagErrorReport>,
     /// For `Skipped` nodes: the id of the root-cause failed node.
     pub skipped_because: Option<String>,
+    /// Node-reported execution evidence (image, exit code, persisted logs).
+    /// See [`NodeRunDetails`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub execution: Option<NodeRunDetails>,
+    /// Upstream inputs resolved at dispatch time. See [`InputBinding`].
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub inputs: Vec<InputBinding>,
+    /// Execution fingerprint of this node (kind + spec + input identities +
+    /// engine version). Equal fingerprints across two executions imply the
+    /// same inputs, code, and environment — the reuse key for incremental
+    /// runs. `None` when the node failed (its fingerprint is dropped on
+    /// failure) or for nodes that never dispatched.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fingerprint: Option<String>,
 }
 
 /// Result of a `DAG::run` invocation: the final status of every node and

@@ -341,26 +341,6 @@ impl ToolFunction for GetOutputTool {
                             "fingerprint": file.fingerprint,
                         })).collect::<Vec<_>>(),
                     }),
-                    data_engine::NodeValue::Data(data) => serde_json::json!({
-                        "name": name,
-                        "type": "data",
-                        "artifact_id": data.artifact_id,
-                        "vpath": data.vpath,
-                        "format": data.format,
-                        "size": data.fingerprint.as_ref().map(|fp| fp.size),
-                        "fingerprint": data.fingerprint,
-                    }),
-                    data_engine::NodeValue::DataSet(data) => serde_json::json!({
-                        "name": name,
-                        "type": "data_set",
-                        "artifacts": data.iter().map(|data| serde_json::json!({
-                            "artifact_id": data.artifact_id,
-                            "vpath": data.vpath,
-                            "format": data.format,
-                            "size": data.fingerprint.as_ref().map(|fp| fp.size),
-                            "fingerprint": data.fingerprint,
-                        })).collect::<Vec<_>>(),
-                    }),
                     data_engine::NodeValue::DataFrame(_) => unreachable!("DataFrame handled above"),
                 });
                 continue;

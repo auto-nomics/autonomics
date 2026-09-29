@@ -103,6 +103,10 @@ impl DagNode for BundleSourceNode {
                     size: metadata.content_length(),
                     mtime_ns,
                     content_hash: metadata.etag().map(str::to_string),
+                    // Bare virtual path (no `vfs://` prefix) on the immutable
+                    // store — declare it at birth so invalidation never has
+                    // to guess from the path spelling.
+                    immutable_remote: true,
                 }),
             },
         );

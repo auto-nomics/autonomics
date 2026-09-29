@@ -311,6 +311,31 @@ impl OpendalFileStorage {
         Ok(meta.content_length())
     }
 
+    /// Stream-hash an object's content with sha256, reading in bounded
+    /// chunks. Returns `(size, bare lowercase hex digest)`.
+    ///
+    /// Chunk consumption is clamped to the requested range length: backends
+    /// that ignore range requests may return more bytes than asked for, and
+    /// hashing them would silently corrupt the digest. An empty object
+    /// hashes to the well-known empty-input digest.
+    pub async fn sha256(&self, virtual_path: &str) -> Result<(u64, String), opendal::Error> {
+        use sha2::Digest;
+
+        const CHUNK: u64 = 1024 * 1024;
+        let size = self.content_length(virtual_path).await?;
+        let mut hasher = sha2::Sha256::new();
+        let mut offset: u64 = 0;
+        while offset < size {
+            let end = (offset + CHUNK).min(size);
+            let buffer = self.read_range(virtual_path, offset..end).await?;
+            let bytes = buffer.to_bytes();
+            let take = ((end - offset) as usize).min(bytes.len());
+            hasher.update(&bytes[..take]);
+            offset += take as u64;
+        }
+        Ok((size, hex_lower(&hasher.finalize())))
+    }
+
     /// Delete an object while holding its replacement lock.
     pub async fn delete_object(&self, virtual_path: &str) -> Result<(), opendal::Error> {
         self.check_writable(virtual_path)?;
@@ -1311,6 +1336,11 @@ fn entry_to_meta(entry: &opendal::Entry) -> Option<ObjectMeta> {
         return None;
     }
     opendal_meta_to_object_meta(entry.path(), meta).into()
+}
+
+/// Lowercase hex of a digest, without pulling in a hex crate.
+fn hex_lower(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 #[cfg(test)]

@@ -714,6 +714,7 @@ async fn write_vfs(
         size: bytes.len() as u64,
         mtime_ns: 0,
         content_hash: Some(format!("{digest:x}")),
+        immutable_remote: true,
     })
 }
 
