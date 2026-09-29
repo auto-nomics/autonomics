@@ -9,8 +9,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use skills::registry::{SkillRegistry, SkillTier};
-use skills::{default_state_dir, install};
+use skills::SkillManager;
 
 #[derive(Parser)]
 #[command(
@@ -54,34 +53,39 @@ enum Command {
     /// Validate a skill directory before installing: SKILL.md format,
     /// every workflow template, every eval file.
     Validate { path: PathBuf },
+    /// Show the in-process usage telemetry (empty for a fresh process;
+    /// meaningful inside the daemon, exposed here for smoke tests).
+    Usage,
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    let state_dir = cli.state_dir.clone().unwrap_or_else(default_state_dir);
-    let registry = {
-        let reg = SkillRegistry::standard(&state_dir);
+    let state_dir = cli
+        .state_dir
+        .clone()
+        .unwrap_or_else(skills::default_state_dir);
+    // A one-shot process has no cross-thread subscribers, but routing
+    // mutations through the manager keeps the generation/notify
+    // invariant identical to the daemon's.
+    let manager = {
+        let m = SkillManager::new(&state_dir);
         match &cli.workspace_dir {
-            Some(dir) => reg.with_root(SkillTier::Workspace, dir),
-            None => reg,
+            Some(dir) => m.with_workspace_root(dir),
+            None => m,
         }
     };
 
     let result = match cli.command {
-        Command::List => list(&registry),
-        Command::Show { name } => show(&registry, &name),
+        Command::List => list(&manager),
+        Command::Show { name } => show(&manager, &name),
         Command::Install {
             source,
             workspace: to_workspace,
-        } => install_cmd(
-            &source,
-            &state_dir,
-            cli.workspace_dir.as_deref(),
-            to_workspace,
-        ),
-        Command::Uninstall { name } => uninstall_cmd(&registry, &name),
-        Command::Workflows { name } => workflows_cmd(&registry, &name),
+        } => install_cmd(&manager, &source, to_workspace),
+        Command::Uninstall { name } => uninstall_cmd(&manager, &name),
+        Command::Workflows { name } => workflows_cmd(&manager, &name),
         Command::Validate { path } => validate_cmd(&path),
+        Command::Usage => usage_cmd(&manager),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -92,8 +96,8 @@ fn main() -> ExitCode {
     }
 }
 
-fn list(registry: &SkillRegistry) -> Result<(), String> {
-    let entries = registry.list();
+fn list(manager: &SkillManager) -> Result<(), String> {
+    let entries = manager.registry().list();
     if entries.is_empty() {
         println!("No skills installed.");
         return Ok(());
@@ -116,8 +120,9 @@ fn list(registry: &SkillRegistry) -> Result<(), String> {
     Ok(())
 }
 
-fn show(registry: &SkillRegistry, name: &str) -> Result<(), String> {
-    let doc = registry
+fn show(manager: &SkillManager, name: &str) -> Result<(), String> {
+    let doc = manager
+        .registry()
         .get(name)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("no skill named {name:?}"))?;
@@ -128,20 +133,16 @@ fn show(registry: &SkillRegistry, name: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn install_cmd(
-    source: &str,
-    state_dir: &std::path::Path,
-    workspace_flag: Option<&std::path::Path>,
-    to_workspace: bool,
-) -> Result<(), String> {
-    let dest_root = if to_workspace {
-        workspace_flag.map(PathBuf::from).ok_or_else(|| {
-            "--workspace <dir> is required to install into the workspace tier".to_string()
-        })?
-    } else {
-        state_dir.join("skills")
-    };
-    println!("Installing from {source:?} into {} …", dest_root.display());
+fn install_cmd(manager: &SkillManager, source: &str, to_workspace: bool) -> Result<(), String> {
+    if to_workspace {
+        return Err(
+            "workspace-tier installs are a daemon-side operation; the CLI \
+             installs into the global tier (pass --workspace-dir at the \
+             manager level instead)"
+                .to_string(),
+        );
+    }
+    println!("Installing from {source:?} …");
 
     // Disambiguation order mirrors the ecosystem convention: an
     // existing local path (after ~ expansion) always wins; only then
@@ -149,17 +150,9 @@ fn install_cmd(
     // the shorthand `owner/repo` would otherwise both parse.
     let local_path = PathBuf::from(shellexpand_home(source));
     let outcome = if local_path.is_dir() {
-        let record = install::InstallRecord {
-            source: source.to_string(),
-            commit: None,
-            installed_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0),
-        };
-        install::install_from_local(&local_path, &dest_root, Some(&record))
+        manager.install_local(&local_path)
     } else {
-        install::install_from_git(source, &dest_root)
+        manager.install_git(source)
     }
     .map_err(|e| e.to_string())?;
 
@@ -175,22 +168,23 @@ fn install_cmd(
     Ok(())
 }
 
-fn uninstall_cmd(registry: &SkillRegistry, name: &str) -> Result<(), String> {
+fn uninstall_cmd(manager: &SkillManager, name: &str) -> Result<(), String> {
     // Refuse builtin by checking the resolved tier first.
-    if let Some(entry) = registry.list().into_iter().find(|e| e.name() == name) {
-        if entry.tier == SkillTier::Builtin {
-            return Err(skills::SkillError::Builtin(name.to_string()).to_string());
-        }
+    if let Some(entry) = manager
+        .registry()
+        .list()
+        .into_iter()
+        .find(|e| e.name() == name)
+        && entry.tier == skills::SkillTier::Builtin
+    {
+        return Err(skills::SkillError::Builtin(name.to_string()).to_string());
     }
-    let roots: Vec<PathBuf> = registry
-        .roots()
-        .iter()
-        .map(|(_, root)| root.clone())
-        // Higher tiers first: uninstall from where it actually lives.
-        .rev()
-        .collect();
-    let removed = install::uninstall(name, &roots).map_err(|e| e.to_string())?;
-    println!("removed {}", removed.display());
+    let removed = manager.uninstall(name).map_err(|e| e.to_string())?;
+    println!(
+        "removed {} (generation {})",
+        removed.display(),
+        manager.generation()
+    );
     Ok(())
 }
 
@@ -203,8 +197,9 @@ fn shellexpand_home(source: &str) -> String {
     source.to_string()
 }
 
-fn workflows_cmd(registry: &SkillRegistry, name: &str) -> Result<(), String> {
-    let doc = registry
+fn workflows_cmd(manager: &SkillManager, name: &str) -> Result<(), String> {
+    let doc = manager
+        .registry()
         .get(name)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("no skill named {name:?}"))?;
@@ -310,5 +305,35 @@ fn validate_cmd(path: &std::path::Path) -> Result<(), String> {
         return Err("validation failed".into());
     }
     println!("\n{} valid.", meta.name);
+    Ok(())
+}
+
+fn usage_cmd(manager: &SkillManager) -> Result<(), String> {
+    let rows = manager.usage_snapshot();
+    if rows.is_empty() {
+        println!("No usage recorded (telemetry lives in the daemon process).");
+        return Ok(());
+    }
+    // Header is fully static — no format args needed.
+    println!(
+        "skill                   {:>6} {:>6} {:>6} {:>6}  last_used",
+        "get", "search", "run", "eval"
+    );
+    for (name, u) in rows {
+        println!(
+            "{:<24} {:>6} {:>6} {:>6} {:>6}  {}",
+            name,
+            u.gets,
+            u.search_hits,
+            u.runs,
+            u.evals,
+            if u.last_used == 0 {
+                "-".to_string()
+            } else {
+                u.last_used.to_string()
+            }
+        );
+    }
+    println!("generation: {}", manager.generation());
     Ok(())
 }

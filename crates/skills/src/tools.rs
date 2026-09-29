@@ -13,7 +13,7 @@ use agentik_proc::tool;
 use agentik_sdk::types::ToolResult;
 
 use crate::format::MAX_BODY_BYTES;
-use crate::registry::{SkillRegistry, SkillTier};
+use crate::manager::SkillManager;
 
 // ────────────────────────── inputs ──────────────────────────
 
@@ -59,7 +59,7 @@ pub struct SkillSearchInput {
 // ────────────────────────── tools ──────────────────────────
 
 pub struct SkillListTool {
-    pub registry: Arc<SkillRegistry>,
+    pub manager: Arc<SkillManager>,
 }
 
 #[async_trait::async_trait]
@@ -67,7 +67,7 @@ impl ToolFunction for SkillListTool {
     type Input = SkillListInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        let mut entries = self.registry.list();
+        let mut entries = self.manager.registry().list();
         if let Some(tier) = input
             .tier
             .as_deref()
@@ -94,7 +94,7 @@ impl ToolFunction for SkillListTool {
                 entry.meta.name,
                 entry.tier.as_str(),
                 tags,
-                crate::format::prompt_safe_description(&entry.meta.description, 240,)
+                crate::format::prompt_safe_description(&entry.meta.description, 240)
             ));
         }
         Ok(ToolResult::success(out))
@@ -102,7 +102,7 @@ impl ToolFunction for SkillListTool {
 }
 
 pub struct SkillGetTool {
-    pub registry: Arc<SkillRegistry>,
+    pub manager: Arc<SkillManager>,
 }
 
 #[async_trait::async_trait]
@@ -114,12 +114,13 @@ impl ToolFunction for SkillGetTool {
         if name.is_empty() {
             return Ok(ToolResult::error("skill_get: 'name' must be non-empty"));
         }
-        let Some(doc) = self.registry.get(name).unwrap_or_else(|e| {
+        let Some(doc) = self.manager.registry().get(name).unwrap_or_else(|e| {
             tracing::warn!(skill = name, error = %e, "skill_get: unreadable skill");
             None
         }) else {
             let names: Vec<String> = self
-                .registry
+                .manager
+                .registry()
                 .list()
                 .into_iter()
                 .map(|e| e.meta.name)
@@ -130,6 +131,8 @@ impl ToolFunction for SkillGetTool {
             )));
         };
 
+        self.manager
+            .record_usage(&doc.meta.name, crate::UsageKind::Get);
         let lines: Vec<&str> = doc.body.lines().collect();
         let offset = input.offset.unwrap_or(1).max(1);
         let limit = input.limit.unwrap_or(400).min(2000);
@@ -163,7 +166,7 @@ impl ToolFunction for SkillGetTool {
 }
 
 pub struct SkillSearchTool {
-    pub registry: Arc<SkillRegistry>,
+    pub manager: Arc<SkillManager>,
 }
 
 #[async_trait::async_trait]
@@ -171,7 +174,11 @@ impl ToolFunction for SkillSearchTool {
     type Input = SkillSearchInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        let entries = self.registry.search(&input.query);
+        let entries = self.manager.registry().search(&input.query);
+        for entry in &entries {
+            self.manager
+                .record_usage(&entry.meta.name, crate::UsageKind::SearchHit);
+        }
         if entries.is_empty() {
             return Ok(ToolResult::success(format!(
                 "No skills match {:?}. Try broader domain keywords, or \
@@ -185,7 +192,7 @@ impl ToolFunction for SkillSearchTool {
                 "- {} ({}) — {}\n",
                 entry.meta.name,
                 entry.tier.as_str(),
-                crate::format::prompt_safe_description(&entry.meta.description, 240,)
+                crate::format::prompt_safe_description(&entry.meta.description, 240)
             ));
         }
         Ok(ToolResult::success(out))
@@ -208,7 +215,7 @@ pub struct SkillWorkflowsInput {
 }
 
 pub struct SkillWorkflowsTool {
-    pub registry: Arc<SkillRegistry>,
+    pub manager: Arc<SkillManager>,
 }
 
 #[async_trait::async_trait]
@@ -217,7 +224,7 @@ impl ToolFunction for SkillWorkflowsTool {
 
     async fn run(&self, input: SkillWorkflowsInput) -> Result<ToolResult, ToolError> {
         let name = input.name.trim();
-        let Some(doc) = self.registry.get(name).unwrap_or_else(|e| {
+        let Some(doc) = self.manager.registry().get(name).unwrap_or_else(|e| {
             tracing::warn!(skill = name, error = %e, "skill_workflows: unreadable skill");
             None
         }) else {
@@ -292,22 +299,23 @@ impl ToolFunction for SkillWorkflowsTool {
 
 // ────────────────────────── registration ──────────────────────────
 
-/// Build the skill tool registrations around one shared registry.
+/// Build the skill tool registrations around one shared manager.
 ///
-/// Pass the same [`SkillRegistry`] used for prompt injection so the
-/// index in the system prompt and the tools always agree.
-pub fn skill_registrations(registry: Arc<SkillRegistry>) -> Vec<ToolRegistration> {
+/// Pass the same [`SkillManager`] used for prompt injection so the
+/// index in the system prompt, the tools, and the usage telemetry
+/// always agree.
+pub fn skill_registrations(manager: Arc<SkillManager>) -> Vec<ToolRegistration> {
     vec![
         ToolRegistration::from(SkillListTool {
-            registry: registry.clone(),
+            manager: manager.clone(),
         }),
         ToolRegistration::from(SkillGetTool {
-            registry: registry.clone(),
+            manager: manager.clone(),
         }),
         ToolRegistration::from(SkillWorkflowsTool {
-            registry: registry.clone(),
+            manager: manager.clone(),
         }),
-        ToolRegistration::from(SkillSearchTool { registry }),
+        ToolRegistration::from(SkillSearchTool { manager }),
     ]
 }
 
@@ -316,7 +324,7 @@ mod tests {
     use super::*;
     use agentik_core::tools::ToolFunction as _;
 
-    fn registry_with_two() -> Arc<SkillRegistry> {
+    fn manager_with_two() -> Arc<SkillManager> {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("skills");
         for (dir, name, desc, tags) in [
@@ -333,19 +341,16 @@ mod tests {
             )
             .unwrap();
         }
-        // Leak the tempdir for the registry's lifetime — the test ends
+        // Leak the tempdir for the manager's lifetime — the test ends
         // before cleanup matters.
-        let root = {
-            let leaked = tmp.keep();
-            leaked.join("skills")
-        };
-        Arc::new(SkillRegistry::empty().with_root(SkillTier::Global, root))
+        let state_dir = tmp.keep();
+        Arc::new(SkillManager::new(state_dir))
     }
 
     #[tokio::test]
     async fn list_reports_builtin_and_installed() {
         let tool = SkillListTool {
-            registry: registry_with_two(),
+            manager: manager_with_two(),
         };
         let out = tool.run(SkillListInput { tier: None }).await.unwrap();
         let text = out.text_content();
@@ -356,7 +361,7 @@ mod tests {
     #[tokio::test]
     async fn get_paginates_and_reports_continuation() {
         let tool = SkillGetTool {
-            registry: registry_with_two(),
+            manager: manager_with_two(),
         };
         let out = tool
             .run(SkillGetInput {
@@ -384,7 +389,7 @@ mod tests {
     #[tokio::test]
     async fn search_andrs_terms_case_insensitively() {
         let tool = SkillSearchTool {
-            registry: registry_with_two(),
+            manager: manager_with_two(),
         };
         let out = tool
             .run(SkillSearchInput {

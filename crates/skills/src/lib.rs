@@ -10,6 +10,9 @@
 //! - [`format`] — parse and validate SKILL.md
 //! - [`registry`] — tiered scan (builtin / global / workspace) with
 //!   name-based shadowing; always fresh, never cached
+//! - [`manager`] — the central process-wide manager: generation
+//!   counter, change broadcast on every mutation, usage telemetry
+//!   (the evolution fitness signal)
 //! - [`inject`] — the one-line-per-skill system-prompt index
 //! - [`tools`] — `skill_list` / `skill_get` / `skill_search` /
 //!   `skill_workflows` agent tools
@@ -31,6 +34,7 @@ pub mod eval;
 pub mod format;
 pub mod inject;
 pub mod install;
+pub mod manager;
 pub mod registry;
 pub mod tools;
 pub mod workflow;
@@ -39,6 +43,7 @@ pub use error::SkillError;
 pub use eval::{Check, EvalCase, EvalReport};
 pub use format::SkillMeta;
 pub use inject::prompt_section;
+pub use manager::{SkillManager, UsageKind, UsageRecord};
 pub use registry::{SkillDocument, SkillEntry, SkillRegistry, SkillTier};
 pub use tools::skill_registrations;
 pub use workflow::{RenderedWorkflow, WorkflowTemplate};

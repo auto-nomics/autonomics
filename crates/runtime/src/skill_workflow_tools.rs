@@ -20,7 +20,7 @@ use agentik_proc::tool;
 use agentik_sdk::types::ToolResult;
 use async_trait::async_trait;
 use data_engine::runtime::DataEngineClient;
-use skills::registry::SkillRegistry;
+use skills::manager::SkillManager;
 use skills::workflow::RenderedWorkflow;
 
 // ────────────────────────── inputs ──────────────────────────
@@ -64,7 +64,7 @@ pub struct SkillEvalInput {
 // ────────────────────────── tools ──────────────────────────
 
 pub struct SkillRunWorkflowTool {
-    pub registry: Arc<SkillRegistry>,
+    pub manager: Arc<SkillManager>,
     pub client: Arc<DataEngineClient>,
 }
 
@@ -80,6 +80,7 @@ impl ToolFunction for SkillRunWorkflowTool {
                 "skill_run_workflow: no skill named {skill:?}"
             )));
         };
+        self.manager.record_usage(skill, skills::UsageKind::Run);
         let Some(dir) = doc.dir.clone() else {
             return Ok(ToolResult::error(format!(
                 "skill_run_workflow: skill {skill:?} is builtin and carries no workflows"
@@ -154,7 +155,7 @@ impl ToolFunction for SkillRunWorkflowTool {
 }
 
 pub struct SkillEvalTool {
-    pub registry: Arc<SkillRegistry>,
+    pub manager: Arc<SkillManager>,
     pub client: Arc<DataEngineClient>,
 }
 
@@ -169,6 +170,7 @@ impl ToolFunction for SkillEvalTool {
                 "skill_eval: no skill named {skill:?}"
             )));
         };
+        self.manager.record_usage(skill, skills::UsageKind::Eval);
         let Some(dir) = doc.dir.clone() else {
             return Ok(ToolResult::error(format!(
                 "skill_eval: skill {skill:?} is builtin and carries no evals"
@@ -251,7 +253,7 @@ impl ToolFunction for SkillEvalTool {
 
 impl SkillRunWorkflowTool {
     fn load_doc(&self, skill: &str) -> Option<skills::SkillDocument> {
-        self.registry.get(skill).unwrap_or_else(|e| {
+        self.manager.registry().get(skill).unwrap_or_else(|e| {
             tracing::warn!(skill = skill, error = %e, "skill workflow tool: unreadable skill");
             None
         })
@@ -262,8 +264,8 @@ impl SkillEvalTool {
     fn load_doc(&self, skill: &str) -> Option<skills::SkillDocument> {
         // Same helper shape as the run tool; duplicated rather than
         // trait-abstracted — two call sites, and the shared state
-        // differs (registry + client).
-        self.registry.get(skill).unwrap_or_else(|e| {
+        // differs (manager + client).
+        self.manager.registry().get(skill).unwrap_or_else(|e| {
             tracing::warn!(skill = skill, error = %e, "skill eval tool: unreadable skill");
             None
         })
@@ -360,15 +362,15 @@ async fn build_dag(
 
 /// Build the engine-bound skill tool registrations.
 pub fn skill_workflow_registrations(
-    registry: Arc<SkillRegistry>,
+    manager: Arc<SkillManager>,
     client: Arc<DataEngineClient>,
 ) -> Vec<ToolRegistration> {
     vec![
         ToolRegistration::from(SkillRunWorkflowTool {
-            registry: registry.clone(),
+            manager: manager.clone(),
             client: client.clone(),
         }),
-        ToolRegistration::from(SkillEvalTool { registry, client }),
+        ToolRegistration::from(SkillEvalTool { manager, client }),
     ]
 }
 
@@ -457,12 +459,10 @@ node = "b"
     #[tokio::test]
     async fn workflow_instantiation_builds_and_runs_in_the_session_dag() {
         let tmp = tempfile::tempdir().unwrap();
-        write_skill(tmp.path());
-        let registry =
-            Arc::new(SkillRegistry::empty().with_root(skills::SkillTier::Global, tmp.path()));
+        write_skill(&tmp.path().join("skills"));
 
         let tool = SkillRunWorkflowTool {
-            registry: registry.clone(),
+            manager: Arc::new(skills::SkillManager::new(tmp.path())),
             client: make_client(),
         };
         let out = tool
@@ -484,13 +484,11 @@ node = "b"
     #[tokio::test]
     async fn evals_run_check_and_clean_up() {
         let tmp = tempfile::tempdir().unwrap();
-        write_skill(tmp.path());
-        let registry =
-            Arc::new(SkillRegistry::empty().with_root(skills::SkillTier::Global, tmp.path()));
+        write_skill(&tmp.path().join("skills"));
         let client = make_client();
 
         let tool = SkillEvalTool {
-            registry,
+            manager: Arc::new(skills::SkillManager::new(tmp.path())),
             client: client.clone(),
         };
         let out = tool
@@ -520,10 +518,8 @@ node = "b"
     #[tokio::test]
     async fn missing_skill_and_bad_params_surface_errors() {
         let tmp = tempfile::tempdir().unwrap();
-        let registry =
-            Arc::new(SkillRegistry::empty().with_root(skills::SkillTier::Global, tmp.path()));
         let run_tool = SkillRunWorkflowTool {
-            registry: registry.clone(),
+            manager: Arc::new(skills::SkillManager::new(tmp.path())),
             client: make_client(),
         };
         let missing = run_tool
@@ -538,7 +534,7 @@ node = "b"
             .unwrap();
         assert!(missing.is_error.unwrap_or(false));
 
-        write_skill(tmp.path());
+        write_skill(&tmp.path().join("skills"));
         let bad_params = run_tool
             .run(SkillRunWorkflowInput {
                 skill: "echo-flow".into(),

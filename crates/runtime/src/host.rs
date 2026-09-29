@@ -158,10 +158,12 @@ pub struct SharedInfra {
     pub memory: Arc<MemoryBackend>,
     /// Optional Turso-backed KMS knowledge service.
     pub kms: Option<Arc<kms::KmsService>>,
-    /// Tiered skill registry (builtin / global / workspace). Cheap to
-    /// hold — scans are on demand and always fresh, so an installed
-    /// skill is visible to the next spawned agent without restart.
-    pub skills: Arc<skills::SkillRegistry>,
+    /// Central skill manager (tiered registry + generation counter +
+    /// change broadcast + usage telemetry). Initialized as the
+    /// process-wide singleton so every mutation path — agent tools,
+    /// the future skill-smith, gateway handlers — shares one
+    /// notification invariant.
+    pub skills: Arc<skills::SkillManager>,
     /// The tokio runtime handle (for spawning agent tasks).
     pub runtime_handle: tokio::runtime::Handle,
     /// Optional host control for agent tools. Set by RuntimeHost when
@@ -359,7 +361,7 @@ impl SharedInfra {
             writing,
             memory,
             kms,
-            skills: Arc::new(skills::SkillRegistry::standard(&config.state_dir)),
+            skills: skills::SkillManager::init(skills::SkillManager::new(&config.state_dir)),
             runtime_handle: tokio::runtime::Handle::current(),
             host_control: None,
         })
@@ -419,7 +421,7 @@ impl SharedInfra {
         }
         // Skill index: one line per visible skill; bodies load on
         // demand via skill_get. Empty library → no section at all.
-        let skill_section = skills::prompt_section(&self.skills.list());
+        let skill_section = skills::prompt_section(&self.skills.registry().list());
         if !skill_section.is_empty() {
             builder = builder.with_system_prompt_section(skill_section);
         }
