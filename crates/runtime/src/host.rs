@@ -158,6 +158,10 @@ pub struct SharedInfra {
     pub memory: Arc<MemoryBackend>,
     /// Optional Turso-backed KMS knowledge service.
     pub kms: Option<Arc<kms::KmsService>>,
+    /// Tiered skill registry (builtin / global / workspace). Cheap to
+    /// hold — scans are on demand and always fresh, so an installed
+    /// skill is visible to the next spawned agent without restart.
+    pub skills: Arc<skills::SkillRegistry>,
     /// The tokio runtime handle (for spawning agent tasks).
     pub runtime_handle: tokio::runtime::Handle,
     /// Optional host control for agent tools. Set by RuntimeHost when
@@ -355,6 +359,7 @@ impl SharedInfra {
             writing,
             memory,
             kms,
+            skills: Arc::new(skills::SkillRegistry::standard(&config.state_dir)),
             runtime_handle: tokio::runtime::Handle::current(),
             host_control: None,
         })
@@ -411,6 +416,12 @@ impl SharedInfra {
         } else {
             builder =
                 builder.with_system_prompt_section(crate::config::build_system_prompt(profile));
+        }
+        // Skill index: one line per visible skill; bodies load on
+        // demand via skill_get. Empty library → no section at all.
+        let skill_section = skills::prompt_section(&self.skills.list());
+        if !skill_section.is_empty() {
+            builder = builder.with_system_prompt_section(skill_section);
         }
 
         builder = builder
@@ -477,6 +488,7 @@ impl SharedInfra {
         let engine_client = self.engine_manager.client_for_session(agent_path.as_str());
 
         let mut tools: Vec<ToolRegistration> = vfs::vbash_registrations(file_storage.clone());
+        tools.extend(skills::skill_registrations(self.skills.clone()));
         if let Some(catalog) = self.catalog.clone() {
             tools.extend(crate::catalog_tools::catalog_registrations(catalog));
         }
