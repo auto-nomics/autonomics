@@ -75,6 +75,10 @@ impl FileFormat {
             (".fasta", FileFormat::Fasta),
             (".fa.gz", FileFormat::Fasta),
             (".fa", FileFormat::Fasta),
+            (".faa.gz", FileFormat::Fasta),
+            (".faa", FileFormat::Fasta),
+            (".fna.gz", FileFormat::Fasta),
+            (".fna", FileFormat::Fasta),
             (".fastq.gz", FileFormat::Fastq),
             (".fastq", FileFormat::Fastq),
             (".fq.gz", FileFormat::Fastq),
@@ -1121,6 +1125,32 @@ mod tests {
     use std::sync::Arc;
     use vfs::OpendalFileStorage;
     use vfs::{BackendConfig, BackendDefinition, MountDefinition, MountedObjectStore, VfsManifest};
+
+    #[test]
+    fn fasta_format_infers_from_paths_and_labels() {
+        assert_eq!(
+            FileFormat::from_path("/data/proteins.faa"),
+            Some(FileFormat::Fasta)
+        );
+        assert_eq!(
+            FileFormat::from_path("/data/genome.fna"),
+            Some(FileFormat::Fasta)
+        );
+        assert_eq!(
+            FileFormat::from_path("/data/genes.FA"),
+            Some(FileFormat::Fasta)
+        );
+        assert_eq!(
+            FileFormat::from_path("/data/proteins.faa.gz"),
+            Some(FileFormat::Fasta)
+        );
+        assert_eq!(
+            FileFormat::from_path("/data/aligned.mafft.clipkit.faa"),
+            Some(FileFormat::Fasta)
+        );
+        assert_eq!(FileFormat::from_label("fasta"), Some(FileFormat::Fasta));
+        assert_eq!(FileFormat::Fasta.as_label(), "fasta");
+    }
 
     #[test]
     fn xpt_format_infers_from_paths_and_labels() {
