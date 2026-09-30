@@ -79,7 +79,7 @@ Node registry + DAG scheduler
 | 模型编排 | `agentik-sdk`、`agentik-types`、`agentik-proc`、`agentik-core`、`agentik-network`、`runtime` | 流式 LLM 客户端、工具 schema 与调用、持久记忆、生命周期、多智能体拓扑和同步到异步宿主。 |
 | 分析执行 | `dag-core`、`data-engine`、`data-engine-tools`、`crates/node-bundles/*`、`workflow-editor` | 节点 trait、插件注册表、类型化端口、调度器、JSON Schema 参数、智能体工具、快照和可复用 workflow skill。 |
 | 数据基础设施 | `vfs`、`data-catalog`、`container-runtime`、`biofusion` | OpenDAL VFS、版本化对象存储数据包、Podman 执行、不可变 panel 缓存，以及生物格式的 DataFusion 读取器。 |
-| 统计与流行病学 | `statkit`、`epi`、`hypothesize`、`cmprsk`、`survey`、`mice`、`hierint` | 描述统计与回归；因果推断和中介；可组合检验与 p 值工作流；竞争风险；调查设计；插补；层级交互模型。 |
+| 统计与流行病学 | `statkit`、`epi`、`hypothesize`、`nodes-power`、`cmprsk`、`survey`、`mice`、`hierint` | 描述统计与回归；因果推断和中介；可组合检验与 p 值工作流；前瞻性功效与样本量设计；竞争风险；调查设计；插补；层级交互模型。 |
 | 机器学习与深度学习 | `ml`、`dl`、`grf`、`grf-sys` | 预处理、特征工程、聚类、监督模型、集成学习、异常检测、降维；Burn 的 MLP、DeepSurv、DeepHit、RNN、Transformer、autoencoder；通过 vendored C++ 核心运行 generalized random forests。 |
 | 统计遗传学 | `ldsc`、`mr`、`lava`、`mrlap`、`lcv`、`cpassoc`、`magma`、`coloc`、`bkmr`、`evalue`、`genomic_sem`、`lcmm` | LD score regression、孟德尔随机化、局部遗传相关、colocalization、Bayesian kernel-machine regression、E-value、Genomic SEM、latent-class mixed models 等。 |
 | 断点回归 | `rdrobust`、`rdpower`、`rdmulti`、`rddensity`、`rdlocrand` | 局部多项式 RD 估计、功效与样本量、多 cutoff 设计、manipulation testing、局部随机化推断。 |

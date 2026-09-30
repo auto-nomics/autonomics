@@ -2856,6 +2856,7 @@ dependencies = [
  "nodes-ml",
  "nodes-mr",
  "nodes-opengwas",
+ "nodes-power",
  "nodes-rd",
  "nodes-regression",
  "nodes-sql",
@@ -7948,6 +7949,23 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "nodes-power"
+version = "0.1.0"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "async-trait",
+ "dag-core",
+ "datafusion",
+ "schemars",
+ "serde",
+ "serde_json",
+ "statrs",
+ "thiserror 2.0.20",
+ "tokio",
 ]
 
 [[package]]

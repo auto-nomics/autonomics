@@ -127,6 +127,7 @@ impl NodeRegistry {
 | **nodes-lcmm** | hlme, hlme_predict, hlme_compare | lcmm | 2,100 |
 | **nodes-survey** | survey_* (30 nodes) | survey | 6,000 |
 | **nodes-hypothesize** | hypothesize.* (24 nodes) | hypothesize | *(已有子模块)* |
+| **nodes-power** | power_t_test, power_prop_test, power_chisq_test, power_correlation, power_anova, power_regression, power_survival, power_cluster | statrs | ~3,000 |
 | **nodes-ml** | ml.* (50+ nodes) | ml | *(已有子模块)* |
 | 合计 | | | ~38,400 |
 
@@ -227,6 +228,7 @@ bundle-epi         = ["dep:nodes-epi"]
 bundle-lcmm        = ["dep:nodes-lcmm"]
 bundle-survey      = ["dep:nodes-survey"]
 bundle-hypothesize = ["dep:nodes-hypothesize"]
+bundle-power       = ["dep:nodes-power"]
 bundle-ml          = ["dep:nodes-ml"]
 
 [dependencies]
@@ -402,6 +404,7 @@ crates/
 │   ├── nodes-lcmm/
 │   ├── nodes-survey/
 │   ├── nodes-hypothesize/
+│   ├── nodes-power/
 │   └── nodes-ml/
 
 ├── data-engine-tools/             # 不变 (只用 dag-core + data-engine runtime API)

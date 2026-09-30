@@ -99,6 +99,8 @@ pub fn build_default_registry_with_container_execution(
     registry.register_plugin(&nodes_ml::Plugin);
     #[cfg(feature = "bundle-hypothesize")]
     registry.register_plugin(&nodes_hypothesize::Plugin);
+    #[cfg(feature = "bundle-power")]
+    registry.register_plugin(&nodes_power::Plugin);
 
     // ── Phase 1.5: DL bundle ────────────────────────────────────────────
     #[cfg(feature = "bundle-dl")]
