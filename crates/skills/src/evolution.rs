@@ -102,6 +102,9 @@ pub struct EvolutionReport {
     pub auto_approved: Vec<String>,
     /// Pending proposals left for human review.
     pub left_pending: usize,
+    /// Pending proposals that are agent-authored — review-gated even
+    /// under auto-approve.
+    pub human_review_only: usize,
     /// (cluster hash, reason) — skipped clusters.
     pub skipped: Vec<(String, String)>,
 }
@@ -164,16 +167,28 @@ pub fn run_evolution_cycle_labeled(
         ..Default::default()
     };
 
-    let pending: Vec<String> = manager
-        .proposals()
-        .list()
-        .into_iter()
+    let all_pending = manager.proposals().list();
+    let pending: Vec<String> = all_pending
+        .iter()
         .filter(|p| p.status == ProposalStatus::Pending)
-        .map(|p| p.name)
+        .map(|p| p.name.clone())
         .collect();
+    // Agent-authored proposals are human-review-only: the model may
+    // draft, never promote its own draft.
+    let agent_authored_pending = all_pending
+        .iter()
+        .filter(|p| p.status == ProposalStatus::Pending && p.authored_by == "agent")
+        .count();
 
     if policy.auto_approve {
-        for name in pending.iter().take(policy.max_approvals_per_cycle) {
+        // Filter before the cap so agent entries consume no approval
+        // slots.
+        let eligible: Vec<String> = all_pending
+            .iter()
+            .filter(|p| p.status == ProposalStatus::Pending && p.authored_by != "agent")
+            .map(|p| p.name.clone())
+            .collect();
+        for name in eligible.iter().take(policy.max_approvals_per_cycle) {
             match manager.approve_proposal(name) {
                 Ok(outcome) => {
                     tracing::info!(
@@ -192,6 +207,7 @@ pub fn run_evolution_cycle_labeled(
         }
     }
     report.left_pending = pending.len() - report.auto_approved.len();
+    report.human_review_only = agent_authored_pending;
     // Persist the fitness signal as part of every cycle — the
     // natural checkpoint cadence, and the restart boundary for
     // usage data.
@@ -550,6 +566,55 @@ mod timer_tests {
             timer_report.triggers.contains(&"timer"),
             "{:?}",
             timer_report.triggers
+        );
+    }
+}
+
+#[cfg(test)]
+mod authoring_tests {
+    use super::*;
+    use crate::observation::{ObservationInput, ObservationKind, ObservationSource};
+
+    #[test]
+    fn auto_approve_never_promotes_agent_authored_proposals() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manager = Arc::new(SkillManager::new(tmp.path().join("state")));
+        let id = manager
+            .record_observation(ObservationInput {
+                kind: ObservationKind::Failure,
+                source: ObservationSource::Agent,
+                summary: "evidence".into(),
+                body: "fix".into(),
+                node_kind: Some("sql".into()),
+                error: Some("boom".into()),
+            })
+            .unwrap()
+            .id;
+        manager
+            .propose_skill(
+                "agent-made",
+                "Agent-drafted skill.",
+                &[],
+                "# Body\n\nSteps.\n",
+                std::slice::from_ref(&id),
+                "pattern",
+            )
+            .unwrap();
+
+        let policy = EvolutionPolicy {
+            auto_approve: true,
+            max_approvals_per_cycle: 5,
+        };
+        let generation = manager.generation();
+        let report = run_evolution_cycle(&manager, &policy).unwrap();
+        // Refused: still pending, human-review-only, generation unmoved.
+        assert!(report.auto_approved.is_empty());
+        assert_eq!(report.left_pending, 1);
+        assert_eq!(report.human_review_only, 1);
+        assert_eq!(manager.generation(), generation);
+        assert_eq!(
+            manager.proposals().find("agent-made").unwrap().status,
+            crate::proposals::ProposalStatus::Pending
         );
     }
 }

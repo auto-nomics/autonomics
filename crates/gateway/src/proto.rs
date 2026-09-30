@@ -361,6 +361,9 @@ pub struct SkillEvolutionStatus {
 pub struct SkillProposalView {
     pub name: String,
     pub status: String,
+    /// `distiller` (deterministic loop) or `agent` (LLM-authored via
+    /// skill_propose; review-gated even under auto-approve).
+    pub authored_by: String,
     pub update: bool,
     pub rationale: String,
     pub cluster_hash: String,

@@ -82,6 +82,12 @@ pub struct Proposal {
     /// manifest is exactly the new evidence.
     #[serde(default)]
     pub update: bool,
+    /// Who drafted the proposal: `distiller` (the deterministic loop)
+    /// or `agent` (an LLM-authored submission via the `skill_propose`
+    /// tool). Agent-authored proposals are human-review-only — the
+    /// auto-approval path refuses them unconditionally.
+    #[serde(default = "default_authored_by")]
+    pub authored_by: String,
     /// Set on approval: where the skill landed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approved_path: Option<String>,
@@ -99,6 +105,10 @@ pub fn cluster_hash(observation_ids: &BTreeSet<String>) -> String {
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn default_authored_by() -> String {
+    "distiller".to_string()
 }
 
 fn unix_now() -> i64 {
@@ -163,6 +173,28 @@ impl Proposals {
         source_observation_ids: Vec<String>,
         update: bool,
     ) -> Result<Proposal, SkillError> {
+        self.submit_as(
+            name,
+            cluster_hash_value,
+            rationale,
+            source_observation_ids,
+            update,
+            default_authored_by(),
+        )
+    }
+
+    /// [`Proposals::submit`] with an explicit author. The agent path
+    /// (`skill_propose`) uses this; everything else submits as the
+    /// distiller.
+    pub fn submit_as(
+        &self,
+        name: &str,
+        cluster_hash_value: &str,
+        rationale: &str,
+        source_observation_ids: Vec<String>,
+        update: bool,
+        authored_by: String,
+    ) -> Result<Proposal, SkillError> {
         let errors = self.validate_dir(name);
         if !errors.is_empty() {
             return Err(SkillError::invalid_frontmatter(
@@ -193,6 +225,7 @@ impl Proposals {
             updated_at: now,
             source_observation_ids,
             update,
+            authored_by,
             approved_path: None,
         };
         self.save(&proposal)?;

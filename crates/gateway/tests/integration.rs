@@ -421,3 +421,59 @@ async fn skill_evolution_status_trigger_approve_reject_roundtrip() {
     let status = client.skill_evolution_status().await.unwrap();
     assert_eq!(status.proposals_rejected, 1);
 }
+
+#[tokio::test]
+async fn agent_authored_proposals_survive_auto_approve_over_the_wire() {
+    let gw = start_mock_gateway("ok").await;
+    let client = gw.client();
+    let manager = gw.infra.skills.clone();
+
+    // One observation as evidence, then an agent-authored proposal.
+    let id = manager
+        .record_observation(skills::ObservationInput {
+            kind: skills::ObservationKind::Failure,
+            source: skills::ObservationSource::Agent,
+            summary: "evidence".into(),
+            body: "the fix".into(),
+            node_kind: Some("sql".into()),
+            error: Some("boom 1".into()),
+        })
+        .unwrap()
+        .id;
+    manager
+        .propose_skill(
+            "agent-authored-skill",
+            "Drafted by the agent from real work.",
+            &["agent".to_string()],
+            "# Body\n\nOperational steps.\n",
+            std::slice::from_ref(&id),
+            "recurring pattern",
+        )
+        .unwrap();
+
+    // The wire listing marks the author.
+    eventually(|| {
+        let client = client.clone();
+        async move {
+            client
+                .skill_proposals()
+                .await
+                .map(|p| {
+                    p.iter()
+                        .any(|x| x.name == "agent-authored-skill" && x.authored_by == "agent")
+                })
+                .unwrap_or(false)
+        }
+    })
+    .await;
+
+    // An auto-gated cycle over HTTP must leave it pending.
+    let report = client.trigger_skill_evolution(Some(true)).await.unwrap();
+    assert!(report.auto_approved.is_empty());
+    let proposals = client.skill_proposals().await.unwrap();
+    let target = proposals
+        .iter()
+        .find(|p| p.name == "agent-authored-skill")
+        .unwrap();
+    assert_eq!(target.status, "pending");
+}

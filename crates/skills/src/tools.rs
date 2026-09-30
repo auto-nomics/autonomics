@@ -380,6 +380,63 @@ impl ToolFunction for SkillObserveTool {
     }
 }
 
+// ────────────────────────── authoring ──────────────────────────
+
+#[tool(
+    name = "skill_propose",
+    description = "Draft a new skill from evidence you recorded. Supply \
+        structured fields (name/description/tags/body) plus the ids of at \
+        least one existing skill_observe observation that backs the claim — \
+        proposals must trace to evidence, not invention. The proposal lands \
+        in the human-review queue (autonomics-skills proposals / the TUI \
+        dashboard); it is never auto-approved. Create-only: if a skill with \
+        the name exists, record observations instead and let the loop \
+        propose the update."
+)]
+pub struct SkillProposeInput {
+    #[desc = "Lowercase kebab-case skill name (becomes the proposal id)."]
+    pub name: String,
+    #[desc = "One line on when to use the skill (<= 1024 chars, no angle brackets)."]
+    pub description: String,
+    #[desc = "Optional tags, e.g. [gwas, workflow]."]
+    pub tags: Option<Vec<String>>,
+    #[desc = "The SKILL.md body: operational instructions in markdown. No TODO placeholders."]
+    pub body: String,
+    #[desc = "Ids of existing observations that back this skill (from skill_observe results)."]
+    pub supporting_observation_ids: Vec<String>,
+    #[desc = "One line on why this deserves to be a skill."]
+    pub rationale: String,
+}
+
+pub struct SkillProposeTool {
+    pub manager: Arc<SkillManager>,
+}
+
+#[async_trait::async_trait]
+impl ToolFunction for SkillProposeTool {
+    type Input = SkillProposeInput;
+
+    async fn run(&self, input: SkillProposeInput) -> Result<ToolResult, ToolError> {
+        let tags = input.tags.unwrap_or_default();
+        match self.manager.propose_skill(
+            input.name.trim(),
+            input.description.trim(),
+            &tags,
+            input.body.trim(),
+            &input.supporting_observation_ids,
+            input.rationale.trim(),
+        ) {
+            Ok(proposal) => Ok(ToolResult::success(format!(
+                "proposal {} submitted (pending human review). It is marked \
+                 agent-authored and never auto-approved; a human reviews it \
+                 via the evolution dashboard or `autonomics-skills proposals`.",
+                proposal.name
+            ))),
+            Err(e) => Ok(ToolResult::error(format!("skill_propose: {e}"))),
+        }
+    }
+}
+
 // ────────────────────────── evolution ──────────────────────────
 
 #[tool(
@@ -469,6 +526,9 @@ pub fn skill_registrations(manager: Arc<SkillManager>) -> Vec<ToolRegistration> 
         ToolRegistration::from(SkillObserveTool {
             manager: manager.clone(),
         }),
+        ToolRegistration::from(SkillProposeTool {
+            manager: manager.clone(),
+        }),
         ToolRegistration::from(SkillEvolveTool { manager }),
     ]
 }
@@ -552,5 +612,67 @@ mod tests {
             .await
             .unwrap();
         assert!(out.text_content().contains("mr-eve"));
+    }
+}
+
+#[cfg(test)]
+mod propose_tool_tests {
+    use super::*;
+    use agentik_core::tools::ToolFunction as _;
+
+    #[tokio::test]
+    async fn propose_tool_submits_and_reports_review_gate() {
+        let tmp = tempfile::tempdir().unwrap().keep();
+        let manager = Arc::new(SkillManager::new(tmp));
+        let observation = manager
+            .record_observation(crate::ObservationInput {
+                kind: crate::ObservationKind::Failure,
+                source: crate::ObservationSource::Agent,
+                summary: "evidence".into(),
+                body: "fix".into(),
+                node_kind: Some("sql".into()),
+                error: Some("boom".into()),
+            })
+            .unwrap();
+
+        let tool = SkillProposeTool {
+            manager: manager.clone(),
+        };
+        let out = tool
+            .run(SkillProposeInput {
+                name: "handy-recipe".into(),
+                description: "When to reach for it.".into(),
+                tags: Some(vec!["recipe".into()]),
+                body: "# Handy\n\nDo the thing.".into(),
+                supporting_observation_ids: vec![observation.id.clone()],
+                rationale: "recurring".into(),
+            })
+            .await
+            .unwrap();
+        assert!(out.text_content().contains("pending human review"));
+        let proposal = manager.proposals().find("handy-recipe").unwrap();
+        assert_eq!(proposal.authored_by, "agent");
+    }
+
+    #[tokio::test]
+    async fn propose_tool_rejects_unbacked_submissions() {
+        let tmp = tempfile::tempdir().unwrap().keep();
+        let manager = Arc::new(SkillManager::new(tmp));
+        let tool = SkillProposeTool {
+            manager: manager.clone(),
+        };
+        let out = tool
+            .run(SkillProposeInput {
+                name: "ghost".into(),
+                description: "d".into(),
+                tags: None,
+                body: "b".into(),
+                supporting_observation_ids: vec!["O-none".into()],
+                rationale: "r".into(),
+            })
+            .await
+            .unwrap();
+        assert!(out.is_error.unwrap_or(false));
+        assert!(manager.proposals().find("ghost").is_none());
     }
 }

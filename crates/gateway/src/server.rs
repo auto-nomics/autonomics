@@ -1227,6 +1227,7 @@ async fn list_skill_proposals(State(state): State<GatewayState>) -> Json<Vec<Ski
         .map(|p| SkillProposalView {
             name: p.name.clone(),
             status: p.status.as_str().to_string(),
+            authored_by: p.authored_by.clone(),
             update: p.update,
             rationale: p.rationale.clone(),
             cluster_hash: p.cluster_hash.clone(),
@@ -1291,6 +1292,7 @@ async fn reject_skill_proposal(
     Ok(Json(SkillProposalView {
         name: proposal.name,
         status: proposal.status.as_str().to_string(),
+        authored_by: proposal.authored_by,
         update: proposal.update,
         rationale: proposal.rationale,
         cluster_hash: proposal.cluster_hash,

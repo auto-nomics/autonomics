@@ -184,10 +184,18 @@ pub fn render_skill_evolution(
             };
             let marker = if selected { "▶ " } else { "  " };
             let kind = if proposal.update { "update" } else { "create" };
+            let author = if proposal.authored_by == "agent" {
+                " · agent"
+            } else {
+                ""
+            };
             let mut spans = vec![
                 Span::styled(marker.to_string(), accent),
                 Span::styled(proposal.name.clone(), if selected { bold } else { normal }),
-                Span::styled(format!(" [{} · {}]", kind, proposal.status), status_style),
+                Span::styled(
+                    format!(" [{} · {}{}]", kind, proposal.status, author),
+                    status_style,
+                ),
                 Span::styled(format!("  ({} obs)", proposal.observation_count), dim),
             ];
             if !proposal.rationale.is_empty() {
@@ -251,6 +259,7 @@ mod tests {
         SkillProposalView {
             name: name.into(),
             status: status.into(),
+            authored_by: "distiller".into(),
             update: false,
             rationale: "three observations".into(),
             cluster_hash: "c-abc".into(),

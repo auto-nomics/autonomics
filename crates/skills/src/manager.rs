@@ -401,6 +401,102 @@ impl SkillManager {
         Ok(outcome)
     }
 
+    /// Agent-authored skill proposal: the `skill_propose` tool path.
+    ///
+    /// The agent supplies structured fields — name, description,
+    /// tags, body — and this side assembles the frontmatter, so the
+    /// model never writes raw YAML (the injection surface stays the
+    /// validated fields, not arbitrary frontmatter). Guard rails:
+    ///
+    /// - at least one **existing** observation must back the claim
+    ///   (`supporting_observation_ids` are checked against the store
+    ///   — proposals must trace to evidence, not invention)
+    /// - the name must not collide with an installed skill (updates
+    ///   belong to the deterministic distiller; an agent wanting an
+    ///   update records observations and lets the loop propose it)
+    /// - the full strict contract applies (kebab-case, description
+    ///   rules, no TODO placeholders)
+    /// - the manifest is marked `authored_by = "agent"`, which the
+    ///   auto-approval path refuses unconditionally — human review
+    ///   only
+    pub fn propose_skill(
+        &self,
+        name: &str,
+        description: &str,
+        tags: &[String],
+        body: &str,
+        supporting_observation_ids: &[String],
+        rationale: &str,
+    ) -> Result<crate::proposals::Proposal, SkillError> {
+        if supporting_observation_ids.is_empty() {
+            return Err(SkillError::invalid_frontmatter(
+                "<skill_propose>",
+                "at least one supporting observation id is required — record the                  evidence with skill_observe first",
+            ));
+        }
+        let known: std::collections::BTreeSet<String> = self
+            .observations()
+            .list()
+            .into_iter()
+            .map(|o| o.id)
+            .collect();
+        let unknown: Vec<&String> = supporting_observation_ids
+            .iter()
+            .filter(|id| !known.contains(*id))
+            .collect();
+        if !unknown.is_empty() {
+            return Err(SkillError::invalid_frontmatter(
+                "<skill_propose>",
+                format!(
+                    "unknown observation id(s): {} — every supporting id must \
+                     exist in the observation store",
+                    unknown
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            ));
+        }
+        if self.registry().list().iter().any(|e| e.meta.name == name) {
+            return Err(SkillError::invalid_frontmatter(
+                "<skill_propose>",
+                format!(
+                    "a skill named {name:?} is already installed; agent proposals \
+                     are create-only — record observations and let the loop \
+                     propose the update"
+                ),
+            ));
+        }
+
+        // Assemble the document from validated fields only.
+        let tags_line = if tags.is_empty() {
+            String::new()
+        } else {
+            format!("tags: [{}]", tags.join(", "))
+        };
+        let content =
+            format!("---\nname: {name}\ndescription: {description}\n{tags_line}\n---\n\n{body}\n");
+        let proposals = self.proposals();
+        let dir = proposals.root().join(name);
+        std::fs::create_dir_all(&dir)?;
+        std::fs::write(dir.join("SKILL.md"), content)?;
+
+        // The cluster hash for an authored proposal is the hash of
+        // its supporting evidence — stable per evidence set, and
+        // distinct from distiller hashes by construction.
+        let ids: std::collections::BTreeSet<String> =
+            supporting_observation_ids.iter().cloned().collect();
+        proposals.submit_as(
+            name,
+            &crate::proposals::cluster_hash(&ids),
+            rationale,
+            supporting_observation_ids.to_vec(),
+            false,
+            "agent".to_string(),
+        )
+    }
+
     /// Reject a pending proposal; its cluster is consumed and will
     /// not re-propose.
     pub fn reject_proposal(&self, name: &str) -> Result<crate::proposals::Proposal, SkillError> {
@@ -570,5 +666,107 @@ mod usage_persistence_tests {
         let manager = SkillManager::new(tmp.path());
         manager.load_usage();
         assert!(manager.usage_snapshot().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod propose_tests {
+    use super::*;
+
+    fn manager_in(tmp: &std::path::Path) -> SkillManager {
+        SkillManager::new(tmp.join("state"))
+    }
+
+    fn observe_once(manager: &SkillManager, body: &str) -> String {
+        manager
+            .record_observation(crate::ObservationInput {
+                kind: crate::ObservationKind::Failure,
+                source: crate::ObservationSource::Agent,
+                summary: "evidence".into(),
+                body: body.into(),
+                node_kind: Some("sql".into()),
+                error: Some("boom".into()),
+            })
+            .unwrap()
+            .id
+    }
+
+    #[test]
+    fn agent_proposal_lands_pending_and_marked() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manager = manager_in(tmp.path());
+        let id = observe_once(&manager, "the fix");
+
+        let proposal = manager
+            .propose_skill(
+                "agent-crafted-recipes",
+                "Recipes distilled by the agent from real work.",
+                &["agent".to_string()],
+                "# Recipes\n\nStep one.\n",
+                std::slice::from_ref(&id),
+                "recurring pattern",
+            )
+            .unwrap();
+        assert_eq!(proposal.authored_by, "agent");
+        assert_eq!(proposal.status, crate::proposals::ProposalStatus::Pending);
+        assert!(
+            tmp.path()
+                .join("state/skill-proposals/agent-crafted-recipes/SKILL.md")
+                .is_file()
+        );
+        // The written document passes the strict contract.
+        assert!(
+            manager
+                .proposals()
+                .validate_dir("agent-crafted-recipes")
+                .is_empty()
+        );
+        // Frontmatter was assembled from the validated fields.
+        let content = std::fs::read_to_string(
+            tmp.path()
+                .join("state/skill-proposals/agent-crafted-recipes/SKILL.md"),
+        )
+        .unwrap();
+        assert!(content.contains("name: agent-crafted-recipes"));
+        assert!(content.contains("tags: [agent]"));
+    }
+
+    #[test]
+    fn evidence_must_exist() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manager = manager_in(tmp.path());
+        let err = manager
+            .propose_skill("x", "d", &[], "b", &["O-doesnotexist".to_string()], "r")
+            .unwrap_err();
+        assert!(err.to_string().contains("unknown observation id"), "{err}");
+    }
+
+    #[test]
+    fn evidence_is_mandatory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manager = manager_in(tmp.path());
+        let err = manager
+            .propose_skill("x", "d", &[], "b", &[], "r")
+            .unwrap_err();
+        assert!(err.to_string().contains("supporting observation"));
+    }
+
+    #[test]
+    fn create_only_no_collisions_with_installed_skills() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manager = manager_in(tmp.path());
+        let id = observe_once(&manager, "e");
+        // Install a skill with the target name first.
+        let dir = tmp.path().join("state/skills/taken-name");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("SKILL.md"),
+            "---\nname: taken-name\ndescription: d\n---\nb\n",
+        )
+        .unwrap();
+        let err = manager
+            .propose_skill("taken-name", "d", &[], "b", std::slice::from_ref(&id), "r")
+            .unwrap_err();
+        assert!(err.to_string().contains("already installed"), "{err}");
     }
 }

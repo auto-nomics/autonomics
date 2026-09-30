@@ -58,6 +58,15 @@ waiting for the background sweep. It is propose-only by design: it
 writes and revises proposals for the user to review, and never
 approves them itself.
 
+When you can articulate a reusable procedure better than the
+distiller's raw fix listing, draft it yourself with `skill_propose`:
+supply the name, a one-line description, tags, the markdown body, and
+the ids of observations that back the claim (evidence is mandatory —
+record it with `skill_observe` first). Your proposal lands in the
+same human-review queue, marked as agent-authored; it is never
+auto-approved. Create-only: for improving an existing skill, record
+observations and let the loop propose the update.
+
 ## When not to use a skill
 
 - The task is a single trivial step no skill covers — proceed directly.
