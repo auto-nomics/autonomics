@@ -414,6 +414,9 @@ impl SkillManager {
     /// - the name must not collide with an installed skill (updates
     ///   belong to the deterministic distiller; an agent wanting an
     ///   update records observations and lets the loop propose it)
+    /// - the name must not collide with an existing proposal either —
+    ///   one draft per name, checked **before** anything is written so
+    ///   a retry can never overwrite a queued (or rejected) draft
     /// - the full strict contract applies (kebab-case, description
     ///   rules, no TODO placeholders)
     /// - the manifest is marked `authored_by = "agent"`, which the
@@ -431,7 +434,7 @@ impl SkillManager {
         if supporting_observation_ids.is_empty() {
             return Err(SkillError::invalid_frontmatter(
                 "<skill_propose>",
-                "at least one supporting observation id is required — record the                  evidence with skill_observe first",
+                "at least one supporting observation id is required — record the evidence with skill_observe first",
             ));
         }
         let known: std::collections::BTreeSet<String> = self
@@ -478,23 +481,51 @@ impl SkillManager {
         let content =
             format!("---\nname: {name}\ndescription: {description}\n{tags_line}\n---\n\n{body}\n");
         let proposals = self.proposals();
+        // Refuse a name collision before writing: submit_as would
+        // refuse it too, but only after this side had already
+        // overwritten the queued draft's SKILL.md.
+        if let Some(existing) = proposals.find(name) {
+            return Err(SkillError::invalid_frontmatter(
+                "<skill_propose>",
+                format!(
+                    "a proposal named {name:?} already exists with status {} — \
+                     one draft per name, and a rejected name never revives",
+                    existing.status.as_str()
+                ),
+            ));
+        }
         let dir = proposals.root().join(name);
-        std::fs::create_dir_all(&dir)?;
-        std::fs::write(dir.join("SKILL.md"), content)?;
 
         // The cluster hash for an authored proposal is the hash of
         // its supporting evidence — stable per evidence set, and
         // distinct from distiller hashes by construction.
         let ids: std::collections::BTreeSet<String> =
             supporting_observation_ids.iter().cloned().collect();
-        proposals.submit_as(
-            name,
-            &crate::proposals::cluster_hash(&ids),
-            rationale,
-            supporting_observation_ids.to_vec(),
-            false,
-            "agent".to_string(),
-        )
+        let submitted = (|| {
+            std::fs::create_dir_all(&dir)?;
+            std::fs::write(dir.join("SKILL.md"), &content)?;
+            proposals.submit_as(
+                name,
+                &crate::proposals::cluster_hash(&ids),
+                rationale,
+                supporting_observation_ids.to_vec(),
+                false,
+                "agent".to_string(),
+            )
+        })();
+
+        submitted.inspect_err(|_| {
+            // A refused submission must not leave an orphan draft
+            // behind — remove what we just wrote so a retry starts
+            // clean and listings stay honest.
+            if let Err(cleanup) = std::fs::remove_dir_all(&dir) {
+                tracing::warn!(
+                    path = %dir.display(),
+                    error = %cleanup,
+                    "cannot remove refused proposal draft"
+                );
+            }
+        })
     }
 
     /// Reject a pending proposal; its cluster is consumed and will
@@ -768,5 +799,68 @@ mod propose_tests {
             .propose_skill("taken-name", "d", &[], "b", std::slice::from_ref(&id), "r")
             .unwrap_err();
         assert!(err.to_string().contains("already installed"), "{err}");
+    }
+
+    #[test]
+    fn refused_submission_leaves_no_orphan_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manager = manager_in(tmp.path());
+        let id = observe_once(&manager, "e");
+        // A TODO placeholder fails the strict contract at submit time,
+        // after the draft was written — the directory must go with the
+        // refusal.
+        let err = manager
+            .propose_skill(
+                "orphan-draft",
+                "d",
+                &[],
+                "# Body\n\nTODO: fill this in\n",
+                std::slice::from_ref(&id),
+                "r",
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("TODO"), "{err}");
+        assert!(
+            !tmp.path()
+                .join("state/skill-proposals/orphan-draft")
+                .exists(),
+            "refused draft must not linger in the proposal area"
+        );
+        assert!(manager.proposals().list().is_empty());
+    }
+
+    #[test]
+    fn same_name_retry_never_overwrites_a_queued_draft() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manager = manager_in(tmp.path());
+        let id = observe_once(&manager, "e");
+        manager
+            .propose_skill(
+                "one-draft-per-name",
+                "First.",
+                &[],
+                "# First\n\nOriginal body.\n",
+                std::slice::from_ref(&id),
+                "r",
+            )
+            .unwrap();
+        let err = manager
+            .propose_skill(
+                "one-draft-per-name",
+                "Second.",
+                &[],
+                "# Second\n\nOverwrite attempt.\n",
+                std::slice::from_ref(&id),
+                "r2",
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("already exists"), "{err}");
+        let content = std::fs::read_to_string(
+            tmp.path()
+                .join("state/skill-proposals/one-draft-per-name/SKILL.md"),
+        )
+        .unwrap();
+        assert!(content.contains("Original body."));
+        assert!(!content.contains("Overwrite attempt."));
     }
 }
