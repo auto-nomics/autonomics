@@ -124,7 +124,7 @@ impl ToolFunction for SkillRunWorkflowTool {
         }
 
         if input.run.unwrap_or(false) {
-            match self.client.run_dag().await {
+            match self.client.run_dag(Some(format!("skill:{skill}"))).await {
                 Ok(report) => {
                     let failed: Vec<&str> = report
                         .statuses
@@ -208,7 +208,7 @@ impl ToolFunction for SkillEvalTool {
                 }
             };
             for case in cases {
-                let outcome = self.run_case(&dir, &case).await;
+                let outcome = self.run_case(skill, &dir, &case).await;
                 match outcome {
                     Ok((nodes, node_kinds)) => {
                         pairs.push((case, nodes));
@@ -291,6 +291,7 @@ impl SkillEvalTool {
     /// template's id→kind map (for anchoring failure observations).
     async fn run_case(
         &self,
+        skill: &str,
         dir: &std::path::Path,
         case: &skills::EvalCase,
     ) -> Result<(Vec<serde_json::Value>, Vec<(String, String)>), String> {
@@ -306,7 +307,11 @@ impl SkillEvalTool {
         build_dag(&self.client, &rendered, &prefix)
             .await
             .map_err(|e| e.to_string())?;
-        let report = self.client.run_dag().await.map_err(|e| e.to_string())?;
+        let report = self
+            .client
+            .run_dag(Some(format!("skill:{skill}")))
+            .await
+            .map_err(|e| e.to_string())?;
 
         // Strip the eval prefix so checks reference template ids.
         let nodes: Vec<serde_json::Value> = report
