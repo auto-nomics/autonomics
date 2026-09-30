@@ -136,6 +136,17 @@ pub fn api_router(state: GatewayState) -> Router {
         )
         // ── settings ──
         .route("/settings", get(get_settings).put(put_setting))
+        .route("/skills/evolution", get(get_skill_evolution_status))
+        .route("/skills/evolution/trigger", post(trigger_skill_evolution))
+        .route("/skills/evolution/proposals", get(list_skill_proposals))
+        .route(
+            "/skills/evolution/proposals/{name}/approve",
+            post(approve_skill_proposal),
+        )
+        .route(
+            "/skills/evolution/proposals/{name}/reject",
+            post(reject_skill_proposal),
+        )
         .with_state(state)
 }
 
@@ -226,6 +237,11 @@ async fn health() -> Json<serde_json::Value> {
         fetch_catalog,
         get_settings,
         put_setting,
+        get_skill_evolution_status,
+        trigger_skill_evolution,
+        list_skill_proposals,
+        approve_skill_proposal,
+        reject_skill_proposal,
     ),
     components(schemas(
         GatewayStatus,
@@ -244,6 +260,12 @@ async fn health() -> Json<serde_json::Value> {
         SaveProviderRequest,
         SetActiveModelRequest,
         FetchCatalogRequest,
+        SkillEvolutionStatus,
+        SkillProposalView,
+        TriggerEvolutionRequest,
+        SkillEvolutionReport,
+        SkippedCluster,
+        SkillApproveOutcome,
         ChatgptLoginStart,
         ChatgptRefreshResponse,
         SettingsMap,
@@ -530,7 +552,7 @@ async fn set_agent_model(
     let hub = state.hub.clone();
     let model =
         tokio::task::block_in_place(|| models.resolve_with_refresh_callback(&req.spec, &hub))
-            .map_err(GatewayError::Message)?;
+            .map_err(|e| GatewayError::Message(e.to_string()))?;
     state.control.set_agent_model(&name, model);
 
     // Persist preferred_model in the agent record (best-effort).
@@ -629,7 +651,7 @@ async fn set_agent_config(
         .control
         .set_agent_runtime_config(&name, runtime.clone())
         .await
-        .map_err(GatewayError::Message)?;
+        .map_err(|e| GatewayError::Message(e.to_string()))?;
     Ok(Json(AgentRuntimeConfigView { runtime, effective }))
 }
 
@@ -855,7 +877,7 @@ async fn put_active_model(
     let hub = state.hub.clone();
     let spec = req.spec.clone();
     let model = tokio::task::block_in_place(|| models.set_active_model(&spec, &hub))
-        .map_err(GatewayError::Message)?;
+        .map_err(|e| GatewayError::Message(e.to_string()))?;
     state.model_slot.store(Some(Arc::new(model)));
     Ok(StatusCode::NO_CONTENT)
 }
@@ -867,7 +889,7 @@ async fn chatgpt_login(
     let models = state.models.clone();
     let hub = state.hub.clone();
     let url = tokio::task::block_in_place(|| models.start_chatgpt_login(hub.clone()))
-        .map_err(GatewayError::Message)?;
+        .map_err(|e| GatewayError::Message(e.to_string()))?;
     Ok(Json(ChatgptLoginStart { url }))
 }
 
@@ -1070,4 +1092,209 @@ async fn get_events(
             .interval(Duration::from_secs(15))
             .text("ping"),
     )
+}
+
+// ── skill evolution ───────────────────────────────────────────────────
+
+/// All pure [`SharedInfra`] operations: no host lock, no agent state —
+/// the manager's always-fresh scans are the source of truth.
+#[utoipa::path(
+    get,
+    path = "/api/v1/skills/evolution",
+    tag = "skills",
+    responses((status = 200, body = SkillEvolutionStatus))
+)]
+async fn get_skill_evolution_status(
+    State(state): State<GatewayState>,
+) -> Json<SkillEvolutionStatus> {
+    Json(skill_evolution_status(&state.infra))
+}
+
+fn skill_evolution_status(infra: &SharedInfra) -> SkillEvolutionStatus {
+    let manager = &infra.skills;
+    let (auto_approve, max_approvals_per_cycle, sweep_interval_secs) = match &infra.skill_evolution
+    {
+        Some(handle) => (
+            handle.policy().auto_approve,
+            handle.policy().max_approvals_per_cycle,
+            handle.timer().map(|d| d.as_secs()),
+        ),
+        // Service off: the loop still runs on demand (CLI,
+        // skill_evolve tool); display the daemon's configured
+        // gate from the manager's defaults.
+        None => (false, 5, None),
+    };
+    let mut skills_workspace = 0;
+    let mut skills_global = 0;
+    let mut skills_builtin = 0;
+    let mut skills_auto = 0;
+    for entry in manager.registry().list() {
+        match entry.tier {
+            skills::SkillTier::Workspace => skills_workspace += 1,
+            skills::SkillTier::Global => skills_global += 1,
+            skills::SkillTier::Builtin => skills_builtin += 1,
+        }
+        if entry.meta.tags.iter().any(|t| t == "auto") {
+            skills_auto += 1;
+        }
+    }
+    let mut proposals_pending = 0;
+    let mut proposals_approved = 0;
+    let mut proposals_rejected = 0;
+    for proposal in manager.proposals().list() {
+        match proposal.status {
+            skills::ProposalStatus::Pending => proposals_pending += 1,
+            skills::ProposalStatus::Approved => proposals_approved += 1,
+            skills::ProposalStatus::Rejected => proposals_rejected += 1,
+        }
+    }
+    SkillEvolutionStatus {
+        service_enabled: infra.skill_evolution.is_some(),
+        generation: manager.generation(),
+        auto_approve,
+        max_approvals_per_cycle,
+        sweep_interval_secs,
+        observations: manager.observations().list().len(),
+        skills_workspace,
+        skills_global,
+        skills_builtin,
+        skills_auto,
+        proposals_pending,
+        proposals_approved,
+        proposals_rejected,
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/skills/evolution/trigger",
+    tag = "skills",
+    request_body = TriggerEvolutionRequest,
+    responses((status = 200, body = SkillEvolutionReport))
+)]
+async fn trigger_skill_evolution(
+    State(state): State<GatewayState>,
+    Json(request): Json<TriggerEvolutionRequest>,
+) -> GatewayResult<Json<SkillEvolutionReport>> {
+    let manager = state.infra.skills.clone();
+    let mut policy = state
+        .infra
+        .skill_evolution
+        .as_ref()
+        .map(|h| h.policy().clone())
+        .unwrap_or_default();
+    if let Some(auto) = request.auto_approve {
+        policy.auto_approve = auto;
+    }
+    // The cycle is synchronous file work; keep it off the async
+    // worker so a large distillation never stalls other requests.
+    let report = tokio::task::spawn_blocking(move || {
+        skills::evolution::run_evolution_cycle(&manager, &policy)
+    })
+    .await
+    .map_err(|e| GatewayError::Message(format!("evolution cycle join error: {e}")))?
+    .map_err(|e| GatewayError::Message(format!("evolution cycle failed: {e}")))?;
+    Ok(Json(SkillEvolutionReport {
+        triggers: report.triggers.iter().map(|t| t.to_string()).collect(),
+        clusters_considered: report.clusters_considered,
+        proposals_written: report.proposals_written,
+        updated_existing: report.updated_existing,
+        auto_approved: report.auto_approved,
+        left_pending: report.left_pending,
+        skipped: report
+            .skipped
+            .into_iter()
+            .map(|(cluster_hash, reason)| SkippedCluster {
+                cluster_hash,
+                reason,
+            })
+            .collect(),
+    }))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/skills/evolution/proposals",
+    tag = "skills",
+    responses((status = 200, body = [SkillProposalView]))
+)]
+async fn list_skill_proposals(State(state): State<GatewayState>) -> Json<Vec<SkillProposalView>> {
+    let manager = &state.infra.skills;
+    let mut rows: Vec<SkillProposalView> = manager
+        .proposals()
+        .list()
+        .into_iter()
+        .map(|p| SkillProposalView {
+            name: p.name.clone(),
+            status: p.status.as_str().to_string(),
+            update: p.update,
+            rationale: p.rationale.clone(),
+            cluster_hash: p.cluster_hash.clone(),
+            observation_count: p.source_observation_ids.len(),
+            created_at: p.created_at,
+        })
+        .collect();
+    // Pending first (actionable), then newest first.
+    rows.sort_by(|a, b| {
+        let pending = |s: &str| if s == "pending" { 0 } else { 1 };
+        pending(&a.status)
+            .cmp(&pending(&b.status))
+            .then(b.created_at.cmp(&a.created_at))
+            .then(a.name.cmp(&b.name))
+    });
+    Json(rows)
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/skills/evolution/proposals/{name}/approve",
+    tag = "skills",
+    responses(
+        (status = 200, body = SkillApproveOutcome),
+        (status = 404, description = "No pending proposal with that name"),
+        (status = 400, description = "Validation refused the promotion")
+    )
+)]
+async fn approve_skill_proposal(
+    State(state): State<GatewayState>,
+    Path(name): Path<String>,
+) -> GatewayResult<Json<SkillApproveOutcome>> {
+    let manager = state.infra.skills.clone();
+    let outcome = tokio::task::spawn_blocking(move || manager.approve_proposal(&name))
+        .await
+        .map_err(|e| GatewayError::Message(format!("approve join error: {e}")))?
+        .map_err(|e| GatewayError::Message(e.to_string()))?;
+    Ok(Json(SkillApproveOutcome {
+        name: outcome.name,
+        destination: outcome.destination.display().to_string(),
+    }))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/skills/evolution/proposals/{name}/reject",
+    tag = "skills",
+    responses(
+        (status = 200, description = "Rejected; cluster consumed"),
+        (status = 404, description = "No pending proposal with that name")
+    )
+)]
+async fn reject_skill_proposal(
+    State(state): State<GatewayState>,
+    Path(name): Path<String>,
+) -> GatewayResult<Json<SkillProposalView>> {
+    let manager = state.infra.skills.clone();
+    let proposal = tokio::task::spawn_blocking(move || manager.reject_proposal(&name))
+        .await
+        .map_err(|e| GatewayError::Message(format!("reject join error: {e}")))?
+        .map_err(|e| GatewayError::Message(e.to_string()))?;
+    Ok(Json(SkillProposalView {
+        name: proposal.name,
+        status: proposal.status.as_str().to_string(),
+        update: proposal.update,
+        rationale: proposal.rationale,
+        cluster_hash: proposal.cluster_hash,
+        observation_count: proposal.source_observation_ids.len(),
+        created_at: proposal.updated_at,
+    }))
 }

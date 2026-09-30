@@ -49,6 +49,12 @@ pub enum CommandAction {
     OpenSessions,
     /// Create a new conversation session within the active agent.
     NewSession,
+    /// Open the skill-evolution dashboard (status, proposals,
+    /// trigger/approve/reject).
+    SkillEvolutionPanel,
+    /// Run one skill-evolution cycle now (propose-only unless the
+    /// daemon is configured to auto-approve).
+    SkillEvolve,
     /// Toggle collapse for thinking blocks.
     ToggleCollapseThinking,
     /// Toggle collapse for tool call blocks.
@@ -338,6 +344,18 @@ fn default_commands() -> Vec<Command> {
             keywords: "agent settings memory runtime use generate per agent".into(),
             category: "agent".into(),
             action: CommandAction::AgentConfig,
+        },
+        Command {
+            title: "Skill evolution dashboard".into(),
+            keywords: "skills evolution proposals distill observe auto refine dashboard".into(),
+            category: "skills".into(),
+            action: CommandAction::SkillEvolutionPanel,
+        },
+        Command {
+            title: "Run skill evolution cycle".into(),
+            keywords: "skills evolve distill trigger proposals cycle now".into(),
+            category: "skills".into(),
+            action: CommandAction::SkillEvolve,
         },
         Command {
             title: "View DAG".into(),

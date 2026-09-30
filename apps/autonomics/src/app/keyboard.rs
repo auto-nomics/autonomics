@@ -230,6 +230,12 @@ impl App {
             return;
         }
 
+        // Skill-evolution dashboard captures keys when visible.
+        if self.state.skill_evolution.visible {
+            self.handle_skill_evolution_key(key);
+            return;
+        }
+
         // Model config popup captures keys when visible.
         if self.state.model_config_visible {
             self.handle_model_config_key(key);

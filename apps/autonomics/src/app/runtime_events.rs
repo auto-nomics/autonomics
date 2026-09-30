@@ -308,6 +308,64 @@ impl App {
                     self.dirty = true;
                 }
             }
+            crate::app_event::AppEvent::SkillEvolutionLoaded { status, proposals } => {
+                match status {
+                    Ok(status) => {
+                        self.state.skill_evolution.status = Some(status);
+                        self.state.skill_evolution.error = None;
+                    }
+                    Err(e) => {
+                        self.state.skill_evolution.error = Some(e);
+                    }
+                }
+                if let Ok(proposals) = proposals {
+                    let first_pending = proposals
+                        .iter()
+                        .position(|p| p.status == "pending")
+                        .unwrap_or(0);
+                    self.state.skill_evolution.proposals = proposals;
+                    self.state.skill_evolution.selected = first_pending;
+                }
+            }
+            crate::app_event::AppEvent::SkillEvolutionTriggered(result) => match result {
+                Ok(report) => {
+                    let summary = format!(
+                        "{} written, {} updated, {} auto-approved, {} left pending",
+                        report.proposals_written.len(),
+                        report.updated_existing.len(),
+                        report.auto_approved.len(),
+                        report.left_pending,
+                    );
+                    self.state.skill_evolution.last_report = Some(summary.clone());
+                    self.state
+                        .toasts
+                        .success("Skill evolution cycle", Some(summary));
+                    self.refresh_skill_evolution();
+                }
+                Err(e) => {
+                    self.state.toasts.error("Skill evolution cycle", Some(e));
+                }
+            },
+            crate::app_event::AppEvent::SkillProposalActioned { action, result } => {
+                match result {
+                    Ok(detail) => {
+                        self.state
+                            .toasts
+                            .success(format!("Proposal {action}"), Some(detail));
+                        // The action may have been issued from the palette
+                        // with the dashboard closed — refresh either way is
+                        // cheap and keeps the next open current.
+                        if self.state.skill_evolution.visible {
+                            self.refresh_skill_evolution();
+                        }
+                    }
+                    Err(e) => {
+                        self.state
+                            .toasts
+                            .error(format!("Proposal {action}"), Some(e));
+                    }
+                }
+            }
             crate::app_event::AppEvent::ProviderSaved {
                 provider_name,
                 result,

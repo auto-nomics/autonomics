@@ -118,6 +118,14 @@ impl App {
             CommandAction::ViewDag => {
                 self.open_dag_view();
             }
+            CommandAction::SkillEvolutionPanel => {
+                self.open_skill_evolution();
+            }
+            CommandAction::SkillEvolve => {
+                // Follow the daemon's configured review gate; the
+                // explicit auto path is a dashboard keypress (T).
+                self.trigger_skill_evolution(false);
+            }
             CommandAction::OpenSessions => {
                 self.open_session_picker();
             }

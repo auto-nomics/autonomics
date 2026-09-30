@@ -158,6 +158,16 @@ pub struct SharedInfra {
     pub memory: Arc<MemoryBackend>,
     /// Optional Turso-backed KMS knowledge service.
     pub kms: Option<Arc<kms::KmsService>>,
+    /// Central skill manager (tiered registry + generation counter +
+    /// change broadcast + usage telemetry). Initialized as the
+    /// process-wide singleton so every mutation path — agent tools,
+    /// eval auto-capture, gateway handlers — shares one notification
+    /// invariant.
+    pub skills: Arc<skills::SkillManager>,
+    /// The evolution service trigger handle, when enabled. `None`
+    /// means the loop still runs on demand (CLI, `skill_evolve`
+    /// tool) but nothing fires it in the background.
+    pub skill_evolution: Option<skills::evolution::EvolutionHandle>,
     /// The tokio runtime handle (for spawning agent tasks).
     pub runtime_handle: tokio::runtime::Handle,
     /// Optional host control for agent tools. Set by RuntimeHost when
@@ -342,6 +352,41 @@ impl SharedInfra {
 
         tracing::info!("SharedInfra::open: all infrastructure ready");
 
+        // ── Skill evolution service ────────────────────────────────
+        // The trigger half of the evolution loop: observation events
+        // and a periodic sweep wake the idempotent workflow (distill
+        // → propose → policy). The manager is the process-wide
+        // singleton so every observation-recording path — agent tool,
+        // eval auto-capture — reaches the worker.
+        let skills = skills::SkillManager::init(skills::SkillManager::new(&config.state_dir));
+        // Reclaim the fitness signal from the previous process.
+        skills.load_usage();
+        let skill_evolution = if config.enable_skill_evolution {
+            let handle = skills::evolution::start(
+                skills.clone(),
+                skills::evolution::EvolutionOptions {
+                    policy: skills::evolution::EvolutionPolicy {
+                        auto_approve: config.skill_evolution_auto_approve,
+                        ..Default::default()
+                    },
+                    quiet_window: std::time::Duration::from_millis(500),
+                    timer: Some(std::time::Duration::from_secs(
+                        config.skill_evolution_interval_secs.max(60),
+                    )),
+                },
+            );
+            skills.attach_evolution(&handle);
+            tracing::info!(
+                auto_approve = config.skill_evolution_auto_approve,
+                interval_secs = config.skill_evolution_interval_secs,
+                "SharedInfra::open: skill evolution service started"
+            );
+            Some(handle)
+        } else {
+            tracing::info!("SharedInfra::open: skill evolution disabled");
+            None
+        };
+
         Ok(Self {
             engine_manager,
             file_storage,
@@ -355,6 +400,8 @@ impl SharedInfra {
             writing,
             memory,
             kms,
+            skills,
+            skill_evolution,
             runtime_handle: tokio::runtime::Handle::current(),
             host_control: None,
         })
@@ -411,6 +458,12 @@ impl SharedInfra {
         } else {
             builder =
                 builder.with_system_prompt_section(crate::config::build_system_prompt(profile));
+        }
+        // Skill index: one line per visible skill; bodies load on
+        // demand via skill_get. Empty library → no section at all.
+        let skill_section = skills::prompt_section(&self.skills.registry().list());
+        if !skill_section.is_empty() {
+            builder = builder.with_system_prompt_section(skill_section);
         }
 
         builder = builder
@@ -477,6 +530,7 @@ impl SharedInfra {
         let engine_client = self.engine_manager.client_for_session(agent_path.as_str());
 
         let mut tools: Vec<ToolRegistration> = vfs::vbash_registrations(file_storage.clone());
+        tools.extend(skills::skill_registrations(self.skills.clone()));
         if let Some(catalog) = self.catalog.clone() {
             tools.extend(crate::catalog_tools::catalog_registrations(catalog));
         }
@@ -511,7 +565,15 @@ impl SharedInfra {
             tools.extend(kegg_tools());
         }
 
-        tools.extend(data_engine_tools::registrations(Arc::new(engine_client)));
+        let engine_client = Arc::new(engine_client);
+        tools.extend(data_engine_tools::registrations(Arc::clone(&engine_client)));
+        // Engine-bound skill tools (workflow instantiation, evals) share
+        // the registry with the pure skill tools and the session's DAG
+        // client, so template-built DAGs are ordinary session DAGs.
+        tools.extend(crate::skill_workflow_tools::skill_workflow_registrations(
+            self.skills.clone(),
+            engine_client,
+        ));
 
         if profile.enable_bibliography {
             let bib_shared = self.bib.clone();

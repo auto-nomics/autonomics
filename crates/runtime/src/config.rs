@@ -232,6 +232,23 @@ pub struct RuntimeConfig {
     /// Expose KMS entity/knowledge/index tools backed by Turso.
     #[serde(default)]
     pub enable_kms: bool,
+    /// Run the skill-evolution service: background worker that
+    /// distills observations into skill proposals (and revises
+    /// installed auto-skills) on observation events and a periodic
+    /// sweep. The approval gate still applies per
+    /// `skill_evolution_auto_approve`.
+    #[serde(default = "default_true")]
+    pub enable_skill_evolution: bool,
+    /// Let the evolution service auto-approve eligible proposals.
+    /// Default false — human review stays in the loop; automation
+    /// only writes pending proposals.
+    #[serde(default)]
+    pub skill_evolution_auto_approve: bool,
+    /// Periodic evolution sweep cadence in seconds (default 6h). The
+    /// event-driven path (observation recorded) runs independently of
+    /// this timer.
+    #[serde(default = "default_skill_evolution_interval_secs")]
+    pub skill_evolution_interval_secs: u64,
 
     // ── HTTP client (shared via `BibShared`) ─────────────────────────
     /// Configuration for the process-wide `reqwest::Client` used by
@@ -251,6 +268,14 @@ impl Default for RuntimeConfig {
 
 fn default_true() -> bool {
     true
+}
+
+/// Six hours: frequent enough that overnight accumulation is dealt
+/// with, rare enough that the sweep is noise on any metric.
+const DEFAULT_SKILL_EVOLUTION_INTERVAL_SECS: u64 = 6 * 60 * 60;
+
+fn default_skill_evolution_interval_secs() -> u64 {
+    DEFAULT_SKILL_EVOLUTION_INTERVAL_SECS
 }
 
 impl RuntimeConfig {
@@ -371,6 +396,15 @@ impl RuntimeConfig {
             )
             .unwrap_or(true),
             enable_kms: resolve_flag(base, |b| b.enable_kms, false),
+            enable_skill_evolution: resolve_flag(base, |b| b.enable_skill_evolution, true),
+            skill_evolution_auto_approve: resolve_flag(
+                base,
+                |b| b.skill_evolution_auto_approve,
+                false,
+            ),
+            skill_evolution_interval_secs: base
+                .and_then(|b| b.skill_evolution_interval_secs)
+                .unwrap_or(DEFAULT_SKILL_EVOLUTION_INTERVAL_SECS),
             bib_http: resolve_bib_http(base),
         }
     }
@@ -784,6 +818,9 @@ pub struct RuntimeConfigBuilder {
     pub(crate) use_memory: Option<bool>,
     pub(crate) generate_memory: Option<bool>,
     pub(crate) enable_kms: Option<bool>,
+    pub(crate) enable_skill_evolution: Option<bool>,
+    pub(crate) skill_evolution_auto_approve: Option<bool>,
+    pub(crate) skill_evolution_interval_secs: Option<u64>,
     pub(crate) bib_http: Option<BibHttpOptions>,
 }
 
@@ -940,6 +977,21 @@ impl RuntimeConfigBuilder {
     /// Enable KMS knowledge-graph tools.
     pub fn enable_kms(mut self, enabled: bool) -> Self {
         self.enable_kms = Some(enabled);
+        self
+    }
+
+    pub fn enable_skill_evolution(mut self, enabled: bool) -> Self {
+        self.enable_skill_evolution = Some(enabled);
+        self
+    }
+
+    pub fn skill_evolution_auto_approve(mut self, enabled: bool) -> Self {
+        self.skill_evolution_auto_approve = Some(enabled);
+        self
+    }
+
+    pub fn skill_evolution_interval_secs(mut self, secs: u64) -> Self {
+        self.skill_evolution_interval_secs = Some(secs);
         self
     }
 
@@ -1184,6 +1236,25 @@ mod tests {
         assert!(!prompt.contains("python_script"));
         assert!(!prompt.contains("r_script"));
         assert!(!prompt.contains("container_command"));
+    }
+
+    #[test]
+    fn skill_evolution_defaults_and_overrides() {
+        // Defaults: service on, review gate on (propose-only), 6h sweep.
+        let cfg = RuntimeConfig::default();
+        assert!(cfg.enable_skill_evolution);
+        assert!(!cfg.skill_evolution_auto_approve);
+        assert_eq!(cfg.skill_evolution_interval_secs, 6 * 60 * 60);
+
+        // Builder overrides flow through resolve.
+        let cfg = RuntimeConfig::builder()
+            .enable_skill_evolution(false)
+            .skill_evolution_auto_approve(true)
+            .skill_evolution_interval_secs(600)
+            .build();
+        assert!(!cfg.enable_skill_evolution);
+        assert!(cfg.skill_evolution_auto_approve);
+        assert_eq!(cfg.skill_evolution_interval_secs, 600);
     }
 
     #[test]

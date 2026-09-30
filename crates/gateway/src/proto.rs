@@ -326,3 +326,81 @@ mod tests {
         assert!(matches!(back, GatewayNotice::ModelChanged { .. }));
     }
 }
+
+// ── Skill evolution ───────────────────────────────────────────────────
+
+/// `GET /api/v1/skills/evolution` — the dashboard's data snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SkillEvolutionStatus {
+    /// Whether the background service (event + timer triggers) runs.
+    pub service_enabled: bool,
+    /// Library generation; advances on every mutation.
+    pub generation: u64,
+    /// Whether cycles may auto-approve (daemon configuration).
+    pub auto_approve: bool,
+    /// Auto-approve cap per cycle.
+    pub max_approvals_per_cycle: usize,
+    /// Periodic sweep cadence in seconds, when armed.
+    pub sweep_interval_secs: Option<u64>,
+    /// Recorded observations feeding distillation.
+    pub observations: usize,
+    /// Installed skills per tier (workspace > global > builtin).
+    pub skills_workspace: usize,
+    pub skills_global: usize,
+    pub skills_builtin: usize,
+    /// Skills carrying the loop's `auto` tag.
+    pub skills_auto: usize,
+    /// Proposals by status.
+    pub proposals_pending: usize,
+    pub proposals_approved: usize,
+    pub proposals_rejected: usize,
+}
+
+/// One proposal row for listings.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SkillProposalView {
+    pub name: String,
+    pub status: String,
+    pub update: bool,
+    pub rationale: String,
+    pub cluster_hash: String,
+    pub observation_count: usize,
+    pub created_at: i64,
+}
+
+/// `POST /api/v1/skills/evolution/trigger` request.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct TriggerEvolutionRequest {
+    /// Explicit per-call override of the review gate. `None` follows
+    /// the daemon configuration; `Some(true)` is the TUI equivalent
+    /// of `autonomics-skills distill --auto`.
+    pub auto_approve: Option<bool>,
+}
+
+/// `POST /api/v1/skills/evolution/trigger` response — the cycle's
+/// report (serializable form of the skills crate's
+/// `EvolutionReport`).
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SkillEvolutionReport {
+    pub triggers: Vec<String>,
+    pub clusters_considered: usize,
+    pub proposals_written: Vec<String>,
+    pub updated_existing: Vec<String>,
+    pub auto_approved: Vec<String>,
+    pub left_pending: usize,
+    pub skipped: Vec<SkippedCluster>,
+}
+
+/// One skipped cluster with its reason.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SkippedCluster {
+    pub cluster_hash: String,
+    pub reason: String,
+}
+
+/// `POST /api/v1/skills/evolution/proposals/{name}/approve` response.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SkillApproveOutcome {
+    pub name: String,
+    pub destination: String,
+}

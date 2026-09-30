@@ -206,7 +206,7 @@ async fn swagger_docs_expose_the_gateway_api() {
         .await
         .unwrap();
     assert_eq!(openapi["info"]["title"], "Autonomics Gateway API");
-    assert_eq!(openapi["paths"].as_object().unwrap().len(), 29);
+    assert_eq!(openapi["paths"].as_object().unwrap().len(), 34);
     let expected_paths = [
         "/api/v1/gateway/status",
         "/api/v1/gateway/shutdown",
@@ -236,6 +236,11 @@ async fn swagger_docs_expose_the_gateway_api() {
         "/api/v1/model-config/providers/{name}/catalog",
         "/api/v1/settings",
         "/api/v1/events",
+        "/api/v1/skills/evolution",
+        "/api/v1/skills/evolution/trigger",
+        "/api/v1/skills/evolution/proposals",
+        "/api/v1/skills/evolution/proposals/{name}/approve",
+        "/api/v1/skills/evolution/proposals/{name}/reject",
     ];
     for path in expected_paths {
         assert!(
@@ -270,4 +275,149 @@ async fn swagger_docs_expose_the_gateway_api() {
     assert_eq!(unauthorized.status(), 401);
 
     gateway_daemon.stop().await;
+}
+
+// ── skill evolution endpoints ─────────────────────────────────────────
+
+/// Poll an async predicate until it holds or the test timeout fires —
+/// the evolution service distills on its own event path, so "who
+/// wrote the proposal" (worker or explicit trigger) is intentionally
+/// racy and the test only asserts observable state.
+async fn eventually<F, Fut>(mut pred: F)
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    tokio::time::timeout(TEST_TIMEOUT, async {
+        loop {
+            if pred().await {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("condition eventually held");
+}
+
+#[tokio::test]
+async fn skill_evolution_status_trigger_approve_reject_roundtrip() {
+    let gw = start_mock_gateway("ok").await;
+    let client = gw.client();
+    let manager = gw.infra.skills.clone();
+
+    // Baseline: fresh isolated state, service armed, gate closed.
+    let status = client.skill_evolution_status().await.unwrap();
+    assert!(status.service_enabled);
+    assert!(!status.auto_approve);
+    assert_eq!(status.proposals_pending, 0);
+
+    // Seed one anchor with three distinct fixes.
+    for body in ["cast the column", "pass format=csv", "validate header"] {
+        manager
+            .record_observation(skills::ObservationInput {
+                kind: skills::ObservationKind::Failure,
+                source: skills::ObservationSource::Agent,
+                summary: "sql boom".into(),
+                body: body.into(),
+                node_kind: Some("sql".into()),
+                error: Some("syntax error near 42".into()),
+            })
+            .unwrap();
+    }
+
+    // Either the event-driven worker or our explicit trigger writes
+    // the proposal; both paths produce one pending row.
+    let _ = client.trigger_skill_evolution(None).await.unwrap();
+    eventually(|| {
+        let client = client.clone();
+        async move {
+            client
+                .skill_proposals()
+                .await
+                .map(|p| p.iter().any(|x| x.status == "pending"))
+                .unwrap_or(false)
+        }
+    })
+    .await;
+
+    // Approve over the wire; generation advances, library grows.
+    let generation_before = client.skill_evolution_status().await.unwrap().generation;
+    let pending_name = client
+        .skill_proposals()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|p| p.status == "pending")
+        .unwrap()
+        .name;
+    let outcome = client.approve_skill_proposal(&pending_name).await.unwrap();
+    assert!(outcome.destination.contains(&pending_name));
+    eventually(|| {
+        let client = client.clone();
+        let before = generation_before;
+        async move {
+            client
+                .skill_evolution_status()
+                .await
+                .map(|s| s.generation > before)
+                .unwrap_or(false)
+        }
+    })
+    .await;
+    let status = client.skill_evolution_status().await.unwrap();
+    assert_eq!(status.proposals_pending, 0);
+    assert_eq!(status.proposals_approved, 1);
+    assert!(status.skills_auto >= 1);
+
+    // Second anchor: trigger with the auto gate, verify the report
+    // says it approved, then exercise reject on a third.
+    for body in ["io a", "io b", "io c"] {
+        manager
+            .record_observation(skills::ObservationInput {
+                kind: skills::ObservationKind::Failure,
+                source: skills::ObservationSource::Agent,
+                summary: "io crash".into(),
+                body: body.into(),
+                node_kind: Some("file_to_dataframe".into()),
+                error: Some("bad schema at 7".into()),
+            })
+            .unwrap();
+    }
+    for body in ["x a", "x b", "x c"] {
+        manager
+            .record_observation(skills::ObservationInput {
+                kind: skills::ObservationKind::Failure,
+                source: skills::ObservationSource::Agent,
+                summary: "third anchor".into(),
+                body: body.into(),
+                node_kind: Some("echo".into()),
+                error: Some("echo fail 9".into()),
+            })
+            .unwrap();
+    }
+    eventually(|| {
+        let client = client.clone();
+        async move {
+            client
+                .skill_proposals()
+                .await
+                .map(|p| p.iter().filter(|x| x.status == "pending").count() >= 2)
+                .unwrap_or(false)
+        }
+    })
+    .await;
+
+    let proposals = client.skill_proposals().await.unwrap();
+    let to_reject = proposals
+        .iter()
+        .find(|p| p.status == "pending" && p.name != pending_name)
+        .unwrap()
+        .name
+        .clone();
+    let rejected = client.reject_skill_proposal(&to_reject).await.unwrap();
+    assert_eq!(rejected.status, "rejected");
+
+    let status = client.skill_evolution_status().await.unwrap();
+    assert_eq!(status.proposals_rejected, 1);
 }

@@ -38,6 +38,10 @@ pub struct TestGateway {
     server: tui_http::HttpServerHandle,
     shutdown: CancellationToken,
     _dir: tempfile::TempDir,
+    /// The daemon's shared infrastructure — kept so tests can reach
+    /// deterministic handles (e.g. the skills manager) without racing
+    /// the process-global singleton other parallel setups swap.
+    pub infra: runtime::SharedInfra,
 }
 
 impl TestGateway {
@@ -262,6 +266,7 @@ pub async fn start_mock_gateway_with_model(model: Model) -> TestGateway {
         .unwrap();
     let addr = server.addr();
 
+    let infra = host.infra();
     tokio::spawn(driver::run(host, hub, sessions, shutdown.clone()));
 
     TestGateway {
@@ -270,5 +275,6 @@ pub async fn start_mock_gateway_with_model(model: Model) -> TestGateway {
         server,
         shutdown,
         _dir: dir,
+        infra,
     }
 }
