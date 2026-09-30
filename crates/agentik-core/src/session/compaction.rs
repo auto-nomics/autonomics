@@ -239,10 +239,7 @@ impl Session {
                 .head_tokens
                 .saturating_sub(preserved_tokens)
                 .saturating_sub(summary_tokens),
-            duration_ms: started
-                .elapsed()
-                .as_millis()
-                .min(u128::from(u64::MAX)) as u64,
+            duration_ms: started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
             usage,
         };
         self.send_compact_event(CompactEvent::CompactFinish {
@@ -449,7 +446,6 @@ impl DeltaThrottle {
         }
     }
 }
-
 
 // ── Compaction helper functions (moved from memory.rs) ─────────────
 
@@ -756,7 +752,10 @@ mod tests {
 
     /// Build an `AgentShared` whose event channel drains into `tx` — the
     /// compaction progress events are the observable under test.
-    fn shared_with_model_and_events(model: Model, tx: UnboundedSender<AgentEvent>) -> Arc<super::super::AgentShared> {
+    fn shared_with_model_and_events(
+        model: Model,
+        tx: UnboundedSender<AgentEvent>,
+    ) -> Arc<super::super::AgentShared> {
         Arc::new(super::super::AgentShared {
             id: Uuid::new_v4(),
             path: AgentPath::root(),
@@ -796,38 +795,40 @@ mod tests {
     /// (60 + 60 + 60 chars) and a final summary message.
     fn streaming_summary_model(summary: &'static str) -> Model {
         let mut mock = MockApiClient::new();
-        mock.expect_request_stream().times(1).returning(move |_m, _t, _i| {
-            Ok(MessageStream::from_events(
-                vec![
-                    MessageStreamEvent::ContentBlockStart {
-                        content_block: ContentBlock::Text {
-                            text: String::new(),
+        mock.expect_request_stream()
+            .times(1)
+            .returning(move |_m, _t, _i| {
+                Ok(MessageStream::from_events(
+                    vec![
+                        MessageStreamEvent::ContentBlockStart {
+                            content_block: ContentBlock::Text {
+                                text: String::new(),
+                            },
+                            index: 0,
                         },
-                        index: 0,
-                    },
-                    MessageStreamEvent::ContentBlockDelta {
-                        delta: ContentBlockDelta::TextDelta {
-                            text: "a".repeat(60),
+                        MessageStreamEvent::ContentBlockDelta {
+                            delta: ContentBlockDelta::TextDelta {
+                                text: "a".repeat(60),
+                            },
+                            index: 0,
                         },
-                        index: 0,
-                    },
-                    MessageStreamEvent::ContentBlockDelta {
-                        delta: ContentBlockDelta::TextDelta {
-                            text: "b".repeat(60),
+                        MessageStreamEvent::ContentBlockDelta {
+                            delta: ContentBlockDelta::TextDelta {
+                                text: "b".repeat(60),
+                            },
+                            index: 0,
                         },
-                        index: 0,
-                    },
-                    MessageStreamEvent::ContentBlockDelta {
-                        delta: ContentBlockDelta::TextDelta {
-                            text: "c".repeat(60),
+                        MessageStreamEvent::ContentBlockDelta {
+                            delta: ContentBlockDelta::TextDelta {
+                                text: "c".repeat(60),
+                            },
+                            index: 0,
                         },
-                        index: 0,
-                    },
-                    MessageStreamEvent::ContentBlockStop { index: 0 },
-                ],
-                Message::assistant_text(summary),
-            ))
-        });
+                        MessageStreamEvent::ContentBlockStop { index: 0 },
+                    ],
+                    Message::assistant_text(summary),
+                ))
+            });
         Model::with_client(dummy_model_info("compact-test"), mock)
     }
 
@@ -872,19 +873,37 @@ mod tests {
         // ── Event sequence ──
         let events = drain_compact_events(&mut rx);
         assert_eq!(events.len(), 6, "got {events:?}");
-        assert!(matches!(&events[0], CompactEvent::CompactStart { plan: Some(p), .. }
+        assert!(
+            matches!(&events[0], CompactEvent::CompactStart { plan: Some(p), .. }
             if p.trigger == CompactTrigger::Manual
                 && p.head_messages > 0 && p.head_messages < 40
                 && p.head_tokens > 0 && p.tail_messages > 0),
-            "plan should describe the split: {events:?}");
-        assert!(matches!(&events[1], CompactEvent::CompactPhase { phase: CompactPhase::Summarizing, .. }));
+            "plan should describe the split: {events:?}"
+        );
+        assert!(matches!(
+            &events[1],
+            CompactEvent::CompactPhase {
+                phase: CompactPhase::Summarizing,
+                ..
+            }
+        ));
         // Deltas are coalesced: 60+60 chars cross the 120-char threshold →
         // one flush; the trailing 60 chars drain via the final flush.
-        assert!(matches!(&events[2], CompactEvent::CompactSummaryDelta { text, .. }
-            if text == &format!("{}{}", "a".repeat(60), "b".repeat(60))));
-        assert!(matches!(&events[3], CompactEvent::CompactSummaryDelta { text, .. }
-            if text == &"c".repeat(60)));
-        assert!(matches!(&events[4], CompactEvent::CompactPhase { phase: CompactPhase::Rebuilding, .. }));
+        assert!(
+            matches!(&events[2], CompactEvent::CompactSummaryDelta { text, .. }
+            if text == &format!("{}{}", "a".repeat(60), "b".repeat(60)))
+        );
+        assert!(
+            matches!(&events[3], CompactEvent::CompactSummaryDelta { text, .. }
+            if text == &"c".repeat(60))
+        );
+        assert!(matches!(
+            &events[4],
+            CompactEvent::CompactPhase {
+                phase: CompactPhase::Rebuilding,
+                ..
+            }
+        ));
         match &events[5] {
             CompactEvent::CompactFinish {
                 stats: Some(stats),
@@ -894,13 +913,19 @@ mod tests {
                 assert_eq!(stats.messages_before, 40);
                 assert!(stats.messages_after < 40, "head should shrink: {stats:?}");
                 assert!(stats.summary_tokens > 0);
-                assert!(stats.freed_tokens > 0, "net context should shrink: {stats:?}");
+                assert!(
+                    stats.freed_tokens > 0,
+                    "net context should shrink: {stats:?}"
+                );
             }
             other => panic!("expected stats-carrying Finish, got {other:?}"),
         }
 
         // ── In-place effects ──
-        assert_eq!(session.lifecycle_status(), agentik_types::AgentLifecycleStatus::Idle);
+        assert_eq!(
+            session.lifecycle_status(),
+            agentik_types::AgentLifecycleStatus::Idle
+        );
         assert_eq!(session.ancestor_summaries.len(), 1);
         assert!(session.summary.is_some());
         assert!(session.messages.len() < 40);
@@ -929,11 +954,24 @@ mod tests {
         assert!(!compacted);
 
         let events = drain_compact_events(&mut rx);
-        assert!(matches!(&events[..], [
-            CompactEvent::CompactStart { plan: None, .. },
-            CompactEvent::CompactFinish { stats: None, error: None, .. },
-        ]), "got {events:?}");
-        assert_eq!(session.lifecycle_status(), agentik_types::AgentLifecycleStatus::Idle);
+        assert!(
+            matches!(
+                &events[..],
+                [
+                    CompactEvent::CompactStart { plan: None, .. },
+                    CompactEvent::CompactFinish {
+                        stats: None,
+                        error: None,
+                        ..
+                    },
+                ]
+            ),
+            "got {events:?}"
+        );
+        assert_eq!(
+            session.lifecycle_status(),
+            agentik_types::AgentLifecycleStatus::Idle
+        );
     }
 
     /// When the provider rejects streaming, compaction falls back to a
@@ -944,13 +982,15 @@ mod tests {
         let mut mock = MockApiClient::new();
         mock.expect_request_stream()
             .times(1)
-            .returning(|_m, _t, _i| Err(agentik_sdk::AnthropicError::BadRequest {
-                message: "streaming unsupported".into(),
-                status: 400,
-            }));
-        mock.expect_request().times(1).returning(|_m, _t, _i| {
-            Ok(Message::assistant_text("fallback summary"))
-        });
+            .returning(|_m, _t, _i| {
+                Err(agentik_sdk::AnthropicError::BadRequest {
+                    message: "streaming unsupported".into(),
+                    status: 400,
+                })
+            });
+        mock.expect_request()
+            .times(1)
+            .returning(|_m, _t, _i| Ok(Message::assistant_text("fallback summary")));
         let model = Model::with_client(dummy_model_info("compact-fallback"), mock);
 
         let (tx, mut rx) = unbounded_channel();
@@ -961,7 +1001,11 @@ mod tests {
         }
 
         let compacted = session
-            .compact(&model, CompactTrigger::Manual, agentik_types::AgentLifecycleStatus::Idle)
+            .compact(
+                &model,
+                CompactTrigger::Manual,
+                agentik_types::AgentLifecycleStatus::Idle,
+            )
             .await
             .expect("fallback request succeeds");
         assert!(compacted);
@@ -969,8 +1013,21 @@ mod tests {
         let events = drain_compact_events(&mut rx);
         // Start → Phase(Summarizing) → (no deltas) → Phase(Rebuilding) → Finish
         assert_eq!(events.len(), 4, "got {events:?}");
-        assert!(matches!(&events[1], CompactEvent::CompactPhase { phase: CompactPhase::Summarizing, .. }));
-        assert!(matches!(&events[3], CompactEvent::CompactFinish { stats: Some(_), error: None, .. }));
+        assert!(matches!(
+            &events[1],
+            CompactEvent::CompactPhase {
+                phase: CompactPhase::Summarizing,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &events[3],
+            CompactEvent::CompactFinish {
+                stats: Some(_),
+                error: None,
+                ..
+            }
+        ));
     }
 
     // ── DeltaThrottle ────────────────────────────────────────────────
@@ -1006,8 +1063,7 @@ mod tests {
         // sleep in the test suite.
         let mut t = DeltaThrottle {
             buf: String::new(),
-            last_flush: Instant::now() - COMPACT_DELTA_FLUSH_INTERVAL
-                - Duration::from_millis(1),
+            last_flush: Instant::now() - COMPACT_DELTA_FLUSH_INTERVAL - Duration::from_millis(1),
         };
         let mut out = Vec::new();
         t.push("tiny", |s| out.push(s));

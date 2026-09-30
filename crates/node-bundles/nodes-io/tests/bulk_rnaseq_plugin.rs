@@ -1,6 +1,3 @@
-use std::sync::Arc;
-
-use container_runtime::{ContainerExecutionInfra, PodmanConfig};
 use dag_core::registry::NodeCtx;
 
 #[test]
@@ -10,12 +7,7 @@ fn plugin_registers_multiomic_concordance_after_container_sweep() {
         None,
     );
     let mut registry = dag_core::registry::NodeRegistry::new(ctx);
-    let container_execution = Arc::new(ContainerExecutionInfra::from_config(PodmanConfig {
-        program: "podman".into(),
-        workspace_root: "/tmp/autonomics-bulk-rnaseq-workspace".into(),
-        panel_cache_root: "/tmp/autonomics-bulk-rnaseq-panels".into(),
-    }));
-    registry.register_plugin(&nodes_io::Plugin::new(container_execution));
+    registry.register_plugin(&nodes_io::Plugin::new());
     let kinds: Vec<String> = registry.list_nodes().into_iter().map(|n| n.kind).collect();
     assert!(
         kinds.iter().any(|k| k == "multiomic_concordance"),

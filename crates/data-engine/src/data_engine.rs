@@ -445,11 +445,7 @@ impl DataEngine {
     /// List recent execution records, newest-first. `ref_name = None` spans
     /// all refs. The audit counterpart of [`Self::dag_log`]: snapshots version
     /// definitions, runs version executions.
-    pub async fn list_runs(
-        &self,
-        limit: usize,
-        ref_name: Option<&str>,
-    ) -> Result<Vec<RunRecord>> {
+    pub async fn list_runs(&self, limit: usize, ref_name: Option<&str>) -> Result<Vec<RunRecord>> {
         let history = self
             .history
             .as_ref()
@@ -512,10 +508,8 @@ impl DataEngine {
         .map_err(Error::Custom)?;
         let staging = match &target {
             dag_export::ExportTarget::Vfs(_) => {
-                let dir = std::env::temp_dir().join(format!(
-                    "autonomics-export-{}",
-                    uuid::Uuid::new_v4()
-                ));
+                let dir = std::env::temp_dir()
+                    .join(format!("autonomics-export-{}", uuid::Uuid::new_v4()));
                 std::fs::create_dir_all(&dir)
                     .map_err(|e| Error::Custom(format!("create staging dir: {e}")))?;
                 Some(dir)
@@ -525,24 +519,19 @@ impl DataEngine {
         let out_path = staging.as_deref().unwrap_or(out_dir.as_path());
 
         let mut summary = match format {
-            crate::dag::ExportFormat::Prov => dag_export::write_prov_document(
+            crate::dag::ExportFormat::Prov => {
+                dag_export::write_prov_document(&run, &report, manifest.as_deref(), out_path)
+                    .map_err(Error::Custom)
+            }
+            crate::dag::ExportFormat::Crate => dag_export::export_ro_crate(
                 &run,
                 &report,
                 manifest.as_deref(),
                 out_path,
+                self.engine_ctx.opendal.as_deref(),
             )
+            .await
             .map_err(Error::Custom),
-            crate::dag::ExportFormat::Crate => {
-                dag_export::export_ro_crate(
-                    &run,
-                    &report,
-                    manifest.as_deref(),
-                    out_path,
-                    self.engine_ctx.opendal.as_deref(),
-                )
-                .await
-                .map_err(Error::Custom)
-            }
         }?;
 
         if let (dag_export::ExportTarget::Vfs(prefix), Some(staging), Some(storage)) =
@@ -945,7 +934,14 @@ impl DataEngine {
         self.commit_history_snapshot(&manifest, manifest_hash.clone(), &mut report)
             .await;
         if let Some(warning) = self
-            .persist_run_record(run_id, started_at, manifest_hash, message, Some(&report), None)
+            .persist_run_record(
+                run_id,
+                started_at,
+                manifest_hash,
+                message,
+                Some(&report),
+                None,
+            )
             .await
         {
             report.warnings.push(warning);
@@ -1922,7 +1918,10 @@ mod tests {
 
         let first = engine.run().await.unwrap();
         assert!(first.ok);
-        let snapshot_id = first.snapshot_id.clone().expect("first run commits a snapshot");
+        let snapshot_id = first
+            .snapshot_id
+            .clone()
+            .expect("first run commits a snapshot");
 
         // Second run of the *same* manifest: no new snapshot — but a second
         // run row linking to the same head (the head-hit backfill).
@@ -1936,9 +1935,10 @@ mod tests {
 
         let runs = engine.list_runs(10, None).await.unwrap();
         assert_eq!(runs.len(), 2, "every execution leaves a row");
-        assert!(runs
-            .iter()
-            .all(|run| run.snapshot_id.as_deref() == Some(snapshot_id.as_str())));
+        assert!(
+            runs.iter()
+                .all(|run| run.snapshot_id.as_deref() == Some(snapshot_id.as_str()))
+        );
         assert!(runs.iter().all(|run| run.ok));
         assert!(runs.iter().all(|run| run.run_report_json.is_some()));
         assert_eq!(runs[0].engine_version, dag_core::engine_version());

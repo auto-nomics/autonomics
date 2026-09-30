@@ -17,7 +17,6 @@ use dag_core::dag::graph::PortOutputs;
 use dag_core::dag::runtime::SchedulerConfig;
 use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::registry::{NodeCtx, NodeRegistry};
-use data_catalog::CatalogConfig;
 use datafusion::common::HashMap;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::prelude::SessionContext;
@@ -367,88 +366,4 @@ async fn dataframe_to_file_output_flows_through_container_command_in_dag() {
         .downcast_ref::<Int64Array>()
         .unwrap();
     assert_eq!(ids.values(), &[1, 2]);
-}
-
-struct CatalogTextFixture {
-    ctx: NodeCtx,
-    bundles: dag_core::BundleRegistry,
-    _scratch: tempfile::TempDir,
-}
-
-async fn catalog_test_fixture() -> CatalogTextFixture {
-    let config_path = std::env::var_os("AUTONOMICS_TEST_VFS_CONFIG")
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME").map(|home| Path::new(&home).join(".autonomics/vfs.toml"))
-        })
-        .expect("HOME or AUTONOMICS_TEST_VFS_CONFIG is required");
-    let source = std::fs::read_to_string(&config_path).unwrap();
-    let catalog_config = CatalogConfig::from_vfs_toml(&source).unwrap();
-    let cache_root = std::env::var_os("HOME")
-        .map(|home| Path::new(&home).join(".autonomics/catalog"))
-        .expect("HOME is required for the default catalog cache");
-    let catalog = data_catalog::LocalCatalog::open(&cache_root).unwrap();
-    if catalog.index().unwrap().entries.is_empty() {
-        let repository = catalog_config
-            .repository
-            .as_deref()
-            .expect("catalog repository is required");
-        let remote =
-            data_catalog::RemoteCatalog::hf(repository, catalog_config.revision.clone(), None)
-                .unwrap();
-        catalog.update(&remote, None).await.unwrap();
-    }
-
-    let scratch = tempfile::tempdir().unwrap();
-    let mut manifest = VfsManifest {
-        backend: vec![
-            BackendDefinition {
-                id: "catalog-cache".into(),
-                config: BackendConfig::local(cache_root.to_string_lossy().into_owned()),
-            },
-            BackendDefinition {
-                id: "catalog-test-local".into(),
-                config: BackendConfig::local("/"),
-            },
-        ],
-        mount: vec![MountDefinition {
-            path: "/".into(),
-            backend: "catalog-test-local".into(),
-            source: scratch.path().to_string_lossy().into_owned(),
-            read_only: false,
-        }],
-    };
-    manifest
-        .mount
-        .extend(catalog.mount_definitions("catalog-cache", true).unwrap());
-    let mounted = Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap());
-    let storage = Arc::new(OpendalFileStorage::with_mounts(
-        scratch.path(),
-        mounted.clone(),
-    ));
-    let session = SessionContext::new();
-    session
-        .runtime_env()
-        .register_object_store(ObjectStoreUrl::parse("vfs://").unwrap().as_ref(), mounted);
-    CatalogTextFixture {
-        ctx: NodeCtx::new(session.runtime_env(), Some(storage)),
-        bundles: catalog.bundle_registry().unwrap(),
-        _scratch: scratch,
-    }
-}
-
-async fn read_published_text(
-    storage: &OpendalFileStorage,
-    output: &dag_core::value::FileRef,
-) -> String {
-    let path = output
-        .path
-        .strip_prefix("vfs://")
-        .expect("LAVA artifact is a VFS URI");
-    let bytes = storage
-        .resolve(path)
-        .read(&storage.resolve_path(path))
-        .await
-        .unwrap();
-    String::from_utf8_lossy(&bytes.to_vec()).into_owned()
 }

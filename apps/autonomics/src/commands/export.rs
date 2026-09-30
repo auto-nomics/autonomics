@@ -11,10 +11,12 @@ use crate::cli::ExportRunArgs;
 pub async fn run_export_run(args: ExportRunArgs) -> color_eyre::Result<()> {
     use dag_core::dag::{DagHistory, ExportFormat, export as dag_export};
 
-    let format =
-        ExportFormat::parse(&args.format).map_err(|e| color_eyre::eyre::eyre!(e))?;
+    let format = ExportFormat::parse(&args.format).map_err(|e| color_eyre::eyre::eyre!(e))?;
     if !args.out.is_absolute() {
-        bail!("--out must be an absolute path, got `{}`", args.out.display());
+        bail!(
+            "--out must be an absolute path, got `{}`",
+            args.out.display()
+        );
     }
 
     let mut builder = gateway::RuntimeConfig::builder();
@@ -45,13 +47,10 @@ pub async fn run_export_run(args: ExportRunArgs) -> color_eyre::Result<()> {
     };
 
     let summary = match format {
-        ExportFormat::Prov => dag_export::write_prov_document(
-            &run,
-            &report,
-            manifest.as_deref(),
-            &args.out,
-        )
-        .map_err(|e| color_eyre::eyre::eyre!(e))?,
+        ExportFormat::Prov => {
+            dag_export::write_prov_document(&run, &report, manifest.as_deref(), &args.out)
+                .map_err(|e| color_eyre::eyre::eyre!(e))?
+        }
         ExportFormat::Crate => {
             let storage = gateway::bibliography_file_storage(&config)?;
             dag_export::export_ro_crate(

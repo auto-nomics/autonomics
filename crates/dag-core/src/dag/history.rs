@@ -1042,7 +1042,10 @@ mod tests {
         assert_eq!(runs.len(), 2);
         assert_eq!(runs[0].id, "222", "newest first");
         assert_eq!(runs[1].id, "111");
-        assert!(runs.iter().all(|run| run.snapshot_id.as_deref() == Some(snapshot_id.as_str())));
+        assert!(
+            runs.iter()
+                .all(|run| run.snapshot_id.as_deref() == Some(snapshot_id.as_str()))
+        );
         assert_eq!(runs[0].trigger.as_deref(), Some("agent:/root/researcher"));
         assert!(!runs[0].ok);
         assert!(runs[0].error.is_some());

@@ -67,7 +67,10 @@ impl ToolFunction for DagRunsLogTool {
 
         if runs.is_empty() {
             return Ok(ToolResult::success(if run_id.is_some() {
-                if run_id.as_deref().is_some_and(|id| id.eq_ignore_ascii_case("latest")) {
+                if run_id
+                    .as_deref()
+                    .is_some_and(|id| id.eq_ignore_ascii_case("latest"))
+                {
                     "No runs recorded yet."
                 } else {
                     "No run found with that id (pass no run_id to list recent runs)."
@@ -160,7 +163,10 @@ fn run_detail_json(run: &data_engine::dag::RunRecord) -> serde_json::Value {
             .unwrap_or_default();
         value["nodes"] = serde_json::json!(nodes);
         value["report_ok"] = report.get("ok").cloned().unwrap_or(serde_json::json!(null));
-        value["warnings"] = report.get("warnings").cloned().unwrap_or(serde_json::json!(null));
+        value["warnings"] = report
+            .get("warnings")
+            .cloned()
+            .unwrap_or(serde_json::json!(null));
     }
 
     value

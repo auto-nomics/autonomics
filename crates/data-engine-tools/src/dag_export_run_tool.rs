@@ -64,11 +64,10 @@ impl ToolFunction for DagExportRunTool {
             .export_run(input.run_id.clone(), format, out_dir)
             .await
             .map_err(ExecError::from)?;
-        let summary_json = serde_json::to_value(&summary).map_err(|e| {
-            ToolError::ValidationFailed {
+        let summary_json =
+            serde_json::to_value(&summary).map_err(|e| ToolError::ValidationFailed {
                 message: format!("serialize export summary: {e}"),
-            }
-        })?;
+            })?;
         Ok(ToolResult::success_json(summary_json))
     }
 }

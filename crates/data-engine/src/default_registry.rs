@@ -70,7 +70,7 @@ pub fn build_default_registry_with_container_execution(
 
     // ── Phase 3: IO, causal, lcmm, mr, survey bundles ──────────────────
     #[cfg(feature = "bundle-io")]
-    registry.register_plugin(&nodes_io::Plugin::new(Arc::clone(&container_execution)));
+    registry.register_plugin(&nodes_io::Plugin::new());
     #[cfg(feature = "bundle-opengwas")]
     registry.register_plugin(&nodes_opengwas::Plugin);
     #[cfg(feature = "bundle-causal")]

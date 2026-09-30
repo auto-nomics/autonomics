@@ -2328,8 +2328,7 @@ mod tests {
                 &dag_core::dag::node_event::NodeReporter::noop(),
             )
             .await
-            .err()
-            .expect("missing path must error");
+            .expect_err("missing path must error");
         let msg = format!("{err:?}");
         assert!(
             msg.contains("does not exist"),
@@ -2351,8 +2350,7 @@ mod tests {
                 &dag_core::dag::node_event::NodeReporter::noop(),
             )
             .await
-            .err()
-            .expect("directory path must error");
+            .expect_err("directory path must error");
         let msg = format!("{err:?}");
         assert!(
             msg.contains("is a directory"),
@@ -2376,8 +2374,7 @@ mod tests {
                 &dag_core::dag::node_event::NodeReporter::noop(),
             )
             .await
-            .err()
-            .expect("unmatched glob must error");
+            .expect_err("unmatched glob must error");
         let msg = format!("{err:?}");
         assert!(
             msg.contains("matched no readable files"),

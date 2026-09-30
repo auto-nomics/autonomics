@@ -327,9 +327,14 @@ fn render_compact_preview(area: Rect, buf: &mut Buffer, compact: &crate::state::
     let header_style = Style::default()
         .fg(Color::Magenta)
         .add_modifier(Modifier::BOLD);
-    let summary_style = Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC);
+    let summary_style = Style::default()
+        .fg(Color::DarkGray)
+        .add_modifier(Modifier::ITALIC);
 
-    let mut lines = vec![Line::styled(format!("⟳ compacting — {phase}  ({trigger})"), header_style)];
+    let mut lines = vec![Line::styled(
+        format!("⟳ compacting — {phase}  ({trigger})"),
+        header_style,
+    )];
     if compact.summary.is_empty() {
         if compact.phase.is_some() {
             lines.push(Line::styled("  …", summary_style));

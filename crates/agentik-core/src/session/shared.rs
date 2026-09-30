@@ -12,8 +12,8 @@ use crate::agent::AgentConfig;
 use crate::context::ContextProvider;
 use crate::skill::SharedSkillRuntime;
 use crate::storage::{AgentStorage, PersistOp};
-use crate::tools::task_runtime::TaskStore;
 use crate::tools::ToolRegistry;
+use crate::tools::task_runtime::TaskStore;
 use agentik_types::AgentPlan;
 
 /// Stable resources shared across all sessions of one agent.

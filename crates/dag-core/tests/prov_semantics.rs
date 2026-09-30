@@ -39,14 +39,20 @@ fn report() -> Value {
 
 fn doc() -> Value {
     let run = RunRecord {
-        id: "run-1".into(), ref_name: "asxl1-deseq2".into(),
-        snapshot_id: Some("snap1".into()), manifest_hash: "mh".into(),
+        id: "run-1".into(),
+        ref_name: "asxl1-deseq2".into(),
+        snapshot_id: Some("snap1".into()),
+        manifest_hash: "mh".into(),
         trigger: Some("agent:/root/bixbench".into()),
         started_at: "2026-09-29T10:00:00Z".into(),
         finished_at: "2026-09-29T10:05:00Z".into(),
-        ok: true, cancelled: false, error: None,
-        message: Some("m".into()), engine_version: "0.1.0".into(),
-        source_revision: "rev1".into(), run_report_json: None,
+        ok: true,
+        cancelled: false,
+        error: None,
+        message: Some("m".into()),
+        engine_version: "0.1.0".into(),
+        source_revision: "rev1".into(),
+        run_report_json: None,
     };
     build_prov_document(&run, &report(), Some("{}"))
 }
@@ -69,19 +75,45 @@ fn pair_count(array: &[Value], key_a: &str, key_b: &str) -> (usize, usize) {
 #[test]
 fn all_sections_present_and_nonempty() {
     let doc = doc();
-    for section in ["prefix", "entity", "activity", "agent", "used", "wasGeneratedBy", "wasDerivedFrom", "wasAssociatedWith"] {
-        assert!(doc.get(section).is_some_and(|v| !v.is_null()), "section {section} missing");
+    for section in [
+        "prefix",
+        "entity",
+        "activity",
+        "agent",
+        "used",
+        "wasGeneratedBy",
+        "wasDerivedFrom",
+        "wasAssociatedWith",
+    ] {
+        assert!(
+            doc.get(section).is_some_and(|v| !v.is_null()),
+            "section {section} missing"
+        );
     }
-    assert!(!doc["agent"].as_object().unwrap().is_empty(), "agent declarations");
-    assert!(!doc["used"].as_array().unwrap().is_empty(), "used relations");
+    assert!(
+        !doc["agent"].as_object().unwrap().is_empty(),
+        "agent declarations"
+    );
+    assert!(
+        !doc["used"].as_array().unwrap().is_empty(),
+        "used relations"
+    );
 }
 
 #[test]
 fn no_duplicate_relations() {
     let doc = doc();
-    let (_, gen_dups) = pair_count(doc["wasGeneratedBy"].as_array().unwrap(), "entity", "activity");
+    let (_, gen_dups) = pair_count(
+        doc["wasGeneratedBy"].as_array().unwrap(),
+        "entity",
+        "activity",
+    );
     let (_, used_dups) = pair_count(doc["used"].as_array().unwrap(), "activity", "entity");
-    let (_, der_dups) = pair_count(doc["wasDerivedFrom"].as_array().unwrap(), "generatedEntity", "usedEntity");
+    let (_, der_dups) = pair_count(
+        doc["wasDerivedFrom"].as_array().unwrap(),
+        "generatedEntity",
+        "usedEntity",
+    );
     assert_eq!((gen_dups, used_dups, der_dups), (0, 0, 0));
 }
 
@@ -91,26 +123,43 @@ fn source_nodes_ingest_external_files_instead_of_generating_them() {
     let src = "urn:autonomics:run:run-1:node:counts_file";
     let original = "urn:autonomics:path:/bixbench/counts.txt";
     // The original data file is used, never generated.
-    assert!(doc["used"].as_array().unwrap().iter().any(
-        |r| r["activity"] == src && r["entity"] == original));
-    assert!(!doc["wasGeneratedBy"].as_array().unwrap().iter().any(
-        |r| r["activity"] == src), "a source node must not generate files");
+    assert!(
+        doc["used"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["activity"] == src && r["entity"] == original)
+    );
+    assert!(
+        !doc["wasGeneratedBy"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["activity"] == src),
+        "a source node must not generate files"
+    );
     assert_eq!(
-        doc["entity"][original]["autonomics:kind"], json!("external-input"),
-        "original file entity is tagged as external input");
+        doc["entity"][original]["autonomics:kind"],
+        json!("external-input"),
+        "original file entity is tagged as external input"
+    );
 }
 
 #[test]
 fn run_level_activity_carries_wall_clock() {
     let doc = doc();
     let run_activity = &doc["activity"]["urn:autonomics:run:run-1"];
-    assert_eq!(run_activity["prov:startTime"], json!("2026-09-29T10:00:00Z"));
+    assert_eq!(
+        run_activity["prov:startTime"],
+        json!("2026-09-29T10:00:00Z")
+    );
     assert_eq!(run_activity["prov:endTime"], json!("2026-09-29T10:05:00Z"));
     assert_eq!(run_activity["autonomics:ref"], json!("asxl1-deseq2"));
     // Node activities reference their run.
     assert_eq!(
         doc["activity"]["urn:autonomics:run:run-1:node:deseq2_condition"]["autonomics:run"],
-        json!("urn:autonomics:run:run-1"));
+        json!("urn:autonomics:run:run-1")
+    );
 }
 
 #[test]
@@ -120,18 +169,33 @@ fn dataframe_entities_join_the_derivation_chain() {
     let original = "urn:autonomics:path:/bixbench/counts.txt";
     let out = "urn:autonomics:sha256:abc";
     // The df entity is generated by its node…
-    assert!(doc["wasGeneratedBy"].as_array().unwrap().iter()
-        .any(|r| r["entity"] == df));
+    assert!(
+        doc["wasGeneratedBy"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["entity"] == df)
+    );
     // …carries its reported shape (schema as literal JSON text)…
     assert_eq!(doc["entity"][df]["autonomics:rows"], json!(42));
     let schema = doc["entity"][df]["autonomics:schema"].as_str().unwrap();
     let schema: Value = serde_json::from_str(schema).unwrap();
     assert_eq!(schema["column_count"], json!(2));
     // …and links the chain: original → df → container output.
-    assert!(doc["wasDerivedFrom"].as_array().unwrap().iter()
-        .any(|r| r["generatedEntity"] == df && r["usedEntity"] == original));
-    assert!(doc["wasDerivedFrom"].as_array().unwrap().iter()
-        .any(|r| r["generatedEntity"] == out && r["usedEntity"] == df));
+    assert!(
+        doc["wasDerivedFrom"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["generatedEntity"] == df && r["usedEntity"] == original)
+    );
+    assert!(
+        doc["wasDerivedFrom"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["generatedEntity"] == out && r["usedEntity"] == df)
+    );
 }
 
 #[test]
@@ -147,13 +211,16 @@ fn container_evidence_lands_on_activities() {
 fn snapshot_entity_is_used_by_the_run() {
     let doc = doc();
     let snap = "urn:autonomics:snapshot:snap1";
-    assert_eq!(
-        doc["entity"][snap]["autonomics:ref"],
-        json!("asxl1-deseq2"));
+    assert_eq!(doc["entity"][snap]["autonomics:ref"], json!("asxl1-deseq2"));
     // The manifest joins the graph: the run consumed its own definition.
-    assert!(doc["used"].as_array().unwrap().iter().any(
-        |r| r["activity"] == "urn:autonomics:run:run-1" && r["entity"] == snap),
-        "snapshot entity must be used by the run activity");
+    assert!(
+        doc["used"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["activity"] == "urn:autonomics:run:run-1" && r["entity"] == snap),
+        "snapshot entity must be used by the run activity"
+    );
 }
 
 /// PROV-JSON attribute values are never null; inside entity/activity/agent
@@ -194,8 +261,12 @@ fn no_null_values_and_namespaced_attribute_keys() {
 fn file_entities_omit_unrecorded_fields() {
     let doc = doc();
     let original = &doc["entity"]["urn:autonomics:path:/bixbench/counts.txt"];
-    assert!(original.get("autonomics:sha256").is_none(),
-        "no recorded hash → key omitted, not null");
-    assert!(original.get("autonomics:format").is_some(),
-        "recorded format is kept");
+    assert!(
+        original.get("autonomics:sha256").is_none(),
+        "no recorded hash → key omitted, not null"
+    );
+    assert!(
+        original.get("autonomics:format").is_some(),
+        "recorded format is kept"
+    );
 }

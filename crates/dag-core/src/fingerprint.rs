@@ -141,9 +141,8 @@ pub fn compute_node_fingerprint(
     identities: &[InputIdentity],
 ) -> String {
     let mut ordered: Vec<&InputIdentity> = identities.iter().collect();
-    ordered.sort_by(|a, b| {
-        (a.to_port, &a.from, a.from_port).cmp(&(b.to_port, &b.from, b.from_port))
-    });
+    ordered
+        .sort_by(|a, b| (a.to_port, &a.from, a.from_port).cmp(&(b.to_port, &b.from, b.from_port)));
 
     let mut hasher = Hasher::new();
     let mut feed = |bytes: &[u8]| {
@@ -198,9 +197,9 @@ fn encode_value(feed: &mut dyn FnMut(&[u8]), identity: &InputIdentity) {
             feed(b"df:");
             match upstream {
                 Some(fingerprint) => feed(fingerprint.as_bytes()),
-                None => feed(
-                    format!("pending:{}:{}", identity.from, identity.from_port).as_bytes(),
-                ),
+                None => {
+                    feed(format!("pending:{}:{}", identity.from, identity.from_port).as_bytes())
+                }
             }
         }
     }
@@ -240,7 +239,10 @@ pub async fn file_sha256(
 ) -> Option<(u64, String)> {
     if let Some(vpath) = path.strip_prefix("vfs://") {
         let storage = storage?;
-        return storage.sha256(&vfs::OpendalFileStorage::normalize_path(vpath)).await.ok();
+        return storage
+            .sha256(&vfs::OpendalFileStorage::normalize_path(vpath))
+            .await
+            .ok();
     }
     let candidate = path.strip_prefix("file://").unwrap_or(path);
     if candidate.starts_with('/') {
@@ -423,8 +425,10 @@ mod tests {
             "/data/x.csv",
             Some(fp(10, 1234, Some("sha256:deadbeef"))),
         )];
-        let a = compute_node_fingerprint("sql", Some(&serde_json::json!({"q": 1})), "v1", &identities);
-        let b = compute_node_fingerprint("sql", Some(&serde_json::json!({"q": 1})), "v1", &identities);
+        let a =
+            compute_node_fingerprint("sql", Some(&serde_json::json!({"q": 1})), "v1", &identities);
+        let b =
+            compute_node_fingerprint("sql", Some(&serde_json::json!({"q": 1})), "v1", &identities);
         assert_eq!(a, b);
         assert_eq!(a.len(), 64, "blake3 hex");
     }
@@ -438,8 +442,12 @@ mod tests {
         let reference =
             compute_node_fingerprint("sql", Some(&serde_json::json!({"q": 1})), "v1", &base);
 
-        let changed_kind =
-            compute_node_fingerprint("other_kind", Some(&serde_json::json!({"q": 1})), "v1", &base);
+        let changed_kind = compute_node_fingerprint(
+            "other_kind",
+            Some(&serde_json::json!({"q": 1})),
+            "v1",
+            &base,
+        );
         let changed_spec =
             compute_node_fingerprint("sql", Some(&serde_json::json!({"q": 2})), "v1", &base);
         let changed_engine =
@@ -453,7 +461,13 @@ mod tests {
         };
         let nospec = compute_node_fingerprint("sql", None, "v1", &base);
 
-        for candidate in [changed_kind, changed_spec, changed_engine, changed_hash, nospec] {
+        for candidate in [
+            changed_kind,
+            changed_spec,
+            changed_engine,
+            changed_hash,
+            nospec,
+        ] {
             assert_ne!(reference, candidate);
         }
     }
@@ -502,7 +516,10 @@ mod tests {
             "k",
             None,
             "v",
-            &[file_identity("/f", Some(fp(10, 1, Some("sha256:deadbeef"))))],
+            &[file_identity(
+                "/f",
+                Some(fp(10, 1, Some("sha256:deadbeef"))),
+            )],
         );
         let hash_bare = compute_node_fingerprint(
             "k",
@@ -581,7 +598,10 @@ mod tests {
             // Simulate a recorded publish-time hash with a stale mtime.
             size: b"stable content".len() as u64,
             mtime_ns: 1,
-            content_hash: Some(format!("sha256:{}", hex_lower(&Sha256::digest(b"stable content")))),
+            content_hash: Some(format!(
+                "sha256:{}",
+                hex_lower(&Sha256::digest(b"stable content"))
+            )),
             immutable_remote: false,
         };
         assert!(!cached_file_changed(&file_ref(&path, expected), None).await);
@@ -595,7 +615,10 @@ mod tests {
         let expected = FileFingerprint {
             size: 0,
             mtime_ns: 1,
-            content_hash: Some(format!("sha256:{}", hex_lower(&Sha256::digest(b"old content")))),
+            content_hash: Some(format!(
+                "sha256:{}",
+                hex_lower(&Sha256::digest(b"old content"))
+            )),
             immutable_remote: false,
         };
         assert!(cached_file_changed(&file_ref(&path, expected), None).await);
@@ -665,7 +688,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let storage = vfs::OpendalFileStorage::new(dir.path());
         let contents = b"hello vfs";
-        storage.write_bytes("/obj.bin", contents.to_vec()).await.unwrap();
+        storage
+            .write_bytes("/obj.bin", contents.to_vec())
+            .await
+            .unwrap();
 
         let (size, hex) = file_sha256("vfs:///obj.bin", Some(&storage)).await.unwrap();
         assert_eq!(hex, hex_lower(&Sha256::digest(contents)));

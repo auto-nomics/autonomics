@@ -54,17 +54,15 @@ pub use uniprot::nodes::search::{UniprotSearchNode, UniprotSearchNodeFactory};
 pub use uniprot::nodes::stream::{UniprotStreamNode, UniprotStreamNodeFactory};
 
 use dag_core::{NodePlugin, NodeRegistry};
-use std::sync::Arc;
 
-pub struct Plugin {
-    container_execution: Arc<container_runtime::ContainerExecutionInfra>,
-}
+/// Container-backed nodes moved to manifest plugins; the io bundle is pure
+/// engine-side and carries no container infrastructure.
+#[derive(Default)]
+pub struct Plugin;
 
 impl Plugin {
-    pub fn new(container_execution: Arc<container_runtime::ContainerExecutionInfra>) -> Self {
-        Self {
-            container_execution,
-        }
+    pub fn new() -> Self {
+        Self
     }
 }
 
@@ -175,9 +173,7 @@ mod tests {
             None,
         );
         let mut registry = NodeRegistry::new(ctx);
-        registry.register_plugin(&Plugin::new(Arc::new(
-            container_runtime::ContainerExecutionInfra::from_env(),
-        )));
+        registry.register_plugin(&Plugin::new());
         let expected = [
             "source_protocolio_protocols",
             "source_protocolio_protocol",

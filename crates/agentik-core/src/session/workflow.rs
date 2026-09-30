@@ -982,7 +982,11 @@ impl Session {
             }
             None => None,
         };
-        if !notice_matches(&self.messages, SKILL_NOTICE_PREFIX, skill_section.as_deref()) {
+        if !notice_matches(
+            &self.messages,
+            SKILL_NOTICE_PREFIX,
+            skill_section.as_deref(),
+        ) {
             let _ = self.remember(Message::user(notice_text(
                 SKILL_NOTICE_PREFIX,
                 skill_section.as_deref(),
@@ -1068,8 +1072,8 @@ fn notice_text(prefix: &str, current: Option<&str>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::AgentShared;
+    use super::*;
     use crate::agent::AgentConfig;
 
     // ── System prompt per-turn hashing (cache prefix stability) ─────
@@ -1083,10 +1087,10 @@ mod tests {
     /// 3. 状态未变的后续回合不重复注入(历史中恰好一条通知)。
     #[tokio::test]
     async fn plan_state_injects_as_tail_notice_and_keeps_system_stable() {
+        use crate::testing::dummy_model_info;
         use agentik_sdk::model::Model;
         use agentik_sdk::provider::client::MockApiClient;
         use agentik_sdk::streaming::MessageStream;
-        use crate::testing::dummy_model_info;
         use std::hash::{Hash, Hasher};
 
         let captured: Arc<std::sync::Mutex<Vec<(Vec<Message>, Option<String>)>>> =
@@ -1110,12 +1114,12 @@ mod tests {
         let mut mock = MockApiClient::new();
         for resp in responses {
             let cap = Arc::clone(&captured);
-            mock.expect_request_stream_with_system()
-                .times(1)
-                .returning(move |messages, _, _, system| {
+            mock.expect_request_stream_with_system().times(1).returning(
+                move |messages, _, _, system| {
                     cap.lock().unwrap().push((messages, system));
                     Ok(MessageStream::from_events(Vec::new(), resp.clone()))
-                });
+                },
+            );
         }
         let model = Model::with_client(dummy_model_info("sys-hash"), mock);
 
@@ -1198,19 +1202,15 @@ mod tests {
             "system must stay byte-identical across the whole conversation"
         );
         assert!(
-            !calls
-                .iter()
-                .any(|(_, s)| s.as_deref().is_some_and(|s| s.contains("## Current plan status"))),
+            !calls.iter().any(|(_, s)| s
+                .as_deref()
+                .is_some_and(|s| s.contains("## Current plan status"))),
             "plan section must not leak into system"
         );
 
         // 2. update_plan 执行后的下一次请求以尾部通知携带 plan。
         assert_eq!(notice_count(&calls[0].0), 0, "cold call has no notice");
-        assert_eq!(
-            notice_count(&calls[1].0),
-            0,
-            "pre-tool call has no notice"
-        );
+        assert_eq!(notice_count(&calls[1].0), 0, "pre-tool call has no notice");
         assert_eq!(
             notice_count(&calls[2].0),
             1,
@@ -1239,11 +1239,11 @@ mod tests {
     /// summary silently lost its profile prompt.
     #[tokio::test]
     async fn memory_summary_appends_to_custom_system_section() {
+        use crate::memory::{MEMORY_SCOPE_ID, MemoryBackend, MemoryConfig, MemoryStore};
+        use crate::testing::dummy_model_info;
         use agentik_sdk::model::Model;
         use agentik_sdk::provider::client::MockApiClient;
         use agentik_sdk::streaming::MessageStream;
-        use crate::memory::{MemoryBackend, MemoryConfig, MemoryStore, MEMORY_SCOPE_ID};
-        use crate::testing::dummy_model_info;
 
         let captured: Arc<std::sync::Mutex<Vec<Option<String>>>> =
             Arc::new(std::sync::Mutex::new(Vec::new()));

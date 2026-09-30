@@ -1173,7 +1173,9 @@ mod tests {
         // A failed execution is as auditable as a successful one: exit code,
         // both captured streams persisted, and the scratch failure-logs still
         // written for the diagnostic message.
-        let details = reporter.take_run_details().expect("failed run records details");
+        let details = reporter
+            .take_run_details()
+            .expect("failed run records details");
         assert_eq!(details.exit_code, Some(42));
         let stdout_log = details.stdout_log.expect("stdout persisted on failure");
         let stderr_log = details.stderr_log.expect("stderr persisted on failure");
@@ -1198,11 +1200,12 @@ mod tests {
                 .to_vec(),
             b"boom"
         );
-        assert!(dir
-            .join(".autonomics")
-            .join("failure-logs")
-            .join("stdout.log")
-            .exists());
+        assert!(
+            dir.join(".autonomics")
+                .join("failure-logs")
+                .join("stdout.log")
+                .exists()
+        );
     }
 
     #[tokio::test]

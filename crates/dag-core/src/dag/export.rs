@@ -100,17 +100,16 @@ pub struct ExportSummary {
 /// Resolve `id_or_prefix` to a run: the literal `latest` selects the most
 /// recent run; otherwise exact id first, then a unique prefix match. Errors
 /// name the recent runs so the caller can retry.
-pub async fn resolve_run(
-    history: &DagHistory,
-    id_or_prefix: &str,
-) -> Result<RunRecord, String> {
+pub async fn resolve_run(history: &DagHistory, id_or_prefix: &str) -> Result<RunRecord, String> {
     let id_or_prefix = id_or_prefix.trim();
     if id_or_prefix.eq_ignore_ascii_case("latest") {
         let mut recent = history
             .list_runs(1, None)
             .await
             .map_err(|e| format!("run listing failed: {e}"))?;
-        return recent.pop().ok_or_else(|| "no runs recorded yet".to_string());
+        return recent
+            .pop()
+            .ok_or_else(|| "no runs recorded yet".to_string());
     }
     if let Some(run) = history
         .get_run(id_or_prefix)
@@ -123,13 +122,14 @@ pub async fn resolve_run(
         .list_runs(1000, None)
         .await
         .map_err(|e| format!("run listing failed: {e}"))?;
-    let matches: Vec<&RunRecord> =
-        all.iter().filter(|run| run.id.starts_with(id_or_prefix)).collect();
+    let matches: Vec<&RunRecord> = all
+        .iter()
+        .filter(|run| run.id.starts_with(id_or_prefix))
+        .collect();
     match matches.as_slice() {
         [run] => Ok((*run).clone()),
         [] => {
-            let recent: Vec<&str> =
-                all.iter().take(5).map(|run| run.id.as_str()).collect();
+            let recent: Vec<&str> = all.iter().take(5).map(|run| run.id.as_str()).collect();
             Err(format!(
                 "no run matches `{id_or_prefix}`. Recent runs: {}",
                 if recent.is_empty() {
@@ -142,7 +142,10 @@ pub async fn resolve_run(
         many => Err(format!(
             "run prefix `{id_or_prefix}` is ambiguous ({} matches: {})",
             many.len(),
-            many.iter().map(|run| run.id.as_str()).collect::<Vec<_>>().join(", ")
+            many.iter()
+                .map(|run| run.id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
         )),
     }
 }
@@ -163,7 +166,10 @@ impl FileEntry {
         let path = value.get("path")?.as_str()?.to_string();
         Some(Self {
             path,
-            format: value.get("format").and_then(Value::as_str).map(str::to_string),
+            format: value
+                .get("format")
+                .and_then(Value::as_str)
+                .map(str::to_string),
             content_hash: value
                 .get("fingerprint")
                 .and_then(|fp| fp.get("content_hash"))
@@ -264,7 +270,11 @@ fn parse_nodes(report: &Value) -> Vec<NodeEntry> {
                 }
             }
             NodeEntry {
-                id: node.get("id").and_then(Value::as_str).unwrap_or_default().to_string(),
+                id: node
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
                 node_type: node
                     .get("node_type")
                     .and_then(Value::as_str)
@@ -299,23 +309,17 @@ fn parse_nodes(report: &Value) -> Vec<NodeEntry> {
                     .into_iter()
                     .flatten()
                     .filter_map(|binding| {
-                        let from = binding
-                            .get("from")
-                            .and_then(Value::as_str)?
-                            .to_string();
-                        let file = FileEntry::from_json(
-                            &json!({
-                                "path": binding.get("path"),
-                                "fingerprint": binding.get("fingerprint"),
-                            }),
-                        );
+                        let from = binding.get("from").and_then(Value::as_str)?.to_string();
+                        let file = FileEntry::from_json(&json!({
+                            "path": binding.get("path"),
+                            "fingerprint": binding.get("fingerprint"),
+                        }));
                         if let Some(entry) = file {
                             return Some(NodeInputRef::File(entry));
                         }
                         // DataFrame bindings carry no path: reference the
                         // producing node so lineage stays connected.
-                        (binding.get("kind").and_then(Value::as_str)
-                            == Some("DataFrame"))
+                        (binding.get("kind").and_then(Value::as_str) == Some("DataFrame"))
                             .then_some(NodeInputRef::Dataframe { from })
                     })
                     .collect(),
@@ -381,11 +385,7 @@ fn df_entity_id(run_id: &str, from: &str) -> String {
 /// - The **snapshot manifest** entity is wired in as an input the run-level
 ///   activity `used`, so the executed definition joins the graph instead of
 ///   dangling.
-pub fn build_prov_document(
-    run: &RunRecord,
-    report: &Value,
-    manifest: Option<&str>,
-) -> Value {
+pub fn build_prov_document(run: &RunRecord, report: &Value, manifest: Option<&str>) -> Value {
     let nodes = parse_nodes(report);
     let run_activity = format!("urn:autonomics:run:{}", run.id);
     let activity = |node: &NodeEntry| format!("urn:autonomics:run:{}:node:{}", run.id, node.id);
@@ -612,8 +612,7 @@ pub async fn export_ro_crate(
         }
     }
 
-    std::fs::create_dir_all(out_dir.join("data"))
-        .map_err(|e| format!("create crate dir: {e}"))?;
+    std::fs::create_dir_all(out_dir.join("data")).map_err(|e| format!("create crate dir: {e}"))?;
     std::fs::create_dir_all(out_dir.join("workflow"))
         .map_err(|e| format!("create workflow dir: {e}"))?;
 
@@ -769,13 +768,15 @@ pub async fn export_ro_crate(
     // The crate's own documents are export artifacts too (with their
     // self-certifying digests) — so a VFS upload ships the complete crate.
     for path in [manifest_path, preview_path] {
-        let bytes = std::fs::read(out_dir.join(path))
-            .map_err(|e| format!("read {path}: {e}"))?;
+        let bytes = std::fs::read(out_dir.join(path)).map_err(|e| format!("read {path}: {e}"))?;
         files.push(ExportFile {
             source: path.to_string(),
             exported_path: path.to_string(),
             bytes: bytes.len() as u64,
-            sha256: Some(format!("sha256:{}", hex_lower(&sha2::Sha256::digest(&bytes)))),
+            sha256: Some(format!(
+                "sha256:{}",
+                hex_lower(&sha2::Sha256::digest(&bytes))
+            )),
             sha256_verified: false,
         });
     }
@@ -884,7 +885,8 @@ async fn pull_file(
 
     let target = out_dir.join(&target_rel);
     if let Some(parent) = target.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| fatal(format!("create {}: {e}", target_rel)))?;
+        std::fs::create_dir_all(parent)
+            .map_err(|e| fatal(format!("create {}: {e}", target_rel)))?;
     }
 
     let mut hasher = sha2::Sha256::new();
@@ -1073,9 +1075,9 @@ pub fn resolve_export_target(
     storage: Option<&vfs::OpendalFileStorage>,
 ) -> Result<ExportTarget, String> {
     if let Some(vpath) = out.strip_prefix("vfs://") {
-        return Ok(ExportTarget::Vfs(
-            vfs::OpendalFileStorage::normalize_path(vpath),
-        ));
+        return Ok(ExportTarget::Vfs(vfs::OpendalFileStorage::normalize_path(
+            vpath,
+        )));
     }
     if out.starts_with('/') {
         let normalized = vfs::OpendalFileStorage::normalize_path(out);
@@ -1196,24 +1198,31 @@ mod tests {
 
         let tool_activity = "urn:autonomics:run:0123456789abcdef:node:tool";
         let out_entity = "urn:autonomics:sha256:deadbeefdeadbeef";
-        assert!(doc["activity"][tool_activity]["autonomics:image_digest"]
-            .as_str()
-            .is_some(), "container node carries its image digest");
+        assert!(
+            doc["activity"][tool_activity]["autonomics:image_digest"]
+                .as_str()
+                .is_some(),
+            "container node carries its image digest"
+        );
         // Content-addressed output entity + generation link.
         assert!(doc["entity"][out_entity].is_object());
-        assert!(doc["wasGeneratedBy"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|link| link["entity"] == out_entity && link["activity"] == tool_activity));
+        assert!(
+            doc["wasGeneratedBy"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|link| link["entity"] == out_entity && link["activity"] == tool_activity)
+        );
         // Trigger agent association.
         assert!(doc["agent"]["urn:autonomics:agent:/root/researcher"].is_object());
-        assert!(doc["wasAssociatedWith"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|link| link["activity"] == tool_activity
-                && link["agent"] == "urn:autonomics:agent:/root/researcher"));
+        assert!(
+            doc["wasAssociatedWith"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|link| link["activity"] == tool_activity
+                    && link["agent"] == "urn:autonomics:agent:/root/researcher")
+        );
         // The engine agent carries the source revision.
         assert_eq!(
             doc["agent"]["urn:autonomics:engine:0.1.0"]["autonomics:source_revision"],
@@ -1221,8 +1230,7 @@ mod tests {
         );
         // DataFrame-only source is represented by its execution fingerprint.
         assert_eq!(
-            doc["entity"]["urn:autonomics:run:0123456789abcdef:df:src"]
-                ["autonomics:fingerprint"],
+            doc["entity"]["urn:autonomics:run:0123456789abcdef:df:src"]["autonomics:fingerprint"],
             json!("fingerprint-src")
         );
     }
@@ -1239,13 +1247,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let storage = vfs::OpendalFileStorage::new(dir.path());
         let contents = b"csv,bytes\n1,2\n";
-        storage.write_bytes("/artifacts/run-1/out.csv", contents.to_vec()).await.unwrap();
+        storage
+            .write_bytes("/artifacts/run-1/out.csv", contents.to_vec())
+            .await
+            .unwrap();
 
         // Correct recorded hash.
         let digest = format!("sha256:{}", hex_lower(&sha2_computed(contents)));
         let mut report = sample_report_json();
-        report["nodes"][1]["output_files"][0]["fingerprint"]["content_hash"] =
-            json!(digest);
+        report["nodes"][1]["output_files"][0]["fingerprint"]["content_hash"] = json!(digest);
 
         let run = sample_run();
         let out = tempfile::tempdir().unwrap();
@@ -1323,16 +1333,19 @@ mod tests {
         let run = sample_run();
         let out = tempfile::tempdir().unwrap();
         // No storage configured: the local path must still be copyable.
-        let summary =
-            export_ro_crate(&run, &report, None, out.path(), None).await.unwrap();
+        let summary = export_ro_crate(&run, &report, None, out.path(), None)
+            .await
+            .unwrap();
         let entry = summary
             .files
             .iter()
             .find(|file| file.exported_path.ends_with("local-out.csv"))
             .expect("local output copied");
-        assert!(!entry.sha256_verified, "no recorded hash → unverified, not an error");
-        let copied =
-            std::fs::read(out.path().join(&entry.exported_path)).unwrap();
+        assert!(
+            !entry.sha256_verified,
+            "no recorded hash → unverified, not an error"
+        );
+        let copied = std::fs::read(out.path().join(&entry.exported_path)).unwrap();
         assert_eq!(copied, b"local,data\n1,2\n");
     }
 
@@ -1347,8 +1360,16 @@ mod tests {
         history.record_run(&other).await.unwrap();
 
         assert_eq!(resolve_run(&history, "aaaa").await.unwrap().id, "aaaa1111");
-        assert_eq!(resolve_run(&history, "bbbb2222").await.unwrap().id, "bbbb2222");
-        assert!(resolve_run(&history, "zzzz").await.unwrap_err().contains("no run matches"));
+        assert_eq!(
+            resolve_run(&history, "bbbb2222").await.unwrap().id,
+            "bbbb2222"
+        );
+        assert!(
+            resolve_run(&history, "zzzz")
+                .await
+                .unwrap_err()
+                .contains("no run matches")
+        );
     }
 
     fn sha2_computed(bytes: &[u8]) -> Vec<u8> {

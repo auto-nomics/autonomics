@@ -195,10 +195,7 @@ pub enum CompactEvent {
     /// A throttled chunk of the compaction summary being generated, for
     /// live preview in frontends. Coalesced at the source (~120 chars or
     /// ~200 ms) so the event channel and SSE replay ring are not flooded.
-    CompactSummaryDelta {
-        ts: DateTime<Utc>,
-        text: String,
-    },
+    CompactSummaryDelta { ts: DateTime<Utc>, text: String },
 
     /// Compaction ended — successfully (`stats`), without work to do
     /// (neither field), or with an error (`error`).
@@ -369,13 +366,20 @@ mod compact_event_tests {
         let ts = "2026-09-28T12:00:00Z";
         let start: CompactEvent =
             serde_json::from_str(&format!("{{\"CompactStart\":{{\"ts\":\"{ts}\"}}}}")).unwrap();
-        assert!(matches!(start, CompactEvent::CompactStart { plan: None, .. }));
+        assert!(matches!(
+            start,
+            CompactEvent::CompactStart { plan: None, .. }
+        ));
 
         let finish: CompactEvent =
             serde_json::from_str(&format!("{{\"CompactFinish\":{{\"ts\":\"{ts}\"}}}}")).unwrap();
         assert!(matches!(
             finish,
-            CompactEvent::CompactFinish { stats: None, error: None, .. }
+            CompactEvent::CompactFinish {
+                stats: None,
+                error: None,
+                ..
+            }
         ));
     }
 
@@ -435,8 +439,12 @@ mod compact_event_tests {
                     CompactEvent::CompactSummaryDelta { text: b, .. },
                 ) => a == b,
                 (
-                    CompactEvent::CompactFinish { stats: a, error: x, .. },
-                    CompactEvent::CompactFinish { stats: b, error: y, .. },
+                    CompactEvent::CompactFinish {
+                        stats: a, error: x, ..
+                    },
+                    CompactEvent::CompactFinish {
+                        stats: b, error: y, ..
+                    },
                 ) => a == b && x == y,
                 _ => false,
             };

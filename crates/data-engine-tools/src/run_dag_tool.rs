@@ -226,9 +226,7 @@ impl ToolFunction for RunDagTool {
         let parsed = serde_json::from_value::<Self::Input>(input)?;
 
         let trigger = Some(format!("agent:{}", self.client.session_id()));
-        let (mut event_rx, reply_rx) =
-            self.client
-                .run_dag_stream(parsed.commit_message, trigger);
+        let (mut event_rx, reply_rx) = self.client.run_dag_stream(parsed.commit_message, trigger);
         // Pin the reply future so it can be polled across loop iterations.
         tokio::pin!(reply_rx);
 

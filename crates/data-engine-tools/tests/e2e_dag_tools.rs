@@ -919,8 +919,8 @@ async fn test_dag_runs_log_records_execution_audit_trail() {
         mounted.clone(),
     ));
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-    let csv_path = std::path::Path::new(&manifest_dir)
-        .join("../data-engine/test_datasets/insurance.csv");
+    let csv_path =
+        std::path::Path::new(&manifest_dir).join("../data-engine/test_datasets/insurance.csv");
     let csv_data = std::fs::read(csv_path).unwrap();
     file_storage
         .resolve("/insurance.csv")
@@ -975,7 +975,11 @@ async fn test_dag_runs_log_records_execution_audit_trail() {
     for call in ["r1", "r2"] {
         let results = toolset
             .execute(
-                &[build_tooluse(call, "run_dag", json!({"commit_message": "audit e2e"}))],
+                &[build_tooluse(
+                    call,
+                    "run_dag",
+                    json!({"commit_message": "audit e2e"}),
+                )],
                 None,
             )
             .await
@@ -1060,8 +1064,8 @@ async fn test_dag_export_run_produces_evidence_crate() {
         mounted.clone(),
     ));
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-    let csv_path = std::path::Path::new(&manifest_dir)
-        .join("../data-engine/test_datasets/insurance.csv");
+    let csv_path =
+        std::path::Path::new(&manifest_dir).join("../data-engine/test_datasets/insurance.csv");
     let csv_data = std::fs::read(csv_path).unwrap();
     file_storage
         .resolve("/insurance.csv")
@@ -1139,11 +1143,15 @@ async fn test_dag_export_run_produces_evidence_crate() {
         .filter_map(|file| file["exported_path"].as_str())
         .collect();
     assert!(
-        exported.iter().any(|path| path.ends_with("exports/out.csv")),
+        exported
+            .iter()
+            .any(|path| path.ends_with("exports/out.csv")),
         "sink output packaged: {exported:?}"
     );
     assert!(
-        exported.iter().any(|path| path.ends_with("workflow/manifest.json")),
+        exported
+            .iter()
+            .any(|path| path.ends_with("workflow/manifest.json")),
         "snapshot manifest packaged: {exported:?}"
     );
     // The crate manifest is readable through the VFS (the tempdir out path
@@ -1157,8 +1165,7 @@ async fn test_dag_export_run_produces_evidence_crate() {
         .read_range("/ro-crate-metadata.json", 0..length)
         .await
         .unwrap();
-    let crate_doc: serde_json::Value =
-        serde_json::from_slice(&manifest_bytes.to_vec()).unwrap();
+    let crate_doc: serde_json::Value = serde_json::from_slice(&manifest_bytes.to_vec()).unwrap();
     let actions = crate_doc["@graph"]
         .as_array()
         .unwrap()
@@ -1181,7 +1188,10 @@ async fn test_dag_export_run_produces_evidence_crate() {
     check_ok(&results[0], "dag_export_run prov");
     let prov_summary = result_json(&results[0]);
     let prov_uri = prov_summary["out"].as_str().unwrap();
-    assert!(prov_uri.starts_with("vfs://"), "prov upload is vfs-addressed");
+    assert!(
+        prov_uri.starts_with("vfs://"),
+        "prov upload is vfs-addressed"
+    );
     let vpath = prov_uri.strip_prefix("vfs://").unwrap();
     let length = file_storage.content_length(vpath).await.unwrap();
     let prov_bytes = file_storage.read_range(vpath, 0..length).await.unwrap();
@@ -1191,7 +1201,10 @@ async fn test_dag_export_run_produces_evidence_crate() {
     let generated = prov["wasGeneratedBy"].as_array().unwrap();
     let mut seen = std::collections::BTreeSet::new();
     for entry in generated {
-        let key = (entry["entity"].as_str().unwrap_or(""), entry["activity"].as_str().unwrap_or(""));
+        let key = (
+            entry["entity"].as_str().unwrap_or(""),
+            entry["activity"].as_str().unwrap_or(""),
+        );
         assert!(seen.insert(key), "duplicate wasGeneratedBy: {key:?}");
     }
 }
@@ -1220,8 +1233,8 @@ async fn test_dag_export_run_uploads_into_vfs() {
         mounted.clone(),
     ));
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-    let csv_path = std::path::Path::new(&manifest_dir)
-        .join("../data-engine/test_datasets/insurance.csv");
+    let csv_path =
+        std::path::Path::new(&manifest_dir).join("../data-engine/test_datasets/insurance.csv");
     let csv_data = std::fs::read(csv_path).unwrap();
     file_storage
         .resolve("/insurance.csv")
@@ -1297,11 +1310,15 @@ async fn test_dag_export_run_uploads_into_vfs() {
         .filter_map(|file| file["exported_path"].as_str())
         .collect();
     assert!(
-        paths.iter().all(|path| path.starts_with("vfs:///evidence/crate/")),
+        paths
+            .iter()
+            .all(|path| path.starts_with("vfs:///evidence/crate/")),
         "all uploaded paths are vfs-addressed: {paths:?}"
     );
     assert!(
-        paths.iter().any(|path| path.ends_with("ro-crate-metadata.json")),
+        paths
+            .iter()
+            .any(|path| path.ends_with("ro-crate-metadata.json")),
         "crate manifest uploaded: {paths:?}"
     );
     // The crate is readable back through the same VFS the agent sees.

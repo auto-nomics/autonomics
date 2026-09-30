@@ -2,8 +2,8 @@
 //! adjacency repair, context rendering, and durable sanitization.
 
 use agentik_sdk::model::sanitize::sanitize_messages;
-use agentik_sdk::types::messages::{ContentBlock, Message, Role};
 use agentik_sdk::types::AgentEvent;
+use agentik_sdk::types::messages::{ContentBlock, Message, Role};
 use uuid::Uuid;
 
 use crate::error::Result;
@@ -11,11 +11,9 @@ use crate::message_ext::AgentMessageExt;
 use crate::storage::PersistOp;
 
 use super::Session;
-use super::compaction::{
-    format_checkpoint_message, prune_old_tool_outputs, PRUNE_PROTECT_TOKENS,
-};
-use super::error;
 use super::SessionState;
+use super::compaction::{PRUNE_PROTECT_TOKENS, format_checkpoint_message, prune_old_tool_outputs};
+use super::error;
 
 /// Insert a `tool_result` into a user message so that all `tool_result`
 /// blocks precede any text blocks.

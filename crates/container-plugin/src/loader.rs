@@ -302,13 +302,7 @@ script_file = "scripts/h2.sh"
     fn script_and_script_file_are_mutually_exclusive() {
         let (runtime, cache, state) = infra();
         let plugins_root = state.path().join("plugins");
-        let both = format!(
-            "{}\nscript = \"inline\"\n",
-            GOOD_LDSC.replace(
-                "script_file = \"scripts/h2.sh\"",
-                "script_file = \"scripts/h2.sh\""
-            )
-        );
+        let both = format!("{}\nscript = \"inline\"\n", GOOD_LDSC);
         write_plugin(
             &plugins_root,
             "both",
