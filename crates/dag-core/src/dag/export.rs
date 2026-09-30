@@ -22,6 +22,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use serde_json::{Value, json};
+use sha2::Digest;
 
 use super::history::{DagHistory, RunRecord};
 
@@ -63,11 +64,16 @@ pub struct ExportFile {
     /// Original recorded path / uri (usually `vfs://…`).
     pub source: String,
     /// Path inside the export (crate-relative, or the written file for PROV).
+    /// After a VFS upload this becomes the `vfs://` address instead.
     pub exported_path: String,
     pub bytes: u64,
+    /// sha256 of the exported bytes: the recorded hash for verified pulls,
+    /// or the digest of the produced file itself (PROV document, crate
+    /// manifest) so every export is self-certifying.
+    pub sha256: Option<String>,
     /// Whether the pulled bytes were verified against a recorded
-    /// `sha256:` hash. `false` means no recomputable hash was recorded —
-    /// the bytes are copied as-is.
+    /// `sha256:` hash. `false` for produced files (nothing to verify
+    /// against) and pulls without a recomputable recorded hash.
     pub sha256_verified: bool,
 }
 
@@ -91,12 +97,21 @@ pub struct ExportSummary {
 
 // ── run resolution ────────────────────────────────────────────────────────────
 
-/// Resolve `id_or_prefix` to a run: exact id first, then a unique prefix
-/// match. Errors name the recent runs so the caller can retry.
+/// Resolve `id_or_prefix` to a run: the literal `latest` selects the most
+/// recent run; otherwise exact id first, then a unique prefix match. Errors
+/// name the recent runs so the caller can retry.
 pub async fn resolve_run(
     history: &DagHistory,
     id_or_prefix: &str,
 ) -> Result<RunRecord, String> {
+    let id_or_prefix = id_or_prefix.trim();
+    if id_or_prefix.eq_ignore_ascii_case("latest") {
+        let mut recent = history
+            .list_runs(1, None)
+            .await
+            .map_err(|e| format!("run listing failed: {e}"))?;
+        return recent.pop().ok_or_else(|| "no runs recorded yet".to_string());
+    }
     if let Some(run) = history
         .get_run(id_or_prefix)
         .await
@@ -170,6 +185,18 @@ impl FileEntry {
     }
 }
 
+/// One upstream value reference from a node's input bindings.
+#[derive(Debug, Clone)]
+enum NodeInputRef {
+    /// A file-like value (carries path + fingerprint; FileSet bindings
+    /// record only the first file — an existing audit degradation).
+    File(FileEntry),
+    /// A DataFrame value: no address, so the reference is the *producing
+    /// node* — resolved to its df entity downstream. Without this the
+    /// lineage chain breaks at every DataFrame edge.
+    Dataframe { from: String },
+}
+
 /// Everything the exporters need from one node's report entry.
 struct NodeEntry {
     id: String,
@@ -180,9 +207,22 @@ struct NodeEntry {
     image: Option<String>,
     image_digest: Option<String>,
     exit_code: Option<i64>,
-    inputs: Vec<(String, Option<FileEntry>)>, // (from node id, file-like value)
-    outputs: Vec<FileEntry>,                  // output_files + port_assignments
-    logs: Vec<FileEntry>,                     // stdout/stderr captures
+    inputs: Vec<NodeInputRef>,
+    /// File outputs, deduplicated by path — `output_files` and
+    /// `port_assignments` carry the same artifacts under two spellings.
+    outputs: Vec<FileEntry>,
+    logs: Vec<FileEntry>, // stdout/stderr captures
+    /// Output column schema (`NodeReport.output_schema`), when reported.
+    output_schema: Option<Value>,
+    output_rows: Option<u64>,
+}
+
+impl NodeEntry {
+    /// Source nodes (no inputs) cannot generate file bytes — their file
+    /// outputs are external references ingested into the run.
+    fn is_source(&self) -> bool {
+        self.inputs.is_empty()
+    }
 }
 
 fn parse_nodes(report: &Value) -> Vec<NodeEntry> {
@@ -194,27 +234,26 @@ fn parse_nodes(report: &Value) -> Vec<NodeEntry> {
         .iter()
         .map(|node| {
             let execution = node.get("execution");
-            let mut outputs = Vec::new();
+            // `output_files` and `port_assignments` are two spellings of the
+            // same artifacts — collect by path so relations are emitted once.
+            let mut outputs: BTreeMap<String, FileEntry> = BTreeMap::new();
             for value in node
                 .get("output_files")
                 .and_then(Value::as_array)
                 .into_iter()
                 .flatten()
+                .chain(
+                    node.get("port_assignments")
+                        .and_then(Value::as_object)
+                        .into_iter()
+                        .flat_map(|map| map.values()),
+                )
             {
                 if let Some(entry) = FileEntry::from_json(value) {
-                    outputs.push(entry);
+                    outputs.insert(entry.path.clone(), entry);
                 }
             }
-            for value in node
-                .get("port_assignments")
-                .and_then(Value::as_object)
-                .into_iter()
-                .flat_map(|map| map.values())
-            {
-                if let Some(entry) = FileEntry::from_json(value) {
-                    outputs.push(entry);
-                }
-            }
+            let outputs = outputs.into_values().collect();
             let mut logs = Vec::new();
             for key in ["stdout_log", "stderr_log"] {
                 if let Some(entry) = execution
@@ -252,6 +291,8 @@ fn parse_nodes(report: &Value) -> Vec<NodeEntry> {
                 exit_code: execution
                     .and_then(|exec| exec.get("exit_code"))
                     .and_then(Value::as_i64),
+                output_schema: node.get("output_schema").cloned(),
+                output_rows: node.get("output_rows").and_then(Value::as_u64),
                 inputs: node
                     .get("inputs")
                     .and_then(Value::as_array)
@@ -262,15 +303,20 @@ fn parse_nodes(report: &Value) -> Vec<NodeEntry> {
                             .get("from")
                             .and_then(Value::as_str)?
                             .to_string();
-                        // A binding carries the first file of file-like
-                        // values; DataFrame bindings have no path → None.
-                        let entry = FileEntry::from_json(
+                        let file = FileEntry::from_json(
                             &json!({
                                 "path": binding.get("path"),
                                 "fingerprint": binding.get("fingerprint"),
                             }),
                         );
-                        Some((from, entry))
+                        if let Some(entry) = file {
+                            return Some(NodeInputRef::File(entry));
+                        }
+                        // DataFrame bindings carry no path: reference the
+                        // producing node so lineage stays connected.
+                        (binding.get("kind").and_then(Value::as_str)
+                            == Some("DataFrame"))
+                            .then_some(NodeInputRef::Dataframe { from })
                     })
                     .collect(),
                 outputs,
@@ -289,75 +335,147 @@ fn entity_id_for_file(entry: &FileEntry) -> String {
     }
 }
 
+/// Attributes of a file entity. PROV-JSON attribute names must be qualified
+/// names and attribute values are never null — absent fields are omitted.
+fn file_entity_attrs(entry: &FileEntry) -> Value {
+    let mut attrs = json!({ "autonomics:path": entry.path });
+    if let Some(format) = &entry.format {
+        attrs["autonomics:format"] = json!(format);
+    }
+    if let Some(hash) = &entry.content_hash {
+        attrs["autonomics:sha256"] = json!(hash);
+    }
+    attrs
+}
+
+/// PROV entity id for the DataFrame value produced by `from` within `run`.
+fn df_entity_id(run_id: &str, from: &str) -> String {
+    format!("urn:autonomics:run:{run_id}:df:{from}")
+}
+
 // ── W3C PROV-JSON ─────────────────────────────────────────────────────────────
 
 /// Build a PROV-JSON document for one recorded run.
 ///
 /// `manifest` is the raw snapshot manifest JSON (the executed definition),
 /// embedded as a referenced entity.
+///
+/// Modeling notes:
+/// - Attribute names are PROV-JSON qualified names (`prov:*` reserved,
+///   `autonomics:*` extensions) and attribute values are never `null` —
+///   unrecorded fields are omitted (spec: W3C PROV-JSON Submission).
+/// - A **run-level activity** carries the wall-clock window
+///   (`prov:startTime`/`prov:endTime`) and run attributes; node activities
+///   reference it via an `autonomics:run` attribute (node-level wall-clock
+///   timestamps are not recorded — `autonomics:elapsed_ms` is the honest
+///   per-node duration).
+/// - **Source nodes** (no inputs) cannot have generated file bytes: their
+///   file outputs are external inputs *ingested* into the run — emitted as
+///   `used` + entities tagged `autonomics:kind = external-input`, never
+///   `wasGeneratedBy`. This keeps original data files from appearing as
+///   run products.
+/// - **DataFrame values** have no address; the entity is the producing
+///   node's fingerprint, enriched with the reported schema summary and row
+///   count, and participates in `wasDerivedFrom` so multi-hop lineage stays
+///   connected through DataFrame edges.
+/// - The **snapshot manifest** entity is wired in as an input the run-level
+///   activity `used`, so the executed definition joins the graph instead of
+///   dangling.
 pub fn build_prov_document(
     run: &RunRecord,
     report: &Value,
     manifest: Option<&str>,
 ) -> Value {
     let nodes = parse_nodes(report);
+    let run_activity = format!("urn:autonomics:run:{}", run.id);
     let activity = |node: &NodeEntry| format!("urn:autonomics:run:{}:node:{}", run.id, node.id);
+    let df_entity = |node: &NodeEntry| df_entity_id(&run.id, &node.id);
 
     let mut entities: BTreeMap<String, Value> = BTreeMap::new();
     let mut activities: BTreeMap<String, Value> = BTreeMap::new();
-    let mut used: Vec<Value> = Vec::new();
-    let mut generated: Vec<Value> = Vec::new();
-    let mut derived: Vec<Value> = Vec::new();
+    // Relation sets: structural dedup so two spellings of the same artifact
+    // (output_files / port_assignments) can never double-emit.
+    let mut used: BTreeMap<(String, String), ()> = BTreeMap::new();
+    let mut generated: BTreeMap<(String, String), ()> = BTreeMap::new();
+    let mut derived: BTreeMap<(String, String), ()> = BTreeMap::new();
 
-    // Input / output entities (content-addressed ids dedupe identical bytes).
+    // Run-level activity: the one place real wall-clock timestamps exist.
+    activities.insert(
+        run_activity.clone(),
+        json!({
+            "prov:type": "autonomics:run",
+            "prov:startTime": run.started_at,
+            "prov:endTime": run.finished_at,
+            "autonomics:ok": run.ok,
+            "autonomics:cancelled": run.cancelled,
+            "autonomics:ref": run.ref_name,
+            "autonomics:message": run.message,
+        }),
+    );
+
+    // Entities + per-node classification.
     for node in &nodes {
-        for (_, entry) in &node.inputs {
-            if let Some(entry) = entry {
-                entities.entry(entity_id_for_file(entry)).or_insert_with(|| {
-                    json!({ "path": entry.path, "format": entry.format,
-                            "sha256": entry.content_hash })
-                });
+        let external = node.is_source();
+        for input in &node.inputs {
+            if let NodeInputRef::File(entry) = input {
+                entities
+                    .entry(entity_id_for_file(entry))
+                    .or_insert_with(|| file_entity_attrs(entry));
             }
+            // DataFrame inputs are declared by their producing node below.
         }
         for entry in node.outputs.iter().chain(node.logs.iter()) {
-            entities.entry(entity_id_for_file(entry)).or_insert_with(|| {
-                json!({ "path": entry.path, "format": entry.format,
-                        "sha256": entry.content_hash })
-            });
+            let attrs = entities
+                .entry(entity_id_for_file(entry))
+                .or_insert_with(|| file_entity_attrs(entry));
+            if external {
+                attrs["autonomics:kind"] = json!("external-input");
+            }
         }
         // DataFrame outputs have no address: represent the value by the
-        // node's execution fingerprint.
+        // node's execution fingerprint, with the reported shape attached.
         if node.outputs.is_empty() && node.fingerprint.is_some() {
-            let id = format!("urn:autonomics:run:{}:df:{}", run.id, node.id);
-            entities.insert(
-                id.clone(),
-                json!({ "kind": "DataFrame", "fingerprint": node.fingerprint }),
-            );
-            generated.push(json!({ "entity": id, "activity": activity(node) }));
+            let mut attrs = json!({
+                "prov:type": "autonomics:DataFrame",
+                "autonomics:fingerprint": node.fingerprint,
+            });
+            if let Some(schema) = &node.output_schema {
+                // PROV attribute values are literals: encode the reported
+                // schema as compact JSON text instead of a nested object
+                // (which could itself contain nulls / unqualified keys).
+                if let Ok(text) = serde_json::to_string(schema) {
+                    attrs["autonomics:schema"] = json!(text);
+                }
+            }
+            if let Some(rows) = node.output_rows {
+                attrs["autonomics:rows"] = json!(rows);
+            }
+            entities.insert(df_entity(node), attrs);
         }
     }
 
-    // Activities.
+    // Node activities.
     for node in &nodes {
         let mut attrs = json!({
-            "type": "autonomics:node",
-            "node_type": node.node_type,
-            "status": node.status,
+            "prov:type": "autonomics:node",
+            "autonomics:node_type": node.node_type,
+            "autonomics:status": node.status,
+            "autonomics:run": run_activity,
         });
         if let Some(fp) = &node.fingerprint {
-            attrs["fingerprint"] = json!(fp);
+            attrs["autonomics:fingerprint"] = json!(fp);
         }
         if let Some(ms) = node.elapsed_ms {
-            attrs["elapsed_ms"] = json!(ms);
+            attrs["autonomics:elapsed_ms"] = json!(ms);
         }
         if let Some(image) = &node.image {
-            attrs["image"] = json!(image);
+            attrs["autonomics:image"] = json!(image);
         }
         if let Some(digest) = &node.image_digest {
-            attrs["image_digest"] = json!(digest);
+            attrs["autonomics:image_digest"] = json!(digest);
         }
         if let Some(code) = node.exit_code {
-            attrs["exit_code"] = json!(code);
+            attrs["autonomics:exit_code"] = json!(code);
         }
         activities.insert(activity(node), attrs);
     }
@@ -365,26 +483,38 @@ pub fn build_prov_document(
     // Relations.
     for node in &nodes {
         let act = activity(node);
+        let external = node.is_source();
         let mut input_ids = Vec::new();
-        for (_, entry) in &node.inputs {
-            if let Some(entry) = entry {
-                let id = entity_id_for_file(entry);
-                used.push(json!({ "activity": act, "entity": id }));
-                input_ids.push(id);
-            }
+        for input in &node.inputs {
+            let id = match input {
+                NodeInputRef::File(entry) => entity_id_for_file(entry),
+                NodeInputRef::Dataframe { from } => df_entity_id(&run.id, from),
+            };
+            used.insert((act.clone(), id.clone()), ());
+            input_ids.push(id);
         }
         let mut output_ids = Vec::new();
         for entry in node.outputs.iter().chain(node.logs.iter()) {
             let id = entity_id_for_file(entry);
-            generated.push(json!({ "entity": id, "activity": act }));
+            if external {
+                // A source node ingests external files, it does not
+                // generate them.
+                used.insert((act.clone(), id.clone()), ());
+            } else {
+                generated.insert((id.clone(), act.clone()), ());
+            }
+            output_ids.push(id);
+        }
+        // DataFrame values join the derivation chain so lineage stays
+        // connected across DataFrame edges.
+        if node.outputs.is_empty() && node.fingerprint.is_some() {
+            let id = df_entity(node);
+            generated.insert((id.clone(), act.clone()), ());
             output_ids.push(id);
         }
         for input_id in input_ids {
             for output_id in &output_ids {
-                derived.push(json!({
-                    "generatedEntity": output_id,
-                    "usedEntity": input_id,
-                }));
+                derived.insert((output_id.clone(), input_id.clone()), ());
             }
         }
     }
@@ -394,29 +524,41 @@ pub fn build_prov_document(
     let trigger_agent = run.trigger.as_deref().and_then(|trigger| {
         let path = trigger.strip_prefix("agent:")?;
         let id = format!("urn:autonomics:agent:{path}");
-        agents.insert(id.clone(), json!({ "kind": "trigger", "name": path }));
+        agents.insert(
+            id.clone(),
+            json!({
+                "prov:type": "prov:SoftwareAgent",
+                "autonomics:kind": "trigger",
+                "autonomics:name": path,
+            }),
+        );
         Some(id)
     });
     let engine_id = format!("urn:autonomics:engine:{}", run.engine_version);
     agents.insert(
         engine_id.clone(),
         json!({
-            "kind": "software",
-            "engine_version": run.engine_version,
-            "source_revision": run.source_revision,
+            "prov:type": "prov:SoftwareAgent",
+            "autonomics:kind": "engine",
+            "autonomics:engine_version": run.engine_version,
+            "autonomics:source_revision": run.source_revision,
         }),
     );
 
-    // The executed definition (snapshot manifest) is an entity too.
+    // The executed definition (snapshot manifest) is an entity too — an
+    // input the run consumed, so it joins the graph via `used`.
     if let Some(snapshot_id) = &run.snapshot_id {
+        let snapshot_entity = format!("urn:autonomics:snapshot:{snapshot_id}");
         entities.insert(
-            format!("urn:autonomics:snapshot:{snapshot_id}"),
+            snapshot_entity.clone(),
             json!({
-                "kind": "dag-manifest",
-                "manifest_hash": run.manifest_hash,
-                "manifest_present": manifest.is_some(),
+                "prov:type": "autonomics:dag-manifest",
+                "autonomics:manifest_hash": run.manifest_hash,
+                "autonomics:ref": run.ref_name,
+                "autonomics:manifest_present": manifest.is_some(),
             }),
         );
+        used.insert((run_activity.clone(), snapshot_entity), ());
     }
 
     let mut associated = Vec::new();
@@ -427,14 +569,20 @@ pub fn build_prov_document(
         associated.push(json!({ "activity": node_id, "agent": engine_id }));
     }
 
+    let relation_array = |set: &BTreeMap<(String, String), ()>, first: &str, second: &str| {
+        set.keys()
+            .map(|(a, b)| json!({ first: a, second: b }))
+            .collect::<Vec<_>>()
+    };
+
     json!({
         "prefix": { "autonomics": "urn:autonomics:" },
         "entity": entities,
         "activity": activities,
         "agent": agents,
-        "used": used,
-        "wasGeneratedBy": generated,
-        "wasDerivedFrom": derived,
+        "used": relation_array(&used, "activity", "entity"),
+        "wasGeneratedBy": relation_array(&generated, "entity", "activity"),
+        "wasDerivedFrom": relation_array(&derived, "generatedEntity", "usedEntity"),
         "wasAssociatedWith": associated,
     })
 }
@@ -487,7 +635,7 @@ pub async fn export_ro_crate(
         };
         let crate_path = exported.exported_path.clone();
         files.push(exported);
-        graph.push(file_entity(&entry, &crate_path));
+        graph.push(file_entity(entry, &crate_path));
     }
 
     // Snapshot manifest: the executed definition ships in the crate.
@@ -499,6 +647,10 @@ pub async fn export_ro_crate(
             source: format!("snapshot:{}", run.snapshot_id.clone().unwrap_or_default()),
             exported_path: path.to_string(),
             bytes: manifest_json.len() as u64,
+            sha256: Some(format!(
+                "sha256:{}",
+                hex_lower(&sha2::Sha256::digest(manifest_json.as_bytes()))
+            )),
             sha256_verified: false,
         });
         graph.push(json!({
@@ -533,12 +685,16 @@ pub async fn export_ro_crate(
         if let Some(agent) = &agent_id {
             action["agent"] = json!({ "@id": agent });
         }
-        // Inputs are referenced where they live (uri + hash), not copied.
+        // File inputs are referenced where they live (uri + hash), not
+        // copied; DataFrame inputs have no address and are represented by
+        // the action chain instead.
         let objects: Vec<Value> = node
             .inputs
             .iter()
-            .filter_map(|(_, entry)| entry.as_ref())
-            .map(|entry| referenced_input_entity(entry))
+            .filter_map(|input| match input {
+                NodeInputRef::File(entry) => Some(referenced_input_entity(entry)),
+                NodeInputRef::Dataframe { .. } => None,
+            })
             .collect();
         if !objects.is_empty() {
             action["object"] = json!(objects);
@@ -597,18 +753,32 @@ pub async fn export_ro_crate(
         "@context": RO_CRATE_CONTEXT,
         "@graph": graph,
     });
+    let manifest_path = "ro-crate-metadata.json";
     std::fs::write(
-        out_dir.join("ro-crate-metadata.json"),
+        out_dir.join(manifest_path),
         serde_json::to_string_pretty(&document)
             .map_err(|e| format!("serialize crate manifest: {e}"))?,
     )
     .map_err(|e| format!("write crate manifest: {e}"))?;
 
-    std::fs::write(
-        out_dir.join("ro-crate-preview.html"),
-        preview_html(run, &nodes),
-    )
-    .map_err(|e| format!("write preview: {e}"))?;
+    let preview_path = "ro-crate-preview.html";
+    let preview = preview_html(run, &nodes);
+    std::fs::write(out_dir.join(preview_path), &preview)
+        .map_err(|e| format!("write preview: {e}"))?;
+
+    // The crate's own documents are export artifacts too (with their
+    // self-certifying digests) — so a VFS upload ships the complete crate.
+    for path in [manifest_path, preview_path] {
+        let bytes = std::fs::read(out_dir.join(path))
+            .map_err(|e| format!("read {path}: {e}"))?;
+        files.push(ExportFile {
+            source: path.to_string(),
+            exported_path: path.to_string(),
+            bytes: bytes.len() as u64,
+            sha256: Some(format!("sha256:{}", hex_lower(&sha2::Sha256::digest(&bytes)))),
+            sha256_verified: false,
+        });
+    }
 
     Ok(ExportSummary {
         run_id: run.id.clone(),
@@ -806,6 +976,7 @@ async fn pull_file(
         source: entry.path.clone(),
         exported_path: target_rel,
         bytes,
+        sha256: entry.content_hash.clone(),
         sha256_verified: verified,
     })
 }
@@ -861,12 +1032,9 @@ pub fn write_prov_document(
     std::fs::create_dir_all(out_dir).map_err(|e| format!("create out dir: {e}"))?;
     let file_name = format!("prov-{}.json", run.id);
     let path = out_dir.join(&file_name);
-    std::fs::write(
-        &path,
-        serde_json::to_string_pretty(&document)
-            .map_err(|e| format!("serialize prov document: {e}"))?,
-    )
-    .map_err(|e| format!("write prov document: {e}"))?;
+    let bytes = serde_json::to_string_pretty(&document)
+        .map_err(|e| format!("serialize prov document: {e}"))?;
+    std::fs::write(&path, &bytes).map_err(|e| format!("write prov document: {e}"))?;
     Ok(ExportSummary {
         run_id: run.id.clone(),
         format: "prov",
@@ -874,13 +1042,85 @@ pub fn write_prov_document(
         files: vec![ExportFile {
             source: format!("run:{}", run.id),
             exported_path: file_name,
-            bytes: std::fs::metadata(&path)
-                .map(|meta| meta.len())
-                .unwrap_or_default(),
+            bytes: bytes.len() as u64,
+            // Self-certifying: the document's own digest, so the export can
+            // be checked without re-deriving it.
+            sha256: Some(format!(
+                "sha256:{}",
+                hex_lower(&sha2::Sha256::digest(bytes.as_bytes()))
+            )),
             sha256_verified: false,
         }],
         skipped: Vec::new(),
     })
+}
+
+/// Where an export should be delivered.
+#[derive(Debug, Clone)]
+pub enum ExportTarget {
+    /// Write directly to this host directory (CLI path).
+    Host(PathBuf),
+    /// Materialize into a staging directory, then upload under this virtual
+    /// prefix so the artifacts are visible through the VFS (agent path).
+    Vfs(String),
+}
+
+/// Resolve an output path against the object store: `vfs://` uris and paths
+/// covered by a mount map to [`ExportTarget::Vfs`]; other absolute paths
+/// stay on the host filesystem.
+pub fn resolve_export_target(
+    out: &str,
+    storage: Option<&vfs::OpendalFileStorage>,
+) -> Result<ExportTarget, String> {
+    if let Some(vpath) = out.strip_prefix("vfs://") {
+        return Ok(ExportTarget::Vfs(
+            vfs::OpendalFileStorage::normalize_path(vpath),
+        ));
+    }
+    if out.starts_with('/') {
+        let normalized = vfs::OpendalFileStorage::normalize_path(out);
+        if storage.is_some_and(|storage| storage.is_mounted(&normalized)) {
+            return Ok(ExportTarget::Vfs(normalized));
+        }
+        return Ok(ExportTarget::Host(PathBuf::from(out)));
+    }
+    Err(format!(
+        "out path `{out}` is neither a vfs uri nor an absolute path"
+    ))
+}
+
+/// Upload a materialized export from `staging` into the object store under
+/// `vfs_prefix`, rewriting the summary's paths to their `vfs://` addresses.
+/// `summary.out` follows what it pointed at before the upload: the file's
+/// `vfs://` address for single-file exports (PROV), the prefix for
+/// directory exports (RO-Crate).
+pub async fn upload_export_to_vfs(
+    summary: &mut ExportSummary,
+    staging: &Path,
+    vfs_prefix: &str,
+    storage: &vfs::OpendalFileStorage,
+) -> Result<(), String> {
+    let prefix = vfs_prefix.trim_end_matches('/');
+    let out_file_index = summary
+        .files
+        .iter()
+        .position(|file| staging.join(&file.exported_path) == Path::new(&summary.out));
+    for file in &mut summary.files {
+        let local = staging.join(&file.exported_path);
+        let bytes = std::fs::read(&local)
+            .map_err(|e| format!("read staged {}: {e}", file.exported_path))?;
+        let vpath = format!("{prefix}/{}", file.exported_path);
+        storage
+            .write_bytes(&vpath, bytes)
+            .await
+            .map_err(|e| format!("upload {vpath}: {e}"))?;
+        file.exported_path = format!("vfs://{vpath}");
+    }
+    summary.out = match out_file_index {
+        Some(index) => summary.files[index].exported_path.clone(),
+        None => format!("vfs://{prefix}"),
+    };
+    Ok(())
 }
 
 #[cfg(test)]
@@ -956,7 +1196,7 @@ mod tests {
 
         let tool_activity = "urn:autonomics:run:0123456789abcdef:node:tool";
         let out_entity = "urn:autonomics:sha256:deadbeefdeadbeef";
-        assert!(doc["activity"][tool_activity]["image_digest"]
+        assert!(doc["activity"][tool_activity]["autonomics:image_digest"]
             .as_str()
             .is_some(), "container node carries its image digest");
         // Content-addressed output entity + generation link.
@@ -976,12 +1216,13 @@ mod tests {
                 && link["agent"] == "urn:autonomics:agent:/root/researcher"));
         // The engine agent carries the source revision.
         assert_eq!(
-            doc["agent"]["urn:autonomics:engine:0.1.0"]["source_revision"],
+            doc["agent"]["urn:autonomics:engine:0.1.0"]["autonomics:source_revision"],
             json!("abc1234")
         );
         // DataFrame-only source is represented by its execution fingerprint.
         assert_eq!(
-            doc["entity"]["urn:autonomics:run:0123456789abcdef:df:src"]["fingerprint"],
+            doc["entity"]["urn:autonomics:run:0123456789abcdef:df:src"]
+                ["autonomics:fingerprint"],
             json!("fingerprint-src")
         );
     }
