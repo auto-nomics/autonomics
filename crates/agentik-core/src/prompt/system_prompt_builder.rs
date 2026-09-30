@@ -6,6 +6,7 @@
 pub struct SystemPromptBuilder {
     identity: String,
     tooluse_guidance: String,
+    skill_guidance: String,
     extra_sections: Vec<String>,
 }
 impl SystemPromptBuilder {
@@ -39,6 +40,17 @@ impl SystemPromptBuilder {
         self
     }
 
+    /// Append the skill-library guidance section: how to consume
+    /// skills (search/get/workflows), how to feed the evolution loop
+    /// (observe/propose/evolve), and the judgement boundaries. Static
+    /// behavioral guidance, so it belongs in the system prompt (the
+    /// per-session skill *index* is injected separately by the runtime
+    /// and stays snapshot-stable for prompt-cache friendliness).
+    pub fn build_skill_guidance(mut self) -> Self {
+        self.skill_guidance = concat!("\n", include_str!("skill_guidance.md"),).to_string();
+        self
+    }
+
     pub fn parse(self) -> String {
         let mut system_prompt = String::new();
 
@@ -50,11 +62,46 @@ impl SystemPromptBuilder {
             system_prompt.push_str(section);
             system_prompt.push('\n');
         }
+        if !self.skill_guidance.is_empty() {
+            system_prompt.push_str(&self.skill_guidance);
+            system_prompt.push('\n');
+        }
         if !self.tooluse_guidance.is_empty() {
             system_prompt.push_str(&self.tooluse_guidance);
             system_prompt.push('\n');
         }
 
         system_prompt
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn skill_guidance_renders_only_when_built() {
+        let plain = SystemPromptBuilder::default()
+            .with_identity("id")
+            .build_tooluse_guidance()
+            .parse();
+        assert!(!plain.contains("Skill library"));
+
+        let with_skills = SystemPromptBuilder::default()
+            .with_identity("id")
+            .build_skill_guidance()
+            .build_tooluse_guidance()
+            .parse();
+        assert!(with_skills.contains("## Skill library"));
+        assert!(with_skills.contains("skill_observe"));
+        assert!(with_skills.contains("skill_propose"));
+        // Render order: identity → extras → skill guidance → tool-use
+        // guidance, mirroring parse().
+        let skill_at = with_skills.find("## Skill library").unwrap();
+        let tool_at = with_skills.find("## Tool usage").unwrap();
+        assert!(
+            skill_at < tool_at,
+            "skill guidance renders before tool-use guidance"
+        );
     }
 }

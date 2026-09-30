@@ -906,8 +906,13 @@ impl Session {
     }
 
     async fn build_context(&mut self) -> Result<Vec<Message>> {
-        let mut builder =
-            system_prompt_builder::SystemPromptBuilder::default().build_tooluse_guidance();
+        // Skill-library guidance is static behavioral text (how to
+        // consume and feed the skill evolution tools), so it lives in
+        // the system prompt; the volatile skill *index* stays out
+        // (see the notice note below for why).
+        let mut builder = system_prompt_builder::SystemPromptBuilder::default()
+            .build_skill_guidance()
+            .build_tooluse_guidance();
 
         let identity = self
             .shared
@@ -1322,5 +1327,73 @@ mod tests {
             profile_at < memory_at,
             "profile section must render before the memory section"
         );
+    }
+
+    /// Skill 指导随 system 一起到达模型边界:静态行为文本进 system
+    /// (会话内稳定),与技能**索引**(spawn 时 extra section)互不干扰。
+    #[tokio::test]
+    async fn skill_guidance_ships_in_the_system_prompt() {
+        use crate::testing::dummy_model_info;
+        use agentik_sdk::model::Model;
+        use agentik_sdk::provider::client::MockApiClient;
+        use agentik_sdk::streaming::MessageStream;
+
+        let captured: Arc<std::sync::Mutex<Option<String>>> = Arc::new(std::sync::Mutex::new(None));
+        let mut mock = MockApiClient::new();
+        {
+            let cap = Arc::clone(&captured);
+            mock.expect_request_stream_with_system()
+                .times(1)
+                .returning(move |_, _, _, system| {
+                    *cap.lock().unwrap() = system;
+                    Ok(MessageStream::from_events(
+                        Vec::new(),
+                        Message::assistant_text("ok"),
+                    ))
+                });
+        }
+        let model = Model::with_client(dummy_model_info("skill-guide"), mock);
+
+        let plan_state = Arc::new(arc_swap::ArcSwap::new(std::sync::Arc::new(
+            agentik_types::AgentPlan::new(),
+        )));
+        let registry = crate::tools::ToolRegistry::new();
+        let shared = Arc::new(AgentShared {
+            id: Uuid::new_v4(),
+            path: agentik_types::AgentPath::root(),
+            config_json: serde_json::json!({}),
+            model: Arc::new(arc_swap::ArcSwapOption::from_pointee(Some(model))),
+            config: AgentConfig::default(),
+            storage: None,
+            context_provider: None,
+            system_prompt_section: None,
+            system_prompt_identity: None,
+            memory: None,
+            skill_runtime: None,
+            tool_registry: Arc::new(registry),
+            tasks: Arc::new(tokio::sync::RwLock::new(
+                crate::tools::task_runtime::TaskStore::new(),
+            )),
+            event_tx: arc_swap::ArcSwapOption::empty(),
+            persist_tx: std::sync::OnceLock::new(),
+            plan: plan_state,
+        });
+
+        let (internal_tx, _internal_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut session = Session::new_for_tests(shared, agentik_types::AgentPath::root());
+        session.remember(Message::user("hello")).unwrap();
+        session.agent_workflow(&internal_tx, None).await.unwrap();
+
+        let system = captured.lock().unwrap().clone().expect("system captured");
+        assert!(system.contains("## Skill library"), "{system}");
+        for tool in [
+            "skill_search",
+            "skill_get",
+            "skill_observe",
+            "skill_propose",
+            "skill_evolve",
+        ] {
+            assert!(system.contains(tool), "missing {tool} in guidance");
+        }
     }
 }
