@@ -4643,6 +4643,7 @@ dependencies = [
  "axum",
  "bib-base",
  "chrono",
+ "container-plugin",
  "dag-core",
  "eventsource-stream",
  "futures",

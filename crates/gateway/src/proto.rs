@@ -408,3 +408,64 @@ pub struct SkillApproveOutcome {
     pub name: String,
     pub destination: String,
 }
+
+// ── Plugins ──────────────────────────────────────────────────────────
+
+/// `GET /api/v1/plugins` — the manifest plugin families installed under
+/// the daemon's plugins root. Built-in node bundles are compiled into the
+/// binary and are not plugin families; a dedicated node-listing endpoint
+/// covers them.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct PluginListView {
+    /// The plugins root the daemon's node registry actually scanned at
+    /// startup (env-pinned by the startup sync, else the loader default).
+    pub root: String,
+    pub plugins: Vec<PluginView>,
+}
+
+/// One installed plugin family.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct PluginView {
+    /// Family name from the manifest (the directory name while the
+    /// manifest is unparseable).
+    pub name: String,
+    /// Image reference `host/path@sha256:…` (absent when the manifest
+    /// failed to parse).
+    pub image: Option<String>,
+    /// Node kinds this family declares.
+    pub kinds: Vec<String>,
+    /// Catalog panel bindings shared by the family's nodes.
+    pub panels: Vec<PluginPanelView>,
+    /// Installation source declared in `plugins.toml` — the declaration
+    /// the startup sync re-materializes from, so it survives restarts
+    /// (absent for families materialized without a declaration).
+    pub source: Option<PluginSourceView>,
+    /// Whether every declared kind is present in the live node registry
+    /// (the daemon registered the family at startup). False after
+    /// on-disk drift until the next restart.
+    pub registered: bool,
+    /// Manifest parse failure detail, when the family is broken.
+    pub error: Option<String>,
+}
+
+/// One catalog panel binding: mount contract plus the dataset repo that
+/// satisfies it.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct PluginPanelView {
+    pub binding: String,
+    pub mount: String,
+    /// Hugging Face dataset repository `owner/name`.
+    pub bundle: String,
+}
+
+/// Installation source from `plugins.toml` — exactly one of git(+rev) or
+/// path per entry.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct PluginSourceView {
+    pub git: Option<String>,
+    /// Pinned commit SHA for git sources (tags/branches are rejected by
+    /// the sync layer).
+    pub rev: Option<String>,
+    /// Local directory installed as a symlink (development iterations).
+    pub path: Option<String>,
+}

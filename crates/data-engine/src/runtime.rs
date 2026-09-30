@@ -1128,6 +1128,13 @@ impl DataEngineManager {
         }
     }
 
+    /// Node kinds available to every session — a snapshot of the shared
+    /// registry. Management surfaces (the gateway's plugin/node listing)
+    /// use this; per-session introspection goes through a session client.
+    pub fn list_nodes(&self) -> Vec<crate::node_registry::NodeInfo> {
+        self.node_registry.list_nodes()
+    }
+
     /// Get (or lazily create) a [`DataEngineClient`] for `session_id`.
     ///
     /// The first call for a given session spawns a dedicated tokio task.

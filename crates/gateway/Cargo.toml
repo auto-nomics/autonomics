@@ -15,6 +15,7 @@ skills = { path = "../skills" }
 api-server = { path = "../api-server" }
 bib-base = { path = "../bib-base" }
 dag-core = { path = "../dag-core" }
+container-plugin = { path = "../container-plugin" }
 axum = "0.8"
 tokio.workspace = true
 tokio-stream = "0.1"
