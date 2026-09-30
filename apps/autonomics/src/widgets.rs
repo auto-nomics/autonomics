@@ -16,6 +16,7 @@ pub mod searchable_picker;
 pub mod session_list;
 pub mod session_picker;
 pub mod sidebar;
+pub mod skill_evolution_widget;
 pub mod status_bar;
 pub mod toast;
 pub mod tree_picker;

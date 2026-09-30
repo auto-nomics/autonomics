@@ -41,6 +41,7 @@ mod model_config;
 mod render;
 mod runtime_events;
 mod sessions;
+mod skill_evolution;
 mod terminal;
 
 pub struct App {

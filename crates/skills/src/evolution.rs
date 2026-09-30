@@ -89,7 +89,7 @@ impl Default for EvolutionPolicy {
 }
 
 /// What one cycle did.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct EvolutionReport {
     /// Coalesced triggers that caused this cycle (labels).
     pub triggers: Vec<&'static str>,
@@ -211,6 +211,10 @@ pub struct EvolutionHandle {
     tx: mpsc::Sender<EvolutionTrigger>,
     dropped: Arc<AtomicU64>,
     reports: broadcast::Sender<Arc<EvolutionReport>>,
+    /// Configuration snapshot for introspection surfaces (the TUI
+    /// dashboard shows what the service was started with).
+    policy: EvolutionPolicy,
+    timer: Option<Duration>,
 }
 
 impl EvolutionHandle {
@@ -245,6 +249,18 @@ impl EvolutionHandle {
     pub(crate) fn sender_for_manager(&self) -> mpsc::Sender<EvolutionTrigger> {
         self.tx.clone()
     }
+
+    /// The policy this service runs with (an auto-approve cap of 0
+    /// alongside `auto_approve: true` would approve nothing, so the
+    /// pair is kept together for display).
+    pub fn policy(&self) -> &EvolutionPolicy {
+        &self.policy
+    }
+
+    /// The periodic sweep cadence, when the timer trigger is armed.
+    pub fn timer(&self) -> Option<Duration> {
+        self.timer
+    }
 }
 
 // ────────────────────────── service ──────────────────────────
@@ -260,6 +276,10 @@ pub fn start(manager: Arc<SkillManager>, options: EvolutionOptions) -> Evolution
     let (report_tx, _) = broadcast::channel::<Arc<EvolutionReport>>(16);
     let dropped = Arc::new(AtomicU64::new(0));
 
+    // Snapshot the introspection copy before the worker owns the rest.
+    let policy = options.policy.clone();
+    let timer = options.timer;
+
     let worker = Worker {
         manager,
         options,
@@ -271,6 +291,8 @@ pub fn start(manager: Arc<SkillManager>, options: EvolutionOptions) -> Evolution
         tx,
         dropped,
         reports: report_tx,
+        policy,
+        timer,
     };
     handle.trigger(EvolutionTrigger::Startup);
     handle

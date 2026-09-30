@@ -64,6 +64,18 @@ pub(crate) enum AppEvent {
     },
     /// A structured DAG snapshot arrived for the interactive TUI view.
     DagSnapshotLoaded(std::result::Result<dag_core::dag::DagTuiSnapshot, String>),
+    /// Skill-evolution dashboard data arrived (status + proposals).
+    SkillEvolutionLoaded {
+        status: std::result::Result<gateway::proto::SkillEvolutionStatus, String>,
+        proposals: std::result::Result<Vec<gateway::proto::SkillProposalView>, String>,
+    },
+    /// A manually triggered evolution cycle finished.
+    SkillEvolutionTriggered(std::result::Result<gateway::proto::SkillEvolutionReport, String>),
+    /// An approve/reject action on a proposal finished.
+    SkillProposalActioned {
+        action: &'static str,
+        result: std::result::Result<String, String>,
+    },
     /// Per-agent model info arrived (render-path cache fill; render itself
     /// must never issue HTTP).
     ModelInfoLoaded {

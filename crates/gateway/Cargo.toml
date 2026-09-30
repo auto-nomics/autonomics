@@ -11,6 +11,7 @@ agentik-core = { path = "../agentik-core" }
 agentik-sdk = { path = "../agentik-sdk" }
 agentik-types = { path = "../agentik-types", features = ["schema"] }
 runtime = { path = "../runtime" }
+skills = { path = "../skills" }
 tui-http = { path = "../tui-http" }
 bib-base = { path = "../bib-base" }
 dag-core = { path = "../dag-core" }

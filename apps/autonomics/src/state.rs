@@ -933,6 +933,8 @@ pub struct AppState {
     pub agent_config: crate::widgets::agent_config_widget::AgentConfigState,
     /// Interactive DAG view visibility.
     pub dag_view_visible: bool,
+    /// Skill-evolution dashboard state (visibility + data snapshots).
+    pub skill_evolution: crate::widgets::skill_evolution_widget::SkillEvolutionState,
     /// Latest structured DAG snapshot. `None` while the first load is running.
     pub dag_snapshot: Option<dag_core::dag::DagTuiSnapshot>,
     /// Selection/viewport state for [`crate::widgets::dag_view::DagTuiWidget`].

@@ -278,6 +278,25 @@ impl App {
             );
         }
 
+        // ── Skill-evolution dashboard ──
+        if self.state.skill_evolution.visible {
+            let popup_width = frame.area().width * 9 / 10;
+            let popup_height = (frame.area().height * 3 / 4).max(12);
+            let popup = crate::widgets::popup::Popup::new(
+                " Skill Evolution ",
+                crate::widgets::popup::PopupControls::default(),
+            )
+            .width(popup_width)
+            .height(popup_height)
+            .accent(ratatui::style::Color::Cyan);
+            let inner = popup.render(frame.area(), frame.buffer_mut());
+            crate::widgets::skill_evolution_widget::render_skill_evolution(
+                inner,
+                frame.buffer_mut(),
+                &mut self.state.skill_evolution,
+            );
+        }
+
         // ── Toast notifications (top-most overlay, bottom-right corner) ──
         self.state.toasts.tick();
         self.state.toasts.render(frame.area(), frame.buffer_mut());
