@@ -437,7 +437,17 @@ impl SessionServer {
                     .try_lock()
                     .expect("uncontended: running flag is false");
                 let result = if let Some(run_id) = run_id {
-                    engine.get_run(&run_id).await.map(|run| run.into_iter().collect())
+                    if run_id.trim().eq_ignore_ascii_case("latest") {
+                        engine
+                            .list_runs(1, None)
+                            .await
+                            .map(|mut runs| runs.pop().into_iter().collect())
+                    } else {
+                        engine
+                            .get_run(run_id.trim())
+                            .await
+                            .map(|run| run.into_iter().collect())
+                    }
                 } else {
                     engine.list_runs(limit, ref_name.as_deref()).await
                 };

@@ -16,19 +16,22 @@ use crate::ExecError;
                   ran, the engine version + git revision, and per-node \
                   execution evidence (container image digest, exit code, \
                   input bindings, persisted stdout/stderr logs). \
-                  Without run_id: list recent runs newest-first. With run_id: \
-                  show that single run including its full per-node report. \
+                  Without run_id: list recent runs newest-first (leave the \
+                  field absent or empty — do not pass an empty string \
+                  expecting a list to be rejected). With run_id: show that \
+                  single run including its full per-node report; `latest` \
+                  selects the most recent run, a unique id prefix also \
+                  works. Run ids shown here are what dag_export_run accepts. \
                   Use this to answer audit questions such as 'which run \
-                  produced this output, from which inputs, with which image' \
-                  or 'what changed between two runs of the same pipeline'."
+                  produced this output, from which inputs, with which image'."
 )]
 pub struct DagRunsLogInput {
     /// Ref name to filter by (e.g. "main"). If omitted, spans all refs.
     pub ref_name: Option<String>,
     /// Maximum number of runs to return when listing (default 20).
     pub limit: Option<usize>,
-    /// Fetch a single run by its id (as shown in listings) instead of
-    /// listing, returning the full per-node run report.
+    /// Fetch a single run by its id (`latest` or a unique prefix also
+    /// works) instead of listing, returning the full per-node run report.
     pub run_id: Option<String>,
 }
 
@@ -48,21 +51,33 @@ impl ToolFunction for DagRunsLogTool {
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
         let limit = input.limit.unwrap_or(20);
+        // An empty or whitespace run_id means "list" — normalize so callers
+        // passing "" get the listing they meant, not a not-found error.
+        let run_id = input
+            .run_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .map(str::to_string);
         let runs = self
             .client
-            .dag_runs_log(input.ref_name.clone(), limit, input.run_id.clone())
+            .dag_runs_log(input.ref_name.clone(), limit, run_id.clone())
             .await
             .map_err(ExecError::from)?;
 
         if runs.is_empty() {
-            return Ok(ToolResult::success(if input.run_id.is_some() {
-                "No run found with that id."
+            return Ok(ToolResult::success(if run_id.is_some() {
+                if run_id.as_deref().is_some_and(|id| id.eq_ignore_ascii_case("latest")) {
+                    "No runs recorded yet."
+                } else {
+                    "No run found with that id (pass no run_id to list recent runs)."
+                }
             } else {
                 "No runs recorded yet."
             }));
         }
 
-        if input.run_id.is_some()
+        if run_id.is_some()
             && let Some(run) = runs.first()
         {
             return Ok(ToolResult::success_json(run_detail_json(run)));

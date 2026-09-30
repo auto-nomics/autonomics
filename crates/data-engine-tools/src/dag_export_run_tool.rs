@@ -16,17 +16,23 @@ use crate::ExecError;
                   sha256 verified against the audit record + the executed DAG \
                   definition; input data is referenced by uri + hash, not copied. \
                   `prov` produces a single W3C PROV-JSON document (entities/\
-                  activities/agents, machine-queryable lineage). Use this when \
-                  delivering evidence for a result (publication, audit, handoff) \
-                  or packaging a run for an archive."
+                  activities/agents, machine-queryable lineage). Get run ids \
+                  from dag_runs_log (no run_id = list); `latest` and unique \
+                  prefixes also work. out_dir: any path you can see through \
+                  the VFS (e.g. /outputs/... inside your workspace) or a \
+                  vfs:// uri — the export is uploaded there so it stays \
+                  visible to you; a bare absolute host path also works. Use \
+                  this when delivering evidence for a result (publication, \
+                  audit, handoff) or packaging a run for an archive."
 )]
 pub struct DagExportRunInput {
-    /// Run id (or unique prefix) from dag_runs_log.
+    /// Run id from dag_runs_log; `latest` or a unique prefix also works.
     pub run_id: String,
     /// `crate` (RO-Crate directory) or `prov` (PROV-JSON). Default `crate`.
     pub format: Option<String>,
-    /// Absolute output directory. For `crate` it holds the crate; for `prov`
-    /// the document is written inside it as `prov-<run_id>.json`.
+    /// Destination directory: a VFS-visible path (mounted, e.g. under your
+    /// workspace) or `vfs://` uri — uploaded through the object store — or
+    /// an absolute host path.
     pub out_dir: String,
 }
 

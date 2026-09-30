@@ -469,7 +469,10 @@ impl DataEngine {
     /// Export one recorded run as deliverable provenance evidence — a W3C
     /// PROV-JSON document or an RO-Crate 1.1 directory (result files pulled
     /// from the object store, content-verified). See
-    /// [`crate::dag::export`]. `run_id` accepts a unique id prefix.
+    /// [`crate::dag::export`]. `run_id` accepts `latest` or a unique id
+    /// prefix. `out_dir` may be a `vfs://` uri or any path covered by a
+    /// mount — the export is then uploaded through the object store so
+    /// agents can see it — or an absolute host path.
     pub async fn export_run(
         &self,
         run_id: &str,
@@ -499,12 +502,34 @@ impl DataEngine {
                 .map(|snapshot| snapshot.manifest_json),
             None => None,
         };
-        match format {
+
+        // VFS-visible destinations materialize into a staging directory
+        // first, then upload through the object store.
+        let target = dag_export::resolve_export_target(
+            &out_dir.to_string_lossy(),
+            self.engine_ctx.opendal.as_deref(),
+        )
+        .map_err(Error::Custom)?;
+        let staging = match &target {
+            dag_export::ExportTarget::Vfs(_) => {
+                let dir = std::env::temp_dir().join(format!(
+                    "autonomics-export-{}",
+                    uuid::Uuid::new_v4()
+                ));
+                std::fs::create_dir_all(&dir)
+                    .map_err(|e| Error::Custom(format!("create staging dir: {e}")))?;
+                Some(dir)
+            }
+            dag_export::ExportTarget::Host(_) => None,
+        };
+        let out_path = staging.as_deref().unwrap_or(out_dir.as_path());
+
+        let mut summary = match format {
             crate::dag::ExportFormat::Prov => dag_export::write_prov_document(
                 &run,
                 &report,
                 manifest.as_deref(),
-                &out_dir,
+                out_path,
             )
             .map_err(Error::Custom),
             crate::dag::ExportFormat::Crate => {
@@ -512,13 +537,25 @@ impl DataEngine {
                     &run,
                     &report,
                     manifest.as_deref(),
-                    &out_dir,
+                    out_path,
                     self.engine_ctx.opendal.as_deref(),
                 )
                 .await
                 .map_err(Error::Custom)
             }
+        }?;
+
+        if let (dag_export::ExportTarget::Vfs(prefix), Some(staging), Some(storage)) =
+            (&target, &staging, self.engine_ctx.opendal.as_deref())
+        {
+            dag_export::upload_export_to_vfs(&mut summary, staging, prefix, storage)
+                .await
+                .map_err(Error::Custom)?;
         }
+        if let Some(staging) = &staging {
+            let _ = std::fs::remove_dir_all(staging);
+        }
+        Ok(summary)
     }
 
     /// Fetch a single snapshot by id or short-hash prefix.
