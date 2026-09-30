@@ -24,7 +24,7 @@ fn request(method: &str, uri: &str, body: Option<String>) -> Request<Body> {
 #[tokio::test]
 async fn server_serves_requests_and_shuts_down_gracefully() {
     let shared = BibShared::open_in_memory().await.unwrap();
-    let server = tui_http::start(tui_http::api_router(shared), "127.0.0.1:0")
+    let server = api_server::start(api_server::api_router(shared), "127.0.0.1:0")
         .await
         .unwrap();
 
@@ -45,7 +45,7 @@ async fn server_serves_requests_and_shuts_down_gracefully() {
 #[tokio::test]
 async fn aggregate_router_exposes_bib_module() {
     let shared = BibShared::open_in_memory().await.unwrap();
-    let app = tui_http::api_router(shared);
+    let app = api_server::api_router(shared);
 
     let response = app
         .clone()
@@ -67,7 +67,7 @@ async fn aggregate_router_exposes_bib_module() {
 #[tokio::test]
 async fn server_serves_the_bibliography_frontend() {
     let shared = BibShared::open_in_memory().await.unwrap();
-    let app = tui_http::api_router(shared);
+    let app = api_server::api_router(shared);
 
     for (path, marker) in [
         ("/", "Autonomics Bibliography"),
@@ -89,7 +89,7 @@ async fn server_serves_the_bibliography_frontend() {
 #[tokio::test]
 async fn bib_collections_and_annotations_use_nested_routes() {
     let shared = BibShared::open_in_memory().await.unwrap();
-    let app = tui_http::api_router(shared);
+    let app = api_server::api_router(shared);
 
     let response = app
         .clone()
@@ -151,7 +151,7 @@ async fn bib_collections_and_annotations_use_nested_routes() {
 #[tokio::test]
 async fn bib_article_crud_uses_nested_routes() {
     let shared = BibShared::open_in_memory().await.unwrap();
-    let app = tui_http::api_router(shared);
+    let app = api_server::api_router(shared);
     let payload = r#"{
         "title": "Local API test",
         "doi": "10.1000/local-api-test",
@@ -216,7 +216,7 @@ async fn bib_upload_preserves_and_serves_the_original_file() {
         .await
         .unwrap()
         .with_file_storage(file_storage);
-    let app = tui_http::api_router(shared);
+    let app = api_server::api_router(shared);
 
     let response = app
         .clone()
@@ -588,7 +588,7 @@ async fn bib_reextract_rejects_non_vfs_sources() {
         })
         .await
         .unwrap();
-    let app = tui_http::api_router(shared);
+    let app = api_server::api_router(shared);
 
     let response = app
         .clone()
@@ -665,7 +665,7 @@ async fn bib_upload_stores_original_pdf_bytes_with_application_pdf_mime() {
 #[tokio::test]
 async fn api_bearer_auth_protects_api_routes_only() {
     let shared = BibShared::open_in_memory().await.unwrap();
-    let app = tui_http::api_router_with_auth(shared, Some("test-token".to_owned()));
+    let app = api_server::api_router_with_auth(shared, Some("test-token".to_owned()));
 
     let response = app
         .clone()
@@ -693,7 +693,7 @@ async fn api_bearer_auth_protects_api_routes_only() {
 
 #[test]
 fn http_api_defaults_to_localhost() {
-    assert_eq!(tui_http::DEFAULT_HTTP_API_ADDR, "127.0.0.1:8765");
+    assert_eq!(api_server::DEFAULT_HTTP_API_ADDR, "127.0.0.1:8765");
 }
 
 /// Poll a full-text row until the background extraction reaches a
@@ -750,6 +750,6 @@ async fn build_app_with_vfs() -> (axum::Router, BibShared, tempfile::TempDir) {
         .await
         .unwrap()
         .with_file_storage(file_storage);
-    let app = tui_http::api_router(shared.clone());
+    let app = api_server::api_router(shared.clone());
     (app, shared, directory)
 }

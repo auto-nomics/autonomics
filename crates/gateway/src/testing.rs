@@ -35,7 +35,7 @@ pub const TEST_TIMEOUT: Duration = Duration::from_secs(30);
 pub struct TestGateway {
     pub addr: std::net::SocketAddr,
     pub token: String,
-    server: tui_http::HttpServerHandle,
+    server: api_server::HttpServerHandle,
     shutdown: CancellationToken,
     _dir: tempfile::TempDir,
     /// The daemon's shared infrastructure — kept so tests can reach
@@ -245,6 +245,9 @@ pub async fn start_mock_gateway_with_model(model: Model) -> TestGateway {
     // uses (`active_model` in the settings table), so `/state` consumers
     // (e.g. the headless runner's run.started.model) see it.
     let _ = models.put_setting("active_model", "mock:mock-model");
+    // Same install-later pattern as the daemon: the bound address exists
+    // only after `start()` (tests bind an ephemeral port).
+    let addr_slot: Arc<ArcSwapOption<String>> = Arc::new(ArcSwapOption::default());
     let state = GatewayState {
         hub: hub.clone(),
         sessions: sessions.clone(),
@@ -253,6 +256,7 @@ pub async fn start_mock_gateway_with_model(model: Model) -> TestGateway {
         models,
         model_slot,
         profiles: Arc::new(profiles),
+        addr: addr_slot.clone(),
         started: std::time::Instant::now(),
         shutdown: shutdown.clone(),
         version: "test",
@@ -261,9 +265,10 @@ pub async fn start_mock_gateway_with_model(model: Model) -> TestGateway {
     let bib_shared = state.infra.bib.as_ref().clone();
     let token = uuid::Uuid::new_v4().simple().to_string();
     let router = router_with_bib(state, token.clone(), bib_shared, None);
-    let server = tui_http::server::start(router, "127.0.0.1:0")
+    let server = api_server::server::start(router, "127.0.0.1:0")
         .await
         .unwrap();
+    addr_slot.store(Some(Arc::new(server.addr().to_string())));
     let addr = server.addr();
 
     let infra = host.infra();

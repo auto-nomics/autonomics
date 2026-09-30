@@ -70,7 +70,7 @@ pub fn env_addr() -> String {
     std::env::var("AUTONOMICS_HTTP_API_ADDR")
         .ok()
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| tui_http::server::DEFAULT_HTTP_API_ADDR.to_owned())
+        .unwrap_or_else(|| api_server::server::DEFAULT_HTTP_API_ADDR.to_owned())
 }
 
 pub fn env_token() -> Option<String> {
@@ -123,6 +123,11 @@ pub async fn run_daemon(
 
     // ── Gateway state + server ───────────────────────────────────────
     let sessions = SessionCache::new();
+    // The bound address is only known after `start()` — bind resolves
+    // after the router is built — so handlers read it through this cell,
+    // installed once the server owns its socket (before the token file
+    // is published, so no authenticated client can observe it empty).
+    let addr_slot: Arc<ArcSwapOption<String>> = Arc::new(ArcSwapOption::default());
     let state = GatewayState {
         hub: hub.clone(),
         sessions: sessions.clone(),
@@ -131,6 +136,7 @@ pub async fn run_daemon(
         models: models.clone(),
         model_slot: model_slot.clone(),
         profiles: Arc::new(profiles),
+        addr: addr_slot.clone(),
         started: std::time::Instant::now(),
         shutdown: shutdown.clone(),
         version: GATEWAY_VERSION,
@@ -145,16 +151,17 @@ pub async fn run_daemon(
     let sweep_shared = bib_shared.clone();
     let router = router_with_bib(state, gateway_token.clone(), bib_shared, env_token.clone());
 
-    let server = tui_http::server::start(router, &addr)
+    let server = api_server::server::start(router, &addr)
         .await
         .map_err(|source| DaemonError::Bind {
             addr: addr.clone(),
             source,
         })?;
 
-    // Server is up — publish the token + pid files now. Permissions are
-    // owner-only: the token is a filesystem permission gate for local
-    // processes.
+    // Server is up — publish the bound address to the handlers, then the
+    // token + pid files. Permissions are owner-only: the token is a
+    // filesystem permission gate for local processes.
+    addr_slot.store(Some(Arc::new(server.addr().to_string())));
     if env_token.is_none() {
         let token_path = token_path(&config);
         write_private_file(&token_path, &gateway_token);

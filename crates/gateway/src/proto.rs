@@ -159,6 +159,7 @@ pub struct OpenaiTokenState {
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct GatewayStatus {
     pub pid: u32,
+    pub addr: String,
     pub version: String,
     pub uptime_secs: u64,
     pub last_seq: u64,

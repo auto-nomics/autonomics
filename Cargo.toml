@@ -62,7 +62,7 @@ members = [
   "stat_crates/survey",
   "crates/bib-types",
   "crates/bib-base",
-  "crates/tui-http",
+  "crates/api-server",
   "crates/arxiv",
   "crates/embase",
   "crates/biorxiv",

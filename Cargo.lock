@@ -332,6 +332,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
+name = "api-server"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "bib-base",
+ "bib-types",
+ "chrono",
+ "http-body-util",
+ "opendal",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tower",
+ "tracing",
+ "uuid",
+ "vfs",
+]
+
+[[package]]
 name = "apply-patch"
 version = "0.1.0"
 dependencies = [
@@ -4616,6 +4638,7 @@ dependencies = [
  "agentik-core",
  "agentik-sdk",
  "agentik-types",
+ "api-server",
  "arc-swap",
  "axum",
  "bib-base",
@@ -4639,7 +4662,6 @@ dependencies = [
  "tower",
  "tracing",
  "tracing-subscriber",
- "tui-http",
  "utoipa",
  "utoipa-swagger-ui",
  "uuid",
@@ -12651,28 +12673,6 @@ name = "ttf-parser"
 version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2df906b07856748fa3f6e0ad0cbaa047052d4a7dd609e231c4f72cee8c36f31"
-
-[[package]]
-name = "tui-http"
-version = "0.1.0"
-dependencies = [
- "axum",
- "bib-base",
- "bib-types",
- "chrono",
- "http-body-util",
- "opendal",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tempfile",
- "tokio",
- "tokio-util",
- "tower",
- "tracing",
- "uuid",
- "vfs",
-]
 
 [[package]]
 name = "tui-scrollbar"

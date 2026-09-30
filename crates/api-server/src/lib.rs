@@ -1,7 +1,7 @@
-//! Local HTTP API backend for the Autonomics TUI.
+//! Local HTTP API server for the Autonomics gateway daemon.
 //!
 //! The server is a small composable Axum host. Feature modules provide route
-//! tables, while this crate owns aggregation and the TUI process lifecycle.
+//! tables, while this crate owns aggregation and the daemon process lifecycle.
 //! Bibliography management is the first module; future REST modules can be
 //! mounted without changing startup behavior.
 

@@ -550,7 +550,7 @@ impl BibBase {
     /// `id` did not exist (idempotent miss), `1` on a normal delete.
     /// Stored full-text *files* on disk are not touched by this method;
     /// full-text lifecycle is the caller's responsibility (see the HTTP
-    /// `delete_article` handler in `tui-http` for the on-disk cleanup
+    /// `delete_article` handler in `api-server` for the on-disk cleanup
     /// pattern).
     pub async fn delete_article(&self, id: &str) -> Result<u64> {
         let _write = self.write_gate.lock().await;

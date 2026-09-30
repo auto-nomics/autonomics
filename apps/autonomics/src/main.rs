@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use clap::Parser;
 use cli::{CacheAction, Cli, Command, TuiArgs};
 use time::macros::format_description;
@@ -27,7 +25,14 @@ mod xai_textarea;
 fn init_logging(nocapture: bool) -> color_eyre::Result<()> {
     color_eyre::install()?;
 
-    let log_dir = PathBuf::from("logs");
+    // Absolute and CWD-independent: under the state dir (`~/.autonomics`
+    // by default, `AUTONOMICS_STATE_DIR`-aware — the same resolution the
+    // other commands use), so logs do not scatter into whatever checkout
+    // the launcher happened to stand in.
+    let log_dir = gateway::RuntimeConfig::builder()
+        .build()
+        .state_dir
+        .join("logs");
     std::fs::create_dir_all(&log_dir)?;
 
     let file_appender = RollingFileAppender::new(Rotation::DAILY, &log_dir, "autonomics.log");
@@ -112,9 +117,10 @@ fn main() -> color_eyre::Result<()> {
         _ => false,
     };
 
-    // `serve` initializes its own logging (absolute state-dir paths — the
-    // daemon outlives the launching terminal, so a relative `logs/` dir
-    // would be wherever the launcher happened to stand).
+    // `serve` initializes its own logging rather than going through
+    // `init_logging`: gateway-targeted filters, the daemon's own log file
+    // (`autonomics-gateway.log`), and stderr mirroring driven by daemon
+    // vs foreground mode.
     if matches!(&cli.command, Some(Command::Serve(_))) {
         return commands::serve::run_serve(match cli.command {
             Some(Command::Serve(args)) => args,

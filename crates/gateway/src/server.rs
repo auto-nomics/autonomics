@@ -47,6 +47,12 @@ pub struct GatewayState {
     pub model_slot: Arc<ArcSwapOption<agentik_sdk::model::Model>>,
     /// Startup-loaded profile cache (spawn-by-path + hydration).
     pub profiles: Arc<Vec<agentik_core::AgentProfile>>,
+    /// The bound API address, installed by the daemon after
+    /// `api_server::server::start` returns — bind resolves only after
+    /// the router (and this state) is built (`127.0.0.1:0` in tests
+    /// binds an ephemeral port, so the pre-bind string is not the
+    /// truth). Same install-later pattern as `model_slot`.
+    pub addr: Arc<ArcSwapOption<String>>,
     pub started: Instant,
     pub shutdown: CancellationToken,
     pub version: &'static str,
@@ -136,6 +142,7 @@ pub fn api_router(state: GatewayState) -> Router {
         )
         // ── settings ──
         .route("/settings", get(get_settings).put(put_setting))
+        // ── skills ──
         .route("/skills/evolution", get(get_skill_evolution_status))
         .route("/skills/evolution/trigger", post(trigger_skill_evolution))
         .route("/skills/evolution/proposals", get(list_skill_proposals))
@@ -173,7 +180,7 @@ pub fn router_with_bib(
     ));
     let docs =
         SwaggerUi::new("/swagger-ui").url("/api/v1/api-docs/openapi.json", ApiDoc::openapi());
-    let bib = tui_http::bib::router(bib_shared);
+    let bib = api_server::bib::router(bib_shared);
     let bib = match env_token.filter(|t| !t.trim().is_empty()) {
         Some(token) => bib.layer(axum::middleware::from_fn_with_state(
             Arc::new(token),
@@ -185,7 +192,7 @@ pub fn router_with_bib(
         .merge(docs)
         .nest("/api/v1/bib", bib)
         .nest("/api/v1", api)
-        .merge(tui_http::frontend_router())
+        .merge(api_server::frontend_router())
         .route("/api/health", get(health))
         .route("/api/v1", get(api_index))
 }
@@ -366,6 +373,11 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
 async fn gateway_status(State(state): State<GatewayState>) -> Json<GatewayStatus> {
     Json(GatewayStatus {
         pid: std::process::id(),
+        addr: state
+            .addr
+            .load_full()
+            .map(|addr| addr.to_string())
+            .unwrap_or_default(),
         version: state.version.to_string(),
         uptime_secs: state.started.elapsed().as_secs(),
         last_seq: state.hub.last_seq(),

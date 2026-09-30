@@ -85,7 +85,7 @@ Two mechanisms make the harness trustworthy for biomedical work:
 | Regression discontinuity | `rdrobust`, `rdpower`, `rdmulti`, `rddensity`, `rdlocrand` | Local-polynomial RD estimation, power and sample-size calculations, multi-cutoff designs, manipulation testing, and local randomization inference. |
 | Scientific data clients | `eutils`, `opengwas`, `gwascatalog-sdk`, `opentargets`, `chembl`, `uniprot`, `string-sdk`, `kegg`, `reactome`, `ensembl`, `rcsb`, `alphafold`, `interpro`, `pubchem`, `protocolio`, `clinicaltrials` | SDKs, agent tools, and selected DAG source nodes for PubMed/Entrez, OpenGWAS, GWAS Catalog, Open Targets, ChEMBL, UniProt, STRING, KEGG, Reactome, Ensembl, RCSB, AlphaFold, InterPro, PubChem, protocols.io, and ClinicalTrials.gov. |
 | Literature, writing, and knowledge | `arxiv`, `biorxiv`, `openalex`, `crossref`, `embase`, `europepmc`, `semantic-scholar`, `bib-types`, `bib-base`, `writing-types`, `writing-base`, `kms`, `kms-tools` | Unified literature search and full-text management, content-addressed documents, BibTeX/RIS/Markdown/CSL export, LaTeX AST operations, citation resolution, compilation, and knowledge-tree tools. |
-| Harness interface | `tui`, `tui-http`, `workflow-editor` | Streaming terminal chat, provider/model configuration, DAG view, bibliography CLI/API/frontend, KMS browser, and workflow editor components. |
+| Harness interface | `tui`, `api-server`, `workflow-editor` | Streaming terminal chat, provider/model configuration, DAG view, bibliography CLI/API/frontend, KMS browser, and workflow editor components. |
 
 The default `data-engine` build enables all node-bundle Cargo features. A library consumer can disable default features and select only needed `bundle-*` features.
 
@@ -248,7 +248,7 @@ curl http://127.0.0.1:8765/api/health
 curl 'http://127.0.0.1:8765/api/v1/bib/articles?query=gwas&limit=10'
 ```
 
-The frontend development workflow is documented in [docs/tui-http-api_zh.md](docs/tui-http-api_zh.md).
+The frontend development workflow is documented in [docs/api-server_zh.md](docs/api-server_zh.md).
 
 ## Analysis Model
 
@@ -315,7 +315,7 @@ cargo test -p dag-core
 cargo test -p biofusion
 cargo test -p agentik-core
 cargo test -p runtime
-cargo test -p tui-http
+cargo test -p api-server
 cargo test -p epi
 cargo test -p statkit
 cargo test -p ldsc
@@ -333,7 +333,7 @@ Some tests call live public APIs, require credentials or private images, downloa
 The TUI HTTP frontend uses Bun:
 
 ```bash
-cd crates/tui-http/frontend
+cd crates/api-server/frontend
 bun install
 bun test
 bun run typecheck
@@ -370,7 +370,7 @@ bun run build
 ### Research workflow
 
 - [TUI guide](docs/tui.md)
-- [TUI HTTP API](docs/tui-http-api_zh.md) (Chinese)
+- [API Server (HTTP API)](docs/api-server_zh.md) (Chinese)
 - [Writing-system design](docs/writing-system-design.md)
 - [Dendrite knowledge-management workspace](dendrite/README.md)
 - [TimesFM service](../../node-plugins/timesfm/README.md) (timesfm plugin checkout)

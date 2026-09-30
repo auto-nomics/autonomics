@@ -1,5 +1,5 @@
 {
-  "name": "autonomics-tui-http-frontend",
+  "name": "autonomics-api-server-frontend",
   "private": true,
   "type": "module",
   "scripts": {

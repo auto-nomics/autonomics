@@ -54,11 +54,11 @@ RPC 层。gateway 分支兑现该升级,核心动机:
 crates/gateway   proto(wire 类型)/ hub(EventHub)/ driver(宿主泵)/ server(axum)/
                  daemon(run_daemon 启动序)/ client(GatewayClient+EventPump)/
                  manager(probe/ensure_running/stop)/ model_store(app DB)
-依赖方向:apps/tui → gateway → runtime → agentik-*;gateway → tui-http(仅 bib router)
-apps/tui 不再直接依赖 runtime/tui-http(gateway 重导出所需的少数类型)
+依赖方向:apps/tui → gateway → runtime → agentik-*;gateway → api-server(仅 bib router)
+apps/tui 不再直接依赖 runtime/api-server(gateway 重导出所需的少数类型)
 ```
 
-`tui-http` 退化为 bib 模块 crate(`bib::router` 与 `frontend_router` 公开供 gateway
+`api-server` 退化为 bib 模块 crate(`bib::router` 与 `frontend_router` 公开供 gateway
 组合),保持零依赖 runtime 的原设计原则。
 
 ## 3. wire 协议
@@ -163,7 +163,7 @@ driver 维护 session 缓存(`SessionList/SessionClosed` 事件折叠,纯函数�
 ## 8. 鉴权与网络面
 
 - gateway API 恒 bearer(env token 或 token 文件);
-- bib API + 内嵌前端维持 `tui-http` 契约(env token 才启用鉴权);
+- bib API + 内嵌前端维持 `api-server` 契约(env token 才启用鉴权);
 - 无 CORS 头——浏览器跨源读被 SOP 拦截;SPA(P4)由 gateway 同源托管,token 在
   serve index 时注入;
 - 传输层 UDS、token 会话化留 P5 加固评估。

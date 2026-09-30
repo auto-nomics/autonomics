@@ -244,5 +244,5 @@ agentik-core storage 已按 agent name 自动恢复并做 WAL replay
    `--output-schema` 是否降级为 prompt 约定 + 本地 JSON 校验,待确认 SDK 能力。
 4. headless 下容器工具的资源约束(并发容器数、单容器超时)是否需要 CLI 覆盖,
    还是完全沿用 profile 配置。
-5. TUI 的 HTTP API(`tui-http`)在 headless 模式默认不启动,是否需要
+5. TUI 的 HTTP API(`api-server`)在 headless 模式默认不启动,是否需要
    `--http` 开关供外部观测。

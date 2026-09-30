@@ -85,7 +85,7 @@ Node registry + DAG scheduler
 | 断点回归 | `rdrobust`、`rdpower`、`rdmulti`、`rddensity`、`rdlocrand` | 局部多项式 RD 估计、功效与样本量、多 cutoff 设计、manipulation testing、局部随机化推断。 |
 | 科研数据客户端 | `eutils`、`opengwas`、`gwascatalog-sdk`、`opentargets`、`chembl`、`uniprot`、`string-sdk`、`kegg`、`reactome`、`ensembl`、`rcsb`、`alphafold`、`interpro`、`pubchem`、`protocolio`、`clinicaltrials` | PubMed/Entrez、OpenGWAS、GWAS Catalog、Open Targets、ChEMBL、UniProt、STRING、KEGG、Reactome、Ensembl、RCSB、AlphaFold、InterPro、PubChem、protocols.io、ClinicalTrials.gov 的 SDK、智能体工具和部分 DAG source 节点。 |
 | 文献、写作与知识 | `arxiv`、`biorxiv`、`openalex`、`crossref`、`embase`、`europepmc`、`semantic-scholar`、`bib-types`、`bib-base`、`writing-types`、`writing-base`、`kms`、`kms-tools` | 统一文献检索与全文管理、内容寻址文档、BibTeX/RIS/Markdown/CSL 导出、LaTeX AST 操作、引文解析、编译和知识树工具。 |
-| Harness 界面 | `tui`、`tui-http`、`workflow-editor` | 流式终端对话、模型配置、DAG 视图、文献 CLI/API/前端、KMS 浏览器和工作流编辑组件。 |
+| Harness 界面 | `tui`、`api-server`、`workflow-editor` | 流式终端对话、模型配置、DAG 视图、文献 CLI/API/前端、KMS 浏览器和工作流编辑组件。 |
 
 默认 `data-engine` 构建启用全部 node-bundle Cargo feature。库使用者可以关闭默认 feature，再按需选择 `bundle-*`。
 
@@ -245,7 +245,7 @@ curl http://127.0.0.1:8765/api/health
 curl 'http://127.0.0.1:8765/api/v1/bib/articles?query=gwas&limit=10'
 ```
 
-前端开发流程见 [docs/tui-http-api_zh.md](docs/tui-http-api_zh.md)。
+前端开发流程见 [docs/api-server_zh.md](docs/api-server_zh.md)。
 
 ## 分析模型
 
@@ -312,7 +312,7 @@ cargo test -p dag-core
 cargo test -p biofusion
 cargo test -p agentik-core
 cargo test -p runtime
-cargo test -p tui-http
+cargo test -p api-server
 cargo test -p epi
 cargo test -p statkit
 cargo test -p ldsc
@@ -330,7 +330,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 TUI HTTP 前端使用 Bun：
 
 ```bash
-cd crates/tui-http/frontend
+cd crates/api-server/frontend
 bun install
 bun test
 bun run typecheck
@@ -367,7 +367,7 @@ bun run build
 ### 科研工作流
 
 - [TUI 指南](docs/tui_zh.md)
-- [TUI HTTP API](docs/tui-http-api_zh.md)
+- [API Server（HTTP API）](docs/api-server_zh.md)
 - [写作系统设计](docs/writing-system-design.md)
 - [Dendrite 知识管理工作空间](dendrite/README.md)
 - [TimesFM 服务](../../node-plugins/timesfm/README.md)（timesfm 插件目录）

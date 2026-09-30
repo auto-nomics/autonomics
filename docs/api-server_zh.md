@@ -1,20 +1,20 @@
-# TUI HTTP API
+# API Server（HTTP API）
 
-交互式 TUI 启动时会同步启动 HTTP API 后端。该后端不是独立的文献服务，而是后续 TUI REST API 的统一入口；文献管理是第一个业务模块。
+gateway daemon 启动时会启动 HTTP API 后端。该后端不是独立的文献服务，而是 REST API 的统一入口；文献管理是第一个业务模块。
 
 ## 架构
 
-- 实现位置：`crates/tui-http`
+- 实现位置：`crates/api-server`
 - 路由命名空间：`/api/v1`
 - 默认绑定：`127.0.0.1:8765`，只监听本机回环地址
 - 地址覆盖：`AUTONOMICS_HTTP_API_ADDR`
 - 鉴权：可选设置 `AUTONOMICS_HTTP_API_TOKEN`；设置后所有 `/api/*` 请求需要 `Authorization: Bearer <token>`，静态前端资源不受影响
 - 数据库：与 `RuntimeHost` 中的 `SharedInfra.bib` 完全共享同一个 `BibShared`，因此 API、TUI agent 工具和写作系统共享同一 Turso 连接与文献源 HTTP 客户端
 - 原文存储：TUI 使用独立文献 VFS 空间 `vfs:///literature/...`；底层默认是 `state_dir/literature/` 本地目录，并自动挂载到 Agent VFS
-- 生命周期：TUI 启动完成 `RuntimeHost::open` 后绑定端口；退出时先 graceful shutdown HTTP API，再关闭 agent 和共享基础设施
+- 生命周期：daemon 启动完成 `RuntimeHost::open` 后绑定端口；退出时先 graceful shutdown HTTP API，再关闭 agent 和共享基础设施
 - 安全边界：默认绑定所有网卡且当前无鉴权。仅在受信网络或有本机防火墙隔离的环境使用；跨不受信网络暴露前必须增加鉴权
 
-新增业务模块时，在该 crate 中实现独立 `Router`，再挂载到 `tui_http::server::api_router` 的 `/api/v1/<module>` 下。不要在各业务模块内自行启动 `TcpListener`。
+新增业务模块时，在该 crate 中实现独立 `Router`，再挂载到 `api_server::server::api_router` 的 `/api/v1/<module>` 下。不要在各业务模块内自行启动 `TcpListener`。
 
 ## 文献 API
 
@@ -57,7 +57,7 @@ http://<本机IP>:8765/
 前端为 React + TypeScript，界面组件来自本地 `src/components/ui` 下的 shadcn/ui 组件；构建与测试由 Bun 执行：
 
 ```bash
-cd crates/tui-http/frontend
+cd crates/api-server/frontend
 bun install
 bun test
 bun run typecheck
