@@ -73,6 +73,7 @@ bundle-dl = ["dep:nodes-dl"]
 
 [dev-dependencies]
 arrow-buffer.workspace = true
+container-runtime = { path = "../container-runtime" }
 tempfile = "3"
 csv = "1"
 evalue = { path = "../../bio_crates/evalue" }
