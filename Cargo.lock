@@ -7848,6 +7848,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "string-sdk",
+ "tar",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
@@ -7855,6 +7856,7 @@ dependencies = [
  "tracing",
  "uniprot",
  "vfs",
+ "zip 8.6.0",
  "zstd 0.13.3",
 ]
 

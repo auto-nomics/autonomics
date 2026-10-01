@@ -58,15 +58,7 @@ pub struct FileDecompressNode {
 
 fn port_layout() -> NodePorts {
     NodePorts::new()
-        .add_input_port_of_type_with_accepted_formats(
-            None,
-            PortType::File,
-            "compressed_file",
-            "gzip",
-            [
-                "gzip", "gz", "bgz", "bgzf", "zst", "zstd", "bz2", "xz", "tgz", "tar_gz",
-            ],
-        )
+        .add_optional_input_port_of_type(PortType::File)
         .add_output_port_of_type(None, PortType::File)
 }
 
@@ -218,14 +210,18 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-fn format_from_path(path: &str) -> Option<String> {
+pub(crate) fn format_from_path(path: &str) -> Option<String> {
     Path::new(path)
         .extension()
         .and_then(|extension| extension.to_str())
         .map(|extension| extension.to_ascii_lowercase())
 }
 
-async fn stage_vfs_input(ctx: &NodeCtx, source: &str, destination: &Path) -> Result<(), DagError> {
+pub(crate) async fn stage_vfs_input(
+    ctx: &NodeCtx,
+    source: &str,
+    destination: &Path,
+) -> Result<(), DagError> {
     let virtual_path = source
         .strip_prefix("vfs://")
         .ok_or_else(|| DagError::Schedule(format!("expected VFS path `{source}`")))?;
@@ -270,11 +266,11 @@ async fn stage_vfs_input(ctx: &NodeCtx, source: &str, destination: &Path) -> Res
     Ok(())
 }
 
-fn normalize_and_source(ctx: &NodeCtx, path: &str) -> String {
+pub(crate) fn normalize_and_source(ctx: &NodeCtx, path: &str) -> String {
     crate::file_to_dataframe::source_path(ctx, &crate::file_to_dataframe::normalize_path(path))
 }
 
-async fn upload_local(ctx: &NodeCtx, path: &str, local: &Path) -> Result<(), DagError> {
+pub(crate) async fn upload_local(ctx: &NodeCtx, path: &str, local: &Path) -> Result<(), DagError> {
     let virtual_path = path
         .strip_prefix("vfs://")
         .ok_or_else(|| DagError::Schedule(format!("expected VFS path `{path}`")))?;

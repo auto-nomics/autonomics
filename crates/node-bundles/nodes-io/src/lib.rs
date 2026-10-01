@@ -1,5 +1,6 @@
 //! DAG node bundle for file, DataFrame, and container I/O boundaries.
 
+pub mod archive_nodes;
 pub mod bundle_source;
 pub mod container_command;
 pub mod dataframe_to_file;
@@ -78,6 +79,8 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(file_decompress::FileDecompressNodeFactory));
         registry.register(Box::new(file_to_dataframe::FileToDataFrameNodeFactory {}));
         registry.register(Box::new(file_set_select::FileSetSelectNodeFactory));
+        registry.register(Box::new(archive_nodes::ArchiveInspectNodeFactory));
+        registry.register(Box::new(archive_nodes::ArchiveExtractNodeFactory));
         registry.register(Box::new(http_fetch::HttpFetchNodeFactory));
         registry.register(Box::new(
             h5ad_obs_to_dataframe::H5adObsToDataFrameNodeFactory {},
@@ -225,6 +228,31 @@ mod tests {
         assert_eq!(
             select.output_port(0).unwrap().data_type,
             dag_core::value::PortType::File
+        );
+    }
+
+    #[test]
+    fn plugin_registers_archive_nodes() {
+        let ctx = dag_core::registry::NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        );
+        let mut registry = NodeRegistry::new(ctx);
+        registry.register_plugin(&Plugin::new());
+
+        let inspect = registry
+            .get_node_ports(archive_nodes::ARCHIVE_INSPECT_KIND)
+            .expect("archive_inspect is registered");
+        assert_eq!(
+            inspect.output_port(0).unwrap().data_type,
+            dag_core::value::PortType::DataFrame
+        );
+        let extract = registry
+            .get_node_ports(archive_nodes::ARCHIVE_EXTRACT_KIND)
+            .expect("archive_extract is registered");
+        assert_eq!(
+            extract.output_port(0).unwrap().data_type,
+            dag_core::value::PortType::FileSet
         );
     }
 }
