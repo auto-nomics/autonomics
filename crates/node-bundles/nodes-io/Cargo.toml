@@ -51,6 +51,9 @@ lzf-sys = "0.1"
 ndarray = "0.15"
 glob = "0.3"
 flate2 = "1.1"
+zstd = "0.13"
+bzip2 = "0.6"
+liblzma = "0.4"
 csv = "1.4"
 encoding_rs = "0.8"
 calamine = { version = "0.35.0", features = ["dates", "chrono"] }
@@ -64,7 +67,6 @@ toml.workspace = true
 data-catalog = { path = "../../data-catalog" }
 tokio = { workspace = true, features = ["net"] }
 arrow-buffer.workspace = true
-zstd = "0.13"
 
 [lints]
 workspace = true

@@ -3,7 +3,9 @@
 pub mod bundle_source;
 pub mod container_command;
 pub mod dataframe_to_file;
+pub mod file_decompress;
 pub mod file_reference;
+pub mod file_set_select;
 pub mod file_to_dataframe;
 pub mod file_transform;
 pub mod gmt_import;
@@ -73,7 +75,9 @@ impl NodePlugin for Plugin {
     fn register(&self, registry: &mut NodeRegistry) {
         registry.register(Box::new(bundle_source::BundleSourceNodeFactory {}));
         registry.register(Box::new(file_reference::FileReferenceNodeFactory {}));
+        registry.register(Box::new(file_decompress::FileDecompressNodeFactory));
         registry.register(Box::new(file_to_dataframe::FileToDataFrameNodeFactory {}));
+        registry.register(Box::new(file_set_select::FileSetSelectNodeFactory));
         registry.register(Box::new(http_fetch::HttpFetchNodeFactory));
         registry.register(Box::new(
             h5ad_obs_to_dataframe::H5adObsToDataFrameNodeFactory {},
@@ -188,5 +192,39 @@ mod tests {
                 "missing protocol.io node: {kind}"
             );
         }
+    }
+
+    #[test]
+    fn plugin_registers_file_decompression_and_selection_nodes() {
+        let ctx = dag_core::registry::NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        );
+        let mut registry = NodeRegistry::new(ctx);
+        registry.register_plugin(&Plugin::new());
+
+        let decompress = registry
+            .get_node_ports(file_decompress::FILE_DECOMPRESS_KIND)
+            .expect("file_decompress is registered");
+        assert_eq!(
+            decompress.input_port(0).unwrap().data_type,
+            dag_core::value::PortType::File
+        );
+        assert_eq!(
+            decompress.output_port(0).unwrap().data_type,
+            dag_core::value::PortType::File
+        );
+
+        let select = registry
+            .get_node_ports(file_set_select::FILE_SET_SELECT_KIND)
+            .expect("file_set_select is registered");
+        assert_eq!(
+            select.input_port(0).unwrap().data_type,
+            dag_core::value::PortType::FileSet
+        );
+        assert_eq!(
+            select.output_port(0).unwrap().data_type,
+            dag_core::value::PortType::File
+        );
     }
 }
