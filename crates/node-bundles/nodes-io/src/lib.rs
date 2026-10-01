@@ -47,6 +47,12 @@ pub use reactome::nodes::participants::{
     ReactomeParticipantsNode, ReactomeParticipantsNodeFactory,
 };
 pub use reactome::nodes::pathways::{ReactomePathwaysNode, ReactomePathwaysNodeFactory};
+pub use enrichr_sdk::nodes::{
+    EnrichrEnrichmentNode, EnrichrEnrichmentNodeFactory, EnrichrGeneMapNode,
+    EnrichrGeneMapNodeFactory, EnrichrLibrariesNode, EnrichrLibrariesNodeFactory,
+    EnrichrViewListNode, EnrichrViewListNodeFactory,
+};
+pub use enrichr_sdk::nodes::Plugin as EnrichrPlugin;
 pub use string_sdk::nodes::{Plugin as StringPlugin, StringIdMapNode, StringIdMapNodeFactory};
 pub use string_sdk::nodes::{
     StringEnrichmentNode, StringEnrichmentNodeFactory, StringNetworkNode, StringNetworkNodeFactory,
@@ -166,6 +172,7 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(ReactomeAnalysisNodeFactory {}));
         registry.register(Box::new(ReactomeParticipantsNodeFactory {}));
         registry.register_plugin(&StringPlugin);
+        registry.register_plugin(&EnrichrPlugin);
     }
 }
 
