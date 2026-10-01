@@ -104,6 +104,11 @@ pub fn api_router(state: GatewayState) -> Router {
         // ── plugins ──
         .route("/plugins", get(plugins::list_plugins))
         // ── skills ──
+        .route("/skills/library", get(skills::list_skill_library))
+        .route(
+            "/skills/library/{name}",
+            get(skills::get_skill_library_detail),
+        )
         .route("/skills/evolution", get(skills::get_skill_evolution_status))
         .route(
             "/skills/evolution/trigger",

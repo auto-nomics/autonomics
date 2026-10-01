@@ -64,10 +64,18 @@ pub(crate) enum AppEvent {
     },
     /// A structured DAG snapshot arrived for the interactive TUI view.
     DagSnapshotLoaded(std::result::Result<dag_core::dag::DagTuiSnapshot, String>),
-    /// Skill-evolution dashboard data arrived (status + proposals).
+    /// Skill-evolution dashboard data arrived (status + unified
+    /// library; the proposals endpoint feeds the pending counter and
+    /// is folded into the library rows).
     SkillEvolutionLoaded {
         status: std::result::Result<gateway::proto::SkillEvolutionStatus, String>,
-        proposals: std::result::Result<Vec<gateway::proto::SkillProposalView>, String>,
+        library: std::result::Result<Vec<gateway::proto::SkillLibraryView>, String>,
+    },
+    /// One skill's detail document arrived (fetched on selection
+    /// move; rendered only while it matches the selected row).
+    SkillDetailLoaded {
+        name: String,
+        result: std::result::Result<gateway::proto::SkillLibraryDetail, String>,
     },
     /// A manually triggered evolution cycle finished.
     SkillEvolutionTriggered(std::result::Result<gateway::proto::SkillEvolutionReport, String>),

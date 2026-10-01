@@ -27,7 +27,7 @@
 // ── Source shims: compile the real widget into this test crate ──
 mod widgets;
 
-use gateway::proto::{SkillEvolutionStatus, SkillProposalView};
+use gateway::proto::{SkillEvolutionStatus, SkillLibraryDetail, SkillLibraryView, SkillProposalView};
 use ratatui::{
     backend::TestBackend,
     buffer::Buffer,
@@ -62,43 +62,92 @@ fn fixture_status() -> SkillEvolutionStatus {
     }
 }
 
-/// One proposal row; `rationale_len` pads the rationale to stress
-/// truncation.
-fn fixture_proposal(name: &str, status: &str, rationale_len: usize) -> SkillProposalView {
-    SkillProposalView {
+/// One library row; `proposal_status` is the skill's pipeline
+/// attribute (`None` = outside the pipeline).
+fn fixture_skill(name: &str, tier: &str, proposal_status: Option<&str>) -> SkillLibraryView {
+    SkillLibraryView {
         name: name.into(),
-        status: status.into(),
-        authored_by: if name.contains("agent-") { "agent" } else { "distiller" }.into(),
-        update: name.starts_with("update-"),
-        rationale: "x".repeat(rationale_len),
-        cluster_hash: "c-abc".into(),
-        observation_count: 3,
-        created_at: 1,
+        tier: tier.into(),
+        tags: vec!["auto".into()],
+        description: "fixture skill description".into(),
+        installed: tier != "proposed",
+        proposal_status: proposal_status.map(Into::into),
+        proposal_update: name.starts_with("update-"),
+        usage_gets: if name.contains("hot-") { 12 } else { 0 },
+        usage_search_hits: 1,
+        usage_runs: 0,
+        usage_evals: 0,
+        usage_last_used: 0,
     }
 }
 
-/// Pending-first queue mixing create/update, distiller/agent, short
-/// and over-long rationales.
-fn fixture_queue() -> Vec<SkillProposalView> {
+/// The unified library: builtin + global + a proposed row, pipeline
+/// statuses mixed.
+fn fixture_library() -> Vec<SkillLibraryView> {
     vec![
-        fixture_proposal("sql-syntax", "pending", 40),
-        fixture_proposal("agent-r-cache", "pending", 90),
-        fixture_proposal("update-ggplot-axis", "pending", 12),
-        fixture_proposal("pathlib-glob", "approved", 24),
-        fixture_proposal("agent-logfmt", "rejected", 24),
+        fixture_skill("skill-system", "builtin", None),
+        fixture_skill("hot-pathlib-glob", "global", Some("approved")),
+        fixture_skill("sql-syntax", "proposed", Some("pending")),
+        fixture_skill("agent-r-cache", "proposed", Some("pending")),
+        fixture_skill("update-ggplot-axis", "global", Some("pending")),
+        fixture_skill("agent-logfmt", "global", Some("rejected")),
     ]
 }
 
-/// Dashboard state with the status/proposals fixtures loaded and the
-/// selection parked on the first pending row. Built field-by-field
-/// (not a struct literal) because the state's private `list_state`
-/// field makes literals illegal outside its module.
+/// The detail document for a library row.
+fn fixture_detail(view: &SkillLibraryView) -> SkillLibraryDetail {
+    SkillLibraryDetail {
+        name: view.name.clone(),
+        tier: view.tier.clone(),
+        tags: view.tags.clone(),
+        description: view.description.clone(),
+        installed: view.installed,
+        body: format!("# {}\n\nOperational guidance for {}.\n", view.name, view.name),
+        workflows: Vec::new(),
+        evals: Vec::new(),
+        proposal: view.proposal_status.as_deref().map(|status| {
+            SkillProposalView {
+                name: view.name.clone(),
+                status: status.into(),
+                authored_by: if view.name.contains("agent-") {
+                    "agent"
+                } else {
+                    "distiller"
+                }
+                .into(),
+                update: view.proposal_update,
+                rationale: format!("evidence behind {}", view.name),
+                cluster_hash: "c-abc".into(),
+                observation_count: 3,
+                created_at: 1,
+            }
+        }),
+        evidence_count: if view.proposal_status.is_some() { 3 } else { 0 },
+        usage_gets: view.usage_gets,
+        usage_search_hits: view.usage_search_hits,
+        usage_runs: view.usage_runs,
+        usage_evals: view.usage_evals,
+        usage_last_used: view.usage_last_used,
+    }
+}
+
+/// Dashboard state with the status/library fixtures loaded, the
+/// selection parked on the first pending row, and that row's detail
+/// fetched. Built field-by-field (not a struct literal) because the
+/// state's private `list_state` field makes literals illegal outside
+/// its module.
 fn fixture_state() -> SkillEvolutionState {
     let mut state = SkillEvolutionState::default();
     state.visible = true;
     state.status = Some(fixture_status());
-    state.proposals = fixture_queue();
-    state.selected = 0;
+    state.library = fixture_library();
+    state.selected = state
+        .library
+        .iter()
+        .position(|s| s.proposal_status.as_deref() == Some("pending"))
+        .unwrap_or(0);
+    let selected = &state.library[state.selected];
+    state.detail = Some((selected.name.clone(), fixture_detail(selected)));
     state.last_report = Some("1 written, 0 auto-approved, 1 left pending".to_string());
     state
 }
@@ -161,14 +210,20 @@ fn open_close_toggles_visibility() {
 #[test]
 fn snapshot_loaded() {
     let mut state = fixture_state();
-    let text = render_dashboard(&mut state, 100, 24);
-    show("loaded · 100×24", &text);
+    let text = render_dashboard(&mut state, 100, 32);
+    show("loaded · 100×32", &text);
     assert!(text.contains("generation 7"), "{text}");
     assert!(text.contains("propose-only"), "{text}");
     assert!(text.contains("observations 12"), "{text}");
-    assert!(text.contains("proposals (pending first)"), "{text}");
+    // Left list: every tier, statuses inline.
+    assert!(text.contains("Skills (6)"), "{text}");
     assert!(text.contains("sql-syntax"), "{text}");
-    assert!(text.contains("· agent"), "agent-authored row is tagged, {text}");
+    assert!(text.contains("pending"), "{text}");
+    // Right pane: the selected skill's detail document.
+    assert!(text.contains("Tier"), "{text}");
+    assert!(text.contains("not installed yet"), "proposed row note");
+    assert!(text.contains("awaiting review"), "{text}");
+    assert!(text.contains("Body — SKILL.md"), "{text}");
 }
 
 #[test]
@@ -182,14 +237,14 @@ fn snapshot_loaded_across_widths() {
 }
 
 #[test]
-fn snapshot_empty_queue() {
+fn snapshot_empty_library() {
     let mut state = fixture_state();
-    state.proposals.clear();
+    state.library.clear();
+    state.detail = None;
     state.last_report = None;
     let text = render_dashboard(&mut state, 100, 24);
-    show("empty queue · 100×24", &text);
-    assert!(text.contains("no proposals yet"), "{text}");
-    assert!(text.contains("patterns surface at >= 3"), "{text}");
+    show("empty library · 100×24", &text);
+    assert!(text.contains("no skills in the library"), "{text}");
 }
 
 #[test]
@@ -198,7 +253,10 @@ fn snapshot_error_state() {
     state.error = Some("gateway: connection refused".into());
     let text = render_dashboard(&mut state, 100, 24);
     show("error · 100×24", &text);
-    assert!(text.contains("error: gateway: connection refused"), "{text}");
+    assert!(
+        text.contains("error: gateway: connection refused"),
+        "{text}"
+    );
     assert!(text.contains("press g to retry"), "{text}");
 }
 
@@ -212,13 +270,28 @@ fn snapshot_loading_state() {
 }
 
 #[test]
+fn snapshot_stale_detail_shows_loading() {
+    let mut state = fixture_state();
+    // The detail belongs to the previously selected row — the pane
+    // must say "loading" rather than render a mismatched document.
+    state.detail = Some((
+        "some-other-skill".into(),
+        fixture_detail(&fixture_skill("some-other-skill", "global", None)),
+    ));
+    let text = render_dashboard(&mut state, 100, 24);
+    show("stale detail · 100×24", &text);
+    assert!(text.contains("loading detail"), "{text}");
+}
+
+#[test]
 fn snapshot_overflow_selection_scrolled_into_view() {
     let mut state = fixture_state();
-    state.proposals = (0..8)
-        .map(|i| fixture_proposal(&format!("prop-{i:02}"), "pending", 20))
+    state.library = (0..8)
+        .map(|i| fixture_skill(&format!("prop-{i:02}"), "global", Some("pending")))
         .collect();
+    state.detail = None;
 
-    // 60×14 → popup 54×12 → ~5 visible queue rows for 8 proposals.
+    // 60×14 → popup 54×12 → ~5 visible list rows for 8 skills.
     state.selected = 7;
     let bottom = render_dashboard(&mut state, 60, 14);
     show("overflow · selection at bottom · 60×14", &bottom);
@@ -233,15 +306,24 @@ fn snapshot_overflow_selection_scrolled_into_view() {
 }
 
 #[test]
-fn snapshot_selection_marker_only_on_pending_row() {
+fn snapshot_marker_follows_selection_and_actions_stay_gated() {
     let mut state = fixture_state();
-    // Selection parked on a non-pending row: nothing is actionable,
-    // so no row may carry the marker.
-    state.selected = 3; // "pathlib-glob", approved
+    // Navigation is a browser: the marker sits on ANY selected row,
+    // including history (approved/rejected) rows.
+    state.selected = state
+        .library
+        .iter()
+        .position(|s| s.proposal_status.as_deref() == Some("rejected"))
+        .unwrap();
+    let selected_name = state.library[state.selected].name.clone();
     let text = render_dashboard(&mut state, 100, 24);
     show("selection on history row · 100×24", &text);
-    assert!(!text.contains('▶'), "history rows never highlight: {text}");
-    assert!(state.selected_pending().is_none());
+    assert!(text.contains('▶'), "browser selection is visible: {text}");
+    assert!(
+        state.selected_pending().is_none(),
+        "history row is not an action target"
+    );
+    assert_eq!(state.selected_skill().unwrap().name, selected_name);
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -283,14 +365,26 @@ fn run_interactive_loop(
     use crossterm::event::{self, Event, KeyCode, KeyEventKind};
     use std::time::Duration;
 
+    use widgets::skill_evolution_widget::PanelFocus;
+
     let mut state = fixture_state();
     let mut next_canned = 0;
-    const CANNED_PROPOSALS: &[&str] = &[
+    const CANNED_SKILLS: &[&str] = &[
         "canned-fmt-strings",
         "canned-sheet-bounds",
         "canned-join-hint",
         "canned-rng-seed",
     ];
+
+    /// Simulate the app's detail fetch: attach the document for the
+    /// row the selection just landed on.
+    fn refetch_detail(state: &mut SkillEvolutionState) {
+        if let Some(view) = state.selected_skill() {
+            let detail = fixture_detail(view);
+            state.detail = Some((view.name.clone(), detail));
+            state.detail_error = None;
+        }
+    }
 
     loop {
         terminal.draw(|frame| {
@@ -301,7 +395,7 @@ fn run_interactive_loop(
                 .popup_height((frame.area().height * 3 / 4).max(12))
                 .render(frame.area(), frame.buffer_mut(), &mut state);
 
-            let hint = "harness: j/k move · a approve · r reject · t fake cycle · e toggle error · g noop · Esc quit";
+            let hint = "harness: j/k move · ←/→ focus · a approve · r reject · t fake cycle · e toggle error · Esc quit";
             let bottom = Rect::new(
                 frame.area().x,
                 frame.area().bottom().saturating_sub(1),
@@ -324,8 +418,22 @@ fn run_interactive_loop(
 
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => return Ok(()),
-            KeyCode::Down | KeyCode::Char('j') => state.select_next(),
-            KeyCode::Up | KeyCode::Char('k') => state.select_prev(),
+            KeyCode::Down | KeyCode::Char('j') => match state.focus {
+                PanelFocus::List => {
+                    state.select_next();
+                    refetch_detail(&mut state);
+                }
+                PanelFocus::Detail => state.scroll_detail(1),
+            },
+            KeyCode::Up | KeyCode::Char('k') => match state.focus {
+                PanelFocus::List => {
+                    state.select_prev();
+                    refetch_detail(&mut state);
+                }
+                PanelFocus::Detail => state.scroll_detail(-1),
+            },
+            KeyCode::Left | KeyCode::Char('h') => state.focus_list(),
+            KeyCode::Right | KeyCode::Char('l') => state.focus_detail(),
             KeyCode::Char('a') => fake_action(&mut state, "approved"),
             KeyCode::Char('r') => fake_action(&mut state, "rejected"),
             KeyCode::Char('e') => {
@@ -335,18 +443,17 @@ fn run_interactive_loop(
                 };
             }
             KeyCode::Char('t') | KeyCode::Char('T') => {
-                let name = CANNED_PROPOSALS[next_canned % CANNED_PROPOSALS.len()];
+                let name = CANNED_SKILLS[next_canned % CANNED_SKILLS.len()];
                 next_canned += 1;
                 let auto = key.code == KeyCode::Char('T');
                 let status = if auto { "approved" } else { "pending" };
-                state.proposals.insert(
-                    0,
-                    fixture_proposal(name, status, 30),
-                );
-                let status_field = state.status.as_mut().unwrap();
-                status_field.generation += 1;
-                status_field.proposals_pending += usize::from(!auto);
-                status_field.proposals_approved += usize::from(auto);
+                let view = fixture_skill(name, "proposed", Some(status));
+                state.library.insert(2, view);
+                if let Some(status) = state.status.as_mut() {
+                    status.generation += 1;
+                    status.proposals_pending += usize::from(!auto);
+                    status.proposals_approved += usize::from(auto);
+                }
                 state.last_report = Some(format!(
                     "{name} written{}, 1 considered",
                     if auto { " + auto-approved" } else { "" }
@@ -360,14 +467,18 @@ fn run_interactive_loop(
     }
 }
 
-/// Approve/reject the selected pending proposal, then advance the
-/// selection to the next pending row — mirrors what the app's
-/// refresh does after the daemon acts.
+/// Approve/reject the selected skill's pending proposal, refetch its
+/// detail, then advance — mirrors what the app's refresh does after
+/// the daemon acts.
 fn fake_action(state: &mut SkillEvolutionState, new_status: &str) {
     let Some(index) = state.selected_pending().map(|_| state.selected) else {
         return;
     };
-    state.proposals[index].status = new_status.into();
+    state.library[index].proposal_status = Some(new_status.into());
+    if new_status == "approved" {
+        state.library[index].installed = true;
+        state.library[index].tier = "global".into();
+    }
     if let Some(status) = state.status.as_mut() {
         status.proposals_pending -= 1;
         if new_status == "approved" {
@@ -376,7 +487,14 @@ fn fake_action(state: &mut SkillEvolutionState, new_status: &str) {
             status.proposals_rejected += 1;
         }
     }
+    // The row's document changed (status flip) — refetch it.
+    let detail = fixture_detail(&state.library[index]);
+    state.detail = Some((state.library[index].name.clone(), detail));
     state.select_next();
+    if let Some(view) = state.selected_skill() {
+        let detail = fixture_detail(view);
+        state.detail = Some((view.name.clone(), detail));
+    }
 }
 
 /// Dim mock app content behind the popup so the overlay's `Clear`

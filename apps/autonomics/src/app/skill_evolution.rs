@@ -15,16 +15,46 @@ impl App {
         self.state.skill_evolution.close();
     }
 
-    /// Fetch the dashboard snapshot (status + proposals in parallel).
+    /// Fetch the dashboard snapshot (status + unified library in
+    /// parallel). The detail document for the selected row follows
+    /// from [`Self::fetch_skill_detail`] when the data lands.
     pub(super) fn refresh_skill_evolution(&mut self) {
         let client = self.client.clone();
         let event_tx = self.app_event_tx.clone();
         self.spawn_client_task("skill_evolution_refresh", move || async move {
             let status = client.skill_evolution_status().await;
-            let proposals = client.skill_proposals().await;
+            let library = client.skill_library().await;
             event_tx.send(crate::app_event::AppEvent::SkillEvolutionLoaded {
                 status: status.map_err(|e| e.to_string()),
-                proposals: proposals.map_err(|e| e.to_string()),
+                library: library.map_err(|e| e.to_string()),
+            });
+        });
+    }
+
+    /// Fetch the detail document for the currently selected library
+    /// row. Cheap and idempotent; skipped while the dashboard is
+    /// closed (the next open refreshes anyway).
+    pub(super) fn fetch_skill_detail(&mut self) {
+        if !self.state.skill_evolution.visible {
+            return;
+        }
+        let Some(name) = self
+            .state
+            .skill_evolution
+            .selected_skill()
+            .map(|s| s.name.clone())
+        else {
+            return;
+        };
+        // A stale reply for the previously selected row is dropped at
+        // render time (name match), so no request de-dup is needed.
+        let client = self.client.clone();
+        let event_tx = self.app_event_tx.clone();
+        self.spawn_client_task("skill_detail_fetch", move || async move {
+            let result = client.skill_library_detail(&name).await;
+            event_tx.send(crate::app_event::AppEvent::SkillDetailLoaded {
+                name,
+                result: result.map_err(|e| e.to_string()),
             });
         });
     }
@@ -78,6 +108,9 @@ impl App {
 
     /// Key handling while the dashboard is open.
     pub(super) fn handle_skill_evolution_key(&mut self, key: &KeyEvent) {
+        use crate::widgets::skill_evolution_widget::PanelFocus;
+
+        let dashboard = &mut self.state.skill_evolution;
         match key.code {
             KeyCode::Esc => self.close_skill_evolution(),
             KeyCode::Char('q') if key.modifiers.is_empty() => self.close_skill_evolution(),
@@ -88,17 +121,39 @@ impl App {
             KeyCode::Char('T') | KeyCode::Char('t') if key.modifiers == KeyModifiers::SHIFT => {
                 self.trigger_skill_evolution(true);
             }
-            KeyCode::Down | KeyCode::Char('j') => self.state.skill_evolution.select_next(),
-            KeyCode::Up | KeyCode::Char('k') => self.state.skill_evolution.select_prev(),
+            // ←/→ (h/l) switch the pane that owns the vertical keys.
+            KeyCode::Left | KeyCode::Char('h') if key.modifiers.is_empty() => {
+                dashboard.focus_list();
+            }
+            KeyCode::Right | KeyCode::Char('l') if key.modifiers.is_empty() => {
+                dashboard.focus_detail();
+            }
+            // Vertical keys act on the focused pane: move the list
+            // selection (fetching the newly selected row's detail), or
+            // scroll the detail document.
+            KeyCode::Down | KeyCode::Char('j') => match dashboard.focus {
+                PanelFocus::List => {
+                    dashboard.select_next();
+                    self.fetch_skill_detail();
+                }
+                PanelFocus::Detail => dashboard.scroll_detail(1),
+            },
+            KeyCode::Up | KeyCode::Char('k') => match dashboard.focus {
+                PanelFocus::List => {
+                    dashboard.select_prev();
+                    self.fetch_skill_detail();
+                }
+                PanelFocus::Detail => dashboard.scroll_detail(-1),
+            },
+            // Actions act on the selected skill's pending proposal —
+            // the row's `proposal_status` attribute is the gate.
             KeyCode::Char('a') | KeyCode::Char('A') => {
-                if let Some(proposal) = self.state.skill_evolution.selected_pending() {
-                    let name = proposal.name.clone();
+                if let Some(name) = dashboard.selected_pending().map(|s| s.name.clone()) {
                     self.approve_skill_proposal(name);
                 }
             }
             KeyCode::Char('r') | KeyCode::Char('R') => {
-                if let Some(proposal) = self.state.skill_evolution.selected_pending() {
-                    let name = proposal.name.clone();
+                if let Some(name) = dashboard.selected_pending().map(|s| s.name.clone()) {
                     self.reject_skill_proposal(name);
                 }
             }

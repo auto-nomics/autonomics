@@ -308,7 +308,7 @@ impl App {
                     self.dirty = true;
                 }
             }
-            crate::app_event::AppEvent::SkillEvolutionLoaded { status, proposals } => {
+            crate::app_event::AppEvent::SkillEvolutionLoaded { status, library } => {
                 match status {
                     Ok(status) => {
                         self.state.skill_evolution.status = Some(status);
@@ -318,13 +318,33 @@ impl App {
                         self.state.skill_evolution.error = Some(e);
                     }
                 }
-                if let Ok(proposals) = proposals {
-                    let first_pending = proposals
+                if let Ok(library) = library {
+                    // Land on the first row with a pending proposal —
+                    // the actionable one — else keep the top.
+                    let first_pending = library
                         .iter()
-                        .position(|p| p.status == "pending")
-                        .unwrap_or(0);
-                    self.state.skill_evolution.proposals = proposals;
+                        .position(|s| s.proposal_status.as_deref() == Some("pending"))
+                        .unwrap_or(0)
+                        .min(library.len().saturating_sub(1));
+                    self.state.skill_evolution.library = library;
                     self.state.skill_evolution.selected = first_pending;
+                    self.state.skill_evolution.detail = None;
+                    // The selection just moved (or landed); pull its
+                    // detail document.
+                    self.fetch_skill_detail();
+                }
+            }
+            crate::app_event::AppEvent::SkillDetailLoaded { name, result } => {
+                let dashboard = &mut self.state.skill_evolution;
+                match result {
+                    Ok(detail) => {
+                        dashboard.detail = Some((name, detail));
+                        dashboard.detail_error = None;
+                    }
+                    Err(e) => {
+                        dashboard.detail = None;
+                        dashboard.detail_error = Some((name, e));
+                    }
                 }
             }
             crate::app_event::AppEvent::SkillEvolutionTriggered(result) => match result {

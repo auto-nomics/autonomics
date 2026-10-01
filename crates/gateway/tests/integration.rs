@@ -206,7 +206,7 @@ async fn swagger_docs_expose_the_gateway_api() {
         .await
         .unwrap();
     assert_eq!(openapi["info"]["title"], "Autonomics Gateway API");
-    assert_eq!(openapi["paths"].as_object().unwrap().len(), 35);
+    assert_eq!(openapi["paths"].as_object().unwrap().len(), 37);
     let expected_paths = [
         "/api/v1/gateway/status",
         "/api/v1/gateway/shutdown",
@@ -237,6 +237,8 @@ async fn swagger_docs_expose_the_gateway_api() {
         "/api/v1/settings",
         "/api/v1/plugins",
         "/api/v1/events",
+        "/api/v1/skills/library",
+        "/api/v1/skills/library/{name}",
         "/api/v1/skills/evolution",
         "/api/v1/skills/evolution/trigger",
         "/api/v1/skills/evolution/proposals",
@@ -477,4 +479,71 @@ async fn agent_authored_proposals_survive_auto_approve_over_the_wire() {
         .find(|p| p.name == "agent-authored-skill")
         .unwrap();
     assert_eq!(target.status, "pending");
+}
+
+#[tokio::test]
+async fn skill_library_lists_installed_and_proposed_with_detail() {
+    let gw = start_mock_gateway("ok").await;
+    let client = gw.client();
+    let manager = gw.infra.skills.clone();
+
+    // The builtin tier is always present; nothing else installed yet.
+    let library = client.skill_library().await.unwrap();
+    assert!(
+        library.iter().all(|s| s.installed),
+        "fresh state: only installed (builtin) rows"
+    );
+    assert!(library.iter().any(|s| s.tier == "builtin"));
+
+    // Seed a pending proposal through the channel (worker trigger).
+    for body in ["fix a", "fix b", "fix c"] {
+        manager
+            .record_observation(skills::ObservationInput {
+                kind: skills::ObservationKind::Failure,
+                source: skills::ObservationSource::Agent,
+                summary: "lib boom".into(),
+                body: body.into(),
+                node_kind: Some("sql".into()),
+                error: Some("lib error 7".into()),
+            })
+            .unwrap();
+    }
+    let _ = client.trigger_skill_evolution(None).await.unwrap();
+    eventually(|| {
+        let client = client.clone();
+        async move {
+            client
+                .skill_library()
+                .await
+                .map(|l| {
+                    l.iter()
+                        .any(|s| s.tier == "proposed" && s.proposal_status.as_deref() == Some("pending"))
+                })
+                .unwrap_or(false)
+        }
+    })
+    .await;
+
+    // Detail of the proposed row: body + proposal with evidence, not
+    // installed, no workflows.
+    let name = client
+        .skill_library()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|s| s.tier == "proposed")
+        .unwrap()
+        .name;
+    let detail = client.skill_library_detail(&name).await.unwrap();
+    assert!(!detail.installed);
+    assert_eq!(detail.tier, "proposed");
+    assert!(detail.body.contains("lib boom") || !detail.body.is_empty());
+    let proposal = detail.proposal.expect("proposed row carries its proposal");
+    assert_eq!(proposal.status, "pending");
+    assert_eq!(proposal.observation_count, 3, "evidence chain size");
+    assert_eq!(detail.evidence_count, 3);
+
+    // Unknown names 404 rather than fabricating a row.
+    let missing = client.skill_library_detail("no-such-skill").await;
+    assert!(missing.is_err());
 }

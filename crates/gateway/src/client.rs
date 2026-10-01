@@ -550,6 +550,20 @@ impl GatewayClient {
 
     // ── skill evolution ──────────────────────────────────────────
 
+    /// The unified skill library: every installed skill plus every
+    /// proposed-but-not-installed name, proposal status and usage
+    /// telemetry attached per row.
+    pub async fn skill_library(&self) -> Result<Vec<SkillLibraryView>> {
+        self.get("/skills/library").await
+    }
+
+    /// One skill's full detail (metadata, usage, proposal record,
+    /// complete SKILL.md body).
+    pub async fn skill_library_detail(&self, name: &str) -> Result<SkillLibraryDetail> {
+        self.get(&format!("/skills/library/{}", encode_segment(name)))
+            .await
+    }
+
     /// Dashboard snapshot: service state, counts, proposals by
     /// status, library generation.
     pub async fn skill_evolution_status(&self) -> Result<SkillEvolutionStatus> {

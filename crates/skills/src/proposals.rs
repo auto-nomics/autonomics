@@ -459,6 +459,13 @@ impl Proposals {
         let content = std::fs::read_to_string(self.root.join(name).join("SKILL.md")).ok()?;
         format::parse_skill_md(&content).ok().map(|(meta, _)| meta)
     }
+
+    /// The proposal's SKILL.md split into `(meta, body)` — the
+    /// document a proposed-but-not-installed skill would promote.
+    pub fn read_skill_md(&self, name: &str) -> Option<(SkillMeta, String)> {
+        let content = std::fs::read_to_string(self.root.join(name).join("SKILL.md")).ok()?;
+        format::parse_skill_md(&content).ok()
+    }
 }
 
 #[cfg(test)]

@@ -409,6 +409,61 @@ pub struct SkillApproveOutcome {
     pub destination: String,
 }
 
+/// `GET /api/v1/skills/library` row — one skill from the unified
+/// library view: every installed skill (all tiers) plus every
+/// proposed-but-not-installed name, with the proposal pipeline as an
+/// attribute rather than a separate listing.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SkillLibraryView {
+    pub name: String,
+    /// builtin | global | workspace | proposed (not installed yet).
+    pub tier: String,
+    pub tags: Vec<String>,
+    pub description: String,
+    /// False only for rows that exist solely as a pending proposal.
+    pub installed: bool,
+    /// Latest proposal status for this name, when the pipeline ever
+    /// touched it (pending | approved | rejected).
+    pub proposal_status: Option<String>,
+    /// The proposal revises an already-installed skill.
+    pub proposal_update: bool,
+    // ── usage telemetry (the evolution fitness signal) ──
+    pub usage_gets: u64,
+    pub usage_search_hits: u64,
+    pub usage_runs: u64,
+    pub usage_evals: u64,
+    /// Unix seconds of the last recorded use; 0 = never.
+    pub usage_last_used: i64,
+}
+
+/// `GET /api/v1/skills/library/{name}` response — one skill's full
+/// detail: metadata, usage, its proposal (with evidence count), and
+/// the complete SKILL.md body.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SkillLibraryDetail {
+    pub name: String,
+    pub tier: String,
+    pub tags: Vec<String>,
+    pub description: String,
+    pub installed: bool,
+    /// The full SKILL.md body below the frontmatter.
+    pub body: String,
+    /// Workflow template stems bundled with the skill (installed
+    /// rows only).
+    pub workflows: Vec<String>,
+    /// Eval file stems bundled with the skill (installed rows only).
+    pub evals: Vec<String>,
+    /// The pipeline record for this name, when one exists.
+    pub proposal: Option<SkillProposalView>,
+    /// Observations backing the proposal (evidence chain size).
+    pub evidence_count: usize,
+    pub usage_gets: u64,
+    pub usage_search_hits: u64,
+    pub usage_runs: u64,
+    pub usage_evals: u64,
+    pub usage_last_used: i64,
+}
+
 // ── Plugins ──────────────────────────────────────────────────────────
 
 /// `GET /api/v1/plugins` — the manifest plugin families installed under
