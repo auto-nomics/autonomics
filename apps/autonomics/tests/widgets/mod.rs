@@ -4,7 +4,11 @@
 //! integration tests can reach them. Paths resolve relative to this
 //! directory (`tests/widgets/`).
 
+#[path = "../../src/widgets/observation_browser_widget.rs"]
+pub mod observation_browser_widget;
 #[path = "../../src/widgets/popup.rs"]
 pub mod popup;
+#[path = "../../src/widgets/skill_browser_widget.rs"]
+pub mod skill_browser_widget;
 #[path = "../../src/widgets/skill_evolution_widget.rs"]
 pub mod skill_evolution_widget;

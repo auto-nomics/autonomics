@@ -330,6 +330,20 @@ mod tests {
 
 // ── Skill evolution ───────────────────────────────────────────────────
 
+/// `GET /api/v1/skills/evolution/observations` — recorded evidence,
+/// newest first. Includes the full reusable body for the TUI browser.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SkillObservationView {
+    pub id: String,
+    pub created_at: i64,
+    pub kind: String,
+    pub source: String,
+    pub summary: String,
+    pub body: String,
+    pub node_kind: Option<String>,
+    pub error: Option<String>,
+}
+
 /// `GET /api/v1/skills/evolution` — the dashboard's data snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SkillEvolutionStatus {

@@ -111,6 +111,10 @@ pub fn api_router(state: GatewayState) -> Router {
         )
         .route("/skills/evolution", get(skills::get_skill_evolution_status))
         .route(
+            "/skills/evolution/observations",
+            get(skills::list_skill_observations),
+        )
+        .route(
             "/skills/evolution/trigger",
             post(skills::trigger_skill_evolution),
         )

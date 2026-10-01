@@ -13,6 +13,40 @@ use crate::proto::*;
 
 // ── skill library ─────────────────────────────────────────────────────
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/skills/evolution/observations",
+    tag = "skills",
+    responses((status = 200, body = [SkillObservationView]))
+)]
+pub(crate) async fn list_skill_observations(
+    State(state): State<GatewayState>,
+) -> Json<Vec<SkillObservationView>> {
+    let mut observations = state.infra.skills.observations().list();
+    observations.sort_by(|a, b| b.created_at.cmp(&a.created_at).then(a.id.cmp(&b.id)));
+    Json(
+        observations
+            .into_iter()
+            .map(|observation| SkillObservationView {
+                kind: observation.kind_label().to_string(),
+                source: match observation.source {
+                    skills::ObservationSource::Agent => "agent",
+                    skills::ObservationSource::Eval => "eval",
+                    skills::ObservationSource::WorkflowRun => "workflow_run",
+                    skills::ObservationSource::Cli => "cli",
+                }
+                .to_string(),
+                id: observation.id,
+                created_at: observation.created_at,
+                summary: observation.summary,
+                body: observation.body,
+                node_kind: observation.node_kind,
+                error: observation.error,
+            })
+            .collect(),
+    )
+}
+
 /// The unified library view: every installed skill (all tiers) plus
 /// every proposed-but-not-installed name, with the proposal pipeline
 /// as one attribute among others. Pure [`SharedInfra`] reads — the

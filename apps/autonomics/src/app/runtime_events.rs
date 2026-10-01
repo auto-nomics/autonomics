@@ -308,7 +308,11 @@ impl App {
                     self.dirty = true;
                 }
             }
-            crate::app_event::AppEvent::SkillEvolutionLoaded { status, library } => {
+            crate::app_event::AppEvent::SkillEvolutionLoaded {
+                status,
+                library,
+                observations,
+            } => {
                 match status {
                     Ok(status) => {
                         self.state.skill_evolution.status = Some(status);
@@ -318,34 +322,25 @@ impl App {
                         self.state.skill_evolution.error = Some(e);
                     }
                 }
-                if let Ok(library) = library {
-                    // Land on the first row with a pending proposal —
-                    // the actionable one — else keep the top.
-                    let first_pending = library
-                        .iter()
-                        .position(|s| s.proposal_status.as_deref() == Some("pending"))
-                        .unwrap_or(0)
-                        .min(library.len().saturating_sub(1));
-                    self.state.skill_evolution.library = library;
-                    self.state.skill_evolution.selected = first_pending;
-                    self.state.skill_evolution.detail = None;
-                    // The selection just moved (or landed); pull its
-                    // detail document.
-                    self.fetch_skill_detail();
+                match library {
+                    Ok(library) => {
+                        self.state.skill_evolution.skills.set_library(library);
+                        self.fetch_skill_detail();
+                    }
+                    Err(error) => self.state.skill_evolution.skills.error = Some(error),
+                }
+                match observations {
+                    Ok(observations) => self
+                        .state
+                        .skill_evolution
+                        .observations
+                        .set_observations(observations),
+                    Err(error) => self.state.skill_evolution.observations.error = Some(error),
                 }
             }
             crate::app_event::AppEvent::SkillDetailLoaded { name, result } => {
-                let dashboard = &mut self.state.skill_evolution;
-                match result {
-                    Ok(detail) => {
-                        dashboard.detail = Some((name, detail));
-                        dashboard.detail_error = None;
-                    }
-                    Err(e) => {
-                        dashboard.detail = None;
-                        dashboard.detail_error = Some((name, e));
-                    }
-                }
+                let dashboard = &mut self.state.skill_evolution.skills;
+                dashboard.apply_detail(name, result);
             }
             crate::app_event::AppEvent::SkillEvolutionTriggered(result) => match result {
                 Ok(report) => {

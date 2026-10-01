@@ -17,7 +17,8 @@
 //!
 //! **Interactive preview** (ignored by default) — runs the widget
 //! live in your terminal against synthetic data, no gateway daemon
-//! needed. j/k navigate, a/r approve/reject, t fake cycle, e toggle
+//! needed. Tab/1/2 switch tabs, j/k navigate/scroll, a/r approve/reject,
+//! t runs a fake cycle, e toggles
 //! the error path:
 //!
 //! ```text
@@ -28,7 +29,8 @@
 mod widgets;
 
 use gateway::proto::{
-    SkillEvolutionStatus, SkillLibraryDetail, SkillLibraryView, SkillProposalView,
+    SkillEvolutionStatus, SkillLibraryDetail, SkillLibraryView, SkillObservationView,
+    SkillProposalView,
 };
 use ratatui::{
     backend::TestBackend,
@@ -39,7 +41,9 @@ use ratatui::{
     text::Line,
     widgets::{Paragraph, StatefulWidget as _, Widget as _},
 };
-use widgets::skill_evolution_widget::{SkillEvolutionState, SkillEvolutionWidget};
+use widgets::skill_evolution_widget::{
+    EvolutionTab, PanelFocus, SkillEvolutionState, SkillEvolutionWidget,
+};
 
 // ═══════════════════════════════════════════════════════════════════════
 // Fixtures
@@ -146,16 +150,33 @@ fn fixture_state() -> SkillEvolutionState {
     let mut state = SkillEvolutionState::default();
     state.visible = true;
     state.status = Some(fixture_status());
-    state.library = fixture_library();
-    state.selected = state
+    state.skills.library = fixture_library();
+    state.skills.selected = state
+        .skills
         .library
         .iter()
         .position(|s| s.proposal_status.as_deref() == Some("pending"))
         .unwrap_or(0);
-    let selected = &state.library[state.selected];
-    state.detail = Some((selected.name.clone(), fixture_detail(selected)));
+    let selected = &state.skills.library[state.skills.selected];
+    state.skills.detail = Some((selected.name.clone(), fixture_detail(selected)));
     state.last_report = Some("1 written, 0 auto-approved, 1 left pending".to_string());
     state
+        .observations
+        .set_observations(vec![fixture_observation("obs-1", "SQL header mismatch")]);
+    state
+}
+
+fn fixture_observation(id: &str, summary: &str) -> SkillObservationView {
+    SkillObservationView {
+        id: id.into(),
+        created_at: 1,
+        kind: "failure".into(),
+        source: "agent".into(),
+        summary: summary.into(),
+        body: "Validate the CSV header before loading.\nEvidence body ends here.".into(),
+        node_kind: Some("sql".into()),
+        error: Some("missing column".into()),
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -245,8 +266,8 @@ fn snapshot_loaded_across_widths() {
 #[test]
 fn snapshot_empty_library() {
     let mut state = fixture_state();
-    state.library.clear();
-    state.detail = None;
+    state.skills.library.clear();
+    state.skills.detail = None;
     state.last_report = None;
     let text = render_dashboard(&mut state, 100, 24);
     show("empty library · 100×24", &text);
@@ -280,7 +301,7 @@ fn snapshot_stale_detail_shows_loading() {
     let mut state = fixture_state();
     // The detail belongs to the previously selected row — the pane
     // must say "loading" rather than render a mismatched document.
-    state.detail = Some((
+    state.skills.detail = Some((
         "some-other-skill".into(),
         fixture_detail(&fixture_skill("some-other-skill", "global", None)),
     ));
@@ -292,19 +313,19 @@ fn snapshot_stale_detail_shows_loading() {
 #[test]
 fn snapshot_overflow_selection_scrolled_into_view() {
     let mut state = fixture_state();
-    state.library = (0..8)
+    state.skills.library = (0..8)
         .map(|i| fixture_skill(&format!("prop-{i:02}"), "global", Some("pending")))
         .collect();
-    state.detail = None;
+    state.skills.detail = None;
 
     // 60×14 → popup 54×12 → ~5 visible list rows for 8 skills.
-    state.selected = 7;
+    state.skills.selected = 7;
     let bottom = render_dashboard(&mut state, 60, 14);
     show("overflow · selection at bottom · 60×14", &bottom);
     assert!(bottom.contains("prop-07"), "selection visible: {bottom}");
     assert!(!bottom.contains("prop-00"), "top scrolled out: {bottom}");
 
-    state.selected = 0;
+    state.skills.selected = 0;
     let top = render_dashboard(&mut state, 60, 14);
     show("overflow · selection at top · 60×14", &top);
     assert!(top.contains("prop-00"), "selection visible: {top}");
@@ -316,12 +337,13 @@ fn snapshot_marker_follows_selection_and_actions_stay_gated() {
     let mut state = fixture_state();
     // Navigation is a browser: the marker sits on ANY selected row,
     // including history (approved/rejected) rows.
-    state.selected = state
+    state.skills.selected = state
+        .skills
         .library
         .iter()
         .position(|s| s.proposal_status.as_deref() == Some("rejected"))
         .unwrap();
-    let selected_name = state.library[state.selected].name.clone();
+    let selected_name = state.skills.library[state.skills.selected].name.clone();
     let text = render_dashboard(&mut state, 100, 24);
     show("selection on history row · 100×24", &text);
     assert!(text.contains('▶'), "browser selection is visible: {text}");
@@ -329,12 +351,135 @@ fn snapshot_marker_follows_selection_and_actions_stay_gated() {
         state.selected_pending().is_none(),
         "history row is not an action target"
     );
-    assert_eq!(state.selected_skill().unwrap().name, selected_name);
+    assert_eq!(state.skills.selected_skill().unwrap().name, selected_name);
 }
 
 // ═══════════════════════════════════════════════════════════════════════
 // Interactive preview (opt-in)
 // ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn snapshot_observations_tab() {
+    let mut state = fixture_state();
+    state.active_tab = EvolutionTab::Observations;
+    let text = render_dashboard(&mut state, 120, 40);
+    assert!(text.contains("Observations (1)"), "{text}");
+    for expected in [
+        "SQL header mismatch",
+        "failure",
+        "agent",
+        "missing column",
+        "CSV header",
+        "Evidence",
+    ] {
+        assert!(text.contains(expected), "missing {expected}: {text}");
+    }
+    assert!(!text.contains("Body — SKILL.md"), "{text}");
+    assert!(
+        state.selected_pending().is_none(),
+        "review actions are disabled on observations"
+    );
+}
+
+#[test]
+fn observations_loading_empty_and_error() {
+    let mut state = fixture_state();
+    state.active_tab = EvolutionTab::Observations;
+    state.observations = Default::default();
+    assert!(render_dashboard(&mut state, 100, 24).contains("loading observations"));
+    state.observations.set_observations(vec![]);
+    assert!(render_dashboard(&mut state, 100, 24).contains("no observations recorded"));
+    state.observations.error = Some("offline".into());
+    assert!(render_dashboard(&mut state, 100, 24).contains("observations unavailable: offline"));
+}
+
+#[test]
+fn tab_navigation_keeps_independent_selection_and_focus() {
+    let mut state = fixture_state();
+    let skill_index = state.skills.selected;
+    state.focus_detail();
+    state.switch_tab();
+    state.observations.set_observations(vec![
+        fixture_observation("a", "First"),
+        fixture_observation("b", "Second"),
+    ]);
+    assert!(
+        !state.navigate(true),
+        "observation selection never fetches skill details"
+    );
+    assert_eq!(state.observations.selected, 1);
+    state.focus_detail();
+    state.switch_tab();
+    assert_eq!(state.skills.selected, skill_index);
+    assert_eq!(state.skills.focus, PanelFocus::Detail);
+    assert!(
+        !state.navigate(true),
+        "detail scrolling never fetches skill details"
+    );
+    state.focus_list();
+    assert!(state.navigate(true));
+    state.switch_tab();
+    assert_eq!(state.observations.selected, 1);
+    assert_eq!(state.observations.focus, PanelFocus::Detail);
+}
+
+#[test]
+fn observations_refresh_and_wrapped_scroll_preserve_context() {
+    let mut state = fixture_state();
+    state.active_tab = EvolutionTab::Observations;
+    let mut row = fixture_observation("target", "Unicode evidence");
+    row.body = "START\n".to_string()
+        + &"中文证据 abcdefghijklmnopqrstuvwxyz0123456789\n".repeat(40)
+        + "END";
+    state
+        .observations
+        .set_observations(vec![fixture_observation("other", "Other"), row.clone()]);
+    state.navigate(true);
+    state.focus_detail();
+    for _ in 0..1000 {
+        state.navigate(true);
+    }
+    let text = render_dashboard(&mut state, 80, 24);
+    assert!(text.contains("END"), "last wrapped line reachable: {text}");
+    assert!(!text.contains("START"));
+    state.observations.set_observations(vec![row]);
+    assert_eq!(state.observations.selected, 0);
+    assert!(
+        render_dashboard(&mut state, 80, 24).contains("END"),
+        "refresh preserves scroll for same ID"
+    );
+    state
+        .observations
+        .set_observations(vec![fixture_observation("new", "New")]);
+    assert!(
+        render_dashboard(&mut state, 100, 32).contains("Summary"),
+        "new selection starts at top"
+    );
+}
+
+#[test]
+fn skill_refresh_preserves_selection_and_stale_replies_do_not_replace_detail() {
+    let mut state = fixture_state();
+    let row = state.skills.selected_skill().unwrap().clone();
+    state.skills.set_library(vec![row.clone()]);
+    assert_eq!(state.skills.selected, 0);
+    state
+        .skills
+        .apply_detail(row.name.clone(), Ok(fixture_detail(&row)));
+    state
+        .skills
+        .apply_detail("stale-row".into(), Err("late error".into()));
+    assert!(state.skills.detail_error.is_none());
+    assert_eq!(state.skills.detail.as_ref().unwrap().0, row.name);
+    state
+        .skills
+        .apply_detail(row.name.clone(), Err("current error".into()));
+    assert!(state.skills.detail.is_none());
+    assert_eq!(
+        state.skills.detail_error.as_ref().unwrap().1,
+        "current error"
+    );
+}
 
 /// Live preview of the dashboard in the user's terminal against
 /// synthetic data — no gateway daemon. Drives the real widget with
@@ -371,7 +516,7 @@ fn run_interactive_loop(
     use crossterm::event::{self, Event, KeyCode, KeyEventKind};
     use std::time::Duration;
 
-    use widgets::skill_evolution_widget::PanelFocus;
+    use widgets::skill_evolution_widget::EvolutionTab;
 
     let mut state = fixture_state();
     let mut next_canned = 0;
@@ -385,10 +530,10 @@ fn run_interactive_loop(
     /// Simulate the app's detail fetch: attach the document for the
     /// row the selection just landed on.
     fn refetch_detail(state: &mut SkillEvolutionState) {
-        if let Some(view) = state.selected_skill() {
+        if let Some(view) = state.skills.selected_skill() {
             let detail = fixture_detail(view);
-            state.detail = Some((view.name.clone(), detail));
-            state.detail_error = None;
+            state.skills.detail = Some((view.name.clone(), detail));
+            state.skills.detail_error = None;
         }
     }
 
@@ -401,7 +546,7 @@ fn run_interactive_loop(
                 .popup_height((frame.area().height * 3 / 4).max(12))
                 .render(frame.area(), frame.buffer_mut(), &mut state);
 
-            let hint = "harness: j/k move · ←/→ focus · a approve · r reject · t fake cycle · e toggle error · Esc quit";
+            let hint = "harness: Tab tabs · j/k move/scroll · ←/→ focus · a approve · r reject · t fake cycle · e toggle error · Esc quit";
             let bottom = Rect::new(
                 frame.area().x,
                 frame.area().bottom().saturating_sub(1),
@@ -424,20 +569,19 @@ fn run_interactive_loop(
 
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => return Ok(()),
-            KeyCode::Down | KeyCode::Char('j') => match state.focus {
-                PanelFocus::List => {
-                    state.select_next();
+            KeyCode::Tab | KeyCode::BackTab => state.switch_tab(),
+            KeyCode::Char('1') => state.active_tab = EvolutionTab::Skills,
+            KeyCode::Char('2') => state.active_tab = EvolutionTab::Observations,
+            KeyCode::Down | KeyCode::Char('j') => {
+                if state.navigate(true) {
                     refetch_detail(&mut state);
                 }
-                PanelFocus::Detail => state.scroll_detail(1),
-            },
-            KeyCode::Up | KeyCode::Char('k') => match state.focus {
-                PanelFocus::List => {
-                    state.select_prev();
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if state.navigate(false) {
                     refetch_detail(&mut state);
                 }
-                PanelFocus::Detail => state.scroll_detail(-1),
-            },
+            }
             KeyCode::Left | KeyCode::Char('h') => state.focus_list(),
             KeyCode::Right | KeyCode::Char('l') => state.focus_detail(),
             KeyCode::Char('a') => fake_action(&mut state, "approved"),
@@ -454,7 +598,7 @@ fn run_interactive_loop(
                 let auto = key.code == KeyCode::Char('T');
                 let status = if auto { "approved" } else { "pending" };
                 let view = fixture_skill(name, "proposed", Some(status));
-                state.library.insert(2, view);
+                state.skills.library.insert(2, view);
                 if let Some(status) = state.status.as_mut() {
                     status.generation += 1;
                     status.proposals_pending += usize::from(!auto);
@@ -473,17 +617,16 @@ fn run_interactive_loop(
     }
 }
 
-/// Approve/reject the selected skill's pending proposal, refetch its
-/// detail, then advance — mirrors what the app's refresh does after
-/// the daemon acts.
+/// Apply a fake proposal action and refresh the library while preserving
+/// the selection, matching the app's refresh after the daemon acts.
 fn fake_action(state: &mut SkillEvolutionState, new_status: &str) {
-    let Some(index) = state.selected_pending().map(|_| state.selected) else {
+    let Some(index) = state.selected_pending().map(|_| state.skills.selected) else {
         return;
     };
-    state.library[index].proposal_status = Some(new_status.into());
+    state.skills.library[index].proposal_status = Some(new_status.into());
     if new_status == "approved" {
-        state.library[index].installed = true;
-        state.library[index].tier = "global".into();
+        state.skills.library[index].installed = true;
+        state.skills.library[index].tier = "global".into();
     }
     if let Some(status) = state.status.as_mut() {
         status.proposals_pending -= 1;
@@ -493,13 +636,17 @@ fn fake_action(state: &mut SkillEvolutionState, new_status: &str) {
             status.proposals_rejected += 1;
         }
     }
-    // The row's document changed (status flip) — refetch it.
-    let detail = fixture_detail(&state.library[index]);
-    state.detail = Some((state.library[index].name.clone(), detail));
-    state.select_next();
-    if let Some(view) = state.selected_skill() {
+    let library = state
+        .skills
+        .library
+        .iter()
+        .filter(|row| row.installed || row.proposal_status.as_deref() == Some("pending"))
+        .cloned()
+        .collect();
+    state.skills.set_library(library);
+    if let Some(view) = state.skills.selected_skill() {
         let detail = fixture_detail(view);
-        state.detail = Some((view.name.clone(), detail));
+        state.skills.detail = Some((view.name.clone(), detail));
     }
 }
 

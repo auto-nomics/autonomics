@@ -570,6 +570,11 @@ impl GatewayClient {
         self.get("/skills/evolution").await
     }
 
+    /// Recorded evolution evidence, newest first, with full bodies.
+    pub async fn skill_observations(&self) -> Result<Vec<SkillObservationView>> {
+        self.get("/skills/evolution/observations").await
+    }
+
     /// Run one evolution cycle now. `auto_approve` overrides the
     /// daemon's review gate for this call only (`Some(true)` is the
     /// TUI equivalent of `autonomics-skills distill --auto`).

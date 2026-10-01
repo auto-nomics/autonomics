@@ -206,7 +206,7 @@ async fn swagger_docs_expose_the_gateway_api() {
         .await
         .unwrap();
     assert_eq!(openapi["info"]["title"], "Autonomics Gateway API");
-    assert_eq!(openapi["paths"].as_object().unwrap().len(), 37);
+    assert_eq!(openapi["paths"].as_object().unwrap().len(), 38);
     let expected_paths = [
         "/api/v1/gateway/status",
         "/api/v1/gateway/shutdown",
@@ -240,6 +240,7 @@ async fn swagger_docs_expose_the_gateway_api() {
         "/api/v1/skills/library",
         "/api/v1/skills/library/{name}",
         "/api/v1/skills/evolution",
+        "/api/v1/skills/evolution/observations",
         "/api/v1/skills/evolution/trigger",
         "/api/v1/skills/evolution/proposals",
         "/api/v1/skills/evolution/proposals/{name}/approve",
@@ -547,4 +548,47 @@ async fn skill_library_lists_installed_and_proposed_with_detail() {
     // Unknown names 404 rather than fabricating a row.
     let missing = client.skill_library_detail("no-such-skill").await;
     assert!(missing.is_err());
+}
+
+#[tokio::test]
+async fn skill_observations_endpoint_returns_full_evidence_in_stable_order() {
+    let gw = start_mock_gateway("ok").await;
+    let client = gw.client();
+    assert!(client.skill_observations().await.unwrap().is_empty());
+    let observation = gw
+        .infra
+        .skills
+        .record_observation(skills::ObservationInput {
+            kind: skills::ObservationKind::Caveat,
+            source: skills::ObservationSource::WorkflowRun,
+            summary: "Header must match".into(),
+            body: "Validate all column names.\nKeep evidence intact.".into(),
+            node_kind: Some("sql".into()),
+            error: Some("missing column".into()),
+        })
+        .unwrap();
+    gw.infra
+        .skills
+        .record_observation(skills::ObservationInput {
+            kind: skills::ObservationKind::Recipe,
+            source: skills::ObservationSource::Cli,
+            summary: "Second fact".into(),
+            body: "Second body".into(),
+            node_kind: None,
+            error: None,
+        })
+        .unwrap();
+    let rows = client.skill_observations().await.unwrap();
+    assert_eq!(rows.len(), 2);
+    let row = rows.iter().find(|row| row.id == observation.id).unwrap();
+    assert_eq!(row.kind, "caveat");
+    assert_eq!(row.source, "workflow_run");
+    assert_eq!(row.body, observation.body);
+    assert_eq!(row.node_kind.as_deref(), Some("sql"));
+    assert_eq!(row.error.as_deref(), Some("missing column"));
+    assert!(
+        rows.windows(2)
+            .all(|pair| pair[0].created_at > pair[1].created_at
+                || (pair[0].created_at == pair[1].created_at && pair[0].id < pair[1].id))
+    );
 }

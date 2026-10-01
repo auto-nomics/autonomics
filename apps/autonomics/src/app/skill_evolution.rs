@@ -22,11 +22,15 @@ impl App {
         let client = self.client.clone();
         let event_tx = self.app_event_tx.clone();
         self.spawn_client_task("skill_evolution_refresh", move || async move {
-            let status = client.skill_evolution_status().await;
-            let library = client.skill_library().await;
+            let (status, library, observations) = tokio::join!(
+                client.skill_evolution_status(),
+                client.skill_library(),
+                client.skill_observations(),
+            );
             event_tx.send(crate::app_event::AppEvent::SkillEvolutionLoaded {
                 status: status.map_err(|e| e.to_string()),
                 library: library.map_err(|e| e.to_string()),
+                observations: observations.map_err(|e| e.to_string()),
             });
         });
     }
@@ -41,13 +45,14 @@ impl App {
         let Some(name) = self
             .state
             .skill_evolution
+            .skills
             .selected_skill()
             .map(|s| s.name.clone())
         else {
             return;
         };
-        // A stale reply for the previously selected row is dropped at
-        // render time (name match), so no request de-dup is needed.
+        self.state.skill_evolution.skills.detail_error = None;
+        // Event handling ignores replies for a previously selected row.
         let client = self.client.clone();
         let event_tx = self.app_event_tx.clone();
         self.spawn_client_task("skill_detail_fetch", move || async move {
@@ -108,13 +113,16 @@ impl App {
 
     /// Key handling while the dashboard is open.
     pub(super) fn handle_skill_evolution_key(&mut self, key: &KeyEvent) {
-        use crate::widgets::skill_evolution_widget::PanelFocus;
+        use crate::widgets::skill_evolution_widget::EvolutionTab;
 
         let dashboard = &mut self.state.skill_evolution;
         match key.code {
             KeyCode::Esc => self.close_skill_evolution(),
             KeyCode::Char('q') if key.modifiers.is_empty() => self.close_skill_evolution(),
             KeyCode::Char('g') | KeyCode::Char('G') => self.refresh_skill_evolution(),
+            KeyCode::Tab | KeyCode::BackTab => dashboard.switch_tab(),
+            KeyCode::Char('1') => dashboard.active_tab = EvolutionTab::Skills,
+            KeyCode::Char('2') => dashboard.active_tab = EvolutionTab::Observations,
             KeyCode::Char('t') if key.modifiers.is_empty() => {
                 self.trigger_skill_evolution(false);
             }
@@ -131,20 +139,16 @@ impl App {
             // Vertical keys act on the focused pane: move the list
             // selection (fetching the newly selected row's detail), or
             // scroll the detail document.
-            KeyCode::Down | KeyCode::Char('j') => match dashboard.focus {
-                PanelFocus::List => {
-                    dashboard.select_next();
+            KeyCode::Down | KeyCode::Char('j') => {
+                if dashboard.navigate(true) {
                     self.fetch_skill_detail();
                 }
-                PanelFocus::Detail => dashboard.scroll_detail(1),
-            },
-            KeyCode::Up | KeyCode::Char('k') => match dashboard.focus {
-                PanelFocus::List => {
-                    dashboard.select_prev();
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if dashboard.navigate(false) {
                     self.fetch_skill_detail();
                 }
-                PanelFocus::Detail => dashboard.scroll_detail(-1),
-            },
+            }
             // Actions act on the selected skill's pending proposal —
             // the row's `proposal_status` attribute is the gate.
             KeyCode::Char('a') | KeyCode::Char('A') => {
