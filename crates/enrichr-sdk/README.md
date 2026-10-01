@@ -65,12 +65,13 @@ defaults.
 - `enrichr_background_enrich`
 - `enrichr_gene_map`
 
-`nodes::Plugin` registers four DAG sources:
+`nodes::Plugin` registers five DAG sources:
 
 - `source_enrichr_enrich`
 - `source_enrichr_libraries`
 - `source_enrichr_view_list`
 - `source_enrichr_genemap`
+- `source_enrichr_background_enrich`
 
 The plugin is registered by `nodes-io` in the default data-engine registry.
 

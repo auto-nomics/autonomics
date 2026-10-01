@@ -12,7 +12,7 @@ use dag_core::{NodePlugin, NodeRegistry};
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 
-use crate::EnrichrClient;
+use crate::{EnrichrClient, request::validate_library_name};
 
 /// Register every Enrichr DAG source node as one plugin.
 pub struct Plugin;
@@ -27,6 +27,7 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(EnrichrLibrariesNodeFactory));
         registry.register(Box::new(EnrichrViewListNodeFactory));
         registry.register(Box::new(EnrichrGeneMapNodeFactory));
+        registry.register(Box::new(EnrichrBackgroundEnrichmentNodeFactory));
     }
 
     fn fixture_spec(&self, kind: &str) -> Option<serde_json::Value> {
@@ -39,6 +40,14 @@ impl NodePlugin for Plugin {
                 "query": "KEGG",
             })),
             "source_enrichr_view_list" | "source_enrichr_genemap" => None,
+            "source_enrichr_background_enrich" => Some(serde_json::json!({
+                "genes": ["TP53", "BRCA1", "EGFR", "MYC", "PTEN"],
+                "background_genes": [
+                    "TP53", "BRCA1", "EGFR", "MYC", "PTEN", "AKT1", "KRAS",
+                    "CDK2", "RB1", "MDM2"
+                ],
+                "background_type": "KEGG_2021_Human",
+            })),
             _ => None,
         }
     }
@@ -56,6 +65,16 @@ fn client(endpoint: &Option<String>) -> Result<EnrichrClient, DagError> {
     builder
         .build()
         .map_err(|error| DagError::Schedule(format!("invalid Enrichr client: {error}")))
+}
+
+fn speedrichr_client(endpoint: &Option<String>) -> Result<EnrichrClient, DagError> {
+    let mut builder = EnrichrClient::builder();
+    if let Some(endpoint) = endpoint {
+        builder = builder.speedrichr_endpoint(endpoint);
+    }
+    builder
+        .build()
+        .map_err(|error| DagError::Schedule(format!("invalid Speedrichr client: {error}")))
 }
 
 fn str_array(values: Vec<Option<String>>) -> Arc<dyn Array> {
@@ -612,6 +631,217 @@ impl DagNode for EnrichrGeneMapNode {
             DagError::Schedule(format!("failed to build Enrichr genemap batch: {error}"))
         })?;
         let df = read_batch(ctx, batch, "genemap").await?;
+        output(df)
+    }
+}
+
+// ===========================================================================
+// source_enrichr_background_enrich
+// ===========================================================================
+
+#[derive(Debug, Clone, Default, JsonSchema, Deserialize)]
+pub struct EnrichrBackgroundEnrichmentSpec {
+    /// Query gene symbols, such as the significant hits from a screen.
+    pub genes: Vec<String>,
+    /// Full background gene universe the assay could have observed.
+    pub background_genes: Vec<String>,
+    /// Gene-set library name (`backgroundType`).
+    pub background_type: String,
+    /// Optional Speedrichr endpoint override for pinned deployments.
+    pub endpoint: Option<String>,
+}
+
+#[derive(Clone)]
+pub struct EnrichrBackgroundEnrichmentNode {
+    meta: NodePorts,
+    spec: EnrichrBackgroundEnrichmentSpec,
+}
+
+pub struct EnrichrBackgroundEnrichmentNodeFactory;
+
+impl NodeFactory for EnrichrBackgroundEnrichmentNodeFactory {
+    fn kind(&self) -> &'static str {
+        "source_enrichr_background_enrich"
+    }
+
+    fn desc(&self) -> &'static str {
+        "Run Speedrichr enrichment against a custom background universe."
+    }
+
+    fn doc(&self) -> &'static str {
+        "Submit a query list and background universe, then run background-corrected \
+         enrichment. Output columns: library, rank, term, overlap_count, \
+         overlapping_genes, p_value, adjusted_p_value, z_score (odds ratio for \
+         Speedrichr), combined_score, \
+         old_p_value, old_adjusted_p_value. Use source_enrichr_libraries to discover \
+         background_type names."
+    }
+
+    fn spec_schema(&self) -> schemars::Schema {
+        schema_for!(EnrichrBackgroundEnrichmentSpec)
+    }
+
+    fn ports(&self) -> NodePorts {
+        NodePorts::new().add_output_port(None)
+    }
+
+    fn build(
+        &self,
+        spec: serde_json::Value,
+        _node_ctx: NodeCtx,
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
+        Ok(Box::new(EnrichrBackgroundEnrichmentNode {
+            meta: self.ports(),
+            spec: serde_json::from_value(spec)?,
+        }))
+    }
+}
+
+#[async_trait]
+impl DagNode for EnrichrBackgroundEnrichmentNode {
+    fn ports(&self) -> &NodePorts {
+        &self.meta
+    }
+
+    fn clone_box(&self) -> Box<dyn DagNode> {
+        Box::new(self.clone())
+    }
+
+    fn kind(&self) -> &'static str {
+        "source_enrichr_background_enrich"
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    async fn execute(
+        &mut self,
+        ctx: &NodeCtx,
+        _inputs: &[dag_core::dag::NodeInput],
+        _reporter: &dag_core::dag::node_event::NodeReporter,
+    ) -> Result<PortOutputs, DagError> {
+        if self.spec.genes.is_empty() {
+            return Err(DagError::Schedule(
+                "source_enrichr_background_enrich: genes must contain at least one symbol"
+                    .to_owned(),
+            ));
+        }
+        if self.spec.background_genes.is_empty() {
+            return Err(DagError::Schedule(
+                "source_enrichr_background_enrich: background_genes must contain at least one symbol"
+                    .to_owned(),
+            ));
+        }
+        validate_library_name(&self.spec.background_type)
+            .map_err(|error| source_error(error, "background_type validation"))?;
+
+        let client = speedrichr_client(&self.spec.endpoint)?;
+        let list = client
+            .speedrichr_add_list(
+                self.spec.genes.clone(),
+                Some("source_enrichr_background_enrich"),
+            )
+            .await
+            .map_err(|error| source_error(error, "background query-list submission"))?;
+        let background = client
+            .speedrichr_add_background(self.spec.background_genes.clone())
+            .await
+            .map_err(|error| source_error(error, "background submission"))?;
+        let result = client
+            .speedrichr_background_enrich(
+                list.user_list_id,
+                &background.background_id,
+                &self.spec.background_type,
+            )
+            .await
+            .map_err(|error| source_error(error, "background enrichment"))?;
+
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("library", DataType::Utf8, false),
+                Field::new("rank", DataType::UInt64, false),
+                Field::new("term", DataType::Utf8, false),
+                Field::new("overlap_count", DataType::UInt64, false),
+                Field::new("overlapping_genes", DataType::Utf8, true),
+                Field::new("p_value", DataType::Float64, false),
+                Field::new("adjusted_p_value", DataType::Float64, false),
+                Field::new("z_score", DataType::Float64, true),
+                Field::new("combined_score", DataType::Float64, false),
+                Field::new("old_p_value", DataType::Float64, true),
+                Field::new("old_adjusted_p_value", DataType::Float64, true),
+            ])),
+            vec![
+                str_array(
+                    result
+                        .terms
+                        .iter()
+                        .map(|_| Some(result.library.clone()))
+                        .collect(),
+                ),
+                u64_array(result.terms.iter().map(|term| Some(term.rank)).collect()),
+                str_array(
+                    result
+                        .terms
+                        .iter()
+                        .map(|term| Some(term.term.clone()))
+                        .collect(),
+                ),
+                u64_array(
+                    result
+                        .terms
+                        .iter()
+                        .map(|term| Some(term.overlap_count() as u64))
+                        .collect(),
+                ),
+                str_array(
+                    result
+                        .terms
+                        .iter()
+                        .map(|term| {
+                            (!term.overlapping_genes.is_empty())
+                                .then(|| term.overlapping_genes.join(","))
+                        })
+                        .collect(),
+                ),
+                f64_array(result.terms.iter().map(|term| Some(term.p_value)).collect()),
+                f64_array(
+                    result
+                        .terms
+                        .iter()
+                        .map(|term| Some(term.adjusted_p_value))
+                        .collect(),
+                ),
+                f64_array(result.terms.iter().map(|term| Some(term.z_score)).collect()),
+                f64_array(
+                    result
+                        .terms
+                        .iter()
+                        .map(|term| Some(term.combined_score))
+                        .collect(),
+                ),
+                f64_array(
+                    result
+                        .terms
+                        .iter()
+                        .map(|term| Some(term.old_p_value))
+                        .collect(),
+                ),
+                f64_array(
+                    result
+                        .terms
+                        .iter()
+                        .map(|term| Some(term.old_adjusted_p_value))
+                        .collect(),
+                ),
+            ],
+        )
+        .map_err(|error| {
+            DagError::Schedule(format!(
+                "failed to build Speedrichr enrichment batch: {error}"
+            ))
+        })?;
+        let df = read_batch(ctx, batch, "background enrichment").await?;
         output(df)
     }
 }

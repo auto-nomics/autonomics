@@ -4,6 +4,8 @@
 use std::sync::Arc;
 
 use agentik_core::tools::ToolFunction;
+use dag_core::dag::DagNode;
+use dag_core::dag::node_event::NodeReporter;
 use dag_core::{NodePlugin, NodeRegistry};
 use datafusion::execution::runtime_env::RuntimeEnv;
 
@@ -83,6 +85,62 @@ async fn tools_validate_inputs_before_network_calls() {
     assert!(error.to_string().contains("background_genes"));
 }
 
+#[tokio::test]
+async fn background_node_validates_genes_before_network_calls() {
+    let runtime = Arc::new(RuntimeEnv::default());
+    let mut registry = NodeRegistry::with_ingredients(runtime, None);
+    registry.register_plugin(&Plugin);
+
+    let mut node = registry
+        .build_node(
+            "source_enrichr_background_enrich",
+            serde_json::json!({
+                "genes": [],
+                "background_genes": ["TP53"],
+                "background_type": "KEGG_2021_Human",
+            }),
+        )
+        .unwrap();
+    let ctx = dag_core::registry::NodeCtx::new(Arc::new(RuntimeEnv::default()), None);
+    let error = node
+        .execute(&ctx, &[], &NodeReporter::noop())
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("genes"));
+
+    let mut node = registry
+        .build_node(
+            "source_enrichr_background_enrich",
+            serde_json::json!({
+                "genes": ["TP53"],
+                "background_genes": [],
+                "background_type": "KEGG_2021_Human",
+            }),
+        )
+        .unwrap();
+    let error = node
+        .execute(&ctx, &[], &NodeReporter::noop())
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("background_genes"));
+
+    let mut node = registry
+        .build_node(
+            "source_enrichr_background_enrich",
+            serde_json::json!({
+                "genes": ["TP53"],
+                "background_genes": ["TP53", "BRCA1"],
+                "background_type": " "
+            }),
+        )
+        .unwrap();
+    let error = node
+        .execute(&ctx, &[], &NodeReporter::noop())
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("background_type"));
+}
+
 #[test]
 fn node_plugin_registers_and_builds_all_sources() {
     let runtime = Arc::new(RuntimeEnv::default());
@@ -98,11 +156,19 @@ fn node_plugin_registers_and_builds_all_sources() {
         "source_enrichr_libraries",
         "source_enrichr_view_list",
         "source_enrichr_genemap",
+        "source_enrichr_background_enrich",
     ] {
         let spec = match kind {
             "source_enrichr_view_list" => serde_json::json!({"user_list_id": 1}),
             "source_enrichr_genemap" => serde_json::json!({"gene": "TP53"}),
             "source_enrichr_libraries" => serde_json::json!({"query": "KEGG"}),
+            "source_enrichr_background_enrich" => serde_json::json!({
+                "genes": ["TP53", "BRCA1", "EGFR"],
+                "background_genes": [
+                    "TP53", "BRCA1", "EGFR", "MYC", "PTEN", "AKT1", "KRAS"
+                ],
+                "background_type": "KEGG_2021_Human",
+            }),
             _ => spec.clone(),
         };
         let node = registry

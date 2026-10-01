@@ -95,6 +95,36 @@ async fn dag_nodes_fetch_and_materialize_enrichr_tables() {
     assert_eq!(gene.value(0), "TP53");
 }
 
+async fn dag_node_runs_background_corrected_enrichment() {
+    let runtime = Arc::new(RuntimeEnv::default());
+    let mut registry = NodeRegistry::with_ingredients(runtime, None);
+    registry.register_plugin(&Plugin);
+
+    let mut node = registry
+        .build_node(
+            "source_enrichr_background_enrich",
+            serde_json::json!({
+                "genes": ["TP53", "BRCA1", "EGFR", "MYC", "PTEN"],
+                "background_genes": [
+                    "TP53", "BRCA1", "EGFR", "MYC", "PTEN", "AKT1", "KRAS",
+                    "CDK2", "RB1", "MDM2"
+                ],
+                "background_type": "KEGG_2021_Human",
+            }),
+        )
+        .unwrap();
+    let outputs = node
+        .execute(&node_ctx(), &[], &NodeReporter::noop())
+        .await
+        .unwrap();
+    let rows = batches(outputs.dataframe(0).unwrap()).await;
+    assert!(!rows.is_empty() && rows[0].num_rows() > 0);
+    let library = column::<StringArray>(&rows, "library");
+    assert_eq!(library.value(0), "KEGG_2021_Human");
+    let odds_ratios = column::<Float64Array>(&rows, "z_score");
+    assert!((0..odds_ratios.len()).all(|index| odds_ratios.value(index).is_finite()));
+}
+
 async fn agent_tools_submit_enrich_and_annotate(client: Arc<EnrichrClient>) {
     let libraries = LibrariesTool::new(client.clone());
     let result = libraries
@@ -173,6 +203,7 @@ async fn view_list_node_reads_back_submitted_list() {
 #[ignore = "uses the public Enrichr API"]
 async fn e2e_tools_and_nodes_against_public_enrichr() {
     dag_nodes_fetch_and_materialize_enrichr_tables().await;
+    dag_node_runs_background_corrected_enrichment().await;
     agent_tools_submit_enrich_and_annotate(Arc::new(EnrichrClient::new())).await;
     view_list_node_reads_back_submitted_list().await;
 }

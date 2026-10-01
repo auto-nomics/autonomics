@@ -26,6 +26,13 @@ pub mod spreadsheet;
 pub use alphafold::nodes::prediction::{AlphaFoldPredictionNode, AlphaFoldPredictionNodeFactory};
 pub use clinicaltrials::nodes::study::{ClinicalTrialsStudyNode, ClinicalTrialsStudyNodeFactory};
 pub use crossref::nodes::works::{CrossrefWorksNode, CrossrefWorksNodeFactory};
+pub use enrichr_sdk::nodes::Plugin as EnrichrPlugin;
+pub use enrichr_sdk::nodes::{
+    EnrichrBackgroundEnrichmentNode, EnrichrBackgroundEnrichmentNodeFactory, EnrichrEnrichmentNode,
+    EnrichrEnrichmentNodeFactory, EnrichrGeneMapNode, EnrichrGeneMapNodeFactory,
+    EnrichrLibrariesNode, EnrichrLibrariesNodeFactory, EnrichrViewListNode,
+    EnrichrViewListNodeFactory,
+};
 pub use interpro::nodes::entry::{InterProEntryNode, InterProEntryNodeFactory};
 pub use nhanes::nodes::download::{NhanesDownloadNode, NhanesDownloadNodeFactory};
 pub use nhanes::nodes::files::{NhanesFilesNode, NhanesFilesNodeFactory};
@@ -47,12 +54,6 @@ pub use reactome::nodes::participants::{
     ReactomeParticipantsNode, ReactomeParticipantsNodeFactory,
 };
 pub use reactome::nodes::pathways::{ReactomePathwaysNode, ReactomePathwaysNodeFactory};
-pub use enrichr_sdk::nodes::{
-    EnrichrEnrichmentNode, EnrichrEnrichmentNodeFactory, EnrichrGeneMapNode,
-    EnrichrGeneMapNodeFactory, EnrichrLibrariesNode, EnrichrLibrariesNodeFactory,
-    EnrichrViewListNode, EnrichrViewListNodeFactory,
-};
-pub use enrichr_sdk::nodes::Plugin as EnrichrPlugin;
 pub use string_sdk::nodes::{Plugin as StringPlugin, StringIdMapNode, StringIdMapNodeFactory};
 pub use string_sdk::nodes::{
     StringEnrichmentNode, StringEnrichmentNodeFactory, StringNetworkNode, StringNetworkNodeFactory,
