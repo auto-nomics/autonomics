@@ -45,6 +45,7 @@ pub fn host_tools(
         }),
         ToolRegistration::from(SendMessageTool {
             control: ctrl.clone(),
+            self_path: self_path.as_str().to_string(),
         }),
         ToolRegistration::from(RouteTaskTool {
             control: ctrl.clone(),
@@ -232,7 +233,9 @@ impl ToolFunction for DeriveProfileTool {
                    a task number (#N) immediately. Use `wait_task` with the task number \
                    to block until the result is ready, or `view_task_results` to poll \
                    for the output. Multiple delegates can run concurrently. \
-                   The target agent's COMPLETE response becomes the task's result."
+                   The target agent's COMPLETE response becomes the task's result. \
+                   You may delegate only to sibling agents or your own descendants; \
+                   upward and cross-parent delegation is rejected."
 )]
 struct DelegateToInput {
     /// Name of the target agent. Accepts a short name (e.g. "researcher")
@@ -266,7 +269,11 @@ impl ToolFunction for DelegateToTool {
         &self,
         input: DelegateToInput,
     ) -> Result<ToolResult, agentik_core::tools::ToolError> {
-        match self.control.delegate(&input.agent_name, input.task).await {
+        match self
+            .control
+            .delegate(&self.caller_path, &input.agent_name, input.task)
+            .await
+        {
             Some(response) => Ok(ToolResult::success(response)),
             None => Ok(ToolResult::success(format!(
                 "Delegation to '{}' failed — agent not found or host channel closed.",
@@ -326,8 +333,9 @@ impl ToolFunction for DelegateToTool {
                    - You want to notify another agent without needing its reply.\n\
                    - You want to kick off work and check results later via list_agents.\n\
                    - You need to broadcast to multiple agents without consuming each response.\n\
-                   The target agent processes the message in its own turn. If it is \
-                   currently busy, the message is queued and handled on its next turn."
+                   Peer messaging is restricted to sibling agents sharing your parent. \
+                   The target must be Idle; busy targets reject the message instead of \
+                   queueing it."
 )]
 struct SendMessageInput {
     /// Name of the target agent. Accepts a short name (e.g. "researcher") \
@@ -339,6 +347,7 @@ struct SendMessageInput {
 
 struct SendMessageTool {
     control: HostControl,
+    self_path: String,
 }
 
 #[async_trait]
@@ -360,7 +369,7 @@ impl ToolFunction for SendMessageTool {
     ) -> Result<ToolResult, agentik_core::tools::ToolError> {
         match self
             .control
-            .send_message(&input.agent_name, input.message)
+            .send_message(&self.self_path, &input.agent_name, input.message)
             .await
         {
             Some(Ok(())) => Ok(ToolResult::success(format!(
@@ -835,7 +844,10 @@ mod tests {
         let (cmd_tx, _cmd_rx) = tokio::sync::mpsc::unbounded_channel::<HostCommand>();
         let (event_tx, _) = tokio::sync::broadcast::channel::<HostEvent>(1);
         let control = HostControl::new(cmd_tx, event_tx);
-        let tool = SendMessageTool { control };
+        let tool = SendMessageTool {
+            control,
+            self_path: "/root/caller".into(),
+        };
 
         assert_eq!(tool.execution_mode(), ExecutionMode::Sync);
         assert_eq!(tool.timeout_seconds(), 3600);
@@ -854,7 +866,10 @@ mod tests {
             control: control.clone(),
             caller_path: "/root/caller".into(),
         };
-        let sender = SendMessageTool { control };
+        let sender = SendMessageTool {
+            control,
+            self_path: "/root/caller".into(),
+        };
 
         assert_eq!(delegate.execution_mode(), ExecutionMode::Async);
         assert_eq!(sender.execution_mode(), ExecutionMode::Sync);

@@ -516,8 +516,9 @@ async fn skill_library_lists_installed_and_proposed_with_detail() {
                 .skill_library()
                 .await
                 .map(|l| {
-                    l.iter()
-                        .any(|s| s.tier == "proposed" && s.proposal_status.as_deref() == Some("pending"))
+                    l.iter().any(|s| {
+                        s.tier == "proposed" && s.proposal_status.as_deref() == Some("pending")
+                    })
                 })
                 .unwrap_or(false)
         }

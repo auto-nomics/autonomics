@@ -94,9 +94,20 @@ impl HostControl {
 
     /// Delegate a task to a named agent and wait for its Done response.
     /// Returns the target agent's full response text.
-    pub async fn delegate(&self, to: &str, message: impl Into<String>) -> Option<String> {
-        self.delegate_tracked(to, message, None, Uuid::new_v4(), None)
-            .await
+    pub async fn delegate(
+        &self,
+        caller_path: &str,
+        to: &str,
+        message: impl Into<String>,
+    ) -> Option<String> {
+        self.delegate_tracked(
+            to,
+            message,
+            Some(caller_path.to_string()),
+            Uuid::new_v4(),
+            None,
+        )
+        .await
     }
 
     /// Delegate with stable identity and an optional live progress sink.
@@ -132,10 +143,12 @@ impl HostControl {
     /// the next turn (same semantics as TUI's `deliver_message`).
     pub async fn send_message(
         &self,
+        caller_path: &str,
         to: &str,
         message: impl Into<String>,
     ) -> Option<Result<(), String>> {
         self.ask(|tx| HostCommand::SendMessage {
+            caller_path: caller_path.into(),
             to: to.into(),
             message: message.into(),
             reply_tx: tx,
@@ -469,6 +482,7 @@ pub enum HostCommand {
     /// message is enqueued and the caller continues immediately.
     /// Reply: Ok(()) on successful delivery, Err(msg) if agent not found.
     SendMessage {
+        caller_path: String,
         to: String,
         message: String,
         reply_tx: oneshot::Sender<Result<(), String>>,

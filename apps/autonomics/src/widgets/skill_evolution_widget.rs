@@ -1015,5 +1015,4 @@ mod tests {
         state.select_next();
         assert_eq!(state.detail_scroll, 0, "selection change resets scroll");
     }
-
 }

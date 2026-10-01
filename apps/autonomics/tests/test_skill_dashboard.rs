@@ -27,7 +27,9 @@
 // ── Source shims: compile the real widget into this test crate ──
 mod widgets;
 
-use gateway::proto::{SkillEvolutionStatus, SkillLibraryDetail, SkillLibraryView, SkillProposalView};
+use gateway::proto::{
+    SkillEvolutionStatus, SkillLibraryDetail, SkillLibraryView, SkillProposalView,
+};
 use ratatui::{
     backend::TestBackend,
     buffer::Buffer,
@@ -102,11 +104,16 @@ fn fixture_detail(view: &SkillLibraryView) -> SkillLibraryDetail {
         tags: view.tags.clone(),
         description: view.description.clone(),
         installed: view.installed,
-        body: format!("# {}\n\nOperational guidance for {}.\n", view.name, view.name),
+        body: format!(
+            "# {}\n\nOperational guidance for {}.\n",
+            view.name, view.name
+        ),
         workflows: Vec::new(),
         evals: Vec::new(),
-        proposal: view.proposal_status.as_deref().map(|status| {
-            SkillProposalView {
+        proposal: view
+            .proposal_status
+            .as_deref()
+            .map(|status| SkillProposalView {
                 name: view.name.clone(),
                 status: status.into(),
                 authored_by: if view.name.contains("agent-") {
@@ -120,8 +127,7 @@ fn fixture_detail(view: &SkillLibraryView) -> SkillLibraryDetail {
                 cluster_hash: "c-abc".into(),
                 observation_count: 3,
                 created_at: 1,
-            }
-        }),
+            }),
         evidence_count: if view.proposal_status.is_some() { 3 } else { 0 },
         usage_gets: view.usage_gets,
         usage_search_hits: view.usage_search_hits,
