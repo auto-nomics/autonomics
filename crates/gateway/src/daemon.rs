@@ -118,6 +118,21 @@ pub async fn run_daemon(
         Arc::new(ArcSwapOption::from_pointee(models.active_model(&hub)));
     host.set_model(model_slot.clone());
 
+    // Rehydrate the daemon-owned multi-agent layout before HTTP state is
+    // built, so the first frontend snapshot already sees the restored agents.
+    // A startup-storage failure is fatal; malformed individual rows are
+    // logged and skipped by the restore loop itself.
+    let restored_agents = host
+        .restore_persisted_agents(&profiles, model_slot.clone(), |spec| {
+            models.resolve_with_refresh_callback(spec, &hub)
+        })
+        .await
+        .map_err(|e| DaemonError::Message(format!("restore agent layout: {e}")))?;
+    tracing::info!(
+        count = restored_agents,
+        "persisted multi-agent layout restored"
+    );
+
     // Startup proactive ChatGPT token refresh (8-day/24h rule).
     models.spawn_ensure_fresh(hub.clone());
 

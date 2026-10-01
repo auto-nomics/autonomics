@@ -100,6 +100,22 @@ pub struct PersistedAgentGraph {
     pub updated_at: i64,
 }
 
+/// The daemon's currently-open multi-agent layout.
+///
+/// Unlike `agent_graph`, which can retain historical rows after abnormal
+/// process exits, this snapshot names the exact set that should be restored on
+/// the next daemon start. It is persisted as one atomic JSON document so a
+/// crash can observe either the previous layout or the new layout, never a
+/// mixture of registrations/removals.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct AgentLayoutSnapshot {
+    /// Monotonic writer-side version. Out-of-order persistence tasks compare
+    /// revisions and never overwrite a newer snapshot with an older one.
+    #[serde(default)]
+    pub revision: u64,
+    pub agents: Vec<PersistedAgentGraph>,
+}
+
 /// The kind of relationship between two agents.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub enum RelationKind {
@@ -622,11 +638,11 @@ pub trait AgentStorage: Send + Sync {
 
     // ── Runtime agent graph (Phase 4) ────────────────────────
     //
-    // Persists the multi-agent host's active-agent metadata across
-    // process restarts. Keyed by hierarchical path (not UUID) so the
-    // dashboard can be reconstructed even if the agent's identity
-    // UUID is rotated (e.g. profile re-derivation). Mirrors codex's
-    // `AgentGraphStore` trait.
+    // Persists a historical graph projection of agents seen by the host,
+    // keyed by hierarchical path (not UUID) so dashboards and history views
+    // can reconstruct topology. Daemon restart uses the separate atomic
+    // current-layout snapshot above instead of treating every graph row as
+    // still-open.
     //
     // Update semantics: `upsert_agent_graph_entry` writes on spawn
     // (created_at = updated_at = now); `update_agent_graph_status` is
@@ -661,6 +677,12 @@ pub trait AgentStorage: Send + Sync {
     /// process startup to surface agents that ran in the previous
     /// session. Returns entries ordered by `updated_at` descending.
     async fn list_persisted_agents(&self) -> Result<Vec<PersistedAgentGraph>, StorageError>;
+
+    /// Persist the exact current daemon layout as one atomic snapshot.
+    async fn save_agent_layout(&self, snapshot: &AgentLayoutSnapshot) -> Result<(), StorageError>;
+
+    /// Load the current daemon layout, if one has been written.
+    async fn load_agent_layout(&self) -> Result<Option<AgentLayoutSnapshot>, StorageError>;
 
     // ── Session log (WAL) ────────────────────────────────────
 

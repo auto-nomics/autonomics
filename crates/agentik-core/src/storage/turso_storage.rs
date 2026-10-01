@@ -77,8 +77,8 @@ use agentik_types::AgentPlan;
 
 use crate::memory::MemoryStage1Record;
 use crate::storage::{
-    AgentProfile, AgentProfileRegistry, AgentRecord, AgentRelation, AgentSnapshot, AgentStorage,
-    PersistedAgentGraph, RelationKind, StorageError,
+    AgentLayoutSnapshot, AgentProfile, AgentProfileRegistry, AgentRecord, AgentRelation,
+    AgentSnapshot, AgentStorage, PersistedAgentGraph, RelationKind, StorageError,
 };
 
 /// Mutex-guarded wrapper around [`turso::Connection`].
@@ -142,6 +142,7 @@ pub struct TursoAgentStorage {
 }
 
 const TRANSCRIPT_WAL_BACKFILL_MARKER: &str = "transcript_wal_backfill_v1";
+const AGENT_LAYOUT_METADATA_KEY: &str = "current_agent_layout_v1";
 
 impl TursoAgentStorage {
     /// Open (or create) an on-disk agent database at `path`.
@@ -2084,6 +2085,61 @@ impl AgentStorage for TursoAgentStorage {
         Ok(out)
     }
 
+    async fn save_agent_layout(&self, snapshot: &AgentLayoutSnapshot) -> Result<(), StorageError> {
+        let json = serde_json::to_string(snapshot)?;
+        let connection = self.conn.0.lock().await;
+
+        // Keep the read and write under one connection guard. Persistence
+        // tasks may complete out of event order, but an older revision must
+        // never replace a newer snapshot.
+        let existing_revision = {
+            let mut rows = connection
+                .query(
+                    "SELECT value FROM agent_storage_metadata WHERE key = ?1",
+                    params_from_iter([Value::Text(AGENT_LAYOUT_METADATA_KEY.to_string())]),
+                )
+                .await?;
+            match rows.next().await? {
+                Some(row) => serde_json::from_str::<AgentLayoutSnapshot>(&text_col(&row, 0)?)
+                    .map(|previous| previous.revision)
+                    .unwrap_or(0),
+                None => 0,
+            }
+        };
+
+        if existing_revision >= snapshot.revision {
+            return Ok(());
+        }
+
+        connection
+            .execute(
+                "INSERT OR REPLACE INTO agent_storage_metadata(key, value) VALUES (?1, ?2)",
+                params_from_iter([
+                    Value::Text(AGENT_LAYOUT_METADATA_KEY.to_string()),
+                    Value::Text(json),
+                ]),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn load_agent_layout(&self) -> Result<Option<AgentLayoutSnapshot>, StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT value FROM agent_storage_metadata WHERE key = ?1",
+                params_from_iter([Value::Text(AGENT_LAYOUT_METADATA_KEY.to_string())]),
+            )
+            .await?;
+        match rows.next().await? {
+            Some(row) => {
+                let json = text_col(&row, 0)?;
+                Ok(Some(serde_json::from_str(&json)?))
+            }
+            None => Ok(None),
+        }
+    }
+
     async fn save_plan(&self, agent_id: Uuid, plan: &AgentPlan) -> Result<(), StorageError> {
         let json = serde_json::to_string(plan)?;
         let now = chrono::Utc::now().timestamp_millis();
@@ -3554,6 +3610,47 @@ mod tests {
             .update_agent_graph_status("/root/nonexistent", r#"{"Idle":null}"#, None)
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_agent_layout_snapshot_ignores_stale_revisions() {
+        let store = TursoAgentStorage::open_in_memory().await.unwrap();
+        assert!(store.load_agent_layout().await.unwrap().is_none());
+
+        let now = chrono::Utc::now().timestamp_millis();
+        let entry = PersistedAgentGraph {
+            path: "/root/current".into(),
+            parent_path: None,
+            profile_path: "researcher".into(),
+            agent_id: Uuid::new_v4(),
+            status_json: r#"{"kind":"running"}"#.into(),
+            last_event: Some("tool".into()),
+            created_at: now,
+            updated_at: now,
+        };
+
+        store
+            .save_agent_layout(&AgentLayoutSnapshot {
+                revision: 7,
+                agents: vec![entry.clone()],
+            })
+            .await
+            .unwrap();
+
+        let mut stale = entry;
+        stale.path = "/root/stale".into();
+        store
+            .save_agent_layout(&AgentLayoutSnapshot {
+                revision: 6,
+                agents: vec![stale],
+            })
+            .await
+            .unwrap();
+
+        let loaded = store.load_agent_layout().await.unwrap().unwrap();
+        assert_eq!(loaded.revision, 7);
+        assert_eq!(loaded.agents.len(), 1);
+        assert_eq!(loaded.agents[0].path, "/root/current");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
