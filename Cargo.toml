@@ -88,6 +88,7 @@ members = [
   "crates/ensembl",
   "crates/rcsb",
   "crates/string-sdk",
+  "crates/enrichr-sdk",
   "crates/kegg",
   "crates/nhanes",
   "crates/grf-sys",

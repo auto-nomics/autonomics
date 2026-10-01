@@ -83,7 +83,7 @@ Node registry + DAG scheduler
 | 机器学习与深度学习 | `ml`、`dl`、`grf`、`grf-sys` | 预处理、特征工程、聚类、监督模型、集成学习、异常检测、降维；Burn 的 MLP、DeepSurv、DeepHit、RNN、Transformer、autoencoder；通过 vendored C++ 核心运行 generalized random forests。 |
 | 统计遗传学 | `ldsc`、`mr`、`lava`、`mrlap`、`lcv`、`cpassoc`、`magma`、`coloc`、`bkmr`、`evalue`、`genomic_sem`、`lcmm` | LD score regression、孟德尔随机化、局部遗传相关、colocalization、Bayesian kernel-machine regression、E-value、Genomic SEM、latent-class mixed models 等。 |
 | 断点回归 | `rdrobust`、`rdpower`、`rdmulti`、`rddensity`、`rdlocrand` | 局部多项式 RD 估计、功效与样本量、多 cutoff 设计、manipulation testing、局部随机化推断。 |
-| 科研数据客户端 | `eutils`、`opengwas`、`gwascatalog-sdk`、`opentargets`、`chembl`、`uniprot`、`string-sdk`、`kegg`、`reactome`、`ensembl`、`rcsb`、`alphafold`、`interpro`、`pubchem`、`protocolio`、`clinicaltrials` | PubMed/Entrez、OpenGWAS、GWAS Catalog、Open Targets、ChEMBL、UniProt、STRING、KEGG、Reactome、Ensembl、RCSB、AlphaFold、InterPro、PubChem、protocols.io、ClinicalTrials.gov 的 SDK、智能体工具和部分 DAG source 节点。 |
+| 科研数据客户端 | `eutils`、`opengwas`、`gwascatalog-sdk`、`opentargets`、`chembl`、`uniprot`、`string-sdk`、`enrichr-sdk`、`kegg`、`reactome`、`ensembl`、`rcsb`、`alphafold`、`interpro`、`pubchem`、`protocolio`、`clinicaltrials` | PubMed/Entrez、OpenGWAS、GWAS Catalog、Open Targets、ChEMBL、UniProt、STRING、Enrichr、KEGG、Reactome、Ensembl、RCSB、AlphaFold、InterPro、PubChem、protocols.io、ClinicalTrials.gov 的 SDK、智能体工具和部分 DAG source 节点。 |
 | 文献、写作与知识 | `arxiv`、`biorxiv`、`openalex`、`crossref`、`embase`、`europepmc`、`semantic-scholar`、`bib-types`、`bib-base`、`writing-types`、`writing-base`、`kms`、`kms-tools` | 统一文献检索与全文管理、内容寻址文档、BibTeX/RIS/Markdown/CSL 导出、LaTeX AST 操作、引文解析、编译和知识树工具。 |
 | Harness 界面 | `tui`、`api-server`、`workflow-editor` | 流式终端对话、模型配置、DAG 视图、文献 CLI/API/前端、KMS 浏览器和工作流编辑组件。 |
 

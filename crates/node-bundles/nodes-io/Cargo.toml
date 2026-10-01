@@ -21,6 +21,7 @@ uniprot = { path = "../../uniprot" }
 reactome = { path = "../../reactome" }
 rcsb = { path = "../../rcsb" }
 string-sdk = { path = "../../string-sdk" }
+enrichr-sdk = { path = "../../enrichr-sdk" }
 kegg = { path = "../../kegg" }
 alphafold = { path = "../../alphafold" }
 interpro = { path = "../../interpro" }

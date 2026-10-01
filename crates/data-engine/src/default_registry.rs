@@ -217,6 +217,26 @@ mod tests {
     }
 
     #[test]
+    fn enrichr_source_factories_are_registered() {
+        let runtime_env = datafusion::prelude::SessionContext::new().runtime_env();
+        let registry = build_default_registry(runtime_env, None, Arc::new(BundleRegistry::new()));
+
+        for kind in [
+            "source_enrichr_enrich",
+            "source_enrichr_libraries",
+            "source_enrichr_view_list",
+            "source_enrichr_genemap",
+            "source_enrichr_background_enrich",
+        ] {
+            let ports = registry
+                .get_node_ports(kind)
+                .unwrap_or_else(|error| panic!("{kind} must be registered: {error}"));
+            assert_eq!(ports.input_ports().len(), 0);
+            assert_eq!(ports.output_ports().len(), 1);
+        }
+    }
+
+    #[test]
     fn kegg_source_factories_are_registered() {
         let runtime_env = datafusion::prelude::SessionContext::new().runtime_env();
         let container_execution =

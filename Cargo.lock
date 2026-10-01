@@ -3991,6 +3991,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "enrichr-sdk"
+version = "0.1.0"
+dependencies = [
+ "agentik-core",
+ "agentik-proc",
+ "agentik-sdk",
+ "arrow-array",
+ "arrow-schema",
+ "async-trait",
+ "dag-core",
+ "datafusion",
+ "reqwest",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+]
+
+[[package]]
 name = "ensembl"
 version = "0.1.0"
 dependencies = [
@@ -7824,6 +7844,7 @@ dependencies = [
  "data-catalog",
  "datafusion",
  "encoding_rs",
+ "enrichr-sdk",
  "errno 0.2.8",
  "flate2",
  "futures",
