@@ -13,10 +13,12 @@
 //! - [`manager`] — the central process-wide manager: generation
 //!   counter, change broadcast on every mutation, usage telemetry
 //!   (the evolution fitness signal)
-//! - [`evolution`] — the loop in two halves: an idempotent workflow
-//!   (distill → propose → policy) and tokio event-driven triggers
-//!   (manual / observation / startup / timer) bridged by a bounded
-//!   channel; bursts coalesce, drops are counted, never blocking
+//! - [`evolution`] — the unified control loop: every skill mutation
+//!   (evolution triggers, proposal approve/reject, explicit cycle)
+//!   travels through one `mpsc::Sender<SkillCommand>` into a single
+//!   worker task; the worker coalesces trigger bursts in a quiet
+//!   window and replies to inline mutations via oneshot. The cycle
+//!   body itself stays `pub(crate)` and the worker calls it directly.
 //! - [`observation`] — the distillation feedstock: durable
 //!   content-hashed records of failures/fixes/recipes
 //! - [`distill`] — deterministic clustering and proposal synthesis
@@ -25,7 +27,7 @@
 //!   between distillation and the live library
 //! - [`inject`] — the one-line-per-skill system-prompt index
 //! - [`tools`] — `skill_list` / `skill_get` / `skill_search` /
-//!   `skill_workflows` / `skill_observe` agent tools
+//!   `skill_workflows` / `skill_observe` / `skill_evolve` agent tools
 //! - [`workflow`] — parameterized DAG templates (`workflow/*.toml`):
 //!   parse, validate, render with checked params
 //! - [`eval`] — eval cases (`evals/*.toml`): run a workflow with fixed
@@ -57,8 +59,8 @@ pub use distill::{Candidate, DistillReport, distill};
 pub use error::SkillError;
 pub use eval::{Check, EvalCase, EvalReport};
 pub use evolution::{
-    EvolutionHandle, EvolutionOptions, EvolutionPolicy, EvolutionReport, EvolutionTrigger,
-    run_evolution_cycle,
+    EvolutionOptions, EvolutionPolicy, EvolutionReport, EvolutionTrigger, SkillCommand,
+    SkillCommandOutcome, SkillControlHandle, start,
 };
 pub use format::SkillMeta;
 pub use inject::prompt_section;
@@ -66,7 +68,7 @@ pub use manager::{SkillManager, UsageKind, UsageRecord};
 pub use observation::{
     Observation, ObservationInput, ObservationKind, ObservationSource, ObservationStore,
 };
-pub use proposals::{Proposal, ProposalStatus, Proposals};
+pub use proposals::{ApproveOutcome, Proposal, ProposalStatus, Proposals};
 pub use registry::{SkillDocument, SkillEntry, SkillRegistry, SkillTier};
 pub use tools::skill_registrations;
 pub use workflow::{RenderedWorkflow, WorkflowTemplate};

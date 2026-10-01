@@ -74,21 +74,11 @@ enum Command {
         #[arg(long)]
         error: Option<String>,
     },
-    /// Run one evolution cycle: cluster anchored observations, write
-    /// proposals (>= 3 occurrences, deterministic), revise installed
-    /// auto-skills with new evidence.
-    Distill {
-        /// Auto-approve eligible proposals this cycle (explicit human
-        /// action; capped per cycle, human-owned names never touched).
-        #[arg(long)]
-        auto: bool,
-    },
-    /// List proposals, optionally filtered by status.
+    /// List proposals, optionally filtered by status. Read-only —
+    /// approve/reject/distill are TUI-only operations (see
+    /// `skill_evolution_status_trigger_approve_reject_roundtrip` in
+    /// the gateway integration tests for the unified channel path).
     Proposals { status: Option<String> },
-    /// Approve a pending proposal into the global tier.
-    Approve { name: String },
-    /// Reject a pending proposal; its pattern will not re-propose.
-    Reject { name: String },
 }
 
 fn main() -> ExitCode {
@@ -126,10 +116,7 @@ fn main() -> ExitCode {
             node_kind,
             error,
         } => observe_cmd(&manager, &summary, &body, kind, node_kind, error),
-        Command::Distill { auto } => distill_cmd(&manager, auto),
         Command::Proposals { status } => proposals_cmd(&manager, status.as_deref()),
-        Command::Approve { name } => approve_cmd(&manager, &name),
-        Command::Reject { name } => reject_cmd(&manager, &name),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -411,43 +398,6 @@ fn observe_cmd(
     Ok(())
 }
 
-fn distill_cmd(manager: &SkillManager, auto: bool) -> Result<(), String> {
-    let policy = skills::EvolutionPolicy {
-        auto_approve: auto,
-        ..Default::default()
-    };
-    let report = skills::run_evolution_cycle(manager, &policy).map_err(|e| e.to_string())?;
-    println!(
-        "{} candidate cluster(s) considered, {} proposal(s) written",
-        report.clusters_considered,
-        report.proposals_written.len()
-    );
-    for name in &report.proposals_written {
-        if report.updated_existing.contains(name) {
-            println!("  update proposal for {name} (pending review)");
-        } else {
-            println!("  proposed {name} (pending review)");
-        }
-    }
-    for name in &report.auto_approved {
-        println!("  auto-approved {name}");
-    }
-    for (hash, reason) in &report.skipped {
-        println!("  skipped {hash}: {reason}");
-    }
-    if report.proposals_written.is_empty() {
-        println!(
-            "\nNo new patterns. Observations cluster at >= {} anchored \
-             occurrences; record more via `observe` or let failing evals \
-             accumulate.",
-            skills::distill::MIN_CLUSTER
-        );
-    } else {
-        println!("\nReview with `proposals`, then `approve <name>` or `reject <name>`.");
-    }
-    Ok(())
-}
-
 fn proposals_cmd(manager: &SkillManager, status: Option<&str>) -> Result<(), String> {
     let proposals = manager.proposals().list();
     let filtered: Vec<_> = proposals
@@ -478,22 +428,9 @@ fn proposals_cmd(manager: &SkillManager, status: Option<&str>) -> Result<(), Str
             proposal.source_observation_ids.len()
         );
     }
-    Ok(())
-}
-
-fn approve_cmd(manager: &SkillManager, name: &str) -> Result<(), String> {
-    let outcome = manager.approve_proposal(name).map_err(|e| e.to_string())?;
     println!(
-        "approved {} → {} (generation {})",
-        outcome.name,
-        outcome.destination.display(),
-        manager.generation()
+        "\nApprove/reject/distill are TUI-only operations. Start the daemon \
+         and open the skill evolution dashboard to control the loop."
     );
-    Ok(())
-}
-
-fn reject_cmd(manager: &SkillManager, name: &str) -> Result<(), String> {
-    manager.reject_proposal(name).map_err(|e| e.to_string())?;
-    println!("rejected {name}; its pattern will not re-propose");
     Ok(())
 }

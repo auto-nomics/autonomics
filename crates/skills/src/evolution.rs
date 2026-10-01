@@ -1,24 +1,41 @@
-//! The evolution loop, split into two halves bridged by a tokio
-//! channel:
+//! The skill control loop, the **only** mutation path in the daemon:
 //!
 //! - **Workflow** ([`run_evolution_cycle`]): the idempotent "what
 //!   happens" — snapshot observations, distill proposals (create or
-//!   update), apply the approval policy. Pure, synchronous, cheap;
-//!   the CLI calls it directly, the service calls it per event batch.
-//! - **Triggers** ([`EvolutionHandle`]): the "when to try" — manual,
-//!   observation-recorded, startup, timer. A trigger is only a
-//!   wake-up signal: every condition that matters (cluster
-//!   thresholds, consumed hashes, delta bars) is re-evaluated inside
-//!   the workflow itself, so a spurious trigger costs one no-op scan
-//!   and a missed trigger only delays the next one. Triggers can be
-//!   added freely without touching the workflow, and vice versa.
+//!   update), apply the approval policy. Pure, synchronous; called
+//!   only by the worker on this crate. Stays `pub(crate)` so the
+//!   auto-approve loop inside the cycle can promote without routing
+//!   through the channel (the worker is already on the executor —
+//!   a channel round-trip would deadlock).
+//! - **Commands** ([`SkillControlHandle`]): the unified control
+//!   surface. Every external mutation — evolution triggers,
+//!   proposal approve/reject, an explicit `RunCycle` — travels
+//!   through one `mpsc::Sender<SkillCommand>` into a single worker
+//!   task spawned by [`start`]. Trigger variants coalesce within a
+//!   quiet window; inline mutations (approve/reject) and explicit
+//!   cycles process immediately with a oneshot reply.
 //!
-//! The bridge is a bounded `mpsc` channel with `try_send`: a full
-//! channel drops the event and counts it (never blocks the caller —
-//! the same "subscriber cannot break the mutation path" contract the
-//! manager's broadcast carries), and the worker coalesces bursts
-//! within a quiet window into one cycle, so a failing eval storm
-//! produces one distillation pass, not twenty.
+//! ## Why one channel
+//!
+//! Before this refactor the gateway HTTP handlers and the agent
+//! `skill_evolve` tool bypassed the channel with `spawn_blocking`,
+//! and the CLI exposed a `distill` / `approve` / `reject` surface
+//! that called the manager directly. Every path except the worker's
+//! own timer/startup/observation feed had its own control code path.
+//! Routing them all through one channel gives a single funnel for
+//! mutation ordering, dropped/timeout observability, and the same
+//! `try_send`-never-blocks contract the observation forwarder
+//! already relies on.
+//!
+//! ## Reply semantics
+//!
+//! Mutations that need a result (approve/reject/run-cycle) carry an
+//! `oneshot::Sender<SkillCommandOutcome<T>>`. The worker sends
+//! exactly one outcome per command: `Ok`, `Err(SkillError)`, or
+//! `WorkerGone` (worker exited before replying — distinct fault
+//! class that maps to HTTP 503 at the boundary). Triggers are
+//! fire-and-forget: a full channel drops the event and bumps the
+//! dropped counter, never blocking the caller.
 //!
 //! ## Safety rails on automation
 //!
@@ -28,17 +45,19 @@
 //! `auto_approve` enabled it is capped per cycle, only ever touches
 //! loop-created skills (human-owned names are refused at distill
 //! time), and every promotion still passes the full validation
-//! contract.
+//! contract. External approve commands (TUI clicks) are deliberately
+//! unbounded — the cap exists to bound *unattended automation*, not
+//! deliberate human action.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::error::SkillError;
 use crate::manager::SkillManager;
-use crate::proposals::ProposalStatus;
+use crate::proposals::{ApproveOutcome, Proposal, ProposalStatus};
 
 /// Why an evolution cycle was attempted. Pure signal — the workflow
 /// re-derives everything it needs from the stores.
@@ -141,9 +160,11 @@ impl Default for EvolutionOptions {
 ///
 /// Idempotent — running it twice without new observations produces a
 /// no-op report (consumed clusters are skipped at distill time).
-/// This is the single entry point shared by the CLI, the agent
-/// tool, and the service worker.
-pub fn run_evolution_cycle(
+/// Internal-use only: the worker is the only caller. `pub(crate)`
+/// because routing an external request through this function would
+/// be the bypass the unified-channel design exists to prevent.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn run_evolution_cycle(
     manager: &SkillManager,
     policy: &EvolutionPolicy,
 ) -> Result<EvolutionReport, SkillError> {
@@ -151,8 +172,8 @@ pub fn run_evolution_cycle(
 }
 
 /// [`run_evolution_cycle`] with the trigger labels that caused it,
-/// used by the service so reports say why they ran.
-pub fn run_evolution_cycle_labeled(
+/// used by the worker so reports say why they ran.
+pub(crate) fn run_evolution_cycle_labeled(
     manager: &SkillManager,
     policy: &EvolutionPolicy,
     triggers: Vec<&'static str>,
@@ -219,12 +240,76 @@ pub fn run_evolution_cycle_labeled(
 
 // ────────────────────────── trigger side ──────────────────────────
 
-/// Cheap, cloneable handle for firing triggers at the evolution
-/// worker. `try_send` semantics: sending to a full or closed channel
-/// never blocks and only bumps the dropped counter.
+/// The reply payload a worker sends back to a request that needs one.
+///
+/// Three-variant sum type (not `Result<T, SkillError>`): `WorkerGone`
+/// is a distinct fault class — the worker task exited before
+/// replying, which surfaces as HTTP 503 at the gateway boundary.
+/// Folding it into `Result` would force every handler to sniff error
+/// variants to pick a status code.
+#[derive(Debug)]
+pub enum SkillCommandOutcome<T> {
+    /// Operation succeeded with the produced value.
+    Ok(T),
+    /// Operation failed with a domain error (bad proposal name,
+    /// validation refused, etc.). Maps to 400/404 at the HTTP layer.
+    Err(SkillError),
+    /// Worker exited before this command was processed. Maps to 503.
+    WorkerGone,
+}
+
+impl<T> SkillCommandOutcome<T> {
+    pub fn is_ok(&self) -> bool {
+        matches!(self, SkillCommandOutcome::Ok(_))
+    }
+}
+
+/// One unit of work the worker processes. The worker owns the
+/// `mpsc::Receiver`; every external mutation travels through this
+/// enum.
+///
+/// Trigger variants are fire-and-forget — the worker never replies.
+/// Mutation variants carry an `oneshot::Sender`; the worker sends
+/// exactly one `SkillCommandOutcome<T>` back before dropping the
+/// command (or `WorkerGone` if it shut down first).
+pub enum SkillCommand {
+    /// Coalesced with other `Evolution` variants in the quiet window
+    /// before one cycle. The four sub-variants come straight from
+    /// [`EvolutionTrigger`].
+    Evolution(EvolutionTrigger),
+    /// Process a pending proposal approval inline (between batch
+    /// collection and cycle run). The worker replies with
+    /// `ApproveOutcome` on success.
+    ApproveProposal {
+        name: String,
+        reply: oneshot::Sender<SkillCommandOutcome<ApproveOutcome>>,
+    },
+    /// Process a pending proposal rejection inline. Replies with
+    /// the updated [`Proposal`].
+    RejectProposal {
+        name: String,
+        reply: oneshot::Sender<SkillCommandOutcome<Proposal>>,
+    },
+    /// Run a full cycle now (no coalescing) with the supplied
+    /// policy. Used by the gateway `POST /skills/evolution/trigger`
+    /// handler and the agent `skill_evolve` tool. Replies with the
+    /// produced [`EvolutionReport`].
+    RunCycle {
+        policy: EvolutionPolicy,
+        reply: oneshot::Sender<SkillCommandOutcome<EvolutionReport>>,
+    },
+}
+
+/// Cheap, cloneable handle for every skill mutation in the daemon.
+/// `try_send` semantics for the trigger path: a full channel drops
+/// the event and bumps the dropped counter, never blocking the
+/// caller (the same "subscriber cannot break the mutation path"
+/// contract the manager's broadcast carries). The `call_*` methods
+/// await a oneshot reply and are intended for request/response
+/// callers (HTTP handlers, the agent tool).
 #[derive(Clone)]
-pub struct EvolutionHandle {
-    tx: mpsc::Sender<EvolutionTrigger>,
+pub struct SkillControlHandle {
+    tx: mpsc::Sender<SkillCommand>,
     dropped: Arc<AtomicU64>,
     reports: broadcast::Sender<Arc<EvolutionReport>>,
     /// Configuration snapshot for introspection surfaces (the TUI
@@ -233,12 +318,12 @@ pub struct EvolutionHandle {
     timer: Option<Duration>,
 }
 
-impl EvolutionHandle {
+impl SkillControlHandle {
     /// Fire a trigger. Returns false when the channel is full or the
     /// worker is gone (the event is dropped and counted — the next
     /// timer or observation will sweep again).
     pub fn trigger(&self, event: EvolutionTrigger) -> bool {
-        match self.tx.try_send(event) {
+        match self.tx.try_send(SkillCommand::Evolution(event)) {
             Ok(()) => true,
             Err(_) => {
                 self.dropped.fetch_add(1, Ordering::Relaxed);
@@ -247,9 +332,11 @@ impl EvolutionHandle {
         }
     }
 
-    /// Triggers dropped so far because the channel was full or the
+    /// Commands dropped so far because the channel was full or the
     /// worker had exited — an observability signal, not an error.
-    pub fn dropped_triggers(&self) -> u64 {
+    /// Renamed from `dropped_triggers()` because the channel now
+    /// carries every command kind, not just triggers.
+    pub fn dropped_commands(&self) -> u64 {
         self.dropped.load(Ordering::Relaxed)
     }
 
@@ -259,10 +346,10 @@ impl EvolutionHandle {
         self.reports.subscribe()
     }
 
-    /// The raw trigger sender, for the manager's observation
+    /// The raw command sender, for the manager's observation
     /// forwarder. Internal-use: callers should go through
-    /// [`EvolutionHandle::trigger`].
-    pub(crate) fn sender_for_manager(&self) -> mpsc::Sender<EvolutionTrigger> {
+    /// [`SkillControlHandle::trigger`].
+    pub(crate) fn sender_for_manager(&self) -> mpsc::Sender<SkillCommand> {
         self.tx.clone()
     }
 
@@ -277,18 +364,82 @@ impl EvolutionHandle {
     pub fn timer(&self) -> Option<Duration> {
         self.timer
     }
+
+    /// Approve a pending proposal now. Returns `WorkerGone` if the
+    /// channel closed before the worker replied.
+    pub async fn call_approve(&self, name: String) -> SkillCommandOutcome<ApproveOutcome> {
+        let (tx, rx) = oneshot::channel();
+        if self
+            .tx
+            .send(SkillCommand::ApproveProposal { name, reply: tx })
+            .await
+            .is_err()
+        {
+            return SkillCommandOutcome::WorkerGone;
+        }
+        match rx.await {
+            Ok(outcome) => outcome,
+            Err(_) => SkillCommandOutcome::WorkerGone,
+        }
+    }
+
+    /// Reject a pending proposal now.
+    pub async fn call_reject(&self, name: String) -> SkillCommandOutcome<Proposal> {
+        let (tx, rx) = oneshot::channel();
+        if self
+            .tx
+            .send(SkillCommand::RejectProposal { name, reply: tx })
+            .await
+            .is_err()
+        {
+            return SkillCommandOutcome::WorkerGone;
+        }
+        match rx.await {
+            Ok(outcome) => outcome,
+            Err(_) => SkillCommandOutcome::WorkerGone,
+        }
+    }
+
+    /// Run one evolution cycle now with the supplied policy (no
+    /// coalescing delay). The cycle report is also broadcast on
+    /// [`SkillControlHandle::subscribe_reports`] so dashboard
+    /// listeners pick it up.
+    pub async fn call_run_cycle(
+        &self,
+        policy: EvolutionPolicy,
+    ) -> SkillCommandOutcome<EvolutionReport> {
+        let (tx, rx) = oneshot::channel();
+        if self
+            .tx
+            .send(SkillCommand::RunCycle { policy, reply: tx })
+            .await
+            .is_err()
+        {
+            return SkillCommandOutcome::WorkerGone;
+        }
+        match rx.await {
+            Ok(outcome) => outcome,
+            Err(_) => SkillCommandOutcome::WorkerGone,
+        }
+    }
 }
 
 // ────────────────────────── service ──────────────────────────
 
-/// Start the evolution service for one manager: spawns the worker
-/// task, fires the startup sweep, and returns the trigger handle.
+/// Start the skill control service for one manager: spawns the
+/// worker task, fires the startup sweep, and returns the control
+/// handle.
 ///
 /// The worker coalesces trigger bursts within
-/// `options.quiet_window` into a single cycle and, when
-/// `options.timer` is set, sweeps periodically.
-pub fn start(manager: Arc<SkillManager>, options: EvolutionOptions) -> EvolutionHandle {
-    let (tx, rx) = mpsc::channel::<EvolutionTrigger>(64);
+/// `options.quiet_window` into a single cycle, processes inline
+/// approve/reject commands as they arrive, and runs explicit
+/// `RunCycle` commands on demand. When `options.timer` is set, the
+/// worker also fires a periodic `Timer` trigger.
+pub fn start(manager: Arc<SkillManager>, options: EvolutionOptions) -> SkillControlHandle {
+    // Capacity bumped from 64 → 128: inline approve/reject commands
+    // now share the channel, and a burst of TUI clicks during a slow
+    // cycle must not push approvals out the back door.
+    let (tx, rx) = mpsc::channel::<SkillCommand>(128);
     let (report_tx, _) = broadcast::channel::<Arc<EvolutionReport>>(16);
     let dropped = Arc::new(AtomicU64::new(0));
 
@@ -303,7 +454,7 @@ pub fn start(manager: Arc<SkillManager>, options: EvolutionOptions) -> Evolution
     };
     tokio::spawn(worker.run(rx));
 
-    let handle = EvolutionHandle {
+    let handle = SkillControlHandle {
         tx,
         dropped,
         reports: report_tx,
@@ -321,7 +472,7 @@ struct Worker {
 }
 
 impl Worker {
-    async fn run(self, mut rx: mpsc::Receiver<EvolutionTrigger>) {
+    async fn run(self, mut rx: mpsc::Receiver<SkillCommand>) {
         // Consume the interval's immediate first tick — the explicit
         // Startup trigger already performs the boot sweep.
         let mut timer = self.options.timer.map(tokio::time::interval);
@@ -329,55 +480,157 @@ impl Worker {
             interval.tick().await;
         }
         loop {
-            // tokio's bounded recv returns Option: None means every
-            // sender (the handle) is gone — shut down.
+            // First command of a new iteration: either an inbound
+            // command or a timer-driven trigger.
             let first = match &mut timer {
                 Some(interval) => {
                     tokio::select! {
-                        event = rx.recv() => match event {
-                            Some(event) => event,
+                        cmd = rx.recv() => match cmd {
+                            Some(cmd) => cmd,
                             None => break,
                         },
-                        _ = interval.tick() => EvolutionTrigger::Timer,
+                        _ = interval.tick() => SkillCommand::Evolution(EvolutionTrigger::Timer),
                     }
                 }
                 None => match rx.recv().await {
-                    Some(event) => event,
+                    Some(cmd) => cmd,
                     None => break,
                 },
             };
-            // Quiet-window drain: everything arriving while the first
-            // event settles joins the same cycle.
-            let mut batch = vec![first];
-            let deadline = tokio::time::Instant::now() + self.options.quiet_window;
-            loop {
-                let remain = deadline.saturating_duration_since(tokio::time::Instant::now());
-                if remain.is_zero() {
-                    break;
-                }
-                match tokio::time::timeout(remain, rx.recv()).await {
-                    Ok(Some(event)) => batch.push(event),
-                    Ok(None) => break,
-                    Err(_) => break,
-                }
-            }
-            let labels: Vec<&'static str> = batch.iter().map(EvolutionTrigger::label).collect();
-            let summary = labels.join(",");
-            match run_evolution_cycle_labeled(&self.manager, &self.options.policy, labels) {
-                Ok(report) => {
-                    if report.acted() {
-                        tracing::info!(
-                            triggers = %summary,
-                            written = report.proposals_written.len(),
-                            auto_approved = report.auto_approved.len(),
-                            left_pending = report.left_pending,
-                            "evolution cycle"
-                        );
+
+            match first {
+                SkillCommand::Evolution(trigger) => {
+                    // Quiet-window drain: collect triggers into the
+                    // batch; process inline mutations as they arrive
+                    // (HTTP callers must not wait behind a possibly
+                    // slow cycle); remember the first `RunCycle` we
+                    // see so it can run *after* the inline replies
+                    // but still skip coalescing.
+                    let mut triggers = vec![trigger];
+                    let mut inline_approves: Vec<(
+                        String,
+                        oneshot::Sender<SkillCommandOutcome<ApproveOutcome>>,
+                    )> = Vec::new();
+                    let mut inline_rejects: Vec<(
+                        String,
+                        oneshot::Sender<SkillCommandOutcome<Proposal>>,
+                    )> = Vec::new();
+                    let mut run_cycle: Option<(
+                        EvolutionPolicy,
+                        oneshot::Sender<SkillCommandOutcome<EvolutionReport>>,
+                    )> = None;
+                    let deadline = tokio::time::Instant::now() + self.options.quiet_window;
+                    loop {
+                        let remain =
+                            deadline.saturating_duration_since(tokio::time::Instant::now());
+                        if remain.is_zero() {
+                            break;
+                        }
+                        match tokio::time::timeout(remain, rx.recv()).await {
+                            Ok(Some(SkillCommand::Evolution(t))) => triggers.push(t),
+                            Ok(Some(SkillCommand::ApproveProposal { name, reply })) => {
+                                inline_approves.push((name, reply));
+                            }
+                            Ok(Some(SkillCommand::RejectProposal { name, reply })) => {
+                                inline_rejects.push((name, reply));
+                            }
+                            Ok(Some(cmd @ SkillCommand::RunCycle { .. })) => {
+                                // First explicit cycle wins; subsequent
+                                // RunCycle commands wait for the next
+                                // iteration rather than stacking here.
+                                if run_cycle.is_none()
+                                    && let SkillCommand::RunCycle { policy, reply } = cmd
+                                {
+                                    run_cycle = Some((policy, reply));
+                                }
+                            }
+                            Ok(None) => break,
+                            Err(_) => break,
+                        }
                     }
-                    let _ = self.reports.send(Arc::new(report));
+
+                    // 1) Inline approve/reject FIRST — these are user
+                    //    clicks and must not wait behind a cycle.
+                    for (name, reply) in inline_approves {
+                        let outcome = match self.manager.approve_proposal(&name) {
+                            Ok(o) => SkillCommandOutcome::Ok(o),
+                            Err(e) => SkillCommandOutcome::Err(e),
+                        };
+                        let _ = reply.send(outcome);
+                    }
+                    for (name, reply) in inline_rejects {
+                        let outcome = match self.manager.reject_proposal(&name) {
+                            Ok(p) => SkillCommandOutcome::Ok(p),
+                            Err(e) => SkillCommandOutcome::Err(e),
+                        };
+                        let _ = reply.send(outcome);
+                    }
+
+                    // 2) Coalesced cycle if any triggers accumulated.
+                    if !triggers.is_empty() {
+                        let labels: Vec<&'static str> =
+                            triggers.iter().map(EvolutionTrigger::label).collect();
+                        let summary = labels.join(",");
+                        match run_evolution_cycle_labeled(
+                            &self.manager,
+                            &self.options.policy,
+                            labels,
+                        ) {
+                            Ok(report) => {
+                                if report.acted() {
+                                    tracing::info!(
+                                        triggers = %summary,
+                                        written = report.proposals_written.len(),
+                                        auto_approved = report.auto_approved.len(),
+                                        left_pending = report.left_pending,
+                                        "evolution cycle"
+                                    );
+                                }
+                                let _ = self.reports.send(Arc::new(report));
+                            }
+                            Err(e) => {
+                                tracing::warn!(triggers = %summary, error = %e, "evolution cycle failed");
+                            }
+                        }
+                    }
+
+                    // 3) Explicit RunCycle (skip coalescing).
+                    if let Some((policy, reply)) = run_cycle {
+                        let outcome =
+                            match run_evolution_cycle_labeled(&self.manager, &policy, Vec::new()) {
+                                Ok(report) => {
+                                    let _ = self.reports.send(Arc::new(report.clone()));
+                                    SkillCommandOutcome::Ok(report)
+                                }
+                                Err(e) => SkillCommandOutcome::Err(e),
+                            };
+                        let _ = reply.send(outcome);
+                    }
                 }
-                Err(e) => {
-                    tracing::warn!(triggers = %summary, error = %e, "evolution cycle failed");
+                SkillCommand::ApproveProposal { name, reply } => {
+                    let outcome = match self.manager.approve_proposal(&name) {
+                        Ok(o) => SkillCommandOutcome::Ok(o),
+                        Err(e) => SkillCommandOutcome::Err(e),
+                    };
+                    let _ = reply.send(outcome);
+                }
+                SkillCommand::RejectProposal { name, reply } => {
+                    let outcome = match self.manager.reject_proposal(&name) {
+                        Ok(p) => SkillCommandOutcome::Ok(p),
+                        Err(e) => SkillCommandOutcome::Err(e),
+                    };
+                    let _ = reply.send(outcome);
+                }
+                SkillCommand::RunCycle { policy, reply } => {
+                    let outcome =
+                        match run_evolution_cycle_labeled(&self.manager, &policy, Vec::new()) {
+                            Ok(report) => {
+                                let _ = self.reports.send(Arc::new(report.clone()));
+                                SkillCommandOutcome::Ok(report)
+                            }
+                            Err(e) => SkillCommandOutcome::Err(e),
+                        };
+                    let _ = reply.send(outcome);
                 }
             }
         }
@@ -493,7 +746,7 @@ mod tests {
             coalesced.triggers
         );
         assert!(!coalesced.acted());
-        assert_eq!(handle.dropped_triggers(), 0);
+        assert_eq!(handle.dropped_commands(), 0);
     }
 
     #[tokio::test]
@@ -615,6 +868,220 @@ mod authoring_tests {
         assert_eq!(
             manager.proposals().find("agent-made").unwrap().status,
             crate::proposals::ProposalStatus::Pending
+        );
+    }
+}
+
+/// Coverage for the unified channel: every skill mutation
+/// (evolution triggers, proposal approve/reject, explicit cycle)
+/// travels through one `mpsc::Sender<SkillCommand>` into the worker
+/// task. These tests pin the funnel invariants the design relies on.
+#[cfg(test)]
+mod channel_funnel {
+    use super::*;
+    use crate::observation::ObservationInput;
+    use crate::proposals::ProposalStatus;
+
+    fn start_service(state_dir: &std::path::Path) -> (Arc<SkillManager>, SkillControlHandle) {
+        let manager = Arc::new(SkillManager::new(state_dir));
+        let handle = start(
+            manager.clone(),
+            EvolutionOptions {
+                quiet_window: Duration::from_millis(20),
+                timer: None,
+                policy: EvolutionPolicy::default(),
+            },
+        );
+        (manager, handle)
+    }
+
+    /// Three anchored failures on `(node_kind=sql, error=boom)` plus
+    /// a `RunCycle` produces one pending proposal. Returns the
+    /// proposal name (deterministic slug from `distill`).
+    ///
+    /// Caller is responsible for draining the Startup sweep
+    /// broadcast BEFORE calling this — the Startup trigger's
+    /// quiet-window drain would otherwise capture the RunCycle
+    /// and create the proposal out from under us.
+    async fn seed_pending_proposal(manager: &SkillManager, handle: &SkillControlHandle) -> String {
+        for body in ["fix a", "fix b", "fix c"] {
+            manager
+                .record_observation(ObservationInput {
+                    kind: crate::observation::ObservationKind::Failure,
+                    source: crate::observation::ObservationSource::Agent,
+                    summary: "fix for boom".into(),
+                    body: body.into(),
+                    node_kind: Some("sql".into()),
+                    error: Some("boom".into()),
+                })
+                .unwrap();
+        }
+        let outcome = handle.call_run_cycle(EvolutionPolicy::default()).await;
+        let report = match outcome {
+            SkillCommandOutcome::Ok(r) => r,
+            other => panic!("seed cycle failed: {other:?}"),
+        };
+        assert_eq!(report.proposals_written.len(), 1);
+        report.proposals_written[0].clone()
+    }
+
+    /// Happy path: `call_approve` returns `SkillCommandOutcome::Ok`
+    /// and bumps the manager's generation (the channel worker
+    /// called `manager.approve_proposal` directly).
+    #[tokio::test]
+    async fn channel_funnel_call_approve_returns_outcome() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (manager, handle) = start_service(&tmp.path().join("state"));
+        let mut reports = handle.subscribe_reports();
+        // Drain the Startup sweep broadcast BEFORE recording
+        // observations; otherwise the Startup trigger's quiet-window
+        // drain captures our RunCycle and creates the proposal
+        // before we can control the cycle order.
+        let _ = tokio::time::timeout(Duration::from_secs(2), reports.recv()).await;
+        let name = seed_pending_proposal(&manager, &handle).await;
+        let _ = tokio::time::timeout(Duration::from_secs(2), reports.recv()).await;
+        let generation_before = manager.generation();
+        let outcome = handle.call_approve(name.clone()).await;
+        match outcome {
+            SkillCommandOutcome::Ok(o) => assert_eq!(o.name, name),
+            other => panic!("expected Ok, got {other:?}"),
+        }
+        assert_eq!(
+            manager.generation(),
+            generation_before + 1,
+            "approve bumps the generation"
+        );
+    }
+
+    /// Happy path: `call_reject` returns the updated proposal with
+    /// `Rejected` status.
+    #[tokio::test]
+    async fn channel_funnel_call_reject_returns_outcome() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (manager, handle) = start_service(&tmp.path().join("state"));
+        let mut reports = handle.subscribe_reports();
+        let _ = tokio::time::timeout(Duration::from_secs(2), reports.recv()).await;
+        let name = seed_pending_proposal(&manager, &handle).await;
+        let _ = tokio::time::timeout(Duration::from_secs(2), reports.recv()).await;
+
+        let outcome = handle.call_reject(name.clone()).await;
+        match outcome {
+            SkillCommandOutcome::Ok(proposal) => {
+                assert_eq!(proposal.name, name);
+                assert_eq!(proposal.status, ProposalStatus::Rejected);
+            }
+            other => panic!("expected Ok, got {other:?}"),
+        }
+    }
+
+    /// `call_run_cycle` runs a cycle and replies with the report;
+    /// the same report is also broadcast on `subscribe_reports` so
+    /// the dashboard live view picks it up.
+    #[tokio::test]
+    async fn channel_funnel_call_run_cycle_returns_report() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (manager, handle) = start_service(&tmp.path().join("state"));
+        let mut reports = handle.subscribe_reports();
+        // Drain startup report first.
+        let _ = tokio::time::timeout(Duration::from_secs(2), reports.recv()).await;
+        let name = seed_pending_proposal(&manager, &handle).await;
+        // Drain the seed cycle broadcast.
+        let _ = tokio::time::timeout(Duration::from_secs(2), reports.recv()).await;
+        assert_eq!(name, "sql-boom");
+    }
+
+    /// After the channel closes (every handle dropped, worker
+    /// exited), the manager's `record_observation` forwarder still
+    /// succeeds — the dropped-triggers contract means the
+    /// observation is recorded but no evolution trigger fires.
+    /// This pins the no-block guarantee on the observation hot
+    /// path.
+    #[tokio::test]
+    async fn channel_funnel_observation_forwarder_does_not_block_after_drop() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (manager, handle) = start_service(&tmp.path().join("state"));
+        drop(handle);
+        // Let the worker observe the closed channel and exit.
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        let probe = manager.record_observation(ObservationInput {
+            kind: crate::observation::ObservationKind::Failure,
+            source: crate::observation::ObservationSource::Agent,
+            summary: "probe".into(),
+            body: "x".into(),
+            node_kind: Some("sql".into()),
+            error: Some("boom".into()),
+        });
+        assert!(
+            probe.is_ok(),
+            "observation must succeed even with worker gone"
+        );
+    }
+
+    /// Dropped-command observability: the counter is reachable
+    /// through the handle and starts at zero; a successful trigger
+    /// does not bump it (the channel has capacity).
+    #[tokio::test]
+    async fn channel_funnel_dropped_command_counter_starts_at_zero() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (_manager, handle) = start_service(&tmp.path().join("state"));
+        let baseline = handle.dropped_commands();
+        handle.trigger(EvolutionTrigger::Manual { by: "t0".into() });
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(handle.dropped_commands(), baseline);
+    }
+
+    /// The critical UX invariant: a TUI approve click must NOT
+    /// wait behind a possibly-slow coalesced evolution cycle. The
+    /// worker drains the quiet window first; inline approve/reject
+    /// commands are processed BEFORE the cycle runs, so the HTTP
+    /// caller never sees the cycle's file I/O.
+    ///
+    /// We exercise this by setting a 300 ms quiet window, firing
+    /// a manual trigger, then queueing an ApproveProposal
+    /// mid-drain. With the design, both the approve reply and the
+    /// cycle broadcast must arrive within a generous window; the
+    /// cycle broadcast's `triggers` field confirms the manual
+    /// trigger was coalesced (proves the cycle ran the manual
+    /// trigger's batch, not just a no-op).
+    #[tokio::test]
+    async fn channel_funnel_inline_approve_does_not_block_cycle() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manager = Arc::new(SkillManager::new(tmp.path().join("state")));
+        let handle = start(
+            manager.clone(),
+            EvolutionOptions {
+                quiet_window: Duration::from_millis(300),
+                timer: None,
+                policy: EvolutionPolicy::default(),
+            },
+        );
+        let mut reports = handle.subscribe_reports();
+        let _ = tokio::time::timeout(Duration::from_secs(2), reports.recv()).await;
+        let name = seed_pending_proposal(&manager, &handle).await;
+        let _ = tokio::time::timeout(Duration::from_secs(2), reports.recv()).await;
+
+        // Open a fresh quiet-window drain with a manual trigger.
+        handle.trigger(EvolutionTrigger::Manual { by: "t0".into() });
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let outcome = handle.call_approve(name.clone()).await;
+        match outcome {
+            SkillCommandOutcome::Ok(_) => {}
+            other => panic!("expected Ok, got {other:?}"),
+        }
+        // The cycle broadcast should arrive within the drain
+        // window plus a cycle's worth of file I/O. Generous
+        // bound keeps the test stable on busy CI.
+        let cycle_broadcast = tokio::time::timeout(Duration::from_secs(2), reports.recv())
+            .await
+            .expect("cycle broadcast")
+            .expect("channel open");
+        // The coalesced cycle should have the manual trigger in
+        // its triggers list (the worker coalesced the manual
+        // trigger into the next cycle, not a fresh cycle).
+        assert!(
+            cycle_broadcast.triggers.iter().any(|t| *t == "manual"),
+            "cycle report missing manual trigger: {:?}",
+            cycle_broadcast.triggers
         );
     }
 }

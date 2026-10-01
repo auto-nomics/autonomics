@@ -111,11 +111,11 @@ pub struct SkillManager {
     generation: AtomicU64,
     changes: broadcast::Sender<u64>,
     usage: RwLock<HashMap<String, UsageRecord>>,
-    /// Optional forwarder to the evolution service — set by
+    /// Optional forwarder to the skill control service — set by
     /// [`SkillManager::attach_evolution`]. Storing just the sender
     /// (not the handle) keeps the manager free of any service
     /// lifetime coupling.
-    evolution_tx: RwLock<Option<mpsc::Sender<crate::evolution::EvolutionTrigger>>>,
+    evolution_tx: RwLock<Option<mpsc::Sender<crate::evolution::SkillCommand>>>,
 }
 
 static GLOBAL: arc_swap::ArcSwapOption<SkillManager> = arc_swap::ArcSwapOption::const_empty();
@@ -327,10 +327,11 @@ impl SkillManager {
     /// Record one observation (idempotent on content). This is the
     /// feedstock call for the whole evolution loop — agent tool,
     /// automatic failure capture, and CLI all land here.
-    /// Forward observation events to the evolution service, when one
-    /// is attached. Never blocks: a full or absent channel only means
-    /// this observation rides the next timer/startup sweep instead.
-    pub fn attach_evolution(&self, handle: &crate::evolution::EvolutionHandle) {
+    /// Forward observation events to the skill control service, when
+    /// one is attached. Never blocks: a full or absent channel only
+    /// means this observation rides the next timer/startup sweep
+    /// instead.
+    pub fn attach_evolution(&self, handle: &crate::evolution::SkillControlHandle) {
         if let Ok(mut slot) = self.evolution_tx.write() {
             *slot = Some(handle.sender_for_manager());
         }
@@ -344,9 +345,11 @@ impl SkillManager {
         if let Ok(slot) = self.evolution_tx.read()
             && let Some(tx) = slot.as_ref()
         {
-            let _ = tx.try_send(crate::evolution::EvolutionTrigger::ObservationRecorded {
-                id: observation.id.clone(),
-            });
+            let _ = tx.try_send(crate::evolution::SkillCommand::Evolution(
+                crate::evolution::EvolutionTrigger::ObservationRecorded {
+                    id: observation.id.clone(),
+                },
+            ));
         }
         Ok(observation)
     }

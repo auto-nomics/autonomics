@@ -100,7 +100,8 @@ pub fn cluster_hash(observation_ids: &BTreeSet<String>) -> String {
         hasher.update(id.as_bytes());
         hasher.update(b"\0");
     }
-    format!("c-{}", hex(&hasher.finalize())[..16].to_string())
+    let digest = hex(&hasher.finalize());
+    format!("c-{}", &digest[..16])
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -136,6 +137,7 @@ pub struct Proposals {
 }
 
 /// Outcome of approving one proposal.
+#[derive(Debug)]
 pub struct ApproveOutcome {
     pub name: String,
     /// Where the skill was installed (the global tier).

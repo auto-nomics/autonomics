@@ -12,6 +12,7 @@ use agentik_core::tools::{ToolError, ToolFunction, ToolRegistration};
 use agentik_proc::tool;
 use agentik_sdk::types::ToolResult;
 
+use crate::evolution::SkillCommandOutcome;
 use crate::format::MAX_BODY_BYTES;
 use crate::manager::SkillManager;
 
@@ -456,7 +457,11 @@ pub struct SkillEvolveInput {
 }
 
 pub struct SkillEvolveTool {
-    pub manager: Arc<SkillManager>,
+    /// Unified control handle. `None` when the daemon started with
+    /// `enable_skill_evolution = false`; in that state every call
+    /// returns a "service disabled" error and the agent should
+    /// surface that to the user rather than retry.
+    pub control: Option<crate::evolution::SkillControlHandle>,
 }
 
 #[async_trait::async_trait]
@@ -467,9 +472,18 @@ impl ToolFunction for SkillEvolveTool {
         // Propose-only by construction: an agent may trigger the
         // workflow but never lift the review gate — auto-approval is
         // a daemon-level configuration, not a model decision.
+        // Route through the unified channel so the tool cannot
+        // bypass the worker's coalescing/ordering.
+        let Some(handle) = self.control.as_ref() else {
+            return Ok(ToolResult::error(
+                "skill evolution service is disabled in this daemon; control \
+                 through the TUI dashboard, or ask the operator to enable \
+                 `enable_skill_evolution`.",
+            ));
+        };
         let policy = crate::evolution::EvolutionPolicy::default();
-        match crate::evolution::run_evolution_cycle(&self.manager, &policy) {
-            Ok(report) => {
+        match handle.call_run_cycle(policy).await {
+            SkillCommandOutcome::Ok(report) => {
                 let mut out = format!(
                     "Evolution cycle: {} cluster(s) considered.\n",
                     report.clusters_considered
@@ -490,14 +504,14 @@ impl ToolFunction for SkillEvolveTool {
                          occurrences; record more with skill_observe.",
                     );
                 } else {
-                    out.push_str(
-                        "\nA human reviews pending proposals (autonomics-skills \
-                         proposals / approve).",
-                    );
+                    out.push_str("\nA human reviews pending proposals through the TUI dashboard.");
                 }
                 Ok(ToolResult::success(out))
             }
-            Err(e) => Ok(ToolResult::error(format!("skill_evolve: {e}"))),
+            SkillCommandOutcome::Err(e) => Ok(ToolResult::error(format!("skill_evolve: {e}"))),
+            SkillCommandOutcome::WorkerGone => Ok(ToolResult::error(
+                "skill evolution worker exited; the daemon must be restarted",
+            )),
         }
     }
 }
@@ -509,7 +523,15 @@ impl ToolFunction for SkillEvolveTool {
 /// Pass the same [`SkillManager`] used for prompt injection so the
 /// index in the system prompt, the tools, and the usage telemetry
 /// always agree.
-pub fn skill_registrations(manager: Arc<SkillManager>) -> Vec<ToolRegistration> {
+///
+/// `control` is the unified skill-control handle. Pass `None` when
+/// the daemon started with `enable_skill_evolution = false`; the
+/// `skill_evolve` tool then reports the service as disabled to any
+/// agent that tries to invoke it, instead of bypassing the channel.
+pub fn skill_registrations(
+    manager: Arc<SkillManager>,
+    control: Option<crate::evolution::SkillControlHandle>,
+) -> Vec<ToolRegistration> {
     vec![
         ToolRegistration::from(SkillListTool {
             manager: manager.clone(),
@@ -529,7 +551,7 @@ pub fn skill_registrations(manager: Arc<SkillManager>) -> Vec<ToolRegistration> 
         ToolRegistration::from(SkillProposeTool {
             manager: manager.clone(),
         }),
-        ToolRegistration::from(SkillEvolveTool { manager }),
+        ToolRegistration::from(SkillEvolveTool { control }),
     ]
 }
 

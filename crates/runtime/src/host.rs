@@ -164,10 +164,12 @@ pub struct SharedInfra {
     /// eval auto-capture, gateway handlers — shares one notification
     /// invariant.
     pub skills: Arc<skills::SkillManager>,
-    /// The evolution service trigger handle, when enabled. `None`
-    /// means the loop still runs on demand (CLI, `skill_evolve`
-    /// tool) but nothing fires it in the background.
-    pub skill_evolution: Option<skills::evolution::EvolutionHandle>,
+    /// The unified skill control handle, when the service is
+    /// enabled. `None` means the loop is disabled at the daemon
+    /// level — every gateway mutation request then returns HTTP
+    /// 503 (the dashboard, the agent `skill_evolve` tool, and the
+    /// observation forwarder all funnel through this handle).
+    pub skill_evolution: Option<skills::SkillControlHandle>,
     /// The tokio runtime handle (for spawning agent tasks).
     pub runtime_handle: tokio::runtime::Handle,
     /// Optional host control for agent tools. Set by RuntimeHost when
@@ -530,7 +532,10 @@ impl SharedInfra {
         let engine_client = self.engine_manager.client_for_session(agent_path.as_str());
 
         let mut tools: Vec<ToolRegistration> = vfs::vbash_registrations(file_storage.clone());
-        tools.extend(skills::skill_registrations(self.skills.clone()));
+        tools.extend(skills::skill_registrations(
+            self.skills.clone(),
+            self.skill_evolution.clone(),
+        ));
         if let Some(catalog) = self.catalog.clone() {
             tools.extend(crate::catalog_tools::catalog_registrations(catalog));
         }

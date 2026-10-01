@@ -121,7 +121,8 @@ fn observation_id(kind: ObservationKind, summary: &str, body: &str) -> String {
     hasher.update(summary.trim().as_bytes());
     hasher.update(b"\0");
     hasher.update(body.trim().as_bytes());
-    format!("O-{}", hex(&hasher.finalize())[..16].to_string())
+    let digest = hex(&hasher.finalize());
+    format!("O-{}", &digest[..16])
 }
 
 fn kind_name(kind: ObservationKind) -> &'static str {
