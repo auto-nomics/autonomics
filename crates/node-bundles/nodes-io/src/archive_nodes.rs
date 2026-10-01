@@ -734,7 +734,10 @@ fn extract_zip(
         }
         if !matches!(
             entry.compression(),
-            zip::CompressionMethod::Stored | zip::CompressionMethod::Deflated
+            zip::CompressionMethod::Stored
+                | zip::CompressionMethod::Deflated
+                | zip::CompressionMethod::Deflate64
+                | zip::CompressionMethod::Bzip2
         ) {
             return Err(format!(
                 "unsupported ZIP compression `{}` for `{normalized}`",
@@ -1056,7 +1059,7 @@ impl NodeFactory for ArchiveExtractNodeFactory {
     }
 
     fn doc(&self) -> &'static str {
-        "Extracts regular-file members from ZIP (stored/deflate) and \
+        "Extracts regular-file members from ZIP (stored/deflate/deflate64/bzip2) and \
         TAR/TAR.GZ/TAR.ZST/TAR.BZ2/TAR.XZ into destination_prefix. Include and \
         exclude globs, strip_components, member/total-size limits, and a per-entry \
         expansion ratio are enforced. Links, special files, absolute paths, `..`, \
@@ -1137,10 +1140,17 @@ mod tests {
     }
 
     fn write_zip(path: &Path, members: &[(&str, &[u8])]) {
+        write_zip_with_method(path, members, zip::CompressionMethod::Deflated)
+    }
+
+    fn write_zip_with_method(
+        path: &Path,
+        members: &[(&str, &[u8])],
+        method: zip::CompressionMethod,
+    ) {
         let file = std::fs::File::create(path).unwrap();
         let mut archive = zip::ZipWriter::new(file);
-        let options = zip::write::SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Deflated);
+        let options = zip::write::SimpleFileOptions::default().compression_method(method);
         for (name, contents) in members {
             archive.start_file(*name, options).unwrap();
             archive.write_all(contents).unwrap();
@@ -1367,6 +1377,32 @@ mod tests {
                 .unwrap()
                 .starts_with("sha256:")
         );
+    }
+
+    #[tokio::test]
+    async fn extracts_bzip2_zip() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive_path = dir.path().join("bzip2.zip");
+        write_zip_with_method(
+            &archive_path,
+            &[("compressed.txt", b"bzip payload\n")],
+            zip::CompressionMethod::Bzip2,
+        );
+        let mut node = ArchiveExtractNode::new(ArchiveExtractSpec {
+            src: Some(archive_path.to_string_lossy().into_owned()),
+            destination_prefix: dir.path().join("out").to_string_lossy().into_owned(),
+            ..ArchiveExtractSpec::default()
+        });
+        let outputs = node
+            .execute(
+                &ctx(),
+                &[],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap();
+        let files = outputs.get(&0).unwrap().as_file_set().unwrap();
+        assert_eq!(std::fs::read(&files[0].path).unwrap(), b"bzip payload\n");
     }
 
     #[tokio::test]

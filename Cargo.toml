@@ -127,9 +127,13 @@ sas_xport = "0.4.1"
 clap = { version = "4.6", features = ["derive"] }
 tar = "0.4"
 # default-features off: the default set pulls xz2, whose lzma-sys conflicts
-# with datafusion's liblzma-sys (`links = "lzma"` clash). MinerU result zips
-# only need deflate.
-zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+# with datafusion's liblzma-sys (`links = "lzma"` clash). These features cover
+# the common ZIP compression methods without adding that conflicting backend.
+zip = { version = "8.6.0", default-features = false, features = [
+  "deflate",
+  "deflate64",
+  "bzip2",
+] }
 toml = "1"
 uuid = "1.24"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
