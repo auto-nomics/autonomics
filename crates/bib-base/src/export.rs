@@ -90,38 +90,12 @@ pub fn to_bibtex(article: &Article) -> String {
 }
 
 /// Build a cite key from first author's last name + year + first title word.
+///
+/// Delegates to `bib_types::evidence::cite_key` (the canonical home, so the
+/// evidence payload layer can reuse it as its fuzzy dedup fallback without a
+/// reverse dependency).
 pub fn cite_key(article: &Article) -> String {
-    let author_part = article
-        .authors
-        .first()
-        .map(|a| {
-            a.last_name
-                .to_lowercase()
-                .chars()
-                .filter(|c| c.is_ascii_alphanumeric())
-                .collect::<String>()
-        })
-        .filter(|part| !part.is_empty())
-        .unwrap_or_else(|| "anon".into());
-    let year_part = article
-        .year
-        .map(|y| y.to_string())
-        .unwrap_or_else(|| "nd".into());
-    let title_part = article
-        .title
-        .split_whitespace()
-        .next()
-        .map(|w| {
-            // Keep only alphanumeric characters so trailing punctuation
-            // (e.g. "Tutorial:" → "tutorial") doesn't leak into the key.
-            w.to_lowercase()
-                .chars()
-                .filter(|c| c.is_ascii_alphanumeric())
-                .collect::<String>()
-        })
-        .filter(|w| !w.is_empty())
-        .unwrap_or_else(|| "untitled".into());
-    format!("{author_part}{year_part}{title_part}")
+    bib_types::evidence::cite_key(article)
 }
 
 fn escape_bibtex(s: &str) -> String {
