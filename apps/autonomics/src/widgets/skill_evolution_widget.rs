@@ -31,6 +31,13 @@ pub struct SkillEvolutionState {
     pub active_tab: EvolutionTab,
     pub last_report: Option<String>,
     pub error: Option<String>,
+    /// Generation seen on the last status snapshot — when it advances
+    /// the dashboard triggers a full refresh because the library /
+    /// proposals / observation counts have all potentially changed.
+    pub seen_generation: u64,
+    /// `cycles_completed` seen on the last status snapshot — same
+    /// auto-refresh trigger when a worker cycle has just finished.
+    pub seen_cycles_completed: u64,
 }
 impl SkillEvolutionState {
     pub fn open(&mut self) {
@@ -166,6 +173,7 @@ impl StatefulWidget for SkillEvolutionWidget {
 
         // Header, tabs, active browser, and keyboard footer.
         let mut header = vec![config_line(status), counters_line(status)];
+        header.push(activity_line(status));
         if let Some(report) = &state.last_report {
             header.push(Line::styled(
                 format!("last cycle: {report}"),
@@ -283,6 +291,108 @@ fn counters_line(status: &SkillEvolutionStatus) -> Line<'static> {
             normal,
         ),
     ])
+}
+
+/// Live worker activity line — the "is a distillation in flight?" /
+/// "how did the last one go?" readout that motivates polling.
+fn activity_line(status: &SkillEvolutionStatus) -> Line<'static> {
+    let dim = Style::new().fg(Color::DarkGray);
+    let normal = Style::new();
+    let mut spans = Vec::new();
+
+    // 1) The current phase — colored so the difference between
+    //    idle / coalescing / distilling is unmistakable at a glance.
+    let (label, style) = match status.phase.as_str() {
+        "idle" => (
+            "distillation idle".to_string(),
+            normal,
+        ),
+        "coalescing" => (
+            if status.phase_queued == 1 {
+                "distillation queued: 1 trigger, batch forming…".to_string()
+            } else {
+                format!("distillation queued: {} triggers, batch forming…", status.phase_queued)
+            },
+            Style::new().fg(Color::Yellow),
+        ),
+        "distilling" => (
+            format!(
+                "distilling… {}.{}s ({})",
+                status.phase_elapsed_ms / 1000,
+                (status.phase_elapsed_ms % 1000) / 100,
+                if status.phase_triggers.is_empty() {
+                    "manual".to_string()
+                } else {
+                    status.phase_triggers.join(", ")
+                }
+            ),
+            Style::new().fg(Color::Green),
+        ),
+        _ => (
+            format!("distillation unknown phase ({})", status.phase),
+            Style::new().fg(Color::Red),
+        ),
+    };
+    spans.push(Span::styled(label, style));
+
+    // 2) Idle line also gets the previous-run rollup — last cycle
+    //    time + duration + triggers. Skipped when no cycle has run
+    //    yet to avoid an awkward "last cycle —" placeholder.
+    if status.phase == "idle" {
+        if let Some(at) = status.last_cycle_at {
+            let dt = chrono::DateTime::from_timestamp(at, 0)
+                .map(|t| t.format("%H:%M:%S").to_string())
+                .unwrap_or_else(|| "—".to_string());
+            let dur = status
+                .last_cycle_duration_ms
+                .map(|ms| format!("{}.{}s", ms / 1000, (ms % 1000) / 100))
+                .unwrap_or_else(|| "—".to_string());
+            let triggers = if status.last_triggers.is_empty() {
+                "—".to_string()
+            } else {
+                status.last_triggers.join(", ")
+            };
+            spans.push(Span::styled("  ·  last cycle ", dim));
+            spans.push(Span::styled(format!("{dt} ({dur} · {triggers})"), normal));
+        }
+        spans.push(Span::styled("  ·  ", dim));
+        spans.push(Span::styled(
+            format!("{} cycles total", status.cycles_completed),
+            normal,
+        ));
+    }
+
+    // 3) Dropped commands are an observability signal, not an error,
+    //    but worth surfacing so the operator can correlate activity
+    //    gaps with channel pressure.
+    if status.dropped_commands > 0 {
+        spans.push(Span::styled("  ·  ", dim));
+        spans.push(Span::styled(
+            format!("⚠ {} dropped", status.dropped_commands),
+            Style::new().fg(Color::Red),
+        ));
+    }
+
+    // 4) Last cycle error — visible in any phase so a failed manual
+    //    run isn't lost under the distilling spinner.
+    if let Some(err) = &status.last_error {
+        spans.push(Span::styled("  ·  last error ", dim));
+        spans.push(Span::styled(
+            truncate_error(err),
+            Style::new().fg(Color::Red),
+        ));
+    }
+
+    Line::from(spans)
+}
+
+fn truncate_error(err: &str) -> String {
+    const MAX: usize = 80;
+    if err.len() <= MAX {
+        err.to_string()
+    } else {
+        format!("{}…", &err[..MAX])
+    }
 }
 
 #[cfg(test)]
@@ -417,6 +527,16 @@ mod tests {
                 proposals_pending: 1,
                 proposals_approved: 0,
                 proposals_rejected: 0,
+                phase: "idle".into(),
+                phase_queued: 0,
+                phase_triggers: Vec::new(),
+                phase_elapsed_ms: 0,
+                cycles_completed: 3,
+                last_cycle_at: None,
+                last_cycle_duration_ms: None,
+                last_triggers: Vec::new(),
+                last_error: None,
+                dropped_commands: 0,
             }),
             last_report: Some("1 written".into()),
             skills: SkillBrowserState {
@@ -516,6 +636,16 @@ mod tests {
             proposals_pending: 0,
             proposals_approved: 0,
             proposals_rejected: 0,
+            phase: "idle".into(),
+            phase_queued: 0,
+            phase_triggers: Vec::new(),
+            phase_elapsed_ms: 0,
+            cycles_completed: 0,
+            last_cycle_at: None,
+            last_cycle_duration_ms: None,
+            last_triggers: Vec::new(),
+            last_error: None,
+            dropped_commands: 0,
         }
     }
 

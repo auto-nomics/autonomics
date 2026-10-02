@@ -156,6 +156,24 @@ impl App {
                         terminal.draw(|f| self.render(f))?;
                         self.dirty = false;
                     }
+
+                    // Status poll while the dashboard is visible: the
+                    // monitor fields (phase, last cycle, dropped, error)
+                    // are runtime observations, not manual refreshes, so
+                    // 1 s cadence keeps the activity line live without
+                    // burning the connection.
+                    if self.state.skill_evolution.visible {
+                        const POLL: std::time::Duration =
+                            std::time::Duration::from_secs(1);
+                        let since = self
+                            .state
+                            .skill_evolution_poll
+                            .map(|t| t.elapsed())
+                            .unwrap_or(POLL);
+                        if since >= POLL {
+                            self.poll_skill_evolution();
+                        }
+                    }
                 }
 
                 // ── Gateway frames (agent events / host events / notices) ──

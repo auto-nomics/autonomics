@@ -935,6 +935,10 @@ pub struct AppState {
     pub dag_view_visible: bool,
     /// Skill-evolution dashboard state (visibility + data snapshots).
     pub skill_evolution: crate::widgets::skill_evolution_widget::SkillEvolutionState,
+    /// Wall-clock of the last dashboard status poll — the render
+    /// tick uses this to throttle the status-only fetch while the
+    /// dashboard is visible.
+    pub skill_evolution_poll: Option<std::time::Instant>,
     /// Latest structured DAG snapshot. `None` while the first load is running.
     pub dag_snapshot: Option<dag_core::dag::DagTuiSnapshot>,
     /// Selection/viewport state for [`crate::widgets::dag_view::DagTuiWidget`].

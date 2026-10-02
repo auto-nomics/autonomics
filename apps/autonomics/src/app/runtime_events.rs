@@ -315,8 +315,11 @@ impl App {
             } => {
                 match status {
                     Ok(status) => {
-                        self.state.skill_evolution.status = Some(status);
-                        self.state.skill_evolution.error = None;
+                        let dashboard = &mut self.state.skill_evolution;
+                        dashboard.seen_generation = status.generation;
+                        dashboard.seen_cycles_completed = status.cycles_completed;
+                        dashboard.status = Some(status);
+                        dashboard.error = None;
                     }
                     Err(e) => {
                         self.state.skill_evolution.error = Some(e);
@@ -359,6 +362,21 @@ impl App {
                 }
                 Err(e) => {
                     self.state.toasts.error("Skill evolution cycle", Some(e));
+                }
+            },
+            crate::app_event::AppEvent::SkillEvolutionStatusPolled { status } => {
+                // Lighter than a full load: status fields only, plus an
+                // auto-refresh when generation or cycle counts advanced
+                // (a cycle's writes have invalidated the cached library /
+                // observations / proposal listings).
+                let Ok(status) = status else { return };
+                let dashboard = &mut self.state.skill_evolution;
+                let advanced =
+                    dashboard.status.as_ref().map(|prev| prev.generation) != Some(status.generation)
+                        || dashboard.seen_cycles_completed != status.cycles_completed;
+                dashboard.status = Some(status);
+                if advanced && dashboard.visible {
+                    self.refresh_skill_evolution();
                 }
             },
             crate::app_event::AppEvent::SkillProposalActioned { action, result } => {

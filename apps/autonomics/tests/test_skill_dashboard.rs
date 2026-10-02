@@ -65,6 +65,16 @@ fn fixture_status() -> SkillEvolutionStatus {
         proposals_pending: 3,
         proposals_approved: 1,
         proposals_rejected: 1,
+        phase: "idle".into(),
+        phase_queued: 0,
+        phase_triggers: Vec::new(),
+        phase_elapsed_ms: 0,
+        cycles_completed: 8,
+        last_cycle_at: Some(1_700_000_000),
+        last_cycle_duration_ms: Some(1234),
+        last_triggers: vec!["observation".into(), "timer".into()],
+        last_error: None,
+        dropped_commands: 0,
     }
 }
 

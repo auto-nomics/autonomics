@@ -35,6 +35,22 @@ impl App {
         });
     }
 
+    /// Lighter-weight status-only poll fired by the tick thread while the
+    /// dashboard is visible. Cheap enough to run at ~1 Hz; the runtime
+    /// events handler promotes the fields and re-triggers a full
+    /// refresh when generation / cycle counts have moved.
+    pub(super) fn poll_skill_evolution(&mut self) {
+        let client = self.client.clone();
+        let event_tx = self.app_event_tx.clone();
+        self.state.skill_evolution_poll = Some(std::time::Instant::now());
+        self.spawn_client_task("skill_evolution_poll", move || async move {
+            let status = client.skill_evolution_status().await;
+            event_tx.send(crate::app_event::AppEvent::SkillEvolutionStatusPolled {
+                status: status.map_err(|e| e.to_string()),
+            });
+        });
+    }
+
     /// Fetch the detail document for the currently selected library
     /// row. Cheap and idempotent; skipped while the dashboard is
     /// closed (the next open refreshes anyway).

@@ -79,6 +79,14 @@ pub(crate) enum AppEvent {
     },
     /// A manually triggered evolution cycle finished.
     SkillEvolutionTriggered(std::result::Result<gateway::proto::SkillEvolutionReport, String>),
+    /// Polled status snapshot from the periodic dashboard poll —
+    /// lighter than a full `SkillEvolutionLoaded` because it carries
+    /// only the status fields. The handler promotes the snapshot
+    /// fields and re-triggers the full refresh when generation /
+    /// cycle counts have advanced since the last full load.
+    SkillEvolutionStatusPolled {
+        status: std::result::Result<gateway::proto::SkillEvolutionStatus, String>,
+    },
     /// An approve/reject action on a proposal finished.
     SkillProposalActioned {
         action: &'static str,
