@@ -7,6 +7,10 @@ document describes how a tool becomes an image + catalog panel + thin
 wrapper; this one describes how that thin wrapper becomes a data-only
 manifest, published as a git repository.
 
+Use [Plugin Authoring Guide](plugins/authoring-guide.md) instead when creating
+a new plugin from scratch rather than migrating and comparing an existing Rust
+wrapper.
+
 The reference implementation is the `ldsc` family (`ldsc_h2`,
 `ldsc_munge`, `ldsc_rg`), migrated end to end and
 exercised by `crates/container-plugin/tests/ldsc_migration.rs` (golden)

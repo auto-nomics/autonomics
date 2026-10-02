@@ -95,6 +95,7 @@ Node registry + DAG scheduler
 一个目录，包含 `manifest.toml`（节点契约：参数、端口、面板、镜像溯源）、
 执行脚本和镜像构建树。插件从钉死 commit SHA 的 git 仓库安装，daemon 启动
 前的插件自检阶段完成安装、校验与汇报——格式与工作流见
+[容器插件构建](docs/plugins/README_zh.md)；替换既有硬编码包装时使用
 [节点插件化迁移](docs/plugin-node-migration_zh.md)。面板数据包由
 `autonomics panels sync` 独立供给：下载并校验 `[[panels]]` 引用中本地
 catalog 缓存缺失的 dataset；启动自检只做本地存在性检查（有界、离线安全），
@@ -132,6 +133,13 @@ daemon 就绪永不等待网络。无人值守部署可设 `AUTONOMICS_PANEL_SYN
 | [bulk-rnaseq](https://github.com/auto-nomics/bulk-rnaseq-plugin) | `limma_voom`, `wgcna` | limma+voom 差异表达、WGCNA 模块分析 |
 | [hyprcoloc](https://github.com/auto-nomics/hyprcoloc-plugin) | `hyprcoloc` | HyPrColoc 多性状共定位 |
 | [grf](https://github.com/auto-nomics/grf-plugin) | 23 个 `grf_*` kind:12 个森林 trainer、`grf_predict_forest`、ATE / 最佳线性投影 / 校准 / 打分、森林权重 / 分裂频率 / 变量重要性 / 取树 / 合并、`grf_generate_causal_data` | 广义随机森林(官方 R grf 2.6.1) |
+
+### 构建插件
+
+- [插件构建总览](docs/plugins/README_zh.md)：生命周期、核心规则和文档地图。
+- [插件构建指南](docs/plugins/authoring-guide_zh.md)：以 `clusterProfiler` ORA 为例的端到端教程。
+- [Manifest 规范](docs/plugins/manifest-reference_zh.md)：规范 schema、模板语义和启动校验。
+- [测试与发布检查表](docs/plugins/testing-and-release_zh.md)：测试金字塔、镜像摘要发布、Git 钉版和干净环境评审。
 
 ### 安装插件
 
@@ -185,6 +193,16 @@ autonomics/
 `reference/` 存放第三方与对照材料，不属于根 Cargo 构建。
 
 ## 快速开始
+
+### 安装预编译二进制
+
+在存在带 tag 的 GitHub Release 后，可以不重新编译，直接安装对应平台的二进制：
+
+```bash
+curl --fail --location https://raw.githubusercontent.com/auto-nomics/autonomics/main/scripts/install.sh | bash
+```
+
+脚本会下载匹配的 Linux/macOS 二进制、校验 `SHA256SUMS`，并安装到 `~/.local/bin`。可用 `AUTONOMICS_INSTALL_DIR` 覆盖安装目录，用 `AUTONOMICS_VERSION=v0.1.0` 固定版本，或用 `AUTONOMICS_REPO=owner/repo` 安装 fork 产物。
 
 ### 构建并运行 TUI
 
@@ -349,6 +367,7 @@ bun run build
 - [Runtime bundles](docs/data-bundles.md)
 - [容器执行设计](docs/container-execution-design.md)
 - [容器迁移流程](docs/container-node-migration.md)
+- [容器插件构建](docs/plugins/README_zh.md)
 
 ### 分析方法
 

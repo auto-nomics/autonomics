@@ -96,10 +96,11 @@ per family holding `manifest.toml` (the node contract: params, ports,
 panels, image provenance), execution scripts, and the image build tree.
 Plugins are installed from git repositories pinned to a commit SHA and
 loaded at daemon startup by the plugin preflight — see
-[Plugin Node Migration](docs/plugin-node-migration.md) for the format and
-the workflow. Panel data bundles are provisioned by `autonomics panels
-sync`, which downloads and checksum-verifies every `[[panels]]` dataset
-reference missing from the local catalog cache; the startup preflight
+[Container Plugin Authoring](docs/plugins/README.md) for the format and
+workflow; use the [migration workflow](docs/plugin-node-migration.md) when
+replacing an existing hardcoded wrapper. Panel data bundles are provisioned by
+`autonomics panels sync`, which downloads and checksum-verifies every
+`[[panels]]` dataset reference missing from the local catalog cache; startup preflight
 only checks presence locally (bounded, offline-safe), so daemon readiness
 never waits on the network. Set `AUTONOMICS_PANEL_SYNC=1` to run the
 provisioning inline during `autonomics serve` for unattended deployments.
@@ -135,6 +136,13 @@ provisioning inline during `autonomics serve` for unattended deployments.
 | [bulk-rnaseq](https://github.com/auto-nomics/bulk-rnaseq-plugin) | `limma_voom`, `wgcna` | limma+voom differential expression, WGCNA modules |
 | [hyprcoloc](https://github.com/auto-nomics/hyprcoloc-plugin) | `hyprcoloc` | HyPrColoc multi-trait colocalization |
 | [grf](https://github.com/auto-nomics/grf-plugin) | 23 `grf_*` kinds: 12 forest trainers, `grf_predict_forest`, ATE / best-linear-projection / calibration / scores, forest weights / split frequencies / variable importance / get-tree / merge, `grf_generate_causal_data` | generalized random forests (official R grf 2.6.1) |
+
+### Building plugins
+
+- [Plugin authoring overview](docs/plugins/README.md): lifecycle, core rules, and the document map.
+- [Plugin authoring guide](docs/plugins/authoring-guide.md): end-to-end tutorial using a `clusterProfiler` ORA example.
+- [Manifest reference](docs/plugins/manifest-reference.md): normative schema, template semantics, and startup validation.
+- [Testing and release checklist](docs/plugins/testing-and-release.md): test pyramid, image digest publication, Git pinning, and clean-room review.
 
 ### Installing plugins
 
@@ -190,6 +198,16 @@ autonomics/
 The `reference/` directory contains third-party and comparison material and is not part of the root Cargo build.
 
 ## Getting Started
+
+### Install a prebuilt binary
+
+After a tagged GitHub release exists, install the platform binary without rebuilding:
+
+```bash
+curl --fail --location https://raw.githubusercontent.com/auto-nomics/autonomics/main/scripts/install.sh | bash
+```
+
+The script downloads the matching Linux or macOS binary, verifies `SHA256SUMS`, and installs it to `~/.local/bin`. Override the destination with `AUTONOMICS_INSTALL_DIR`, pin a release with `AUTONOMICS_VERSION=v0.1.0`, or use `AUTONOMICS_REPO=owner/repo` for a fork.
 
 ### Build and run the TUI
 
@@ -352,6 +370,7 @@ bun run build
 - [Runtime bundles](docs/data-bundles.md): built-in bundle identifiers and runtime overlays.
 - [Container execution](docs/container-execution-design.md): Podman contracts and lifecycle.
 - [Container migration workflow](docs/container-node-migration.md): image, data package, and wrapper acceptance criteria.
+- [Container plugin authoring](docs/plugins/README.md): independent plugin repositories, manifest contracts, testing, and immutable release.
 
 ### Analysis methods
 
