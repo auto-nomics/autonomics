@@ -152,7 +152,6 @@
 <text x="869.0" y="942.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">ml (preprocessing, ensembles)</text>
 <text x="869.0" y="954.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">dl (Burn: MLP, DeepSurv, DeepHit,</text>
 <text x="869.0" y="966.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">RNN, Transformer, AE)</text>
-<text x="869.0" y="978.0" fill="#374151" font-size="10.0" font-weight="italic" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">grf / grf-sys (vendored GPL-3)</text>
 <rect x="994.0" y="880.0" width="210.0" height="32.0" rx="8" ry="8" fill="#ffffff" stroke="#82b366" stroke-width="1.0"/>
 <text x="1099.0" y="900.4" fill="#1F2937" font-size="11.0" font-weight="bold" font-family="Helvetica, Arial, sans-serif" text-anchor="middle">SQL / I/O / source / sink</text>
 <rect x="994.0" y="916.0" width="210.0" height="80.0" rx="0" ry="0" fill="#ffffff" stroke="none" stroke-width="1.0"/>

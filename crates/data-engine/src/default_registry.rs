@@ -62,9 +62,7 @@ pub fn build_default_registry_with_container_execution(
     #[cfg(feature = "bundle-writing")]
     registry.register_plugin(&nodes_writing::Plugin);
 
-    // ── GRF bundle ────────────────────────────────────────────────────
-    #[cfg(feature = "bundle-grf")]
-    registry.register_plugin(&nodes_grf::Plugin);
+    // ── Regression discontinuity bundle ───────────────────────────────
     #[cfg(feature = "bundle-rd")]
     registry.register_plugin(&nodes_rd::Plugin);
 

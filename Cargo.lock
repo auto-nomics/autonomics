@@ -2869,7 +2869,6 @@ dependencies = [
  "nodes-dl",
  "nodes-epi",
  "nodes-genetics",
- "nodes-grf",
  "nodes-hypothesize",
  "nodes-io",
  "nodes-lcmm",
@@ -5208,31 +5207,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fdf242682df893b86f33a73828fb09ca4b2d3bb6cc95249707fc684d27484b91"
 dependencies = [
  "bitflags 2.13.2",
-]
-
-[[package]]
-name = "grf"
-version = "0.1.0"
-dependencies = [
- "arrow-array",
- "arrow-schema",
- "grf-sys",
- "rand 0.8.8",
- "rand_distr 0.4.3",
- "schemars",
- "serde",
- "statkit",
- "thiserror 2.0.20",
- "tokio",
-]
-
-[[package]]
-name = "grf-sys"
-version = "0.1.0"
-dependencies = [
- "cc",
- "libc",
- "thiserror 2.0.20",
 ]
 
 [[package]]
@@ -7783,23 +7757,6 @@ dependencies = [
  "tokio",
  "tracing",
  "vfs",
-]
-
-[[package]]
-name = "nodes-grf"
-version = "0.1.0"
-dependencies = [
- "arrow",
- "arrow-array",
- "arrow-schema",
- "async-trait",
- "dag-core",
- "grf",
- "schemars",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
 ]
 
 [[package]]

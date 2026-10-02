@@ -80,7 +80,7 @@ Two mechanisms make the harness trustworthy for biomedical work:
 | Analysis execution | `dag-core`, `data-engine`, `data-engine-tools`, `crates/node-bundles/*`, `workflow-editor` | Node traits, plugin registry, typed ports, scheduler, JSON-schema specs, agent tools, snapshots, and reusable workflow skills. |
 | Data infrastructure | `vfs`, `data-catalog`, `container-runtime`, `biofusion` | OpenDAL-backed VFS, Hugging Face-hosted versioned packages, Podman execution, immutable panel caches, and biological-format DataFusion readers. |
 | Statistics and epidemiology | `statkit`, `epi`, `hypothesize`, `nodes-power`, `cmprsk`, `survey`, `mice`, `hierint` | Descriptive statistics and regression; causal inference and mediation; composable tests and p-value workflows; prospective power and sample-size design; competing risks; survey designs; imputation; hierarchical interaction models. |
-| Machine learning and deep learning | `ml`, `dl`, `grf`, `grf-sys` | Preprocessing, feature engineering, clustering, supervised models, ensembles, anomaly detection, dimensionality reduction; Burn-based MLP, DeepSurv, DeepHit, RNN, Transformer, and autoencoder workflows; generalized random forests through the vendored C++ core. |
+| Machine learning and deep learning | `ml`, `dl` | Preprocessing, feature engineering, clustering, supervised models, ensembles, anomaly detection, dimensionality reduction; Burn-based MLP, DeepSurv, DeepHit, RNN, Transformer, and autoencoder workflows. Generalized random forests ship as the containerized `grf` plugin family (official R grf). |
 | Statistical genetics | `ldsc`, `mr`, `lava`, `mrlap`, `lcv`, `cpassoc`, `magma`, `coloc`, `bkmr`, `evalue`, `genomic_sem`, `lcmm` | LD score regression, Mendelian randomization, local genetic correlation, colocalization, Bayesian kernel-machine regression, E-value analysis, Genomic SEM, latent-class mixed models, and related ports. |
 | Regression discontinuity | `rdrobust`, `rdpower`, `rdmulti`, `rddensity`, `rdlocrand` | Local-polynomial RD estimation, power and sample-size calculations, multi-cutoff designs, manipulation testing, and local randomization inference. |
 | Scientific data clients | `eutils`, `opengwas`, `gwascatalog-sdk`, `opentargets`, `chembl`, `uniprot`, `string-sdk`, `enrichr-sdk`, `kegg`, `reactome`, `ensembl`, `rcsb`, `alphafold`, `interpro`, `pubchem`, `protocolio`, `clinicaltrials` | SDKs, agent tools, and selected DAG source nodes for PubMed/Entrez, OpenGWAS, GWAS Catalog, Open Targets, ChEMBL, UniProt, STRING, Enrichr, KEGG, Reactome, Ensembl, RCSB, AlphaFold, InterPro, PubChem, protocols.io, and ClinicalTrials.gov. |
@@ -104,7 +104,7 @@ only checks presence locally (bounded, offline-safe), so daemon readiness
 never waits on the network. Set `AUTONOMICS_PANEL_SYNC=1` to run the
 provisioning inline during `autonomics serve` for unattended deployments.
 
-26 families / 74 node kinds are currently published:
+27 families / 97 node kinds are currently published:
 
 | Family | Node kinds | Tool |
 | --- | --- | --- |
@@ -134,6 +134,7 @@ provisioning inline during `autonomics serve` for unattended deployments.
 | [pathology](https://github.com/auto-nomics/pathology-plugin) | 7 `pathology_*` variants | WSI ingest / QC / embedding / IHC |
 | [bulk-rnaseq](https://github.com/auto-nomics/bulk-rnaseq-plugin) | `limma_voom`, `wgcna` | limma+voom differential expression, WGCNA modules |
 | [hyprcoloc](https://github.com/auto-nomics/hyprcoloc-plugin) | `hyprcoloc` | HyPrColoc multi-trait colocalization |
+| [grf](https://github.com/auto-nomics/grf-plugin) | 23 `grf_*` kinds: 12 forest trainers, `grf_predict_forest`, ATE / best-linear-projection / calibration / scores, forest weights / split frequencies / variable importance / get-tree / merge, `grf_generate_causal_data` | generalized random forests (official R grf 2.6.1) |
 
 ### Installing plugins
 
@@ -320,7 +321,6 @@ cargo test -p epi
 cargo test -p statkit
 cargo test -p ldsc
 cargo test -p mr
-cargo test -p grf
 cargo test -p nodes-io
 
 # Formatting and lint.
@@ -363,7 +363,6 @@ bun run build
 - [MiXeR](docs/stat-genetics/mixer.md)
 - [SuSiE-RSS](docs/stat-genetics/susie-rss.md)
 - [TWAS/FUSION](docs/stat-genetics/twas-fusion.md)
-- [GRF port](docs/grf_analysis.md)
 - [Radiomics Stage-A nodes](docs/radiomics_nodes.md)
 - [Visualization container](docs/visualization.md)
 
@@ -387,4 +386,4 @@ bun run build
 
 ## License
 
-The workspace metadata declares the MIT license for Autonomics packages that inherit it; no standalone top-level license file is currently checked in. Vendored and containerized third-party software retains its upstream license. In particular, the GRF C++ core is GPL-3, and static linking via `grf-sys` has GPL implications for distributed binaries. Dataset and model checkpoints carry their own terms.
+The workspace metadata declares the MIT license for Autonomics packages that inherit it; no standalone top-level license file is currently checked in. Vendored and containerized third-party software retains its upstream license. GPL-licensed tooling (e.g. the grf R package) runs only inside digest-pinned container plugins, isolated at the image boundary like every other tool family; nothing GPL is compiled into or linked with the workspace binaries. Dataset and model checkpoints carry their own terms.
