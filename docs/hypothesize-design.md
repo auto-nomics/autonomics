@@ -28,8 +28,9 @@ Cross-validation target throughout: the corresponding R function from
    Kruskal–Wallis, Friedman, one-way ANOVA, Levene/Bartlett.
 2. **Likelihood trinity** — Wald, LRT, Score as first-class nodes that accept
    fitted-model outputs (estimate ± SE, log-likelihoods, score + information)
-   so regression nodes (`linear_regression`, `logistic_regression`,
-   `cox_regression`, `susie_rss`, …) can feed them directly.
+   so regression nodes (`linear_regression`, `binary_logistic_regression`,
+   `ordinal_logistic_regression`, `cox_regression`, `susie_rss`, …) can
+   feed them directly.
 3. **Closure under combination** — Fisher's, Stouffer's, Tippett's, min-P,
    Wilkinson, and the Boolean algebra (intersection-union / union-intersection
    / complement) operate uniformly on the standard test-row schema, so any
@@ -388,8 +389,9 @@ promoted to typed columns by the node layer.
 
 These nodes read **scalars and small matrices from the spec**, not from
 columns. They are the natural sink for fitted-model outputs: the agent (or
-the DAG author) wires a `linear_regression`/`logistic_regression`/
-`cox_regression` output through a tiny projection node (or reads from a
+   the DAG author) wires a `linear_regression`/`binary_logistic_regression`/
+   `ordinal_logistic_regression`/`cox_regression` output through a tiny
+   projection node (or reads from a
 single-row upstream table) and feeds the values into these specs.
 
 | Kind                          | Spec fields                                                                          | Output                       |
