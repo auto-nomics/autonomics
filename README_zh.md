@@ -80,7 +80,7 @@ Node registry + DAG scheduler
 | 分析执行 | `dag-core`、`data-engine`、`data-engine-tools`、`crates/node-bundles/*`、`workflow-editor` | 节点 trait、插件注册表、类型化端口、调度器、JSON Schema 参数、智能体工具、快照和可复用 workflow skill。 |
 | 数据基础设施 | `vfs`、`data-catalog`、`container-runtime`、`biofusion` | OpenDAL VFS、版本化对象存储数据包、Podman 执行、不可变 panel 缓存，以及生物格式的 DataFusion 读取器。 |
 | 统计与流行病学 | `statkit`、`epi`、`hypothesize`、`nodes-power`、`cmprsk`、`survey`、`mice`、`hierint` | 描述统计与回归；因果推断和中介；可组合检验与 p 值工作流；前瞻性功效与样本量设计；竞争风险；调查设计；插补；层级交互模型。 |
-| 机器学习与深度学习 | `ml`、`dl`、`grf`、`grf-sys` | 预处理、特征工程、聚类、监督模型、集成学习、异常检测、降维；Burn 的 MLP、DeepSurv、DeepHit、RNN、Transformer、autoencoder；通过 vendored C++ 核心运行 generalized random forests。 |
+| 机器学习与深度学习 | `ml`、`dl` | 预处理、特征工程、聚类、监督模型、集成学习、异常检测、降维；Burn 的 MLP、DeepSurv、DeepHit、RNN、Transformer、autoencoder。广义随机森林以容器化 `grf` 插件家族(官方 R grf)提供。 |
 | 统计遗传学 | `ldsc`、`mr`、`lava`、`mrlap`、`lcv`、`cpassoc`、`magma`、`coloc`、`bkmr`、`evalue`、`genomic_sem`、`lcmm` | LD score regression、孟德尔随机化、局部遗传相关、colocalization、Bayesian kernel-machine regression、E-value、Genomic SEM、latent-class mixed models 等。 |
 | 断点回归 | `rdrobust`、`rdpower`、`rdmulti`、`rddensity`、`rdlocrand` | 局部多项式 RD 估计、功效与样本量、多 cutoff 设计、manipulation testing、局部随机化推断。 |
 | 科研数据客户端 | `eutils`、`opengwas`、`gwascatalog-sdk`、`opentargets`、`chembl`、`uniprot`、`string-sdk`、`enrichr-sdk`、`kegg`、`reactome`、`ensembl`、`rcsb`、`alphafold`、`interpro`、`pubchem`、`protocolio`、`clinicaltrials` | PubMed/Entrez、OpenGWAS、GWAS Catalog、Open Targets、ChEMBL、UniProt、STRING、Enrichr、KEGG、Reactome、Ensembl、RCSB、AlphaFold、InterPro、PubChem、protocols.io、ClinicalTrials.gov 的 SDK、智能体工具和部分 DAG source 节点。 |
@@ -101,7 +101,7 @@ catalog 缓存缺失的 dataset；启动自检只做本地存在性检查（有�
 daemon 就绪永不等待网络。无人值守部署可设 `AUTONOMICS_PANEL_SYNC=1` 让
 `autonomics serve` 启动时内联完成供给。
 
-当前发布 26 个家族 / 74 个节点 kind：
+当前发布 27 个家族 / 97 个节点 kind：
 
 | 家族 | 节点 kind | 工具 |
 | --- | --- | --- |
@@ -131,6 +131,7 @@ daemon 就绪永不等待网络。无人值守部署可设 `AUTONOMICS_PANEL_SYN
 | [pathology](https://github.com/auto-nomics/pathology-plugin) | 7 个 `pathology_*` 变体 | WSI 切片摄取 / QC / 嵌入 / IHC |
 | [bulk-rnaseq](https://github.com/auto-nomics/bulk-rnaseq-plugin) | `limma_voom`, `wgcna` | limma+voom 差异表达、WGCNA 模块分析 |
 | [hyprcoloc](https://github.com/auto-nomics/hyprcoloc-plugin) | `hyprcoloc` | HyPrColoc 多性状共定位 |
+| [grf](https://github.com/auto-nomics/grf-plugin) | 23 个 `grf_*` kind:12 个森林 trainer、`grf_predict_forest`、ATE / 最佳线性投影 / 校准 / 打分、森林权重 / 分裂频率 / 变量重要性 / 取树 / 合并、`grf_generate_causal_data` | 广义随机森林(官方 R grf 2.6.1) |
 
 ### 安装插件
 
@@ -317,7 +318,6 @@ cargo test -p epi
 cargo test -p statkit
 cargo test -p ldsc
 cargo test -p mr
-cargo test -p grf
 cargo test -p nodes-io
 
 # 格式与 lint。
@@ -360,7 +360,6 @@ bun run build
 - [MiXeR](docs/stat-genetics/mixer_zh.md)
 - [SuSiE-RSS](docs/stat-genetics/susie-rss_zh.md)
 - [TWAS/FUSION](docs/stat-genetics/twas-fusion.md)
-- [GRF 移植](docs/grf_analysis.md)
 - [Radiomics Stage-A 节点](docs/radiomics_nodes.md)
 - [Visualization 容器](docs/visualization_zh.md)
 
@@ -384,4 +383,4 @@ bun run build
 
 ## 许可证
 
-工作空间元数据对继承它的 Autonomics 包声明 MIT；当前未单独提交顶层 license 文件。Vendored 与容器化第三方软件保留上游许可；尤其注意 GRF C++ 核心为 GPL-3，通过 `grf-sys` 静态链接会对分发二进制产生 GPL 影响。数据集和模型 checkpoint 另有各自条款。
+工作空间元数据对继承它的 Autonomics 包声明 MIT；当前未单独提交顶层 license 文件。Vendored 与容器化第三方软件保留上游许可。GPL 许可的工具(如 grf R 包)仅在 digest 钉死的容器插件内运行,与其它工具家族一样隔离在镜像边界,不编译进、也不链接进工作空间二进制。数据集和模型 checkpoint 另有各自条款。

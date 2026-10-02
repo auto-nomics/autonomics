@@ -1,5 +1,11 @@
 # grf (Generalized Random Forests) 移植分析
 
+> **本文档已废弃 (superseded)。** 所述的原生 FFI 移植方案(`grf-sys` C++ 静态链接 +
+> `bio_crates/grf` Rust 移植 + `nodes-grf` 节点包)已整体移除:GRF 现以容器化 manifest 插件
+> 形态提供(github.com/auto-nomics/grf-plugin,官方 R grf 2.6.1,digest 钉死镜像),
+> 移除了 GPL-3 静态链接与 libstdc++/pthread 强制依赖。插件格式与迁移流程见
+> docs/plugin-node-migration.md。本文保留仅作历史记录。
+
 > 参考代码: `reference/grf/` (R + C++, grf 2.6.1, GPL-3)
 > 用途: 为 autonomics DAG 引擎设计 grf 的节点封装方案
 > 关键问题: **能否直接调用 C++ core, DAG 节点仅做调度?**
