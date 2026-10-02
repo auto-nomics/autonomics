@@ -139,6 +139,26 @@ impl LocalCatalog {
         }
     }
 
+    /// Search fully installed current entries in this local cache.
+    ///
+    /// This never contacts the remote registry. An entry is ignored if its
+    /// manifest or completion marker has been removed from the cache.
+    pub fn search(
+        &self,
+        query: &str,
+        kind: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<CatalogEntry>> {
+        let index = self.index()?;
+        let mut installed = CatalogIndex::default();
+        installed.entries = index
+            .current_entries()
+            .filter(|entry| self.is_installed(entry))
+            .cloned()
+            .collect();
+        Ok(installed.search(query, kind, limit))
+    }
+
     fn write_index(&self, index: &CatalogIndex) -> Result<()> {
         let path = self.root.join("index.json");
         let pending = self

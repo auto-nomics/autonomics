@@ -1,4 +1,4 @@
-//! Agent-facing tools for the remote catalog and the local package cache.
+//! Agent-facing tools for the package catalog and its local installation cache.
 
 use std::sync::Arc;
 
@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use data_catalog::{LocalCatalog, RemoteCatalog};
 use serde_json::json;
 
-/// Remote catalog access plus the runtime's local package cache.
+/// Remote package registry plus the runtime's local installation cache.
 pub struct CatalogState {
     pub local: Arc<LocalCatalog>,
     pub remote: Arc<RemoteCatalog>,
@@ -17,10 +17,10 @@ pub struct CatalogState {
 
 #[tool(
     name = "catalog_search",
-    description = "Search current entries in the remote catalog by free text and kind. Results include id, version, kind, digest, and generated VFS paths."
+    description = "Search current entries installed in the local catalog cache by free text and kind. Results include repository, version, kind, and digest."
 )]
 pub struct CatalogSearchInput {
-    #[desc = "Free-text terms. All terms must match id, version, kind, or digest."]
+    #[desc = "Free-text terms. All terms must match repository, version, kind, or digest."]
     pub query: Option<String>,
     #[desc = "Exact dataset kind, for example ldsc_ref_ld_chr."]
     pub kind: Option<String>,
@@ -29,23 +29,6 @@ pub struct CatalogSearchInput {
 }
 
 pub struct CatalogSearchTool {
-    state: Arc<CatalogState>,
-}
-
-#[tool(
-    name = "catalog_install",
-    description = "Download and verify one package from the remote catalog into the local cache. Restart the runtime before binding newly installed entries into a DAG."
-)]
-pub struct CatalogInstallInput {
-    #[desc = "Catalog dataset id."]
-    pub id: String,
-    #[desc = "Optional exact version. Omit for the current version."]
-    pub version: Option<String>,
-    #[desc = "Optional immutable digest."]
-    pub digest: Option<String>,
-}
-
-pub struct CatalogInstallTool {
     state: Arc<CatalogState>,
 }
 
@@ -137,41 +120,16 @@ impl ToolFunction for CatalogSearchTool {
     type Input = CatalogSearchInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        let index = self
-            .state
-            .remote
-            .index()
-            .await
-            .map_err(|error| execution_failed(error.to_string()))?;
-        let entries = index.search(
-            input.query.as_deref().unwrap_or(""),
-            input.kind.as_deref(),
-            input.limit.unwrap_or(50).min(500),
-        );
-        Ok(ToolResult::success_json(json!({ "datasets": entries })))
-    }
-}
-
-#[async_trait]
-impl ToolFunction for CatalogInstallTool {
-    type Input = CatalogInstallInput;
-
-    async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        let entry = self
+        let entries = self
             .state
             .local
-            .install(
-                &self.state.remote,
-                &input.id,
-                input.version.as_deref(),
-                input.digest.as_deref(),
+            .search(
+                input.query.as_deref().unwrap_or(""),
+                input.kind.as_deref(),
+                input.limit.unwrap_or(50).min(500),
             )
-            .await
             .map_err(|error| execution_failed(error.to_string()))?;
-        Ok(ToolResult::success_json(json!({
-            "entry": entry,
-            "restart_required": true
-        })))
+        Ok(ToolResult::success_json(json!({ "datasets": entries })))
     }
 }
 
@@ -274,9 +232,6 @@ pub fn catalog_registrations(state: Arc<CatalogState>) -> Vec<ToolRegistration> 
         ToolRegistration::from(CatalogSearchTool {
             state: Arc::clone(&state),
         }),
-        ToolRegistration::from(CatalogInstallTool {
-            state: Arc::clone(&state),
-        }),
         ToolRegistration::from(CatalogUpdateTool {
             state: Arc::clone(&state),
         }),
@@ -293,6 +248,8 @@ pub fn catalog_registrations(state: Arc<CatalogState>) -> Vec<ToolRegistration> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agentik_sdk::types::ToolResultContent;
+    use data_catalog::remote::test_utils::MapSource;
 
     fn test_state() -> CatalogState {
         let workspace = tempfile::tempdir().unwrap();
@@ -306,8 +263,49 @@ mod tests {
         }
     }
 
+    fn local_state_with_installed_entry() -> (CatalogState, tempfile::TempDir, std::path::PathBuf) {
+        let cache = tempfile::tempdir().unwrap();
+        let entry = data_catalog::CatalogEntry {
+            repo: data_catalog::HfRepoId::new("owner/installed-panel").unwrap(),
+            version: "v1".into(),
+            kind: "panel".into(),
+            digest: format!("sha256:{}", "a".repeat(64)),
+            current: true,
+            created_unix_seconds: 1,
+        };
+        let mut index = data_catalog::CatalogIndex::default();
+        index.upsert_current(entry.clone());
+        std::fs::write(
+            cache.path().join("index.json"),
+            serde_json::to_vec(&index).unwrap(),
+        )
+        .unwrap();
+
+        let entry_dir = cache.path().join(entry.cache_dir_name());
+        std::fs::create_dir_all(&entry_dir).unwrap();
+        std::fs::write(entry_dir.join("manifest.json"), "").unwrap();
+        let marker = entry_dir.join(data_catalog::local::PANEL_CACHE_COMPLETE_MARKER);
+        std::fs::write(&marker, format!("digest={}\n", entry.digest)).unwrap();
+
+        let remote = RemoteCatalog::from_source(
+            data_catalog::CatalogConfig {
+                repository: Some("owner/catalog-index".into()),
+                ..Default::default()
+            },
+            Box::new(MapSource::default()),
+        );
+        (
+            CatalogState {
+                local: Arc::new(LocalCatalog::open(cache.path()).unwrap()),
+                remote: Arc::new(remote),
+            },
+            cache,
+            marker,
+        )
+    }
+
     #[tokio::test]
-    async fn registers_six_catalog_tools() {
+    async fn registers_five_catalog_tools() {
         let registrations = catalog_registrations(Arc::new(test_state()));
         let names: Vec<&str> = registrations
             .iter()
@@ -317,12 +315,48 @@ mod tests {
             names,
             [
                 "catalog_search",
-                "catalog_install",
                 "catalog_update",
                 "catalog_describe",
                 "catalog_list_files",
                 "catalog_list_versions"
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn catalog_search_uses_installed_local_entries() {
+        let (state, _cache, marker) = local_state_with_installed_entry();
+        let state = Arc::new(state);
+        let result = CatalogSearchTool {
+            state: Arc::clone(&state),
+        }
+        .run(CatalogSearchInput {
+            query: Some("installed-panel".into()),
+            kind: Some("panel".into()),
+            limit: Some(10),
+        })
+        .await
+        .unwrap();
+
+        let ToolResultContent::Json(value) = result.content else {
+            panic!("catalog_search must return JSON");
+        };
+        let datasets = value["datasets"].as_array().unwrap();
+        assert_eq!(datasets.len(), 1);
+        assert_eq!(datasets[0]["repo"].as_str(), Some("owner/installed-panel"));
+
+        std::fs::remove_file(marker).unwrap();
+        let result = CatalogSearchTool { state }
+            .run(CatalogSearchInput {
+                query: Some("installed-panel".into()),
+                kind: Some("panel".into()),
+                limit: Some(10),
+            })
+            .await
+            .unwrap();
+        let ToolResultContent::Json(value) = result.content else {
+            panic!("catalog_search must return JSON");
+        };
+        assert!(value["datasets"].as_array().unwrap().is_empty());
     }
 }
