@@ -25,6 +25,7 @@ pub mod fulltext;
 pub mod http_options;
 pub mod library_tools;
 pub mod mineru;
+pub mod nodes;
 pub mod oa_fetch;
 pub mod query;
 pub mod shared;
