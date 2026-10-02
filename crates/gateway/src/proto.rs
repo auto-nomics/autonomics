@@ -369,6 +369,29 @@ pub struct SkillEvolutionStatus {
     pub proposals_pending: usize,
     pub proposals_approved: usize,
     pub proposals_rejected: usize,
+    /// ── Live cycle monitor (flat mirror of skills::CycleStatus) ──
+    /// Current worker phase: `idle` | `coalescing` | `distilling`.
+    pub phase: String,
+    /// Triggers accumulated in the quiet window (coalescing only).
+    pub phase_queued: usize,
+    /// Trigger labels the running cycle was caused by (distilling
+    /// only).
+    pub phase_triggers: Vec<String>,
+    /// How long the current phase has held, in milliseconds.
+    pub phase_elapsed_ms: u64,
+    /// Cycles executed since service start.
+    pub cycles_completed: u64,
+    /// Unix time of the most recent cycle.
+    pub last_cycle_at: Option<i64>,
+    /// Wall time of the most recent cycle, in milliseconds.
+    pub last_cycle_duration_ms: Option<u64>,
+    /// Trigger labels of the most recent cycle.
+    pub last_triggers: Vec<String>,
+    /// Error text when the most recent cycle failed.
+    pub last_error: Option<String>,
+    /// Commands dropped because the channel was full — an
+    /// observability signal, not an error.
+    pub dropped_commands: u64,
 }
 
 /// One proposal row for listings.

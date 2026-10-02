@@ -254,17 +254,26 @@ pub(crate) async fn get_skill_evolution_status(
 
 fn skill_evolution_status(infra: &SharedInfra) -> SkillEvolutionStatus {
     let manager = &infra.skills;
-    let (auto_approve, max_approvals_per_cycle, sweep_interval_secs) = match &infra.skill_evolution
-    {
-        Some(handle) => (
-            handle.policy().auto_approve,
-            handle.policy().max_approvals_per_cycle,
-            handle.timer().map(|d| d.as_secs()),
-        ),
-        // Service off: the loop still runs on demand (CLI,
-        // skill_evolve tool); display the daemon's configured
-        // gate from the manager's defaults.
-        None => (false, 5, None),
+    let (auto_approve, max_approvals_per_cycle, sweep_interval_secs, cycle) =
+        match &infra.skill_evolution {
+            Some(handle) => (
+                handle.policy().auto_approve,
+                handle.policy().max_approvals_per_cycle,
+                handle.timer().map(|d| d.as_secs()),
+                handle.cycle_status(),
+            ),
+            // Service off: the loop still runs on demand (CLI,
+            // skill_evolve tool); display the daemon's configured
+            // gate from the manager's defaults and a zeroed monitor.
+            None => (false, 5, None, skills::CycleStatus::default()),
+        };
+    // Flatten the typed phase into DTO-friendly fields.
+    let (phase, phase_queued, phase_triggers) = match &cycle.phase {
+        skills::CyclePhase::Idle => ("idle".to_string(), 0, Vec::new()),
+        skills::CyclePhase::Coalescing { queued } => ("coalescing".to_string(), *queued, Vec::new()),
+        skills::CyclePhase::Distilling { triggers } => {
+            ("distilling".to_string(), 0, triggers.clone())
+        }
     };
     let mut skills_workspace = 0;
     let mut skills_global = 0;
@@ -304,6 +313,16 @@ fn skill_evolution_status(infra: &SharedInfra) -> SkillEvolutionStatus {
         proposals_pending,
         proposals_approved,
         proposals_rejected,
+        phase,
+        phase_queued,
+        phase_triggers,
+        phase_elapsed_ms: cycle.phase_elapsed_ms,
+        cycles_completed: cycle.cycles_completed,
+        last_cycle_at: cycle.last_cycle_at,
+        last_cycle_duration_ms: cycle.last_cycle_duration_ms,
+        last_triggers: cycle.last_triggers,
+        last_error: cycle.last_error,
+        dropped_commands: cycle.dropped_commands,
     }
 }
 
