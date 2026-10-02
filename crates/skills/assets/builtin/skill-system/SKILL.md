@@ -47,11 +47,13 @@ reusable node/edge graphs over the registered node kinds.
 
 When you learn something a future session would otherwise rediscover
 the hard way, record it with `skill_observe`: a failure and its fix
-(`--kind failure`, anchored with the node kind and error text), a
-verified recipe (`recipe`), or a caveat (`caveat`). Repeated anchored
-failures cluster deterministically and surface as skill proposals the
-user reviews — your observations are the raw material of new skills.
-Failing evals feed the same channel automatically.
+(`kind: failure`, anchored with the node kind and error text), a
+verified recipe (`recipe`), or a caveat (`caveat`) — anchor each with
+the node kind. Repeated anchored observations of every kind cluster
+deterministically — failures by error signature, recipes and caveats
+by their one-line summary, so write summaries as a stable one-liner
+naming the technique or boundary — and surface as skill proposals the
+user reviews. Failing evals feed the same channel automatically.
 
 `skill_evolve` runs one evolution cycle immediately instead of
 waiting for the background sweep. It is propose-only by design: it

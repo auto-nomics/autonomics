@@ -5,9 +5,12 @@
 //! code end to end:
 //!
 //! 1. **Cluster** observations by their structural anchor —
-//!    `(node_kind, error signature)` — not by text similarity. Only
-//!    anchored observations participate; free-form notes stay
-//!    searchable but never auto-propose.
+//!    `(node_kind, signature, kind)` — not by text similarity. The
+//!    signature is the normalized error text for failures and the
+//!    normalized summary line for recipes and caveats; the kind keeps
+//!    the three from ever coalescing. Only anchored observations
+//!    participate; free-form notes stay searchable but never
+//!    auto-propose.
 //! 2. **Threshold**: a cluster needs `MIN_CLUSTER` anchored
 //!    observations before it is worth a skill — the same
 //!    "repeated pattern" bar EvoScientist applies, evaluated
@@ -39,8 +42,11 @@ pub const MIN_CLUSTER: usize = 3;
 /// One candidate cluster surfaced by [`distill`].
 #[derive(Debug, Clone)]
 pub struct Candidate {
+    pub kind: ObservationKind,
     pub node_kind: String,
-    pub error_signature: String,
+    /// The normalized clustering signature: error text for failures,
+    /// summary line for recipes and caveats.
+    pub signature: String,
     pub observations: Vec<Observation>,
 }
 
@@ -51,20 +57,33 @@ impl Candidate {
         cluster_hash(&ids)
     }
 
-    /// The skill name this cluster distills to.
+    /// The skill name this cluster distills to. Failure names keep the
+    /// bare `<node>-<signature>` form; recipe and caveat names carry a
+    /// kind suffix so the three namespaces never collide.
     pub fn skill_name(&self) -> Option<String> {
-        let error_slug = slug(&self.error_signature);
+        let sig_slug = slug(&self.signature);
         let kind_slug = slug(&self.node_kind);
         if kind_slug.is_empty() {
             return None;
         }
-        let base = if error_slug.is_empty() {
-            format!("{kind_slug}-fixes")
+        let stem = if sig_slug.is_empty() {
+            match self.kind {
+                ObservationKind::Failure => format!("{kind_slug}-fixes"),
+                ObservationKind::Recipe | ObservationKind::Caveat => kind_slug.clone(),
+            }
         } else {
-            format!("{kind_slug}-{error_slug}")
+            format!("{kind_slug}-{sig_slug}")
         };
-        // Leave room for nothing: names cap at 64 chars by contract.
-        format::sanitize_name(&base[..base.len().min(60)])
+        let capped = match self.kind {
+            ObservationKind::Failure => stem[..stem.len().min(60)].to_string(),
+            // Truncate the stem BEFORE appending the kind suffix so
+            // the suffix always survives the 64-char name cap — that
+            // is what keeps the failure/recipe/caveat namespaces
+            // disjoint on long signatures.
+            ObservationKind::Recipe => format!("{}-recipe", &stem[..stem.len().min(52)]),
+            ObservationKind::Caveat => format!("{}-caveat", &stem[..stem.len().min(52)]),
+        };
+        format::sanitize_name(&capped)
     }
 }
 
@@ -105,34 +124,39 @@ impl DistillReport {
 }
 
 /// Group anchored observations into candidate clusters meeting the
-/// threshold, in a deterministic order.
+/// threshold, in a deterministic order. Failures cluster by their
+/// normalized error text, recipes and caveats by their normalized
+/// summary line; the kind is part of the key, so the three never
+/// coalesce into one cluster.
 pub fn candidates(observations: &[Observation]) -> Vec<Candidate> {
-    let mut groups: BTreeMap<(String, String), Vec<Observation>> = BTreeMap::new();
+    let mut groups: BTreeMap<(String, String, ObservationKind), Vec<Observation>> =
+        BTreeMap::new();
     for observation in observations {
-        // Only failure-kind observations carry a reliable anchor; a
-        // recipe without a node kind has nothing to cluster on.
+        // The structural anchor is mandatory for every kind: without
+        // a node kind there is nothing to cluster on.
         let Some(kind) = observation.node_kind.as_deref().map(str::to_string) else {
             continue;
         };
-        if observation.kind != ObservationKind::Failure {
-            continue;
-        }
-        let error = observation
-            .error
-            .as_deref()
-            .map(signature)
-            .unwrap_or_default();
+        let sig = match observation.kind {
+            ObservationKind::Failure => observation
+                .error
+                .as_deref()
+                .map(signature)
+                .unwrap_or_default(),
+            ObservationKind::Recipe | ObservationKind::Caveat => signature(&observation.summary),
+        };
         groups
-            .entry((kind, error))
+            .entry((kind, sig, observation.kind))
             .or_default()
             .push(observation.clone());
     }
     groups
         .into_iter()
         .filter(|(_, members)| members.len() >= MIN_CLUSTER)
-        .map(|((node_kind, error_signature), observations)| Candidate {
+        .map(|((node_kind, signature, kind), observations)| Candidate {
+            kind,
             node_kind,
-            error_signature,
+            signature,
             observations,
         })
         .collect()
@@ -160,36 +184,73 @@ fn signature(error: &str) -> String {
     out.trim().to_string()
 }
 
+/// Defuse a signature for embedding in the YAML plain-scalar
+/// description: `": "` would terminate the value and `" #"` would
+/// start a comment. The body keeps the untouched text.
+fn yaml_safe(text: &str) -> String {
+    text.replace(": ", ":").replace(" #", "#")
+}
+
 /// Render the skeleton SKILL.md for a candidate.
 ///
 /// Conservative by design: it presents what was observed, not advice
 /// the loop has no basis for. The approval gate (a human, for now)
 /// decides whether the pattern deserves promotion.
 pub fn render_skill_md(candidate: &Candidate) -> String {
-    let mut out = String::new();
-    let error_line = if candidate.error_signature.is_empty() {
+    // Per-kind profile: capitalized noun for the description, plain
+    // noun for the entries heading, how the signature is introduced,
+    // the description tail, and the kind tag after `auto`.
+    let (cap_noun, noun, sig_prefix, tail, kind_tag) = match candidate.kind {
+        ObservationKind::Failure => (
+            "Fixes",
+            "fixes",
+            " failing with",
+            "Consult before debugging a similar failure.",
+            "",
+        ),
+        ObservationKind::Recipe => (
+            "Recipes",
+            "recipes",
+            " for",
+            "Consult before improvising a similar procedure.",
+            ", recipe",
+        ),
+        ObservationKind::Caveat => (
+            "Caveats",
+            "caveats",
+            " on",
+            "Consult before applying the usual approach here.",
+            ", caveat",
+        ),
+    };
+    let sig_line = if candidate.signature.is_empty() {
         String::new()
     } else {
-        format!(" failing with `{}`", candidate.error_signature)
+        format!("{sig_prefix} `{}`", candidate.signature)
     };
+    let mut out = String::new();
     out.push_str(&format!(
-        "---\nname: {}\ndescription: Fixes recorded for the `{}` node kind{}. \
-         Consult before debugging a similar failure.\ntags: [auto, {}]\n---\n\n",
+        "---\nname: {}\ndescription: {} recorded for the `{}` node kind{}. \
+         {}\ntags: [auto{}, {}]\n---\n\n",
         candidate.skill_name().unwrap_or_default(),
+        cap_noun,
         candidate.node_kind,
-        error_line,
+        yaml_safe(&sig_line),
+        tail,
+        kind_tag,
         slug(&candidate.node_kind),
     ));
     out.push_str(&format!(
         "# Auto-distilled: `{}`{}\n\n",
-        candidate.node_kind, error_line
+        candidate.node_kind, sig_line
     ));
     out.push_str(&format!(
-        "Distilled from {} recorded observation(s). Each entry below was \
+        "Distilled from {} recorded {} observation(s). Each entry below was \
          learned during real work; none of it is invented.\n\n",
-        candidate.observations.len()
+        candidate.observations.len(),
+        noun,
     ));
-    out.push_str("## Recorded fixes\n\n");
+    out.push_str(&format!("## Recorded {noun}\n\n"));
     for observation in &candidate.observations {
         out.push_str(&format!("### {}\n\n", observation.summary));
         let body = observation.body.trim();
@@ -200,9 +261,10 @@ pub fn render_skill_md(candidate: &Candidate) -> String {
         out.push('\n');
     }
     out.push_str(
-        "## Caveats\n\n- This skill was generated deterministically from \
-         observation records. Verify each fix still applies before use, and \
-         edit or uninstall it if the underlying node behavior has changed.\n",
+        "## Notes on auto-generation\n\n- This skill was generated \
+         deterministically from observation records. Verify each entry \
+         still applies before use, and edit or uninstall it if the \
+         underlying node behavior has changed.\n",
     );
     out
 }
@@ -312,13 +374,14 @@ pub fn distill(
                 render_update_md(&current, &fresh),
             )?;
             let rationale = format!(
-                "update: {} new observation(s) on `{}`{}",
+                "update: {} new {} observation(s) on `{}`{}",
                 fresh.len(),
+                candidate.kind.label(),
                 candidate.node_kind,
-                if candidate.error_signature.is_empty() {
+                if candidate.signature.is_empty() {
                     String::new()
                 } else {
-                    format!(" / `{}`", candidate.error_signature)
+                    format!(" / `{}`", candidate.signature)
                 }
             );
             proposals.submit(
@@ -352,13 +415,14 @@ pub fn distill(
         std::fs::create_dir_all(&dir)?;
         std::fs::write(dir.join("SKILL.md"), render_skill_md(&candidate))?;
         let rationale = format!(
-            "{} anchored observation(s) on `{}`{}",
+            "{} anchored {} observation(s) on `{}`{}",
             candidate.observations.len(),
+            candidate.kind.label(),
             candidate.node_kind,
-            if candidate.error_signature.is_empty() {
+            if candidate.signature.is_empty() {
                 String::new()
             } else {
-                format!(" / `{}`", candidate.error_signature)
+                format!(" / `{}`", candidate.signature)
             }
         );
         proposals.submit(
@@ -397,6 +461,24 @@ mod tests {
             .unwrap();
     }
 
+    fn observe_kind(
+        store: &ObservationStore,
+        kind: ObservationKind,
+        summary: &str,
+        body: &str,
+    ) {
+        store
+            .record(ObservationInput {
+                kind,
+                source: ObservationSource::Agent,
+                summary: summary.into(),
+                body: body.into(),
+                node_kind: Some("file_to_dataframe".into()),
+                error: None,
+            })
+            .unwrap();
+    }
+
     #[test]
     fn clusters_by_anchor_with_numeric_generalization() {
         let tmp = tempfile::tempdir().unwrap();
@@ -426,6 +508,9 @@ mod tests {
 
     #[test]
     fn unanchored_observations_do_not_participate() {
+        // Since recipes and caveats also cluster when anchored, this
+        // now only proves the anchor rule itself: no node kind, no
+        // cluster — regardless of kind.
         let tmp = tempfile::tempdir().unwrap();
         let store = ObservationStore::open(tmp.path());
         for i in 0..5 {
@@ -441,6 +526,139 @@ mod tests {
                 .unwrap();
         }
         assert!(candidates(&store.list()).is_empty());
+    }
+
+    #[test]
+    fn recipe_clusters_on_summary_signature() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = ObservationStore::open(tmp.path());
+        observe_kind(
+            &store,
+            ObservationKind::Recipe,
+            "prefer tibble for table 3 ops",
+            "recipe body a",
+        );
+        observe_kind(
+            &store,
+            ObservationKind::Recipe,
+            "prefer tibble for table 7 ops",
+            "recipe body b",
+        );
+        observe_kind(
+            &store,
+            ObservationKind::Recipe,
+            "prefer tibble for table 9 ops",
+            "recipe body c",
+        );
+
+        let candidates = candidates(&store.list());
+        assert_eq!(candidates.len(), 1);
+        let candidate = &candidates[0];
+        assert_eq!(candidate.kind, ObservationKind::Recipe);
+        assert_eq!(candidate.observations.len(), 3);
+        let name = candidate.skill_name().unwrap();
+        assert_eq!(name, "file-to-dataframe-prefer-tibble-for-table-n-ops-recipe");
+
+        // The rendered draft carries the recipe tag and heading.
+        let md = render_skill_md(candidate);
+        assert!(md.contains("tags: [auto, recipe, file-to-dataframe]"));
+        assert!(md.contains("## Recorded recipes"));
+        assert!(md.contains("recipe body b"));
+    }
+
+    #[test]
+    fn caveat_clusters_on_summary_signature() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = ObservationStore::open(tmp.path());
+        observe_kind(
+            &store,
+            ObservationKind::Caveat,
+            "locale breaks sort order on column 1",
+            "caveat body a",
+        );
+        observe_kind(
+            &store,
+            ObservationKind::Caveat,
+            "locale breaks sort order on column 2",
+            "caveat body b",
+        );
+        observe_kind(
+            &store,
+            ObservationKind::Caveat,
+            "locale breaks sort order on column 3",
+            "caveat body c",
+        );
+
+        let candidates = candidates(&store.list());
+        assert_eq!(candidates.len(), 1);
+        let candidate = &candidates[0];
+        assert_eq!(candidate.kind, ObservationKind::Caveat);
+        let name = candidate.skill_name().unwrap();
+        assert!(name.ends_with("-caveat"), "{name}");
+        let md = render_skill_md(candidate);
+        assert!(md.contains("tags: [auto, caveat, file-to-dataframe]"));
+        assert!(md.contains("## Recorded caveats"));
+    }
+
+    #[test]
+    fn kinds_never_coalesce_into_one_cluster() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = ObservationStore::open(tmp.path());
+        // Same node kind and the same normalized signature text, but
+        // only two of each kind — the kind is part of the key, so no
+        // cluster reaches three and none is proposed.
+        observe(&store, "column 3 has bad type", "failure fix");
+        observe(&store, "column 7 has bad type", "another failure fix");
+        observe_kind(
+            &store,
+            ObservationKind::Recipe,
+            "column 3 has bad type",
+            "recipe a",
+        );
+        observe_kind(
+            &store,
+            ObservationKind::Recipe,
+            "column 7 has bad type",
+            "recipe b",
+        );
+        observe_kind(
+            &store,
+            ObservationKind::Caveat,
+            "column 3 has bad type",
+            "caveat a",
+        );
+        observe_kind(
+            &store,
+            ObservationKind::Caveat,
+            "column 7 has bad type",
+            "caveat b",
+        );
+        assert!(candidates(&store.list()).is_empty());
+    }
+
+    #[test]
+    fn coloned_signatures_still_render_valid_frontmatter() {
+        // A summary containing ": " (plain-scalar terminator) and " #"
+        // (comment starter) must not break the generated SKILL.md.
+        let tmp = tempfile::tempdir().unwrap();
+        let store = ObservationStore::open(tmp.path());
+        for i in 1..=3 {
+            observe_kind(
+                &store,
+                ObservationKind::Recipe,
+                &format!("note: faster path #{i} for big joins"),
+                &format!("body {i}"),
+            );
+        }
+        let proposals = Proposals::open(tmp.path());
+        let registry = crate::registry::SkillRegistry::empty().with_root(
+            crate::registry::SkillTier::Global,
+            tmp.path().join("skills"),
+        );
+        let report = distill(&store.list(), &proposals, &registry).unwrap();
+        assert_eq!(report.proposals_written.len(), 1);
+        let name = &report.proposals_written[0];
+        assert!(proposals.validate_dir(name).is_empty());
     }
 
     #[test]
@@ -491,6 +709,57 @@ mod update_tests {
                 error: Some(error.into()),
             })
             .unwrap();
+    }
+
+    fn observe_recipe(store: &ObservationStore, summary: &str, body: &str) {
+        store
+            .record(ObservationInput {
+                kind: ObservationKind::Recipe,
+                source: ObservationSource::Agent,
+                summary: summary.into(),
+                body: body.into(),
+                node_kind: Some("sql".into()),
+                error: None,
+            })
+            .unwrap();
+    }
+
+    /// The same evolution arc as [`create_then_update_full_arc`], on
+    /// recipe observations clustered by summary signature: three
+    /// recordings create the skill, three more revise it.
+    #[test]
+    fn recipe_create_then_update_full_arc() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = ObservationStore::open(tmp.path());
+        let proposals = Proposals::open(tmp.path());
+        let registry =
+            SkillRegistry::empty().with_root(SkillTier::Global, tmp.path().join("skills"));
+        let global = tmp.path().join("skills");
+
+        observe_recipe(&store, "use CTE for join 1", "recipe one");
+        observe_recipe(&store, "use CTE for join 2", "recipe two");
+        observe_recipe(&store, "use CTE for join 3", "recipe three");
+        let report = distill(&store.list(), &proposals, &registry).unwrap();
+        assert_eq!(report.proposals_written.len(), 1);
+        let name = report.proposals_written[0].clone();
+        assert!(name.ends_with("-recipe"), "{name}");
+
+        proposals.approve(&name, &global).unwrap();
+        let skill_md = global.join(&name).join("SKILL.md");
+        let content = std::fs::read_to_string(&skill_md).unwrap();
+        assert!(content.contains("## Recorded recipes"));
+        assert!(content.contains("recipe three"));
+
+        // Three NEW recordings on the same summary signature → an
+        // update proposal measured against the approved manifest.
+        observe_recipe(&store, "use CTE for join 4", "recipe four");
+        observe_recipe(&store, "use CTE for join 5", "recipe five");
+        observe_recipe(&store, "use CTE for join 6", "recipe six");
+        let updated = distill(&store.list(), &proposals, &registry).unwrap();
+        assert_eq!(updated.updated_existing, vec![name.clone()]);
+        let proposal = proposals.find(&name).unwrap();
+        assert!(proposal.update);
+        assert_eq!(proposal.status, crate::ProposalStatus::Pending);
     }
 
     /// The full evolution arc of one pattern: three observations

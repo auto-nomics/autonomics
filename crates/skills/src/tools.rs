@@ -304,23 +304,24 @@ impl ToolFunction for SkillWorkflowsTool {
     name = "skill_observe",
     description = "Record one durable, reusable observation for the skill \
         evolution loop: a failure and its fix, a verified recipe, or a caveat \
-        where a usual approach breaks. Observations are clustered \
-        deterministically by node kind and error signature; a pattern seen \
-        three or more times becomes a skill proposal for human review. \
+        where a usual approach breaks. Anchored observations are clustered \
+        deterministically — failures by node kind and error signature, \
+        recipes and caveats by node kind and summary signature; a pattern \
+        seen three or more times becomes a skill proposal for human review. \
         Record only what future work would otherwise repeat: name the \
         component, state the reusable fix or condition — never run \
         transcripts or one-off facts."
 )]
 pub struct SkillObserveInput {
-    #[desc = "One line a future search would find; name the component, command, or interface."]
+    #[desc = "One line a future search would find; name the component, command, or interface. For recipe and caveat observations this line is also the clustering signature — write it as a stable one-liner naming the technique or boundary (numeric differences are generalized)."]
     pub summary: String,
     #[desc = "The reusable pattern, fix, or condition. Not a run transcript."]
     pub body: String,
     #[desc = "Observation kind: failure (a fix for an error), recipe (verified how-to), or caveat (where an approach breaks)."]
     pub kind: Option<String>,
-    #[desc = "DAG node kind involved, when the observation is anchored to one (e.g. file_to_dataframe). Anchored failures drive auto-distillation."]
+    #[desc = "DAG node kind involved, when the observation is anchored to one (e.g. file_to_dataframe). Anchored observations of every kind drive auto-distillation."]
     pub node_kind: Option<String>,
-    #[desc = "The error text when this is a failure observation. Distillation clusters by its signature."]
+    #[desc = "The error text when this is a failure observation; distillation clusters failures by its signature. Unused for recipe and caveat."]
     pub error: Option<String>,
 }
 
@@ -371,8 +372,8 @@ impl ToolFunction for SkillObserveTool {
         };
         match self.manager.record_observation(observation_input) {
             Ok(observation) => Ok(ToolResult::success(format!(
-                "recorded observation {} ({}). Repeated patterns surface as \
-                 skill proposals via `autonomics-skills distill`.",
+                "recorded observation {} ({}). Repeated anchored patterns \
+                 surface as skill proposals in the evolution cycle.",
                 observation.id,
                 observation.kind_label(),
             ))),

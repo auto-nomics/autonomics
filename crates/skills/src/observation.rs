@@ -35,7 +35,7 @@ use crate::error::SkillError;
 pub const OBSERVATIONS_DIR: &str = "skill-observations";
 
 /// What kind of signal this observation carries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ObservationKind {
     /// A failure occurred and this is what fixed (or caused) it.
@@ -86,14 +86,21 @@ pub struct Observation {
     pub error: Option<String>,
 }
 
-impl Observation {
-    /// Human-readable kind label for tool output.
-    pub fn kind_label(&self) -> &'static str {
-        match self.kind {
+impl ObservationKind {
+    /// Stable lowercase label for display, tool args, and rationales.
+    pub fn label(&self) -> &'static str {
+        match self {
             ObservationKind::Failure => "failure",
             ObservationKind::Recipe => "recipe",
             ObservationKind::Caveat => "caveat",
         }
+    }
+}
+
+impl Observation {
+    /// Human-readable kind label for tool output.
+    pub fn kind_label(&self) -> &'static str {
+        self.kind.label()
     }
 
     /// Build from input plus the derived id and timestamp.
@@ -126,11 +133,7 @@ fn observation_id(kind: ObservationKind, summary: &str, body: &str) -> String {
 }
 
 fn kind_name(kind: ObservationKind) -> &'static str {
-    match kind {
-        ObservationKind::Failure => "failure",
-        ObservationKind::Recipe => "recipe",
-        ObservationKind::Caveat => "caveat",
-    }
+    kind.label()
 }
 
 fn hex(bytes: &[u8]) -> String {
