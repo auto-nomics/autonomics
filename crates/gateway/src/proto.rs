@@ -392,6 +392,13 @@ pub struct SkillEvolutionStatus {
     /// Commands dropped because the channel was full — an
     /// observability signal, not an error.
     pub dropped_commands: u64,
+    /// Cycles short-circuited because the observation pool was
+    /// empty. Distinct from `cycles_completed`: the worker never
+    /// ran a cycle body.
+    pub cycle_skipped_empty: u64,
+    /// Stable label for why the most recent cycle (or short-circuit)
+    /// was skipped; `None` when the last cycle body actually ran.
+    pub last_skipped_reason: Option<String>,
 }
 
 /// One proposal row for listings.

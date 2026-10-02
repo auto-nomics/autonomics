@@ -323,6 +323,8 @@ fn skill_evolution_status(infra: &SharedInfra) -> SkillEvolutionStatus {
         last_triggers: cycle.last_triggers,
         last_error: cycle.last_error,
         dropped_commands: cycle.dropped_commands,
+        cycle_skipped_empty: cycle.cycle_skipped_empty,
+        last_skipped_reason: cycle.last_skipped_reason,
     }
 }
 
