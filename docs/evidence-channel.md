@@ -1,0 +1,76 @@
+# Evidence channel
+
+`evidence` is a format contract on `FileRef` values: structured, auditable
+information (first shape: bibliographic citations) flowing on DAG file edges
+with wiring-time format gating, content-addressed fingerprints, and inline
+rendering for the agent.
+
+## Contract
+
+A `FileRef` with `format == "evidence"` carries the UTF-8 JSON encoding of
+`bib_types::evidence::EvidenceSet`:
+
+```json
+{
+  "schema_version": 1,
+  "records": [
+    {
+      "citation": { "title": "…", "authors": […], "identifiers": […], "year": 2024 },
+      "note": "why this record is relevant",
+      "origin": "pubmed"
+    }
+  ]
+}
+```
+
+- `citation` is the canonical `bib_types::Article` (normalized by twelve
+  crates and six retrieval backends).
+- Writers always emit `schema_version: 1`; readers **fail closed** on newer
+  versions rather than guessing at unknown semantics.
+- Producers attach a `sha256:{hex}` content hash to the `FileRef`
+  fingerprint, so downstream node fingerprints are content-addressed and
+  incremental invalidation works when a source rewrites the same path.
+
+## Nodes
+
+| Kind | Ports | Behavior |
+|---|---|---|
+| `source_literature` | 0 in; 1 out `File(evidence)` | Fans a `StructuredSearch` out through the literature gateway (pubmed, arxiv, biorxiv, openalex, crossref, s2), stamps `origin`/`note`, dedups, writes one artifact. Per-source failures warn and degrade; all-failed or an unknown source name fails the node. `limit` is per source (default 25, cap 200). |
+| `evidence_merge` | variadic in `File(evidence)`; 1 out `File(evidence)` | Reads inputs in port order, merges, dedups. First occurrence wins for citation fields and `origin`; a missing `note` is filled from the first duplicate that has one. |
+| `evidence_export` | 1 in `File(evidence)`; 1 out `File(bibtex\|ris\|markdown)` | Renders the citations as a bibliography; the output port's format contract follows the spec (`ports_for_spec`). |
+
+## Dedup semantics
+
+Two records are the same evidence when **any** identifier collides:
+
+- DOI: normalized (URL prefixes stripped) and lowercased
+- PMID / arXiv / S2 / OpenAlex / …: trimmed and lowercased
+- No identifiers at all: fuzzy `cite_key` (first author + year + first
+  title word)
+
+Known limitation: the same paper arriving once PMID-only and once DOI-only
+(with disjoint identifiers) is kept twice — resolving that requires a
+cross-source lookup the merge node intentionally does not perform.
+
+## Gating
+
+- Declared ports (merge port 0, export input, all outputs): the scheduler's
+  format gate rejects mismatched wiring at `add_edge` time
+  (`PortFormatMismatch`).
+- Variadic undeclared ports carry no wiring-time contract (dag-core
+  semantics shared with `container_command`); `evidence_merge` rejects
+  non-evidence values at run time instead.
+
+## Path discipline
+
+Spec-driven explicit `path` (`vfs://` URI or absolute local), overwritten on
+re-run, `sink_path()` declared. The engine does not detect write-write
+collisions — give every evidence node its own path.
+
+## Agent experience
+
+`get_output` on an evidence output reads the artifact (4 MiB engine-side
+cap, `DataEngineCmd::ReadFile`) and renders a compact citation list
+(`cite`/`title`/`year`/`doi`/`origin`/`note`, capped at 50 records with
+`total`/`returned`) instead of a bare path. Read or parse failures degrade
+to a metadata entry carrying the error.

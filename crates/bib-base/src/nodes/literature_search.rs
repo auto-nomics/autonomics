@@ -52,7 +52,7 @@ pub struct LiteratureSearchSpec {
 /// regardless of how many literature nodes run.
 static GATEWAY: OnceLock<Arc<LiteratureGateway>> = OnceLock::new();
 
-fn shared_gateway() -> Arc<LiteratureGateway> {
+pub(crate) fn shared_gateway() -> Arc<LiteratureGateway> {
     GATEWAY
         .get_or_init(|| {
             let http = Arc::new(reqwest::Client::new());

@@ -15,6 +15,7 @@
 //! content-addressed (see `dag_core::fingerprint` encoding).
 
 pub mod evidence_export;
+pub mod literature_fetch;
 pub mod evidence_merge;
 pub mod literature_search;
 

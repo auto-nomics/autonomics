@@ -28,6 +28,9 @@ pub use bib_base::nodes::evidence_export::{
     EvidenceExportFormat, EvidenceExportNode, EvidenceExportNodeFactory, EvidenceExportSpec,
 };
 pub use bib_base::nodes::evidence_merge::{EvidenceMergeNode, EvidenceMergeNodeFactory, EvidenceMergeSpec};
+pub use bib_base::nodes::literature_fetch::{
+    LiteratureFetchNode, LiteratureFetchNodeFactory, LiteratureFetchSpec,
+};
 pub use bib_base::nodes::literature_search::{
     LiteratureSearchNode, LiteratureSearchNodeFactory, LiteratureSearchSpec,
 };
@@ -180,6 +183,7 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(ReactomeAnalysisNodeFactory {}));
         registry.register(Box::new(ReactomeParticipantsNodeFactory {}));
         registry.register(Box::new(LiteratureSearchNodeFactory {}));
+        registry.register(Box::new(LiteratureFetchNodeFactory {}));
         registry.register(Box::new(EvidenceMergeNodeFactory {}));
         registry.register(Box::new(EvidenceExportNodeFactory {}));
         registry.register_plugin(&StringPlugin);
@@ -306,6 +310,17 @@ mod tests {
             )
             .expect("source_literature builds");
         assert_eq!(source.ports().output_port(0).unwrap().format.as_deref(), Some("evidence"));
+
+        let fetch = registry
+            .build_node(
+                "source_literature_fetch",
+                serde_json::json!({"id_kind": "doi", "id_value": "10.1/x", "path": "/tmp/f.json"}),
+            )
+            .expect("source_literature_fetch builds");
+        assert_eq!(
+            fetch.ports().output_port(0).unwrap().format.as_deref(),
+            Some("evidence")
+        );
 
         let export = registry
             .build_node(
