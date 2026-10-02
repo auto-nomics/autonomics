@@ -10,9 +10,11 @@ pub struct BibArgs {
     #[command(subcommand)]
     pub action: BibAction,
 
-    /// Path to the bibliography database file.
-    #[arg(long, global = true, value_name = "PATH", default_value = "bib.db")]
-    pub db: PathBuf,
+    /// Path to the bibliography database file. Defaults to the runtime
+    /// bibliography database (`AUTONOMICS_BIB_DB` or `~/.autonomics/bib.db`)
+    /// — the same path the daemon uses.
+    #[arg(long, global = true, value_name = "PATH")]
+    pub db: Option<PathBuf>,
 }
 
 /// Subcommands under `autonomics bib ...`.

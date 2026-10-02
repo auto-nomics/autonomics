@@ -262,8 +262,9 @@ Prompts for confirmation unless `-y` is passed.
 
 ## `bib` subcommand
 
-Local bibliography library management. All subcommands accept `--db <PATH>`
-(default `bib.db`).
+Local bibliography library management. All subcommands default to the runtime
+bibliography database (`AUTONOMICS_BIB_DB` → `~/.autonomics/bib.db`, the same
+path the daemon uses); pass `--db <PATH>` to override.
 
 ```
 autonomics bib [OPTIONS] <ACTION>

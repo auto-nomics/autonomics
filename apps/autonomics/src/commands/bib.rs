@@ -7,12 +7,15 @@ use bib_base::{stored_fulltext, vfs_virtual_path};
 use vfs::OpendalFileStorage;
 
 pub async fn run_bib(bib: BibArgs) -> color_eyre::Result<()> {
+    let db_path = bib
+        .db
+        .clone()
+        .unwrap_or_else(|| gateway::RuntimeConfig::default().bib_db_path);
     let config = gateway::RuntimeConfig::builder()
-        .bib_db_path(&bib.db)
+        .bib_db_path(&db_path)
         .build();
     let file_storage = gateway::bibliography_file_storage(&config)?;
-    let db_path = bib.db.to_string_lossy().to_string();
-    let db = bib_base::BibBase::open(&db_path).await?;
+    let db = bib_base::BibBase::open(&db_path.to_string_lossy()).await?;
     match bib.action {
         BibAction::Upload(args) => run_bib_upload(&db, &file_storage, args).await,
         BibAction::Reextract(args) => run_bib_reextract(&db, &file_storage, args).await,

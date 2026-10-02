@@ -231,7 +231,7 @@ autonomics kms --agent-db /path/to/agent.db
 
 ## `bib` 子命令
 
-本地文献库管理。所有子命令均接受 `--db <PATH>`（默认 `bib.db`）。
+本地文献库管理。所有子命令默认走 runtime 配置的文献库路径（`AUTONOMICS_BIB_DB` → `~/.autonomics/bib.db`，与 daemon 一致），可用 `--db <PATH>` 显式覆盖。
 
 ```
 autonomics bib [OPTIONS] <ACTION>

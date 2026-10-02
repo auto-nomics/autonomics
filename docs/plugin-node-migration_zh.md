@@ -63,7 +63,7 @@ loader 扫描该根目录、以 fail-closed 方式校验每个 `manifest.toml`�
 
 ## 第 1 步：创建插件目录
 
-在插件检出根目录（开发路径 `/mnt/projects/node-plugins/`）下创建
+在插件检出根目录（如在开发路径 `/mnt/projects/node-plugins/`）下创建
 `<tool>/`，包含：
 
 - `manifest.toml` —— 见下文编写规范。
