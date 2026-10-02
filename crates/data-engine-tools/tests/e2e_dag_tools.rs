@@ -1328,3 +1328,174 @@ async fn test_dag_export_run_uploads_into_vfs() {
         .unwrap();
     assert!(metadata > 0);
 }
+
+/// Evidence channel end-to-end: two `file_reference` evidence inputs merge
+/// (identifier dedup + note fill-in) and `get_output` renders the citations
+/// inline instead of a bare path. Local absolute paths keep this test
+/// independent of VFS mount resolution.
+#[tokio::test]
+async fn test_evidence_channel_merge_and_inline_render() {
+    let dir = std::env::temp_dir().join(format!("evidence-e2e-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path_a = dir.join("set_a.json");
+    let path_b = dir.join("set_b.json");
+    let merged_path = dir.join("merged.json");
+
+    let set_a = json!({
+        "schema_version": 1,
+        "records": [
+            {"citation": {"id": "1", "title": "Alpha study", "year": 2023,
+                          "authors": [{"last_name": "Smith"}],
+                          "identifiers": [{"kind": "doi", "value": "10.1/shared"}]},
+             "origin": "pubmed"},
+            {"citation": {"id": "2", "title": "Beta study", "year": 2024,
+                          "authors": [{"last_name": "Jones"}],
+                          "identifiers": []},
+             "note": "why beta matters"}
+        ]
+    });
+    // Same DOI (URL-prefixed, different casing) plus one unique record: the
+    // merge must collapse the duplicate and carry the duplicate's note into
+    // the surviving Alpha record.
+    let set_b = json!({
+        "schema_version": 1,
+        "records": [
+            {"citation": {"id": "3", "title": "Alpha study (alt view)", "year": 2023,
+                          "authors": [{"last_name": "Smith"}],
+                          "identifiers": [{"kind": "doi", "value": "https://doi.org/10.1/SHARED"}]},
+             "note": "duplicate view", "origin": "openalex"},
+            {"citation": {"id": "4", "title": "Gamma study", "year": 2025,
+                          "authors": [{"last_name": "Lee"}],
+                          "identifiers": [{"kind": "doi", "value": "10.1/gamma"}]},
+             "origin": "crossref"}
+        ]
+    });
+    std::fs::write(&path_a, serde_json::to_vec(&set_a).unwrap()).unwrap();
+    std::fs::write(&path_b, serde_json::to_vec(&set_b).unwrap()).unwrap();
+
+    // Engine without VFS: local absolute paths only.
+    let engine = DataEngine::builder().build();
+    let (client, _handle) = spawn_with_engine(engine);
+    let tools = data_engine_tools::registrations(Arc::new(client.clone()));
+    let mut registry = agentik_core::tools::ToolRegistry::new();
+    registry.register_all(tools).unwrap();
+    let toolset = Toolset::from_registry(Arc::new(registry), None);
+
+    let mut steps = vec![
+        (
+            "e1",
+            "add_node",
+            json!({"id": "ref_a", "kind": "file_reference",
+                   "spec": {"path": path_a.to_str().unwrap(), "format": "evidence"}}),
+        ),
+        (
+            "e2",
+            "add_node",
+            json!({"id": "ref_b", "kind": "file_reference",
+                   "spec": {"path": path_b.to_str().unwrap(), "format": "evidence"}}),
+        ),
+        (
+            "e3",
+            "add_node",
+            json!({"id": "merge", "kind": "evidence_merge",
+                   "spec": {"path": merged_path.to_str().unwrap()}}),
+        ),
+        (
+            "e4",
+            "add_edge",
+            json!({"from": "ref_a", "from_port": 0, "to": "merge", "to_port": 0}),
+        ),
+        (
+            "e5",
+            "add_edge",
+            json!({"from": "ref_b", "from_port": 0, "to": "merge", "to_port": 1}),
+        ),
+        ("e6", "run_dag", json!({})),
+    ];
+    // Sequential: later steps depend on earlier ones.
+    for (id, name, input) in steps.drain(..) {
+        let res = toolset
+            .execute(&[build_tooluse(id, name, input)], None)
+            .await
+            .unwrap();
+        check_ok(&res[0], name);
+    }
+
+    // Merged artifact: 3 records (Alpha + Beta + Gamma), Alpha carries the
+    // duplicate's note and its own origin.
+    let merged: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&merged_path).unwrap()).unwrap();
+    assert_eq!(merged["records"].as_array().unwrap().len(), 3);
+    assert_eq!(merged["records"][0]["citation"]["title"], json!("Alpha study"));
+    assert_eq!(merged["records"][0]["note"], json!("duplicate view"));
+    assert_eq!(merged["records"][0]["origin"], json!("pubmed"));
+
+    // get_output renders evidence inline: citation list, not a bare file.
+    let res = toolset
+        .execute(
+            &[build_tooluse("e7", "get_output", json!({"id": "merge"}))],
+            None,
+        )
+        .await
+        .unwrap();
+    check_ok(&res[0], "get_output merge");
+    let output = result_json(&res[0]);
+    let entry = &output["outputs"][0];
+    assert_eq!(entry["type"], json!("evidence"));
+    assert_eq!(entry["total"], json!(3));
+    assert_eq!(entry["returned"], json!(3));
+    let records = entry["records"].as_array().unwrap();
+    assert_eq!(records[0]["cite"], json!("Smith, 2023"));
+    assert_eq!(records[0]["doi"], json!("10.1/shared"));
+
+    // Non-evidence files on variadic ports carry no wiring-time contract
+    // (undeclared ports skip edge validation — dag-core semantics shared
+    // with container_command), so the merge node itself rejects them at run
+    // time. Wire an existing file declared as csv into a third input port.
+    let res = toolset
+        .execute(
+            &[build_tooluse(
+                "e8",
+                "add_node",
+                json!({"id": "ref_csv", "kind": "file_reference",
+                       "spec": {"path": path_a.to_str().unwrap(), "format": "csv"}}),
+            )],
+            None,
+        )
+        .await
+        .unwrap();
+    check_ok(&res[0], "add_node csv ref");
+    let res = toolset
+        .execute(
+            &[build_tooluse(
+                "e9",
+                "add_edge",
+                json!({"from": "ref_csv", "from_port": 0, "to": "merge", "to_port": 2}),
+            )],
+            None,
+        )
+        .await
+        .unwrap();
+    check_ok(&res[0], "add_edge csv -> merge (wiring is permissive)");
+    let res = toolset
+        .execute(&[build_tooluse("e10", "run_dag", json!({}))], None)
+        .await
+        .unwrap();
+    check_ok(&res[0], "run_dag with bad input");
+    let report = result_json(&res[0]);
+    assert_eq!(report["ok"], json!(false), "run must fail with a csv input");
+    let merge_node = report["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["id"] == json!("merge"))
+        .expect("merge node in run report");
+    assert_eq!(merge_node["status"], json!("failed"));
+    let message = merge_node["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("expected `evidence`"),
+        "run-time format rejection message, got: {message}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}

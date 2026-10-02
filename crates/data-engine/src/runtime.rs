@@ -296,6 +296,20 @@ impl SessionServer {
                     .expect("uncontended: running flag is false");
                 let _ = reply.send(Ok(engine.get_output(id).await));
             }
+            DataEngineCmd::ReadFile { path, reply } => {
+                if self.running.load(Ordering::SeqCst) {
+                    let _ = reply.send(Err(crate::error::Error::Custom(
+                        "DAG is currently running; read artifact files after it completes"
+                            .to_string(),
+                    )));
+                    return;
+                }
+                let engine = self
+                    .engine
+                    .try_lock()
+                    .expect("uncontended: running flag is false");
+                let _ = reply.send(engine.read_file(&path).await);
+            }
             DataEngineCmd::GetNodeStatus { id, reply } => {
                 if self.running.load(Ordering::SeqCst) {
                     let _ = reply.send(Err(crate::error::Error::Custom(
@@ -826,6 +840,20 @@ impl DataEngineClient {
         self.request(
             DataEngineCmd::GetOutput {
                 id,
+                reply: reply_tx,
+            },
+            reply_rx,
+        )
+        .await
+    }
+
+    /// Read artifact bytes for one output path (`vfs://` URI or absolute
+    /// host path). See [`DataEngineCmd::ReadFile`].
+    pub async fn read_file(&self, path: String) -> Result<Vec<u8>> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.request(
+            DataEngineCmd::ReadFile {
+                path,
                 reply: reply_tx,
             },
             reply_rx,

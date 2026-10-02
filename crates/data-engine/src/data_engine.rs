@@ -1054,6 +1054,56 @@ impl DataEngine {
         self.dag.output(node_id.into().as_ref())
     }
 
+    /// Maximum payload served through [`Self::read_file`]. Payload rendering
+    /// (evidence citations, …) is bounded; anything larger is caller-scope
+    /// data movement, not tool rendering.
+    pub const MAX_READ_FILE_BYTES: usize = 4 * 1024 * 1024;
+
+    /// Read artifact bytes for one output path: `vfs://` URIs resolve through
+    /// the mounted object storage, anything else reads the host filesystem.
+    ///
+    /// Fails closed on payloads larger than [`Self::MAX_READ_FILE_BYTES`] so
+    /// the tool layer never materializes a runaway artifact by accident.
+    pub async fn read_file(&self, path: &str) -> crate::error::Result<Vec<u8>> {
+        if let Some(virtual_path) = path.strip_prefix("vfs://") {
+            let storage = self.engine_ctx.opendal.as_ref().ok_or_else(|| {
+                crate::error::Error::Custom(format!(
+                    "VFS path `{path}` requires a mounted runtime VFS"
+                ))
+            })?;
+            let operator = storage.resolve(virtual_path);
+            let bytes = operator
+                .read(&storage.resolve_path(virtual_path))
+                .await
+                .map_err(|error| {
+                    crate::error::Error::Custom(format!(
+                        "cannot read VFS file `{path}`: {error}"
+                    ))
+                })?;
+            if bytes.len() > Self::MAX_READ_FILE_BYTES {
+                return Err(crate::error::Error::Custom(format!(
+                    "file `{path}` is {} bytes; read_file serves at most {} bytes",
+                    bytes.len(),
+                    Self::MAX_READ_FILE_BYTES
+                )));
+            }
+            return Ok(bytes.to_vec());
+        }
+
+        let local = path.strip_prefix("file://").unwrap_or(path);
+        let bytes = tokio::fs::read(local).await.map_err(|error| {
+            crate::error::Error::Custom(format!("cannot read file `{path}`: {error}"))
+        })?;
+        if bytes.len() > Self::MAX_READ_FILE_BYTES {
+            return Err(crate::error::Error::Custom(format!(
+                "file `{path}` is {} bytes; read_file serves at most {} bytes",
+                bytes.len(),
+                Self::MAX_READ_FILE_BYTES
+            )));
+        }
+        Ok(bytes)
+    }
+
     // ── incremental execution API ──────────────────────────────────────
 
     /// Drop a node's recorded execution fingerprint, so the next
@@ -1295,6 +1345,33 @@ mod tests {
 
         assert!(Arc::ptr_eq(engine.container_execution(), &infra));
         assert!(Arc::ptr_eq(session.container_execution(), &infra));
+    }
+
+    #[tokio::test]
+    async fn read_file_serves_local_paths_and_enforces_the_size_cap() {
+        let engine = DataEngine::builder().build();
+
+        // Local absolute path.
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), b"evidence-bytes").unwrap();
+        let bytes = engine
+            .read_file(file.path().to_str().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(bytes, b"evidence-bytes");
+
+        // Oversize payloads fail closed with the limit named.
+        let big = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(big.path(), vec![0u8; DataEngine::MAX_READ_FILE_BYTES + 1]).unwrap();
+        let error = engine
+            .read_file(big.path().to_str().unwrap())
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("at most"), "{error}");
+
+        // vfs:// without a mounted storage fails closed too.
+        let error = engine.read_file("vfs://artifacts/none.json").await.unwrap_err();
+        assert!(error.to_string().contains("mounted"), "{error}");
     }
 
     #[tokio::test]

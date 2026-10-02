@@ -62,6 +62,14 @@ pub enum DataEngineCmd {
         id: String,
         reply: oneshot::Sender<EngineResult<Option<PortOutputs>>>,
     },
+    /// Read artifact bytes for one output path (`vfs://` URI resolved through
+    /// the mounted object storage, absolute host path otherwise). Lets the
+    /// tool layer render payload files (e.g. `evidence` artifacts) inline
+    /// without its own storage handle. Size-capped on the engine side.
+    ReadFile {
+        path: String,
+        reply: oneshot::Sender<EngineResult<Vec<u8>>>,
+    },
     /// Query a node's runtime status. Returns `None` if the DAG has never
     /// been run (no status entry exists for the node).
     GetNodeStatus {
