@@ -59,8 +59,8 @@ pub use distill::{Candidate, DistillReport, distill};
 pub use error::SkillError;
 pub use eval::{Check, EvalCase, EvalReport};
 pub use evolution::{
-    EvolutionOptions, EvolutionPolicy, EvolutionReport, EvolutionTrigger, SkillCommand,
-    SkillCommandOutcome, SkillControlHandle, start,
+    CyclePhase, CycleStatus, EvolutionOptions, EvolutionPolicy, EvolutionReport, EvolutionTrigger,
+    SkillCommand, SkillCommandOutcome, SkillControlHandle, start,
 };
 pub use format::SkillMeta;
 pub use inject::prompt_section;

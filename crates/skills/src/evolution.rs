@@ -154,6 +154,158 @@ impl Default for EvolutionOptions {
     }
 }
 
+// ────────────────────────── cycle monitor ──────────────────────────
+
+/// Live worker phase, updated at every transition so the status
+/// endpoint can show what the loop is doing *right now*.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case", tag = "phase")]
+pub enum CyclePhase {
+    /// No batch is being collected and no cycle is running.
+    #[default]
+    Idle,
+    /// The quiet window is draining; `queued` triggers have
+    /// accumulated so far.
+    Coalescing { queued: usize },
+    /// A cycle (distill + policy) is executing for these trigger
+    /// labels.
+    Distilling { triggers: Vec<String> },
+}
+
+impl CyclePhase {
+    /// Stable lowercase label for flat DTOs and rendering.
+    pub fn label(&self) -> &'static str {
+        match self {
+            CyclePhase::Idle => "idle",
+            CyclePhase::Coalescing { .. } => "coalescing",
+            CyclePhase::Distilling { .. } => "distilling",
+        }
+    }
+}
+
+/// One point-in-time read of the worker's progress — what the
+/// dashboard polls while a cycle runs and what it shows between
+/// cycles.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct CycleStatus {
+    pub phase: CyclePhase,
+    /// How long the current phase has held (ms).
+    pub phase_elapsed_ms: u64,
+    /// Cycles executed since service start (successes and failures).
+    pub cycles_completed: u64,
+    pub last_cycle_at: Option<i64>,
+    pub last_cycle_duration_ms: Option<u64>,
+    /// Trigger labels of the most recent cycle.
+    pub last_triggers: Vec<String>,
+    /// Error text when the most recent cycle failed; cleared by the
+    /// next success.
+    pub last_error: Option<String>,
+    /// Commands dropped because the channel was full or the worker
+    /// was gone — an observability signal, not an error.
+    pub dropped_commands: u64,
+}
+
+/// Mutable core behind the monitor lock. Phase updates are rare (a
+/// handful per cycle) and reads poll at ~1 Hz, so a plain mutex with
+/// short critical sections is plenty.
+#[derive(Debug)]
+struct MonitorCore {
+    phase: CyclePhase,
+    phase_since: std::time::Instant,
+    cycles_completed: u64,
+    last_cycle_at: Option<i64>,
+    last_cycle_duration_ms: Option<u64>,
+    last_triggers: Vec<String>,
+    last_error: Option<String>,
+}
+
+impl Default for MonitorCore {
+    fn default() -> Self {
+        Self {
+            phase: CyclePhase::Idle,
+            phase_since: std::time::Instant::now(),
+            cycles_completed: 0,
+            last_cycle_at: None,
+            last_cycle_duration_ms: None,
+            last_triggers: Vec::new(),
+            last_error: None,
+        }
+    }
+}
+
+/// Shared between the worker (writer) and the control handle
+/// (reader). Runtime-only observation state — resets on restart by
+/// design; the durable record of what cycles produced lives in the
+/// proposals area.
+#[derive(Debug, Default)]
+pub struct CycleMonitor(std::sync::Mutex<MonitorCore>);
+
+impl CycleMonitor {
+    /// The quiet window opened (or grew): `queued` triggers so far.
+    fn coalescing(&self, queued: usize) {
+        let mut core = self.lock();
+        if !matches!(core.phase, CyclePhase::Coalescing { .. }) {
+            core.phase_since = std::time::Instant::now();
+        }
+        core.phase = CyclePhase::Coalescing { queued };
+    }
+
+    /// A cycle is starting for these trigger labels.
+    fn distilling(&self, triggers: &[&'static str]) {
+        let mut core = self.lock();
+        core.phase = CyclePhase::Distilling {
+            triggers: triggers.iter().map(|t| t.to_string()).collect(),
+        };
+        core.phase_since = std::time::Instant::now();
+    }
+
+    /// A cycle returned — success or failure — and the worker is idle
+    /// again.
+    fn cycle_finished(
+        &self,
+        triggers: &[&'static str],
+        duration: Duration,
+        error: Option<String>,
+    ) {
+        let mut core = self.lock();
+        core.phase = CyclePhase::Idle;
+        core.phase_since = std::time::Instant::now();
+        core.cycles_completed += 1;
+        core.last_cycle_at = Some(unix_now());
+        core.last_cycle_duration_ms = Some(duration.as_millis() as u64);
+        core.last_triggers = triggers.iter().map(|t| t.to_string()).collect();
+        core.last_error = error;
+    }
+
+    fn snapshot(&self, dropped_commands: u64) -> CycleStatus {
+        let core = self.lock();
+        CycleStatus {
+            phase_elapsed_ms: core.phase_since.elapsed().as_millis() as u64,
+            phase: core.phase.clone(),
+            cycles_completed: core.cycles_completed,
+            last_cycle_at: core.last_cycle_at,
+            last_cycle_duration_ms: core.last_cycle_duration_ms,
+            last_triggers: core.last_triggers.clone(),
+            last_error: core.last_error.clone(),
+            dropped_commands,
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, MonitorCore> {
+        // Poisoning only happens if a worker panicked mid-update; the
+        // monitor is observation state, so recovering with a fresh
+        // core beats propagating the panic into every poll.
+        self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 // ────────────────────────── workflow ──────────────────────────
 
 /// Run one evolution cycle: distill, then apply the approval policy.
@@ -316,6 +468,7 @@ pub struct SkillControlHandle {
     /// dashboard shows what the service was started with).
     policy: EvolutionPolicy,
     timer: Option<Duration>,
+    monitor: Arc<CycleMonitor>,
 }
 
 impl SkillControlHandle {
@@ -338,6 +491,13 @@ impl SkillControlHandle {
     /// carries every command kind, not just triggers.
     pub fn dropped_commands(&self) -> u64 {
         self.dropped.load(Ordering::Relaxed)
+    }
+
+    /// Live worker phase plus last-cycle telemetry — the dashboard's
+    /// "is a distillation running and how did the last one go" read.
+    pub fn cycle_status(&self) -> CycleStatus {
+        self.monitor
+            .snapshot(self.dropped.load(Ordering::Relaxed))
     }
 
     /// Subscribe to per-cycle reports (fire-and-forget broadcast;
@@ -442,6 +602,7 @@ pub fn start(manager: Arc<SkillManager>, options: EvolutionOptions) -> SkillCont
     let (tx, rx) = mpsc::channel::<SkillCommand>(128);
     let (report_tx, _) = broadcast::channel::<Arc<EvolutionReport>>(16);
     let dropped = Arc::new(AtomicU64::new(0));
+    let monitor = Arc::new(CycleMonitor::default());
 
     // Snapshot the introspection copy before the worker owns the rest.
     let policy = options.policy.clone();
@@ -451,6 +612,7 @@ pub fn start(manager: Arc<SkillManager>, options: EvolutionOptions) -> SkillCont
         manager,
         options,
         reports: report_tx.clone(),
+        monitor: Arc::clone(&monitor),
     };
     tokio::spawn(worker.run(rx));
 
@@ -460,6 +622,7 @@ pub fn start(manager: Arc<SkillManager>, options: EvolutionOptions) -> SkillCont
         reports: report_tx,
         policy,
         timer,
+        monitor,
     };
     handle.trigger(EvolutionTrigger::Startup);
     handle
@@ -469,6 +632,7 @@ struct Worker {
     manager: Arc<SkillManager>,
     options: EvolutionOptions,
     reports: broadcast::Sender<Arc<EvolutionReport>>,
+    monitor: Arc<CycleMonitor>,
 }
 
 impl Worker {
@@ -507,6 +671,7 @@ impl Worker {
                     // see so it can run *after* the inline replies
                     // but still skip coalescing.
                     let mut triggers = vec![trigger];
+                    self.monitor.coalescing(triggers.len());
                     let mut inline_approves: Vec<(
                         String,
                         oneshot::Sender<SkillCommandOutcome<ApproveOutcome>>,
@@ -527,7 +692,10 @@ impl Worker {
                             break;
                         }
                         match tokio::time::timeout(remain, rx.recv()).await {
-                            Ok(Some(SkillCommand::Evolution(t))) => triggers.push(t),
+                            Ok(Some(SkillCommand::Evolution(t))) => {
+                                triggers.push(t);
+                                self.monitor.coalescing(triggers.len());
+                            }
                             Ok(Some(SkillCommand::ApproveProposal { name, reply })) => {
                                 inline_approves.push((name, reply));
                             }
@@ -571,11 +739,22 @@ impl Worker {
                         let labels: Vec<&'static str> =
                             triggers.iter().map(EvolutionTrigger::label).collect();
                         let summary = labels.join(",");
-                        match run_evolution_cycle_labeled(
+                        self.monitor.distilling(&labels);
+                        let started = std::time::Instant::now();
+                        let outcome = run_evolution_cycle_labeled(
                             &self.manager,
                             &self.options.policy,
-                            labels,
-                        ) {
+                            labels.clone(),
+                        );
+                        self.monitor.cycle_finished(
+                            &labels,
+                            started.elapsed(),
+                            match &outcome {
+                                Ok(_) => None,
+                                Err(e) => Some(e.to_string()),
+                            },
+                        );
+                        match outcome {
                             Ok(report) => {
                                 if report.acted() {
                                     tracing::info!(
@@ -596,14 +775,26 @@ impl Worker {
 
                     // 3) Explicit RunCycle (skip coalescing).
                     if let Some((policy, reply)) = run_cycle {
+                        let labels = vec!["manual"];
+                        self.monitor.distilling(&labels);
+                        let started = std::time::Instant::now();
                         let outcome =
-                            match run_evolution_cycle_labeled(&self.manager, &policy, Vec::new()) {
-                                Ok(report) => {
-                                    let _ = self.reports.send(Arc::new(report.clone()));
-                                    SkillCommandOutcome::Ok(report)
-                                }
-                                Err(e) => SkillCommandOutcome::Err(e),
-                            };
+                            run_evolution_cycle_labeled(&self.manager, &policy, labels.clone());
+                        self.monitor.cycle_finished(
+                            &labels,
+                            started.elapsed(),
+                            match &outcome {
+                                Ok(_) => None,
+                                Err(e) => Some(e.to_string()),
+                            },
+                        );
+                        let outcome = match outcome {
+                            Ok(report) => {
+                                let _ = self.reports.send(Arc::new(report.clone()));
+                                SkillCommandOutcome::Ok(report)
+                            }
+                            Err(e) => SkillCommandOutcome::Err(e),
+                        };
                         let _ = reply.send(outcome);
                     }
                 }
@@ -622,14 +813,26 @@ impl Worker {
                     let _ = reply.send(outcome);
                 }
                 SkillCommand::RunCycle { policy, reply } => {
+                    let labels = vec!["manual"];
+                    self.monitor.distilling(&labels);
+                    let started = std::time::Instant::now();
                     let outcome =
-                        match run_evolution_cycle_labeled(&self.manager, &policy, Vec::new()) {
-                            Ok(report) => {
-                                let _ = self.reports.send(Arc::new(report.clone()));
-                                SkillCommandOutcome::Ok(report)
-                            }
-                            Err(e) => SkillCommandOutcome::Err(e),
-                        };
+                        run_evolution_cycle_labeled(&self.manager, &policy, labels.clone());
+                    self.monitor.cycle_finished(
+                        &labels,
+                        started.elapsed(),
+                        match &outcome {
+                            Ok(_) => None,
+                            Err(e) => Some(e.to_string()),
+                        },
+                    );
+                    let outcome = match outcome {
+                        Ok(report) => {
+                            let _ = self.reports.send(Arc::new(report.clone()));
+                            SkillCommandOutcome::Ok(report)
+                        }
+                        Err(e) => SkillCommandOutcome::Err(e),
+                    };
                     let _ = reply.send(outcome);
                 }
             }
@@ -1083,5 +1286,56 @@ mod channel_funnel {
             "cycle report missing manual trigger: {:?}",
             cycle_broadcast.triggers
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn monitor_reflects_coalesce_distill_idle_phases() {
+        // The monitor must transition idle → coalescing → distilling →
+        // idle around a run, and stamp a meaningful last-cycle row.
+        let tmp = tempfile::tempdir().unwrap();
+        let manager = Arc::new(SkillManager::new(tmp.path().join("state")));
+        let handle = start(
+            manager.clone(),
+            EvolutionOptions {
+                policy: EvolutionPolicy::default(),
+                quiet_window: Duration::from_millis(80),
+                timer: None,
+            },
+        );
+
+        // Startup sweep finishes before we sample, so the monitor
+        // should report at least one cycle right out of the gate.
+        tokio::time::sleep(Duration::from_millis(120)).await;
+        let post_startup = handle.cycle_status();
+        assert_eq!(post_startup.phase, CyclePhase::Idle);
+        assert!(post_startup.cycles_completed >= 1);
+
+        // Drive a manual cycle through the worker and capture the
+        // status just before the worker is parked (and after — we
+        // read by polling, so the final state is what matters).
+        handle.trigger(EvolutionTrigger::Manual { by: "t1".into() });
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let final_status = loop {
+            let s = handle.cycle_status();
+            if !matches!(s.phase, CyclePhase::Idle)
+                || std::time::Instant::now() >= deadline
+            {
+                // Cycle should have advanced the counter past startup.
+                if s.cycles_completed >= 2 && s.last_triggers.iter().any(|t| t == "manual") {
+                    break s;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+        assert_eq!(final_status.phase, CyclePhase::Idle);
+        assert!(
+            final_status
+                .last_triggers
+                .iter()
+                .any(|t| t == "manual"),
+            "last_triggers missing: {:?}",
+            final_status.last_triggers
+        );
+        assert!(final_status.last_cycle_duration_ms.is_some());
     }
 }
