@@ -106,14 +106,29 @@ modules. Three regression engines and one descriptive-statistics module.
 - **Algorithm**: Wraps `statkit::regression::ols`.
 - **Cross-validation**: matches R `lm()` (tol = 1e-4).
 
-### 3.2 `logistic_regression` — Binary Logistic Regression
+### 3.2 `binary_logistic_regression` — Binary Logistic Regression
 
-- **Node**: `logistic_regression`
+- **Node**: `binary_logistic_regression`
 - **Inputs**: `predictors` (list), `outcome` (binary 0/1).
 - **Output schema**: `term, coefficient, std_error, z_stat, p_value,
   odds_ratio, or_ci_lower, or_ci_upper, log_likelihood, n_obs, converged`.
 - **Effect**: Odds ratios = exp(β) with 95% CI.
 - **Cross-validation**: matches R `glm(family=binomial)` (tol = 1e-4).
+
+### 3.2.1 `ordinal_logistic_regression` — Ordinal Logistic Regression
+
+- **Node**: `ordinal_logistic_regression`
+- **Inputs**: `predictors` (non-empty numeric list), `outcome`
+  (numeric or string ordinal), and optional `outcome_levels`.
+- **Level order**: numeric outcomes use ascending numeric order; explicit
+  numeric levels must be finite and strictly increasing. String outcomes use
+  lexical order by default, while `outcome_levels` supplies a semantically
+  meaningful order (for example `["low", "medium", "high"]`).
+- **Model**: unweighted proportional-odds cumulative logit,
+  `P(Y ≤ j | X) = sigmoid(α_j − Xβ)`.
+- **Output schema**: one row per slope followed by one row per cut point:
+  `term, coefficient, std_error, z_stat, p_value, odds_ratio,
+  or_ci_lower, or_ci_upper, log_likelihood, n_obs, n_levels, converged`.
 
 ### 3.3 `cox_regression` — Cox Proportional Hazards
 
@@ -390,7 +405,8 @@ Validation traces are preserved in the repo at:
 | Node kind | Spec schema | Output schema | Status |
 |-----------|-------------|---------------|--------|
 | `linear_regression` | `x_columns, y_column, intercept` | term, coef, SE, t, p, R², n | ✅ |
-| `logistic_regression` | `predictors, outcome, intercept` | term, coef, SE, z, p, OR, OR CI, LL, n, converged | ✅ |
+| `binary_logistic_regression` | `predictors, outcome, intercept` | term, coef, SE, z, p, OR, OR CI, LL, n, converged | ✅ |
+| `ordinal_logistic_regression` | `predictors, outcome, outcome_levels?` | term, coef, SE, z, p, OR, OR CI, LL, n, n_levels, converged | ✅ |
 | `cox_regression` | `predictors, time_column, event_column` | term, coef, SE, z, p, HR, HR CI, LL, n, n_events, converged | ✅ |
 | `chi_square` | `row_column, col_column` | χ², df, p, n, small_expected | ✅ |
 | `epi_roc` | `score1_column, label_column, score2_column?, n_bootstrap, seed` | auc1, auc1 CI, auc2?, delong_z?, delong_p?, n_pos, n_neg | ✅ |

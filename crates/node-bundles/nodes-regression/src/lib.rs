@@ -1,11 +1,12 @@
-//! Linear, logistic, cox regression + chi-square DAG node bundle.
+//! Linear, binary/ordinal logistic, cox regression + chi-square DAG node bundle.
 
+pub mod binary_logistic_regression;
 pub mod chi_square;
 pub mod cox_regression;
 pub mod glinternet;
 pub mod hiernet;
 pub mod linear_regression;
-pub mod logistic_regression;
+pub mod ordinal_logistic_regression;
 pub mod rlm;
 pub mod rrr;
 
@@ -19,7 +20,10 @@ impl NodePlugin for Plugin {
     fn register(&self, registry: &mut NodeRegistry) {
         registry.register(Box::new(linear_regression::LinearRegressionNodeFactory {}));
         registry.register(Box::new(
-            logistic_regression::LogisticRegressionNodeFactory {},
+            binary_logistic_regression::BinaryLogisticRegressionNodeFactory {},
+        ));
+        registry.register(Box::new(
+            ordinal_logistic_regression::OrdinalLogisticRegressionNodeFactory {},
         ));
         registry.register(Box::new(cox_regression::CoxRegressionNodeFactory {}));
         registry.register(Box::new(chi_square::ChiSquareNodeFactory {}));

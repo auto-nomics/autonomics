@@ -116,7 +116,7 @@ impl NodeRegistry {
 | **nodes-io** | file_to_dataframe, dataframe_to_file, container_command, visualization_container, ldsc_h2_container | opentargets, container-runtime, vfs | ~2,100 |
 | **nodes-opengwas** | source_opengwas_associations, source_opengwas_phewas, source_opengwas_gwasinfo, source_opengwas_gwasinfo_search, source_opengwas_variants_rsid, source_opengwas_variants_chrpos, source_opengwas_ld_clump, source_opengwas_tophits | opengwas | ~1,000 |
 | **nodes-sql** | sql_node, echo_node | — | 700 |
-| **nodes-regression** | linear_regression, logistic_regression, cox_regression, chi_square | statkit | 1,400 |
+| **nodes-regression** | linear_regression, binary_logistic_regression, ordinal_logistic_regression, cox_regression, chi_square | statkit | 1,400 |
 | **nodes-causal** | mediation, causal, cmest (6 variants) | statkit, epi | 2,200 |
 | **nodes-survival** | survival, fine_gray, cuminc | cmprsk | 1,400 |
 | **nodes-ldsc** | ldsc_sldsc, liability, lcv | ldsc, lcv | 3,900 |

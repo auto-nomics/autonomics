@@ -4,7 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Linear, logistic, cox regression + chi-square DAG node bundle."
+description = "Linear, binary/ordinal logistic, cox regression + chi-square DAG node bundle."
 
 [dependencies]
 dag-core = { path = "../../dag-core" }

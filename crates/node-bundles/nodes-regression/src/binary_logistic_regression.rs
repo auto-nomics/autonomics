@@ -1,4 +1,4 @@
-//! Logistic regression transform node.
+//! Binary logistic regression transform node.
 //!
 //! Wraps [`statkit::regression::logistic`] — IRLS (Newton-Raphson) binary
 //! logistic regression with Wald z-tests, odds ratios, and 95% CIs.
@@ -38,7 +38,7 @@ use dag_core::{
 // ── Error ──────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Error)]
-pub enum LogisticRegressionError {
+pub enum BinaryLogisticRegressionError {
     #[error("{0}")]
     Column(String),
     #[error("no predictor columns specified")]
@@ -53,23 +53,23 @@ pub enum LogisticRegressionError {
     ReadBatch(String),
 }
 
-impl From<ColumnError> for LogisticRegressionError {
+impl From<ColumnError> for BinaryLogisticRegressionError {
     fn from(e: ColumnError) -> Self {
         Self::Column(e.to_string())
     }
 }
 
-impl ::dag_core::dag::NodeError for LogisticRegressionError {
+impl ::dag_core::dag::NodeError for BinaryLogisticRegressionError {
     fn node_type(&self) -> &str {
-        "logistic_regression"
+        "binary_logistic_regression"
     }
 }
 
 // ── Spec ───────────────────────────────────────────────────────────────────
 
-/// Spec for [`LogisticRegressionNode`].
+/// Spec for [`BinaryLogisticRegressionNode`].
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
-pub struct LogisticRegressionNodeSpec {
+pub struct BinaryLogisticRegressionNodeSpec {
     /// Names of the predictor columns (numeric). At least one is required.
     pub predictors: Vec<String>,
     /// Name of the binary outcome column (values must be 0/1 or true/false).
@@ -86,14 +86,14 @@ fn default_true() -> bool {
 // ── Node ───────────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
-pub struct LogisticRegressionNode {
+pub struct BinaryLogisticRegressionNode {
     meta: NodePorts,
     predictors: Vec<String>,
     outcome: String,
     intercept: bool,
 }
 
-impl LogisticRegressionNode {
+impl BinaryLogisticRegressionNode {
     pub fn new(predictors: Vec<String>, outcome: String, intercept: bool) -> Self {
         Self {
             meta: port_layout(),
@@ -104,15 +104,15 @@ impl LogisticRegressionNode {
     }
 }
 
-pub struct LogisticRegressionNodeFactory {}
+pub struct BinaryLogisticRegressionNodeFactory {}
 
 fn port_layout() -> NodePorts {
     NodePorts::new().add_output_port(None).add_input_port(None)
 }
 
-impl NodeFactory for LogisticRegressionNodeFactory {
+impl NodeFactory for BinaryLogisticRegressionNodeFactory {
     fn kind(&self) -> &'static str {
-        "logistic_regression"
+        "binary_logistic_regression"
     }
 
     fn desc(&self) -> &'static str {
@@ -129,7 +129,7 @@ impl NodeFactory for LogisticRegressionNodeFactory {
     }
 
     fn spec_schema(&self) -> schemars::Schema {
-        schema_for!(LogisticRegressionNodeSpec)
+        schema_for!(BinaryLogisticRegressionNodeSpec)
     }
 
     fn ports(&self) -> NodePorts {
@@ -141,28 +141,28 @@ impl NodeFactory for LogisticRegressionNodeFactory {
         spec: serde_json::Value,
         _node_ctx: NodeCtx,
     ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
-        let s: LogisticRegressionNodeSpec = serde_json::from_value(spec)?;
+        let s: BinaryLogisticRegressionNodeSpec = serde_json::from_value(spec)?;
         if s.predictors.is_empty() {
             return Err(dag_core::registry::error::Error::SpecRejection {
-                kind: "logistic_regression".to_string(),
+                kind: "binary_logistic_regression".to_string(),
                 reason: "predictors must be a non-empty array".to_string(),
                 schema_pretty: serde_json::to_string_pretty(&schema_for!(
-                    LogisticRegressionNodeSpec
+                    BinaryLogisticRegressionNodeSpec
                 ))
                 .unwrap_or_default(),
             });
         }
         if s.predictors.contains(&s.outcome) {
             return Err(dag_core::registry::error::Error::SpecRejection {
-                kind: "logistic_regression".to_string(),
+                kind: "binary_logistic_regression".to_string(),
                 reason: format!("outcome '{}' must not also appear in predictors", s.outcome),
                 schema_pretty: serde_json::to_string_pretty(&schema_for!(
-                    LogisticRegressionNodeSpec
+                    BinaryLogisticRegressionNodeSpec
                 ))
                 .unwrap_or_default(),
             });
         }
-        Ok(Box::new(LogisticRegressionNode::new(
+        Ok(Box::new(BinaryLogisticRegressionNode::new(
             s.predictors,
             s.outcome,
             s.intercept,
@@ -173,7 +173,7 @@ impl NodeFactory for LogisticRegressionNodeFactory {
 // ── DagNode impl ───────────────────────────────────────────────────────────
 
 #[async_trait]
-impl DagNode for LogisticRegressionNode {
+impl DagNode for BinaryLogisticRegressionNode {
     fn ports(&self) -> &NodePorts {
         &self.meta
     }
@@ -183,7 +183,7 @@ impl DagNode for LogisticRegressionNode {
     }
 
     fn kind(&self) -> &'static str {
-        "logistic_regression"
+        "binary_logistic_regression"
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -196,7 +196,7 @@ impl DagNode for LogisticRegressionNode {
         inputs: &[NodeInput],
         _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
-        let input = inputs.first().ok_or(LogisticRegressionError::Column(
+        let input = inputs.first().ok_or(BinaryLogisticRegressionError::Column(
             "no input connected".to_string(),
         ))?;
         let batches = input
@@ -204,16 +204,16 @@ impl DagNode for LogisticRegressionNode {
             .clone()
             .collect()
             .await
-            .map_err(|e| LogisticRegressionError::Collect(e.to_string()))?;
+            .map_err(|e| BinaryLogisticRegressionError::Collect(e.to_string()))?;
 
         // --- Extract all columns leniently (NaN for nulls) ---
         let y_raw = dag_core::arrow_util::extract_numeric_lenient(&batches, &self.outcome)
-            .map_err(LogisticRegressionError::from)?;
+            .map_err(BinaryLogisticRegressionError::from)?;
 
         // Validate binary outcome.
         for &v in &y_raw {
             if !v.is_nan() && v != 0.0 && v != 1.0 {
-                return Err(LogisticRegressionError::Column(format!(
+                return Err(BinaryLogisticRegressionError::Column(format!(
                     "outcome '{}' must be binary (0/1), found value {v}",
                     self.outcome
                 ))
@@ -225,7 +225,7 @@ impl DagNode for LogisticRegressionNode {
         for name in &self.predictors {
             x_raw.push(
                 dag_core::arrow_util::extract_numeric_lenient(&batches, name)
-                    .map_err(LogisticRegressionError::from)?,
+                    .map_err(BinaryLogisticRegressionError::from)?,
             );
         }
 
@@ -244,7 +244,7 @@ impl DagNode for LogisticRegressionNode {
         }
 
         if y.is_empty() {
-            return Err(LogisticRegressionError::Column(
+            return Err(BinaryLogisticRegressionError::Column(
                 "no complete-case rows after removing nulls".to_string(),
             )
             .into());
@@ -253,14 +253,14 @@ impl DagNode for LogisticRegressionNode {
         // --- Fit logistic regression ---
         let x_slices: Vec<&[f64]> = x_filtered.iter().map(|v| v.as_slice()).collect();
         let fit = statkit::regression::logistic(&x_slices, &y, self.intercept)
-            .map_err(|e| LogisticRegressionError::Fit(e.to_string()))?;
+            .map_err(|e| BinaryLogisticRegressionError::Fit(e.to_string()))?;
 
         // --- Build output batch ---
         let batch = build_logistic_batch(&fit, &self.predictors, self.intercept);
         let ctx = node_ctx.session();
         let df = ctx
             .read_batch(batch)
-            .map_err(|e| LogisticRegressionError::ReadBatch(e.to_string()))?;
+            .map_err(|e| BinaryLogisticRegressionError::ReadBatch(e.to_string()))?;
 
         let mut res = PortOutputs::new();
         res.insert(0, df);

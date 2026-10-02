@@ -86,14 +86,28 @@
 - **算法**：包装 `statkit::regression::ols`。
 - **交叉验证**：与 R `lm()` 匹配（tol = 1e-4）。
 
-### 3.2 `logistic_regression` — 二分类逻辑回归
+### 3.2 `binary_logistic_regression` — 二分类逻辑回归
 
-- **节点**：`logistic_regression`
+- **节点**：`binary_logistic_regression`
 - **输入**：`predictors`、`outcome`（二分类 0/1）。
 - **输出模式**：`term, coefficient, std_error, z_stat, p_value, odds_ratio,
   or_ci_lower, or_ci_upper, log_likelihood, n_obs, converged`。
 - **效应**：OR = exp(β) + 95% CI。
 - **交叉验证**：与 R `glm(family=binomial)` 匹配（tol = 1e-4）。
+
+### 3.2.1 `ordinal_logistic_regression` — 有序逻辑回归
+
+- **节点**：`ordinal_logistic_regression`
+- **输入**：`predictors`（非空数值列）、`outcome`（数值或字符串有序结局）、
+  可选 `outcome_levels`。
+- **等级顺序**：数值结局按数值升序；显式数值等级必须有限且严格递增。
+  字符串结局默认字典序，建议用 `outcome_levels` 显式给出语义顺序
+  （例如 `["low", "medium", "high"]`）。
+- **模型**：非加权比例优势累积 logit，
+  `P(Y ≤ j | X) = sigmoid(α_j − Xβ)`。
+- **输出模式**：每个斜率一行，随后每个切点一行：
+  `term, coefficient, std_error, z_stat, p_value, odds_ratio,
+  or_ci_lower, or_ci_upper, log_likelihood, n_obs, n_levels, converged`。
 
 ### 3.3 `cox_regression` — Cox 比例风险
 
@@ -303,7 +317,8 @@
 | 节点类型 | Spec schema | 输出 schema | 状态 |
 |----------|-------------|-------------|------|
 | `linear_regression` | `x_columns, y_column, intercept` | term, coef, SE, t, p, R², n | ✅ |
-| `logistic_regression` | `predictors, outcome, intercept` | term, coef, SE, z, p, OR, OR CI, LL, n, converged | ✅ |
+| `binary_logistic_regression` | `predictors, outcome, intercept` | term, coef, SE, z, p, OR, OR CI, LL, n, converged | ✅ |
+| `ordinal_logistic_regression` | `predictors, outcome, outcome_levels?` | term, coef, SE, z, p, OR, OR CI, LL, n, n_levels, converged | ✅ |
 | `cox_regression` | `predictors, time_column, event_column` | term, coef, SE, z, p, HR, HR CI, LL, n, n_events, converged | ✅ |
 | `chi_square` | `row_column, col_column` | χ², df, p, n, small_expected | ✅ |
 | `epi_roc` | `score1_column, label_column, score2_column?, n_bootstrap, seed` | auc1, auc1 CI, auc2?, delong_z?, delong_p?, n_pos, n_neg | ✅ |
