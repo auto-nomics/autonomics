@@ -16,6 +16,8 @@ chembl = { path = "../../chembl" }
 openalex = { path = "../../openalex" }
 semantic-scholar = { path = "../../semantic-scholar" }
 crossref = { path = "../../crossref" }
+bib-base = { path = "../../bib-base" }
+bib-types = { path = "../../bib-types" }
 nhanes = { path = "../../nhanes" }
 uniprot = { path = "../../uniprot" }
 reactome = { path = "../../reactome" }
