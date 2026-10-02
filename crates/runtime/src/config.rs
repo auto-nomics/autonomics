@@ -1232,7 +1232,10 @@ mod tests {
         let prompt = RuntimeConfig::default().system_prompt_or_default();
 
         assert!(prompt.contains("**Prefer dedicated nodes**"));
-        assert!(prompt.contains("**Terminal visualization only**"));
+        // The visualization bullet must keep pinning computation
+        // upstream: it is a terminal sink, never a compute node.
+        assert!(prompt.contains("**Visualization**"));
+        assert!(prompt.contains("terminal sink for plot-ready data"));
         assert!(!prompt.contains("python_script"));
         assert!(!prompt.contains("r_script"));
         assert!(!prompt.contains("container_command"));
