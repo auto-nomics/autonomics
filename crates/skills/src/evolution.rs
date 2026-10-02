@@ -203,6 +203,13 @@ pub struct CycleStatus {
     /// Commands dropped because the channel was full or the worker
     /// was gone — an observability signal, not an error.
     pub dropped_commands: u64,
+    /// Cycles short-circuited because the observation pool was empty.
+    /// Distinct from `cycles_completed`: the worker never ran a cycle
+    /// body, so it did not consume cluster cycles' worth of work.
+    pub cycle_skipped_empty: u64,
+    /// Stable label for why the most recent cycle (or short-circuit)
+    /// was skipped; `None` when the last cycle body actually ran.
+    pub last_skipped_reason: Option<String>,
 }
 
 /// Mutable core behind the monitor lock. Phase updates are rare (a
@@ -217,6 +224,8 @@ struct MonitorCore {
     last_cycle_duration_ms: Option<u64>,
     last_triggers: Vec<String>,
     last_error: Option<String>,
+    cycle_skipped_empty: u64,
+    last_skipped_reason: Option<String>,
 }
 
 impl Default for MonitorCore {
@@ -229,6 +238,8 @@ impl Default for MonitorCore {
             last_cycle_duration_ms: None,
             last_triggers: Vec::new(),
             last_error: None,
+            cycle_skipped_empty: 0,
+            last_skipped_reason: None,
         }
     }
 }
@@ -275,6 +286,25 @@ impl CycleMonitor {
         core.last_cycle_duration_ms = Some(duration.as_millis() as u64);
         core.last_triggers = triggers.iter().map(|t| t.to_string()).collect();
         core.last_error = error;
+        // A cycle body actually ran, so the prior short-circuit
+        // reason (if any) no longer applies.
+        core.last_skipped_reason = None;
+    }
+
+    /// The worker received triggers but found no observations to
+    /// distill. It skips the cycle body, leaves `cycles_completed`
+    /// alone (no work was done), and stamps a stable skip reason so
+    /// the dashboard can surface it.
+    fn cycle_skipped_empty(&self, triggers: &[&'static str]) {
+        let mut core = self.lock();
+        core.phase = CyclePhase::Idle;
+        core.phase_since = std::time::Instant::now();
+        core.cycle_skipped_empty += 1;
+        core.last_cycle_at = Some(unix_now());
+        core.last_cycle_duration_ms = Some(0);
+        core.last_triggers = triggers.iter().map(|t| t.to_string()).collect();
+        core.last_error = None;
+        core.last_skipped_reason = Some("empty_pool".to_string());
     }
 
     fn snapshot(&self, dropped_commands: u64) -> CycleStatus {
@@ -288,6 +318,8 @@ impl CycleMonitor {
             last_triggers: core.last_triggers.clone(),
             last_error: core.last_error.clone(),
             dropped_commands,
+            cycle_skipped_empty: core.cycle_skipped_empty,
+            last_skipped_reason: core.last_skipped_reason.clone(),
         }
     }
 
@@ -739,6 +771,21 @@ impl Worker {
                         let labels: Vec<&'static str> =
                             triggers.iter().map(EvolutionTrigger::label).collect();
                         let summary = labels.join(",");
+                        // Short-circuit when the observation pool is
+                        // empty: there's nothing to cluster, no cycle
+                        // body to run, no report to broadcast. Explicit
+                        // RunCycle commands still go through the body
+                        // below — the operator asked for it.
+                        if run_cycle.is_none()
+                            && self.manager.observations().list().is_empty()
+                        {
+                            tracing::debug!(
+                                triggers = %summary,
+                                "evolution cycle skipped: empty observation pool"
+                            );
+                            self.monitor.cycle_skipped_empty(&labels);
+                            continue;
+                        }
                         self.monitor.distilling(&labels);
                         let started = std::time::Instant::now();
                         let outcome = run_evolution_cycle_labeled(
@@ -997,13 +1044,31 @@ mod tests {
 #[cfg(test)]
 mod timer_tests {
     use super::*;
+    use crate::observation::{
+        ObservationInput, ObservationKind, ObservationSource,
+    };
 
     /// The timer trigger path: with no events arriving, the periodic
     /// sweep alone produces cycles.
     #[tokio::test]
     async fn timer_sweeps_without_events() {
+        // Seed the observation pool so the worker actually runs the
+        // cycle body; the empty-pool short-circuit introduced later
+        // would otherwise elide the broadcast entirely.
         let tmp = tempfile::tempdir().unwrap();
         let manager = Arc::new(SkillManager::new(tmp.path().join("state")));
+        for body in ["fix a", "fix b", "fix c"] {
+            manager
+                .record_observation(ObservationInput {
+                    kind: ObservationKind::Failure,
+                    source: ObservationSource::Agent,
+                    summary: "fix for boom N".into(),
+                    body: body.into(),
+                    node_kind: Some("sql".into()),
+                    error: Some("boom at step N".into()),
+                })
+                .unwrap();
+        }
         let options = EvolutionOptions {
             quiet_window: Duration::from_millis(20),
             timer: Some(Duration::from_millis(120)),
@@ -1294,6 +1359,19 @@ mod channel_funnel {
         // idle around a run, and stamp a meaningful last-cycle row.
         let tmp = tempfile::tempdir().unwrap();
         let manager = Arc::new(SkillManager::new(tmp.path().join("state")));
+        // Seed one observation so the startup sweep has something to
+        // distill; otherwise the worker short-circuits the cycle
+        // body and `cycles_completed` stays at 0.
+        manager
+            .record_observation(crate::observation::ObservationInput {
+                kind: crate::observation::ObservationKind::Failure,
+                source: crate::observation::ObservationSource::Agent,
+                summary: "fix for boom N".into(),
+                body: "fix a".into(),
+                node_kind: Some("sql".into()),
+                error: Some("boom at step N".into()),
+            })
+            .unwrap();
         let handle = start(
             manager.clone(),
             EvolutionOptions {
@@ -1337,5 +1415,55 @@ mod channel_funnel {
             final_status.last_triggers
         );
         assert!(final_status.last_cycle_duration_ms.is_some());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn empty_observation_pool_short_circuits_before_merge() {
+        // The startup sweep also gets short-circuited when no
+        // observations exist; subsequent Manual triggers must not
+        // flip the phase into Distilling nor bump cycles_completed.
+        let tmp = tempfile::tempdir().unwrap();
+        let manager = Arc::new(SkillManager::new(tmp.path().join("state")));
+        let handle = start(
+            manager.clone(),
+            EvolutionOptions {
+                policy: EvolutionPolicy::default(),
+                quiet_window: Duration::from_millis(40),
+                timer: None,
+            },
+        );
+
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        let after_startup = handle.cycle_status();
+        assert!(
+            after_startup.cycle_skipped_empty >= 1,
+            "startup sweep against empty pool already short-circuits"
+        );
+
+        // A manual trigger against an empty pool must also be a
+        // skip, not a Distilling run.
+        handle.trigger(EvolutionTrigger::Manual { by: "t0".into() });
+        tokio::time::sleep(Duration::from_millis(150)).await;
+
+        let status = handle.cycle_status();
+        assert_eq!(status.phase, CyclePhase::Idle);
+        assert_eq!(
+            status.cycles_completed, 0,
+            "cycles_completed stays at 0 when every cycle was skipped"
+        );
+        assert!(status.cycle_skipped_empty >= 1);
+        assert_eq!(
+            status.last_skipped_reason.as_deref(),
+            Some("empty_pool"),
+            "skip reason surfaces the empty-pool signal"
+        );
+        assert!(
+            status
+                .last_triggers
+                .iter()
+                .any(|t| t == "manual"),
+            "last_triggers records what got skipped: {:?}",
+            status.last_triggers
+        );
     }
 }
