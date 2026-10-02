@@ -5,12 +5,15 @@
 //! code end to end:
 //!
 //! 1. **Cluster** observations by their structural anchor —
-//!    `(node_kind, signature, kind)` — not by text similarity. The
-//!    signature is the normalized error text for failures and the
-//!    normalized summary line for recipes and caveats; the kind keeps
-//!    the three from ever coalescing. Only anchored observations
-//!    participate; free-form notes stay searchable but never
-//!    auto-propose.
+//!    `(node_kind, signature, kind)` — not by text similarity.
+//!    Failures cluster by node kind and normalized error signature
+//!    (identical error shapes recur verbatim in eval loops). Recipes
+//!    and caveats cluster per node kind alone: real-world summaries
+//!    rephrase the same lesson differently every time, so a per-node
+//!    notebook is the only deterministic grouping with nonzero
+//!    recall. The kind keeps the three from ever coalescing. Only
+//!    anchored observations participate; free-form notes stay
+//!    searchable but never auto-propose.
 //! 2. **Threshold**: a cluster needs `MIN_CLUSTER` anchored
 //!    observations before it is worth a skill — the same
 //!    "repeated pattern" bar EvoScientist applies, evaluated
@@ -44,8 +47,9 @@ pub const MIN_CLUSTER: usize = 3;
 pub struct Candidate {
     pub kind: ObservationKind,
     pub node_kind: String,
-    /// The normalized clustering signature: error text for failures,
-    /// summary line for recipes and caveats.
+    /// The normalized clustering signature — error text for
+    /// failures, empty for recipes and caveats (they cluster per
+    /// node kind; their summaries vary too much to key on).
     pub signature: String,
     pub observations: Vec<Observation>,
 }
@@ -124,10 +128,11 @@ impl DistillReport {
 }
 
 /// Group anchored observations into candidate clusters meeting the
-/// threshold, in a deterministic order. Failures cluster by their
-/// normalized error text, recipes and caveats by their normalized
-/// summary line; the kind is part of the key, so the three never
-/// coalesce into one cluster.
+/// threshold, in a deterministic order. Failures cluster by node kind
+/// and normalized error signature; recipes and caveats cluster per
+/// node kind (summaries are search material, not cluster keys). The
+/// kind is part of the key, so the three never coalesce into one
+/// cluster.
 pub fn candidates(observations: &[Observation]) -> Vec<Candidate> {
     let mut groups: BTreeMap<(String, String, ObservationKind), Vec<Observation>> =
         BTreeMap::new();
@@ -143,7 +148,13 @@ pub fn candidates(observations: &[Observation]) -> Vec<Candidate> {
                 .as_deref()
                 .map(signature)
                 .unwrap_or_default(),
-            ObservationKind::Recipe | ObservationKind::Caveat => signature(&observation.summary),
+            // Recipes and caveats cluster per node context: real-world
+            // summaries rephrase the same lesson differently every
+            // time, so a summary signature never collides (measured:
+            // 52/52 size-1 clusters on production data). The distilled
+            // skill is a per-node notebook; every entry keeps its own
+            // summary line.
+            ObservationKind::Recipe | ObservationKind::Caveat => String::new(),
         };
         groups
             .entry((kind, sig, observation.kind))
@@ -528,26 +539,31 @@ mod tests {
         assert!(candidates(&store.list()).is_empty());
     }
 
+    /// Recipes cluster per node kind — deliberately NOT by summary
+    /// text. This replicates the production failure that motivated
+    /// the key change: three recordings of overlapping lessons with
+    /// completely different wordings produced three size-1 clusters
+    /// and zero proposals under the old summary-signature key.
     #[test]
-    fn recipe_clusters_on_summary_signature() {
+    fn recipe_clusters_per_node_kind_with_distinct_wordings() {
         let tmp = tempfile::tempdir().unwrap();
         let store = ObservationStore::open(tmp.path());
         observe_kind(
             &store,
             ObservationKind::Recipe,
-            "prefer tibble for table 3 ops",
+            "quote mixed-case column names in queries",
             "recipe body a",
         );
         observe_kind(
             &store,
             ObservationKind::Recipe,
-            "prefer tibble for table 7 ops",
+            "identifiers are case-sensitive; wrap them in double quotes",
             "recipe body b",
         );
         observe_kind(
             &store,
             ObservationKind::Recipe,
-            "prefer tibble for table 9 ops",
+            "always use VARCHAR casts for schema-portable output",
             "recipe body c",
         );
 
@@ -556,36 +572,39 @@ mod tests {
         let candidate = &candidates[0];
         assert_eq!(candidate.kind, ObservationKind::Recipe);
         assert_eq!(candidate.observations.len(), 3);
+        assert_eq!(candidate.signature, "");
         let name = candidate.skill_name().unwrap();
-        assert_eq!(name, "file-to-dataframe-prefer-tibble-for-table-n-ops-recipe");
+        assert_eq!(name, "file-to-dataframe-recipe");
 
-        // The rendered draft carries the recipe tag and heading.
+        // The rendered draft carries the recipe tag and heading, and
+        // lists every entry with its own summary line.
         let md = render_skill_md(candidate);
         assert!(md.contains("tags: [auto, recipe, file-to-dataframe]"));
         assert!(md.contains("## Recorded recipes"));
         assert!(md.contains("recipe body b"));
+        assert!(md.contains("quote mixed-case column names in queries"));
     }
 
     #[test]
-    fn caveat_clusters_on_summary_signature() {
+    fn caveat_clusters_per_node_kind() {
         let tmp = tempfile::tempdir().unwrap();
         let store = ObservationStore::open(tmp.path());
         observe_kind(
             &store,
             ObservationKind::Caveat,
-            "locale breaks sort order on column 1",
+            "locale breaks sort order on text columns",
             "caveat body a",
         );
         observe_kind(
             &store,
             ObservationKind::Caveat,
-            "locale breaks sort order on column 2",
+            "do not rely on implicit coercion for date strings",
             "caveat body b",
         );
         observe_kind(
             &store,
             ObservationKind::Caveat,
-            "locale breaks sort order on column 3",
+            "empty strings become NULL after the roundtrip",
             "caveat body c",
         );
 
@@ -594,7 +613,7 @@ mod tests {
         let candidate = &candidates[0];
         assert_eq!(candidate.kind, ObservationKind::Caveat);
         let name = candidate.skill_name().unwrap();
-        assert!(name.ends_with("-caveat"), "{name}");
+        assert_eq!(name, "file-to-dataframe-caveat");
         let md = render_skill_md(candidate);
         assert!(md.contains("tags: [auto, caveat, file-to-dataframe]"));
         assert!(md.contains("## Recorded caveats"));
@@ -605,8 +624,9 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let store = ObservationStore::open(tmp.path());
         // Same node kind and the same normalized signature text, but
-        // only two of each kind — the kind is part of the key, so no
-        // cluster reaches three and none is proposed.
+        // only two of each kind — the kind is part of the key, so the
+        // per-node recipe and caveat buckets stay separate from each
+        // other and from the failure bucket, and none reaches three.
         observe(&store, "column 3 has bad type", "failure fix");
         observe(&store, "column 7 has bad type", "another failure fix");
         observe_kind(
@@ -638,15 +658,16 @@ mod tests {
 
     #[test]
     fn coloned_signatures_still_render_valid_frontmatter() {
-        // A summary containing ": " (plain-scalar terminator) and " #"
-        // (comment starter) must not break the generated SKILL.md.
+        // A failure error text containing ": " (plain-scalar
+        // terminator) and " #" (comment starter) must not break the
+        // generated SKILL.md frontmatter. (Recipes and caveats no
+        // longer embed a signature at all — they cluster per node.)
         let tmp = tempfile::tempdir().unwrap();
         let store = ObservationStore::open(tmp.path());
         for i in 1..=3 {
-            observe_kind(
+            observe(
                 &store,
-                ObservationKind::Recipe,
-                &format!("note: faster path #{i} for big joins"),
+                &format!("note: cast check #{i} failed for port 0"),
                 &format!("body {i}"),
             );
         }

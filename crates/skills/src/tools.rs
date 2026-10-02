@@ -306,20 +306,21 @@ impl ToolFunction for SkillWorkflowsTool {
         evolution loop: a failure and its fix, a verified recipe, or a caveat \
         where a usual approach breaks. Anchored observations are clustered \
         deterministically — failures by node kind and error signature, \
-        recipes and caveats by node kind and summary signature; a pattern \
-        seen three or more times becomes a skill proposal for human review. \
-        Record only what future work would otherwise repeat: name the \
-        component, state the reusable fix or condition — never run \
-        transcripts or one-off facts."
+        recipes and caveats per node kind; a pattern seen three or more \
+        times becomes a skill proposal for human review. Pass node_kind \
+        whenever the fact is tied to a DAG node: unanchored observations \
+        never auto-distill. Record only what future work would otherwise \
+        repeat: name the component, state the reusable fix or condition — \
+        never run transcripts or one-off facts."
 )]
 pub struct SkillObserveInput {
-    #[desc = "One line a future search would find; name the component, command, or interface. For recipe and caveat observations this line is also the clustering signature — write it as a stable one-liner naming the technique or boundary (numeric differences are generalized)."]
+    #[desc = "One line a future search would find; name the component, command, or interface."]
     pub summary: String,
     #[desc = "The reusable pattern, fix, or condition. Not a run transcript."]
     pub body: String,
     #[desc = "Observation kind: failure (a fix for an error), recipe (verified how-to), or caveat (where an approach breaks)."]
     pub kind: Option<String>,
-    #[desc = "DAG node kind involved, when the observation is anchored to one (e.g. file_to_dataframe). Anchored observations of every kind drive auto-distillation."]
+    #[desc = "DAG node kind involved (e.g. file_to_dataframe). Required for auto-distillation of every kind — unanchored observations stay searchable but never cluster."]
     pub node_kind: Option<String>,
     #[desc = "The error text when this is a failure observation; distillation clusters failures by its signature. Unused for recipe and caveat."]
     pub error: Option<String>,
@@ -371,12 +372,25 @@ impl ToolFunction for SkillObserveTool {
                 .map(str::to_string),
         };
         match self.manager.record_observation(observation_input) {
-            Ok(observation) => Ok(ToolResult::success(format!(
-                "recorded observation {} ({}). Repeated anchored patterns \
-                 surface as skill proposals in the evolution cycle.",
-                observation.id,
-                observation.kind_label(),
-            ))),
+            Ok(observation) => {
+                // Source-level data quality: a quarter of recorded
+                // observations arrived unanchored and could never
+                // distill. Nudge at record time instead of filtering
+                // silently at distill time.
+                let anchor_nudge = if observation.node_kind.is_none() {
+                    " Note: unanchored observations never auto-distill — \
+                     pass node_kind when the fact is tied to a DAG node."
+                } else {
+                    ""
+                };
+                Ok(ToolResult::success(format!(
+                    "recorded observation {} ({}). Repeated anchored \
+                     patterns surface as skill proposals in the evolution \
+                     cycle.{anchor_nudge}",
+                    observation.id,
+                    observation.kind_label(),
+                )))
+            }
             Err(e) => Ok(ToolResult::error(format!("skill_observe: {e}"))),
         }
     }
