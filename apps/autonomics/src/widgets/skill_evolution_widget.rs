@@ -360,6 +360,17 @@ fn activity_line(status: &SkillEvolutionStatus) -> Line<'static> {
             format!("{} cycles total", status.cycles_completed),
             normal,
         ));
+        // Empty-pool short-circuits: the worker never ran a cycle
+        // body, so the last-cycle row above may be missing or stale.
+        // Surface a small footnote so the operator sees "yeah, the
+        // daemon is alive, it just had nothing to do".
+        if status.cycle_skipped_empty > 0 {
+            spans.push(Span::styled("  ·  ", dim));
+            spans.push(Span::styled(
+                format!("{} skipped (empty pool)", status.cycle_skipped_empty),
+                dim,
+            ));
+        }
     }
 
     // 3) Dropped commands are an observability signal, not an error,
@@ -537,6 +548,8 @@ mod tests {
                 last_triggers: Vec::new(),
                 last_error: None,
                 dropped_commands: 0,
+                cycle_skipped_empty: 0,
+                last_skipped_reason: None,
             }),
             last_report: Some("1 written".into()),
             skills: SkillBrowserState {
@@ -646,6 +659,8 @@ mod tests {
             last_triggers: Vec::new(),
             last_error: None,
             dropped_commands: 0,
+            cycle_skipped_empty: 0,
+            last_skipped_reason: None,
         }
     }
 

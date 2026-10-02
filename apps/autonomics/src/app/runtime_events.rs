@@ -347,17 +347,37 @@ impl App {
             }
             crate::app_event::AppEvent::SkillEvolutionTriggered(result) => match result {
                 Ok(report) => {
-                    let summary = format!(
-                        "{} written, {} updated, {} auto-approved, {} left pending",
-                        report.proposals_written.len(),
-                        report.updated_existing.len(),
-                        report.auto_approved.len(),
-                        report.left_pending,
-                    );
+                    // An explicit RunCycle against an empty pool
+                    // still runs the cycle body (the operator asked
+                    // for it); the report comes back with zero
+                    // clusters. Show an info toast instead of a
+                    // success one so the operator can tell the cycle
+                    // was a no-op from causes (nothing recorded yet)
+                    // other than "wrote N".
+                    let empty_run = report.triggers.is_empty()
+                        && report.clusters_considered == 0
+                        && report.skipped.is_empty();
+                    let summary = if empty_run {
+                        "no observations to distill — record one with skill_observe".to_string()
+                    } else {
+                        format!(
+                            "{} written, {} updated, {} auto-approved, {} left pending",
+                            report.proposals_written.len(),
+                            report.updated_existing.len(),
+                            report.auto_approved.len(),
+                            report.left_pending,
+                        )
+                    };
                     self.state.skill_evolution.last_report = Some(summary.clone());
-                    self.state
-                        .toasts
-                        .success("Skill evolution cycle", Some(summary));
+                    if empty_run {
+                        self.state
+                            .toasts
+                            .info("Skill evolution cycle", Some(summary));
+                    } else {
+                        self.state
+                            .toasts
+                            .success("Skill evolution cycle", Some(summary));
+                    }
                     self.refresh_skill_evolution();
                 }
                 Err(e) => {

@@ -75,6 +75,8 @@ fn fixture_status() -> SkillEvolutionStatus {
         last_triggers: vec!["observation".into(), "timer".into()],
         last_error: None,
         dropped_commands: 0,
+        cycle_skipped_empty: 0,
+        last_skipped_reason: None,
     }
 }
 
