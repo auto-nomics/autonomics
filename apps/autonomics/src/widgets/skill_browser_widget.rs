@@ -343,8 +343,16 @@ fn skill_row(skill: &SkillLibraryView, selected: bool, width: u16) -> Line<'stat
         Span::styled(format!(" [{tier_tag}]"), dim),
     ];
     if let Some(status) = &skill.proposal_status {
+        // An update proposal revises an installed skill rather than
+        // adding a new one — the ↑ marks it in the narrow list column
+        // (the detail pane spells out what approving it does).
+        let status_text = if skill.proposal_update {
+            format!(" {status}↑")
+        } else {
+            format!(" {status}")
+        };
         spans.push(Span::styled(
-            format!(" {status}"),
+            status_text,
             if selected { status_style } else { dim },
         ));
     }
@@ -431,16 +439,25 @@ fn detail_document(detail: &SkillLibraryDetail) -> Vec<Line<'static>> {
                 "approved" => Style::new().fg(Color::Green),
                 _ => Style::new().fg(Color::DarkGray),
             };
+            // Update proposals revise an installed skill (the previous
+            // version archives to .history/ on approve); creates add a
+            // new one. The status line says which.
+            let kind_note = if proposal.update {
+                "update of installed skill — previous version archives on approve"
+            } else {
+                ""
+            };
             let status_note = match proposal.status.as_str() {
                 "pending" => " — awaiting review",
                 "approved" => " — promoted to the library",
                 _ => " — cluster consumed, will not re-propose",
             };
-            lines.push(field(
-                "Proposal",
-                format!("{}{status_note}", proposal.status),
-                status_style,
-            ));
+            let status_line = if proposal.update {
+                format!("update {status_note} · {kind_note}")
+            } else {
+                format!("{}{status_note}", proposal.status)
+            };
+            lines.push(field("Proposal", status_line, status_style));
             let mut meta = format!(
                 "by {} · {} obs evidence",
                 proposal.authored_by, proposal.observation_count

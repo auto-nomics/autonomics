@@ -254,10 +254,16 @@ fn snapshot_loaded() {
     assert!(text.contains("generation 7"), "{text}");
     assert!(text.contains("propose-only"), "{text}");
     assert!(text.contains("observations 12"), "{text}");
-    // Left list: every tier, statuses inline.
+    // Left list: every tier, statuses inline. The update-ggplot-axis
+    // row carries proposal_update=true — it must render distinctly
+    // from plain pending creates.
     assert!(text.contains("Skills (6)"), "{text}");
     assert!(text.contains("sql-syntax"), "{text}");
     assert!(text.contains("pending"), "{text}");
+    assert!(
+        text.contains("pending↑"),
+        "update proposal rows must be distinguishable: {text}"
+    );
     // Right pane: the selected skill's detail document.
     assert!(text.contains("Tier"), "{text}");
     assert!(text.contains("not installed yet"), "proposed row note");
