@@ -203,7 +203,12 @@ async fn bib_save_batch_mixed_ids() {
     use europepmc::EuropePmcClient;
 
     let epmc = Arc::new(EuropePmcClient::new());
-    let tool = BibSaveTool { bib, gateway, epmc };
+    let tool = BibSaveTool {
+        bib,
+        gateway,
+        epmc,
+        file_storage: std::sync::Arc::new(vfs::OpendalFileStorage::new_temp()),
+    };
 
     // Mix of real PMIDs — these are stable PubMed records.
     let input = BibSaveInput {

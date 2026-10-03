@@ -32,7 +32,6 @@ use europepmc::EuropePmcClient;
 
 use crate::bib_base::BibBase;
 use crate::collections::CollectionAddOutcome;
-use crate::oa_fetch::try_fetch_fulltext_with;
 use crate::query::LiteratureGateway;
 
 // ===========================================================================
@@ -188,6 +187,9 @@ pub struct BibSaveTool {
     /// Defaults to [`EuropePmcClient::new`] when constructed via
     /// [`bib_library_registrations`].
     pub epmc: Arc<EuropePmcClient>,
+    /// VFS storage the fetched OA full text is written into — full texts
+    /// are files on the File channel, so saves store real objects.
+    pub file_storage: Arc<vfs::OpendalFileStorage>,
 }
 
 /// Result of saving a single article within a batch.
@@ -501,7 +503,9 @@ impl BibSaveTool {
     /// Attempt to fetch an open-access full text for `article` from Europe PMC
     /// and store it. Returns `true` on success.
     async fn try_fetch_oa_fulltext(&self, article: &bib_types::Article) -> bool {
-        let ft = match try_fetch_fulltext_with(&self.epmc, article).await {
+        // File channel: the fetched text is written into the VFS as a real
+        // content-addressed object; the DB row points at the file.
+        let ft = match crate::oa_fetch::fetch_fulltext_stored(&self.epmc, &self.file_storage, article).await {
             Some(ft) => ft,
             None => return false,
         };
@@ -2003,6 +2007,7 @@ pub fn bib_library_registrations(
             bib: bib.clone(),
             gateway: gateway.clone(),
             epmc,
+            file_storage: file_storage.clone(),
         }),
         R::from(BibCreateCollectionTool { bib: bib.clone() }),
         R::from(BibAddToCollectionTool { bib: bib.clone() }),
@@ -2018,7 +2023,7 @@ pub fn bib_library_registrations(
         }),
         R::from(BibExportTool {
             bib,
-            storage: file_storage,
+            storage: file_storage.clone(),
         }),
     ]
 }
@@ -2325,6 +2330,7 @@ mod tests {
             bib: bib.clone(),
             gateway,
             epmc,
+            file_storage: Arc::new(vfs::OpendalFileStorage::new_temp()),
         };
 
         let input = BibSaveInput {
@@ -2428,7 +2434,12 @@ mod tests {
         let bib = Arc::new(BibBase::open_in_memory().await.unwrap());
         let gateway = Arc::new(crate::default_gateway());
         let epmc = Arc::new(EuropePmcClient::new());
-        let tool = BibSaveTool { bib, gateway, epmc };
+        let tool = BibSaveTool {
+            bib,
+            gateway,
+            epmc,
+            file_storage: Arc::new(vfs::OpendalFileStorage::new_temp()),
+        };
 
         let article = ArticleInput {
             title: "Cached test".into(),
@@ -2478,7 +2489,12 @@ mod tests {
         let bib = Arc::new(BibBase::open_in_memory().await.unwrap());
         let gateway = Arc::new(crate::default_gateway());
         let epmc = Arc::new(EuropePmcClient::new());
-        let tool = BibSaveTool { bib, gateway, epmc };
+        let tool = BibSaveTool {
+            bib,
+            gateway,
+            epmc,
+            file_storage: Arc::new(vfs::OpendalFileStorage::new_temp()),
+        };
 
         let input = BibSaveInput {
             articles: Some(vec![
@@ -2562,7 +2578,12 @@ mod tests {
         let bib = Arc::new(BibBase::open_in_memory().await.unwrap());
         let gateway = Arc::new(crate::default_gateway());
         let epmc = Arc::new(EuropePmcClient::new());
-        let tool = BibSaveTool { bib, gateway, epmc };
+        let tool = BibSaveTool {
+            bib,
+            gateway,
+            epmc,
+            file_storage: Arc::new(vfs::OpendalFileStorage::new_temp()),
+        };
 
         let input = BibSaveInput {
             articles: None,
@@ -2579,7 +2600,12 @@ mod tests {
         let bib = Arc::new(BibBase::open_in_memory().await.unwrap());
         let gateway = Arc::new(crate::default_gateway());
         let epmc = Arc::new(EuropePmcClient::new());
-        let tool = BibSaveTool { bib, gateway, epmc };
+        let tool = BibSaveTool {
+            bib,
+            gateway,
+            epmc,
+            file_storage: Arc::new(vfs::OpendalFileStorage::new_temp()),
+        };
 
         let input = BibSaveInput {
             articles: Some(vec![ArticleInput {
