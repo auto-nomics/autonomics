@@ -44,8 +44,12 @@ pub const DEFAULT_KEEP_TOKENS: u64 = 8_000;
 /// history (ported from Codex `COMPACT_USER_MESSAGE_MAX_TOKENS`).
 const COMPACT_USER_MESSAGE_MAX_TOKENS: u64 = 20_000;
 /// Minimum tokens of recent tool output to protect from pruning.
+///
+/// Temporarily unused: render-time pruning invalidated prompt-cache prefixes.
+#[allow(dead_code)]
 pub(super) const PRUNE_PROTECT_TOKENS: u64 = 40_000;
 /// Only prune if at least this many tokens can be freed.
+#[allow(dead_code)]
 const PRUNE_MINIMUM_TOKENS: u64 = 20_000;
 /// Chars per token heuristic (matching OpenCode's `Token.estimate()`).
 const CHARS_PER_TOKEN: usize = 4;
@@ -650,6 +654,9 @@ fn collect_recent_user_messages(messages: &[Message], max_tokens: u64) -> Vec<Me
 /// Prune old tool outputs from a message list by replacing their content
 /// with a placeholder. Protects the most recent `protect_tokens` worth
 /// of tool output content.
+///
+/// Temporarily unused: render-time pruning invalidated prompt-cache prefixes.
+#[allow(dead_code)]
 pub(super) fn prune_old_tool_outputs(messages: &mut [Message], protect_tokens: u64) {
     if messages.is_empty() {
         return;
