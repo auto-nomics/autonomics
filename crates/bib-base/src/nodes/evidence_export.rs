@@ -123,10 +123,14 @@ impl DagNode for EvidenceExportNode {
         }
 
         let bytes = read_file_bytes(node_ctx, &file.path).await?;
-        let set = EvidenceSet::parse(&bytes)
-            .map_err(|error| DagError::Schedule(format!("evidence_export input `{}`: {error}", file.path)))?;
-        let articles: Vec<bib_types::Article> =
-            set.records.iter().map(|record| record.citation.clone()).collect();
+        let set = EvidenceSet::parse(&bytes).map_err(|error| {
+            DagError::Schedule(format!("evidence_export input `{}`: {error}", file.path))
+        })?;
+        let articles: Vec<bib_types::Article> = set
+            .records
+            .iter()
+            .map(|record| record.citation.clone())
+            .collect();
         let rendered = render_all(&articles, self.spec.format.export_format());
 
         let file = write_artifact(
@@ -174,12 +178,19 @@ impl NodeFactory for EvidenceExportNodeFactory {
         port_layout(EvidenceExportFormat::Bibtex)
     }
 
-    fn ports_for_spec(&self, spec: serde_json::Value) -> dag_core::registry::error::Result<NodePorts> {
+    fn ports_for_spec(
+        &self,
+        spec: serde_json::Value,
+    ) -> dag_core::registry::error::Result<NodePorts> {
         let spec: EvidenceExportSpec = serde_json::from_value(spec)?;
         Ok(port_layout(spec.format))
     }
 
-    fn build(&self, spec: serde_json::Value, _node_ctx: NodeCtx) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
+    fn build(
+        &self,
+        spec: serde_json::Value,
+        _node_ctx: NodeCtx,
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let spec: EvidenceExportSpec = serde_json::from_value(spec)?;
         Ok(Box::new(EvidenceExportNode::new(spec)))
     }
@@ -215,7 +226,9 @@ mod tests {
             .join(format!("export-node-{tag}-{}.json", uuid::Uuid::new_v4()))
             .to_string_lossy()
             .into_owned();
-        tokio::fs::write(&path, set.to_bytes().unwrap()).await.unwrap();
+        tokio::fs::write(&path, set.to_bytes().unwrap())
+            .await
+            .unwrap();
         path
     }
 
@@ -233,7 +246,10 @@ mod tests {
             format,
             path: out_path.clone(),
         });
-        let inputs = vec![NodeInput::file(0, FileRef::local(&in_path, Some(FORMAT.into())).unwrap())];
+        let inputs = vec![NodeInput::file(
+            0,
+            FileRef::local(&in_path, Some(FORMAT.into())).unwrap(),
+        )];
         let outputs = node
             .execute(&node_ctx(), &inputs, &NodeReporter::noop())
             .await
@@ -267,7 +283,10 @@ mod tests {
     fn ports_for_spec_follows_format() {
         let factory = EvidenceExportNodeFactory {};
         let base = factory.ports();
-        assert_eq!(base.output_port(0).unwrap().format.as_deref(), Some("bibtex"));
+        assert_eq!(
+            base.output_port(0).unwrap().format.as_deref(),
+            Some("bibtex")
+        );
         let spec = serde_json::json!({"format": "ris", "path": "/tmp/out.ris"});
         let ports = factory.ports_for_spec(spec).unwrap();
         assert_eq!(ports.output_port(0).unwrap().format.as_deref(), Some("ris"));

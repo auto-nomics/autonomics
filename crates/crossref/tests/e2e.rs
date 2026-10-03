@@ -15,7 +15,6 @@ use crossref::CrossrefClient;
 /// A well-known DOI that is extremely unlikely to disappear.
 const FAMOUS_DOI: &str = "10.1037/0003-066X.59.1.29"; // Baumeister — ego depletion
 
-
 // ===========================================================================
 // 1.  SDK: fetch a single work by DOI
 // ===========================================================================
@@ -234,4 +233,3 @@ async fn convert_work_to_article_live() {
     println!("  Journal: {:?}", article.journal);
     println!("  Year: {:?}", article.year);
 }
-

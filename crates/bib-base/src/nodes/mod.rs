@@ -17,10 +17,10 @@
 use std::sync::{Arc, OnceLock};
 
 pub mod evidence_export;
+pub mod evidence_merge;
 pub mod literature_citations;
 pub mod literature_fetch;
 pub mod literature_fulltext;
-pub mod evidence_merge;
 pub mod literature_search;
 pub mod s2_recommendations;
 
@@ -84,7 +84,9 @@ pub(crate) async fn write_artifact(
 
     if let Some(virtual_path) = path.strip_prefix("vfs://") {
         let storage = ctx.opendal.as_ref().ok_or_else(|| {
-            DagError::Schedule(format!("VFS output `{path}` requires a mounted runtime VFS"))
+            DagError::Schedule(format!(
+                "VFS output `{path}` requires a mounted runtime VFS"
+            ))
         })?;
         let operator = storage.resolve(virtual_path);
         operator
@@ -109,11 +111,9 @@ pub(crate) async fn write_artifact(
 
     let local = path.strip_prefix("file://").unwrap_or(path);
     if let Some(parent) = std::path::Path::new(local).parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .map_err(|error| {
-                DagError::Schedule(format!("cannot create `{}`: {error}", parent.display()))
-            })?;
+        tokio::fs::create_dir_all(parent).await.map_err(|error| {
+            DagError::Schedule(format!("cannot create `{}`: {error}", parent.display()))
+        })?;
     }
     tokio::fs::write(local, &bytes)
         .await
@@ -169,10 +169,11 @@ mod tests {
         assert_eq!(file.format.as_deref(), Some("evidence"));
         let fingerprint = file.fingerprint.expect("fingerprint attached");
         assert_eq!(fingerprint.size, 7);
-        assert!(fingerprint
-            .content_hash
-            .as_deref()
-            .is_some_and(|hash| hash.starts_with("sha256:") && hash.len() == "sha256:".len() + 64));
+        assert!(
+            fingerprint.content_hash.as_deref().is_some_and(
+                |hash| hash.starts_with("sha256:") && hash.len() == "sha256:".len() + 64
+            )
+        );
         assert!(!fingerprint.immutable_remote);
         assert!(fingerprint.mtime_ns > 0);
 
@@ -190,7 +191,6 @@ mod tests {
         assert!(err.to_string().contains("mounted runtime VFS"));
     }
 }
-
 
 // ---------------------------------------------------------------------------
 // Shared bibliography handle
@@ -211,7 +211,8 @@ pub fn shared_bib() -> Result<Arc<crate::shared::BibShared>, dag_core::dag::DagE
     SHARED_BIB.get().cloned().ok_or_else(|| {
         dag_core::dag::DagError::Schedule(
             "literature_fulltext requires the runtime host's shared bibliography; \
-             no SharedInfra installed one in this process".into(),
+             no SharedInfra installed one in this process"
+                .into(),
         )
     })
 }

@@ -65,7 +65,10 @@ impl S2RecommendationsNode {
     }
 
     /// Build a node bound to a caller-supplied client (tests).
-    pub fn with_client(spec: S2RecommendationsSpec, client: Arc<semantic_scholar::S2Client>) -> Self {
+    pub fn with_client(
+        spec: S2RecommendationsSpec,
+        client: Arc<semantic_scholar::S2Client>,
+    ) -> Self {
         Self {
             meta: port_layout(),
             spec,

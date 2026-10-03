@@ -57,7 +57,7 @@ fn parse_id_kind(raw: &str) -> Result<IdKind, DagError> {
             return Err(DagError::Schedule(format!(
                 "unknown id_kind `{other}`; valid kinds: doi, pmid, pmc, embase, arxiv, \
                  biorxiv, s2, openalex, other"
-            )))
+            )));
         }
     };
     Ok(kind)
@@ -130,10 +130,7 @@ impl DagNode for LiteratureFetchNode {
         _inputs: &[NodeInput],
         _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> std::result::Result<PortOutputs, DagError> {
-        let gateway = self
-            .gateway
-            .clone()
-            .unwrap_or_else(shared_gateway);
+        let gateway = self.gateway.clone().unwrap_or_else(shared_gateway);
         let kind = parse_id_kind(&self.spec.id_kind)?;
         let value = if kind == IdKind::Doi {
             bib_types::convert::normalize_doi(&self.spec.id_value)
@@ -293,7 +290,10 @@ mod tests {
     }
 
     fn node_ctx() -> NodeCtx {
-        NodeCtx::new(datafusion::prelude::SessionContext::new().runtime_env(), None)
+        NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        )
     }
 
     fn tmp_path(tag: &str) -> String {
@@ -321,10 +321,12 @@ mod tests {
             .execute(&node_ctx(), &[], &NodeReporter::noop())
             .await
             .unwrap();
-        assert!(outputs
-            .get(&0)
-            .and_then(|value| value.as_file().ok())
-            .is_some_and(|file| file.format.as_deref() == Some("evidence")));
+        assert!(
+            outputs
+                .get(&0)
+                .and_then(|value| value.as_file().ok())
+                .is_some_and(|file| file.format.as_deref() == Some("evidence"))
+        );
 
         let set = EvidenceSet::parse(&tokio::fs::read(&path).await.unwrap()).unwrap();
         assert_eq!(set.records.len(), 1);

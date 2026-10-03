@@ -1426,7 +1426,10 @@ async fn test_evidence_channel_merge_and_inline_render() {
     let merged: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&merged_path).unwrap()).unwrap();
     assert_eq!(merged["records"].as_array().unwrap().len(), 3);
-    assert_eq!(merged["records"][0]["citation"]["title"], json!("Alpha study"));
+    assert_eq!(
+        merged["records"][0]["citation"]["title"],
+        json!("Alpha study")
+    );
     assert_eq!(merged["records"][0]["note"], json!("duplicate view"));
     assert_eq!(merged["records"][0]["origin"], json!("pubmed"));
 
@@ -1495,6 +1498,136 @@ async fn test_evidence_channel_merge_and_inline_render() {
     assert!(
         message.contains("expected `evidence`"),
         "run-time format rejection message, got: {message}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// Fulltext leg of the evidence channel: an evidence file resolves through
+/// `literature_fulltext` to a FileSet of real VFS FileRefs, and get_output
+/// renders the file entries (path / format / fingerprint).
+#[tokio::test]
+async fn test_evidence_channel_resolves_fulltext_fileset() {
+    // Install the shared bibliography singleton the node resolves through.
+    let mut shared = bib_base::BibShared::open_in_memory().await.unwrap();
+    shared = shared.with_file_storage(Arc::new(vfs::OpendalFileStorage::new_temp()));
+    let shared = Arc::new(shared);
+
+    let dir = std::env::temp_dir().join(format!("evidence-ft-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // Library article + uploaded full text behind a DOI.
+    let mut article = bib_types::Article::new("art-e2e", "Fulltext study");
+    article
+        .identifiers
+        .push(bib_types::Identifier::doi("10.1/e2e"));
+    let authors = bib_types::Author {
+        last_name: "Garcia".into(),
+        fore_name: None,
+        initials: None,
+        affiliation: None,
+        orcid: None,
+        corresponding: false,
+    };
+    article.authors.push(authors);
+    article.year = Some(2026);
+    shared.bib.upsert_article(&article).await.unwrap();
+
+    let content = b"%PDF-1.4 e2e fulltext";
+    let stored = bib_base::stored_files::stored_fulltext("art-e2e", "paper.pdf", content);
+    let virtual_path = bib_base::stored_files::vfs_virtual_path(&stored.path).unwrap();
+    shared
+        .file_storage
+        .as_ref()
+        .unwrap()
+        .write_bytes(&virtual_path, content.to_vec())
+        .await
+        .unwrap();
+    shared
+        .bib
+        .upsert_fulltext(&bib_types::FullText {
+            article_id: "art-e2e".into(),
+            file_path: stored.path.clone(),
+            file_format: bib_types::FileFormat::Pdf,
+            text_content: None,
+            source: bib_types::FullTextSource::UserUpload,
+            file_hash: Some(stored.file_hash.clone()),
+            file_size: Some(content.len() as i64),
+            uploaded_at: None,
+            extract_status: None,
+            text_format: None,
+            extracted_by: None,
+            extract_error: None,
+        })
+        .await
+        .unwrap();
+    bib_base::nodes::set_shared_bib(shared);
+
+    // Evidence file referencing the same DOI (URL-prefixed, mixed case).
+    let evidence_path = dir.join("ev.json");
+    let evidence = json!({
+        "schema_version": 1,
+        "records": [
+            {"citation": {"id": "x", "title": "Fulltext study", "year": 2026,
+                          "authors": [{"last_name": "Garcia"}],
+                          "identifiers": [{"kind": "doi", "value": "https://doi.org/10.1/E2E"}]}}
+        ]
+    });
+    std::fs::write(&evidence_path, serde_json::to_vec(&evidence).unwrap()).unwrap();
+
+    let engine = DataEngine::builder().build();
+    let (client, _handle) = spawn_with_engine(engine);
+    let tools = data_engine_tools::registrations(Arc::new(client.clone()));
+    let mut registry = agentik_core::tools::ToolRegistry::new();
+    registry.register_all(tools).unwrap();
+    let toolset = Toolset::from_registry(Arc::new(registry), None);
+
+    for (id, name, input) in [
+        (
+            "f1",
+            "add_node",
+            json!({"id": "ref", "kind": "file_reference",
+            "spec": {"path": evidence_path.to_str().unwrap(), "format": "evidence"}}),
+        ),
+        (
+            "f2",
+            "add_node",
+            json!({"id": "ft", "kind": "literature_fulltext",
+            "spec": {"fetch_missing": false}}),
+        ),
+        (
+            "f3",
+            "add_edge",
+            json!({"from": "ref", "from_port": 0, "to": "ft", "to_port": 0}),
+        ),
+        ("f4", "run_dag", json!({})),
+    ] {
+        let res = toolset
+            .execute(&[build_tooluse(id, name, input)], None)
+            .await
+            .unwrap();
+        check_ok(&res[0], name);
+    }
+
+    let res = toolset
+        .execute(
+            &[build_tooluse("f5", "get_output", json!({"id": "ft"}))],
+            None,
+        )
+        .await
+        .unwrap();
+    check_ok(&res[0], "get_output ft");
+    let output = result_json(&res[0]);
+    let entry = &output["outputs"][0];
+    assert_eq!(entry["type"], json!("file_set"));
+    let files = entry["files"].as_array().unwrap();
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0]["path"], json!(stored.path));
+    assert_eq!(files[0]["format"], json!("pdf"));
+    assert!(
+        files[0]["fingerprint"]["content_hash"]
+            .as_str()
+            .is_some_and(|hash| hash.starts_with("sha256:"))
     );
 
     std::fs::remove_dir_all(&dir).ok();

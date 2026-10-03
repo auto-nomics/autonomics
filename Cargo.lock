@@ -2910,6 +2910,7 @@ dependencies = [
  "arrow",
  "arrow-array",
  "async-trait",
+ "bib-base",
  "bib-types",
  "data-engine",
  "datafusion",

@@ -141,11 +141,7 @@ impl DagNode for LiteratureSearchNode {
         reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let gateway = self.gateway();
-        let limit = self
-            .spec
-            .limit
-            .unwrap_or(DEFAULT_LIMIT)
-            .min(MAX_LIMIT) as usize;
+        let limit = self.spec.limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT) as usize;
 
         if let Some(sources) = &self.spec.sources {
             if sources.is_empty() {
@@ -363,7 +359,9 @@ mod tests {
             .into_owned()
     }
 
-    fn gateway_with(sources: Vec<Arc<dyn crate::query::LiteratureSource>>) -> Arc<LiteratureGateway> {
+    fn gateway_with(
+        sources: Vec<Arc<dyn crate::query::LiteratureSource>>,
+    ) -> Arc<LiteratureGateway> {
         let mut gateway = LiteratureGateway::new();
         for source in sources {
             gateway.add_source(source);
@@ -405,11 +403,12 @@ mod tests {
         assert_eq!(set.records[0].origin.as_deref(), Some("src_a"));
         assert_eq!(set.records[0].note.as_deref(), Some("query context"));
         // Artifact fingerprint is content-addressed.
-        assert!(file
-            .fingerprint
-            .as_ref()
-            .and_then(|fp| fp.content_hash.as_deref())
-            .is_some_and(|hash| hash.starts_with("sha256:")));
+        assert!(
+            file.fingerprint
+                .as_ref()
+                .and_then(|fp| fp.content_hash.as_deref())
+                .is_some_and(|hash| hash.starts_with("sha256:"))
+        );
         std::fs::remove_file(&path).ok();
     }
 
@@ -452,7 +451,10 @@ mod tests {
             note: None,
         };
         let err = run(spec, gateway).await.unwrap_err().to_string();
-        assert!(err.contains("all requested literature sources failed"), "{err}");
+        assert!(
+            err.contains("all requested literature sources failed"),
+            "{err}"
+        );
         assert!(err.contains("timeout"));
     }
 

@@ -73,15 +73,16 @@ impl EvidenceSet {
     /// Serialize to pretty-printed JSON bytes (evidence files are audit
     /// artifacts; deterministic pretty printing keeps them human-readable).
     pub fn to_bytes(&self) -> Result<Vec<u8>, String> {
-        serde_json::to_vec_pretty(self).map_err(|e| format!("failed to serialize evidence set: {e}"))
+        serde_json::to_vec_pretty(self)
+            .map_err(|e| format!("failed to serialize evidence set: {e}"))
     }
 
     /// Parse fail-closed: unknown future schema versions are rejected by
     /// version number rather than guessed at. Older payloads (fields with
     /// `#[serde(default)]`) stay forward-compatible.
     pub fn parse(bytes: &[u8]) -> Result<Self, String> {
-        let set: Self = serde_json::from_slice(bytes)
-            .map_err(|e| format!("invalid evidence payload: {e}"))?;
+        let set: Self =
+            serde_json::from_slice(bytes).map_err(|e| format!("invalid evidence payload: {e}"))?;
         if set.schema_version > SCHEMA_VERSION {
             return Err(format!(
                 "evidence payload schema_version {} is newer than supported {}; \
@@ -271,7 +272,9 @@ mod tests {
     fn dedup_merges_on_normalized_doi() {
         let mut r1 = record("1", "Same paper");
         r1.citation = with_author(r1.citation, "Smith");
-        r1.citation.identifiers.push(Identifier::doi("10.1000/test"));
+        r1.citation
+            .identifiers
+            .push(Identifier::doi("10.1000/test"));
 
         let mut r2 = record("2", "Same paper, URL-prefixed DOI");
         r2.citation = with_author(r2.citation, "Smith");

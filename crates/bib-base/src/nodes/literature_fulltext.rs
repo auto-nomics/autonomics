@@ -178,9 +178,7 @@ impl LiteratureFulltextNode {
             return Ok(None);
         };
         let fetched = match shared.file_storage.as_ref() {
-            Some(storage) => {
-                fetch_fulltext_stored(&shared.europe_pmc, storage, &article).await
-            }
+            Some(storage) => fetch_fulltext_stored(&shared.europe_pmc, storage, &article).await,
             // No storage handle: fetching would produce a synthetic
             // pointer, which this node exists to eliminate.
             None => return Ok(None),
@@ -218,10 +216,8 @@ impl LiteratureFulltextNode {
             &format!("oa-{}.txt", fulltext.article_id),
             text.as_bytes(),
         );
-        let virtual_path =
-            vfs_virtual_path(&stored.path).ok_or_else(|| {
-                DagError::Schedule(format!("invalid stored path `{}`", stored.path))
-            })?;
+        let virtual_path = vfs_virtual_path(&stored.path)
+            .ok_or_else(|| DagError::Schedule(format!("invalid stored path `{}`", stored.path)))?;
         let byte_len = text.len();
         storage
             .write_bytes(&virtual_path, text.into_bytes())
@@ -290,14 +286,20 @@ impl DagNode for LiteratureFulltextNode {
         let bib = shared.bib.clone();
         let bytes = read_file_bytes(node_ctx, &file.path).await?;
         let set = EvidenceSet::parse(&bytes).map_err(|error| {
-            DagError::Schedule(format!("literature_fulltext input `{}`: {error}", file.path))
+            DagError::Schedule(format!(
+                "literature_fulltext input `{}`: {error}",
+                file.path
+            ))
         })?;
         let fetch_missing = self.spec.fetch_missing.unwrap_or(true);
 
         let mut files: Vec<FileRef> = Vec::with_capacity(set.records.len());
         let mut misses: Vec<String> = Vec::new();
         for record in &set.records {
-            match self.resolve_record(&bib, &shared, record, fetch_missing).await {
+            match self
+                .resolve_record(&bib, &shared, record, fetch_missing)
+                .await
+            {
                 Ok(Some(fulltext)) => {
                     let fulltext = if fulltext.file_path.starts_with("vfs://") {
                         fulltext
@@ -319,7 +321,7 @@ impl DagNode for LiteratureFulltextNode {
                 Err(reason) => {
                     return Err(DagError::Schedule(format!(
                         "literature_fulltext failed on {reason}"
-                    )))
+                    )));
                 }
             }
         }
@@ -424,7 +426,10 @@ mod tests {
     }
 
     fn node_ctx() -> NodeCtx {
-        NodeCtx::new(datafusion::prelude::SessionContext::new().runtime_env(), None)
+        NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        )
     }
 
     async fn write_evidence(tag: &str, records: Vec<EvidenceRecord>) -> String {
@@ -436,7 +441,9 @@ mod tests {
             records,
             ..Default::default()
         };
-        tokio::fs::write(&path, set.to_bytes().unwrap()).await.unwrap();
+        tokio::fs::write(&path, set.to_bytes().unwrap())
+            .await
+            .unwrap();
         path
     }
 
@@ -477,7 +484,9 @@ mod tests {
         let stored = upload_fulltext(&shared, "art-1", b"%PDF-1.4 fake").await;
 
         let mut record_citation = Article::new("ev-1", "Uploaded study");
-        record_citation.identifiers.push(Identifier::doi("https://doi.org/10.1/UP"));
+        record_citation
+            .identifiers
+            .push(Identifier::doi("https://doi.org/10.1/UP"));
         let path = write_evidence(
             "uploaded",
             vec![EvidenceRecord {
@@ -489,10 +498,15 @@ mod tests {
         .await;
 
         let mut node = LiteratureFulltextNode::with_shared(
-            LiteratureFulltextSpec { fetch_missing: Some(false) },
+            LiteratureFulltextSpec {
+                fetch_missing: Some(false),
+            },
             shared.clone(),
         );
-        let inputs = vec![NodeInput::file(0, FileRef::local(&path, Some(FORMAT.into())).unwrap())];
+        let inputs = vec![NodeInput::file(
+            0,
+            FileRef::local(&path, Some(FORMAT.into())).unwrap(),
+        )];
         let outputs = node
             .execute(&node_ctx(), &inputs, &NodeReporter::noop())
             .await
@@ -509,7 +523,10 @@ mod tests {
         assert_eq!(fingerprint.size, b"%PDF-1.4 fake".len() as u64);
         assert_eq!(
             fingerprint.content_hash.as_deref(),
-            stored.file_hash.map(|hash| format!("sha256:{hash}")).as_deref()
+            stored
+                .file_hash
+                .map(|hash| format!("sha256:{hash}"))
+                .as_deref()
         );
         assert!(fingerprint.immutable_remote);
         std::fs::remove_file(path).ok();
@@ -552,10 +569,15 @@ mod tests {
         .await;
 
         let mut node = LiteratureFulltextNode::with_shared(
-            LiteratureFulltextSpec { fetch_missing: Some(false) },
+            LiteratureFulltextSpec {
+                fetch_missing: Some(false),
+            },
             shared.clone(),
         );
-        let inputs = vec![NodeInput::file(0, FileRef::local(&path, Some(FORMAT.into())).unwrap())];
+        let inputs = vec![NodeInput::file(
+            0,
+            FileRef::local(&path, Some(FORMAT.into())).unwrap(),
+        )];
         let outputs = node
             .execute(&node_ctx(), &inputs, &NodeReporter::noop())
             .await
@@ -566,12 +588,18 @@ mod tests {
             .and_then(|value| value.as_file_set().ok())
             .unwrap();
         assert_eq!(files.len(), 1);
-        assert!(files[0].path.starts_with("vfs:///literature/art-2/"), "{}", files[0].path);
-        assert!(files[0]
-            .fingerprint
-            .as_ref()
-            .and_then(|fp| fp.content_hash.as_deref())
-            .is_some_and(|hash| hash.starts_with("sha256:")));
+        assert!(
+            files[0].path.starts_with("vfs:///literature/art-2/"),
+            "{}",
+            files[0].path
+        );
+        assert!(
+            files[0]
+                .fingerprint
+                .as_ref()
+                .and_then(|fp| fp.content_hash.as_deref())
+                .is_some_and(|hash| hash.starts_with("sha256:"))
+        );
 
         // The DB row now points at the materialized object.
         let row = shared.bib.get_fulltext("art-2").await.unwrap().unwrap();
@@ -605,10 +633,15 @@ mod tests {
         )
         .await;
         let mut node = LiteratureFulltextNode::with_shared(
-            LiteratureFulltextSpec { fetch_missing: Some(false) },
+            LiteratureFulltextSpec {
+                fetch_missing: Some(false),
+            },
             shared,
         );
-        let inputs = vec![NodeInput::file(0, FileRef::local(&path, Some(FORMAT.into())).unwrap())];
+        let inputs = vec![NodeInput::file(
+            0,
+            FileRef::local(&path, Some(FORMAT.into())).unwrap(),
+        )];
         let err = node
             .execute(&node_ctx(), &inputs, &NodeReporter::noop())
             .await
@@ -621,7 +654,9 @@ mod tests {
 
     #[tokio::test]
     async fn without_shared_bibliography_fails_closed() {
-        let mut node = LiteratureFulltextNode::new(LiteratureFulltextSpec { fetch_missing: None });
+        let mut node = LiteratureFulltextNode::new(LiteratureFulltextSpec {
+            fetch_missing: None,
+        });
         let err = node
             .execute(&node_ctx(), &[], &NodeReporter::noop())
             .await

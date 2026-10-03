@@ -27,7 +27,9 @@ use agentik_proc::tool;
 use agentik_sdk::types::{ToolResult as AgentToolResult, ToolResultBlock};
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use bib_types::{AddedBy, ArticleRole, CollectionStatus, FetchStatus, IdKind, Identifier, TextFormat};
+use bib_types::{
+    AddedBy, ArticleRole, CollectionStatus, FetchStatus, IdKind, Identifier, TextFormat,
+};
 use europepmc::EuropePmcClient;
 
 use crate::bib_base::BibBase;
@@ -505,10 +507,13 @@ impl BibSaveTool {
     async fn try_fetch_oa_fulltext(&self, article: &bib_types::Article) -> bool {
         // File channel: the fetched text is written into the VFS as a real
         // content-addressed object; the DB row points at the file.
-        let ft = match crate::oa_fetch::fetch_fulltext_stored(&self.epmc, &self.file_storage, article).await {
-            Some(ft) => ft,
-            None => return false,
-        };
+        let ft =
+            match crate::oa_fetch::fetch_fulltext_stored(&self.epmc, &self.file_storage, article)
+                .await
+            {
+                Some(ft) => ft,
+                None => return false,
+            };
         match self.bib.upsert_fulltext(&ft).await {
             Ok(()) => true,
             Err(e) => {

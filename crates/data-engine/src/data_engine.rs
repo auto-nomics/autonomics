@@ -1076,9 +1076,7 @@ impl DataEngine {
                 .read(&storage.resolve_path(virtual_path))
                 .await
                 .map_err(|error| {
-                    crate::error::Error::Custom(format!(
-                        "cannot read VFS file `{path}`: {error}"
-                    ))
+                    crate::error::Error::Custom(format!("cannot read VFS file `{path}`: {error}"))
                 })?;
             if bytes.len() > Self::MAX_READ_FILE_BYTES {
                 return Err(crate::error::Error::Custom(format!(
@@ -1370,7 +1368,10 @@ mod tests {
         assert!(error.to_string().contains("at most"), "{error}");
 
         // vfs:// without a mounted storage fails closed too.
-        let error = engine.read_file("vfs://artifacts/none.json").await.unwrap_err();
+        let error = engine
+            .read_file("vfs://artifacts/none.json")
+            .await
+            .unwrap_err();
         assert!(error.to_string().contains("mounted"), "{error}");
     }
 

@@ -22,9 +22,9 @@ use bib_types::{ExtractStatus, FileFormat, FullText, FullTextSource, IdKind, Tex
 use crate::stored_files::{stored_fulltext, vfs_virtual_path};
 use chrono::Utc;
 use europepmc::EuropePmcClient;
-use vfs::OpendalFileStorage;
 use europepmc::types::{ResultType, SearchRequest};
 use tracing::debug;
+use vfs::OpendalFileStorage;
 
 /// Try to fetch an open-access full text for `article` from Europe PMC.
 ///

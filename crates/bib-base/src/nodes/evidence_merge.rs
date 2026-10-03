@@ -167,7 +167,11 @@ impl NodeFactory for EvidenceMergeNodeFactory {
         port_layout()
     }
 
-    fn build(&self, spec: serde_json::Value, _node_ctx: NodeCtx) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
+    fn build(
+        &self,
+        spec: serde_json::Value,
+        _node_ctx: NodeCtx,
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let spec: EvidenceMergeSpec = serde_json::from_value(spec)?;
         Ok(Box::new(EvidenceMergeNode::new(spec)))
     }
@@ -230,7 +234,12 @@ mod tests {
             "b",
             vec![
                 // Same DOI as Alpha: duplicate.
-                record("3", "Alpha (alt view)", Some("https://doi.org/10.1/A"), Some("why")),
+                record(
+                    "3",
+                    "Alpha (alt view)",
+                    Some("https://doi.org/10.1/A"),
+                    Some("why"),
+                ),
                 // No identifiers, distinct cite key from Beta: kept.
                 record("4", "Gamma", None, None),
             ],
@@ -266,11 +275,13 @@ mod tests {
             .get(&0)
             .and_then(|value| value.as_file().ok())
             .unwrap();
-        assert!(out_file
-            .fingerprint
-            .as_ref()
-            .and_then(|fp| fp.content_hash.as_deref())
-            .is_some_and(|hash| hash.starts_with("sha256:")));
+        assert!(
+            out_file
+                .fingerprint
+                .as_ref()
+                .and_then(|fp| fp.content_hash.as_deref())
+                .is_some_and(|hash| hash.starts_with("sha256:"))
+        );
 
         for path in [path_a, path_b, out_path] {
             std::fs::remove_file(path).ok();
@@ -303,8 +314,8 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_newer_schema_version_payload() {
-        let path = std::env::temp_dir()
-            .join(format!("merge-node-v2-{}.json", uuid::Uuid::new_v4()));
+        let path =
+            std::env::temp_dir().join(format!("merge-node-v2-{}.json", uuid::Uuid::new_v4()));
         tokio::fs::write(&path, br#"{"schema_version": 2, "records": []}"#)
             .await
             .unwrap();

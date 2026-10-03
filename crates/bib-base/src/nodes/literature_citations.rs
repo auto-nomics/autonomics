@@ -58,7 +58,9 @@ pub struct LiteratureCitationsSpec {
 static S2_CLIENT: OnceLock<Arc<semantic_scholar::S2Client>> = OnceLock::new();
 
 pub(crate) fn shared_s2_client() -> Arc<semantic_scholar::S2Client> {
-    S2_CLIENT.get_or_init(|| Arc::new(semantic_scholar::S2Client::new())).clone()
+    S2_CLIENT
+        .get_or_init(|| Arc::new(semantic_scholar::S2Client::new()))
+        .clone()
 }
 
 const DEFAULT_LIMIT: u32 = 20;
@@ -125,7 +127,10 @@ impl LiteratureCitationsNode {
     }
 
     /// Build a node bound to a caller-supplied client (tests).
-    pub fn with_client(spec: LiteratureCitationsSpec, client: Arc<semantic_scholar::S2Client>) -> Self {
+    pub fn with_client(
+        spec: LiteratureCitationsSpec,
+        client: Arc<semantic_scholar::S2Client>,
+    ) -> Self {
         Self {
             meta: port_layout(),
             spec,
@@ -307,7 +312,10 @@ mod tests {
             Some("user note"),
         )
         .unwrap();
-        assert!(note.starts_with("influential citation; intents: [methodology]"), "{note}");
+        assert!(
+            note.starts_with("influential citation; intents: [methodology]"),
+            "{note}"
+        );
         assert!(note.contains("context: "), "{note}");
         assert!(note.ends_with("user note"), "{note}");
     }

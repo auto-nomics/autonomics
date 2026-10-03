@@ -27,16 +27,18 @@ pub use alphafold::nodes::prediction::{AlphaFoldPredictionNode, AlphaFoldPredict
 pub use bib_base::nodes::evidence_export::{
     EvidenceExportFormat, EvidenceExportNode, EvidenceExportNodeFactory, EvidenceExportSpec,
 };
-pub use bib_base::nodes::evidence_merge::{EvidenceMergeNode, EvidenceMergeNodeFactory, EvidenceMergeSpec};
+pub use bib_base::nodes::evidence_merge::{
+    EvidenceMergeNode, EvidenceMergeNodeFactory, EvidenceMergeSpec,
+};
 pub use bib_base::nodes::literature_citations::{
     CitationDirection, LiteratureCitationsNode, LiteratureCitationsNodeFactory,
     LiteratureCitationsSpec,
 };
-pub use bib_base::nodes::literature_fulltext::{
-    LiteratureFulltextNode, LiteratureFulltextNodeFactory, LiteratureFulltextSpec,
-};
 pub use bib_base::nodes::literature_fetch::{
     LiteratureFetchNode, LiteratureFetchNodeFactory, LiteratureFetchSpec,
+};
+pub use bib_base::nodes::literature_fulltext::{
+    LiteratureFulltextNode, LiteratureFulltextNodeFactory, LiteratureFulltextSpec,
 };
 pub use bib_base::nodes::literature_search::{
     LiteratureSearchNode, LiteratureSearchNodeFactory, LiteratureSearchSpec,
@@ -322,7 +324,10 @@ mod tests {
                 serde_json::json!({"query": {}, "path": "/tmp/lit.json"}),
             )
             .expect("source_literature builds");
-        assert_eq!(source.ports().output_port(0).unwrap().format.as_deref(), Some("evidence"));
+        assert_eq!(
+            source.ports().output_port(0).unwrap().format.as_deref(),
+            Some("evidence")
+        );
 
         let fulltext = registry
             .build_node("literature_fulltext", serde_json::json!({}))
@@ -374,7 +379,13 @@ mod tests {
             .expect("evidence_export builds");
         // ports_for_spec: output contract follows the spec'd format.
         let export_ports = export.ports();
-        assert_eq!(export_ports.input_port(0).unwrap().format.as_deref(), Some("evidence"));
-        assert_eq!(export_ports.output_port(0).unwrap().format.as_deref(), Some("ris"));
+        assert_eq!(
+            export_ports.input_port(0).unwrap().format.as_deref(),
+            Some("evidence")
+        );
+        assert_eq!(
+            export_ports.output_port(0).unwrap().format.as_deref(),
+            Some("ris")
+        );
     }
 }
