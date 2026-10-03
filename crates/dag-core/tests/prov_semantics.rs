@@ -1,8 +1,9 @@
 //! Regression tests pinning the PROV modeling semantics fixed after the
 //! first real-world export review: no duplicate relations, source nodes
 //! ingest (not generate) external files, a run-level activity carries real
-//! timestamps, DataFrame entities join the derivation chain, and all
-//! sections (used/agent/prefix) are present.
+//! timestamps, DataFrame entities join the derivation chain, specs / wiring
+//! ports / dispatch order ride their activities and relations, and all
+//! sections (used/agent/prefix/…) are present.
 
 use dag_core::dag::RunRecord;
 use dag_core::dag::export::build_prov_document;
@@ -12,20 +13,20 @@ fn report() -> Value {
     json!({
         "nodes": [
             {"id":"counts_file","status":"success","node_type":"file_reference",
-             "elapsed_ms":3,"fingerprint":"fp-src",
+             "elapsed_ms":3,"dispatch_seq":0,"fingerprint":"fp-src",
              "output_files":[{"path":"/bixbench/counts.txt","format":"txt",
                "fingerprint":{"size":10,"mtime_ns":1,"content_hash":null,"immutable_remote":false}}],
              "port_assignments":{"0":{"path":"/bixbench/counts.txt","format":"txt",
                "fingerprint":{"size":10,"mtime_ns":1,"content_hash":null,"immutable_remote":false}}},
              "inputs":[]},
             {"id":"normalize","status":"success","node_type":"sql",
-             "elapsed_ms":50,"fingerprint":"fp-sql","output_type":"DataFrame",
+             "elapsed_ms":50,"dispatch_seq":1,"fingerprint":"fp-sql","output_type":"DataFrame",
              "output_schema":{"column_count":2,"columns":{"a":"Int64"},"type_distribution":null},
              "output_rows":42,
              "inputs":[{"from":"counts_file","from_port":0,"to_port":0,"kind":"File",
                "path":"/bixbench/counts.txt","fingerprint":{"size":10,"mtime_ns":1,"content_hash":null}}]},
             {"id":"deseq2_condition","status":"success","node_type":"deseq2_condition",
-             "elapsed_ms":9000,"fingerprint":"fp-tool",
+             "elapsed_ms":9000,"dispatch_seq":2,"fingerprint":"fp-tool",
              "output_files":[{"path":"vfs:///artifacts/r1/out.csv","format":"csv",
                "fingerprint":{"size":5,"mtime_ns":0,"content_hash":"sha256:abc","immutable_remote":true}}],
              "port_assignments":{"0":{"path":"vfs:///artifacts/r1/out.csv","format":"csv",
@@ -35,6 +36,21 @@ fn report() -> Value {
                "exit_code":0,"run_name":"r1"}}
         ]
     })
+}
+
+fn manifest() -> String {
+    json!({
+        "nodes": [
+            {"id":"counts_file","kind":"file_reference","spec":{"path":"/bixbench/counts.txt"}},
+            {"id":"normalize","kind":"sql","spec":{"sql_query":"SELECT a FROM counts"}},
+            {"id":"deseq2_condition","kind":"deseq2_condition","spec":{"design":"~condition"}}
+        ],
+        "edges": [
+            {"from":"counts_file","from_port":0,"to":"normalize","to_port":0},
+            {"from":"normalize","from_port":0,"to":"deseq2_condition","to_port":0}
+        ]
+    })
+    .to_string()
 }
 
 fn doc() -> Value {
@@ -54,7 +70,7 @@ fn doc() -> Value {
         source_revision: "rev1".into(),
         run_report_json: None,
     };
-    build_prov_document(&run, &report(), Some("{}"))
+    build_prov_document(&run, &report(), Some(&manifest()))
 }
 
 fn pair_count(array: &[Value], key_a: &str, key_b: &str) -> (usize, usize) {
@@ -82,6 +98,7 @@ fn all_sections_present_and_nonempty() {
         "agent",
         "used",
         "wasGeneratedBy",
+        "wasInformedBy",
         "wasDerivedFrom",
         "wasAssociatedWith",
     ] {
@@ -114,7 +131,12 @@ fn no_duplicate_relations() {
         "generatedEntity",
         "usedEntity",
     );
-    assert_eq!((gen_dups, used_dups, der_dups), (0, 0, 0));
+    let (_, inf_dups) = pair_count(
+        doc["wasInformedBy"].as_array().unwrap(),
+        "activity",
+        "informed",
+    );
+    assert_eq!((gen_dups, used_dups, der_dups, inf_dups), (0, 0, 0, 0));
 }
 
 #[test]
@@ -269,4 +291,64 @@ fn file_entities_omit_unrecorded_fields() {
         original.get("autonomics:format").is_some(),
         "recorded format is kept"
     );
+}
+
+/// The document alone reconstructs the DAG: every activity carries its spec
+/// and dispatch order, every wiring edge appears as a port-role on `used` /
+/// `wasGeneratedBy` and as a `wasInformedBy` between the node activities —
+/// exactly once even though the manifest and the observed bindings both
+/// declare it.
+#[test]
+fn specs_order_and_wiring_ports_join_the_graph() {
+    let doc = doc();
+    let normalize = "urn:autonomics:run:run-1:node:normalize";
+    let deseq2 = "urn:autonomics:run:run-1:node:deseq2_condition";
+    let df = "urn:autonomics:run:run-1:df:normalize";
+
+    // Specs from the executed manifest, as compact JSON literals.
+    let spec: Value =
+        serde_json::from_str(doc["activity"][normalize]["autonomics:spec"].as_str().unwrap())
+            .unwrap();
+    assert_eq!(spec["sql_query"], json!("SELECT a FROM counts"));
+
+    // Dispatch order: the scheduler's serialization of the run.
+    assert_eq!(
+        doc["activity"][normalize]["autonomics:dispatch_seq"],
+        json!(1)
+    );
+    assert_eq!(doc["activity"][deseq2]["autonomics:dispatch_seq"], json!(2));
+
+    // `used` names the wiring edge: producer:from_port>to_port.
+    let used = doc["used"].as_array().unwrap();
+    let df_binding = used
+        .iter()
+        .find(|r| r["activity"] == deseq2 && r["entity"] == df)
+        .unwrap();
+    assert_eq!(df_binding["prov:role"], json!("normalize:0>0"));
+    let file_binding = used
+        .iter()
+        .find(|r| {
+            r["activity"] == normalize && r["entity"] == "urn:autonomics:path:/bixbench/counts.txt"
+        })
+        .unwrap();
+    assert_eq!(file_binding["prov:role"], json!("counts_file:0>0"));
+
+    // `wasGeneratedBy` names the producing output port.
+    let generation = doc["wasGeneratedBy"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["activity"] == deseq2 && r["entity"] == "urn:autonomics:sha256:abc")
+        .unwrap();
+    assert_eq!(generation["prov:role"], json!("port:0"));
+
+    // Node-level topology: exactly one informed record per declared edge
+    // (manifest + observed binding merge), ports in the role.
+    let informed = doc["wasInformedBy"].as_array().unwrap();
+    let matches: Vec<&Value> = informed
+        .iter()
+        .filter(|r| r["activity"] == normalize && r["informed"] == "urn:autonomics:run:run-1:node:counts_file")
+        .collect();
+    assert_eq!(matches.len(), 1, "declared + observed edges dedupe");
+    assert_eq!(matches[0]["prov:role"], json!("0>0"));
 }

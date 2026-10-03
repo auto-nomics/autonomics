@@ -16,7 +16,12 @@ use crate::ExecError;
                   sha256 verified against the audit record + the executed DAG \
                   definition; input data is referenced by uri + hash, not copied. \
                   `prov` produces a single W3C PROV-JSON document (entities/\
-                  activities/agents, machine-queryable lineage). Get run ids \
+                  activities/agents, machine-queryable lineage) that carries \
+                  the full DAG: per-node specs (autonomics:spec), edge wiring \
+                  with ports (prov:role on used/wasGeneratedBy + wasInformedBy \
+                  between nodes), execution order (autonomics:dispatch_seq), \
+                  output schemas, and failure/skip details — enough to \
+                  reconstruct the run from the document alone. Get run ids \
                   from dag_runs_log (no run_id = list); `latest` and unique \
                   prefixes also work. out_dir: any path you can see through \
                   the VFS (e.g. /outputs/... inside your workspace) or a \

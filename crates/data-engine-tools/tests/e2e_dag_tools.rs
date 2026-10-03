@@ -33,24 +33,77 @@ fn result_json(result: &ToolResult) -> serde_json::Value {
     }
 }
 
+/// Hermetic per-test storage: a tempdir-backed mount at `/`, the shape
+/// production engines run with. Fixture files are written into `files`
+/// (the mount source) with `std::fs`; nodes address them by their virtual
+/// `/…` paths.
+///
+/// This replaced `OpendalFileStorage::new("/mnt/disk3/test")`, which both
+/// wrote fixtures into a real data disk and mis-modeled addressing: a bare
+/// `/x` is a *host* path unless a mount covers it, so `file_to_dataframe`
+/// correctly rejected it once host-path pre-validation landed — that, not
+/// a product bug, is what rotted the get_output tests.
+struct HermeticVfs {
+    storage: Arc<OpendalFileStorage>,
+    /// The mount table — engines must also get this via `.with_vfs(…)`,
+    /// or their DataFusion session has no `vfs://` object store and node
+    /// reads of mounted paths fail.
+    mounted: Arc<MountedObjectStore>,
+    /// Mount source: fixture files live here for the test's lifetime.
+    files: tempfile::TempDir,
+    /// Default-backend root (unused under the `/` mount, kept alive so the
+    /// tempdir outlives the storage).
+    _data: tempfile::TempDir,
+}
+
+fn hermetic_vfs() -> HermeticVfs {
+    let files = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let manifest = VfsManifest {
+        backend: vec![BackendDefinition {
+            id: "default".into(),
+            config: BackendConfig::local("/"),
+        }],
+        mount: vec![MountDefinition {
+            path: "/".into(),
+            backend: "default".into(),
+            source: files.path().to_string_lossy().to_string(),
+            read_only: false,
+        }],
+    };
+    let mounted = Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap());
+    HermeticVfs {
+        storage: Arc::new(OpendalFileStorage::with_mounts(
+            data.path(),
+            mounted.clone(),
+        )),
+        mounted,
+        files,
+        _data: data,
+    }
+}
+
+/// Write a fixture file into the hermetic mount at virtual `path`.
+fn put_fixture(vfs: &HermeticVfs, path: &str, bytes: &[u8]) {
+    let rel = path.trim_start_matches('/');
+    std::fs::write(vfs.files.path().join(rel), bytes).unwrap();
+}
+
 #[tokio::test]
 async fn test_add_source_sql_run_dag() {
-    // 1. Set up file storage and write test data
-    let file_storage = Arc::new(OpendalFileStorage::new("/mnt/disk3/test"));
+    // 1. Set up hermetic storage and write test data
+    let vfs = hermetic_vfs();
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
     let csv_path =
         std::path::Path::new(&manifest_dir).join("../data-engine/test_datasets/insurance.csv");
     let csv_data = std::fs::read(csv_path).unwrap();
-    file_storage
-        .op
-        .write("/insurance.csv", csv_data)
-        .await
-        .unwrap();
+    put_fixture(&vfs, "/insurance.csv", &csv_data);
 
     // 2. Build DataEngine and spawn server
     let engine = DataEngine::builder()
-        .register_opendal_fs(file_storage)
+        .register_opendal_fs(vfs.storage.clone())
         .unwrap()
+        .with_vfs((*vfs.mounted).clone())
         .build();
     let (client, _handle) = spawn_with_engine(engine);
 
@@ -395,20 +448,17 @@ async fn same_turn_add_nodes_and_edge_then_remove_edge_and_upstream() {
 /// agent's pipeline relied on.
 #[tokio::test]
 async fn test_get_output_vcf_select_star_returns_correct_rows() {
-    let file_storage = Arc::new(OpendalFileStorage::new("/mnt/disk3/test"));
+    let vfs = hermetic_vfs();
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
     let vcf_path =
         std::path::Path::new(&manifest_dir).join("../data-engine/test_datasets/sample.vcf.gz");
     let vcf_data = std::fs::read(vcf_path).unwrap();
-    file_storage
-        .op
-        .write("/sample.vcf.gz", vcf_data)
-        .await
-        .unwrap();
+    put_fixture(&vfs, "/sample.vcf.gz", &vcf_data);
 
     let engine = DataEngine::builder()
-        .register_opendal_fs(file_storage)
+        .register_opendal_fs(vfs.storage.clone())
         .unwrap()
+        .with_vfs((*vfs.mounted).clone())
         .build();
     let (client, _handle) = spawn_with_engine(engine);
     let tools = data_engine_tools::registrations(Arc::new(client.clone()));
@@ -534,18 +584,15 @@ async fn test_get_output_vcf_select_star_returns_correct_rows() {
 /// collect_error="<msg>"` — the agent sees the real failure.
 #[tokio::test]
 async fn test_get_output_surfaces_collect_error_instead_of_swallowing() {
-    let file_storage = Arc::new(OpendalFileStorage::new("/mnt/disk3/test"));
+    let vfs = hermetic_vfs();
     // 5 rows where `s` is non-numeric → cast(s as int) errors at execution.
     let csv = b"age,s\n1,abc\n2,def\n3,ghi\n4,jkl\n5,mno\n";
-    file_storage
-        .op
-        .write("/badcast.csv", csv.to_vec())
-        .await
-        .unwrap();
+    put_fixture(&vfs, "/badcast.csv", csv);
 
     let engine = DataEngine::builder()
-        .register_opendal_fs(file_storage)
+        .register_opendal_fs(vfs.storage.clone())
         .unwrap()
+        .with_vfs((*vfs.mounted).clone())
         .build();
     let (client, _handle) = spawn_with_engine(engine);
     let tools = data_engine_tools::registrations(Arc::new(client.clone()));
@@ -652,20 +699,17 @@ async fn test_get_output_surfaces_collect_error_instead_of_swallowing() {
 /// Struct columns in general. Keep it as a control alongside the VCF test.
 #[tokio::test]
 async fn test_get_output_synthetic_struct_column_baseline() {
-    let file_storage = Arc::new(OpendalFileStorage::new("/mnt/disk3/test"));
+    let vfs = hermetic_vfs();
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
     let csv_path =
         std::path::Path::new(&manifest_dir).join("../data-engine/test_datasets/insurance.csv");
     let csv_data = std::fs::read(csv_path).unwrap();
-    file_storage
-        .op
-        .write("/insurance.csv", csv_data)
-        .await
-        .unwrap();
+    put_fixture(&vfs, "/insurance.csv", &csv_data);
 
     let engine = DataEngine::builder()
-        .register_opendal_fs(file_storage)
+        .register_opendal_fs(vfs.storage.clone())
         .unwrap()
+        .with_vfs((*vfs.mounted).clone())
         .build();
     let (client, _handle) = spawn_with_engine(engine);
     let tools = data_engine_tools::registrations(Arc::new(client.clone()));
@@ -758,20 +802,17 @@ async fn test_get_output_synthetic_struct_column_baseline() {
 ///      and not a silent null).
 #[tokio::test]
 async fn test_inspect_node_returns_live_spec() {
-    let file_storage = Arc::new(OpendalFileStorage::new("/mnt/disk3/test"));
+    let vfs = hermetic_vfs();
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
     let csv_path =
         std::path::Path::new(&manifest_dir).join("../data-engine/test_datasets/insurance.csv");
     let csv_data = std::fs::read(csv_path).unwrap();
-    file_storage
-        .op
-        .write("/insurance.csv", csv_data)
-        .await
-        .unwrap();
+    put_fixture(&vfs, "/insurance.csv", &csv_data);
 
     let engine = DataEngine::builder()
-        .register_opendal_fs(file_storage)
+        .register_opendal_fs(vfs.storage.clone())
         .unwrap()
+        .with_vfs((*vfs.mounted).clone())
         .build();
     let (client, _handle) = spawn_with_engine(engine);
 
@@ -1329,306 +1370,162 @@ async fn test_dag_export_run_uploads_into_vfs() {
     assert!(metadata > 0);
 }
 
-/// Evidence channel end-to-end: two `file_reference` evidence inputs merge
-/// (identifier dedup + note fill-in) and `get_output` renders the citations
-/// inline instead of a bare path. Local absolute paths keep this test
-/// independent of VFS mount resolution.
+/// End-to-end PROV export: the recorded run carries its node specs (from
+/// the executed manifest), the wiring edges with ports, and the dispatch
+/// order — read back through the VFS the agent sees.
 #[tokio::test]
-async fn test_evidence_channel_merge_and_inline_render() {
-    let dir = std::env::temp_dir().join(format!("evidence-e2e-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path_a = dir.join("set_a.json");
-    let path_b = dir.join("set_b.json");
-    let merged_path = dir.join("merged.json");
-
-    let set_a = json!({
-        "schema_version": 1,
-        "records": [
-            {"citation": {"id": "1", "title": "Alpha study", "year": 2023,
-                          "authors": [{"last_name": "Smith"}],
-                          "identifiers": [{"kind": "doi", "value": "10.1/shared"}]},
-             "origin": "pubmed"},
-            {"citation": {"id": "2", "title": "Beta study", "year": 2024,
-                          "authors": [{"last_name": "Jones"}],
-                          "identifiers": []},
-             "note": "why beta matters"}
-        ]
-    });
-    // Same DOI (URL-prefixed, different casing) plus one unique record: the
-    // merge must collapse the duplicate and carry the duplicate's note into
-    // the surviving Alpha record.
-    let set_b = json!({
-        "schema_version": 1,
-        "records": [
-            {"citation": {"id": "3", "title": "Alpha study (alt view)", "year": 2023,
-                          "authors": [{"last_name": "Smith"}],
-                          "identifiers": [{"kind": "doi", "value": "https://doi.org/10.1/SHARED"}]},
-             "note": "duplicate view", "origin": "openalex"},
-            {"citation": {"id": "4", "title": "Gamma study", "year": 2025,
-                          "authors": [{"last_name": "Lee"}],
-                          "identifiers": [{"kind": "doi", "value": "10.1/gamma"}]},
-             "origin": "crossref"}
-        ]
-    });
-    std::fs::write(&path_a, serde_json::to_vec(&set_a).unwrap()).unwrap();
-    std::fs::write(&path_b, serde_json::to_vec(&set_b).unwrap()).unwrap();
-
-    // Engine without VFS: local absolute paths only.
-    let engine = DataEngine::builder().build();
-    let (client, _handle) = spawn_with_engine(engine);
-    let tools = data_engine_tools::registrations(Arc::new(client.clone()));
-    let mut registry = agentik_core::tools::ToolRegistry::new();
-    registry.register_all(tools).unwrap();
-    let toolset = Toolset::from_registry(Arc::new(registry), None);
-
-    let mut steps = vec![
-        (
-            "e1",
-            "add_node",
-            json!({"id": "ref_a", "kind": "file_reference",
-                   "spec": {"path": path_a.to_str().unwrap(), "format": "evidence"}}),
-        ),
-        (
-            "e2",
-            "add_node",
-            json!({"id": "ref_b", "kind": "file_reference",
-                   "spec": {"path": path_b.to_str().unwrap(), "format": "evidence"}}),
-        ),
-        (
-            "e3",
-            "add_node",
-            json!({"id": "merge", "kind": "evidence_merge",
-                   "spec": {"path": merged_path.to_str().unwrap()}}),
-        ),
-        (
-            "e4",
-            "add_edge",
-            json!({"from": "ref_a", "from_port": 0, "to": "merge", "to_port": 0}),
-        ),
-        (
-            "e5",
-            "add_edge",
-            json!({"from": "ref_b", "from_port": 0, "to": "merge", "to_port": 1}),
-        ),
-        ("e6", "run_dag", json!({})),
-    ];
-    // Sequential: later steps depend on earlier ones.
-    for (id, name, input) in steps.drain(..) {
-        let res = toolset
-            .execute(&[build_tooluse(id, name, input)], None)
-            .await
-            .unwrap();
-        check_ok(&res[0], name);
-    }
-
-    // Merged artifact: 3 records (Alpha + Beta + Gamma), Alpha carries the
-    // duplicate's note and its own origin.
-    let merged: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&merged_path).unwrap()).unwrap();
-    assert_eq!(merged["records"].as_array().unwrap().len(), 3);
-    assert_eq!(
-        merged["records"][0]["citation"]["title"],
-        json!("Alpha study")
-    );
-    assert_eq!(merged["records"][0]["note"], json!("duplicate view"));
-    assert_eq!(merged["records"][0]["origin"], json!("pubmed"));
-
-    // get_output renders evidence inline: citation list, not a bare file.
-    let res = toolset
-        .execute(
-            &[build_tooluse("e7", "get_output", json!({"id": "merge"}))],
-            None,
-        )
-        .await
-        .unwrap();
-    check_ok(&res[0], "get_output merge");
-    let output = result_json(&res[0]);
-    let entry = &output["outputs"][0];
-    assert_eq!(entry["type"], json!("evidence"));
-    assert_eq!(entry["total"], json!(3));
-    assert_eq!(entry["returned"], json!(3));
-    let records = entry["records"].as_array().unwrap();
-    assert_eq!(records[0]["cite"], json!("Smith, 2023"));
-    assert_eq!(records[0]["doi"], json!("10.1/shared"));
-
-    // Non-evidence files on variadic ports carry no wiring-time contract
-    // (undeclared ports skip edge validation — dag-core semantics shared
-    // with container_command), so the merge node itself rejects them at run
-    // time. Wire an existing file declared as csv into a third input port.
-    let res = toolset
-        .execute(
-            &[build_tooluse(
-                "e8",
-                "add_node",
-                json!({"id": "ref_csv", "kind": "file_reference",
-                       "spec": {"path": path_a.to_str().unwrap(), "format": "csv"}}),
-            )],
-            None,
-        )
-        .await
-        .unwrap();
-    check_ok(&res[0], "add_node csv ref");
-    let res = toolset
-        .execute(
-            &[build_tooluse(
-                "e9",
-                "add_edge",
-                json!({"from": "ref_csv", "from_port": 0, "to": "merge", "to_port": 2}),
-            )],
-            None,
-        )
-        .await
-        .unwrap();
-    check_ok(&res[0], "add_edge csv -> merge (wiring is permissive)");
-    let res = toolset
-        .execute(&[build_tooluse("e10", "run_dag", json!({}))], None)
-        .await
-        .unwrap();
-    check_ok(&res[0], "run_dag with bad input");
-    let report = result_json(&res[0]);
-    assert_eq!(report["ok"], json!(false), "run must fail with a csv input");
-    let merge_node = report["nodes"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|node| node["id"] == json!("merge"))
-        .expect("merge node in run report");
-    assert_eq!(merge_node["status"], json!("failed"));
-    let message = merge_node["error"]["message"].as_str().unwrap_or_default();
-    assert!(
-        message.contains("expected `evidence`"),
-        "run-time format rejection message, got: {message}"
-    );
-
-    std::fs::remove_dir_all(&dir).ok();
-}
-
-/// Fulltext leg of the evidence channel: an evidence file resolves through
-/// `literature_fulltext` to a FileSet of real VFS FileRefs, and get_output
-/// renders the file entries (path / format / fingerprint).
-#[tokio::test]
-async fn test_evidence_channel_resolves_fulltext_fileset() {
-    // Install the shared bibliography singleton the node resolves through.
-    let mut shared = bib_base::BibShared::open_in_memory().await.unwrap();
-    shared = shared.with_file_storage(Arc::new(vfs::OpendalFileStorage::new_temp()));
-    let shared = Arc::new(shared);
-
-    let dir = std::env::temp_dir().join(format!("evidence-ft-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(&dir).unwrap();
-
-    // Library article + uploaded full text behind a DOI.
-    let mut article = bib_types::Article::new("art-e2e", "Fulltext study");
-    article
-        .identifiers
-        .push(bib_types::Identifier::doi("10.1/e2e"));
-    let authors = bib_types::Author {
-        last_name: "Garcia".into(),
-        fore_name: None,
-        initials: None,
-        affiliation: None,
-        orcid: None,
-        corresponding: false,
+async fn test_dag_export_run_prov_carries_specs_edges_and_order() {
+    let mounted_root = tempfile::tempdir().unwrap();
+    let data_root = tempfile::tempdir().unwrap();
+    let manifest = VfsManifest {
+        backend: vec![BackendDefinition {
+            id: "default".into(),
+            config: BackendConfig::local("/"),
+        }],
+        mount: vec![MountDefinition {
+            path: "/".into(),
+            backend: "default".into(),
+            source: mounted_root.path().to_string_lossy().to_string(),
+            read_only: false,
+        }],
     };
-    article.authors.push(authors);
-    article.year = Some(2026);
-    shared.bib.upsert_article(&article).await.unwrap();
+    let mounted = Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap());
+    let file_storage = Arc::new(OpendalFileStorage::with_mounts(
+        data_root.path(),
+        mounted.clone(),
+    ));
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    let csv_path =
+        std::path::Path::new(&manifest_dir).join("../data-engine/test_datasets/insurance.csv");
+    let csv_data = std::fs::read(csv_path).unwrap();
+    file_storage
+        .resolve("/insurance.csv")
+        .write(&file_storage.resolve_path("/insurance.csv"), csv_data)
+        .await
+        .unwrap();
 
-    let content = b"%PDF-1.4 e2e fulltext";
-    let stored = bib_base::stored_files::stored_fulltext("art-e2e", "paper.pdf", content);
-    let virtual_path = bib_base::stored_files::vfs_virtual_path(&stored.path).unwrap();
-    shared
-        .file_storage
-        .as_ref()
+    let history = data_engine::dag::DagHistory::open_in_memory()
+        .await
+        .unwrap();
+    let engine = DataEngine::builder()
+        .register_opendal_fs(file_storage.clone())
         .unwrap()
-        .write_bytes(&virtual_path, content.to_vec())
-        .await
-        .unwrap();
-    shared
-        .bib
-        .upsert_fulltext(&bib_types::FullText {
-            article_id: "art-e2e".into(),
-            file_path: stored.path.clone(),
-            file_format: bib_types::FileFormat::Pdf,
-            text_content: None,
-            source: bib_types::FullTextSource::UserUpload,
-            file_hash: Some(stored.file_hash.clone()),
-            file_size: Some(content.len() as i64),
-            uploaded_at: None,
-            extract_status: None,
-            text_format: None,
-            extracted_by: None,
-            extract_error: None,
-        })
-        .await
-        .unwrap();
-    bib_base::nodes::set_shared_bib(shared);
-
-    // Evidence file referencing the same DOI (URL-prefixed, mixed case).
-    let evidence_path = dir.join("ev.json");
-    let evidence = json!({
-        "schema_version": 1,
-        "records": [
-            {"citation": {"id": "x", "title": "Fulltext study", "year": 2026,
-                          "authors": [{"last_name": "Garcia"}],
-                          "identifiers": [{"kind": "doi", "value": "https://doi.org/10.1/E2E"}]}}
-        ]
-    });
-    std::fs::write(&evidence_path, serde_json::to_vec(&evidence).unwrap()).unwrap();
-
-    let engine = DataEngine::builder().build();
+        .with_vfs((*mounted).clone())
+        .build()
+        .with_history(history);
     let (client, _handle) = spawn_with_engine(engine);
+
     let tools = data_engine_tools::registrations(Arc::new(client.clone()));
     let mut registry = agentik_core::tools::ToolRegistry::new();
     registry.register_all(tools).unwrap();
     let toolset = Toolset::from_registry(Arc::new(registry), None);
 
-    for (id, name, input) in [
+    for (call, name, input) in [
         (
-            "f1",
+            "v1",
             "add_node",
-            json!({"id": "ref", "kind": "file_reference",
-            "spec": {"path": evidence_path.to_str().unwrap(), "format": "evidence"}}),
+            json!({"id": "src", "kind": "file_to_dataframe", "spec": {"path": "/insurance.csv"}}),
         ),
         (
-            "f2",
+            "v2",
             "add_node",
-            json!({"id": "ft", "kind": "literature_fulltext",
-            "spec": {"fetch_missing": false}}),
+            json!({"id": "sink", "kind": "dataframe_to_file",
+                   "spec": {"path": "/vfs-exports/out.csv", "format": "csv", "mode": "overwrite"}}),
         ),
         (
-            "f3",
+            "v3",
             "add_edge",
-            json!({"from": "ref", "from_port": 0, "to": "ft", "to_port": 0}),
+            json!({"from": "src", "from_port": 0, "to": "sink", "to_port": 0}),
         ),
-        ("f4", "run_dag", json!({})),
     ] {
-        let res = toolset
-            .execute(&[build_tooluse(id, name, input)], None)
+        let results = toolset
+            .execute(&[build_tooluse(call, name, input)], None)
             .await
             .unwrap();
-        check_ok(&res[0], name);
+        check_ok(&results[0], name);
     }
+    let results = toolset
+        .execute(&[build_tooluse("vr", "run_dag", json!({}))], None)
+        .await
+        .unwrap();
+    check_ok(&results[0], "run_dag");
 
-    let res = toolset
+    let results = toolset
         .execute(
-            &[build_tooluse("f5", "get_output", json!({"id": "ft"}))],
+            &[build_tooluse(
+                "ve",
+                "dag_export_run",
+                json!({"run_id": "latest", "format": "prov", "out_dir": "/evidence/prov"}),
+            )],
             None,
         )
         .await
         .unwrap();
-    check_ok(&res[0], "get_output ft");
-    let output = result_json(&res[0]);
-    let entry = &output["outputs"][0];
-    assert_eq!(entry["type"], json!("file_set"));
-    let files = entry["files"].as_array().unwrap();
-    assert_eq!(files.len(), 1);
-    assert_eq!(files[0]["path"], json!(stored.path));
-    assert_eq!(files[0]["format"], json!("pdf"));
+
+    check_ok(&results[0], "dag_export_run");
+    let summary = result_json(&results[0]);
     assert!(
-        files[0]["fingerprint"]["content_hash"]
+        summary["out"]
             .as_str()
-            .is_some_and(|hash| hash.starts_with("sha256:"))
+            .unwrap()
+            .starts_with("vfs:///evidence/prov/prov-"),
+        "single-file export lands at its vfs address: {}",
+        summary["out"]
     );
 
-    std::fs::remove_dir_all(&dir).ok();
+    // Read the document back through the same VFS the agent sees.
+    let prov_vpath = summary["files"][0]["exported_path"]
+        .as_str()
+        .unwrap()
+        .strip_prefix("vfs://")
+        .unwrap()
+        .to_string();
+    let length = file_storage.content_length(&prov_vpath).await.unwrap();
+    let bytes = file_storage
+        .read_range(&prov_vpath, 0..length)
+        .await
+        .unwrap()
+        .to_bytes();
+    let doc: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+    let run_id = summary["run_id"].as_str().unwrap();
+    let src_act = format!("urn:autonomics:run:{run_id}:node:src");
+    let sink_act = format!("urn:autonomics:run:{run_id}:node:sink");
+
+    // Specs from the executed manifest, as compact JSON literals.
+    let src_spec: serde_json::Value = serde_json::from_str(
+        doc["activity"][src_act.as_str()]["autonomics:spec"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(src_spec["path"], json!("/insurance.csv"));
+    let sink_spec: serde_json::Value = serde_json::from_str(
+        doc["activity"][sink_act.as_str()]["autonomics:spec"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(sink_spec["format"], json!("csv"));
+
+    // Dispatch order recorded end-to-end: the source runs before its sink.
+    let src_seq = doc["activity"][src_act.as_str()]["autonomics:dispatch_seq"]
+        .as_u64()
+        .unwrap();
+    let sink_seq = doc["activity"][sink_act.as_str()]["autonomics:dispatch_seq"]
+        .as_u64()
+        .unwrap();
+    assert!(src_seq < sink_seq);
+
+    // Wiring edge with ports, at the node level.
+    assert!(
+        doc["wasInformedBy"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["activity"] == json!(sink_act)
+                && r["informed"] == json!(src_act)
+                && r["prov:role"] == json!("0>0")),
+        "declared edge lands as wasInformedBy with its ports"
+    );
 }

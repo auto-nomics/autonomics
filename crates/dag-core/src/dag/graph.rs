@@ -528,6 +528,12 @@ impl DAG {
         // Per-node execution duration and skip root-cause tracking.
         let mut durations: HashMap<NodeId, std::time::Duration> = HashMap::new();
         let mut skipped_because: HashMap<NodeId, NodeId> = HashMap::new();
+        // Dispatch-turn sequence: the scheduler's serialization of a
+        // concurrent run (assigned to executed and fingerprint-reused nodes
+        // alike), recorded per node so the run report carries the true
+        // execution order — `node_ids()` is a HashMap, so no array order is.
+        let mut next_dispatch_seq: u64 = 0;
+        let mut dispatch_order: HashMap<NodeId, u64> = HashMap::new();
 
         // Seed the ready queue with source nodes; every other node enters as
         // its predecessors complete (by execution or fingerprint reuse).
@@ -555,6 +561,8 @@ impl DAG {
                     // Already skipped/finished by a cascade — don't dispatch.
                     continue;
                 }
+                dispatch_order.insert(id.clone(), next_dispatch_seq);
+                next_dispatch_seq += 1;
                 // Borrow the node payload, then clone it into an owned Box so it
                 // can be moved into the 'static future. The original stays in
                 // `self` for re-runs / iterative optimisation.
@@ -1092,6 +1100,7 @@ impl DAG {
                 &all_ids,
                 &durations,
                 &skipped_because,
+                &dispatch_order,
                 cfg.compute_row_counts && memory_trigger.is_none(),
             )
             .await;
@@ -1123,6 +1132,7 @@ impl DAG {
         all_ids: &[NodeId],
         durations: &HashMap<NodeId, std::time::Duration>,
         skipped_because: &HashMap<NodeId, NodeId>,
+        dispatch_order: &HashMap<NodeId, u64>,
         compute_row_counts: bool,
     ) -> Vec<NodeReport> {
         // Only run `count()` when the caller opted in. Default is off, so a
@@ -1202,6 +1212,7 @@ impl DAG {
 
                 let output_rows = counts.get(id).copied();
                 let elapsed_ms = durations.get(id).map(|d| d.as_millis() as u64);
+                let dispatch_seq = dispatch_order.get(id).copied();
 
                 // Extract file sink path / artifact path via DagNode trait hooks.
                 let file_path = self
@@ -1233,6 +1244,7 @@ impl DAG {
                     output_schema,
                     output_rows,
                     elapsed_ms,
+                    dispatch_seq,
                     artifact_path,
                     file_path,
                     error,
@@ -2977,6 +2989,35 @@ mod tests {
         fn as_any(&self) -> &dyn std::any::Any {
             self
         }
+    }
+
+    #[tokio::test]
+    async fn run_report_records_dispatch_sequence() {
+        // A strict chain forces one dispatch order regardless of
+        // concurrency: the recorded sequence must be a→b→c.
+        let mut dag = DAG::default();
+        add(&mut dag, "a");
+        add(&mut dag, "b");
+        add(&mut dag, "c");
+        dag.add_edge("a", "b", 0, 0).unwrap();
+        dag.add_edge("b", "c", 0, 0).unwrap();
+
+        let report = dag
+            .run(&SchedulerConfig::default(), &test_ctx(), None)
+            .await
+            .unwrap();
+
+        let seq = |id: &str| {
+            report
+                .nodes
+                .iter()
+                .find(|node| node.id == id)
+                .unwrap()
+                .dispatch_seq
+        };
+        assert_eq!(seq("a"), Some(0));
+        assert_eq!(seq("b"), Some(1));
+        assert_eq!(seq("c"), Some(2));
     }
 
     #[tokio::test]

@@ -31,8 +31,8 @@ use crate::ExecError;
                   - \"dataframe_to_file\":   {\"path\": \"/out/result.csv\", \"format\": \"csv\", \"mode\": \"overwrite\"} \
                   - \"bundle_source\": {\"bundle_id\": \"EUR.panel\", \"format\": \"txt\"} \
                   - \"linear_regression\": {\"x_columns\": [\"x1\"], \"y_column\": \"y\", \"intercept\": true} \
-                  - \"ldsc\":           {\"n_blocks\": 200, \"intercept\": null} \
-                  - \"mock\":           {} \
+                  - \"sldsc\":          {\"n_blocks\": 200, \"intercept\": null} \
+                  - \"echo\":           {} \
                   \
                   Prefer creating all nodes first, waiting for their results, \
                   then adding edges. `add_edge` also briefly waits for node \
@@ -43,7 +43,7 @@ pub struct AddNodeInput {
     /// Unique identifier for this node in the DAG.
     pub id: String,
     /// The node kind — one of the kinds returned by `list_node_factories`
-    /// (e.g. "sql", "file_to_dataframe", "dataframe_to_file", "linear_regression", "ldsc", "mock").
+    /// (e.g. "sql", "file_to_dataframe", "dataframe_to_file", "linear_regression", "sldsc", "echo").
     pub kind: String,
     /// JSON object conforming to the node's JSON Schema. Unknown keys are
     /// rejected by factories that use `deny_unknown_fields`.
@@ -186,5 +186,103 @@ mod tests {
             description.contains("json arrays") && description.contains("ndjson"),
             "add_node description must tell agents JSON can become a DataFrame: {description}"
         );
+    }
+
+    /// Documentation drift guard: every node kind advertised as an example in
+    /// the `add_node` description (the `- "kind": {…}` spec bullets) and in
+    /// the `kind` field docstrings of the discovery tools must be registered
+    /// by the default registry. `mock` once lingered here after `mock_node.rs`
+    /// was removed (e301220) — the docs steered agents toward a kind that no
+    /// longer existed.
+    #[tokio::test]
+    async fn documented_example_kinds_exist_in_default_registry() {
+        /// Quoted tokens after `(e.g. ` in a field docstring — the shared
+        /// "for example kinds" convention of the discovery tools.
+        fn eg_list_kinds(doc: &str) -> Vec<String> {
+            let after_eg = doc
+                .split_once("(e.g.")
+                .expect("kind docstring must list examples via `(e.g. …)`")
+                .1;
+            after_eg
+                .split('"')
+                .enumerate()
+                .filter(|(i, _)| i % 2 == 1)
+                .map(|(_, token)| token.to_string())
+                .collect()
+        }
+
+        let mut documented: Vec<String> = Vec::new();
+
+        // Spec bullets in the add_node description: `- "kind": {…}`. The
+        // macro's `\` line continuations flatten the literal into one line,
+        // so scan for the bullet marker anywhere in the description.
+        let def = super::AddNodeInput::definition();
+        let mut rest = def.description.as_str();
+        while let Some(offset) = rest.find("- \"") {
+            let after_bullet = &rest[offset + 3..];
+            if let Some((kind, tail)) = after_bullet.split_once("\":") {
+                if tail.trim_start().starts_with('{') {
+                    documented.push(kind.to_string());
+                }
+            }
+            rest = &rest[offset + 3..];
+        }
+        assert!(
+            !documented.is_empty(),
+            "extraction found no spec bullets — description format changed; update this test"
+        );
+
+        // Example kinds in the `kind` field docstrings of the four tools
+        // that name candidate kinds.
+        for doc in [
+            def.input_schema
+                .properties
+                .get("kind")
+                .and_then(|p| p.get("description"))
+                .and_then(|d| d.as_str())
+                .expect("add_node `kind` property must carry a docstring")
+                .to_string(),
+            crate::get_node_spec_tool::GetNodeSpecInput::definition()
+                .input_schema
+                .properties["kind"]["description"]
+                .as_str()
+                .unwrap()
+                .to_string(),
+            crate::get_node_ports_tool::GetNodePortsInput::definition()
+                .input_schema
+                .properties["kind"]["description"]
+                .as_str()
+                .unwrap()
+                .to_string(),
+            crate::get_node_doc_tool::GetNodeDocInput::definition()
+                .input_schema
+                .properties["kind"]["description"]
+                .as_str()
+                .unwrap()
+                .to_string(),
+        ] {
+            let kinds = eg_list_kinds(&doc);
+            assert!(
+                !kinds.is_empty(),
+                "`kind` docstring lost its `(e.g. …)` example list: {doc}"
+            );
+            documented.extend(kinds);
+        }
+
+        let engine = data_engine::data_engine::DataEngine::builder().build();
+        let (client, _handle) = data_engine::runtime::spawn_with_engine(engine);
+        let registered: std::collections::HashSet<String> = client
+            .list_node_factories()
+            .expect("default registry must be listable")
+            .into_iter()
+            .map(|info| info.kind)
+            .collect();
+
+        for kind in documented {
+            assert!(
+                registered.contains(&kind),
+                "tool docs advertise kind `{kind}` but the default registry does not register it — docs drifted from the node catalog"
+            );
+        }
     }
 }

@@ -312,6 +312,13 @@ pub struct NodeReport {
     pub output_rows: Option<usize>,
     /// Milliseconds spent in `execute()`.
     pub elapsed_ms: Option<u64>,
+    /// Scheduler visitation order within the run: the 0-based sequence in
+    /// which this node's dispatch turn arrived, covering both executed and
+    /// fingerprint-reused nodes. The serialization of a concurrent schedule;
+    /// `None` for nodes that never reached a dispatch turn (skipped by an
+    /// upstream failure, cancelled while still pending).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dispatch_seq: Option<u64>,
 
     /// For artifact-producing nodes: the path of the
     /// rendered/produced artifact (e.g. a PNG).
