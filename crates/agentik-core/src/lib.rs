@@ -8,7 +8,6 @@ pub mod message_ext;
 // pub mod process; // TODO: process module lives in runtime
 pub mod prompt;
 pub mod session;
-pub mod skill;
 pub mod storage;
 pub mod supervise;
 pub mod testing;

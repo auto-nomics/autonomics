@@ -10,7 +10,6 @@ use uuid::Uuid;
 
 use crate::agent::AgentConfig;
 use crate::context::ContextProvider;
-use crate::skill::SharedSkillRuntime;
 use crate::storage::{AgentStorage, PersistOp};
 use crate::tools::ToolRegistry;
 use crate::tools::task_runtime::TaskStore;
@@ -33,7 +32,6 @@ pub(crate) struct AgentShared {
     pub system_prompt_section: Option<String>,
     pub system_prompt_identity: Option<String>,
     pub(crate) memory: Option<Arc<crate::memory::MemoryBackend>>,
-    pub skill_runtime: Option<SharedSkillRuntime>,
     pub tool_registry: Arc<ToolRegistry>,
     /// Shared background-task list — the same Arc baked into the registry's
     /// task tools (`wait_task`, `view_task_results`, `view_task_status`).
@@ -93,7 +91,6 @@ impl AgentShared {
             system_prompt_section: None,
             system_prompt_identity: None,
             memory: None,
-            skill_runtime: None,
             tool_registry: Arc::new(ToolRegistry::new()),
             tasks: Arc::new(tokio::sync::RwLock::new(
                 crate::tools::task_runtime::TaskStore::new(),

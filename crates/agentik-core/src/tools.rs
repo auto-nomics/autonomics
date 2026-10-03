@@ -8,7 +8,6 @@ pub mod builtins;
 pub mod error;
 pub mod function;
 pub mod task_runtime;
-pub mod tool_provider;
 pub mod toolset;
 pub mod truncation;
 
@@ -18,7 +17,6 @@ pub use function::{
     ProgressRecord, TaskMetadata, ToolContext, ToolFunction,
 };
 pub use task_runtime::TaskStore;
-pub use tool_provider::ToolProviderRegistry;
 pub use toolset::{ToolRegistration, ToolRegistry, Toolset};
 
 pub use agentik_sdk::types::{
