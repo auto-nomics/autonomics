@@ -10,8 +10,6 @@
 //! - **[`S2Client`]** — an async HTTP client supporting paper search, paper
 //!   details, citations, references, author search, author details, and
 //!   recommendations.
-//! - **Agent tools** — pre-built [`ToolFunction`] implementations that expose
-//!   Semantic Scholar capabilities to an agentik agent.
 //!
 //! # Quick start (SDK only)
 //!
@@ -34,30 +32,15 @@
 //! The API is usable without authentication (shared rate limit), but an API
 //! key can be obtained from Semantic Scholar for higher limits. Pass it via
 //! [`S2Client::with_api_key`]. The key is sent as the `x-api-key` header.
-//!
-//! # Wiring tools into an agent
-//!
-//! ```no_run,ignore
-//! use semantic_scholar::{S2Client, s2_registrations};
-//! use std::sync::Arc;
-//!
-//! let client = Arc::new(S2Client::new());
-//! let tools = s2_registrations(client);
-//! // pass `tools` to Agent::builder().with_tools(tools)
-//! ```
 
 pub mod client;
 pub mod convert;
 pub mod error;
-pub mod format;
 pub mod query;
-pub mod tools;
 pub mod types;
 
 pub use client::PaperSearchFilter;
 pub use client::S2Client;
 pub use convert::{paper_to_article, papers_to_articles};
 pub use error::S2Error;
-pub use tools::s2_extended_registrations;
-pub use tools::s2_registrations;
 pub use types::{Author, Paper};

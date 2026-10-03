@@ -13,6 +13,7 @@ agentik-sdk = { path = "../agentik-sdk" }
 arrow.workspace = true
 arrow-array.workspace = true
 data-engine = { path = "../data-engine" }
+bib-types = { path = "../bib-types" }
 nodes-sql = { path = "../node-bundles/nodes-sql" }
 datafusion.workspace = true
 async-trait.workspace = true
@@ -22,6 +23,8 @@ tokio = { workspace = true }
 
 [dev-dependencies]
 vfs = { path = "../vfs" }
+bib-base = { path = "../bib-base" }
 tempfile = "3.27.0"
+uuid = { version = "1.12", features = ["v4"] }
 [lints]
 workspace = true

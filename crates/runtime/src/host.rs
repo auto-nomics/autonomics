@@ -335,11 +335,18 @@ impl SharedInfra {
             "SharedInfra::open: opening bibliography db at {}",
             bib_db_path.display()
         );
+        // Library-backed DAG nodes (literature_fulltext) resolve through
+        // this exact handle, so node outputs share the host's storage and
+        // connection pool.
         let bib = Arc::new(
             bib_base::BibShared::open_with(&bib_db_path, config.bib_http.clone())
                 .await?
                 .with_file_storage(file_storage.clone()),
         );
+        // Library-backed DAG nodes (literature_fulltext) resolve through this
+        // exact handle, so their outputs share the host's storage view and
+        // connection pool.
+        bib_base::nodes::set_shared_bib(bib.clone());
 
         let writing_db_path = config.writing_db_path.clone();
         tracing::info!(
@@ -592,16 +599,12 @@ impl SharedInfra {
             );
             tools.extend(bib_tools);
 
-            // Extended literature tools: source-specific capabilities of
-            // OpenAlex / Crossref / Semantic Scholar that fall outside the
-            // LiteratureGateway's search/fetch contract (autocomplete,
-            // citation graph, recommendations, author lookup, type
-            // catalogue). The shared clients live on BibShared.
-            tools.extend(bib_base::bib_extended_registrations(
-                bib_shared.openalex.clone(),
-                bib_shared.crossref.clone(),
-                bib_shared.s2.clone(),
-            ));
+            // Literature retrieval (search, fetch, citation graph,
+            // recommendations) flows through the DAG evidence channel —
+            // source_literature / source_literature_fetch /
+            // source_literature_citations / source_s2_recommendations —
+            // not through agent tools. BibShared still owns the shared
+            // clients the nodes reach via their process-wide singletons.
         }
 
         if profile.enable_writing {

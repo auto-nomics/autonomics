@@ -24,6 +24,28 @@ pub mod source_opentargets;
 pub mod source_semantic_scholar;
 pub mod spreadsheet;
 pub use alphafold::nodes::prediction::{AlphaFoldPredictionNode, AlphaFoldPredictionNodeFactory};
+pub use bib_base::nodes::evidence_export::{
+    EvidenceExportFormat, EvidenceExportNode, EvidenceExportNodeFactory, EvidenceExportSpec,
+};
+pub use bib_base::nodes::evidence_merge::{
+    EvidenceMergeNode, EvidenceMergeNodeFactory, EvidenceMergeSpec,
+};
+pub use bib_base::nodes::literature_citations::{
+    CitationDirection, LiteratureCitationsNode, LiteratureCitationsNodeFactory,
+    LiteratureCitationsSpec,
+};
+pub use bib_base::nodes::literature_fetch::{
+    LiteratureFetchNode, LiteratureFetchNodeFactory, LiteratureFetchSpec,
+};
+pub use bib_base::nodes::literature_fulltext::{
+    LiteratureFulltextNode, LiteratureFulltextNodeFactory, LiteratureFulltextSpec,
+};
+pub use bib_base::nodes::literature_search::{
+    LiteratureSearchNode, LiteratureSearchNodeFactory, LiteratureSearchSpec,
+};
+pub use bib_base::nodes::s2_recommendations::{
+    S2RecommendationsNode, S2RecommendationsNodeFactory, S2RecommendationsSpec,
+};
 pub use clinicaltrials::nodes::study::{ClinicalTrialsStudyNode, ClinicalTrialsStudyNodeFactory};
 pub use crossref::nodes::works::{CrossrefWorksNode, CrossrefWorksNodeFactory};
 pub use enrichr_sdk::nodes::Plugin as EnrichrPlugin;
@@ -172,6 +194,13 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(ReactomeMappingNodeFactory {}));
         registry.register(Box::new(ReactomeAnalysisNodeFactory {}));
         registry.register(Box::new(ReactomeParticipantsNodeFactory {}));
+        registry.register(Box::new(LiteratureSearchNodeFactory {}));
+        registry.register(Box::new(LiteratureFetchNodeFactory {}));
+        registry.register(Box::new(LiteratureFulltextNodeFactory {}));
+        registry.register(Box::new(LiteratureCitationsNodeFactory {}));
+        registry.register(Box::new(S2RecommendationsNodeFactory {}));
+        registry.register(Box::new(EvidenceMergeNodeFactory {}));
+        registry.register(Box::new(EvidenceExportNodeFactory {}));
         registry.register_plugin(&StringPlugin);
         registry.register_plugin(&EnrichrPlugin);
     }
@@ -261,6 +290,102 @@ mod tests {
         assert_eq!(
             extract.output_port(0).unwrap().data_type,
             dag_core::value::PortType::FileSet
+        );
+    }
+
+    #[test]
+    fn plugin_registers_evidence_channel_nodes() {
+        let ctx = dag_core::registry::NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        );
+        let mut registry = NodeRegistry::new(ctx);
+        registry.register_plugin(&Plugin::new());
+
+        // All three kinds are registered with the evidence format contract
+        // on the right ports.
+        let merge = registry
+            .build_node("evidence_merge", serde_json::json!({"path": "/tmp/x.json"}))
+            .expect("evidence_merge builds");
+        let ports = merge.ports();
+        assert_eq!(
+            ports.input_port(0).unwrap().format.as_deref(),
+            Some("evidence")
+        );
+        assert_eq!(
+            ports.output_port(0).unwrap().format.as_deref(),
+            Some("evidence")
+        );
+        assert!(!ports.is_fixed_input(), "variadic input");
+
+        let source = registry
+            .build_node(
+                "source_literature",
+                serde_json::json!({"query": {}, "path": "/tmp/lit.json"}),
+            )
+            .expect("source_literature builds");
+        assert_eq!(
+            source.ports().output_port(0).unwrap().format.as_deref(),
+            Some("evidence")
+        );
+
+        let fulltext = registry
+            .build_node("literature_fulltext", serde_json::json!({}))
+            .expect("literature_fulltext builds");
+        let ft_ports = fulltext.ports();
+        assert_eq!(
+            ft_ports.input_port(0).unwrap().format.as_deref(),
+            Some("evidence")
+        );
+        assert!(ft_ports.output_port(0).unwrap().data_type == dag_core::value::PortType::FileSet);
+
+        let citations = registry
+            .build_node(
+                "source_literature_citations",
+                serde_json::json!({"paper_id": "DOI:10.1/x", "path": "/tmp/c.json"}),
+            )
+            .expect("source_literature_citations builds");
+        assert_eq!(
+            citations.ports().output_port(0).unwrap().format.as_deref(),
+            Some("evidence")
+        );
+        let recs = registry
+            .build_node(
+                "source_s2_recommendations",
+                serde_json::json!({"paper_id": "DOI:10.1/x", "path": "/tmp/r.json"}),
+            )
+            .expect("source_s2_recommendations builds");
+        assert_eq!(
+            recs.ports().output_port(0).unwrap().format.as_deref(),
+            Some("evidence")
+        );
+
+        let fetch = registry
+            .build_node(
+                "source_literature_fetch",
+                serde_json::json!({"id_kind": "doi", "id_value": "10.1/x", "path": "/tmp/f.json"}),
+            )
+            .expect("source_literature_fetch builds");
+        assert_eq!(
+            fetch.ports().output_port(0).unwrap().format.as_deref(),
+            Some("evidence")
+        );
+
+        let export = registry
+            .build_node(
+                "evidence_export",
+                serde_json::json!({"format": "ris", "path": "/tmp/out.ris"}),
+            )
+            .expect("evidence_export builds");
+        // ports_for_spec: output contract follows the spec'd format.
+        let export_ports = export.ports();
+        assert_eq!(
+            export_ports.input_port(0).unwrap().format.as_deref(),
+            Some("evidence")
+        );
+        assert_eq!(
+            export_ports.output_port(0).unwrap().format.as_deref(),
+            Some("ris")
         );
     }
 }
