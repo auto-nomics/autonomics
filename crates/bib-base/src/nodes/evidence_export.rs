@@ -1,5 +1,7 @@
 //! `evidence_export`: render an evidence file as bibtex / ris / markdown.
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
@@ -49,8 +51,10 @@ impl EvidenceExportFormat {
 pub struct EvidenceExportSpec {
     /// Citation format of the exported file.
     pub format: EvidenceExportFormat,
-    /// Destination path (`vfs://` URI or absolute local path; overwritten on
-    /// re-run).
+    /// Destination path. Prefers a `vfs://` URI for cross-process
+    /// artifacts; a bare absolute path is auto-rewritten to `vfs:///...`
+    /// so the engine and the agent share one mounted object-store
+    /// namespace. Overwritten on re-run.
     pub path: String,
 }
 
@@ -204,14 +208,16 @@ mod tests {
     use dag_core::dag::node_event::NodeReporter;
     use dag_core::value::FileRef;
 
-    fn node_ctx() -> NodeCtx {
-        NodeCtx::new(
+    fn node_ctx() -> (NodeCtx, Arc<vfs::OpendalFileStorage>) {
+        let storage = Arc::new(vfs::OpendalFileStorage::new_temp());
+        let ctx = NodeCtx::new(
             datafusion::prelude::SessionContext::new().runtime_env(),
-            None,
-        )
+            Some(storage.clone()),
+        );
+        (ctx, storage)
     }
 
-    async fn write_set(tag: &str) -> String {
+    async fn write_set(storage: &vfs::OpendalFileStorage, tag: &str) -> String {
         let mut citation = Article::new("1", "A breakthrough");
         citation.identifiers.push(Identifier::doi("10.1000/test"));
         let set = EvidenceSet {
@@ -222,36 +228,33 @@ mod tests {
             }],
             ..Default::default()
         };
-        let path = std::env::temp_dir()
-            .join(format!("export-node-{tag}-{}.json", uuid::Uuid::new_v4()))
-            .to_string_lossy()
-            .into_owned();
-        tokio::fs::write(&path, set.to_bytes().unwrap())
+        let path = format!("/tmp/export-node-{tag}-{}.json", uuid::Uuid::new_v4());
+        storage
+            .op
+            .write(&path, set.to_bytes().unwrap())
             .await
             .unwrap();
         path
     }
 
-    async fn export(format: EvidenceExportFormat) -> (String, String) {
-        let in_path = write_set("in").await;
-        let out_path = std::env::temp_dir()
-            .join(format!(
-                "export-node-out-{}.{}",
-                uuid::Uuid::new_v4(),
-                format.label()
-            ))
-            .to_string_lossy()
-            .into_owned();
+    async fn export(format: EvidenceExportFormat) -> String {
+        let (ctx, storage) = node_ctx();
+        let in_path = write_set(&storage, "in").await;
+        let out_path = format!(
+            "/tmp/export-node-out-{}.{}",
+            uuid::Uuid::new_v4(),
+            format.label()
+        );
         let mut node = EvidenceExportNode::new(EvidenceExportSpec {
             format,
             path: out_path.clone(),
         });
         let inputs = vec![NodeInput::file(
             0,
-            FileRef::local(&in_path, Some(FORMAT.into())).unwrap(),
+            FileRef::new(&in_path, Some(FORMAT.into())),
         )];
         let outputs = node
-            .execute(&node_ctx(), &inputs, &NodeReporter::noop())
+            .execute(&ctx, &inputs, &NodeReporter::noop())
             .await
             .unwrap();
         let out_file = outputs
@@ -259,24 +262,27 @@ mod tests {
             .and_then(|value| value.as_file().ok())
             .unwrap();
         assert_eq!(out_file.format.as_deref(), Some(format.label()));
-        let content = String::from_utf8(tokio::fs::read(&out_path).await.unwrap()).unwrap();
-        std::fs::remove_file(in_path).ok();
-        (out_path, content)
+        assert!(out_file.path.starts_with("vfs://"), "{}", out_file.path);
+        assert!(
+            out_file
+                .fingerprint
+                .as_ref()
+                .is_some_and(|fp| fp.immutable_remote)
+        );
+        let bytes = read_file_bytes(&ctx, &out_path).await.unwrap();
+        String::from_utf8(bytes).unwrap()
     }
 
     #[tokio::test]
     async fn exports_bibtex_ris_markdown() {
-        let (path, content) = export(EvidenceExportFormat::Bibtex).await;
+        let content = export(EvidenceExportFormat::Bibtex).await;
         assert!(content.starts_with("@article{"), "{content}");
-        std::fs::remove_file(path).ok();
 
-        let (path, content) = export(EvidenceExportFormat::Ris).await;
+        let content = export(EvidenceExportFormat::Ris).await;
         assert!(content.starts_with("TY  - JOUR"), "{content}");
-        std::fs::remove_file(path).ok();
 
-        let (path, content) = export(EvidenceExportFormat::Markdown).await;
+        let content = export(EvidenceExportFormat::Markdown).await;
         assert!(content.starts_with("- "), "{content}");
-        std::fs::remove_file(path).ok();
     }
 
     #[test]

@@ -89,9 +89,16 @@ pub struct Article {
     pub source: ArticleSource,
 
     /// Timestamps.
-    #[serde(default)]
+    ///
+    /// Skipped during serialization so evidence JSON bytes are
+    /// deterministic across runs (a freshly-constructed `Article` had
+    /// `Some(Utc::now())` here, which varied the produced bytes by the
+    /// microsecond and made `content_hash` an unreliable content
+    /// fingerprint). The fields remain on the in-memory struct and are
+    /// populated from the bibliography database on load and write.
+    #[serde(default, skip_serializing)]
     pub created_at: Option<DateTime<Utc>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub updated_at: Option<DateTime<Utc>>,
 }
 
@@ -375,8 +382,10 @@ pub struct Annotation {
     #[serde(default)]
     pub page: Option<u32>,
 
-    /// Creation timestamp.
-    #[serde(default)]
+    /// Creation timestamp. Skipped during serialization — see [`Article`]
+    /// for the rationale; the same hazard applies to anything serialized
+    /// into a DAG artifact.
+    #[serde(default, skip_serializing)]
     pub created_at: Option<DateTime<Utc>>,
 }
 
@@ -462,9 +471,11 @@ pub struct Collection {
     #[serde(default)]
     pub status: CollectionStatus,
 
-    #[serde(default)]
+    /// See [`Article`] for the rationale on `skip_serializing`; the same
+    /// hazard applies to anything serialized into a DAG artifact.
+    #[serde(default, skip_serializing)]
     pub created_at: Option<DateTime<Utc>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub updated_at: Option<DateTime<Utc>>,
 }
 
@@ -596,7 +607,9 @@ pub struct CollectionArticle {
     /// Agent-supplied note explaining the article's relevance.
     #[serde(default)]
     pub note: Option<String>,
-    #[serde(default)]
+    /// See [`Article`] for the rationale on `skip_serializing`; the same
+    /// hazard applies to anything serialized into a DAG artifact.
+    #[serde(default, skip_serializing)]
     pub added_at: Option<DateTime<Utc>>,
 }
 
@@ -746,7 +759,9 @@ pub struct FullText {
     #[serde(default)]
     pub file_size: Option<i64>,
 
-    #[serde(default)]
+    /// See [`Article`] for the rationale on `skip_serializing`; the same
+    /// hazard applies to anything serialized into a DAG artifact.
+    #[serde(default, skip_serializing)]
     pub uploaded_at: Option<DateTime<Utc>>,
 
     /// Lifecycle of the extraction producing [`FullText::text_content`].

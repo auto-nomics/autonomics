@@ -394,10 +394,17 @@ mod tests {
         r1.origin = Some("pubmed".into());
         let r2 = record("2", "Two");
 
-        let set = EvidenceSet {
+        let mut set = EvidenceSet {
             records: vec![r1, r2],
             ..Default::default()
         };
+        // Timestamps on `Article` are `skip_serializing` — they round-trip
+        // as `None`, so zero them on the source side too for the
+        // structural comparison.
+        for record in &mut set.records {
+            record.citation.created_at = None;
+            record.citation.updated_at = None;
+        }
         let bytes = set.to_bytes().unwrap();
         let back = EvidenceSet::parse(&bytes).unwrap();
         assert_eq!(set, back);
@@ -409,5 +416,42 @@ mod tests {
         let bytes = set.to_bytes().unwrap();
         let text = String::from_utf8(bytes).unwrap();
         assert!(text.contains(&format!("\"schema_version\": {SCHEMA_VERSION}")));
+    }
+
+    #[test]
+    fn evidence_bytes_are_deterministic_across_runs() {
+        // Without `skip_serializing` on Article's `created_at` /
+        // `updated_at`, two freshly-constructed records would carry
+        // distinct Utc::now() values and produce distinct sha256 hashes
+        // for byte-identical-looking evidence. Pin the property.
+        use crate::types::{Article, Identifier};
+        let mut cite = Article::new("e1", "Deterministic evidence");
+        cite.identifiers.push(Identifier::doi("10.1/det"));
+        let record = EvidenceRecord {
+            citation: cite,
+            note: None,
+            origin: Some("pubmed".into()),
+        };
+        let set_a = EvidenceSet {
+            records: vec![record.clone()],
+            ..Default::default()
+        };
+        // Sleep to make Utc::now() strictly differ if the fields were
+        // ever re-included; with skip_serializing this is irrelevant.
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let set_b = EvidenceSet {
+            records: vec![record],
+            ..Default::default()
+        };
+        assert_eq!(set_a.to_bytes().unwrap(), set_b.to_bytes().unwrap());
+        let text = String::from_utf8(set_a.to_bytes().unwrap()).unwrap();
+        assert!(
+            !text.contains("created_at"),
+            "timestamps leaked into JSON: {text}"
+        );
+        assert!(
+            !text.contains("updated_at"),
+            "timestamps leaked into JSON: {text}"
+        );
     }
 }

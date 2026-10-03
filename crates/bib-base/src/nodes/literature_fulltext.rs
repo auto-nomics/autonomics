@@ -327,11 +327,19 @@ impl DagNode for LiteratureFulltextNode {
         }
 
         if files.is_empty() {
-            return Err(DagError::Schedule(format!(
+            // Even on the failure path, surface the miss list through the
+            // NodeReporter so the TUI / scheduler log see it; the JSON
+            // `report.warnings` field stays engine-level and will not
+            // carry per-node reporter emissions, so callers should judge
+            // coverage from the (zero-length) FileSet / runtime
+            // telemetry, not from an empty warnings array.
+            let message = format!(
                 "no full text resolved for any of the {} evidence record(s): {}",
                 set.records.len(),
                 misses.join(", ")
-            )));
+            );
+            reporter.warn(message.clone());
+            return Err(DagError::Schedule(message));
         }
         if !misses.is_empty() {
             reporter.warn(format!(
@@ -385,7 +393,11 @@ impl NodeFactory for LiteratureFulltextNodeFactory {
          backing file are materialized into content-addressed VFS objects on \
          first resolution. Records with no full text available are skipped \
          with a warning naming the identifier; the node fails only when \
-         nothing resolves at all.\n\
+         nothing resolves at all — even on that hard-fail path the same \
+         warning is emitted first so the TUI / scheduler log can see the \
+         miss list. (Note: NodeReporter warnings do **not** flow into the \
+         run-level JSON `warnings` array — judge coverage from the FileSet \
+         length and timing, not from an empty warnings array.)\n\
          \n\
          Requires the runtime host's shared bibliography (the same storage \
          the engine and the library mount)."
@@ -425,23 +437,35 @@ mod tests {
         Arc::new(shared)
     }
 
-    fn node_ctx() -> NodeCtx {
-        NodeCtx::new(
+    /// A NodeCtx whose mounted VFS mirrors the test's evidence file.
+    /// The node reads the evidence bytes via `read_file_bytes`, which
+    /// routes through the mounted opendal storage.
+    fn node_ctx_with_evidence_storage() -> (NodeCtx, Arc<vfs::OpendalFileStorage>) {
+        let storage = Arc::new(vfs::OpendalFileStorage::new_temp());
+        let ctx = NodeCtx::new(
             datafusion::prelude::SessionContext::new().runtime_env(),
-            None,
-        )
+            Some(storage.clone()),
+        );
+        (ctx, storage)
     }
 
-    async fn write_evidence(tag: &str, records: Vec<EvidenceRecord>) -> String {
-        let path = std::env::temp_dir()
-            .join(format!("fulltext-node-{tag}-{}.json", uuid::Uuid::new_v4()))
-            .to_string_lossy()
-            .into_owned();
+    /// Write the evidence JSON into the VFS storage at a fresh
+    /// `/tmp/fulltext-node-...json` virtual path and return that path.
+    /// The node reads it via `read_file_bytes`, which resolves the bare
+    /// absolute path through the mounted opendal storage.
+    async fn write_evidence(
+        storage: &vfs::OpendalFileStorage,
+        tag: &str,
+        records: Vec<EvidenceRecord>,
+    ) -> String {
+        let path = format!("/tmp/fulltext-node-{tag}-{}.json", uuid::Uuid::new_v4());
         let set = EvidenceSet {
             records,
             ..Default::default()
         };
-        tokio::fs::write(&path, set.to_bytes().unwrap())
+        storage
+            .op
+            .write(&path, set.to_bytes().unwrap())
             .await
             .unwrap();
         path
@@ -478,6 +502,7 @@ mod tests {
     #[tokio::test]
     async fn resolves_uploaded_fulltext_to_fileset() {
         let shared = shared_with_storage().await;
+        let (ctx, storage) = node_ctx_with_evidence_storage();
         let mut article = Article::new("art-1", "Uploaded study");
         article.identifiers.push(Identifier::doi("10.1/up"));
         shared.bib.upsert_article(&article).await.unwrap();
@@ -488,6 +513,7 @@ mod tests {
             .identifiers
             .push(Identifier::doi("https://doi.org/10.1/UP"));
         let path = write_evidence(
+            &storage,
             "uploaded",
             vec![EvidenceRecord {
                 citation: record_citation,
@@ -503,12 +529,9 @@ mod tests {
             },
             shared.clone(),
         );
-        let inputs = vec![NodeInput::file(
-            0,
-            FileRef::local(&path, Some(FORMAT.into())).unwrap(),
-        )];
+        let inputs = vec![NodeInput::file(0, FileRef::new(&path, Some(FORMAT.into())))];
         let outputs = node
-            .execute(&node_ctx(), &inputs, &NodeReporter::noop())
+            .execute(&ctx, &inputs, &NodeReporter::noop())
             .await
             .unwrap();
 
@@ -529,12 +552,12 @@ mod tests {
                 .as_deref()
         );
         assert!(fingerprint.immutable_remote);
-        std::fs::remove_file(path).ok();
     }
 
     #[tokio::test]
     async fn materializes_synthetic_pointer_into_vfs_object() {
         let shared = shared_with_storage().await;
+        let (ctx, storage) = node_ctx_with_evidence_storage();
         let mut article = Article::new("art-2", "OA study");
         article.identifiers.push(Identifier::pmid("42"));
         shared.bib.upsert_article(&article).await.unwrap();
@@ -559,6 +582,7 @@ mod tests {
             .unwrap();
 
         let path = write_evidence(
+            &storage,
             "synthetic",
             vec![EvidenceRecord {
                 citation: article.clone(),
@@ -574,12 +598,9 @@ mod tests {
             },
             shared.clone(),
         );
-        let inputs = vec![NodeInput::file(
-            0,
-            FileRef::local(&path, Some(FORMAT.into())).unwrap(),
-        )];
+        let inputs = vec![NodeInput::file(0, FileRef::new(&path, Some(FORMAT.into())))];
         let outputs = node
-            .execute(&node_ctx(), &inputs, &NodeReporter::noop())
+            .execute(&ctx, &inputs, &NodeReporter::noop())
             .await
             .unwrap();
 
@@ -615,15 +636,16 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(bytes.to_vec(), b"full text words");
-        std::fs::remove_file(path).ok();
     }
 
     #[tokio::test]
     async fn nothing_resolved_fails_with_identifier_list() {
         let shared = shared_with_storage().await;
-        let mut citation = Article::new("ev-x", "Unknown study");
+        let (ctx, storage) = node_ctx_with_evidence_storage();
+        let mut citation = Article::new("evidence-x", "Unknown study");
         citation.identifiers.push(Identifier::doi("10.1/nowhere"));
         let path = write_evidence(
+            &storage,
             "miss",
             vec![EvidenceRecord {
                 citation,
@@ -638,27 +660,27 @@ mod tests {
             },
             shared,
         );
-        let inputs = vec![NodeInput::file(
-            0,
-            FileRef::local(&path, Some(FORMAT.into())).unwrap(),
-        )];
+        let inputs = vec![NodeInput::file(0, FileRef::new(&path, Some(FORMAT.into())))];
         let err = node
-            .execute(&node_ctx(), &inputs, &NodeReporter::noop())
+            .execute(&ctx, &inputs, &NodeReporter::noop())
             .await
             .unwrap_err()
             .to_string();
         assert!(err.contains("no full text resolved"), "{err}");
         assert!(err.contains("doi:10.1/nowhere"), "{err}");
-        std::fs::remove_file(path).ok();
     }
 
     #[tokio::test]
     async fn without_shared_bibliography_fails_closed() {
+        let ctx_no_storage = NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        );
         let mut node = LiteratureFulltextNode::new(LiteratureFulltextSpec {
             fetch_missing: None,
         });
         let err = node
-            .execute(&node_ctx(), &[], &NodeReporter::noop())
+            .execute(&ctx_no_storage, &[], &NodeReporter::noop())
             .await
             .unwrap_err()
             .to_string();

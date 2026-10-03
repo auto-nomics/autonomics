@@ -1,6 +1,8 @@
 //! `evidence_merge`: merge any number of evidence files into one
 //! deduplicated set.
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
@@ -18,9 +20,11 @@ use crate::nodes::{read_file_bytes, write_artifact};
 /// Spec for [`EvidenceMergeNode`].
 #[derive(Debug, Clone, JsonSchema, Deserialize)]
 pub struct EvidenceMergeSpec {
-    /// Destination for the merged evidence JSON artifact (`vfs://` URI or
-    /// absolute local path; overwritten on re-run). Give each merge node
-    /// its own path.
+    /// Destination for the merged evidence JSON artifact. Prefers a
+    /// `vfs://` URI for cross-process artifacts; a bare absolute path is
+    /// auto-rewritten to `vfs:///...` so the engine and the agent share
+    /// one mounted object-store namespace. Overwritten on re-run. Give
+    /// each merge node its own path.
     pub path: String,
 }
 
@@ -186,11 +190,13 @@ mod tests {
     use dag_core::node::NodeInput;
     use dag_core::value::FileRef;
 
-    fn node_ctx() -> NodeCtx {
-        NodeCtx::new(
+    fn node_ctx() -> (NodeCtx, Arc<vfs::OpendalFileStorage>) {
+        let storage = Arc::new(vfs::OpendalFileStorage::new_temp());
+        let ctx = NodeCtx::new(
             datafusion::prelude::SessionContext::new().runtime_env(),
-            None,
-        )
+            Some(storage.clone()),
+        );
+        (ctx, storage)
     }
 
     fn record(id: &str, title: &str, doi: Option<&str>, note: Option<&str>) -> EvidenceRecord {
@@ -205,24 +211,29 @@ mod tests {
         }
     }
 
-    async fn write_set(tag: &str, records: Vec<EvidenceRecord>) -> (String, FileRef) {
-        let path = std::env::temp_dir()
-            .join(format!("merge-node-{tag}-{}.json", uuid::Uuid::new_v4()))
-            .to_string_lossy()
-            .into_owned();
+    async fn write_set(
+        storage: &vfs::OpendalFileStorage,
+        tag: &str,
+        records: Vec<EvidenceRecord>,
+    ) -> (String, FileRef) {
+        // Absolute virtual path; `read_file_bytes` resolves bare absolute
+        // paths through the mounted opendal storage.
+        let path = format!("/tmp/merge-node-{tag}-{}.json", uuid::Uuid::new_v4());
         let set = EvidenceSet {
             records,
             ..Default::default()
         };
         let bytes = set.to_bytes().unwrap();
-        tokio::fs::write(&path, &bytes).await.unwrap();
-        let file = FileRef::local(&path, Some(FORMAT.into())).unwrap();
+        storage.op.write(&path, bytes).await.unwrap();
+        let file = FileRef::new(&path, Some(FORMAT.into()));
         (path, file)
     }
 
     #[tokio::test]
     async fn merges_in_port_order_and_dedups() {
-        let (path_a, file_a) = write_set(
+        let (ctx, storage) = node_ctx();
+        let (_path_a, file_a) = write_set(
+            &storage,
             "a",
             vec![
                 record("1", "Alpha", Some("10.1/a"), None),
@@ -230,7 +241,8 @@ mod tests {
             ],
         )
         .await;
-        let (path_b, file_b) = write_set(
+        let (_path_b, file_b) = write_set(
+            &storage,
             "b",
             vec![
                 // Same DOI as Alpha: duplicate.
@@ -246,10 +258,7 @@ mod tests {
         )
         .await;
 
-        let out_path = std::env::temp_dir()
-            .join(format!("merge-node-out-{}.json", uuid::Uuid::new_v4()))
-            .to_string_lossy()
-            .into_owned();
+        let out_path = format!("/tmp/merge-node-out-{}.json", uuid::Uuid::new_v4());
         let mut node = EvidenceMergeNode::new(EvidenceMergeSpec {
             path: out_path.clone(),
         });
@@ -258,11 +267,11 @@ mod tests {
             NodeInput::file(0, file_a.clone()),
         ];
         let outputs = node
-            .execute(&node_ctx(), &inputs, &NodeReporter::noop())
+            .execute(&ctx, &inputs, &NodeReporter::noop())
             .await
             .unwrap();
 
-        let merged = EvidenceSet::parse(&tokio::fs::read(&out_path).await.unwrap()).unwrap();
+        let merged = EvidenceSet::parse(&read_file_bytes(&ctx, &out_path).await.unwrap()).unwrap();
         // Port order: A's records first, then B's non-duplicate.
         assert_eq!(merged.records.len(), 3);
         assert_eq!(merged.records[0].citation.title, "Alpha");
@@ -275,37 +284,35 @@ mod tests {
             .get(&0)
             .and_then(|value| value.as_file().ok())
             .unwrap();
+        let fingerprint = out_file.fingerprint.as_ref().expect("fingerprint");
         assert!(
-            out_file
-                .fingerprint
-                .as_ref()
-                .and_then(|fp| fp.content_hash.as_deref())
-                .is_some_and(|hash| hash.starts_with("sha256:"))
+            fingerprint
+                .content_hash
+                .as_deref()
+                .is_some_and(|h| h.starts_with("sha256:"))
         );
-
-        for path in [path_a, path_b, out_path] {
-            std::fs::remove_file(path).ok();
-        }
+        assert!(fingerprint.immutable_remote);
+        assert!(out_file.path.starts_with("vfs://"), "{}", out_file.path);
     }
 
     #[tokio::test]
     async fn rejects_non_evidence_format_input() {
-        let plain = FileRef::local(
-            {
-                let path = std::env::temp_dir()
-                    .join(format!("merge-node-plain-{}.csv", uuid::Uuid::new_v4()));
-                std::fs::write(&path, "a,b\n1,2\n").unwrap();
-                path
-            },
-            Some("csv".into()),
-        )
-        .unwrap();
+        let (ctx, storage) = node_ctx();
+        // Inputs read from VFS via the mounted storage; a wrong-format
+        // input must trip the format check before any read happens.
+        let path = format!("/tmp/merge-node-plain-{}.csv", uuid::Uuid::new_v4());
+        storage
+            .op
+            .write(&path, b"a,b\n1,2\n".to_vec())
+            .await
+            .unwrap();
+        let plain = FileRef::new(&path, Some("csv".into()));
         let mut node = EvidenceMergeNode::new(EvidenceMergeSpec {
             path: "/tmp/should-not-be-written.json".into(),
         });
         let inputs = vec![NodeInput::file(0, plain)];
         let err = node
-            .execute(&node_ctx(), &inputs, &NodeReporter::noop())
+            .execute(&ctx, &inputs, &NodeReporter::noop())
             .await
             .unwrap_err()
             .to_string();
@@ -314,22 +321,23 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_newer_schema_version_payload() {
-        let path =
-            std::env::temp_dir().join(format!("merge-node-v2-{}.json", uuid::Uuid::new_v4()));
-        tokio::fs::write(&path, br#"{"schema_version": 2, "records": []}"#)
+        let (ctx, storage) = node_ctx();
+        let path = format!("/tmp/merge-node-v2-{}.json", uuid::Uuid::new_v4());
+        storage
+            .op
+            .write(&path, br#"{"schema_version": 2, "records": []}"#.to_vec())
             .await
             .unwrap();
-        let file = FileRef::local(&path, Some(FORMAT.into())).unwrap();
+        let file = FileRef::new(&path, Some(FORMAT.into()));
         let mut node = EvidenceMergeNode::new(EvidenceMergeSpec {
             path: "/tmp/should-not-be-written.json".into(),
         });
         let inputs = vec![NodeInput::file(0, file)];
         let err = node
-            .execute(&node_ctx(), &inputs, &NodeReporter::noop())
+            .execute(&ctx, &inputs, &NodeReporter::noop())
             .await
             .unwrap_err()
             .to_string();
         assert!(err.contains("schema_version 2"), "{err}");
-        std::fs::remove_file(path).ok();
     }
 }

@@ -35,13 +35,16 @@ pub struct LiteratureSearchSpec {
     #[serde(default)]
     pub limit: Option<u32>,
     /// Source names to search (e.g. `["pubmed", "arxiv", "openalex",
-    /// "crossref", "s2", "biorxiv"]`). Default: all registered sources. An
-    /// unknown name fails the node with the list of valid names.
+    /// "crossref", "semantic_scholar", "biorxiv"]`). Default: all
+    /// registered sources. An unknown name fails the node with the list
+    /// of valid names.
     #[serde(default)]
     pub sources: Option<Vec<String>>,
-    /// Destination for the evidence JSON artifact. `vfs://` URI or absolute
-    /// local path; overwritten on re-run. Give each evidence node its own
-    /// path — the engine does not detect write-write collisions.
+    /// Destination for the evidence JSON artifact. Prefers a `vfs://` URI
+    /// for cross-process artifacts; a bare absolute path is auto-rewritten
+    /// to `vfs:///...` so the engine and the agent share one mounted
+    /// object-store namespace. Overwritten on re-run. Give each evidence
+    /// node its own path — the engine does not detect write-write collisions.
     pub path: String,
     /// Optional provenance note stamped on every emitted record.
     #[serde(default)]
@@ -238,9 +241,9 @@ impl NodeFactory for LiteratureSearchNodeFactory {
 
     fn doc(&self) -> &'static str {
         "A source node that fans a StructuredSearch out through the literature \
-         gateway (pubmed, arxiv, biorxiv, openalex, crossref, s2 — six backends, \
-         concurrent) and writes the deduplicated results as one `evidence` \
-         artifact: JSON `{schema_version, records[{citation, note, origin}]}`.\n\
+         gateway (pubmed, arxiv, biorxiv, openalex, crossref, semantic_scholar \
+         — six backends, concurrent) and writes the deduplicated results as one \
+         `evidence` artifact: JSON `{schema_version, records[{citation, note, origin}]}`.\n\
          \n\
          No input ports; one output port (File, format `evidence`) — only ports \
          accepting `evidence` may consume it (evidence_merge, evidence_export).\n\
@@ -254,9 +257,11 @@ impl NodeFactory for LiteratureSearchNodeFactory {
          failed. Cross-source duplicates (same DOI/PMID/arXiv id) are merged, \
          first occurrence wins.\n\
          \n\
-         `path` is overwritten on re-run; give each evidence node a distinct \
-         path. Inspect the artifact with get_output — evidence files render as \
-         a compact citation list."
+         `path` accepts a `vfs://` URI or a bare absolute path; bare absolute \
+         paths are auto-rewritten to `vfs:///...` so the engine and the agent \
+         share one mounted object-store namespace. Overwritten on re-run; give \
+         each evidence node a distinct path. Inspect the artifact with \
+         get_output — evidence files render as a compact citation list."
     }
 
     fn spec_schema(&self) -> schemars::Schema {
@@ -280,6 +285,7 @@ impl NodeFactory for LiteratureSearchNodeFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::nodes::read_file_bytes;
     use async_trait::async_trait;
     use bib_types::query::StructuredSearch;
     use bib_types::types::{Article, IdKind, Identifier};
@@ -335,28 +341,30 @@ mod tests {
         a
     }
 
-    fn node_ctx() -> NodeCtx {
-        NodeCtx::new(
+    fn node_ctx() -> (NodeCtx, Arc<vfs::OpendalFileStorage>) {
+        let storage = Arc::new(vfs::OpendalFileStorage::new_temp());
+        let ctx = NodeCtx::new(
             datafusion::prelude::SessionContext::new().runtime_env(),
-            None,
-        )
+            Some(storage.clone()),
+        );
+        (ctx, storage)
     }
 
     async fn run(
         spec: LiteratureSearchSpec,
         gateway: Arc<LiteratureGateway>,
+        ctx: &NodeCtx,
     ) -> std::result::Result<PortOutputs, DagError> {
         let mut node = LiteratureSearchNode::with_gateway(spec, gateway);
-        let ctx = node_ctx();
         let reporter = NodeReporter::noop();
-        node.execute(&ctx, &[], &reporter).await
+        node.execute(ctx, &[], &reporter).await
     }
 
     fn tmp_path(tag: &str) -> String {
-        std::env::temp_dir()
-            .join(format!("lit-node-{tag}-{}.json", uuid::Uuid::new_v4()))
-            .to_string_lossy()
-            .into_owned()
+        // Absolute so `validate_output_path` accepts it; `write_artifact`
+        // rewrites it to `vfs:///tmp/...` and the virtual path resolves
+        // inside the test's VFS temp root, hermetic and parallel-safe.
+        format!("/tmp/lit-node-{tag}-{}.json", uuid::Uuid::new_v4())
     }
 
     fn gateway_with(
@@ -371,6 +379,7 @@ mod tests {
 
     #[tokio::test]
     async fn flattens_batches_and_stamps_origin_and_note() {
+        let (ctx, _storage) = node_ctx();
         let gateway = gateway_with(vec![
             Arc::new(FakeSource {
                 name: "src_a",
@@ -392,28 +401,34 @@ mod tests {
             note: Some("query context".into()),
         };
 
-        let outputs = run(spec, gateway).await.unwrap();
+        let outputs = run(spec, gateway, &ctx).await.unwrap();
         let file = outputs
             .get(&0)
             .and_then(|value| value.as_file().ok())
             .expect("file output");
-        let bytes = tokio::fs::read(&path).await.unwrap();
+        let bytes = read_file_bytes(&ctx, &file.path).await.unwrap();
         let set = EvidenceSet::parse(&bytes).unwrap();
         assert_eq!(set.records.len(), 2);
         assert_eq!(set.records[0].origin.as_deref(), Some("src_a"));
         assert_eq!(set.records[0].note.as_deref(), Some("query context"));
-        // Artifact fingerprint is content-addressed.
+        // Artifact fingerprint is content-addressed and immutable.
+        let fingerprint = file.fingerprint.as_ref().expect("fingerprint attached");
         assert!(
-            file.fingerprint
-                .as_ref()
-                .and_then(|fp| fp.content_hash.as_deref())
-                .is_some_and(|hash| hash.starts_with("sha256:"))
+            fingerprint
+                .content_hash
+                .as_deref()
+                .is_some_and(|hash| hash.starts_with("sha256:")),
+            "{fingerprint:?}"
         );
-        std::fs::remove_file(&path).ok();
+        assert!(fingerprint.immutable_remote);
+        // The recorded path is the canonical vfs:// URI, not the bare
+        // absolute path the spec used.
+        assert!(file.path.starts_with("vfs://"), "{}", file.path);
     }
 
     #[tokio::test]
     async fn failed_source_degrades_but_all_failed_is_an_error() {
+        let (ctx, _storage) = node_ctx();
         // One healthy + one failing source: succeeds with the healthy batch.
         let gateway = gateway_with(vec![
             Arc::new(FakeSource {
@@ -434,7 +449,7 @@ mod tests {
             path: tmp_path("degrade"),
             note: None,
         };
-        let outputs = run(spec, gateway).await.unwrap();
+        let outputs = run(spec, gateway, &ctx).await.unwrap();
         drop(outputs);
 
         // Every source failing: node errors.
@@ -450,7 +465,7 @@ mod tests {
             path: tmp_path("allfail"),
             note: None,
         };
-        let err = run(spec, gateway).await.unwrap_err().to_string();
+        let err = run(spec, gateway, &ctx).await.unwrap_err().to_string();
         assert!(
             err.contains("all requested literature sources failed"),
             "{err}"
@@ -460,6 +475,7 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_source_name_fails_with_valid_names() {
+        let (ctx, _storage) = node_ctx();
         let gateway = gateway_with(vec![Arc::new(FakeSource {
             name: "pubmed",
             articles: vec![],
@@ -472,13 +488,14 @@ mod tests {
             path: tmp_path("unknown"),
             note: None,
         };
-        let err = run(spec, gateway).await.unwrap_err().to_string();
+        let err = run(spec, gateway, &ctx).await.unwrap_err().to_string();
         assert!(err.contains("unknown literature source"), "{err}");
         assert!(err.contains("`pubmed`"), "{err}");
     }
 
     #[tokio::test]
     async fn limit_is_capped_and_dedups_across_sources() {
+        let (ctx, _storage) = node_ctx();
         let gateway = gateway_with(vec![
             Arc::new(FakeSource {
                 name: "a",
@@ -500,10 +517,10 @@ mod tests {
             path: path.clone(),
             note: None,
         };
-        run(spec, gateway).await.unwrap();
-        let set = EvidenceSet::parse(&tokio::fs::read(&path).await.unwrap()).unwrap();
+        run(spec, gateway, &ctx).await.unwrap();
+        let bytes = read_file_bytes(&ctx, &path).await.unwrap();
+        let set = EvidenceSet::parse(&bytes).unwrap();
         assert_eq!(set.records.len(), 1);
         assert_eq!(set.records[0].citation.title, "Same");
-        std::fs::remove_file(&path).ok();
     }
 }
