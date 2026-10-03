@@ -105,7 +105,7 @@ only checks presence locally (bounded, offline-safe), so daemon readiness
 never waits on the network. Set `AUTONOMICS_PANEL_SYNC=1` to run the
 provisioning inline during `autonomics serve` for unattended deployments.
 
-27 families / 97 node kinds are currently published:
+28 families / 99 node kinds are currently published:
 
 | Family | Node kinds | Tool |
 | --- | --- | --- |
@@ -117,6 +117,7 @@ provisioning inline during `autonomics serve` for unattended deployments.
 | [deseq2](https://github.com/auto-nomics/deseq2-plugin) | `deseq2_de` | differential expression (DESeq2) |
 | [gcta](https://github.com/auto-nomics/gcta-plugin) | `gcta_cojo_select`, `gcta_sblup`, `gcta_fastbat`, `gcta_acat` | GCTA summary-statistics suite |
 | [pathway-gsea](https://github.com/auto-nomics/pathway-gsea-plugin) | `pathway_gsea` | fgsea pathway enrichment |
+| [clusterprofiler](https://github.com/auto-nomics/clusterprofiler-plugin) | `clusterprofiler_ora`, `clusterprofiler_gsea` | ORA and GSEA enrichment (clusterProfiler) |
 | [plink2](https://github.com/auto-nomics/plink2-plugin) | `plink2_clump` | LD clumping (PLINK2) |
 | [visualization](https://github.com/auto-nomics/visualization-plugin) | `visualization` | R plot rendering from user scripts |
 | [mtag](https://github.com/auto-nomics/mtag-plugin) | `mtag` | multi-trait analysis of GWAS |
