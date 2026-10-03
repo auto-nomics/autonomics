@@ -32,6 +32,9 @@ pub use bib_base::nodes::literature_citations::{
     CitationDirection, LiteratureCitationsNode, LiteratureCitationsNodeFactory,
     LiteratureCitationsSpec,
 };
+pub use bib_base::nodes::literature_fulltext::{
+    LiteratureFulltextNode, LiteratureFulltextNodeFactory, LiteratureFulltextSpec,
+};
 pub use bib_base::nodes::literature_fetch::{
     LiteratureFetchNode, LiteratureFetchNodeFactory, LiteratureFetchSpec,
 };
@@ -191,6 +194,7 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(ReactomeParticipantsNodeFactory {}));
         registry.register(Box::new(LiteratureSearchNodeFactory {}));
         registry.register(Box::new(LiteratureFetchNodeFactory {}));
+        registry.register(Box::new(LiteratureFulltextNodeFactory {}));
         registry.register(Box::new(LiteratureCitationsNodeFactory {}));
         registry.register(Box::new(S2RecommendationsNodeFactory {}));
         registry.register(Box::new(EvidenceMergeNodeFactory {}));
@@ -319,6 +323,16 @@ mod tests {
             )
             .expect("source_literature builds");
         assert_eq!(source.ports().output_port(0).unwrap().format.as_deref(), Some("evidence"));
+
+        let fulltext = registry
+            .build_node("literature_fulltext", serde_json::json!({}))
+            .expect("literature_fulltext builds");
+        let ft_ports = fulltext.ports();
+        assert_eq!(
+            ft_ports.input_port(0).unwrap().format.as_deref(),
+            Some("evidence")
+        );
+        assert!(ft_ports.output_port(0).unwrap().data_type == dag_core::value::PortType::FileSet);
 
         let citations = registry
             .build_node(

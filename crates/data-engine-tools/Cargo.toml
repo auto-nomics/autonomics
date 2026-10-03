@@ -23,6 +23,7 @@ tokio = { workspace = true }
 
 [dev-dependencies]
 vfs = { path = "../vfs" }
+bib-base = { path = "../bib-base" }
 tempfile = "3.27.0"
 uuid = { version = "1.12", features = ["v4"] }
 [lints]

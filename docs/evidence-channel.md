@@ -38,6 +38,23 @@ A `FileRef` with `format == "evidence"` carries the UTF-8 JSON encoding of
 | `source_literature` | 0 in; 1 out `File(evidence)` | Fans a `StructuredSearch` out through the literature gateway (pubmed, arxiv, biorxiv, openalex, crossref, s2), stamps `origin`/`note`, dedups, writes one artifact. Per-source failures warn and degrade; all-failed or an unknown source name fails the node. `limit` is per source (default 25, cap 200). |
 | `evidence_merge` | variadic in `File(evidence)`; 1 out `File(evidence)` | Reads inputs in port order, merges, dedups. First occurrence wins for citation fields and `origin`; a missing `note` is filled from the first duplicate that has one. |
 | `evidence_export` | 1 in `File(evidence)`; 1 out `File(bibtex\|ris\|markdown)` | Renders the citations as a bibliography; the output port's format contract follows the spec (`ports_for_spec`). |
+| `literature_fulltext` | 1 in `File(evidence)`; 1 out `FileSet` | Resolves every record to its bibliography full-text file as a `FileSet` of VFS `FileRef`s — `get_output` shows the actual files (path / format `pdf\|txt\|html` / sha256 fingerprint). With `fetch_missing: true` (default), unmatched records are saved and their full text fetched from Europe PMC open access **as a stored VFS object** (same chain as `bib_save`); `false` makes the node a pure resolver over the existing library. |
+
+## Channel division of labor
+
+| Payload | Channel |
+|---|---|
+| Bibliography full text (PDF / HTML / extracted text) | **File channel** — content-addressed VFS objects at `vfs:///literature/{article_id}/{sha256}-{filename}` |
+| Citation records (search / fetch / citation graph / recommendations) | **File channel** — `evidence` artifacts |
+| Structured table data / database queries / node-to-node dataflow | **DataFrame channel** — `source_*` and transformation nodes |
+| Human-facing audit trail (node input lines, per-node evidence) | `NodeRunDetails` + `InputBinding` (audit, not data) |
+
+OA full texts are written as real VFS objects at fetch time (canonical
+chain in `bib_base::oa_fetch::fetch_fulltext_stored`, used by both `bib_save`
+and `literature_fulltext`); rows never point at synthetic `europepmc:`
+pointers. Rows written by older versions carry such pointers with the text
+inline — the `literature_fulltext` node materializes those on first
+resolution.
 
 ## Dedup semantics
 

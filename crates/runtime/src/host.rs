@@ -335,11 +335,18 @@ impl SharedInfra {
             "SharedInfra::open: opening bibliography db at {}",
             bib_db_path.display()
         );
+        // Library-backed DAG nodes (literature_fulltext) resolve through
+        // this exact handle, so node outputs share the host's storage and
+        // connection pool.
         let bib = Arc::new(
             bib_base::BibShared::open_with(&bib_db_path, config.bib_http.clone())
                 .await?
                 .with_file_storage(file_storage.clone()),
         );
+        // Library-backed DAG nodes (literature_fulltext) resolve through this
+        // exact handle, so their outputs share the host's storage view and
+        // connection pool.
+        bib_base::nodes::set_shared_bib(bib.clone());
 
         let writing_db_path = config.writing_db_path.clone();
         tracing::info!(
