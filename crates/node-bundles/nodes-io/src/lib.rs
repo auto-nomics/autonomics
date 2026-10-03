@@ -28,11 +28,18 @@ pub use bib_base::nodes::evidence_export::{
     EvidenceExportFormat, EvidenceExportNode, EvidenceExportNodeFactory, EvidenceExportSpec,
 };
 pub use bib_base::nodes::evidence_merge::{EvidenceMergeNode, EvidenceMergeNodeFactory, EvidenceMergeSpec};
+pub use bib_base::nodes::literature_citations::{
+    CitationDirection, LiteratureCitationsNode, LiteratureCitationsNodeFactory,
+    LiteratureCitationsSpec,
+};
 pub use bib_base::nodes::literature_fetch::{
     LiteratureFetchNode, LiteratureFetchNodeFactory, LiteratureFetchSpec,
 };
 pub use bib_base::nodes::literature_search::{
     LiteratureSearchNode, LiteratureSearchNodeFactory, LiteratureSearchSpec,
+};
+pub use bib_base::nodes::s2_recommendations::{
+    S2RecommendationsNode, S2RecommendationsNodeFactory, S2RecommendationsSpec,
 };
 pub use clinicaltrials::nodes::study::{ClinicalTrialsStudyNode, ClinicalTrialsStudyNodeFactory};
 pub use crossref::nodes::works::{CrossrefWorksNode, CrossrefWorksNodeFactory};
@@ -184,6 +191,8 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(ReactomeParticipantsNodeFactory {}));
         registry.register(Box::new(LiteratureSearchNodeFactory {}));
         registry.register(Box::new(LiteratureFetchNodeFactory {}));
+        registry.register(Box::new(LiteratureCitationsNodeFactory {}));
+        registry.register(Box::new(S2RecommendationsNodeFactory {}));
         registry.register(Box::new(EvidenceMergeNodeFactory {}));
         registry.register(Box::new(EvidenceExportNodeFactory {}));
         registry.register_plugin(&StringPlugin);
@@ -310,6 +319,27 @@ mod tests {
             )
             .expect("source_literature builds");
         assert_eq!(source.ports().output_port(0).unwrap().format.as_deref(), Some("evidence"));
+
+        let citations = registry
+            .build_node(
+                "source_literature_citations",
+                serde_json::json!({"paper_id": "DOI:10.1/x", "path": "/tmp/c.json"}),
+            )
+            .expect("source_literature_citations builds");
+        assert_eq!(
+            citations.ports().output_port(0).unwrap().format.as_deref(),
+            Some("evidence")
+        );
+        let recs = registry
+            .build_node(
+                "source_s2_recommendations",
+                serde_json::json!({"paper_id": "DOI:10.1/x", "path": "/tmp/r.json"}),
+            )
+            .expect("source_s2_recommendations builds");
+        assert_eq!(
+            recs.ports().output_port(0).unwrap().format.as_deref(),
+            Some("evidence")
+        );
 
         let fetch = registry
             .build_node(

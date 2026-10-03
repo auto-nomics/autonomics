@@ -15,9 +15,11 @@
 //! content-addressed (see `dag_core::fingerprint` encoding).
 
 pub mod evidence_export;
+pub mod literature_citations;
 pub mod literature_fetch;
 pub mod evidence_merge;
 pub mod literature_search;
+pub mod s2_recommendations;
 
 use dag_core::dag::DagError;
 use dag_core::registry::NodeCtx;
