@@ -18,7 +18,7 @@ use crate::registry::NodeRegistry;
 /// impl NodePlugin for Plugin {
 ///     fn name(&self) -> &'static str { "mr" }
 ///     fn register(&self, registry: &mut NodeRegistry) {
-///         registry.register(Box::new(TwoSampleMrNodeFactory));
+///         registry.register(Box::new(MrlapNodeFactory));
 ///         // ...
 ///     }
 /// }

@@ -121,7 +121,7 @@ impl NodeRegistry {
 | **nodes-survival** | survival, fine_gray, cuminc | cmprsk | 1,400 |
 | **nodes-ldsc** | ldsc_sldsc, liability, lcv | ldsc, lcv | 3,900 |
 | **nodes-genetics** | cpassoc, magma (4) | cpassoc, magma, genomic_sem | 3,900 |
-| **nodes-mr** | two_sample_mr, mrlap | mr, mrlap | 4,000 |
+| **nodes-mr** | mrlap | mrlap | 4,000 |
 | **nodes-coloc** | coloc, bkmr | coloc, bkmr | 1,300 |
 | **nodes-epi** | epi_rcs, epi_roc, epi_lasso, epi_wqs, evalue | epi, evalue | 1,900 |
 | **nodes-lcmm** | hlme, hlme_predict, hlme_compare | lcmm | 2,100 |
@@ -134,11 +134,9 @@ impl NodeRegistry {
 每个 bundle crate 结构:
 ```
 crates/node-bundles/nodes-mr/
-├── Cargo.toml          # depends on dag-core + mr, mrlap
+├── Cargo.toml          # depends on dag-core + mrlap
 ├── src/
 │   ├── lib.rs          # pub struct Plugin; impl NodePlugin for Plugin
-│   ├── two_sample_mr.rs
-│   ├── mrlap.rs
 │   └── mrlap.rs
 └── tests/
 ```
@@ -156,7 +154,6 @@ pub struct Plugin;
 impl NodePlugin for Plugin {
     fn name(&self) -> &'static str { "mr" }
     fn register(&self, registry: &mut NodeRegistry) {
-        registry.register(Box::new(TwoSampleMrNodeFactory));
         registry.register(Box::new(MrlapNodeFactory));
         registry.register(Box::new(MrpressoNodeFactory));
         registry.register(Box::new(MvmrNodeFactory));
@@ -164,7 +161,6 @@ impl NodePlugin for Plugin {
 }
 
 // 公开供 data-engine 导入的工厂类型
-pub use two_sample_mr::{TwoSampleMrNode, TwoSampleMrNodeFactory, TwoSampleMrSpec};
 pub use mrlap::{MrlapNode, MrlapNodeFactory, MrlapSpec};
 // ...
 ```
@@ -452,7 +448,7 @@ pub use dag_core::{
 pub use nodes_sql::{SqlNode, SqlNodeFactory, SqlNodeSpec};
 
 #[cfg(feature = "bundle-mr")]
-pub use nodes_mr::{TwoSampleMrNode, TwoSampleMrNodeFactory, TwoSampleMrSpec};
+pub use nodes_mr::{MrlapNode, MrlapNodeFactory, MrlapSpec};
 // ...
 ```
 

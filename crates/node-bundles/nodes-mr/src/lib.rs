@@ -1,7 +1,6 @@
 //! Mendelian randomisation DAG node bundle.
 
 pub mod mrlap;
-pub mod two_sample_mr;
 
 use dag_core::{NodePlugin, NodeRegistry};
 
@@ -11,7 +10,6 @@ impl NodePlugin for Plugin {
         "mr"
     }
     fn register(&self, registry: &mut NodeRegistry) {
-        registry.register(Box::new(two_sample_mr::TwoSampleMrNodeFactory {}));
         registry.register(Box::new(mrlap::MrlapNodeFactory {}));
     }
 }
