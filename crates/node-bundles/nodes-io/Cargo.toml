@@ -30,6 +30,7 @@ interpro = { path = "../../interpro" }
 pubchem = { path = "../../pubchem" }
 protocolio = { path = "../../protocolio" }
 clinicaltrials = { path = "../../clinicaltrials" }
+gwascatalog-sdk = { path = "../../gwascatalog-sdk" }
 mr = { path = "../../../bio_crates/mr" }
 arrow-array.workspace = true
 arrow-cast.workspace = true

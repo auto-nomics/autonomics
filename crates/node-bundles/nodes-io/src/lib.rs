@@ -55,6 +55,18 @@ pub use enrichr_sdk::nodes::{
     EnrichrLibrariesNode, EnrichrLibrariesNodeFactory, EnrichrViewListNode,
     EnrichrViewListNodeFactory,
 };
+pub use gwascatalog_sdk::nodes::associations::{
+    AssociationsNode, AssociationsNodeFactory, StudyAssociationsNode, StudyAssociationsNodeFactory,
+};
+pub use gwascatalog_sdk::nodes::download::{DownloadNode, DownloadNodeFactory};
+pub use gwascatalog_sdk::nodes::efo_traits::{EfoTraitsNode, EfoTraitsNodeFactory};
+pub use gwascatalog_sdk::nodes::search::{SearchNode, SearchNodeFactory};
+pub use gwascatalog_sdk::nodes::snps::{SnpsNode, SnpsNodeFactory};
+pub use gwascatalog_sdk::nodes::studies::{StudiesNode, StudiesNodeFactory};
+pub use gwascatalog_sdk::nodes::summary_associations::{
+    SummaryAssociationsNode, SummaryAssociationsNodeFactory,
+};
+pub use gwascatalog_sdk::nodes::unpublished::{UnpublishedNode, UnpublishedNodeFactory};
 pub use interpro::nodes::entry::{InterProEntryNode, InterProEntryNodeFactory};
 pub use nhanes::nodes::download::{NhanesDownloadNode, NhanesDownloadNodeFactory};
 pub use nhanes::nodes::files::{NhanesFilesNode, NhanesFilesNodeFactory};
@@ -150,24 +162,27 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(
             source_opentargets::OpentargetsSearchNodeFactory {},
         ));
+        registry.register(Box::new(
+            source_opentargets::OpentargetsAssociatedDiseasesNodeFactory,
+        ));
+        registry.register(Box::new(
+            source_opentargets::OpentargetsAssociatedTargetsNodeFactory,
+        ));
         registry.register(Box::new(source_chembl::ChemblActivitiesNodeFactory));
         registry.register(Box::new(source_chembl::ChemblMoleculesNodeFactory));
+        registry.register(Box::new(source_chembl::ChemblMechanismsNodeFactory));
+        registry.register(Box::new(source_chembl::ChemblIndicationsNodeFactory));
         registry.register(Box::new(source_openalex::OpenAlexWorksNodeFactory {}));
         registry.register(Box::new(source_kegg::KeggSearchNodeFactory));
         registry.register(Box::new(source_kegg::KeggRelationsNodeFactory));
         registry.register(Box::new(source_kegg::KeggGenePathwaysNodeFactory));
+        registry.register(Box::new(source_kegg::KeggDdiNodeFactory));
         registry.register(Box::new(source_openalex::OpenAlexGroupByNodeFactory {}));
         registry.register(Box::new(
             source_semantic_scholar::S2PaperSearchNodeFactory {},
         ));
         registry.register(Box::new(
             source_semantic_scholar::S2AuthorSearchNodeFactory {},
-        ));
-        registry.register(Box::new(
-            source_opentargets::OpentargetsAssociationsNodeFactory {},
-        ));
-        registry.register(Box::new(
-            source_opentargets::OpentargetsSearchNodeFactory {},
         ));
         registry.register(Box::new(CrossrefWorksNodeFactory {}));
         registry.register(Box::new(NhanesFilesNodeFactory {}));
@@ -203,6 +218,32 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(EvidenceExportNodeFactory {}));
         registry.register_plugin(&StringPlugin);
         registry.register_plugin(&EnrichrPlugin);
+        // GWAS Catalog source nodes (Solr search, REST catalog, summary
+        // statistics, full-file download) — the node half of the
+        // gwascatalog-sdk tool family.
+        registry.register(Box::new(gwascatalog_sdk::nodes::search::SearchNodeFactory));
+        registry.register(Box::new(
+            gwascatalog_sdk::nodes::studies::StudiesNodeFactory,
+        ));
+        registry.register(Box::new(
+            gwascatalog_sdk::nodes::associations::AssociationsNodeFactory,
+        ));
+        registry.register(Box::new(
+            gwascatalog_sdk::nodes::associations::StudyAssociationsNodeFactory,
+        ));
+        registry.register(Box::new(gwascatalog_sdk::nodes::snps::SnpsNodeFactory));
+        registry.register(Box::new(
+            gwascatalog_sdk::nodes::efo_traits::EfoTraitsNodeFactory,
+        ));
+        registry.register(Box::new(
+            gwascatalog_sdk::nodes::unpublished::UnpublishedNodeFactory,
+        ));
+        registry.register(Box::new(
+            gwascatalog_sdk::nodes::summary_associations::SummaryAssociationsNodeFactory,
+        ));
+        registry.register(Box::new(
+            gwascatalog_sdk::nodes::download::DownloadNodeFactory,
+        ));
     }
 }
 

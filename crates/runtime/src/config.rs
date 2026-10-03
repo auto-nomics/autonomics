@@ -448,7 +448,8 @@ const PROMPT_OPENGWAS: &str = "\n\
 - Use `download_files` to download summary-statistics files from OpenGWAS.\n\
 - For fetching GWAS summary-statistics tables as pipeline inputs, use the DAG \
   source nodes `source_opengwas_*` (e.g. `source_opengwas_phewas`, \
-  `source_opengwas_variants`, `source_opengwas_assoc`).\n\
+  `source_opengwas_variants_rsid`, `source_opengwas_associations`, \
+  `source_opengwas_ld_clump`).\n\
 - Interpret results with appropriate statistical context (p-values, effect sizes, \
   odds ratios).";
 
@@ -457,7 +458,11 @@ const PROMPT_OPENTARGETS: &str = "\n\
 - Query the Open Targets Platform for genes, diseases, drugs, studies, and variants.\n\
 - Look up target/disease associations, associated diseases for a target (and vice versa), \
   drug info, GWAS study metadata, and variant records.\n\
-- Use `opentargets_search` for free-text discovery across all entity types.";
+- Use `opentargets_search` for free-text discovery across all entity types.
+- In pipelines, prefer the DAG nodes `source_opentargets_associated_diseases` /
+  `source_opentargets_associated_targets` (ranked tables with per-datasource score
+  columns), `source_opentargets_associations`, and `source_opentargets_search`;
+  the `opentargets_*` tools are for interactive lookup of annotation cards.";
 
 const PROMPT_GWASCATALOG: &str = "\n\
 ### GWAS Catalog (EBI)\n\
@@ -465,8 +470,13 @@ const PROMPT_GWASCATALOG: &str = "\n\
   submissions (`gwascatalog_*` tools).\n\
 - Use `gwascatalog_search` first for cross-resource discovery (Solr full-text across studies, \
   variants, traits, genes, publications).\n\
-- Use `gwascatalog_summary_*` tools for per-variant harmonised summary statistics (effect sizes, \
-  alleles, p-values) — distinct from the curated REST resources.";
+- In pipelines, prefer the DAG nodes `source_gwascatalog_search`, \
+  `source_gwascatalog_studies`, `source_gwascatalog_associations`, \
+  `source_gwascatalog_study_associations`, `source_gwascatalog_snps`, \
+  `source_gwascatalog_efo_traits`, `source_gwascatalog_unpublished_studies`, \
+  `source_gwascatalog_summary_associations` (per-variant harmonised stats), and \
+  `source_gwascatalog_download` (full summary-statistics files); the `gwascatalog_*` \
+  tools are for interactive browsing of the same resources.";
 
 const PROMPT_CHEMBL: &str = "\n\
 ### Drug & Bioactivity Data (ChEMBL)\n\
@@ -474,8 +484,10 @@ const PROMPT_CHEMBL: &str = "\n\
 - Use `chembl_molecule_summary`, `chembl_target_summary`, and `chembl_activities` for \
   compound properties, protein components, and standardized activity measurements.\n\
 - Use `chembl_mechanisms` and `chembl_indications` for mechanisms of action and drug \
-  indications. In pipelines, use `source_chembl_activities` or \
-  `source_chembl_molecules` to obtain typed tables for SQL and analysis nodes.";
+  indications. In pipelines, use the DAG nodes `source_chembl_activities`, \
+  `source_chembl_molecules`, `source_chembl_mechanisms`, and \
+  `source_chembl_indications` to obtain typed tables for SQL and analysis nodes; \
+  the `chembl_*` tools are for interactive lookup.";
 
 const PROMPT_RCSB: &str = "\
 ### Structural Biology (RCSB PDB)\n\
@@ -501,7 +513,10 @@ const PROMPT_KEGG: &str = "\n\
   orthologs, compounds, drugs, and diseases.\n\
 - Use `kegg_link` and `kegg_convert` for biological relationships and identifier mapping; \
   prefer one database-level request or cached results over per-gene calls.\n\
-- Keep outputs concise and remember that KEGG API access is limited to academic use.";
+- Keep outputs concise and remember that KEGG API access is limited to academic use.
+- In pipelines, prefer the DAG nodes `source_kegg_search`, `source_kegg_relations`,
+  `source_kegg_gene_pathways`, and `source_kegg_ddi`; the `kegg_*` tools are for
+  interactive inspection of entries.";
 
 const PROMPT_BIOMEDICAL_RESOURCES: &str = "\n\
 ### Biomedical Reference Resources\n\

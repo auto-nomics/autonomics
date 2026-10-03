@@ -793,6 +793,145 @@ fn canonical_relation_target(operation: KeggRelationOperation, target: &str) -> 
     }
 }
 
+// ===========================================================================
+// Drug–drug interactions
+// ===========================================================================
+
+/// Spec for `source_kegg_ddi`.
+#[derive(Debug, Clone, JsonSchema, Deserialize)]
+pub struct KeggDdiSpec {
+    /// KEGG drug entry or entry list to look up interactions for, e.g.
+    /// `D00001` or `D00001+D00002`. Multiples are `+`-joined.
+    pub entries: String,
+    /// Endpoint override for tests and private KEGG mirrors.
+    #[serde(default)]
+    pub endpoint: Option<String>,
+    /// Process-local request limit. KEGG's academic limit is 3.
+    #[serde(default = "default_rate_limit")]
+    pub requests_per_second: u32,
+}
+
+/// Source node emitting KEGG drug–drug interaction rows
+/// (`ddi/{entries}`) as a table.
+#[derive(Clone)]
+pub struct KeggDdiNode {
+    meta: NodePorts,
+    spec: KeggDdiSpec,
+}
+
+pub struct KeggDdiNodeFactory;
+
+impl NodeFactory for KeggDdiNodeFactory {
+    fn kind(&self) -> &'static str {
+        "source_kegg_ddi"
+    }
+
+    fn desc(&self) -> &'static str {
+        "Fetches KEGG drug-drug interactions for one or more drug entries as a table."
+    }
+
+    fn doc(&self) -> &'static str {
+        "A source node over the KEGG `ddi` operation. `entries` is one KEGG          drug id or a `+`-joined list (e.g. `D00001+D00002`); the node emits          one row per recorded interaction pair. This is the pipeline form of          the `kegg_ddi` tool: drug, interacts_with, category, and the raw          description as typed columns.\n\n\
+         Output schema: `drug, interacts_with, category, description`.\n\n\
+         Rate limiting matches the tooling (3 requests/second academic \
+         limit); override with `requests_per_second`."
+    }
+
+    fn spec_schema(&self) -> schemars::Schema {
+        schema_for!(KeggDdiSpec)
+    }
+
+    fn ports(&self) -> NodePorts {
+        output_port()
+    }
+
+    fn build(
+        &self,
+        spec: serde_json::Value,
+        _node_ctx: NodeCtx,
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
+        let spec: KeggDdiSpec = serde_json::from_value(spec)?;
+        Ok(Box::new(KeggDdiNode {
+            meta: output_port(),
+            spec,
+        }))
+    }
+}
+
+#[async_trait]
+impl DagNode for KeggDdiNode {
+    fn ports(&self) -> &NodePorts {
+        &self.meta
+    }
+
+    fn clone_box(&self) -> Box<dyn DagNode> {
+        Box::new(self.clone())
+    }
+
+    fn kind(&self) -> &'static str {
+        "source_kegg_ddi"
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    async fn execute(
+        &mut self,
+        ctx: &NodeCtx,
+        _inputs: &[NodeInput],
+        _reporter: &dag_core::dag::node_event::NodeReporter,
+    ) -> Result<PortOutputs, DagError> {
+        let entries = self.spec.entries.trim().to_string();
+        if entries.is_empty() {
+            return Err(DagError::Schedule(
+                "source_kegg_ddi requires `entries` (a KEGG drug id or a `+`-joined list)".into(),
+            ));
+        }
+        let client = client(
+            self.spec.endpoint.as_deref(),
+            Some(self.spec.requests_per_second),
+        )?;
+        let rows: Vec<kegg::DrugInteraction> = client
+            .ddi(&entries)
+            .await
+            .map_err(|error| DagError::Schedule(format!("KEGG ddi failed: {error}")))?;
+
+        let batch = build_ddi_batch(rows)?;
+        let dataframe = to_data_frame(&ctx.session(), batch)?;
+        let mut outputs = PortOutputs::new();
+        outputs.insert(0, dataframe);
+        Ok(outputs)
+    }
+}
+
+fn build_ddi_batch(rows: Vec<kegg::DrugInteraction>) -> Result<RecordBatch, DagError> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("drug", DataType::Utf8, true),
+        Field::new("interacts_with", DataType::Utf8, true),
+        Field::new("category", DataType::Utf8, true),
+        Field::new("description", DataType::Utf8, true),
+    ]));
+    RecordBatch::try_new(
+        schema,
+        vec![
+            strings(rows.iter().map(|row| Some(row.drug.clone())).collect()),
+            strings(
+                rows.iter()
+                    .map(|row| Some(row.interacts_with.clone()))
+                    .collect(),
+            ),
+            strings(rows.iter().map(|row| Some(row.category.clone())).collect()),
+            strings(
+                rows.iter()
+                    .map(|row| Some(row.description.clone()))
+                    .collect(),
+            ),
+        ],
+    )
+    .map_err(|error| DagError::Schedule(format!("failed to build KEGG ddi batch: {error}")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -32,7 +32,7 @@ use crate::client::GwasCatalogClient;
 
 /// Which files to fetch.
 #[derive(Debug, Clone, Default, PartialEq)]
-enum FileVariant {
+pub(crate) enum FileVariant {
     /// Harmonised `.h.tsv.gz` from the `harmonised/` subdirectory (default,
     /// recommended for cross-study analysis).
     #[default]
@@ -44,7 +44,7 @@ enum FileVariant {
 }
 
 impl FileVariant {
-    fn from_str(s: &str) -> Self {
+    pub(crate) fn from_str(s: &str) -> Self {
         match s.to_ascii_lowercase().as_str() {
             "raw" => FileVariant::Raw,
             "all" => FileVariant::All,
