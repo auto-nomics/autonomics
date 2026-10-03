@@ -1,8 +1,7 @@
 //! The `update_plan` tool — the agent's first-class persistent task plan.
 //!
-//! Unlike the skill-bound `update_todo` tool (which drives a predefined
-//! workflow with auto-advancing steps), `update_plan` is a free-form,
-//! agent-level todo list that the model itself creates and maintains.
+//! `update_plan` is a free-form, agent-level todo list that the model itself
+//! creates and maintains.
 //!
 //! ## How it works
 //!
@@ -15,14 +14,6 @@
 //!    the updated checklist.
 //! 5. The tool returns "Plan updated" to the model.
 //!
-//! ## Boundary with `update_todo`
-//!
-//! - `update_plan` — agent-level, free-form, persistent, always available.
-//! - `update_todo` — skill-level, predefined steps, auto-advancing, only
-//!   available when a skill workflow is active.
-//!
-//! They coexist without interference.
-
 use std::sync::Arc;
 
 use agentik_proc::tool;
