@@ -33,8 +33,10 @@ pub struct LiteratureFetchSpec {
     /// order, first hit wins. An unknown name fails the node.
     #[serde(default)]
     pub sources: Option<Vec<String>>,
-    /// Destination for the evidence JSON artifact. `vfs://` URI or absolute
-    /// local path; overwritten on re-run.
+    /// Destination for the evidence JSON artifact. Prefers a `vfs://`
+    /// URI for cross-process artifacts; a bare absolute path is
+    /// auto-rewritten to `vfs:///...` so the engine and the agent share
+    /// one mounted object-store namespace. Overwritten on re-run.
     pub path: String,
     /// Optional provenance note stamped on the record.
     #[serde(default)]
@@ -243,6 +245,7 @@ impl NodeFactory for LiteratureFetchNodeFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::nodes::read_file_bytes;
     use crate::query::{LiteratureGateway, LiteratureSource, SourceBatch};
     use bib_types::query::StructuredSearch;
     use dag_core::dag::node_event::NodeReporter;
@@ -289,22 +292,24 @@ mod tests {
         }
     }
 
-    fn node_ctx() -> NodeCtx {
-        NodeCtx::new(
+    fn node_ctx() -> (NodeCtx, Arc<vfs::OpendalFileStorage>) {
+        let storage = Arc::new(vfs::OpendalFileStorage::new_temp());
+        let ctx = NodeCtx::new(
             datafusion::prelude::SessionContext::new().runtime_env(),
-            None,
-        )
+            Some(storage.clone()),
+        );
+        (ctx, storage)
     }
 
     fn tmp_path(tag: &str) -> String {
-        std::env::temp_dir()
-            .join(format!("fetch-node-{tag}-{}.json", uuid::Uuid::new_v4()))
-            .to_string_lossy()
-            .into_owned()
+        // Absolute; `write_artifact` rewrites it to `vfs:///tmp/...` which
+        // resolves inside the test's VFS temp root.
+        format!("/tmp/fetch-node-{tag}-{}.json", uuid::Uuid::new_v4())
     }
 
     #[tokio::test]
     async fn fetches_known_doi_into_single_record_evidence() {
+        let (ctx, _storage) = node_ctx();
         let mut article = Article::new("1", "Known paper");
         article.identifiers.push(Identifier::doi("10.1/known"));
         let mut gateway = LiteratureGateway::new();
@@ -318,26 +323,31 @@ mod tests {
             gateway,
         );
         let outputs = node
-            .execute(&node_ctx(), &[], &NodeReporter::noop())
+            .execute(&ctx, &[], &NodeReporter::noop())
             .await
             .unwrap();
+        let file = outputs
+            .get(&0)
+            .and_then(|value| value.as_file().ok())
+            .expect("file output");
+        assert_eq!(file.format.as_deref(), Some("evidence"));
+        assert!(file.path.starts_with("vfs://"), "{}", file.path);
         assert!(
-            outputs
-                .get(&0)
-                .and_then(|value| value.as_file().ok())
-                .is_some_and(|file| file.format.as_deref() == Some("evidence"))
+            file.fingerprint
+                .as_ref()
+                .is_some_and(|fp| fp.immutable_remote)
         );
 
-        let set = EvidenceSet::parse(&tokio::fs::read(&path).await.unwrap()).unwrap();
+        let set = EvidenceSet::parse(&read_file_bytes(&ctx, &path).await.unwrap()).unwrap();
         assert_eq!(set.records.len(), 1);
         assert_eq!(set.records[0].citation.title, "Known paper");
         assert_eq!(set.records[0].origin.as_deref(), Some("fake"));
         assert_eq!(set.records[0].note.as_deref(), Some("ctx"));
-        std::fs::remove_file(&path).ok();
     }
 
     #[tokio::test]
     async fn unknown_identifier_fails_closed() {
+        let (ctx, _storage) = node_ctx();
         let mut gateway = LiteratureGateway::new();
         gateway.add_source(Arc::new(FetchableSource { article: None }));
         let gateway = Arc::new(gateway);
@@ -346,7 +356,7 @@ mod tests {
             gateway,
         );
         let err = node
-            .execute(&node_ctx(), &[], &NodeReporter::noop())
+            .execute(&ctx, &[], &NodeReporter::noop())
             .await
             .unwrap_err()
             .to_string();
@@ -355,9 +365,10 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_id_kind_lists_valid_kinds() {
+        let (ctx, _storage) = node_ctx();
         let mut node = LiteratureFetchNode::new(spec("isbn", "x", &tmp_path("kind")));
         let err = node
-            .execute(&node_ctx(), &[], &NodeReporter::noop())
+            .execute(&ctx, &[], &NodeReporter::noop())
             .await
             .unwrap_err()
             .to_string();

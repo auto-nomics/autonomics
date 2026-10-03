@@ -35,7 +35,7 @@ A `FileRef` with `format == "evidence"` carries the UTF-8 JSON encoding of
 
 | Kind | Ports | Behavior |
 |---|---|---|
-| `source_literature` | 0 in; 1 out `File(evidence)` | Fans a `StructuredSearch` out through the literature gateway (pubmed, arxiv, biorxiv, openalex, crossref, s2), stamps `origin`/`note`, dedups, writes one artifact. Per-source failures warn and degrade; all-failed or an unknown source name fails the node. `limit` is per source (default 25, cap 200). |
+| `source_literature` | 0 in; 1 out `File(evidence)` | Fans a `StructuredSearch` out through the literature gateway (pubmed, arxiv, biorxiv, openalex, crossref, semantic_scholar), stamps `origin`/`note`, dedups, writes one artifact. Per-source failures warn and degrade; all-failed or an unknown source name fails the node. `limit` is per source (default 25, cap 200). |
 | `evidence_merge` | variadic in `File(evidence)`; 1 out `File(evidence)` | Reads inputs in port order, merges, dedups. First occurrence wins for citation fields and `origin`; a missing `note` is filled from the first duplicate that has one. |
 | `evidence_export` | 1 in `File(evidence)`; 1 out `File(bibtex\|ris\|markdown)` | Renders the citations as a bibliography; the output port's format contract follows the spec (`ports_for_spec`). |
 | `literature_fulltext` | 1 in `File(evidence)`; 1 out `FileSet` | Resolves every record to its bibliography full-text file as a `FileSet` of VFS `FileRef`s — `get_output` shows the actual files (path / format `pdf\|txt\|html` / sha256 fingerprint). With `fetch_missing: true` (default), unmatched records are saved and their full text fetched from Europe PMC open access **as a stored VFS object** (same chain as `bib_save`); `false` makes the node a pure resolver over the existing library. |
@@ -80,9 +80,15 @@ cross-source lookup the merge node intentionally does not perform.
 
 ## Path discipline
 
-Spec-driven explicit `path` (`vfs://` URI or absolute local), overwritten on
-re-run, `sink_path()` declared. The engine does not detect write-write
-collisions — give every evidence node its own path.
+Spec-driven explicit `path` (`vfs://` URI or bare absolute), overwritten on
+re-run, `sink_path()` declared. **Bare absolute paths are auto-normalized to
+`vfs:///...` and routed through the mounted runtime VFS, so the engine and
+the agent share one object-store namespace** — this is the only reliable
+form for cross-process artifacts. An explicit `vfs://` URI on an engine
+without a mounted VFS fails closed; bare absolute paths on such embedded
+engines fall back to the host filesystem (test/embedded use only — the
+production runtime always mounts the VFS). The engine does not detect
+write-write collisions — give every evidence node its own path.
 
 ## Agent experience
 

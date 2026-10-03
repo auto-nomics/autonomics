@@ -34,6 +34,26 @@ use crate::error::SkillError;
 /// Directory under the state dir holding observation files.
 pub const OBSERVATIONS_DIR: &str = "skill-observations";
 
+/// Node-kind renames applied on load. When a stored observation carries
+/// `node_kind` matching a tuple's left side, the in-memory value is
+/// rewritten to the right side and the on-disk TOML is re-emitted
+/// (atomically, via temp + rename) so subsequent reads see the new name.
+///
+/// Rationale: distillation clusters on `(node_kind, signature, kind)` —
+/// an observation anchored on a removed node kind contributes to
+/// nothing. The id is content-hashed over `(kind, summary, body)`
+/// alone, never over `node_kind`, so re-anchoring is safe and does
+/// not collide with the deduplication the store already does.
+///
+/// One entry per historical rename. Add new entries here when retiring
+/// a node kind rather than expecting callers to migrate.
+const NODE_KIND_RENAMES: &[(&str, &str)] = &[
+    // `literature_search` (the original tool-style name) was retired when
+    // literature retrieval was migrated into DAG evidence nodes; the
+    // canonical kind is now `source_literature`.
+    ("literature_search", "source_literature"),
+];
+
 /// What kind of signal this observation carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -171,7 +191,11 @@ impl ObservationStore {
     }
 
     /// Every stored observation, sorted by id (i.e. grouped by kind
-    /// and content, stable across runs).
+    /// and content, stable across runs). Applies [`NODE_KIND_RENAMES`]
+    /// on load: an observation whose `node_kind` matches a stale entry
+    /// has its in-memory value rewritten and the on-disk TOML
+    /// re-emitted (atomically, via temp + rename) so the rename is
+    /// sticky across the next read.
     pub fn list(&self) -> Vec<Observation> {
         let Ok(read_dir) = std::fs::read_dir(&self.root) else {
             return Vec::new();
@@ -183,23 +207,88 @@ impl ObservationStore {
             if !name.ends_with(".toml") || name.starts_with('.') {
                 continue;
             }
-            match std::fs::read_to_string(&path)
-                .map_err(|e| e.to_string())
-                .and_then(|t| toml::from_str::<Observation>(&t).map_err(|e| e.to_string()))
-            {
-                Ok(observation) => out.push(observation),
+            let text = match std::fs::read_to_string(&path) {
+                Ok(t) => t,
                 Err(e) => {
                     tracing::warn!(
                         path = %path.display(),
-                        error = e,
+                        error = %e,
+                        "skipping unreadable observation"
+                    );
+                    continue;
+                }
+            };
+            let mut observation: Observation = match toml::from_str(&text) {
+                Ok(o) => o,
+                Err(e) => {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %e,
                         "skipping malformed observation"
+                    );
+                    continue;
+                }
+            };
+            // On-load node_kind migration: rewrite stale anchors in the
+            // data, then re-emit the file so the rename sticks.
+            if let Some(rewritten) = rewrite_node_kind(&mut observation) {
+                tracing::warn!(
+                    id = %observation.id,
+                    old = %rewritten.0,
+                    new = %rewritten.1,
+                    "rewrote skill observation node_kind to current DAG kind"
+                );
+                if let Err(error) = atomic_write_toml(&path, &observation) {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %error,
+                        "failed to persist rewritten node_kind; in-memory value still applied"
                     );
                 }
             }
+            out.push(observation);
         }
         out.sort_by(|a, b| a.id.cmp(&b.id));
         out
     }
+}
+
+/// If `observation.node_kind` matches a stale entry in
+/// [`NODE_KIND_RENAMES`], mutate it to the current DAG kind and return
+/// the (old, new) pair so the caller can log. Returns `None` when no
+/// rewrite was needed.
+fn rewrite_node_kind(observation: &mut Observation) -> Option<(&'static str, &'static str)> {
+    let old = observation.node_kind.as_deref()?;
+    let (from, to) = NODE_KIND_RENAMES.iter().find(|(o, _)| *o == old)?;
+    observation.node_kind = Some((*to).to_string());
+    Some((*from, *to))
+}
+
+/// Atomically re-emit the observation TOML: write to a sibling temp file
+/// in the same directory and `rename` over the original. Same shape as
+/// the manifest installer in `install.rs` — keeps readers from ever
+/// seeing a half-written file.
+fn atomic_write_toml(path: &Path, observation: &Observation) -> std::io::Result<()> {
+    let parent = path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "observation path has no parent",
+        )
+    })?;
+    let tmp = parent.join(format!(
+        ".{}.tmp",
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("observation")
+    ));
+    let text = toml::to_string_pretty(observation).map_err(|error| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("toml encode: {error}"),
+        )
+    })?;
+    std::fs::write(&tmp, text)?;
+    std::fs::rename(&tmp, path)
 }
 
 fn unix_now() -> i64 {
@@ -257,5 +346,66 @@ mod tests {
         .unwrap();
         let listed = store.list();
         assert_eq!(listed.len(), 1);
+    }
+
+    /// Pre-rename observations (e.g. anchored on the now-retired
+    /// `literature_search` kind) get rewritten to the current DAG kind
+    /// on first read; the on-disk TOML is also re-emitted so the
+    /// rename is sticky across subsequent loads. The id is unaffected.
+    #[test]
+    fn renames_literature_search_to_source_literature_on_load() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = ObservationStore::open(tmp.path());
+        let recorded = store
+            .record(ObservationInput {
+                kind: ObservationKind::Recipe,
+                source: ObservationSource::Agent,
+                summary: "lit audit".into(),
+                body: "audit body".into(),
+                node_kind: Some("literature_search".into()),
+                error: None,
+            })
+            .unwrap();
+        // Manually rewrite the persisted TOML back to the stale name to
+        // simulate an observation recorded before the migration.
+        let path = tmp
+            .path()
+            .join(OBSERVATIONS_DIR)
+            .join(format!("{}.toml", recorded.id));
+        std::fs::write(
+            &path,
+            format!(
+                "id = '{}'\ncreated_at = 0\nkind = 'recipe'\nsource = 'agent'\nsummary = 'lit audit'\nbody = 'audit body'\nnode_kind = 'literature_search'\n",
+                recorded.id
+            ),
+        )
+        .unwrap();
+
+        // First list() returns the rewritten kind and persists the change.
+        let first = store.list();
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].id, recorded.id);
+        assert_eq!(first[0].node_kind.as_deref(), Some("source_literature"));
+        // The TOML on disk now carries the new kind.
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            on_disk.contains("node_kind = \"source_literature\""),
+            "TOML was not rewritten: {on_disk}"
+        );
+        assert!(!on_disk.contains("literature_search\""));
+
+        // Subsequent list() observes the same rewritten value with no
+        // further migration; no temp files are left in the dir.
+        let second = store.list();
+        assert_eq!(second[0].node_kind.as_deref(), Some("source_literature"));
+        let entries: Vec<_> = std::fs::read_dir(tmp.path().join(OBSERVATIONS_DIR))
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            entries.iter().all(|n| !n.ends_with(".tmp")),
+            "leftover tmp: {entries:?}"
+        );
     }
 }
