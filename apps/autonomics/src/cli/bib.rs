@@ -49,7 +49,7 @@ pub struct UploadArgs {
     #[arg(long, value_name = "PATH")]
     pub pdf: PathBuf,
 
-    /// Article ID in the local library (from bib_save or lit_search).
+    /// Article ID in the local library (from bib_save or source_literature_fetch).
     #[arg(long)]
     pub article_id: String,
 

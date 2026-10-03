@@ -426,9 +426,16 @@ proactively rather than answering from memory alone.";
 
 const PROMPT_BIBLIOGRAPHY: &str = "\n\
 ### Literature & Evidence\n\
-- Use `lit_search` to search across multiple academic sources concurrently \
-  (PubMed, arXiv, bioRxiv).\n\
-- Use `lit_fetch` to retrieve a full article record by DOI / PMID / arXiv ID.\n\
+- Literature retrieval runs on the DAG evidence channel: add a \
+  `source_literature` node (structured multi-source search: PubMed, arXiv, \
+  bioRxiv, OpenAlex, Crossref, Semantic Scholar), a `source_literature_fetch` \
+  node (one article by DOI / PMID / arXiv / S2 / OpenAlex id), a \
+  `source_literature_citations` node (papers citing a paper, or its reference \
+  list), or a `source_s2_recommendations` node, wire them through \
+  `evidence_merge` when combining searches, then `run_dag` and `get_output` — \
+  evidence outputs render as a compact citation list inline.\n\
+- Give every evidence node its own output `path`; chain `evidence_export` \
+  (bibtex / ris / markdown) when a bibliography file is needed.\n\
 - Use `bib_save` to store articles in your personal library, `bib_search_library` \
   to find saved articles, and `bib_export` to export collections.\n\
 - `bib_export` writes rendered citation files directly to a VFS `output_path`.\n\

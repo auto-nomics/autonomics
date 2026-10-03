@@ -8,8 +8,8 @@
 //!
 //! - **Query** ([`query::LiteratureGateway`]) — unified entry point that
 //!   searches PubMed and arXiv concurrently through a
-//!   single [`query::LiteratureSource`] trait. Exposed as agent tools
-//!   ([`lit_search`](tools::LitSearchTool), [`lit_fetch`](tools::LitFetchTool)).
+//!   single [`query::LiteratureSource`] trait. Consumed by the DAG evidence
+//!   nodes ([`nodes`]) — literature retrieval left the agent tool surface.
 //!
 //! Depends on [`bib_types`] for the canonical data model.
 
@@ -30,7 +30,6 @@ pub mod oa_fetch;
 pub mod query;
 pub mod shared;
 pub mod stored_files;
-pub mod tools;
 
 pub use bib_base::BibBase;
 pub use error::{Error, Result};
@@ -46,7 +45,6 @@ pub use extraction::{
 pub use fulltext::{FullTextPage, PendingExtraction};
 pub use http_options::BibHttpOptions;
 pub use library_tools::bib_all_registrations;
-pub use library_tools::bib_extended_registrations;
 pub use mineru::{
     DEFAULT_API_URL as MINERU_DEFAULT_API_URL, MineruExtractor, MineruZipOutput, markdown_from_zip,
 };
@@ -68,7 +66,6 @@ pub use stored_files::{
 pub fn default_gateway() -> LiteratureGateway {
     LiteratureGateway::with_default_sources()
 }
-pub use tools::{LitFetchTool, LitSearchTool, bib_query_registrations};
 
 // Re-export bib-types for convenience so downstream code can import
 // types and storage from a single crate.

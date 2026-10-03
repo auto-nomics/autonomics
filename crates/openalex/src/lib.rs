@@ -9,8 +9,6 @@
 //! - **[`OpenAlexClient`]** — an async HTTP client supporting list, get,
 //!   search, autocomplete, and group-by operations across all major entity
 //!   types (works, authors, sources, institutions, topics, funders).
-//! - **Agent tools** — pre-built [`ToolRegistration`]s that expose OpenAlex
-//!   literature-discovery capabilities to an agentik agent.
 //!
 //! # Quick start (SDK only)
 //!
@@ -35,17 +33,6 @@
 //! # }
 //! ```
 //!
-//! # Wiring tools into an agent
-//!
-//! ```no_run,ignore
-//! use openalex::{OpenAlexClient, openalex_registrations};
-//! use std::sync::Arc;
-//!
-//! let client = Arc::new(OpenAlexClient::new(None));
-//! let tools = openalex_registrations(client);
-//! // pass `tools` to Agent::builder().with_tools(tools)
-//! ```
-//!
 //! # Rate limits
 //!
 //! Without an API key: $0.10/day budget (~100 list calls). With a free key:
@@ -57,12 +44,9 @@ pub mod convert;
 pub mod error;
 pub mod format;
 pub mod query;
-pub mod tools;
 pub mod types;
 
 pub use client::{ListParams, OpenAlexClient};
 pub use convert::{work_to_article, works_to_articles};
 pub use error::OpenAlexError;
-pub use tools::openalex_extended_registrations;
-pub use tools::openalex_registrations;
 pub use types::*;

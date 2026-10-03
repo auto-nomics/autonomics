@@ -592,16 +592,12 @@ impl SharedInfra {
             );
             tools.extend(bib_tools);
 
-            // Extended literature tools: source-specific capabilities of
-            // OpenAlex / Crossref / Semantic Scholar that fall outside the
-            // LiteratureGateway's search/fetch contract (autocomplete,
-            // citation graph, recommendations, author lookup, type
-            // catalogue). The shared clients live on BibShared.
-            tools.extend(bib_base::bib_extended_registrations(
-                bib_shared.openalex.clone(),
-                bib_shared.crossref.clone(),
-                bib_shared.s2.clone(),
-            ));
+            // Literature retrieval (search, fetch, citation graph,
+            // recommendations) flows through the DAG evidence channel —
+            // source_literature / source_literature_fetch /
+            // source_literature_citations / source_s2_recommendations —
+            // not through agent tools. BibShared still owns the shared
+            // clients the nodes reach via their process-wide singletons.
         }
 
         if profile.enable_writing {
