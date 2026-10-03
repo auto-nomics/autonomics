@@ -14,9 +14,12 @@
 //! carries a `sha256:{hex}` content hash so downstream fingerprints are
 //! content-addressed (see `dag_core::fingerprint` encoding).
 
+use std::sync::{Arc, OnceLock};
+
 pub mod evidence_export;
 pub mod literature_citations;
 pub mod literature_fetch;
+pub mod literature_fulltext;
 pub mod evidence_merge;
 pub mod literature_search;
 pub mod s2_recommendations;
@@ -186,4 +189,29 @@ mod tests {
             .unwrap_err();
         assert!(err.to_string().contains("mounted runtime VFS"));
     }
+}
+
+
+// ---------------------------------------------------------------------------
+// Shared bibliography handle
+// ---------------------------------------------------------------------------
+
+static SHARED_BIB: OnceLock<Arc<crate::shared::BibShared>> = OnceLock::new();
+
+/// Install the runtime host's shared bibliography for
+/// `literature_fulltext` (and future library-backed nodes). Called by
+/// `SharedInfra::open`; idempotent — the first install wins.
+pub fn set_shared_bib(shared: Arc<crate::shared::BibShared>) {
+    let _ = SHARED_BIB.set(shared);
+}
+
+/// The host-installed shared bibliography, or a fail-closed error explaining
+/// what is missing.
+pub fn shared_bib() -> Result<Arc<crate::shared::BibShared>, dag_core::dag::DagError> {
+    SHARED_BIB.get().cloned().ok_or_else(|| {
+        dag_core::dag::DagError::Schedule(
+            "literature_fulltext requires the runtime host's shared bibliography; \
+             no SharedInfra installed one in this process".into(),
+        )
+    })
 }
