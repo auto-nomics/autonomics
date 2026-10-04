@@ -14,13 +14,15 @@
 use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use agentik_core::Agent;
 use agentik_core::TursoAgentStorage;
 use agentik_core::agent::InternalEvent;
 use agentik_core::memory::{MemoryBackend, MemoryConfig, MemoryStore, SemanticGrounding};
 use agentik_core::storage::{
-    AgentDelegationRecord, AgentProfileRegistry, AgentStorage, AgentTurnRecord,
+    AgentDelegationRecord, AgentLayoutSnapshot, AgentProfileRegistry, AgentStorage,
+    AgentTurnRecord, PersistedAgentGraph,
 };
 use agentik_network::{AgentNetwork, EdgeTrigger, NodeSpec, RoutingAction, TerminationSpec};
 use agentik_sdk::model::Model;
@@ -158,6 +160,18 @@ pub struct SharedInfra {
     pub memory: Arc<MemoryBackend>,
     /// Optional Turso-backed KMS knowledge service.
     pub kms: Option<Arc<kms::KmsService>>,
+    /// Central skill manager (tiered registry + generation counter +
+    /// change broadcast + usage telemetry). Initialized as the
+    /// process-wide singleton so every mutation path — agent tools,
+    /// eval auto-capture, gateway handlers — shares one notification
+    /// invariant.
+    pub skills: Arc<skills::SkillManager>,
+    /// The unified skill control handle, when the service is
+    /// enabled. `None` means the loop is disabled at the daemon
+    /// level — every gateway mutation request then returns HTTP
+    /// 503 (the dashboard, the agent `skill_evolve` tool, and the
+    /// observation forwarder all funnel through this handle).
+    pub skill_evolution: Option<skills::SkillControlHandle>,
     /// The tokio runtime handle (for spawning agent tasks).
     pub runtime_handle: tokio::runtime::Handle,
     /// Optional host control for agent tools. Set by RuntimeHost when
@@ -321,11 +335,18 @@ impl SharedInfra {
             "SharedInfra::open: opening bibliography db at {}",
             bib_db_path.display()
         );
+        // Library-backed DAG nodes (literature_fulltext) resolve through
+        // this exact handle, so node outputs share the host's storage and
+        // connection pool.
         let bib = Arc::new(
             bib_base::BibShared::open_with(&bib_db_path, config.bib_http.clone())
                 .await?
                 .with_file_storage(file_storage.clone()),
         );
+        // Library-backed DAG nodes (literature_fulltext) resolve through this
+        // exact handle, so their outputs share the host's storage view and
+        // connection pool.
+        bib_base::nodes::set_shared_bib(bib.clone());
 
         let writing_db_path = config.writing_db_path.clone();
         tracing::info!(
@@ -342,6 +363,41 @@ impl SharedInfra {
 
         tracing::info!("SharedInfra::open: all infrastructure ready");
 
+        // ── Skill evolution service ────────────────────────────────
+        // The trigger half of the evolution loop: observation events
+        // and a periodic sweep wake the idempotent workflow (distill
+        // → propose → policy). The manager is the process-wide
+        // singleton so every observation-recording path — agent tool,
+        // eval auto-capture — reaches the worker.
+        let skills = skills::SkillManager::init(skills::SkillManager::new(&config.state_dir));
+        // Reclaim the fitness signal from the previous process.
+        skills.load_usage();
+        let skill_evolution = if config.enable_skill_evolution {
+            let handle = skills::evolution::start(
+                skills.clone(),
+                skills::evolution::EvolutionOptions {
+                    policy: skills::evolution::EvolutionPolicy {
+                        auto_approve: config.skill_evolution_auto_approve,
+                        ..Default::default()
+                    },
+                    quiet_window: std::time::Duration::from_millis(500),
+                    timer: Some(std::time::Duration::from_secs(
+                        config.skill_evolution_interval_secs.max(60),
+                    )),
+                },
+            );
+            skills.attach_evolution(&handle);
+            tracing::info!(
+                auto_approve = config.skill_evolution_auto_approve,
+                interval_secs = config.skill_evolution_interval_secs,
+                "SharedInfra::open: skill evolution service started"
+            );
+            Some(handle)
+        } else {
+            tracing::info!("SharedInfra::open: skill evolution disabled");
+            None
+        };
+
         Ok(Self {
             engine_manager,
             file_storage,
@@ -355,6 +411,8 @@ impl SharedInfra {
             writing,
             memory,
             kms,
+            skills,
+            skill_evolution,
             runtime_handle: tokio::runtime::Handle::current(),
             host_control: None,
         })
@@ -411,6 +469,12 @@ impl SharedInfra {
         } else {
             builder =
                 builder.with_system_prompt_section(crate::config::build_system_prompt(profile));
+        }
+        // Skill index: one line per visible skill; bodies load on
+        // demand via skill_get. Empty library → no section at all.
+        let skill_section = skills::prompt_section(&self.skills.registry().list());
+        if !skill_section.is_empty() {
+            builder = builder.with_system_prompt_section(skill_section);
         }
 
         builder = builder
@@ -477,6 +541,10 @@ impl SharedInfra {
         let engine_client = self.engine_manager.client_for_session(agent_path.as_str());
 
         let mut tools: Vec<ToolRegistration> = vfs::vbash_registrations(file_storage.clone());
+        tools.extend(skills::skill_registrations(
+            self.skills.clone(),
+            self.skill_evolution.clone(),
+        ));
         if let Some(catalog) = self.catalog.clone() {
             tools.extend(crate::catalog_tools::catalog_registrations(catalog));
         }
@@ -511,7 +579,15 @@ impl SharedInfra {
             tools.extend(kegg_tools());
         }
 
-        tools.extend(data_engine_tools::registrations(Arc::new(engine_client)));
+        let engine_client = Arc::new(engine_client);
+        tools.extend(data_engine_tools::registrations(Arc::clone(&engine_client)));
+        // Engine-bound skill tools (workflow instantiation, evals) share
+        // the registry with the pure skill tools and the session's DAG
+        // client, so template-built DAGs are ordinary session DAGs.
+        tools.extend(crate::skill_workflow_tools::skill_workflow_registrations(
+            self.skills.clone(),
+            engine_client,
+        ));
 
         if profile.enable_bibliography {
             let bib_shared = self.bib.clone();
@@ -523,16 +599,12 @@ impl SharedInfra {
             );
             tools.extend(bib_tools);
 
-            // Extended literature tools: source-specific capabilities of
-            // OpenAlex / Crossref / Semantic Scholar that fall outside the
-            // LiteratureGateway's search/fetch contract (autocomplete,
-            // citation graph, recommendations, author lookup, type
-            // catalogue). The shared clients live on BibShared.
-            tools.extend(bib_base::bib_extended_registrations(
-                bib_shared.openalex.clone(),
-                bib_shared.crossref.clone(),
-                bib_shared.s2.clone(),
-            ));
+            // Literature retrieval (search, fetch, citation graph,
+            // recommendations) flows through the DAG evidence channel —
+            // source_literature / source_literature_fetch /
+            // source_literature_citations / source_s2_recommendations —
+            // not through agent tools. BibShared still owns the shared
+            // clients the nodes reach via their process-wide singletons.
         }
 
         if profile.enable_writing {
@@ -1118,6 +1190,11 @@ pub struct RuntimeHost {
     /// First-class delegation ledger. Keyed by stable delegation ID, so the
     /// same target can safely process multiple queued requests.
     delegations: HashMap<uuid::Uuid, HostDelegation>,
+    /// Stable insertion order for the persisted multi-agent layout.
+    next_layout_order: u64,
+    /// Monotonic version for layout snapshots. Persistence tasks can finish
+    /// out of order, but the storage layer ignores stale revisions.
+    next_layout_revision: u64,
     /// Cached profiles (blueprints) loaded at startup. Used by GetStatus
     /// and route_task so agents can discover what they can spawn.
     profiles: Vec<agentik_core::AgentProfile>,
@@ -1224,6 +1301,13 @@ struct AgentEntry {
     /// `GetAgentInfo` / `GetStatus` (which serialize `AgentInfo`) see the
     /// same value that `update_agent_status` last set.
     info: crate::control::AgentInfo,
+    /// Profile used to instantiate this agent; needed to rebuild the layout
+    /// without depending on the mutable profile catalog.
+    profile_path: String,
+    /// Layout insertion position assigned by [`RuntimeHost`].
+    layout_order: u64,
+    /// First time this incarnation entered the daemon layout.
+    layout_created_at: i64,
     /// Live runtime status. Updated on every observed [`AgentEvent`].
     /// Phase-1 deliverable — surfaces "what is agent X doing?" without
     /// requiring the agent to expose anything new.
@@ -1237,6 +1321,10 @@ struct AgentEntry {
     model: Arc<ArcSwapOption<Model>>,
     /// Shared memory backend — same Arc as the agent's runtime.
     memory: Arc<MemoryBackend>,
+    /// Set when the host enqueues an inbound message but the target agent has
+    /// not yet emitted `TurnStarted`. This closes the Idle-status race where
+    /// several peer messages could queue before the runtime status caught up.
+    inbound_pending: Arc<AtomicBool>,
 }
 
 struct HostDelegation {
@@ -1265,6 +1353,12 @@ impl RuntimeHost {
         let (event_broadcast, _) = tokio::sync::broadcast::channel(256);
         let control = crate::control::HostControl::new(cmd_tx, event_broadcast.clone());
         infra.host_control = Some(control.clone());
+        let next_layout_revision = infra
+            .storage
+            .load_agent_layout()
+            .await?
+            .map(|snapshot| snapshot.revision.saturating_add(1))
+            .unwrap_or(0);
         tracing::info!("RuntimeHost::open: host created successfully");
         Ok(Self {
             infra,
@@ -1275,6 +1369,8 @@ impl RuntimeHost {
             cmd_rx,
             control,
             delegations: HashMap::new(),
+            next_layout_order: 0,
+            next_layout_revision,
             profiles: Vec::new(),
             model: None,
             registration_rx,
@@ -1638,6 +1734,7 @@ impl RuntimeHost {
             // the sender gets immediate Ok/Err feedback but does NOT wait
             // for the target's Done event.
             HostCommand::SendMessage {
+                caller_path,
                 to,
                 message,
                 reply_tx,
@@ -1653,18 +1750,14 @@ impl RuntimeHost {
                         return;
                     }
                 };
-                // Validate the agent is still in the registry (resolve_agent
-                // checks profiles too, but we can only message live agents).
-                if !self.agents.contains_key(&resolved) {
-                    let _ = reply_tx.send(Err(format!(
-                        "Agent '{to}' resolved to '{resolved}' but is not \
-                         currently running. Only live agents can receive \
-                         messages."
-                    )));
-                    return;
+                match self.send_inter_agent_to(&caller_path, &resolved, message) {
+                    Ok(()) => {
+                        let _ = reply_tx.send(Ok(()));
+                    }
+                    Err(error) => {
+                        let _ = reply_tx.send(Err(error));
+                    }
                 }
-                self.send_inter_agent_to(&resolved, message);
-                let _ = reply_tx.send(Ok(()));
             }
             HostCommand::Delegate {
                 to,
@@ -1674,6 +1767,12 @@ impl RuntimeHost {
                 progress,
                 reply_tx,
             } => {
+                let Some(caller_path) = caller_path else {
+                    let _ = reply_tx.send(
+                        "Delegation failed: the calling agent path is unavailable.".to_string(),
+                    );
+                    return;
+                };
                 // Resolve target: full path or short name.
                 let resolved = match self.resolve_agent(&to) {
                     Some(path) => path,
@@ -1686,11 +1785,15 @@ impl RuntimeHost {
                         return;
                     }
                 };
+                if let Err(error) = self.validate_delegation_paths(&caller_path, &resolved) {
+                    let _ = reply_tx.send(error);
+                    return;
+                }
                 let now = unix_epoch_ms();
                 let record = HostDelegation {
                     snapshot: DelegationSnapshot {
                         delegation_id,
-                        caller_path,
+                        caller_path: Some(caller_path),
                         target_path: resolved.clone(),
                         task: message.clone(),
                         status: DelegationStatus::Pending,
@@ -2040,6 +2143,140 @@ impl RuntimeHost {
         }
     }
 
+    /// Resolve a path and require the corresponding live agent registry entry.
+    fn resolve_live_agent(
+        &self,
+        path: &str,
+        role: &str,
+        requested: &str,
+    ) -> std::result::Result<String, String> {
+        let resolved = self
+            .resolve_agent(path)
+            .unwrap_or_else(|| requested.to_string());
+        if !self.agents.contains_key(&resolved) {
+            return Err(format!(
+                "Agent '{requested}' resolved to '{resolved}' but is not currently running. \
+                 Only live agents can be the {role} of an inter-agent operation."
+            ));
+        }
+        Ok(resolved)
+    }
+
+    /// Validate the hierarchy policy for fire-and-forget peer messaging.
+    fn validate_peer_message_paths(
+        &self,
+        caller_path: &str,
+        target_path: &str,
+    ) -> std::result::Result<(), String> {
+        let caller = self.resolve_live_agent(caller_path, "sender", caller_path)?;
+        let target = self.resolve_live_agent(target_path, "recipient", target_path)?;
+        let Ok(caller_path) = agentik_types::AgentPath::try_from(caller.as_str()) else {
+            return Err(format!("invalid sender path `{caller}`"));
+        };
+        let Ok(target_path) = agentik_types::AgentPath::try_from(target.as_str()) else {
+            return Err(format!("invalid recipient path `{target}`"));
+        };
+        if caller_path == target_path {
+            return Err("Peer messages cannot target the sending agent itself.".to_string());
+        }
+        if caller_path.parent() != target_path.parent() {
+            return Err(format!(
+                "Peer message denied: '{}' and '{}' are not sibling agents. \
+                 Cross-parent and parent-child fire-and-forget messaging is disabled.",
+                caller_path.as_str(),
+                target_path.as_str()
+            ));
+        }
+        let status = self
+            .agents
+            .get(target.as_str())
+            .map(|entry| entry.status.clone())
+            .unwrap_or(crate::control::AgentStatus::Idle);
+        let inbound_pending = self
+            .agents
+            .get(target.as_str())
+            .is_some_and(|entry| entry.inbound_pending.load(Ordering::Acquire));
+        if status != crate::control::AgentStatus::Idle {
+            return Err(format!(
+                "Peer message denied: '{}' is currently '{}' rather than Idle. \
+                 Busy agents no longer queue peer messages.",
+                target_path.as_str(),
+                status.tag()
+            ));
+        }
+        if inbound_pending {
+            return Err(format!(
+                "Peer message denied: '{}' is Idle but already has an inbound \
+                 message waiting to start a turn.",
+                target_path.as_str()
+            ));
+        }
+        Ok(())
+    }
+
+    /// Validate delegation hierarchy: sibling or descendant targets only.
+    fn validate_delegation_paths(
+        &self,
+        caller_path: &str,
+        target_path: &str,
+    ) -> std::result::Result<(), String> {
+        let caller = self.resolve_live_agent(caller_path, "caller", caller_path)?;
+        let target = self.resolve_live_agent(target_path, "delegate target", target_path)?;
+        let Ok(caller_path) = agentik_types::AgentPath::try_from(caller.as_str()) else {
+            return Err(format!("invalid caller path `{caller}`"));
+        };
+        let Ok(target_path) = agentik_types::AgentPath::try_from(target.as_str()) else {
+            return Err(format!("invalid delegate target path `{target}`"));
+        };
+        if caller_path == target_path {
+            return Err("Agents cannot delegate tasks to themselves.".to_string());
+        }
+        if path_is_ancestor(&target_path, &caller_path) {
+            return Err(format!(
+                "Delegation denied: '{}' is a superior of '{}'. \
+                 Subordinate agents cannot delegate tasks upward.",
+                target_path.as_str(),
+                caller_path.as_str()
+            ));
+        }
+        if caller_path.parent() != target_path.parent()
+            && !path_is_ancestor(&caller_path, &target_path)
+        {
+            return Err(format!(
+                "Delegation denied: '{}' is not a sibling or descendant of '{}'. \
+                 Cross-parent delegation is disabled.",
+                target_path.as_str(),
+                caller_path.as_str()
+            ));
+        }
+        if caller_path.parent() == target_path.parent() {
+            let status = self
+                .agents
+                .get(target.as_str())
+                .map(|entry| entry.status.clone())
+                .unwrap_or(crate::control::AgentStatus::Idle);
+            let inbound_pending = self
+                .agents
+                .get(target.as_str())
+                .is_some_and(|entry| entry.inbound_pending.load(Ordering::Acquire));
+            if status != crate::control::AgentStatus::Idle {
+                return Err(format!(
+                    "Delegation denied: sibling target '{}' is currently '{}' rather than Idle.",
+                    target_path.as_str(),
+                    status.tag()
+                ));
+            }
+            if inbound_pending {
+                return Err(format!(
+                    "Delegation denied: sibling target '{}' already has an inbound \
+                     message waiting to start a turn.",
+                    target_path.as_str()
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Forward a command to a named agent's relay task.
     /// `name` is resolved via [`resolve_agent`](Self::resolve_agent).
     fn send_agent_command(&self, name: &str, cmd: AgentCommand) {
@@ -2280,6 +2517,9 @@ impl RuntimeHost {
         info.agent_id = Some(agent_id);
         let event_tx = self.event_tx.clone();
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<AgentCommand>();
+        let layout_order = self.next_layout_order;
+        self.next_layout_order = self.next_layout_order.saturating_add(1);
+        let layout_created_at = unix_epoch_ms();
 
         let relay_task = agentik_core::supervise::spawn_safe_on(
             &self.infra.runtime_handle,
@@ -2297,8 +2537,12 @@ impl RuntimeHost {
                 status: info.status.clone(),
                 last_event: info.last_event.clone(),
                 info: info.clone(),
+                profile_path: profile_path.clone(),
+                layout_order,
+                layout_created_at,
                 model,
                 memory,
+                inbound_pending: Arc::new(AtomicBool::new(false)),
             },
         );
 
@@ -2308,6 +2552,62 @@ impl RuntimeHost {
         // can tolerate eventual consistency. Failure here is logged but does
         // not abort the spawn flow.
         self.persist_upsert_agent_graph(&path, agent_id, &profile_path, &info);
+        self.persist_current_agent_layout();
+    }
+
+    /// Persist the exact set and status of currently registered agents.
+    fn agent_layout_snapshot(&self, revision: u64) -> AgentLayoutSnapshot {
+        let updated_at = unix_epoch_ms();
+        let mut agents = Vec::with_capacity(self.agents.len());
+
+        for entry in self.agents.values() {
+            let Some(agent_id) = entry.info.agent_id else {
+                continue;
+            };
+            let Ok(status_json) = serde_json::to_string(&entry.status) else {
+                continue;
+            };
+            let parent_path = agentik_types::AgentPath::try_from(entry.info.path.as_str())
+                .ok()
+                .and_then(|path| path.parent().map(|parent| parent.as_str().to_string()));
+            agents.push((
+                entry.layout_order,
+                PersistedAgentGraph {
+                    path: entry.info.path.clone(),
+                    parent_path,
+                    profile_path: entry.profile_path.clone(),
+                    agent_id,
+                    status_json,
+                    last_event: entry.last_event.clone(),
+                    created_at: entry.layout_created_at,
+                    updated_at,
+                },
+            ));
+        }
+        agents.sort_by_key(|(order, _)| *order);
+        let agents = agents
+            .into_iter()
+            .map(|(_, entry)| entry)
+            .collect::<Vec<_>>();
+
+        AgentLayoutSnapshot { revision, agents }
+    }
+
+    /// Queue an atomic layout snapshot write without blocking the host pump.
+    fn persist_current_agent_layout(&mut self) {
+        let revision = self.next_layout_revision;
+        self.next_layout_revision = self.next_layout_revision.saturating_add(1);
+        let snapshot = self.agent_layout_snapshot(revision);
+        let storage = self.infra.storage.clone();
+        agentik_core::supervise::spawn_safe_on_drop(
+            &self.infra.runtime_handle,
+            "persist_current_agent_layout",
+            async move {
+                if let Err(error) = storage.save_agent_layout(&snapshot).await {
+                    tracing::warn!(%error, "failed to persist agent layout");
+                }
+            },
+        );
     }
 
     /// Spawn a background task that upserts the agent's graph row in storage.
@@ -2560,6 +2860,163 @@ impl RuntimeHost {
         Ok(name)
     }
 
+    /// Restore the multi-agent layout left behind by the previous daemon.
+    ///
+    /// The current-layout snapshot records the exact set of agents that were
+    /// open when the daemon stopped, along with their hierarchical paths and
+    /// stable IDs. The record in `agents` carries the exact serialized profile
+    /// used by that incarnation, which takes precedence over the current
+    /// profile blueprint. Individual corrupt or unresolvable entries are
+    /// skipped so one stale row cannot prevent the daemon and the remaining
+    /// agents from starting.
+    pub async fn restore_persisted_agents<F>(
+        &mut self,
+        profiles: &[agentik_core::AgentProfile],
+        global_model: Arc<ArcSwapOption<Model>>,
+        mut resolve_model: F,
+    ) -> Result<usize>
+    where
+        F: FnMut(&str) -> std::result::Result<Model, String>,
+    {
+        let entries = self
+            .infra
+            .storage
+            .load_agent_layout()
+            .await?
+            .map(|snapshot| snapshot.agents)
+            .unwrap_or_default();
+
+        let mut restored = 0;
+        for entry in entries {
+            let path = match agentik_types::AgentPath::try_from(entry.path.as_str()) {
+                Ok(path) => path,
+                Err(error) => {
+                    tracing::warn!(
+                        path = %entry.path,
+                        error = %error,
+                        "skipping persisted agent with invalid path"
+                    );
+                    continue;
+                }
+            };
+
+            let record = match self
+                .infra
+                .storage
+                .get_agent(entry.agent_id)
+                .await
+                .ok()
+                .flatten()
+            {
+                Some(record) => record,
+                None => match self
+                    .infra
+                    .storage
+                    .get_agent_by_name(entry.path.as_str())
+                    .await
+                {
+                    Ok(Some(record)) => record,
+                    Ok(None) => {
+                        tracing::warn!(
+                            path = %entry.path,
+                            agent_id = %entry.agent_id,
+                            "skipping persisted agent without an agents record"
+                        );
+                        continue;
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            path = %entry.path,
+                            error = %error,
+                            "failed to load persisted agent record"
+                        );
+                        continue;
+                    }
+                },
+            };
+
+            let profile = match serde_json::from_value::<agentik_core::AgentProfile>(
+                record.config_json.clone(),
+            ) {
+                Ok(profile) => profile,
+                Err(error) => {
+                    let fallback = profiles
+                        .iter()
+                        .find(|profile| profile.path == entry.profile_path)
+                        .cloned();
+                    match fallback {
+                        Some(profile) => profile,
+                        None => {
+                            tracing::warn!(
+                                path = %entry.path,
+                                profile = %entry.profile_path,
+                                error = %error,
+                                "skipping persisted agent with unreadable profile"
+                            );
+                            continue;
+                        }
+                    }
+                }
+            };
+
+            let model_override = match profile.preferred_model.as_deref() {
+                Some(spec) => match resolve_model(spec) {
+                    Ok(model) => Some(model),
+                    Err(error) => {
+                        tracing::warn!(
+                            path = %entry.path,
+                            model = spec,
+                            error = %error,
+                            "skipping persisted agent because its preferred model is unavailable"
+                        );
+                        continue;
+                    }
+                },
+                None => None,
+            };
+
+            if model_override.is_none() && global_model.load_full().is_none() {
+                tracing::warn!(
+                    path = %entry.path,
+                    "skipping persisted agent because no default model is configured"
+                );
+                continue;
+            }
+
+            match self
+                .spawn_agent(&path, &profile, global_model.clone(), model_override)
+                .await
+            {
+                Ok(handle) => {
+                    let agent_id = handle.agent_id;
+                    let mut info =
+                        capability_from_profile(handle.path.name(), handle.path.as_str(), &profile);
+                    info.agent_id = Some(agent_id);
+                    self.register_agent(handle, info.clone());
+                    self.emit_host_event(HostEvent::AgentRegistered {
+                        path: path.clone(),
+                        info,
+                    });
+                    restored += 1;
+                    tracing::info!(
+                        agent = %entry.path,
+                        agent_id = %entry.agent_id,
+                        "restored persisted agent layout entry"
+                    );
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        path = %entry.path,
+                        error = %error,
+                        "failed to restore persisted agent"
+                    );
+                }
+            }
+        }
+
+        Ok(restored)
+    }
+
     /// Send a message to a named agent (via the relay task).
     ///
     /// `name` should already be a resolved full path. Callers that receive
@@ -2572,28 +3029,58 @@ impl RuntimeHost {
     /// Inject a message from another runtime source. Unlike TUI input, the
     /// target session emits MessageInjected so the externally supplied turn is
     /// visible and persisted in that agent's own session.
-    fn send_inter_agent_to(&self, name: &str, message: String) {
-        self.send_to_from_user(name, message, false);
+    fn send_inter_agent_to(
+        &self,
+        caller_path: &str,
+        name: &str,
+        message: String,
+    ) -> std::result::Result<(), String> {
+        self.validate_peer_message_paths(caller_path, name)?;
+        if !self.enqueue_agent_message(name, message, None, false) {
+            return Err(format!(
+                "Agent '{name}' is registered but its relay channel is closed."
+            ));
+        }
+        Ok(())
     }
 
     fn send_to_from_user(&self, name: &str, message: String, from_user: bool) {
+        if self.agents.contains_key(name) {
+            if !self.enqueue_agent_message(name, message, None, from_user) {
+                tracing::warn!(agent = name, "user message dropped: relay channel closed");
+            }
+        }
+    }
+
+    fn enqueue_agent_message(
+        &self,
+        name: &str,
+        message: String,
+        delegation_id: Option<uuid::Uuid>,
+        from_user: bool,
+    ) -> bool {
         if let Some(entry) = self.agents.get(name) {
-            let _ = entry.cmd_tx.send(AgentCommand::Message {
-                text: message,
-                delegation_id: None,
-                from_user,
-            });
+            let sent = entry
+                .cmd_tx
+                .send(AgentCommand::Message {
+                    text: message,
+                    delegation_id,
+                    from_user,
+                })
+                .is_ok();
+            if sent {
+                entry.inbound_pending.store(true, Ordering::Release);
+            }
+            sent
+        } else {
+            false
         }
     }
 
     /// Send a tracked delegation request through the target relay.
     fn send_delegation_to(&self, name: &str, message: String, delegation_id: uuid::Uuid) {
-        if let Some(entry) = self.agents.get(name) {
-            let _ = entry.cmd_tx.send(AgentCommand::Message {
-                text: message,
-                delegation_id: Some(delegation_id),
-                from_user: false,
-            });
+        if !self.enqueue_agent_message(name, message, Some(delegation_id), false) {
+            tracing::warn!(agent = name, %delegation_id, "delegation dropped: relay channel closed");
         }
     }
 
@@ -2611,7 +3098,7 @@ impl RuntimeHost {
     pub fn inject_initial_prompts(&mut self) {
         let messages = self.network.initial_messages();
         for (node, prompt) in messages {
-            self.send_inter_agent_to(&node, prompt);
+            self.send_to_from_user(&node, prompt, false);
         }
     }
 
@@ -2625,6 +3112,7 @@ impl RuntimeHost {
         // Phase 4: remove the persisted graph row so the dashboard doesn't
         // resurrect a stale entry on the next process start.
         self.persist_remove_agent_graph(name);
+        self.persist_current_agent_layout();
     }
 
     /// Shut down all registered agents and await their graceful exit.
@@ -2638,6 +3126,9 @@ impl RuntimeHost {
     /// `block_on`) so that background tasks can make progress while we
     /// await their completion.
     pub async fn shutdown_all_agents_and_wait(&mut self) {
+        let shutdown_revision = self.next_layout_revision;
+        self.next_layout_revision = self.next_layout_revision.saturating_add(1);
+        let shutdown_snapshot = self.agent_layout_snapshot(shutdown_revision);
         let names: Vec<String> = self.agents.keys().cloned().collect();
         for name in &names {
             self.fail_pending_delegations(name, "target agent shut down before completion");
@@ -2649,6 +3140,14 @@ impl RuntimeHost {
         }
         for name in names {
             self.notify_unregistered(&name);
+        }
+        if let Err(error) = self
+            .infra
+            .storage
+            .save_agent_layout(&shutdown_snapshot)
+            .await
+        {
+            tracing::warn!(%error, "failed to persist final agent layout during shutdown");
         }
         // Wait for all relay tasks to finish. Each relay loop calls
         // `handle.join().await` before exiting, which in turn waits for
@@ -2710,6 +3209,17 @@ impl RuntimeHost {
     /// multiplexed [`Self::recv_next`] shares one processing path.
     fn process_tagged(&mut self, tagged: TaggedEvent) -> TaggedEvent {
         let (name, event) = tagged;
+
+        if matches!(
+            &event,
+            AgentEvent::TurnStarted { .. }
+                | AgentEvent::TurnCompleted { .. }
+                | AgentEvent::Done
+                | AgentEvent::Error(_)
+        ) && let Some(entry) = self.agents.get_mut(&name)
+        {
+            entry.inbound_pending.store(false, Ordering::Release);
+        }
 
         match &event {
             AgentEvent::TurnStarted {
@@ -2794,7 +3304,14 @@ impl RuntimeHost {
         // Execute any routing actions (topology-edge based forwarding).
         for action in &actions {
             if let agentik_network::RoutingAction::Send { to, message } = action {
-                self.send_inter_agent_to(to, message.clone());
+                if let Err(error) = self.send_inter_agent_to(&name, to, message.clone()) {
+                    tracing::warn!(
+                        from = %name,
+                        to = %to,
+                        error = %error,
+                        "topology message rejected by communication policy"
+                    );
+                }
             }
         }
 
@@ -2911,6 +3428,7 @@ impl RuntimeHost {
         // Fire-and-forget — the in-memory state is authoritative for the
         // live runtime; persistence is a read-side projection.
         self.persist_agent_status(name, &new_status, &new_last_event);
+        self.persist_current_agent_layout();
     }
 
     /// Send a `HostEvent` to both the mpsc channel (TUI / `recv_event`)
@@ -3093,6 +3611,17 @@ fn unix_epoch_ms() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|value| value.as_millis() as i64)
         .unwrap_or(0)
+}
+
+fn path_is_ancestor(ancestor: &agentik_types::AgentPath, path: &agentik_types::AgentPath) -> bool {
+    let mut current = path.parent();
+    while let Some(parent) = current {
+        if &parent == ancestor {
+            return true;
+        }
+        current = parent.parent();
+    }
+    false
 }
 
 fn push_delegation_progress(
@@ -3853,6 +4382,7 @@ mod send_message_tests {
     #[test]
     fn send_message_is_distinct_from_deliver_and_delegate() {
         let send = HostCommand::SendMessage {
+            caller_path: "/root/sender".into(),
             to: "worker".into(),
             message: "hello".into(),
             reply_tx: oneshot::channel().0,
@@ -3898,6 +4428,7 @@ mod send_message_tests {
     fn send_message_reply_channel_is_result_unit_string() {
         let (tx, rx) = oneshot::channel::<std::result::Result<(), String>>();
         let _cmd = HostCommand::SendMessage {
+            caller_path: "/root/sender".into(),
             to: "worker".into(),
             message: "hello".into(),
             reply_tx: tx,
@@ -3934,18 +4465,23 @@ mod send_message_tests {
         let control = HostControl::new(cmd_tx, event_tx);
 
         // Spawn the "caller" — sends the message and awaits reply.
-        let caller =
-            tokio::spawn(async move { control.send_message("worker", "hello there").await });
+        let caller = tokio::spawn(async move {
+            control
+                .send_message("/root/sender", "worker", "hello there")
+                .await
+        });
 
         // "Host" side: receive the command and reply Ok(()).
         let cmd = cmd_rx.recv().await.expect("command received");
         match cmd {
             HostCommand::SendMessage {
+                caller_path,
                 to,
                 message,
                 reply_tx,
             } => {
                 assert_eq!(to, "worker");
+                assert_eq!(caller_path, "/root/sender");
                 assert_eq!(message, "hello there");
                 let _ = reply_tx.send(Ok(()));
             }
@@ -3963,7 +4499,11 @@ mod send_message_tests {
         let (event_tx, _) = tokio::sync::broadcast::channel::<HostEvent>(1);
         let control = HostControl::new(cmd_tx, event_tx);
 
-        let caller = tokio::spawn(async move { control.send_message("nonexistent", "test").await });
+        let caller = tokio::spawn(async move {
+            control
+                .send_message("/root/sender", "nonexistent", "test")
+                .await
+        });
 
         let cmd = cmd_rx.recv().await.expect("command received");
         match cmd {
@@ -3989,7 +4529,9 @@ mod send_message_tests {
         // Drop the receiver → channel is closed.
         drop(cmd_rx);
 
-        let result = control.send_message("worker", "hello").await;
+        let result = control
+            .send_message("/root/sender", "worker", "hello")
+            .await;
         assert!(result.is_none(), "should return None on closed channel");
     }
 }
@@ -4090,6 +4632,115 @@ impl Drop for RuntimeHost {
 }
 
 #[cfg(test)]
+mod communication_policy_tests {
+    use super::*;
+
+    fn config(dir: &tempfile::TempDir) -> RuntimeConfig {
+        let mut config = RuntimeConfig::default();
+        config.data_dir = dir.path().join("data");
+        config.state_dir = dir.path().join("state");
+        config.agent_db = dir.path().join("agent.db");
+        config
+    }
+
+    async fn register_agent_at(
+        host: &mut RuntimeHost,
+        path: &str,
+        model: Arc<ArcSwapOption<Model>>,
+    ) {
+        let path = agentik_types::AgentPath::try_from(path).unwrap();
+        let profile = agentik_core::AgentProfile::new("researcher");
+        let handle = host
+            .spawn_agent(&path, &profile, model, None)
+            .await
+            .unwrap();
+        let info = capability_from_profile(handle.path.name(), handle.path.as_str(), &profile);
+        host.register_agent(handle, info);
+    }
+
+    fn set_status(host: &mut RuntimeHost, path: &str, status: crate::control::AgentStatus) {
+        let entry = host.agents.get_mut(path).unwrap();
+        entry.status = status.clone();
+        entry.info.status = status;
+    }
+
+    fn set_pending(host: &mut RuntimeHost, path: &str, pending: bool) {
+        host.agents
+            .get_mut(path)
+            .unwrap()
+            .inbound_pending
+            .store(pending, Ordering::Release);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn inter_agent_communication_enforces_hierarchy_and_idle_targets() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut host = RuntimeHost::open(&config(&dir)).await.unwrap();
+        let model: Arc<ArcSwapOption<Model>> = Arc::new(ArcSwapOption::from_pointee(None));
+        for path in ["/root/a", "/root/b", "/root/a/child", "/root/b/child"] {
+            register_agent_at(&mut host, path, model.clone()).await;
+        }
+
+        assert!(
+            host.validate_peer_message_paths("/root/a", "/root/b")
+                .is_ok()
+        );
+        set_status(&mut host, "/root/b", crate::control::AgentStatus::Running);
+        let busy = host
+            .validate_peer_message_paths("/root/a", "/root/b")
+            .unwrap_err();
+        assert!(busy.contains("currently 'running'"), "{busy}");
+        set_status(&mut host, "/root/b", crate::control::AgentStatus::Idle);
+        set_pending(&mut host, "/root/b", true);
+        let pending = host
+            .validate_peer_message_paths("/root/a", "/root/b")
+            .unwrap_err();
+        assert!(pending.contains("inbound"), "{pending}");
+        set_pending(&mut host, "/root/b", false);
+
+        let cross_children = host
+            .validate_peer_message_paths("/root/a/child", "/root/b/child")
+            .unwrap_err();
+        assert!(
+            cross_children.contains("not sibling agents"),
+            "{cross_children}"
+        );
+        let parent_child = host
+            .validate_peer_message_paths("/root/a", "/root/a/child")
+            .unwrap_err();
+        assert!(
+            parent_child.contains("not sibling agents"),
+            "{parent_child}"
+        );
+
+        assert!(
+            host.validate_delegation_paths("/root/a", "/root/a/child")
+                .is_ok()
+        );
+        let upward = host
+            .validate_delegation_paths("/root/a/child", "/root/a")
+            .unwrap_err();
+        assert!(upward.contains("superior"), "{upward}");
+        let cross_delegation = host
+            .validate_delegation_paths("/root/a/child", "/root/b/child")
+            .unwrap_err();
+        assert!(
+            cross_delegation.contains("Cross-parent delegation"),
+            "{cross_delegation}"
+        );
+
+        set_status(&mut host, "/root/b", crate::control::AgentStatus::Running);
+        let busy_sibling_delegation = host
+            .validate_delegation_paths("/root/a", "/root/b")
+            .unwrap_err();
+        assert!(
+            busy_sibling_delegation.contains("rather than Idle"),
+            "{busy_sibling_delegation}"
+        );
+    }
+}
+
+#[cfg(test)]
 mod agent_persistence_tests {
     use super::*;
     use std::time::Duration;
@@ -4099,6 +4750,7 @@ mod agent_persistence_tests {
         let mut config = RuntimeConfig::default();
         config.data_dir = dir.path().join("data");
         config.state_dir = dir.path().join("state");
+        config.agent_db = dir.path().join("agent.db");
         config
     }
 
@@ -4137,11 +4789,34 @@ mod agent_persistence_tests {
         let agent_id = info.agent_id.expect("registered event carries agent ID");
         assert_eq!(spawn.await.unwrap().unwrap(), path.as_str());
 
+        let sender_path = path.parent().unwrap().join("sender").unwrap();
+        let sender_profile = agentik_core::AgentProfile::new("researcher/sender");
+        let sender_handle = host
+            .spawn_agent(
+                &sender_path,
+                &sender_profile,
+                Arc::new(ArcSwapOption::from_pointee(None)),
+                None,
+            )
+            .await
+            .unwrap();
+        let sender_info = capability_from_profile(
+            sender_handle.path.name(),
+            sender_handle.path.as_str(),
+            &sender_profile,
+        );
+        host.register_agent(sender_handle, sender_info);
+
         let control = host.control();
         let delivery_path = path.clone();
+        let caller_path = sender_path.as_str().to_string();
         let delivery = tokio::spawn(async move {
             control
-                .send_message(delivery_path.as_str(), "persist child message")
+                .send_message(
+                    &caller_path,
+                    delivery_path.as_str(),
+                    "persist child message",
+                )
                 .await
                 .expect("host command channel should remain open")
                 .expect("child agent should be registered");
@@ -4192,23 +4867,40 @@ mod agent_persistence_tests {
         drop(storage);
         drop(host);
 
-        let host = RuntimeHost::open(&config(&dir)).await.unwrap();
-        let model: Arc<ArcSwapOption<Model>> = Arc::new(ArcSwapOption::from_pointee(None));
-        let mut handle = host
-            .spawn_agent(&path, &profile, model, None)
+        let mut host = RuntimeHost::open(&config(&dir)).await.unwrap();
+        host.set_profiles(vec![profile.clone()]);
+        let model: Arc<ArcSwapOption<Model>> = Arc::new(ArcSwapOption::from_pointee(Some(
+            agentik_core::testing::get_mock_model("layout-restart-test"),
+        )));
+        let restored = host
+            .restore_persisted_agents(&[profile.clone()], model, |spec| {
+                panic!("unexpected model preference `{spec}`")
+            })
             .await
             .unwrap();
         assert_eq!(
-            handle.agent_id, agent_id,
+            restored, 2,
+            "persisted sibling layout entries must both be restored"
+        );
+        assert!(host.agent_names().contains(&path.as_str()));
+
+        assert_eq!(
+            host.agents
+                .get(path.as_str())
+                .and_then(|entry| entry.info.agent_id),
+            Some(agent_id),
             "same child path must restore its ID"
         );
 
-        handle.list_sessions();
+        let control = host.control();
+        control.list_sessions(path.as_str());
+        host.recv_and_process_command().await;
         let sessions = timeout(Duration::from_secs(2), async {
             loop {
-                let Some(event) = handle.recv_event().await else {
-                    panic!("agent event channel closed");
+                let Some((event_path, event)) = host.recv_any().await else {
+                    panic!("host agent event channel closed");
                 };
+                assert_eq!(event_path, path.as_str());
                 if let AgentEvent::SessionList { sessions } = event {
                     return sessions;
                 }

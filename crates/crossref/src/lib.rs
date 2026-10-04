@@ -9,7 +9,6 @@
 //! - **[`CrossrefClient`]** — an async HTTP client covering all REST API
 //!   resource components: works, journals, members, funders, prefixes, types,
 //!   and licenses.
-//! - **Agent tools** — [`ToolFunction`] implementations that expose Crossref
 //!   capabilities to an agentik agent. These return LLM-friendly Markdown
 //!   (unstructured output).
 //! - **DAG nodes** — `DagNode` source nodes that emit tabular DataFrames for
@@ -41,11 +40,8 @@ pub mod error;
 pub mod format;
 pub mod nodes;
 pub mod query;
-pub mod tools;
 pub mod types;
 
 pub use client::{CrossrefClient, CrossrefClientBuilder};
 pub use convert::work_to_article;
 pub use error::{CrossrefError, Result};
-pub use tools::crossref_extended_registrations;
-pub use tools::crossref_registrations;

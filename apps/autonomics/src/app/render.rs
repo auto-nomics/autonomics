@@ -278,6 +278,19 @@ impl App {
             );
         }
 
+        // ── Skill-evolution dashboard ──
+        if self.state.skill_evolution.visible {
+            use ratatui::widgets::StatefulWidget as _;
+            crate::widgets::skill_evolution_widget::SkillEvolutionWidget::new()
+                .popup_width(frame.area().width * 9 / 10)
+                .popup_height((frame.area().height * 3 / 4).max(12))
+                .render(
+                    frame.area(),
+                    frame.buffer_mut(),
+                    &mut self.state.skill_evolution,
+                );
+        }
+
         // ── Toast notifications (top-most overlay, bottom-right corner) ──
         self.state.toasts.tick();
         self.state.toasts.render(frame.area(), frame.buffer_mut());

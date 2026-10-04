@@ -206,7 +206,7 @@ async fn swagger_docs_expose_the_gateway_api() {
         .await
         .unwrap();
     assert_eq!(openapi["info"]["title"], "Autonomics Gateway API");
-    assert_eq!(openapi["paths"].as_object().unwrap().len(), 29);
+    assert_eq!(openapi["paths"].as_object().unwrap().len(), 38);
     let expected_paths = [
         "/api/v1/gateway/status",
         "/api/v1/gateway/shutdown",
@@ -235,7 +235,16 @@ async fn swagger_docs_expose_the_gateway_api() {
         "/api/v1/model-config/chatgpt/refresh",
         "/api/v1/model-config/providers/{name}/catalog",
         "/api/v1/settings",
+        "/api/v1/plugins",
         "/api/v1/events",
+        "/api/v1/skills/library",
+        "/api/v1/skills/library/{name}",
+        "/api/v1/skills/evolution",
+        "/api/v1/skills/evolution/observations",
+        "/api/v1/skills/evolution/trigger",
+        "/api/v1/skills/evolution/proposals",
+        "/api/v1/skills/evolution/proposals/{name}/approve",
+        "/api/v1/skills/evolution/proposals/{name}/reject",
     ];
     for path in expected_paths {
         assert!(
@@ -270,4 +279,316 @@ async fn swagger_docs_expose_the_gateway_api() {
     assert_eq!(unauthorized.status(), 401);
 
     gateway_daemon.stop().await;
+}
+
+// ── skill evolution endpoints ─────────────────────────────────────────
+
+/// Poll an async predicate until it holds or the test timeout fires —
+/// the evolution service distills on its own event path, so "who
+/// wrote the proposal" (worker or explicit trigger) is intentionally
+/// racy and the test only asserts observable state.
+async fn eventually<F, Fut>(mut pred: F)
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    tokio::time::timeout(TEST_TIMEOUT, async {
+        loop {
+            if pred().await {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("condition eventually held");
+}
+
+#[tokio::test]
+async fn skill_evolution_status_trigger_approve_reject_roundtrip() {
+    let gw = start_mock_gateway("ok").await;
+    let client = gw.client();
+    let manager = gw.infra.skills.clone();
+
+    // Baseline: fresh isolated state, service armed, gate closed.
+    let status = client.skill_evolution_status().await.unwrap();
+    assert!(status.service_enabled);
+    assert!(!status.auto_approve);
+    assert_eq!(status.proposals_pending, 0);
+
+    // Seed one anchor with three distinct fixes.
+    for body in ["cast the column", "pass format=csv", "validate header"] {
+        manager
+            .record_observation(skills::ObservationInput {
+                kind: skills::ObservationKind::Failure,
+                source: skills::ObservationSource::Agent,
+                summary: "sql boom".into(),
+                body: body.into(),
+                node_kind: Some("sql".into()),
+                error: Some("syntax error near 42".into()),
+            })
+            .unwrap();
+    }
+
+    // Either the event-driven worker or our explicit trigger writes
+    // the proposal; both paths produce one pending row.
+    let _ = client.trigger_skill_evolution(None).await.unwrap();
+    eventually(|| {
+        let client = client.clone();
+        async move {
+            client
+                .skill_proposals()
+                .await
+                .map(|p| p.iter().any(|x| x.status == "pending"))
+                .unwrap_or(false)
+        }
+    })
+    .await;
+
+    // Approve over the wire; generation advances, library grows.
+    let generation_before = client.skill_evolution_status().await.unwrap().generation;
+    let pending_name = client
+        .skill_proposals()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|p| p.status == "pending")
+        .unwrap()
+        .name;
+    let outcome = client.approve_skill_proposal(&pending_name).await.unwrap();
+    assert!(outcome.destination.contains(&pending_name));
+    eventually(|| {
+        let client = client.clone();
+        let before = generation_before;
+        async move {
+            client
+                .skill_evolution_status()
+                .await
+                .map(|s| s.generation > before)
+                .unwrap_or(false)
+        }
+    })
+    .await;
+    let status = client.skill_evolution_status().await.unwrap();
+    assert_eq!(status.proposals_pending, 0);
+    assert_eq!(status.proposals_approved, 1);
+    assert!(status.skills_auto >= 1);
+
+    // Second anchor: trigger with the auto gate, verify the report
+    // says it approved, then exercise reject on a third.
+    for body in ["io a", "io b", "io c"] {
+        manager
+            .record_observation(skills::ObservationInput {
+                kind: skills::ObservationKind::Failure,
+                source: skills::ObservationSource::Agent,
+                summary: "io crash".into(),
+                body: body.into(),
+                node_kind: Some("file_to_dataframe".into()),
+                error: Some("bad schema at 7".into()),
+            })
+            .unwrap();
+    }
+    for body in ["x a", "x b", "x c"] {
+        manager
+            .record_observation(skills::ObservationInput {
+                kind: skills::ObservationKind::Failure,
+                source: skills::ObservationSource::Agent,
+                summary: "third anchor".into(),
+                body: body.into(),
+                node_kind: Some("echo".into()),
+                error: Some("echo fail 9".into()),
+            })
+            .unwrap();
+    }
+    eventually(|| {
+        let client = client.clone();
+        async move {
+            client
+                .skill_proposals()
+                .await
+                .map(|p| p.iter().filter(|x| x.status == "pending").count() >= 2)
+                .unwrap_or(false)
+        }
+    })
+    .await;
+
+    let proposals = client.skill_proposals().await.unwrap();
+    let to_reject = proposals
+        .iter()
+        .find(|p| p.status == "pending" && p.name != pending_name)
+        .unwrap()
+        .name
+        .clone();
+    let rejected = client.reject_skill_proposal(&to_reject).await.unwrap();
+    assert_eq!(rejected.status, "rejected");
+
+    let status = client.skill_evolution_status().await.unwrap();
+    assert_eq!(status.proposals_rejected, 1);
+}
+
+#[tokio::test]
+async fn agent_authored_proposals_survive_auto_approve_over_the_wire() {
+    let gw = start_mock_gateway("ok").await;
+    let client = gw.client();
+    let manager = gw.infra.skills.clone();
+
+    // One observation as evidence, then an agent-authored proposal.
+    let id = manager
+        .record_observation(skills::ObservationInput {
+            kind: skills::ObservationKind::Failure,
+            source: skills::ObservationSource::Agent,
+            summary: "evidence".into(),
+            body: "the fix".into(),
+            node_kind: Some("sql".into()),
+            error: Some("boom 1".into()),
+        })
+        .unwrap()
+        .id;
+    manager
+        .propose_skill(
+            "agent-authored-skill",
+            "Drafted by the agent from real work.",
+            &["agent".to_string()],
+            "# Body\n\nOperational steps.\n",
+            std::slice::from_ref(&id),
+            "recurring pattern",
+        )
+        .unwrap();
+
+    // The wire listing marks the author.
+    eventually(|| {
+        let client = client.clone();
+        async move {
+            client
+                .skill_proposals()
+                .await
+                .map(|p| {
+                    p.iter()
+                        .any(|x| x.name == "agent-authored-skill" && x.authored_by == "agent")
+                })
+                .unwrap_or(false)
+        }
+    })
+    .await;
+
+    // An auto-gated cycle over HTTP must leave it pending.
+    let report = client.trigger_skill_evolution(Some(true)).await.unwrap();
+    assert!(report.auto_approved.is_empty());
+    let proposals = client.skill_proposals().await.unwrap();
+    let target = proposals
+        .iter()
+        .find(|p| p.name == "agent-authored-skill")
+        .unwrap();
+    assert_eq!(target.status, "pending");
+}
+
+#[tokio::test]
+async fn skill_library_lists_installed_and_proposed_with_detail() {
+    let gw = start_mock_gateway("ok").await;
+    let client = gw.client();
+    let manager = gw.infra.skills.clone();
+
+    // The builtin tier is always present; nothing else installed yet.
+    let library = client.skill_library().await.unwrap();
+    assert!(
+        library.iter().all(|s| s.installed),
+        "fresh state: only installed (builtin) rows"
+    );
+    assert!(library.iter().any(|s| s.tier == "builtin"));
+
+    // Seed a pending proposal through the channel (worker trigger).
+    for body in ["fix a", "fix b", "fix c"] {
+        manager
+            .record_observation(skills::ObservationInput {
+                kind: skills::ObservationKind::Failure,
+                source: skills::ObservationSource::Agent,
+                summary: "lib boom".into(),
+                body: body.into(),
+                node_kind: Some("sql".into()),
+                error: Some("lib error 7".into()),
+            })
+            .unwrap();
+    }
+    let _ = client.trigger_skill_evolution(None).await.unwrap();
+    eventually(|| {
+        let client = client.clone();
+        async move {
+            client
+                .skill_library()
+                .await
+                .map(|l| {
+                    l.iter().any(|s| {
+                        s.tier == "proposed" && s.proposal_status.as_deref() == Some("pending")
+                    })
+                })
+                .unwrap_or(false)
+        }
+    })
+    .await;
+
+    // Detail of the proposed row: body + proposal with evidence, not
+    // installed, no workflows.
+    let name = client
+        .skill_library()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|s| s.tier == "proposed")
+        .unwrap()
+        .name;
+    let detail = client.skill_library_detail(&name).await.unwrap();
+    assert!(!detail.installed);
+    assert_eq!(detail.tier, "proposed");
+    assert!(detail.body.contains("lib boom") || !detail.body.is_empty());
+    let proposal = detail.proposal.expect("proposed row carries its proposal");
+    assert_eq!(proposal.status, "pending");
+    assert_eq!(proposal.observation_count, 3, "evidence chain size");
+    assert_eq!(detail.evidence_count, 3);
+
+    // Unknown names 404 rather than fabricating a row.
+    let missing = client.skill_library_detail("no-such-skill").await;
+    assert!(missing.is_err());
+}
+
+#[tokio::test]
+async fn skill_observations_endpoint_returns_full_evidence_in_stable_order() {
+    let gw = start_mock_gateway("ok").await;
+    let client = gw.client();
+    assert!(client.skill_observations().await.unwrap().is_empty());
+    let observation = gw
+        .infra
+        .skills
+        .record_observation(skills::ObservationInput {
+            kind: skills::ObservationKind::Caveat,
+            source: skills::ObservationSource::WorkflowRun,
+            summary: "Header must match".into(),
+            body: "Validate all column names.\nKeep evidence intact.".into(),
+            node_kind: Some("sql".into()),
+            error: Some("missing column".into()),
+        })
+        .unwrap();
+    gw.infra
+        .skills
+        .record_observation(skills::ObservationInput {
+            kind: skills::ObservationKind::Recipe,
+            source: skills::ObservationSource::Cli,
+            summary: "Second fact".into(),
+            body: "Second body".into(),
+            node_kind: None,
+            error: None,
+        })
+        .unwrap();
+    let rows = client.skill_observations().await.unwrap();
+    assert_eq!(rows.len(), 2);
+    let row = rows.iter().find(|row| row.id == observation.id).unwrap();
+    assert_eq!(row.kind, "caveat");
+    assert_eq!(row.source, "workflow_run");
+    assert_eq!(row.body, observation.body);
+    assert_eq!(row.node_kind.as_deref(), Some("sql"));
+    assert_eq!(row.error.as_deref(), Some("missing column"));
+    assert!(
+        rows.windows(2)
+            .all(|pair| pair[0].created_at > pair[1].created_at
+                || (pair[0].created_at == pair[1].created_at && pair[0].id < pair[1].id))
+    );
 }

@@ -474,7 +474,13 @@ mod tests {
             .await
             .unwrap();
 
-        let batches = outputs.dataframe(0).unwrap().clone().collect().await.unwrap();
+        let batches = outputs
+            .dataframe(0)
+            .unwrap()
+            .clone()
+            .collect()
+            .await
+            .unwrap();
         let s1 = batches
             .iter()
             .flat_map(|b| {

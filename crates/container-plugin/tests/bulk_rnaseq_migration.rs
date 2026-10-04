@@ -38,8 +38,7 @@ fn load_manifest(root: &PathBuf) -> PluginManifest {
     let mut manifest: PluginManifest = toml::from_str(&text).unwrap();
     for node in manifest.nodes.iter_mut() {
         if let Some(relative) = node.command.script_file.clone() {
-            let source =
-                std::fs::read_to_string(root.join("bulk-rnaseq").join(&relative)).unwrap();
+            let source = std::fs::read_to_string(root.join("bulk-rnaseq").join(&relative)).unwrap();
             node.command.script = Some(source);
             node.command.script_file = None;
         }
@@ -126,7 +125,10 @@ fn limma_voom_plugin_compiles_to_the_legacy_wrapper_contract() {
     // joined-string list params render as the empty string the runner's
     // split_csv folds into an empty vector.
     assert_eq!(
-        compiled.env.get("AUTONOMICS_LIMMA_OUTCOME").map(String::as_str),
+        compiled
+            .env
+            .get("AUTONOMICS_LIMMA_OUTCOME")
+            .map(String::as_str),
         Some("condition")
     );
     assert_eq!(
@@ -165,7 +167,10 @@ fn limma_voom_plugin_compiles_to_the_legacy_wrapper_contract() {
         Some("tmm")
     );
     assert_eq!(
-        compiled.env.get("AUTONOMICS_LIMMA_ALPHA").map(String::as_str),
+        compiled
+            .env
+            .get("AUTONOMICS_LIMMA_ALPHA")
+            .map(String::as_str),
         Some("0.05")
     );
     assert_eq!(
@@ -211,7 +216,10 @@ fn limma_voom_plugin_compiles_to_the_legacy_wrapper_contract() {
         Some("quantile")
     );
     assert_eq!(
-        compiled_full.env.get("AUTONOMICS_LIMMA_ALPHA").map(String::as_str),
+        compiled_full
+            .env
+            .get("AUTONOMICS_LIMMA_ALPHA")
+            .map(String::as_str),
         Some("0.01")
     );
 }
@@ -385,15 +393,14 @@ fn baked_runners_keep_the_semantic_contract_markers() {
     assert!(limma.contains("limma::eBayes"));
     assert!(limma.contains("limma::makeContrasts"));
     // The 1.0.1 additions: legacy validate() rules enforced runner-side.
-    assert!(limma.contains(
-        "contrast_levels must contain exactly two entries for categorical outcome"
-    ));
+    assert!(
+        limma.contains("contrast_levels must contain exactly two entries for categorical outcome")
+    );
     assert!(limma.contains("covariates cannot contain duplicates"));
     assert!(limma.contains("covariate `%s` is reserved"));
     assert!(limma.contains("covariate `%s` must be a simple R identifier"));
 
-    let wgcna =
-        std::fs::read_to_string(root.join("bulk-rnaseq").join("wgcna_runner.R")).unwrap();
+    let wgcna = std::fs::read_to_string(root.join("bulk-rnaseq").join("wgcna_runner.R")).unwrap();
     assert!(wgcna.contains("WGCNA::pickSoftThreshold"));
     assert!(wgcna.contains("WGCNA::blockwiseModules"));
     assert!(wgcna.contains("WGCNA::signedKME"));

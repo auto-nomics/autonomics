@@ -14,6 +14,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
 
+use dag_core::dag::node_event::NodeReporter;
+use dag_core::dag::runtime::NodeRunDetails;
 use dag_core::dag::{DagError, graph::PortOutputs};
 use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::value::{FileRef, NodeValue, PortType};
@@ -22,8 +24,8 @@ use dag_core::{DataBundle, NodeCtx};
 use container_runtime::gc::{acquire_panel_lock_shared, acquire_scratch_lock_shared};
 use container_runtime::{
     CachedPanel, ContainerNetwork, ContainerRunRequest, ContainerRuntimeError,
-    DEFAULT_CONTAINER_WORKDIR, GpuRequest, PanelCache, PanelRef, PodmanConnection, PullPolicy,
-    keep_workspace_enabled, unique_container_name, workspace_ref,
+    DEFAULT_CONTAINER_WORKDIR, GpuRequest, ImageReference, PanelCache, PanelRef, PodmanConnection,
+    PullPolicy, keep_workspace_enabled, unique_container_name, workspace_ref,
 };
 
 use super::ContainerCommandOutputSpec;
@@ -330,30 +332,6 @@ pub(super) async fn stage_inputs(
                 }
                 NodeValue::FileSet(staged_files)
             }
-            NodeValue::Data(data) => {
-                let file = data.to_file_ref();
-                let path = stage_input_file(ctx, &staging_dir, index, &file).await?;
-                index += 1;
-                NodeValue::File(FileRef {
-                    path: path.to_string_lossy().into_owned(),
-                    format: file.format,
-                    fingerprint: file.fingerprint,
-                })
-            }
-            NodeValue::DataSet(data) => {
-                let mut staged_files = Vec::with_capacity(data.len());
-                for data in data {
-                    let file = data.to_file_ref();
-                    let path = stage_input_file(ctx, &staging_dir, index, &file).await?;
-                    index += 1;
-                    staged_files.push(FileRef {
-                        path: path.to_string_lossy().into_owned(),
-                        format: file.format,
-                        fingerprint: file.fingerprint,
-                    });
-                }
-                NodeValue::FileSet(staged_files)
-            }
             NodeValue::DataFrame(_) => {
                 return Err("container_command inputs must be File or FileSet values".into());
             }
@@ -610,6 +588,24 @@ impl DagNode for ContainerCommandNode {
                         stdout,
                     } => {
                         write_failure_logs(&workspace_path, &stdout, &stderr);
+                        // Persist the captured streams next to where the
+                        // outputs would have landed, so a failed execution is
+                        // as auditable as a successful one.
+                        let logs = publish_run_logs(
+                            ctx,
+                            &self.artifact_prefix,
+                            &request_name,
+                            &stdout,
+                            &stderr,
+                            reporter,
+                        )
+                        .await;
+                        reporter.set_run_details(run_details(
+                            &self.image,
+                            exit_code,
+                            &request_name,
+                            logs,
+                        ));
                         let mut logs = capture_declared_output_logs(&resolved_outputs);
                         logs.extend(capture_input_manifest(&staged_inputs));
                         ContainerCommandError::ExitStatus {
@@ -625,6 +621,25 @@ impl DagNode for ContainerCommandNode {
                 return Err(error.into_dag_error(self.kind));
             }
         };
+        // Persist the captured streams beside this run's outputs before the
+        // live events below consume them — the events are best-effort and
+        // disappear with the channel, the persisted copies are the audit
+        // record.
+        let logs = publish_run_logs(
+            ctx,
+            &self.artifact_prefix,
+            &request_name,
+            &result.stdout,
+            &result.stderr,
+            reporter,
+        )
+        .await;
+        reporter.set_run_details(run_details(
+            &self.image,
+            result.exit_code,
+            &request_name,
+            logs,
+        ));
         if !result.stdout.trim().is_empty() {
             reporter.info(result.stdout);
         }
@@ -811,4 +826,93 @@ async fn publish_output(
         metadata.len(),
         Some(digest),
     ))
+}
+
+/// Persist a run's captured stdout/stderr at
+/// `{artifact_prefix}/{run_name}/.autonomics-logs/`, beside the run's
+/// published outputs, and return `FileRef`s (path + sha256) for the run
+/// report.
+///
+/// Best-effort by design: missing object storage or a write failure only
+/// warns — log retention must never fail an otherwise-successful execution.
+/// Blank captures are skipped, matching when the live events are emitted.
+async fn publish_run_logs(
+    ctx: &NodeCtx,
+    artifact_prefix: &str,
+    run_name: &str,
+    stdout: &str,
+    stderr: &str,
+    reporter: &NodeReporter,
+) -> (Option<FileRef>, Option<FileRef>) {
+    let Some(storage) = ctx.opendal.as_ref() else {
+        reporter.warn("no object storage registered; run stdout/stderr not persisted");
+        return (None, None);
+    };
+    let prefix = vfs::OpendalFileStorage::normalize_path(artifact_prefix.trim_end_matches('/'));
+    let base = format!("{prefix}/{run_name}/.autonomics-logs");
+
+    let stdout_ref = if stdout.trim().is_empty() {
+        Ok(None)
+    } else {
+        write_log_object(storage, &format!("{base}/stdout.log"), stdout)
+            .await
+            .map(Some)
+    };
+    let stderr_ref = if stderr.trim().is_empty() {
+        Ok(None)
+    } else {
+        write_log_object(storage, &format!("{base}/stderr.log"), stderr)
+            .await
+            .map(Some)
+    };
+    for result in [&stdout_ref, &stderr_ref] {
+        if let Err(error) = result {
+            reporter.warn(format!("cannot persist run log: {error}"));
+        }
+    }
+    (stdout_ref.ok().flatten(), stderr_ref.ok().flatten())
+}
+
+/// Write one captured stream to object storage and describe it as a
+/// content-addressed [`FileRef`]. The capture is already in memory (capped by
+/// the runtime's output limit), so a single-shot digest suffices.
+async fn write_log_object(
+    storage: &vfs::OpendalFileStorage,
+    virtual_path: &str,
+    contents: &str,
+) -> Result<FileRef, String> {
+    let digest = format!("sha256:{}", hex(&Sha256::digest(contents.as_bytes())));
+    let bytes = contents.as_bytes().to_vec();
+    storage
+        .write_bytes(virtual_path, bytes)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(FileRef::remote(
+        format!("vfs://{virtual_path}"),
+        Some("text/plain".to_string()),
+        contents.len() as u64,
+        Some(digest),
+    ))
+}
+
+/// Assemble the execution evidence a container run reports for its node.
+fn run_details(
+    image: &str,
+    exit_code: i32,
+    run_name: &str,
+    logs: (Option<FileRef>, Option<FileRef>),
+) -> NodeRunDetails {
+    NodeRunDetails {
+        image: Some(image.to_string()),
+        // References are digest-pinned on the plugin path, but the spec alone
+        // does not enforce it — parse tolerantly and leave the digest unset
+        // for tag-style references.
+        image_digest: ImageReference::parse(image)
+            .ok()
+            .map(|reference| reference.digest().to_string()),
+        exit_code: Some(exit_code),
+        run_name: Some(run_name.to_string()),
+        stdout_log: logs.0,
+        stderr_log: logs.1,
+    }
 }

@@ -55,11 +55,9 @@ impl Widget for StatusBar<'_> {
         // While compacting, replace the static label with a spinning
         // indicator and the live pass detail line.
         let indicator: std::borrow::Cow<str> = match (self.status, self.compact) {
-            (AgentStatus::Compacting, Some(c)) if c.is_compacting => {
-                std::borrow::Cow::Owned(
-                    COMPACT_SPINNER[(self.frame % COMPACT_SPINNER.len() as u64) as usize].to_string(),
-                )
-            }
+            (AgentStatus::Compacting, Some(c)) if c.is_compacting => std::borrow::Cow::Owned(
+                COMPACT_SPINNER[(self.frame % COMPACT_SPINNER.len() as u64) as usize].to_string(),
+            ),
             _ => std::borrow::Cow::Borrowed(base_indicator),
         };
         let status_text: String = match (self.status, self.compact) {

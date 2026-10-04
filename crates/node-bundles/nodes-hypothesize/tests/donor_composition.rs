@@ -35,7 +35,7 @@ use dag_core::dag::node_event::NodeReporter;
 use dag_core::node::{DagNode, NodeInput};
 use dag_core::registry::{NodeCtx, NodeFactory};
 use datafusion::prelude::SessionContext;
-use nodes_hypothesize::donor_composition::{DonorCompositionNodeFactory, DONOR_COMPOSITION_KIND};
+use nodes_hypothesize::donor_composition::{DONOR_COMPOSITION_KIND, DonorCompositionNodeFactory};
 use std::sync::Arc;
 
 /// Expand donor × cell-type counts into the cell-level table the node
@@ -108,7 +108,13 @@ async fn donor_composition_matches_r_glm_reference() {
         .await
         .unwrap();
 
-    let batches = outputs.dataframe(0).unwrap().clone().collect().await.unwrap();
+    let batches = outputs
+        .dataframe(0)
+        .unwrap()
+        .clone()
+        .collect()
+        .await
+        .unwrap();
     assert_eq!(batches.len(), 1);
     let batch = &batches[0];
     assert_eq!(batch.num_rows(), 2, "one row per cell type");

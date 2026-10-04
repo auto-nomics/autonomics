@@ -1,9 +1,12 @@
 //! DAG node bundle for file, DataFrame, and container I/O boundaries.
 
+pub mod archive_nodes;
 pub mod bundle_source;
 pub mod container_command;
 pub mod dataframe_to_file;
+pub mod file_decompress;
 pub mod file_reference;
+pub mod file_set_select;
 pub mod file_to_dataframe;
 pub mod file_transform;
 pub mod gmt_import;
@@ -21,8 +24,37 @@ pub mod source_opentargets;
 pub mod source_semantic_scholar;
 pub mod spreadsheet;
 pub use alphafold::nodes::prediction::{AlphaFoldPredictionNode, AlphaFoldPredictionNodeFactory};
+pub use bib_base::nodes::evidence_export::{
+    EvidenceExportFormat, EvidenceExportNode, EvidenceExportNodeFactory, EvidenceExportSpec,
+};
+pub use bib_base::nodes::evidence_merge::{
+    EvidenceMergeNode, EvidenceMergeNodeFactory, EvidenceMergeSpec,
+};
+pub use bib_base::nodes::literature_citations::{
+    CitationDirection, LiteratureCitationsNode, LiteratureCitationsNodeFactory,
+    LiteratureCitationsSpec,
+};
+pub use bib_base::nodes::literature_fetch::{
+    LiteratureFetchNode, LiteratureFetchNodeFactory, LiteratureFetchSpec,
+};
+pub use bib_base::nodes::literature_fulltext::{
+    LiteratureFulltextNode, LiteratureFulltextNodeFactory, LiteratureFulltextSpec,
+};
+pub use bib_base::nodes::literature_search::{
+    LiteratureSearchNode, LiteratureSearchNodeFactory, LiteratureSearchSpec,
+};
+pub use bib_base::nodes::s2_recommendations::{
+    S2RecommendationsNode, S2RecommendationsNodeFactory, S2RecommendationsSpec,
+};
 pub use clinicaltrials::nodes::study::{ClinicalTrialsStudyNode, ClinicalTrialsStudyNodeFactory};
 pub use crossref::nodes::works::{CrossrefWorksNode, CrossrefWorksNodeFactory};
+pub use enrichr_sdk::nodes::Plugin as EnrichrPlugin;
+pub use enrichr_sdk::nodes::{
+    EnrichrBackgroundEnrichmentNode, EnrichrBackgroundEnrichmentNodeFactory, EnrichrEnrichmentNode,
+    EnrichrEnrichmentNodeFactory, EnrichrGeneMapNode, EnrichrGeneMapNodeFactory,
+    EnrichrLibrariesNode, EnrichrLibrariesNodeFactory, EnrichrViewListNode,
+    EnrichrViewListNodeFactory,
+};
 pub use interpro::nodes::entry::{InterProEntryNode, InterProEntryNodeFactory};
 pub use nhanes::nodes::download::{NhanesDownloadNode, NhanesDownloadNodeFactory};
 pub use nhanes::nodes::files::{NhanesFilesNode, NhanesFilesNodeFactory};
@@ -54,17 +86,15 @@ pub use uniprot::nodes::search::{UniprotSearchNode, UniprotSearchNodeFactory};
 pub use uniprot::nodes::stream::{UniprotStreamNode, UniprotStreamNodeFactory};
 
 use dag_core::{NodePlugin, NodeRegistry};
-use std::sync::Arc;
 
-pub struct Plugin {
-    container_execution: Arc<container_runtime::ContainerExecutionInfra>,
-}
+/// Container-backed nodes moved to manifest plugins; the io bundle is pure
+/// engine-side and carries no container infrastructure.
+#[derive(Default)]
+pub struct Plugin;
 
 impl Plugin {
-    pub fn new(container_execution: Arc<container_runtime::ContainerExecutionInfra>) -> Self {
-        Self {
-            container_execution,
-        }
+    pub fn new() -> Self {
+        Self
     }
 }
 
@@ -75,7 +105,11 @@ impl NodePlugin for Plugin {
     fn register(&self, registry: &mut NodeRegistry) {
         registry.register(Box::new(bundle_source::BundleSourceNodeFactory {}));
         registry.register(Box::new(file_reference::FileReferenceNodeFactory {}));
+        registry.register(Box::new(file_decompress::FileDecompressNodeFactory));
         registry.register(Box::new(file_to_dataframe::FileToDataFrameNodeFactory {}));
+        registry.register(Box::new(file_set_select::FileSetSelectNodeFactory));
+        registry.register(Box::new(archive_nodes::ArchiveInspectNodeFactory));
+        registry.register(Box::new(archive_nodes::ArchiveExtractNodeFactory));
         registry.register(Box::new(http_fetch::HttpFetchNodeFactory));
         registry.register(Box::new(
             h5ad_obs_to_dataframe::H5adObsToDataFrameNodeFactory {},
@@ -160,7 +194,15 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(ReactomeMappingNodeFactory {}));
         registry.register(Box::new(ReactomeAnalysisNodeFactory {}));
         registry.register(Box::new(ReactomeParticipantsNodeFactory {}));
+        registry.register(Box::new(LiteratureSearchNodeFactory {}));
+        registry.register(Box::new(LiteratureFetchNodeFactory {}));
+        registry.register(Box::new(LiteratureFulltextNodeFactory {}));
+        registry.register(Box::new(LiteratureCitationsNodeFactory {}));
+        registry.register(Box::new(S2RecommendationsNodeFactory {}));
+        registry.register(Box::new(EvidenceMergeNodeFactory {}));
+        registry.register(Box::new(EvidenceExportNodeFactory {}));
         registry.register_plugin(&StringPlugin);
+        registry.register_plugin(&EnrichrPlugin);
     }
 }
 
@@ -175,9 +217,7 @@ mod tests {
             None,
         );
         let mut registry = NodeRegistry::new(ctx);
-        registry.register_plugin(&Plugin::new(Arc::new(
-            container_runtime::ContainerExecutionInfra::from_env(),
-        )));
+        registry.register_plugin(&Plugin::new());
         let expected = [
             "source_protocolio_protocols",
             "source_protocolio_protocol",
@@ -192,5 +232,160 @@ mod tests {
                 "missing protocol.io node: {kind}"
             );
         }
+    }
+
+    #[test]
+    fn plugin_registers_file_decompression_and_selection_nodes() {
+        let ctx = dag_core::registry::NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        );
+        let mut registry = NodeRegistry::new(ctx);
+        registry.register_plugin(&Plugin::new());
+
+        let decompress = registry
+            .get_node_ports(file_decompress::FILE_DECOMPRESS_KIND)
+            .expect("file_decompress is registered");
+        assert_eq!(
+            decompress.input_port(0).unwrap().data_type,
+            dag_core::value::PortType::File
+        );
+        assert_eq!(
+            decompress.output_port(0).unwrap().data_type,
+            dag_core::value::PortType::File
+        );
+
+        let select = registry
+            .get_node_ports(file_set_select::FILE_SET_SELECT_KIND)
+            .expect("file_set_select is registered");
+        assert_eq!(
+            select.input_port(0).unwrap().data_type,
+            dag_core::value::PortType::FileSet
+        );
+        assert_eq!(
+            select.output_port(0).unwrap().data_type,
+            dag_core::value::PortType::File
+        );
+    }
+
+    #[test]
+    fn plugin_registers_archive_nodes() {
+        let ctx = dag_core::registry::NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        );
+        let mut registry = NodeRegistry::new(ctx);
+        registry.register_plugin(&Plugin::new());
+
+        let inspect = registry
+            .get_node_ports(archive_nodes::ARCHIVE_INSPECT_KIND)
+            .expect("archive_inspect is registered");
+        assert_eq!(
+            inspect.output_port(0).unwrap().data_type,
+            dag_core::value::PortType::DataFrame
+        );
+        let extract = registry
+            .get_node_ports(archive_nodes::ARCHIVE_EXTRACT_KIND)
+            .expect("archive_extract is registered");
+        assert_eq!(
+            extract.output_port(0).unwrap().data_type,
+            dag_core::value::PortType::FileSet
+        );
+    }
+
+    #[test]
+    fn plugin_registers_evidence_channel_nodes() {
+        let ctx = dag_core::registry::NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        );
+        let mut registry = NodeRegistry::new(ctx);
+        registry.register_plugin(&Plugin::new());
+
+        // All three kinds are registered with the evidence format contract
+        // on the right ports.
+        let merge = registry
+            .build_node("evidence_merge", serde_json::json!({"path": "/tmp/x.json"}))
+            .expect("evidence_merge builds");
+        let ports = merge.ports();
+        assert_eq!(
+            ports.input_port(0).unwrap().format.as_deref(),
+            Some("evidence")
+        );
+        assert_eq!(
+            ports.output_port(0).unwrap().format.as_deref(),
+            Some("evidence")
+        );
+        assert!(!ports.is_fixed_input(), "variadic input");
+
+        let source = registry
+            .build_node(
+                "source_literature",
+                serde_json::json!({"query": {}, "path": "/tmp/lit.json"}),
+            )
+            .expect("source_literature builds");
+        assert_eq!(
+            source.ports().output_port(0).unwrap().format.as_deref(),
+            Some("evidence")
+        );
+
+        let fulltext = registry
+            .build_node("literature_fulltext", serde_json::json!({}))
+            .expect("literature_fulltext builds");
+        let ft_ports = fulltext.ports();
+        assert_eq!(
+            ft_ports.input_port(0).unwrap().format.as_deref(),
+            Some("evidence")
+        );
+        assert!(ft_ports.output_port(0).unwrap().data_type == dag_core::value::PortType::FileSet);
+
+        let citations = registry
+            .build_node(
+                "source_literature_citations",
+                serde_json::json!({"paper_id": "DOI:10.1/x", "path": "/tmp/c.json"}),
+            )
+            .expect("source_literature_citations builds");
+        assert_eq!(
+            citations.ports().output_port(0).unwrap().format.as_deref(),
+            Some("evidence")
+        );
+        let recs = registry
+            .build_node(
+                "source_s2_recommendations",
+                serde_json::json!({"paper_id": "DOI:10.1/x", "path": "/tmp/r.json"}),
+            )
+            .expect("source_s2_recommendations builds");
+        assert_eq!(
+            recs.ports().output_port(0).unwrap().format.as_deref(),
+            Some("evidence")
+        );
+
+        let fetch = registry
+            .build_node(
+                "source_literature_fetch",
+                serde_json::json!({"id_kind": "doi", "id_value": "10.1/x", "path": "/tmp/f.json"}),
+            )
+            .expect("source_literature_fetch builds");
+        assert_eq!(
+            fetch.ports().output_port(0).unwrap().format.as_deref(),
+            Some("evidence")
+        );
+
+        let export = registry
+            .build_node(
+                "evidence_export",
+                serde_json::json!({"format": "ris", "path": "/tmp/out.ris"}),
+            )
+            .expect("evidence_export builds");
+        // ports_for_spec: output contract follows the spec'd format.
+        let export_ports = export.ports();
+        assert_eq!(
+            export_ports.input_port(0).unwrap().format.as_deref(),
+            Some("evidence")
+        );
+        assert_eq!(
+            export_ports.output_port(0).unwrap().format.as_deref(),
+            Some("ris")
+        );
     }
 }

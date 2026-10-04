@@ -182,7 +182,7 @@ pub struct AgentTabState {
     pub history_search_selected: usize,
     /// Snapshot of the input buffer saved when Ctrl+R starts, restored on Esc.
     pub history_search_draft: Option<String>,
-    /// Cached total rendered line count (updated every frame).
+    /// Cached total visual row count (updated every frame).
     pub content_line_count: usize,
     /// Per-message content version (parallel to `messages`). Bumped whenever
     /// the rendered output of that message would change (text append, usage
@@ -195,6 +195,10 @@ pub struct AgentTabState {
     /// Per-message rendered-line cache (parallel to `messages`). Entry *i*
     /// holds the last rendered `Vec<Line>` for `messages[i]`.
     pub cached_msg_lines: Vec<Vec<Line<'static>>>,
+    /// Visual row count for each cached message at the current terminal
+    /// width. This metadata lets the renderer find the viewport without
+    /// flattening the whole transcript every frame.
+    pub cached_msg_row_counts: Vec<usize>,
     /// The `msg_versions[i]` value at which `cached_msg_lines[i]` was rendered.
     /// Zero means stale (never rendered).
     pub cached_msg_versions: Vec<u64>,
@@ -278,6 +282,7 @@ impl Default for AgentTabState {
             msg_versions: Vec::new(),
             msg_version_counter: 0,
             cached_msg_lines: Vec::new(),
+            cached_msg_row_counts: Vec::new(),
             cached_msg_versions: Vec::new(),
             cached_msg_width: 0,
             cached_display_version: 0,
@@ -371,6 +376,7 @@ impl AgentTabState {
         self.msg_version_counter = self.msg_version_counter.wrapping_add(1);
         self.messages.push(line);
         self.msg_versions.push(self.msg_version_counter);
+        self.cached_msg_row_counts.push(0);
     }
 
     /// Feed one compaction progress event into the tab state.
@@ -413,8 +419,8 @@ impl AgentTabState {
         }
     }
 
-    /// Replace the entire message list in one shot, keeping `msg_versions`,
-    /// `cached_msg_lines`, and `cached_msg_versions` in lockstep. Use this
+    /// Replace the entire message list in one shot, keeping render caches and
+    /// their metadata vectors in lockstep. Use this
     /// instead of assigning `messages` directly (e.g. when replaying history
     /// from storage).
     pub fn set_messages(&mut self, messages: Vec<ChatLine>) {
@@ -423,6 +429,7 @@ impl AgentTabState {
         self.messages = messages;
         self.msg_versions = (0..n).map(|_| self.msg_version_counter).collect();
         self.cached_msg_lines = vec![Vec::new(); n];
+        self.cached_msg_row_counts = vec![0; n];
         self.cached_msg_versions = vec![0; n];
         self.content_line_count = n;
     }
@@ -933,6 +940,12 @@ pub struct AppState {
     pub agent_config: crate::widgets::agent_config_widget::AgentConfigState,
     /// Interactive DAG view visibility.
     pub dag_view_visible: bool,
+    /// Skill-evolution dashboard state (visibility + data snapshots).
+    pub skill_evolution: crate::widgets::skill_evolution_widget::SkillEvolutionState,
+    /// Wall-clock of the last dashboard status poll — the render
+    /// tick uses this to throttle the status-only fetch while the
+    /// dashboard is visible.
+    pub skill_evolution_poll: Option<std::time::Instant>,
     /// Latest structured DAG snapshot. `None` while the first load is running.
     pub dag_snapshot: Option<dag_core::dag::DagTuiSnapshot>,
     /// Selection/viewport state for [`crate::widgets::dag_view::DagTuiWidget`].

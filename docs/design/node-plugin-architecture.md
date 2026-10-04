@@ -116,28 +116,27 @@ impl NodeRegistry {
 | **nodes-io** | file_to_dataframe, dataframe_to_file, container_command, visualization_container, ldsc_h2_container | opentargets, container-runtime, vfs | ~2,100 |
 | **nodes-opengwas** | source_opengwas_associations, source_opengwas_phewas, source_opengwas_gwasinfo, source_opengwas_gwasinfo_search, source_opengwas_variants_rsid, source_opengwas_variants_chrpos, source_opengwas_ld_clump, source_opengwas_tophits | opengwas | ~1,000 |
 | **nodes-sql** | sql_node, echo_node | — | 700 |
-| **nodes-regression** | linear_regression, logistic_regression, cox_regression, chi_square | statkit | 1,400 |
+| **nodes-regression** | linear_regression, binary_logistic_regression, ordinal_logistic_regression, cox_regression, chi_square | statkit | 1,400 |
 | **nodes-causal** | mediation, causal, cmest (6 variants) | statkit, epi | 2,200 |
 | **nodes-survival** | survival, fine_gray, cuminc | cmprsk | 1,400 |
 | **nodes-ldsc** | ldsc_sldsc, liability, lcv | ldsc, lcv | 3,900 |
 | **nodes-genetics** | cpassoc, magma (4) | cpassoc, magma, genomic_sem | 3,900 |
-| **nodes-mr** | two_sample_mr, mrlap | mr, mrlap | 4,000 |
+| **nodes-mr** | mrlap | mrlap | 4,000 |
 | **nodes-coloc** | coloc, bkmr | coloc, bkmr | 1,300 |
 | **nodes-epi** | epi_rcs, epi_roc, epi_lasso, epi_wqs, evalue | epi, evalue | 1,900 |
 | **nodes-lcmm** | hlme, hlme_predict, hlme_compare | lcmm | 2,100 |
 | **nodes-survey** | survey_* (30 nodes) | survey | 6,000 |
 | **nodes-hypothesize** | hypothesize.* (24 nodes) | hypothesize | *(已有子模块)* |
+| **nodes-power** | power_t_test, power_prop_test, power_chisq_test, power_correlation, power_anova, power_regression, power_survival, power_cluster | statrs | ~3,000 |
 | **nodes-ml** | ml.* (50+ nodes) | ml | *(已有子模块)* |
 | 合计 | | | ~38,400 |
 
 每个 bundle crate 结构:
 ```
 crates/node-bundles/nodes-mr/
-├── Cargo.toml          # depends on dag-core + mr, mrlap
+├── Cargo.toml          # depends on dag-core + mrlap
 ├── src/
 │   ├── lib.rs          # pub struct Plugin; impl NodePlugin for Plugin
-│   ├── two_sample_mr.rs
-│   ├── mrlap.rs
 │   └── mrlap.rs
 └── tests/
 ```
@@ -155,7 +154,6 @@ pub struct Plugin;
 impl NodePlugin for Plugin {
     fn name(&self) -> &'static str { "mr" }
     fn register(&self, registry: &mut NodeRegistry) {
-        registry.register(Box::new(TwoSampleMrNodeFactory));
         registry.register(Box::new(MrlapNodeFactory));
         registry.register(Box::new(MrpressoNodeFactory));
         registry.register(Box::new(MvmrNodeFactory));
@@ -163,7 +161,6 @@ impl NodePlugin for Plugin {
 }
 
 // 公开供 data-engine 导入的工厂类型
-pub use two_sample_mr::{TwoSampleMrNode, TwoSampleMrNodeFactory, TwoSampleMrSpec};
 pub use mrlap::{MrlapNode, MrlapNodeFactory, MrlapSpec};
 // ...
 ```
@@ -227,6 +224,7 @@ bundle-epi         = ["dep:nodes-epi"]
 bundle-lcmm        = ["dep:nodes-lcmm"]
 bundle-survey      = ["dep:nodes-survey"]
 bundle-hypothesize = ["dep:nodes-hypothesize"]
+bundle-power       = ["dep:nodes-power"]
 bundle-ml          = ["dep:nodes-ml"]
 
 [dependencies]
@@ -402,6 +400,7 @@ crates/
 │   ├── nodes-lcmm/
 │   ├── nodes-survey/
 │   ├── nodes-hypothesize/
+│   ├── nodes-power/
 │   └── nodes-ml/
 
 ├── data-engine-tools/             # 不变 (只用 dag-core + data-engine runtime API)
@@ -449,7 +448,7 @@ pub use dag_core::{
 pub use nodes_sql::{SqlNode, SqlNodeFactory, SqlNodeSpec};
 
 #[cfg(feature = "bundle-mr")]
-pub use nodes_mr::{TwoSampleMrNode, TwoSampleMrNodeFactory, TwoSampleMrSpec};
+pub use nodes_mr::{MrlapNode, MrlapNodeFactory, MrlapSpec};
 // ...
 ```
 

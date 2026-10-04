@@ -3,6 +3,9 @@ use crate::model::ProviderType;
 use crate::model::model_info::ModelInfoBuilder;
 use crate::provider::ProviderPreset;
 
+pub const MODEL_MIMO_V2_6_PRO: &str = "mimo-v2.6-pro";
+pub const MODEL_MIMO_V2_6_FLASH: &str = "mimo-v2.6-flash";
+pub const MODEL_MIMO_V2_6_PRO_ULTRASPEED: &str = "mimo-v2.6-pro-ultraspeed";
 pub const MODEL_MIMO_V2_5_PRO: &str = "mimo-v2.5-pro";
 pub const MODEL_MIMO_V2_PRO: &str = "mimo-v2-pro";
 pub const MODEL_MIMO_V2_5: &str = "mimo-v2.5";
@@ -78,7 +81,29 @@ impl MimoProvider {
 
     fn model_definitions() -> Vec<ModelInfo> {
         vec![
+            // V2.6 series — 1M context, 128K output, full-modal understanding
+            // (domestic CNY pricing per 1M tokens; see docs/zh-CN price page)
+            ModelInfoBuilder::new(MODEL_MIMO_V2_6_PRO)
+                .context(1_000_000, 131_072)
+                .capabilities(true, true, true, true)
+                .thinking_enabled(None)
+                .pricing(3.0, 6.0)
+                .build(),
+            ModelInfoBuilder::new(MODEL_MIMO_V2_6_FLASH)
+                .context(1_000_000, 131_072)
+                .capabilities(true, true, true, true)
+                .thinking_enabled(None)
+                .pricing(1.0, 2.0)
+                .build(),
+            ModelInfoBuilder::new(MODEL_MIMO_V2_6_PRO_ULTRASPEED)
+                .context(1_000_000, 131_072)
+                .capabilities(true, true, true, true)
+                .thinking_enabled(None)
+                .pricing(30.0, 60.0)
+                .build(),
             // Pro series — 1M context, 128K output
+            // NOTE: v2.5-pro and v2.5 are scheduled for deprecation on
+            // 2026-10-21 (per Xiaomi's announcement on the pricing page).
             ModelInfoBuilder::new(MODEL_MIMO_V2_5_PRO)
                 .context(1_000_000, 131_072)
                 .capabilities(false, true, true, true)

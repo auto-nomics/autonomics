@@ -9,6 +9,7 @@
 //! - [`runtime`] — the async readiness scheduler and [`RunReport`].
 
 pub mod error;
+pub mod export;
 pub mod graph;
 pub mod history;
 pub mod node_event;
@@ -21,7 +22,10 @@ pub mod view;
 pub use crate::node::{DagNode, NodeId, NodeInput, NodePorts};
 
 pub use error::{DagError, NodeError};
+pub use export::{ExportFile, ExportFormat, ExportSummary, SkippedFile};
 pub use graph::DAG;
-pub use history::{DagHistory, DagManifest, Snapshot};
-pub use runtime::{DirtyState, RunReport, RuntimeStatus, SchedulerConfig};
+pub use history::{DagHistory, DagManifest, RunRecord, Snapshot};
+pub use runtime::{
+    InputBinding, InputHashing, NodeRunDetails, RunReport, RuntimeStatus, SchedulerConfig,
+};
 pub use view::{DagEdgeView, DagNodeView, DagPortView, DagTuiSnapshot};

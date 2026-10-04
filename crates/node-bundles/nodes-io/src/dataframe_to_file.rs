@@ -370,6 +370,47 @@ impl DataFrameToFileNode {
         Ok(rewritten.into_bytes())
     }
 
+    /// Rewrite `Utf8View` string columns to the canonical `Utf8` layout.
+    ///
+    /// Parquet sources hand DataFusion `Utf8View` columns, and a join that
+    /// mixes a `Utf8View` side with a `Utf8` side keeps the view layout in the
+    /// output schema. The external sinks this node writes through (CSV/TSV and
+    /// Parquet) are only guaranteed to understand the canonical `Utf8` layout,
+    /// so normalise here instead of depending on the Arrow writer version.
+    /// Frames without view columns pass through untouched.
+    fn normalize_string_views(frame: DataFrame) -> Result<DataFrame, DataFrameToFileError> {
+        use datafusion::common::Column;
+        use datafusion::logical_expr::{Expr, cast};
+
+        let schema = frame.schema().clone();
+        let is_view: Vec<bool> = schema
+            .fields()
+            .iter()
+            .map(|field| matches!(field.data_type(), arrow_schema::DataType::Utf8View))
+            .collect();
+        if !is_view.iter().any(|is_view| *is_view) {
+            return Ok(frame);
+        }
+
+        let projections: Vec<Expr> = (0..schema.fields().len())
+            .map(|index| {
+                let (qualifier, field) = schema.qualified_field(index);
+                let column = Expr::Column(Column::new(qualifier.cloned(), field.name()));
+                if is_view[index] {
+                    cast(column, arrow_schema::DataType::Utf8)
+                } else {
+                    column
+                }
+            })
+            .collect();
+
+        frame
+            .select(projections)
+            .map_err(|error| DataFrameToFileError::InvalidInput {
+                message: format!("cannot normalise Utf8View columns for writing: {error}"),
+            })
+    }
+
     /// Return the rows already stored at `path` concatenated with `new`, used
     /// to implement true single-file append.
     ///
@@ -626,6 +667,8 @@ impl DagNode for DataFrameToFileNode {
             return Ok(outputs);
         }
 
+        let df = Self::normalize_string_views(df)?;
+
         // Resolve the DataFrame to actually write. DataFusion's
         // `write_csv`/`write_parquet` do not implement
         // `InsertOp::Overwrite` and their single-file sink always
@@ -721,7 +764,7 @@ mod tests {
     use super::SinkMode;
     use std::sync::Arc;
 
-    use arrow_array::{Int32Array, RecordBatch, StringArray};
+    use arrow_array::{Int32Array, RecordBatch, StringArray, StringViewArray};
     use arrow_schema::{DataType, Field, Schema};
     use datafusion::execution::object_store::ObjectStoreUrl;
     use datafusion::prelude::{DataFrame, SessionContext};
@@ -790,6 +833,25 @@ mod tests {
                 Arc::new(StringArray::from_iter(
                     rows.iter().map(|(_, part)| Some(*part)),
                 )),
+            ],
+        )
+        .unwrap();
+        ctx.read_batch(batch).unwrap()
+    }
+
+    fn string_view_dataframe(ctx: &SessionContext) -> DataFrame {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8View, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2])),
+                Arc::new(StringViewArray::from(vec![
+                    Some("short"),
+                    Some("longer-than-12-bytes"),
+                ])),
             ],
         )
         .unwrap();
@@ -1098,6 +1160,105 @@ mod tests {
         assert!(contents.contains("2 2 3\n"));
         assert!(contents.contains("1 1 1\n"));
         assert!(contents.contains("2 2 4\n"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn dataframe_to_file_writes_string_view_tsv_and_parquet() {
+        let ctx = SessionContext::new();
+        let tsv_path = format!("/tmp/sink_utf8_view_{}.tsv", std::process::id());
+        let parquet_path = format!("/tmp/sink_utf8_view_{}.parquet", std::process::id());
+
+        for (path, format) in [
+            (&tsv_path, WriteFormat::Tsv),
+            (&parquet_path, WriteFormat::Parquet),
+        ] {
+            let mut sink = DataFrameToFileNode::new(path.clone(), format, SinkMode::Overwrite);
+            sink.execute(
+                &node_ctx(),
+                &[NodeInput::new_dataframe(0, string_view_dataframe(&ctx))],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap();
+        }
+
+        let tsv = std::fs::read_to_string(&tsv_path).unwrap();
+        assert!(
+            tsv.contains("short"),
+            "TSV should contain string view value: {tsv}"
+        );
+        assert!(
+            tsv.contains("longer-than-12-bytes"),
+            "TSV should contain long value: {tsv}"
+        );
+        let parquet_rows = ctx
+            .read_parquet(
+                &parquet_path,
+                datafusion::prelude::ParquetReadOptions::default(),
+            )
+            .await
+            .unwrap()
+            .count()
+            .await
+            .unwrap();
+        assert_eq!(parquet_rows, 2);
+        let _ = std::fs::remove_file(&tsv_path);
+        let _ = std::fs::remove_file(&parquet_path);
+    }
+
+    /// The write path must rewrite `Utf8View` columns to `Utf8`, leave every
+    /// other column alone, and pass frames without view columns through.
+    #[tokio::test]
+    async fn normalize_string_views_casts_view_columns_to_utf8() {
+        let ctx = SessionContext::new();
+        let view = string_view_dataframe(&ctx);
+        assert_eq!(view.schema().field(1).data_type(), &DataType::Utf8View);
+
+        let normalized = DataFrameToFileNode::normalize_string_views(view).unwrap();
+        assert_eq!(normalized.schema().field(0).data_type(), &DataType::Int32);
+        assert_eq!(normalized.schema().field(1).data_type(), &DataType::Utf8);
+
+        let batches = normalized.collect().await.unwrap();
+        assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 2);
+        let names = batches[0]
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("normalised view column should be a StringArray");
+        assert_eq!(names.value(0), "short");
+        assert_eq!(names.value(1), "longer-than-12-bytes");
+
+        let (_, plain) = sample_dataframe();
+        let untouched = DataFrameToFileNode::normalize_string_views(plain).unwrap();
+        assert_eq!(untouched.schema().field(1).data_type(), &DataType::Utf8);
+    }
+
+    /// Appending a `Utf8View` frame forces the read-back/cast/union path to
+    /// line the view column up with the `Utf8` schema on disk.
+    #[tokio::test]
+    async fn dataframe_to_file_appends_string_view_columns_to_existing_tsv() {
+        let ctx = SessionContext::new();
+        let path = format!("/tmp/sink_utf8_view_append_{}.tsv", std::process::id());
+        let _ = std::fs::remove_file(&path);
+
+        for mode in [SinkMode::Overwrite, SinkMode::Append] {
+            let mut sink = DataFrameToFileNode::new(path.clone(), WriteFormat::Tsv, mode);
+            sink.execute(
+                &node_ctx(),
+                &[NodeInput::new_dataframe(0, string_view_dataframe(&ctx))],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap();
+        }
+
+        let tsv = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            tsv.matches("short").count(),
+            2,
+            "both appended rows should be present: {tsv}"
+        );
         let _ = std::fs::remove_file(&path);
     }
 

@@ -68,8 +68,14 @@ async fn main() {
         .unwrap_or_else(|| "未知（access token 无 exp claim）".to_string());
     eprintln!();
     eprintln!("登录成功：");
-    eprintln!("  email        : {}", blob.email.as_deref().unwrap_or("（无）"));
-    eprintln!("  订阅计划     : {}", blob.plan_type.as_deref().unwrap_or("（未知）"));
+    eprintln!(
+        "  email        : {}",
+        blob.email.as_deref().unwrap_or("（无）")
+    );
+    eprintln!(
+        "  订阅计划     : {}",
+        blob.plan_type.as_deref().unwrap_or("（未知）")
+    );
     eprintln!("  account id   : {}", blob.account_id);
     eprintln!("  access token 剩余有效期: {expires}");
 

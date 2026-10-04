@@ -171,6 +171,9 @@ async fn vfs_file(
             size: metadata.content_length(),
             mtime_ns,
             content_hash: metadata.etag().map(str::to_string),
+            // This branch resolves through the object store (the path may be
+            // a bare mounted virtual path): immutable by construction.
+            immutable_remote: true,
         }),
     })
 }

@@ -10,7 +10,7 @@ use datafusion::{
 use serde::Serialize;
 use vfs::{MountedObjectStore, OpendalFileStorage};
 
-use crate::dag::{DAG, DagError, DagHistory, RunReport, SchedulerConfig};
+use crate::dag::{DAG, DagError, DagHistory, RunRecord, RunReport, RuntimeStatus, SchedulerConfig};
 use crate::error::{Error, Result};
 use crate::node_registry::registry::NodeRegistry;
 use crate::nodes::DagNode;
@@ -58,6 +58,10 @@ pub struct DataEngine {
     /// [`Self::set_commit_message`] before `run()`. Consumed (cleared) on
     /// each `run()` — falls back to a default when `None`.
     pending_commit_message: Option<String>,
+    /// Who initiated the next run (e.g. `"agent:/root/researcher"`), recorded
+    /// in the run's audit trail. Set via [`Self::set_run_trigger`] before
+    /// `run()`; consumed (cleared) on each `run()`.
+    run_trigger: Option<String>,
 }
 
 impl DataEngine {
@@ -119,6 +123,7 @@ impl DataEngine {
             history: None,
             history_ref: "main".to_string(),
             pending_commit_message: None,
+            run_trigger: None,
         }
     }
 
@@ -437,6 +442,111 @@ impl DataEngine {
         history.log(r, limit).await.map_err(Error::Dag)
     }
 
+    /// List recent execution records, newest-first. `ref_name = None` spans
+    /// all refs. The audit counterpart of [`Self::dag_log`]: snapshots version
+    /// definitions, runs version executions.
+    pub async fn list_runs(&self, limit: usize, ref_name: Option<&str>) -> Result<Vec<RunRecord>> {
+        let history = self
+            .history
+            .as_ref()
+            .ok_or_else(|| Error::Custom("no history store attached".into()))?;
+        history.list_runs(limit, ref_name).await.map_err(Error::Dag)
+    }
+
+    /// Fetch a single execution record by run id.
+    pub async fn get_run(&self, run_id: &str) -> Result<Option<RunRecord>> {
+        let history = self
+            .history
+            .as_ref()
+            .ok_or_else(|| Error::Custom("no history store attached".into()))?;
+        history.get_run(run_id).await.map_err(Error::Dag)
+    }
+
+    /// Export one recorded run as deliverable provenance evidence — a W3C
+    /// PROV-JSON document or an RO-Crate 1.1 directory (result files pulled
+    /// from the object store, content-verified). See
+    /// [`crate::dag::export`]. `run_id` accepts `latest` or a unique id
+    /// prefix. `out_dir` may be a `vfs://` uri or any path covered by a
+    /// mount — the export is then uploaded through the object store so
+    /// agents can see it — or an absolute host path.
+    pub async fn export_run(
+        &self,
+        run_id: &str,
+        format: crate::dag::ExportFormat,
+        out_dir: std::path::PathBuf,
+    ) -> Result<crate::dag::ExportSummary> {
+        use crate::dag::export as dag_export;
+
+        let history = self
+            .history
+            .as_ref()
+            .ok_or_else(|| Error::Custom("no history store attached".into()))?;
+        let run = dag_export::resolve_run(history, run_id)
+            .await
+            .map_err(Error::Custom)?;
+        // Engine-level error rows carry no run report; export what exists.
+        let report: serde_json::Value = run
+            .run_report_json
+            .as_deref()
+            .and_then(|json| serde_json::from_str(json).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+        let manifest = match &run.snapshot_id {
+            Some(snapshot_id) => history
+                .get_snapshot(snapshot_id)
+                .await
+                .map_err(Error::Dag)?
+                .map(|snapshot| snapshot.manifest_json),
+            None => None,
+        };
+
+        // VFS-visible destinations materialize into a staging directory
+        // first, then upload through the object store.
+        let target = dag_export::resolve_export_target(
+            &out_dir.to_string_lossy(),
+            self.engine_ctx.opendal.as_deref(),
+        )
+        .map_err(Error::Custom)?;
+        let staging = match &target {
+            dag_export::ExportTarget::Vfs(_) => {
+                let dir = std::env::temp_dir()
+                    .join(format!("autonomics-export-{}", uuid::Uuid::new_v4()));
+                std::fs::create_dir_all(&dir)
+                    .map_err(|e| Error::Custom(format!("create staging dir: {e}")))?;
+                Some(dir)
+            }
+            dag_export::ExportTarget::Host(_) => None,
+        };
+        let out_path = staging.as_deref().unwrap_or(out_dir.as_path());
+
+        let mut summary = match format {
+            crate::dag::ExportFormat::Prov => {
+                dag_export::write_prov_document(&run, &report, manifest.as_deref(), out_path)
+                    .map_err(Error::Custom)
+            }
+            crate::dag::ExportFormat::Crate => dag_export::export_ro_crate(
+                &run,
+                &report,
+                manifest.as_deref(),
+                out_path,
+                self.engine_ctx.opendal.as_deref(),
+            )
+            .await
+            .map_err(Error::Custom),
+        }?;
+
+        if let (dag_export::ExportTarget::Vfs(prefix), Some(staging), Some(storage)) =
+            (&target, &staging, self.engine_ctx.opendal.as_deref())
+        {
+            dag_export::upload_export_to_vfs(&mut summary, staging, prefix, storage)
+                .await
+                .map_err(Error::Custom)?;
+        }
+        if let Some(staging) = &staging {
+            let _ = std::fs::remove_dir_all(staging);
+        }
+        Ok(summary)
+    }
+
     /// Fetch a single snapshot by id or short-hash prefix.
     pub async fn get_snapshot(&self, snapshot_id: &str) -> Result<Option<crate::dag::Snapshot>> {
         let history = self
@@ -691,6 +801,7 @@ impl DataEngine {
             history: self.history.clone(),
             history_ref: "main".to_string(),
             pending_commit_message: None,
+            run_trigger: None,
         }
     }
 
@@ -717,6 +828,13 @@ impl DataEngine {
         self.pending_commit_message = message;
     }
 
+    /// Set who initiated the next run (e.g. `"agent:/root/researcher"`).
+    /// Consumed on the next run and recorded in its run record; if not
+    /// called, the run is recorded as unattributed.
+    pub fn set_run_trigger(&mut self, trigger: Option<String>) {
+        self.run_trigger = trigger;
+    }
+
     /// Borrow the history store (if attached) for direct queries — e.g.
     /// `log`, `refs`, `get_snapshot`.
     pub fn history(&self) -> Option<&DagHistory> {
@@ -740,14 +858,15 @@ impl DataEngine {
     /// If a [`DagHistory`] is attached ([`Self::with_history`]), a snapshot
     /// manifest is captured *before* execution and committed with the
     /// [`RunReport`] *after* execution under the current history ref
-    /// ([`Self::history_ref`]).
+    /// ([`Self::history_ref`]); every invocation also appends one execution
+    /// record to the history's `runs` audit trail.
     pub async fn run(&mut self) -> Result<RunReport> {
-        let manifest = self.dag.to_manifest();
-        let manifest_hash = manifest.content_hash();
-        let mut report = self.dag.run(&self.config, &self.engine_ctx, None).await?;
-        self.commit_history_snapshot(&manifest, manifest_hash, &mut report)
-            .await;
-        Ok(report)
+        // Route every entry point through the same tail so each execution
+        // leaves a snapshot decision + run record. The dummy sink's receiver
+        // is dropped immediately; `try_send` failures are ignored, matching
+        // the no-sink semantics.
+        let (sink, _dropped_sink) = tokio::sync::mpsc::channel(1);
+        self.run_with_events_and_cancel(sink, None).await
     }
 
     /// Like [`run`](Self::run) but also streams lightweight per-node events
@@ -762,14 +881,23 @@ impl DataEngine {
 
     /// Run a DAG while propagating an external cancellation token to spawned
     /// node tasks.
+    ///
+    /// Every invocation — success, failed nodes, or an engine-level error —
+    /// appends one row to the history's `runs` audit trail before returning.
     pub async fn run_with_events_and_cancel(
         &mut self,
         event_sink: tokio::sync::mpsc::Sender<crate::dag::node_event::NodeEvent>,
         external_cancel: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<RunReport> {
+        let run_id = uuid::Uuid::new_v4().to_string();
+        let started_at = chrono::Utc::now().to_rfc3339();
         let manifest = self.dag.to_manifest();
         let manifest_hash = manifest.content_hash();
-        let mut report = match external_cancel {
+        // Capture before the commit consumes it, so the run record always
+        // carries the message even when the manifest was unchanged.
+        let message = self.pending_commit_message.clone();
+
+        let run_result = match external_cancel {
             Some(token) => {
                 self.dag
                     .run_with_external_cancel(
@@ -778,17 +906,95 @@ impl DataEngine {
                         Some(event_sink),
                         token,
                     )
-                    .await?
+                    .await
             }
             None => {
                 self.dag
                     .run(&self.config, &self.engine_ctx, Some(event_sink))
-                    .await?
+                    .await
             }
         };
-        self.commit_history_snapshot(&manifest, manifest_hash, &mut report)
+        let mut report = match run_result {
+            Ok(report) => report,
+            Err(error) => {
+                // The run itself errored (schedule/validation failure) — no
+                // RunReport exists, but the execution still leaves a trace.
+                self.persist_run_record(
+                    run_id,
+                    started_at,
+                    manifest_hash,
+                    message,
+                    None,
+                    Some(&error.to_string()),
+                )
+                .await;
+                return Err(error.into());
+            }
+        };
+        self.commit_history_snapshot(&manifest, manifest_hash.clone(), &mut report)
             .await;
+        if let Some(warning) = self
+            .persist_run_record(
+                run_id,
+                started_at,
+                manifest_hash,
+                message,
+                Some(&report),
+                None,
+            )
+            .await
+        {
+            report.warnings.push(warning);
+        }
         Ok(report)
+    }
+
+    /// Append this execution's audit record to the history `runs` table.
+    ///
+    /// Returns a warning string when the record could not be persisted — the
+    /// run itself is never failed by an audit write.
+    async fn persist_run_record(
+        &mut self,
+        run_id: String,
+        started_at: String,
+        manifest_hash: String,
+        message: Option<String>,
+        report: Option<&RunReport>,
+        error: Option<&str>,
+    ) -> Option<String> {
+        let history = self.history.clone()?;
+        let record = RunRecord {
+            id: run_id,
+            ref_name: self.history_ref.clone(),
+            // Backfilled by `commit_history_snapshot`: the snapshot committed
+            // by this run, or the existing head when the manifest was
+            // unchanged. `None` only when no head resolved.
+            snapshot_id: report.and_then(|report| report.snapshot_id.clone()),
+            manifest_hash,
+            trigger: self.run_trigger.take(),
+            started_at,
+            finished_at: chrono::Utc::now().to_rfc3339(),
+            ok: error.is_none() && report.is_some_and(|report| report.ok),
+            cancelled: report.is_some_and(|report| {
+                report
+                    .statuses
+                    .values()
+                    .any(|status| matches!(status, RuntimeStatus::Cancelled))
+            }),
+            error: error.map(str::to_string),
+            message,
+            engine_version: dag_core::engine_version().to_string(),
+            source_revision: dag_core::source_revision().to_string(),
+            // Serialized after the snapshot commit, so `snapshot_id` is
+            // backfilled here (unlike the snapshot's own embedded copy).
+            run_report_json: report.and_then(|report| serde_json::to_string(report).ok()),
+        };
+        if let Err(persist_error) = history.record_run(&record).await {
+            let warning = format!("DAG run record was not persisted: {persist_error}");
+            tracing::warn!(run_id = %record.id, error = %persist_error, "{warning}");
+            return Some(warning);
+        }
+        None
     }
 
     async fn commit_history_snapshot(
@@ -814,7 +1020,13 @@ impl DataEngine {
             }
         };
 
-        if head.is_some_and(|head| head.manifest_hash == manifest_hash) {
+        if let Some(head) = head
+            && head.manifest_hash == manifest_hash
+        {
+            // The executed definition is exactly the current head: no new
+            // snapshot (the manifest did not change), but link the run to it
+            // so the run record still resolves to its definition.
+            report.snapshot_id = Some(head.id);
             return;
         }
 
@@ -842,34 +1054,96 @@ impl DataEngine {
         self.dag.output(node_id.into().as_ref())
     }
 
+    /// Maximum payload served through [`Self::read_file`]. Payload rendering
+    /// (evidence citations, …) is bounded; anything larger is caller-scope
+    /// data movement, not tool rendering.
+    pub const MAX_READ_FILE_BYTES: usize = 4 * 1024 * 1024;
+
+    /// Read artifact bytes for one output path: `vfs://` URIs resolve through
+    /// the mounted object storage, anything else reads the host filesystem.
+    ///
+    /// Fails closed on payloads larger than [`Self::MAX_READ_FILE_BYTES`] so
+    /// the tool layer never materializes a runaway artifact by accident.
+    pub async fn read_file(&self, path: &str) -> crate::error::Result<Vec<u8>> {
+        if let Some(virtual_path) = path.strip_prefix("vfs://") {
+            let storage = self.engine_ctx.opendal.as_ref().ok_or_else(|| {
+                crate::error::Error::Custom(format!(
+                    "VFS path `{path}` requires a mounted runtime VFS"
+                ))
+            })?;
+            let operator = storage.resolve(virtual_path);
+            let bytes = operator
+                .read(&storage.resolve_path(virtual_path))
+                .await
+                .map_err(|error| {
+                    crate::error::Error::Custom(format!("cannot read VFS file `{path}`: {error}"))
+                })?;
+            if bytes.len() > Self::MAX_READ_FILE_BYTES {
+                return Err(crate::error::Error::Custom(format!(
+                    "file `{path}` is {} bytes; read_file serves at most {} bytes",
+                    bytes.len(),
+                    Self::MAX_READ_FILE_BYTES
+                )));
+            }
+            return Ok(bytes.to_vec());
+        }
+
+        let local = path.strip_prefix("file://").unwrap_or(path);
+        let bytes = tokio::fs::read(local).await.map_err(|error| {
+            crate::error::Error::Custom(format!("cannot read file `{path}`: {error}"))
+        })?;
+        if bytes.len() > Self::MAX_READ_FILE_BYTES {
+            return Err(crate::error::Error::Custom(format!(
+                "file `{path}` is {} bytes; read_file serves at most {} bytes",
+                bytes.len(),
+                Self::MAX_READ_FILE_BYTES
+            )));
+        }
+        Ok(bytes)
+    }
+
     // ── incremental execution API ──────────────────────────────────────
 
-    /// Mark a node (and all its transitive descendants) as dirty, so the next
-    /// [`Self::run`] will re-execute them even in incremental mode.
+    /// Drop a node's recorded execution fingerprint, so the next
+    /// [`Self::run`] re-executes it even in incremental mode.
     ///
     /// Use this when an external input (file, VFS dataset, API response) has
     /// changed outside the engine and the node's cached output is stale.
+    /// Descendants are deliberately not invalidated: they re-evaluate through
+    /// the identity chain, and are correctly reused when this node reproduces
+    /// identical outputs.
     pub fn mark_node_dirty(&mut self, node_id: &str) {
         self.dag.mark_dirty(node_id);
     }
 
-    /// Mark every node dirty — forces a full re-run on the next [`Self::run`]
-    /// regardless of incremental mode.
+    /// Drop every recorded fingerprint — forces a full re-run on the next
+    /// [`Self::run`] regardless of incremental mode.
     pub fn mark_all_dirty(&mut self) {
         self.dag.mark_all_dirty();
     }
 
-    /// Whether a node is currently marked dirty (needs re-execution).
+    /// Whether a node will re-execute on the next incremental run, to the
+    /// extent knowable without dispatching (no recorded fingerprint or no
+    /// cached outputs).
     pub fn is_node_dirty(&self, node_id: &str) -> bool {
         self.dag.is_dirty(node_id)
     }
 
     /// Enable or disable incremental execution mode.
     ///
-    /// When enabled, subsequent [`Self::run`] calls only re-execute dirty nodes
-    /// and skip clean nodes whose outputs are cached from a previous run.
+    /// When enabled, subsequent [`Self::run`] calls reuse the cached outputs
+    /// of nodes whose computed execution fingerprint matches the one recorded
+    /// at their last successful execution.
     pub fn set_incremental(&mut self, enabled: bool) {
         self.config.incremental = enabled;
+    }
+
+    /// Set the input identity depth for fingerprint computation (see
+    /// [`dag_core::dag::InputHashing`]). `Content` additionally hashes
+    /// file-like inputs that lack a recorded content hash — full
+    /// Nextflow-style semantics at the cost of reading those inputs.
+    pub fn set_input_hashing(&mut self, hashing: crate::dag::InputHashing) {
+        self.config.input_hashing = hashing;
     }
 
     /// Query a node's runtime status. Returns `None` when the DAG has never
@@ -1069,6 +1343,36 @@ mod tests {
 
         assert!(Arc::ptr_eq(engine.container_execution(), &infra));
         assert!(Arc::ptr_eq(session.container_execution(), &infra));
+    }
+
+    #[tokio::test]
+    async fn read_file_serves_local_paths_and_enforces_the_size_cap() {
+        let engine = DataEngine::builder().build();
+
+        // Local absolute path.
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), b"evidence-bytes").unwrap();
+        let bytes = engine
+            .read_file(file.path().to_str().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(bytes, b"evidence-bytes");
+
+        // Oversize payloads fail closed with the limit named.
+        let big = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(big.path(), vec![0u8; DataEngine::MAX_READ_FILE_BYTES + 1]).unwrap();
+        let error = engine
+            .read_file(big.path().to_str().unwrap())
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("at most"), "{error}");
+
+        // vfs:// without a mounted storage fails closed too.
+        let error = engine
+            .read_file("vfs://artifacts/none.json")
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("mounted"), "{error}");
     }
 
     #[tokio::test]
@@ -1675,6 +1979,96 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn every_execution_records_a_run_row() {
+        let directory = tempfile::tempdir().unwrap();
+        let history = DagHistory::open(&directory.path().join("history.db"))
+            .await
+            .unwrap();
+        let mut engine = DataEngine::builder().build().with_history(history);
+        engine
+            .add_node_from_registry(
+                "read",
+                "file_to_dataframe",
+                serde_json::json!({"path": datasets_dir().join("Iris.csv").to_string_lossy()}),
+            )
+            .unwrap();
+
+        let first = engine.run().await.unwrap();
+        assert!(first.ok);
+        let snapshot_id = first
+            .snapshot_id
+            .clone()
+            .expect("first run commits a snapshot");
+
+        // Second run of the *same* manifest: no new snapshot — but a second
+        // run row linking to the same head (the head-hit backfill).
+        let second = engine.run().await.unwrap();
+        assert!(second.ok);
+        assert_eq!(
+            second.snapshot_id.as_deref(),
+            Some(snapshot_id.as_str()),
+            "unchanged manifest links the run to the existing head"
+        );
+
+        let runs = engine.list_runs(10, None).await.unwrap();
+        assert_eq!(runs.len(), 2, "every execution leaves a row");
+        assert!(
+            runs.iter()
+                .all(|run| run.snapshot_id.as_deref() == Some(snapshot_id.as_str()))
+        );
+        assert!(runs.iter().all(|run| run.ok));
+        assert!(runs.iter().all(|run| run.run_report_json.is_some()));
+        assert_eq!(runs[0].engine_version, dag_core::engine_version());
+        assert_eq!(runs[0].source_revision, dag_core::source_revision());
+        // The persisted report's snapshot_id is backfilled (unlike the
+        // snapshot-embedded copy, which is serialized before assignment).
+        let persisted: serde_json::Value =
+            serde_json::from_str(runs[0].run_report_json.as_deref().unwrap()).unwrap();
+        assert_eq!(persisted["snapshot_id"], serde_json::json!(snapshot_id));
+
+        // Definitions stay deduplicated: one manifest change, one snapshot.
+        let log = engine.dag_log(None, 10).await.unwrap();
+        assert_eq!(log.len(), 1);
+
+        // The trigger is recorded for the run that carried it, and consumed.
+        engine.set_run_trigger(Some("agent:/root/researcher".into()));
+        let _ = engine.run().await.unwrap();
+        let runs = engine.list_runs(10, None).await.unwrap();
+        assert_eq!(runs.len(), 3);
+        assert_eq!(runs[0].trigger.as_deref(), Some("agent:/root/researcher"));
+        assert!(runs[1].trigger.is_none(), "trigger is per-run");
+
+        let fetched = engine.get_run(&runs[0].id).await.unwrap().unwrap();
+        assert_eq!(fetched.id, runs[0].id);
+    }
+
+    #[tokio::test]
+    async fn failed_nodes_record_a_failed_run_row() {
+        let directory = tempfile::tempdir().unwrap();
+        let history = DagHistory::open(&directory.path().join("history.db"))
+            .await
+            .unwrap();
+        let mut engine = DataEngine::builder().build().with_history(history);
+        let boom_ports = NodePorts::new().add_output_port(None);
+        engine.add_node("boom", BoomNode(boom_ports)).unwrap();
+
+        let report = engine.run().await.expect("run completes even on failure");
+        assert!(!report.ok);
+
+        let runs = engine.list_runs(10, None).await.unwrap();
+        assert_eq!(runs.len(), 1);
+        assert!(!runs[0].ok);
+        assert!(!runs[0].cancelled);
+        // Node failures live inside the run report, not the top-level error
+        // field (which is reserved for engine-level errors).
+        assert_eq!(runs[0].error, None);
+        let persisted: serde_json::Value =
+            serde_json::from_str(runs[0].run_report_json.as_deref().unwrap()).unwrap();
+        assert_eq!(persisted["ok"], serde_json::json!(false));
+        assert_eq!(persisted["statuses"]["boom"], serde_json::json!("failed"));
+    }
+
     /// A node that sleeps — for the parallelism test. No inputs, no real output.
     #[derive(Clone)]
     struct SleepNode(NodePorts);
@@ -1752,7 +2146,6 @@ mod tests {
             "dataframe_to_file",
             "linear_regression",
             "echo",
-            "two_sample_mr",
             "enrichment_ora",
         ] {
             assert!(
@@ -1772,7 +2165,6 @@ mod tests {
             "dataframe_to_file",
             "linear_regression",
             "echo",
-            "two_sample_mr",
         ] {
             let schema = engine
                 .get_node_spec(kind)

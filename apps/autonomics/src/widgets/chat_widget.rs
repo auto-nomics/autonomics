@@ -37,12 +37,14 @@ impl ChatWidgetState {
 /// expensive markdown-parse / layout pass is never repeated for unchanged
 /// messages. See `AgentTabWidget` for the per-message incremental cache.
 pub struct ChatWidget<'a> {
+    /// Total visual rows represented by `lines`. Kept separate so callers can
+    /// pass only the viewport slice while the scrollbar still describes the
+    /// complete transcript.
     pub lines: &'a [Line<'static>],
+    pub total_rows: usize,
 }
 
-const MAX_PARAGRAPH_SCROLL: usize = u16::MAX as usize;
-
-fn visual_row_count(line: &Line<'_>, width: u16) -> usize {
+pub(crate) fn visual_row_count(line: &Line<'_>, width: u16) -> usize {
     if width == 0 {
         return 1;
     }
@@ -108,28 +110,14 @@ impl StatefulWidget for ChatWidget<'_> {
 
         // `trim: false` preserves leading whitespace so that pretty-printed JSON
         // (and indented markdown code blocks) keep their indentation when rendered.
-        state.total_lines = self
-            .lines
-            .iter()
-            .map(|line| visual_row_count(line, area.width))
-            .sum();
-
-        // Paragraph's vertical scroll is a u16. Virtualize the visible rows
-        // once the logical scroll offset exceeds that API's representable range.
-        if state.scroll_offset > MAX_PARAGRAPH_SCROLL {
-            let window = virtual_window(
-                self.lines,
-                state.scroll_offset,
-                area.height as usize,
-                area.width,
-            );
-            Paragraph::new(window).render(area, buf);
-        } else {
-            let paragraph = Paragraph::new(self.lines.to_vec())
-                .wrap(Wrap { trim: false })
-                .scroll((state.scroll_offset as u16, 0));
-            paragraph.render(area, buf);
-        }
+        state.total_lines = self.total_rows;
+        let window = virtual_window(
+            self.lines,
+            state.scroll_offset,
+            area.height as usize,
+            area.width,
+        );
+        Paragraph::new(window).render(area, buf);
 
         // Render scrollbar overlaid on the right edge of the chat area
         if state.total_lines > area.height as usize {
@@ -181,7 +169,11 @@ mod tests {
         terminal
             .draw(|frame| {
                 let mut state = ChatWidgetState::new(LINE_COUNT - 1);
-                ChatWidget { lines: &lines }.render(frame.area(), frame.buffer_mut(), &mut state);
+                ChatWidget {
+                    lines: &lines,
+                    total_rows: LINE_COUNT,
+                }
+                .render(frame.area(), frame.buffer_mut(), &mut state);
             })
             .unwrap();
 

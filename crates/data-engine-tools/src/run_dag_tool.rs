@@ -98,6 +98,9 @@ fn node_event_to_record(ev: &NodeEvent) -> Option<agentik_core::tools::ProgressR
 /// Convert a finished [`RunReport`] into the structured JSON returned to the
 /// agent. Shared by both the streaming and non-streaming execution paths so
 /// their results are identical.
+///
+/// File-level fingerprints are stripped via [`to_value_without_field`] so the
+/// agent-facing report stays slim without changing `FileRef`'s serde contract.
 fn build_report_json(report: RunReport) -> serde_json::Value {
     let warnings = report.warnings;
     let snapshot_id = report.snapshot_id;
@@ -115,13 +118,25 @@ fn build_report_json(report: RunReport) -> serde_json::Value {
                 obj.insert("output_type".into(), serde_json::json!(output_type));
             }
             if !nr.output_files.is_empty() {
-                obj.insert("output_files".into(), serde_json::json!(nr.output_files));
+                obj.insert(
+                    "output_files".into(),
+                    to_value_without_field(&nr.output_files, "fingerprint"),
+                );
             }
             if !nr.port_assignments.is_empty() {
-                obj.insert(
-                    "port_assignments".into(),
-                    serde_json::json!(nr.port_assignments),
-                );
+                // A map of port -> FileRef serializes as an object, so strip
+                // each value individually rather than the map itself.
+                let ports: serde_json::Map<String, _> = nr
+                    .port_assignments
+                    .iter()
+                    .map(|(port, file)| {
+                        (
+                            port.to_string(),
+                            to_value_without_field(file, "fingerprint"),
+                        )
+                    })
+                    .collect();
+                obj.insert("port_assignments".into(), serde_json::Value::Object(ports));
             }
 
             if let Some(schema) = nr.output_schema {
@@ -145,6 +160,20 @@ fn build_report_json(report: RunReport) -> serde_json::Value {
             if let Some(cause) = nr.skipped_because {
                 obj.insert("skipped_because".into(), serde_json::json!(cause));
             }
+            if let Some(execution) = nr.execution {
+                obj.insert("execution".into(), serde_json::json!(execution));
+            }
+            if !nr.inputs.is_empty() {
+                obj.insert(
+                    "inputs".into(),
+                    to_value_without_field(&nr.inputs, "fingerprint"),
+                );
+            }
+
+            // Omit fingerprint in run report for agent
+            // if let Some(fingerprint) = nr.fingerprint {
+            //     obj.insert("fingerprint".into(), serde_json::json!(fingerprint));
+            // }
 
             serde_json::Value::Object(obj)
         })
@@ -183,6 +212,27 @@ fn build_report_json(report: RunReport) -> serde_json::Value {
     })
 }
 
+/// Serialize a value, then remove `field` from the resulting object (or from
+/// every object in a top-level array). Used to drop fingerprints from file
+/// entries in the report without reconstructing the Rust types.
+fn to_value_without_field<T: serde::Serialize>(value: &T, field: &str) -> serde_json::Value {
+    let mut v = serde_json::to_value(value).unwrap_or(serde_json::Value::Null);
+    match &mut v {
+        serde_json::Value::Object(map) => {
+            map.remove(field);
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                if let Some(map) = item.as_object_mut() {
+                    map.remove(field);
+                }
+            }
+        }
+        _ => {}
+    }
+    v
+}
+
 #[async_trait]
 impl ToolFunction for RunDagTool {
     type Input = RunDagInput;
@@ -195,7 +245,12 @@ impl ToolFunction for RunDagTool {
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
         // Non-streaming path (used when called directly, not via the toolset).
-        let report = self.client.run_dag().await.map_err(ExecError::from)?;
+        let trigger = Some(format!("agent:{}", self.client.session_id()));
+        let report = self
+            .client
+            .run_dag(trigger)
+            .await
+            .map_err(ExecError::from)?;
         let _ = input; // commit_message only used in streaming path
         Ok(ToolResult::success_json(build_report_json(report)))
     }
@@ -211,7 +266,8 @@ impl ToolFunction for RunDagTool {
     ) -> Result<ToolResult, ToolError> {
         let parsed = serde_json::from_value::<Self::Input>(input)?;
 
-        let (mut event_rx, reply_rx) = self.client.run_dag_stream(parsed.commit_message);
+        let trigger = Some(format!("agent:{}", self.client.session_id()));
+        let (mut event_rx, reply_rx) = self.client.run_dag_stream(parsed.commit_message, trigger);
         // Pin the reply future so it can be polled across loop iterations.
         tokio::pin!(reply_rx);
 
@@ -259,5 +315,68 @@ mod tests {
             "no DAG history store attached; run snapshot was not persisted"
         );
         assert!(json["snapshot_id"].is_null());
+    }
+
+    #[test]
+    fn report_json_strips_file_fingerprints() {
+        use data_engine::dag::runtime::NodeReport;
+        use data_engine::dag::{InputBinding, RuntimeStatus};
+        use data_engine::value::{FileFingerprint, FileRef};
+
+        let fingerprint = FileFingerprint {
+            size: 1,
+            mtime_ns: 2,
+            content_hash: Some("abc".into()),
+            immutable_remote: false,
+        };
+        let file = FileRef {
+            path: "out.csv".into(),
+            format: Some("csv".into()),
+            fingerprint: Some(fingerprint.clone()),
+        };
+        let node = NodeReport {
+            id: "sink".into(),
+            status: RuntimeStatus::Success,
+            node_type: "dataframe_to_file".into(),
+            output_type: Some("File".into()),
+            output_files: vec![file.clone()],
+            port_assignments: [(0u8, file)].into_iter().collect(),
+            output_schema: None,
+            output_rows: None,
+            elapsed_ms: Some(3),
+            dispatch_seq: Some(0),
+            artifact_path: None,
+            file_path: Some("out.csv".into()),
+            error: None,
+            skipped_because: None,
+            execution: None,
+            inputs: vec![InputBinding {
+                from: "src".into(),
+                from_port: 0,
+                to_port: 0,
+                kind: "DataFrame".into(),
+                path: Some("in.csv".into()),
+                fingerprint: Some(fingerprint),
+            }],
+            fingerprint: None,
+        };
+        let report = RunReport {
+            ok: true,
+            warnings: Vec::new(),
+            snapshot_id: None,
+            resource: Default::default(),
+            nodes: vec![node],
+            statuses: Default::default(),
+            errors: Default::default(),
+        };
+
+        let json = build_report_json(report);
+        let node = &json["nodes"][0];
+
+        assert!(node["output_files"][0].get("fingerprint").is_none());
+        assert_eq!(node["output_files"][0]["path"], "out.csv");
+        assert!(node["port_assignments"]["0"].get("fingerprint").is_none());
+        assert!(node["inputs"][0].get("fingerprint").is_none());
+        assert_eq!(node["inputs"][0]["path"], "in.csv");
     }
 }

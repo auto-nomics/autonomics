@@ -5,6 +5,9 @@
 那份文档描述「工具 → 镜像 + 目录面板 + 薄包装」的三层分离；这份文档描述
 「薄包装 → 纯数据清单 + git 仓库」的最后一跃。
 
+如果是从零创建插件，而不是迁移并对账既有 Rust 包装，请改用
+[插件构建指南](plugins/authoring-guide_zh.md)。
+
 参考实现是 `ldsc` 家族（`ldsc_h2`、`ldsc_munge`、
 `ldsc_rg`），已端到端迁移完成，并由
 `crates/container-plugin/tests/ldsc_migration.rs`（黄金对账）和
@@ -63,7 +66,7 @@ loader 扫描该根目录、以 fail-closed 方式校验每个 `manifest.toml`�
 
 ## 第 1 步：创建插件目录
 
-在插件检出根目录（开发路径 `/mnt/projects/node-plugins/`）下创建
+在插件检出根目录（如在开发路径 `/mnt/projects/node-plugins/`）下创建
 `<tool>/`，包含：
 
 - `manifest.toml` —— 见下文编写规范。

@@ -43,15 +43,15 @@ mod shared;
 mod tool_images;
 mod workflow;
 
-pub use compaction::{estimate_message_tokens, DEFAULT_KEEP_TOKENS};
+pub use compaction::{DEFAULT_KEEP_TOKENS, estimate_message_tokens};
 pub(crate) use shared::AgentShared;
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use agentik_sdk::types::messages::{ContentBlock, Message, Role};
 use agentik_sdk::types::AgentEvent;
+use agentik_sdk::types::messages::{ContentBlock, Message, Role};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;

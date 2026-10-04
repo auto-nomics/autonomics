@@ -75,7 +75,7 @@ fn deseq2_de_plugin_compiles_to_the_legacy_wrapper_contract() {
 
     assert_eq!(
         compiled.image,
-        "ghcr.io/auto-nomics/autonomics/deseq2@sha256:8b2e2a78d87293e6cae6dbed2e283dff1dd8461a7f993cb347ca9810698b2b3e"
+        "ghcr.io/auto-nomics/autonomics/deseq2@sha256:9bd9a2e95a59d7a1725351b99fe188a71202a68a7255830213fe39a226e7864f"
     );
     assert_eq!(compiled.outputs.len(), 5);
     assert_eq!(compiled.outputs[0].path, "results.tsv");
@@ -132,10 +132,12 @@ fn deseq2_de_plugin_compiles_to_the_legacy_wrapper_contract() {
     assert!(compiled.files.is_empty());
 
     // The env channel is the whole param contract for a baked runner, so the
-    // six legacy AUTONOMICS_DESEQ2_* names are asserted as an exact key set
-    // (BTreeMap order) plus default values byte-equal to the legacy
-    // `container_spec` output: empty covariates join, enum label, serde_json
-    // number spellings.
+    // AUTONOMICS_DESEQ2_* names are asserted as an exact key set (BTreeMap
+    // order) plus default values byte-equal to the legacy `container_spec`
+    // output: empty covariates join, enum label, serde_json number spellings.
+    // Deliberate delta: LFC_SHRINK postdates the legacy wrapper — the
+    // pre-apeglm image silently delivered raw MLE coefficients while
+    // downstream consumers assumed DESeq2-recommended apeglm shrinkage.
     let env_names: Vec<&str> = compiled.env.keys().map(String::as_str).collect();
     assert_eq!(
         env_names,
@@ -145,6 +147,7 @@ fn deseq2_de_plugin_compiles_to_the_legacy_wrapper_contract() {
             "AUTONOMICS_DESEQ2_CONDITION_TEST",
             "AUTONOMICS_DESEQ2_COVARIATES",
             "AUTONOMICS_DESEQ2_FIT_TYPE",
+            "AUTONOMICS_DESEQ2_LFC_SHRINK",
             "AUTONOMICS_DESEQ2_THREADS",
         ]
     );
@@ -171,6 +174,10 @@ fn deseq2_de_plugin_compiles_to_the_legacy_wrapper_contract() {
     assert_eq!(
         compiled.env.get("AUTONOMICS_DESEQ2_FIT_TYPE").unwrap(),
         "parametric"
+    );
+    assert_eq!(
+        compiled.env.get("AUTONOMICS_DESEQ2_LFC_SHRINK").unwrap(),
+        "apeglm"
     );
     assert_eq!(compiled.env.get("AUTONOMICS_DESEQ2_THREADS").unwrap(), "1");
 
@@ -203,6 +210,7 @@ fn deseq2_de_plugin_renders_submitted_values_into_env() {
             "condition_test": "knockout",
             "covariates": "type,batch",
             "fit_type": "local",
+            "lfc_shrink": "none",
             "alpha": 0.05,
             "threads": 1,
         }),
@@ -237,6 +245,10 @@ fn deseq2_de_plugin_renders_submitted_values_into_env() {
         compiled.env.get("AUTONOMICS_DESEQ2_FIT_TYPE").unwrap(),
         "local"
     );
+    assert_eq!(
+        compiled.env.get("AUTONOMICS_DESEQ2_LFC_SHRINK").unwrap(),
+        "none"
+    );
     assert_eq!(compiled.env.get("AUTONOMICS_DESEQ2_ALPHA").unwrap(), "0.05");
     assert_eq!(compiled.env.get("AUTONOMICS_DESEQ2_THREADS").unwrap(), "1");
 }
@@ -267,6 +279,10 @@ fn deseq2_de_plugin_schema_matches_the_legacy_param_surface() {
     // values outside parametric/local/mean.
     assert_eq!(schema["properties"]["fit_type"]["type"], "string");
     assert_eq!(schema["properties"]["fit_type"]["default"], "parametric");
+    // lfc_shrink postdates the legacy wrapper: apeglm posterior estimates
+    // by default, none for raw MLE coefficients.
+    assert_eq!(schema["properties"]["lfc_shrink"]["type"], "string");
+    assert_eq!(schema["properties"]["lfc_shrink"]["default"], "apeglm");
     // alpha bounds per the legacy validate() code: strict (0, 1).
     let alpha = &schema["properties"]["alpha"];
     assert_eq!(alpha["type"], "number");

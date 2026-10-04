@@ -42,12 +42,13 @@ pub fn run_serve(args: ServeArgs) -> color_eyre::Result<()> {
     let runtime = tokio::runtime::Runtime::new()
         .map_err(|e| color_eyre::eyre::eyre!("failed to build tokio runtime: {e}"))?;
     runtime.block_on(async move {
-        match args.action {
-            Some(ServeAction::Status) => match manager::probe().await {
+        if let Some(ServeAction::Status) = args.action {
+            match manager::probe().await {
                 Ok(Some(status)) => {
                     println!(
-                        "gateway running: pid {} (v{}, up {}s, {} agents, last_seq {})",
+                        "gateway running: pid {} at {} (v{}, up {}s, {} agents, last_seq {})",
                         status.pid,
+                        status.addr,
                         status.version,
                         status.uptime_secs,
                         status.agent_count,
@@ -63,8 +64,9 @@ pub fn run_serve(args: ServeArgs) -> color_eyre::Result<()> {
                     eprintln!("error: {error}");
                     std::process::exit(3);
                 }
-            },
-            Some(ServeAction::Stop) => match manager::stop().await {
+            }
+        } else if let Some(ServeAction::Stop) = args.action {
+            match manager::stop().await {
                 Ok(()) => {
                     println!("gateway shutdown requested");
                     Ok(())
@@ -73,14 +75,13 @@ pub fn run_serve(args: ServeArgs) -> color_eyre::Result<()> {
                     eprintln!("error: {error}");
                     std::process::exit(3);
                 }
-            },
-            None => {
-                run_foreground_or_daemon(
-                    daemon_config.expect("daemon config was prepared"),
-                    args.daemon,
-                )
-                .await
             }
+        } else {
+            run_foreground_or_daemon(
+                daemon_config.expect("daemon config was prepared"),
+                args.daemon,
+            )
+            .await
         }
     })?;
     // Bound the time the runtime waits for background tasks once the
@@ -317,6 +318,13 @@ fn stabilize_daemon_cwd(config: &mut gateway::RuntimeConfig) -> color_eyre::Resu
 /// added to.
 fn setup_network_allowlist(state_dir: &std::path::Path) -> color_eyre::Result<()> {
     let allowlist_path = state_dir.join(nodes_io::http_fetch::ALLOWLIST_FILE_NAME);
+    // First writer on a fresh state dir: at this point in startup nothing
+    // has created it yet (the log dir and the instance lock come later),
+    // so a first-ever launch — including the auto-spawned daemon on a
+    // brand-new machine — dies here without this.
+    std::fs::create_dir_all(state_dir).map_err(|error| {
+        color_eyre::eyre::eyre!("cannot create {}: {error}", state_dir.display())
+    })?;
     if !allowlist_path.exists() {
         std::fs::write(
             &allowlist_path,

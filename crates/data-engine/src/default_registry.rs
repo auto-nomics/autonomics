@@ -62,15 +62,13 @@ pub fn build_default_registry_with_container_execution(
     #[cfg(feature = "bundle-writing")]
     registry.register_plugin(&nodes_writing::Plugin);
 
-    // ── GRF bundle ────────────────────────────────────────────────────
-    #[cfg(feature = "bundle-grf")]
-    registry.register_plugin(&nodes_grf::Plugin);
+    // ── Regression discontinuity bundle ───────────────────────────────
     #[cfg(feature = "bundle-rd")]
     registry.register_plugin(&nodes_rd::Plugin);
 
     // ── Phase 3: IO, causal, lcmm, mr, survey bundles ──────────────────
     #[cfg(feature = "bundle-io")]
-    registry.register_plugin(&nodes_io::Plugin::new(Arc::clone(&container_execution)));
+    registry.register_plugin(&nodes_io::Plugin::new());
     #[cfg(feature = "bundle-opengwas")]
     registry.register_plugin(&nodes_opengwas::Plugin);
     #[cfg(feature = "bundle-causal")]
@@ -99,6 +97,8 @@ pub fn build_default_registry_with_container_execution(
     registry.register_plugin(&nodes_ml::Plugin);
     #[cfg(feature = "bundle-hypothesize")]
     registry.register_plugin(&nodes_hypothesize::Plugin);
+    #[cfg(feature = "bundle-power")]
+    registry.register_plugin(&nodes_power::Plugin);
 
     // ── Phase 1.5: DL bundle ────────────────────────────────────────────
     #[cfg(feature = "bundle-dl")]
@@ -171,12 +171,19 @@ mod tests {
                     panel_cache_root: "/tmp/autonomics-visualization-panels".into(),
                 },
             ));
+        // Pin the plugins root to a path that does not exist: the assertion
+        // below is about a *plugin-free* registry build, and the default
+        // root (`~/.autonomics/plugins`) exists on dev machines with
+        // plugins installed — where the manifest `visualization` plugin
+        // legitimately registers its kind.
+        let plugins_parent = tempfile::tempdir().unwrap();
+        let plugins_root = plugins_parent.path().join("absent");
         let registry = build_default_registry_with_container_execution(
             runtime_env,
             None,
             Arc::new(BundleRegistry::new()),
             container_execution,
-            None,
+            Some(plugins_root),
         );
 
         // The wrapper moved to the manifest plugin: neither the wrapper
@@ -203,6 +210,26 @@ mod tests {
             let ports = registry
                 .get_node_ports(kind)
                 .unwrap_or_else(|error| panic!("{kind} must be registered: {error}"));
+            assert_eq!(ports.output_ports().len(), 1);
+        }
+    }
+
+    #[test]
+    fn enrichr_source_factories_are_registered() {
+        let runtime_env = datafusion::prelude::SessionContext::new().runtime_env();
+        let registry = build_default_registry(runtime_env, None, Arc::new(BundleRegistry::new()));
+
+        for kind in [
+            "source_enrichr_enrich",
+            "source_enrichr_libraries",
+            "source_enrichr_view_list",
+            "source_enrichr_genemap",
+            "source_enrichr_background_enrich",
+        ] {
+            let ports = registry
+                .get_node_ports(kind)
+                .unwrap_or_else(|error| panic!("{kind} must be registered: {error}"));
+            assert_eq!(ports.input_ports().len(), 0);
             assert_eq!(ports.output_ports().len(), 1);
         }
     }

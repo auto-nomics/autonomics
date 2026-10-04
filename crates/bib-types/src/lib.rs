@@ -13,9 +13,11 @@
 //! `eutils` can depend on `bib-types` without pulling in storage code.
 
 pub mod convert;
+pub mod evidence;
 pub mod query;
 pub mod types;
 
+pub use evidence::{EvidenceRecord, EvidenceSet};
 pub use query::{BoolOp, StructuredSearch, YearRange};
 pub use types::{
     AddedBy, Annotation, AnnotationKind, Article, ArticleRole, ArticleSource, Author, Collection,

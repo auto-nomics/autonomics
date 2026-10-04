@@ -174,7 +174,7 @@ Acceptance for this stage:
 - package validates;
 - payload checksums and sizes are recorded;
 - package is published to the intended catalog;
-- `catalog list` or `catalog_search` can find it;
+- `catalog install` followed by `catalog_search` can find it in the local cache;
 - the package has no build tooling or transient files.
 
 ## Stage 3: Wrap the node

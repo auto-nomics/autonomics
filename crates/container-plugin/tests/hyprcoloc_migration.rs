@@ -84,7 +84,10 @@ fn hyprcoloc_plugin_compiles_to_the_legacy_wrapper_contract() {
     // Byte-exact command: bare interpreter, script carried alongside — the
     // legacy `command: ["Rscript"]` + generated script shape.
     assert_eq!(compiled.command, vec!["Rscript".to_string()]);
-    let script = compiled.script.as_deref().expect("hyprcoloc ships a script");
+    let script = compiled
+        .script
+        .as_deref()
+        .expect("hyprcoloc ships a script");
 
     // Semantic script markers — the same tokens the legacy wrapper's test
     // asserted on its generated template, plus the do.call splicing the
@@ -136,10 +139,7 @@ fn hyprcoloc_plugin_compiles_to_the_legacy_wrapper_contract() {
     // Defaults render the legacy serde defaults (1e-4 → "0.0001", matching
     // the legacy template literal).
     assert_eq!(
-        compiled
-            .env
-            .get("HYPRCOLOC_SNP_COLUMN")
-            .map(String::as_str),
+        compiled.env.get("HYPRCOLOC_SNP_COLUMN").map(String::as_str),
         Some("snp")
     );
     assert_eq!(
@@ -199,7 +199,10 @@ fn hyprcoloc_plugin_compiles_to_the_legacy_wrapper_contract() {
         Some("")
     );
     assert_eq!(
-        compiled.env.get("HYPRCOLOC_ALIGN_THRESH").map(String::as_str),
+        compiled
+            .env
+            .get("HYPRCOLOC_ALIGN_THRESH")
+            .map(String::as_str),
         Some("")
     );
 
@@ -228,11 +231,17 @@ fn hyprcoloc_plugin_compiles_to_the_legacy_wrapper_contract() {
         Some("trait2")
     );
     assert_eq!(
-        compiled_full.env.get("HYPRCOLOC_PRIOR_1").map(String::as_str),
+        compiled_full
+            .env
+            .get("HYPRCOLOC_PRIOR_1")
+            .map(String::as_str),
         Some("0.001")
     );
     assert_eq!(
-        compiled_full.env.get("HYPRCOLOC_PRIOR_12").map(String::as_str),
+        compiled_full
+            .env
+            .get("HYPRCOLOC_PRIOR_12")
+            .map(String::as_str),
         Some("0.05")
     );
     assert_eq!(
@@ -264,7 +273,10 @@ fn hyprcoloc_plugin_compiles_to_the_legacy_wrapper_contract() {
         Some("alignment")
     );
     assert_eq!(
-        compiled_full.env.get("HYPRCOLOC_REG_STEPS").map(String::as_str),
+        compiled_full
+            .env
+            .get("HYPRCOLOC_REG_STEPS")
+            .map(String::as_str),
         Some("2")
     );
     assert_eq!(
@@ -285,8 +297,8 @@ fn runner_script_keeps_the_legacy_validation_markers() {
         eprintln!("skipping: plugin directory not present");
         return;
     };
-    let script = std::fs::read_to_string(root.join("hyprcoloc").join("scripts/hyprcoloc_runner.R"))
-        .unwrap();
+    let script =
+        std::fs::read_to_string(root.join("hyprcoloc").join("scripts/hyprcoloc_runner.R")).unwrap();
     assert!(script.contains("hyprcoloc requires at least two traits"));
     assert!(script.contains("trait name cannot be empty"));
     assert!(script.contains("trait names must be unique"));

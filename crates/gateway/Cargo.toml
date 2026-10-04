@@ -11,9 +11,11 @@ agentik-core = { path = "../agentik-core" }
 agentik-sdk = { path = "../agentik-sdk" }
 agentik-types = { path = "../agentik-types", features = ["schema"] }
 runtime = { path = "../runtime" }
-tui-http = { path = "../tui-http" }
+skills = { path = "../skills" }
+api-server = { path = "../api-server" }
 bib-base = { path = "../bib-base" }
 dag-core = { path = "../dag-core" }
+container-plugin = { path = "../container-plugin" }
 axum = "0.8"
 tokio.workspace = true
 tokio-stream = "0.1"

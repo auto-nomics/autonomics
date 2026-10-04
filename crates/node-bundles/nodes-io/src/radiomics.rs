@@ -613,6 +613,7 @@ async fn glob_dicom_files(ctx: &NodeCtx, pattern: &str) -> Result<Vec<FileRef>, 
                     size: meta.size,
                     mtime_ns: mtime_ns as i128,
                     content_hash: meta.e_tag,
+                    immutable_remote: true,
                 }),
             });
         }
@@ -1980,6 +1981,9 @@ async fn resolve_file_ref(ctx: &NodeCtx, path: &str) -> Result<FileRef, String> 
                         size: metadata.content_length(),
                         mtime_ns: mtime_ns as i128,
                         content_hash: metadata.etag().map(str::to_string),
+                        // The original path may be a bare mounted virtual
+                        // path — immutable remote regardless of spelling.
+                        immutable_remote: true,
                     }),
                 });
             }

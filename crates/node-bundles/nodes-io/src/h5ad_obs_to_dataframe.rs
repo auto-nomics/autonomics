@@ -731,9 +731,7 @@ fn read_batch(
         let array = match &column.source {
             ColumnSource::Index => {
                 if metadata.index_nullable {
-                    let group = obs
-                        .group(&metadata.index_dataset)
-                        .map_err(hdf5_error)?;
+                    let group = obs.group(&metadata.index_dataset).map_err(hdf5_error)?;
                     let values = group.dataset("values").map_err(hdf5_error)?;
                     let mask = group.dataset("mask").ok();
                     read_string_array(&values, start, end, mask.as_ref().map(|m| (m, start, end)))
@@ -1623,7 +1621,9 @@ mod tests {
         // it is a mount path, even though it does not exist as a host-local
         // file — mirroring how `file_to_dataframe` and container staging
         // already accept mounted paths.
-        use vfs::{BackendConfig, BackendDefinition, MountDefinition, MountedObjectStore, VfsManifest};
+        use vfs::{
+            BackendConfig, BackendDefinition, MountDefinition, MountedObjectStore, VfsManifest,
+        };
 
         let backend = tempfile::tempdir().unwrap();
         let manifest = VfsManifest {

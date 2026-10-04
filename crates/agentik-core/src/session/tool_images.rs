@@ -171,7 +171,7 @@ mod tests {
     use super::*;
     use crate::agent::AgentConfig;
     use crate::message_ext::AgentMessageExt;
-    use crate::session::{make_test_session, AgentShared};
+    use crate::session::{AgentShared, make_test_session};
     use crate::testing::dummy_model_info;
     use crate::tools::error::ToolError;
     use crate::tools::function::{ToolContext, ToolFunction};
@@ -227,9 +227,9 @@ mod tests {
 
         let empty_blocks = ToolResult {
             tool_use_id: "call_t2".into(),
-            content: ToolResultContent::Blocks(vec![
-                agentik_types::tools::ToolResultBlock::text("only text"),
-            ]),
+            content: ToolResultContent::Blocks(vec![agentik_types::tools::ToolResultBlock::text(
+                "only text",
+            )]),
             is_error: None,
         };
         assert!(tool_result_image_companion(&empty_blocks, "t").is_none());
@@ -239,10 +239,7 @@ mod tests {
     fn companion_caps_image_count_and_notes_skips() {
         let blocks: Vec<_> = (0..6)
             .map(|i| {
-                agentik_types::tools::ToolResultBlock::image_base64(
-                    "image/png",
-                    "x".repeat(10 + i),
-                )
+                agentik_types::tools::ToolResultBlock::image_base64("image/png", "x".repeat(10 + i))
             })
             .collect();
         let result = ToolResult {
@@ -397,7 +394,6 @@ mod tests {
             system_prompt_section: None,
             system_prompt_identity: None,
             memory: None,
-            skill_runtime: None,
             tool_registry: Arc::new(registry),
             tasks: Arc::new(tokio::sync::RwLock::new(
                 crate::tools::task_runtime::TaskStore::new(),

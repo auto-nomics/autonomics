@@ -308,6 +308,117 @@ impl App {
                     self.dirty = true;
                 }
             }
+            crate::app_event::AppEvent::SkillEvolutionLoaded {
+                status,
+                library,
+                observations,
+            } => {
+                match status {
+                    Ok(status) => {
+                        let dashboard = &mut self.state.skill_evolution;
+                        dashboard.seen_generation = status.generation;
+                        dashboard.seen_cycles_completed = status.cycles_completed;
+                        dashboard.status = Some(status);
+                        dashboard.error = None;
+                    }
+                    Err(e) => {
+                        self.state.skill_evolution.error = Some(e);
+                    }
+                }
+                match library {
+                    Ok(library) => {
+                        self.state.skill_evolution.skills.set_library(library);
+                        self.fetch_skill_detail();
+                    }
+                    Err(error) => self.state.skill_evolution.skills.error = Some(error),
+                }
+                match observations {
+                    Ok(observations) => self
+                        .state
+                        .skill_evolution
+                        .observations
+                        .set_observations(observations),
+                    Err(error) => self.state.skill_evolution.observations.error = Some(error),
+                }
+            }
+            crate::app_event::AppEvent::SkillDetailLoaded { name, result } => {
+                let dashboard = &mut self.state.skill_evolution.skills;
+                dashboard.apply_detail(name, result);
+            }
+            crate::app_event::AppEvent::SkillEvolutionTriggered(result) => match result {
+                Ok(report) => {
+                    // An explicit RunCycle against an empty pool
+                    // still runs the cycle body (the operator asked
+                    // for it); the report comes back with zero
+                    // clusters. Show an info toast instead of a
+                    // success one so the operator can tell the cycle
+                    // was a no-op from causes (nothing recorded yet)
+                    // other than "wrote N".
+                    let empty_run = report.triggers.is_empty()
+                        && report.clusters_considered == 0
+                        && report.skipped.is_empty();
+                    let summary = if empty_run {
+                        "no observations to distill — record one with skill_observe".to_string()
+                    } else {
+                        format!(
+                            "{} written, {} updated, {} auto-approved, {} left pending",
+                            report.proposals_written.len(),
+                            report.updated_existing.len(),
+                            report.auto_approved.len(),
+                            report.left_pending,
+                        )
+                    };
+                    self.state.skill_evolution.last_report = Some(summary.clone());
+                    if empty_run {
+                        self.state
+                            .toasts
+                            .info("Skill evolution cycle", Some(summary));
+                    } else {
+                        self.state
+                            .toasts
+                            .success("Skill evolution cycle", Some(summary));
+                    }
+                    self.refresh_skill_evolution();
+                }
+                Err(e) => {
+                    self.state.toasts.error("Skill evolution cycle", Some(e));
+                }
+            },
+            crate::app_event::AppEvent::SkillEvolutionStatusPolled { status } => {
+                // Lighter than a full load: status fields only, plus an
+                // auto-refresh when generation or cycle counts advanced
+                // (a cycle's writes have invalidated the cached library /
+                // observations / proposal listings).
+                let Ok(status) = status else { return };
+                let dashboard = &mut self.state.skill_evolution;
+                let advanced = dashboard.status.as_ref().map(|prev| prev.generation)
+                    != Some(status.generation)
+                    || dashboard.seen_cycles_completed != status.cycles_completed;
+                dashboard.status = Some(status);
+                if advanced && dashboard.visible {
+                    self.refresh_skill_evolution();
+                }
+            }
+            crate::app_event::AppEvent::SkillProposalActioned { action, result } => {
+                match result {
+                    Ok(detail) => {
+                        self.state
+                            .toasts
+                            .success(format!("Proposal {action}"), Some(detail));
+                        // The action may have been issued from the palette
+                        // with the dashboard closed — refresh either way is
+                        // cheap and keeps the next open current.
+                        if self.state.skill_evolution.visible {
+                            self.refresh_skill_evolution();
+                        }
+                    }
+                    Err(e) => {
+                        self.state
+                            .toasts
+                            .error(format!("Proposal {action}"), Some(e));
+                    }
+                }
+            }
             crate::app_event::AppEvent::ProviderSaved {
                 provider_name,
                 result,

@@ -1,0 +1,80 @@
+# Rust
+/target/
+**/target/
+**/*.rs.bk
+*.pdb
+Cargo.lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.helix/
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Build artifacts
+**/target/
+**/Cargo.lock
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+*.elf
+
+# Embedded artifacts
+*.bin
+*.hex
+*.uf2
+*.map
+*.lst
+memory.x
+
+# Documentation
+/doc/
+
+# Test artifacts
+/tests/target/
+
+# Debug output files
+algo_analysis.txt
+clippy_output.txt
+debug_layout.txt
+debug_output.txt
+rendering_issues_output.txt
+test_output.txt
+*.debug.txt
+
+# Backup files
+*.tmp
+*.bak
+
+# Embedded examples specific
+examples/*/target/
+examples/*/*.bin
+examples/*/*.hex
+examples/*/*.elf
+examples/*/openocd.gdb
+examples/*/debug.gdb
+
+# Package/release artifacts
+target/package/
+*.crate
+
+fuzz/
+.agent/
+scripts/
+temp/
+review/

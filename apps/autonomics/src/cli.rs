@@ -13,6 +13,7 @@
 
 mod bib;
 mod cache;
+mod export;
 mod kms;
 mod panels;
 mod run;
@@ -25,6 +26,7 @@ pub use bib::{
     BibAction, BibArgs, ExportArgs, InfoArgs, ListArgs, ReextractArgs, RequestsArgs, UploadArgs,
 };
 pub use cache::{CacheAction, CacheArgs, ClearOpengwasArgs, RefreshOpengwasArgs};
+pub use export::ExportRunArgs;
 pub use kms::KmsArgs;
 pub use panels::{PanelsAction, PanelsArgs};
 pub use run::RunArgs;
@@ -53,6 +55,10 @@ pub enum Command {
 
     /// Bibliography management — upload full-text PDFs, list pending requests.
     Bib(BibArgs),
+
+    /// Export a recorded DAG run as provenance evidence
+    /// (RO-Crate directory / W3C PROV-JSON).
+    ExportRun(ExportRunArgs),
 
     /// Headless mode
     Run(RunArgs),

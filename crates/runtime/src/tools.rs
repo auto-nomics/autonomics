@@ -133,8 +133,13 @@ pub fn protocolio_tools(storage: Arc<OpendalFileStorage>) -> Vec<ToolRegistratio
 /// `AUTONOMICS_BIB_DB` environment variable.
 pub const DEFAULT_BIB_DB: &str = "bib.db";
 
-/// Bibliography tools: literature search/fetch (`lit_search`, `lit_fetch`)
-/// plus library management (`bib_save`, `bib_create_collection`, …, `bib_export`).
+/// Bibliography tools: local-library management (`bib_save`,
+/// `bib_create_collection`, …, `bib_export`).
+///
+/// Literature *retrieval* (search / fetch / citation graph /
+/// recommendations) is not a tool anymore — it flows through the DAG
+/// evidence channel (`source_literature`, `source_literature_fetch`,
+/// `source_literature_citations`, `source_s2_recommendations`).
 ///
 /// `db_path` selects the libSQL file backing [`BibBase`]; pass
 /// [`DEFAULT_BIB_DB`] for the conventional location.

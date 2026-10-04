@@ -8,7 +8,7 @@ Autonomics 智能体平台的交互式终端界面——通过一个基于 `rata
 ## 功能特性
 
 - **本地 HTTP API** — TUI 启动时同步启动 `/api/v1` REST 后端，当前提供文献
-  管理模块，详见 [TUI HTTP API](tui-http-api_zh.md)。
+  管理模块，详见 [API Server（HTTP API）](api-server_zh.md)。
 - **智能体对话** — 基于 `agentik-core` 的流式对话，支持工具调用。实时 Markdown
   渲染（代码块经 `syntect` 语法高亮）、思维增量展示、逐轮 token 用量统计、后台
   工具任务，以及支持增量历史搜索（`Ctrl+R`）的可滚动对话记录。
@@ -231,7 +231,7 @@ autonomics kms --agent-db /path/to/agent.db
 
 ## `bib` 子命令
 
-本地文献库管理。所有子命令均接受 `--db <PATH>`（默认 `bib.db`）。
+本地文献库管理。所有子命令默认走 runtime 配置的文献库路径（`AUTONOMICS_BIB_DB` → `~/.autonomics/bib.db`，与 daemon 一致），可用 `--db <PATH>` 显式覆盖。
 
 ```
 autonomics bib [OPTIONS] <ACTION>

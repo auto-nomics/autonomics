@@ -66,6 +66,15 @@ impl FileFormat {
     /// bioinformatics files (`.vcf.gz`, `.bed.gz`, …).
     pub fn from_path(path: &str) -> Option<Self> {
         let lower = path.to_lowercase();
+        // Gzip and BGZF share the gzip container. Strip either suffix and infer
+        // the underlying format once, so `.csv.gz`, `.tsv.bgz`, `.vcf.bgz`, and
+        // future base formats stay in one table.
+        if let Some(stem) = lower
+            .strip_suffix(".bgz")
+            .or_else(|| lower.strip_suffix(".gz"))
+        {
+            return Self::from_path(stem);
+        }
         // Order matters: longer/compound suffixes first.
         let suffixes: &[(&str, FileFormat)] = &[
             (".vcf.gz", FileFormat::Vcf),
@@ -75,6 +84,10 @@ impl FileFormat {
             (".fasta", FileFormat::Fasta),
             (".fa.gz", FileFormat::Fasta),
             (".fa", FileFormat::Fasta),
+            (".faa.gz", FileFormat::Fasta),
+            (".faa", FileFormat::Fasta),
+            (".fna.gz", FileFormat::Fasta),
+            (".fna", FileFormat::Fasta),
             (".fastq.gz", FileFormat::Fastq),
             (".fastq", FileFormat::Fastq),
             (".fq.gz", FileFormat::Fastq),
@@ -97,8 +110,12 @@ impl FileFormat {
             (".bigwig", FileFormat::BigWig),
             (".bb", FileFormat::BigBed),
             (".bigbed", FileFormat::BigBed),
+            (".csv.zst", FileFormat::Csv),
+            (".csv.zstd", FileFormat::Csv),
             (".csv", FileFormat::Csv),
             (".tsv.gz", FileFormat::Tsv),
+            (".tsv.zst", FileFormat::Tsv),
+            (".tsv.zstd", FileFormat::Tsv),
             (".tsv", FileFormat::Tsv),
             (".parquet", FileFormat::Parquet),
             (".json.gz", FileFormat::Json),
@@ -118,8 +135,8 @@ impl FileFormat {
 
     pub fn from_label(label: &str) -> Option<Self> {
         match label.to_ascii_lowercase().as_str() {
-            "csv" => Some(Self::Csv),
-            "tsv" | "tsv.gz" => Some(Self::Tsv),
+            "csv" | "csv.gz" | "csv.bgz" | "csv.zst" | "csv.zstd" => Some(Self::Csv),
+            "tsv" | "tsv.gz" | "tsv.bgz" | "tsv.zst" | "tsv.zstd" => Some(Self::Tsv),
             "parquet" => Some(Self::Parquet),
             "json" | "ndjson" => Some(Self::Json),
             "xls" => Some(Self::Xls),
@@ -377,7 +394,7 @@ impl NodeFactory for FileToDataFrameNodeFactory {
     fn doc(&self) -> &'static str {
         "Reads an external path or an upstream file reference into a \
         DataFrame. Supports local/remote files: CSV/TSV/Parquet via \
-        DataFusion (including .tsv.gz), XLS/XLSX workbooks via calamine, \
+        DataFusion (including .csv.gz/.bgz/.zst and .tsv.gz/.bgz/.zst), XLS/XLSX workbooks via calamine, \
         JSON arrays and NDJSON (including .json.gz), JSON arrays and NDJSON (including \
         .json.gz), SAS XPORT transport files, and \
         bioinformatics formats (VCF, BAM, BED, GTF, FASTA, MatrixMarket, etc.) via \
@@ -1123,6 +1140,32 @@ mod tests {
     use vfs::{BackendConfig, BackendDefinition, MountDefinition, MountedObjectStore, VfsManifest};
 
     #[test]
+    fn fasta_format_infers_from_paths_and_labels() {
+        assert_eq!(
+            FileFormat::from_path("/data/proteins.faa"),
+            Some(FileFormat::Fasta)
+        );
+        assert_eq!(
+            FileFormat::from_path("/data/genome.fna"),
+            Some(FileFormat::Fasta)
+        );
+        assert_eq!(
+            FileFormat::from_path("/data/genes.FA"),
+            Some(FileFormat::Fasta)
+        );
+        assert_eq!(
+            FileFormat::from_path("/data/proteins.faa.gz"),
+            Some(FileFormat::Fasta)
+        );
+        assert_eq!(
+            FileFormat::from_path("/data/aligned.mafft.clipkit.faa"),
+            Some(FileFormat::Fasta)
+        );
+        assert_eq!(FileFormat::from_label("fasta"), Some(FileFormat::Fasta));
+        assert_eq!(FileFormat::Fasta.as_label(), "fasta");
+    }
+
+    #[test]
     fn xpt_format_infers_from_paths_and_labels() {
         assert_eq!(
             FileFormat::from_path("/data/DEMO_J.xpt"),
@@ -1135,6 +1178,32 @@ mod tests {
         assert_eq!(FileFormat::from_label("xpt"), Some(FileFormat::Xpt));
         assert_eq!(FileFormat::from_label("XPT"), Some(FileFormat::Xpt));
         assert_eq!(FileFormat::Xpt.as_label(), "xpt");
+    }
+
+    #[test]
+    fn tabular_format_infers_compressed_extensions() {
+        assert_eq!(
+            FileFormat::from_path("/data/cohort.csv.gz"),
+            Some(FileFormat::Csv)
+        );
+        assert_eq!(
+            FileFormat::from_path("/data/cohort.csv.bgz"),
+            Some(FileFormat::Csv)
+        );
+        assert_eq!(
+            FileFormat::from_path("/data/cohort.csv.zst"),
+            Some(FileFormat::Csv)
+        );
+        assert_eq!(
+            FileFormat::from_path("/data/cohort.tsv.zstd"),
+            Some(FileFormat::Tsv)
+        );
+        assert_eq!(
+            FileFormat::from_path("/data/sample.vcf.bgz"),
+            Some(FileFormat::Vcf)
+        );
+        assert_eq!(FileFormat::from_label("csv.bgz"), Some(FileFormat::Csv));
+        assert_eq!(FileFormat::from_label("tsv.zst"), Some(FileFormat::Tsv));
     }
 
     /// Write a three-row XPORT fixture with one character and two numeric
@@ -2059,6 +2128,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn file_to_dataframe_infers_csv_gzip_from_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cohort.csv.gz");
+        let mut encoder = flate2::write::GzEncoder::new(
+            std::fs::File::create(&path).unwrap(),
+            Default::default(),
+        );
+        std::io::Write::write_all(&mut encoder, b"gene_id,n\n79501,504\n").unwrap();
+        encoder.finish().unwrap();
+
+        let ctx = SessionContext::new();
+        let node_ctx = dag_core::registry::NodeCtx::new(ctx.runtime_env().clone(), None);
+        let mut node = FileToDataFrameNode::new(Some(path.to_string_lossy().to_string()), None);
+
+        let outputs = node
+            .execute(
+                &node_ctx,
+                &[],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap();
+        let df = outputs.dataframe(0).unwrap();
+        assert_eq!(df.clone().count().await.unwrap(), 1);
+        assert_eq!(df.schema().fields().len(), 2);
+    }
+
+    #[tokio::test]
     async fn file_to_dataframe_reads_gzipped_tsv() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("cohort.tsv.gz");
@@ -2298,8 +2395,7 @@ mod tests {
                 &dag_core::dag::node_event::NodeReporter::noop(),
             )
             .await
-            .err()
-            .expect("missing path must error");
+            .expect_err("missing path must error");
         let msg = format!("{err:?}");
         assert!(
             msg.contains("does not exist"),
@@ -2321,8 +2417,7 @@ mod tests {
                 &dag_core::dag::node_event::NodeReporter::noop(),
             )
             .await
-            .err()
-            .expect("directory path must error");
+            .expect_err("directory path must error");
         let msg = format!("{err:?}");
         assert!(
             msg.contains("is a directory"),
@@ -2346,8 +2441,7 @@ mod tests {
                 &dag_core::dag::node_event::NodeReporter::noop(),
             )
             .await
-            .err()
-            .expect("unmatched glob must error");
+            .expect_err("unmatched glob must error");
         let msg = format!("{err:?}");
         assert!(
             msg.contains("matched no readable files"),

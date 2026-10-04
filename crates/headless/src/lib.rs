@@ -354,9 +354,8 @@ impl TranslationState {
                     },
                     // Phase ticks and throttled summary deltas are TUI-only
                     // detail; emitting them here would flood the JSONL stream.
-                    CompactEvent::CompactPhase { .. } | CompactEvent::CompactSummaryDelta { .. } => {
-                        return vec![]
-                    }
+                    CompactEvent::CompactPhase { .. }
+                    | CompactEvent::CompactSummaryDelta { .. } => return vec![],
                     CompactEvent::CompactFinish { stats, error, .. } => match (stats, error) {
                         (Some(stats), _) => format!(
                             "context compaction finished: {} → {} messages, ~{} token summary, \

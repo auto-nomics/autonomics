@@ -1,0 +1,26 @@
+[package]
+name = "ascii-dag-core"
+version = "0.1.0"
+edition.workspace = true
+license = "MIT OR Apache-2.0"
+description = "Internal minimal graph layout and semantic-cell renderer"
+publish = false
+
+[lib]
+name = "ascii_dag"
+path = "src/lib.rs"
+
+[features]
+default = ["std", "layout-horizontal"]
+std = ["alloc"]
+alloc = []
+ports = []
+layout-vertical = []
+layout-horizontal = []
+arena = []
+arena-idx-u8 = ["arena"]
+arena-idx-u16 = ["arena"]
+arena-idx-u32 = ["arena"]
+
+[lints]
+workspace = true

@@ -44,6 +44,10 @@ sha2 = "0.10"
 base64 = "0.22"
 vfs = { path = "../vfs" }
 
+# DAG evidence-channel nodes (see `src/nodes/`); pulls no node-registry
+# features beyond the factory/node traits.
+dag-core = { path = "../dag-core" }
+
 [lints]
 workspace = true
 
@@ -54,3 +58,5 @@ e2e = []
 [dev-dependencies]
 tokio = { workspace = true }
 lopdf = { version = "0.42", default-features = false }
+# Test-only: constructing a `NodeCtx` needs a DataFusion runtime env.
+datafusion.workspace = true

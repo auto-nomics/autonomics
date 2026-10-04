@@ -36,6 +36,7 @@ anyhow = "1"
 libc = "0.2"
 datafusion.workspace = true
 vfs = { path = "../vfs" }
+skills = { path = "../skills" }
 bib-base = { path = "../bib-base" }
 writing-base = { path = "../writing-base" }
 kms = { path = "../kms" }
@@ -58,4 +59,5 @@ workspace = true
 
 [dev-dependencies]
 chrono = { version = "0.4", features = ["serde"] }
+data-catalog = { path = "../data-catalog", features = ["test-util"] }
 tempfile = "3"

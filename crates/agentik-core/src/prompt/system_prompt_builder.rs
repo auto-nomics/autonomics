@@ -6,7 +6,8 @@
 pub struct SystemPromptBuilder {
     identity: String,
     tooluse_guidance: String,
-    extra_section: String,
+    skill_guidance: String,
+    extra_sections: Vec<String>,
 }
 impl SystemPromptBuilder {
     pub fn with_identity(mut self, identity: impl Into<String>) -> Self {
@@ -14,8 +15,11 @@ impl SystemPromptBuilder {
         self
     }
 
+    /// Append an extra section. Sections render in insertion order, so a
+    /// later section (e.g. memory) supplements — never replaces — an
+    /// earlier one (e.g. the agent's profile prompt).
     pub fn with_extra_section(mut self, section: impl Into<String>) -> Self {
-        self.extra_section = section.into();
+        self.extra_sections.push(section.into());
         self
     }
 
@@ -24,15 +28,27 @@ impl SystemPromptBuilder {
         self
     }
 
+    /// Append the tool-use guidance section: parallel tool calls,
+    /// task completion signaling, and plan-mode usage. Static
+    /// behavioral guidance, so it belongs in the system prompt.
     pub fn build_tooluse_guidance(mut self) -> Self {
         self.tooluse_guidance = concat!(
-            "## Tool usage\n",
-            "Use tools to complete the task. When operations are independent, you should return multiple tool calls in a single response. For example, when creating multiple entities or linking several isolated knowledge entries, issue all tool calls together in one reply rather than one at a time.\n",
-            "Tool calls within a single reply execute in parallel, which greatly reduces round-trip time.\n\n",
-            "## Task completion\n",
-            "When all tasks are complete, output your final text directly — a response with no tool calls signals task completion. No additional termination action is needed.\n\n",
+            include_str!("tooluse_guidance.md"),
+            "\n",
             include_str!("plan_guidance.md"),
-        ).to_string();
+        )
+        .to_string();
+        self
+    }
+
+    /// Append the skill-library guidance section: how to consume
+    /// skills (search/get/workflows), how to feed the evolution loop
+    /// (observe/propose/evolve), and the judgement boundaries. Static
+    /// behavioral guidance, so it belongs in the system prompt (the
+    /// per-session skill *index* is injected separately by the runtime
+    /// and stays snapshot-stable for prompt-cache friendliness).
+    pub fn build_skill_guidance(mut self) -> Self {
+        self.skill_guidance = concat!("\n", include_str!("skill_guidance.md"),).to_string();
         self
     }
 
@@ -43,8 +59,12 @@ impl SystemPromptBuilder {
             system_prompt.push_str(&self.identity);
             system_prompt.push('\n');
         }
-        if !self.extra_section.is_empty() {
-            system_prompt.push_str(&self.extra_section);
+        for section in &self.extra_sections {
+            system_prompt.push_str(section);
+            system_prompt.push('\n');
+        }
+        if !self.skill_guidance.is_empty() {
+            system_prompt.push_str(&self.skill_guidance);
             system_prompt.push('\n');
         }
         if !self.tooluse_guidance.is_empty() {
@@ -53,5 +73,36 @@ impl SystemPromptBuilder {
         }
 
         system_prompt
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn skill_guidance_renders_only_when_built() {
+        let plain = SystemPromptBuilder::default()
+            .with_identity("id")
+            .build_tooluse_guidance()
+            .parse();
+        assert!(!plain.contains("Skill library"));
+
+        let with_skills = SystemPromptBuilder::default()
+            .with_identity("id")
+            .build_skill_guidance()
+            .build_tooluse_guidance()
+            .parse();
+        assert!(with_skills.contains("## Skill library"));
+        assert!(with_skills.contains("skill_observe"));
+        assert!(with_skills.contains("skill_propose"));
+        // Render order: identity → extras → skill guidance → tool-use
+        // guidance, mirroring parse().
+        let skill_at = with_skills.find("## Skill library").unwrap();
+        let tool_at = with_skills.find("## Tool usage").unwrap();
+        assert!(
+            skill_at < tool_at,
+            "skill guidance renders before tool-use guidance"
+        );
     }
 }

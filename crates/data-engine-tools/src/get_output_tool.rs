@@ -56,6 +56,9 @@ const DEFAULT_LIMIT: usize = 25;
 /// request from dragging the whole table into the tool result.
 const MAX_LIMIT: usize = 50;
 
+/// Hard ceiling on evidence records rendered inline (mirrors `MAX_LIMIT`).
+const EVIDENCE_MAX_RECORDS: usize = 50;
+
 pub struct GetOutputTool {
     client: Arc<DataEngineClient>,
 }
@@ -63,6 +66,56 @@ pub struct GetOutputTool {
 impl GetOutputTool {
     pub fn new(client: Arc<DataEngineClient>) -> Self {
         Self { client }
+    }
+
+    /// Render an `evidence` artifact inline: the agent sees the citation list
+    /// directly instead of a bare path. Read/parse failures degrade to a
+    /// metadata entry carrying the error (fail-visible, never a swallowed
+    /// path).
+    async fn render_evidence(&self, name: &u8, file: &data_engine::FileRef) -> serde_json::Value {
+        let mut entry = serde_json::json!({
+            "name": name,
+            "type": "evidence",
+            "path": file.path,
+            "format": file.format,
+            "size": file.fingerprint.as_ref().map(|fp| fp.size),
+            "fingerprint": file.fingerprint,
+        });
+        let bytes = match self.client.read_file(file.path.clone()).await {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                entry["read_error"] = serde_json::Value::String(error.to_string());
+                return entry;
+            }
+        };
+        match bib_types::evidence::EvidenceSet::parse(&bytes) {
+            Ok(set) => {
+                let total = set.records.len();
+                let returned = total.min(EVIDENCE_MAX_RECORDS);
+                let records: Vec<serde_json::Value> = set.records[..returned]
+                    .iter()
+                    .map(|record| {
+                        serde_json::json!({
+                            "cite": record.citation.short_cite(),
+                            "title": record.citation.title,
+                            "year": record.citation.year,
+                            "journal": record.citation.journal,
+                            "doi": record.citation.doi(),
+                            "origin": record.origin,
+                            "note": record.note,
+                        })
+                    })
+                    .collect();
+                entry["total"] = serde_json::Value::Number(total.into());
+                entry["returned"] = serde_json::Value::Number(returned.into());
+                entry["records"] = serde_json::Value::Array(records);
+                entry
+            }
+            Err(error) => {
+                entry["parse_error"] = serde_json::Value::String(error);
+                entry
+            }
+        }
     }
 }
 
@@ -323,6 +376,11 @@ impl ToolFunction for GetOutputTool {
         for (name, value) in dfs.iter() {
             let Some(df) = value.as_dataframe().ok() else {
                 outputs_info.push(match value {
+                    data_engine::NodeValue::File(file)
+                        if file.format.as_deref() == Some(bib_types::evidence::FORMAT) =>
+                    {
+                        self.render_evidence(name, file).await
+                    }
                     data_engine::NodeValue::File(file) => serde_json::json!({
                         "name": name,
                         "type": "file",
@@ -341,27 +399,13 @@ impl ToolFunction for GetOutputTool {
                             "fingerprint": file.fingerprint,
                         })).collect::<Vec<_>>(),
                     }),
-                    data_engine::NodeValue::Data(data) => serde_json::json!({
+                    // Handled by the `as_dataframe` fast path above; this arm
+                    // only exists to keep the match exhaustive without a
+                    // panic path.
+                    data_engine::NodeValue::DataFrame(_) => serde_json::json!({
                         "name": name,
-                        "type": "data",
-                        "artifact_id": data.artifact_id,
-                        "vpath": data.vpath,
-                        "format": data.format,
-                        "size": data.fingerprint.as_ref().map(|fp| fp.size),
-                        "fingerprint": data.fingerprint,
+                        "type": "dataframe",
                     }),
-                    data_engine::NodeValue::DataSet(data) => serde_json::json!({
-                        "name": name,
-                        "type": "data_set",
-                        "artifacts": data.iter().map(|data| serde_json::json!({
-                            "artifact_id": data.artifact_id,
-                            "vpath": data.vpath,
-                            "format": data.format,
-                            "size": data.fingerprint.as_ref().map(|fp| fp.size),
-                            "fingerprint": data.fingerprint,
-                        })).collect::<Vec<_>>(),
-                    }),
-                    data_engine::NodeValue::DataFrame(_) => unreachable!("DataFrame handled above"),
                 });
                 continue;
             };

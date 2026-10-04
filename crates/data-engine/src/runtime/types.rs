@@ -47,6 +47,9 @@ pub enum DataEngineCmd {
         event_tx: Option<mpsc::Sender<NodeEvent>>,
         /// Commit message for the history snapshot. If `None`, a default is used.
         commit_message: Option<String>,
+        /// Who initiated the run (e.g. `"agent:/root/researcher"`), recorded
+        /// in the run's audit trail. `None` leaves the run unattributed.
+        trigger: Option<String>,
         reply: oneshot::Sender<EngineResult<RunReport>>,
         /// Cancellation token shared with the caller. When the caller drops
         /// the reply receiver (e.g. the agent task is cancelled), this token
@@ -58,6 +61,14 @@ pub enum DataEngineCmd {
     GetOutput {
         id: String,
         reply: oneshot::Sender<EngineResult<Option<PortOutputs>>>,
+    },
+    /// Read artifact bytes for one output path (`vfs://` URI resolved through
+    /// the mounted object storage, absolute host path otherwise). Lets the
+    /// tool layer render payload files (e.g. `evidence` artifacts) inline
+    /// without its own storage handle. Size-capped on the engine side.
+    ReadFile {
+        path: String,
+        reply: oneshot::Sender<EngineResult<Vec<u8>>>,
     },
     /// Query a node's runtime status. Returns `None` if the DAG has never
     /// been run (no status entry exists for the node).
@@ -111,6 +122,25 @@ pub enum DataEngineCmd {
         ref_name: Option<String>,
         limit: usize,
         reply: oneshot::Sender<EngineResult<Vec<crate::dag::Snapshot>>>,
+    },
+    /// Query the execution audit trail: recent runs, or one run by id.
+    DagRunsLog {
+        ref_name: Option<String>,
+        limit: usize,
+        /// When set, fetch this single run (with its full run report)
+        /// instead of listing.
+        run_id: Option<String>,
+        reply: oneshot::Sender<EngineResult<Vec<crate::dag::RunRecord>>>,
+    },
+    /// Export one recorded run as provenance evidence (PROV-JSON / RO-Crate).
+    ExportRun {
+        /// Run id (unique prefix accepted).
+        run_id: String,
+        /// `prov` or `crate`.
+        format: String,
+        /// Absolute output directory.
+        out_dir: std::path::PathBuf,
+        reply: oneshot::Sender<EngineResult<crate::dag::ExportSummary>>,
     },
     /// Load a snapshot's DAG into memory without moving the ref.
     CheckoutDag {

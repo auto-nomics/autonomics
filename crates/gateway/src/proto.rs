@@ -159,6 +159,7 @@ pub struct OpenaiTokenState {
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct GatewayStatus {
     pub pid: u32,
+    pub addr: String,
     pub version: String,
     pub uptime_secs: u64,
     pub last_seq: u64,
@@ -325,4 +326,245 @@ mod tests {
         let back: GatewayNotice = serde_json::from_str(&json).unwrap();
         assert!(matches!(back, GatewayNotice::ModelChanged { .. }));
     }
+}
+
+// ── Skill evolution ───────────────────────────────────────────────────
+
+/// `GET /api/v1/skills/evolution/observations` — recorded evidence,
+/// newest first. Includes the full reusable body for the TUI browser.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SkillObservationView {
+    pub id: String,
+    pub created_at: i64,
+    pub kind: String,
+    pub source: String,
+    pub summary: String,
+    pub body: String,
+    pub node_kind: Option<String>,
+    pub error: Option<String>,
+}
+
+/// `GET /api/v1/skills/evolution` — the dashboard's data snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SkillEvolutionStatus {
+    /// Whether the background service (event + timer triggers) runs.
+    pub service_enabled: bool,
+    /// Library generation; advances on every mutation.
+    pub generation: u64,
+    /// Whether cycles may auto-approve (daemon configuration).
+    pub auto_approve: bool,
+    /// Auto-approve cap per cycle.
+    pub max_approvals_per_cycle: usize,
+    /// Periodic sweep cadence in seconds, when armed.
+    pub sweep_interval_secs: Option<u64>,
+    /// Recorded observations feeding distillation.
+    pub observations: usize,
+    /// Installed skills per tier (workspace > global > builtin).
+    pub skills_workspace: usize,
+    pub skills_global: usize,
+    pub skills_builtin: usize,
+    /// Skills carrying the loop's `auto` tag.
+    pub skills_auto: usize,
+    /// Proposals by status.
+    pub proposals_pending: usize,
+    pub proposals_approved: usize,
+    pub proposals_rejected: usize,
+    /// ── Live cycle monitor (flat mirror of skills::CycleStatus) ──
+    /// Current worker phase: `idle` | `coalescing` | `distilling`.
+    pub phase: String,
+    /// Triggers accumulated in the quiet window (coalescing only).
+    pub phase_queued: usize,
+    /// Trigger labels the running cycle was caused by (distilling
+    /// only).
+    pub phase_triggers: Vec<String>,
+    /// How long the current phase has held, in milliseconds.
+    pub phase_elapsed_ms: u64,
+    /// Cycles executed since service start.
+    pub cycles_completed: u64,
+    /// Unix time of the most recent cycle.
+    pub last_cycle_at: Option<i64>,
+    /// Wall time of the most recent cycle, in milliseconds.
+    pub last_cycle_duration_ms: Option<u64>,
+    /// Trigger labels of the most recent cycle.
+    pub last_triggers: Vec<String>,
+    /// Error text when the most recent cycle failed.
+    pub last_error: Option<String>,
+    /// Commands dropped because the channel was full — an
+    /// observability signal, not an error.
+    pub dropped_commands: u64,
+    /// Cycles short-circuited because the observation pool was
+    /// empty. Distinct from `cycles_completed`: the worker never
+    /// ran a cycle body.
+    pub cycle_skipped_empty: u64,
+    /// Stable label for why the most recent cycle (or short-circuit)
+    /// was skipped; `None` when the last cycle body actually ran.
+    pub last_skipped_reason: Option<String>,
+}
+
+/// One proposal row for listings.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SkillProposalView {
+    pub name: String,
+    pub status: String,
+    /// `distiller` (deterministic loop) or `agent` (LLM-authored via
+    /// skill_propose; review-gated even under auto-approve).
+    pub authored_by: String,
+    pub update: bool,
+    pub rationale: String,
+    pub cluster_hash: String,
+    pub observation_count: usize,
+    pub created_at: i64,
+}
+
+/// `POST /api/v1/skills/evolution/trigger` request.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct TriggerEvolutionRequest {
+    /// Explicit per-call override of the review gate. `None` follows
+    /// the daemon configuration; `Some(true)` is the TUI equivalent
+    /// of `autonomics-skills distill --auto`.
+    pub auto_approve: Option<bool>,
+}
+
+/// `POST /api/v1/skills/evolution/trigger` response — the cycle's
+/// report (serializable form of the skills crate's
+/// `EvolutionReport`).
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SkillEvolutionReport {
+    pub triggers: Vec<String>,
+    pub clusters_considered: usize,
+    pub proposals_written: Vec<String>,
+    pub updated_existing: Vec<String>,
+    pub auto_approved: Vec<String>,
+    pub left_pending: usize,
+    pub skipped: Vec<SkippedCluster>,
+}
+
+/// One skipped cluster with its reason.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SkippedCluster {
+    pub cluster_hash: String,
+    pub reason: String,
+}
+
+/// `POST /api/v1/skills/evolution/proposals/{name}/approve` response.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SkillApproveOutcome {
+    pub name: String,
+    pub destination: String,
+}
+
+/// `GET /api/v1/skills/library` row — one skill from the unified
+/// library view: every installed skill (all tiers) plus every
+/// proposed-but-not-installed name, with the proposal pipeline as an
+/// attribute rather than a separate listing.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SkillLibraryView {
+    pub name: String,
+    /// builtin | global | workspace | proposed (not installed yet).
+    pub tier: String,
+    pub tags: Vec<String>,
+    pub description: String,
+    /// False only for rows that exist solely as a pending proposal.
+    pub installed: bool,
+    /// Latest proposal status for this name, when the pipeline ever
+    /// touched it (pending | approved | rejected).
+    pub proposal_status: Option<String>,
+    /// The proposal revises an already-installed skill.
+    pub proposal_update: bool,
+    // ── usage telemetry (the evolution fitness signal) ──
+    pub usage_gets: u64,
+    pub usage_search_hits: u64,
+    pub usage_runs: u64,
+    pub usage_evals: u64,
+    /// Unix seconds of the last recorded use; 0 = never.
+    pub usage_last_used: i64,
+}
+
+/// `GET /api/v1/skills/library/{name}` response — one skill's full
+/// detail: metadata, usage, its proposal (with evidence count), and
+/// the complete SKILL.md body.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SkillLibraryDetail {
+    pub name: String,
+    pub tier: String,
+    pub tags: Vec<String>,
+    pub description: String,
+    pub installed: bool,
+    /// The full SKILL.md body below the frontmatter.
+    pub body: String,
+    /// Workflow template stems bundled with the skill (installed
+    /// rows only).
+    pub workflows: Vec<String>,
+    /// Eval file stems bundled with the skill (installed rows only).
+    pub evals: Vec<String>,
+    /// The pipeline record for this name, when one exists.
+    pub proposal: Option<SkillProposalView>,
+    /// Observations backing the proposal (evidence chain size).
+    pub evidence_count: usize,
+    pub usage_gets: u64,
+    pub usage_search_hits: u64,
+    pub usage_runs: u64,
+    pub usage_evals: u64,
+    pub usage_last_used: i64,
+}
+
+// ── Plugins ──────────────────────────────────────────────────────────
+
+/// `GET /api/v1/plugins` — the manifest plugin families installed under
+/// the daemon's plugins root. Built-in node bundles are compiled into the
+/// binary and are not plugin families; a dedicated node-listing endpoint
+/// covers them.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct PluginListView {
+    /// The plugins root the daemon's node registry actually scanned at
+    /// startup (env-pinned by the startup sync, else the loader default).
+    pub root: String,
+    pub plugins: Vec<PluginView>,
+}
+
+/// One installed plugin family.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct PluginView {
+    /// Family name from the manifest (the directory name while the
+    /// manifest is unparseable).
+    pub name: String,
+    /// Image reference `host/path@sha256:…` (absent when the manifest
+    /// failed to parse).
+    pub image: Option<String>,
+    /// Node kinds this family declares.
+    pub kinds: Vec<String>,
+    /// Catalog panel bindings shared by the family's nodes.
+    pub panels: Vec<PluginPanelView>,
+    /// Installation source declared in `plugins.toml` — the declaration
+    /// the startup sync re-materializes from, so it survives restarts
+    /// (absent for families materialized without a declaration).
+    pub source: Option<PluginSourceView>,
+    /// Whether every declared kind is present in the live node registry
+    /// (the daemon registered the family at startup). False after
+    /// on-disk drift until the next restart.
+    pub registered: bool,
+    /// Manifest parse failure detail, when the family is broken.
+    pub error: Option<String>,
+}
+
+/// One catalog panel binding: mount contract plus the dataset repo that
+/// satisfies it.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct PluginPanelView {
+    pub binding: String,
+    pub mount: String,
+    /// Hugging Face dataset repository `owner/name`.
+    pub bundle: String,
+}
+
+/// Installation source from `plugins.toml` — exactly one of git(+rev) or
+/// path per entry.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct PluginSourceView {
+    pub git: Option<String>,
+    /// Pinned commit SHA for git sources (tags/branches are rejected by
+    /// the sync layer).
+    pub rev: Option<String>,
+    /// Local directory installed as a symlink (development iterations).
+    pub path: Option<String>,
 }

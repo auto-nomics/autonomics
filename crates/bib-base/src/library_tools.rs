@@ -27,14 +27,14 @@ use agentik_proc::tool;
 use agentik_sdk::types::{ToolResult as AgentToolResult, ToolResultBlock};
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use bib_types::{AddedBy, ArticleRole, CollectionStatus, FetchStatus, Identifier, TextFormat};
+use bib_types::{
+    AddedBy, ArticleRole, CollectionStatus, FetchStatus, IdKind, Identifier, TextFormat,
+};
 use europepmc::EuropePmcClient;
 
 use crate::bib_base::BibBase;
 use crate::collections::CollectionAddOutcome;
-use crate::oa_fetch::try_fetch_fulltext_with;
 use crate::query::LiteratureGateway;
-use crate::tools::parse_id_kind;
 
 // ===========================================================================
 // bib_save — save articles to local library (direct metadata or fetch-by-id)
@@ -189,6 +189,9 @@ pub struct BibSaveTool {
     /// Defaults to [`EuropePmcClient::new`] when constructed via
     /// [`bib_library_registrations`].
     pub epmc: Arc<EuropePmcClient>,
+    /// VFS storage the fetched OA full text is written into — full texts
+    /// are files on the File channel, so saves store real objects.
+    pub file_storage: Arc<vfs::OpendalFileStorage>,
 }
 
 /// Result of saving a single article within a batch.
@@ -502,10 +505,15 @@ impl BibSaveTool {
     /// Attempt to fetch an open-access full text for `article` from Europe PMC
     /// and store it. Returns `true` on success.
     async fn try_fetch_oa_fulltext(&self, article: &bib_types::Article) -> bool {
-        let ft = match try_fetch_fulltext_with(&self.epmc, article).await {
-            Some(ft) => ft,
-            None => return false,
-        };
+        // File channel: the fetched text is written into the VFS as a real
+        // content-addressed object; the DB row points at the file.
+        let ft =
+            match crate::oa_fetch::fetch_fulltext_stored(&self.epmc, &self.file_storage, article)
+                .await
+            {
+                Some(ft) => ft,
+                None => return false,
+            };
         match self.bib.upsert_fulltext(&ft).await {
             Ok(()) => true,
             Err(e) => {
@@ -2004,6 +2012,7 @@ pub fn bib_library_registrations(
             bib: bib.clone(),
             gateway: gateway.clone(),
             epmc,
+            file_storage: file_storage.clone(),
         }),
         R::from(BibCreateCollectionTool { bib: bib.clone() }),
         R::from(BibAddToCollectionTool { bib: bib.clone() }),
@@ -2019,7 +2028,7 @@ pub fn bib_library_registrations(
         }),
         R::from(BibExportTool {
             bib,
-            storage: file_storage,
+            storage: file_storage.clone(),
         }),
     ]
 }
@@ -2054,44 +2063,30 @@ pub fn bib_all_registrations(
     epmc: Option<Arc<europepmc::EuropePmcClient>>,
     file_storage: Arc<vfs::OpendalFileStorage>,
 ) -> Vec<ToolRegistration> {
-    let mut tools = crate::tools::bib_query_registrations(gateway.clone());
-    tools.extend(bib_library_registrations(bib, gateway, epmc, file_storage));
-    tools
-}
-
-/// Build [`ToolRegistration`]s for the extended literature tools whose
-/// capabilities are **not** covered by the [`LiteratureGateway`].
-///
-/// When [`BibShared`](crate::BibShared) is constructed, three additional
-/// sources (OpenAlex, Crossref, Semantic Scholar) are loaded into the
-/// gateway for unified `search`/`fetch`. Each of these APIs, however, also
-/// offers source-specific features that fall outside the
-/// [`LiteratureSource`](crate::LiteratureSource) contract:
-///
-/// | Source            | Extended tools                                   |
-/// |-------------------|--------------------------------------------------|
-/// | OpenAlex          | `openalex_autocomplete` (cross-entity typeahead) |
-/// | Crossref          | `crossref_types` (work-type catalogue)           |
-/// | Semantic Scholar  | `s2_citations`, `s2_references`,                 |
-/// |                   | `s2_recommendations`, `s2_author`                |
-///
-/// Pass the shared clients from [`BibShared`](crate::BibShared) so every
-/// agent reuses the same connection pools.
-pub fn bib_extended_registrations(
-    openalex_client: Arc<openalex::OpenAlexClient>,
-    crossref_client: Arc<crossref::CrossrefClient>,
-    s2_client: Arc<semantic_scholar::S2Client>,
-) -> Vec<ToolRegistration> {
-    let mut tools = Vec::new();
-    tools.extend(openalex::openalex_extended_registrations(openalex_client));
-    tools.extend(crossref::crossref_extended_registrations(crossref_client));
-    tools.extend(semantic_scholar::s2_extended_registrations(s2_client));
-    tools
+    // Literature *retrieval* now flows through the DAG evidence channel
+    // (source_literature / source_literature_fetch / citation-graph nodes);
+    // this registration covers only the local-library management tools.
+    bib_library_registrations(bib, gateway, epmc, file_storage)
 }
 
 // ===========================================================================
 // Helpers
 // ===========================================================================
+
+/// Parse a user-supplied identifier-kind string (formerly in the retired
+/// `tools` module; kept for the library tools' by-id lookups).
+pub(crate) fn parse_id_kind(s: &str) -> Option<IdKind> {
+    match s.trim().to_lowercase().as_str() {
+        "doi" => Some(IdKind::Doi),
+        "pmid" => Some(IdKind::Pmid),
+        "pmc" => Some(IdKind::Pmc),
+        "arxiv" => Some(IdKind::Arxiv),
+        "biorxiv" => Some(IdKind::Biorxiv),
+        "s2" => Some(IdKind::S2),
+        "openalex" => Some(IdKind::OpenAlex),
+        _ => None,
+    }
+}
 
 /// Parse a role string, defaulting to [`ArticleRole::Referenced`].
 fn parse_role(s: Option<&str>) -> ArticleRole {
@@ -2340,6 +2335,7 @@ mod tests {
             bib: bib.clone(),
             gateway,
             epmc,
+            file_storage: Arc::new(vfs::OpendalFileStorage::new_temp()),
         };
 
         let input = BibSaveInput {
@@ -2443,7 +2439,12 @@ mod tests {
         let bib = Arc::new(BibBase::open_in_memory().await.unwrap());
         let gateway = Arc::new(crate::default_gateway());
         let epmc = Arc::new(EuropePmcClient::new());
-        let tool = BibSaveTool { bib, gateway, epmc };
+        let tool = BibSaveTool {
+            bib,
+            gateway,
+            epmc,
+            file_storage: Arc::new(vfs::OpendalFileStorage::new_temp()),
+        };
 
         let article = ArticleInput {
             title: "Cached test".into(),
@@ -2493,7 +2494,12 @@ mod tests {
         let bib = Arc::new(BibBase::open_in_memory().await.unwrap());
         let gateway = Arc::new(crate::default_gateway());
         let epmc = Arc::new(EuropePmcClient::new());
-        let tool = BibSaveTool { bib, gateway, epmc };
+        let tool = BibSaveTool {
+            bib,
+            gateway,
+            epmc,
+            file_storage: Arc::new(vfs::OpendalFileStorage::new_temp()),
+        };
 
         let input = BibSaveInput {
             articles: Some(vec![
@@ -2577,7 +2583,12 @@ mod tests {
         let bib = Arc::new(BibBase::open_in_memory().await.unwrap());
         let gateway = Arc::new(crate::default_gateway());
         let epmc = Arc::new(EuropePmcClient::new());
-        let tool = BibSaveTool { bib, gateway, epmc };
+        let tool = BibSaveTool {
+            bib,
+            gateway,
+            epmc,
+            file_storage: Arc::new(vfs::OpendalFileStorage::new_temp()),
+        };
 
         let input = BibSaveInput {
             articles: None,
@@ -2594,7 +2605,12 @@ mod tests {
         let bib = Arc::new(BibBase::open_in_memory().await.unwrap());
         let gateway = Arc::new(crate::default_gateway());
         let epmc = Arc::new(EuropePmcClient::new());
-        let tool = BibSaveTool { bib, gateway, epmc };
+        let tool = BibSaveTool {
+            bib,
+            gateway,
+            epmc,
+            file_storage: Arc::new(vfs::OpendalFileStorage::new_temp()),
+        };
 
         let input = BibSaveInput {
             articles: Some(vec![ArticleInput {

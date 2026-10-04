@@ -7,6 +7,10 @@ document describes how a tool becomes an image + catalog panel + thin
 wrapper; this one describes how that thin wrapper becomes a data-only
 manifest, published as a git repository.
 
+Use [Plugin Authoring Guide](plugins/authoring-guide.md) instead when creating
+a new plugin from scratch rather than migrating and comparing an existing Rust
+wrapper.
+
 The reference implementation is the `ldsc` family (`ldsc_h2`,
 `ldsc_munge`, `ldsc_rg`), migrated end to end and
 exercised by `crates/container-plugin/tests/ldsc_migration.rs` (golden)
@@ -42,6 +46,15 @@ Migrate when the node is a `container_command`-backed wrapper: one or
 more related tool invocations sharing an image and panel set. Do **not**
 migrate pure-Rust in-process transforms — they have no image, no panels,
 and no reason to leave the compile-time registry.
+
+Native FFI bundles are also in scope when the vendored code carries a
+contaminating license or a native ABI the binaries should not link
+(statically-linked GPL C++, libstdc++/pthread): those must leave the
+process tree even though they were never `container_command` wrappers.
+The `grf` family is the reference case — 23 in-process nodes over a
+40 MB vendored GPL-3 C++ core, rebuilt as file-port plugin nodes backed
+by the official R package, with the forest-exchange Arrow blob replaced
+by a `forest.rds` artifact.
 
 A plugin family may hold several `[[nodes]]` when (and only when) they
 share the image and panel bindings — `ldsc`'s h²/munge/rg share one

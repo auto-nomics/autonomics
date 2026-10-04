@@ -79,13 +79,13 @@ Node registry + DAG scheduler
 | 模型编排 | `agentik-sdk`、`agentik-types`、`agentik-proc`、`agentik-core`、`agentik-network`、`runtime` | 流式 LLM 客户端、工具 schema 与调用、持久记忆、生命周期、多智能体拓扑和同步到异步宿主。 |
 | 分析执行 | `dag-core`、`data-engine`、`data-engine-tools`、`crates/node-bundles/*`、`workflow-editor` | 节点 trait、插件注册表、类型化端口、调度器、JSON Schema 参数、智能体工具、快照和可复用 workflow skill。 |
 | 数据基础设施 | `vfs`、`data-catalog`、`container-runtime`、`biofusion` | OpenDAL VFS、版本化对象存储数据包、Podman 执行、不可变 panel 缓存，以及生物格式的 DataFusion 读取器。 |
-| 统计与流行病学 | `statkit`、`epi`、`hypothesize`、`cmprsk`、`survey`、`mice`、`hierint` | 描述统计与回归；因果推断和中介；可组合检验与 p 值工作流；竞争风险；调查设计；插补；层级交互模型。 |
-| 机器学习与深度学习 | `ml`、`dl`、`grf`、`grf-sys` | 预处理、特征工程、聚类、监督模型、集成学习、异常检测、降维；Burn 的 MLP、DeepSurv、DeepHit、RNN、Transformer、autoencoder；通过 vendored C++ 核心运行 generalized random forests。 |
+| 统计与流行病学 | `statkit`、`epi`、`hypothesize`、`nodes-power`、`cmprsk`、`survey`、`mice`、`hierint` | 描述统计与回归；因果推断和中介；可组合检验与 p 值工作流；前瞻性功效与样本量设计；竞争风险；调查设计；插补；层级交互模型。 |
+| 机器学习与深度学习 | `ml`、`dl` | 预处理、特征工程、聚类、监督模型、集成学习、异常检测、降维；Burn 的 MLP、DeepSurv、DeepHit、RNN、Transformer、autoencoder。广义随机森林以容器化 `grf` 插件家族(官方 R grf)提供。 |
 | 统计遗传学 | `ldsc`、`mr`、`lava`、`mrlap`、`lcv`、`cpassoc`、`magma`、`coloc`、`bkmr`、`evalue`、`genomic_sem`、`lcmm` | LD score regression、孟德尔随机化、局部遗传相关、colocalization、Bayesian kernel-machine regression、E-value、Genomic SEM、latent-class mixed models 等。 |
 | 断点回归 | `rdrobust`、`rdpower`、`rdmulti`、`rddensity`、`rdlocrand` | 局部多项式 RD 估计、功效与样本量、多 cutoff 设计、manipulation testing、局部随机化推断。 |
-| 科研数据客户端 | `eutils`、`opengwas`、`gwascatalog-sdk`、`opentargets`、`chembl`、`uniprot`、`string-sdk`、`kegg`、`reactome`、`ensembl`、`rcsb`、`alphafold`、`interpro`、`pubchem`、`protocolio`、`clinicaltrials` | PubMed/Entrez、OpenGWAS、GWAS Catalog、Open Targets、ChEMBL、UniProt、STRING、KEGG、Reactome、Ensembl、RCSB、AlphaFold、InterPro、PubChem、protocols.io、ClinicalTrials.gov 的 SDK、智能体工具和部分 DAG source 节点。 |
+| 科研数据客户端 | `eutils`、`opengwas`、`gwascatalog-sdk`、`opentargets`、`chembl`、`uniprot`、`string-sdk`、`enrichr-sdk`、`kegg`、`reactome`、`ensembl`、`rcsb`、`alphafold`、`interpro`、`pubchem`、`protocolio`、`clinicaltrials` | PubMed/Entrez、OpenGWAS、GWAS Catalog、Open Targets、ChEMBL、UniProt、STRING、Enrichr、KEGG、Reactome、Ensembl、RCSB、AlphaFold、InterPro、PubChem、protocols.io、ClinicalTrials.gov 的 SDK、智能体工具和部分 DAG source 节点。 |
 | 文献、写作与知识 | `arxiv`、`biorxiv`、`openalex`、`crossref`、`embase`、`europepmc`、`semantic-scholar`、`bib-types`、`bib-base`、`writing-types`、`writing-base`、`kms`、`kms-tools` | 统一文献检索与全文管理、内容寻址文档、BibTeX/RIS/Markdown/CSL 导出、LaTeX AST 操作、引文解析、编译和知识树工具。 |
-| Harness 界面 | `tui`、`tui-http`、`workflow-editor` | 流式终端对话、模型配置、DAG 视图、文献 CLI/API/前端、KMS 浏览器和工作流编辑组件。 |
+| Harness 界面 | `tui`、`api-server`、`workflow-editor` | 流式终端对话、模型配置、DAG 视图、文献 CLI/API/前端、KMS 浏览器和工作流编辑组件。 |
 
 默认 `data-engine` 构建启用全部 node-bundle Cargo feature。库使用者可以关闭默认 feature，再按需选择 `bundle-*`。
 
@@ -95,13 +95,14 @@ Node registry + DAG scheduler
 一个目录，包含 `manifest.toml`（节点契约：参数、端口、面板、镜像溯源）、
 执行脚本和镜像构建树。插件从钉死 commit SHA 的 git 仓库安装，daemon 启动
 前的插件自检阶段完成安装、校验与汇报——格式与工作流见
+[容器插件构建](docs/plugins/README_zh.md)；替换既有硬编码包装时使用
 [节点插件化迁移](docs/plugin-node-migration_zh.md)。面板数据包由
 `autonomics panels sync` 独立供给：下载并校验 `[[panels]]` 引用中本地
 catalog 缓存缺失的 dataset；启动自检只做本地存在性检查（有界、离线安全），
 daemon 就绪永不等待网络。无人值守部署可设 `AUTONOMICS_PANEL_SYNC=1` 让
 `autonomics serve` 启动时内联完成供给。
 
-当前发布 26 个家族 / 74 个节点 kind：
+当前发布 27 个家族 / 97 个节点 kind：
 
 | 家族 | 节点 kind | 工具 |
 | --- | --- | --- |
@@ -131,6 +132,14 @@ daemon 就绪永不等待网络。无人值守部署可设 `AUTONOMICS_PANEL_SYN
 | [pathology](https://github.com/auto-nomics/pathology-plugin) | 7 个 `pathology_*` 变体 | WSI 切片摄取 / QC / 嵌入 / IHC |
 | [bulk-rnaseq](https://github.com/auto-nomics/bulk-rnaseq-plugin) | `limma_voom`, `wgcna` | limma+voom 差异表达、WGCNA 模块分析 |
 | [hyprcoloc](https://github.com/auto-nomics/hyprcoloc-plugin) | `hyprcoloc` | HyPrColoc 多性状共定位 |
+| [grf](https://github.com/auto-nomics/grf-plugin) | 23 个 `grf_*` kind:12 个森林 trainer、`grf_predict_forest`、ATE / 最佳线性投影 / 校准 / 打分、森林权重 / 分裂频率 / 变量重要性 / 取树 / 合并、`grf_generate_causal_data` | 广义随机森林(官方 R grf 2.6.1) |
+
+### 构建插件
+
+- [插件构建总览](docs/plugins/README_zh.md)：生命周期、核心规则和文档地图。
+- [插件构建指南](docs/plugins/authoring-guide_zh.md)：以 `clusterProfiler` ORA 为例的端到端教程。
+- [Manifest 规范](docs/plugins/manifest-reference_zh.md)：规范 schema、模板语义和启动校验。
+- [测试与发布检查表](docs/plugins/testing-and-release_zh.md)：测试金字塔、镜像摘要发布、Git 钉版和干净环境评审。
 
 ### 安装插件
 
@@ -184,6 +193,16 @@ autonomics/
 `reference/` 存放第三方与对照材料，不属于根 Cargo 构建。
 
 ## 快速开始
+
+### 安装预编译二进制
+
+在存在带 tag 的 GitHub Release 后，可以不重新编译，直接安装对应平台的二进制：
+
+```bash
+curl --fail --location https://raw.githubusercontent.com/auto-nomics/autonomics/main/scripts/install.sh | bash
+```
+
+脚本会下载匹配的 Linux/macOS 二进制、校验 `SHA256SUMS`，并安装到 `~/.local/bin`。可用 `AUTONOMICS_INSTALL_DIR` 覆盖安装目录，用 `AUTONOMICS_VERSION=v0.1.0` 固定版本，或用 `AUTONOMICS_REPO=owner/repo` 安装 fork 产物。
 
 ### 构建并运行 TUI
 
@@ -245,7 +264,7 @@ curl http://127.0.0.1:8765/api/health
 curl 'http://127.0.0.1:8765/api/v1/bib/articles?query=gwas&limit=10'
 ```
 
-前端开发流程见 [docs/tui-http-api_zh.md](docs/tui-http-api_zh.md)。
+前端开发流程见 [docs/api-server_zh.md](docs/api-server_zh.md)。
 
 ## 分析模型
 
@@ -312,12 +331,11 @@ cargo test -p dag-core
 cargo test -p biofusion
 cargo test -p agentik-core
 cargo test -p runtime
-cargo test -p tui-http
+cargo test -p api-server
 cargo test -p epi
 cargo test -p statkit
 cargo test -p ldsc
 cargo test -p mr
-cargo test -p grf
 cargo test -p nodes-io
 
 # 格式与 lint。
@@ -330,7 +348,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 TUI HTTP 前端使用 Bun：
 
 ```bash
-cd crates/tui-http/frontend
+cd crates/api-server/frontend
 bun install
 bun test
 bun run typecheck
@@ -349,6 +367,7 @@ bun run build
 - [Runtime bundles](docs/data-bundles.md)
 - [容器执行设计](docs/container-execution-design.md)
 - [容器迁移流程](docs/container-node-migration.md)
+- [容器插件构建](docs/plugins/README_zh.md)
 
 ### 分析方法
 
@@ -360,14 +379,13 @@ bun run build
 - [MiXeR](docs/stat-genetics/mixer_zh.md)
 - [SuSiE-RSS](docs/stat-genetics/susie-rss_zh.md)
 - [TWAS/FUSION](docs/stat-genetics/twas-fusion.md)
-- [GRF 移植](docs/grf_analysis.md)
 - [Radiomics Stage-A 节点](docs/radiomics_nodes.md)
 - [Visualization 容器](docs/visualization_zh.md)
 
 ### 科研工作流
 
 - [TUI 指南](docs/tui_zh.md)
-- [TUI HTTP API](docs/tui-http-api_zh.md)
+- [API Server（HTTP API）](docs/api-server_zh.md)
 - [写作系统设计](docs/writing-system-design.md)
 - [Dendrite 知识管理工作空间](dendrite/README.md)
 - [TimesFM 服务](../../node-plugins/timesfm/README.md)（timesfm 插件目录）
@@ -384,4 +402,4 @@ bun run build
 
 ## 许可证
 
-工作空间元数据对继承它的 Autonomics 包声明 MIT；当前未单独提交顶层 license 文件。Vendored 与容器化第三方软件保留上游许可；尤其注意 GRF C++ 核心为 GPL-3，通过 `grf-sys` 静态链接会对分发二进制产生 GPL 影响。数据集和模型 checkpoint 另有各自条款。
+工作空间元数据对继承它的 Autonomics 包声明 MIT；当前未单独提交顶层 license 文件。Vendored 与容器化第三方软件保留上游许可。GPL 许可的工具(如 grf R 包)仅在 digest 钉死的容器插件内运行,与其它工具家族一样隔离在镜像边界,不编译进、也不链接进工作空间二进制。数据集和模型 checkpoint 另有各自条款。

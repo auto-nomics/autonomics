@@ -10,7 +10,7 @@ bibliography library, all from a single `ratatui`-based binary.
 
 - **Local HTTP API** — starts with the TUI and exposes the versioned `/api/v1`
   backend; bibliography management is the first module. See
-  [TUI HTTP API](tui-http-api_zh.md) (Chinese).
+  [API Server (HTTP API)](api-server_zh.md) (Chinese).
 - **Agent chat** — Streaming conversation with tool-calling agents built on
   `agentik-core`. Live Markdown rendering (with syntax highlighting via `syntect`),
   thinking deltas, per-turn token usage, background tool tasks, and a scrollable
@@ -262,8 +262,9 @@ Prompts for confirmation unless `-y` is passed.
 
 ## `bib` subcommand
 
-Local bibliography library management. All subcommands accept `--db <PATH>`
-(default `bib.db`).
+Local bibliography library management. All subcommands default to the runtime
+bibliography database (`AUTONOMICS_BIB_DB` → `~/.autonomics/bib.db`, the same
+path the daemon uses); pass `--db <PATH>` to override.
 
 ```
 autonomics bib [OPTIONS] <ACTION>

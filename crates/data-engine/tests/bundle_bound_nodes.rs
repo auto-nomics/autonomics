@@ -10,13 +10,6 @@ fn bundle(id: &str, vpath: &str) -> DataBundle {
     DataBundle::new(id, id, vpath)
 }
 
-fn catalog_panel(id: &str, source: &str) -> DataBundle {
-    let mut value = DataBundle::new(id, id, format!("/bundles/{id}"));
-    value.source = Some(source.into());
-    value.digest = Some(format!("sha256:{}", id.len()));
-    value
-}
-
 fn catalog() -> BundleRegistry {
     BundleRegistry::from_bundles([
         bundle(
@@ -67,10 +60,20 @@ fn catalog() -> BundleRegistry {
 
 fn registry() -> data_engine::node_registry::NodeRegistry {
     let ctx = SessionContext::new();
-    data_engine::default_registry::build_default_registry(
+    // Hermetic: an absent plugins root keeps the default build free of
+    // host-installed manifest plugins (~/.autonomics/plugins), which is
+    // exactly the plugin-free registry these tests pin. Without it the
+    // suite depends on what the developer machine has installed.
+    let absent_plugins = std::env::temp_dir().join(format!(
+        "autonomics-test-plugins-absent-{}",
+        std::process::id()
+    ));
+    data_engine::default_registry::build_default_registry_with_container_execution(
         ctx.runtime_env(),
         None,
         Arc::new(catalog()),
+        Arc::new(container_runtime::ContainerExecutionInfra::from_env()),
+        Some(absent_plugins),
     )
 }
 
@@ -106,23 +109,6 @@ fn all_bundle_bound_node_kinds_build_from_runtime_catalog() {
         (
             "magma_kegg_align",
             serde_json::json!({"min_set_size": 1, "max_set_size": 10}),
-        ),
-        (
-            "hdl_l_scan",
-            serde_json::json!({
-                "chr": 1,
-                "pieces": [3],
-                "trait1_name": "a",
-                "trait2_name": "b"
-            }),
-        ),
-        (
-            "two_sample_mr",
-            serde_json::json!({
-                "id_exposure": "exposure",
-                "id_outcome": "outcome",
-                "clump": {"type": "local_ld"}
-            }),
         ),
     ];
     let registry = registry();

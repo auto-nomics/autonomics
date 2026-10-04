@@ -4,7 +4,7 @@
 
 The container-backed DAG node runs the official
 [TwoSampleMR](https://github.com/MRCIEU/TwoSampleMR) R package. The legacy
-`mr` DataFrame node remains registered as a transitional Rust-port fallback.
+Rust-port `two_sample_mr` node has been removed.
 
 ## Features
 

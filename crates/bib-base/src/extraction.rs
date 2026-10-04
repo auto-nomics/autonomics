@@ -186,7 +186,7 @@ pub async fn run_extraction_parts(
             // from a previous run are NOT cleaned here — every claimable
             // row has `text_content = NULL` (`restart_extraction` clears
             // it), so old-vs-new diffing happens at the restart/replace/
-            // delete entry points in tui-http instead.
+            // delete entry points in api-server instead.
             store_figures(storage, article_id, &mut extracted).await;
 
             bib.record_extraction_success(

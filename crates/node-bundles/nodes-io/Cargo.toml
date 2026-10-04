@@ -16,18 +16,20 @@ chembl = { path = "../../chembl" }
 openalex = { path = "../../openalex" }
 semantic-scholar = { path = "../../semantic-scholar" }
 crossref = { path = "../../crossref" }
+bib-base = { path = "../../bib-base" }
+bib-types = { path = "../../bib-types" }
 nhanes = { path = "../../nhanes" }
 uniprot = { path = "../../uniprot" }
 reactome = { path = "../../reactome" }
 rcsb = { path = "../../rcsb" }
 string-sdk = { path = "../../string-sdk" }
+enrichr-sdk = { path = "../../enrichr-sdk" }
 kegg = { path = "../../kegg" }
 alphafold = { path = "../../alphafold" }
 interpro = { path = "../../interpro" }
 pubchem = { path = "../../pubchem" }
 protocolio = { path = "../../protocolio" }
 clinicaltrials = { path = "../../clinicaltrials" }
-mr = { path = "../../../bio_crates/mr" }
 arrow-array.workspace = true
 arrow-cast.workspace = true
 arrow.workspace = true
@@ -51,6 +53,11 @@ lzf-sys = "0.1"
 ndarray = "0.15"
 glob = "0.3"
 flate2 = "1.1"
+zstd = "0.13"
+bzip2 = "0.6"
+liblzma = "0.4"
+tar.workspace = true
+zip.workspace = true
 csv = "1.4"
 encoding_rs = "0.8"
 calamine = { version = "0.35.0", features = ["dates", "chrono"] }
@@ -64,7 +71,6 @@ toml.workspace = true
 data-catalog = { path = "../../data-catalog" }
 tokio = { workspace = true, features = ["net"] }
 arrow-buffer.workspace = true
-zstd = "0.13"
 
 [lints]
 workspace = true

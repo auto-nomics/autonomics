@@ -79,13 +79,13 @@ Two mechanisms make the harness trustworthy for biomedical work:
 | Model orchestration | `agentik-sdk`, `agentik-types`, `agentik-proc`, `agentik-core`, `agentik-network`, `runtime` | Streaming LLM clients, tool schemas and calls, persistent memory, lifecycle, multi-agent topology, and a sync-to-async host. |
 | Analysis execution | `dag-core`, `data-engine`, `data-engine-tools`, `crates/node-bundles/*`, `workflow-editor` | Node traits, plugin registry, typed ports, scheduler, JSON-schema specs, agent tools, snapshots, and reusable workflow skills. |
 | Data infrastructure | `vfs`, `data-catalog`, `container-runtime`, `biofusion` | OpenDAL-backed VFS, Hugging Face-hosted versioned packages, Podman execution, immutable panel caches, and biological-format DataFusion readers. |
-| Statistics and epidemiology | `statkit`, `epi`, `hypothesize`, `cmprsk`, `survey`, `mice`, `hierint` | Descriptive statistics and regression; causal inference and mediation; composable tests and p-value workflows; competing risks; survey designs; imputation; hierarchical interaction models. |
-| Machine learning and deep learning | `ml`, `dl`, `grf`, `grf-sys` | Preprocessing, feature engineering, clustering, supervised models, ensembles, anomaly detection, dimensionality reduction; Burn-based MLP, DeepSurv, DeepHit, RNN, Transformer, and autoencoder workflows; generalized random forests through the vendored C++ core. |
+| Statistics and epidemiology | `statkit`, `epi`, `hypothesize`, `nodes-power`, `cmprsk`, `survey`, `mice`, `hierint` | Descriptive statistics and regression; causal inference and mediation; composable tests and p-value workflows; prospective power and sample-size design; competing risks; survey designs; imputation; hierarchical interaction models. |
+| Machine learning and deep learning | `ml`, `dl` | Preprocessing, feature engineering, clustering, supervised models, ensembles, anomaly detection, dimensionality reduction; Burn-based MLP, DeepSurv, DeepHit, RNN, Transformer, and autoencoder workflows. Generalized random forests ship as the containerized `grf` plugin family (official R grf). |
 | Statistical genetics | `ldsc`, `mr`, `lava`, `mrlap`, `lcv`, `cpassoc`, `magma`, `coloc`, `bkmr`, `evalue`, `genomic_sem`, `lcmm` | LD score regression, Mendelian randomization, local genetic correlation, colocalization, Bayesian kernel-machine regression, E-value analysis, Genomic SEM, latent-class mixed models, and related ports. |
 | Regression discontinuity | `rdrobust`, `rdpower`, `rdmulti`, `rddensity`, `rdlocrand` | Local-polynomial RD estimation, power and sample-size calculations, multi-cutoff designs, manipulation testing, and local randomization inference. |
-| Scientific data clients | `eutils`, `opengwas`, `gwascatalog-sdk`, `opentargets`, `chembl`, `uniprot`, `string-sdk`, `kegg`, `reactome`, `ensembl`, `rcsb`, `alphafold`, `interpro`, `pubchem`, `protocolio`, `clinicaltrials` | SDKs, agent tools, and selected DAG source nodes for PubMed/Entrez, OpenGWAS, GWAS Catalog, Open Targets, ChEMBL, UniProt, STRING, KEGG, Reactome, Ensembl, RCSB, AlphaFold, InterPro, PubChem, protocols.io, and ClinicalTrials.gov. |
+| Scientific data clients | `eutils`, `opengwas`, `gwascatalog-sdk`, `opentargets`, `chembl`, `uniprot`, `string-sdk`, `enrichr-sdk`, `kegg`, `reactome`, `ensembl`, `rcsb`, `alphafold`, `interpro`, `pubchem`, `protocolio`, `clinicaltrials` | SDKs, agent tools, and selected DAG source nodes for PubMed/Entrez, OpenGWAS, GWAS Catalog, Open Targets, ChEMBL, UniProt, STRING, Enrichr, KEGG, Reactome, Ensembl, RCSB, AlphaFold, InterPro, PubChem, protocols.io, and ClinicalTrials.gov. |
 | Literature, writing, and knowledge | `arxiv`, `biorxiv`, `openalex`, `crossref`, `embase`, `europepmc`, `semantic-scholar`, `bib-types`, `bib-base`, `writing-types`, `writing-base`, `kms`, `kms-tools` | Unified literature search and full-text management, content-addressed documents, BibTeX/RIS/Markdown/CSL export, LaTeX AST operations, citation resolution, compilation, and knowledge-tree tools. |
-| Harness interface | `tui`, `tui-http`, `workflow-editor` | Streaming terminal chat, provider/model configuration, DAG view, bibliography CLI/API/frontend, KMS browser, and workflow editor components. |
+| Harness interface | `tui`, `api-server`, `workflow-editor` | Streaming terminal chat, provider/model configuration, DAG view, bibliography CLI/API/frontend, KMS browser, and workflow editor components. |
 
 The default `data-engine` build enables all node-bundle Cargo features. A library consumer can disable default features and select only needed `bundle-*` features.
 
@@ -96,15 +96,16 @@ per family holding `manifest.toml` (the node contract: params, ports,
 panels, image provenance), execution scripts, and the image build tree.
 Plugins are installed from git repositories pinned to a commit SHA and
 loaded at daemon startup by the plugin preflight — see
-[Plugin Node Migration](docs/plugin-node-migration.md) for the format and
-the workflow. Panel data bundles are provisioned by `autonomics panels
-sync`, which downloads and checksum-verifies every `[[panels]]` dataset
-reference missing from the local catalog cache; the startup preflight
+[Container Plugin Authoring](docs/plugins/README.md) for the format and
+workflow; use the [migration workflow](docs/plugin-node-migration.md) when
+replacing an existing hardcoded wrapper. Panel data bundles are provisioned by
+`autonomics panels sync`, which downloads and checksum-verifies every
+`[[panels]]` dataset reference missing from the local catalog cache; startup preflight
 only checks presence locally (bounded, offline-safe), so daemon readiness
 never waits on the network. Set `AUTONOMICS_PANEL_SYNC=1` to run the
 provisioning inline during `autonomics serve` for unattended deployments.
 
-26 families / 74 node kinds are currently published:
+28 families / 99 node kinds are currently published:
 
 | Family | Node kinds | Tool |
 | --- | --- | --- |
@@ -116,6 +117,7 @@ provisioning inline during `autonomics serve` for unattended deployments.
 | [deseq2](https://github.com/auto-nomics/deseq2-plugin) | `deseq2_de` | differential expression (DESeq2) |
 | [gcta](https://github.com/auto-nomics/gcta-plugin) | `gcta_cojo_select`, `gcta_sblup`, `gcta_fastbat`, `gcta_acat` | GCTA summary-statistics suite |
 | [pathway-gsea](https://github.com/auto-nomics/pathway-gsea-plugin) | `pathway_gsea` | fgsea pathway enrichment |
+| [clusterprofiler](https://github.com/auto-nomics/clusterprofiler-plugin) | `clusterprofiler_ora`, `clusterprofiler_gsea` | ORA and GSEA enrichment (clusterProfiler) |
 | [plink2](https://github.com/auto-nomics/plink2-plugin) | `plink2_clump` | LD clumping (PLINK2) |
 | [visualization](https://github.com/auto-nomics/visualization-plugin) | `visualization` | R plot rendering from user scripts |
 | [mtag](https://github.com/auto-nomics/mtag-plugin) | `mtag` | multi-trait analysis of GWAS |
@@ -134,6 +136,14 @@ provisioning inline during `autonomics serve` for unattended deployments.
 | [pathology](https://github.com/auto-nomics/pathology-plugin) | 7 `pathology_*` variants | WSI ingest / QC / embedding / IHC |
 | [bulk-rnaseq](https://github.com/auto-nomics/bulk-rnaseq-plugin) | `limma_voom`, `wgcna` | limma+voom differential expression, WGCNA modules |
 | [hyprcoloc](https://github.com/auto-nomics/hyprcoloc-plugin) | `hyprcoloc` | HyPrColoc multi-trait colocalization |
+| [grf](https://github.com/auto-nomics/grf-plugin) | 23 `grf_*` kinds: 12 forest trainers, `grf_predict_forest`, ATE / best-linear-projection / calibration / scores, forest weights / split frequencies / variable importance / get-tree / merge, `grf_generate_causal_data` | generalized random forests (official R grf 2.6.1) |
+
+### Building plugins
+
+- [Plugin authoring overview](docs/plugins/README.md): lifecycle, core rules, and the document map.
+- [Plugin authoring guide](docs/plugins/authoring-guide.md): end-to-end tutorial using a `clusterProfiler` ORA example.
+- [Manifest reference](docs/plugins/manifest-reference.md): normative schema, template semantics, and startup validation.
+- [Testing and release checklist](docs/plugins/testing-and-release.md): test pyramid, image digest publication, Git pinning, and clean-room review.
 
 ### Installing plugins
 
@@ -189,6 +199,16 @@ autonomics/
 The `reference/` directory contains third-party and comparison material and is not part of the root Cargo build.
 
 ## Getting Started
+
+### Install a prebuilt binary
+
+After a tagged GitHub release exists, install the platform binary without rebuilding:
+
+```bash
+curl --fail --location https://raw.githubusercontent.com/auto-nomics/autonomics/main/scripts/install.sh | bash
+```
+
+The script downloads the matching Linux or macOS binary, verifies `SHA256SUMS`, and installs it to `~/.local/bin`. Override the destination with `AUTONOMICS_INSTALL_DIR`, pin a release with `AUTONOMICS_VERSION=v0.1.0`, or use `AUTONOMICS_REPO=owner/repo` for a fork.
 
 ### Build and run the TUI
 
@@ -248,7 +268,7 @@ curl http://127.0.0.1:8765/api/health
 curl 'http://127.0.0.1:8765/api/v1/bib/articles?query=gwas&limit=10'
 ```
 
-The frontend development workflow is documented in [docs/tui-http-api_zh.md](docs/tui-http-api_zh.md).
+The frontend development workflow is documented in [docs/api-server_zh.md](docs/api-server_zh.md).
 
 ## Analysis Model
 
@@ -315,12 +335,11 @@ cargo test -p dag-core
 cargo test -p biofusion
 cargo test -p agentik-core
 cargo test -p runtime
-cargo test -p tui-http
+cargo test -p api-server
 cargo test -p epi
 cargo test -p statkit
 cargo test -p ldsc
 cargo test -p mr
-cargo test -p grf
 cargo test -p nodes-io
 
 # Formatting and lint.
@@ -333,7 +352,7 @@ Some tests call live public APIs, require credentials or private images, downloa
 The TUI HTTP frontend uses Bun:
 
 ```bash
-cd crates/tui-http/frontend
+cd crates/api-server/frontend
 bun install
 bun test
 bun run typecheck
@@ -352,6 +371,7 @@ bun run build
 - [Runtime bundles](docs/data-bundles.md): built-in bundle identifiers and runtime overlays.
 - [Container execution](docs/container-execution-design.md): Podman contracts and lifecycle.
 - [Container migration workflow](docs/container-node-migration.md): image, data package, and wrapper acceptance criteria.
+- [Container plugin authoring](docs/plugins/README.md): independent plugin repositories, manifest contracts, testing, and immutable release.
 
 ### Analysis methods
 
@@ -363,14 +383,13 @@ bun run build
 - [MiXeR](docs/stat-genetics/mixer.md)
 - [SuSiE-RSS](docs/stat-genetics/susie-rss.md)
 - [TWAS/FUSION](docs/stat-genetics/twas-fusion.md)
-- [GRF port](docs/grf_analysis.md)
 - [Radiomics Stage-A nodes](docs/radiomics_nodes.md)
 - [Visualization container](docs/visualization.md)
 
 ### Research workflow
 
 - [TUI guide](docs/tui.md)
-- [TUI HTTP API](docs/tui-http-api_zh.md) (Chinese)
+- [API Server (HTTP API)](docs/api-server_zh.md) (Chinese)
 - [Writing-system design](docs/writing-system-design.md)
 - [Dendrite knowledge-management workspace](dendrite/README.md)
 - [TimesFM service](../../node-plugins/timesfm/README.md) (timesfm plugin checkout)
@@ -387,4 +406,4 @@ bun run build
 
 ## License
 
-The workspace metadata declares the MIT license for Autonomics packages that inherit it; no standalone top-level license file is currently checked in. Vendored and containerized third-party software retains its upstream license. In particular, the GRF C++ core is GPL-3, and static linking via `grf-sys` has GPL implications for distributed binaries. Dataset and model checkpoints carry their own terms.
+The workspace metadata declares the MIT license for Autonomics packages that inherit it; no standalone top-level license file is currently checked in. Vendored and containerized third-party software retains its upstream license. GPL-licensed tooling (e.g. the grf R package) runs only inside digest-pinned container plugins, isolated at the image boundary like every other tool family; nothing GPL is compiled into or linked with the workspace binaries. Dataset and model checkpoints carry their own terms.

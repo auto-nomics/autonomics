@@ -18,10 +18,13 @@
 //! Articles without a PMID or DOI (e.g. pure arXiv preprints) are skipped.
 
 use bib_types::{ExtractStatus, FileFormat, FullText, FullTextSource, IdKind, TextFormat};
+
+use crate::stored_files::{stored_fulltext, vfs_virtual_path};
 use chrono::Utc;
 use europepmc::EuropePmcClient;
 use europepmc::types::{ResultType, SearchRequest};
 use tracing::debug;
+use vfs::OpendalFileStorage;
 
 /// Try to fetch an open-access full text for `article` from Europe PMC.
 ///
@@ -81,6 +84,49 @@ pub async fn try_fetch_fulltext_with(
         extracted_by: Some("europepmc".to_string()),
         extract_error: None,
     })
+}
+
+/// Fetch an OA full text and **store it as a real VFS object**.
+///
+/// The canonical fetch path: runs the [`try_fetch_fulltext_with`] chain,
+/// then writes the text to the content-addressed location
+/// `vfs:///literature/{article_id}/{sha256}-oa-{pmc}.txt` through the
+/// shared storage and returns the row pointing at it (hash + size
+/// recorded; text kept inline for the FTS index). Returns `None` when the
+/// article has no OA full text; a storage write failure downgrades to a
+/// warning and `None` — same best-effort contract as the fetch itself.
+pub async fn fetch_fulltext_stored(
+    client: &EuropePmcClient,
+    storage: &OpendalFileStorage,
+    article: &bib_types::Article,
+) -> Option<FullText> {
+    let mut fulltext = try_fetch_fulltext_with(client, article).await?;
+    let text = fulltext.text_content.clone().unwrap_or_default();
+
+    let name = fulltext
+        .file_path
+        .strip_prefix("europepmc:")
+        .map(|pmc| format!("oa-{pmc}.txt"))
+        .unwrap_or_else(|| "oa-fulltext.txt".to_string());
+    let stored = stored_fulltext(&article.id, &name, text.as_bytes());
+    let Some(virtual_path) = vfs_virtual_path(&stored.path) else {
+        return None;
+    };
+    let byte_len = text.len();
+    if let Err(error) = storage.write_bytes(&virtual_path, text.into_bytes()).await {
+        tracing::warn!(
+            article_id = %article.id,
+            path = %stored.path,
+            error = %error,
+            "cannot store OA full text object; skipping file-backed result"
+        );
+        return None;
+    }
+
+    fulltext.file_path = stored.path;
+    fulltext.file_hash = Some(stored.file_hash);
+    fulltext.file_size = Some(byte_len as i64);
+    Some(fulltext)
 }
 
 // ---------------------------------------------------------------------------

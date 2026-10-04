@@ -411,28 +411,32 @@ fn translation_renders_compact_progress() {
 
     // Phase ticks and throttled summary deltas are swallowed — the JSONL
     // stream would otherwise mirror the SSE delta flood.
-    assert!(state
-        .translate(
-            "agent",
-            AgentEvent::Compact {
-                event: CompactEvent::CompactPhase {
-                    ts,
-                    phase: agentik_types::CompactPhase::Summarizing,
+    assert!(
+        state
+            .translate(
+                "agent",
+                AgentEvent::Compact {
+                    event: CompactEvent::CompactPhase {
+                        ts,
+                        phase: agentik_types::CompactPhase::Summarizing,
+                    },
                 },
-            },
-        )
-        .is_empty());
-    assert!(state
-        .translate(
-            "agent",
-            AgentEvent::Compact {
-                event: CompactEvent::CompactSummaryDelta {
-                    ts,
-                    text: "## Progress".into(),
+            )
+            .is_empty()
+    );
+    assert!(
+        state
+            .translate(
+                "agent",
+                AgentEvent::Compact {
+                    event: CompactEvent::CompactSummaryDelta {
+                        ts,
+                        text: "## Progress".into(),
+                    },
                 },
-            },
-        )
-        .is_empty());
+            )
+            .is_empty()
+    );
 
     let finish = state.translate(
         "agent",

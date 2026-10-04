@@ -1,0 +1,230 @@
+use ascii_dag::algorithms::sugiyama::config::LayoutConfig;
+use ascii_dag::graph::Graph;
+use ascii_dag::graph::arena::Arena;
+use ascii_dag::graph::csr::CsrGraphBuilder;
+use ascii_dag::render::engine::RenderOptions;
+use std::io::{self, Write};
+use std::time::Instant;
+
+/// Graph topology for benchmarking
+#[derive(Clone, Copy)]
+enum Topology {
+    Chain,   // Simple chain: 0 → 1 → 2 → ... → N
+    Diamond, // Diamond lattice: worst case for skip-level edges
+    WideFan, // Fan-out then fan-in: worst case for crossing reduction
+}
+
+impl Topology {
+    fn name(&self) -> &'static str {
+        match self {
+            Topology::Chain => "Chain",
+            Topology::Diamond => "Diamond",
+            Topology::WideFan => "WideFan",
+        }
+    }
+}
+
+type GraphData = (Vec<(usize, String)>, Vec<(usize, usize)>);
+
+fn generate_chain(n: usize) -> GraphData {
+    let nodes: Vec<_> = (0..n).map(|i| (i, format!("N{}", i))).collect();
+    let edges: Vec<_> = (0..n - 1).map(|i| (i, i + 1)).collect();
+    (nodes, edges)
+}
+
+fn generate_diamond(n: usize) -> GraphData {
+    // Diamond lattice: each node connects to 2 nodes in next level
+    // Creates many skip-level edges and crossing opportunities
+    let nodes: Vec<_> = (0..n).map(|i| (i, format!("N{}", i))).collect();
+    let mut edges = Vec::with_capacity(n * 2);
+
+    for i in 0..n.saturating_sub(1) {
+        edges.push((i, i + 1));
+        if i + 2 < n {
+            edges.push((i, i + 2)); // Skip-level edge
+        }
+    }
+    (nodes, edges)
+}
+
+fn generate_wide_fan(n: usize) -> GraphData {
+    // Fan-out from root, then fan-in to sink
+    // Worst case for crossing reduction (all nodes at same level)
+    let nodes: Vec<_> = (0..n).map(|i| (i, format!("N{}", i))).collect();
+    let mut edges = Vec::with_capacity(n * 2);
+
+    let root = 0;
+    let sink = n - 1;
+    let middle_count = n.saturating_sub(2);
+
+    // Root fans out to all middle nodes
+    for i in 1..=middle_count {
+        edges.push((root, i));
+    }
+    // All middle nodes fan in to sink
+    for i in 1..=middle_count {
+        edges.push((i, sink));
+    }
+    (nodes, edges)
+}
+
+fn generate_graph(topology: Topology, n: usize) -> GraphData {
+    match topology {
+        Topology::Chain => generate_chain(n),
+        Topology::Diamond => generate_diamond(n),
+        Topology::WideFan => generate_wide_fan(n),
+    }
+}
+
+fn run_comparison(topology: Topology, count: usize) {
+    let (nodes, edges) = generate_graph(topology, count);
+
+    // Build heap DAG once for both benchmarking and arena size estimation
+    let node_refs: Vec<(usize, &str)> = nodes.iter().map(|(id, s)| (*id, s.as_str())).collect();
+    let dag = Graph::from_edges(&node_refs, &edges);
+
+    // Use the DAG's estimator for arena buffer sizing with 2x safety margin.
+    let layout_estimate = dag.estimate_layout_arena_size();
+    let arena_size = (layout_estimate * 2).max(256 * 1024);
+
+    // --- HEAP BENCHMARK ---
+    let heap_total_us;
+    let heap_build_us;
+    let heap_compute_us;
+    let heap_render_us;
+    {
+        let start = Instant::now();
+
+        // 1. Build
+        let build_start = Instant::now();
+        let dag = Graph::from_edges(&node_refs, &edges);
+        heap_build_us = build_start.elapsed().as_micros();
+
+        // 2. Compute Layout
+        let compute_start = Instant::now();
+        let ir = dag.compute_layout();
+        heap_compute_us = compute_start.elapsed().as_micros();
+
+        // 3. Render
+        let render_start = Instant::now();
+        let mut output = String::with_capacity(count * 100);
+        let _ = ir.render_with(&RenderOptions::plain(), &mut output);
+        heap_render_us = render_start.elapsed().as_micros();
+
+        heap_total_us = start.elapsed().as_micros();
+    }
+
+    // --- ARENA BENCHMARK ---
+    let arena_total_us;
+    let arena_build_us;
+    let arena_compute_us;
+    let arena_render_us;
+    {
+        // Scale graph arena: labels + node/edge structs + overhead
+        let label_bytes: usize = nodes.iter().map(|(_, l)| l.len()).sum::<usize>() + 256;
+        let graph_size =
+            (label_bytes + (nodes.len() + edges.len()) * 64 + 64 * 1024).max(256 * 1024);
+
+        let mut graph_mem = vec![0u8; graph_size];
+        let mut temp_mem = vec![0u8; arena_size];
+        let mut output_mem = vec![0u8; arena_size];
+
+        let start = Instant::now();
+
+        // 1. Build
+        let build_start = Instant::now();
+        let mut graph_arena = Arena::new(&mut graph_mem);
+
+        let mut builder =
+            CsrGraphBuilder::new(&mut graph_arena, nodes.len(), edges.len(), label_bytes, 0)
+                .expect("Failed to create CsrGraphBuilder");
+
+        for (id, label) in &nodes {
+            builder.add_node(*id, label);
+        }
+        for (u, v) in &edges {
+            builder.add_edge(*u, *v);
+        }
+
+        let graph = builder.build().expect("Failed to build graph");
+        arena_build_us = build_start.elapsed().as_micros();
+
+        // 2. Compute Layout
+        let compute_start = Instant::now();
+        let mut temp_arena = Arena::new(&mut temp_mem);
+        let mut final_arena = Arena::new(&mut output_mem);
+
+        let layout = graph
+            .compute_layout_arena(&LayoutConfig::standard(), &mut temp_arena, &mut final_arena)
+            .expect("Layout computation failed (None returned). Use --features arena, not --all-features.");
+        arena_compute_us = compute_start.elapsed().as_micros();
+
+        // 3. Render
+        let render_start = Instant::now();
+        let options = RenderOptions::plain();
+        let mut arena_buf = vec![0u8; layout.estimate_render_arena_size(&options)];
+        let render_arena = ascii_dag::graph::arena::Arena::new(&mut arena_buf);
+        let mut render_buf = vec![0u8; layout.estimate_render_output_size(&options)];
+        let _ = layout.render_to_bytes(&options, &render_arena, &mut render_buf);
+        arena_render_us = render_start.elapsed().as_micros();
+
+        arena_total_us = start.elapsed().as_micros();
+    }
+
+    let speedup = heap_total_us as f64 / arena_total_us as f64;
+
+    // Print Heap row
+    println!(
+        "| {:>8} | {:>5} | {:>5} | {:>8}µs | {:>8}µs | {:>8}µs | {:>10}µs |",
+        topology.name(),
+        count,
+        "Heap",
+        heap_build_us,
+        heap_compute_us,
+        heap_render_us,
+        heap_total_us
+    );
+
+    // Print Arena row
+    println!(
+        "| {:>8} | {:>5} | {:>5} | {:>8}µs | {:>8}µs | {:>8}µs | {:>10}µs | **{:.1}x**",
+        "", "", "Arena", arena_build_us, arena_compute_us, arena_render_us, arena_total_us, speedup
+    );
+}
+
+fn main() {
+    println!("\n=== Desktop Benchmark: Heap vs Arena ===");
+    println!("Platform: Apple M2 Ultra (ARM64), Release Build\n");
+    println!(
+        "| {:>8} | {:>5} | {:>5} | {:>10} | {:>10} | {:>10} | {:>12} | Speedup",
+        "Topology", "Nodes", "Mode", "Build", "Compute", "Render", "Total"
+    );
+    println!(
+        "|----------|-------|-------|------------|------------|------------|--------------|--------"
+    );
+    let _ = io::stdout().flush();
+
+    // Note: Chain depth = N-1, Diamond depth ≈ N-1, and arena layout caps at MAX_LEVELS=255.
+    // Chain/Diamond 250 is the safe max (249 levels). WideFan has only 3 levels regardless.
+    let tests = [
+        (Topology::Chain, 100),
+        (Topology::Chain, 250),
+        (Topology::Diamond, 100),
+        (Topology::Diamond, 200),
+        (Topology::WideFan, 100),
+        (Topology::WideFan, 500),
+    ];
+
+    for (topology, size) in tests {
+        run_comparison(topology, size);
+        println!();
+    }
+
+    println!("Legend:");
+    println!("  Chain   = Simple linear chain (best case)");
+    println!("  Diamond = Diamond lattice with skip-level edges (stress test)");
+    println!("  WideFan = Fan-out/fan-in (worst case for crossing reduction)");
+    println!("\n  Build = DAG/CSR construction");
+    println!("  Compute = Sugiyama layout algorithm");
+    println!("  Render = ASCII output generation");
+}

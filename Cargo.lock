@@ -332,6 +332,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
+name = "api-server"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "bib-base",
+ "bib-types",
+ "chrono",
+ "http-body-util",
+ "opendal",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tower",
+ "tracing",
+ "uuid",
+ "vfs",
+]
+
+[[package]]
 name = "apply-patch"
 version = "0.1.0"
 dependencies = [
@@ -713,6 +735,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d92bec98840b8f03a5ff5413de5293bfcd8bf96467cf5452609f939ec6f5de16"
 
 [[package]]
+name = "ascii-dag"
+version = "0.11.0"
+
+[[package]]
+name = "ascii-dag-core"
+version = "0.1.0"
+
+[[package]]
 name = "ash"
 version = "0.38.0+1.3.281"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -856,6 +886,7 @@ dependencies = [
  "agentik-types",
  "arboard",
  "arc-swap",
+ "ascii-dag",
  "base64 0.22.1",
  "bib-base",
  "chrono",
@@ -1054,6 +1085,8 @@ dependencies = [
  "bib-types",
  "chrono",
  "crossref",
+ "dag-core",
+ "datafusion",
  "europepmc",
  "eutils",
  "futures",
@@ -2701,6 +2734,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
@@ -2833,6 +2867,7 @@ dependencies = [
  "arrow-buffer",
  "arrow-schema",
  "async-trait",
+ "chrono",
  "container-plugin",
  "container-runtime",
  "csv",
@@ -2845,7 +2880,6 @@ dependencies = [
  "nodes-dl",
  "nodes-epi",
  "nodes-genetics",
- "nodes-grf",
  "nodes-hypothesize",
  "nodes-io",
  "nodes-lcmm",
@@ -2854,6 +2888,7 @@ dependencies = [
  "nodes-ml",
  "nodes-mr",
  "nodes-opengwas",
+ "nodes-power",
  "nodes-rd",
  "nodes-regression",
  "nodes-sql",
@@ -2870,6 +2905,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "turso",
+ "uuid",
  "vfs",
 ]
 
@@ -2883,6 +2919,8 @@ dependencies = [
  "arrow",
  "arrow-array",
  "async-trait",
+ "bib-base",
+ "bib-types",
  "data-engine",
  "datafusion",
  "nodes-sql",
@@ -2891,6 +2929,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "uuid",
  "vfs",
 ]
 
@@ -3577,6 +3616,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "930c7171c8df9fb1782bdf9b918ed9ed2d33d1d22300abb754f9085bc48bf8e8"
 
 [[package]]
+name = "deflate64"
+version = "0.1.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac6b926516df9c60bfa16e107b21086399f8285a44ca9711344b9e553c5146e2"
+
+[[package]]
 name = "defmt"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3956,6 +4001,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75030f3c4f45dafd7586dd6780965a8c7e8e285a5ecb86713e63a79c5b2766f3"
 dependencies = [
  "cfg-if 1.0.5",
+]
+
+[[package]]
+name = "enrichr-sdk"
+version = "0.1.0"
+dependencies = [
+ "agentik-core",
+ "agentik-proc",
+ "agentik-sdk",
+ "arrow-array",
+ "arrow-schema",
+ "async-trait",
+ "dag-core",
+ "datafusion",
+ "reqwest",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
 ]
 
 [[package]]
@@ -4612,10 +4677,12 @@ dependencies = [
  "agentik-core",
  "agentik-sdk",
  "agentik-types",
+ "api-server",
  "arc-swap",
  "axum",
  "bib-base",
  "chrono",
+ "container-plugin",
  "dag-core",
  "eventsource-stream",
  "futures",
@@ -4626,6 +4693,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "skills",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
@@ -4634,7 +4702,6 @@ dependencies = [
  "tower",
  "tracing",
  "tracing-subscriber",
- "tui-http",
  "utoipa",
  "utoipa-swagger-ui",
  "uuid",
@@ -5154,31 +5221,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fdf242682df893b86f33a73828fb09ca4b2d3bb6cc95249707fc684d27484b91"
 dependencies = [
  "bitflags 2.13.2",
-]
-
-[[package]]
-name = "grf"
-version = "0.1.0"
-dependencies = [
- "arrow-array",
- "arrow-schema",
- "grf-sys",
- "rand 0.8.8",
- "rand_distr 0.4.3",
- "schemars",
- "serde",
- "statkit",
- "thiserror 2.0.20",
- "tokio",
-]
-
-[[package]]
-name = "grf-sys"
-version = "0.1.0"
-dependencies = [
- "cc",
- "libc",
- "thiserror 2.0.20",
 ]
 
 [[package]]
@@ -7732,23 +7774,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nodes-grf"
-version = "0.1.0"
-dependencies = [
- "arrow",
- "arrow-array",
- "arrow-schema",
- "async-trait",
- "dag-core",
- "grf",
- "schemars",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "nodes-hypothesize"
 version = "0.1.0"
 dependencies = [
@@ -7778,7 +7803,10 @@ dependencies = [
  "arrow-cast",
  "arrow-schema",
  "async-trait",
+ "bib-base",
+ "bib-types",
  "biofusion",
+ "bzip2",
  "calamine",
  "chembl",
  "clinicaltrials",
@@ -7789,6 +7817,7 @@ dependencies = [
  "data-catalog",
  "datafusion",
  "encoding_rs",
+ "enrichr-sdk",
  "errno 0.2.8",
  "flate2",
  "futures",
@@ -7798,8 +7827,8 @@ dependencies = [
  "interpro",
  "kegg",
  "libc",
+ "liblzma",
  "lzf-sys",
- "mr",
  "ndarray 0.15.6",
  "nhanes",
  "openalex",
@@ -7818,6 +7847,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "string-sdk",
+ "tar",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
@@ -7825,6 +7855,7 @@ dependencies = [
  "tracing",
  "uniprot",
  "vfs",
+ "zip 8.6.0",
  "zstd 0.13.3",
 ]
 
@@ -7915,17 +7946,12 @@ dependencies = [
  "dag-core",
  "datafusion",
  "faer",
- "mr",
  "mrlap",
  "nodes-ldsc",
- "opengwas",
  "schemars",
  "serde",
  "serde_json",
- "statrs",
- "thiserror 2.0.20",
  "tokio",
- "tracing",
  "vfs",
 ]
 
@@ -7944,6 +7970,23 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "nodes-power"
+version = "0.1.0"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "async-trait",
+ "dag-core",
+ "datafusion",
+ "schemars",
+ "serde",
+ "serde_json",
+ "statrs",
+ "thiserror 2.0.20",
+ "tokio",
 ]
 
 [[package]]
@@ -10579,6 +10622,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "skills",
  "string-sdk",
  "tempfile",
  "thiserror 2.0.20",
@@ -11139,6 +11183,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_yaml"
+version = "0.9.34+deprecated"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a8b1a1a2ebf674015cc02edccce75287f1a0130d394307b36743c2f5d504b47"
+dependencies = [
+ "indexmap",
+ "itoa",
+ "ryu",
+ "serde",
+ "unsafe-libyaml",
+]
+
+[[package]]
 name = "serial_test"
 version = "3.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11348,6 +11405,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "513c3f5f732bfd6fbb187619c2dfe9d2f25f1a2976f01d575f0fd329d565df56"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "skills"
+version = "0.1.0"
+dependencies = [
+ "agentik-core",
+ "agentik-proc",
+ "agentik-sdk",
+ "arc-swap",
+ "async-trait",
+ "clap",
+ "schemars",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "toml 1.1.6+spec-1.1.0",
+ "tracing",
 ]
 
 [[package]]
@@ -12595,28 +12674,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2df906b07856748fa3f6e0ad0cbaa047052d4a7dd609e231c4f72cee8c36f31"
 
 [[package]]
-name = "tui-http"
-version = "0.1.0"
-dependencies = [
- "axum",
- "bib-base",
- "bib-types",
- "chrono",
- "http-body-util",
- "opendal",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tempfile",
- "tokio",
- "tokio-util",
- "tower",
- "tracing",
- "uuid",
- "vfs",
-]
-
-[[package]]
 name = "tui-scrollbar"
 version = "0.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13036,6 +13093,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "unsafe-libyaml"
+version = "0.2.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "673aac59facbab8a9007c7f6108d11f63b603f7cabff99fabf650fea5c32b861"
+
+[[package]]
 name = "untrusted"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13179,6 +13242,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
@@ -14519,7 +14583,9 @@ version = "8.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2d04a6b5381502aa6087c94c669499eb1602eb9c5e8198e534de571f7154809b"
 dependencies = [
+ "bzip2",
  "crc32fast",
+ "deflate64",
  "flate2",
  "indexmap",
  "memchr",

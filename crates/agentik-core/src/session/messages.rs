@@ -2,8 +2,8 @@
 //! adjacency repair, context rendering, and durable sanitization.
 
 use agentik_sdk::model::sanitize::sanitize_messages;
-use agentik_sdk::types::messages::{ContentBlock, Message, Role};
 use agentik_sdk::types::AgentEvent;
+use agentik_sdk::types::messages::{ContentBlock, Message, Role};
 use uuid::Uuid;
 
 use crate::error::Result;
@@ -11,11 +11,9 @@ use crate::message_ext::AgentMessageExt;
 use crate::storage::PersistOp;
 
 use super::Session;
-use super::compaction::{
-    format_checkpoint_message, prune_old_tool_outputs, PRUNE_PROTECT_TOKENS,
-};
-use super::error;
 use super::SessionState;
+use super::compaction::format_checkpoint_message;
+use super::error;
 
 /// Insert a `tool_result` into a user message so that all `tool_result`
 /// blocks precede any text blocks.
@@ -243,7 +241,7 @@ impl Session {
     ///
     /// - Historical compaction summaries are injected as
     ///   `<conversation-checkpoint>` user messages BEFORE current messages.
-    /// - Old tool outputs exceeding the protection window are pruned.
+    /// - Current messages are appended verbatim to preserve cache prefixes.
     pub fn render_context(&self) -> Result<Vec<Message>> {
         let mut result = Vec::new();
 
@@ -254,9 +252,7 @@ impl Session {
         }
 
         // 2. Append the current messages
-        let mut messages = self.messages.clone();
-        prune_old_tool_outputs(&mut messages, PRUNE_PROTECT_TOKENS);
-        result.extend(messages);
+        result.extend(self.messages.iter().cloned());
 
         Ok(result)
     }
@@ -418,6 +414,67 @@ mod tests {
         assert_eq!(b, 1);
     }
 
+    /// Context rendering must stay append-only. Mutating an old tool result
+    /// after it has been sent once invalidates the prompt-cache prefix from
+    /// that result onward.
+    #[test]
+    fn render_context_keeps_tool_output_stable_as_history_grows() {
+        let mut session = make_test_session();
+        session
+            .remember(Message::user("run bioinformatics tools"))
+            .unwrap();
+        let old_output = "old".repeat(40_000); // 30k estimated tokens
+
+        let tool_turn = |session: &mut crate::session::Session, id: &str, output: String| {
+            session
+                .remember(Message::assistant_tool_use(
+                    id,
+                    "run_analysis",
+                    serde_json::json!({}),
+                ))
+                .unwrap();
+            session
+                .remember(Message::tool_result(id, output, false))
+                .unwrap();
+        };
+
+        tool_turn(&mut session, "call_0", old_output.clone());
+        tool_turn(
+            &mut session,
+            "call_1",
+            "recent".repeat(1_000), // 1.5k estimated tokens
+        );
+
+        let first = session.render_context().unwrap();
+        assert_eq!(
+            tool_result_content(&first, "call_0").as_deref(),
+            Some(old_output.as_str()),
+        );
+
+        tool_turn(
+            &mut session,
+            "call_2",
+            "new".repeat(40_000), // 30k estimated tokens
+        );
+        let second = session.render_context().unwrap();
+
+        assert_eq!(
+            &second[..first.len()],
+            &first[..],
+            "existing rendered messages must remain a stable prefix"
+        );
+        assert_eq!(
+            tool_result_content(&second, "call_0").as_deref(),
+            Some(old_output.as_str()),
+            "newer tail output must not mutate an older rendered tool result"
+        );
+        assert_eq!(
+            tool_result_content(&session.messages, "call_0").as_deref(),
+            Some(old_output.as_str()),
+            "rendering must not mutate stored tool results"
+        );
+    }
+
     /// Regression for `messages.N: tool_use ids were found without
     /// tool_result blocks immediately after` on MiniMax's Anthropic-compatible
     /// gateway: when a tool_result arrives after a notification/user text was
@@ -481,6 +538,20 @@ mod tests {
             .flat_map(|m| m.content.iter())
             .filter(|c| matches!(c, ContentBlock::ToolResult { tool_use_id: id, .. } if id == tool_use_id))
             .count()
+    }
+
+    fn tool_result_content(msgs: &[Message], tool_use_id: &str) -> Option<String> {
+        msgs.iter()
+            .flat_map(|m| m.content.iter())
+            .find_map(|c| match c {
+                ContentBlock::ToolResult {
+                    tool_use_id: id,
+                    content,
+                    ..
+                } if id == tool_use_id => Some(content.clone()),
+                _ => None,
+            })
+            .flatten()
     }
 
     /// When the slot immediately after a `tool_use` is non-User (e.g.

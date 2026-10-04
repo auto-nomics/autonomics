@@ -6,8 +6,10 @@ members = [
   "crates/agentik-proc",
   "crates/gwascatalog-sdk",
   "crates/dag-core",
+  "crates/ascii-dag-core",
   "crates/data-engine",
   "crates/node-bundles/nodes-hypothesize",
+  "crates/node-bundles/nodes-power",
   "crates/node-bundles/nodes-ml",
   "crates/node-bundles/nodes-sql",
   "crates/node-bundles/nodes-regression",
@@ -23,7 +25,6 @@ members = [
   "crates/node-bundles/nodes-ldsc",
   "crates/node-bundles/nodes-genetics",
   "crates/node-bundles/nodes-mice",
-  "crates/node-bundles/nodes-grf",
   "apps/autonomics",
   "crates/opengwas",
   "crates/eutils",
@@ -61,7 +62,7 @@ members = [
   "stat_crates/survey",
   "crates/bib-types",
   "crates/bib-base",
-  "crates/tui-http",
+  "crates/api-server",
   "crates/arxiv",
   "crates/embase",
   "crates/biorxiv",
@@ -87,10 +88,9 @@ members = [
   "crates/ensembl",
   "crates/rcsb",
   "crates/string-sdk",
+  "crates/enrichr-sdk",
   "crates/kegg",
   "crates/nhanes",
-  "crates/grf-sys",
-  "bio_crates/grf",
   "bio_crates/genomic_sem",
   "bio_crates/rdrobust",
   "bio_crates/rdpower",
@@ -100,7 +100,7 @@ members = [
   "crates/node-bundles/nodes-rd",
   "crates/workflow-editor",
   "stat_crates/dl",
-  "crates/node-bundles/nodes-dl", "crates/container-plugin",
+  "crates/node-bundles/nodes-dl", "crates/container-plugin", "crates/skills",
 ]
 resolver = "3"
 
@@ -126,9 +126,13 @@ sas_xport = "0.4.1"
 clap = { version = "4.6", features = ["derive"] }
 tar = "0.4"
 # default-features off: the default set pulls xz2, whose lzma-sys conflicts
-# with datafusion's liblzma-sys (`links = "lzma"` clash). MinerU result zips
-# only need deflate.
-zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+# with datafusion's liblzma-sys (`links = "lzma"` clash). These features cover
+# the common ZIP compression methods without adding that conflicting backend.
+zip = { version = "8.6.0", default-features = false, features = [
+  "deflate",
+  "deflate64",
+  "bzip2",
+] }
 toml = "1"
 uuid = "1.24"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
