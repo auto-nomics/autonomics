@@ -270,7 +270,9 @@ fn skill_evolution_status(infra: &SharedInfra) -> SkillEvolutionStatus {
     // Flatten the typed phase into DTO-friendly fields.
     let (phase, phase_queued, phase_triggers) = match &cycle.phase {
         skills::CyclePhase::Idle => ("idle".to_string(), 0, Vec::new()),
-        skills::CyclePhase::Coalescing { queued } => ("coalescing".to_string(), *queued, Vec::new()),
+        skills::CyclePhase::Coalescing { queued } => {
+            ("coalescing".to_string(), *queued, Vec::new())
+        }
         skills::CyclePhase::Distilling { triggers } => {
             ("distilling".to_string(), 0, triggers.clone())
         }

@@ -306,9 +306,12 @@ fn specs_order_and_wiring_ports_join_the_graph() {
     let df = "urn:autonomics:run:run-1:df:normalize";
 
     // Specs from the executed manifest, as compact JSON literals.
-    let spec: Value =
-        serde_json::from_str(doc["activity"][normalize]["autonomics:spec"].as_str().unwrap())
-            .unwrap();
+    let spec: Value = serde_json::from_str(
+        doc["activity"][normalize]["autonomics:spec"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
     assert_eq!(spec["sql_query"], json!("SELECT a FROM counts"));
 
     // Dispatch order: the scheduler's serialization of the run.
@@ -347,7 +350,10 @@ fn specs_order_and_wiring_ports_join_the_graph() {
     let informed = doc["wasInformedBy"].as_array().unwrap();
     let matches: Vec<&Value> = informed
         .iter()
-        .filter(|r| r["activity"] == normalize && r["informed"] == "urn:autonomics:run:run-1:node:counts_file")
+        .filter(|r| {
+            r["activity"] == normalize
+                && r["informed"] == "urn:autonomics:run:run-1:node:counts_file"
+        })
         .collect();
     assert_eq!(matches.len(), 1, "declared + observed edges dedupe");
     assert_eq!(matches[0]["prov:role"], json!("0>0"));

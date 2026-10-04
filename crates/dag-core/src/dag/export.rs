@@ -720,9 +720,9 @@ pub fn build_prov_document(run: &RunRecord, report: &Value, manifest: Option<&st
                 // `wasInformedBy` pass below covers it).
                 continue;
             };
-            used.entry((act.clone(), id.clone())).or_default().insert(
-                used_role(&input.from, input.from_port, input.to_port),
-            );
+            used.entry((act.clone(), id.clone()))
+                .or_default()
+                .insert(used_role(&input.from, input.from_port, input.to_port));
             input_ids.push(id);
         }
         let mut output_ids = Vec::new();
@@ -823,7 +823,8 @@ pub fn build_prov_document(run: &RunRecord, report: &Value, manifest: Option<&st
                 "autonomics:manifest_present": manifest.is_some(),
             }),
         );
-        used.entry((run_activity.clone(), snapshot_entity)).or_default();
+        used.entry((run_activity.clone(), snapshot_entity))
+            .or_default();
     }
 
     let mut associated = Vec::new();
@@ -846,8 +847,7 @@ pub fn build_prov_document(run: &RunRecord, report: &Value, manifest: Option<&st
                             record["prov:role"] = json!(only);
                         }
                         Some(_) => {
-                            record["prov:role"] =
-                                json!(roles.iter().collect::<Vec<_>>());
+                            record["prov:role"] = json!(roles.iter().collect::<Vec<_>>());
                         }
                         None => {}
                     }
@@ -1624,17 +1624,20 @@ mod tests {
         let downstream = "urn:autonomics:run:0123456789abcdef:node:downstream";
 
         // Error detail as a compact JSON literal.
-        let error: Value = serde_json::from_str(
-            doc["activity"][boom]["autonomics:error"].as_str().unwrap(),
-        )
-        .unwrap();
+        let error: Value =
+            serde_json::from_str(doc["activity"][boom]["autonomics:error"].as_str().unwrap())
+                .unwrap();
         assert_eq!(error["kind"], json!("node_error"));
         // Skip root cause recorded; neither node reached a dispatch turn.
         assert_eq!(
             doc["activity"][downstream]["autonomics:skipped_because"],
             json!("boom")
         );
-        assert!(doc["activity"][boom].get("autonomics:dispatch_seq").is_none());
+        assert!(
+            doc["activity"][boom]
+                .get("autonomics:dispatch_seq")
+                .is_none()
+        );
 
         // Run-level context: warnings + memory peak.
         let run_activity = &doc["activity"]["urn:autonomics:run:0123456789abcdef"];
@@ -1675,8 +1678,7 @@ mod tests {
         let digest = format!("sha256:{}", hex_lower(&sha2_computed(contents)));
         let mut report = sample_report_json();
         report["nodes"][1]["output_files"][0]["fingerprint"]["content_hash"] = json!(digest);
-        report["nodes"][1]["port_assignments"]["0"]["fingerprint"]["content_hash"] =
-            json!(digest);
+        report["nodes"][1]["port_assignments"]["0"]["fingerprint"]["content_hash"] = json!(digest);
 
         let run = sample_run();
         let out = tempfile::tempdir().unwrap();
