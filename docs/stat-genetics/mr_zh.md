@@ -2,7 +2,7 @@
 
 [English](mr.md) | [中文](mr_zh.md)
 
-容器化 DAG 节点直接运行官方 [TwoSampleMR](https://github.com/MRCIEU/TwoSampleMR) R 包。旧版 `mr` DataFrame 节点保留为 Rust 移植的过渡回退。
+容器化 DAG 节点直接运行官方 [TwoSampleMR](https://github.com/MRCIEU/TwoSampleMR) R 包。旧版 Rust 移植 `two_sample_mr` 节点已移除。
 
 ## 功能
 

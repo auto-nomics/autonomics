@@ -8,7 +8,7 @@ use std::time::Duration;
 use agentik_sdk::model::sanitize::sanitize_messages;
 use agentik_sdk::types::messages::{ContentBlock, Message};
 use agentik_sdk::types::tools::ToolUse;
-use agentik_sdk::types::{AgentEvent, AnthropicError, ToolDefinition};
+use agentik_sdk::types::{AgentEvent, AnthropicError};
 use agentik_types::CompactTrigger;
 use futures::StreamExt;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
@@ -324,11 +324,9 @@ impl Session {
 
         self.poll_context_provider().await;
 
-        let allowed = self.current_allowed_tools().await;
-
         self.set_lifecycle(agentik_types::AgentLifecycleStatus::Requesting);
         self.shared.send_event(AgentEvent::Requesting);
-        let response_message = self.request_with_retries(allowed.as_deref()).await?;
+        let response_message = self.request_with_retries().await?;
 
         let last_usage = response_message.usage.clone().unwrap_or_default();
         self.telemetry.record_usage(&last_usage);
@@ -562,7 +560,7 @@ impl Session {
     /// phase. Retrying the whole workflow after a later failure could execute
     /// tools twice, while retrying here only repeats the LLM request.
     /// Each attempt rebuilds fresh state inside `request`.
-    async fn request_with_retries(&mut self, allowed: Option<&[String]>) -> Result<Message> {
+    async fn request_with_retries(&mut self) -> Result<Message> {
         let max_retries: u32 = self
             .shared
             .config
@@ -572,7 +570,7 @@ impl Session {
         let mut attempts_used = 0u32;
 
         loop {
-            match self.request(allowed).await {
+            match self.request().await {
                 Ok(response) => return Ok(response),
                 Err(e) if attempts_used < max_retries && is_retryable_api_request(&e) => {
                     attempts_used += 1;
@@ -609,7 +607,7 @@ impl Session {
         }
     }
 
-    async fn request(&mut self, allowed: Option<&[String]>) -> Result<Message> {
+    async fn request(&mut self) -> Result<Message> {
         let span = span!(Level::TRACE, "API Request");
         let _enter = span.enter();
 
@@ -647,7 +645,7 @@ impl Session {
             }
         }
 
-        let all_tools = self.visible_tools(allowed);
+        let all_tools = self.toolset.tools();
 
         // Repair any Anthropic-invariant violations before sending and
         // persist the repaired shape so future turns don't re-patch.
@@ -888,23 +886,6 @@ impl Session {
         }
     }
 
-    async fn current_allowed_tools(&self) -> Option<Vec<String>> {
-        let rt = self.shared.skill_runtime.as_ref()?;
-        let guard = rt.lock().await;
-        Some(guard.allowed_tools_for_current_step())
-    }
-
-    fn visible_tools(&self, allowed: Option<&[String]>) -> Vec<ToolDefinition> {
-        let all = self.toolset.tools();
-        match allowed {
-            None => all,
-            Some(names) => all
-                .into_iter()
-                .filter(|t| names.iter().any(|n| n == &t.name))
-                .collect(),
-        }
-    }
-
     async fn build_context(&mut self) -> Result<Vec<Message>> {
         // Skill-library guidance is static behavioral text (how to
         // consume and feed the skill evolution tools), so it lives in
@@ -943,11 +924,11 @@ impl Session {
             }
         }
 
-        // 注:plan 与 skill 状态不再进 system——它们随任务推进高频变化,
-        // 每次变化都会重写 instructions(请求体最头部),使 prompt-cache
-        // 的最长公共前缀归零,并轮换 ChatGPT wire 的 prompt_cache_key。
-        // 改为变更时向消息流尾部注入通知(inject_state_notices),system
-        // 在会话内保持逐字节稳定。
+        // 注:plan 状态不再进 system——它随任务推进高频变化,每次变化
+        // 都会重写 instructions(请求体最头部),使 prompt-cache 的最长
+        // 公共前缀归零,并轮换 ChatGPT wire 的 prompt_cache_key。改为
+        // 变更时向消息流尾部注入通知(inject_state_notices),system 在
+        // 会话内保持逐字节稳定。
         let system_prompt = builder.parse();
 
         self.inject_state_notices().await;
@@ -961,9 +942,9 @@ impl Session {
         Ok(context_messages)
     }
 
-    /// 将 plan / skill 状态以**消息流尾部通知**同步给模型:仅当状态与
+    /// 将 plan 状态以**消息流尾部通知**同步给模型:仅当状态与
     /// 历史中最近一条同类通知不一致时追加一条 user 消息(前缀
-    /// [`PLAN_NOTICE_PREFIX`] / [`SKILL_NOTICE_PREFIX`]);状态未变则不
+    /// [`PLAN_NOTICE_PREFIX`]);状态未变则不
     /// 注入——幂等,重试与 snapshot 恢复安全。
     ///
     /// 通知经 `remember` 落库;压缩把旧通知摘要掉后,下次构建在历史中
@@ -976,25 +957,6 @@ impl Session {
             let _ = self.remember(Message::user(notice_text(
                 PLAN_NOTICE_PREFIX,
                 plan_section.as_deref(),
-            )));
-        }
-
-        // skill
-        let skill_section = match &self.shared.skill_runtime {
-            Some(rt) => {
-                let section = rt.lock().await.current_prompt_section();
-                (!section.is_empty()).then_some(section)
-            }
-            None => None,
-        };
-        if !notice_matches(
-            &self.messages,
-            SKILL_NOTICE_PREFIX,
-            skill_section.as_deref(),
-        ) {
-            let _ = self.remember(Message::user(notice_text(
-                SKILL_NOTICE_PREFIX,
-                skill_section.as_deref(),
             )));
         }
     }
@@ -1028,7 +990,7 @@ fn render_plan_prompt_section(plan: &AgentPlan) -> String {
     s
 }
 
-// ── Tail-injected state notices (plan / skill) ─────────────────────
+// ── Tail-injected state notices (plan) ─────────────────────────────
 //
 // 这些状态随任务推进高频变化,放进 system 会打掉 prompt-cache 前缀
 // (见 build_context 注释)。改为:变化时在消息流尾部追加一条带前缀
@@ -1036,8 +998,6 @@ fn render_plan_prompt_section(plan: &AgentPlan) -> String {
 
 /// 尾部通知:plan 状态通知的前缀(同时也是历史扫描标记)。
 const PLAN_NOTICE_PREFIX: &str = "[plan-status]\n";
-/// 尾部通知:skill 状态通知的前缀。
-const SKILL_NOTICE_PREFIX: &str = "[skill-status]\n";
 /// 通知正文里表示"状态已清空"的哨兵;历史中出现它等价于当前无状态。
 const NOTICE_CLEARED_BODY: &str = "(cleared — no longer active)";
 
@@ -1085,7 +1045,7 @@ mod tests {
 
     /// system 稳定性 + plan 尾部通知注入实证:在模型调用边界
     /// (MockApiClient)捕获每次实际传出的 `system` 与消息列表,验证:
-    /// 1. system 在**整个会话**内逐字节稳定(plan/skill 状态变化不再
+    /// 1. system 在**整个会话**内逐字节稳定(plan 状态变化不再
     ///    重写 instructions——prompt-cache 前缀的关键不变量);
     /// 2. `update_plan` 执行后,plan 状态以**消息流尾部通知**出现在
     ///    同一回合内的下一次请求里(携带渲染后的 plan);
@@ -1155,7 +1115,6 @@ mod tests {
             system_prompt_section: None,
             system_prompt_identity: None,
             memory: None,
-            skill_runtime: None,
             tool_registry: Arc::new(registry),
             tasks: Arc::new(tokio::sync::RwLock::new(
                 crate::tools::task_runtime::TaskStore::new(),
@@ -1293,7 +1252,6 @@ mod tests {
             system_prompt_section: Some("## Profile\nYou are the orchestrator agent.".into()),
             system_prompt_identity: None,
             memory: Some(memory),
-            skill_runtime: None,
             tool_registry: Arc::new(registry),
             tasks: Arc::new(tokio::sync::RwLock::new(
                 crate::tools::task_runtime::TaskStore::new(),
@@ -1369,7 +1327,6 @@ mod tests {
             system_prompt_section: None,
             system_prompt_identity: None,
             memory: None,
-            skill_runtime: None,
             tool_registry: Arc::new(registry),
             tasks: Arc::new(tokio::sync::RwLock::new(
                 crate::tools::task_runtime::TaskStore::new(),
@@ -1395,5 +1352,96 @@ mod tests {
         ] {
             assert!(system.contains(tool), "missing {tool} in guidance");
         }
+    }
+
+    /// Skills are guidance and tool users, not tool gatekeepers. Every tool
+    /// registered on the session must reach the model request unchanged.
+    #[tokio::test]
+    async fn request_exposes_all_registered_tools() {
+        use crate::testing::dummy_model_info;
+        use agentik_sdk::model::Model;
+        use agentik_sdk::provider::client::MockApiClient;
+        use agentik_sdk::streaming::MessageStream;
+
+        let captured_tools: Arc<std::sync::Mutex<Option<Vec<agentik_sdk::types::ToolDefinition>>>> =
+            Arc::new(std::sync::Mutex::new(None));
+        let mut mock = MockApiClient::new();
+        {
+            let cap = Arc::clone(&captured_tools);
+            mock.expect_request_stream_with_system()
+                .times(1)
+                .returning(move |_, tools, _, _| {
+                    *cap.lock().unwrap() = Some(tools);
+                    Ok(MessageStream::from_events(
+                        Vec::new(),
+                        Message::assistant_text("ok"),
+                    ))
+                });
+        }
+        let model = Model::with_client(dummy_model_info("all-tools"), mock);
+
+        let plan_state = Arc::new(arc_swap::ArcSwap::new(std::sync::Arc::new(
+            agentik_types::AgentPlan::new(),
+        )));
+        let tasks = Arc::new(tokio::sync::RwLock::new(
+            crate::tools::task_runtime::TaskStore::new(),
+        ));
+        let mut registry = crate::tools::ToolRegistry::new();
+        registry
+            .register_all(crate::tools::task_registrations(Arc::clone(&tasks)))
+            .unwrap();
+        registry
+            .register_all(crate::tools::plan_registrations(
+                crate::tools::builtins::PlanHandle::new(
+                    Arc::clone(&plan_state),
+                    Uuid::new_v4(),
+                    None,
+                    None,
+                ),
+            ))
+            .unwrap();
+
+        let shared = Arc::new(AgentShared {
+            id: Uuid::new_v4(),
+            path: agentik_types::AgentPath::root(),
+            config_json: serde_json::json!({}),
+            model: Arc::new(arc_swap::ArcSwapOption::from_pointee(Some(model))),
+            config: AgentConfig::default(),
+            storage: None,
+            context_provider: None,
+            system_prompt_section: None,
+            system_prompt_identity: None,
+            memory: None,
+            tool_registry: Arc::new(registry),
+            tasks,
+            event_tx: arc_swap::ArcSwapOption::empty(),
+            persist_tx: std::sync::OnceLock::new(),
+            plan: plan_state,
+        });
+
+        let (internal_tx, _internal_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut session = Session::new_for_tests(shared, agentik_types::AgentPath::root());
+        let mut expected: Vec<String> = session
+            .toolset
+            .tools()
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect();
+        expected.sort();
+        assert!(expected.len() > 1, "test should register multiple tools");
+
+        session.remember(Message::user("hello")).unwrap();
+        session.agent_workflow(&internal_tx, None).await.unwrap();
+
+        let mut actual: Vec<String> = captured_tools
+            .lock()
+            .unwrap()
+            .take()
+            .expect("tools captured")
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect();
+        actual.sort();
+        assert_eq!(actual, expected);
     }
 }

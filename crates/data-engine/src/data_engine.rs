@@ -2146,7 +2146,6 @@ mod tests {
             "dataframe_to_file",
             "linear_regression",
             "echo",
-            "two_sample_mr",
             "enrichment_ora",
         ] {
             assert!(
@@ -2166,7 +2165,6 @@ mod tests {
             "dataframe_to_file",
             "linear_regression",
             "echo",
-            "two_sample_mr",
         ] {
             let schema = engine
                 .get_node_spec(kind)

@@ -272,12 +272,7 @@ impl CycleMonitor {
 
     /// A cycle returned — success or failure — and the worker is idle
     /// again.
-    fn cycle_finished(
-        &self,
-        triggers: &[&'static str],
-        duration: Duration,
-        error: Option<String>,
-    ) {
+    fn cycle_finished(&self, triggers: &[&'static str], duration: Duration, error: Option<String>) {
         let mut core = self.lock();
         core.phase = CyclePhase::Idle;
         core.phase_since = std::time::Instant::now();
@@ -327,7 +322,9 @@ impl CycleMonitor {
         // Poisoning only happens if a worker panicked mid-update; the
         // monitor is observation state, so recovering with a fresh
         // core beats propagating the panic into every poll.
-        self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 
@@ -528,8 +525,7 @@ impl SkillControlHandle {
     /// Live worker phase plus last-cycle telemetry — the dashboard's
     /// "is a distillation running and how did the last one go" read.
     pub fn cycle_status(&self) -> CycleStatus {
-        self.monitor
-            .snapshot(self.dropped.load(Ordering::Relaxed))
+        self.monitor.snapshot(self.dropped.load(Ordering::Relaxed))
     }
 
     /// Subscribe to per-cycle reports (fire-and-forget broadcast;
@@ -776,9 +772,7 @@ impl Worker {
                         // body to run, no report to broadcast. Explicit
                         // RunCycle commands still go through the body
                         // below — the operator asked for it.
-                        if run_cycle.is_none()
-                            && self.manager.observations().list().is_empty()
-                        {
+                        if run_cycle.is_none() && self.manager.observations().list().is_empty() {
                             tracing::debug!(
                                 triggers = %summary,
                                 "evolution cycle skipped: empty observation pool"
@@ -1044,9 +1038,7 @@ mod tests {
 #[cfg(test)]
 mod timer_tests {
     use super::*;
-    use crate::observation::{
-        ObservationInput, ObservationKind, ObservationSource,
-    };
+    use crate::observation::{ObservationInput, ObservationKind, ObservationSource};
 
     /// The timer trigger path: with no events arriving, the periodic
     /// sweep alone produces cycles.
@@ -1395,9 +1387,7 @@ mod channel_funnel {
         let deadline = std::time::Instant::now() + Duration::from_secs(2);
         let final_status = loop {
             let s = handle.cycle_status();
-            if !matches!(s.phase, CyclePhase::Idle)
-                || std::time::Instant::now() >= deadline
-            {
+            if !matches!(s.phase, CyclePhase::Idle) || std::time::Instant::now() >= deadline {
                 // Cycle should have advanced the counter past startup.
                 if s.cycles_completed >= 2 && s.last_triggers.iter().any(|t| t == "manual") {
                     break s;
@@ -1407,10 +1397,7 @@ mod channel_funnel {
         };
         assert_eq!(final_status.phase, CyclePhase::Idle);
         assert!(
-            final_status
-                .last_triggers
-                .iter()
-                .any(|t| t == "manual"),
+            final_status.last_triggers.iter().any(|t| t == "manual"),
             "last_triggers missing: {:?}",
             final_status.last_triggers
         );
@@ -1458,10 +1445,7 @@ mod channel_funnel {
             "skip reason surfaces the empty-pool signal"
         );
         assert!(
-            status
-                .last_triggers
-                .iter()
-                .any(|t| t == "manual"),
+            status.last_triggers.iter().any(|t| t == "manual"),
             "last_triggers records what got skipped: {:?}",
             status.last_triggers
         );

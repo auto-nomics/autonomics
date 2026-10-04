@@ -110,14 +110,6 @@ fn all_bundle_bound_node_kinds_build_from_runtime_catalog() {
             "magma_kegg_align",
             serde_json::json!({"min_set_size": 1, "max_set_size": 10}),
         ),
-        (
-            "two_sample_mr",
-            serde_json::json!({
-                "id_exposure": "exposure",
-                "id_outcome": "outcome",
-                "clump": {"type": "local_ld"}
-            }),
-        ),
     ];
     let registry = registry();
 

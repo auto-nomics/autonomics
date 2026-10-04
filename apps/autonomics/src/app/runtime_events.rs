@@ -391,14 +391,14 @@ impl App {
                 // observations / proposal listings).
                 let Ok(status) = status else { return };
                 let dashboard = &mut self.state.skill_evolution;
-                let advanced =
-                    dashboard.status.as_ref().map(|prev| prev.generation) != Some(status.generation)
-                        || dashboard.seen_cycles_completed != status.cycles_completed;
+                let advanced = dashboard.status.as_ref().map(|prev| prev.generation)
+                    != Some(status.generation)
+                    || dashboard.seen_cycles_completed != status.cycles_completed;
                 dashboard.status = Some(status);
                 if advanced && dashboard.visible {
                     self.refresh_skill_evolution();
                 }
-            },
+            }
             crate::app_event::AppEvent::SkillProposalActioned { action, result } => {
                 match result {
                     Ok(detail) => {

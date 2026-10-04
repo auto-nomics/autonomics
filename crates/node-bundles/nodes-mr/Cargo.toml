@@ -8,20 +8,15 @@ description = "Mendelian randomisation DAG node bundle."
 
 [dependencies]
 dag-core = { path = "../../dag-core" }
-mr = { path = "../../../bio_crates/mr" }
 mrlap = { path = "../../../bio_crates/mrlap" }
 nodes-ldsc = { path = "../nodes-ldsc" }
-opengwas = { path = "../../opengwas" }
 arrow-array.workspace = true
 arrow-schema.workspace = true
 async-trait.workspace = true
 schemars.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-thiserror.workspace = true
-tracing.workspace = true
 faer.workspace = true
-statrs = "0.18"
 datafusion.workspace = true
 
 [dev-dependencies]

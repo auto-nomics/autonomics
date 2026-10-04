@@ -394,7 +394,6 @@ mod tests {
             system_prompt_section: None,
             system_prompt_identity: None,
             memory: None,
-            skill_runtime: None,
             tool_registry: Arc::new(registry),
             tasks: Arc::new(tokio::sync::RwLock::new(
                 crate::tools::task_runtime::TaskStore::new(),

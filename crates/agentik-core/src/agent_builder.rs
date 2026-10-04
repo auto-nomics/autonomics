@@ -12,7 +12,6 @@ use crate::memory::{
     MemoryBackend, MemoryConfig, MemoryStore, SemanticGrounding, memory_registrations,
 };
 use crate::session::AgentShared;
-use crate::skill::{self, Skill};
 use crate::storage::AgentStorage;
 use crate::tools::{ToolRegistration, ToolRegistry};
 use agentik_sdk::types::messages::Message;
@@ -34,8 +33,6 @@ pub struct AgentBuilder {
     path: Option<agentik_types::AgentPath>,
     /// Opaque configuration JSON persisted to the registry (e.g. RuntimeConfig).
     config_json: Option<serde_json::Value>,
-    /// Optional skill workflow to attach to the agent.
-    skill: Option<Skill>,
     cancel_token: Option<CancellationToken>,
 }
 
@@ -55,7 +52,6 @@ impl Clone for AgentBuilder {
             id: self.id,
             path: self.path.clone(),
             config_json: self.config_json.clone(),
-            skill: self.skill.clone(),
             cancel_token: self.cancel_token.clone(),
         }
     }
@@ -77,7 +73,6 @@ impl AgentBuilder {
             id: None,
             path: None,
             config_json: None,
-            skill: None,
             cancel_token: None,
         }
     }
@@ -109,11 +104,6 @@ impl AgentBuilder {
 
     pub fn with_tools(mut self, tools: Vec<ToolRegistration>) -> Self {
         self.tools = tools;
-        self
-    }
-
-    pub fn with_skill(mut self, skill: Skill) -> Self {
-        self.skill = Some(skill);
         self
     }
 
@@ -192,10 +182,8 @@ impl AgentBuilder {
         self
     }
 
-    pub async fn build(mut self) -> Result<Agent, AgentError> {
+    pub async fn build(self) -> Result<Agent, AgentError> {
         let model = self.model.clone();
-
-        let skill_runtime = self.skill.take().map(skill::instantiate);
 
         let (internal_event_tx, internal_event_rx) = tokio::sync::mpsc::unbounded_channel();
 
@@ -226,9 +214,6 @@ impl AgentBuilder {
         }
         registry.register_all(crate::tools::task_registrations(tasks.clone()))?;
         registry.register_all(crate::tools::plan_registrations(plan_handle))?;
-        if let Some((_, todo_reg)) = &skill_runtime {
-            registry.register(todo_reg.clone())?;
-        }
         let registry = Arc::new(registry);
 
         // ── Build AgentShared ───────────────────────────────
@@ -243,7 +228,6 @@ impl AgentBuilder {
             system_prompt_section: self.system_prompt_section,
             system_prompt_identity: self.system_prompt_identity,
             memory,
-            skill_runtime: skill_runtime.map(|(rt, _)| rt),
             tool_registry: registry,
             tasks,
             event_tx,

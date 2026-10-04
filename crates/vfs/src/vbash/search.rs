@@ -6,6 +6,7 @@
 
 use std::collections::{BTreeSet, HashSet};
 
+use agentik_core::tools::truncation::{TruncationConfig, truncate_tool_output};
 use agentik_core::tools::{ToolError, ToolResult};
 use agentik_sdk::types::ToolResult as AgentToolResult;
 use futures::StreamExt;
@@ -235,14 +236,17 @@ fn format_grep_result(
         GrepOutputMode::Content => matched.iter().map(|f| f.output_lines.len()).sum(),
         _ => matched.len(),
     };
-    let truncated = total_possible > GREP_MAX_RESULT_LINES || hit_limit;
+    let result_limited = total_possible > GREP_MAX_RESULT_LINES || hit_limit;
 
     let mut out = lines.join("\n");
-    if truncated {
+    if result_limited {
         out.push_str(&format!(
             "\n\n(results limited to {GREP_MAX_RESULT_LINES} lines)"
         ));
     }
+    let bounded_output = truncate_tool_output(&out, &TruncationConfig::default());
+    out = bounded_output.content;
+    let truncated = result_limited || bounded_output.truncated;
     if out.is_empty() {
         out = "(no matches)".to_string();
     }
@@ -635,6 +639,20 @@ mod tests {
         assert_eq!(json["files_scanned"], 1);
         assert_eq!(json["files_skipped"], 0);
         assert_eq!(json["total_matches"], 50_000);
+    }
+
+    #[tokio::test]
+    async fn grep_single_file_forcibly_bounds_large_output() {
+        let storage = make_op();
+        let long_line = format!("target {}\n", "世".repeat(60_000));
+        write_file(&storage, "long.txt", &long_line).await;
+
+        let result = grep(&storage, "/long.txt", "target").await;
+        let json = json_val(result);
+        let matches = json["matches"].as_str().unwrap();
+        assert!(matches.contains("[output truncated"));
+        assert!(json["truncated"].as_bool().unwrap());
+        assert_eq!(matches.chars().count(), 50_000);
     }
 
     #[tokio::test]
