@@ -90,7 +90,10 @@ pub fn rcs_basis(x: &[f64], knots: &[f64]) -> Vec<Vec<f64>> {
     }
     let t_min = knots[0];
     let t_max = knots[k - 1];
-    let denom = (t_max - t_min).powi(2);
+    // Harrell's λ/μ normalise by (t_max − t_min) to the FIRST power so that
+    // λ_j + μ_j = 1; squaring the span breaks the tail-linearity constraint
+    // and the basis no longer spans Harrell's RCS space.
+    let denom = t_max - t_min;
 
     // Helper: (value)³₊ (positive part).
     let pos3 = |v: f64| v.max(0.0).powi(3);
@@ -356,13 +359,34 @@ mod tests {
 
     #[test]
     fn basis_linear_beyond_knots() {
-        // The spline should be linear outside [t_min, t_max].
+        // The spline must be linear outside [t_min, t_max] — Harrell's tail
+        // constraint. With the first-power denominator, λ_j + μ_j = 1 and the
+        // x³/x² terms cancel beyond the boundary knots; a squared span
+        // violates the constraint (second differences are no longer zero).
         let knots = vec![2.0, 5.0, 8.0];
-        let basis = rcs_basis(&[0.0, 1.0, 10.0, 20.0], &knots);
-        // For a single nonlinear column, the second differences outside the
-        // boundary should be approximately constant (linear).
-        assert!(!basis.is_empty());
-        assert_eq!(basis[0].len(), 4);
+        let xs: Vec<f64> = (0..=40).map(|i| i as f64 * 0.5).collect(); // [0, 20]
+        let basis = rcs_basis(&xs, &knots);
+        assert_eq!(basis.len(), 1);
+        assert_eq!(basis[0].len(), xs.len());
+
+        // Below t_min the cubic positive parts are all zero → column is 0.
+        for (i, &x) in xs.iter().enumerate() {
+            if x < 2.0 {
+                assert!(basis[0][i].abs() < 1e-12, "below t_min at x={x}: {}", basis[0][i]);
+            }
+        }
+
+        // Above t_max the column is linear: second differences vanish.
+        for i in 1..xs.len() - 1 {
+            if xs[i - 1] >= 8.0 {
+                let d2 = basis[0][i + 1] - 2.0 * basis[0][i] + basis[0][i - 1];
+                assert!(
+                    d2.abs() < 1e-9,
+                    "second difference above t_max at x={}: {d2}",
+                    xs[i]
+                );
+            }
+        }
     }
 
     #[test]

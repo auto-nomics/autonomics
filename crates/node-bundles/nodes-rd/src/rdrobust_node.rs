@@ -58,7 +58,9 @@ pub struct RdRobustNodeConfig {
     /// Column name for cluster variable (optional).
     #[serde(default)]
     pub cluster: Option<String>,
-    /// Column name for fuzzy treatment variable (optional).
+    /// Column name for fuzzy treatment variable. NOT IMPLEMENTED: the backend
+    /// has no fuzzy-RD estimator, so a spec setting this is rejected at build
+    /// time rather than silently falling back to a sharp ITT estimate.
     #[serde(default)]
     pub fuzzy: Option<String>,
     /// Minimum nearest neighbors for NN VCE (default 3).
@@ -161,8 +163,10 @@ impl NodeFactory for RdRobustNodeFactory {
     }
     fn doc(&self) -> &'static str {
         "Estimates local-polynomial regression discontinuity treatment effects \
-        with robust bias-corrected inference. Supports sharp and fuzzy RD, \
-        covariate adjustment, cluster-robust SEs, and multiple bandwidth selectors."
+        with robust bias-corrected inference for sharp RD designs. Supports \
+        covariate adjustment, cluster-robust SEs, and multiple bandwidth \
+        selectors. Fuzzy RD is not yet implemented: specs setting `fuzzy` are \
+        rejected with an explicit error."
     }
     fn spec_schema(&self) -> schemars::Schema {
         schema_for!(RdRobustNodeConfig)
@@ -177,6 +181,19 @@ impl NodeFactory for RdRobustNodeFactory {
         _ctx: NodeCtx,
     ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let config: RdRobustNodeConfig = serde_json::from_value(spec)?;
+        // The backend has no fuzzy-RD path (`fuzzy` used to be accepted and
+        // silently dropped, returning a sharp ITT). Reject loudly instead.
+        if config.fuzzy.is_some() {
+            return Err(dag_core::registry::error::Error::SpecRejection {
+                kind: RDROBUST_NODE_KIND.to_string(),
+                reason: "fuzzy RD is not yet implemented: the `fuzzy` spec field would be \
+                         silently ignored and a sharp (ITT) estimate returned. Omit `fuzzy` \
+                         for sharp RD."
+                    .to_string(),
+                schema_pretty: serde_json::to_string_pretty(&self.spec_schema())
+                    .unwrap_or_default(),
+            });
+        }
         Ok(Box::new(RdRobustNode::new(config)))
     }
 }
@@ -411,6 +428,47 @@ mod tests {
         assert!(
             robust_coef.is_finite() && robust_coef > 0.0,
             "expected positive finite, got {robust_coef}"
+        );
+    }
+}
+
+// =====================================================================
+// Fuzzy-RD rejection (build-time guard)
+// =====================================================================
+
+#[cfg(test)]
+mod fuzzy_rejection_tests {
+    use super::*;
+
+    #[test]
+    fn fuzzy_spec_is_rejected_at_build() {
+        // Regression: `fuzzy` used to be accepted by the schema and then
+        // silently dropped in execute(), returning a sharp ITT estimate.
+        let spec = serde_json::json!({
+            "y": "y",
+            "x": "x",
+            "cutoff": 0.0,
+            "fuzzy": "treatment"
+        });
+        let err = RdRobustNodeFactory
+            .build(spec, NodeCtx::new(datafusion::prelude::SessionContext::new().runtime_env(), None))
+            .err()
+            .expect("fuzzy spec must be rejected");
+        let msg = err.to_string();
+        assert!(msg.contains("fuzzy"), "error should name fuzzy: {msg}");
+    }
+
+    #[test]
+    fn sharp_spec_still_builds() {
+        let spec = serde_json::json!({
+            "y": "y",
+            "x": "x",
+            "cutoff": 0.0
+        });
+        assert!(
+            RdRobustNodeFactory
+                .build(spec, NodeCtx::new(datafusion::prelude::SessionContext::new().runtime_env(), None))
+                .is_ok()
         );
     }
 }

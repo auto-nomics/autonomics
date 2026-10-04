@@ -238,21 +238,20 @@ pub fn impute_logreg<R: Rng + ?Sized>(
     let p_full = fit.coef.len();
     let normal = Normal::new(0.0, 1.0).expect("normal(0,1) init");
     let z: Vec<f64> = (0..p_full).map(|_| normal.sample(rng)).collect();
-    // Cholesky of cov_unscaled (R: t(chol(sym(cov.unscaled))) %*% z).
-    let mut cov = Mat::<f64>::zeros(p_full, p_full);
-    for j in 0..p_full {
-        for k in 0..p_full {
-            cov[(j, k)] = fit.cov_unscaled[j * p_full + k];
-        }
-    }
-    let chol = Llt::new(cov.as_ref(), Side::Lower)
-        .map_err(|e| MiceError::Numerical(format!("logreg cov: {e:?}")))?;
-    let mut zm = Mat::<f64>::zeros(p_full, 1);
-    for j in 0..p_full {
-        zm[(j, 0)] = z[j];
-    }
-    let lz_mat = chol.solve(&zm);
-    let beta_star: Vec<f64> = (0..p_full).map(|j| fit.coef[j] + lz_mat[(j, 0)]).collect();
+    // Draw β* = β̂ + L·z with L = chol(sym(V)), V = cov.unscaled(β̂) —
+    // R's `mice.impute.logreg`: `t(chol(sym(cov.unscaled))) %*% z`.
+    // NB: this must MULTIPLY by the Cholesky factor. Solving L·x = z
+    // (faer `Llt::solve`) returns V⁻¹z instead, giving the draw covariance
+    // V⁻² ≠ V and turning imputations into near-noise.
+    let sym_cov = crate::linalg::symmetrise(&fit.cov_unscaled);
+    let l = crate::linalg::chol_factor(&sym_cov)
+        .map_err(|e| MiceError::Numerical(format!("logreg cov: {e}")))?;
+    let beta_star: Vec<f64> = (0..p_full)
+        .map(|j| {
+            let lz: f64 = (0..=j).map(|k| l[j * p_full + k] * z[k]).sum();
+            fit.coef[j] + lz
+        })
+        .collect();
 
     // Step 4: impute wy rows.
     // R applies the augmentation to ALL `wy` rows in the original data frame

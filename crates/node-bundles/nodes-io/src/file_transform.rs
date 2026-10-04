@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 use flate2::Compression;
-use flate2::read::GzDecoder;
+use flate2::read::MultiGzDecoder;
 use flate2::write::{DeflateEncoder, GzEncoder};
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
@@ -139,7 +139,10 @@ fn decompress_if_gzip(path: &str, bytes: Vec<u8>) -> Result<Vec<u8>, DagError> {
     if !is_gzip(path) {
         return Ok(bytes);
     }
-    let mut decoder = GzDecoder::new(&bytes[..]);
+    // MultiGzDecoder concatenates ALL gzip members — required for BGZF and
+    // other multi-member streams, where a single-member GzDecoder silently
+    // truncates after the first ~64 KiB block and reports success.
+    let mut decoder = MultiGzDecoder::new(&bytes[..]);
     let mut output = Vec::new();
     decoder
         .read_to_end(&mut output)
