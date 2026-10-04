@@ -5,7 +5,10 @@
 //! one component test) and emit either a single combined test row or a
 //! passthrough table with adjusted p-values.
 
-use super::common::{HypoNodeError, collect_input, emit_test_row, extract_f64_column};
+use super::common::{
+    HypoNodeError, collect_input, emit_test_row, emit_test_row_with_p, extract_f64_column,
+    extract_opt_f64_column,
+};
 use arrow_array::{Float64Array, Int32Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
 use async_trait::async_trait;
@@ -127,7 +130,9 @@ impl NodeFactory for BooleanNodeFactory {
         "Boolean algebra over hypothesis tests (AND/OR/NOT)."
     }
     fn doc(&self) -> &'static str {
-        "intersection (max p), union (min p), or complement (1-p)."
+        "intersection (max p), union (min p), or complement (1-p). NA semantics: \
+        any null component p-value propagates to a null output p-value \
+        (R min/max default NA rule); null rows are never silently dropped."
     }
     fn spec_schema(&self) -> schemars::Schema {
         schema_for!(BooleanNodeSpec)
@@ -173,27 +178,94 @@ impl DagNode for BooleanNode {
         _r: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<dag_core::dag::graph::PortOutputs, DagError> {
         let batches = collect_input(inputs).await?;
-        let pvals =
-            extract_f64_column(&batches, self.spec.p_column.as_deref().unwrap_or("p_value"))?;
-        let result = match self.spec.op.to_lowercase().as_str() {
-            "intersection" | "and" => h::intersection_test(&pvals),
-            "union" | "or" => h::union_test(&pvals),
+        let pvals = extract_opt_f64_column(
+            &batches,
+            self.spec.p_column.as_deref().unwrap_or("p_value"),
+        )?;
+        let n_tests = pvals.len();
+        if n_tests == 0 {
+            return Err(HypoNodeError::Insufficient("no p-values supplied".into()).into());
+        }
+        let n_missing = pvals.iter().filter(|p| p.is_none()).count();
+        for p in pvals.iter().flatten() {
+            if !(0.0..=1.0).contains(p) {
+                return Err(HypoNodeError::Test(format!("p-value out of range: {p}")).into());
+            }
+        }
+
+        // Any non-estimable component makes the joint p non-estimable. This
+        // mirrors R's min/max NA rule: min(c(0.05, NA)) is NA, not 0.05 —
+        // and a silent drop would turn `(0.001, NA)` into an intersection
+        // p of 0.001, overstating the evidence.
+        let (method, kind, p_out) = match self.spec.op.to_lowercase().as_str() {
+            "intersection" | "and" => {
+                let p = if n_missing > 0 {
+                    None
+                } else {
+                    Some(
+                        pvals
+                            .iter()
+                            .map(|p| p.unwrap())
+                            .fold(f64::NEG_INFINITY, f64::max),
+                    )
+                };
+                ("Intersection-Union Test", "intersection_test", p)
+            }
+            "union" | "or" => {
+                let p = if n_missing > 0 {
+                    None
+                } else {
+                    Some(
+                        pvals
+                            .iter()
+                            .map(|p| p.unwrap())
+                            .fold(f64::INFINITY, f64::min),
+                    )
+                };
+                ("Union-Intersection Test", "union_test", p)
+            }
             "complement" | "not" => {
-                if pvals.len() != 1 {
+                if n_tests != 1 {
                     return Err(HypoNodeError::Spec(
                         "complement requires exactly 1 p-value".into(),
                     )
                     .into());
                 }
-                let test = h::wald_uni(0.0, 1.0, 0.0).unwrap(); // placeholder to get a HypothesisTest
-                Ok(h::complement_test(&test).reassign_pval(1.0 - pvals[0]))
+                ("Complemented Test", "complemented_test", pvals[0].map(|p| 1.0 - p))
             }
             other => {
                 return Err(HypoNodeError::Spec(format!("unknown boolean op '{other}'")).into());
             }
+        };
+
+        let mut extras = serde_json::Map::new();
+        extras.insert(h::KEY_KIND.into(), serde_json::json!(kind));
+        extras.insert(h::KEY_N_TESTS.into(), serde_json::json!(n_tests));
+        extras.insert("n_missing".into(), serde_json::json!(n_missing));
+        extras.insert(
+            h::KEY_COMPONENT_PVALS.into(),
+            serde_json::json!(pvals), // Vec<Option<f64>> keeps nulls in the JSON array
+        );
+        if method == "Complemented Test" {
+            extras.insert(
+                h::KEY_ORIGINAL_PVAL.into(),
+                match pvals[0] {
+                    Some(p) => serde_json::json!(p),
+                    None => serde_json::Value::Null,
+                },
+            );
         }
-        .map_err(|e| HypoNodeError::Test(e.to_string()))?;
-        emit_test_row(ctx, &result)
+        extras.insert("n".into(), serde_json::json!(n_tests));
+
+        let result = h::HypothesisTest {
+            stat: f64::NAN,
+            p_value: p_out.unwrap_or(f64::NAN),
+            dof: f64::NAN,
+            alternative: h::Alternative::TwoSided,
+            method,
+            extras,
+        };
+        emit_test_row_with_p(ctx, &result, p_out)
     }
 }
 
