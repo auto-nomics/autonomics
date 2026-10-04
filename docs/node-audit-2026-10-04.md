@@ -309,6 +309,20 @@ dag-core 冲突门单测。执行环境备注：本机 15G 内存下并行链接
   两处代码已不存在；新 R runner 只能在其源码（服务器
   /mnt/projects/node-plugins/grf，未入 GitHub org）核验，本机不可达。
   建议：grf 插件源码入库（org 建仓）后在 runner 上复核 #12 两点。
+- **执行中新增发现：ml::split 种子失效（审计编号外，随本批修复）**——
+  merge 终态保险波随机抓到 `centroid::tests::test_fit_predict_separable`
+  闪断（同二进制 5 跑 1 败），根因两层：① `stratified_kfold`/
+  `train_test_split` 分层分支 `ChaCha8Rng::seed_from_u64(seed)` 播种后按
+  `HashMap` 迭代序逐类 `shuffle`，而 std HashMap 的 RandomState 是**按
+  实例**（非按进程）变序——同种子跨调用即跨进程不同折，seed 参数形同
+  虚设；② 折的 train 向量由 `HashSet` 迭代派生，顺序同样按实例漂移，
+  且行序漂移会传导进下游浮点累加。**生产影响**：`ml_pam_fit` 节点默认
+  CV 即 shuffle=true + 用户 seed，同一 DAG 重跑折不同，复现性造假。
+  修复：类分组改 BTreeMap（迭代序=键序，seed 恢复意义）、train 派生改
+  区间迭代（顺序与成员同样稳定）；kfold 本身干净；group_kfold 的
+  train 派生同修。新增回归测试 `stratified_kfold_seed_is_meaningful`
+  （同种子两次调用全等 + 未洗牌轮转分配手验）。ml lib 81 全绿四连。
+  建议归档为独立审计项（复现性类 P0）。
 
 ---
 

@@ -57,8 +57,9 @@ pub fn train_test_split(
             (indices, test)
         }
         Some(labels) => {
-            let mut classes: std::collections::HashMap<usize, Vec<usize>> =
-                std::collections::HashMap::new();
+            // BTreeMap for the same seed-validity reason as stratified_kfold.
+            let mut classes: std::collections::BTreeMap<usize, Vec<usize>> =
+                std::collections::BTreeMap::new();
             for (i, &label) in labels.iter().enumerate() {
                 classes.entry(label).or_default().push(i);
             }
@@ -136,9 +137,11 @@ pub fn stratified_kfold(labels: &[usize], k: usize, shuffle: bool, seed: u64) ->
     }
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
 
-    // Group sample indices by class.
-    let mut classes: std::collections::HashMap<usize, Vec<usize>> =
-        std::collections::HashMap::new();
+    // Group sample indices by class. BTreeMap (not HashMap): the seeded
+    // shuffle below consumes rng state in class-iteration order, so a
+    // per-process-random HashMap order would silently invalidate the seed.
+    let mut classes: std::collections::BTreeMap<usize, Vec<usize>> =
+        std::collections::BTreeMap::new();
     for (i, &label) in labels.iter().enumerate() {
         classes.entry(label).or_default().push(i);
     }
@@ -157,16 +160,14 @@ pub fn stratified_kfold(labels: &[usize], k: usize, shuffle: bool, seed: u64) ->
         }
     }
 
-    let all_set: std::collections::HashSet<usize> = (0..n).collect();
     let mut folds = Vec::with_capacity(k);
     for test in &mut fold_test {
         test.sort_unstable();
         let test_set: std::collections::HashSet<usize> = test.iter().copied().collect();
-        let train: Vec<usize> = all_set
-            .iter()
-            .filter(|&&i| !test_set.contains(&i))
-            .copied()
-            .collect();
+        // Range iteration (not a HashSet's) so train order is as stable as
+        // its membership: per-instance HashSet iteration order would leak
+        // into downstream row order and floating-point accumulation.
+        let train: Vec<usize> = (0..n).filter(|&i| !test_set.contains(&i)).collect();
         folds.push((train, test.clone()));
     }
     Ok(folds)
@@ -200,16 +201,14 @@ pub fn group_kfold(groups: &[usize], k: usize) -> Result<Vec<Fold>> {
     for (fold_idx, &g) in sorted_groups.iter().enumerate() {
         fold_test[fold_idx % k].extend(group_members[&g].iter().copied());
     }
-    let all_set: std::collections::HashSet<usize> = (0..n).collect();
     let mut folds = Vec::with_capacity(k);
     for test in &mut fold_test {
         test.sort_unstable();
         let test_set: std::collections::HashSet<usize> = test.iter().copied().collect();
-        let train: Vec<usize> = all_set
-            .iter()
-            .filter(|&&i| !test_set.contains(&i))
-            .copied()
-            .collect();
+        // Range iteration (not a HashSet's) so train order is as stable as
+        // its membership: per-instance HashSet iteration order would leak
+        // into downstream row order and floating-point accumulation.
+        let train: Vec<usize> = (0..n).filter(|&i| !test_set.contains(&i)).collect();
         folds.push((train, test.clone()));
     }
     Ok(folds)
@@ -258,6 +257,28 @@ mod tests {
             let class0 = test.iter().filter(|&&i| labels[i] == 0).count();
             assert_eq!(class0, 6); // 30/5 = 6
         }
+    }
+
+    #[test]
+    fn stratified_kfold_seed_is_meaningful() {
+        // The seeded shuffle consumes rng state in class-iteration order, so
+        // the seed is only meaningful if that order is fixed (BTreeMap: label
+        // order). The pre-BTreeMap HashMap version flaked the ml PAM CV test
+        // ~20% across processes: same seed, different folds.
+        let labels: Vec<usize> = vec![0, 1, 0, 1, 0, 1, 0, 1, 2, 2, 2, 2];
+        let a = stratified_kfold(&labels, 3, true, 7).unwrap();
+        let b = stratified_kfold(&labels, 3, true, 7).unwrap();
+        assert_eq!(a, b);
+        // Unshuffled round-robin is position-based and hand-checkable:
+        // class 2 = [8,9,10,11] → folds 0,1,2,0.
+        let plain = stratified_kfold(&labels, 3, false, 0).unwrap();
+        let c2: Vec<Vec<usize>> = plain
+            .iter()
+            .map(|(_, test)| test.iter().copied().filter(|&i| i >= 8).collect())
+            .collect();
+        assert_eq!(c2[0], vec![8, 11]);
+        assert_eq!(c2[1], vec![9]);
+        assert_eq!(c2[2], vec![10]);
     }
 
     #[test]
