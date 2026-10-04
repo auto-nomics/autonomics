@@ -13,31 +13,36 @@ use crate::{
     workspace::ProposalWorkspace,
 };
 
+/// A reusable runtime environment selected by a plugin proposal.
+///
+/// This is not a plugin-owned image: ordinary plugin repositories contain
+/// source and tests, while environment images are managed as shared assets.
 #[derive(Debug, Clone)]
-pub struct ApprovedImage {
+pub struct Environment {
     pub reference: String,
     pub interpreters: Vec<String>,
 }
 
+/// Approved digest-pinned runtime environments available to plugin proposals.
 #[derive(Debug, Default)]
-pub struct ImageCatalog {
-    images: BTreeMap<String, ApprovedImage>,
+pub struct EnvironmentCatalog {
+    environments: BTreeMap<String, Environment>,
 }
 
-impl ImageCatalog {
-    pub fn insert(&mut self, id: impl Into<String>, image: ApprovedImage) {
-        self.images.insert(id.into(), image);
+impl EnvironmentCatalog {
+    pub fn insert(&mut self, id: impl Into<String>, environment: Environment) {
+        self.environments.insert(id.into(), environment);
     }
 
-    pub fn get(&self, id: &str) -> Option<&ApprovedImage> {
-        self.images.get(id)
+    pub fn get(&self, id: &str) -> Option<&Environment> {
+        self.environments.get(id)
     }
 }
 
 pub fn validate_workspace(
     proposal: &crate::Proposal,
     workspace: &ProposalWorkspace,
-    catalog: &ImageCatalog,
+    catalog: &EnvironmentCatalog,
     installed_kinds: &[String],
     attempt: u32,
 ) -> ValidationReport {
@@ -161,7 +166,7 @@ fn validate_policy(
     proposal: &crate::Proposal,
     workspace: &ProposalWorkspace,
     manifest: &PluginManifest,
-    catalog: &ImageCatalog,
+    catalog: &EnvironmentCatalog,
 ) -> std::result::Result<(), String> {
     if manifest.nodes.len() != 1 {
         return Err("MVP plugins must declare exactly one node".into());
@@ -182,29 +187,40 @@ fn validate_policy(
     if !manifest.panels.is_empty() {
         return Err("panels are not allowed in the greenfield MVP".into());
     }
-    let Some(image_id) = proposal.image_id.as_deref() else {
-        return Err("proposal has no bound image".into());
+    let files = workspace.list_files().map_err(|error| error.to_string())?;
+    if files.iter().any(|path| {
+        Path::new(path)
+            .file_name()
+            .is_some_and(|name| name == "Dockerfile")
+    }) {
+        return Err(
+            "ordinary plugin proposals cannot contain a Dockerfile; use an approved environment"
+                .into(),
+        );
+    }
+    let Some(environment_id) = proposal.environment_id.as_deref() else {
+        return Err("proposal has no bound environment".into());
     };
-    let Some(expected_reference) = proposal.image_reference.as_deref() else {
-        return Err("proposal has no digest-pinned image reference".into());
+    let Some(expected_reference) = proposal.environment_reference.as_deref() else {
+        return Err("proposal has no digest-pinned environment reference".into());
     };
     if manifest.image.reference.as_str() != expected_reference {
-        return Err("manifest image differs from proposal image".into());
+        return Err("manifest image differs from the proposal environment".into());
     }
-    let Some(image) = catalog.get(image_id) else {
-        return Err(format!("image `{image_id}` is not approved"));
+    let Some(environment) = catalog.get(environment_id) else {
+        return Err(format!("environment `{environment_id}` is not approved"));
     };
-    if image.reference != expected_reference {
-        return Err("proposal image differs from approved image catalog".into());
+    if environment.reference != expected_reference {
+        return Err("proposal environment differs from the approved environment catalog".into());
     }
-    if !image
+    if !environment
         .interpreters
         .iter()
         .any(|item| item == &node.command.interpreter)
     {
         return Err(format!(
-            "interpreter `{}` is not approved for image `{}`",
-            node.command.interpreter, image_id
+            "interpreter `{}` is not approved for environment `{}`",
+            node.command.interpreter, environment_id
         ));
     }
     if !matches!(
@@ -311,9 +327,9 @@ mod tests {
     use super::*;
     use crate::{ProposalAction, ProposalStatus};
 
-    const IMAGE: &str = "docker.io/library/hello-world@sha256:2dad70a9583f93db1dcc9a560b7d5b309af4a5151dfaf615f80d059a0925d78c";
+    const ENVIRONMENT_REFERENCE: &str = "docker.io/library/hello-world@sha256:2dad70a9583f93db1dcc9a560b7d5b309af4a5151dfaf615f80d059a0925d78c";
 
-    fn setup(tmp: &Path) -> (crate::Proposal, ProposalWorkspace, ImageCatalog) {
+    fn setup(tmp: &Path) -> (crate::Proposal, ProposalWorkspace, EnvironmentCatalog) {
         let workspace = ProposalWorkspace::new(tmp.join("repo"));
         workspace
             .write_text(
@@ -324,7 +340,7 @@ schema_version = 1
 plugin_name = "demo-plugin"
 
 [image]
-reference = "{IMAGE}"
+reference = "{ENVIRONMENT_REFERENCE}"
 
 [[nodes]]
 kind = "demo_plugin"
@@ -359,8 +375,8 @@ script_file = "scripts/adapter.sh"
             status: ProposalStatus::Draft,
             authored_by: "agent".into(),
             request_ids: vec!["R-test".into()],
-            image_id: Some("demo".into()),
-            image_reference: Some(IMAGE.into()),
+            environment_id: Some("demo".into()),
+            environment_reference: Some(ENVIRONMENT_REFERENCE.into()),
             source_commit: None,
             remote: None,
             pushed_commit: None,
@@ -369,11 +385,11 @@ script_file = "scripts/adapter.sh"
             created_at: 0,
             updated_at: 0,
         };
-        let mut catalog = ImageCatalog::default();
+        let mut catalog = EnvironmentCatalog::default();
         catalog.insert(
             "demo",
-            ApprovedImage {
-                reference: IMAGE.into(),
+            Environment {
+                reference: ENVIRONMENT_REFERENCE.into(),
                 interpreters: vec!["sh".into()],
             },
         );
@@ -386,6 +402,24 @@ script_file = "scripts/adapter.sh"
         let (proposal, workspace, catalog) = setup(tmp.path());
         let report = validate_workspace(&proposal, &workspace, &catalog, &[], 1);
         assert_eq!(report.overall, GateStatus::Pass, "{report:?}");
+    }
+
+    #[test]
+    fn ordinary_plugin_rejects_dockerfile() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (proposal, workspace, catalog) = setup(tmp.path());
+        workspace
+            .write_text("Dockerfile", "FROM docker.io/library/alpine:latest\n")
+            .unwrap();
+        let report = validate_workspace(&proposal, &workspace, &catalog, &[], 1);
+        assert_eq!(report.overall, GateStatus::Fail);
+        assert!(report.gates.iter().any(|gate| {
+            gate.name == "policy"
+                && gate
+                    .reason
+                    .as_deref()
+                    .is_some_and(|reason| reason.contains("cannot contain a Dockerfile"))
+        }));
     }
 
     #[test]

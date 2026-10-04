@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    ApprovedImage, Error, GitRepo, Result,
+    Error, GitRepo, Result,
     development::PluginDevelopment,
     request::{RequestStore, atomic_toml, unix_now},
 };
@@ -45,10 +45,12 @@ pub struct Proposal {
     pub status: ProposalStatus,
     pub authored_by: String,
     pub request_ids: Vec<String>,
+    /// Approved reusable environment selected by this proposal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub image_id: Option<String>,
+    pub environment_id: Option<String>,
+    /// Digest-pinned reference resolved from the environment catalog.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub image_reference: Option<String>,
+    pub environment_reference: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_commit: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -130,8 +132,8 @@ impl ProposalStore {
             status: ProposalStatus::Draft,
             authored_by: "agent".to_string(),
             request_ids: request_ids.to_vec(),
-            image_id: None,
-            image_reference: None,
+            environment_id: None,
+            environment_reference: None,
             source_commit: None,
             remote: None,
             pushed_commit: None,
@@ -309,10 +311,10 @@ fn proposal_id(plugin_name: &str, request_ids: &BTreeSet<String>, now: i64) -> S
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ImageCatalog;
     use crate::request::{RequestIntent, RequestRecord, RequestSource, RequestStatus};
+    use crate::{Environment, EnvironmentCatalog};
 
-    fn fixture(tmp: &Path) -> (RequestStore, ProposalStore, ImageCatalog) {
+    fn fixture(tmp: &Path) -> (RequestStore, ProposalStore, EnvironmentCatalog) {
         let requests = RequestStore::open(tmp);
         requests
             .record(RequestRecord {
@@ -328,10 +330,10 @@ mod tests {
             })
             .unwrap();
         let proposals = ProposalStore::open(tmp, "main", "RSI Test", "rsi@example.com");
-        let mut catalog = ImageCatalog::default();
+        let mut catalog = EnvironmentCatalog::default();
         catalog.insert(
             "demo",
-            ApprovedImage {
+            Environment {
                 reference: "docker.io/library/hello-world@sha256:5e23090353324d887c48ad5e5c56d294eab81588df9605b07d1afe895f9ccf8".into(),
                 interpreters: vec!["sh".into()],
             },
@@ -356,12 +358,12 @@ mod tests {
                 &requests,
             )
             .unwrap();
-        assert_eq!(development.proposal().image_id, None);
-        assert_eq!(development.proposal().image_reference, None);
+        assert_eq!(development.proposal().environment_id, None);
+        assert_eq!(development.proposal().environment_reference, None);
         let id = development.id().to_string();
         let reopened = proposals.develop(&id).unwrap().unwrap();
         assert_eq!(reopened.id(), development.id());
-        development.bind_approved_image("demo", &catalog).unwrap();
+        development.bind_environment("demo", &catalog).unwrap();
 
         let workspace = development.workspace();
         workspace.write_text("README.md", "# demo\n").unwrap();

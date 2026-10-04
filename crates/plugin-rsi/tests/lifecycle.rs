@@ -1,16 +1,16 @@
 use plugin_rsi::{
-    ApprovedImage, GateStatus, ImageCatalog, ProposalStore, RequestIntent, RequestRecord,
+    Environment, EnvironmentCatalog, GateStatus, ProposalStore, RequestIntent, RequestRecord,
     RequestSource, RequestStatus, RequestStore, validate_workspace,
 };
 
-const IMAGE: &str = "docker.io/library/hello-world@sha256:2dad70a9583f93db1dcc9a560b7d5b309af4a5151dfaf615f80d059a0925d78c";
+const ENVIRONMENT_REFERENCE: &str = "docker.io/library/hello-world@sha256:2dad70a9583f93db1dcc9a560b7d5b309af4a5151dfaf615f80d059a0925d78c";
 
-fn catalog() -> ImageCatalog {
-    let mut catalog = ImageCatalog::default();
+fn catalog() -> EnvironmentCatalog {
+    let mut catalog = EnvironmentCatalog::default();
     catalog.insert(
         "demo",
-        ApprovedImage {
-            reference: IMAGE.into(),
+        Environment {
+            reference: ENVIRONMENT_REFERENCE.into(),
             interpreters: vec!["sh".into()],
         },
     );
@@ -24,7 +24,7 @@ fn request() -> RequestRecord {
         source: RequestSource::User,
         intent: RequestIntent::NewNode,
         summary: "Create demo plugin".into(),
-        body: "Copy one file through the demo image.".into(),
+        body: "Copy one file through the demo environment.".into(),
         plugin_name: Some("demo-plugin".into()),
         evidence_ids: Vec::new(),
         status: RequestStatus::Open,
@@ -41,7 +41,7 @@ schema_version = 1
 plugin_name = "demo-plugin"
 
 [image]
-reference = "{IMAGE}"
+reference = "{ENVIRONMENT_REFERENCE}"
 
 [[nodes]]
 kind = "demo_plugin"
@@ -82,8 +82,8 @@ fn greenfield_proposal_reaches_review_gate() {
             &requests,
         )
         .unwrap();
-    assert_eq!(development.proposal().image_reference, None);
-    development.bind_approved_image("demo", &catalog()).unwrap();
+    assert_eq!(development.proposal().environment_reference, None);
+    development.bind_environment("demo", &catalog()).unwrap();
 
     write_plugin(&development.workspace());
     development.start_validation().unwrap();

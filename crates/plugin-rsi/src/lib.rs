@@ -26,5 +26,5 @@ pub use names::{derive_node_kind, validate_plugin_name};
 pub use proposal::{Proposal, ProposalAction, ProposalStatus, ProposalStore};
 pub use report::{GateResult, GateStatus, ValidationReport};
 pub use request::{RequestIntent, RequestRecord, RequestSource, RequestStatus, RequestStore};
-pub use validate::{ApprovedImage, ImageCatalog, validate_workspace};
+pub use validate::{Environment, EnvironmentCatalog, validate_workspace};
 pub use workspace::ProposalWorkspace;

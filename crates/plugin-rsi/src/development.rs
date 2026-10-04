@@ -1,15 +1,15 @@
 use std::path::PathBuf;
 
 use crate::{
-    ApprovedImage, Error, GitRepo, Proposal, ProposalStatus, ProposalStore, Result,
-    validate::ImageCatalog, workspace::ProposalWorkspace,
+    Error, GitRepo, Proposal, ProposalStatus, ProposalStore, Result, validate::EnvironmentCatalog,
+    workspace::ProposalWorkspace,
 };
 
 /// An operational handle to one plugin proposal.
 ///
 /// [`ProposalStore`] owns creation, lookup, review, and publication records.
 /// This type owns the narrower development workflow for one proposal: binding
-/// an image, exposing its workspace, recording validation, snapshotting git
+/// an environment, exposing its workspace, recording validation, snapshotting git
 /// state, and moving it to pending review.
 #[derive(Debug, Clone)]
 pub struct PluginDevelopment<'a> {
@@ -47,14 +47,15 @@ impl<'a> PluginDevelopment<'a> {
         self.store.proposal_path(self.id()).join("reports")
     }
 
-    /// Bind an image already trusted by the runtime.
+    /// Bind a runtime environment already trusted by the daemon.
     ///
-    /// Newly developed images will use a separate trusted build-result path;
-    /// an Agent never supplies a raw digest through this method.
-    pub fn bind_approved_image(
+    /// Ordinary plugin proposals never own or build an image. New environments
+    /// are managed as separate reusable assets and bound by id, never by an
+    /// Agent-supplied digest.
+    pub fn bind_environment(
         &mut self,
-        image_id: &str,
-        catalog: &ImageCatalog,
+        environment_id: &str,
+        catalog: &EnvironmentCatalog,
     ) -> Result<Proposal> {
         self.refresh()?;
         if !matches!(
@@ -62,17 +63,19 @@ impl<'a> PluginDevelopment<'a> {
             ProposalStatus::Draft | ProposalStatus::Validating | ProposalStatus::NeedsFix
         ) {
             return Err(Error::Validation(format!(
-                "image cannot be bound from status {:?}",
+                "environment cannot be bound from status {:?}",
                 self.proposal.status
             )));
         }
-        let image = catalog.get(image_id).ok_or_else(|| {
-            Error::Validation(format!("image {image_id:?} is not approved for RSI"))
+        let environment = catalog.get(environment_id).ok_or_else(|| {
+            Error::Validation(format!(
+                "environment {environment_id:?} is not approved for RSI"
+            ))
         })?;
-        let reference = image.reference.to_string();
+        let reference = environment.reference.to_string();
         self.mutate(|proposal| {
-            proposal.image_id = Some(image_id.to_string());
-            proposal.image_reference = Some(reference);
+            proposal.environment_id = Some(environment_id.to_string());
+            proposal.environment_reference = Some(reference);
         })
     }
 
@@ -138,9 +141,9 @@ impl<'a> PluginDevelopment<'a> {
                 "proposal source_commit does not match repository HEAD".into(),
             ));
         }
-        if self.proposal.image_reference.is_none() {
+        if self.proposal.environment_reference.is_none() {
             return Err(Error::Validation(
-                "proposal has no digest-pinned image".into(),
+                "proposal has no digest-pinned environment".into(),
             ));
         }
         let report = self.latest_report()?;
