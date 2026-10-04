@@ -221,3 +221,63 @@ mrlap 6、nodes-hypothesize 11、nodes-rd 3、nodes-io 98、nodes-survey 40 lib
   `R_LIBS_USER` 与实际安装目录（`~/R/x86_64-pc-linux-gnu-library/4.6/`）
   不一致时，install.packages 子进程看不到已装依赖，需 `export R_LIBS=…`
   直传。
+
+---
+
+## Batch-2a 执行记录（2026-10-04，分支 fix/node-audit-plan-touch）
+
+范围裁定：只修「与 BONE_MARROW_CACHEXIA_MASTER_PLAN_v3.9 相触」的 4 项
+（P0 #4、P0 #17、P1 two_sample_mr local_ld、P1 hypergeometric fold）；
+svycoxph/cmest_weighting 等不在该方案主方法链上的仍留 batch-2b。
+
+1. **donor_composition 斜率 SE**（P0 #4）+ **golden 追加发现：线性预测子
+   先 `.exp()` 再 sigmoid**— `fit_binomial` 有两个独立 bug：
+   (a) 收尾取 `h[1][1]/det`（= Var(intercept)），改为 `h[0][0]/det`
+   （= (H⁻¹)₁₁ = Var(slope)）；
+   (b) 迭代与最终 Hessian 两处的概率均为
+   `(intercept + slope*x).exp().sigmoid()` = σ(e^η)，拟的根本不是
+   logistic 回归——报告的 `log_odds_ratio` 量纲全错（6 供者夹具上报
+   −4.777，真值 −1.099），且 SE 在错误模型上计算。审计时只核了 H⁻¹
+   代数没做端到端对照，漏了 (b)；R glm golden 一跑即现形——再次印证
+   「golden 必须独立实现」。两处 `.exp()` 删除。
+   原节点零测试覆盖；新增 `tests/donor_composition.rs` golden，参考值由
+   R 4.6 base `glm(cbind(k, n-k) ~ x, family=binomial,
+   control=glm.control(epsilon=1e-14))` 独立生成（非本 crate 公式回放），
+   并以闭式解双重锚定（平衡两组夹具：slope=−log 3 精确、SE=√(52.5/675)）。
+   注意 R 默认 `epsilon=1e-8` 下 IRLS 提前停：slope 差 2e-10、SE 差 1.2e-6
+   ——「R 输出」当 golden 必须收紧收敛控制，否则门设在 R 自身噪声里。
+   6 供者×2 细胞类型用例下 slope 1e-12、SE/z/p 1e-9~1e-10 内一致；
+   修复前 slope −4.777/SE 0.394 对参考 −1.099/0.27889 确认失败。
+2. **two_sample_mr local_ld 缺染色体表**（P1）— 由 warn+跳过改为硬报错：
+   `HarmoniseInput` 无染色体列，无法判定哪些 SNP 落在缺表染色体上，
+   继续执行等于静默断言"未检验的独立性成立"。报错信息指向
+   `wjixiang/catalog-ldmatrix-1000g-eur` bundle 或切回 opengwas 模式。
+   新增 `local_ld_missing_chromosome_table_errors` 单测（deregister
+   chr2 表后断言 Err 且报错点名染色体与"independence"）。同节点顺带修正
+   spec doc 失实：默认 r²=0.001/kb=5000/p1=5e-8 **严于** R TwoSampleMR
+   的 clump_kb=10000/clump_p1=1e-5，外部预选工具集会被裁剪，需显式调
+   p1——原文错误宣称这些是 "standard TwoSampleMR parameters"。
+3. **hypergeometric_ora_ondf fold_enrichment 倒置**（P1）— 第 5 元由
+   `expected/hits` 改为 `hits/expected`。新增
+   `fold_enrichment_is_observed_over_expected`（双基因集、population=8
+   用例：hits=2、expected=0.75 → fold≈2.667，倒置方向输出 0.375 必挂）。
+   原有单测只数行数，对该字段零断言——单基因集夹具下 fold 恰为 1.0，
+   正反两方向都过，故须双集夹具才能锁定方向。
+4. **dataframe_to_file append 模式丢列**（P0 #17）— `append_existing`
+   原对旧文件按新 schema `select` 投影：旧文件多出的列被静默丢弃并覆写。
+   现两个方向都硬报错：旧文件列 ⊄ 新 schema（丢列）或新列 ⊄ 旧文件
+   （union 必炸）均拒写，报错点名冲突列；写失败不触碰原文件。新增
+   wider-onto-narrow 与 narrower-onto-wider 两个方向的单测，断言报错含
+   列名且原文件字节未变（id 列回读校验）。
+
+测试：nodes-hypothesize（lib + donor_composition golden）、nodes-sql、
+nodes-mr（lib + 新增 2 例）、nodes-io（lib + 新增 2 例）。
+
+合并注意（PR #95）：origin/main 的 25ed57c7 已把原生 two_sample_mr 节点
+整体迁到容器插件并删除源文件（"complete the TwoSampleMR container
+migration"），故本分支的 two_sample_mr.rs 为 modify/delete 冲突，
+dataframe_to_file.rs 亦被同提交重写（Utf8View 物理投影）。处置：
+local_ld 硬报错修复只对原生节点血统有效（含已部署 daemon，batch-1
+血统仍带原生节点）；donor_composition 与 hypergeometric 两处上游未动
+可干净落位；append 丢列修复需在 25ed57c7 的新写路径上人工移植。
+容器插件路径（R TwoSampleMR 脚本）不走 local_ld，无此缺陷。

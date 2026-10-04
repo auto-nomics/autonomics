@@ -144,7 +144,12 @@ impl NodeFactory for ManifestNodeFactory {
             self.panel_cache.clone(),
             bundles,
         )
-        .map_err(|error| dag_core::registry::error::Error::Unknown(error.to_string()))?;
+        .map_err(|error| dag_core::registry::error::Error::Unknown(error.to_string()))?
+        // Surface the manifest's compiled port layout (required, fixed
+        // inputs) on the built node itself. Without this the node falls
+        // back to the legacy optional-variadic layout and DAG validation
+        // lets an unwired required input execute on an empty FileSet.
+        .with_ports(self.ports.clone());
 
         Ok(Box::new(node))
     }
@@ -399,6 +404,50 @@ ldsc --h2 "$AUTONOMICS_INPUT0" \
         assert_eq!(schema["type"], "object");
         assert_eq!(schema["additionalProperties"], false);
         assert!(schema["properties"]["intercept"]["type"] == "number");
+    }
+
+    #[test]
+    fn built_node_carries_the_manifest_port_layout() {
+        // The factory compiles the manifest's declared inputs into
+        // required, fixed ports; the *built node* must carry them too (not
+        // just the factory surface) so DAG validation rejects an unwired
+        // required input (`PortDisconnected`) instead of falling back to
+        // the legacy optional-variadic layout and executing an empty
+        // FileSet that "succeeds".
+        let runtime = Arc::new(FakeRuntime {
+            workspace_root: PathBuf::from("/tmp"),
+            requests: Mutex::new(Vec::new()),
+        });
+        // Panel-free variant, like the e2e test: bundle bindings resolve at
+        // build time and would fail with DataBundleNotFound in the test env.
+        let workspace = tempfile::tempdir().unwrap();
+        let mut manifest = test_manifest();
+        manifest.panels.clear();
+        let plugin = Plugin::new(
+            manifest,
+            runtime as Arc<dyn PodmanConnection>,
+            Arc::new(PanelCache::new(workspace.path().join("panels"))),
+        );
+        let ctx = NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        );
+        let mut registry = NodeRegistry::new(ctx);
+        registry.register_plugin(&plugin);
+        let node = registry
+            .build_node("ldsc_h2", serde_json::json!({ "intercept": 2.0 }))
+            .expect("manifest node builds");
+        let ports = node.ports();
+        assert!(
+            ports.is_fixed_input(),
+            "manifest inputs are exhaustive, not variadic"
+        );
+        let inputs: Vec<_> = ports.input_ports().iter().collect();
+        assert!(!inputs.is_empty(), "ldsc_h2 declares input ports");
+        assert!(
+            inputs.iter().all(|port| port.required),
+            "every declared manifest input is required"
+        );
     }
 
     /// Restores AUTONOMICS_KEEP_WORKSPACE on drop so one test's debugging

@@ -368,7 +368,7 @@ fn fit_binomial(observations: &[(f64, f64, f64)]) -> Option<(f64, f64, f64, f64)
         let mut h = [[0.0, 0.0], [0.0, 0.0]];
         let mut score = [0.0, 0.0];
         for &(x, successes, trials) in observations {
-            let probability = (intercept + slope * x).exp().sigmoid();
+            let probability = (intercept + slope * x).sigmoid();
             let weight = trials * probability * (1.0 - probability).max(1e-10);
             let residual = successes - trials * probability;
             h[0][0] += weight;
@@ -394,7 +394,7 @@ fn fit_binomial(observations: &[(f64, f64, f64)]) -> Option<(f64, f64, f64, f64)
     }
     let mut h = [[0.0, 0.0], [0.0, 0.0]];
     for &(x, _, trials) in observations {
-        let probability = (intercept + slope * x).exp().sigmoid();
+        let probability = (intercept + slope * x).sigmoid();
         let weight = trials * probability * (1.0 - probability).max(1e-10);
         h[0][0] += weight;
         h[0][1] += weight * x;
@@ -405,7 +405,10 @@ fn fit_binomial(observations: &[(f64, f64, f64)]) -> Option<(f64, f64, f64, f64)
     if !determinant.is_finite() || determinant.abs() < 1e-14 {
         return None;
     }
-    let covariance = h[1][1] / determinant;
+    // theta = [intercept, slope]; H⁻¹ = adj(H)/det, so Var(slope) = (H⁻¹)₁₁
+    // = h[0][0]/det (previously h[1][1]/det, which is Var(intercept) and
+    // understated the slope SE).
+    let covariance = h[0][0] / determinant;
     if !covariance.is_finite() || covariance <= 0.0 {
         return None;
     }

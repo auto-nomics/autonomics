@@ -465,11 +465,47 @@ impl DataFrameToFileNode {
             }
         };
 
+        // Column-name sets must match exactly: a subset `select` on the
+        // existing file would silently drop its extra columns, and a missing
+        // column would surface as an opaque planner error. Both directions
+        // lose or mangle persisted data, so refuse with an explicit message
+        // (node audit 2026-10-04, P0 #17).
+        let target = new.schema().inner();
+        let existing_schema = existing.schema().inner();
+        let dropped: Vec<&str> = existing_schema
+            .fields()
+            .iter()
+            .map(|f| f.name().as_str())
+            .filter(|name| target.index_of(name).is_err())
+            .collect();
+        if !dropped.is_empty() {
+            return Err(DataFrameToFileError::InvalidInput {
+                message: format!(
+                    "append mode: existing file `{path}` has columns not present in the \
+                     new data ({dropped:?}); appending would silently drop them. Use \
+                     mode=overwrite, or project the new data to the same column set first"
+                ),
+            });
+        }
+        let missing: Vec<&str> = target
+            .fields()
+            .iter()
+            .map(|f| f.name().as_str())
+            .filter(|name| existing_schema.index_of(name).is_err())
+            .collect();
+        if !missing.is_empty() {
+            return Err(DataFrameToFileError::InvalidInput {
+                message: format!(
+                    "append mode: new data has columns not present in the existing \
+                     file `{path}` ({missing:?}); the schemas must match to append"
+                ),
+            });
+        }
+
         // Cast each existing column to the new DataFrame's field type so the
         // two schemas are union-compatible. This matters most for CSV, where
         // integers re-read back as `Int64` regardless of how they were
         // written.
-        let target = new.schema().inner();
         let cast_exprs: Vec<_> = target
             .fields()
             .iter()
@@ -929,6 +965,108 @@ mod tests {
             vec![1, 2, 3, 4, 5],
             "append must keep rows from both writes"
         );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A DataFrame with an extra column (`score`) appended onto a file that
+    /// lacks it must fail: the pre-fix code silently projected the existing
+    /// rows down to the new column subset and rewrote the file (node audit
+    /// 2026-10-04, P0 #17).
+    #[tokio::test]
+    async fn test_dataframe_to_file_append_rejects_extra_new_column() {
+        let path = format!("/tmp/sink_append_extra_{}.csv", std::process::id());
+        let ctx = SessionContext::new();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, false),
+            Field::new("score", DataType::Int32, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from(vec![4])),
+                Arc::new(StringArray::from(vec!["dave"])),
+                Arc::new(Int32Array::from(vec![7])),
+            ],
+        )
+        .unwrap();
+        let wider = ctx.read_batch(batch).unwrap();
+
+        let mut node = DataFrameToFileNode::new(path.clone(), WriteFormat::Csv, SinkMode::Append);
+        node.execute(
+            &node_ctx(),
+            &[NodeInput::new_dataframe(0, sample_dataframe().1)],
+            &dag_core::dag::node_event::NodeReporter::noop(),
+        )
+        .await
+        .unwrap();
+
+        let err = node
+            .execute(
+                &node_ctx(),
+                &[NodeInput::new_dataframe(0, wider)],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .expect_err("appending a wider schema must fail");
+        assert!(
+            err.to_string().contains("score"),
+            "error should name the conflicting column: {err}"
+        );
+
+        // The original file must be untouched.
+        let ids = read_csv_ids(&ctx, &path).await;
+        assert_eq!(ids, vec![1, 2, 3], "failed append must not alter the file");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Appending a *narrower* DataFrame onto a wider file must also fail —
+    /// previously the existing file's extra columns were silently dropped and
+    /// the file overwritten without them.
+    #[tokio::test]
+    async fn test_dataframe_to_file_append_rejects_dropped_existing_column() {
+        let path = format!("/tmp/sink_append_drop_{}.csv", std::process::id());
+        let ctx = SessionContext::new();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, false),
+            Field::new("score", DataType::Int32, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from(vec![1])),
+                Arc::new(StringArray::from(vec!["alice"])),
+                Arc::new(Int32Array::from(vec![9])),
+            ],
+        )
+        .unwrap();
+        let wider = ctx.read_batch(batch).unwrap();
+
+        let mut node = DataFrameToFileNode::new(path.clone(), WriteFormat::Csv, SinkMode::Append);
+        node.execute(
+            &node_ctx(),
+            &[NodeInput::new_dataframe(0, wider)],
+            &dag_core::dag::node_event::NodeReporter::noop(),
+        )
+        .await
+        .unwrap();
+
+        let err = node
+            .execute(
+                &node_ctx(),
+                &[NodeInput::new_dataframe(0, second_dataframe().1)],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .expect_err("appending a narrower schema must fail");
+        assert!(
+            err.to_string().contains("score"),
+            "error should name the column that would be dropped: {err}"
+        );
+
+        let ids = read_csv_ids(&ctx, &path).await;
+        assert_eq!(ids, vec![1], "failed append must not alter the file");
         let _ = std::fs::remove_file(&path);
     }
 
