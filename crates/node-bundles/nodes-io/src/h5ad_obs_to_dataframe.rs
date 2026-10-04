@@ -337,30 +337,28 @@ impl DagNode for H5adObsToDataFrameNode {
 
         let mut temporary = None;
         let local_path = if source_path.starts_with("vfs://") {
-            let virtual_path = match source_path.strip_prefix("vfs://") {
-                Some(virtual_path) => vfs::OpendalFileStorage::normalize_path(virtual_path),
-                None => source_path.clone(),
-            };
-            temporary = Some(Arc::new(
-                stage_vfs_object(node_ctx, &virtual_path)
-                    .await
-                    .map_err(DagError::Schedule)?,
-            ));
-            temporary
-                .as_ref()
-                .expect("temporary H5AD was just staged")
-                .as_ref()
-                .path()
-                .to_path_buf()
+            stage_to_temporary(node_ctx, &source_path, &mut temporary).await?
         } else {
             let local = source_path.strip_prefix("file://").unwrap_or(&source_path);
             let path = Path::new(local);
-            if !path.is_file() {
-                return Err(DagError::Schedule(format!(
-                    "{H5AD_OBS_TO_DATAFRAME_KIND} input is not a readable file: `{local}`"
-                )));
+            if path.is_file() {
+                path.to_path_buf()
+            } else {
+                // A bare absolute path may be a VFS mount path: `file_reference`
+                // keeps engine-visible paths (`/datasets/...`) on the FileRef,
+                // and container nodes already stage those through the VFS.
+                // Fall back to the same resolution before declaring the input
+                // unreadable — otherwise host-provided H5ADs referenced by
+                // their mounted path fail with "not a readable file".
+                let mapped = crate::file_to_dataframe::source_path(node_ctx, local);
+                if mapped.starts_with("vfs://") {
+                    stage_to_temporary(node_ctx, &mapped, &mut temporary).await?
+                } else {
+                    return Err(DagError::Schedule(format!(
+                        "{H5AD_OBS_TO_DATAFRAME_KIND} input is not a readable file: `{local}`"
+                    )));
+                }
             }
-            path.to_path_buf()
         };
 
         let include_obsm = self.include_obsm.clone();
@@ -398,6 +396,28 @@ impl DagNode for H5adObsToDataFrameNode {
 struct InspectedPath {
     path: PathBuf,
     metadata: H5adObsMetadata,
+}
+
+async fn stage_to_temporary(
+    node_ctx: &NodeCtx,
+    vfs_uri: &str,
+    temporary: &mut Option<Arc<NamedTempFile>>,
+) -> Result<PathBuf, DagError> {
+    let virtual_path = match vfs_uri.strip_prefix("vfs://") {
+        Some(virtual_path) => vfs::OpendalFileStorage::normalize_path(virtual_path),
+        None => vfs_uri.to_string(),
+    };
+    *temporary = Some(Arc::new(
+        stage_vfs_object(node_ctx, &virtual_path)
+            .await
+            .map_err(DagError::Schedule)?,
+    ));
+    Ok(temporary
+        .as_ref()
+        .expect("temporary H5AD was just staged")
+        .as_ref()
+        .path()
+        .to_path_buf())
 }
 
 async fn stage_vfs_object(node_ctx: &NodeCtx, virtual_path: &str) -> Result<NamedTempFile, String> {
@@ -1563,5 +1583,76 @@ mod tests {
         let dataframe = output.get(&0).unwrap().as_dataframe().unwrap().clone();
         let batches = dataframe.collect().await.unwrap();
         assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 5);
+    }
+
+    #[tokio::test]
+    async fn bare_mount_path_falls_back_to_vfs() {
+        // `file_reference` keeps engine-visible paths (`/datasets/...`) on the
+        // emitted FileRef. Such a bare path must resolve through the VFS when
+        // it is a mount path, even though it does not exist as a host-local
+        // file — mirroring how `file_to_dataframe` and container staging
+        // already accept mounted paths.
+        use vfs::{BackendConfig, BackendDefinition, MountDefinition, MountedObjectStore, VfsManifest};
+
+        let backend = tempfile::tempdir().unwrap();
+        let manifest = VfsManifest {
+            backend: vec![BackendDefinition {
+                id: "default".into(),
+                config: BackendConfig::local(backend.path().to_string_lossy().to_string()),
+            }],
+            mount: vec![MountDefinition {
+                path: "/datasets".into(),
+                backend: "default".into(),
+                source: backend.path().to_string_lossy().to_string(),
+                read_only: true,
+            }],
+        };
+        let storage = Arc::new(OpendalFileStorage::with_mounts(
+            tempfile::tempdir().unwrap().path(),
+            Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap()),
+        ));
+        fixture(&backend.path().join("input.h5ad"));
+
+        let mut node = H5adObsToDataFrameNodeFactory {}
+            .build(
+                serde_json::json!({ "path": "/datasets/input.h5ad" }),
+                vfs_node_ctx(&storage),
+            )
+            .unwrap();
+        let output = node
+            .execute(
+                &vfs_node_ctx(&storage),
+                &[],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap();
+        let dataframe = output.get(&0).unwrap().as_dataframe().unwrap().clone();
+        let batches = dataframe.collect().await.unwrap();
+        assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 5);
+    }
+
+    #[tokio::test]
+    async fn missing_everywhere_stays_an_error() {
+        let storage = Arc::new(OpendalFileStorage::new_temp());
+        let mut node = H5adObsToDataFrameNodeFactory {}
+            .build(
+                serde_json::json!({ "path": "/definitely/not/there.h5ad" }),
+                vfs_node_ctx(&storage),
+            )
+            .unwrap();
+        let error = node
+            .execute(
+                &vfs_node_ctx(&storage),
+                &[],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message.contains("cannot stat H5AD") || message.contains("not a readable file"),
+            "unexpected error: {message}"
+        );
     }
 }

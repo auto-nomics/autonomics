@@ -137,6 +137,20 @@ impl ContainerCommandNode {
         })
     }
 
+    /// Override the node's declared port layout.
+    ///
+    /// The default layout (`ContainerCommandNode::new*`) is the legacy
+    /// `container_command` contract: a variadic, optional file input. Plugin
+    /// manifests declare explicit input ports, and those must surface on the
+    /// built node — not only on the factory — so DAG validation enforces
+    /// them: a required input port with no edge has to fail the run
+    /// (`PortDisconnected`) instead of executing with zero inputs and
+    /// "succeeding" on an empty FileSet.
+    pub fn with_ports(mut self, ports: NodePorts) -> Self {
+        self.ports = ports;
+        self
+    }
+
     /// Resolves the host scratch directory that will be mounted at `/work`.
     ///
     /// A spec-provided `workdir` is used as-is when absolute and joined onto
