@@ -272,3 +272,12 @@ svycoxph/cmest_weighting 等不在该方案主方法链上的仍留 batch-2b。
 
 测试：nodes-hypothesize（lib + donor_composition golden）、nodes-sql、
 nodes-mr（lib + 新增 2 例）、nodes-io（lib + 新增 2 例）。
+
+合并注意（PR #95）：origin/main 的 25ed57c7 已把原生 two_sample_mr 节点
+整体迁到容器插件并删除源文件（"complete the TwoSampleMR container
+migration"），故本分支的 two_sample_mr.rs 为 modify/delete 冲突，
+dataframe_to_file.rs 亦被同提交重写（Utf8View 物理投影）。处置：
+local_ld 硬报错修复只对原生节点血统有效（含已部署 daemon，batch-1
+血统仍带原生节点）；donor_composition 与 hypergeometric 两处上游未动
+可干净落位；append 丢列修复需在 25ed57c7 的新写路径上人工移植。
+容器插件路径（R TwoSampleMR 脚本）不走 local_ld，无此缺陷。
