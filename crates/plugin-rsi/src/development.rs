@@ -1,16 +1,21 @@
 use std::path::PathBuf;
 
 use crate::{
-    Error, GitRepo, Proposal, ProposalStatus, ProposalStore, Result, validate::EnvironmentCatalog,
-    workspace::ProposalWorkspace,
+    Error, GitRepo, Proposal, ProposalStatus, ProposalStore, Result, node::NodeDevelopment,
+    validate::EnvironmentCatalog, workspace::ProposalWorkspace,
 };
+use container_plugin::{
+    manifest::{ImageMetadata, PluginManifest},
+    node_definition::{self, NodeDefinition},
+};
+use container_runtime::ImageReference;
 
 /// An operational handle to one plugin proposal.
 ///
 /// [`ProposalStore`] owns creation, lookup, review, and publication records.
 /// This type owns the narrower development workflow for one proposal: binding
-/// an environment, exposing its workspace, recording validation, snapshotting git
-/// state, and moving it to pending review.
+/// an environment, maintaining manifest nodes, recording validation,
+/// snapshotting git state, and moving it to pending review.
 #[derive(Debug, Clone)]
 pub struct PluginDevelopment<'a> {
     store: &'a ProposalStore,
@@ -47,6 +52,98 @@ impl<'a> PluginDevelopment<'a> {
         self.store.proposal_path(self.id()).join("reports")
     }
 
+    /// List every node defined by this plugin's manifest.
+    pub fn list_nodes(&self) -> Result<Vec<NodeDefinition>> {
+        Ok(self.load_manifest()?.nodes)
+    }
+
+    /// Read one node by kind.
+    pub fn read_node(&self, kind: &str) -> Result<Option<NodeDefinition>> {
+        Ok(self
+            .list_nodes()?
+            .into_iter()
+            .find(|node| node.kind == kind))
+    }
+
+    /// Create a node and return a development handle for it.
+    pub fn create_node(&mut self, node: NodeDefinition) -> Result<NodeDevelopment<'_, 'a>> {
+        self.refresh()?;
+        self.ensure_nodes_editable()?;
+        self.validate_node(&node)?;
+        let mut manifest = self.load_manifest()?;
+        if manifest
+            .nodes
+            .iter()
+            .any(|existing| existing.kind == node.kind)
+        {
+            return Err(Error::Validation(format!(
+                "node kind `{}` already exists",
+                node.kind
+            )));
+        }
+        let kind = node.kind.clone();
+        manifest.nodes.push(node);
+        let node_kinds = manifest
+            .nodes
+            .iter()
+            .map(|node| node.kind.clone())
+            .collect::<Vec<_>>();
+        self.save_manifest(&manifest)?;
+        self.mutate(|proposal| proposal.node_kinds = node_kinds)?;
+        Ok(NodeDevelopment::new(self, kind))
+    }
+
+    /// Open a development handle for an existing node.
+    pub fn node(&mut self, kind: &str) -> Result<Option<NodeDevelopment<'_, 'a>>> {
+        self.refresh()?;
+        if self.read_node(kind)?.is_some() {
+            Ok(Some(NodeDevelopment::new(self, kind)))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Replace an existing node definition with the same kind.
+    pub fn update_node(&mut self, node: NodeDefinition) -> Result<NodeDefinition> {
+        self.refresh()?;
+        self.ensure_nodes_editable()?;
+        self.validate_node(&node)?;
+        let mut manifest = self.load_manifest()?;
+        let index = manifest
+            .nodes
+            .iter()
+            .position(|existing| existing.kind == node.kind)
+            .ok_or_else(|| Error::Validation(format!("node `{}` does not exist", node.kind)))?;
+        manifest.nodes[index] = node.clone();
+        let node_kinds = manifest
+            .nodes
+            .iter()
+            .map(|node| node.kind.clone())
+            .collect::<Vec<_>>();
+        self.save_manifest(&manifest)?;
+        self.mutate(|proposal| proposal.node_kinds = node_kinds)?;
+        Ok(node)
+    }
+
+    /// Delete a node from the plugin manifest.
+    pub fn delete_node(&mut self, kind: &str) -> Result<Proposal> {
+        self.refresh()?;
+        self.ensure_nodes_editable()?;
+        let mut manifest = self.load_manifest()?;
+        let before = manifest.nodes.len();
+        manifest.nodes.retain(|node| node.kind != kind);
+        if manifest.nodes.len() == before {
+            return Err(Error::Validation(format!("node `{kind}` does not exist")));
+        }
+        let node_kinds = manifest
+            .nodes
+            .iter()
+            .map(|node| node.kind.clone())
+            .collect::<Vec<_>>();
+        self.save_manifest(&manifest)?;
+        self.mutate(|proposal| proposal.node_kinds = node_kinds)
+    }
+
     /// Bind a runtime environment already trusted by the daemon.
     ///
     /// Ordinary plugin proposals never own or build an image. New environments
@@ -72,6 +169,28 @@ impl<'a> PluginDevelopment<'a> {
                 "environment {environment_id:?} is not approved for RSI"
             ))
         })?;
+        let reference = ImageReference::parse(&environment.reference).map_err(|error| {
+            Error::Validation(format!("invalid environment reference: {error}"))
+        })?;
+        let workspace = self.workspace();
+        let manifest_path = workspace.path().join("manifest.toml");
+        let mut manifest = if manifest_path.is_file() {
+            let mut manifest = self.load_manifest()?;
+            manifest.image.reference = reference.clone();
+            manifest
+        } else {
+            let mut image = ImageMetadata::default();
+            image.reference = reference.clone();
+            PluginManifest {
+                schema_version: 1,
+                plugin_name: self.proposal.plugin_name.clone(),
+                image,
+                panels: Vec::new(),
+                nodes: Vec::new(),
+            }
+        };
+        manifest.image.reference = reference;
+        self.save_manifest(&manifest)?;
         let reference = environment.reference.to_string();
         self.mutate(|proposal| {
             proposal.environment_id = Some(environment_id.to_string());
@@ -177,6 +296,67 @@ impl<'a> PluginDevelopment<'a> {
     fn refresh(&mut self) -> Result<()> {
         self.proposal = self.store.load(self.id())?;
         Ok(())
+    }
+
+    fn ensure_nodes_editable(&self) -> Result<()> {
+        if matches!(
+            self.proposal.status,
+            ProposalStatus::Draft | ProposalStatus::Validating | ProposalStatus::NeedsFix
+        ) {
+            Ok(())
+        } else {
+            Err(Error::Validation(format!(
+                "nodes cannot be edited from status {:?}",
+                self.proposal.status
+            )))
+        }
+    }
+
+    fn validate_node(&self, node: &NodeDefinition) -> Result<()> {
+        node_definition::validate(node)
+            .map_err(|error| Error::Validation(format!("invalid node `{}`: {error}", node.kind)))?;
+        if node.command.script.is_some() || node.command.script_file.is_none() {
+            return Err(Error::Validation(
+                "RSI nodes must declare a safe relative script_file".into(),
+            ));
+        }
+        let script_file = node.command.script_file.as_deref().expect("checked above");
+        match self.workspace().read_text(script_file) {
+            Ok(_) => Ok(()),
+            Err(Error::ReadFile { source, .. })
+                if source.kind() == std::io::ErrorKind::NotFound =>
+            {
+                Ok(())
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn load_manifest(&self) -> Result<PluginManifest> {
+        let path = self.workspace().path().join("manifest.toml");
+        let text =
+            std::fs::read_to_string(&path).map_err(|source| Error::ReadFile { path, source })?;
+        let manifest: PluginManifest =
+            toml::from_str(&text).map_err(|source| Error::ParseToml {
+                path: self.workspace().path().join("manifest.toml"),
+                source,
+            })?;
+        if manifest.plugin_name != self.proposal.plugin_name {
+            return Err(Error::Validation(format!(
+                "manifest plugin_name `{}` does not match proposal `{}`",
+                manifest.plugin_name, self.proposal.plugin_name
+            )));
+        }
+        Ok(manifest)
+    }
+
+    fn save_manifest(&self, manifest: &PluginManifest) -> Result<()> {
+        let path = self.workspace().path().join("manifest.toml");
+        let text = toml::to_string_pretty(manifest).map_err(|source| Error::SerializeToml {
+            path: path.clone(),
+            source,
+        })?;
+        self.workspace().write_text("manifest.toml", &text)
     }
 
     fn mutate<F>(&mut self, mutate: F) -> Result<Proposal>

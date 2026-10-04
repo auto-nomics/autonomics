@@ -40,7 +40,9 @@ pub struct Proposal {
     pub schema_version: u32,
     pub proposal_id: String,
     pub plugin_name: String,
-    pub node_kind: String,
+    /// Runtime kinds currently declared by the proposal's plugin manifest.
+    #[serde(default)]
+    pub node_kinds: Vec<String>,
     pub action: ProposalAction,
     pub status: ProposalStatus,
     pub authored_by: String,
@@ -95,7 +97,6 @@ impl ProposalStore {
         requests: &RequestStore,
     ) -> Result<PluginDevelopment<'_>> {
         crate::validate_plugin_name(plugin_name)?;
-        let node_kind = crate::derive_node_kind(plugin_name)?;
         let requested = BTreeSet::from_iter(request_ids.iter().cloned());
         if requested.is_empty() {
             return Err(Error::InvalidRequest(
@@ -127,7 +128,7 @@ impl ProposalStore {
             schema_version: 1,
             proposal_id,
             plugin_name: plugin_name.to_string(),
-            node_kind,
+            node_kinds: Vec::new(),
             action: ProposalAction::NewPlugin,
             status: ProposalStatus::Draft,
             authored_by: "agent".to_string(),
@@ -314,6 +315,8 @@ mod tests {
     use crate::request::{RequestIntent, RequestRecord, RequestSource, RequestStatus};
     use crate::{Environment, EnvironmentCatalog};
 
+    const ENVIRONMENT_REFERENCE: &str = "docker.io/library/hello-world@sha256:2dad70a9583f93db1dcc9a560b7d5b309af4a5151dfaf615f80d059a0925d78c";
+
     fn fixture(tmp: &Path) -> (RequestStore, ProposalStore, EnvironmentCatalog) {
         let requests = RequestStore::open(tmp);
         requests
@@ -334,7 +337,7 @@ mod tests {
         catalog.insert(
             "demo",
             Environment {
-                reference: "docker.io/library/hello-world@sha256:5e23090353324d887c48ad5e5c56d294eab81588df9605b07d1afe895f9ccf8".into(),
+                reference: ENVIRONMENT_REFERENCE.into(),
                 interpreters: vec!["sh".into()],
             },
         );

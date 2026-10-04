@@ -1,3 +1,8 @@
+use std::collections::BTreeMap;
+
+use container_plugin::node_definition::{
+    CommandSpec, NodeDefinition, OutputSpec, PortKind, PortLayout, PortSpec,
+};
 use plugin_rsi::{
     Environment, EnvironmentCatalog, GateStatus, ProposalStore, RequestIntent, RequestRecord,
     RequestSource, RequestStatus, RequestStore, validate_workspace,
@@ -31,41 +36,37 @@ fn request() -> RequestRecord {
     }
 }
 
-fn write_plugin(workspace: &plugin_rsi::ProposalWorkspace) {
-    workspace
-        .write_text(
-            "manifest.toml",
-            &format!(
-                r#"
-schema_version = 1
-plugin_name = "demo-plugin"
-
-[image]
-reference = "{ENVIRONMENT_REFERENCE}"
-
-[[nodes]]
-kind = "demo_plugin"
-desc = "Demo file adapter"
-doc = "Copies input 0 to output 0."
-
-[nodes.ports]
-inputs = [{{ type = "file", label = "input" }}]
-outputs = [{{ path = "out.txt", format = "txt" }}]
-
-[nodes.command]
-interpreter = "sh"
-script_file = "scripts/adapter.sh"
-"#
-            ),
-        )
-        .unwrap();
-    workspace
-        .write_text(
-            "scripts/adapter.sh",
-            "set -eu\ncp \"$AUTONOMICS_INPUT0\" \"$AUTONOMICS_OUTPUT0\"\n",
-        )
-        .unwrap();
-    workspace.write_text("README.md", "# demo\n").unwrap();
+fn node_definition(kind: &str, script_file: &str, output: &str) -> NodeDefinition {
+    NodeDefinition {
+        kind: kind.into(),
+        desc: format!("Demo {kind} adapter"),
+        doc: "Copies input 0 to output 0.".into(),
+        deprecated: false,
+        timeout_secs: 3600,
+        artifact_prefix: None,
+        ports: PortLayout {
+            inputs: vec![PortSpec {
+                r#type: PortKind::File,
+                label: Some("input".into()),
+                accepted_formats: Vec::new(),
+            }],
+            outputs: vec![OutputSpec {
+                path: output.into(),
+                format: Some("txt".into()),
+                label: None,
+            }],
+        },
+        params: BTreeMap::new(),
+        command: CommandSpec {
+            interpreter: "sh".into(),
+            argv: Vec::new(),
+            script: None,
+            script_file: Some(script_file.into()),
+            env: BTreeMap::new(),
+            files: BTreeMap::new(),
+        },
+        resources: Default::default(),
+    }
 }
 
 #[test]
@@ -85,7 +86,45 @@ fn greenfield_proposal_reaches_review_gate() {
     assert_eq!(development.proposal().environment_reference, None);
     development.bind_environment("demo", &catalog()).unwrap();
 
-    write_plugin(&development.workspace());
+    let mut first = development
+        .create_node(node_definition(
+            "demo_plugin",
+            "scripts/demo_plugin.sh",
+            "demo_plugin.txt",
+        ))
+        .unwrap();
+    first
+        .write_script("set -eu\ncp \"$AUTONOMICS_INPUT0\" \"$AUTONOMICS_OUTPUT0\"\n")
+        .unwrap();
+    first
+        .update_with(|node| node.desc = "Updated demo file adapter".into())
+        .unwrap();
+
+    let mut second = development
+        .create_node(node_definition(
+            "demo_reverse_plugin",
+            "scripts/demo_reverse_plugin.sh",
+            "demo_reverse_plugin.txt",
+        ))
+        .unwrap();
+    second
+        .write_script("set -eu\ncp \"$AUTONOMICS_INPUT0\" \"$AUTONOMICS_OUTPUT0\"\n")
+        .unwrap();
+
+    let temporary = development
+        .create_node(node_definition(
+            "demo_temp_plugin",
+            "scripts/demo_temp_plugin.sh",
+            "demo_temp_plugin.txt",
+        ))
+        .unwrap();
+    temporary.delete().unwrap();
+    assert_eq!(development.list_nodes().unwrap().len(), 2);
+
+    development
+        .workspace()
+        .write_text("README.md", "# demo\n")
+        .unwrap();
     development.start_validation().unwrap();
     let current = development.proposal().clone();
     let report = validate_workspace(&current, &development.workspace(), &catalog(), &[], 1);

@@ -149,6 +149,7 @@ validation result being considered:
 schema_version = 1
 proposal_id = "P-..."
 plugin_name = "clusterprofiler-bitr"
+node_kinds = ["clusterprofiler_bitr"]
 action = "new_plugin"
 status = "draft"
 authored_by = "agent"
@@ -170,11 +171,14 @@ new family, it is empty. Approval archives the prior installed plugin before any
 replacement, enabling rollback.
 
 The `repo/` directory is initialized as a git repository when the proposal is
-created, before the first file is written. The daemon-owned RSI worker is the
-only component that creates commits; Agents request structured workspace writes
-and validation runs, but never run git themselves. Every attempt leaves an
-auditable commit plus a report. A proposal cannot enter review with a dirty
-working tree or a source commit that does not match the reviewed report.
+created, before the first file is written. A proposal starts with no nodes;
+`PluginDevelopment` creates and updates `[[nodes]]` through node-level
+development handles and mirrors their kinds into `proposal.toml`. The
+daemon-owned RSI worker is the only component that creates commits; Agents
+request structured workspace writes and validation runs, but never run git
+themselves. Every attempt leaves an auditable commit plus a report. A proposal
+cannot enter review with a dirty working tree or a source commit that does not
+match the reviewed report.
 
 ## 4. Agent Topology
 
@@ -203,6 +207,10 @@ or bash access:
 - `plugin_rsi_request_record`: create a structured executable-node request.
 - `plugin_rsi_baseline_get`: copy an installed family into a proposal baseline.
 - `plugin_rsi_proposal_create`: create a draft for a new or updated family.
+- `plugin_rsi_node_create`: add one node to the plugin manifest.
+- `plugin_rsi_node_read`: read one node definition.
+- `plugin_rsi_node_update`: update one node definition.
+- `plugin_rsi_node_delete`: remove one node definition.
 - `plugin_rsi_file_write`: write one safe relative path under `plugin/`.
 - `plugin_rsi_file_read`: read one proposal or baseline file.
 - `plugin_rsi_diff`: return a structured baseline/proposal diff.

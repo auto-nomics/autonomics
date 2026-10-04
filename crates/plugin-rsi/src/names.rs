@@ -22,12 +22,6 @@ pub fn validate_plugin_name(name: &str) -> Result<&str> {
     }
 }
 
-/// Derive the unique runtime kind for the one-plugin-one-node MVP policy.
-pub fn derive_node_kind(plugin_name: &str) -> Result<String> {
-    validate_plugin_name(plugin_name)?;
-    Ok(plugin_name.replace('-', "_"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -43,13 +37,5 @@ mod tests {
         for bad in ["", "-demo", "demo-", "Demo", "demo_tool", "../demo"] {
             assert!(validate_plugin_name(bad).is_err(), "{bad} must fail");
         }
-    }
-
-    #[test]
-    fn derives_underscore_kind() {
-        assert_eq!(
-            derive_node_kind("clusterprofiler-bitr").unwrap(),
-            "clusterprofiler_bitr"
-        );
     }
 }

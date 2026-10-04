@@ -64,24 +64,34 @@ pub fn validate_workspace(
         }
     }
 
-    let collision = installed_kinds.contains(&proposal.node_kind);
-    if collision {
+    let collisions = proposal
+        .node_kinds
+        .iter()
+        .filter(|kind| installed_kinds.contains(kind))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !collisions.is_empty() {
         gates.push(GateResult::fail(
             "kind_collision",
-            format!("node kind `{}` is already registered", proposal.node_kind),
+            format!("node kinds already registered: {}", collisions.join(", ")),
         ));
         return blocked_rest(proposal, attempt, gates, "kind_collision");
     }
     gates.push(GateResult::pass("kind_collision"));
 
-    let script = manifest.nodes[0].command.script.clone().unwrap_or_default();
-    match static_script_review(&manifest.nodes[0], &script) {
-        Ok(()) => gates.push(GateResult::pass("script_static")),
-        Err(error) => {
-            gates.push(GateResult::fail("script_static", error));
-            return blocked_rest(proposal, attempt, gates, "script_static");
-        }
+    let script_results = manifest
+        .nodes
+        .iter()
+        .map(|node| {
+            let script = node.command.script.clone().unwrap_or_default();
+            static_script_review(node, &script)
+        })
+        .collect::<Vec<_>>();
+    if let Some(Err(error)) = script_results.into_iter().find(|result| result.is_err()) {
+        gates.push(GateResult::fail("script_static", error));
+        return blocked_rest(proposal, attempt, gates, "script_static");
     }
+    gates.push(GateResult::pass("script_static"));
 
     match registry_compile(&manifest) {
         Ok(()) => gates.push(GateResult::pass("registry_compile")),
@@ -141,20 +151,22 @@ fn load_manifest(
         .map_err(|error| vec![error.to_string()])?;
     let mut manifest: PluginManifest =
         toml::from_str(&text).map_err(|error| vec![error.to_string()])?;
-    let Some(node) = manifest.nodes.first_mut() else {
+    if manifest.nodes.is_empty() {
         return Err(vec!["manifest has no nodes".into()]);
-    };
-    match (&node.command.script, &node.command.script_file) {
-        (Some(_), Some(_)) => return Err(vec!["script and script_file are both set".into()]),
-        (None, Some(relative)) => {
-            let script = workspace
-                .read_text(relative)
-                .map_err(|error| vec![error.to_string()])?;
-            node.command.script = Some(script);
-            node.command.script_file = None;
+    }
+    for node in manifest.nodes.iter_mut() {
+        match (&node.command.script, &node.command.script_file) {
+            (Some(_), Some(_)) => return Err(vec!["script and script_file are both set".into()]),
+            (None, Some(relative)) => {
+                let script = workspace
+                    .read_text(relative)
+                    .map_err(|error| vec![error.to_string()])?;
+                node.command.script = Some(script);
+                node.command.script_file = None;
+            }
+            (None, None) => return Err(vec!["command must declare script_file".into()]),
+            (Some(_), None) => return Err(vec!["RSI plugins must use script_file".into()]),
         }
-        (None, None) => return Err(vec!["command must declare script_file".into()]),
-        (Some(_), None) => return Err(vec!["RSI plugins must use script_file".into()]),
     }
     for node in &manifest.nodes {
         node_definition::validate(node).map_err(|error| vec![error])?;
@@ -168,8 +180,8 @@ fn validate_policy(
     manifest: &PluginManifest,
     catalog: &EnvironmentCatalog,
 ) -> std::result::Result<(), String> {
-    if manifest.nodes.len() != 1 {
-        return Err("MVP plugins must declare exactly one node".into());
+    if manifest.nodes.is_empty() {
+        return Err("manifest must declare at least one node".into());
     }
     if manifest.plugin_name != proposal.plugin_name {
         return Err(format!(
@@ -177,11 +189,17 @@ fn validate_policy(
             manifest.plugin_name, proposal.plugin_name
         ));
     }
-    let node = &manifest.nodes[0];
-    if node.kind != proposal.node_kind {
+    let mut manifest_kinds = manifest
+        .nodes
+        .iter()
+        .map(|node| node.kind.clone())
+        .collect::<Vec<_>>();
+    manifest_kinds.sort();
+    let mut proposal_kinds = proposal.node_kinds.clone();
+    proposal_kinds.sort();
+    if manifest_kinds != proposal_kinds {
         return Err(format!(
-            "manifest kind `{}` does not match derived kind `{}`",
-            node.kind, proposal.node_kind
+            "manifest node kinds {manifest_kinds:?} do not match proposal node kinds {proposal_kinds:?}"
         ));
     }
     if !manifest.panels.is_empty() {
@@ -213,27 +231,29 @@ fn validate_policy(
     if environment.reference != expected_reference {
         return Err("proposal environment differs from the approved environment catalog".into());
     }
-    if !environment
-        .interpreters
-        .iter()
-        .any(|item| item == &node.command.interpreter)
-    {
-        return Err(format!(
-            "interpreter `{}` is not approved for environment `{}`",
-            node.command.interpreter, environment_id
-        ));
-    }
-    if !matches!(
-        node.resources.network,
-        None | Some(ContainerNetwork::Isolated)
-    ) {
-        return Err("network egress requires a later reviewed release class".into());
-    }
-    if !node.resources.read_only_rootfs {
-        return Err("read_only_rootfs cannot be disabled in the MVP".into());
-    }
-    if node.resources.gpus.is_some() || node.resources.user.is_some() {
-        return Err("GPU and user overrides are not allowed in the MVP".into());
+    for node in &manifest.nodes {
+        if !environment
+            .interpreters
+            .iter()
+            .any(|item| item == &node.command.interpreter)
+        {
+            return Err(format!(
+                "interpreter `{}` is not approved for environment `{}`",
+                node.command.interpreter, environment_id
+            ));
+        }
+        if !matches!(
+            node.resources.network,
+            None | Some(ContainerNetwork::Isolated)
+        ) {
+            return Err("network egress requires a later reviewed release class".into());
+        }
+        if !node.resources.read_only_rootfs {
+            return Err("read_only_rootfs cannot be disabled in the MVP".into());
+        }
+        if node.resources.gpus.is_some() || node.resources.user.is_some() {
+            return Err("GPU and user overrides are not allowed in the MVP".into());
+        }
     }
     let readme = workspace
         .read_text("README.md")
@@ -280,7 +300,16 @@ fn static_script_review(node: &NodeDefinition, script: &str) -> std::result::Res
 }
 
 fn registry_compile(manifest: &PluginManifest) -> std::result::Result<(), String> {
-    let node = &manifest.nodes[0];
+    for node in &manifest.nodes {
+        compile_one_node(manifest, node)?;
+    }
+    Ok(())
+}
+
+fn compile_one_node(
+    manifest: &PluginManifest,
+    node: &NodeDefinition,
+) -> std::result::Result<(), String> {
     let _schema = compile_schema(&node.params);
     let ports = node_definition::compile_ports(&node.ports);
     if ports.input_ports().len() != node.ports.inputs.len()
@@ -304,7 +333,7 @@ fn registry_compile(manifest: &PluginManifest) -> std::result::Result<(), String
         &manifest.panels,
         &serde_json::Value::Object(values),
     )
-    .map_err(|error| error.to_string())?;
+    .map_err(|error| format!("node `{}`: {error}", node.kind))?;
     Ok(())
 }
 
@@ -370,7 +399,7 @@ script_file = "scripts/adapter.sh"
             schema_version: 1,
             proposal_id: "P-test".into(),
             plugin_name: "demo-plugin".into(),
-            node_kind: "demo_plugin".into(),
+            node_kinds: vec!["demo_plugin".into()],
             action: ProposalAction::NewPlugin,
             status: ProposalStatus::Draft,
             authored_by: "agent".into(),
