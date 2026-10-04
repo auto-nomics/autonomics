@@ -530,7 +530,9 @@ pub enum ClumpMode {
     ///
     /// The node queries `vfs:///data/oss/ld_matrix/eur_chr{chrom}/` for r² pairs
     /// involving the instrument SNPs and runs greedy clumping in Rust.
-    /// No network access or API token required.
+    /// No network access or API token required. Requires the LD-matrix data
+    /// bundle with all 22 autosome tables; a missing chromosome table is a
+    /// hard error, because instrument independence could not be verified.
     #[serde(rename = "local_ld")]
     LocalLd,
 }
@@ -598,11 +600,18 @@ pub struct TwoSampleMrNodeSpec {
     /// Allele-frequency tolerance for palindrome inference (default `0.08`).
     #[serde(default = "default_tolerance")]
     pub tolerance: f64,
-    /// LD clumping configuration. Instruments are always clumped via the
-    /// OpenGWAS `/ld/clump` endpoint before harmonisation to ensure
-    /// independence. Defaults to standard TwoSampleMR parameters
-    /// (r²=0.001, kb=5000, p1=5e-8, pop=EUR). Requires the
-    /// `OPENGWAS_TOKEN` environment variable.
+    /// LD clumping configuration. Instruments are always clumped before
+    /// harmonisation to ensure independence (OpenGWAS `/ld/clump` endpoint by
+    /// default, or the local VFS LD matrix with `clump.mode = "local_ld"`).
+    /// Defaults: r²=0.001, kb=5000, p1=5e-8, pop=EUR. Note these defaults are
+    /// *stricter* than R TwoSampleMR's `clump_kb=10000, clump_p1=1e-5` — a
+    /// pre-selected instrument set chosen at R's looser thresholds will be
+    /// trimmed here (in OpenGWAS mode, SNPs with exposure p > p1 are not
+    /// eligible as clump representatives). Raise `p1` explicitly when piping
+    /// in an externally curated instrument list. OpenGWAS mode requires the
+    /// `OPENGWAS_TOKEN` environment variable; local mode requires the
+    /// `wjixiang/catalog-ldmatrix-1000g-eur` bundle with all 22 autosome
+    /// tables present (missing tables are a hard error, not a warning).
     #[serde(default)]
     pub clump: ClumpConfig,
     /// Full MR [`TwoSampleMrParameters`] (defaults reproduce `default_parameters()`).
@@ -766,7 +775,7 @@ async fn clump_local_ld(
         let df = match session.sql(&sql).await {
             Ok(df) => df,
             Err(e) => {
-                tracing::debug!("LD matrix table for chr{chrom} unavailable ({e}); skipping");
+                tracing::debug!("LD matrix table for chr{chrom} unavailable ({e})");
                 skipped_chroms.push(chrom);
                 continue;
             }
@@ -827,12 +836,17 @@ async fn clump_local_ld(
     );
 
     if !skipped_chroms.is_empty() {
-        tracing::warn!(
-            "LD matrix: chromosomes {:?} had no ld_matrix table; \
-             SNPs on those chromosomes are treated as having no LD data \
-             (kept as independent instruments)",
+        // Instruments carry no chromosome column, so there is no way to tell
+        // which SNPs sit on the missing tables — treating them as LD-free
+        // would silently assert instrument independence that was never
+        // checked. Refuse instead (node audit 2026-10-04, P1).
+        return Err(TwoSampleMrNodeError::Clump(format!(
+            "local LD clumping: no ld_matrix table for chromosomes {:?}; \
+             instrument independence cannot be verified. Install the \
+             `wjixiang/catalog-ldmatrix-1000g-eur` data bundle (all 22 \
+             autosomes) or switch clump.mode to \"opengwas\"",
             skipped_chroms
-        );
+        )));
     }
 
     // Build ClumpSnp list. Since the VFS LD matrix doesn't provide
@@ -1633,6 +1647,38 @@ mod tests {
         assert!(
             !snps.contains("rs4"),
             "rs4 (r²=0.8 with rs3) should be pruned"
+        );
+    }
+
+    /// A missing chromosome LD table must be a hard error, not a warning:
+    /// instruments carry no chromosome column, so their independence on the
+    /// missing table could not be verified (node audit 2026-10-04, P1).
+    #[tokio::test]
+    async fn local_ld_missing_chromosome_table_errors() {
+        let session = test_session();
+        register_mock_ld_tables(&session).await;
+        // Drop one autosome table to simulate an incomplete LD bundle.
+        session
+            .deregister_table("eur_chr2")
+            .unwrap()
+            .expect("chr2 table was registered by the mock");
+
+        let inputs = local_ld_test_inputs();
+        let cfg = ClumpConfig {
+            mode: ClumpMode::LocalLd,
+            ..ClumpConfig::default()
+        };
+        let err = clump_instruments(inputs, &cfg, &session, Some("eur_chr"))
+            .await
+            .expect_err("missing LD table must fail clumping");
+        let message = format!("{err}");
+        assert!(
+            message.contains("chr2") || message.contains("2"),
+            "error should name the missing chromosome: {message}"
+        );
+        assert!(
+            message.contains("independence"),
+            "error should explain the scientific stakes: {message}"
         );
     }
 
