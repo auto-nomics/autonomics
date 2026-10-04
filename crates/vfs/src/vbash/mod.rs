@@ -9,12 +9,18 @@ mod search;
 
 use std::sync::Arc;
 
+use agentik_core::tools::truncation::{DEFAULT_MAX_CHARS, TruncationConfig, truncate_tool_output};
 use agentik_core::tools::{ToolError, ToolFunction, ToolRegistration};
 use agentik_proc::tool;
-use agentik_sdk::types::ToolResult as AgentToolResult;
+use agentik_sdk::types::{
+    ToolImageSource, ToolResult as AgentToolResult, ToolResultBlock, ToolResultContent,
+};
 use async_trait::async_trait;
 
 use crate::storage::OpendalFileStorage;
+
+/// Leave room for the outer ToolResult JSON and error/type metadata.
+const VFS_OUTPUT_MARGIN: usize = 256;
 
 // ────────────────────────── input ──────────────────────────
 
@@ -94,7 +100,7 @@ impl ToolFunction for VfsBashTool {
     async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
         let storage = &self.storage;
 
-        match input.op.as_str() {
+        let result = match input.op.as_str() {
             // ── introspection ──
             "mount_list" => ops::op_mount_list(storage).await,
 
@@ -173,11 +179,142 @@ impl ToolFunction for VfsBashTool {
                  Supported: read cat ls cp mv rm mkdir stat touch write edit patch \
                  head tail wc grep glob tree mount_list."
             ))),
-        }
+        };
+
+        result
+            .map(bound_vfs_output)
+            .map_err(|error| bound_tool_error(&error))
     }
 }
 
 // ────────────────────────── registration ──────────────────────────
+
+/// Apply the system-wide character budget to every VFS operation.
+///
+/// JSON that already fits is returned unchanged. Oversized JSON is represented
+/// as a valid JSON object containing a truncated rendering of the original
+/// payload, keeping the outer tool result structured while guaranteeing that
+/// the serialized response stays within `DEFAULT_MAX_CHARS`. Oversized image
+/// blocks are omitted with an explicit marker rather than sent as base64.
+fn bound_vfs_output(mut result: AgentToolResult) -> AgentToolResult {
+    let config = output_config();
+    match &mut result.content {
+        ToolResultContent::Text(content) => {
+            *content = truncate_tool_output(content, &config).content;
+        }
+        ToolResultContent::Json(value) => {
+            if let Ok(serialized) = serde_json::to_string(value) {
+                if serialized.chars().count() > DEFAULT_MAX_CHARS - VFS_OUTPUT_MARGIN {
+                    *value = truncated_json_payload(&serialized, &config);
+                }
+            }
+        }
+        ToolResultContent::Blocks(blocks) => {
+            if blocks.len() == 1
+                && matches!(blocks[0], ToolResultBlock::Image { .. })
+                && image_data_chars(&blocks[0]) > DEFAULT_MAX_CHARS - VFS_OUTPUT_MARGIN
+            {
+                let chars = image_data_chars(&blocks[0]);
+                let omitted = format!(
+                    "[image omitted: base64 expansion was {chars} characters; \
+                     limit is {DEFAULT_MAX_CHARS}]"
+                );
+                result.content = ToolResultContent::Text(omitted);
+            } else {
+                let joined = blocks
+                    .iter()
+                    .map(|block| match block {
+                        ToolResultBlock::Text { text } => text.as_str(),
+                        ToolResultBlock::Image { .. } => "[image omitted]",
+                    })
+                    .collect::<Vec<_>>()
+                    .join("");
+                let bounded = truncate_tool_output(&joined, &config);
+                blocks.clear();
+                blocks.push(ToolResultBlock::text(bounded.content));
+            }
+        }
+    }
+    result
+}
+
+fn truncated_json_payload(serialized: &str, config: &TruncationConfig) -> serde_json::Value {
+    let mut content = truncate_tool_output(serialized, config).content;
+    let mut payload = serde_json::json!({
+        "output_truncated": true,
+        "content": content,
+    });
+
+    // JSON escaping can make nested text longer than its raw character count.
+    // Shrink it until the complete serialized wrapper also fits.
+    while serde_json::to_string(&payload)
+        .map(|bounded| bounded.chars().count() > DEFAULT_MAX_CHARS - VFS_OUTPUT_MARGIN)
+        .unwrap_or(true)
+    {
+        let cut = content.chars().count().saturating_sub(128).max(1);
+        if cut == content.chars().count() {
+            content.clear();
+        } else {
+            content = content.chars().take(cut).collect();
+        }
+        payload = serde_json::json!({
+            "output_truncated": true,
+            "content": content,
+        });
+        if content.is_empty() {
+            break;
+        }
+    }
+    payload
+}
+
+fn image_data_chars(block: &ToolResultBlock) -> usize {
+    let ToolResultBlock::Image { source } = block else {
+        return 0;
+    };
+    let ToolImageSource::Base64 { data, .. } = source;
+    data.chars().count()
+}
+
+fn bound_tool_error(error: &ToolError) -> ToolError {
+    let config = output_config();
+    let bounded = |value: &str| truncate_tool_output(value, &config).content;
+
+    match error {
+        ToolError::NotFound { name } => ToolError::NotFound {
+            name: bounded(name),
+        },
+        ToolError::ValidationFailed { message } => ToolError::ValidationFailed {
+            message: bounded(message),
+        },
+        ToolError::ExecutionFailed { source } => ToolError::ExecutionFailed {
+            source: Box::new(BoundedToolError(bounded(&source.to_string()))),
+        },
+        ToolError::Timeout { seconds } => ToolError::Timeout { seconds: *seconds },
+        ToolError::Cancel => ToolError::Cancel,
+        ToolError::RegistryError { message } => ToolError::RegistryError {
+            message: bounded(message),
+        },
+    }
+}
+
+fn output_config() -> TruncationConfig {
+    TruncationConfig {
+        max_chars: DEFAULT_MAX_CHARS - VFS_OUTPUT_MARGIN,
+        ..TruncationConfig::default()
+    }
+}
+
+#[derive(Debug)]
+struct BoundedToolError(String);
+
+impl std::fmt::Display for BoundedToolError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for BoundedToolError {}
 
 /// Build the [`ToolRegistration`] for the unified VFS bash tool.
 ///
@@ -230,6 +367,61 @@ mod tests {
             ToolResultContent::Json(v) => v,
             other => panic!("expected JSON content, got: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn json_operations_enforce_serialized_character_limit() {
+        let tool = make_tool();
+        let mut write = input("write");
+        write.path = Some("/large.txt".into());
+        write.content = Some("x".repeat(60_000));
+        tool.run(write).await.unwrap();
+
+        let mut cat = input("cat");
+        cat.path = Some("/large.txt".into());
+        let result = tool.run(cat).await.unwrap();
+        let serialized = serde_json::to_string(&result).unwrap();
+        let json = result_json(result);
+
+        assert_eq!(json["output_truncated"], serde_json::json!(true));
+        assert!(
+            serialized.chars().count() <= DEFAULT_MAX_CHARS,
+            "serialized JSON has {} characters",
+            serialized.chars().count()
+        );
+        assert!(json["content"].as_str().unwrap().contains("x"));
+    }
+
+    #[tokio::test]
+    async fn oversized_image_is_omitted_instead_of_expanding_context() {
+        let tool = make_tool();
+        let mut write = input("write");
+        write.path = Some("/large.png".into());
+        write.content = Some("x".repeat(60_000));
+        tool.run(write).await.unwrap();
+
+        let mut read = input("read");
+        read.path = Some("/large.png".into());
+        let result = tool.run(read).await.unwrap();
+
+        match result.content {
+            ToolResultContent::Text(text) => {
+                assert!(text.contains("[image omitted: base64 expansion was"));
+                assert!(text.contains("limit is 50000]"));
+            }
+            other => panic!("expected bounded text content, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tool_error_messages_enforce_character_limit() {
+        let error = ToolError::ValidationFailed {
+            message: "x".repeat(60_000),
+        };
+        let bounded = bound_tool_error(&error);
+        let serialized = serde_json::to_string(&bounded.to_string()).unwrap();
+
+        assert!(serialized.chars().count() <= DEFAULT_MAX_CHARS);
     }
 
     #[tokio::test]
