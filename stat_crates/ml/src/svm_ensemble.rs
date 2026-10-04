@@ -119,7 +119,9 @@ fn resolve_gamma(gamma: Option<f64>, train_data: &Mat<f64>) -> f64 {
     if nrows == 0 || ncols == 0 {
         return 1.0;
     }
-    let total: f64 = (0..nrows).map(|i| (0..ncols).map(|j| train_data[(i, j)]).sum::<f64>()).sum();
+    let total: f64 = (0..nrows)
+        .map(|i| (0..ncols).map(|j| train_data[(i, j)]).sum::<f64>())
+        .sum();
     let count = (nrows * ncols) as f64;
     let mean = total / count;
     let var: f64 = (0..nrows)
