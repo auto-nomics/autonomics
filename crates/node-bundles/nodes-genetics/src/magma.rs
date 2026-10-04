@@ -767,7 +767,12 @@ impl NodeFactory for MagmaSetNodeFactory {
         "Takes gene results (from magma_gene or .genes.raw file) and runs \
         competitive regression analysis. For analysis_type='set', reads a \
         gene-set annotation file. For analysis_type='covar', reads a gene \
-        covariate file. Outputs variable, type, n_genes, beta, beta_std, se, pval."
+        covariate file. NOTE: with a DataFrame input (no gene_raw path) the \
+        gene-gene correlation matrix is unavailable — the identity matrix, a \
+        constant placeholder MAC, and zero coordinates are substituted, so \
+        those results are exploratory only; prefer a .genes.raw file built \
+        from a real LD reference. Outputs variable, type, n_genes, beta, \
+        beta_std, se, pval."
     }
     fn spec_schema(&self) -> schemars::Schema {
         schema_for!(MagmaSetConfig)
@@ -812,13 +817,19 @@ impl DagNode for MagmaSetNode {
         &mut self,
         node_ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _reporter: &dag_core::dag::node_event::NodeReporter,
+        reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         // Load gene data from .genes.raw file or construct from DataFrame
         let gene_data = if let Some(ref raw_path) = self.config.gene_raw {
             let staged = stage_vfs_file(node_ctx, raw_path).await?;
             magma::setanalysis::GeneRawData::read(staged.as_ref()).map_err(MagmaNodeError::from)?
         } else if !inputs.is_empty() {
+            reporter.warn(
+                "magma_set: the DataFrame input carries no gene-gene correlation matrix, \
+                 no real MAC, and no gene coordinates — start/end default to 0, mac to 100, \
+                 and R to the identity. Without a .genes.raw file (gene_raw) produced from a \
+                 real LD reference the competitive-regression results are exploratory only.",
+            );
             gene_results_to_raw(inputs[0].dataframe()?).await?
         } else {
             return Err(MagmaNodeError::Magma(magma::MagmaError::Input(
@@ -879,8 +890,16 @@ impl DagNode for MagmaSetNode {
 }
 
 /// Convert a gene results DataFrame to GeneRawData (without correlations).
-/// This is used when the set node receives gene results from the gene node
-/// instead of a .genes.raw file. Correlations default to 0 (identity matrix).
+///
+/// This is used when the set/meta node receives gene results from the gene
+/// node instead of a `.genes.raw` file. The gene-results schema carries no
+/// gene-gene correlations, no MAC, and no gene coordinates, so they are
+/// FABRICATED here: `corrs` default to 0 (identity matrix), `mac` to a
+/// constant 100, and `start`/`end` to 0. Importing real LD-derived
+/// correlations/MAC for a DataFrame input is a scheme-level adaptation that
+/// is intentionally NOT implemented; until then, competitive-regression
+/// results built from this conversion are exploratory only (the caller
+/// emits a runtime WARN). See `MagmaSetNodeFactory::doc`.
 async fn gene_results_to_raw(
     df: &datafusion::dataframe::DataFrame,
 ) -> Result<magma::setanalysis::GeneRawData, MagmaNodeError> {
