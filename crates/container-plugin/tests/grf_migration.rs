@@ -293,7 +293,7 @@ fn causal_forest_compiles_to_the_pinned_contract() {
     assert_eq!(get("AUTONOMICS_GRF_X_COLUMN_NAMES"), "x0,x1,x2");
     assert_eq!(get("AUTONOMICS_GRF_Y_HAT_COLUMN_NAME"), "yhat");
     assert_eq!(get("AUTONOMICS_GRF_NUM_TREES"), "500");
-    assert_eq!(get("AUTONOMICS_GRF_HONESTY"), "false");
+    assert_eq!(get("AUTONOMICS_GRF_HONESTY"), "");
 
     // Resources: deseq2-scale defaults for trainers.
     assert_eq!(compiled.cpus, Some(2.0));

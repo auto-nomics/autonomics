@@ -98,19 +98,62 @@ fn sigmoid(f: f64, a: f64, b: f64) -> f64 {
     }
 }
 
-pub fn svm_classify(data: &Mat<f64>, labels: &[usize], kernel: &str, c: f64) -> Result<SvmResult> {
-    svm_fit_predict(data, labels, data, kernel, c)
+pub fn svm_classify(
+    data: &Mat<f64>,
+    labels: &[usize],
+    kernel: &str,
+    c: f64,
+    gamma: Option<f64>,
+) -> Result<SvmResult> {
+    svm_fit_predict(data, labels, data, kernel, c, gamma)
+}
+
+/// Resolve the RBF width γ: `None` selects the "scale" heuristic
+/// `1 / (n_features · Var(X))` (sklearn's `gamma='scale'`), falling back to
+/// `1 / n_features` for constant features.
+fn resolve_gamma(gamma: Option<f64>, train_data: &Mat<f64>) -> f64 {
+    if let Some(g) = gamma {
+        return g;
+    }
+    let (nrows, ncols) = train_data.shape();
+    if nrows == 0 || ncols == 0 {
+        return 1.0;
+    }
+    let total: f64 = (0..nrows)
+        .map(|i| (0..ncols).map(|j| train_data[(i, j)]).sum::<f64>())
+        .sum();
+    let count = (nrows * ncols) as f64;
+    let mean = total / count;
+    let var: f64 = (0..nrows)
+        .map(|i| {
+            (0..ncols)
+                .map(|j| (train_data[(i, j)] - mean).powi(2))
+                .sum::<f64>()
+        })
+        .sum::<f64>()
+        / count;
+    if var > 0.0 {
+        1.0 / (ncols as f64 * var)
+    } else {
+        1.0 / ncols as f64
+    }
 }
 
 /// Train an SVM on `train_data`/`train_labels` and predict on `test_data`.
 /// Platt scaling coefficients are fit on the training decision values, then
 /// applied to test decision values.
+///
+/// `c` is the regularisation cost (linfa `pos_neg_weights`); `gamma` is the
+/// kernel coefficient, kept separate because they are unrelated
+/// hyperparameters (the previous code passed `c` as the RBF width).
+/// Labels must be binary 0/1 — linfa-svm only fits binary classifiers.
 pub fn svm_fit_predict(
     train_data: &Mat<f64>,
     train_labels: &[usize],
     test_data: &Mat<f64>,
     kernel: &str,
     c: f64,
+    gamma: Option<f64>,
 ) -> Result<SvmResult> {
     use linfa::dataset::DatasetBase;
     use linfa::traits::{Fit, Predict};
@@ -120,24 +163,45 @@ pub fn svm_fit_predict(
     if nrows == 0 {
         return Err(SvmEnsembleError::Empty);
     }
+    if train_labels.len() != nrows {
+        return Err(SvmEnsembleError::Other(format!(
+            "label count {} does not match row count {nrows}",
+            train_labels.len()
+        )));
+    }
+    if let Some(&bad) = train_labels.iter().find(|&&l| l > 1) {
+        return Err(SvmEnsembleError::Other(format!(
+            "SVM classification is binary (labels 0/1); found label {bad}. \
+             Use multi-class labels with a different model kind."
+        )));
+    }
+
+    let gamma = resolve_gamma(gamma, train_data);
 
     let x = faer_to_ndarray(train_data);
     let y: Vec<bool> = train_labels.iter().map(|&l| l != 0).collect();
     let dataset = DatasetBase::new(x, ndarray::Array1::from(y.clone()));
 
-    let mut params = Svm::<_, bool>::params().pos_neg_weights(1.0, 1.0);
+    // `pos_neg_weights` carries the regularisation cost C (previously
+    // hardcoded to 1.0 while `c` was misused as the kernel parameter).
+    let mut params = Svm::<_, bool>::params().pos_neg_weights(c, c);
     match kernel {
         "linear" => {
             params = params.linear_kernel();
         }
         "rbf" | "gaussian" => {
-            params = params.gaussian_kernel(c);
+            params = params.gaussian_kernel(gamma);
         }
         "poly" | "polynomial" => {
-            params = params.polynomial_kernel(c, 3.0);
+            // linfa's polynomial kernel is (⟨x,x'⟩ + constant)^degree; the
+            // additive constant is 1.0 with cubic degree, γ only sets the
+            // RBF width above.
+            params = params.polynomial_kernel(1.0, 3.0);
         }
-        _ => {
-            params = params.gaussian_kernel(c);
+        other => {
+            return Err(SvmEnsembleError::Other(format!(
+                "unsupported SVM kernel `{other}` (expected linear, rbf, or poly)"
+            )));
         }
     }
 
@@ -315,7 +379,7 @@ mod tests {
             ],
         );
         let labels = vec![0, 0, 0, 0, 1, 1, 1, 1];
-        let result = svm_classify(&data, &labels, "linear", 1.0).unwrap();
+        let result = svm_classify(&data, &labels, "linear", 1.0, None).unwrap();
         assert_eq!(result.predictions.len(), 8);
         assert_eq!(result.probabilities.len(), 8);
         assert!(
@@ -374,7 +438,7 @@ mod tests {
         // Test data: novel points not in training set
         let test = mat_from_row_major(2, 2, &[0.2, 0.3, 4.8, 5.2]);
 
-        let result = svm_fit_predict(&train, &labels, &test, "linear", 1.0).unwrap();
+        let result = svm_fit_predict(&train, &labels, &test, "linear", 1.0, None).unwrap();
         assert_eq!(result.predictions.len(), 2);
         assert_eq!(result.probabilities.len(), 2);
         assert_eq!(result.predictions, vec![0, 1]);

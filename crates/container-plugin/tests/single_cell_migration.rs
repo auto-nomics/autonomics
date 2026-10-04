@@ -133,7 +133,7 @@ fn single_cell_preprocessor_plugin_compiles_to_the_legacy_wrapper_contract() {
             .env
             .get("AUTONOMICS_SINGLE_CELL_NORMALIZE_TOTAL")
             .unwrap(),
-        "false"
+        ""
     );
     assert_eq!(
         compiled
@@ -261,7 +261,7 @@ fn family_expectations() -> Vec<Expected> {
                 ("SC_P_INT_N_PCS", "30"),
                 ("SC_P_INT_N_NEIGHBORS", "15"),
                 ("SC_P_NUM_MIN_DIST", "0.5"),
-                ("SC_P_BOOL_SCALE", "false"),
+                ("SC_P_BOOL_SCALE", ""),
             ],
         },
         Expected {
@@ -278,7 +278,7 @@ fn family_expectations() -> Vec<Expected> {
             ],
             values: json!({}),
             env: &[
-                ("SC_P_BOOL_MAJORITY_VOTING", "false"),
+                ("SC_P_BOOL_MAJORITY_VOTING", ""),
                 ("SC_P_STR_MODEL_FILE", "Immune_All_Low.pkl"),
                 ("SC_MODEL_DIR", "/panels/celltypist_model"),
             ],
@@ -600,7 +600,7 @@ fn single_cell_h5ad_plugin_renders_submitted_values_into_env() {
     .unwrap();
     assert_eq!(embed.env.get("SC_P_NUM_RESOLUTION").unwrap(), "0.8");
     assert_eq!(embed.env.get("SC_P_INT_RANDOM_STATE").unwrap(), "17");
-    assert_eq!(embed.env.get("SC_P_BOOL_NORMALIZE").unwrap(), "false");
+    assert_eq!(embed.env.get("SC_P_BOOL_NORMALIZE").unwrap(), "");
 
     let marker = compile_container_spec(
         node_by_kind(&manifest, "h5ad_marker_annotate"),

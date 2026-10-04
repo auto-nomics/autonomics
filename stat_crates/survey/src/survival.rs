@@ -223,49 +223,88 @@ pub fn svy_coxph(
         .ok_or_else(|| SurveyError::InvalidInput("singular Cox information".into()))?
         .inverse();
 
-    // Decompose the estimating function into per-observation dfbeta values.
-    // Events carry their observed covariate; risk members carry the hazard-
-    // weighted expected covariate for the full tied-event weight.
+    // Per-observation score residuals as a literal transcription of
+    // survival's `coxscore2.c` (Breslow branch — tied events diverge from
+    // coxph's Efron default), which `residuals.coxph` scales by the case
+    // weights and post-multiplies by `naive.var` to give the dfbeta values
+    // `survey::svycoxph` feeds to `svyrecvar`.  For subject k:
+    //   U_k = w_k · [ 1{event}·(x_k − x̄(T_k))
+    //                − Σ_{t ≤ T_k} e^{η_k}·h(t)·(x_k − x̄(t)) ]
+    // with h(t) = Σ_{j∈E_t} w_j / S₀(t).  The risk-set term is centered on
+    // the subject's OWN covariates, which is what makes Σᵢ Uᵢ = 0 at β̂.
+    let eta: Vec<f64> = (0..n)
+        .map(|j| (0..p).map(|a| beta[a] * x[a][j]).sum())
+        .collect();
+    let exp_eta: Vec<f64> = eta.iter().map(|&e| e.exp().min(1e300)).collect();
     let mut dbeta = vec![vec![0.0_f64; p]; n];
-    let mut idx = 0;
-    while idx < n {
-        let t = time[order[idx]];
-        let mut group_end = idx;
-        while group_end < n && time[order[group_end]] == t {
-            group_end += 1;
+    {
+        // Descending-time walk (the sorted `order`): the risk set grows as
+        // times shrink, and cumhaz / xhaz accumulate over event times
+        // already passed (strictly later than the group being entered).
+        let mut denom = 0.0_f64; // S₀ over the current risk set
+        let mut a = vec![0.0_f64; p]; // S₁ (weighted covariate sums)
+        let mut cumhaz = 0.0_f64; // Σ h(t) over event times already passed
+        let mut xhaz = vec![0.0_f64; p]; // Σ x̄(t)·h(t) likewise
+        let mut idx = 0;
+        while idx < n {
+            let t = time[order[idx]];
+            let mut group_end = idx;
+            while group_end < n && time[order[group_end]] == t {
+                group_end += 1;
+            }
+            // Everyone entering the risk set at t is charged the cumhaz /
+            // xhaz accumulated at strictly later event times.
+            for pos in idx..group_end {
+                let i = order[pos];
+                for a_idx in 0..p {
+                    dbeta[i][a_idx] =
+                        exp_eta[i] * (x[a_idx][i] * cumhaz - xhaz[a_idx]);
+                }
+            }
+            // Grow the risk set with this time group.
+            let mut meanwt = 0.0_f64;
+            for pos in idx..group_end {
+                let i = order[pos];
+                let risk = ws[i] * exp_eta[i];
+                denom += risk;
+                for a_idx in 0..p {
+                    a[a_idx] += risk * x[a_idx][i];
+                }
+                if event[i] == 1.0 {
+                    meanwt += ws[i];
+                }
+            }
+            if meanwt > 0.0 {
+                let hazard = meanwt / denom;
+                cumhaz += hazard;
+                for a_idx in 0..p {
+                    let xbar = a[a_idx] / denom;
+                    xhaz[a_idx] += xbar * hazard;
+                    // Deaths at t get their unweighted event deviation.
+                    for pos in idx..group_end {
+                        let i = order[pos];
+                        if event[i] == 1.0 {
+                            dbeta[i][a_idx] += x[a_idx][i] - xbar;
+                        }
+                    }
+                }
+            }
+            idx = group_end;
         }
-        let events: Vec<usize> = order[idx..group_end]
-            .iter()
-            .copied()
-            .filter(|&j| event[j] == 1.0)
-            .collect();
-        if !events.is_empty() {
-            let mut s0 = 0.0_f64;
-            let mut s1 = vec![0.0_f64; p];
-            for &j in &order[..group_end] {
-                let eta: f64 = (0..p).map(|a| beta[a] * x[a][j]).sum();
-                let weighted_risk = ws[j] * eta.exp();
-                s0 += weighted_risk;
-                for a in 0..p {
-                    s1[a] += weighted_risk * x[a][j];
-                }
-            }
-            let x_bar: Vec<f64> = s1.iter().map(|s| s / s0).collect();
-            let event_weight: f64 = events.iter().map(|&j| ws[j]).sum();
-            for &j in &order[..group_end] {
-                let eta: f64 = (0..p).map(|a| beta[a] * x[a][j]).sum();
-                let hazard_share = ws[j] * eta.exp() / s0;
-                for a in 0..p {
-                    dbeta[j][a] -= hazard_share * event_weight * x_bar[a];
-                }
-            }
-            for &j in &events {
-                for a in 0..p {
-                    dbeta[j][a] += ws[j] * x[a][j];
-                }
+        // End-of-stratum adjustment: everyone pays the full cumhaz / xhaz.
+        for i in 0..n {
+            for a_idx in 0..p {
+                dbeta[i][a_idx] +=
+                    exp_eta[i] * (xhaz[a_idx] - x[a_idx][i] * cumhaz);
             }
         }
-        idx = group_end;
+        // Case-weight scaling (`if (weighted) rr <- rr * weights` in
+        // residuals.coxph) completes the score residuals.
+        for i in 0..n {
+            for a_idx in 0..p {
+                dbeta[i][a_idx] *= ws[i];
+            }
+        }
     }
 
     let mut influence = vec![vec![0.0_f64; p]; n];
@@ -507,12 +546,13 @@ pub fn svy_survreg(
         .ok_or_else(|| SurveyError::InvalidInput("singular survreg design".into()))?;
     let naive = llt.inverse();
 
+    // Influence row i = estfun row · bread:
+    // influence[i][a] = Σ_b xmat[b][i]·rᵢ·wᵢ·naive[(b,a)].
     let mut influence = vec![vec![0.0_f64; p]; n];
     for i in 0..n {
         for a in 0..p {
-            let ef = xmat[a][i] * resid[i] * ws[i];
             for b in 0..p {
-                influence[i][a] += ef * naive[(b, a)];
+                influence[i][a] += xmat[b][i] * resid[i] * ws[i] * naive[(b, a)];
             }
         }
     }

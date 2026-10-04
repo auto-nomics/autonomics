@@ -77,6 +77,10 @@ pub struct PredictSpec {
     /// SVM regularisation parameter C (default 1.0).
     #[serde(default = "d_svm_c")]
     pub c: f64,
+    /// SVM RBF kernel width γ. `null` (default) uses the "scale" heuristic
+    /// `1/(n_features · Var(X))`.
+    #[serde(default)]
+    pub gamma: Option<f64>,
     /// AdaBoost number of estimators (default 50).
     #[serde(default = "d_ab_n")]
     pub n_estimators: usize,
@@ -261,6 +265,7 @@ impl DagNode for PredictNode {
                     &test_x,
                     &self.spec.kernel,
                     self.spec.c,
+                    self.spec.gamma,
                 )
                 .map_err(|e| err(e.to_string()))?;
                 PredictResult {

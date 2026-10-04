@@ -8,10 +8,16 @@ use super::*;
 pub struct SvmSpec {
     pub features: Vec<String>,
     pub label_column: String,
+    /// SVM kernel: "linear" | "rbf" | "poly" (default "rbf").
     #[serde(default = "d_svm_kernel")]
     pub kernel: String,
+    /// SVM regularisation cost C (default 1.0).
     #[serde(default = "d_svm_c")]
     pub c: f64,
+    /// RBF kernel width γ. `null` (default) uses the "scale" heuristic
+    /// `1/(n_features · Var(X))`.
+    #[serde(default)]
+    pub gamma: Option<f64>,
 }
 fn d_svm_kernel() -> String {
     "rbf".into()
@@ -48,6 +54,7 @@ impl NodeFactory for SvmFactory {
             label_column: s.label_column,
             kernel: s.kernel,
             c: s.c,
+            gamma: s.gamma,
             meta: self.ports(),
         }))
     }
@@ -59,6 +66,7 @@ struct SvmNode {
     label_column: String,
     kernel: String,
     c: f64,
+    gamma: Option<f64>,
     meta: NodePorts,
 }
 
@@ -96,13 +104,17 @@ impl DagNode for SvmNode {
                 }
             })?;
         let labels: Vec<usize> = labels_f.into_iter().map(|v| v as usize).collect();
-        let result =
-            ml::svm_ensemble::svm_classify(&data, &labels, &self.kernel, self.c).map_err(|e| {
-                DagError::NodeError {
-                    node_type: "ml_svm".into(),
-                    msg: e.to_string(),
-                }
-            })?;
+        let result = ml::svm_ensemble::svm_classify(
+            &data,
+            &labels,
+            &self.kernel,
+            self.c,
+            self.gamma,
+        )
+        .map_err(|e| DagError::NodeError {
+            node_type: "ml_svm".into(),
+            msg: e.to_string(),
+        })?;
         let (_schema, mut fields, mut arrays) = common::concat_input(&batches)?;
         fields.push(Arc::new(Field::new("prediction", DataType::UInt32, false)));
         arrays.push(Arc::new(UInt32Array::from(

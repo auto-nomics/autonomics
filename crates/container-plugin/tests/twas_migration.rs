@@ -122,7 +122,7 @@ fn twas_fusion_plugin_compiles_to_the_legacy_wrapper_contract() {
     assert_eq!(compiled.env.get("FUSION_CHR").unwrap(), "21");
     assert_eq!(
         compiled.env.get("FUSION_USE_NOFILTER_WEIGHTS").unwrap(),
-        "false"
+        ""
     );
     assert_eq!(compiled.env.get("FUSION_FORCE_MODEL").unwrap(), "");
     assert_eq!(compiled.env.get("FUSION_MAX_IMPUTE").unwrap(), "0.5");

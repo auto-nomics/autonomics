@@ -129,13 +129,13 @@ where
         .ok_or_else(|| SurveyError::InvalidInput("singular final Jacobian".into()))?;
     let naive = llt.inverse();
 
-    // Estfun: J_i * resid_i * w_i, influence = estfun * naive.
+    // Estfun: J_i * resid_i * w_i; influence row i = estfun row · bread:
+    // influence[i][a] = Σ_b jac[i][b]·rᵢ·wᵢ·naive[(b,a)].
     let mut influence = vec![vec![0.0_f64; p]; n];
     for i in 0..n {
         for a in 0..p {
-            let estfun_ia = jac[i][a] * resid[i] * ws[i];
             for b in 0..p {
-                influence[i][a] += estfun_ia * naive[(b, a)];
+                influence[i][a] += jac[i][b] * resid[i] * ws[i] * naive[(b, a)];
             }
         }
     }
@@ -181,8 +181,11 @@ impl SvyIvregFit {
 ///
 /// 1. First stage: WLS of `endogenous` on `instruments` + `exogenous`.
 /// 2. Second stage: WLS of `y` on `endogenous_hat` + `exogenous`.
-/// 3. Design variance uses the **original** endogenous (not fitted) in the
-///    estimating functions, per Woodridge's correction.
+/// 3. Design variance mirrors R `survey::svyivreg`: residuals are taken
+///    against the **original** regressors (AER `ivreg` computes
+///    `y - x %*% coef`), the estfun rows use the **projected** regressors
+///    X̂ (AER `model.matrix.ivreg` defaults to `component = "projected"`),
+///    and the bread is `(X̂ᵀWX̂)⁻¹`.
 pub fn svy_ivreg(
     y: &[f64],
     endogenous: &[Vec<f64>],
@@ -229,20 +232,41 @@ pub fn svy_ivreg(
         let z1_refs: Vec<&[f64]> = z1.iter().map(|v| v.as_slice()).collect();
         let reg = statkit::regression::ols(&z1_refs, &y_w, false)
             .map_err(|e| SurveyError::InvalidInput(format!("IV first stage failed: {e}")))?;
-        endo_hat[e] = reg.fitted.clone();
+        // The regression runs in √w-scaled space; undo the row scaling so
+        // the second stage combines x̂ with the unscaled exogenous columns.
+        endo_hat[e] = reg
+            .fitted
+            .iter()
+            .zip(&ws)
+            .map(|(&f, wi)| f / wi.sqrt())
+            .collect();
     }
 
     // --- Second stage: WLS of y on endo_hat + exogenous ---
-    // Build design matrix for second stage: [endo_hat, exogenous]
+    // Build design matrix for second stage: [endo_hat, exogenous]. Both
+    // sides of the WLS are √w-scaled (rows of x2 and y alike).
     let p = n_endo + n_exo;
     let x2: Vec<Vec<f64>> = endo_hat.iter().chain(exogenous.iter()).cloned().collect();
-    let x2_refs: Vec<&[f64]> = x2.iter().map(|v| v.as_slice()).collect();
+    let x2_w: Vec<Vec<f64>> = x2
+        .iter()
+        .map(|c| {
+            c.iter()
+                .zip(&ws)
+                .map(|(&v, wi)| v * wi.sqrt())
+                .collect()
+        })
+        .collect();
+    let x2_refs: Vec<&[f64]> = x2_w.iter().map(|v| v.as_slice()).collect();
     let y_w: Vec<f64> = y.iter().zip(&ws).map(|(&v, wi)| v * wi.sqrt()).collect();
     let reg2 = statkit::regression::ols(&x2_refs, &y_w, false)
         .map_err(|e| SurveyError::InvalidInput(format!("IV second stage failed: {e}")))?;
     let beta = reg2.coefficients.clone();
-    let fitted2 = reg2.fitted.clone();
-    let resid: Vec<f64> = (0..n).map(|i| y[i] - fitted2[i]).collect();
+    // AER::ivreg residuals: y - Xβ against the ORIGINAL regressors
+    // (ivreg.fit computes `yhat <- x %*% coef`), not the projection X̂.
+    let x_orig: Vec<Vec<f64>> = endogenous.iter().chain(exogenous.iter()).cloned().collect();
+    let resid: Vec<f64> = (0..n)
+        .map(|i| y[i] - (0..p).map(|a| x_orig[a][i] * beta[a]).sum::<f64>())
+        .collect();
 
     // Naive covariance from second stage.
     let mut xtwx = vec![vec![0.0_f64; p]; p];
@@ -259,14 +283,15 @@ pub fn svy_ivreg(
         .ok_or_else(|| SurveyError::InvalidInput("singular IV design".into()))?;
     let naive = llt.inverse();
 
-    // Estfun: use **original** endogenous (not fitted) in the score.
-    let x_orig: Vec<Vec<f64>> = endogenous.iter().chain(exogenous.iter()).cloned().collect();
+    // Estfun rows use the PROJECTED regressors X̂ (`x2`), matching R
+    // `survey:::estfun.ivreg` via AER `model.matrix.ivreg` default
+    // `component = "projected"`.  Influence row i = wᵢ·rᵢ·x̂ᵢᵀ · bread:
+    // influence[i][a] = Σ_b x2[b][i]·rᵢ·wᵢ·naive[(b,a)].
     let mut influence = vec![vec![0.0_f64; p]; n];
     for i in 0..n {
         for a in 0..p {
-            let ef = x_orig[a][i] * resid[i] * ws[i];
             for b in 0..p {
-                influence[i][a] += ef * naive[(b, a)];
+                influence[i][a] += x2[b][i] * resid[i] * ws[i] * naive[(b, a)];
             }
         }
     }

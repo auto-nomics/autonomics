@@ -122,7 +122,7 @@ fn susie_rss_plugin_compiles_to_the_legacy_wrapper_contract() {
             .env
             .get("SUSIE_ESTIMATE_RESIDUAL_VARIANCE")
             .unwrap(),
-        "false"
+        ""
     );
     assert_eq!(
         compiled.env.get("SUSIE_ESTIMATE_PRIOR_VARIANCE").unwrap(),

@@ -124,7 +124,7 @@ fn hdl_l_plugin_compiles_to_the_legacy_wrapper_contract() {
         compiled.env.get("HDL_L_LIM").unwrap(),
         "1.522997974471263e-8"
     );
-    assert_eq!(compiled.env.get("HDL_L_INTERCEPT_OUTPUT").unwrap(), "false");
+    assert_eq!(compiled.env.get("HDL_L_INTERCEPT_OUTPUT").unwrap(), "");
     assert_eq!(compiled.env.get("HDL_L_FILL_MISSING_N").unwrap(), "");
 
     // Semantic script markers, not byte equality: the legacy wrapper
@@ -288,7 +288,7 @@ fn hdl_l_scan_plugin_compiles_to_the_legacy_wrapper_contract() {
     assert_eq!(compiled.env.get("HDL_L_SCAN_NREF").unwrap(), "335272.0");
     assert_eq!(
         compiled.env.get("HDL_L_SCAN_INTERCEPT_OUTPUT").unwrap(),
-        "false"
+        ""
     );
     assert_eq!(compiled.env.get("HDL_L_SCAN_FILL_MISSING_N").unwrap(), "");
 

@@ -124,6 +124,12 @@ pub fn build_default_registry_with_container_execution(
         }
     }
 
+    // Duplicate kinds are near-certainly a bug (one factory silently
+    // replaces the other): fail fast instead of running the wrong node.
+    registry
+        .assert_no_conflicts()
+        .unwrap_or_else(|error| panic!("node registry conflict: {error}"));
+
     registry
 }
 

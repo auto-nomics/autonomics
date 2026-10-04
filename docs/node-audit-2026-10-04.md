@@ -224,6 +224,108 @@ mrlap 6、nodes-hypothesize 11、nodes-rd 3、nodes-io 98、nodes-survey 40 lib
 
 ---
 
+## Batch-2 执行记录（2026-10-04，分支 fix/node-audit-batch2）
+
+范围 6 项（#9 #10 #11 #12 #14 #15）：4 项落地、1 项审计勘误、1 项受阻。
+
+本地测试全绿（单波 7 包 `cargo test`：container-plugin、ml、nodes-ml、
+nodes-io、nodes-survey、dag-core、data-engine）：67 套件 685 通过 0 失败
+19 忽略。含 survey 79 lib + 2 新金标（svy_ivreg/svy_coxph 1e-8 门）、
+container-plugin 23 处更新后的金标断言 + presence 语义回归测试、
+dag-core 冲突门单测。执行环境备注：本机 15G 内存下并行链接大测试
+二进制会触发 swap 活锁，全量波以 `-j 3` 跑通。
+
+- **#11 estfun 重写（survey 生存段/IV 段，本批价值最高）**——全部落地：
+  - `svy_ivreg`：sandwich 中间层按 survey 4.5 `estfun.ivreg` 语义重写——
+    estfun 行用投影回归变量 X̂（AER `model.matrix.ivreg` 默认
+    `component="projected"`）、残差对原始 X（`ivreg.fit` 的
+    `y − x%*%coef`）、面包 (X̂ᵀWX̂)⁻¹。执行中挖出**两个点估计级 bug**：
+    ① 一阶段拟合值存的是 √w 缩放空间的值没除回来（endo_hat 被污染）；
+    ② 二阶段只 √w 缩放了 y 没缩放 X——**2SLS 点估计本身就是错的**
+    （修复前 coef 0.7974 vs 真值 0.8512，两 bug 方向相反互相掩盖）。
+    新增金标 `svy_ivreg_reference`（R 手抄 AER + survey::svytotal 生成，
+    digits=16）1e-8 门通过。
+  - `svy_coxph`：dfbeta 层按 survival `coxscore2.c` 逐行转写（降时间
+    遍历 + running risk set + cumhaz/xhaz 累加器；事件项 (x_k−x̄) 不带
+    权；风险集扣除以自身 x_k 为中心乘标量 hazard h(t)=Σ_E w/S₀；最后
+    整体乘 case weight，即 `residuals.coxph` 的
+    `if (weighted) rr <- rr * weights`；dbeta = (score×w) %*% naive.var）。
+    此前教科书式"加权 score 分解"虽然 ΣᵢUᵢ=0 但与 coxph 分解不同，
+    SE 高 19.5%。R 侧先逐行转写对 `resid(g,"score",weighted=TRUE)` 数值
+    对齐（max|Δ|=4.4e-14，vcov 至 5e-18）再移植。新增金标
+    `svy_coxph_reference`（coef+SE+vcov）1e-8 门通过。ties 记 Breslow
+    分支，与 coxph Efron 默认的分歧已在注释声明。
+  - `svy_nls`/`svy_survreg` 同类面包循环下标错位一并修复。
+  - nodes-survey `svyivreg` 节点 p 值从硬编码 0 改 t 分布双尾。
+  - 测试：survey 79 lib + 2 金标（新增）全绿。
+- **#15 registry 冲突检测**：`NodeRegistry` 注册时记录重复 kind（保留
+  last-write-wins 兼容存量），新增 `assert_no_conflicts()`；
+  data-engine 启动注册完毕即 panic 上报——一处修、全插件受益。顺手
+  删除 nodes-io 里 OpenTargets 两家工厂的真实重复注册（该重复已被新
+  门拦出）。dag-core 单测覆盖重复→报错路径。
+- **#14 ML 两项**：
+  - `ml_tsne`：Barnes-Hut θ 默认 350→0.5（linfa-tsne 原生默认；350
+    相当于关掉四叉树近似，静默跑 O(n²) 精确 t-SNE）；种子经
+    `embedding_size_with_rng(SmallRng::seed_from_u64(seed))` 注入
+    （ml crate 加 rand08 别名依赖解 0.8/0.9 双版本），TsneSpec 新增
+    `seed` 字段（默认 42）。
+  - `ml_svm`：C/γ 分离——此前 spec 的 C 被塞进 `gaussian_kernel` 当
+    RBF 宽度、正则 `pos_neg_weights` 写死 1.0、poly 的
+    (constant,degree) 被传成 (C,3)。现 `pos_neg_weights(c,c)` 用真 C；
+    γ 独立参数（Spec `gamma: Option<f64>`，null=sklearn 'scale' 启发式
+    1/(n_features·Var(X))，常数列回退 1/n_features）；未知 kernel 硬
+    报错（不再静默回落 rbf）；标签>1 硬报错（明确二分类，不再静默
+    `l!=0` 折叠）。`ml_predict` 的 SVM 分支同步。
+- **#9 框架层 bool presence 语义（一处修、全插件受益）**：
+  container-plugin `serialise_value` 定义 `Bool(false)→""`（与 optional
+  缺席同形）、`Bool(true)→"true"`。两种消费习语自此一致：`[ -n "$VAR" ]`
+  与 `= "true"` 都把显式 false 读为关——此前字面 "false" 让一切 presence
+  测试为真，用户显式关反而开（mtag/ldsc 的 bug 类）。
+  落地后做了**两轮全 26 家族消费方式复查**（argv/env/script 三面 +
+  JSON 内联习语）：
+  - 天然安全：`= "true"` 比较型（mixer/twas/twosamplemr/radiomics/
+    music）、`as.logical("")=FALSE` 型（lava/mvmr/mrpresso）、
+    带默认值 env_logical 型（susie）、Python omit-empty 型
+    （single-cell run_workflow.py，下游 opt_bool 默认与 manifest 一致）。
+  - 严格 stop 型 4 处，均已提 fork PR 让 ""=FALSE/空读作 false：
+    hdl-plugin#1（env_flag）、hyprcoloc-plugin#1（to_bool）、
+    single-cell-plugin#1（parse_bool，第一轮漏网，复查抓回）、
+    pathology-plugin#1（JSON 内联新破坏面：`"amp":{{ amp }}` 渲染成
+    `"amp":,` 非法 JSON，runner 侧把空 JSON 值修回 false）。
+  - container-plugin 金标断言同步更新：第一轮 10 处 + 复查补 13 处
+    （hdl SCAN、mrpresso、music×4、single-cell×3、twas、susie、
+    radiomics×3、hyprcoloc×2、pathology amp）+ 新增 presence 语义
+    回归测试（env 与 argv 两面）。
+- **#10 gcta cma.cojo —— 审计勘误（无代码改动）**：原判
+  "--cojo-slct 不产 cma.cojo（那是 --cojo-cond 产物）"不成立。GCTA
+  源码 `joint_meta.cpp` `run_massoc_slct` 在 `!joint_only &&
+  mld_slct_alg != 2` 时调用 `massoc_cond_output` 写 `<out>.cma.cojo`
+  （剩余 SNP 的条件分析结果）；v1.94.1 tag 与 master（1.95.x 线）行为
+  一致。插件 cojo.sh 走 --cojo-slct 前向选择，manifest 四输出声明正确。
+- **#12 grf —— 受阻（目标代码已被移除）**：本分支基线上原生 grf 栈已
+  由 ab868407 整体删除，改为容器化 grf 插件（镜像内置
+  /opt/autonomics/grf_runner.R，参数走 AUTONOMICS_GRF_* env 通道）。审计
+  所指 bio_crates/grf auto-X 不排 weights 列 / predict 不按列名对齐的
+  两处代码已不存在；新 R runner 只能在其源码（服务器
+  /mnt/projects/node-plugins/grf，未入 GitHub org）核验，本机不可达。
+  建议：grf 插件源码入库（org 建仓）后在 runner 上复核 #12 两点。
+- **执行中新增发现：ml::split 种子失效（审计编号外，随本批修复）**——
+  merge 终态保险波随机抓到 `centroid::tests::test_fit_predict_separable`
+  闪断（同二进制 5 跑 1 败），根因两层：① `stratified_kfold`/
+  `train_test_split` 分层分支 `ChaCha8Rng::seed_from_u64(seed)` 播种后按
+  `HashMap` 迭代序逐类 `shuffle`，而 std HashMap 的 RandomState 是**按
+  实例**（非按进程）变序——同种子跨调用即跨进程不同折，seed 参数形同
+  虚设；② 折的 train 向量由 `HashSet` 迭代派生，顺序同样按实例漂移，
+  且行序漂移会传导进下游浮点累加。**生产影响**：`ml_pam_fit` 节点默认
+  CV 即 shuffle=true + 用户 seed，同一 DAG 重跑折不同，复现性造假。
+  修复：类分组改 BTreeMap（迭代序=键序，seed 恢复意义）、train 派生改
+  区间迭代（顺序与成员同样稳定）；kfold 本身干净；group_kfold 的
+  train 派生同修。新增回归测试 `stratified_kfold_seed_is_meaningful`
+  （同种子两次调用全等 + 未洗牌轮转分配手验）。ml lib 81 全绿四连。
+  建议归档为独立审计项（复现性类 P0）。
+
+---
+
 ## Batch-2a 执行记录（2026-10-04，分支 fix/node-audit-plan-touch）
 
 范围裁定：只修「与 BONE_MARROW_CACHEXIA_MASTER_PLAN_v3.9 相触」的 4 项
