@@ -10,18 +10,13 @@ use std::sync::Arc;
 use writing_base::LatexEngine;
 
 use agentik_core::tools::ToolRegistration;
-use alphafold::AlphaFoldClient;
 use bib_base::{BibBase, LiteratureGateway};
 use chembl::ChEMBLClient;
-use clinicaltrials::ClinicalTrialsClient;
 use data_engine::runtime::DataEngineClient;
 use gwascatalog_sdk::GwasCatalogClient;
-use interpro::InterProClient;
 use kegg::KeggClient;
 use opengwas::OpengwasClient;
 use opentargets::OpenTargetsClient;
-use protocolio::ProtocolioClient;
-use pubchem::PubChemClient;
 use rcsb::RcsbClient;
 use string_sdk::StringDbClient;
 use vfs::OpendalFileStorage;
@@ -90,42 +85,12 @@ pub fn kegg_tools() -> Vec<ToolRegistration> {
     kegg::kegg_registrations(client)
 }
 
-/// Public biomedical reference APIs in the first resource-expansion batch.
-/// None of these clients require credentials or provider-specific SDK setup.
-pub fn biomedical_resources_tools() -> Vec<ToolRegistration> {
-    let mut tools = Vec::new();
-    tools.extend(alphafold::registrations(Arc::new(AlphaFoldClient::new())));
-    tools.extend(interpro::registrations(Arc::new(InterProClient::new())));
-    tools.extend(pubchem::registrations(Arc::new(PubChemClient::new())));
-    tools.extend(clinicaltrials::registrations(Arc::new(
-        ClinicalTrialsClient::new(),
-    )));
-    tools
-}
-
 /// GWAS Catalog tools (curated studies, associations, EFO traits, SNPs,
 /// unpublished submissions, summary statistics, full summary-stats file
 /// download, and Solr full-text search).
 pub fn gwascatalog_tools(storage: Arc<OpendalFileStorage>) -> Vec<ToolRegistration> {
     let client = Arc::new(GwasCatalogClient::new());
     gwascatalog_sdk::gwascatalog_registrations(client, storage)
-}
-
-/// protocols.io tools (protocol search/details/steps/materials and PDF export).
-///
-/// The API requires a Bearer token. If `PROTOCOLS_IO_ACCESS_TOKEN` is absent,
-/// the tools are disabled rather than failing the entire runtime startup.
-pub fn protocolio_tools(storage: Arc<OpendalFileStorage>) -> Vec<ToolRegistration> {
-    match ProtocolioClient::new() {
-        Ok(client) => {
-            let client = Arc::new(client);
-            protocolio::tools::registrations(client, storage)
-        }
-        Err(error) => {
-            eprintln!("[runtime] WARNING: protocols.io tools disabled: {error}");
-            Vec::new()
-        }
-    }
 }
 
 /// Default on-disk location for the bibliography database, mirroring the
@@ -258,8 +223,12 @@ pub async fn tool_set_from_config(
         tools.extend(kegg_tools());
     }
 
-    tools.extend(biomedical_resources_tools());
-    tools.extend(protocolio_tools(file_storage.clone()));
+    // The alphafold/interpro/pubchem/clinicaltrials/protocolio tool layers
+    // were removed in the dag-generalization migration — their DAG node
+    // counterparts (`source_alphafold_prediction`, `source_interpro_entry`,
+    // `source_pubchem_compound`, `source_clinicaltrials_study`,
+    // `source_protocolio_*`) are the surviving surface, registered by the
+    // io bundle.
 
     tools.extend(data_engine_tools::registrations(data_engine_client));
 
@@ -386,31 +355,6 @@ mod tests {
             registrations.iter().all(|registration| {
                 !registration.definition.input_schema.properties.is_empty()
             })
-        );
-    }
-
-    #[test]
-    fn biomedical_resources_tools_are_registered_with_nonempty_schemas() {
-        let registrations = biomedical_resources_tools();
-        let names = registrations
-            .iter()
-            .map(|registration| registration.definition.name.as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            names,
-            [
-                "alphafold_lookup",
-                "interpro_lookup",
-                "pubchem_compound_lookup",
-                "clinicaltrials_study_lookup"
-            ]
-        );
-        assert!(
-            registrations.iter().all(|registration| !registration
-                .definition
-                .input_schema
-                .properties
-                .is_empty())
         );
     }
 }

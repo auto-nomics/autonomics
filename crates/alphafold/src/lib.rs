@@ -4,9 +4,7 @@ pub mod client;
 pub mod error;
 pub mod format;
 pub mod nodes;
-pub mod tools;
 pub mod types;
 
 pub use client::AlphaFoldClient;
 pub use error::{AlphaFoldError, Result};
-pub use tools::registrations;

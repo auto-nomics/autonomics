@@ -1,3 +1,8 @@
+// The Input struct carries Rust's `#[deprecated]` so the derived tool
+// schema advertises `"deprecated": true`; the module-local allow keeps the
+// macro-generated impls in this file warning-free.
+#![allow(deprecated)]
+
 use std::sync::Arc;
 
 use agentik_core::tools::{ToolError, ToolFunction, ToolResult};
@@ -11,9 +16,10 @@ use crate::{OpengwasClient, types::*};
 
 #[tool(
     name = "opengwas_ld_matrix",
-    description = "Get the LD R-value matrix for a list of SNPs. \
+    description = "Pipeline/dataframe use: prefer the DAG node `source_opengwas_ld_matrix` (typed table) — this tool stays for interactive lookup. Get the LD R-value matrix for a list of SNPs. \
                   Values are relative to a specified reference allele."
 )]
+#[deprecated(note = "prefer the DAG node source_opengwas_ld_matrix for pipeline use")]
 pub struct LdMatrixInput {
     #[desc = "List of rs IDs for the LD matrix."]
     pub rsid: Option<Vec<String>>,

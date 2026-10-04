@@ -6,9 +6,6 @@
 //! - **`EutilsClient`** — an async HTTP client for all nine E-utilities
 //!   (EInfo, ESearch, EPost, ESummary, EFetch, ELink, EGQuery, ESpell,
 //!   ECitMatch).
-//! - **Agent tools** — pre-built [`ToolFunction`] implementations that expose
-//!   PubMed search, fetch, summary, related-articles, spell-check, and
-//!   cross-database query capabilities to an agentik agent.
 //!
 //! # Quick start (SDK only)
 //!
@@ -25,17 +22,6 @@
 //! # }
 //! ```
 //!
-//! # Wiring tools into an agent
-//!
-//! ```no_run,ignore
-//! use eutils::{EutilsClient, eutils_registrations};
-//! use std::sync::Arc;
-//!
-//! let client = Arc::new(EutilsClient::from_env());
-//! let tools = eutils_registrations(client);
-//! // pass `tools` to Agent::builder().with_tools(tools)
-//! ```
-//!
 //! # Environment variables
 //!
 //! | Variable         | Default          | Description                        |
@@ -49,10 +35,8 @@ pub mod convert;
 pub mod error;
 pub mod format;
 pub mod query;
-pub mod tools;
 pub mod types;
 
 pub use client::EutilsClient;
 pub use convert::{esummary_to_articles, medline_to_articles};
 pub use error::EutilsError;
-pub use tools::eutils_registrations;

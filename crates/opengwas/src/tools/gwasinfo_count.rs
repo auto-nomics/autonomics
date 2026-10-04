@@ -1,3 +1,9 @@
+// Tool Input structs marked `#[deprecated]` so the derived tool
+// schema advertises `"deprecated": true` (survey T3 dual-track
+// guidance); the module-local allow keeps the macro-generated
+// impls in this file warning-free.
+#![allow(deprecated)]
+
 use std::sync::Arc;
 
 use agentik_core::tools::{ToolError, ToolFunction, ToolResult};
@@ -11,8 +17,9 @@ use crate::format::format_gwasinfo_count;
 
 #[tool(
     name = "opengwas_gwasinfo_count",
-    description = "Return the total number of GWAS datasets cached in memory."
+    description = "Pipeline/dataframe use: prefer the DAG node `source_opengwas_gwasinfo_count` (typed table) — this tool stays for interactive lookup. Return the total number of GWAS datasets cached in memory."
 )]
+#[deprecated(note = "prefer the DAG node source_opengwas_gwasinfo_count for pipeline use")]
 pub struct GwasinfoCountInput {}
 
 pub struct GwasinfoCountTool {

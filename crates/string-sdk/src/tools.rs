@@ -1,5 +1,11 @@
 //! Agent tools for identifier resolution, network queries, and previews.
 
+// Tool Input structs marked `#[deprecated]` so the derived tool
+// schema advertises `"deprecated": true` (survey T3 dual-track
+// guidance); the module-local allow keeps the macro-generated
+// impls in this file warning-free.
+#![allow(deprecated)]
+
 use std::sync::Arc;
 
 use agentik_core::tools::{ToolError, ToolFunction, ToolRegistration};
@@ -103,10 +109,11 @@ impl ToolFunction for ResolveIdentifiersTool {
 
 #[tool(
     name = "string_network_interactions",
-    description = "Retrieve STRING protein-protein interactions as a concise Markdown preview. \
+    description = "Pipeline/dataframe use: prefer the DAG node `source_string_network` (typed table) — this tool stays for interactive lookup. Retrieve STRING protein-protein interactions as a concise Markdown preview. \
                    With one input protein STRING adds a confidence-ranked neighborhood; with two \
                    or more it returns interactions among the supplied proteins."
 )]
+#[deprecated(note = "prefer the DAG node source_string_network for pipeline use")]
 pub struct NetworkInteractionsInput {
     #[desc = "Protein, gene, or STRING identifiers."]
     pub identifiers: Vec<String>,
@@ -163,9 +170,10 @@ impl ToolFunction for NetworkInteractionsTool {
 
 #[tool(
     name = "string_functional_enrichment",
-    description = "Run STRING over-representation enrichment for a protein set and return the \
+    description = "Pipeline/dataframe use: prefer the DAG node `source_string_enrichment` (typed table) — this tool stays for interactive lookup. Run STRING over-representation enrichment for a protein set and return the \
                    most significant functional terms, sorted by FDR."
 )]
+#[deprecated(note = "prefer the DAG node source_string_enrichment for pipeline use")]
 pub struct FunctionalEnrichmentInput {
     #[desc = "Protein, gene, or STRING identifiers comprising the measured set."]
     pub identifiers: Vec<String>,
