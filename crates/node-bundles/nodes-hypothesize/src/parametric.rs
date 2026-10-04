@@ -3,6 +3,7 @@
 
 use super::common::{
     HypoNodeError, collect_input, emit_test_row, extract_f64_column, extract_groups,
+    extract_paired_columns,
 };
 use async_trait::async_trait;
 use dag_core::dag::DagError;
@@ -31,6 +32,10 @@ pub struct TTestNodeSpec {
     pub var_equal: bool,
     #[serde(default = "default_alt")]
     pub alternative: String,
+    /// Confidence level for the estimate CI (R `t.test` `conf.level`), in
+    /// (0, 1). Default 0.95.
+    #[serde(default = "default_conf_level")]
+    pub conf_level: f64,
 }
 
 fn default_mu() -> f64 {
@@ -38,6 +43,9 @@ fn default_mu() -> f64 {
 }
 fn default_alt() -> String {
     "two.sided".to_string()
+}
+fn default_conf_level() -> f64 {
+    0.95
 }
 
 pub struct TTestNodeFactory;
@@ -51,7 +59,10 @@ impl NodeFactory for TTestNodeFactory {
     fn doc(&self) -> &'static str {
         "Performs a t-test on column data. Supports one-sample (mu), \
         two-sample (group_column or y_column with var_equal), and paired \
-        (paired=true with y_column) modes. Emits a standard test row."
+        (paired=true with y_column) modes. Paired and wide two-sample \
+        branches drop a row when either column is null (R complete-case, \
+        not independent per-column NA-dropping). Emits a standard test row \
+        with stderr/conf_low/conf_high at conf_level (default 0.95)."
     }
     fn spec_schema(&self) -> schemars::Schema {
         schema_for!(TTestNodeSpec)
@@ -65,6 +76,11 @@ impl NodeFactory for TTestNodeFactory {
         _ctx: NodeCtx,
     ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let s: TTestNodeSpec = serde_json::from_value(spec)?;
+        if !(s.conf_level > 0.0 && s.conf_level < 1.0) {
+            return Err(dag_core::registry::error::Error::Unknown(
+                "conf_level must be in (0, 1)".into(),
+            ));
+        }
         Ok(Box::new(TTestNode {
             meta: NodePorts::new().add_output_port(None).add_input_port(None),
             spec: s,
@@ -102,30 +118,50 @@ impl DagNode for TTestNode {
         let batches = collect_input(inputs).await?;
         let alt = h::Alternative::parse_r(&self.spec.alternative)
             .map_err(|e| HypoNodeError::Spec(e.to_string()))?;
-        let x = extract_f64_column(&batches, &self.spec.x_column)?;
+        let cl = self.spec.conf_level;
 
         let result = if self.spec.paired {
-            let y = extract_f64_column(
-                &batches,
-                self.spec
-                    .y_column
-                    .as_deref()
-                    .ok_or_else(|| HypoNodeError::Spec("paired requires y_column".into()))?,
-            )?;
-            h::t_test_paired(&x, &y, alt)
+            // R t.test(paired=TRUE) deletes pairs with an NA on either side
+            // — extracting x and y independently would misalign the pairs.
+            let yc = self
+                .spec
+                .y_column
+                .as_deref()
+                .ok_or_else(|| HypoNodeError::Spec("paired requires y_column".into()))?;
+            let (pairs, n_dropped) = extract_paired_columns(&batches, &self.spec.x_column, yc)?;
+            let xs: Vec<f64> = pairs.iter().map(|(a, _)| *a).collect();
+            let ys: Vec<f64> = pairs.iter().map(|(_, b)| *b).collect();
+            let mut r = h::t_test_paired(&xs, &ys, alt, cl)
+                .map_err(|e| HypoNodeError::Test(e.to_string()))?;
+            r.extras
+                .insert("n_dropped".into(), serde_json::json!(n_dropped));
+            r
         } else if let Some(gc) = &self.spec.group_column {
+            // Group branch already follows R formula na.omit semantics via
+            // extract_groups: rows with a null response or null group label
+            // are dropped before grouping.
             let groups = extract_groups(&batches, &self.spec.x_column, gc)?;
             if groups.len() < 2 {
                 return Err(HypoNodeError::Insufficient("need ≥ 2 groups".into()).into());
             }
-            h::t_test_two(&groups[0].1, &groups[1].1, self.spec.var_equal, alt)
-        } else if let Some(_yc) = &self.spec.y_column {
-            let y = extract_f64_column(&batches, self.spec.y_column.as_deref().unwrap())?;
-            h::t_test_two(&x, &y, self.spec.var_equal, alt)
+            h::t_test_two(&groups[0].1, &groups[1].1, self.spec.var_equal, alt, cl)
+                .map_err(|e| HypoNodeError::Test(e.to_string()))?
+        } else if let Some(yc) = &self.spec.y_column {
+            // Wide two-sample: complete-case, same as R on data.frame input.
+            let (pairs, n_dropped) =
+                extract_paired_columns(&batches, &self.spec.x_column, yc)?;
+            let xs: Vec<f64> = pairs.iter().map(|(a, _)| *a).collect();
+            let ys: Vec<f64> = pairs.iter().map(|(_, b)| *b).collect();
+            let mut r = h::t_test_two(&xs, &ys, self.spec.var_equal, alt, cl)
+                .map_err(|e| HypoNodeError::Test(e.to_string()))?;
+            r.extras
+                .insert("n_dropped".into(), serde_json::json!(n_dropped));
+            r
         } else {
-            h::t_test_one(&x, self.spec.mu, alt)
-        }
-        .map_err(|e| HypoNodeError::Test(e.to_string()))?;
+            let x = extract_f64_column(&batches, &self.spec.x_column)?;
+            h::t_test_one(&x, self.spec.mu, alt, cl)
+                .map_err(|e| HypoNodeError::Test(e.to_string()))?
+        };
 
         emit_test_row(ctx, &result)
     }

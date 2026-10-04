@@ -39,7 +39,7 @@ fn t_test_one_matches_r_pt() {
     //   t = (x̄ - μ) / s/√n = 2.325 - 2.0) / (0.4232/√8) ≈ 2.171
     //   df = 7, p = 2·pt(-|t|, 7)
     let x = vec![2.1, 2.5, 1.8, 3.0, 2.7, 1.9, 2.4, 2.2];
-    let t = h::t_test_one(&x, 2.0, h::Alternative::TwoSided).unwrap();
+    let t = h::t_test_one(&x, 2.0, h::Alternative::TwoSided, 0.95).unwrap();
     let mean: f64 = x.iter().sum::<f64>() / 8.0;
     let sd = (x.iter().map(|&xi| (xi - mean).powi(2)).sum::<f64>() / 7.0).sqrt();
     let t_expected = (mean - 2.0) / (sd / 8.0_f64.sqrt());
@@ -52,7 +52,7 @@ fn t_test_paired_matches_r_pt() {
     // R: t.test(c(2.5,3.5,3.2,4.0,4.8,5.5,5.4,6.2), c(2.1,2.9,3.3,4.1,4.7,5.4,5.2,6.0), paired=T)
     let a = vec![2.5, 3.5, 3.2, 4.0, 4.8, 5.5, 5.4, 6.2];
     let b = vec![2.1, 2.9, 3.3, 4.1, 4.7, 5.4, 5.2, 6.0];
-    let t = h::t_test_paired(&a, &b, h::Alternative::TwoSided).unwrap();
+    let t = h::t_test_paired(&a, &b, h::Alternative::TwoSided, 0.95).unwrap();
     let d: Vec<f64> = a.iter().zip(&b).map(|(p, q)| p - q).collect();
     let dm: f64 = d.iter().sum::<f64>() / d.len() as f64;
     let dvar: f64 = d.iter().map(|&di| (di - dm).powi(2)).sum::<f64>() / 7.0;
@@ -71,7 +71,7 @@ fn t_test_two_welch_matches_r_pt() {
     // R: t.test(c(2.1,2.5,1.8,3.0,2.7,1.9,2.4,2.2), c(3.0,3.5,3.2,4.0,4.8,5.5,5.4,6.2), var.equal=F)
     let x = vec![2.1, 2.5, 1.8, 3.0, 2.7, 1.9, 2.4, 2.2];
     let y = vec![3.0, 3.5, 3.2, 4.0, 4.8, 5.5, 5.4, 6.2];
-    let t = h::t_test_two(&x, &y, false, h::Alternative::TwoSided).unwrap();
+    let t = h::t_test_two(&x, &y, false, h::Alternative::TwoSided, 0.95).unwrap();
     let (n1f, n2f) = (8.0_f64, 8.0_f64);
     let m1: f64 = x.iter().sum::<f64>() / n1f;
     let m2: f64 = y.iter().sum::<f64>() / n2f;
@@ -96,7 +96,7 @@ fn t_test_two_pooled_matches_r_pt() {
     // R: t.test(x, y, var.equal=TRUE) — df = n1+n2-2
     let x = vec![2.1, 2.5, 1.8, 3.0, 2.7, 1.9, 2.4, 2.2];
     let y = vec![3.0, 3.5, 3.2, 4.0, 4.8, 5.5, 5.4, 6.2];
-    let t = h::t_test_two(&x, &y, true, h::Alternative::TwoSided).unwrap();
+    let t = h::t_test_two(&x, &y, true, h::Alternative::TwoSided, 0.95).unwrap();
     assert!((t.dof - 14.0).abs() < 1e-12, "df should be n1+n2-2");
     let (m1, m2) = (x.iter().sum::<f64>() / 8.0, y.iter().sum::<f64>() / 8.0);
     let sp2: f64 = (x.iter().map(|&xi| (xi - m1).powi(2)).sum::<f64>()
@@ -110,9 +110,9 @@ fn t_test_two_pooled_matches_r_pt() {
 fn t_test_directions_match_r() {
     // R: pt(t, df) for less; pt(-t, df) for greater; 2*pt(-|t|, df) for two-sided
     let x = vec![2.1, 2.5, 1.8, 3.0, 2.7, 1.9, 2.4, 2.2];
-    let t = h::t_test_one(&x, 0.0, h::Alternative::TwoSided).unwrap();
-    let p_less = h::t_test_one(&x, 0.0, h::Alternative::Less).unwrap();
-    let p_greater = h::t_test_one(&x, 0.0, h::Alternative::Greater).unwrap();
+    let t = h::t_test_one(&x, 0.0, h::Alternative::TwoSided, 0.95).unwrap();
+    let p_less = h::t_test_one(&x, 0.0, h::Alternative::Less, 0.95).unwrap();
+    let p_greater = h::t_test_one(&x, 0.0, h::Alternative::Greater, 0.95).unwrap();
     assert_close(
         p_less.p_value + p_greater.p_value,
         1.0,
