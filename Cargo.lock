@@ -2005,6 +2005,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "coding-agent"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "coloc"
 version = "0.1.0"
 dependencies = [
@@ -9316,6 +9324,7 @@ dependencies = [
 name = "plugin-rsi"
 version = "0.1.0"
 dependencies = [
+ "coding-agent",
  "container-plugin",
  "container-runtime",
  "serde",

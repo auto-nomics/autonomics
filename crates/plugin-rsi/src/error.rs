@@ -57,6 +57,9 @@ pub enum Error {
     #[error("GitHub operation failed: {0}")]
     GitHub(String),
 
+    #[error(transparent)]
+    CodingAgent(#[from] coding_agent::Error),
+
     #[error("plugin source `{name}` already has a conflicting declaration")]
     ConflictingPluginSource { name: String },
 

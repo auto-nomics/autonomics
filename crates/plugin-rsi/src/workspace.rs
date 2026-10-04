@@ -68,6 +68,17 @@ impl ProposalWorkspace {
         std::fs::read_to_string(&path).map_err(|source| Error::ReadFile { path, source })
     }
 
+    /// Remove a file by safe repository-relative path.
+    pub fn remove_file(&self, relative: &str) -> Result<()> {
+        let path = self.safe_path(relative)?;
+        ensure_not_symlink(&path)?;
+        match std::fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(source) => Err(Error::Io(source)),
+        }
+    }
+
     pub fn list_files(&self) -> Result<Vec<String>> {
         let mut files = Vec::new();
         visit_files(&self.repo_path, &self.repo_path, &mut files)?;

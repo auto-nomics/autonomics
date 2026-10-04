@@ -1,8 +1,11 @@
 use std::path::PathBuf;
 
+use coding_agent::{CodingAgent, CodingTask};
+
 use crate::{
-    Error, GitRepo, Proposal, ProposalStatus, ProposalStore, Result, node::NodeDevelopment,
-    validate::EnvironmentCatalog, workspace::ProposalWorkspace,
+    CodingAgentRun, Error, GitRepo, Proposal, ProposalStatus, ProposalStore, Result,
+    coding_agent as agent_runs, node::NodeDevelopment, validate::EnvironmentCatalog,
+    workspace::ProposalWorkspace,
 };
 use container_plugin::{
     manifest::{ImageMetadata, PluginManifest},
@@ -291,6 +294,96 @@ impl<'a> PluginDevelopment<'a> {
             std::fs::read_to_string(&path).map_err(|source| Error::ReadFile { path, source })?;
         serde_json::from_str(&text)
             .map_err(|source| Error::Validation(format!("invalid report JSON: {source}")))
+    }
+
+    /// Run one external coding agent against an isolated copy of the plugin.
+    ///
+    /// A successful process is not trusted. The daemon validates the candidate
+    /// workspace, copies only safe relative text files back into the proposal
+    /// repository, synchronizes manifest metadata, and invalidates prior
+    /// validation evidence. Git snapshots remain daemon-owned.
+    pub fn run_coding_agent(
+        &mut self,
+        agent: &dyn CodingAgent,
+        task: CodingTask,
+    ) -> Result<CodingAgentRun> {
+        self.refresh()?;
+        if !matches!(
+            self.proposal.status,
+            ProposalStatus::Draft | ProposalStatus::Validating | ProposalStatus::NeedsFix
+        ) {
+            return Err(Error::Validation(format!(
+                "coding agent cannot run from status {:?}",
+                self.proposal.status
+            )));
+        }
+        task.validate()?;
+        let Some(environment_reference) = self.proposal.environment_reference.clone() else {
+            return Err(Error::Validation(
+                "proposal must bind an environment before coding agent development".into(),
+            ));
+        };
+
+        let task = agent_runs::plugin_task(task)?;
+        let rendered_prompt = coding_agent::render_task_prompt(&task);
+        let run_id = agent_runs::new_run_id(self.id(), agent.kind().as_str(), &rendered_prompt);
+        let agent_root = self
+            .store
+            .proposal_path(self.id())
+            .join("agent-runs")
+            .join(&run_id);
+        let source = self.workspace();
+        let candidate = agent_runs::prepare_agent_workspace(&agent_root, &source)?;
+        let execution = agent.execute(&task, candidate.workspace.path())?;
+        let changes = agent_runs::workspace_changes(&source, &candidate.workspace)?;
+        let mut run = CodingAgentRun {
+            run_id,
+            proposal_id: self.id().to_string(),
+            agent: agent.kind().as_str().to_string(),
+            argv: execution.argv.clone(),
+            prompt_sha256: agent_runs::prompt_hash(&rendered_prompt),
+            exit_code: execution.exit_code,
+            success: execution.success,
+            synced: false,
+            stdout: execution.stdout,
+            stderr: execution.stderr,
+            duration_ms: execution.duration_ms,
+            created_at: crate::request::unix_now(),
+            added_files: changes.added.clone(),
+            changed_files: changes.changed.clone(),
+            removed_files: changes.removed.clone(),
+        };
+
+        if execution.success && !changes.is_empty() {
+            let manifest = match agent_runs::validate_candidate(
+                &candidate.workspace,
+                &self.proposal.plugin_name,
+                &environment_reference,
+            ) {
+                Ok(manifest) => manifest,
+                Err(error) => {
+                    run.write(&self.reports_dir())?;
+                    return Err(error);
+                }
+            };
+            agent_runs::adopt_candidate(&source, &candidate.workspace, &changes)?;
+            let node_kinds = manifest
+                .nodes
+                .iter()
+                .map(|node| node.kind.clone())
+                .collect::<Vec<_>>();
+            self.mutate(|proposal| {
+                proposal.node_kinds = node_kinds;
+                proposal.latest_report = None;
+                if proposal.status == ProposalStatus::Validating {
+                    proposal.status = ProposalStatus::NeedsFix;
+                }
+            })?;
+            run.synced = true;
+        }
+
+        run.write(&self.reports_dir())?;
+        Ok(run)
     }
 
     fn refresh(&mut self) -> Result<()> {

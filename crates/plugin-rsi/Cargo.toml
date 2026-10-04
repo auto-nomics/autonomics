@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+coding-agent = { path = "../coding-agent" }
 container-plugin = { path = "../container-plugin" }
 container-runtime = { path = "../container-runtime" }
 serde = { version = "1", features = ["derive"] }
