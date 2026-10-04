@@ -65,6 +65,15 @@ pub fn z_threshold(two_sided_p: f64) -> f64 {
     -std_normal().inverse_cdf(two_sided_p / 2.0)
 }
 
+/// One-sided standard-normal quantile, R's `stats::qnorm(p)`.
+///
+/// Used by the reverse-direction filter, whose threshold is
+/// `qnorm(MR_reverse)` in `run_MR.R` — a lower-tail quantile (negative for
+/// p < 0.5), NOT the two-sided `-qnorm(p/2)`.
+pub fn qnorm(p: f64) -> f64 {
+    std_normal().inverse_cdf(p)
+}
+
 /// Standard normal density (R's `dnorm(x)`).
 pub fn dnorm(x: f64) -> f64 {
     std_normal().pdf(x)

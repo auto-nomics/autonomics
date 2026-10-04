@@ -105,8 +105,20 @@ impl DagNode for WilcoxonNode {
         } else if let Some(yc) = &self.spec.y_column {
             let y = extract_f64_column(&batches, yc)?;
             if self.spec.paired {
+                // Paired Wilcoxon: test the within-pair differences x − y
+                // (R: wilcox.test(x, y, paired = TRUE)). Running the one-sample
+                // signed-rank on `x` alone ignores `y` entirely.
+                if x.len() != y.len() {
+                    return Err(HypoNodeError::Spec(format!(
+                        "paired wilcoxon requires equal-length x and y columns ({} vs {})",
+                        x.len(),
+                        y.len()
+                    ))
+                    .into());
+                }
+                let d: Vec<f64> = x.iter().zip(&y).map(|(a, b)| a - b).collect();
                 h::wilcoxon_signed_rank(
-                    &x,
+                    &d,
                     self.spec.mu,
                     alt,
                     h::ZeroMethod::Wilcox,
@@ -331,5 +343,127 @@ impl DagNode for FriedmanNode {
         let refs: Vec<&[f64]> = data.iter().map(|r| r.as_slice()).collect();
         let result = h::friedman_test(&refs).map_err(|e| HypoNodeError::Test(e.to_string()))?;
         emit_test_row(ctx, &result)
+    }
+}
+
+#[cfg(test)]
+mod wilcoxon_paired_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    fn paired_batch() -> datafusion::dataframe::DataFrame {
+        // x (post) = y (pre) + 0.6 with large symmetric noise: x alone is
+        // sign-symmetric (one-sample signed-rank on x is null), while every
+        // within-pair difference is +0.6.
+        let pre = vec![5.1, -3.2, 4.8, -4.9, 3.3, -2.8, 4.1, -4.4, 2.6, -3.6];
+        let post: Vec<f64> = pre.iter().map(|v| v + 0.6).collect();
+        let schema = Arc::new(arrow_schema::Schema::new(vec![
+            arrow_schema::Field::new("pre", arrow_schema::DataType::Float64, false),
+            arrow_schema::Field::new("post", arrow_schema::DataType::Float64, false),
+        ]));
+        let batch = arrow_array::RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(arrow_array::Float64Array::from(pre)),
+                Arc::new(arrow_array::Float64Array::from(post)),
+            ],
+        )
+        .unwrap();
+        datafusion::prelude::SessionContext::new()
+            .read_batch(batch)
+            .unwrap()
+    }
+
+    async fn run_node(spec: serde_json::Value) -> Result<f64, String> {
+        let ctx = NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        );
+        let mut node = WilcoxonNodeFactory.build(spec, ctx.clone()).map_err(|e| e.to_string())?;
+        let outputs = node
+            .execute(
+                &ctx,
+                &[NodeInput::new_dataframe(0, paired_batch())],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+        let batches = outputs
+            .dataframe(0)
+            .unwrap()
+            .clone()
+            .collect()
+            .await
+            .map_err(|e| e.to_string())?;
+        let p = batches[0]
+            .column(1)
+            .as_any()
+            .downcast_ref::<arrow_array::Float64Array>()
+            .unwrap()
+            .value(0);
+        Ok(p)
+    }
+
+    #[tokio::test]
+    async fn paired_mode_tests_within_pair_differences() {
+        // Regression: paired mode used to run the one-sample signed-rank on x
+        // alone (y was never read), so a constant +0.6 shift inside noisy
+        // pairs came back non-significant.
+        let p = run_node(serde_json::json!({
+            "x_column": "post",
+            "y_column": "pre",
+            "paired": true,
+            "alternative": "greater"
+        }))
+        .await
+        .unwrap();
+        assert!(p < 0.01, "paired wilcoxon should detect the +0.6 shift, p = {p}");
+    }
+
+    #[tokio::test]
+    async fn paired_mode_rejects_length_mismatch() {
+        // extract_f64_column skips nulls, so a y column with missing values
+        // yields fewer entries than x → paired mode must error rather than
+        // silently zip-truncate (which would misalign pairs).
+        let ctx = NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        );
+        let y_with_gaps: Vec<Option<f64>> =
+            vec![Some(1.0), None, Some(3.0), None, Some(5.0)];
+        let schema = Arc::new(arrow_schema::Schema::new(vec![
+            arrow_schema::Field::new("x", arrow_schema::DataType::Float64, false),
+            arrow_schema::Field::new("y", arrow_schema::DataType::Float64, true),
+        ]));
+        let batch = arrow_array::RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(arrow_array::Float64Array::from(vec![1.1, 2.2, 3.3, 4.4, 5.5])),
+                Arc::new(arrow_array::Float64Array::from(y_with_gaps)),
+            ],
+        )
+        .unwrap();
+        let df = datafusion::prelude::SessionContext::new()
+            .read_batch(batch)
+            .unwrap();
+        let mut node = WilcoxonNodeFactory
+            .build(
+                serde_json::json!({"x_column": "x", "y_column": "y", "paired": true}),
+                ctx.clone(),
+            )
+            .unwrap();
+        let err = node
+            .execute(
+                &ctx,
+                &[NodeInput::new_dataframe(0, df)],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .err()
+            .expect("length mismatch must error");
+        assert!(
+            err.to_string().contains("equal-length"),
+            "error should name the mismatch: {err}"
+        );
     }
 }

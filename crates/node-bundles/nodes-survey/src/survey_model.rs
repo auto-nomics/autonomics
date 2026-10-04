@@ -838,16 +838,28 @@ impl SpecExecute for SvySurvregSpec {
         let terms: Vec<String> = std::iter::once("(Intercept)".into())
             .chain(self.predictors.iter().cloned())
             .collect();
+        let t_stats: Vec<f64> = fit
+            .coefficients
+            .iter()
+            .zip(&se)
+            .map(|(coef, stderr)| {
+                if *stderr > 0.0 {
+                    coef / stderr
+                } else {
+                    f64::NAN
+                }
+            })
+            .collect();
+        let p_values: Vec<f64> = t_stats
+            .iter()
+            .map(|&t| crate::survey_common::student_t_two_sided_p(t, fit.df as f64))
+            .collect();
         crate::survey_common::build_model_output_batch(
             &terms,
             &fit.coefficients,
             &se,
-            &fit.coefficients
-                .iter()
-                .zip(&se)
-                .map(|(b, s)| if *s > 0.0 { b / s } else { 0.0 })
-                .collect::<Vec<_>>(),
-            &vec![0.0; fit.coefficients.len()],
+            &t_stats,
+            &p_values,
             &vec![fit.df as f64; fit.coefficients.len()],
         )
         .map(|b| {
@@ -927,15 +939,21 @@ impl SpecExecute for SvyOlrSpec {
             .cloned()
             .chain((0..fit.n_levels - 1).map(|i| format!("threshold_{}", i + 1)))
             .collect();
+        let t_stats: Vec<f64> = all
+            .iter()
+            .zip(&se)
+            .map(|(b, s)| if *s > 0.0 { b / s } else { f64::NAN })
+            .collect();
+        let p_values: Vec<f64> = t_stats
+            .iter()
+            .map(|&t| crate::survey_common::student_t_two_sided_p(t, fit.df as f64))
+            .collect();
         crate::survey_common::build_model_output_batch(
             &terms,
             &all,
             &se,
-            &all.iter()
-                .zip(&se)
-                .map(|(b, s)| if *s > 0.0 { b / s } else { 0.0 })
-                .collect::<Vec<_>>(),
-            &vec![0.0; all.len()],
+            &t_stats,
+            &p_values,
             &vec![fit.df as f64; all.len()],
         )
         .map(|b| {
@@ -1002,12 +1020,22 @@ impl SpecExecute for SvyLoglinSpec {
         let terms: Vec<String> = (0..fit.coefficients.len())
             .map(|i| format!("coef_{}", i))
             .collect();
+        let t_stats: Vec<f64> = fit
+            .coefficients
+            .iter()
+            .zip(&se)
+            .map(|(b, s)| if *s > 0.0 { b / s } else { f64::NAN })
+            .collect();
+        let p_values: Vec<f64> = t_stats
+            .iter()
+            .map(|&t| crate::survey_common::student_t_two_sided_p(t, fit.df as f64))
+            .collect();
         crate::survey_common::build_model_output_batch(
             &terms,
             &fit.coefficients,
             &se,
-            &vec![0.0; fit.coefficients.len()],
-            &vec![0.0; fit.coefficients.len()],
+            &t_stats,
+            &p_values,
             &vec![fit.df as f64; fit.coefficients.len()],
         )
         .map(|b| {
@@ -1096,16 +1124,22 @@ impl SpecExecute for SvyIvregSpec {
             .chain(self.exogenous.iter())
             .cloned()
             .collect();
+        let t_stats: Vec<f64> = fit
+            .coefficients
+            .iter()
+            .zip(&se)
+            .map(|(b, s)| if *s > 0.0 { b / s } else { f64::NAN })
+            .collect();
+        let p_values: Vec<f64> = t_stats
+            .iter()
+            .map(|&t| crate::survey_common::student_t_two_sided_p(t, fit.df as f64))
+            .collect();
         crate::survey_common::build_model_output_batch(
             &terms,
             &fit.coefficients,
             &se,
-            &fit.coefficients
-                .iter()
-                .zip(&se)
-                .map(|(b, s)| if *s > 0.0 { b / s } else { 0.0 })
-                .collect::<Vec<_>>(),
-            &vec![0.0; fit.coefficients.len()],
+            &t_stats,
+            &p_values,
             &vec![fit.df as f64; fit.coefficients.len()],
         )
         .map(|b| {
