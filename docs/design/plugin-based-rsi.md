@@ -122,18 +122,17 @@ created_at = 1760000000
 source = "user"
 intent = "new_node"
 plugin_name = "clusterprofiler"
-node_kind = "clusterprofiler_bitr"
 summary = "Expose organism-specific identifier mapping"
 body = "..."
-error_signature = "..."
 evidence_ids = ["O-...", "run-..."]
 status = "open"
 ```
 
 Valid `source` values are `user`, `agent`, `workflow_run`, `eval`, and
 `observation`. Valid intents are `new_node`, `optimize_node`, `fix_node`, and
-`clarify_contract`. Statuses are `open`, `triaged`, `proposal_pending`,
-`consumed`, and `rejected`.
+`clarify_contract`. Statuses are `open`, `working`, `proposal_pending`,
+`consumed`, and `rejected`. Requests intentionally omit implementation choices
+such as node kind, scripts, and images; those belong to the responding proposal.
 
 This should be a separate `plugin-rsi` store rather than overloading the skill
 observation schema. Skill observations remain procedural knowledge; executable

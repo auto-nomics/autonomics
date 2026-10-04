@@ -182,13 +182,19 @@ fn validate_policy(
     if !manifest.panels.is_empty() {
         return Err("panels are not allowed in the greenfield MVP".into());
     }
-    if manifest.image.reference.as_str() != proposal.image_reference {
+    let Some(image_id) = proposal.image_id.as_deref() else {
+        return Err("proposal has no bound image".into());
+    };
+    let Some(expected_reference) = proposal.image_reference.as_deref() else {
+        return Err("proposal has no digest-pinned image reference".into());
+    };
+    if manifest.image.reference.as_str() != expected_reference {
         return Err("manifest image differs from proposal image".into());
     }
-    let Some(image) = catalog.get(&proposal.image_id) else {
-        return Err(format!("image `{}` is not approved", proposal.image_id));
+    let Some(image) = catalog.get(image_id) else {
+        return Err(format!("image `{image_id}` is not approved"));
     };
-    if image.reference != proposal.image_reference {
+    if image.reference != expected_reference {
         return Err("proposal image differs from approved image catalog".into());
     }
     if !image
@@ -198,7 +204,7 @@ fn validate_policy(
     {
         return Err(format!(
             "interpreter `{}` is not approved for image `{}`",
-            node.command.interpreter, proposal.image_id
+            node.command.interpreter, image_id
         ));
     }
     if !matches!(
@@ -353,8 +359,8 @@ script_file = "scripts/adapter.sh"
             status: ProposalStatus::Draft,
             authored_by: "agent".into(),
             request_ids: vec!["R-test".into()],
-            image_id: "demo".into(),
-            image_reference: IMAGE.into(),
+            image_id: Some("demo".into()),
+            image_reference: Some(IMAGE.into()),
             source_commit: None,
             remote: None,
             pushed_commit: None,

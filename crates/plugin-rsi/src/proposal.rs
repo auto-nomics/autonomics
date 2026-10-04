@@ -46,8 +46,10 @@ pub struct Proposal {
     pub status: ProposalStatus,
     pub authored_by: String,
     pub request_ids: Vec<String>,
-    pub image_id: String,
-    pub image_reference: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_reference: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_commit: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -84,13 +86,10 @@ impl ProposalStore {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub fn create(
         &self,
         plugin_name: &str,
         request_ids: &[String],
-        image_id: &str,
-        catalog: &ImageCatalog,
         rationale: &str,
         requests: &RequestStore,
     ) -> Result<Proposal> {
@@ -109,9 +108,6 @@ impl ProposalStore {
                 missing.join(", ")
             )));
         }
-        let image = catalog.get(image_id).ok_or_else(|| {
-            Error::Validation(format!("image {image_id:?} is not approved for RSI"))
-        })?;
         if rationale.trim().is_empty() {
             return Err(Error::InvalidRequest("rationale is required".into()));
         }
@@ -135,8 +131,8 @@ impl ProposalStore {
             status: ProposalStatus::Draft,
             authored_by: "agent".to_string(),
             request_ids: request_ids.to_vec(),
-            image_id: image_id.to_string(),
-            image_reference: image.reference.to_string(),
+            image_id: None,
+            image_reference: None,
             source_commit: None,
             remote: None,
             pushed_commit: None,
@@ -147,6 +143,33 @@ impl ProposalStore {
         };
         self.save(&proposal)?;
         Ok(proposal)
+    }
+
+    /// Bind an already-approved image to a proposal. New-image proposals will
+    /// use a separate trusted build result path instead of this method.
+    pub fn bind_approved_image(
+        &self,
+        id: &str,
+        image_id: &str,
+        catalog: &ImageCatalog,
+    ) -> Result<Proposal> {
+        let proposal = self.load(id)?;
+        if !matches!(
+            proposal.status,
+            ProposalStatus::Draft | ProposalStatus::Validating | ProposalStatus::NeedsFix
+        ) {
+            return Err(Error::Validation(format!(
+                "image cannot be bound from status {:?}",
+                proposal.status
+            )));
+        }
+        let image = catalog.get(image_id).ok_or_else(|| {
+            Error::Validation(format!("image {image_id:?} is not approved for RSI"))
+        })?;
+        self.update(id, |proposal| {
+            proposal.image_id = Some(image_id.to_string());
+            proposal.image_reference = Some(image.reference.to_string());
+        })
     }
 
     pub fn find(&self, id: &str) -> Result<Option<Proposal>> {
@@ -246,6 +269,11 @@ impl ProposalStore {
         if proposal.source_commit.as_deref() != Some(head.as_str()) {
             return Err(Error::Validation(
                 "proposal source_commit does not match repository HEAD".into(),
+            ));
+        }
+        if proposal.image_reference.is_none() {
+            return Err(Error::Validation(
+                "proposal has no digest-pinned image".into(),
             ));
         }
         let report = self.latest_report(&proposal)?;
@@ -401,8 +429,6 @@ mod tests {
                 summary: "Create demo plugin".into(),
                 body: "Deterministic adapter".into(),
                 plugin_name: Some("demo-plugin".into()),
-                node_kind: None,
-                image_id: Some("demo".into()),
                 evidence_ids: Vec::new(),
                 status: RequestStatus::Open,
             })
@@ -432,11 +458,14 @@ mod tests {
             .create(
                 "demo-plugin",
                 &[request_id],
-                "demo",
-                &catalog,
                 "Needed for testing",
                 &requests,
             )
+            .unwrap();
+        assert_eq!(proposal.image_id, None);
+        assert_eq!(proposal.image_reference, None);
+        proposals
+            .bind_approved_image(&proposal.proposal_id, "demo", &catalog)
             .unwrap();
         assert!(
             proposals

@@ -26,8 +26,6 @@ fn request() -> RequestRecord {
         summary: "Create demo plugin".into(),
         body: "Copy one file through the demo image.".into(),
         plugin_name: Some("demo-plugin".into()),
-        node_kind: None,
-        image_id: Some("demo".into()),
         evidence_ids: Vec::new(),
         status: RequestStatus::Open,
     }
@@ -80,11 +78,13 @@ fn greenfield_proposal_reaches_review_gate() {
         .create(
             "demo-plugin",
             &[request.id.clone()],
-            "demo",
-            &catalog(),
             "The request needs a deterministic adapter.",
             &requests,
         )
+        .unwrap();
+    assert_eq!(proposal.image_reference, None);
+    proposals
+        .bind_approved_image(&proposal.proposal_id, "demo", &catalog())
         .unwrap();
 
     write_plugin(&proposals.workspace(&proposal.proposal_id).unwrap().unwrap());
