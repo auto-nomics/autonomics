@@ -970,7 +970,10 @@ fn build_set_results_batch(
 /// Config for the meta-analysis node.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct MagmaMetaConfig {
-    /// VFS paths to .genes.raw files for each cohort.
+    /// VFS paths to .genes.raw files for each cohort. Used only when no
+    /// cohort DataFrames are wired to the variadic input port; ignored
+    /// otherwise.
+    #[serde(default)]
     pub cohort_files: Vec<String>,
     /// Optional weights (one per cohort). Default: √N.
     #[serde(default)]
@@ -1005,7 +1008,9 @@ impl NodeFactory for MagmaMetaNodeFactory {
     fn doc(&self) -> &'static str {
         "Combines gene-level Z-statistics from multiple cohorts using \
         inverse-variance weighted combination (√N weighting by default). \
-        Outputs combined gene results."
+        Cohorts are the wired input DataFrames (gene-results schema, ≥2 \
+        required); when no inputs are wired, .genes.raw paths from the \
+        cohort_files config are used instead. Outputs combined gene results."
     }
     fn spec_schema(&self) -> schemars::Schema {
         schema_for!(MagmaMetaConfig)
@@ -1049,28 +1054,50 @@ impl DagNode for MagmaMetaNode {
     async fn execute(
         &mut self,
         node_ctx: &NodeCtx,
-        _inputs: &[NodeInput],
-        _reporter: &dag_core::dag::node_event::NodeReporter,
+        inputs: &[NodeInput],
+        reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
-        if self.config.cohort_files.len() < 2 {
+        // Cohort inputs: wired DataFrames take precedence over the config
+        // paths, closing the port↔execution contract (the node advertises a
+        // variadic gene-results input but previously ignored it).
+        let cohorts: Vec<magma::setanalysis::GeneRawData> = if inputs.len() >= 2 {
+            reporter.info(format!(
+                "magma_meta: combining {} connected cohort tables",
+                inputs.len()
+            ));
+            let cohort_futures = inputs
+                .iter()
+                .map(|input| input.dataframe().map(gene_results_to_raw))
+                .collect::<Result<Vec<_>, _>>()?;
+            futures::future::try_join_all(cohort_futures).await?
+        } else if inputs.len() == 1 {
             return Err(MagmaNodeError::Magma(magma::MagmaError::Input(
-                "magma_meta requires at least 2 cohort files".into(),
+                "magma_meta has 1 wired cohort input; wire at least 2, or none \
+                 to fall back to the cohort_files config paths"
+                    .into(),
             ))
             .into());
-        }
-
-        let staged_cohorts = futures::future::try_join_all(
-            self.config
-                .cohort_files
+        } else if self.config.cohort_files.len() >= 2 {
+            let staged_cohorts = futures::future::try_join_all(
+                self.config
+                    .cohort_files
+                    .iter()
+                    .map(|path| stage_vfs_file(node_ctx, path)),
+            )
+            .await?;
+            staged_cohorts
                 .iter()
-                .map(|path| stage_vfs_file(node_ctx, path)),
-        )
-        .await?;
-        let cohorts: Vec<magma::setanalysis::GeneRawData> = staged_cohorts
-            .iter()
-            .map(|path| magma::setanalysis::GeneRawData::read(path.as_ref()))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(MagmaNodeError::from)?;
+                .map(|path| magma::setanalysis::GeneRawData::read(path.as_ref()))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(MagmaNodeError::from)?
+        } else {
+            return Err(MagmaNodeError::Magma(magma::MagmaError::Input(
+                "magma_meta requires at least 2 cohorts: wire ≥2 gene-results \
+                 DataFrames to the input port or list ≥2 cohort_files paths"
+                    .into(),
+            ))
+            .into());
+        };
 
         let meta = magma::meta::meta_analyze(&cohorts, self.config.weights.as_deref(), None)
             .map_err(MagmaNodeError::from)?;
@@ -1572,6 +1599,83 @@ mod tests {
         let df = res.dataframe(0).unwrap();
         let count = df.clone().count().await.unwrap();
         assert_eq!(count, 20, "should have 20 genes");
+    }
+
+    #[tokio::test]
+    async fn meta_node_combines_wired_cohort_tables() {
+        let ctx = node_ctx();
+        let make_cohort = |gene_id: &str, n: i64, zstat: f64| {
+            let batch = RecordBatch::try_new(
+                gene_results_schema(),
+                vec![
+                    Arc::new(StringArray::from(vec![gene_id.to_string()])),
+                    Arc::new(Int32Array::from(vec![1])),
+                    Arc::new(UInt32Array::from(vec![1000u32])),
+                    Arc::new(UInt32Array::from(vec![1500u32])),
+                    Arc::new(Int32Array::from(vec![10])),
+                    Arc::new(Int32Array::from(vec![6])),
+                    Arc::new(Int64Array::from(vec![n])),
+                    Arc::new(Float64Array::from(vec![zstat])),
+                    Arc::new(Float64Array::from(vec![0.5])),
+                ],
+            )
+            .unwrap();
+            ctx.session().read_batch(batch).unwrap()
+        };
+
+        // Port↔execution contract: wired cohort tables are the cohort input
+        // even with an empty cohort_files config.
+        let mut node = MagmaMetaNode::new(MagmaMetaConfig {
+            cohort_files: vec![],
+            weights: None,
+        });
+        let res = node
+            .execute(
+                &ctx,
+                &[
+                    NodeInput::new_dataframe(0, make_cohort("geneA", 100, 1.0)),
+                    NodeInput::new_dataframe(1, make_cohort("geneA", 400, 2.0)),
+                ],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .expect("wired cohort tables should be meta-analyzed");
+
+        let df = res.dataframe(0).unwrap();
+        let batches = df.clone().collect().await.unwrap();
+        let ids = extract_string_col(&batches, "gene_id").unwrap();
+        let zstats = extract_f64_col(&batches, "zstat").unwrap();
+        let ns = extract_i64_col(&batches, "n").unwrap();
+        assert_eq!(ids.len(), 1);
+        assert_eq!(ids[0], "geneA");
+        // Hand-computed √N weights: (10·1 + 20·2) / √(10² + 20²) = 50/√500.
+        assert!(
+            (zstats[0] - 2.236_067_977_499_79).abs() < 1e-12,
+            "combined zstat: got {}",
+            zstats[0]
+        );
+        assert_eq!(ns[0], Some(500));
+
+        // A single wired cohort cannot be meta-analyzed and is rejected.
+        let error = node
+            .execute(
+                &ctx,
+                &[NodeInput::new_dataframe(0, make_cohort("geneA", 100, 1.0))],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("1 wired cohort input"),
+            "{error}"
+        );
+
+        // No inputs and no cohort_files is rejected.
+        let error = node
+            .execute(&ctx, &[], &dag_core::dag::node_event::NodeReporter::noop())
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("at least 2 cohorts"), "{error}");
     }
 
     #[tokio::test]
