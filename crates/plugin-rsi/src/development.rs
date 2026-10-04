@@ -1,9 +1,7 @@
 use std::path::PathBuf;
 
-use coding_agent::{CodingAgent, CodingTask};
-
 use crate::{
-    CodingAgentRun, Error, GitRepo, Proposal, ProposalStatus, ProposalStore, Result, agent_run,
+    DevelopmentChanges, Error, GitRepo, Proposal, ProposalStatus, ProposalStore, Result, candidate,
     node::NodeDevelopment, validate::EnvironmentCatalog, workspace::ProposalWorkspace,
 };
 use container_plugin::{
@@ -144,6 +142,63 @@ impl<'a> PluginDevelopment<'a> {
             .collect::<Vec<_>>();
         self.save_manifest(&manifest)?;
         self.mutate(|proposal| proposal.node_kinds = node_kinds)
+    }
+
+    /// Create a detached candidate repository for one specialized agent run.
+    ///
+    /// The returned workspace is the only repository an agent may touch. The
+    /// daemon does not adopt any candidate until
+    /// [`PluginDevelopment::adopt_development_candidate`] validates its diff.
+    pub fn prepare_development_candidate(&mut self, run_id: &str) -> Result<ProposalWorkspace> {
+        self.refresh()?;
+        self.ensure_development_candidate_editable()?;
+        self.environment_reference()?;
+        let root = self.development_candidate_root(run_id)?;
+        candidate::prepare_candidate_workspace(&root, &self.workspace())
+    }
+
+    /// Validate and adopt one specialized development candidate.
+    ///
+    /// Adoption is daemon-owned and atomic at the file-operation level: the
+    /// candidate is checked first, then only safe relative text files are
+    /// copied back into the proposal repository.
+    pub fn adopt_development_candidate(&mut self, run_id: &str) -> Result<DevelopmentChanges> {
+        self.refresh()?;
+        self.ensure_development_candidate_editable()?;
+        let environment_reference = self.environment_reference()?;
+        let source = self.workspace();
+        let candidate_root = self.development_candidate_root(run_id)?;
+        let candidate_workspace = ProposalWorkspace::new(candidate_root.join("workspace"));
+        if !candidate_workspace.path().is_dir() {
+            return Err(Error::Validation(format!(
+                "development candidate `{run_id}` does not exist"
+            )));
+        }
+        let changes = candidate::workspace_changes(&source, &candidate_workspace)?;
+        if changes.is_empty() {
+            return Err(Error::Validation(format!(
+                "development candidate `{run_id}` has no changes"
+            )));
+        }
+        let manifest = candidate::validate_candidate(
+            &candidate_workspace,
+            &self.proposal.plugin_name,
+            &environment_reference,
+        )?;
+        candidate::adopt_candidate(&source, &candidate_workspace, &changes)?;
+        let node_kinds = manifest
+            .nodes
+            .iter()
+            .map(|node| node.kind.clone())
+            .collect::<Vec<_>>();
+        self.mutate(|proposal| {
+            proposal.node_kinds = node_kinds;
+            proposal.latest_report = None;
+            if proposal.status == ProposalStatus::Validating {
+                proposal.status = ProposalStatus::NeedsFix;
+            }
+        })?;
+        Ok(changes.into())
     }
 
     /// Bind a runtime environment already trusted by the daemon.
@@ -295,96 +350,6 @@ impl<'a> PluginDevelopment<'a> {
             .map_err(|source| Error::Validation(format!("invalid report JSON: {source}")))
     }
 
-    /// Run one external coding agent against an isolated copy of the plugin.
-    ///
-    /// A successful process is not trusted. The daemon validates the candidate
-    /// workspace, copies only safe relative text files back into the proposal
-    /// repository, synchronizes manifest metadata, and invalidates prior
-    /// validation evidence. Git snapshots remain daemon-owned.
-    pub fn run_coding_agent(
-        &mut self,
-        agent: &dyn CodingAgent,
-        task: CodingTask,
-    ) -> Result<CodingAgentRun> {
-        self.refresh()?;
-        if !matches!(
-            self.proposal.status,
-            ProposalStatus::Draft | ProposalStatus::Validating | ProposalStatus::NeedsFix
-        ) {
-            return Err(Error::Validation(format!(
-                "coding agent cannot run from status {:?}",
-                self.proposal.status
-            )));
-        }
-        task.validate()?;
-        let Some(environment_reference) = self.proposal.environment_reference.clone() else {
-            return Err(Error::Validation(
-                "proposal must bind an environment before coding agent development".into(),
-            ));
-        };
-
-        let task = agent_run::plugin_task(task)?;
-        let rendered_prompt = coding_agent::render_task_prompt(&task);
-        let run_id = agent_run::new_run_id(self.id(), agent.kind().as_str(), &rendered_prompt);
-        let agent_root = self
-            .store
-            .proposal_path(self.id())
-            .join("agent-runs")
-            .join(&run_id);
-        let source = self.workspace();
-        let candidate = agent_run::prepare_agent_workspace(&agent_root, &source)?;
-        let execution = agent.execute(&task, candidate.workspace.path())?;
-        let changes = agent_run::workspace_changes(&source, &candidate.workspace)?;
-        let mut run = CodingAgentRun {
-            run_id,
-            proposal_id: self.id().to_string(),
-            agent: agent.kind().as_str().to_string(),
-            argv: execution.argv.clone(),
-            prompt_sha256: agent_run::prompt_hash(&rendered_prompt),
-            exit_code: execution.exit_code,
-            success: execution.success,
-            synced: false,
-            stdout: execution.stdout,
-            stderr: execution.stderr,
-            duration_ms: execution.duration_ms,
-            created_at: crate::request::unix_now(),
-            added_files: changes.added.clone(),
-            changed_files: changes.changed.clone(),
-            removed_files: changes.removed.clone(),
-        };
-
-        if execution.success && !changes.is_empty() {
-            let manifest = match agent_run::validate_candidate(
-                &candidate.workspace,
-                &self.proposal.plugin_name,
-                &environment_reference,
-            ) {
-                Ok(manifest) => manifest,
-                Err(error) => {
-                    run.write(&self.reports_dir())?;
-                    return Err(error);
-                }
-            };
-            agent_run::adopt_candidate(&source, &candidate.workspace, &changes)?;
-            let node_kinds = manifest
-                .nodes
-                .iter()
-                .map(|node| node.kind.clone())
-                .collect::<Vec<_>>();
-            self.mutate(|proposal| {
-                proposal.node_kinds = node_kinds;
-                proposal.latest_report = None;
-                if proposal.status == ProposalStatus::Validating {
-                    proposal.status = ProposalStatus::NeedsFix;
-                }
-            })?;
-            run.synced = true;
-        }
-
-        run.write(&self.reports_dir())?;
-        Ok(run)
-    }
-
     fn refresh(&mut self) -> Result<()> {
         self.proposal = self.store.load(self.id())?;
         Ok(())
@@ -402,6 +367,49 @@ impl<'a> PluginDevelopment<'a> {
                 self.proposal.status
             )))
         }
+    }
+
+    fn ensure_development_candidate_editable(&self) -> Result<()> {
+        if matches!(
+            self.proposal.status,
+            ProposalStatus::Draft | ProposalStatus::Validating | ProposalStatus::NeedsFix
+        ) {
+            Ok(())
+        } else {
+            Err(Error::Validation(format!(
+                "development candidates cannot run from status {:?}",
+                self.proposal.status
+            )))
+        }
+    }
+
+    fn environment_reference(&self) -> Result<String> {
+        self.proposal.environment_reference.clone().ok_or_else(|| {
+            Error::Validation(
+                "proposal must bind an environment before specialized development".into(),
+            )
+        })
+    }
+
+    fn development_candidate_root(&self, run_id: &str) -> Result<std::path::PathBuf> {
+        let valid = !run_id.is_empty()
+            && run_id.len() <= 128
+            && run_id.chars().all(|character| {
+                character.is_ascii_lowercase()
+                    || character.is_ascii_digit()
+                    || character == '-'
+                    || character == '_'
+            });
+        if !valid {
+            return Err(Error::Validation(
+                "development candidate id must be `[a-z0-9_-]` and at most 128 bytes".into(),
+            ));
+        }
+        Ok(self
+            .store
+            .proposal_path(self.id())
+            .join("development-candidates")
+            .join(run_id))
     }
 
     fn validate_node(&self, node: &NodeDefinition) -> Result<()> {

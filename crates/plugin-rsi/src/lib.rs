@@ -5,7 +5,7 @@
 //! narrow host-owned API; they never receive raw git, gh, host-filesystem, or
 //! live-registry access.
 
-mod agent_run;
+mod candidate;
 pub mod development;
 pub mod error;
 pub mod github;
@@ -16,10 +16,11 @@ pub mod node;
 pub mod proposal;
 pub mod report;
 pub mod request;
+pub mod tools;
 pub mod validate;
 pub mod workspace;
 
-pub use agent_run::CodingAgentRun;
+pub use candidate::DevelopmentChanges;
 pub use development::PluginDevelopment;
 pub use error::{Error, Result};
 pub use github::{GhPublisher, GhPublisherConfig, GhStatus};
@@ -30,5 +31,6 @@ pub use node::NodeDevelopment;
 pub use proposal::{Proposal, ProposalAction, ProposalStatus, ProposalStore};
 pub use report::{GateResult, GateStatus, ValidationReport};
 pub use request::{RequestIntent, RequestRecord, RequestSource, RequestStatus, RequestStore};
+pub use tools::{PluginDevelopmentToolsetRegistry, plugin_development_tool_registrations};
 pub use validate::{Environment, EnvironmentCatalog, validate_workspace};
 pub use workspace::ProposalWorkspace;

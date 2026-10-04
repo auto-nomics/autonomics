@@ -6,9 +6,13 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-coding-agent = { path = "../coding-agent" }
+agentik-core = { path = "../agentik-core" }
+agentik-proc = { path = "../agentik-proc" }
+agentik-sdk = { path = "../agentik-sdk" }
+async-trait.workspace = true
 container-plugin = { path = "../container-plugin" }
 container-runtime = { path = "../container-runtime" }
+schemars.workspace = true
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
@@ -17,6 +21,7 @@ toml = "1"
 
 [dev-dependencies]
 tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt"] }
 
 [lints]
 workspace = true
