@@ -1180,7 +1180,9 @@ mod tests {
         let prompt = RuntimeConfig::default().system_prompt_or_default();
 
         assert!(prompt.contains("**Prefer dedicated nodes**"));
-        assert!(prompt.contains("**Terminal visualization only**"));
+        // Marker reworded in 936d68e6 (visualization became a manifest
+        // plugin); the bullet still forbids computation in the sink.
+        assert!(prompt.contains("**Visualization**: the `visualization` manifest plugin"));
         assert!(!prompt.contains("python_script"));
         assert!(!prompt.contains("r_script"));
         assert!(!prompt.contains("container_command"));
