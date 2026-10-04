@@ -7343,6 +7343,7 @@ dependencies = [
  "linfa-trees",
  "linfa-tsne",
  "ndarray 0.16.1",
+ "rand 0.8.8",
  "rand 0.9.5",
  "rand_chacha 0.9.0",
  "serde",

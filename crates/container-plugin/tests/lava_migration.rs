@@ -114,11 +114,11 @@ fn lava_plugin_compiles_to_the_legacy_wrapper_contract() {
     assert_eq!(compiled.env.get("LAVA_TARGET").unwrap(), "");
     assert_eq!(compiled.env.get("LAVA_LOCUS_INDEX").unwrap(), "1");
     assert_eq!(compiled.env.get("LAVA_LOCUS_ID").unwrap(), "");
-    assert_eq!(compiled.env.get("LAVA_VARIANCES").unwrap(), "false");
+    assert_eq!(compiled.env.get("LAVA_VARIANCES").unwrap(), "");
     assert_eq!(compiled.env.get("LAVA_ADAP_THRESH").unwrap(), "");
     assert_eq!(compiled.env.get("LAVA_P_VALUES").unwrap(), "true");
     assert_eq!(compiled.env.get("LAVA_CIS").unwrap(), "true");
-    assert_eq!(compiled.env.get("LAVA_ONLY_FULL_MODEL").unwrap(), "false");
+    assert_eq!(compiled.env.get("LAVA_ONLY_FULL_MODEL").unwrap(), "");
     assert_eq!(compiled.env.get("LAVA_MAX_R2").unwrap(), "0.95");
 
     let script = compiled.script.as_deref().unwrap();

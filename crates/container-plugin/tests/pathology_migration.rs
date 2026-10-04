@@ -121,8 +121,10 @@ fn expected_cases() -> Vec<Expected> {
             settings_key: "PATHOLOGY_EMBED_SETTINGS",
             // The legacy serializer kept `gpus` inside the blob (the runner
             // ignores it); the template hardcodes the same value as
-            // [nodes.resources].gpus for byte parity.
-            settings_default: r#"{"batch_size":32,"device":"auto","amp":false,"gpus":"all"}"#,
+            // [nodes.resources].gpus for byte parity. `amp` defaults to
+            // false, which the host renders as "" (presence semantics); the
+            // runner repairs the empty JSON value back to false.
+            settings_default: r#"{"batch_size":32,"device":"auto","amp":,"gpus":"all"}"#,
             outputs: &[("embeddings.h5", "hdf5"), ("embed_meta.json", "json")],
             timeout_secs: 7200,
             artifact_prefix: "/artifacts/pathology_wsi_embed",

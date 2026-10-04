@@ -203,7 +203,10 @@ impl Default for TsneOptions {
     fn default() -> Self {
         Self {
             embedding_size: 2,
-            approx_threshold: 350.0,
+            // linfa-tsne's own default Barnes-Hut θ (0.5); the previous
+            // 350.0 effectively disabled the quadtree approximation and
+            // silently ran exact t-SNE at O(n²) cost.
+            approx_threshold: 0.5,
             perplexity: 5.0,
             max_iter: 1000,
             seed: 42,
@@ -229,9 +232,11 @@ pub fn tsne(data: &Mat<f64>, opts: &TsneOptions) -> Result<TsneModel> {
 
     let ndarray_data = faer_to_ndarray(data);
 
-    // linfa-tsne uses rand 0.8 internally; we use the default SmallRng.
-    // For reproducibility, set perplexity and approx_threshold carefully.
-    let embedding = TSneParams::embedding_size(opts.embedding_size)
+    // Seed the RNG instead of linfa-tsne's fixed SmallRng(42) so callers
+    // control reproducibility through `TsneOptions::seed`.
+    use rand08::SeedableRng;
+    let rng = rand08::rngs::SmallRng::seed_from_u64(opts.seed);
+    let embedding = TSneParams::embedding_size_with_rng(opts.embedding_size, rng)
         .approx_threshold(opts.approx_threshold)
         .perplexity(opts.perplexity)
         .max_iter(opts.max_iter)
