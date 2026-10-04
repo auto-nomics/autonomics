@@ -22,6 +22,8 @@ use tracing::{debug, info_span, warn};
 use super::utils::{build_input_bindings, build_inputs, cascade_skip};
 
 use super::error::DagError;
+use super::logical::LogicalGraph;
+use super::physical::PhysicalJobRef;
 use super::runtime::{
     InputBinding, InputHashing, NodeReport, NodeRunDetails, RunReport, RuntimeStatus,
     SchedulerConfig, SchemaReport,
@@ -257,6 +259,10 @@ pub struct DAG {
     /// (see [`NodeReporter::set_run_details`]). Same per-run lifetime as
     /// `input_bindings`.
     node_run_details: HashMap<NodeId, NodeRunDetails>,
+    /// Logical provenance for jobs installed from an expanded logical graph.
+    pub(crate) physical_jobs: HashMap<NodeId, PhysicalJobRef>,
+    /// Logical source graphs whose compiled jobs are installed in this DAG.
+    pub(crate) logical_graphs: Vec<LogicalGraph>,
 }
 
 impl DAG {
@@ -358,6 +364,8 @@ impl DAG {
         self.fingerprints.clear();
         self.input_bindings.clear();
         self.node_run_details.clear();
+        self.physical_jobs.clear();
+        self.logical_graphs.clear();
     }
 
     /// Reset all node statuses to [`RuntimeStatus::Pending`] and drop every
@@ -1233,11 +1241,16 @@ impl DAG {
                 let execution = self.node_run_details.get(id).cloned();
                 let inputs = self.input_bindings.get(id).cloned().unwrap_or_default();
                 let fingerprint = self.fingerprints.get(id).cloned();
+                let physical_job = self.physical_jobs.get(id);
 
                 NodeReport {
                     id: id.clone(),
                     status,
                     node_type,
+                    logical_node: physical_job.map(|job| job.logical_node.clone()),
+                    physical_job_id: physical_job.map(|_| id.clone()),
+                    scatter_axis: physical_job.and_then(|job| job.axis.clone()),
+                    item_key: physical_job.and_then(|job| job.item_key.clone()),
                     output_type,
                     output_files,
                     port_assignments,
@@ -1464,6 +1477,19 @@ impl DAG {
         self.outputs.remove(id);
         self.specs.remove(id);
         self.fingerprints.remove(id);
+        if let Some(job) = self.physical_jobs.remove(id) {
+            self.logical_graphs.retain(|graph| {
+                let contains_deleted_source =
+                    graph.nodes().iter().any(|node| node.id == job.logical_node);
+                let has_remaining_job = self.physical_jobs.values().any(|remaining| {
+                    graph
+                        .nodes()
+                        .iter()
+                        .any(|node| node.id == remaining.logical_node)
+                });
+                !contains_deleted_source || has_remaining_job
+            });
+        }
         Ok(())
     }
 
@@ -2027,6 +2053,7 @@ impl DAG {
                 spec: spec.clone(),
             });
         }
+        nodes.sort_by(|left, right| left.id.cmp(&right.id));
 
         let mut edges = Vec::new();
         for edge in self.graph.edge_references() {
@@ -2041,7 +2068,25 @@ impl DAG {
             });
         }
 
-        super::history::DagManifest { nodes, edges }
+        super::history::DagManifest {
+            schema_version: super::history::MANIFEST_SCHEMA_VERSION,
+            logical: super::history::LogicalManifest {
+                compiler_version: super::history::LOGICAL_COMPILER_VERSION,
+                graphs: self.logical_graphs.clone(),
+            },
+            nodes,
+            edges,
+            physical_jobs: self
+                .physical_jobs
+                .iter()
+                .map(|(id, job)| (id.clone(), job.clone()))
+                .collect(),
+        }
+    }
+
+    /// Return the retained logical source graphs.
+    pub fn logical_graphs(&self) -> &[LogicalGraph] {
+        &self.logical_graphs
     }
 
     /// Whether a spec has been retained for `id` (i.e. the node was added via

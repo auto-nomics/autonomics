@@ -17,7 +17,7 @@
 //!     id              TEXT PRIMARY KEY,   -- blake3(parent_id || manifest_hash || ts)
 //!     parent_id       TEXT,               -- predecessor snapshot (NULL = root)
 //!     manifest_hash   TEXT NOT NULL,      -- blake3 of canonical manifest JSON
-//!     manifest_json   TEXT NOT NULL,      -- full DAG blueprint (nodes + edges + specs)
+//!     manifest_json   TEXT NOT NULL,      -- logical source + physical blueprint
 //!     run_report_json TEXT,               -- serialized RunReport (NULL if saved without running)
 //!     timestamp       TEXT NOT NULL,      -- ISO 8601 UTC
 //!     message         TEXT NOT NULL,      -- human-readable label
@@ -48,6 +48,7 @@
 //! );
 //! ```
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use blake3::Hasher;
@@ -56,18 +57,74 @@ use turso::{Value, params_from_iter};
 
 use super::NodeId;
 use super::error::DagError;
+use super::logical::LogicalGraph;
+use super::physical::PhysicalJobRef;
 
 // ── content-addressable data model ───────────────────────────────────────────
 
-/// A pure-data, fully serializable description of a DAG's topology + node
-/// configuration — sufficient to reconstruct the DAG from a [`crate::registry::NodeRegistry`].
+/// Current shape of the persisted DAG manifest.
+///
+/// Version 1 contained only the expanded physical graph. Version 2 adds the
+/// logical source graph(s) and explicit physical-job provenance while keeping
+/// those original physical `nodes`/`edges` fields at the top level for
+/// backward-compatible deserialization.
+pub const MANIFEST_SCHEMA_VERSION: u16 = 2;
+
+/// Version of the logical-to-physical expansion semantics.
+///
+/// The stored physical graph remains authoritative for exact restore. This
+/// version makes compiler drift visible when a historical logical graph is
+/// re-expanded with a newer planner.
+pub const LOGICAL_COMPILER_VERSION: u16 = 1;
+
+/// A pure-data, fully serializable description of a DAG's logical source and
+/// expanded physical topology — sufficient to reconstruct the DAG from a
+/// [`crate::registry::NodeRegistry`].
 ///
 /// This is the "tree" object (to borrow git terminology): its content hash
 /// identifies a unique DAG configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DagManifest {
+    #[serde(default = "default_manifest_schema_version")]
+    pub schema_version: u16,
+    #[serde(default)]
+    pub logical: LogicalManifest,
     pub nodes: Vec<NodeEntry>,
     pub edges: Vec<EdgeEntry>,
+    #[serde(default)]
+    pub physical_jobs: BTreeMap<NodeId, PhysicalJobRef>,
+}
+
+/// The logical source layer persisted alongside its compiled physical graph.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogicalManifest {
+    #[serde(default = "default_logical_compiler_version")]
+    pub compiler_version: u16,
+    #[serde(default)]
+    pub graphs: Vec<LogicalGraph>,
+}
+
+impl Default for LogicalManifest {
+    fn default() -> Self {
+        Self {
+            compiler_version: default_logical_compiler_version(),
+            graphs: Vec::new(),
+        }
+    }
+}
+
+impl Default for DagManifest {
+    fn default() -> Self {
+        Self::from_parts(Vec::new(), Vec::new())
+    }
+}
+
+fn default_manifest_schema_version() -> u16 {
+    1
+}
+
+fn default_logical_compiler_version() -> u16 {
+    LOGICAL_COMPILER_VERSION
 }
 
 /// One node's identity + configuration in a manifest.
@@ -91,10 +148,53 @@ pub struct EdgeEntry {
 }
 
 impl DagManifest {
+    /// Validate cross-layer metadata before persisting or restoring a manifest.
+    pub fn validate_layers(&self) -> Result<(), DagError> {
+        if self.schema_version == 0 || self.schema_version > MANIFEST_SCHEMA_VERSION {
+            return Err(DagError::History(format!(
+                "unsupported DAG manifest schema version {} (supported: 1..={MANIFEST_SCHEMA_VERSION})",
+                self.schema_version
+            )));
+        }
+        if self.logical.compiler_version > LOGICAL_COMPILER_VERSION {
+            return Err(DagError::History(format!(
+                "unsupported logical compiler version {} (supported: <={LOGICAL_COMPILER_VERSION})",
+                self.logical.compiler_version
+            )));
+        }
+
+        let physical_ids = self
+            .nodes
+            .iter()
+            .map(|node| node.id.as_str())
+            .collect::<BTreeSet<_>>();
+        let logical_ids = self
+            .logical
+            .graphs
+            .iter()
+            .flat_map(|graph| graph.nodes().iter().map(|node| node.id.as_str()))
+            .collect::<BTreeSet<_>>();
+        for (physical_id, job) in &self.physical_jobs {
+            if !physical_ids.contains(physical_id.as_str()) {
+                return Err(DagError::History(format!(
+                    "physical job provenance references missing physical node `{physical_id}`"
+                )));
+            }
+            if !logical_ids.contains(job.logical_node.as_str()) {
+                return Err(DagError::History(format!(
+                    "physical node `{physical_id}` references missing logical node `{}`",
+                    job.logical_node
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// Compute the blake3 content hash of this manifest's canonical JSON form.
     ///
-    /// Two manifests with the same nodes + edges (in the same order) always
-    /// produce the same hash — enabling dedup at the storage layer.
+    /// Two manifests with the same logical graphs, physical nodes + edges, and
+    /// physical-job provenance always produce the same hash — enabling dedup at
+    /// the storage layer.
     pub fn content_hash(&self) -> String {
         // serde_json with sorted keys gives a canonical byte sequence.
         let json = serde_json::to_vec(self).unwrap_or_default();
@@ -105,7 +205,13 @@ impl DagManifest {
 
     /// Build a manifest from raw DAG state (used by [`super::graph::DAG::to_manifest`]).
     pub fn from_parts(nodes: Vec<NodeEntry>, edges: Vec<EdgeEntry>) -> Self {
-        DagManifest { nodes, edges }
+        DagManifest {
+            schema_version: MANIFEST_SCHEMA_VERSION,
+            logical: LogicalManifest::default(),
+            nodes,
+            edges,
+            physical_jobs: BTreeMap::new(),
+        }
     }
 }
 
@@ -320,6 +426,7 @@ impl DagHistory {
         run_report: Option<&impl Serialize>,
         message: &str,
     ) -> Result<String, DagError> {
+        manifest.validate_layers()?;
         let manifest_hash = manifest.content_hash();
         let manifest_json = serde_json::to_string(manifest)
             .map_err(|e| DagError::History(format!("manifest serialization failed: {e}")))?;
@@ -864,6 +971,7 @@ mod tests {
                 spec: serde_json::json!({"path": "/tmp/x.csv"}),
             }],
             edges: vec![],
+            ..Default::default()
         };
 
         let id1 = history
@@ -893,6 +1001,7 @@ mod tests {
                 spec: serde_json::json!({}),
             }],
             edges: vec![],
+            ..Default::default()
         };
         let m2 = DagManifest {
             nodes: vec![
@@ -908,6 +1017,7 @@ mod tests {
                 },
             ],
             edges: vec![],
+            ..Default::default()
         };
 
         let _ = history
@@ -937,6 +1047,7 @@ mod tests {
                 spec: serde_json::json!({}),
             }],
             edges: vec![],
+            ..Default::default()
         };
 
         let id1 = history
@@ -979,11 +1090,90 @@ mod tests {
                 to: "y".into(),
                 to_port: 0,
             }],
+            ..Default::default()
         };
         let h1 = m.content_hash();
         let h2 = m.content_hash();
         assert_eq!(h1, h2);
         assert_eq!(h1.len(), 64); // blake3 hex = 32 bytes = 64 chars
+    }
+
+    #[test]
+    fn manifest_deserializes_v1_physical_only_snapshots() {
+        let manifest: DagManifest = serde_json::from_str(r#"{"nodes":[],"edges":[]}"#).unwrap();
+        assert_eq!(manifest.schema_version, 1);
+        assert!(manifest.logical.graphs.is_empty());
+        assert!(manifest.physical_jobs.is_empty());
+    }
+
+    #[test]
+    fn manifest_roundtrips_logical_and_physical_layers() {
+        let graph = super::super::LogicalGraph::builder()
+            .add_node(super::super::LogicalNode::for_each(
+                "read",
+                "file_to_dataframe",
+                serde_json::json!({"path": "{{item.path}}"}),
+                "sample",
+                vec![serde_json::json!({"key": "a", "path": "/tmp/a.csv"})],
+            ))
+            .build();
+        let manifest = DagManifest {
+            logical: LogicalManifest {
+                graphs: vec![graph],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let encoded = serde_json::to_string(&manifest).unwrap();
+        let decoded: DagManifest = serde_json::from_str(&encoded).unwrap();
+
+        assert_eq!(decoded.schema_version, MANIFEST_SCHEMA_VERSION);
+        assert_eq!(decoded.logical.compiler_version, LOGICAL_COMPILER_VERSION);
+        assert_eq!(decoded.logical.graphs.len(), 1);
+        assert_eq!(decoded.logical.graphs[0].nodes()[0].id, "read");
+    }
+
+    #[tokio::test]
+    async fn commit_rejects_invalid_layer_provenance() {
+        let history = DagHistory::open_in_memory().await.unwrap();
+        let manifest = DagManifest {
+            nodes: vec![NodeEntry {
+                id: "read#sample=a".into(),
+                kind: "echo".into(),
+                spec: serde_json::json!({}),
+            }],
+            physical_jobs: BTreeMap::from([(
+                "read#sample=a".to_string(),
+                PhysicalJobRef {
+                    logical_node: "read".to_string(),
+                    axis: Some("sample".to_string()),
+                    item_key: Some("a".to_string()),
+                    item: Some(serde_json::json!({"key": "a"})),
+                },
+            )]),
+            ..Default::default()
+        };
+
+        let error = history
+            .commit("main", &manifest, None::<&RunReportStub>, "invalid")
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("missing logical node `read`"));
+    }
+
+    #[test]
+    fn rejects_unknown_manifest_schema_version() {
+        let manifest = DagManifest {
+            schema_version: MANIFEST_SCHEMA_VERSION + 1,
+            ..Default::default()
+        };
+        let error = manifest.validate_layers().unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported DAG manifest schema")
+        );
     }
 
     /// A stub type implementing Serialize to stand in for RunReport in tests.
@@ -1021,6 +1211,7 @@ mod tests {
                 spec: serde_json::json!({}),
             }],
             edges: vec![],
+            ..Default::default()
         };
         let snapshot_id = history
             .commit("main", &manifest, None::<&RunReportStub>, "v1")
@@ -1064,6 +1255,7 @@ mod tests {
         let manifest = DagManifest {
             nodes: vec![],
             edges: vec![],
+            ..Default::default()
         };
         let _ = history
             .commit("main", &manifest, None::<&RunReportStub>, "v1")

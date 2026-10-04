@@ -10,7 +10,7 @@
 //!   dag_history_cli refs
 //!       列出所有 ref（branch / tag）
 //!   dag_history_cli manifest <snapshot_id>
-//!       打印快照的 manifest（nodes + edges），pretty JSON
+//!       打印快照的双层 manifest，pretty JSON
 //!   dag_history_cli diff <old_id> <new_id>
 //!       对比两次快照的 manifest 差异
 //!   dag_history_cli branch <new_name> [--from REF]
@@ -188,11 +188,24 @@ async fn cmd_show(history: &DagHistory, rest: &[String]) -> Result<()> {
     // Manifest 概要
     if let Ok(manifest) = snap.manifest() {
         println!("\nManifest 概要:");
-        println!("  节点: {} 个", manifest.nodes.len());
+        println!(
+            "  Schema: {}（logical graphs: {}, physical jobs: {}）",
+            manifest.schema_version,
+            manifest.logical.graphs.len(),
+            manifest.physical_jobs.len()
+        );
+        for (index, graph) in manifest.logical.graphs.iter().enumerate() {
+            println!(
+                "  逻辑图 #{index}: {} 个节点, {} 条边",
+                graph.nodes().len(),
+                graph.edges().len()
+            );
+        }
+        println!("  物理节点: {} 个", manifest.nodes.len());
         for n in &manifest.nodes {
             println!("    • {} ({})", n.id, n.kind);
         }
-        println!("  边: {} 条", manifest.edges.len());
+        println!("  物理边: {} 条", manifest.edges.len());
         for e in &manifest.edges {
             println!(
                 "    • {}.[{}] → {}.[{}]",

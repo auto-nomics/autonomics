@@ -12,7 +12,9 @@ pub mod error;
 pub mod export;
 pub mod graph;
 pub mod history;
+pub mod logical;
 pub mod node_event;
+pub mod physical;
 pub mod runtime;
 pub mod utils;
 pub mod view;
@@ -25,6 +27,13 @@ pub use error::{DagError, NodeError};
 pub use export::{ExportFile, ExportFormat, ExportSummary, SkippedFile};
 pub use graph::DAG;
 pub use history::{DagHistory, DagManifest, RunRecord, Snapshot};
+pub use logical::{
+    LogicalEdge, LogicalExecutionStrategy, LogicalGraph, LogicalGraphBuilder, LogicalNode,
+    LogicalNodeDefinition,
+};
+pub use physical::{
+    GatherNode, PhysicalEdge, PhysicalGraph, PhysicalInstallReport, PhysicalJobRef, PhysicalNode,
+};
 pub use runtime::{
     InputBinding, InputHashing, NodeRunDetails, RunReport, RuntimeStatus, SchedulerConfig,
 };
