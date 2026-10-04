@@ -20,10 +20,6 @@ use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 use std::sync::Arc;
 
-fn default_bonf() -> String {
-    "bonferroni".to_string()
-}
-
 fn default_alpha() -> f64 {
     0.05
 }
@@ -273,9 +269,15 @@ impl DagNode for BooleanNode {
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct AdjustNodeSpec {
-    #[serde(default = "default_bonf")]
-    pub method: String,
+    /// Adjustment method (R `p.adjust` names). If omitted, Bonferroni is used
+    /// and a WARN is emitted at runtime — research DAGs should set it
+    /// explicitly (e.g. BH / BY).
+    pub method: Option<String>,
     pub p_column: Option<String>,
+    /// Family-size override (R `p.adjust(..., n = …)`). Defaults to the total
+    /// row count across all batches, including rows with a null p-value
+    /// (null rows count toward n and keep a null `p_adj`, mirroring
+    /// `p.adjust(p, n = length(p))` with NA rows).
     pub n_total: Option<usize>,
     #[serde(default = "default_alpha")]
     pub alpha: f64,
@@ -290,8 +292,11 @@ impl NodeFactory for AdjustNodeFactory {
         "Multiple-testing correction (Bonferroni/Holm/BH/BY/...)."
     }
     fn doc(&self) -> &'static str {
-        "Applies p.adjust to a column of p-values, adding p_adj and reject \
-        (p_adj < alpha) to the output."
+        "Applies p.adjust once over the full family (all input batches, \
+        order preserved), appending p_adj and reject (p_adj < alpha) to \
+        every batch. Rows with a null p keep a null p_adj/reject and still \
+        count toward the family size n. Set method explicitly: omitting it \
+        defaults to Bonferroni with a runtime WARN."
     }
     fn spec_schema(&self) -> schemars::Schema {
         schema_for!(AdjustNodeSpec)
@@ -305,8 +310,10 @@ impl NodeFactory for AdjustNodeFactory {
         _: NodeCtx,
     ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let s: AdjustNodeSpec = serde_json::from_value(spec)?;
-        h::AdjustMethod::parse(&s.method)
-            .map_err(|e| dag_core::registry::error::Error::Unknown(e.to_string()))?;
+        if let Some(m) = &s.method {
+            h::AdjustMethod::parse(m)
+                .map_err(|e| dag_core::registry::error::Error::Unknown(e.to_string()))?;
+        }
         if !(0.0..=1.0).contains(&s.alpha) || s.alpha == 0.0 {
             return Err(dag_core::registry::error::Error::Unknown(
                 "alpha must be in (0, 1]".into(),
@@ -341,50 +348,89 @@ impl DagNode for AdjustNode {
         &mut self,
         ctx: &NodeCtx,
         inputs: &[NodeInput],
-        _r: &dag_core::dag::node_event::NodeReporter,
+        reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<dag_core::dag::graph::PortOutputs, DagError> {
         let batches = collect_input(inputs).await?;
         let pcol = self.spec.p_column.as_deref().unwrap_or("p_value");
-        let pvals = extract_f64_column(&batches, pcol)?;
-        let method = h::AdjustMethod::parse(&self.spec.method)
-            .map_err(|e| HypoNodeError::Spec(e.to_string()))?;
-        let adjusted = h::p_adjust_raw(&pvals, method, self.spec.n_total)
-            .map_err(|e| HypoNodeError::Test(e.to_string()))?;
+        // Full family in input order across all batches, nulls kept in place.
+        let pvals = extract_opt_f64_column(&batches, pcol)?;
+        let n_total = pvals.len();
+        let n_eff = self.spec.n_total.unwrap_or(n_total);
 
-        // Build output: same input batch but with `p_adj` column appended.
-        let batch = &batches[0];
-        let schema = batch.schema();
-        let mut fields: Vec<arrow_schema::FieldRef> = schema.fields().iter().cloned().collect();
-        let mut cols: Vec<Arc<dyn arrow_array::Array>> = batch.columns().to_vec();
-        fields.push(Arc::new(Field::new("p_adj", DataType::Float64, false)));
-        cols.push(Arc::new(Float64Array::from(adjusted.clone())));
-        fields.push(Arc::new(Field::new("reject", DataType::Int32, false)));
-        cols.push(Arc::new(Int32Array::from(
-            adjusted
+        let method = match &self.spec.method {
+            Some(m) => h::AdjustMethod::parse(m).map_err(|e| HypoNodeError::Spec(e.to_string()))?,
+            None => {
+                // Default kept for backward compatibility, but never silent:
+                // a research DAG must choose its FDR/FWER procedure.
+                let msg = "hypothesize.adjust_pvalues: 'method' not set; defaulting to \
+                           Bonferroni. Set method explicitly (e.g. BH/BY) in research DAGs.";
+                tracing::warn!("{msg}");
+                reporter.warn(msg);
+                h::AdjustMethod::Bonferroni
+            }
+        };
+
+        // One family-wide adjustment over the estimable p-values; null rows
+        // stay null in p_adj/reject but still count toward n (R semantics
+        // for p.adjust(p, n = length(p)) with NA rows).
+        let mut adjusted_full: Vec<Option<f64>> = vec![None; n_total];
+        let nonnull: Vec<f64> = pvals.iter().flatten().copied().collect();
+        if !nonnull.is_empty() {
+            let adjusted = h::p_adjust_raw(&nonnull, method, Some(n_eff))
+                .map_err(|e| HypoNodeError::Test(e.to_string()))?;
+            let mut k = 0;
+            for (i, p) in pvals.iter().enumerate() {
+                if p.is_some() {
+                    adjusted_full[i] = Some(adjusted[k]);
+                    k += 1;
+                }
+            }
+        }
+
+        // Per-batch backfill: every batch keeps its row count and order,
+        // with p_adj (Float64, nullable) and reject (Int32, nullable; null p
+        // → null, not 0) appended.
+        let mut dfs = Vec::new();
+        let mut offset = 0usize;
+        for batch in &batches {
+            let rows = batch.num_rows();
+            let slice = &adjusted_full[offset..offset + rows];
+            offset += rows;
+
+            let p_adj: Float64Array = slice.iter().copied().collect();
+            let reject: Int32Array = slice
                 .iter()
-                .map(|&p| if p < self.spec.alpha { 1 } else { 0 })
-                .collect::<Vec<_>>(),
-        )));
+                .map(|p| p.map(|v| if v < self.spec.alpha { 1 } else { 0 }))
+                .collect();
 
-        let new_batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), cols)
-            .map_err(|e| HypoNodeError::ReadBatch(e.to_string()))?;
-        let session = ctx.session();
-        let df = session
-            .read_batch(new_batch)
-            .map_err(|e| HypoNodeError::ReadBatch(e.to_string()))?;
+            let schema = batch.schema();
+            let mut fields: Vec<arrow_schema::FieldRef> = schema.fields().iter().cloned().collect();
+            let mut cols: Vec<Arc<dyn arrow_array::Array>> = batch.columns().to_vec();
+            fields.push(Arc::new(Field::new("p_adj", DataType::Float64, true)));
+            cols.push(Arc::new(p_adj));
+            fields.push(Arc::new(Field::new("reject", DataType::Int32, true)));
+            cols.push(Arc::new(reject));
+
+            let new_batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), cols)
+                .map_err(|e| HypoNodeError::ReadBatch(e.to_string()))?;
+            let df = ctx
+                .session()
+                .read_batch(new_batch)
+                .map_err(|e| HypoNodeError::ReadBatch(e.to_string()))?;
+            dfs.push(df);
+        }
+
+        let mut dfs = dfs.into_iter();
+        let mut df = dfs
+            .next()
+            .ok_or_else(|| HypoNodeError::Insufficient("no input batches".into()))?;
+        for other in dfs {
+            df = df
+                .union(other)
+                .map_err(|e| HypoNodeError::Output(e.to_string()))?;
+        }
         let mut res = dag_core::dag::graph::PortOutputs::new();
         res.insert(0, df);
         Ok(res)
-    }
-}
-
-// Helper trait to reassign p_value (for complement op on raw p-value lists).
-trait ReassignPval {
-    fn reassign_pval(self, p: f64) -> Self;
-}
-impl ReassignPval for h::HypothesisTest {
-    fn reassign_pval(mut self, p: f64) -> Self {
-        self.p_value = p;
-        self
     }
 }
