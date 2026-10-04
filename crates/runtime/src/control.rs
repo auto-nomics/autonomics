@@ -17,6 +17,12 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
+/// How long [`HostControl::deliver_message_tracked`] waits for the host
+/// loop to confirm delivery before giving up (`None`). Generous on purpose:
+/// the host loop also drains agent events, so a busy runtime can sit on a
+/// command for a while — this only fires when the loop is wedged or gone.
+const DELIVERY_CONFIRM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// A clonable handle for sending commands to RuntimeHost.
 #[derive(Clone)]
 pub struct HostControl {
@@ -89,7 +95,34 @@ impl HostControl {
         self.fire(HostCommand::DeliverMessage {
             name: name.into(),
             message: message.into(),
+            reply_tx: None,
         });
+    }
+
+    /// Deliver a user message and await the host's delivery confirmation.
+    ///
+    /// Unlike [`deliver_message`](Self::deliver_message), an accepted call
+    /// means the runtime actually resolved a live agent and enqueued the
+    /// message. Returns `None` when the host loop is unreachable or stays
+    /// silent for [`DELIVERY_CONFIRM_TIMEOUT`] — the historical failure mode
+    /// where messages were acknowledged but silently dropped (empty registry
+    /// after a restart, exited agent loop) surfaces as an error instead.
+    pub async fn deliver_message_tracked(
+        &self,
+        name: &str,
+        message: impl Into<String>,
+    ) -> Option<Result<(), String>> {
+        tokio::time::timeout(
+            DELIVERY_CONFIRM_TIMEOUT,
+            self.ask(|reply_tx| HostCommand::DeliverMessage {
+                name: name.into(),
+                message: message.into(),
+                reply_tx: Some(reply_tx),
+            }),
+        )
+        .await
+        .ok()
+        .flatten()
     }
 
     /// Delegate a task to a named agent and wait for its Done response.
@@ -475,7 +508,17 @@ pub enum HostCommand {
 
     /// Deliver a user message to a named agent (TUI → agent).
     /// Not inter-agent communication — use Delegate for that.
-    DeliverMessage { name: String, message: String },
+    ///
+    /// `reply_tx` is `None` for the fire-and-forget TUI path. The gateway
+    /// sets it so delivery failures (unknown agent, exited loop) are
+    /// reported to the HTTP caller instead of being acknowledged with a
+    /// blind 202. Reply: `Ok(())` once enqueued on the agent's command
+    /// channel, `Err(msg)` explaining why the message was dropped.
+    DeliverMessage {
+        name: String,
+        message: String,
+        reply_tx: Option<oneshot::Sender<Result<(), String>>>,
+    },
 
     /// Fire-and-forget inter-agent message (Phase 5). Unlike Delegate,
     /// the sender does NOT wait for the target's Done response — the
