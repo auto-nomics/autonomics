@@ -5,6 +5,7 @@
 //! narrow host-owned API; they never receive raw git, gh, host-filesystem, or
 //! live-registry access.
 
+pub mod development;
 pub mod error;
 pub mod github;
 pub mod gitrepo;
@@ -16,6 +17,7 @@ pub mod request;
 pub mod validate;
 pub mod workspace;
 
+pub use development::PluginDevelopment;
 pub use error::{Error, Result};
 pub use github::{GhPublisher, GhPublisherConfig, GhStatus};
 pub use gitrepo::GitRepo;

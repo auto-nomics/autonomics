@@ -74,7 +74,7 @@ fn greenfield_proposal_reaches_review_gate() {
     let requests = RequestStore::open(state.path());
     let request = requests.record(request()).unwrap();
     let proposals = ProposalStore::open(state.path(), "main", "Autonomics RSI", "rsi@example.com");
-    let proposal = proposals
+    let mut development = proposals
         .create(
             "demo-plugin",
             &[request.id.clone()],
@@ -82,36 +82,26 @@ fn greenfield_proposal_reaches_review_gate() {
             &requests,
         )
         .unwrap();
-    assert_eq!(proposal.image_reference, None);
-    proposals
-        .bind_approved_image(&proposal.proposal_id, "demo", &catalog())
-        .unwrap();
+    assert_eq!(development.proposal().image_reference, None);
+    development.bind_approved_image("demo", &catalog()).unwrap();
 
-    write_plugin(&proposals.workspace(&proposal.proposal_id).unwrap().unwrap());
-    proposals.start_validation(&proposal.proposal_id).unwrap();
-    let current = proposals.find(&proposal.proposal_id).unwrap().unwrap();
-    let report = validate_workspace(
-        &current,
-        &proposals.workspace(&proposal.proposal_id).unwrap().unwrap(),
-        &catalog(),
-        &[],
-        1,
-    );
+    write_plugin(&development.workspace());
+    development.start_validation().unwrap();
+    let current = development.proposal().clone();
+    let report = validate_workspace(&current, &development.workspace(), &catalog(), &[], 1);
     assert_eq!(report.overall, GateStatus::Pass, "{report:?}");
-    let reports_dir = proposals.reports_dir(&proposal.proposal_id);
+    let reports_dir = development.reports_dir();
     let report_path = report.write(&reports_dir).unwrap();
     let relative_report = report_path
         .strip_prefix(reports_dir.parent().unwrap())
         .unwrap()
         .to_string_lossy()
         .to_string();
-    proposals
-        .record_report(&proposal.proposal_id, &relative_report, &report)
+    development
+        .record_report(&relative_report, &report)
         .unwrap();
-    proposals
-        .snapshot(&proposal.proposal_id, "snapshot: attempt 1")
-        .unwrap();
-    proposals.submit(&proposal.proposal_id).unwrap();
-    let reviewed = proposals.approve(&proposal.proposal_id).unwrap();
+    development.snapshot("snapshot: attempt 1").unwrap();
+    development.submit().unwrap();
+    let reviewed = proposals.approve(development.id()).unwrap();
     assert!(reviewed.source_commit.is_some());
 }

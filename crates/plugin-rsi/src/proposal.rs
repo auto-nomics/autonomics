@@ -9,9 +9,8 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     ApprovedImage, Error, GitRepo, Result,
+    development::PluginDevelopment,
     request::{RequestStore, atomic_toml, unix_now},
-    validate::ImageCatalog,
-    workspace::ProposalWorkspace,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -92,7 +91,7 @@ impl ProposalStore {
         request_ids: &[String],
         rationale: &str,
         requests: &RequestStore,
-    ) -> Result<Proposal> {
+    ) -> Result<PluginDevelopment<'_>> {
         crate::validate_plugin_name(plugin_name)?;
         let node_kind = crate::derive_node_kind(plugin_name)?;
         let requested = BTreeSet::from_iter(request_ids.iter().cloned());
@@ -142,34 +141,7 @@ impl ProposalStore {
             updated_at: now,
         };
         self.save(&proposal)?;
-        Ok(proposal)
-    }
-
-    /// Bind an already-approved image to a proposal. New-image proposals will
-    /// use a separate trusted build result path instead of this method.
-    pub fn bind_approved_image(
-        &self,
-        id: &str,
-        image_id: &str,
-        catalog: &ImageCatalog,
-    ) -> Result<Proposal> {
-        let proposal = self.load(id)?;
-        if !matches!(
-            proposal.status,
-            ProposalStatus::Draft | ProposalStatus::Validating | ProposalStatus::NeedsFix
-        ) {
-            return Err(Error::Validation(format!(
-                "image cannot be bound from status {:?}",
-                proposal.status
-            )));
-        }
-        let image = catalog.get(image_id).ok_or_else(|| {
-            Error::Validation(format!("image {image_id:?} is not approved for RSI"))
-        })?;
-        self.update(id, |proposal| {
-            proposal.image_id = Some(image_id.to_string());
-            proposal.image_reference = Some(image.reference.to_string());
-        })
+        Ok(PluginDevelopment::new(self, proposal))
     }
 
     pub fn find(&self, id: &str) -> Result<Option<Proposal>> {
@@ -208,81 +180,11 @@ impl ProposalStore {
         Ok(proposals)
     }
 
-    pub fn workspace(&self, id: &str) -> Result<Option<ProposalWorkspace>> {
-        let proposal = self.find(id)?;
-        Ok(proposal.map(|_| ProposalWorkspace::new(self.proposal_path(id).join("repo"))))
-    }
-
-    pub fn reports_dir(&self, id: &str) -> PathBuf {
-        self.proposal_path(id).join("reports")
-    }
-
-    pub fn snapshot(&self, id: &str, message: &str) -> Result<Option<String>> {
-        let proposal = self.load(id)?;
-        if !matches!(
-            proposal.status,
-            ProposalStatus::Draft | ProposalStatus::Validating | ProposalStatus::NeedsFix
-        ) {
-            return Err(Error::InvalidTransition {
-                from: format!("{:?}", proposal.status),
-                to: "snapshot".into(),
-            });
-        }
-        let repo = GitRepo::open(self.proposal_path(id).join("repo"));
-        let commit = repo.snapshot_commit(message, &self.author_name, &self.author_email)?;
-        if let Some(commit) = &commit {
-            self.update(id, |proposal| {
-                proposal.source_commit = Some(commit.clone());
-            })?;
-        }
-        Ok(commit)
-    }
-
-    pub fn record_report(
-        &self,
-        id: &str,
-        relative_report: &str,
-        report: &crate::ValidationReport,
-    ) -> Result<Proposal> {
-        self.update(id, |proposal| {
-            proposal.latest_report = Some(relative_report.to_string());
-            if proposal.status == ProposalStatus::Validating && !report.passed() {
-                proposal.status = ProposalStatus::NeedsFix;
-            }
-        })
-    }
-
-    pub fn start_validation(&self, id: &str) -> Result<Proposal> {
-        self.transition(id, ProposalStatus::Validating)
-    }
-
-    pub fn submit(&self, id: &str) -> Result<Proposal> {
-        let proposal = self.load(id)?;
-        self.ensure_transition(proposal.status, ProposalStatus::PendingReview)?;
-        let repo = GitRepo::open(self.proposal_path(id).join("repo"));
-        if !repo.is_clean()? {
-            return Err(Error::Validation(
-                "working tree is dirty; snapshot the reviewed content first".into(),
-            ));
-        }
-        let head = repo.head()?;
-        if proposal.source_commit.as_deref() != Some(head.as_str()) {
-            return Err(Error::Validation(
-                "proposal source_commit does not match repository HEAD".into(),
-            ));
-        }
-        if proposal.image_reference.is_none() {
-            return Err(Error::Validation(
-                "proposal has no digest-pinned image".into(),
-            ));
-        }
-        let report = self.latest_report(&proposal)?;
-        if !report.passed() {
-            return Err(Error::Validation(
-                "latest validation report did not pass".into(),
-            ));
-        }
-        self.transition(id, ProposalStatus::PendingReview)
+    /// Open the development handle for one existing proposal.
+    pub fn develop(&self, id: &str) -> Result<Option<PluginDevelopment<'_>>> {
+        Ok(self
+            .find(id)?
+            .map(|proposal| PluginDevelopment::new(self, proposal)))
     }
 
     pub fn approve(&self, id: &str) -> Result<Proposal> {
@@ -320,30 +222,13 @@ impl ProposalStore {
         self.transition(id, ProposalStatus::Installed)
     }
 
-    pub fn latest_report(&self, proposal: &Proposal) -> Result<crate::ValidationReport> {
-        let relative = proposal
-            .latest_report
-            .as_deref()
-            .ok_or_else(|| Error::Validation("proposal has no validation report".into()))?;
-        let path = self.proposal_path(&proposal.proposal_id).join(relative);
-        if !path.is_file() {
-            return Err(Error::Validation(
-                "latest validation report is missing".into(),
-            ));
-        }
-        let text =
-            std::fs::read_to_string(&path).map_err(|source| Error::ReadFile { path, source })?;
-        serde_json::from_str(&text)
-            .map_err(|source| Error::Validation(format!("invalid report JSON: {source}")))
-    }
-
     pub(crate) fn transition(&self, id: &str, to: ProposalStatus) -> Result<Proposal> {
         let proposal = self.load(id)?;
         self.ensure_transition(proposal.status, to)?;
         self.update(id, |proposal| proposal.status = to)
     }
 
-    fn update<F>(&self, id: &str, mutate: F) -> Result<Proposal>
+    pub(crate) fn update<F>(&self, id: &str, mutate: F) -> Result<Proposal>
     where
         F: FnOnce(&mut Proposal),
     {
@@ -356,7 +241,7 @@ impl ProposalStore {
         Ok(proposal)
     }
 
-    fn ensure_transition(&self, from: ProposalStatus, to: ProposalStatus) -> Result<()> {
+    pub(crate) fn ensure_transition(&self, from: ProposalStatus, to: ProposalStatus) -> Result<()> {
         let valid = match (from, to) {
             (ProposalStatus::Draft, ProposalStatus::Validating)
             | (ProposalStatus::NeedsFix, ProposalStatus::Validating)
@@ -383,7 +268,7 @@ impl ProposalStore {
         }
     }
 
-    fn load(&self, id: &str) -> Result<Proposal> {
+    pub(crate) fn load(&self, id: &str) -> Result<Proposal> {
         self.find(id)?
             .ok_or_else(|| Error::InvalidRequest(format!("unknown proposal {id:?}")))
     }
@@ -396,8 +281,16 @@ impl ProposalStore {
         self.proposal_path(id).join("proposal.toml")
     }
 
-    fn proposal_path(&self, id: &str) -> PathBuf {
+    pub(crate) fn proposal_path(&self, id: &str) -> PathBuf {
         self.root.join(id)
+    }
+
+    pub(crate) fn author_name(&self) -> &str {
+        &self.author_name
+    }
+
+    pub(crate) fn author_email(&self) -> &str {
+        &self.author_email
     }
 }
 
@@ -416,6 +309,7 @@ fn proposal_id(plugin_name: &str, request_ids: &BTreeSet<String>, now: i64) -> S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ImageCatalog;
     use crate::request::{RequestIntent, RequestRecord, RequestSource, RequestStatus};
 
     fn fixture(tmp: &Path) -> (RequestStore, ProposalStore, ImageCatalog) {
@@ -454,7 +348,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let (requests, proposals, catalog) = fixture(tmp.path());
         let request_id = first_request(&requests);
-        let proposal = proposals
+        let mut development = proposals
             .create(
                 "demo-plugin",
                 &[request_id],
@@ -462,20 +356,15 @@ mod tests {
                 &requests,
             )
             .unwrap();
-        assert_eq!(proposal.image_id, None);
-        assert_eq!(proposal.image_reference, None);
-        proposals
-            .bind_approved_image(&proposal.proposal_id, "demo", &catalog)
-            .unwrap();
-        assert!(
-            proposals
-                .workspace(&proposal.proposal_id)
-                .unwrap()
-                .is_some()
-        );
+        assert_eq!(development.proposal().image_id, None);
+        assert_eq!(development.proposal().image_reference, None);
+        let id = development.id().to_string();
+        let reopened = proposals.develop(&id).unwrap().unwrap();
+        assert_eq!(reopened.id(), development.id());
+        development.bind_approved_image("demo", &catalog).unwrap();
 
-        let workspace = proposals.workspace(&proposal.proposal_id).unwrap().unwrap();
+        let workspace = development.workspace();
         workspace.write_text("README.md", "# demo\n").unwrap();
-        assert!(proposals.submit(&proposal.proposal_id).is_err());
+        assert!(development.submit().is_err());
     }
 }
