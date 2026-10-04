@@ -1,0 +1,21 @@
+[package]
+name = "plugin-rsi"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+container-plugin = { path = "../container-plugin" }
+container-runtime = { path = "../container-runtime" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+toml = "1"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

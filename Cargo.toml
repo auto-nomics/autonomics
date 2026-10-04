@@ -99,7 +99,7 @@ members = [
   "bio_crates/rdlocrand",
   "crates/node-bundles/nodes-rd",
   "stat_crates/dl",
-  "crates/node-bundles/nodes-dl", "crates/container-plugin", "crates/skills",
+  "crates/node-bundles/nodes-dl", "crates/container-plugin", "crates/skills", "crates/plugin-rsi",
 ]
 resolver = "3"
 
