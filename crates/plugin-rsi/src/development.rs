@@ -3,9 +3,8 @@ use std::path::PathBuf;
 use coding_agent::{CodingAgent, CodingTask};
 
 use crate::{
-    CodingAgentRun, Error, GitRepo, Proposal, ProposalStatus, ProposalStore, Result,
-    coding_agent as agent_runs, node::NodeDevelopment, validate::EnvironmentCatalog,
-    workspace::ProposalWorkspace,
+    CodingAgentRun, Error, GitRepo, Proposal, ProposalStatus, ProposalStore, Result, agent_run,
+    node::NodeDevelopment, validate::EnvironmentCatalog, workspace::ProposalWorkspace,
 };
 use container_plugin::{
     manifest::{ImageMetadata, PluginManifest},
@@ -324,24 +323,24 @@ impl<'a> PluginDevelopment<'a> {
             ));
         };
 
-        let task = agent_runs::plugin_task(task)?;
+        let task = agent_run::plugin_task(task)?;
         let rendered_prompt = coding_agent::render_task_prompt(&task);
-        let run_id = agent_runs::new_run_id(self.id(), agent.kind().as_str(), &rendered_prompt);
+        let run_id = agent_run::new_run_id(self.id(), agent.kind().as_str(), &rendered_prompt);
         let agent_root = self
             .store
             .proposal_path(self.id())
             .join("agent-runs")
             .join(&run_id);
         let source = self.workspace();
-        let candidate = agent_runs::prepare_agent_workspace(&agent_root, &source)?;
+        let candidate = agent_run::prepare_agent_workspace(&agent_root, &source)?;
         let execution = agent.execute(&task, candidate.workspace.path())?;
-        let changes = agent_runs::workspace_changes(&source, &candidate.workspace)?;
+        let changes = agent_run::workspace_changes(&source, &candidate.workspace)?;
         let mut run = CodingAgentRun {
             run_id,
             proposal_id: self.id().to_string(),
             agent: agent.kind().as_str().to_string(),
             argv: execution.argv.clone(),
-            prompt_sha256: agent_runs::prompt_hash(&rendered_prompt),
+            prompt_sha256: agent_run::prompt_hash(&rendered_prompt),
             exit_code: execution.exit_code,
             success: execution.success,
             synced: false,
@@ -355,7 +354,7 @@ impl<'a> PluginDevelopment<'a> {
         };
 
         if execution.success && !changes.is_empty() {
-            let manifest = match agent_runs::validate_candidate(
+            let manifest = match agent_run::validate_candidate(
                 &candidate.workspace,
                 &self.proposal.plugin_name,
                 &environment_reference,
@@ -366,7 +365,7 @@ impl<'a> PluginDevelopment<'a> {
                     return Err(error);
                 }
             };
-            agent_runs::adopt_candidate(&source, &candidate.workspace, &changes)?;
+            agent_run::adopt_candidate(&source, &candidate.workspace, &changes)?;
             let node_kinds = manifest
                 .nodes
                 .iter()

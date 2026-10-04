@@ -5,7 +5,7 @@
 //! narrow host-owned API; they never receive raw git, gh, host-filesystem, or
 //! live-registry access.
 
-pub mod coding_agent;
+mod agent_run;
 pub mod development;
 pub mod error;
 pub mod github;
@@ -19,7 +19,7 @@ pub mod request;
 pub mod validate;
 pub mod workspace;
 
-pub use coding_agent::CodingAgentRun;
+pub use agent_run::CodingAgentRun;
 pub use development::PluginDevelopment;
 pub use error::{Error, Result};
 pub use github::{GhPublisher, GhPublisherConfig, GhStatus};
