@@ -57,16 +57,16 @@ impl App {
                     self.request_dag_snapshot();
                 }
             }
-            KeyCode::Up | KeyCode::Char('k') => {
+            KeyCode::Left | KeyCode::Char('h') => {
                 self.state.dag_view_state.select_up(&snapshot);
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            KeyCode::Right | KeyCode::Char('l') => {
                 self.state.dag_view_state.select_down(&snapshot);
             }
-            KeyCode::Left | KeyCode::Char('h') => {
+            KeyCode::Up | KeyCode::Char('k') => {
                 self.state.dag_view_state.select_left(&snapshot);
             }
-            KeyCode::Right | KeyCode::Char('l') => {
+            KeyCode::Down | KeyCode::Char('j') => {
                 self.state.dag_view_state.select_right(&snapshot);
             }
             KeyCode::Tab => self.state.dag_view_state.select_next(&snapshot),
