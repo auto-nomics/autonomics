@@ -9,7 +9,7 @@ use unicode_width::{UnicodeWidthChar as _, UnicodeWidthStr};
 
 use crate::state::{AgentStatus, AgentTabState, DisplaySettings, InputMode};
 use crate::widgets::{
-    chat_widget::{ChatWidget, ChatWidgetState},
+    chat_widget::{ChatWidget, ChatWidgetState, visual_row_count},
     input_area::{InputWidget, InputWidgetState, PROMPT_GUTTER},
     session_list::SessionSummary,
     sidebar::{SideBar, SidebarData},
@@ -21,6 +21,51 @@ use crate::widgets::{
 const SIDEBAR_PERCENT: u16 = 25;
 /// Minimum sidebar width in columns. Below this the sidebar is hidden.
 const SIDEBAR_MIN_WIDTH: u16 = 24;
+
+/// Collect only rendered lines intersecting the requested logical-row window.
+///
+/// Message ownership stays in `AgentTabState::cached_msg_lines`; the returned
+/// vector contains only the Ratatui lines needed by the current viewport.
+fn collect_visible_lines(
+    ts: &AgentTabState,
+    scroll_offset: usize,
+    viewport_height: u16,
+    width: u16,
+) -> (Vec<Line<'static>>, usize) {
+    let viewport_end = scroll_offset.saturating_add(viewport_height as usize);
+    let mut visible = Vec::new();
+    let mut logical_row = 0usize;
+    let mut window_start = None;
+
+    for (message_idx, cached) in ts.cached_msg_lines.iter().enumerate() {
+        let message_start = logical_row;
+        let Some(message_rows) = ts.cached_msg_row_counts.get(message_idx) else {
+            break;
+        };
+        logical_row = message_start.saturating_add(*message_rows);
+        if logical_row <= scroll_offset || message_start >= viewport_end {
+            continue;
+        }
+
+        let mut line_start = message_start;
+        for line in cached {
+            let rows = visual_row_count(line, width);
+            let line_end = line_start.saturating_add(rows);
+            if line_end > scroll_offset && line_start < viewport_end {
+                if window_start.is_none() {
+                    window_start = Some(line_start);
+                }
+                visible.push(line.clone());
+            } else if line_start >= viewport_end {
+                break;
+            }
+            line_start = line_end;
+        }
+    }
+
+    let relative_offset = scroll_offset.saturating_sub(window_start.unwrap_or(0));
+    (visible, relative_offset)
+}
 
 /// Renders a single agent's conversation surface with a right-hand sidebar.
 ///
@@ -131,7 +176,10 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
         let n = ts.messages.len();
         if ts.cached_msg_lines.len() != n {
             ts.cached_msg_lines.resize(n, Vec::new());
+            ts.cached_msg_row_counts.resize(n, 0);
             ts.cached_msg_versions.resize(n, 0);
+        } else if ts.cached_msg_row_counts.len() != n {
+            ts.cached_msg_row_counts.resize(n, 0);
         }
         if ts.cached_msg_width != width {
             ts.cached_msg_width = width;
@@ -146,28 +194,43 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
             }
         }
 
-        let mut flat: Vec<ratatui::text::Line<'static>> = Vec::new();
+        let mut total_rows = 0usize;
         for (i, msg) in ts.messages.iter().enumerate() {
             if ts.cached_msg_versions[i] == ts.msg_versions[i] && !ts.cached_msg_lines[i].is_empty()
             {
-                flat.extend_from_slice(&ts.cached_msg_lines[i]);
+                if ts.cached_msg_row_counts[i] == 0 {
+                    ts.cached_msg_row_counts[i] = ts.cached_msg_lines[i]
+                        .iter()
+                        .map(|line| visual_row_count(line, width))
+                        .sum();
+                }
             } else {
                 let rendered = super::chat_widget::render::render_line_with_settings(
                     msg,
                     chat_inner_area,
                     self.display,
                 );
-                flat.extend_from_slice(&rendered);
                 ts.cached_msg_lines[i] = rendered;
+                ts.cached_msg_row_counts[i] = ts.cached_msg_lines[i]
+                    .iter()
+                    .map(|line| visual_row_count(line, width))
+                    .sum();
                 ts.cached_msg_versions[i] = ts.msg_versions[i];
             }
+            total_rows += ts.cached_msg_row_counts[i];
         }
 
-        let mut chat_state = ChatWidgetState::new(ts.scroll_offset);
-        let chat_widget = ChatWidget { lines: &flat };
-        chat_widget.render(chat_inner_area, buf, &mut chat_state);
-        ts.content_line_count = chat_state.total_lines;
+        ts.content_line_count = total_rows;
         ts.clamp_scroll(viewport_height);
+
+        let (visible_lines, relative_scroll_offset) =
+            collect_visible_lines(ts, ts.scroll_offset, viewport_height, width);
+        let mut chat_state = ChatWidgetState::new(relative_scroll_offset);
+        let chat_widget = ChatWidget {
+            lines: &visible_lines,
+            total_rows,
+        };
+        chat_widget.render(chat_inner_area, buf, &mut chat_state);
 
         // ── Sidebar ──
         if let Some(sb_area) = sidebar_area {
@@ -526,6 +589,35 @@ fn render_footer_hint(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn visible_line_collector_returns_only_the_viewport() {
+        let mut ts = AgentTabState::default();
+        ts.cached_msg_lines = (0..100)
+            .map(|i| vec![Line::raw(format!("line {i:03}"))])
+            .collect();
+        ts.cached_msg_row_counts = vec![1; 100];
+
+        let (visible, relative_offset) =
+            collect_visible_lines(&ts, ts.cached_msg_lines.len() - 2, 2, 20);
+
+        assert_eq!(visible.len(), 2);
+        assert_eq!(relative_offset, 0);
+        assert_eq!(visible[0].to_string(), "line 098");
+        assert_eq!(visible[1].to_string(), "line 099");
+    }
+
+    #[test]
+    fn visible_line_collector_keeps_offset_inside_a_wrapped_line() {
+        let mut ts = AgentTabState::default();
+        ts.cached_msg_lines = vec![vec![Line::raw("aaaaaa")]];
+        ts.cached_msg_row_counts = vec![3];
+
+        let (visible, relative_offset) = collect_visible_lines(&ts, 2, 1, 2);
+
+        assert_eq!(visible.len(), 1);
+        assert_eq!(relative_offset, 2);
+    }
 
     #[test]
     fn pending_preview_has_bounded_height() {
