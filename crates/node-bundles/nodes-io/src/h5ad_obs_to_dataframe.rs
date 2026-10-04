@@ -159,6 +159,10 @@ struct H5adObsColumn {
 #[derive(Debug)]
 struct H5adObsMetadata {
     index_dataset: String,
+    /// The named index is a nullable-string group (`values` + boolean
+    /// `mask`) instead of a plain string dataset — how anndata ≥ 0.13
+    /// stores a pandas nullable-string index.
+    index_nullable: bool,
     row_count: usize,
     schema: SchemaRef,
     columns: Vec<H5adObsColumn>,
@@ -337,30 +341,28 @@ impl DagNode for H5adObsToDataFrameNode {
 
         let mut temporary = None;
         let local_path = if source_path.starts_with("vfs://") {
-            let virtual_path = match source_path.strip_prefix("vfs://") {
-                Some(virtual_path) => vfs::OpendalFileStorage::normalize_path(virtual_path),
-                None => source_path.clone(),
-            };
-            temporary = Some(Arc::new(
-                stage_vfs_object(node_ctx, &virtual_path)
-                    .await
-                    .map_err(DagError::Schedule)?,
-            ));
-            temporary
-                .as_ref()
-                .expect("temporary H5AD was just staged")
-                .as_ref()
-                .path()
-                .to_path_buf()
+            stage_to_temporary(node_ctx, &source_path, &mut temporary).await?
         } else {
             let local = source_path.strip_prefix("file://").unwrap_or(&source_path);
             let path = Path::new(local);
-            if !path.is_file() {
-                return Err(DagError::Schedule(format!(
-                    "{H5AD_OBS_TO_DATAFRAME_KIND} input is not a readable file: `{local}`"
-                )));
+            if path.is_file() {
+                path.to_path_buf()
+            } else {
+                // A bare absolute path may be a VFS mount path: `file_reference`
+                // keeps engine-visible paths (`/datasets/...`) on the FileRef,
+                // and container nodes already stage those through the VFS.
+                // Fall back to the same resolution before declaring the input
+                // unreadable — otherwise host-provided H5ADs referenced by
+                // their mounted path fail with "not a readable file".
+                let mapped = crate::file_to_dataframe::source_path(node_ctx, local);
+                if mapped.starts_with("vfs://") {
+                    stage_to_temporary(node_ctx, &mapped, &mut temporary).await?
+                } else {
+                    return Err(DagError::Schedule(format!(
+                        "{H5AD_OBS_TO_DATAFRAME_KIND} input is not a readable file: `{local}`"
+                    )));
+                }
             }
-            path.to_path_buf()
         };
 
         let include_obsm = self.include_obsm.clone();
@@ -398,6 +400,28 @@ impl DagNode for H5adObsToDataFrameNode {
 struct InspectedPath {
     path: PathBuf,
     metadata: H5adObsMetadata,
+}
+
+async fn stage_to_temporary(
+    node_ctx: &NodeCtx,
+    vfs_uri: &str,
+    temporary: &mut Option<Arc<NamedTempFile>>,
+) -> Result<PathBuf, DagError> {
+    let virtual_path = match vfs_uri.strip_prefix("vfs://") {
+        Some(virtual_path) => vfs::OpendalFileStorage::normalize_path(virtual_path),
+        None => vfs_uri.to_string(),
+    };
+    *temporary = Some(Arc::new(
+        stage_vfs_object(node_ctx, &virtual_path)
+            .await
+            .map_err(DagError::Schedule)?,
+    ));
+    Ok(temporary
+        .as_ref()
+        .expect("temporary H5AD was just staged")
+        .as_ref()
+        .path()
+        .to_path_buf())
 }
 
 async fn stage_vfs_object(node_ctx: &NodeCtx, virtual_path: &str) -> Result<NamedTempFile, String> {
@@ -448,7 +472,24 @@ fn inspect_h5ad(
         .group("obs")
         .map_err(|error| format!("H5AD has no readable `/obs` group: {error}"))?;
     let index_dataset = string_attribute(&obs, "_index")?;
-    let index = dataset_1d(&obs, &index_dataset, "obs index")?;
+    // anndata ≥ 0.13 encodes a nullable-string index as a group
+    // (`values` + boolean `mask`); read through `values` like the
+    // nullable-string obs columns below.
+    let index_nullable = matches!(
+        string_attribute_if_present(&obs, &index_dataset, "encoding-type")?.as_deref(),
+        Some("nullable-string-array")
+    );
+    let index = if index_nullable {
+        let group = obs
+            .group(&index_dataset)
+            .map_err(|error| format!("obs index `{index_dataset}` cannot be opened: {error}"))?;
+        let values = dataset_1d(&group, "values", "obs index")?;
+        let mask = dataset_1d(&group, "mask", "obs index mask")?;
+        ensure_1d_length(&mask, values.shape()[0], "nullable index mask")?;
+        values
+    } else {
+        dataset_1d(&obs, &index_dataset, "obs index")?
+    };
     let row_count = index.shape().first().copied().unwrap_or(0);
     ensure_string_dataset(&index, "obs index")?;
 
@@ -526,6 +567,7 @@ fn inspect_h5ad(
         path,
         metadata: H5adObsMetadata {
             index_dataset,
+            index_nullable,
             row_count,
             schema,
             columns,
@@ -688,8 +730,15 @@ fn read_batch(
     for column in &metadata.columns {
         let array = match &column.source {
             ColumnSource::Index => {
-                let dataset = obs.dataset(&metadata.index_dataset).map_err(hdf5_error)?;
-                read_string_array(&dataset, start, end, None)
+                if metadata.index_nullable {
+                    let group = obs.group(&metadata.index_dataset).map_err(hdf5_error)?;
+                    let values = group.dataset("values").map_err(hdf5_error)?;
+                    let mask = group.dataset("mask").ok();
+                    read_string_array(&values, start, end, mask.as_ref().map(|m| (m, start, end)))
+                } else {
+                    let dataset = obs.dataset(&metadata.index_dataset).map_err(hdf5_error)?;
+                    read_string_array(&dataset, start, end, None)
+                }
             }
             ColumnSource::Obs { name, decoder } => read_obs_column(&obs, name, decoder, start, end),
             ColumnSource::Obsm {
@@ -1563,5 +1612,133 @@ mod tests {
         let dataframe = output.get(&0).unwrap().as_dataframe().unwrap().clone();
         let batches = dataframe.collect().await.unwrap();
         assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 5);
+    }
+
+    #[tokio::test]
+    async fn bare_mount_path_falls_back_to_vfs() {
+        // `file_reference` keeps engine-visible paths (`/datasets/...`) on the
+        // emitted FileRef. Such a bare path must resolve through the VFS when
+        // it is a mount path, even though it does not exist as a host-local
+        // file — mirroring how `file_to_dataframe` and container staging
+        // already accept mounted paths.
+        use vfs::{
+            BackendConfig, BackendDefinition, MountDefinition, MountedObjectStore, VfsManifest,
+        };
+
+        let backend = tempfile::tempdir().unwrap();
+        let manifest = VfsManifest {
+            backend: vec![BackendDefinition {
+                id: "default".into(),
+                config: BackendConfig::local(backend.path().to_string_lossy().to_string()),
+            }],
+            mount: vec![MountDefinition {
+                path: "/datasets".into(),
+                backend: "default".into(),
+                source: backend.path().to_string_lossy().to_string(),
+                read_only: true,
+            }],
+        };
+        let storage = Arc::new(OpendalFileStorage::with_mounts(
+            tempfile::tempdir().unwrap().path(),
+            Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap()),
+        ));
+        fixture(&backend.path().join("input.h5ad"));
+
+        let mut node = H5adObsToDataFrameNodeFactory {}
+            .build(
+                serde_json::json!({ "path": "/datasets/input.h5ad" }),
+                vfs_node_ctx(&storage),
+            )
+            .unwrap();
+        let output = node
+            .execute(
+                &vfs_node_ctx(&storage),
+                &[],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap();
+        let dataframe = output.get(&0).unwrap().as_dataframe().unwrap().clone();
+        let batches = dataframe.collect().await.unwrap();
+        assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 5);
+    }
+
+    #[tokio::test]
+    async fn nullable_string_index_reads_through_values() {
+        // anndata >= 0.13 stores a pandas nullable-string index as a group
+        // (`values` + boolean `mask`, encoding-type `nullable-string-array`)
+        // instead of a plain string dataset; the reader must resolve it
+        // through `values` instead of failing "`_index` is not a dataset".
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("input.h5ad");
+        {
+            let file = File::create(&path).unwrap();
+            let obs = file.create_group("obs").unwrap();
+            write_string_attribute(&obs, "encoding-type", &["dataframe"]).unwrap();
+            write_string_attribute(&obs, "encoding-version", &["0.2.0"]).unwrap();
+            write_string_attribute(&obs, "_index", &["_index"]).unwrap();
+            let index = obs.create_group("_index").unwrap();
+            write_string_attribute(&index, "encoding-type", &["nullable-string-array"]).unwrap();
+            write_string_attribute(&index, "encoding-version", &["0.1.0"]).unwrap();
+            write_string_dataset(&index, "values", &["c0", "c1", "c2", "c3", "c4"]).unwrap();
+            index
+                .new_dataset::<bool>()
+                .shape(5)
+                .create("mask")
+                .unwrap()
+                .as_writer()
+                .write_raw(&[false; 5])
+                .unwrap();
+            obs.new_dataset::<i32>()
+                .shape(5)
+                .create("count")
+                .unwrap()
+                .as_writer()
+                .write_raw(&[1_i32, 2, 3, 4, 5])
+                .unwrap();
+            write_string_attribute(&obs, "column-order", &["count"]).unwrap();
+            file.close().unwrap();
+        }
+        let mut node = H5adObsToDataFrameNodeFactory {}
+            .build(
+                serde_json::json!({ "path": path.to_string_lossy() }),
+                node_ctx(),
+            )
+            .unwrap();
+        let output = node
+            .execute(
+                &node_ctx(),
+                &[],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap();
+        let dataframe = output.get(&0).unwrap().as_dataframe().unwrap().clone();
+        let batches = dataframe.collect().await.unwrap();
+        assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 5);
+    }
+
+    #[tokio::test]
+    async fn missing_everywhere_stays_an_error() {
+        let storage = Arc::new(OpendalFileStorage::new_temp());
+        let mut node = H5adObsToDataFrameNodeFactory {}
+            .build(
+                serde_json::json!({ "path": "/definitely/not/there.h5ad" }),
+                vfs_node_ctx(&storage),
+            )
+            .unwrap();
+        let error = node
+            .execute(
+                &vfs_node_ctx(&storage),
+                &[],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message.contains("cannot stat H5AD") || message.contains("not a readable file"),
+            "unexpected error: {message}"
+        );
     }
 }

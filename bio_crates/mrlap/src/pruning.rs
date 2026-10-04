@@ -77,11 +77,14 @@ pub fn validate_pruning_dist(d: f64) -> Result<()> {
     Ok(())
 }
 
-/// Reverse-direction filter (lines 69-77). Excludes instruments more strongly
-/// associated with the outcome than the exposure at p < `mr_reverse`.
+/// Reverse-direction filter (R `run_MR.R` lines 69-77). Excludes instruments
+/// more strongly associated with the outcome than the exposure:
+/// `reverse_t_threshold = stats::qnorm(MR_reverse)` — a one-sided lower-tail
+/// quantile (e.g. −3.09 at 1e-3), so only IVs whose exposure association does
+/// NOT dominate (stat ≤ qnorm) are dropped.
 fn apply_reverse(data: &mut Vec<HarmonisedRow>, mr_reverse: Option<f64>) {
     if let Some(p) = mr_reverse {
-        let t = crate::input::z_threshold(p); // qnorm(MR_reverse)
+        let t = crate::input::qnorm(p); // R: stats::qnorm(MR_reverse)
         data.retain(|r| {
             let stat = (r.std_beta_exp.abs() - r.std_beta_out.abs())
                 / (r.std_se_exp.powi(2) + r.std_se_out.powi(2)).sqrt();
@@ -230,4 +233,55 @@ fn to_instruments(pruned: &[HarmonisedRow]) -> Vec<Instrument> {
             n_out: d.n_out,
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(
+        rsid: &str,
+        std_beta_exp: f64,
+        std_se_exp: f64,
+        std_beta_out: f64,
+        std_se_out: f64,
+    ) -> HarmonisedRow {
+        HarmonisedRow {
+            rsid: rsid.to_string(),
+            chr_exp: Some(1),
+            pos_exp: Some(1000),
+            alt_exp: "A".into(),
+            ref_exp: "G".into(),
+            n_exp: 100_000.0,
+            std_beta_exp,
+            std_se_exp,
+            p_exp: 1e-6,
+            std_beta_out,
+            std_se_out,
+            p_out: 1e-6,
+            n_out: 100_000.0,
+        }
+    }
+
+    #[test]
+    fn reverse_filter_is_one_sided_at_qnorm() {
+        // R: reverse_t_threshold = stats::qnorm(1e-3) = -3.0902 (one-sided
+        // lower tail). Regression: the old code used the two-sided
+        // -qnorm(p/2) = +3.29, inverting the filter's direction and making it
+        // drop exposure-dominating IVs instead of reverse-direction ones.
+        // With equal SEs of 0.05 the denominator is 0.05·√2 ≈ 0.07071.
+        let mut data = vec![
+            row("strong", 0.30, 0.05, 0.02, 0.05), // stat ≈ +3.96 → keep
+            row("mild", 0.00, 0.05, 0.2121, 0.05), // stat ≈ -3.00 > qnorm → keep
+            row("rev", 0.00, 0.05, 0.2475, 0.05),  // stat ≈ -3.50 < qnorm → drop
+        ];
+        apply_reverse(&mut data, Some(1e-3));
+        let ids: Vec<&str> = data.iter().map(|d| d.rsid.as_str()).collect();
+        assert_eq!(ids, vec!["strong", "mild"]);
+
+        // None disables the filter entirely.
+        let mut all = vec![row("rev", 0.0, 0.05, 0.9, 0.05)];
+        apply_reverse(&mut all, None);
+        assert_eq!(all.len(), 1);
+    }
 }

@@ -168,12 +168,15 @@ pub fn mann_whitney(
     let mean_u = n1f * n2f / 2.0;
     let var_u = n1f * n2f * (n_total + 1.0) / 12.0 * tie_c;
 
+    // One-sided tests are directional on U₁ (x vs y): "greater" means x is
+    // stochastically larger than y. Only the two-sided test folds U₁ and U₂
+    // together via min(U₁, U₂); for it |U₁ − E[U]| is numerically equivalent.
     let c = if correct { 0.5 } else { 0.0 };
     let z = if var_u > 0.0 {
         let numerator = match alt {
-            Alternative::TwoSided => (u - mean_u).abs().max(0.0) - c,
-            Alternative::Less => (mean_u - u) - c,
-            Alternative::Greater => (u - mean_u) - c,
+            Alternative::TwoSided => (u1 - mean_u).abs().max(0.0) - c,
+            Alternative::Less => (u1 - mean_u) + c,
+            Alternative::Greater => (u1 - mean_u) - c,
         };
         numerator / var_u.sqrt()
     } else {
@@ -423,6 +426,29 @@ mod tests {
         let y = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         let t = mann_whitney(&x, &y, Alternative::TwoSided, true).unwrap();
         assert!(t.p_value > 0.5, "p = {}", t.p_value);
+    }
+
+    #[test]
+    fn mann_whitney_one_sided_direction() {
+        // x is stochastically larger than y → "greater" significant, "less"
+        // not. Regression: the old code derived both one-sided branches from
+        // min(U₁, U₂), which is ≤ E[U] by construction, so every one-sided
+        // p-value came out ≥ 0.5 regardless of direction.
+        let x: Vec<f64> = (0..40).map(|i| i as f64 * 0.25 + 5.3).collect();
+        let y: Vec<f64> = (0..40).map(|i| i as f64 * 0.25).collect();
+
+        let g = mann_whitney(&x, &y, Alternative::Greater, true).unwrap();
+        let l = mann_whitney(&x, &y, Alternative::Less, true).unwrap();
+        let t = mann_whitney(&x, &y, Alternative::TwoSided, true).unwrap();
+        assert!(g.p_value < 1e-4, "greater: {}", g.p_value);
+        assert!(l.p_value > 0.999, "less: {}", l.p_value);
+        assert!(t.p_value < 1e-4, "two-sided: {}", t.p_value);
+
+        // Swapping the samples must swap which side is significant.
+        let g2 = mann_whitney(&y, &x, Alternative::Greater, true).unwrap();
+        let l2 = mann_whitney(&y, &x, Alternative::Less, true).unwrap();
+        assert!(g2.p_value > 0.999, "greater swapped: {}", g2.p_value);
+        assert!(l2.p_value < 1e-4, "less swapped: {}", l2.p_value);
     }
 
     #[test]

@@ -22,7 +22,11 @@ knots <- c(4.0, 5.5, 7.0, 8.5)
 rcs_basis_r <- function(x, knots) {
   k <- length(knots)
   tmin <- knots[1]; tmax <- knots[k]
-  denom <- (tmax - tmin)^2
+  ## Harrell's lambda_j/mu_j divide by (tmax - tmin) to the FIRST power so
+  ## that lambda_j + mu_j = 1 — that identity is what cancels the x^2 and x^3
+  ## terms beyond the boundary knots (linear tails). A squared denominator
+  ## silently breaks the tail-linearity constraint.
+  denom <- tmax - tmin
   pos3 <- function(v) pmax(v, 0)^3
   sapply(2:(k - 1), function(j) {
     lj <- (tmax - knots[j]) / denom

@@ -227,7 +227,9 @@ impl DagNode for HypergeometricOraOnDfNode {
                 hits,
                 set_n,
                 expected,
-                expected / hits as f64,
+                // Fold enrichment = observed / expected (was inverted: node
+                // audit 2026-10-04, P1 — hits=2, expected=1 reported 0.5).
+                hits as f64 / expected,
                 pvalue,
             ));
         }
@@ -400,6 +402,107 @@ mod tests {
         assert_eq!(
             outputs.dataframe(0).unwrap().clone().count().await.unwrap(),
             1
+        );
+    }
+
+    /// Fold enrichment must be observed/expected. Fixture: query {A, B} of a
+    /// background {A, B, C, D, E, F, G, H}, set S1 = {A, B, D} →
+    /// expected = 2·3/8 = 0.75, hits = 2, fold = 2/0.75 ≈ 2.667. The
+    /// pre-fix code emitted expected/hits = 0.375 (node audit 2026-10-04).
+    #[tokio::test]
+    async fn fold_enrichment_is_observed_over_expected() {
+        use arrow_array::Float64Array;
+        let session = datafusion::prelude::SessionContext::new();
+        let result_schema = Arc::new(Schema::new(vec![
+            Field::new("gene", DataType::Utf8, false),
+            Field::new("pvalue", DataType::Float64, false),
+        ]));
+        let result_batch = RecordBatch::try_new(
+            result_schema,
+            vec![
+                Arc::new(StringArray::from(vec!["A", "B", "C"])),
+                Arc::new(Float64Array::from(vec![0.01, 0.02, 0.9])),
+            ],
+        )
+        .unwrap();
+        let set_schema = Arc::new(Schema::new(vec![
+            Field::new("set_id", DataType::Utf8, false),
+            Field::new("gene", DataType::Utf8, false),
+        ]));
+        let set_batch = RecordBatch::try_new(
+            set_schema.clone(),
+            vec![
+                Arc::new(StringArray::from(vec!["S1", "S1", "S1"])),
+                Arc::new(StringArray::from(vec!["A", "B", "D"])),
+            ],
+        )
+        .unwrap();
+        // A second set supplies the rest of the background so the
+        // hypergeometric population is 8, not 3.
+        let set2_batch = RecordBatch::try_new(
+            set_schema.clone(),
+            vec![
+                Arc::new(StringArray::from(vec!["S2", "S2", "S2", "S2", "S2"])),
+                Arc::new(StringArray::from(vec!["C", "E", "F", "G", "H"])),
+            ],
+        )
+        .unwrap();
+        let sets_df = session
+            .read_batch(set_batch)
+            .unwrap()
+            .union(session.read_batch(set2_batch).unwrap())
+            .unwrap();
+
+        let spec = HypergeometricOraOnDfSpec {
+            gene_column: "gene".into(),
+            set_id_column: "set_id".into(),
+            set_gene_column: "gene".into(),
+            hit_filter_sql: Some("pvalue < 0.05".into()),
+            min_set_size: 2,
+            min_hits: 1,
+        };
+        let mut node = HypergeometricOraOnDfNode::new(spec);
+        let outputs = node
+            .execute(
+                &NodeCtx::new(session.runtime_env(), None),
+                &[
+                    NodeInput::new_dataframe(0, session.read_batch(result_batch).unwrap()),
+                    NodeInput::new_dataframe(1, sets_df),
+                ],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap();
+
+        let batches = outputs
+            .dataframe(0)
+            .unwrap()
+            .clone()
+            .collect()
+            .await
+            .unwrap();
+        let s1 = batches
+            .iter()
+            .flat_map(|b| {
+                let ids = b
+                    .column_by_name("set_id")
+                    .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+                    .unwrap();
+                let folds = b
+                    .column_by_name("fold_enrichment")
+                    .and_then(|c| c.as_any().downcast_ref::<Float64Array>())
+                    .unwrap();
+                (0..b.num_rows())
+                    .filter(|&i| ids.value(i) == "S1")
+                    .map(|i| folds.value(i))
+                    .collect::<Vec<_>>()
+            })
+            .next()
+            .unwrap();
+        let want = 2.0f64 / 0.75f64;
+        assert!(
+            (s1 - want).abs() < 1e-12,
+            "fold_enrichment must be hits/expected: got {s1}, want {want}"
         );
     }
 }

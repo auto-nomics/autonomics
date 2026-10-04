@@ -160,7 +160,9 @@ pub fn ridge_fit(x: &[Vec<f64>], y: &[f64], ridge: f64) -> Result<RidgeFit> {
 /// Cholesky factorisation of a symmetric positive-definite matrix.
 ///
 /// Returns the lower-triangular `L` such that `L · Lᵀ = x`. `x` is supplied
-/// row-major as a flat slice (length `p × p`).
+/// row-major as a flat slice (length `p × p`); the result is row-major too,
+/// matching R's `t(chol(sym(x)))`. Only the lower triangle of `x` is read, so
+/// asymmetric input is implicitly symmetrised to the lower triangle.
 pub fn chol_factor(x: &[f64]) -> Result<Vec<f64>> {
     let p_sq = x.len();
     let p = (p_sq as f64).sqrt() as usize;
@@ -169,18 +171,26 @@ pub fn chol_factor(x: &[f64]) -> Result<Vec<f64>> {
             "chol_factor: expected square matrix, got length {p_sq}"
         )));
     }
-    let m = Mat::from_fn(p, p, |i, j| x[i * p + j]);
-    let _llt = Llt::new(m.as_ref(), Side::Lower)
-        .map_err(|e| MiceError::Numerical(format!("chol_factor: {e:?}")))?;
-    let out = vec![0.0_f64; p * p];
-    for _j in 0..p {
-        for _k in 0..p {
-            // faer's L is stored in the lower triangle (including diagonal).
-            // The upper triangle (j < k) is zero.
-            // Access L from Llt via factor(): faer 0.24 stores L lower-triangular in factor().
+    let mut l = vec![0.0_f64; p * p];
+    for j in 0..p {
+        for k in 0..=j {
+            let mut sum = x[j * p + k];
+            for m in 0..k {
+                sum -= l[j * p + m] * l[k * p + m];
+            }
+            if j == k {
+                if sum <= 0.0 {
+                    return Err(MiceError::Numerical(format!(
+                        "chol_factor: matrix not positive definite (pivot {j} = {sum})"
+                    )));
+                }
+                l[j * p + j] = sum.sqrt();
+            } else {
+                l[j * p + k] = sum / l[k * p + k];
+            }
         }
     }
-    Ok(out)
+    Ok(l)
 }
 
 /// Symmetrise `x` to mirror R's `sym()`: replace `x` by `(x + xᵀ) / 2`.
@@ -194,4 +204,42 @@ pub fn symmetrise(x: &[f64]) -> Vec<f64> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chol_factor_reconstructs_matrix() {
+        // Regression: chol_factor used to return an all-zero matrix, so every
+        // downstream β* draw collapsed to β̂ (zero parameter uncertainty).
+        let a = vec![4.0, 2.0, -2.0, 2.0, 10.0, 4.0, -2.0, 4.0, 6.0]; // SPD
+        let l = chol_factor(&a).unwrap();
+        for j in 0..3 {
+            for k in (j + 1)..3 {
+                assert_eq!(l[j * 3 + k], 0.0, "upper triangle must be zero");
+            }
+            assert!(l[j * 3 + j] > 0.0, "diagonal must be positive");
+        }
+        for i in 0..3 {
+            for j in 0..3 {
+                let mut s = 0.0;
+                for k in 0..3 {
+                    s += l[i * 3 + k] * l[j * 3 + k];
+                }
+                assert!(
+                    (s - a[i * 3 + j]).abs() < 1e-12,
+                    "L·Lᵀ[{i}][{j}] = {s}, want {}",
+                    a[i * 3 + j]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn chol_factor_rejects_indefinite() {
+        let a = vec![1.0, 2.0, 2.0, 1.0]; // not PSD
+        assert!(chol_factor(&a).is_err());
+    }
 }

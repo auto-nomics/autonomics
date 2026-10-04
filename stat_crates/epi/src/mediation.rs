@@ -25,10 +25,10 @@
 //! TE  = β₁ + β₂·α₁
 //! ```
 //!
-//! With interaction (β₃ ≠ 0):
+//! With interaction (β₃ ≠ 0), for X: 0 → 1 at covariate means C̄:
 //!
 //! ```text
-//! NDE = β₁ + β₃·(α₀ + α₁)   (setting M to its value under X=0)
+//! NDE = β₁ + β₃·(α₀ + Σ α_c·C̄)   (setting M to its value under X=0)
 //! NIE = (β₂ + β₃) · α₁
 //! ```
 //!
@@ -258,19 +258,29 @@ fn fit_and_decompose(
     };
 
     // ── Decomposition (VanderWeele 2015) ───────────────────────────────
-    // For binary X (control=0, treated=1):
+    // For binary X (control=0, treated=1), evaluated at covariate means C̄:
     //
-    // E[M | X=0, C] = α₀ + α₂·C (mediator value under control)
-    // M(0) = α₀ (at mean covariates = 0, or at C mean)
+    // E[M | X=0, C̄] = α₀ + α₁·x_control + Σ α_c·C̄   (x_control = 0 here)
     //
-    // NDE = β₁ + β₃ · E[M|X=control]
-    //     = β₁ + β₃ · α₀   (when X: control=0 → E[M|0] = α₀)
+    // NDE = β₁ + β₃ · M(0)
+    //     = β₁ + β₃ · (α₀ + Σ α_c·C̄)
     //
     // NIE = (β₂ + β₃) · α₁
     //
     // TE = NDE + NIE
 
-    let m_under_control = alpha_0; // E[M | X=0] at covariate mean
+    // M(0): mediator-model prediction at X = 0 with covariates held at their
+    // sample means (m-coefficient layout: 0=intercept, 1=X, 2+=covariates).
+    let n = x.len();
+    let m_under_control = alpha_0
+        + covariates
+            .iter()
+            .enumerate()
+            .map(|(i, cov)| {
+                let mean = cov.iter().sum::<f64>() / n as f64;
+                m_fit.coefficients[2 + i] * mean
+            })
+            .sum::<f64>();
     let nde = beta_1 + beta_3 * m_under_control;
     let nie = (beta_2 + beta_3) * alpha_1;
     let te = nde + nie;
@@ -439,5 +449,50 @@ mod tests {
         // Point estimates should be within bootstrap CIs (most of the time).
         assert!(result.nde >= result.nde_ci_lower * 0.9 && result.nde <= result.nde_ci_upper * 1.1);
         assert!(result.nie >= result.nie_ci_lower * 0.9 && result.nie <= result.nie_ci_upper * 1.1);
+    }
+
+    #[test]
+    fn interaction_nde_uses_covariate_means() {
+        // Regression: with interaction and a non-zero-mean covariate,
+        // M(0) = α₀ + α_c·C̄ (mediator prediction at X=0, covariates at their
+        // sample means). The old code used α₀ alone, biasing NDE by
+        // β₃·α_c·C̄ (74% relative error on NHANES-like data).
+        let n = 240;
+        let x: Vec<f64> = (0..n).map(|i| (i % 2) as f64).collect();
+        // C ∈ {4.0, 4.7, 5.4, 6.1, 6.8} equally often → mean exactly 5.4.
+        let c: Vec<f64> = (0..n).map(|i| 4.0 + ((i % 5) as f64) * 0.7).collect();
+        // Deterministic pseudo-noise so the mediator design is full-rank.
+        let eps: Vec<f64> = (0..n)
+            .map(|i| (((i * 7919 + 13) % 97) as f64 / 97.0 - 0.5) * 0.4)
+            .collect();
+        let (a0, a1, ac) = (1.0, 0.5, 0.8);
+        let m: Vec<f64> = (0..n).map(|i| a0 + a1 * x[i] + ac * c[i] + eps[i]).collect();
+        let (b1, b2, b3) = (0.3, 1.0, 0.4);
+        // Outcome is exact in [1, X, M, X:M] → β̂ recovered exactly.
+        let y: Vec<f64> = (0..n)
+            .map(|i| 0.2 + b1 * x[i] + b2 * m[i] + b3 * x[i] * m[i] + 0.6 * c[i])
+            .collect();
+
+        let (nde, nie, te, _a1, _b1, _b2, _b3) =
+            fit_and_decompose(&x, &m, &y, &[&c], true, &MediationOptions::default()).unwrap();
+
+        let c_mean = 5.4;
+        let m0 = a0 + ac * c_mean; // 5.32
+        let expected_nde = b1 + b3 * m0; // 2.428
+        let expected_nie = (b2 + b3) * a1; // 0.70
+        assert!(
+            (nde - expected_nde).abs() < 0.1,
+            "NDE: got {nde}, expected {expected_nde} (pre-fix code gave {})",
+            b1 + b3 * a0
+        );
+        assert!(
+            (nie - expected_nie).abs() < 0.1,
+            "NIE: got {nie}, expected {expected_nie}"
+        );
+        assert!(
+            (te - (expected_nde + expected_nie)).abs() < 0.2,
+            "TE: got {te}, expected {}",
+            expected_nde + expected_nie
+        );
     }
 }
