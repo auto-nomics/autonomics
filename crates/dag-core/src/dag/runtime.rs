@@ -246,6 +246,10 @@ pub struct DagErrorReport {
 /// both the success and the failure path.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct NodeRunDetails {
+    /// Local or remote task workspace retained for debugging and resume.
+    pub workspace: Option<String>,
+    /// Machine-readable task manifest containing process identity and I/O contracts.
+    pub task_manifest: Option<crate::value::FileRef>,
     /// Full container image reference used for the execution, if any.
     pub image: Option<String>,
     /// The `sha256:` digest parsed from `image`, when the reference is
@@ -333,6 +337,8 @@ pub struct NodeReport {
     pub node_type: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub executor: Option<&'static str>,
+    /// Resource request submitted for this task.
+    pub resources: crate::dag::execution::TaskResources,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub logical_node: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -57,6 +57,7 @@ use turso::{Value, params_from_iter};
 
 use super::NodeId;
 use super::error::DagError;
+use super::execution::TaskResources;
 use super::logical::LogicalGraph;
 use super::physical::PhysicalJobRef;
 
@@ -102,6 +103,12 @@ pub struct LogicalManifest {
     pub compiler_version: u16,
     #[serde(default)]
     pub graphs: Vec<LogicalGraph>,
+    #[serde(default)]
+    pub default_task_resources: TaskResources,
+    #[serde(default)]
+    pub logical_task_resources: BTreeMap<String, TaskResources>,
+    #[serde(default)]
+    pub physical_task_resources: BTreeMap<NodeId, TaskResources>,
 }
 
 impl Default for LogicalManifest {
@@ -109,6 +116,9 @@ impl Default for LogicalManifest {
         Self {
             compiler_version: default_logical_compiler_version(),
             graphs: Vec::new(),
+            default_task_resources: TaskResources::default(),
+            logical_task_resources: BTreeMap::new(),
+            physical_task_resources: BTreeMap::new(),
         }
     }
 }
@@ -184,6 +194,23 @@ impl DagManifest {
                 return Err(DagError::History(format!(
                     "physical node `{physical_id}` references missing logical node `{}`",
                     job.logical_node
+                )));
+            }
+        }
+        self.logical.default_task_resources.validate()?;
+        for (logical_node, resources) in &self.logical.logical_task_resources {
+            resources.validate()?;
+            if !logical_ids.contains(logical_node.as_str()) {
+                return Err(DagError::History(format!(
+                    "task resources reference missing logical node `{logical_node}`"
+                )));
+            }
+        }
+        for (physical_node, resources) in &self.logical.physical_task_resources {
+            resources.validate()?;
+            if !physical_ids.contains(physical_node.as_str()) {
+                return Err(DagError::History(format!(
+                    "task resources reference missing physical node `{physical_node}`"
                 )));
             }
         }

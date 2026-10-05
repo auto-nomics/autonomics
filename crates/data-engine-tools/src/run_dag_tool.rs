@@ -355,6 +355,7 @@ mod tests {
             status: RuntimeStatus::Success,
             node_type: "dataframe_to_file".into(),
             executor: Some("local"),
+            resources: Default::default(),
             logical_node: None,
             physical_job_id: None,
             scatter_axis: None,

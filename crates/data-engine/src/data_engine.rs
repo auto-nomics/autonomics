@@ -107,6 +107,33 @@ impl DataEngine {
         self.dag.set_task_executor(executor);
     }
 
+    /// Set resources for one concrete physical node.
+    pub fn set_task_resources(
+        &mut self,
+        id: impl Into<String>,
+        resources: dag_core::TaskResources,
+    ) -> Result<()> {
+        self.dag.set_task_resources(id, resources)?;
+        Ok(())
+    }
+
+    /// Set resources inherited by every physical job of a logical process.
+    pub fn set_logical_task_resources(
+        &mut self,
+        logical_node: impl Into<String>,
+        resources: dag_core::TaskResources,
+    ) -> Result<()> {
+        self.dag
+            .set_logical_task_resources(logical_node, resources)?;
+        Ok(())
+    }
+
+    /// Set resources inherited by tasks without a more specific override.
+    pub fn set_default_task_resources(&mut self, resources: dag_core::TaskResources) -> Result<()> {
+        self.dag.set_default_task_resources(resources)?;
+        Ok(())
+    }
+
     fn new_from_parts(
         ctx: SessionContext,
         runtime_env: Arc<RuntimeEnv>,
@@ -776,10 +803,8 @@ impl DataEngine {
                 edge.to_port,
             )?;
         }
-        self.dag.restore_layers(
-            manifest.logical.graphs.clone(),
-            manifest.physical_jobs.clone(),
-        )?;
+        self.dag
+            .restore_execution_layers(manifest.logical.clone(), manifest.physical_jobs.clone())?;
         Ok(())
     }
 
