@@ -238,6 +238,20 @@ impl SessionServer {
                     .expect("uncontended: running flag is false");
                 let _ = reply.send(engine.add_node_from_registry(id, &kind, spec));
             }
+            DataEngineCmd::AddLogicalGraph { graph, reply } => {
+                if self.running.load(Ordering::SeqCst) {
+                    let _ = reply.send(Err(crate::error::Error::Custom(
+                        "DAG is currently running; wait for it to complete before installing a logical graph"
+                            .to_string(),
+                    )));
+                    return;
+                }
+                let mut engine = self
+                    .engine
+                    .try_lock()
+                    .expect("uncontended: running flag is false");
+                let _ = reply.send(engine.add_logical_graph(graph));
+            }
             DataEngineCmd::UpdateNode { id, spec, reply } => {
                 if self.running.load(Ordering::SeqCst) {
                     let _ = reply.send(Err(crate::error::Error::Custom(
@@ -1101,6 +1115,21 @@ impl DataEngineClient {
                 id,
                 kind,
                 spec,
+                reply: reply_tx,
+            },
+            reply_rx,
+        )
+        .await
+    }
+
+    pub async fn add_logical_graph(
+        &self,
+        graph: crate::dag::LogicalGraph,
+    ) -> Result<crate::data_engine::LogicalInstallReport> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.request(
+            DataEngineCmd::AddLogicalGraph {
+                graph,
                 reply: reply_tx,
             },
             reply_rx,

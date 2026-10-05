@@ -4,6 +4,7 @@
 //! channel values between operators; dynamic fanout turns each item into a
 //! physical job at runtime.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -17,7 +18,7 @@ use crate::value::{ChannelValue, FileRef, NodeValue, PortType};
 pub type Result<T> = std::result::Result<T, DagError>;
 
 /// A declarative, deterministic subset of Nextflow-style channel operators.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "operator", rename_all = "snake_case")]
 pub enum ChannelOperator {
     OfItems { items: Vec<Value> },
@@ -33,7 +34,7 @@ pub enum ChannelOperator {
 }
 
 /// One ordered branch predicate.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ChannelBranch {
     pub name: String,
     pub path: String,

@@ -1,4 +1,5 @@
 mod add_edge_tool;
+mod add_logical_graph_tool;
 mod add_node_tool;
 mod branch_from_snapshot_tool;
 mod checkout_dag_tool;
@@ -78,6 +79,7 @@ impl From<ExecError> for ToolError {
 /// Each tool sends commands to the [`DataEngineClient`] actor and awaits
 /// replies via oneshot channels. All node creation is done through the
 /// generic `add_node` tool (kind + JSON spec).
+/// Logical Channel/scatter graphs use the typed `add_logical_graph` tool.
 pub fn registrations(client: Arc<DataEngineClient>) -> Vec<ToolRegistration> {
     vec![
         // ── node discovery ────────────────────────────────────────────────
@@ -92,6 +94,9 @@ pub fn registrations(client: Arc<DataEngineClient>) -> Vec<ToolRegistration> {
         ToolRegistration::from(add_node_tool::AddNodeTool::new(client.clone())),
         ToolRegistration::from(update_node_tool::UpdateNodeTool::new(client.clone())),
         ToolRegistration::from(add_edge_tool::AddEdgeTool::new(client.clone())),
+        ToolRegistration::from(add_logical_graph_tool::AddLogicalGraphTool::new(
+            client.clone(),
+        )),
         ToolRegistration::from(remove_edge_tool::RemoveEdgeTool::new(client.clone())),
         ToolRegistration::from(remove_node_tool::RemoveNodeTool::new(client.clone())),
         // ── DAG execution & inspection ────────────────────────────────────

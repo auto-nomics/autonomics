@@ -7,6 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::channel::{ChannelNode, ChannelOperator, validate_branches};
@@ -19,7 +20,7 @@ use super::{DagNode, NodeId};
 pub type Result<T> = std::result::Result<T, DagError>;
 
 /// How many physical jobs represent one logical node.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum LogicalExecutionStrategy {
     /// Run one physical job.
     Once,
@@ -35,7 +36,7 @@ pub enum LogicalExecutionStrategy {
 }
 
 /// The executable definition behind a logical node.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub enum LogicalNodeDefinition {
     Registry {
         kind: String,
@@ -53,7 +54,7 @@ pub struct DynamicFanoutSpec {
     pub axis: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct LogicalNode {
     pub id: String,
     pub definition: LogicalNodeDefinition,
@@ -129,7 +130,7 @@ impl LogicalNode {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct LogicalEdge {
     pub from: String,
     pub from_port: u8,
@@ -137,7 +138,7 @@ pub struct LogicalEdge {
     pub to_port: u8,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct LogicalGraph {
     nodes: Vec<LogicalNode>,
     edges: Vec<LogicalEdge>,
