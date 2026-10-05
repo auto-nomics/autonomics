@@ -260,7 +260,7 @@ fn twosamplemr_plugin_renders_submitted_values_into_env() {
         compiled.env.get("TWOSAMPLEMR_HARMONISE_ACTION").unwrap(),
         "3"
     );
-    assert_eq!(compiled.env.get("TWOSAMPLEMR_CLUMP").unwrap(), "");
+    assert_eq!(compiled.env.get("TWOSAMPLEMR_CLUMP").unwrap(), "false");
     assert_eq!(compiled.env.get("TWOSAMPLEMR_CLUMP_P1").unwrap(), "1e-7");
     assert_eq!(compiled.env.get("TWOSAMPLEMR_CLUMP_P2").unwrap(), "2e-6");
     assert_eq!(compiled.env.get("TWOSAMPLEMR_CLUMP_R2").unwrap(), "0.05");

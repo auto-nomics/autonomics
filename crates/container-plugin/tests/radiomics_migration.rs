@@ -110,7 +110,7 @@ const CONTRACTS: &[Contract] = &[
             ("RADIOMICS_RESAMPLED_SPACING", ""),
             ("RADIOMICS_INTERPOLATOR", "sitkBSpline"),
             ("RADIOMICS_RESEGMENT_RANGE", ""),
-            ("RADIOMICS_NORMALIZE", ""),
+            ("RADIOMICS_NORMALIZE", "false"),
         ],
     },
     Contract {
@@ -129,7 +129,7 @@ const CONTRACTS: &[Contract] = &[
             ("RADIOMICS_MASK_LABEL", "1"),
             ("RADIOMICS_BIN_WIDTH", "25.0"),
             ("RADIOMICS_RESAMPLED_SPACING", ""),
-            ("RADIOMICS_FORCE2D", ""),
+            ("RADIOMICS_FORCE2D", "false"),
             ("RADIOMICS_FORCE2D_DIMENSION", "0"),
             ("RADIOMICS_IMAGE_TYPES", "Original"),
             (
@@ -176,7 +176,7 @@ const CONTRACTS: &[Contract] = &[
         ],
         runner_command: "phi-scrub",
         env: &[
-            ("RADIOMICS_KEEP_PATIENT_ID", ""),
+            ("RADIOMICS_KEEP_PATIENT_ID", "false"),
             ("RADIOMICS_PSEUDONYM", ""),
         ],
     },
@@ -404,6 +404,8 @@ fn stand_in_required_values(
         }
         let filler = match spec.r#type {
             ParamType::Bool => json!(false),
+            // Flag accepts the same boolean JSON shape (F02).
+            ParamType::Flag => json!(false),
             ParamType::Int => json!(1),
             ParamType::Number => json!(1.0),
             ParamType::String => json!("golden"),

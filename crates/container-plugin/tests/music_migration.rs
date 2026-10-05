@@ -151,11 +151,11 @@ fn music_deconvolution_plugin_compiles_to_the_legacy_wrapper_contract() {
     );
     assert_eq!(
         compiled.env.get("AUTONOMICS_MUSIC_CENTERED").unwrap(),
-        ""
+        "false"
     );
     assert_eq!(
         compiled.env.get("AUTONOMICS_MUSIC_CT_COV").unwrap(),
-        ""
+        "false"
     );
     assert_eq!(
         compiled.env.get("AUTONOMICS_MUSIC_EPSILON").unwrap(),
@@ -167,7 +167,7 @@ fn music_deconvolution_plugin_compiles_to_the_legacy_wrapper_contract() {
     );
     assert_eq!(
         compiled.env.get("AUTONOMICS_MUSIC_NORMALIZE").unwrap(),
-        ""
+        "false"
     );
     assert_eq!(compiled.env.get("AUTONOMICS_MUSIC_NU").unwrap(), "0.0001");
     // Legacy `spec.select_cell_types.join(",")` of the empty default: "".
@@ -268,7 +268,7 @@ fn music_deconvolution_plugin_renders_submitted_values_into_env() {
     );
     assert_eq!(
         compiled.env.get("AUTONOMICS_MUSIC_NORMALIZE").unwrap(),
-        ""
+        "false"
     );
     assert_eq!(compiled.env.get("AUTONOMICS_MUSIC_CT_COV").unwrap(), "true");
 }

@@ -111,7 +111,9 @@ fn mvmr_plugin_compiles_to_the_legacy_wrapper_contract() {
     assert_eq!(compiled.env.get("MVMR_STRENGTH").unwrap(), "true");
     assert_eq!(compiled.env.get("MVMR_STRHET").unwrap(), "true");
     assert_eq!(compiled.env.get("MVMR_PLEIOTROPY").unwrap(), "true");
-    assert_eq!(compiled.env.get("MVMR_QHET").unwrap(), "");
+    // qhet defaults to false and renders the literal — R's
+    // as.logical("false") is FALSE while as.logical("") is NA (F02).
+    assert_eq!(compiled.env.get("MVMR_QHET").unwrap(), "false");
     assert_eq!(compiled.env.get("MVMR_PCOR").unwrap(), "");
 
     // Script is asserted semantically, not byte-exactly: the plugin drives
@@ -219,7 +221,8 @@ fn mvmr_plugin_renders_submitted_values_into_env() {
         "LDL_beta HDL_beta TG_beta"
     );
     assert_eq!(compiled.env.get("MVMR_LABEL_COLUMN").unwrap(), "SNP");
-    assert_eq!(compiled.env.get("MVMR_STRENGTH").unwrap(), "");
+    // Submitted false renders the literal (value semantics).
+    assert_eq!(compiled.env.get("MVMR_STRENGTH").unwrap(), "false");
     // Unsubmitted booleans keep their defaults.
     assert_eq!(compiled.env.get("MVMR_STRHET").unwrap(), "true");
     assert_eq!(compiled.env.get("MVMR_QHET").unwrap(), "true");

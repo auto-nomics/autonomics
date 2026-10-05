@@ -166,7 +166,7 @@ fn hyprcoloc_plugin_compiles_to_the_legacy_wrapper_contract() {
             .env
             .get("HYPRCOLOC_UNIFORM_PRIORS")
             .map(String::as_str),
-        Some("")
+        Some("false")
     );
     assert_eq!(
         compiled.env.get("HYPRCOLOC_BB_ALG").map(String::as_str),
@@ -185,7 +185,7 @@ fn hyprcoloc_plugin_compiles_to_the_legacy_wrapper_contract() {
     );
     assert_eq!(
         compiled.env.get("HYPRCOLOC_SNPSCORES").map(String::as_str),
-        Some("")
+        Some("false")
     );
 
     // Optional numeric params render as the empty string the script's

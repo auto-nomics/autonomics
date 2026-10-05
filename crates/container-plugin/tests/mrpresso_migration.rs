@@ -110,10 +110,12 @@ fn mrpresso_plugin_compiles_to_the_legacy_wrapper_contract() {
         "E1_effect"
     );
     assert_eq!(compiled.env.get("MRPRESSO_SD_EXPOSURE").unwrap(), "E1_se");
-    assert_eq!(compiled.env.get("MRPRESSO_OUTLIER_TEST").unwrap(), "");
+    // Both diagnostic bools default to false and render the literal so
+    // the script's as.logical() parse chain never sees NA (F02).
+    assert_eq!(compiled.env.get("MRPRESSO_OUTLIER_TEST").unwrap(), "false");
     assert_eq!(
         compiled.env.get("MRPRESSO_DISTORTION_TEST").unwrap(),
-        ""
+        "false"
     );
     assert_eq!(
         compiled.env.get("MRPRESSO_SIGNIF_THRESHOLD").unwrap(),
@@ -216,7 +218,7 @@ fn mrpresso_plugin_renders_submitted_values_into_env() {
     assert_eq!(compiled.env.get("MRPRESSO_OUTLIER_TEST").unwrap(), "true");
     assert_eq!(
         compiled.env.get("MRPRESSO_DISTORTION_TEST").unwrap(),
-        ""
+        "false"
     );
     assert_eq!(
         compiled.env.get("MRPRESSO_SIGNIF_THRESHOLD").unwrap(),
