@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use futures::FutureExt;
 use serde::{Deserialize, Serialize};
+use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
@@ -21,13 +22,12 @@ use super::{DagNode, NodeInput};
 use crate::dag::DagError;
 use crate::dag::graph::PortOutputs;
 use crate::registry::NodeCtx;
-use crate::value::FileRef;
+use crate::value::{FileRef, NodeValue};
 
 /// Resource requests associated with one task.
 ///
-/// These are executor directives. The local executor enforces duration and
-/// records task workspaces; CPU and memory requests are carried for future
-/// resource-aware executors.
+/// These are executor directives. The local executor enforces duration,
+/// weighted CPU/memory request scheduling, and task workspaces.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskResources {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -97,6 +97,8 @@ pub struct TaskInputBinding {
     pub path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fingerprint: Option<crate::value::FileFingerprint>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub staged_paths: Vec<String>,
 }
 
 /// One named process output contract.
@@ -137,12 +139,16 @@ pub trait TaskExecutor: Send + Sync {
 #[derive(Debug, Clone)]
 pub struct LocalTaskExecutor {
     workspace_root: PathBuf,
+    resource_budget: LocalResourceBudget,
+    stage_inputs: bool,
 }
 
 impl Default for LocalTaskExecutor {
     fn default() -> Self {
         Self {
             workspace_root: std::env::temp_dir().join("autonomics-dag-tasks"),
+            resource_budget: Self::discover_resource_budget(),
+            stage_inputs: false,
         }
     }
 }
@@ -151,7 +157,161 @@ impl LocalTaskExecutor {
     pub fn with_workspace_root(workspace_root: impl Into<PathBuf>) -> Self {
         Self {
             workspace_root: workspace_root.into(),
+            resource_budget: Self::discover_resource_budget(),
+            stage_inputs: false,
         }
+    }
+
+    pub fn with_workspace_root_and_resource_limits(
+        workspace_root: impl Into<PathBuf>,
+        cpu_limit: Option<u32>,
+        memory_limit_bytes: Option<u64>,
+    ) -> Result<Self, DagError> {
+        TaskResources {
+            cpus: cpu_limit,
+            memory_bytes: memory_limit_bytes,
+            max_duration_ms: None,
+        }
+        .validate()?;
+        Ok(Self {
+            workspace_root: workspace_root.into(),
+            resource_budget: LocalResourceBudget::new(cpu_limit, memory_limit_bytes),
+            stage_inputs: false,
+        })
+    }
+
+    pub fn with_workspace_root_resource_limits_and_input_staging(
+        workspace_root: impl Into<PathBuf>,
+        cpu_limit: Option<u32>,
+        memory_limit_bytes: Option<u64>,
+    ) -> Result<Self, DagError> {
+        let mut executor = Self::with_workspace_root_and_resource_limits(
+            workspace_root,
+            cpu_limit,
+            memory_limit_bytes,
+        )?;
+        executor.stage_inputs = true;
+        Ok(executor)
+    }
+
+    fn discover_resource_budget() -> LocalResourceBudget {
+        let cpus = std::thread::available_parallelism()
+            .map(|cpus| cpus.get() as u32)
+            .ok();
+        let memory_bytes = crate::resource::sample_memory_usage()
+            .ok()
+            .map(|sample| sample.limit_bytes);
+        LocalResourceBudget::new(cpus, memory_bytes)
+    }
+}
+
+#[derive(Debug)]
+struct LocalResourceState {
+    cpu_limit: Option<u32>,
+    memory_limit_bytes: Option<u64>,
+    cpu_used: u64,
+    memory_used_bytes: u64,
+    generation: u64,
+}
+
+#[derive(Debug)]
+struct LocalResourceBudget {
+    state: std::sync::Arc<(std::sync::Mutex<LocalResourceState>, Notify)>,
+}
+
+impl Clone for LocalResourceBudget {
+    fn clone(&self) -> Self {
+        Self {
+            state: std::sync::Arc::clone(&self.state),
+        }
+    }
+}
+
+impl LocalResourceBudget {
+    fn new(cpu_limit: Option<u32>, memory_limit_bytes: Option<u64>) -> Self {
+        Self {
+            state: std::sync::Arc::new((
+                std::sync::Mutex::new(LocalResourceState {
+                    cpu_limit,
+                    memory_limit_bytes,
+                    cpu_used: 0,
+                    memory_used_bytes: 0,
+                    generation: 0,
+                }),
+                Notify::new(),
+            )),
+        }
+    }
+
+    fn fits(request: u64, used: u64, limit: Option<u64>) -> Result<bool, DagError> {
+        let Some(limit) = limit else {
+            return Ok(true);
+        };
+        let limit = limit as u64;
+        if request > limit {
+            return Err(DagError::Schedule(format!(
+                "task requests {request} but the local executor limit is {limit}"
+            )));
+        }
+        Ok(request.saturating_add(used) <= limit)
+    }
+
+    async fn acquire(&self, request: &TaskResources) -> Result<LocalResourceLease, DagError> {
+        let cpus = request.cpus.map(u64::from).unwrap_or(0);
+        let memory_bytes = request.memory_bytes.unwrap_or(0);
+        loop {
+            let observed_generation = {
+                let mut state = self.state.0.lock().unwrap();
+                let cpu_available =
+                    Self::fits(cpus, state.cpu_used, state.cpu_limit.map(u64::from))?;
+                let memory_available = Self::fits(
+                    memory_bytes,
+                    state.memory_used_bytes,
+                    state.memory_limit_bytes,
+                )?;
+                if cpu_available && memory_available {
+                    state.cpu_used += cpus;
+                    state.memory_used_bytes += memory_bytes;
+                    let generation = state.generation;
+                    return Ok(LocalResourceLease {
+                        state: std::sync::Arc::clone(&self.state),
+                        cpus,
+                        memory_bytes,
+                        generation,
+                    });
+                }
+                state.generation
+            };
+
+            let notified = self.state.1.notified();
+            let unchanged = {
+                let state = self.state.0.lock().unwrap();
+                state.generation == observed_generation
+            };
+            if unchanged {
+                notified.await;
+            }
+        }
+    }
+}
+
+struct LocalResourceLease {
+    state: std::sync::Arc<(std::sync::Mutex<LocalResourceState>, Notify)>,
+    cpus: u64,
+    memory_bytes: u64,
+    #[allow(dead_code)]
+    generation: u64,
+}
+
+impl Drop for LocalResourceLease {
+    fn drop(&mut self) {
+        {
+            let mut state = self.state.0.lock().unwrap();
+            state.cpu_used = state.cpu_used.saturating_sub(self.cpus);
+            state.memory_used_bytes = state.memory_used_bytes.saturating_sub(self.memory_bytes);
+            state.generation += 1;
+        }
+        self.state.1.notify_waiters();
     }
 }
 
@@ -186,6 +346,17 @@ impl LocalTaskWorkspace {
             }
         }
 
+        let manifest = Self::write_manifest(&workspace_root, submission)?;
+        Ok(Self {
+            root: workspace_root,
+            manifest,
+        })
+    }
+
+    fn write_manifest(
+        workspace_root: &std::path::Path,
+        submission: &TaskSubmission,
+    ) -> Result<FileRef, DagError> {
         let manifest_path = workspace_root.join("task.json");
         let manifest_json = serde_json::to_vec_pretty(&serde_json::json!({
             "spec": submission.spec,
@@ -200,11 +371,110 @@ impl LocalTaskWorkspace {
                 manifest_path.display()
             ))
         })?;
-        let manifest = FileRef::local(&manifest_path, Some("json".into()))?;
-        Ok(Self {
-            root: workspace_root,
-            manifest,
+        FileRef::local(&manifest_path, Some("json".into()))
+    }
+
+    async fn read_source(
+        path: &str,
+        storage: Option<&vfs::OpendalFileStorage>,
+    ) -> Result<Vec<u8>, DagError> {
+        if let Some(virtual_path) = path.strip_prefix("vfs://") {
+            let storage = storage.ok_or_else(|| {
+                DagError::Schedule(format!(
+                    "cannot stage VFS input `{path}` because no object store is configured"
+                ))
+            })?;
+            let length = storage
+                .content_length(virtual_path)
+                .await
+                .map_err(|error| {
+                    DagError::Schedule(format!("cannot stat VFS input `{path}`: {error}"))
+                })?;
+            let bytes = storage
+                .read_range(virtual_path, 0..length)
+                .await
+                .map_err(|error| {
+                    DagError::Schedule(format!("cannot read VFS input `{path}`: {error}"))
+                })?;
+            return Ok(bytes.to_vec());
+        }
+
+        let local_path = path.strip_prefix("file://").unwrap_or(path);
+        std::fs::read(local_path).map_err(|error| {
+            DagError::Schedule(format!("cannot stage local input `{local_path}`: {error}"))
         })
+    }
+
+    async fn stage_file(
+        input_root: &std::path::Path,
+        sequence: &mut u64,
+        source: &FileRef,
+        storage: Option<&vfs::OpendalFileStorage>,
+    ) -> Result<FileRef, DagError> {
+        let bytes = Self::read_source(&source.path, storage).await?;
+        let staged_path = input_root.join(format!("input-{}.bin", *sequence));
+        *sequence += 1;
+        std::fs::write(&staged_path, bytes).map_err(|error| {
+            DagError::Schedule(format!(
+                "cannot write staged input `{}`: {error}",
+                staged_path.display()
+            ))
+        })?;
+        let mut staged = FileRef::local(&staged_path, source.format.clone())?;
+        if source.fingerprint.is_some() {
+            staged.fingerprint = source.fingerprint.clone();
+        }
+        Ok(staged)
+    }
+
+    async fn stage_inputs(
+        &mut self,
+        submission: &mut TaskSubmission,
+        storage: Option<&vfs::OpendalFileStorage>,
+    ) -> Result<(), DagError> {
+        let input_root = self.root.join("inputs");
+        std::fs::create_dir_all(&input_root).map_err(|error| {
+            DagError::Schedule(format!(
+                "cannot create input staging directory `{}`: {error}",
+                input_root.display()
+            ))
+        })?;
+        let mut sequence = 0u64;
+        let mut staged_by_port = std::collections::BTreeMap::<u8, Vec<String>>::new();
+
+        for input in &mut submission.inputs {
+            let (sources, is_file_set) = match &input.data {
+                NodeValue::File(file) => (vec![file.clone()], false),
+                NodeValue::FileSet(files) => (files.clone(), true),
+                NodeValue::DataFrame(_) | NodeValue::Channel(_) => continue,
+            };
+            let mut staged_files = Vec::with_capacity(sources.len());
+            for source in &sources {
+                let staged = Self::stage_file(&input_root, &mut sequence, source, storage).await?;
+                staged_by_port
+                    .entry(input.port)
+                    .or_default()
+                    .push(staged.path.clone());
+                staged_files.push(staged);
+            }
+            input.data = if is_file_set {
+                NodeValue::FileSet(staged_files)
+            } else {
+                NodeValue::File(
+                    staged_files
+                        .into_iter()
+                        .next()
+                        .ok_or_else(|| DagError::Schedule("file input had no source".into()))?,
+                )
+            };
+        }
+        for binding in &mut submission.spec.inputs {
+            if let Some(paths) = staged_by_port.get(&binding.port) {
+                binding.staged_paths = paths.clone();
+            }
+        }
+        self.manifest = Self::write_manifest(&self.root, submission)?;
+        Ok(())
     }
 
     fn finish(&self, status: &str, duration: Duration) {
@@ -256,7 +526,7 @@ impl TaskExecutor for LocalTaskExecutor {
 
         let timeout = task_timeout(&execution.submission.resources);
         let cancellation = execution.cancellation.clone();
-        let workspace =
+        let mut workspace =
             match LocalTaskWorkspace::create(&self.workspace_root, &execution.submission) {
                 Ok(workspace) => Some(workspace),
                 Err(error) => {
@@ -268,6 +538,82 @@ impl TaskExecutor for LocalTaskExecutor {
                     };
                 }
             };
+
+        let resource_lease = tokio::select! {
+            lease = self.resource_budget.acquire(&execution.submission.resources) => match lease {
+                Ok(lease) => lease,
+                Err(error) => {
+                    let duration = start.elapsed();
+                    let mut details = execution.reporter.take_run_details();
+                    if let Some(workspace) = &workspace {
+                        workspace.attach(&mut details, 125);
+                        workspace.finish("resource_rejected", duration);
+                    }
+                    return JobResult::Failed {
+                        id: task_id,
+                        error,
+                        duration,
+                        details,
+                    };
+                }
+            },
+            _ = cancellation.cancelled() => {
+                let duration = start.elapsed();
+                let mut details = execution.reporter.take_run_details();
+                if let Some(workspace) = &workspace {
+                    workspace.attach(&mut details, 130);
+                    workspace.finish("cancelled", duration);
+                }
+                return JobResult::Failed {
+                    id: task_id,
+                    error: DagError::Schedule(
+                        "task cancelled by DAG run cancellation".into(),
+                    ),
+                    duration,
+                    details,
+                };
+            },
+            _ = tokio::time::sleep(timeout.unwrap_or(Duration::MAX)), if timeout.is_some() => {
+                let duration = start.elapsed();
+                let mut details = execution.reporter.take_run_details();
+                if let Some(workspace) = &workspace {
+                    workspace.attach(&mut details, 124);
+                    workspace.finish("timeout", duration);
+                }
+                return JobResult::Failed {
+                    id: task_id,
+                    error: DagError::Schedule(format!(
+                        "task `{}` exceeded max_duration_ms of {} while awaiting resources",
+                        execution.submission.spec.id,
+                        execution.submission.resources.max_duration_ms.unwrap_or_default()
+                    )),
+                    duration,
+                    details,
+                };
+            }
+        };
+
+        if self.stage_inputs
+            && let Some(workspace) = workspace.as_mut()
+            && let Err(error) = workspace
+                .stage_inputs(
+                    &mut execution.submission,
+                    execution.engine_ctx.opendal.as_deref(),
+                )
+                .await
+        {
+            drop(resource_lease);
+            let duration = start.elapsed();
+            let mut details = execution.reporter.take_run_details();
+            workspace.attach(&mut details, 126);
+            workspace.finish("input_staging_failed", duration);
+            return JobResult::Failed {
+                id: task_id,
+                error,
+                duration,
+                details,
+            };
+        }
 
         let result = tokio::select! {
             result = AssertUnwindSafe(execution.node.execute(
@@ -311,6 +657,7 @@ impl TaskExecutor for LocalTaskExecutor {
                 };
             }
         };
+        drop(resource_lease);
 
         let duration = start.elapsed();
         let mut details = execution.reporter.take_run_details();

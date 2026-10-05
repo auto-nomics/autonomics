@@ -545,6 +545,7 @@ impl DAG {
                 payload: binding.kind,
                 path: binding.path,
                 fingerprint: binding.fingerprint,
+                staged_paths: Vec::new(),
             })
             .collect::<Vec<_>>();
 
@@ -575,6 +576,7 @@ impl DAG {
                 payload: "json".into(),
                 path: None,
                 fingerprint: None,
+                staged_paths: Vec::new(),
             });
         }
 
@@ -2932,6 +2934,128 @@ mod tests {
         ports: NodePorts,
     }
 
+    #[derive(Default)]
+    struct ResourceTrace {
+        active: usize,
+        max_active: usize,
+    }
+
+    #[derive(Clone)]
+    struct ResourceTrackingNode {
+        trace: Arc<std::sync::Mutex<ResourceTrace>>,
+        ports: NodePorts,
+    }
+
+    #[derive(Clone)]
+    struct FileSourceNode {
+        path: std::path::PathBuf,
+        ports: NodePorts,
+    }
+
+    #[async_trait::async_trait]
+    impl DagNode for FileSourceNode {
+        fn ports(&self) -> &NodePorts {
+            &self.ports
+        }
+
+        async fn execute(
+            &mut self,
+            _ctx: &crate::registry::NodeCtx,
+            _inputs: &[NodeInput],
+            _reporter: &crate::dag::node_event::NodeReporter,
+        ) -> std::result::Result<PortOutputs, DagError> {
+            let file = FileRef::local(&self.path, Some("text".into()))?;
+            let mut outputs = PortOutputs::new();
+            outputs.insert(0, file);
+            Ok(outputs)
+        }
+
+        fn clone_box(&self) -> Box<dyn DagNode> {
+            Box::new(self.clone())
+        }
+
+        fn kind(&self) -> &'static str {
+            "file_source_test_node"
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    #[derive(Clone)]
+    struct InputPathProbeNode {
+        paths: Arc<std::sync::Mutex<Vec<String>>>,
+        ports: NodePorts,
+    }
+
+    #[async_trait::async_trait]
+    impl DagNode for InputPathProbeNode {
+        fn ports(&self) -> &NodePorts {
+            &self.ports
+        }
+
+        async fn execute(
+            &mut self,
+            _ctx: &crate::registry::NodeCtx,
+            inputs: &[NodeInput],
+            _reporter: &crate::dag::node_event::NodeReporter,
+        ) -> std::result::Result<PortOutputs, DagError> {
+            let mut paths = self.paths.lock().unwrap();
+            for input in inputs {
+                paths.push(input.data.as_file()?.path.clone());
+            }
+            Ok(PortOutputs::new())
+        }
+
+        fn clone_box(&self) -> Box<dyn DagNode> {
+            Box::new(self.clone())
+        }
+
+        fn kind(&self) -> &'static str {
+            "input_path_probe_test_node"
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl DagNode for ResourceTrackingNode {
+        fn ports(&self) -> &NodePorts {
+            &self.ports
+        }
+
+        async fn execute(
+            &mut self,
+            _ctx: &crate::registry::NodeCtx,
+            _inputs: &[NodeInput],
+            _reporter: &crate::dag::node_event::NodeReporter,
+        ) -> std::result::Result<PortOutputs, DagError> {
+            {
+                let mut trace = self.trace.lock().unwrap();
+                trace.active += 1;
+                trace.max_active = trace.max_active.max(trace.active);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+            self.trace.lock().unwrap().active -= 1;
+            Ok(PortOutputs::new())
+        }
+
+        fn clone_box(&self) -> Box<dyn DagNode> {
+            Box::new(self.clone())
+        }
+
+        fn kind(&self) -> &'static str {
+            "resource_tracking_test_node"
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
     #[async_trait::async_trait]
     impl DagNode for SleepingNode {
         fn ports(&self) -> &NodePorts {
@@ -3134,6 +3258,115 @@ mod tests {
             manifest.logical.physical_task_resources.get("sleep"),
             Some(&resources)
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn local_executor_serializes_resource_requests() -> Result<()> {
+        let workspace_root = tempfile::tempdir().unwrap();
+        let mut dag = DAG::default();
+        dag.set_task_executor(std::sync::Arc::new(
+            LocalTaskExecutor::with_workspace_root_and_resource_limits(
+                workspace_root.path(),
+                Some(1),
+                Some(1024),
+            )?,
+        ));
+        let trace = Arc::new(std::sync::Mutex::new(ResourceTrace::default()));
+        for id in ["a", "b"] {
+            dag.add_node_with_spec(
+                id.into(),
+                Box::new(ResourceTrackingNode {
+                    trace: Arc::clone(&trace),
+                    ports: NodePorts::new(),
+                }),
+                "resource_tracking_test_node".into(),
+                serde_json::json!({"id": id}),
+            )?;
+            dag.set_task_resources(
+                id,
+                TaskResources {
+                    cpus: Some(1),
+                    memory_bytes: Some(1024),
+                    max_duration_ms: Some(5_000),
+                },
+            )?;
+        }
+
+        let report = dag
+            .run(
+                &crate::dag::SchedulerConfig {
+                    max_concurrency: 2,
+                    ..crate::dag::SchedulerConfig::default()
+                },
+                &test_ctx(),
+                None,
+            )
+            .await?;
+        assert!(report.ok, "{report:?}");
+        assert_eq!(trace.lock().unwrap().max_active, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn local_executor_stages_file_inputs_in_workspace() -> Result<()> {
+        let source_dir = tempfile::tempdir().unwrap();
+        let source_path = source_dir.path().join("source.txt");
+        std::fs::write(&source_path, b"staged payload").unwrap();
+        let workspace_root = tempfile::tempdir().unwrap();
+        let mut dag = DAG::default();
+        dag.set_task_executor(std::sync::Arc::new(
+            LocalTaskExecutor::with_workspace_root_resource_limits_and_input_staging(
+                workspace_root.path(),
+                Some(1),
+                Some(1024),
+            )?,
+        ));
+        dag.add_node_with_spec(
+            "source".into(),
+            Box::new(FileSourceNode {
+                path: source_path.clone(),
+                ports: NodePorts::new().add_output_port_of_type(None, PortType::File),
+            }),
+            "file_source_test_node".into(),
+            serde_json::json!({"path": source_path}),
+        )?;
+        let staged_paths = Arc::new(std::sync::Mutex::new(Vec::new()));
+        dag.add_node_with_spec(
+            "probe".into(),
+            Box::new(InputPathProbeNode {
+                paths: Arc::clone(&staged_paths),
+                ports: NodePorts::new().add_input_port_of_type(None, PortType::File),
+            }),
+            "input_path_probe_test_node".into(),
+            serde_json::json!({}),
+        )?;
+        dag.add_edge("source", "probe", 0, 0)?;
+
+        let report = dag
+            .run(&crate::dag::SchedulerConfig::default(), &test_ctx(), None)
+            .await?;
+        assert!(report.ok, "{report:?}");
+        let paths = staged_paths.lock().unwrap().clone();
+        assert_eq!(paths.len(), 1);
+        let staged_path = std::path::Path::new(&paths[0]);
+        assert!(staged_path.starts_with(workspace_root.path()));
+        assert_eq!(staged_path.parent().unwrap().file_name().unwrap(), "inputs");
+        assert_eq!(std::fs::read(staged_path).unwrap(), b"staged payload");
+
+        let probe = report.nodes.iter().find(|node| node.id == "probe").unwrap();
+        let manifest_path = probe
+            .execution
+            .as_ref()
+            .unwrap()
+            .task_manifest
+            .as_ref()
+            .unwrap()
+            .path
+            .clone();
+        let manifest: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(manifest_path).unwrap()).unwrap();
+        assert_eq!(manifest["spec"]["inputs"][0]["staged_paths"][0], paths[0]);
         Ok(())
     }
 

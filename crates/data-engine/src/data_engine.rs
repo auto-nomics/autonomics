@@ -107,6 +107,31 @@ impl DataEngine {
         self.dag.set_task_executor(executor);
     }
 
+    /// Configure the built-in local executor.
+    pub fn set_local_task_executor(
+        &mut self,
+        workspace_root: impl Into<std::path::PathBuf>,
+        cpu_limit: Option<u32>,
+        memory_limit_bytes: Option<u64>,
+        stage_inputs: bool,
+    ) -> Result<()> {
+        let executor = if stage_inputs {
+            dag_core::LocalTaskExecutor::with_workspace_root_resource_limits_and_input_staging(
+                workspace_root,
+                cpu_limit,
+                memory_limit_bytes,
+            )?
+        } else {
+            dag_core::LocalTaskExecutor::with_workspace_root_and_resource_limits(
+                workspace_root,
+                cpu_limit,
+                memory_limit_bytes,
+            )?
+        };
+        self.dag.set_task_executor(std::sync::Arc::new(executor));
+        Ok(())
+    }
+
     /// Set resources for one concrete physical node.
     pub fn set_task_resources(
         &mut self,
