@@ -163,12 +163,6 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(
             source_semantic_scholar::S2AuthorSearchNodeFactory {},
         ));
-        registry.register(Box::new(
-            source_opentargets::OpentargetsAssociationsNodeFactory {},
-        ));
-        registry.register(Box::new(
-            source_opentargets::OpentargetsSearchNodeFactory {},
-        ));
         registry.register(Box::new(CrossrefWorksNodeFactory {}));
         registry.register(Box::new(NhanesFilesNodeFactory {}));
         registry.register(Box::new(NhanesDownloadNodeFactory {}));

@@ -110,7 +110,7 @@ const CONTRACTS: &[Contract] = &[
             ("RADIOMICS_RESAMPLED_SPACING", ""),
             ("RADIOMICS_INTERPOLATOR", "sitkBSpline"),
             ("RADIOMICS_RESEGMENT_RANGE", ""),
-            ("RADIOMICS_NORMALIZE", "false"),
+            ("RADIOMICS_NORMALIZE", ""),
         ],
     },
     Contract {
@@ -129,7 +129,7 @@ const CONTRACTS: &[Contract] = &[
             ("RADIOMICS_MASK_LABEL", "1"),
             ("RADIOMICS_BIN_WIDTH", "25.0"),
             ("RADIOMICS_RESAMPLED_SPACING", ""),
-            ("RADIOMICS_FORCE2D", "false"),
+            ("RADIOMICS_FORCE2D", ""),
             ("RADIOMICS_FORCE2D_DIMENSION", "0"),
             ("RADIOMICS_IMAGE_TYPES", "Original"),
             (
@@ -176,7 +176,7 @@ const CONTRACTS: &[Contract] = &[
         ],
         runner_command: "phi-scrub",
         env: &[
-            ("RADIOMICS_KEEP_PATIENT_ID", "false"),
+            ("RADIOMICS_KEEP_PATIENT_ID", ""),
             ("RADIOMICS_PSEUDONYM", ""),
         ],
     },

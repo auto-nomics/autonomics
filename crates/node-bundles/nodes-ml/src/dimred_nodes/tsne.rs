@@ -13,8 +13,14 @@ pub struct TsneSpec {
     pub perplexity: f64,
     #[serde(default = "d_tsne_iter")]
     pub max_iter: usize,
+    /// Barnes-Hut θ (linfa-tsne `approx_threshold`). Defaults to the
+    /// library's 0.5; values ≥ sample count silently disable the quadtree
+    /// approximation and run exact O(n²) t-SNE.
     #[serde(default = "d_tsne_threshold")]
     pub approx_threshold: f64,
+    /// RNG seed for the embedding initialisation.
+    #[serde(default = "d_tsne_seed")]
+    pub seed: u64,
 }
 fn d_tsne_dims() -> usize {
     2
@@ -26,7 +32,10 @@ fn d_tsne_iter() -> usize {
     1000
 }
 fn d_tsne_threshold() -> f64 {
-    350.0
+    0.5
+}
+fn d_tsne_seed() -> u64 {
+    42
 }
 
 pub struct TsneFactory;
@@ -58,6 +67,7 @@ impl NodeFactory for TsneFactory {
             perplexity: s.perplexity,
             max_iter: s.max_iter,
             approx_threshold: s.approx_threshold,
+            seed: s.seed,
             meta: self.ports(),
         }))
     }
@@ -70,6 +80,7 @@ struct TsneNode {
     perplexity: f64,
     max_iter: usize,
     approx_threshold: f64,
+    seed: u64,
     meta: NodePorts,
 }
 
@@ -104,7 +115,7 @@ impl DagNode for TsneNode {
             perplexity: self.perplexity,
             max_iter: self.max_iter,
             approx_threshold: self.approx_threshold,
-            ..Default::default()
+            seed: self.seed,
         };
         let model = ml::dimred::tsne(&data, &opts).map_err(|e| DagError::NodeError {
             node_type: "ml_tsne".into(),

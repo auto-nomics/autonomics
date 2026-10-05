@@ -1128,7 +1128,13 @@ impl SpecExecute for SvyIvregSpec {
             .coefficients
             .iter()
             .zip(&se)
-            .map(|(b, s)| if *s > 0.0 { b / s } else { f64::NAN })
+            .map(|(coef, stderr)| {
+                if *stderr > 0.0 {
+                    coef / stderr
+                } else {
+                    f64::NAN
+                }
+            })
             .collect();
         let p_values: Vec<f64> = t_stats
             .iter()

@@ -210,7 +210,7 @@ fn mixer_fit1_plugin_renders_submitted_values_into_env() {
     assert_eq!(compiled.env.get("MIXER_CHR2USE").unwrap(), "21-22");
     assert_eq!(compiled.env.get("MIXER_SEED").unwrap(), "42");
     assert_eq!(compiled.env.get("MIXER_DIFFEVO_FAST_REPEATS").unwrap(), "5");
-    assert_eq!(compiled.env.get("MIXER_FAST_RUN").unwrap(), "false");
+    assert_eq!(compiled.env.get("MIXER_FAST_RUN").unwrap(), "");
     assert_eq!(compiled.env.get("MIXER_KMAX_PDF").unwrap(), "20");
     assert_eq!(compiled.env.get("MIXER_DOWNSAMPLE_FACTOR").unwrap(), "500");
     assert_eq!(compiled.env.get("MIXER_THREADS").unwrap(), "4");

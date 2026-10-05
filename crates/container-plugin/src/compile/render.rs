@@ -40,7 +40,13 @@ fn serialise_value(value: &Value) -> Option<String> {
         // Optional-and-absent params resolve to null and render as an
         // empty string: env consumers see "" and `[ -n "$VAR" ]` is false.
         Value::Null => String::new(),
-        Value::Bool(b) => b.to_string(),
+        // Booleans carry *presence* semantics: `false` renders as "" so
+        // both consumer idioms agree — `[ -n "$VAR" ]` presence tests are
+        // off, and `= "true"` equality tests are off. Rendering the
+        // literal "false" made every presence test true (the flag was
+        // passed whenever a user *explicitly disabled* it).
+        Value::Bool(true) => "true".to_string(),
+        Value::Bool(false) => String::new(),
         Value::Number(n) => n.to_string(),
         Value::String(s) => s.clone(),
         Value::Array(items) => items
@@ -345,6 +351,22 @@ mod tests {
             render_argv(&argv, &resolved).unwrap(),
             vec!["--limit", "2.5", "--force", "true", "--count", "7"]
         );
+    }
+
+    #[test]
+    fn bool_false_renders_empty_for_presence_semantics() {
+        // Explicit false must be indistinguishable from an unset optional:
+        // `[ -n "$VAR" ]` tests off and `= "true"` comparisons fail.
+        // Rendering the literal "false" passed the flag whenever a user
+        // explicitly disabled it (mtag/ldsc presence-style scripts).
+        let resolved = resolved(&[("force", json!(false))]);
+        let mut env = BTreeMap::new();
+        env.insert("MTAG_FORCE".into(), "{{ force }}".into());
+        let rendered = render_env(&env, &resolved).unwrap();
+        assert_eq!(rendered.get("MTAG_FORCE").unwrap(), "");
+
+        let argv = vec!["--force".into(), "{{ force }}".into()];
+        assert_eq!(render_argv(&argv, &resolved).unwrap(), vec!["--force", ""]);
     }
 
     #[test]

@@ -186,6 +186,9 @@ pub struct NodeInfo {
 pub struct NodeRegistry {
     node_ctx: NodeCtx,
     nodes: HashMap<String, Box<dyn NodeFactory>>,
+    /// Kinds registered more than once (last write still wins, but the
+    /// conflict is recorded and surfaces via [`Self::assert_no_conflicts`]).
+    conflicts: Vec<String>,
 }
 
 impl NodeRegistry {
@@ -198,6 +201,7 @@ impl NodeRegistry {
         Self {
             node_ctx,
             nodes: Default::default(),
+            conflicts: Vec::new(),
         }
     }
 
@@ -211,8 +215,37 @@ impl NodeRegistry {
     }
 
     /// Register a single node factory.
+    ///
+    /// Registering the same kind twice is almost always a bug (one factory
+    /// silently replaces the other).  Last-write-wins behaviour is kept for
+    /// backwards compatibility, but the duplicate kind is recorded and
+    /// [`Self::assert_no_conflicts`] reports it.
     pub fn register(&mut self, factory: Box<dyn NodeFactory>) {
-        self.nodes.insert(factory.kind().to_string(), factory);
+        let kind = factory.kind().to_string();
+        if self.nodes.insert(kind.clone(), factory).is_some() && !self.conflicts.contains(&kind) {
+            self.conflicts.push(kind);
+        }
+    }
+
+    /// Kinds that were registered more than once.
+    pub fn conflicts(&self) -> &[String] {
+        &self.conflicts
+    }
+
+    /// Error if any node kind was registered more than once.
+    ///
+    /// Intended to be called once by the engine host after all plugins are
+    /// registered, so silent factory overwrites surface at startup instead
+    /// of producing a node that runs the wrong implementation.
+    pub fn assert_no_conflicts(&self) -> Result<()> {
+        if self.conflicts.is_empty() {
+            Ok(())
+        } else {
+            Err(Error::Unknown(format!(
+                "duplicate node kind registrations (last write won): {}",
+                self.conflicts.join(", ")
+            )))
+        }
     }
 
     /// Register all factories from a [`NodePlugin`](crate::plugin::NodePlugin).
@@ -305,5 +338,71 @@ impl NodeRegistry {
                 data_bundles: factory.data_bundles(),
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct FakeFactory {
+        kind: &'static str,
+    }
+
+    impl NodeFactory for FakeFactory {
+        fn kind(&self) -> &'static str {
+            self.kind
+        }
+        fn desc(&self) -> &'static str {
+            "fake"
+        }
+        fn doc(&self) -> &'static str {
+            "fake"
+        }
+        fn spec_schema(&self) -> schemars::Schema {
+            schemars::Schema::default()
+        }
+        fn ports(&self) -> NodePorts {
+            NodePorts::new()
+        }
+        fn build(
+            &self,
+            _spec: serde_json::Value,
+            _node_ctx: NodeCtx,
+        ) -> Result<Box<dyn DagNode>> {
+            Err(Error::Unknown("fake factory cannot build".into()))
+        }
+    }
+
+    fn registry() -> NodeRegistry {
+        NodeRegistry::new(NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        ))
+    }
+
+    #[test]
+    fn duplicate_registration_is_reported() {
+        let mut reg = registry();
+        reg.register(Box::new(FakeFactory { kind: "dup_kind" }));
+        reg.register(Box::new(FakeFactory { kind: "other_kind" }));
+        // Distinct kinds are fine.
+        assert!(reg.assert_no_conflicts().is_ok());
+        assert!(reg.conflicts().is_empty());
+
+        // Second registration of the same kind: last write still wins, but
+        // the conflict is recorded (once, even on a third registration).
+        reg.register(Box::new(FakeFactory { kind: "dup_kind" }));
+        reg.register(Box::new(FakeFactory { kind: "dup_kind" }));
+        assert_eq!(reg.conflicts(), ["dup_kind"]);
+        let err = reg
+            .assert_no_conflicts()
+            .expect_err("duplicate must error");
+        assert!(
+            err.to_string().contains("dup_kind"),
+            "error names the kind: {err}"
+        );
+        // The last registration is the one that sticks.
+        assert!(reg.get_node_ports("dup_kind").is_ok());
     }
 }
