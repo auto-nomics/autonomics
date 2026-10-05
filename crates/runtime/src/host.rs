@@ -1725,9 +1725,19 @@ impl RuntimeHost {
             HostCommand::Disconnect { from, to } => {
                 self.network.disconnect(&from, &to);
             }
-            HostCommand::DeliverMessage { name, message } => {
+            HostCommand::DeliverMessage {
+                name,
+                message,
+                reply_tx,
+            } => {
                 let resolved = self.resolve_agent(&name).unwrap_or(name);
-                self.send_to(&resolved, message);
+                let result = self.send_to(&resolved, message);
+                if let Err(error) = &result {
+                    tracing::warn!(agent = %resolved, %error, "user message dropped");
+                }
+                if let Some(reply_tx) = reply_tx {
+                    let _ = reply_tx.send(result);
+                }
             }
             // ── Phase 5: fire-and-forget inter-agent message ──
             // Unlike Delegate, no reply_tx is recorded in tool_delegations —
@@ -3022,8 +3032,13 @@ impl RuntimeHost {
     /// `name` should already be a resolved full path. Callers that receive
     /// user/LLM-provided names should call [`resolve_agent`](Self::resolve_agent)
     /// first.
-    pub fn send_to(&self, name: &str, message: String) {
-        self.send_to_from_user(name, message, true);
+    ///
+    /// Returns `Err` when the message was dropped — the agent is not in the
+    /// live registry (e.g. the registry was emptied by a restart) or its
+    /// command loop has exited. Historically both cases failed silently,
+    /// which let callers acknowledge messages that never reached anyone.
+    pub fn send_to(&self, name: &str, message: String) -> std::result::Result<(), String> {
+        self.send_to_from_user(name, message, true)
     }
 
     /// Inject a message from another runtime source. Unlike TUI input, the
@@ -3044,12 +3059,25 @@ impl RuntimeHost {
         Ok(())
     }
 
-    fn send_to_from_user(&self, name: &str, message: String, from_user: bool) {
-        if self.agents.contains_key(name) {
-            if !self.enqueue_agent_message(name, message, None, from_user) {
-                tracing::warn!(agent = name, "user message dropped: relay channel closed");
-            }
+    fn send_to_from_user(
+        &self,
+        name: &str,
+        message: String,
+        from_user: bool,
+    ) -> std::result::Result<(), String> {
+        if !self.agents.contains_key(name) {
+            return Err(format!(
+                "Agent '{name}' is not registered. The live registry is empty until \
+                 agents are spawned and resets on daemon restart; re-spawn or recover \
+                 the agent before delivering messages."
+            ));
         }
+        if !self.enqueue_agent_message(name, message, None, from_user) {
+            return Err(format!(
+                "Agent '{name}' is not accepting commands (its loop has exited)."
+            ));
+        }
+        Ok(())
     }
 
     fn enqueue_agent_message(
@@ -3080,7 +3108,11 @@ impl RuntimeHost {
     /// Send a tracked delegation request through the target relay.
     fn send_delegation_to(&self, name: &str, message: String, delegation_id: uuid::Uuid) {
         if !self.enqueue_agent_message(name, message, Some(delegation_id), false) {
-            tracing::warn!(agent = name, %delegation_id, "delegation dropped: relay channel closed");
+            tracing::warn!(
+                agent = name,
+                %delegation_id,
+                "delegation dropped: agent not in the live registry or relay channel closed"
+            );
         }
     }
 
@@ -3098,7 +3130,9 @@ impl RuntimeHost {
     pub fn inject_initial_prompts(&mut self) {
         let messages = self.network.initial_messages();
         for (node, prompt) in messages {
-            self.send_to_from_user(&node, prompt, false);
+            if let Err(error) = self.send_to_from_user(&node, prompt, false) {
+                tracing::warn!(agent = %node, %error, "initial prompt dropped");
+            }
         }
     }
 
@@ -4376,7 +4410,7 @@ mod send_message_tests {
 
     /// `SendMessage`, `DeliverMessage`, and `Delegate` MUST be distinct
     /// variants. They dispatch to different handler paths:
-    /// - `DeliverMessage` → fire-and-forget TUI message (no reply)
+    /// - `DeliverMessage` → user message (optional reply for the gateway)
     /// - `SendMessage` → fire-and-forget inter-agent (reply: Ok/Err)
     /// - `Delegate` → request-response (reply: full response text)
     #[test]
@@ -4390,6 +4424,7 @@ mod send_message_tests {
         let deliver = HostCommand::DeliverMessage {
             name: "worker".into(),
             message: "hello".into(),
+            reply_tx: None,
         };
         let delegate = HostCommand::Delegate {
             to: "worker".into(),
@@ -4533,6 +4568,102 @@ mod send_message_tests {
             .send_message("/root/sender", "worker", "hello")
             .await;
         assert!(result.is_none(), "should return None on closed channel");
+    }
+
+    /// The gateway rides `DeliverMessage.reply_tx` so a 202 means the host
+    /// actually enqueued the message. Round-trip: tracked delivery carries
+    /// the reply channel, the host confirms, the caller sees `Some(Ok(()))`.
+    #[tokio::test]
+    async fn deliver_message_tracked_round_trip_confirms_delivery() {
+        let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<HostCommand>();
+        let (event_tx, _) = tokio::sync::broadcast::channel::<HostEvent>(1);
+        let control = HostControl::new(cmd_tx, event_tx);
+
+        let caller = tokio::spawn(async move {
+            control
+                .deliver_message_tracked("/root/worker", "hello there")
+                .await
+        });
+
+        let cmd = cmd_rx.recv().await.expect("command received");
+        match cmd {
+            HostCommand::DeliverMessage {
+                name,
+                message,
+                reply_tx,
+            } => {
+                assert_eq!(name, "/root/worker");
+                assert_eq!(message, "hello there");
+                let reply_tx = reply_tx.expect("tracked delivery carries a reply channel");
+                let _ = reply_tx.send(Ok(()));
+            }
+            _ => panic!("expected DeliverMessage variant"),
+        }
+
+        let result = caller.await.expect("caller task panicked");
+        assert_eq!(result, Some(Ok(())));
+    }
+
+    /// Tracked delivery surfaces dropped messages: an `Err` reply (unknown
+    /// agent, exited loop) reaches the caller instead of a blind 202.
+    #[tokio::test]
+    async fn deliver_message_tracked_round_trip_reports_drop() {
+        let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<HostCommand>();
+        let (event_tx, _) = tokio::sync::broadcast::channel::<HostEvent>(1);
+        let control = HostControl::new(cmd_tx, event_tx);
+
+        let caller = tokio::spawn(async move {
+            control
+                .deliver_message_tracked("/root/ghost", "hello")
+                .await
+        });
+
+        let cmd = cmd_rx.recv().await.expect("command received");
+        match cmd {
+            HostCommand::DeliverMessage { reply_tx, .. } => {
+                let reply_tx = reply_tx.expect("tracked delivery carries a reply channel");
+                let _ = reply_tx.send(Err("Agent '/root/ghost' is not registered.".into()));
+            }
+            _ => panic!("expected DeliverMessage variant"),
+        }
+
+        let result = caller.await.expect("caller task panicked");
+        assert!(matches!(result, Some(Err(message)) if message.contains("not registered")));
+    }
+
+    /// When the host never answers (reply channel dropped without a send —
+    /// a wedged or panicked host loop), tracked delivery returns `None`.
+    /// The fire-and-forget TUI path still sends no reply channel at all.
+    #[tokio::test]
+    async fn deliver_message_tracked_returns_none_when_host_is_silent() {
+        let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<HostCommand>();
+        let (event_tx, _) = tokio::sync::broadcast::channel::<HostEvent>(1);
+        let control = HostControl::new(cmd_tx, event_tx);
+
+        let caller = tokio::spawn({
+            let control = control.clone();
+            async move { control.deliver_message_tracked("/root/wedged", "hello").await }
+        });
+
+        let cmd = cmd_rx.recv().await.expect("command received");
+        match cmd {
+            HostCommand::DeliverMessage { reply_tx, .. } => {
+                drop(reply_tx);
+            }
+            _ => panic!("expected DeliverMessage variant"),
+        }
+
+        let result = caller.await.expect("caller task panicked");
+        assert!(result.is_none(), "silent host must surface as None");
+
+        // Legacy TUI path: no reply channel, still fire-and-forget.
+        control.deliver_message("/root/worker", "hello");
+        match cmd_rx.recv().await.expect("command received") {
+            HostCommand::DeliverMessage { reply_tx, .. } => {
+                assert!(reply_tx.is_none(), "TUI delivery stays fire-and-forget");
+            }
+            _ => panic!("expected DeliverMessage variant"),
+        }
     }
 }
 

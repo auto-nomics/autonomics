@@ -73,22 +73,38 @@ pub(crate) async fn spawn_agent(
     Ok(Json(SpawnAgentResponse { path }))
 }
 
-/// Deliver a user message (fire-and-forget: 202; the reply stream is the
-/// SSE event channel, same contract the TUI drives today).
+/// Deliver a user message to an agent's next turn (the reply stream is the
+/// SSE event channel, same contract the TUI drives today). The runtime
+/// confirms enqueue before this returns: an unknown agent or an exited
+/// agent loop is an error, not a silent 202.
 #[utoipa::path(
     post,
     path = "/api/v1/agents/{name}/messages",
     tag = "agents",
     request_body = DeliverMessageRequest,
-    responses((status = 202, description = "Message accepted"))
+    responses(
+        (status = 202, description = "Message accepted and enqueued on the agent's command channel"),
+        (status = 404, description = "Agent is not in the live registry (re-spawn after restarts)"),
+        (status = 503, description = "Agent loop has exited and cannot receive messages"),
+        (status = 504, description = "Host runtime did not confirm delivery in time")
+    )
 )]
 pub(crate) async fn deliver_message(
     State(state): State<GatewayState>,
     Path(name): Path<String>,
     Json(req): Json<DeliverMessageRequest>,
-) -> StatusCode {
-    state.control.deliver_message(&name, req.text);
-    StatusCode::ACCEPTED
+) -> GatewayResult<StatusCode> {
+    match state.control.deliver_message_tracked(&name, req.text).await {
+        Some(Ok(())) => Ok(StatusCode::ACCEPTED),
+        Some(Err(message)) if message.contains("is not registered") => {
+            Err(GatewayError::Status(StatusCode::NOT_FOUND, message))
+        }
+        Some(Err(message)) => Err(GatewayError::Status(StatusCode::SERVICE_UNAVAILABLE, message)),
+        None => Err(GatewayError::Status(
+            StatusCode::GATEWAY_TIMEOUT,
+            format!("host runtime did not confirm delivery to agent '{name}'"),
+        )),
+    }
 }
 
 #[utoipa::path(post, path = "/api/v1/agents/{name}/cancel", tag = "agents", responses((status = 202, description = "Cancel requested")))]
