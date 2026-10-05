@@ -354,6 +354,7 @@ mod tests {
             id: "sink".into(),
             status: RuntimeStatus::Success,
             node_type: "dataframe_to_file".into(),
+            executor: Some("local"),
             logical_node: None,
             physical_job_id: None,
             scatter_axis: None,

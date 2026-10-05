@@ -19,11 +19,12 @@ use data_engine::runtime::DataEngineClient;
 
 #[tool(
     name = "get_output",
-    description = "Get the output DataFrames of a node after a DAG run. \
+    description = "Get the outputs of a node after a DAG run. \
                   The node must have been executed (status Success). \
-                  Returns the actual data rows, with optional offset and limit \
-                  to control pagination. If the DataFrame is large, use limit \
-                  to avoid returning excessive data. \
+                  DataFrame outputs return actual data rows; Channel outputs \
+                  return item_count plus a bounded page of JSON items. Use \
+                  optional offset and limit to control pagination, and use a \
+                  limit for large outputs. \
                   \
                   Each output entry reports `total_rows` (full row count, from \
                   COUNT(*)), `returned_rows` (rows actually materialized in \
@@ -398,6 +399,18 @@ impl ToolFunction for GetOutputTool {
                             "size": file.fingerprint.as_ref().map(|fp| fp.size),
                             "fingerprint": file.fingerprint,
                         })).collect::<Vec<_>>(),
+                    }),
+                    data_engine::NodeValue::Channel(channel) => serde_json::json!({
+                        "name": name,
+                        "type": "channel",
+                        "item_count": channel.items.len(),
+                        "items": channel
+                            .items
+                            .iter()
+                            .skip(offset)
+                            .take(limit)
+                            .cloned()
+                            .collect::<Vec<_>>(),
                     }),
                     // Handled by the `as_dataframe` fast path above; this arm
                     // only exists to keep the match exhaustive without a

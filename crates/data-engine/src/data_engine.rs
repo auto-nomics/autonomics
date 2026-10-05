@@ -102,6 +102,11 @@ impl DataEngine {
         })
     }
 
+    /// Replace the execution backend used for physical tasks.
+    pub fn set_task_executor(&mut self, executor: std::sync::Arc<dyn dag_core::TaskExecutor>) {
+        self.dag.set_task_executor(executor);
+    }
+
     fn new_from_parts(
         ctx: SessionContext,
         runtime_env: Arc<RuntimeEnv>,

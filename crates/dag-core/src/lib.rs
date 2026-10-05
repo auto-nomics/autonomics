@@ -16,7 +16,11 @@ pub mod resource;
 pub mod sink;
 pub mod value;
 
-pub use dag::{ChannelBranch, ChannelNode, ChannelOperator};
+pub use dag::{
+    ChannelBranch, ChannelNode, ChannelOperator, LocalTaskExecutor, TaskExecution, TaskExecutor,
+    TaskInputBinding, TaskInputSource, TaskOutputBinding, TaskResources, TaskSpec, TaskSubmission,
+    local_task_executor,
+};
 pub use node::{
     BundleRegistry, BundleRegistryError, DEFAULT_PORT, DagNode, DataBundle, DataBundleBinding,
     NodeId, NodeInput, NodePorts, Port, PortId, ResolvedDataBundle,
