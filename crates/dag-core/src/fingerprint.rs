@@ -1,11 +1,13 @@
 //! Node execution fingerprints and content-level cache invalidation.
 //!
 //! A fingerprint is a blake3 digest over *everything that determines a node's
-//! output*: its kind, canonical spec, engine version, and the identity of
-//! every input value it consumes. Following the Nextflow task-hash model, one
-//! digest simultaneously serves as provenance evidence ("this output came
-//! from exactly these inputs"), a cache key (equal fingerprint ⇒ equal
-//! result), and an invalidation check (see [`cached_file_changed`]).
+//! output*: its kind, canonical spec, engine version, the identity of every
+//! input value it consumes, and — for plugin-backed nodes — the identity of
+//! the plugin implementation that executes (see [`PluginIdentity`]).
+//! Following the Nextflow task-hash model, one digest simultaneously serves
+//! as provenance evidence ("this output came from exactly these inputs"), a
+//! cache key (equal fingerprint ⇒ equal result), and an invalidation check
+//! (see [`cached_file_changed`]).
 //!
 //! Input identity is value-shaped:
 //! - file-like values contribute their path plus a content hash when one is
@@ -31,11 +33,32 @@ use crate::value::{FileFingerprint, FileRef, NodeValue};
 
 /// Domain separator for the fingerprint hash, so digests from different
 /// schemes or versions can never collide.
-pub const FINGERPRINT_DOMAIN: &str = "autonomics-node-fingerprint-v1";
+///
+/// v2 adds the plugin-identity constituent (WO-R09): v1 digests covered only
+/// kind + spec + engine version + input identities, so swapping a plugin
+/// family's scripts, manifest, or image under an unchanged kind/spec kept the
+/// fingerprint — and its cache — stale. Every node's fingerprint changes once
+/// when an engine built with v2 first recomputes it, plugin-backed or not
+/// (the absent-plugin marker is itself a constituent).
+pub const FINGERPRINT_DOMAIN: &str = "autonomics-node-fingerprint-v2";
 
 /// Marker written into the digest when a node has no retained spec (raw
 /// `add_node` path, tests only) — auditable degradation, never silent.
 pub const NOSPEC_TAG: &str = "nospec";
+
+/// Marker written into the digest when a node's behavior is defined entirely
+/// by its kind + spec (built-in factories; no plugin family underneath).
+/// Explicit, so "no plugin" can never be confused with a plugin identity
+/// that happens to encode to empty bytes.
+pub const NOPLUGIN_TAG: &str = "noplg";
+
+/// Marker for a plugin node that runs no script (argv-only command).
+pub const NOSCRIPT_TAG: &str = "noscript";
+
+/// Marker for a mounted catalog panel whose resolved bundle carries no
+/// content digest (legacy / built-in bundles) — visible degradation, never a
+/// silently unchecked mount.
+pub const NODIGEST_TAG: &str = "nodigest";
 
 // ── input identities ──────────────────────────────────────────────────────────
 
@@ -116,15 +139,64 @@ pub fn collect_input_identities(
     identities
 }
 
+// ── plugin identity ───────────────────────────────────────────────────────────
+
+/// The identity of the plugin implementation a node executes (WO-R09).
+///
+/// A plugin-backed node's behavior is determined not only by its kind and
+/// spec but by the plugin family loaded next to the engine: the manifest
+/// that declared it, the exact script it stages into the container, and the
+/// image the container runs. None of those appear in the node spec, so
+/// without this constituent a plugin swap under an unchanged kind/spec kept
+/// the old fingerprint — and its cached outputs — forever.
+///
+/// Built by the plugin loader from the *loaded* definition (not re-read from
+/// disk at dispatch time), so the fingerprint always reflects what the
+/// engine would actually execute.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginIdentity {
+    /// `sha256:{hex}` over the family `manifest.toml` bytes exactly as
+    /// loaded — every declaration (node definitions, params, panels, image
+    /// metadata) participates at the byte level.
+    pub manifest_sha256: String,
+    /// `sha256:{hex}` over the exact script source the node stages into the
+    /// container. For `script_file` nodes this is the referenced file's
+    /// content (inlined by the loader before validation); for inline
+    /// `script` nodes the manifest hash already covers it and this is the
+    /// same bytes hashed uniformly. `None` for argv-only commands.
+    pub script_sha256: Option<String>,
+    /// Full image reference string (`host/path@sha256:…`) from the
+    /// manifest's `[image]` table — pinned by digest, so any digest change
+    /// is a different execution environment.
+    pub image_reference: String,
+    /// Catalog panels mounted for this node. The declaration (binding,
+    /// mount, bundle id) is covered by the manifest hash; the `digest` pins
+    /// *which content* the catalog resolved, when it is known.
+    pub panels: Vec<PanelIdentity>,
+}
+
+/// One mounted catalog panel, in the shape that matters for identity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PanelIdentity {
+    /// Local binding slot the node mounts through.
+    pub binding: String,
+    /// Stable bundle identifier in the runtime `BundleRegistry`.
+    pub bundle_id: String,
+    /// Immutable catalog content digest of the resolved bundle, when known.
+    pub digest: Option<String>,
+}
+
 // ── fingerprint computation ───────────────────────────────────────────────────
 
 /// Compute a node's execution fingerprint.
 ///
 /// ```text
-/// blake3( FINGERPRINT_DOMAIN ‖ engine_version ‖ kind ‖ spec ‖ Σ sorted identities )
+/// blake3( FINGERPRINT_DOMAIN ‖ engine_version ‖ kind ‖ spec ‖ plugin ‖ Σ sorted identities )
 /// ```
 ///
 /// * `spec = None` marks the node as spec-less (see [`NOSPEC_TAG`]).
+/// * `plugin = None` marks the node as plugin-less (see [`NOPLUGIN_TAG`]);
+///   `Some` feeds the full [`PluginIdentity`] (WO-R09).
 /// * identities are canonically ordered by `(to_port, from, from_port)`.
 /// * `source_revision` is deliberately **not** part of the digest: it changes
 ///   on every commit, which would invalidate fingerprints (and any future
@@ -139,6 +211,7 @@ pub fn compute_node_fingerprint(
     spec: Option<&serde_json::Value>,
     engine_version: &str,
     identities: &[InputIdentity],
+    plugin: Option<&PluginIdentity>,
 ) -> String {
     let mut ordered: Vec<&InputIdentity> = identities.iter().collect();
     ordered
@@ -162,6 +235,11 @@ pub fn compute_node_fingerprint(
         }
         None => feed(NOSPEC_TAG.as_bytes()),
     }
+    feed(&[0]);
+    match plugin {
+        Some(identity) => encode_plugin_identity(&mut feed, identity),
+        None => feed(NOPLUGIN_TAG.as_bytes()),
+    }
     for identity in ordered {
         feed(&[0]);
         feed(&identity.to_port.to_be_bytes());
@@ -173,6 +251,38 @@ pub fn compute_node_fingerprint(
         encode_value(&mut feed, identity);
     }
     hasher.finalize().to_hex().to_string()
+}
+
+/// Fingerprint contribution of a node's plugin implementation. Every
+/// constituent is NUL-separated and prefixed so no field can bleed into its
+/// neighbour; panels are canonically ordered by binding so declaration order
+/// in the manifest never changes the digest.
+fn encode_plugin_identity(feed: &mut dyn FnMut(&[u8]), identity: &PluginIdentity) {
+    feed(b"plugin");
+    feed(&[0]);
+    feed(identity.manifest_sha256.as_bytes());
+    feed(&[0]);
+    match &identity.script_sha256 {
+        Some(hash) => feed(hash.as_bytes()),
+        None => feed(NOSCRIPT_TAG.as_bytes()),
+    }
+    feed(&[0]);
+    feed(identity.image_reference.as_bytes());
+    let mut panels: Vec<&PanelIdentity> = identity.panels.iter().collect();
+    panels.sort_by(|a, b| a.binding.cmp(&b.binding));
+    for panel in panels {
+        feed(&[0]);
+        feed(b"panel");
+        feed(&[0]);
+        feed(panel.binding.as_bytes());
+        feed(&[0]);
+        feed(panel.bundle_id.as_bytes());
+        feed(&[0]);
+        match &panel.digest {
+            Some(digest) => feed(digest.as_bytes()),
+            None => feed(NODIGEST_TAG.as_bytes()),
+        }
+    }
 }
 
 fn encode_value(feed: &mut dyn FnMut(&[u8]), identity: &InputIdentity) {
@@ -426,9 +536,9 @@ mod tests {
             Some(fp(10, 1234, Some("sha256:deadbeef"))),
         )];
         let a =
-            compute_node_fingerprint("sql", Some(&serde_json::json!({"q": 1})), "v1", &identities);
+            compute_node_fingerprint("sql", Some(&serde_json::json!({"q": 1})), "v1", &identities, None);
         let b =
-            compute_node_fingerprint("sql", Some(&serde_json::json!({"q": 1})), "v1", &identities);
+            compute_node_fingerprint("sql", Some(&serde_json::json!({"q": 1})), "v1", &identities, None);
         assert_eq!(a, b);
         assert_eq!(a.len(), 64, "blake3 hex");
     }
@@ -440,26 +550,27 @@ mod tests {
             Some(fp(10, 1234, Some("sha256:deadbeef"))),
         )];
         let reference =
-            compute_node_fingerprint("sql", Some(&serde_json::json!({"q": 1})), "v1", &base);
+            compute_node_fingerprint("sql", Some(&serde_json::json!({"q": 1})), "v1", &base, None);
 
         let changed_kind = compute_node_fingerprint(
             "other_kind",
             Some(&serde_json::json!({"q": 1})),
             "v1",
             &base,
+            None,
         );
         let changed_spec =
-            compute_node_fingerprint("sql", Some(&serde_json::json!({"q": 2})), "v1", &base);
+            compute_node_fingerprint("sql", Some(&serde_json::json!({"q": 2})), "v1", &base, None);
         let changed_engine =
-            compute_node_fingerprint("sql", Some(&serde_json::json!({"q": 1})), "v2", &base);
+            compute_node_fingerprint("sql", Some(&serde_json::json!({"q": 1})), "v2", &base, None);
         let changed_hash = {
             let identities = vec![file_identity(
                 "/data/x.csv",
                 Some(fp(10, 1234, Some("sha256:feedface"))),
             )];
-            compute_node_fingerprint("sql", Some(&serde_json::json!({"q": 1})), "v1", &identities)
+            compute_node_fingerprint("sql", Some(&serde_json::json!({"q": 1})), "v1", &identities, None)
         };
-        let nospec = compute_node_fingerprint("sql", None, "v1", &base);
+        let nospec = compute_node_fingerprint("sql", None, "v1", &base, None);
 
         for candidate in [
             changed_kind,
@@ -481,8 +592,8 @@ mod tests {
         let b: serde_json::Value =
             serde_json::from_str(r#"{"beta": {"a": 3, "z": 2}, "alpha": 1}"#).unwrap();
         assert_eq!(
-            compute_node_fingerprint("k", Some(&a), "v", &[]),
-            compute_node_fingerprint("k", Some(&b), "v", &[]),
+            compute_node_fingerprint("k", Some(&a), "v", &[], None),
+            compute_node_fingerprint("k", Some(&b), "v", &[], None),
         );
     }
 
@@ -505,8 +616,8 @@ mod tests {
             },
         };
         assert_eq!(
-            compute_node_fingerprint("k", None, "v", &[first.clone(), second.clone()]),
-            compute_node_fingerprint("k", None, "v", &[second, first]),
+            compute_node_fingerprint("k", None, "v", &[first.clone(), second.clone()], None),
+            compute_node_fingerprint("k", None, "v", &[second, first], None),
         );
     }
 
@@ -520,32 +631,37 @@ mod tests {
                 "/f",
                 Some(fp(10, 1, Some("sha256:deadbeef"))),
             )],
+            None,
         );
         let hash_bare = compute_node_fingerprint(
             "k",
             None,
             "v",
             &[file_identity("/f", Some(fp(10, 1, Some("deadbeef"))))],
+            None,
         );
         let hash_etag = compute_node_fingerprint(
             "k",
             None,
             "v",
             &[file_identity("/f", Some(fp(10, 1, Some("\"etag1\""))))],
+            None,
         );
         let meta = compute_node_fingerprint(
             "k",
             None,
             "v",
             &[file_identity("/f", Some(fp(10, 1, None)))],
+            None,
         );
         let meta_other_mtime = compute_node_fingerprint(
             "k",
             None,
             "v",
             &[file_identity("/f", Some(fp(10, 2, None)))],
+            None,
         );
-        let nofp = compute_node_fingerprint("k", None, "v", &[file_identity("/f", None)]);
+        let nofp = compute_node_fingerprint("k", None, "v", &[file_identity("/f", None)], None);
 
         let all = [hash_sha, hash_bare, hash_etag, meta, meta_other_mtime, nofp];
         for (i, a) in all.iter().enumerate() {
@@ -565,12 +681,145 @@ mod tests {
                 upstream: fingerprint.map(str::to_string),
             },
         };
-        let a = compute_node_fingerprint("k", None, "v", &[upstream(Some("fp1"))]);
-        let b = compute_node_fingerprint("k", None, "v", &[upstream(Some("fp2"))]);
-        let pending = compute_node_fingerprint("k", None, "v", &[upstream(None)]);
+        let a = compute_node_fingerprint("k", None, "v", &[upstream(Some("fp1"))], None);
+        let b = compute_node_fingerprint("k", None, "v", &[upstream(Some("fp2"))], None);
+        let pending = compute_node_fingerprint("k", None, "v", &[upstream(None)], None);
         assert_ne!(a, b, "upstream fingerprint change must propagate");
         assert_ne!(a, pending);
         assert_ne!(b, pending);
+    }
+
+    // ── plugin identity (WO-R09) ─────────────────────────────────────────
+
+    fn plugin_identity() -> PluginIdentity {
+        PluginIdentity {
+            manifest_sha256: "sha256:aaaa".to_string(),
+            script_sha256: Some("sha256:bbbb".to_string()),
+            image_reference: "ghcr.io/auto-nomics/autonomics/ldsc@sha256:1".to_string(),
+            panels: vec![PanelIdentity {
+                binding: "ref_ld".to_string(),
+                bundle_id: "owner/ref-ld".to_string(),
+                digest: Some("sha256:panel1".to_string()),
+            }],
+        }
+    }
+
+    /// Same plugin identity, same everything: two computations must agree
+    /// (the "pure data re-run leaves the fingerprint unchanged" acceptance).
+    #[test]
+    fn plugin_identity_fingerprint_is_stable() {
+        let identities = vec![file_identity(
+            "/data/x.csv",
+            Some(fp(10, 1234, Some("sha256:deadbeef"))),
+        )];
+        let plugin = plugin_identity();
+        let a = compute_node_fingerprint(
+            "ldsc_h2",
+            Some(&serde_json::json!({"intercept": 1.0})),
+            "v1",
+            &identities,
+            Some(&plugin),
+        );
+        let b = compute_node_fingerprint(
+            "ldsc_h2",
+            Some(&serde_json::json!({"intercept": 1.0})),
+            "v1",
+            &identities,
+            Some(&plugin),
+        );
+        assert_eq!(a, b);
+    }
+
+    /// Every plugin-identity constituent must move the digest: manifest
+    /// bytes, script source, image reference, panel digest — and a plugin
+    /// identity must never collide with the plugin-less marker.
+    #[test]
+    fn plugin_identity_reacts_to_every_constituent() {
+        let base = vec![file_identity(
+            "/data/x.csv",
+            Some(fp(10, 1234, Some("sha256:deadbeef"))),
+        )];
+        let plugin = plugin_identity();
+        let reference = compute_node_fingerprint("k", None, "v", &base, Some(&plugin));
+
+        let changed_manifest = {
+            let mut other = plugin.clone();
+            other.manifest_sha256 = "sha256:aaab".to_string();
+            compute_node_fingerprint("k", None, "v", &base, Some(&other))
+        };
+        let changed_script = {
+            let mut other = plugin.clone();
+            other.script_sha256 = Some("sha256:bbbc".to_string());
+            compute_node_fingerprint("k", None, "v", &base, Some(&other))
+        };
+        let script_absent_vs_present = {
+            let mut other = plugin.clone();
+            other.script_sha256 = None;
+            compute_node_fingerprint("k", None, "v", &base, Some(&other))
+        };
+        let changed_image = {
+            let mut other = plugin.clone();
+            other.image_reference =
+                "ghcr.io/auto-nomics/autonomics/ldsc@sha256:2".to_string();
+            compute_node_fingerprint("k", None, "v", &base, Some(&other))
+        };
+        let changed_panel_digest = {
+            let mut other = plugin.clone();
+            other.panels[0].digest = Some("sha256:panel2".to_string());
+            compute_node_fingerprint("k", None, "v", &base, Some(&other))
+        };
+        let panel_digest_absent = {
+            let mut other = plugin.clone();
+            other.panels[0].digest = None;
+            compute_node_fingerprint("k", None, "v", &base, Some(&other))
+        };
+        let no_plugin = compute_node_fingerprint("k", None, "v", &base, None);
+
+        for candidate in [
+            changed_manifest,
+            changed_script,
+            script_absent_vs_present,
+            changed_image,
+            changed_panel_digest,
+            panel_digest_absent,
+            no_plugin,
+        ] {
+            assert_ne!(reference, candidate);
+        }
+    }
+
+    /// Panel declaration order in the manifest must not leak into the
+    /// digest: the same mounts in a different order are the same execution.
+    #[test]
+    fn plugin_panel_order_is_canonical() {
+        let mut panels = vec![
+            PanelIdentity {
+                binding: "b".to_string(),
+                bundle_id: "owner/b".to_string(),
+                digest: None,
+            },
+            PanelIdentity {
+                binding: "a".to_string(),
+                bundle_id: "owner/a".to_string(),
+                digest: None,
+            },
+        ];
+        let plugin = PluginIdentity {
+            manifest_sha256: "sha256:aaaa".to_string(),
+            script_sha256: None,
+            image_reference: "reg/p@sha256:1".to_string(),
+            panels: panels.clone(),
+        };
+        let first = compute_node_fingerprint("k", None, "v", &[], Some(&plugin));
+        panels.reverse();
+        let plugin = PluginIdentity {
+            manifest_sha256: "sha256:aaaa".to_string(),
+            script_sha256: None,
+            image_reference: "reg/p@sha256:1".to_string(),
+            panels,
+        };
+        let second = compute_node_fingerprint("k", None, "v", &[], Some(&plugin));
+        assert_eq!(first, second);
     }
 
     // ── cached_file_changed ───────────────────────────────────────────────

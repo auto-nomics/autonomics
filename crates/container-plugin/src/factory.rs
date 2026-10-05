@@ -13,16 +13,30 @@
 
 use std::sync::Arc;
 
+use dag_core::fingerprint::{PanelIdentity, PluginIdentity};
 use dag_core::node::DagNode;
 use dag_core::registry::error::Result as RegistryResult;
 use dag_core::registry::{NodeCtx, NodeFactory, NodeRegistry};
 use dag_core::{DataBundle, DataBundleBinding, NodePlugin, NodePorts};
 use nodes_io::container_command::ContainerCommandNode;
+use sha2::{Digest, Sha256};
 
 use crate::compile::compile_schema;
 use crate::compile::spec_compile::compile_container_spec;
 use crate::manifest::{ImageMetadata, PanelBinding, PluginManifest};
 use crate::node_definition::{NodeDefinition, compile_ports};
+
+/// `sha256:{hex}` over `bytes` — the same dialect the fingerprint module
+/// uses for file content hashes, so identity hashes read uniformly in
+/// run records and audits.
+fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    let mut hex = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        hex.push_str(&format!("{byte:02x}"));
+    }
+    format!("sha256:{hex}")
+}
 
 /// A [`NodeFactory`] backed by one manifest node definition.
 ///
@@ -35,6 +49,9 @@ pub struct ManifestNodeFactory {
     entry: NodeDefinition,
     image: ImageMetadata,
     panels: Vec<PanelBinding>,
+    /// Loaded-family identity (WO-R09): joined into every built node's
+    /// execution fingerprint so plugin edits invalidate cached outputs.
+    identity: PluginIdentity,
     runtime: Arc<dyn container_runtime::PodmanConnection>,
     panel_cache: Arc<container_runtime::PanelCache>,
     kind: &'static str,
@@ -45,13 +62,14 @@ pub struct ManifestNodeFactory {
 
 impl ManifestNodeFactory {
     /// Construct a factory from one node definition plus its family-level
-    /// image and panel bindings. Callers are expected to have run
+    /// image, panel bindings, and identity. Callers are expected to have run
     /// [`crate::node_definition::validate`] already; this constructor
     /// trusts the definition and leaks its identity strings.
     pub fn new(
         entry: NodeDefinition,
         image: ImageMetadata,
         panels: Vec<PanelBinding>,
+        identity: PluginIdentity,
         runtime: Arc<dyn container_runtime::PodmanConnection>,
         panel_cache: Arc<container_runtime::PanelCache>,
     ) -> Self {
@@ -64,9 +82,17 @@ impl ManifestNodeFactory {
             entry,
             image,
             panels,
+            identity,
             runtime,
             panel_cache,
         }
+    }
+
+    /// The loaded-family identity this factory stamps onto built nodes.
+    /// Panel digests are the *declared* view here (catalog resolution
+    /// happens per build); the identity on a built node is the complete one.
+    pub fn plugin_identity(&self) -> &PluginIdentity {
+        &self.identity
     }
 
     fn panel_bindings(&self) -> Vec<DataBundleBinding> {
@@ -137,6 +163,16 @@ impl NodeFactory for ManifestNodeFactory {
             .map(|panel| node_ctx.bound_data_bundle(&panel.binding).cloned())
             .collect::<RegistryResult<Vec<DataBundle>>>()?;
 
+        // Complete the identity with the panel digests the catalog actually
+        // resolved for this build (same order as `self.panels` above): the
+        // declaration is pinned by the manifest hash, the content by this
+        // digest. Bundles without a digest degrade to an explicit marker in
+        // the fingerprint encoding.
+        let mut identity = self.identity.clone();
+        for (panel, bundle) in identity.panels.iter_mut().zip(&bundles) {
+            panel.digest = bundle.digest.clone();
+        }
+
         let node = ContainerCommandNode::new_with_catalog_panels(
             self.kind,
             container_spec,
@@ -149,7 +185,10 @@ impl NodeFactory for ManifestNodeFactory {
         // inputs) on the built node itself. Without this the node falls
         // back to the legacy optional-variadic layout and DAG validation
         // lets an unwired required input execute on an empty FileSet.
-        .with_ports(self.ports.clone());
+        .with_ports(self.ports.clone())
+        // Stamp the loaded-family identity so the scheduler's fingerprint
+        // gate sees the plugin implementation, not just kind + spec.
+        .with_plugin_identity(identity);
 
         Ok(Box::new(node))
     }
@@ -166,21 +205,56 @@ pub struct Plugin {
 impl Plugin {
     /// Build the plugin from a parsed family manifest plus the shared
     /// execution infrastructure injected by the runtime host.
+    ///
+    /// `manifest_bytes` are the exact `manifest.toml` bytes the manifest was
+    /// parsed from; they are hashed into every node's plugin identity
+    /// (WO-R09) so any manifest edit — down to a single character — changes
+    /// the identity and invalidates cached incremental outputs. Callers
+    /// constructing manifests programmatically (tests, tools) pass the TOML
+    /// text they parsed.
     pub fn new(
         manifest: PluginManifest,
+        manifest_bytes: &[u8],
         runtime: Arc<dyn container_runtime::PodmanConnection>,
         panel_cache: Arc<container_runtime::PanelCache>,
     ) -> Self {
         let name: &'static str = Box::leak(manifest.plugin_name.clone().into_boxed_str());
         let panels = manifest.panels.clone();
+        let manifest_sha256 = sha256_hex(manifest_bytes);
+        let image_reference = manifest.image.reference.as_str();
+        let panel_identities = manifest
+            .panels
+            .iter()
+            .map(|panel| PanelIdentity {
+                binding: panel.binding.clone(),
+                bundle_id: panel.bundle.to_string(),
+                digest: None,
+            })
+            .collect::<Vec<_>>();
         let factories = manifest
             .nodes
             .into_iter()
             .map(|entry| {
+                // The loader inlines `script_file` contents into
+                // `command.script` before this point, so hashing the script
+                // source covers both inline scripts and referenced script
+                // files — always the exact bytes the container will run.
+                let script_sha256 = entry
+                    .command
+                    .script
+                    .as_deref()
+                    .map(|script| sha256_hex(script.as_bytes()));
+                let identity = PluginIdentity {
+                    manifest_sha256: manifest_sha256.clone(),
+                    script_sha256,
+                    image_reference: image_reference.clone(),
+                    panels: panel_identities.clone(),
+                };
                 ManifestNodeFactory::new(
                     entry,
                     manifest.image.clone(),
                     manifest.panels.clone(),
+                    identity,
                     runtime.clone(),
                     panel_cache.clone(),
                 )
@@ -214,6 +288,18 @@ impl Plugin {
             .iter()
             .map(|factory| factory.kind())
             .collect()
+    }
+
+    /// The loaded-family identity that nodes of `kind` carry into their
+    /// execution fingerprint (WO-R09). `None` when the family does not
+    /// declare `kind`. Panel digests are the declared view; the identity
+    /// stamped onto a built node additionally carries the catalog-resolved
+    /// panel digests.
+    pub fn plugin_identity(&self, kind: &str) -> Option<PluginIdentity> {
+        self.factories
+            .iter()
+            .find(|factory| factory.kind() == kind)
+            .map(|factory| factory.plugin_identity().clone())
     }
 
     /// The family-level `[[panels]]` bindings. Every node in the family
@@ -353,6 +439,7 @@ ldsc --h2 "$AUTONOMICS_INPUT0" \
         let panel_cache = Arc::new(PanelCache::new(workspace.path().join("panels")));
         let plugin = Plugin::new(
             test_manifest(),
+            LDSC_MANIFEST_TOML.as_bytes(),
             runtime as Arc<dyn PodmanConnection>,
             panel_cache,
         );
@@ -374,6 +461,7 @@ ldsc --h2 "$AUTONOMICS_INPUT0" \
         let panel_cache = Arc::new(PanelCache::new(PathBuf::from("/tmp/plugin-test-panels")));
         let plugin = Plugin::new(
             test_manifest(),
+            LDSC_MANIFEST_TOML.as_bytes(),
             runtime as Arc<dyn PodmanConnection>,
             panel_cache,
         );
@@ -425,6 +513,7 @@ ldsc --h2 "$AUTONOMICS_INPUT0" \
         manifest.panels.clear();
         let plugin = Plugin::new(
             manifest,
+            LDSC_MANIFEST_TOML.as_bytes(),
             runtime as Arc<dyn PodmanConnection>,
             Arc::new(PanelCache::new(workspace.path().join("panels"))),
         );
@@ -448,6 +537,116 @@ ldsc --h2 "$AUTONOMICS_INPUT0" \
             inputs.iter().all(|port| port.required),
             "every declared manifest input is required"
         );
+    }
+
+    /// WO-R09: the identity stamped onto a built node carries the family
+    /// part (manifest bytes, script source, image reference) plus the
+    /// catalog-resolved panel digests. Goldens are constructed
+    /// independently: the manifest hash straight over the fixture's TOML
+    /// bytes, the script hash over the *parsed* script value (TOML unescapes
+    /// the multi-line literal, so raw-byte hashing would be wrong), both
+    /// with `sha2` directly rather than the factory's own helper.
+    #[test]
+    fn built_node_carries_the_plugin_identity_with_panel_digests() {
+        use dag_core::BundleRegistry;
+        use sha2::{Digest, Sha256};
+
+        fn sha256_hex_of(bytes: &[u8]) -> String {
+            let digest = Sha256::digest(bytes);
+            let hex = digest.iter().map(|b| format!("{b:02x}")).collect::<String>();
+            format!("sha256:{hex}")
+        }
+
+        let runtime = Arc::new(FakeRuntime {
+            workspace_root: PathBuf::from("/tmp"),
+            requests: Mutex::new(Vec::new()),
+        });
+        let workspace = tempfile::tempdir().unwrap();
+        let panel_cache = Arc::new(PanelCache::new(workspace.path().join("panels")));
+        let plugin = Plugin::new(
+            test_manifest(),
+            LDSC_MANIFEST_TOML.as_bytes(),
+            runtime as Arc<dyn PodmanConnection>,
+            panel_cache,
+        );
+
+        // Register both declared panels with catalog digests so the build
+        // resolves them and the identity picks the digests up.
+        let bundle_registry = Arc::new(
+            BundleRegistry::from_bundles(vec![
+                dag_core::DataBundle {
+                    ident: "wjixiang/catalog-ldsc-ref-ld-1000g-eur-basic".into(),
+                    desc: "ref ld scores".into(),
+                    vpath: "/panels/ref_ld".into(),
+                    source: Some("catalog".into()),
+                    digest: Some("sha256:panel-ref-ld".into()),
+                },
+                dag_core::DataBundle {
+                    ident: "wjixiang/catalog-ldsc-w-ld-1000g-eur-hm3-no-mhc".into(),
+                    desc: "w ld weights".into(),
+                    vpath: "/panels/w_ld".into(),
+                    source: Some("catalog".into()),
+                    digest: Some("sha256:panel-w-ld".into()),
+                },
+            ])
+            .unwrap(),
+        );
+        let ctx = dag_core::NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        )
+        .with_bundle_registry(bundle_registry);
+        let mut registry = NodeRegistry::new(ctx);
+        registry.register_plugin(&plugin);
+
+        let node = registry
+            .build_node("ldsc_h2", serde_json::json!({ "intercept": 2.0 }))
+            .expect("manifest node builds with panels resolved");
+        let identity = node
+            .plugin_identity()
+            .cloned()
+            .expect("built node carries its plugin identity");
+
+        // Family part.
+        assert_eq!(
+            identity.manifest_sha256,
+            sha256_hex_of(LDSC_MANIFEST_TOML.as_bytes()),
+            "manifest hash is over the exact TOML bytes"
+        );
+        let parsed: PluginManifest = toml::from_str(LDSC_MANIFEST_TOML).unwrap();
+        let expected_script_hash = parsed.nodes[0]
+            .command
+            .script
+            .as_deref()
+            .map(|script| sha256_hex_of(script.as_bytes()));
+        assert_eq!(
+            identity.script_sha256, expected_script_hash,
+            "script hash is over the parsed (inlined) script source"
+        );
+        assert_eq!(
+            identity.image_reference,
+            "ghcr.io/auto-nomics/autonomics/ldsc@sha256:2dad70a9583f93db1dcc9a560b7d5b309af4a5151dfaf615f80d059a0925d78c"
+        );
+
+        // Panel part: declarations with the catalog-resolved digests.
+        let mut panels = identity.panels.clone();
+        panels.sort_by(|a, b| a.binding.cmp(&b.binding));
+        assert_eq!(panels.len(), 2, "both declared panels participate");
+        assert_eq!(panels[0].binding, "ref_ld");
+        assert_eq!(
+            panels[0].digest.as_deref(),
+            Some("sha256:panel-ref-ld"),
+            "the digest the catalog resolved at build time joins the identity"
+        );
+        assert_eq!(panels[1].binding, "w_ld");
+        assert_eq!(panels[1].digest.as_deref(), Some("sha256:panel-w-ld"));
+
+        // The factory-side view is the same family identity (declared
+        // panels, digests unresolved until build).
+        let declared = plugin.plugin_identity("ldsc_h2").unwrap();
+        assert_eq!(declared.manifest_sha256, identity.manifest_sha256);
+        assert_eq!(declared.script_sha256, identity.script_sha256);
+        assert!(declared.panels.iter().all(|panel| panel.digest.is_none()));
     }
 
     /// Restores AUTONOMICS_KEEP_WORKSPACE on drop so one test's debugging
@@ -492,6 +691,7 @@ ldsc --h2 "$AUTONOMICS_INPUT0" \
         manifest.panels.clear();
         let plugin = Plugin::new(
             manifest,
+            LDSC_MANIFEST_TOML.as_bytes(),
             runtime.clone() as Arc<dyn PodmanConnection>,
             panel_cache,
         );

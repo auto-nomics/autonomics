@@ -276,7 +276,7 @@ mod tests {
                 )
             })
             .collect();
-        let manifest: PluginManifest = toml::from_str(&format!(
+        let toml_text = format!(
             r#"
 schema_version = 1
 plugin_name = "{name}"
@@ -300,8 +300,9 @@ interpreter = "sh"
 script = "true"
 "#,
             "a".repeat(64)
-        ))
-        .expect("fixture manifest parses");
+        );
+        let manifest: PluginManifest = toml::from_str(&toml_text)
+            .expect("fixture manifest parses");
         let state = tempfile::tempdir().unwrap();
         let runtime: Arc<dyn container_runtime::PodmanConnection> = Arc::new(
             container_runtime::PodmanRuntime::new(container_runtime::PodmanConfig {
@@ -313,7 +314,7 @@ script = "true"
         let panel_cache = Arc::new(container_runtime::PanelCache::new(
             state.path().join("panels"),
         ));
-        Plugin::new(manifest, runtime, panel_cache)
+        Plugin::new(manifest, toml_text.as_bytes(), runtime, panel_cache)
     }
 
     /// Build a remote catalog whose package repositories each hold one

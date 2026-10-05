@@ -270,6 +270,13 @@ impl DAG {
         self.outputs.get(id).cloned()
     }
 
+    /// The execution fingerprint recorded at `id`'s last successful
+    /// execution, if any (see [`crate::fingerprint::compute_node_fingerprint`]).
+    /// Read-only introspection for tests, audits, and tooling.
+    pub fn recorded_fingerprint(&self, id: &str) -> Option<&str> {
+        self.fingerprints.get(id).map(String::as_str)
+    }
+
     // ── incremental-execution API (fingerprint reuse) ───────────────────
 
     /// Whether `id` will re-execute on the next incremental run, to the
@@ -665,11 +672,17 @@ impl DAG {
                         serde_json::Value::Null,
                     )
                 });
+                // Plugin identity comes from the node payload (WO-R09): for
+                // plugin-backed nodes the loaded family's manifest/script/
+                // image determine the output just as much as spec and inputs,
+                // so they belong in the reuse key. `None` for built-ins.
+                let plugin_identity = node_box.plugin_identity().cloned();
                 let candidate = crate::fingerprint::compute_node_fingerprint(
                     &kind,
                     Some(&spec),
                     crate::engine_version(),
                     &identities,
+                    plugin_identity.as_ref(),
                 );
                 if incremental
                     && self.fingerprints.get(&id) == Some(&candidate)
@@ -4053,6 +4066,146 @@ mod tests {
             1,
             "d should be reused (identity chain unchanged)"
         );
+    }
+
+    /// A counting node that reports a plugin identity, standing in for a
+    /// manifest-plugin node whose implementation lives outside kind + spec.
+    #[derive(Clone)]
+    struct PluginBackedEcho {
+        meta: NodePorts,
+        counter: Arc<std::sync::atomic::AtomicUsize>,
+        identity: crate::fingerprint::PluginIdentity,
+    }
+
+    impl PluginBackedEcho {
+        fn new(
+            counter: Arc<std::sync::atomic::AtomicUsize>,
+            identity: crate::fingerprint::PluginIdentity,
+        ) -> Self {
+            Self {
+                meta: NodePorts::new().add_output_port(None),
+                counter,
+                identity,
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl DagNode for PluginBackedEcho {
+        fn ports(&self) -> &NodePorts {
+            &self.meta
+        }
+        fn clone_box(&self) -> Box<dyn DagNode> {
+            Box::new(self.clone())
+        }
+        fn kind(&self) -> &'static str {
+            "plugin_echo"
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn plugin_identity(&self) -> Option<&crate::fingerprint::PluginIdentity> {
+            Some(&self.identity)
+        }
+        async fn execute(
+            &mut self,
+            ctx: &crate::registry::NodeCtx,
+            inputs: &[NodeInput],
+            _reporter: &NodeReporter,
+        ) -> std::result::Result<PortOutputs, DagError> {
+            self.counter
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let mut out: PortOutputs = PortOutputs::new();
+            if inputs.is_empty() {
+                let batch = arrow_array::RecordBatch::try_from_iter([(
+                    "value",
+                    std::sync::Arc::new(arrow_array::Int64Array::from(Vec::<i64>::new()))
+                        as std::sync::Arc<dyn arrow_array::Array>,
+                )])
+                .map_err(|e| DagError::Schedule(e.to_string()))?;
+                let df = ctx
+                    .session()
+                    .read_batch(batch)
+                    .map_err(|e| DagError::Schedule(e.to_string()))?;
+                out.insert(0, crate::value::NodeValue::DataFrame(df));
+            }
+            Ok(out)
+        }
+    }
+
+    /// WO-R09 acceptance at the scheduler level: the payload's plugin
+    /// identity is a fingerprint constituent, a pure re-run reuses, and a
+    /// plugin swap under identical kind + spec invalidates the cache.
+    #[tokio::test]
+    async fn plugin_identity_participates_in_reuse() {
+        let identity = |manifest_sha256: &str| crate::fingerprint::PluginIdentity {
+            manifest_sha256: manifest_sha256.to_string(),
+            script_sha256: Some("sha256:bbbb".to_string()),
+            image_reference: "reg.example/acme/plug@sha256:1".to_string(),
+            panels: Vec::new(),
+        };
+        // Two identities differing in exactly one manifest-hash nibble —
+        // the "one character edited in manifest.toml" scenario.
+        let identity_a = identity("sha256:aaaa");
+        let identity_b = identity("sha256:aaab");
+        let ctr = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        let mut dag = DAG::default();
+        let spec = serde_json::json!({"x": 1});
+        dag.add_node_with_spec(
+            "p".into(),
+            Box::new(PluginBackedEcho::new(ctr.clone(), identity_a.clone())),
+            "plugin_echo".to_string(),
+            spec.clone(),
+        )
+        .unwrap();
+
+        let cfg = incremental_cfg();
+        dag.run(&cfg, &test_ctx(), None).await.unwrap();
+        assert_eq!(ctr.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        // Wiring: the recorded fingerprint must be the digest computed over
+        // the payload's identity — not over no plugin and not over another
+        // identity. (Expected values come from the public fingerprint API,
+        // so this pins *what was fed*, not the digest formula itself.)
+        let recorded = dag.recorded_fingerprint("p").unwrap().to_string();
+        let feed = |plugin: Option<&crate::fingerprint::PluginIdentity>| {
+            crate::fingerprint::compute_node_fingerprint(
+                "plugin_echo",
+                Some(&spec),
+                crate::engine_version(),
+                &[],
+                plugin,
+            )
+        };
+        assert_eq!(recorded, feed(Some(&identity_a)));
+        assert_ne!(recorded, feed(Some(&identity_b)));
+        assert_ne!(recorded, feed(None));
+
+        // Pure data re-run: nothing changed — reused, not re-executed.
+        dag.run(&cfg, &test_ctx(), None).await.unwrap();
+        assert_eq!(
+            ctr.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "unchanged identity + unchanged inputs must reuse"
+        );
+
+        // Plugin swap under identical kind + spec: the fingerprint moves
+        // and the node re-executes.
+        dag.replace_node_with_spec(
+            "p",
+            Box::new(PluginBackedEcho::new(ctr.clone(), identity_b.clone())),
+            "plugin_echo".to_string(),
+            spec.clone(),
+        )
+        .unwrap();
+        dag.run(&cfg, &test_ctx(), None).await.unwrap();
+        assert_eq!(
+            ctr.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "a plugin-implementation change must invalidate the cache"
+        );
+        assert_eq!(dag.recorded_fingerprint("p").unwrap(), feed(Some(&identity_b)));
     }
 
     /// `mark_all_dirty` forces a full re-run even in incremental mode.

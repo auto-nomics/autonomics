@@ -337,10 +337,11 @@ pub struct NodeReport {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub inputs: Vec<InputBinding>,
     /// Execution fingerprint of this node (kind + spec + input identities +
-    /// engine version). Equal fingerprints across two executions imply the
-    /// same inputs, code, and environment — the reuse key for incremental
-    /// runs. `None` when the node failed (its fingerprint is dropped on
-    /// failure) or for nodes that never dispatched.
+    /// engine version + plugin identity for plugin-backed nodes). Equal
+    /// fingerprints across two executions imply the same inputs, code, and
+    /// environment — the reuse key for incremental runs. `None` when the
+    /// node failed (its fingerprint is dropped on failure) or for nodes that
+    /// never dispatched.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fingerprint: Option<String>,
 }
