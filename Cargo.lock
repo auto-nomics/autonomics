@@ -2730,6 +2730,7 @@ dependencies = [
  "chrono",
  "datafusion",
  "futures",
+ "glob",
  "opendal",
  "petgraph",
  "schemars",
