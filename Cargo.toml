@@ -98,7 +98,6 @@ members = [
   "bio_crates/rddensity",
   "bio_crates/rdlocrand",
   "crates/node-bundles/nodes-rd",
-  "crates/workflow-editor",
   "stat_crates/dl",
   "crates/node-bundles/nodes-dl", "crates/container-plugin", "crates/skills",
 ]
