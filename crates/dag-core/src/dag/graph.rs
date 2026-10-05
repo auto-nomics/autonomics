@@ -22,6 +22,10 @@ use tracing::{debug, info_span, warn};
 use super::utils::{build_input_bindings, build_inputs, cascade_skip};
 
 use super::error::DagError;
+use super::execution::{
+    TaskExecution, TaskExecutor, TaskInputBinding, TaskInputSource, TaskOutputBinding,
+    TaskResources, TaskSpec, TaskSubmission,
+};
 use super::logical::{
     DynamicFanoutSpec, LogicalExecutionStrategy, LogicalGraph, LogicalNode, LogicalNodeDefinition,
     item_key, physical_id, render_spec,
@@ -372,6 +376,19 @@ pub struct EdgeLabel {
 pub type DynamicNodeBuilder =
     Arc<dyn Fn(&str, serde_json::Value) -> Result<Box<dyn DagNode>> + Send + Sync>;
 
+#[derive(Clone)]
+struct TaskExecutorHandle {
+    executor: Arc<dyn TaskExecutor>,
+}
+
+impl Default for TaskExecutorHandle {
+    fn default() -> Self {
+        Self {
+            executor: super::execution::local_task_executor(),
+        }
+    }
+}
+
 /// Module-local Result alias — every fallible operation in this module fails
 /// with [`DagError`].
 pub type Result<T> = std::result::Result<T, DagError>;
@@ -423,6 +440,8 @@ pub struct DAG {
     pub(crate) logical_graphs: Vec<LogicalGraph>,
     /// Node factory used to materialize jobs discovered by dynamic fanout.
     dynamic_node_builder: Option<DynamicNodeBuilder>,
+    /// Execution backend used for ordinary physical tasks.
+    task_executor: TaskExecutorHandle,
 }
 
 impl DAG {
@@ -439,6 +458,113 @@ impl DAG {
     /// Install the factory used to materialize runtime-discovered jobs.
     pub fn set_dynamic_node_builder(&mut self, builder: DynamicNodeBuilder) {
         self.dynamic_node_builder = Some(builder);
+    }
+
+    /// Replace the backend used to execute dispatched physical tasks.
+    pub fn set_task_executor(&mut self, executor: std::sync::Arc<dyn TaskExecutor>) {
+        self.task_executor = TaskExecutorHandle { executor };
+    }
+
+    fn input_name(&self, id: &str, port: u8) -> String {
+        self.nodes
+            .get(id)
+            .and_then(|node| node.ports().input_port(port))
+            .and_then(|port| port.label.clone())
+            .unwrap_or_else(|| format!("port_{port}"))
+    }
+
+    fn output_name(&self, id: &str, port: u8) -> String {
+        self.nodes
+            .get(id)
+            .and_then(|node| node.ports().output_port(port))
+            .and_then(|port| port.label.clone())
+            .unwrap_or_else(|| format!("port_{port}"))
+    }
+
+    fn build_task_submission(
+        &self,
+        id: &str,
+        kind: &str,
+        spec: serde_json::Value,
+        inputs: &[super::NodeInput],
+        incoming: &HashMap<NodeId, Vec<(NodeId, EdgeLabel)>>,
+    ) -> TaskSubmission {
+        let mut task_inputs = build_input_bindings(id, incoming, &self.outputs)
+            .into_iter()
+            .map(|binding| TaskInputBinding {
+                name: self.input_name(id, binding.to_port),
+                port: binding.to_port,
+                source: TaskInputSource::UpstreamPort {
+                    from: binding.from,
+                    from_port: binding.from_port,
+                },
+                payload: binding.kind,
+                path: binding.path,
+                fingerprint: binding.fingerprint,
+            })
+            .collect::<Vec<_>>();
+
+        let physical_job = self.physical_jobs.get(id);
+        if task_inputs.is_empty()
+            && let Some(job) = physical_job
+            && job.item.is_some()
+        {
+            let axis = job.axis.clone().unwrap_or_default();
+            let dynamic = self.logical_graphs.iter().any(|graph| {
+                graph.nodes().iter().any(|node| {
+                    node.id == job.logical_node
+                        && matches!(
+                            node.strategy,
+                            LogicalExecutionStrategy::DynamicForEach { .. }
+                        )
+                })
+            });
+            let source = if dynamic {
+                TaskInputSource::DynamicFanoutItem { axis }
+            } else {
+                TaskInputSource::ScatterItem { axis }
+            };
+            task_inputs.push(TaskInputBinding {
+                name: "item".into(),
+                port: 0,
+                source,
+                payload: "json".into(),
+                path: None,
+                fingerprint: None,
+            });
+        }
+
+        let physical_job = physical_job.cloned();
+        let task_outputs = self
+            .nodes
+            .get(id)
+            .map(|node| {
+                node.ports()
+                    .output_ports()
+                    .iter()
+                    .map(|port| TaskOutputBinding {
+                        name: self.output_name(id, port.index),
+                        port: port.index,
+                        payload: port.data_type.to_string(),
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        TaskSubmission {
+            spec: TaskSpec {
+                id: id.to_string(),
+                logical_node: physical_job.as_ref().map(|job| job.logical_node.clone()),
+                kind: kind.to_string(),
+                spec,
+                axis: physical_job.as_ref().and_then(|job| job.axis.clone()),
+                item_key: physical_job.as_ref().and_then(|job| job.item_key.clone()),
+                item: physical_job.and_then(|job| job.item),
+                inputs: task_inputs,
+                outputs: task_outputs,
+            },
+            inputs: inputs.to_vec(),
+            resources: TaskResources::default(),
+        }
     }
 
     // ── incremental-execution API (fingerprint reuse) ───────────────────
@@ -1150,6 +1276,9 @@ impl DAG {
 
                 self.statuses.insert(id.clone(), RuntimeStatus::Running);
                 in_flight += 1;
+                let submission = self.build_task_submission(&id, &kind, spec, &inputs, &incoming);
+                let task_id = submission.spec.id.clone();
+                let executor = std::sync::Arc::clone(&self.task_executor.executor);
                 let tx = tx.clone();
                 let sem = sem.clone();
                 let global_sem = engine_ctx.global_sem.clone();
@@ -1182,66 +1311,34 @@ impl DAG {
                         Some(permit) => permit,
                         None => return,
                     };
-                    let mut node = node_box;
-                    let start = std::time::Instant::now();
-
-                    // Catch panics from `execute` so a crashing node is converted
-                    // to a `JobResult::Failed` instead of silently dropping the
-                    // `Done` signal — which would hang the scheduler (in_flight
-                    // never decrements, rx.recv() blocks forever).
-                    let result = tokio::select! {
-                        result = AssertUnwindSafe(node.execute(&engine_ctx, &inputs, &reporter))
-                            .catch_unwind() => result,
-                        _ = task_cancel.cancelled() => {
-                            let duration = start.elapsed();
-                            let res = JobResult::Failed {
-                                id: job_id.clone(),
-                                error: DagError::Schedule(
-                                    "node cancelled by DAG run cancellation".into(),
-                                ),
-                                duration,
-                                // The `execute` future is dropped at this
-                                // point, so partial evidence the node already
-                                // recorded is still worth harvesting.
-                                details: reporter.take_run_details(),
-                            };
-                            let _ = tx
-                                .send(NodeEvent::new(job_id, NodeEventKind::Done(res)))
-                                .await;
-                            return;
-                        }
+                    let execution = TaskExecution {
+                        submission,
+                        node: node_box,
+                        engine_ctx,
+                        reporter,
+                        cancellation: task_cancel,
                     };
-
-                    let duration = start.elapsed();
-                    let details = reporter.take_run_details();
+                    let result = AssertUnwindSafe(executor.run(execution))
+                        .catch_unwind()
+                        .await;
                     let res = match result {
-                        Ok(Ok(outs)) => JobResult::Success {
-                            id: job_id.clone(),
-                            outputs: outs,
-                            duration,
-                            details,
-                        },
-                        Ok(Err(error)) => {
-                            warn!(node = %job_id, error = %error, "node failed");
-                            JobResult::Failed {
-                                id: job_id.clone(),
-                                error,
-                                duration,
-                                details,
-                            }
-                        }
+                        Ok(result) => result,
                         Err(panic_payload) => {
-                            let msg = panic_payload
+                            let message = panic_payload
                                 .downcast_ref::<&str>()
-                                .map(|s| (*s).to_string())
+                                .map(|value| (*value).to_string())
                                 .or_else(|| panic_payload.downcast_ref::<String>().cloned())
-                                .unwrap_or_else(|| "panicked with non-string payload".to_string());
-                            warn!(node = %job_id, panic = %msg, "node panicked");
+                                .unwrap_or_else(|| {
+                                    "executor panicked with non-string payload".to_string()
+                                });
+                            warn!(node = %task_id, panic = %message, "task executor panicked");
                             JobResult::Failed {
-                                id: job_id.clone(),
-                                error: DagError::Schedule(format!("node panicked: {msg}")),
-                                duration,
-                                details,
+                                id: task_id,
+                                error: DagError::Schedule(format!(
+                                    "task executor panicked: {message}"
+                                )),
+                                duration: std::time::Duration::default(),
+                                details: None,
                             }
                         }
                     };
@@ -1710,6 +1807,9 @@ impl DAG {
                 let output_rows = counts.get(id).copied();
                 let elapsed_ms = durations.get(id).map(|d| d.as_millis() as u64);
                 let dispatch_seq = dispatch_order.get(id).copied();
+                let executor = dispatch_seq
+                    .is_some()
+                    .then(|| self.task_executor.executor.name());
 
                 // Extract file sink path / artifact path via DagNode trait hooks.
                 let file_path = self
@@ -1736,6 +1836,7 @@ impl DAG {
                     id: id.clone(),
                     status,
                     node_type,
+                    executor,
                     logical_node: physical_job.map(|job| job.logical_node.clone()),
                     physical_job_id: physical_job.map(|_| id.clone()),
                     scatter_axis: physical_job.and_then(|job| job.axis.clone()),
@@ -2644,11 +2745,34 @@ fn canonical_file_path(path: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use crate::dag::{ChannelBranch, ChannelNode, ChannelOperator, NodeInput, NodePorts};
+    use crate::dag::{
+        ChannelBranch, ChannelNode, ChannelOperator, LocalTaskExecutor, NodeInput, NodePorts,
+        TaskExecutor, TaskInputSource, TaskSpec,
+    };
     use crate::value::{FileRef, PortType};
     use std::assert_matches;
 
     use super::*;
+
+    #[derive(Clone)]
+    struct RecordingTaskExecutor {
+        specs: Arc<std::sync::Mutex<Vec<TaskSpec>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl TaskExecutor for RecordingTaskExecutor {
+        fn name(&self) -> &'static str {
+            "recording"
+        }
+
+        async fn run(&self, execution: TaskExecution) -> crate::dag::node_event::JobResult {
+            self.specs
+                .lock()
+                .unwrap()
+                .push(execution.submission.spec.clone());
+            LocalTaskExecutor.run(execution).await
+        }
+    }
 
     /// Minimal echo node for graph tests — passes through inputs unchanged.
     #[derive(Clone)]
@@ -3019,6 +3143,10 @@ mod tests {
                 ports: NodePorts::new().add_output_port_of_type(None, PortType::Any),
             }) as Box<dyn DagNode>)
         }));
+        let task_specs = Arc::new(std::sync::Mutex::new(Vec::new()));
+        dag.set_task_executor(Arc::new(RecordingTaskExecutor {
+            specs: Arc::clone(&task_specs),
+        }));
         dag.install_compiled_graph(logical, physical).unwrap();
 
         let report = dag
@@ -3056,6 +3184,42 @@ mod tests {
             .find(|summary| summary.logical_node == "process")
             .unwrap();
         assert_eq!(process_summary.physical_job_count, 2);
+        let task_specs = task_specs.lock().unwrap();
+        let process_spec = task_specs
+            .iter()
+            .find(|spec| spec.id == "process#sample=a")
+            .unwrap();
+        assert_eq!(process_spec.logical_node.as_deref(), Some("process"));
+        assert_eq!(process_spec.item, Some(serde_json::json!("a")));
+        assert_eq!(
+            process_spec.inputs[0].source,
+            TaskInputSource::DynamicFanoutItem {
+                axis: "sample".into()
+            }
+        );
+        assert_eq!(process_spec.outputs.len(), 1);
+        assert_eq!(process_spec.outputs[0].name, "port_0");
+        assert_eq!(process_spec.outputs[0].payload, "any");
+        assert_eq!(
+            report
+                .nodes
+                .iter()
+                .find(|node| node.id == "process#sample=a")
+                .unwrap()
+                .executor,
+            Some("recording")
+        );
+        let collect_spec = task_specs
+            .iter()
+            .find(|spec| spec.id == "collect#0")
+            .unwrap();
+        assert!(collect_spec.inputs.iter().any(|input| matches!(
+            &input.source,
+            TaskInputSource::UpstreamPort {
+                from,
+                from_port: 0,
+            } if from.starts_with("process#sample=")
+        )));
 
         let incremental_report = dag
             .run(

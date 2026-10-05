@@ -332,6 +332,8 @@ pub struct NodeReport {
     pub status: RuntimeStatus,
     pub node_type: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub executor: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub logical_node: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub physical_job_id: Option<String>,
