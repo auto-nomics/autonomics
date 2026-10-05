@@ -102,6 +102,20 @@ impl ChannelNode {
         &self.operator
     }
 
+    /// Whether this operator can be applied one item at a time.
+    ///
+    /// Stateful fan-in operators intentionally retain batch execution until a
+    /// dedicated streaming state machine is added.
+    pub fn supports_stream_item(&self) -> bool {
+        matches!(
+            self.operator,
+            ChannelOperator::Map { .. }
+                | ChannelOperator::Filter { .. }
+                | ChannelOperator::Flatten
+                | ChannelOperator::Branch { .. }
+        )
+    }
+
     pub fn spec(&self) -> Value {
         serde_json::to_value(&self.operator).unwrap_or(Value::Null)
     }
@@ -391,7 +405,7 @@ impl DagNode for ChannelNode {
         &mut self,
         _ctx: &crate::registry::NodeCtx,
         inputs: &[NodeInput],
-        _reporter: &NodeReporter,
+        reporter: &NodeReporter,
     ) -> std::result::Result<PortOutputs, DagError> {
         let expected = if matches!(self.operator, ChannelOperator::Collect) {
             0
@@ -410,7 +424,21 @@ impl DagNode for ChannelNode {
             )));
         }
         let mut outputs = PortOutputs::new();
-        if let ChannelOperator::Branch { branches } = &self.operator {
+        if let ChannelOperator::OfItems { items } = &self.operator {
+            for (sequence, item) in items.iter().enumerate() {
+                reporter
+                    .emit_channel_item(0, sequence as u64, item.clone())
+                    .await;
+                tokio::task::yield_now().await;
+            }
+            reporter.close_channel(0, items.len() as u64).await;
+            outputs.insert(
+                0,
+                ChannelValue {
+                    items: items.clone(),
+                },
+            );
+        } else if let ChannelOperator::Branch { branches } = &self.operator {
             let mut branch_outputs = branches
                 .iter()
                 .map(|_| ChannelValue::default())
@@ -447,6 +475,60 @@ impl DagNode for ChannelNode {
     }
 }
 
+impl ChannelNode {
+    pub async fn process_stream_item(
+        &mut self,
+        input_port: u8,
+        item: serde_json::Value,
+    ) -> Result<Vec<(u8, serde_json::Value)>> {
+        if input_port != 0 {
+            return Err(DagError::Schedule(format!(
+                "streaming channel operator does not accept input port {input_port}"
+            )));
+        }
+
+        let outputs = match self.operator.clone() {
+            ChannelOperator::Map { template } => {
+                vec![(0, render_spec(&template, &item)?)]
+            }
+            ChannelOperator::Filter { path, equals } => {
+                if item.pointer(&pointer_path(&path)) == Some(&equals) {
+                    vec![(0, item)]
+                } else {
+                    Vec::new()
+                }
+            }
+            ChannelOperator::Flatten => match item {
+                serde_json::Value::Array(values) => values
+                    .into_iter()
+                    .map(|value| Ok((0, value)))
+                    .collect::<Result<Vec<_>>>()?,
+                value => {
+                    return Err(DagError::Schedule(format!(
+                        "channel.flatten requires array items, got {value}"
+                    )));
+                }
+            },
+            ChannelOperator::Branch { branches } => {
+                match branches
+                    .iter()
+                    .enumerate()
+                    .find(|(_, branch)| branch_matches(branch, &item))
+                {
+                    Some((index, _)) => vec![(index as u8, item)],
+                    None => Vec::new(),
+                }
+            }
+            operator => {
+                return Err(DagError::Schedule(format!(
+                    "channel operator `{operator:?}` does not support streaming item execution"
+                )));
+            }
+        };
+        Ok(outputs)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -474,6 +556,79 @@ mod tests {
         let (sender, _receiver) = tokio::sync::mpsc::channel(1);
         let reporter = NodeReporter::new("channel-test", sender);
         node.execute(&context, &inputs, &reporter).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn stateless_operators_apply_stream_items_incrementally() {
+        let mut map = ChannelNode::new(ChannelOperator::Map {
+            template: serde_json::json!({"id": "{{item.id}}"}),
+        });
+        assert_eq!(
+            map.process_stream_item(0, serde_json::json!({"id": "one", "kind": "keep"}))
+                .await
+                .unwrap(),
+            vec![(0, serde_json::json!({"id": "one"}))]
+        );
+
+        let mut filter = ChannelNode::new(ChannelOperator::Filter {
+            path: "kind".into(),
+            equals: serde_json::json!("keep"),
+        });
+        assert_eq!(
+            filter
+                .process_stream_item(0, serde_json::json!({"kind": "keep"}))
+                .await
+                .unwrap(),
+            vec![(0, serde_json::json!({"kind": "keep"}))]
+        );
+        assert!(
+            filter
+                .process_stream_item(0, serde_json::json!({"kind": "drop"}))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        let mut flatten = ChannelNode::new(ChannelOperator::Flatten);
+        assert_eq!(
+            flatten
+                .process_stream_item(0, serde_json::json!([1, 2]))
+                .await
+                .unwrap(),
+            vec![(0, serde_json::json!(1)), (0, serde_json::json!(2))]
+        );
+
+        let mut branch = ChannelNode::new(ChannelOperator::Branch {
+            branches: vec![
+                crate::dag::ChannelBranch {
+                    name: "keep".into(),
+                    path: "kind".into(),
+                    equals: Some(serde_json::json!("keep")),
+                    not_equals: None,
+                    exists: None,
+                    prefix: None,
+                    suffix: None,
+                    contains: None,
+                },
+                crate::dag::ChannelBranch {
+                    name: "other".into(),
+                    path: "kind".into(),
+                    equals: Some(serde_json::json!("other")),
+                    not_equals: None,
+                    exists: None,
+                    prefix: None,
+                    suffix: None,
+                    contains: None,
+                },
+            ],
+        });
+        assert_eq!(
+            branch
+                .process_stream_item(0, serde_json::json!({"kind": "other"}))
+                .await
+                .unwrap(),
+            vec![(1, serde_json::json!({"kind": "other"}))]
+        );
     }
 
     #[tokio::test]

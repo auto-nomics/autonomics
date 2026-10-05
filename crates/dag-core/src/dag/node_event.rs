@@ -88,6 +88,18 @@ pub enum NodeEventKind {
     Progress { current: u64, total: u64 },
     /// A free-form log line.
     Log { level: EventLevel, message: String },
+    /// One item emitted by a streaming Channel producer.
+    ///
+    /// Unlike ephemeral observations, this event drives scheduler readiness and
+    /// uses a bounded `send().await` so a slow downstream expansion applies
+    /// backpressure to the producer.
+    ChannelItem {
+        port: u8,
+        sequence: u64,
+        item: serde_json::Value,
+    },
+    /// A streaming Channel producer has emitted its final item.
+    ChannelClosed { port: u8, item_count: u64 },
     /// Run-level memory observation emitted by the scheduler's memory guard.
     Resource {
         usage_bytes: u64,
@@ -214,6 +226,30 @@ impl NodeReporter {
         self.log(EventLevel::Error, message);
     }
 
+    pub async fn emit_channel_item(&self, port: u8, sequence: u64, item: serde_json::Value) {
+        let _ = self
+            .tx
+            .send(NodeEvent::new(
+                self.node_id.clone(),
+                NodeEventKind::ChannelItem {
+                    port,
+                    sequence,
+                    item,
+                },
+            ))
+            .await;
+    }
+
+    pub async fn close_channel(&self, port: u8, item_count: u64) {
+        let _ = self
+            .tx
+            .send(NodeEvent::new(
+                self.node_id.clone(),
+                NodeEventKind::ChannelClosed { port, item_count },
+            ))
+            .await;
+    }
+
     /// Attach execution-level evidence (image, exit code, persisted log
     /// URIs, …) to this dispatch. Called by the node; harvested by the
     /// scheduler when the terminal `JobResult` is built, so the details
@@ -240,5 +276,47 @@ impl NodeReporter {
     pub fn take_logs(&self) -> Vec<ReportedLog> {
         let mut logs = self.logs.lock().unwrap_or_else(|error| error.into_inner());
         std::mem::take(&mut logs)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[tokio::test]
+    async fn channel_item_emission_applies_backpressure() {
+        let (sender, mut receiver) = mpsc::channel::<NodeEvent>(1);
+        let reporter = NodeReporter::new("source", sender);
+        let first_sent = std::sync::Arc::new(AtomicBool::new(false));
+        let producer_first_sent = std::sync::Arc::clone(&first_sent);
+        let producer = tokio::spawn(async move {
+            reporter
+                .emit_channel_item(0, 0, serde_json::json!("first"))
+                .await;
+            producer_first_sent.store(true, Ordering::SeqCst);
+            reporter
+                .emit_channel_item(0, 1, serde_json::json!("second"))
+                .await;
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        assert!(first_sent.load(Ordering::SeqCst));
+        assert!(
+            !producer.is_finished(),
+            "second item must wait for capacity"
+        );
+
+        let first = receiver.recv().await.unwrap();
+        let NodeEventKind::ChannelItem { item, sequence, .. } = first.kind else {
+            panic!("expected a channel item event");
+        };
+        assert_eq!(item, serde_json::json!("first"));
+        assert_eq!(sequence, 0);
+
+        tokio::time::timeout(std::time::Duration::from_millis(500), producer)
+            .await
+            .expect("producer should resume after capacity is released")
+            .unwrap();
     }
 }

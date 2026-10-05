@@ -89,6 +89,17 @@ fn node_event_to_record(ev: &NodeEvent) -> Option<agentik_core::tools::ProgressR
                 .status(format!("{status:?}").to_lowercase())
                 .elapsed_ms(*elapsed_ms),
         ),
+        NodeEventKind::ChannelItem { sequence, .. } => Some(
+            ProgressRecord::new("channel_item")
+                .label(label)
+                .current(*sequence),
+        ),
+        NodeEventKind::ChannelClosed { item_count, .. } => Some(
+            ProgressRecord::new("channel_closed")
+                .label(label)
+                .current(*item_count)
+                .total(*item_count),
+        ),
         // Done carries the heavy output map and is never emitted on the
         // external sink — nothing to record.
         NodeEventKind::Done(_) => None,

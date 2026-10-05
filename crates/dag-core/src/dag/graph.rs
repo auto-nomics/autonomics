@@ -1,6 +1,6 @@
 //! The DAG data structure: a payload store + a structural index.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::time::Duration;
@@ -21,6 +21,7 @@ use tracing::{debug, info_span, warn};
 
 use super::utils::{build_input_bindings, build_inputs, cascade_skip};
 
+use super::channel::ChannelOperator;
 use super::error::DagError;
 use super::execution::{
     TaskExecution, TaskExecutor, TaskInputBinding, TaskInputSource, TaskOutputBinding,
@@ -754,6 +755,354 @@ impl DAG {
             .await
     }
 
+    fn streaming_operator(&self, node_id: &str) -> Result<Option<ChannelOperator>> {
+        let Some((kind, spec)) = self.specs.get(node_id) else {
+            return Ok(None);
+        };
+        if kind != "channel" {
+            return Ok(None);
+        }
+        let operator =
+            serde_json::from_value::<ChannelOperator>(spec.clone()).map_err(|error| {
+                DagError::Schedule(format!("invalid channel operator for `{node_id}`: {error}"))
+            })?;
+        let supports_stream = self
+            .nodes
+            .get(node_id)
+            .and_then(|node| node.as_any().downcast_ref::<super::channel::ChannelNode>())
+            .is_some_and(|node| node.supports_stream_item());
+        Ok(supports_stream.then_some(operator))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn propagate_stream_item(
+        &mut self,
+        from: &str,
+        from_port: u8,
+        item: serde_json::Value,
+        incoming: &mut HashMap<NodeId, Vec<(NodeId, EdgeLabel)>>,
+        successors: &mut HashMap<NodeId, Vec<NodeId>>,
+        pending: &mut HashMap<NodeId, usize>,
+        ready: &mut VecDeque<NodeId>,
+        all_ids: &mut Vec<NodeId>,
+        streaming_expanded: &mut BTreeSet<NodeId>,
+        stream_node_items: &mut HashMap<NodeId, Vec<serde_json::Value>>,
+        stream_node_counts: &mut HashMap<NodeId, usize>,
+        stream_node_outputs: &mut HashMap<NodeId, HashMap<u8, Vec<serde_json::Value>>>,
+        tx: mpsc::Sender<NodeEvent>,
+    ) -> Result<()> {
+        let targets = successors.get(from).cloned().unwrap_or_default();
+        for target in targets {
+            let labels = incoming
+                .get(&target)
+                .into_iter()
+                .flatten()
+                .filter(|(producer, label)| {
+                    producer.as_str() == from && label.from_port == from_port
+                })
+                .map(|(_, label)| label.clone())
+                .collect::<Vec<_>>();
+            if labels.is_empty() {
+                continue;
+            }
+
+            if self
+                .specs
+                .get(target.as_str())
+                .is_some_and(|(kind, _)| kind == "dynamic_fanout")
+            {
+                for _label in labels {
+                    let sequence = *stream_node_counts.entry(target.clone()).or_insert(0);
+                    self.expand_dynamic_fanout_item(
+                        target.as_str(),
+                        item.clone(),
+                        sequence as usize,
+                        incoming,
+                        successors,
+                        pending,
+                        ready,
+                        all_ids,
+                        streaming_expanded,
+                    )?;
+                    *stream_node_counts.entry(target.clone()).or_insert(0) += 1;
+                }
+                continue;
+            }
+
+            let Some(operator) = self.streaming_operator(target.as_str())? else {
+                continue;
+            };
+            let _ = operator;
+
+            for label in labels {
+                let Some(from_idx) = self.id_to_idx.get(from) else {
+                    continue;
+                };
+                let Some(to_idx) = self.id_to_idx.get(&target) else {
+                    continue;
+                };
+                let exists = self.graph.edges_connecting(*from_idx, *to_idx).any(|edge| {
+                    edge.weight().from_port == label.from_port
+                        && edge.weight().to_port == label.to_port
+                });
+                if !exists {
+                    continue;
+                }
+                self.delete_edge(from, &target, label.from_port, label.to_port)?;
+                if let Some(count) = pending.get_mut(&target) {
+                    *count = count.saturating_sub(1);
+                }
+            }
+            self.statuses.insert(target.clone(), RuntimeStatus::Running);
+            stream_node_items
+                .entry(target.clone())
+                .or_default()
+                .push(item.clone());
+            let input_count = stream_node_items
+                .get(&target)
+                .map(Vec::len)
+                .unwrap_or_default();
+            stream_node_counts.insert(target.clone(), input_count);
+
+            let outputs = {
+                let Some(node) = self.nodes.get(&target) else {
+                    continue;
+                };
+                let mut node = node
+                    .clone_box()
+                    .as_any()
+                    .downcast_ref::<super::channel::ChannelNode>()
+                    .unwrap()
+                    .clone();
+                node.process_stream_item(from_port, item.clone()).await?
+            };
+            let sequence = *stream_node_counts.get(&target).unwrap();
+            for (output_port, output_item) in outputs {
+                stream_node_outputs
+                    .entry(target.clone())
+                    .or_default()
+                    .entry(output_port)
+                    .or_default()
+                    .push(output_item.clone());
+                let reporter = NodeReporter::new(target.clone(), tx.clone());
+                reporter
+                    .emit_channel_item(output_port, sequence as u64, output_item)
+                    .await;
+            }
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn close_stream_successors(
+        &mut self,
+        from: &str,
+        successors: &mut HashMap<NodeId, Vec<NodeId>>,
+        pending: &mut HashMap<NodeId, usize>,
+        ready: &mut VecDeque<NodeId>,
+        stream_node_items: &mut HashMap<NodeId, Vec<serde_json::Value>>,
+        stream_node_counts: &mut HashMap<NodeId, usize>,
+        stream_node_outputs: &mut HashMap<NodeId, HashMap<u8, Vec<serde_json::Value>>>,
+        tx: mpsc::Sender<NodeEvent>,
+    ) -> Result<()> {
+        let targets = successors.get(from).cloned().unwrap_or_default();
+        for target in targets {
+            let Some(_operator) = self.streaming_operator(target.as_str())? else {
+                continue;
+            };
+            if self.statuses.get(&target) != Some(&RuntimeStatus::Running) {
+                continue;
+            }
+            let _items = stream_node_items.remove(&target);
+            let output_items = stream_node_outputs.remove(&target).unwrap_or_default();
+            let mut outputs = PortOutputs::new();
+            for (port, items) in output_items {
+                outputs.insert(port, crate::ChannelValue { items });
+            }
+            self.outputs.insert(target.clone(), outputs);
+            self.statuses.insert(target.clone(), RuntimeStatus::Success);
+            self.fingerprints.remove(&target);
+
+            let item_count = stream_node_counts.get(&target).copied().unwrap_or_default();
+            let ports = self
+                .outputs
+                .get(&target)
+                .map(|outputs| outputs.iter().map(|(port, _)| *port).collect::<Vec<_>>())
+                .unwrap_or_default();
+            for port in ports {
+                let reporter = NodeReporter::new(target.clone(), tx.clone());
+                reporter.close_channel(port, item_count as u64).await;
+            }
+
+            for successor in successors.get(&target).cloned().unwrap_or_default() {
+                let left = {
+                    let count = pending.entry(successor.clone()).or_insert(0);
+                    count.saturating_sub(1)
+                };
+                if left == 0 && self.statuses.get(&successor) == Some(&RuntimeStatus::Pending) {
+                    ready.push_back(successor);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn expand_dynamic_fanout_item(
+        &mut self,
+        coordinator_id: &str,
+        item: serde_json::Value,
+        sequence: usize,
+        incoming: &mut HashMap<NodeId, Vec<(NodeId, EdgeLabel)>>,
+        successors: &mut HashMap<NodeId, Vec<NodeId>>,
+        pending: &mut HashMap<NodeId, usize>,
+        ready: &mut VecDeque<NodeId>,
+        all_ids: &mut Vec<NodeId>,
+        streaming_expanded: &mut BTreeSet<NodeId>,
+    ) -> Result<NodeId> {
+        let Some((coordinator_kind, coordinator_spec)) = self.specs.get(coordinator_id).cloned()
+        else {
+            return Err(DagError::Schedule(format!(
+                "dynamic fanout `{coordinator_id}` has no retained specification"
+            )));
+        };
+        if coordinator_kind != "dynamic_fanout" {
+            return Err(DagError::Schedule(format!(
+                "node `{coordinator_id}` is not a dynamic fanout coordinator"
+            )));
+        }
+        let definition = serde_json::from_value::<DynamicFanoutSpec>(coordinator_spec.clone())
+            .map_err(|error| {
+                DagError::Schedule(format!(
+                    "invalid dynamic fanout specification for `{coordinator_id}`: {error}"
+                ))
+            })?;
+        let logical_id = self
+            .physical_jobs
+            .get(coordinator_id)
+            .map(|job| job.logical_node.clone())
+            .unwrap_or_else(|| definition.axis.clone());
+        let item_key = item_key(&item, sequence)?;
+        let actual_id = physical_id(
+            &logical_id,
+            &Some(definition.axis.clone()),
+            &Some(item_key.clone()),
+        );
+
+        let builder = self.dynamic_node_builder.clone().ok_or_else(|| {
+            DagError::Schedule(format!(
+                "dynamic fanout `{coordinator_id}` has no registered node builder"
+            ))
+        })?;
+        let rendered = render_spec(&definition.spec, &item)?;
+        let existing_definition = self.specs.get(actual_id.as_str()).cloned();
+        if existing_definition != Some((definition.kind.clone(), rendered.clone())) {
+            let node = builder(&definition.kind, rendered.clone()).map_err(|error| {
+                DagError::Schedule(format!(
+                    "cannot build dynamic fanout job `{actual_id}`: {error}"
+                ))
+            })?;
+            if self.nodes.contains_key(&actual_id) {
+                self.replace_node_with_spec(
+                    actual_id.as_str(),
+                    node,
+                    definition.kind.clone(),
+                    rendered,
+                )?;
+            } else {
+                self.add_node_with_spec(
+                    actual_id.clone(),
+                    node,
+                    definition.kind.clone(),
+                    rendered,
+                )?;
+            }
+        }
+        self.physical_jobs.insert(
+            actual_id.clone(),
+            PhysicalJobRef {
+                logical_node: logical_id.clone(),
+                axis: Some(definition.axis.clone()),
+                item_key: Some(item_key),
+                item: Some(item),
+            },
+        );
+
+        let logical_edges = self
+            .logical_graphs
+            .iter()
+            .flat_map(|graph| graph.edges().iter().cloned())
+            .filter(|edge| edge.from == logical_id)
+            .map(|edge| (edge.to.clone(), edge.from_port))
+            .collect::<Vec<_>>();
+
+        // The coordinator's placeholder edge is replaced by actual-job edges
+        // once. On subsequent items only the new actual edge is appended.
+        if !self.successors(coordinator_id).is_empty() {
+            for successor in self.successors(coordinator_id) {
+                if let Some(labels) = incoming.get_mut(&successor) {
+                    labels.retain(|(from, _)| from != coordinator_id);
+                }
+                if let Some(count) = pending.get_mut(&successor) {
+                    *count = count.saturating_sub(1);
+                }
+                while let Some((_, label)) = self
+                    .incoming_edges_with_ports(&successor)
+                    .into_iter()
+                    .find(|(from, _)| from == coordinator_id)
+                {
+                    self.delete_edge(coordinator_id, &successor, label.from_port, label.to_port)?;
+                }
+            }
+        }
+
+        for (logical_target, from_port) in logical_edges {
+            let target = physical_id(&logical_target, &None, &None);
+            let mut used_ports = self
+                .incoming_edges_with_ports(&target)
+                .into_iter()
+                .map(|(_, label)| label.to_port)
+                .collect::<std::collections::BTreeSet<_>>();
+            let mut to_port = 0u8;
+            while used_ports.contains(&to_port) {
+                to_port = to_port.checked_add(1).ok_or_else(|| {
+                    DagError::Schedule(format!(
+                        "dynamic fanout target `{target}` exceeds the port range"
+                    ))
+                })?;
+            }
+            used_ports.insert(to_port);
+            self.add_edge(actual_id.clone(), target.clone(), from_port, to_port)?;
+            successors
+                .entry(actual_id.clone())
+                .or_default()
+                .push(target.clone());
+            incoming
+                .entry(target.clone())
+                .or_default()
+                .push((actual_id.clone(), EdgeLabel { from_port, to_port }));
+            let count = pending.entry(target.clone()).or_insert(0);
+            *count += 1;
+        }
+
+        if !all_ids.contains(&actual_id) {
+            all_ids.push(actual_id.clone());
+        }
+        self.statuses
+            .insert(actual_id.clone(), RuntimeStatus::Pending);
+        pending.insert(actual_id.clone(), 0);
+        ready.push_back(actual_id.clone());
+        streaming_expanded.insert(coordinator_id.to_string());
+
+        let actual_jobs = self
+            .physical_jobs
+            .iter()
+            .filter(|(id, job)| id.as_str() != coordinator_id && job.logical_node == logical_id)
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        successors.insert(coordinator_id.to_string(), actual_jobs);
+        Ok(actual_id)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn expand_dynamic_fanout(
         &mut self,
@@ -762,6 +1111,7 @@ impl DAG {
         successors: &mut HashMap<NodeId, Vec<NodeId>>,
         pending: &mut HashMap<NodeId, usize>,
         ready: &mut VecDeque<NodeId>,
+        streaming_expanded: &mut BTreeSet<NodeId>,
     ) -> Result<Vec<NodeId>> {
         let Some((coordinator_kind, coordinator_spec)) = self.specs.get(coordinator_id).cloned()
         else {
@@ -849,6 +1199,30 @@ impl DAG {
             })
             .map(|(id, _)| id.clone())
             .collect::<Vec<_>>();
+
+        if streaming_expanded.contains(coordinator_id) {
+            for successor in self.successors(coordinator_id) {
+                if let Some(labels) = incoming.get_mut(&successor) {
+                    labels.retain(|(from, _)| from != coordinator_id);
+                }
+                if let Some(count) = pending.get_mut(&successor) {
+                    *count = count.saturating_sub(1);
+                }
+                while let Some((_, label)) = self
+                    .incoming_edges_with_ports(&successor)
+                    .into_iter()
+                    .find(|(from, _)| from == coordinator_id)
+                {
+                    self.delete_edge(coordinator_id, &successor, label.from_port, label.to_port)?;
+                }
+            }
+            self.fingerprints
+                .insert(coordinator_id.to_string(), channel_fingerprint);
+            self.statuses
+                .insert(coordinator_id.to_string(), RuntimeStatus::Success);
+            successors.insert(coordinator_id.to_string(), existing_actuals.clone());
+            return Ok(existing_actuals);
+        }
 
         for actual in &existing_actuals {
             for successor in successors.get(actual).cloned().unwrap_or_default() {
@@ -1053,6 +1427,10 @@ impl DAG {
         }
 
         let mut all_ids = self.node_ids();
+        let mut streaming_expanded = BTreeSet::<NodeId>::new();
+        let mut stream_node_items = HashMap::<NodeId, Vec<serde_json::Value>>::new();
+        let mut stream_node_counts = HashMap::<NodeId, usize>::new();
+        let mut stream_node_outputs = HashMap::<NodeId, HashMap<u8, Vec<serde_json::Value>>>::new();
 
         // Precompute adjacency + per-node port assignment so the dispatch loop only
         // needs a single mutable borrow of `self`.
@@ -1138,7 +1516,8 @@ impl DAG {
                 }
             }
         }
-        let (tx, mut rx) = mpsc::channel::<NodeEvent>(all_ids.len().max(1));
+        let event_capacity = all_ids.len().saturating_mul(128).max(128);
+        let (tx, mut rx) = mpsc::channel::<NodeEvent>(event_capacity);
 
         // Per-node execution duration and skip root-cause tracking.
         let mut durations: HashMap<NodeId, std::time::Duration> = HashMap::new();
@@ -1183,6 +1562,7 @@ impl DAG {
                         &mut successors,
                         &mut pending,
                         &mut ready,
+                        &mut streaming_expanded,
                     )?;
                     for actual_id in actual_ids {
                         if !all_ids.contains(&actual_id) {
@@ -1407,7 +1787,10 @@ impl DAG {
                 job_handles.push(AbortOnDropHandle(Some(handle)));
             }
 
-            if in_flight == 0 {
+            let streaming_active = stream_node_counts
+                .keys()
+                .any(|node| self.statuses.get(node) == Some(&RuntimeStatus::Running));
+            if in_flight == 0 && !streaming_active {
                 break;
             }
 
@@ -1480,6 +1863,48 @@ impl DAG {
                     continue;
                 }
                 NodeEventKind::Finished { .. } => continue,
+                NodeEventKind::ChannelItem {
+                    port,
+                    sequence: _,
+                    item,
+                } => {
+                    let source = msg.node_id.clone();
+                    stream_node_items
+                        .entry(msg.node_id.clone())
+                        .or_default()
+                        .push(item.clone());
+                    self.propagate_stream_item(
+                        &source,
+                        port,
+                        item,
+                        &mut incoming,
+                        &mut successors,
+                        &mut pending,
+                        &mut ready,
+                        &mut all_ids,
+                        &mut streaming_expanded,
+                        &mut stream_node_items,
+                        &mut stream_node_counts,
+                        &mut stream_node_outputs,
+                        tx.clone(),
+                    )
+                    .await?;
+                    continue;
+                }
+                NodeEventKind::ChannelClosed { .. } => {
+                    self.close_stream_successors(
+                        &msg.node_id,
+                        &mut successors,
+                        &mut pending,
+                        &mut ready,
+                        &mut stream_node_items,
+                        &mut stream_node_counts,
+                        &mut stream_node_outputs,
+                        tx.clone(),
+                    )
+                    .await?;
+                    continue;
+                }
             };
             in_flight -= 1;
 
@@ -3714,11 +4139,34 @@ mod tests {
         dag.set_logical_task_resources("process", process_resources.clone())?;
         dag.install_compiled_graph(logical, physical).unwrap();
 
+        let (_event_tx, mut event_rx) = tokio::sync::mpsc::channel::<NodeEvent>(128);
         let report = dag
-            .run(&crate::dag::SchedulerConfig::default(), &test_ctx(), None)
+            .run(
+                &crate::dag::SchedulerConfig::default(),
+                &test_ctx(),
+                Some(_event_tx),
+            )
             .await
             .unwrap();
         assert!(report.ok, "{report:?}");
+        let mut finish_order = Vec::new();
+        while let Some(event) = event_rx.recv().await {
+            if matches!(event.kind, NodeEventKind::Finished { .. }) {
+                finish_order.push(event.node_id.clone());
+            }
+        }
+        let first_process = finish_order
+            .iter()
+            .position(|id| id.starts_with("process#sample="))
+            .expect("dynamic process should finish");
+        let source_position = finish_order
+            .iter()
+            .position(|id| id == "source#0")
+            .expect("stream source should finish");
+        assert!(
+            first_process < source_position,
+            "dynamic job should finish before its streaming source closes: {finish_order:?}"
+        );
         assert_eq!(*executions.lock().unwrap(), 2);
         assert!(dag.nodes.contains_key("process#sample=a"));
         assert!(dag.nodes.contains_key("process#sample=b"));
@@ -3845,6 +4293,67 @@ mod tests {
         assert!(restored_report.ok, "{restored_report:?}");
         assert_eq!(
             restored_report
+                .logical_nodes
+                .iter()
+                .find(|summary| summary.logical_node == "process")
+                .unwrap()
+                .physical_job_count,
+            2,
+            "nodes={:?}",
+            report.nodes,
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn streaming_map_drives_dynamic_fanout() -> Result<()> {
+        let logical = crate::dag::LogicalGraph::builder()
+            .add_node(crate::dag::LogicalNode::channel(
+                "source",
+                ChannelOperator::OfItems {
+                    items: vec!["one".into(), "two".into()],
+                },
+            ))
+            .add_node(crate::dag::LogicalNode::channel(
+                "mapped",
+                ChannelOperator::Map {
+                    template: serde_json::json!("{{item}}"),
+                },
+            ))
+            .add_node(crate::dag::LogicalNode::dynamic_for_each(
+                "process",
+                "dynamic_item",
+                serde_json::json!({"value": "{{item}}"}),
+                "sample",
+            ))
+            .add_node(crate::dag::LogicalNode::channel(
+                "collect",
+                ChannelOperator::Collect,
+            ))
+            .add_edge("source", "mapped", 0, 0)
+            .add_edge("mapped", "process", 0, 0)
+            .add_edge("process", "collect", 0, 0)
+            .build();
+        let physical = logical
+            .compile(|_, _| unreachable!("dynamic and channel nodes are built by the planner"))
+            .unwrap();
+        let mut dag = DAG::default();
+        dag.set_dynamic_node_builder(Arc::new(move |kind, spec| {
+            assert_eq!(kind, "dynamic_item");
+            let value = spec["value"].as_str().unwrap().to_string();
+            Ok(Box::new(DynamicItemNode {
+                value,
+                ports: NodePorts::new().add_output_port_of_type(None, PortType::Any),
+            }) as Box<dyn DagNode>)
+        }));
+        dag.install_compiled_graph(logical, physical).unwrap();
+
+        let report = dag
+            .run(&crate::dag::SchedulerConfig::default(), &test_ctx(), None)
+            .await?;
+        assert!(report.ok, "{report:?}");
+        assert_eq!(
+            report
                 .logical_nodes
                 .iter()
                 .find(|summary| summary.logical_node == "process")
