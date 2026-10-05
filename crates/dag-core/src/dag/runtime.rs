@@ -285,6 +285,42 @@ pub struct InputBinding {
     pub fingerprint: Option<crate::value::FileFingerprint>,
 }
 
+/// A failed physical job aggregated under its logical source node.
+#[derive(Debug, Clone, Serialize)]
+pub struct LogicalJobError {
+    pub physical_job_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub item_key: Option<String>,
+    pub error: DagErrorReport,
+}
+
+/// Logical-node view over the physical jobs produced by its expansion.
+///
+/// [`RunReport::nodes`] remains the authoritative execution ledger. This
+/// summary makes scatter health legible without losing that physical detail.
+#[derive(Debug, Clone, Serialize)]
+pub struct LogicalRunSummary {
+    pub logical_node: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub execution_strategy: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logical_node_type: Option<String>,
+    pub status: RuntimeStatus,
+    pub physical_job_count: usize,
+    pub status_counts: BTreeMap<String, usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scatter_axis: Option<String>,
+    pub item_keys: Vec<String>,
+    pub failed_item_keys: Vec<String>,
+    pub skipped_item_keys: Vec<String>,
+    pub physical_job_ids: Vec<String>,
+    pub summed_elapsed_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_elapsed_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<LogicalJobError>,
+}
+
 /// Per-node execution summary produced by [`super::graph::DAG::run`].
 ///
 /// Contains everything an agent needs to understand what each node did
@@ -367,6 +403,8 @@ pub struct RunReport {
     pub resource: ResourceRunReport,
     /// Rich per-node reports (serializable, agent-friendly).
     pub nodes: Vec<NodeReport>,
+    /// Aggregated status for nodes installed from logical source graphs.
+    pub logical_nodes: Vec<LogicalRunSummary>,
     /// Flat status map kept for backward-compatible programmatic access.
     pub statuses: HashMap<NodeId, RuntimeStatus>,
     /// Per-node errors (only populated for `Failed` nodes).
@@ -379,12 +417,13 @@ impl Serialize for RunReport {
         serializer: S,
     ) -> std::result::Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
-        let mut st = serializer.serialize_struct("RunReport", 7)?;
+        let mut st = serializer.serialize_struct("RunReport", 8)?;
         st.serialize_field("ok", &self.ok)?;
         st.serialize_field("warnings", &self.warnings)?;
         st.serialize_field("snapshot_id", &self.snapshot_id)?;
         st.serialize_field("resource", &self.resource)?;
         st.serialize_field("nodes", &self.nodes)?;
+        st.serialize_field("logical_nodes", &self.logical_nodes)?;
 
         // Convert hashbrown HashMaps to std HashMaps for serialization.
         let statuses: std::collections::HashMap<&str, RuntimeStatus> = self

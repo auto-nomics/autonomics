@@ -1828,6 +1828,40 @@ mod tests {
         assert_eq!(gather.node_type, "logical_gather");
         assert_eq!(gather.logical_node.as_deref(), Some("gather"));
         assert_eq!(report.status("summary#0"), Some(RuntimeStatus::Success));
+        assert_eq!(report.logical_nodes.len(), 4);
+        let read_summary = report
+            .logical_nodes
+            .iter()
+            .find(|summary| summary.logical_node == "read")
+            .unwrap();
+        assert_eq!(read_summary.status, RuntimeStatus::Success);
+        assert_eq!(read_summary.execution_strategy, Some("for_each"));
+        assert_eq!(
+            read_summary.logical_node_type.as_deref(),
+            Some("file_to_dataframe")
+        );
+        assert_eq!(read_summary.physical_job_count, 2);
+        assert_eq!(read_summary.status_counts.get("success"), Some(&2));
+        assert_eq!(read_summary.scatter_axis.as_deref(), Some("sample"));
+        assert_eq!(read_summary.item_keys, vec!["setosa", "virginica"]);
+        assert!(read_summary.failed_item_keys.is_empty());
+        assert_eq!(
+            read_summary.physical_job_ids,
+            vec!["read#sample=setosa", "read#sample=virginica"]
+        );
+        let gather_summary = report
+            .logical_nodes
+            .iter()
+            .find(|summary| summary.logical_node == "gather")
+            .unwrap();
+        assert_eq!(gather_summary.execution_strategy, Some("gather"));
+        assert_eq!(
+            gather_summary.logical_node_type.as_deref(),
+            Some("logical_gather")
+        );
+        assert_eq!(gather_summary.physical_job_count, 1);
+        let encoded = serde_json::to_value(&report).unwrap();
+        assert!(encoded["logical_nodes"].is_array());
     }
 
     #[tokio::test]

@@ -1,6 +1,6 @@
 //! The DAG data structure: a payload store + a structural index.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::time::Duration;
@@ -22,11 +22,11 @@ use tracing::{debug, info_span, warn};
 use super::utils::{build_input_bindings, build_inputs, cascade_skip};
 
 use super::error::DagError;
-use super::logical::LogicalGraph;
+use super::logical::{LogicalExecutionStrategy, LogicalGraph, LogicalNode, LogicalNodeDefinition};
 use super::physical::PhysicalJobRef;
 use super::runtime::{
-    InputBinding, InputHashing, NodeReport, NodeRunDetails, RunReport, RuntimeStatus,
-    SchedulerConfig, SchemaReport,
+    InputBinding, InputHashing, LogicalJobError, LogicalRunSummary, NodeReport, NodeRunDetails,
+    RunReport, RuntimeStatus, SchedulerConfig, SchemaReport,
 };
 use super::{DagNode, NodeId};
 use crate::dag::node_event::{JobResult, NodeEvent, NodeEventKind, NodeReporter};
@@ -120,6 +120,154 @@ struct MemoryGuardState {
     peak: Option<MemorySample>,
     source: Option<&'static str>,
     error: Option<String>,
+}
+
+#[derive(Default)]
+struct LogicalSummaryBuilder {
+    execution_strategy: Option<&'static str>,
+    logical_node_type: Option<String>,
+    scatter_axis: Option<String>,
+    status_counts: BTreeMap<String, usize>,
+    item_keys: Vec<String>,
+    failed_item_keys: Vec<String>,
+    skipped_item_keys: Vec<String>,
+    physical_job_ids: Vec<String>,
+    summed_elapsed_ms: u64,
+    max_elapsed_ms: Option<u64>,
+    errors: Vec<LogicalJobError>,
+}
+
+impl LogicalSummaryBuilder {
+    fn record(&mut self, report: &NodeReport) {
+        *self
+            .status_counts
+            .entry(runtime_status_name(report.status).to_string())
+            .or_insert(0) += 1;
+        self.scatter_axis
+            .get_or_insert_with(|| report.scatter_axis.clone().unwrap_or_default());
+        if self.scatter_axis.as_deref() == Some("") {
+            self.scatter_axis = None;
+        }
+        if let Some(item_key) = &report.item_key {
+            self.item_keys.push(item_key.clone());
+        }
+        self.physical_job_ids.push(
+            report
+                .physical_job_id
+                .clone()
+                .unwrap_or_else(|| report.id.clone()),
+        );
+        if let Some(elapsed_ms) = report.elapsed_ms {
+            self.summed_elapsed_ms += elapsed_ms;
+            self.max_elapsed_ms = Some(
+                self.max_elapsed_ms
+                    .map_or(elapsed_ms, |current| current.max(elapsed_ms)),
+            );
+        }
+        if report.status == RuntimeStatus::Failed {
+            if let Some(item_key) = &report.item_key {
+                self.failed_item_keys.push(item_key.clone());
+            }
+            if let Some(error) = &report.error {
+                self.errors.push(LogicalJobError {
+                    physical_job_id: report
+                        .physical_job_id
+                        .clone()
+                        .unwrap_or_else(|| report.id.clone()),
+                    item_key: report.item_key.clone(),
+                    error: error.clone(),
+                });
+            }
+        }
+        if report.status == RuntimeStatus::Skipped {
+            if let Some(item_key) = &report.item_key {
+                self.skipped_item_keys.push(item_key.clone());
+            }
+        }
+    }
+
+    fn finish(mut self, logical_node: String) -> LogicalRunSummary {
+        self.item_keys.sort();
+        self.failed_item_keys.sort();
+        self.skipped_item_keys.sort();
+        self.physical_job_ids.sort();
+        let status = aggregate_logical_status(&self.status_counts, self.physical_job_ids.len());
+        LogicalRunSummary {
+            logical_node,
+            execution_strategy: self.execution_strategy,
+            logical_node_type: self.logical_node_type,
+            status,
+            physical_job_count: self.physical_job_ids.len(),
+            status_counts: self.status_counts,
+            scatter_axis: self.scatter_axis,
+            item_keys: self.item_keys,
+            failed_item_keys: self.failed_item_keys,
+            skipped_item_keys: self.skipped_item_keys,
+            physical_job_ids: self.physical_job_ids,
+            summed_elapsed_ms: self.summed_elapsed_ms,
+            max_elapsed_ms: self.max_elapsed_ms,
+            errors: self.errors,
+        }
+    }
+}
+
+fn logical_execution_strategy_name(strategy: &LogicalExecutionStrategy) -> &'static str {
+    match strategy {
+        LogicalExecutionStrategy::Once => "once",
+        LogicalExecutionStrategy::ForEach { .. } => "for_each",
+        LogicalExecutionStrategy::Gather => "gather",
+    }
+}
+
+fn logical_node_type(definition: &LogicalNodeDefinition) -> String {
+    match definition {
+        LogicalNodeDefinition::Registry { kind, .. } => kind.clone(),
+        LogicalNodeDefinition::Gather => "logical_gather".to_string(),
+    }
+}
+
+fn logical_scatter_axis(strategy: &LogicalExecutionStrategy) -> Option<String> {
+    match strategy {
+        LogicalExecutionStrategy::ForEach { axis, .. } => Some(axis.clone()),
+        LogicalExecutionStrategy::Once | LogicalExecutionStrategy::Gather => None,
+    }
+}
+
+fn runtime_status_name(status: RuntimeStatus) -> &'static str {
+    match status {
+        RuntimeStatus::Pending => "pending",
+        RuntimeStatus::Ready => "ready",
+        RuntimeStatus::Running => "running",
+        RuntimeStatus::Success => "success",
+        RuntimeStatus::Failed => "failed",
+        RuntimeStatus::Skipped => "skipped",
+        RuntimeStatus::Cancelled => "cancelled",
+    }
+}
+
+fn aggregate_logical_status(
+    status_counts: &BTreeMap<String, usize>,
+    physical_job_count: usize,
+) -> RuntimeStatus {
+    let count = |name: &str| status_counts.get(name).copied().unwrap_or(0);
+    if physical_job_count == 0 {
+        return RuntimeStatus::Pending;
+    }
+    if count("failed") > 0 {
+        RuntimeStatus::Failed
+    } else if count("cancelled") > 0 {
+        RuntimeStatus::Cancelled
+    } else if count("running") > 0 {
+        RuntimeStatus::Running
+    } else if count("ready") > 0 {
+        RuntimeStatus::Ready
+    } else if count("pending") > 0 {
+        RuntimeStatus::Pending
+    } else if count("success") > 0 {
+        RuntimeStatus::Success
+    } else {
+        RuntimeStatus::Skipped
+    }
 }
 
 impl MemoryGuardState {
@@ -1112,6 +1260,7 @@ impl DAG {
                 cfg.compute_row_counts && memory_trigger.is_none(),
             )
             .await;
+        let logical_run_summaries = self.build_logical_run_summaries(&node_reports);
 
         Ok(RunReport {
             ok,
@@ -1119,9 +1268,44 @@ impl DAG {
             snapshot_id: None,
             resource,
             nodes: node_reports,
+            logical_nodes: logical_run_summaries,
             statuses: self.statuses.clone(),
             errors: self.errors.drain().collect(),
         })
+    }
+
+    /// Aggregate physical execution reports under their logical source nodes.
+    ///
+    /// Every logical node is represented even when it currently has no
+    /// physical jobs. That makes a deleted scatter sibling visible as a
+    /// zero-job logical summary instead of silently disappearing from the
+    /// logical execution view.
+    fn build_logical_run_summaries(&self, reports: &[NodeReport]) -> Vec<LogicalRunSummary> {
+        let mut builders = BTreeMap::new();
+        for graph in &self.logical_graphs {
+            for node in graph.nodes() {
+                let builder = LogicalSummaryBuilder {
+                    execution_strategy: Some(logical_execution_strategy_name(&node.strategy)),
+                    logical_node_type: Some(logical_node_type(&node.definition)),
+                    scatter_axis: logical_scatter_axis(&node.strategy),
+                    ..LogicalSummaryBuilder::default()
+                };
+                builders.entry(node.id.clone()).or_insert(builder);
+            }
+        }
+
+        for report in reports
+            .iter()
+            .filter(|report| report.logical_node.is_some())
+        {
+            let logical_node = report.logical_node.clone().unwrap();
+            builders.entry(logical_node).or_default().record(report);
+        }
+
+        builders
+            .into_iter()
+            .map(|(logical_node, builder)| builder.finish(logical_node))
+            .collect()
     }
 
     /// Build per-node [`NodeReport`] summaries from the execution state

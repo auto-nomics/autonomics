@@ -35,6 +35,7 @@ pub use physical::{
     GatherNode, PhysicalEdge, PhysicalGraph, PhysicalInstallReport, PhysicalJobRef, PhysicalNode,
 };
 pub use runtime::{
-    InputBinding, InputHashing, NodeRunDetails, RunReport, RuntimeStatus, SchedulerConfig,
+    InputBinding, InputHashing, LogicalJobError, LogicalRunSummary, NodeRunDetails, RunReport,
+    RuntimeStatus, SchedulerConfig,
 };
 pub use view::{DagEdgeView, DagNodeView, DagPortView, DagTuiSnapshot};
