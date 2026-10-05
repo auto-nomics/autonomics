@@ -286,10 +286,7 @@ fn hdl_l_scan_plugin_compiles_to_the_legacy_wrapper_contract() {
         "trait1"
     );
     assert_eq!(compiled.env.get("HDL_L_SCAN_NREF").unwrap(), "335272.0");
-    assert_eq!(
-        compiled.env.get("HDL_L_SCAN_INTERCEPT_OUTPUT").unwrap(),
-        ""
-    );
+    assert_eq!(compiled.env.get("HDL_L_SCAN_INTERCEPT_OUTPUT").unwrap(), "");
     assert_eq!(compiled.env.get("HDL_L_SCAN_FILL_MISSING_N").unwrap(), "");
 
     // Semantic script markers: the per-chr/piece loop stays script-side

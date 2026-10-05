@@ -104,17 +104,12 @@ impl DagNode for SvmNode {
                 }
             })?;
         let labels: Vec<usize> = labels_f.into_iter().map(|v| v as usize).collect();
-        let result = ml::svm_ensemble::svm_classify(
-            &data,
-            &labels,
-            &self.kernel,
-            self.c,
-            self.gamma,
-        )
-        .map_err(|e| DagError::NodeError {
-            node_type: "ml_svm".into(),
-            msg: e.to_string(),
-        })?;
+        let result =
+            ml::svm_ensemble::svm_classify(&data, &labels, &self.kernel, self.c, self.gamma)
+                .map_err(|e| DagError::NodeError {
+                    node_type: "ml_svm".into(),
+                    msg: e.to_string(),
+                })?;
         let (_schema, mut fields, mut arrays) = common::concat_input(&batches)?;
         fields.push(Arc::new(Field::new("prediction", DataType::UInt32, false)));
         arrays.push(Arc::new(UInt32Array::from(

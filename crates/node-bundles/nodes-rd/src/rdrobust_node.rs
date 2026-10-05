@@ -451,7 +451,13 @@ mod fuzzy_rejection_tests {
             "fuzzy": "treatment"
         });
         let err = RdRobustNodeFactory
-            .build(spec, NodeCtx::new(datafusion::prelude::SessionContext::new().runtime_env(), None))
+            .build(
+                spec,
+                NodeCtx::new(
+                    datafusion::prelude::SessionContext::new().runtime_env(),
+                    None,
+                ),
+            )
             .err()
             .expect("fuzzy spec must be rejected");
         let msg = err.to_string();
@@ -467,7 +473,13 @@ mod fuzzy_rejection_tests {
         });
         assert!(
             RdRobustNodeFactory
-                .build(spec, NodeCtx::new(datafusion::prelude::SessionContext::new().runtime_env(), None))
+                .build(
+                    spec,
+                    NodeCtx::new(
+                        datafusion::prelude::SessionContext::new().runtime_env(),
+                        None
+                    )
+                )
                 .is_ok()
         );
     }

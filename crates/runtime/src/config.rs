@@ -432,11 +432,12 @@ const PROMPT_BIBLIOGRAPHY: &str = "\n\
   node (one article by DOI / PMID / arXiv / S2 / OpenAlex id), a \
   `source_literature_citations` node (papers citing a paper, or its reference \
   list), or a `source_s2_recommendations` node, wire them through \
-  `evidence_merge` when combining searches, then `run_dag` and `get_output` — \
+  `evidence_merge` when combining searches, add a `bib_save` node to import \
+  evidence into your library, then `run_dag` and `get_output` — \
   evidence outputs render as a compact citation list inline.\n\
 - Give every evidence node its own output `path`; chain `evidence_export` \
   (bibtex / ris / markdown) when a bibliography file is needed.\n\
-- Use `bib_save` to store articles in your personal library, `bib_search_library` \
+- Use the `bib_save` DAG node to store articles in your personal library, `bib_search_library` \
   to find saved articles, and `bib_export` to export collections.\n\
 - `bib_export` writes rendered citation files directly to a VFS `output_path`.\n\
 - Always verify claims against primary literature when possible.";

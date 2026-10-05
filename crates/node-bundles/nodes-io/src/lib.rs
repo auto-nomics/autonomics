@@ -24,6 +24,9 @@ pub mod source_opentargets;
 pub mod source_semantic_scholar;
 pub mod spreadsheet;
 pub use alphafold::nodes::prediction::{AlphaFoldPredictionNode, AlphaFoldPredictionNodeFactory};
+pub use bib_base::nodes::bib_save::{
+    BibSaveCollectionSpec, BibSaveNode, BibSaveNodeFactory, BibSaveSpec,
+};
 pub use bib_base::nodes::evidence_export::{
     EvidenceExportFormat, EvidenceExportNode, EvidenceExportNodeFactory, EvidenceExportSpec,
 };
@@ -190,6 +193,7 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(ReactomeParticipantsNodeFactory {}));
         registry.register(Box::new(LiteratureSearchNodeFactory {}));
         registry.register(Box::new(LiteratureFetchNodeFactory {}));
+        registry.register(Box::new(BibSaveNodeFactory {}));
         registry.register(Box::new(LiteratureFulltextNodeFactory {}));
         registry.register(Box::new(LiteratureCitationsNodeFactory {}));
         registry.register(Box::new(S2RecommendationsNodeFactory {}));
@@ -332,6 +336,18 @@ mod tests {
             Some("evidence")
         );
         assert!(ft_ports.output_port(0).unwrap().data_type == dag_core::value::PortType::FileSet);
+
+        let saved = registry
+            .build_node("bib_save", serde_json::json!({}))
+            .expect("bib_save builds");
+        let saved_ports = saved.ports();
+        assert_eq!(
+            saved_ports.input_port(0).unwrap().format.as_deref(),
+            Some("evidence")
+        );
+        assert!(
+            saved_ports.output_port(0).unwrap().data_type == dag_core::value::PortType::DataFrame
+        );
 
         let citations = registry
             .build_node(

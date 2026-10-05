@@ -149,14 +149,8 @@ fn music_deconvolution_plugin_compiles_to_the_legacy_wrapper_contract() {
         compiled.env.get("AUTONOMICS_MUSIC_CELL_TYPE_COL").unwrap(),
         "cell_type"
     );
-    assert_eq!(
-        compiled.env.get("AUTONOMICS_MUSIC_CENTERED").unwrap(),
-        ""
-    );
-    assert_eq!(
-        compiled.env.get("AUTONOMICS_MUSIC_CT_COV").unwrap(),
-        ""
-    );
+    assert_eq!(compiled.env.get("AUTONOMICS_MUSIC_CENTERED").unwrap(), "");
+    assert_eq!(compiled.env.get("AUTONOMICS_MUSIC_CT_COV").unwrap(), "");
     assert_eq!(
         compiled.env.get("AUTONOMICS_MUSIC_EPSILON").unwrap(),
         "0.01"
@@ -165,10 +159,7 @@ fn music_deconvolution_plugin_compiles_to_the_legacy_wrapper_contract() {
         compiled.env.get("AUTONOMICS_MUSIC_ITER_MAX").unwrap(),
         "1000"
     );
-    assert_eq!(
-        compiled.env.get("AUTONOMICS_MUSIC_NORMALIZE").unwrap(),
-        ""
-    );
+    assert_eq!(compiled.env.get("AUTONOMICS_MUSIC_NORMALIZE").unwrap(), "");
     assert_eq!(compiled.env.get("AUTONOMICS_MUSIC_NU").unwrap(), "0.0001");
     // Legacy `spec.select_cell_types.join(",")` of the empty default: "".
     assert_eq!(
@@ -266,10 +257,7 @@ fn music_deconvolution_plugin_renders_submitted_values_into_env() {
         compiled.env.get("AUTONOMICS_MUSIC_CENTERED").unwrap(),
         "true"
     );
-    assert_eq!(
-        compiled.env.get("AUTONOMICS_MUSIC_NORMALIZE").unwrap(),
-        ""
-    );
+    assert_eq!(compiled.env.get("AUTONOMICS_MUSIC_NORMALIZE").unwrap(), "");
     assert_eq!(compiled.env.get("AUTONOMICS_MUSIC_CT_COV").unwrap(), "true");
 }
 

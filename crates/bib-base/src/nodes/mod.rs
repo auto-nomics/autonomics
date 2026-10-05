@@ -16,6 +16,7 @@
 
 use std::sync::{Arc, OnceLock};
 
+pub mod bib_save;
 pub mod evidence_export;
 pub mod evidence_merge;
 pub mod literature_citations;

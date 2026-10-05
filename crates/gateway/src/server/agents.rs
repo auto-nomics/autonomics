@@ -99,7 +99,10 @@ pub(crate) async fn deliver_message(
         Some(Err(message)) if message.contains("is not registered") => {
             Err(GatewayError::Status(StatusCode::NOT_FOUND, message))
         }
-        Some(Err(message)) => Err(GatewayError::Status(StatusCode::SERVICE_UNAVAILABLE, message)),
+        Some(Err(message)) => Err(GatewayError::Status(
+            StatusCode::SERVICE_UNAVAILABLE,
+            message,
+        )),
         None => Err(GatewayError::Status(
             StatusCode::GATEWAY_TIMEOUT,
             format!("host runtime did not confirm delivery to agent '{name}'"),

@@ -1,15 +1,18 @@
-//! Library management agent tools — persist, organize, and retrieve
+//! Library management agent tools — organize, annotate, and retrieve
 //! articles from the local Turso-backed bibliography database.
 //!
-//! These tools complement the external query tools ([`lit_search`],
-//! [`lit_fetch`]) by bridging "found on the internet" → "stored locally
-//! and organized into collections".
+//! Saving literature into the library used to be the `bib_save` tool;
+//! it has migrated to the DAG evidence channel: search/fetch via
+//! `source_literature` / `source_literature_fetch`, then a `bib_save`
+//! DAG node that consumes one `evidence` artifact and writes every
+//! record into the same `BibBase`. Library *management* (collections,
+//! annotations, full-text requests, exports, deletion) and
+//! *retrieval* (`bib_search_library` / `bib_get_article`) remain tools.
 //!
 //! # Tool inventory
 //!
 //! | Tool                   | Purpose                                                |
 //! |------------------------|--------------------------------------------------------|
-//! | `bib_save`             | Fetch + store an article in the local library.          |
 //! | `bib_delete`           | Remove articles (id- or identifier-based; dry-run safe). |
 //! | `bib_create_collection`| Create a new collection.                                |
 //! | `bib_add_to_collection`| Add one or more articles to a collection + roles.       |
@@ -30,625 +33,9 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use bib_types::{
     AddedBy, ArticleRole, CollectionStatus, FetchStatus, IdKind, Identifier, TextFormat,
 };
-use europepmc::EuropePmcClient;
 
 use crate::bib_base::BibBase;
 use crate::collections::CollectionAddOutcome;
-use crate::query::LiteratureGateway;
-
-// ===========================================================================
-// bib_save — save articles to local library (direct metadata or fetch-by-id)
-// ===========================================================================
-
-/// A single typed article identifier for `bib_save`'s `ids` mode.
-#[derive(schemars::JsonSchema, serde::Deserialize, serde::Serialize)]
-pub struct ArticleIdInput {
-    #[schemars(
-        description = "Identifier type: \"doi\", \"pmid\", \"arxiv\", \"openalex\", \"s2\", or \"biorxiv\""
-    )]
-    pub id_type: String,
-    #[schemars(
-        description = "The identifier value (e.g. \"10.1038/...\", \"30124452\", \"W2741809807\")"
-    )]
-    pub id: String,
-}
-
-/// Complete article metadata for `bib_save`'s `articles` mode — the fast path.
-///
-/// Pass the full metadata you already have from `lit_search` or `lit_fetch`
-/// results.  The article is stored immediately without any external
-/// re-fetch, saving a network round-trip per article.
-#[derive(Debug, Clone, schemars::JsonSchema, serde::Deserialize, serde::Serialize)]
-pub struct ArticleInput {
-    #[schemars(description = "Article title (required)")]
-    pub title: String,
-
-    #[schemars(description = "DOI, e.g. \"10.1038/s41586-023-06236-2\"")]
-    #[serde(default)]
-    pub doi: Option<String>,
-
-    #[schemars(description = "PubMed ID")]
-    #[serde(default)]
-    pub pmid: Option<String>,
-
-    #[schemars(
-        description = "Structured identifiers: [{\"kind\":\"doi\",\"value\":\"...\"}]. \
-                              Optional when `doi` or `pmid` top-level fields are provided."
-    )]
-    #[serde(default)]
-    pub identifiers: Vec<IdentifierInput>,
-
-    #[schemars(
-        description = "Authors as display-name strings, e.g. [\"Smith J\", \"Doe K\"]. \
-                              Matches the format returned by lit_search."
-    )]
-    #[serde(default)]
-    pub authors: Vec<String>,
-
-    #[schemars(description = "Publication year")]
-    #[serde(default)]
-    pub year: Option<u16>,
-
-    #[schemars(description = "Journal or venue name")]
-    #[serde(default)]
-    pub journal: Option<String>,
-
-    #[schemars(description = "Journal volume")]
-    #[serde(default)]
-    pub volume: Option<String>,
-
-    #[schemars(description = "Issue number")]
-    #[serde(default)]
-    pub issue: Option<String>,
-
-    #[schemars(description = "Page range (e.g. \"1-15\")")]
-    #[serde(default)]
-    pub pages: Option<String>,
-
-    #[schemars(description = "Abstract text")]
-    #[serde(default)]
-    pub abstract_text: Option<String>,
-
-    #[schemars(description = "Keywords (MeSH terms or author keywords)")]
-    #[serde(default)]
-    pub keywords: Vec<String>,
-
-    #[schemars(description = "Publication types (e.g. [\"Journal Article\", \"Review\"])")]
-    #[serde(default)]
-    pub pub_types: Vec<String>,
-
-    #[schemars(
-        description = "Source this article came from (e.g. \"pubmed\", \"arxiv\", \
-                              \"openalex\"). Used for provenance."
-    )]
-    #[serde(default)]
-    pub source: Option<String>,
-}
-
-/// A structured identifier inside [`ArticleInput`].
-#[derive(Debug, Clone, schemars::JsonSchema, serde::Deserialize, serde::Serialize)]
-pub struct IdentifierInput {
-    #[schemars(
-        description = "Kind: \"doi\", \"pmid\", \"arxiv\", \"openalex\", \"s2\", \"biorxiv\""
-    )]
-    pub kind: String,
-    #[schemars(description = "Identifier value")]
-    pub value: String,
-}
-
-#[tool(
-    name = "bib_save",
-    description = "Save one or more articles to the local library. \
-                  \
-                  **Two modes** (provide exactly one): \
-                  \
-                  1. **`articles` (preferred)** — pass complete article metadata directly. \
-                  No external fetch is needed; articles are stored immediately. This is the \
-                  fast path: pass the JSON you already have from `lit_search` or `lit_fetch` \
-                  results. \
-                  \
-                  2. **`ids`** — pass typed `{ id_type, id }` identifiers when you only have \
-                  an ID and need the gateway to fetch metadata from external sources \
-                  (PubMed, arXiv, OpenAlex, Crossref, Semantic Scholar, bioRxiv). \
-                  \
-                  Articles already in the library (matched by identifier) are returned as \
-                  cached without re-fetching. \
-                  \
-                  After saving metadata, each newly stored article is **automatically checked** \
-                  for an open-access full text on Europe PMC. When available it is downloaded \
-                  (JATS XML → plain text) and stored alongside the article. Set \
-                  `fetch_fulltext=false` to skip. \
-                  \
-                  **Examples**: \
-                  • articles=[{title:\"...\", doi:\"10.1038/...\", year:2024}] — direct save \
-                  • articles=[{title:\"...\", pmid:\"37658030\", authors:[\"Smith J\"]}] — direct save \
-                  • ids=[{id_type:\"pmid\", id:\"37658030\"}] — fetch + save by PMID \
-                  • ids=[{id_type:\"doi\", id:\"10.1038/...\"}, {id_type:\"arxiv\", id:\"2401.00001\"}] — batch fetch"
-)]
-pub struct BibSaveInput {
-    #[desc = "Complete article metadata objects to save directly — no external fetch needed. \
-             Pass the article JSON from lit_search or lit_fetch results. Each object needs \
-             at least `title` and one identifier (doi, pmid, or identifiers array)."]
-    pub articles: Option<Vec<ArticleInput>>,
-
-    #[desc = "Typed identifiers to fetch + save (fetches metadata from external sources). \
-             Use when you only have an ID without full metadata. Mutually exclusive with `articles`."]
-    pub ids: Option<Vec<ArticleIdInput>>,
-
-    #[desc = "Force a specific source for ALL ids (e.g. \"pubmed\", \"crossref\"). \
-             Only used in `ids` mode. Default: auto-route each id to compatible sources."]
-    pub source: Option<String>,
-    #[desc = "Attempt to download open-access full text from Europe PMC after saving. Default: true"]
-    pub fetch_fulltext: Option<bool>,
-}
-
-pub struct BibSaveTool {
-    pub bib: Arc<BibBase>,
-    pub gateway: Arc<LiteratureGateway>,
-    /// Europe PMC client used for best-effort OA full-text auto-fetch.
-    /// Defaults to [`EuropePmcClient::new`] when constructed via
-    /// [`bib_library_registrations`].
-    pub epmc: Arc<EuropePmcClient>,
-    /// VFS storage the fetched OA full text is written into — full texts
-    /// are files on the File channel, so saves store real objects.
-    pub file_storage: Arc<vfs::OpendalFileStorage>,
-}
-
-/// Result of saving a single article within a batch.
-#[derive(serde::Serialize)]
-struct SaveResult {
-    id: String,
-    saved: bool,
-    cached: bool,
-    article_id: Option<String>,
-    source: Option<String>,
-    title: Option<String>,
-    doi: Option<String>,
-    pmid: Option<String>,
-    year: Option<u16>,
-    #[serde(default)]
-    fulltext_fetched: bool,
-    error: Option<String>,
-}
-
-#[async_trait]
-impl ToolFunction for BibSaveTool {
-    type Input = BibSaveInput;
-
-    fn timeout_seconds(&self) -> u64 {
-        // Generous timeout for batch fetches — each ID may require a network
-        // round-trip to PubMed/arXiv. Capped at the agentik maximum.
-        300
-    }
-
-    async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
-        let want_fulltext = input.fetch_fulltext.unwrap_or(true);
-
-        // Determine mode: `articles` (direct save) or `ids` (fetch-by-id).
-        let has_articles = input.articles.as_ref().is_some_and(|a| !a.is_empty());
-        let has_ids = input.ids.as_ref().is_some_and(|i| !i.is_empty());
-
-        if !has_articles && !has_ids {
-            return Err(ToolError::ExecutionFailed {
-                source: "provide either `articles` (full metadata, preferred) or `ids` \
-                         (typed identifiers to fetch)"
-                    .into(),
-            });
-        }
-
-        let results = if has_articles {
-            // ── Direct-save mode ───────────────────────────────────────────
-            let articles = input.articles.unwrap();
-            let futures: Vec<_> = articles
-                .iter()
-                .map(|a| self.save_article_direct(a, want_fulltext))
-                .collect();
-            futures::future::join_all(futures).await
-        } else {
-            // ── Fetch-by-id mode ───────────────────────────────────────────
-            let ids = input.ids.unwrap();
-            let mut identifiers: Vec<(String, Identifier)> = Vec::new();
-            for entry in &ids {
-                let kind =
-                    parse_id_kind(&entry.id_type).ok_or_else(|| ToolError::ExecutionFailed {
-                        source: format!(
-                            "unknown id_type '{}': expected one of doi, pmid, arxiv, openalex, s2, biorxiv",
-                            entry.id_type
-                        )
-                        .into(),
-                    })?;
-                identifiers.push((entry.id.clone(), Identifier::new(kind, entry.id.trim())));
-            }
-
-            let futures: Vec<_> = identifiers
-                .iter()
-                .map(|(raw, id)| self.save_one(raw, id, input.source.as_deref(), want_fulltext))
-                .collect();
-            futures::future::join_all(futures).await
-        };
-
-        let total = results.len();
-        let saved = results.iter().filter(|r| r.saved && !r.cached).count();
-        let cached = results.iter().filter(|r| r.cached).count();
-        let failed = results.iter().filter(|r| !r.saved).count();
-        let oa_count = results.iter().filter(|r| r.fulltext_fetched).count();
-
-        Ok(AgentToolResult::success_json(serde_json::json!({
-            "total": total,
-            "saved": saved,
-            "cached": cached,
-            "failed": failed,
-            "oa_fulltext_fetched": oa_count,
-            "results": results,
-            "message": format!(
-                "{saved} saved, {cached} cached, {failed} failed \
-                 ({oa_count} OA full texts fetched from Europe PMC) \
-                 out of {total} articles."
-            ),
-        })))
-    }
-}
-
-impl BibSaveTool {
-    /// Save a full article directly — no external fetch.  Never errors;
-    /// failures are captured in the returned [`SaveResult::error`].
-    async fn save_article_direct(&self, input: &ArticleInput, want_fulltext: bool) -> SaveResult {
-        // Build the canonical Article from the input.
-        let article = match article_input_to_article(input) {
-            Ok(a) => a,
-            Err(msg) => {
-                return SaveResult {
-                    id: input.title.clone(),
-                    saved: false,
-                    cached: false,
-                    article_id: None,
-                    source: input.source.clone(),
-                    title: Some(input.title.clone()),
-                    doi: input.doi.clone(),
-                    pmid: input.pmid.clone(),
-                    year: input.year,
-                    fulltext_fetched: false,
-                    error: Some(msg),
-                };
-            }
-        };
-
-        let raw_id = article
-            .doi()
-            .or(article.pmid())
-            .map(str::to_owned)
-            .unwrap_or_else(|| article.title.clone());
-
-        // Check if already in local library (dedup by any identifier).
-        let existing_identifier = article.identifiers.first();
-        if let Some(id) = existing_identifier {
-            if let Ok(Some(existing)) = self.bib.find_by_identifier(id.kind, &id.value).await {
-                let has_ft = self.bib.has_fulltext(&existing.id).await.unwrap_or(false);
-                let cached_doi = existing.doi().map(str::to_owned);
-                let cached_pmid = existing.pmid().map(str::to_owned);
-                return SaveResult {
-                    id: raw_id,
-                    saved: true,
-                    cached: true,
-                    article_id: Some(existing.id),
-                    source: input.source.clone(),
-                    title: Some(existing.title),
-                    doi: cached_doi,
-                    pmid: cached_pmid,
-                    year: existing.year,
-                    fulltext_fetched: has_ft,
-                    error: None,
-                };
-            }
-        }
-
-        let article_id = article.id.clone();
-        let title = article.title.clone();
-        let doi = article.doi().map(str::to_owned);
-        let pmid = article.pmid().map(str::to_owned);
-        let year = article.year;
-
-        match self.bib.upsert_article(&article).await {
-            Ok(()) => {
-                let ft_fetched = if want_fulltext {
-                    self.try_fetch_oa_fulltext(&article).await
-                } else {
-                    false
-                };
-                SaveResult {
-                    id: raw_id,
-                    saved: true,
-                    cached: false,
-                    article_id: Some(article_id),
-                    source: input.source.clone(),
-                    title: Some(title),
-                    doi,
-                    pmid,
-                    year,
-                    fulltext_fetched: ft_fetched,
-                    error: None,
-                }
-            }
-            Err(e) => SaveResult {
-                id: raw_id,
-                saved: false,
-                cached: false,
-                article_id: None,
-                source: input.source.clone(),
-                title: Some(title),
-                doi,
-                pmid,
-                year,
-                fulltext_fetched: false,
-                error: Some(format!("Database error: {e}")),
-            },
-        }
-    }
-
-    /// Fetch + upsert a single article. Never errors — failures are captured
-    /// in the returned [`SaveResult::error`] so one bad ID doesn't abort the batch.
-    async fn save_one(
-        &self,
-        raw_id: &str,
-        identifier: &Identifier,
-        source_override: Option<&str>,
-        want_fulltext: bool,
-    ) -> SaveResult {
-        // 1. Check if already in local library.
-        if let Ok(Some(existing)) = self
-            .bib
-            .find_by_identifier(identifier.kind, &identifier.value)
-            .await
-        {
-            let doi = existing.doi().map(str::to_owned);
-            let pmid = existing.pmid().map(str::to_owned);
-
-            // If cached and already has full text, report it.
-            let has_ft = self.bib.has_fulltext(&existing.id).await.unwrap_or(false);
-
-            return SaveResult {
-                id: raw_id.into(),
-                saved: true,
-                cached: true,
-                article_id: Some(existing.id),
-                source: None,
-                title: Some(existing.title),
-                doi,
-                pmid,
-                year: existing.year,
-                fulltext_fetched: has_ft,
-                error: None,
-            };
-        }
-
-        // 2. Fetch from external source.
-        let fetched = if let Some(source) = source_override {
-            self.gateway
-                .fetch_from(source, identifier)
-                .await
-                .ok()
-                .flatten()
-                .map(|article| (source.into(), article))
-        } else {
-            self.gateway.fetch(identifier).await
-        };
-
-        let (source_name, article) = match fetched {
-            Some(x) => x,
-            None => {
-                return SaveResult {
-                    id: raw_id.into(),
-                    saved: false,
-                    cached: false,
-                    article_id: None,
-                    source: None,
-                    title: None,
-                    doi: None,
-                    pmid: None,
-                    year: None,
-                    fulltext_fetched: false,
-                    error: Some(format!(
-                        "Article '{}:{}' not found in any compatible source",
-                        identifier.kind.as_str(),
-                        raw_id
-                    )),
-                };
-            }
-        };
-
-        // 3. Upsert to local DB.
-        let article_id = article.id.clone();
-        let title = article.title.clone();
-        let doi = article.doi().map(str::to_owned);
-        let pmid = article.pmid().map(str::to_owned);
-        let year = article.year;
-
-        match self.bib.upsert_article(&article).await {
-            Ok(()) => {
-                // 4. Best-effort OA full-text fetch from Europe PMC.
-                let ft_fetched = if want_fulltext {
-                    self.try_fetch_oa_fulltext(&article).await
-                } else {
-                    false
-                };
-
-                SaveResult {
-                    id: raw_id.into(),
-                    saved: true,
-                    cached: false,
-                    article_id: Some(article_id),
-                    source: Some(source_name),
-                    title: Some(title),
-                    doi,
-                    pmid,
-                    year,
-                    fulltext_fetched: ft_fetched,
-                    error: None,
-                }
-            }
-            Err(e) => SaveResult {
-                id: raw_id.into(),
-                saved: false,
-                cached: false,
-                article_id: None,
-                source: Some(source_name),
-                title: Some(title),
-                doi,
-                pmid,
-                year,
-                fulltext_fetched: false,
-                error: Some(format!("Database error: {e}")),
-            },
-        }
-    }
-
-    /// Attempt to fetch an open-access full text for `article` from Europe PMC
-    /// and store it. Returns `true` on success.
-    async fn try_fetch_oa_fulltext(&self, article: &bib_types::Article) -> bool {
-        // File channel: the fetched text is written into the VFS as a real
-        // content-addressed object; the DB row points at the file.
-        let ft =
-            match crate::oa_fetch::fetch_fulltext_stored(&self.epmc, &self.file_storage, article)
-                .await
-            {
-                Some(ft) => ft,
-                None => return false,
-            };
-        match self.bib.upsert_fulltext(&ft).await {
-            Ok(()) => true,
-            Err(e) => {
-                tracing::warn!(article_id = %article.id, error = %e, "failed to store OA full text");
-                false
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// ArticleInput → Article conversion
-// ---------------------------------------------------------------------------
-
-/// Convert an [`ArticleInput`] (agent-facing DTO) into a canonical
-/// [`bib_types::Article`].
-///
-/// Top-level `doi`/`pmid` fields are merged into `identifiers` alongside
-/// any structured `identifiers` array (duplicates skipped).  Author
-/// display-name strings are parsed into [`bib_types::Author`] structs.
-fn article_input_to_article(input: &ArticleInput) -> Result<bib_types::Article, String> {
-    use bib_types::{Article, ArticleSource, Author, IdKind, Identifier};
-
-    if input.title.trim().is_empty() {
-        return Err("article `title` is required and must not be empty".into());
-    }
-
-    // Collect identifiers from both structured array and top-level convenience fields.
-    let mut identifiers: Vec<Identifier> = Vec::new();
-    let mut seen: std::collections::HashSet<(IdKind, String)> = std::collections::HashSet::new();
-
-    // Helper closure to add without duplicating.
-    let mut push_id = |kind: IdKind, value: &str, ids: &mut Vec<Identifier>| {
-        let v = value.trim().to_owned();
-        if v.is_empty() {
-            return;
-        }
-        if seen.insert((kind, v.clone())) {
-            ids.push(Identifier::new(kind, v));
-        }
-    };
-
-    // Structured identifiers.
-    for id_input in &input.identifiers {
-        let kind = parse_id_kind(&id_input.kind).unwrap_or(IdKind::Other);
-        push_id(kind, &id_input.value, &mut identifiers);
-    }
-    // Convenience top-level fields.
-    if let Some(ref doi) = input.doi {
-        push_id(IdKind::Doi, doi, &mut identifiers);
-    }
-    if let Some(ref pmid) = input.pmid {
-        push_id(IdKind::Pmid, pmid, &mut identifiers);
-    }
-
-    if identifiers.is_empty() {
-        return Err("at least one identifier is required (doi, pmid, or identifiers array)".into());
-    }
-
-    // Parse authors: "Family Given" or "Family" from display-name strings.
-    let authors: Vec<Author> = input
-        .authors
-        .iter()
-        .filter(|s| !s.trim().is_empty())
-        .map(|display| {
-            let trimmed = display.trim();
-            // Try to split into last + rest at the first space.
-            if let Some(space) = trimmed.find(' ') {
-                let (last, rest) = trimmed.split_at(space);
-                Author {
-                    last_name: last.to_owned(),
-                    fore_name: Some(rest.trim().to_owned()),
-                    initials: None,
-                    affiliation: None,
-                    orcid: None,
-                    corresponding: false,
-                }
-            } else {
-                Author {
-                    last_name: trimmed.to_owned(),
-                    fore_name: None,
-                    initials: None,
-                    affiliation: None,
-                    orcid: None,
-                    corresponding: false,
-                }
-            }
-        })
-        .collect();
-
-    // Derive the internal article ID from the primary identifier.
-    let primary = &identifiers[0];
-    let id = format!("{}:{}", primary.kind.as_str(), primary.value);
-
-    // Parse source.
-    let source = input
-        .source
-        .as_deref()
-        .map(|s| match s.to_lowercase().as_str() {
-            "pubmed" => ArticleSource::Pubmed,
-            "arxiv" => ArticleSource::Arxiv,
-            "biorxiv" => ArticleSource::Biorxiv,
-            "openalex" => ArticleSource::OpenAlex,
-            "crossref" | "doi" => ArticleSource::CrossRef,
-            "europepmc" | " europe_pmc" => ArticleSource::EuropePmc,
-            "semantic_scholar" | "s2" => ArticleSource::SemanticScholar,
-            "gwascatalog" => ArticleSource::GwasCatalog,
-            "manual" => ArticleSource::Manual,
-            _ => ArticleSource::Unknown,
-        })
-        .unwrap_or(ArticleSource::Unknown);
-
-    let now = chrono::Utc::now();
-    Ok(Article {
-        id,
-        title: input.title.trim().to_owned(),
-        authors,
-        identifiers,
-        abstract_text: input.abstract_text.clone().filter(|s| !s.is_empty()),
-        year: input.year,
-        month: None,
-        journal: input.journal.clone().filter(|s| !s.is_empty()),
-        volume: input.volume.clone().filter(|s| !s.is_empty()),
-        issue: input.issue.clone().filter(|s| !s.is_empty()),
-        pages: input.pages.clone().filter(|s| !s.is_empty()),
-        issn: None,
-        essn: None,
-        language: None,
-        pub_types: input.pub_types.clone(),
-        keywords: input.keywords.clone(),
-        source,
-        created_at: Some(now),
-        updated_at: Some(now),
-    })
-}
 
 // ===========================================================================
 // bib_create_collection
@@ -701,7 +88,7 @@ impl ToolFunction for BibCreateCollectionTool {
 /// to the top-level `default_role` / `default_note` on [`BibAddToCollectionInput`].
 #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct BibAddToCollectionEntry {
-    /// Article ID (from bib_save or lit_search results).
+    /// Article ID (from a `bib_save` DAG node or `source_literature_fetch`).
     pub article_id: String,
     /// Role for this article: "requested", "referenced", "cited", or "background".
     /// When omitted the top-level `default_role` is used.
@@ -713,7 +100,7 @@ pub struct BibAddToCollectionEntry {
 
 #[tool(
     name = "bib_add_to_collection",
-    description = "Add one or more articles (already saved via bib_save) to a collection, \
+    description = "Add one or more articles (already saved via a `bib_save` DAG node) to a collection, \
                   each with a semantic role describing why it's included. \
                   \
                   Pass a list under `articles`; a single-article call is just a \
@@ -1035,8 +422,9 @@ struct SearchQueryResult {
                   you want to find articles matching several independent terms in one \
                   call instead of N separate tool calls. \
                   \
-                  Use this to find articles you've already saved (via bib_save). \
-                  For searching external databases, use lit_search instead. \
+                  Use this to find articles you've already saved (via a `bib_save` DAG node). \
+                  For searching external databases, use the DAG evidence channel \
+                  (`source_literature`) instead. \
                   \
                   **Examples**: \
                   • queries=[\"Mendelian randomization\"] — single search \
@@ -1134,8 +522,7 @@ impl BibSearchLibraryTool {
 
 /// Result of fetching a single article within a batch. Never errors at the
 /// tool level — failures (including "not found") are captured in `error` so
-/// one bad ID doesn't abort the whole batch. Mirrors the `SaveResult` pattern
-/// used by `bib_save`.
+/// one bad ID doesn't abort the whole batch.
 #[derive(serde::Serialize)]
 struct GetArticleResult {
     article_id: String,
@@ -1219,8 +606,9 @@ impl GetArticleResult {
                   if available, and all user annotations (notes/highlights/comments). \
                   \
                   Pass a list of article IDs — each is fetched concurrently from the \
-                  local database. Articles must have been saved via `bib_save` first; \
-                  missing IDs are returned with `found: false` rather than failing the \
+                  local database. Articles must have been saved via a `bib_save` DAG \
+                  node first; missing IDs are returned with `found: false` rather \
+                  than failing the \
                   whole call. \
                   \
                   Full-text content is omitted by default to keep responses and agent \
@@ -1232,7 +620,7 @@ impl GetArticleResult {
                   • article_ids=[\"a1\", \"a2\", \"a3\"] — batch (fetched concurrently)"
 )]
 pub struct BibGetArticleInput {
-    #[desc = "One or more article IDs (from bib_save or bib_search_library results)"]
+    #[desc = "One or more article IDs (from a `bib_save` DAG node or `bib_search_library` results)"]
     pub article_ids: Vec<String>,
     #[desc = "If true and full text is available, include one bounded full-text page. Default: false"]
     pub include_fulltext: Option<bool>,
@@ -1309,7 +697,7 @@ impl BibGetArticleTool {
                     false,
                     format!(
                         "Article '{article_id}' not found in local library. \
-                         Use bib_save to add it first."
+                         Import it with a `bib_save` DAG node first."
                     ),
                 );
             }
@@ -1420,7 +808,7 @@ impl BibGetArticleTool {
 pub struct BibRequestFulltextInput {
     #[desc = "Collection ID (the collection context for this request)"]
     pub collection_id: String,
-    #[desc = "Article ID (already in the local library via bib_save)"]
+    #[desc = "Article ID (already in the local library via a `bib_save` DAG node)"]
     pub article_id: String,
 }
 
@@ -1463,7 +851,7 @@ impl ToolFunction for BibRequestFulltextTool {
                   reading a paper."
 )]
 pub struct BibAddNoteInput {
-    #[desc = "Article ID (from bib_save or bib_search_library)"]
+    #[desc = "Article ID (from a `bib_save` DAG node or `bib_search_library`)"]
     pub article_id: String,
     #[desc = "Annotation type: \"note\", \"highlight\", or \"comment\". Default: note"]
     pub kind: Option<String>,
@@ -1508,6 +896,20 @@ impl ToolFunction for BibAddNoteTool {
 // bib_delete — remove articles from the local library
 // ===========================================================================
 
+/// A single typed article identifier used by [`BibDeleteTool`]'s `ids`
+/// mode (typed external identifiers resolved via `find_by_identifier`).
+#[derive(schemars::JsonSchema, serde::Deserialize, serde::Serialize)]
+pub struct ArticleIdInput {
+    #[schemars(
+        description = "Identifier type: \"doi\", \"pmid\", \"pmc\", \"arxiv\", \"openalex\", \"s2\", or \"biorxiv\""
+    )]
+    pub id_type: String,
+    #[schemars(
+        description = "The identifier value (e.g. \"10.1038/...\", \"30124452\", \"2401.00001\")"
+    )]
+    pub id: String,
+}
+
 /// Per-article result row for [`BibDeleteTool`].
 #[derive(serde::Serialize)]
 struct DeleteResult {
@@ -1526,10 +928,10 @@ struct DeleteResult {
 }
 
 /// Input for [`BibDeleteTool`] — the only path that physically removes
-/// rows from the library. `bib_save` is idempotent (matched identifiers
-/// return as `cached` and cannot overwrite or replace) and `bib_add_note`
-/// can only append annotations, so neither can be used to evict a
-/// placeholder or mis-saved entry.
+/// rows from the library. The `bib_save` DAG node is idempotent (matched
+/// identifiers return as `cached` and cannot overwrite or replace) and
+/// `bib_add_note` can only append annotations, so neither can be used to
+/// evict a placeholder or mis-saved entry.
 ///
 /// # Safety model
 ///
@@ -1555,9 +957,9 @@ struct DeleteResult {
 #[tool(
     name = "bib_delete",
     description = "Delete one or more articles from the local bibliography library. \
-                  This is the only path that physically removes an article: `bib_save` \
-                  cannot overwrite or replace an existing row (matched identifiers are \
-                  returned as `cached`), and `bib_add_note` can only append annotations. \
+                  This is the only path that physically removes an article: the `bib_save` \
+                  DAG node cannot overwrite or replace an existing row (matched identifiers \
+                  are returned as `cached`), and `bib_add_note` can only append annotations. \
                   Use this tool to clean up placeholder rows, mis-saved entries (e.g. \
                   wrong PMID recall), or any article you no longer want in the library. \
                   Two input modes (at least one must be non-empty): (1) `article_ids` -- \
@@ -1989,31 +1391,22 @@ impl ToolFunction for BibReadFigureTool {
 
 /// Build [`ToolRegistration`]s for all library management tools.
 ///
-/// Requires a [`BibBase`] (for storage), a [`LiteratureGateway`] (for
-/// `bib_save` external fetching), a shared [`EuropePmcClient`] (for
-/// the OA full-text auto-fetch inside `bib_save`), and the VFS file
-/// storage (for `bib_read_figure` — pass `None` when the host runs
-/// without bibliography file storage).
+/// Requires a [`BibBase`] (for storage) and the VFS file storage (for
+/// `bib_read_figure` — pass a no-op handle when the host runs without
+/// bibliography file storage).
 ///
-/// `epmc` should normally come from [`crate::BibShared::europe_pmc`] so
-/// every agent in a multi-agent host shares a single connection pool.
-/// A fresh `EuropePmcClient` is constructed only if `None` is passed —
-/// kept for backwards compatibility and standalone single-agent use.
+/// `bib_save` is no longer a tool — fetching literature + writing it into
+/// the library now flows through the DAG evidence channel: `bib_save` is a
+/// `bib_save` DAG node that consumes an `evidence` artifact and writes
+/// every record into the same `BibBase`. Library *retrieval* (`bib_search`
+/// / `bib_get_article` / etc.) and *management* (`bib_create_collection`
+/// / `bib_export` / etc.) remain tools; the agent invokes them as before.
 pub fn bib_library_registrations(
     bib: Arc<BibBase>,
-    gateway: Arc<LiteratureGateway>,
-    epmc: Option<Arc<EuropePmcClient>>,
     file_storage: Arc<vfs::OpendalFileStorage>,
 ) -> Vec<ToolRegistration> {
     use agentik_core::tools::ToolRegistration as R;
-    let epmc = epmc.unwrap_or_else(|| Arc::new(EuropePmcClient::new()));
     vec![
-        R::from(BibSaveTool {
-            bib: bib.clone(),
-            gateway: gateway.clone(),
-            epmc,
-            file_storage: file_storage.clone(),
-        }),
         R::from(BibCreateCollectionTool { bib: bib.clone() }),
         R::from(BibAddToCollectionTool { bib: bib.clone() }),
         R::from(BibListCollectionTool { bib: bib.clone() }),
@@ -2036,10 +1429,9 @@ pub fn bib_library_registrations(
 /// Build [`ToolRegistration`]s for **all** bibliography tools — both query
 /// and management. This is the one-stop registration function.
 ///
-/// When called from a multi-agent host, pass the shared
-/// [`EuropePmcClient`] from [`crate::BibShared::europe_pmc`] so every
-/// spawned agent reuses the same connection pool. Pass `None` to
-/// allocate a fresh client (single-agent / test use).
+/// `bib_save` is no longer a tool — fetching literature + writing it into
+/// the library now flows through the DAG evidence channel; see
+/// [`bib_library_registrations`] for details.
 ///
 /// # Example
 ///
@@ -2049,24 +1441,17 @@ pub fn bib_library_registrations(
 /// # async fn example() {
 /// let shared = BibShared::open_in_memory().await.unwrap();
 /// let file_storage = Arc::new(vfs::OpendalFileStorage::new_temp());
-/// let tools = bib_all_registrations(
-///     shared.bib.clone(),
-///     shared.gateway.clone(),
-///     Some(shared.europe_pmc.clone()),
-///     file_storage,
-/// );
+/// let tools = bib_all_registrations(shared.bib.clone(), file_storage);
 /// # }
 /// ```
 pub fn bib_all_registrations(
     bib: Arc<BibBase>,
-    gateway: Arc<LiteratureGateway>,
-    epmc: Option<Arc<europepmc::EuropePmcClient>>,
     file_storage: Arc<vfs::OpendalFileStorage>,
 ) -> Vec<ToolRegistration> {
     // Literature *retrieval* now flows through the DAG evidence channel
     // (source_literature / source_literature_fetch / citation-graph nodes);
     // this registration covers only the local-library management tools.
-    bib_library_registrations(bib, gateway, epmc, file_storage)
+    bib_library_registrations(bib, file_storage)
 }
 
 // ===========================================================================
@@ -2149,500 +1534,6 @@ fn format_extension(format: bib_types::ExportFormat) -> &'static str {
 mod tests {
     use super::*;
     use agentik_sdk::types::ToolResultContent;
-    use bib_types::IdKind;
-
-    // ── article_input_to_article ──────────────────────────────────────────
-
-    #[test]
-    fn test_article_input_with_doi_only() {
-        let input = ArticleInput {
-            title: "GWAS of height".into(),
-            doi: Some("10.1038/ng.1234".into()),
-            pmid: None,
-            identifiers: vec![],
-            authors: vec!["Smith John".into(), "Doe Kate".into()],
-            year: Some(2024),
-            journal: Some("Nature Genetics".into()),
-            volume: None,
-            issue: None,
-            pages: None,
-            abstract_text: Some("A study of height.".into()),
-            keywords: vec!["GWAS".into()],
-            pub_types: vec!["Journal Article".into()],
-            source: Some("pubmed".into()),
-        };
-
-        let article = article_input_to_article(&input).unwrap();
-        assert_eq!(article.title, "GWAS of height");
-        assert_eq!(article.doi(), Some("10.1038/ng.1234"));
-        assert_eq!(article.authors.len(), 2);
-        assert_eq!(article.authors[0].last_name, "Smith");
-        assert_eq!(article.authors[0].fore_name.as_deref(), Some("John"));
-        assert_eq!(article.authors[1].last_name, "Doe");
-        assert_eq!(article.year, Some(2024));
-        assert_eq!(article.journal.as_deref(), Some("Nature Genetics"));
-        assert_eq!(article.source, bib_types::ArticleSource::Pubmed);
-        assert_eq!(article.id, "doi:10.1038/ng.1234");
-    }
-
-    #[test]
-    fn test_article_input_with_structured_identifiers() {
-        let input = ArticleInput {
-            title: "Deep learning for genomics".into(),
-            doi: None,
-            pmid: None,
-            identifiers: vec![
-                IdentifierInput {
-                    kind: "arxiv".into(),
-                    value: "2401.00001".into(),
-                },
-                IdentifierInput {
-                    kind: "doi".into(),
-                    value: "10.48550/arXiv.2401.00001".into(),
-                },
-            ],
-            authors: vec![],
-            year: Some(2024),
-            journal: None,
-            volume: None,
-            issue: None,
-            pages: None,
-            abstract_text: None,
-            keywords: vec![],
-            pub_types: vec![],
-            source: Some("arxiv".into()),
-        };
-
-        let article = article_input_to_article(&input).unwrap();
-        assert_eq!(article.identifiers.len(), 2);
-        assert_eq!(article.identifier(IdKind::Arxiv), Some("2401.00001"));
-        assert_eq!(article.source, bib_types::ArticleSource::Arxiv);
-    }
-
-    #[test]
-    fn test_article_input_dedup_identifiers() {
-        // DOI provided both as top-level field and in identifiers array.
-        let input = ArticleInput {
-            title: "Test".into(),
-            doi: Some("10.1038/test".into()),
-            pmid: Some("12345".into()),
-            identifiers: vec![IdentifierInput {
-                kind: "doi".into(),
-                value: "10.1038/test".into(),
-            }],
-            authors: vec![],
-            year: None,
-            journal: None,
-            volume: None,
-            issue: None,
-            pages: None,
-            abstract_text: None,
-            keywords: vec![],
-            pub_types: vec![],
-            source: None,
-        };
-
-        let article = article_input_to_article(&input).unwrap();
-        // DOI should appear only once.
-        let doi_count = article
-            .identifiers
-            .iter()
-            .filter(|i| i.kind == IdKind::Doi)
-            .count();
-        assert_eq!(doi_count, 1);
-        // PMID should also be present.
-        assert_eq!(article.pmid(), Some("12345"));
-    }
-
-    #[test]
-    fn test_article_input_missing_title() {
-        let input = ArticleInput {
-            title: "  ".into(),
-            doi: Some("10.1038/x".into()),
-            pmid: None,
-            identifiers: vec![],
-            authors: vec![],
-            year: None,
-            journal: None,
-            volume: None,
-            issue: None,
-            pages: None,
-            abstract_text: None,
-            keywords: vec![],
-            pub_types: vec![],
-            source: None,
-        };
-
-        assert!(article_input_to_article(&input).is_err());
-    }
-
-    #[test]
-    fn test_article_input_missing_identifiers() {
-        let input = ArticleInput {
-            title: "No IDs".into(),
-            doi: None,
-            pmid: None,
-            identifiers: vec![],
-            authors: vec![],
-            year: None,
-            journal: None,
-            volume: None,
-            issue: None,
-            pages: None,
-            abstract_text: None,
-            keywords: vec![],
-            pub_types: vec![],
-            source: None,
-        };
-
-        assert!(article_input_to_article(&input).is_err());
-    }
-
-    #[test]
-    fn test_article_input_single_name_author() {
-        let input = ArticleInput {
-            title: "Single".into(),
-            doi: Some("10.1/x".into()),
-            pmid: None,
-            identifiers: vec![],
-            authors: vec!["Organization".into()],
-            year: None,
-            journal: None,
-            volume: None,
-            issue: None,
-            pages: None,
-            abstract_text: None,
-            keywords: vec![],
-            pub_types: vec![],
-            source: None,
-        };
-
-        let article = article_input_to_article(&input).unwrap();
-        assert_eq!(article.authors.len(), 1);
-        assert_eq!(article.authors[0].last_name, "Organization");
-        assert!(article.authors[0].fore_name.is_none());
-    }
-
-    // ── Direct save (no external fetch) ───────────────────────────────────
-
-    #[tokio::test]
-    async fn test_save_article_direct_basic() {
-        let bib = Arc::new(BibBase::open_in_memory().await.unwrap());
-        let gateway = Arc::new(crate::default_gateway());
-        let epmc = Arc::new(EuropePmcClient::new());
-        let get_tool = BibGetArticleTool { bib: bib.clone() };
-        let tool = BibSaveTool {
-            bib: bib.clone(),
-            gateway,
-            epmc,
-            file_storage: Arc::new(vfs::OpendalFileStorage::new_temp()),
-        };
-
-        let input = BibSaveInput {
-            articles: Some(vec![ArticleInput {
-                title: "Mendelian randomization study".into(),
-                doi: Some("10.1038/ng.2024.001".into()),
-                pmid: Some("39000001".into()),
-                identifiers: vec![],
-                authors: vec!["Smith Jane".into(), "Roe Richard".into()],
-                year: Some(2024),
-                journal: Some("Nature Genetics".into()),
-                volume: Some("56".into()),
-                issue: None,
-                pages: Some("100-110".into()),
-                abstract_text: Some("We investigate causal effects.".into()),
-                keywords: vec!["MR".into(), "genetics".into()],
-                pub_types: vec!["Journal Article".into()],
-                source: Some("pubmed".into()),
-            }]),
-            ids: None,
-            source: None,
-            fetch_fulltext: Some(false),
-        };
-
-        let result = tool.run(input).await.unwrap();
-        let json = match result.content {
-            ToolResultContent::Json(v) => v,
-            _ => panic!("expected JSON"),
-        };
-
-        assert_eq!(json["total"], 1);
-        assert_eq!(json["saved"].as_u64(), Some(1));
-        assert_eq!(json["cached"].as_u64(), Some(0));
-
-        let r = &json["results"][0];
-        assert_eq!(r["saved"], true);
-        assert_eq!(r["cached"], false);
-        assert_eq!(r["doi"], "10.1038/ng.2024.001");
-        assert_eq!(r["pmid"], "39000001");
-        assert_eq!(r["year"], 2024);
-        assert!(r["article_id"].as_str().is_some());
-
-        let article_id = r["article_id"].as_str().unwrap().to_owned();
-        let text = "0123456789".repeat(10);
-        bib.upsert_fulltext(&bib_types::FullText {
-            article_id: article_id.clone(),
-            file_path: "vfs:///literature/test/source.txt".into(),
-            file_format: bib_types::FileFormat::Txt,
-            text_content: Some(text),
-            source: bib_types::FullTextSource::UserUpload,
-            file_hash: None,
-            file_size: None,
-            uploaded_at: None,
-            extract_status: None,
-            text_format: None,
-            extracted_by: None,
-            extract_error: None,
-        })
-        .await
-        .unwrap();
-
-        let default_result = get_tool
-            .run(BibGetArticleInput {
-                article_ids: vec![article_id.clone()],
-                include_fulltext: None,
-                offset: None,
-                limit: None,
-            })
-            .await
-            .unwrap();
-        let default_json = match default_result.content {
-            ToolResultContent::Json(value) => value,
-            _ => panic!("expected JSON"),
-        };
-        assert_eq!(default_json["results"][0]["has_fulltext"], true);
-        assert!(default_json["results"][0].get("fulltext").is_none());
-
-        let paged_result = get_tool
-            .run(BibGetArticleInput {
-                article_ids: vec![article_id],
-                include_fulltext: Some(true),
-                offset: Some(20),
-                limit: Some(7),
-            })
-            .await
-            .unwrap();
-        let paged_json = match paged_result.content {
-            ToolResultContent::Json(value) => value,
-            _ => panic!("expected JSON"),
-        };
-        let paged = &paged_json["results"][0];
-        assert_eq!(paged["fulltext"], "0123456");
-        assert_eq!(paged["fulltext_offset"], 20);
-        assert_eq!(paged["fulltext_limit"], 7);
-        assert_eq!(paged["fulltext_total_chars"], 100);
-        assert_eq!(paged["fulltext_next_offset"], 27);
-    }
-
-    #[tokio::test]
-    async fn test_save_article_direct_cached() {
-        let bib = Arc::new(BibBase::open_in_memory().await.unwrap());
-        let gateway = Arc::new(crate::default_gateway());
-        let epmc = Arc::new(EuropePmcClient::new());
-        let tool = BibSaveTool {
-            bib,
-            gateway,
-            epmc,
-            file_storage: Arc::new(vfs::OpendalFileStorage::new_temp()),
-        };
-
-        let article = ArticleInput {
-            title: "Cached test".into(),
-            doi: Some("10.1038/cached.001".into()),
-            pmid: None,
-            identifiers: vec![],
-            authors: vec![],
-            year: Some(2023),
-            journal: None,
-            volume: None,
-            issue: None,
-            pages: None,
-            abstract_text: None,
-            keywords: vec![],
-            pub_types: vec![],
-            source: None,
-        };
-
-        // First save.
-        let input1 = BibSaveInput {
-            articles: Some(vec![article.clone()]),
-            ids: None,
-            source: None,
-            fetch_fulltext: Some(false),
-        };
-        let _ = tool.run(input1).await.unwrap();
-
-        // Second save — should be cached.
-        let input2 = BibSaveInput {
-            articles: Some(vec![article]),
-            ids: None,
-            source: None,
-            fetch_fulltext: Some(false),
-        };
-        let result2 = tool.run(input2).await.unwrap();
-        let json2 = match result2.content {
-            ToolResultContent::Json(v) => v,
-            _ => panic!("expected JSON"),
-        };
-
-        assert_eq!(json2["saved"].as_u64(), Some(0));
-        assert_eq!(json2["cached"].as_u64(), Some(1));
-    }
-
-    #[tokio::test]
-    async fn test_save_article_direct_batch() {
-        let bib = Arc::new(BibBase::open_in_memory().await.unwrap());
-        let gateway = Arc::new(crate::default_gateway());
-        let epmc = Arc::new(EuropePmcClient::new());
-        let tool = BibSaveTool {
-            bib,
-            gateway,
-            epmc,
-            file_storage: Arc::new(vfs::OpendalFileStorage::new_temp()),
-        };
-
-        let input = BibSaveInput {
-            articles: Some(vec![
-                ArticleInput {
-                    title: "Article A".into(),
-                    doi: Some("10.1/a".into()),
-                    pmid: None,
-                    identifiers: vec![],
-                    authors: vec![],
-                    year: Some(2020),
-                    journal: None,
-                    volume: None,
-                    issue: None,
-                    pages: None,
-                    abstract_text: None,
-                    keywords: vec![],
-                    pub_types: vec![],
-                    source: None,
-                },
-                ArticleInput {
-                    title: "Article B".into(),
-                    doi: None,
-                    pmid: Some("99999".into()),
-                    identifiers: vec![],
-                    authors: vec![],
-                    year: Some(2021),
-                    journal: None,
-                    volume: None,
-                    issue: None,
-                    pages: None,
-                    abstract_text: None,
-                    keywords: vec![],
-                    pub_types: vec![],
-                    source: None,
-                },
-                ArticleInput {
-                    title: "Article C (arXiv)".into(),
-                    doi: None,
-                    pmid: None,
-                    identifiers: vec![IdentifierInput {
-                        kind: "arxiv".into(),
-                        value: "2101.00001".into(),
-                    }],
-                    authors: vec![],
-                    year: Some(2021),
-                    journal: None,
-                    volume: None,
-                    issue: None,
-                    pages: None,
-                    abstract_text: None,
-                    keywords: vec![],
-                    pub_types: vec![],
-                    source: Some("arxiv".into()),
-                },
-            ]),
-            ids: None,
-            source: None,
-            fetch_fulltext: Some(false),
-        };
-
-        let result = tool.run(input).await.unwrap();
-        let json = match result.content {
-            ToolResultContent::Json(v) => v,
-            _ => panic!("expected JSON"),
-        };
-
-        assert_eq!(json["total"], 3);
-        assert_eq!(json["saved"].as_u64(), Some(3));
-        assert_eq!(json["failed"].as_u64(), Some(0));
-
-        let results = json["results"].as_array().unwrap();
-        assert_eq!(results.len(), 3);
-        for r in results {
-            assert_eq!(r["saved"], true);
-            assert!(r["article_id"].as_str().is_some());
-        }
-    }
-
-    #[tokio::test]
-    async fn test_save_rejects_empty_input() {
-        let bib = Arc::new(BibBase::open_in_memory().await.unwrap());
-        let gateway = Arc::new(crate::default_gateway());
-        let epmc = Arc::new(EuropePmcClient::new());
-        let tool = BibSaveTool {
-            bib,
-            gateway,
-            epmc,
-            file_storage: Arc::new(vfs::OpendalFileStorage::new_temp()),
-        };
-
-        let input = BibSaveInput {
-            articles: None,
-            ids: None,
-            source: None,
-            fetch_fulltext: None,
-        };
-
-        assert!(tool.run(input).await.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_save_article_direct_error_no_id() {
-        let bib = Arc::new(BibBase::open_in_memory().await.unwrap());
-        let gateway = Arc::new(crate::default_gateway());
-        let epmc = Arc::new(EuropePmcClient::new());
-        let tool = BibSaveTool {
-            bib,
-            gateway,
-            epmc,
-            file_storage: Arc::new(vfs::OpendalFileStorage::new_temp()),
-        };
-
-        let input = BibSaveInput {
-            articles: Some(vec![ArticleInput {
-                title: "No identifiers".into(),
-                doi: None,
-                pmid: None,
-                identifiers: vec![],
-                authors: vec![],
-                year: None,
-                journal: None,
-                volume: None,
-                issue: None,
-                pages: None,
-                abstract_text: None,
-                keywords: vec![],
-                pub_types: vec![],
-                source: None,
-            }]),
-            ids: None,
-            source: None,
-            fetch_fulltext: Some(false),
-        };
-
-        let result = tool.run(input).await.unwrap();
-        let json = match result.content {
-            ToolResultContent::Json(v) => v,
-            _ => panic!("expected JSON"),
-        };
-
-        assert_eq!(json["failed"].as_u64(), Some(1));
-        assert!(json["results"][0]["error"].as_str().is_some());
-    }
 
     // ── bib_export ────────────────────────────────────────────────────────
 

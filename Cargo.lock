@@ -1075,6 +1075,8 @@ dependencies = [
  "agentik-core",
  "agentik-proc",
  "agentik-sdk",
+ "arrow-array",
+ "arrow-schema",
  "arxiv",
  "async-trait",
  "base64 0.22.1",

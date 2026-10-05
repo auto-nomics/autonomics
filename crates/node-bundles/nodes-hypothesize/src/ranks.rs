@@ -379,7 +379,9 @@ mod wilcoxon_paired_tests {
             datafusion::prelude::SessionContext::new().runtime_env(),
             None,
         );
-        let mut node = WilcoxonNodeFactory.build(spec, ctx.clone()).map_err(|e| e.to_string())?;
+        let mut node = WilcoxonNodeFactory
+            .build(spec, ctx.clone())
+            .map_err(|e| e.to_string())?;
         let outputs = node
             .execute(
                 &ctx,
@@ -417,7 +419,10 @@ mod wilcoxon_paired_tests {
         }))
         .await
         .unwrap();
-        assert!(p < 0.01, "paired wilcoxon should detect the +0.6 shift, p = {p}");
+        assert!(
+            p < 0.01,
+            "paired wilcoxon should detect the +0.6 shift, p = {p}"
+        );
     }
 
     #[tokio::test]
@@ -429,8 +434,7 @@ mod wilcoxon_paired_tests {
             datafusion::prelude::SessionContext::new().runtime_env(),
             None,
         );
-        let y_with_gaps: Vec<Option<f64>> =
-            vec![Some(1.0), None, Some(3.0), None, Some(5.0)];
+        let y_with_gaps: Vec<Option<f64>> = vec![Some(1.0), None, Some(3.0), None, Some(5.0)];
         let schema = Arc::new(arrow_schema::Schema::new(vec![
             arrow_schema::Field::new("x", arrow_schema::DataType::Float64, false),
             arrow_schema::Field::new("y", arrow_schema::DataType::Float64, true),
@@ -438,7 +442,9 @@ mod wilcoxon_paired_tests {
         let batch = arrow_array::RecordBatch::try_new(
             schema,
             vec![
-                Arc::new(arrow_array::Float64Array::from(vec![1.1, 2.2, 3.3, 4.4, 5.5])),
+                Arc::new(arrow_array::Float64Array::from(vec![
+                    1.1, 2.2, 3.3, 4.4, 5.5,
+                ])),
                 Arc::new(arrow_array::Float64Array::from(y_with_gaps)),
             ],
         )

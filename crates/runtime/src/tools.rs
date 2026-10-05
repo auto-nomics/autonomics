@@ -11,7 +11,7 @@ use writing_base::LatexEngine;
 
 use agentik_core::tools::ToolRegistration;
 use alphafold::AlphaFoldClient;
-use bib_base::{BibBase, LiteratureGateway};
+use bib_base::BibBase;
 use chembl::ChEMBLClient;
 use clinicaltrials::ClinicalTrialsClient;
 use data_engine::runtime::DataEngineClient;
@@ -133,7 +133,7 @@ pub fn protocolio_tools(storage: Arc<OpendalFileStorage>) -> Vec<ToolRegistratio
 /// `AUTONOMICS_BIB_DB` environment variable.
 pub const DEFAULT_BIB_DB: &str = "bib.db";
 
-/// Bibliography tools: local-library management (`bib_save`,
+/// Bibliography tools: local-library management (`bib_save` is a DAG node;
 /// `bib_create_collection`, …, `bib_export`).
 ///
 /// Literature *retrieval* (search / fetch / citation graph /
@@ -155,13 +155,7 @@ pub async fn bib_tools(
     file_storage: Arc<OpendalFileStorage>,
 ) -> Result<Vec<ToolRegistration>> {
     let bib = Arc::new(BibBase::open(db_path).await?);
-    let gateway = Arc::new(LiteratureGateway::with_default_sources());
-    Ok(bib_base::bib_all_registrations(
-        bib,
-        gateway,
-        None,
-        file_storage,
-    ))
+    Ok(bib_base::bib_all_registrations(bib, file_storage))
 }
 
 /// Resolves the bibliography DB path: the `AUTONOMICS_BIB_DB` env var if set,

@@ -372,7 +372,11 @@ mod tests {
         // Below t_min the cubic positive parts are all zero → column is 0.
         for (i, &x) in xs.iter().enumerate() {
             if x < 2.0 {
-                assert!(basis[0][i].abs() < 1e-12, "below t_min at x={x}: {}", basis[0][i]);
+                assert!(
+                    basis[0][i].abs() < 1e-12,
+                    "below t_min at x={x}: {}",
+                    basis[0][i]
+                );
             }
         }
 

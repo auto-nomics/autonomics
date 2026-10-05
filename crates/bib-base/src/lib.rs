@@ -17,6 +17,7 @@ pub mod annotations;
 pub mod bib_base;
 pub mod collections;
 pub use collections::CollectionAddOutcome;
+pub use collections::{CollectionAssignment, CollectionAssignmentOutcome};
 pub mod error;
 pub mod export;
 pub mod extract;

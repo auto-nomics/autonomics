@@ -591,12 +591,8 @@ impl SharedInfra {
 
         if profile.enable_bibliography {
             let bib_shared = self.bib.clone();
-            let bib_tools = bib_base::bib_all_registrations(
-                bib_shared.bib.clone(),
-                bib_shared.gateway.clone(),
-                Some(bib_shared.europe_pmc.clone()),
-                file_storage.clone(),
-            );
+            let bib_tools =
+                bib_base::bib_all_registrations(bib_shared.bib.clone(), file_storage.clone());
             tools.extend(bib_tools);
 
             // Literature retrieval (search, fetch, citation graph,
@@ -4642,7 +4638,11 @@ mod send_message_tests {
 
         let caller = tokio::spawn({
             let control = control.clone();
-            async move { control.deliver_message_tracked("/root/wedged", "hello").await }
+            async move {
+                control
+                    .deliver_message_tracked("/root/wedged", "hello")
+                    .await
+            }
         });
 
         let cmd = cmd_rx.recv().await.expect("command received");
