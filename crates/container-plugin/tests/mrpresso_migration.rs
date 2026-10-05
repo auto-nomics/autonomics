@@ -12,11 +12,29 @@ use container_plugin::manifest::PluginManifest;
 use serde_json::json;
 
 fn plugin_root() -> Option<PathBuf> {
-    let root = std::env::var_os("NODE_PLUGINS_ROOT")
+    let explicit = std::env::var_os("NODE_PLUGINS_ROOT");
+    let root = explicit
+        .clone()
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/mnt/projects/node-plugins"));
     let manifest = root.join("mrpresso").join("manifest.toml");
-    manifest.is_file().then_some(root)
+    if manifest.is_file() {
+        return Some(root);
+    }
+    if explicit.is_some() {
+        // fix-review R04 (2026-10-05): an explicitly set NODE_PLUGINS_ROOT
+        // means migration parity was requested. A missing family must fail
+        // loudly — early-returns here used to count as *passed* tests, so a
+        // green summary claimed coverage that never ran.
+        panic!(
+            "NODE_PLUGINS_ROOT is set but the mrpresso family is not deployed \
+             under it ({}) — migration parity cannot run. Deploy the family \
+             or unset NODE_PLUGINS_ROOT to skip these tests deliberately.",
+            manifest.display()
+        );
+    }
+    eprintln!("skipping: mrpresso plugin directory not present (NODE_PLUGINS_ROOT unset)");
+    None
 }
 
 fn load_manifest(root: &PathBuf) -> PluginManifest {
@@ -110,8 +128,13 @@ fn mrpresso_plugin_compiles_to_the_legacy_wrapper_contract() {
         "E1_effect"
     );
     assert_eq!(compiled.env.get("MRPRESSO_SD_EXPOSURE").unwrap(), "E1_se");
-    assert_eq!(compiled.env.get("MRPRESSO_OUTLIER_TEST").unwrap(), "");
-    assert_eq!(compiled.env.get("MRPRESSO_DISTORTION_TEST").unwrap(), "");
+    // Both diagnostic bools default to false and render the literal so
+    // the script's as.logical() parse chain never sees NA (F02).
+    assert_eq!(compiled.env.get("MRPRESSO_OUTLIER_TEST").unwrap(), "false");
+    assert_eq!(
+        compiled.env.get("MRPRESSO_DISTORTION_TEST").unwrap(),
+        "false"
+    );
     assert_eq!(
         compiled.env.get("MRPRESSO_SIGNIF_THRESHOLD").unwrap(),
         "0.05"
@@ -211,7 +234,10 @@ fn mrpresso_plugin_renders_submitted_values_into_env() {
         "E1_se E2_se"
     );
     assert_eq!(compiled.env.get("MRPRESSO_OUTLIER_TEST").unwrap(), "true");
-    assert_eq!(compiled.env.get("MRPRESSO_DISTORTION_TEST").unwrap(), "");
+    assert_eq!(
+        compiled.env.get("MRPRESSO_DISTORTION_TEST").unwrap(),
+        "false"
+    );
     assert_eq!(
         compiled.env.get("MRPRESSO_SIGNIF_THRESHOLD").unwrap(),
         "0.01"

@@ -12,11 +12,29 @@ use container_plugin::manifest::PluginManifest;
 use serde_json::json;
 
 fn plugin_root() -> Option<PathBuf> {
-    let root = std::env::var_os("NODE_PLUGINS_ROOT")
+    let explicit = std::env::var_os("NODE_PLUGINS_ROOT");
+    let root = explicit
+        .clone()
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/mnt/projects/node-plugins"));
     let manifest = root.join("hdl").join("manifest.toml");
-    manifest.is_file().then_some(root)
+    if manifest.is_file() {
+        return Some(root);
+    }
+    if explicit.is_some() {
+        // fix-review R04 (2026-10-05): an explicitly set NODE_PLUGINS_ROOT
+        // means migration parity was requested. A missing family must fail
+        // loudly — early-returns here used to count as *passed* tests, so a
+        // green summary claimed coverage that never ran.
+        panic!(
+            "NODE_PLUGINS_ROOT is set but the hdl family is not deployed \
+             under it ({}) — migration parity cannot run. Deploy the family \
+             or unset NODE_PLUGINS_ROOT to skip these tests deliberately.",
+            manifest.display()
+        );
+    }
+    eprintln!("skipping: hdl plugin directory not present (NODE_PLUGINS_ROOT unset)");
+    None
 }
 
 fn load_manifest(root: &PathBuf) -> PluginManifest {
@@ -124,7 +142,9 @@ fn hdl_l_plugin_compiles_to_the_legacy_wrapper_contract() {
         compiled.env.get("HDL_L_LIM").unwrap(),
         "1.522997974471263e-8"
     );
-    assert_eq!(compiled.env.get("HDL_L_INTERCEPT_OUTPUT").unwrap(), "");
+    // intercept_output defaults to false and renders the literal; the
+    // optional string keeps the empty presence channel (F02).
+    assert_eq!(compiled.env.get("HDL_L_INTERCEPT_OUTPUT").unwrap(), "false");
     assert_eq!(compiled.env.get("HDL_L_FILL_MISSING_N").unwrap(), "");
 
     // Semantic script markers, not byte equality: the legacy wrapper
@@ -286,7 +306,10 @@ fn hdl_l_scan_plugin_compiles_to_the_legacy_wrapper_contract() {
         "trait1"
     );
     assert_eq!(compiled.env.get("HDL_L_SCAN_NREF").unwrap(), "335272.0");
-    assert_eq!(compiled.env.get("HDL_L_SCAN_INTERCEPT_OUTPUT").unwrap(), "");
+    assert_eq!(
+        compiled.env.get("HDL_L_SCAN_INTERCEPT_OUTPUT").unwrap(),
+        "false"
+    );
     assert_eq!(compiled.env.get("HDL_L_SCAN_FILL_MISSING_N").unwrap(), "");
 
     // Semantic script markers: the per-chr/piece loop stays script-side

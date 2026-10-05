@@ -1,11 +1,12 @@
 //! Node execution fingerprints and content-level cache invalidation.
 //!
 //! A fingerprint is a blake3 digest over *everything that determines a node's
-//! output*: its kind, canonical spec, engine version, and the identity of
-//! every input value it consumes. Following the Nextflow task-hash model, one
-//! digest simultaneously serves as provenance evidence ("this output came
-//! from exactly these inputs"), a cache key (equal fingerprint ⇒ equal
-//! result), and an invalidation check (see [`cached_file_changed`]).
+//! output*: its kind, canonical spec, engine version, source revision, and
+//! the identity of every input value it consumes. Following the Nextflow
+//! task-hash model, one digest simultaneously serves as provenance evidence
+//! ("this output came from exactly these inputs"), a cache key (equal
+//! fingerprint ⇒ equal result), and an invalidation check (see
+//! [`cached_file_changed`]).
 //!
 //! Input identity is value-shaped:
 //! - file-like values contribute their path plus a content hash when one is
@@ -30,8 +31,9 @@ use crate::dag::graph::{EdgeLabel, PortOutputs};
 use crate::value::{FileFingerprint, FileRef, NodeValue};
 
 /// Domain separator for the fingerprint hash, so digests from different
-/// schemes or versions can never collide.
-pub const FINGERPRINT_DOMAIN: &str = "autonomics-node-fingerprint-v1";
+/// schemes or versions can never collide. v2 adds the source revision to
+/// the digest (F15); v1 digests are not compatible by design.
+pub const FINGERPRINT_DOMAIN: &str = "autonomics-node-fingerprint-v2";
 
 /// Marker written into the digest when a node has no retained spec (raw
 /// `add_node` path, tests only) — auditable degradation, never silent.
@@ -121,18 +123,22 @@ pub fn collect_input_identities(
 
 // ── fingerprint computation ───────────────────────────────────────────────────
 
-/// Compute a node's execution fingerprint.
+/// Compute a node's execution fingerprint, binding the build's
+/// [`crate::source_revision()`] into the digest.
 ///
 /// ```text
-/// blake3( FINGERPRINT_DOMAIN ‖ engine_version ‖ kind ‖ spec ‖ Σ sorted identities )
+/// blake3( FINGERPRINT_DOMAIN ‖ engine_version ‖ rev ‖ kind ‖ spec ‖ Σ sorted identities )
 /// ```
 ///
 /// * `spec = None` marks the node as spec-less (see [`NOSPEC_TAG`]).
 /// * identities are canonically ordered by `(to_port, from, from_port)`.
-/// * `source_revision` is deliberately **not** part of the digest: it changes
-///   on every commit, which would invalidate fingerprints (and any future
-///   cache built on them) on every rebuild. The revision is recorded at the
-///   run-record layer instead.
+/// * the **source revision** participates: `engine_version` is the crate
+///   version, which stays flat across many commits, so without the
+///   revision an implementation change with an unchanged spec and
+///   unchanged inputs would keep hitting the same fingerprint and reuse
+///   stale incremental cache entries (audit F15). The revision is the
+///   short git commit by default; builds can stamp an explicit identity
+///   via the `AUTONOMICS_SOURCE_REVISION` env override at build time.
 ///
 /// Canonical JSON relies on serde_json's sorted-key object representation
 /// (the workspace does not enable `preserve_order`) — the same premise as
@@ -141,6 +147,26 @@ pub fn compute_node_fingerprint(
     kind: &str,
     spec: Option<&serde_json::Value>,
     engine_version: &str,
+    identities: &[InputIdentity],
+) -> String {
+    compute_node_fingerprint_with_revision(
+        kind,
+        spec,
+        engine_version,
+        crate::source_revision(),
+        identities,
+    )
+}
+
+/// Revision-explicit form of [`compute_node_fingerprint`]. The revision is
+/// injectable so tests can prove two builds from different source
+/// revisions produce different fingerprints (and the same revision
+/// reproduces the same one) without rebuilding the crate.
+pub fn compute_node_fingerprint_with_revision(
+    kind: &str,
+    spec: Option<&serde_json::Value>,
+    engine_version: &str,
+    source_revision: &str,
     identities: &[InputIdentity],
 ) -> String {
     let mut ordered: Vec<&InputIdentity> = identities.iter().collect();
@@ -154,6 +180,10 @@ pub fn compute_node_fingerprint(
     feed(FINGERPRINT_DOMAIN.as_bytes());
     feed(&[0]);
     feed(engine_version.as_bytes());
+    feed(&[0]);
+    feed(b"rev");
+    feed(&[0]);
+    feed(source_revision.as_bytes());
     feed(&[0]);
     feed(kind.as_bytes());
     feed(&[0]);
@@ -450,37 +480,116 @@ mod tests {
             "/data/x.csv",
             Some(fp(10, 1234, Some("sha256:deadbeef"))),
         )];
-        let reference =
-            compute_node_fingerprint("sql", Some(&serde_json::json!({"q": 1})), "v1", &base);
+        let reference = compute_node_fingerprint_with_revision(
+            "sql",
+            Some(&serde_json::json!({"q": 1})),
+            "v1",
+            "aaaaaaaaaaaa",
+            &base,
+        );
 
-        let changed_kind = compute_node_fingerprint(
+        let changed_kind = compute_node_fingerprint_with_revision(
             "other_kind",
             Some(&serde_json::json!({"q": 1})),
             "v1",
+            "aaaaaaaaaaaa",
             &base,
         );
-        let changed_spec =
-            compute_node_fingerprint("sql", Some(&serde_json::json!({"q": 2})), "v1", &base);
-        let changed_engine =
-            compute_node_fingerprint("sql", Some(&serde_json::json!({"q": 1})), "v2", &base);
+        let changed_spec = compute_node_fingerprint_with_revision(
+            "sql",
+            Some(&serde_json::json!({"q": 2})),
+            "v1",
+            "aaaaaaaaaaaa",
+            &base,
+        );
+        let changed_engine = compute_node_fingerprint_with_revision(
+            "sql",
+            Some(&serde_json::json!({"q": 1})),
+            "v2",
+            "aaaaaaaaaaaa",
+            &base,
+        );
+        let changed_revision = compute_node_fingerprint_with_revision(
+            "sql",
+            Some(&serde_json::json!({"q": 1})),
+            "v1",
+            "bbbbbbbbbbbb",
+            &base,
+        );
         let changed_hash = {
             let identities = vec![file_identity(
                 "/data/x.csv",
                 Some(fp(10, 1234, Some("sha256:feedface"))),
             )];
-            compute_node_fingerprint("sql", Some(&serde_json::json!({"q": 1})), "v1", &identities)
+            compute_node_fingerprint_with_revision(
+                "sql",
+                Some(&serde_json::json!({"q": 1})),
+                "v1",
+                "aaaaaaaaaaaa",
+                &identities,
+            )
         };
-        let nospec = compute_node_fingerprint("sql", None, "v1", &base);
+        let nospec = compute_node_fingerprint_with_revision(
+            "sql",
+            None,
+            "v1",
+            "aaaaaaaaaaaa",
+            &base,
+        );
 
         for candidate in [
             changed_kind,
             changed_spec,
             changed_engine,
+            changed_revision,
             changed_hash,
             nospec,
         ] {
             assert_ne!(reference, candidate);
         }
+    }
+
+    #[test]
+    fn source_revision_participates_in_the_fingerprint() {
+        // F15: the engine version is the crate version and stays flat
+        // across commits; the revision is what distinguishes two builds
+        // with identical specs and inputs. Same revision → same digest;
+        // different revision → different digest (no silent incremental
+        // cache reuse across an engine change).
+        let identities = vec![file_identity(
+            "/data/x.csv",
+            Some(fp(10, 1234, Some("sha256:deadbeef"))),
+        )];
+        let a = compute_node_fingerprint_with_revision(
+            "sql",
+            Some(&serde_json::json!({"q": 1})),
+            "v1",
+            "aaaaaaaaaaaa",
+            &identities,
+        );
+        let a_again = compute_node_fingerprint_with_revision(
+            "sql",
+            Some(&serde_json::json!({"q": 1})),
+            "v1",
+            "aaaaaaaaaaaa",
+            &identities,
+        );
+        let b = compute_node_fingerprint_with_revision(
+            "sql",
+            Some(&serde_json::json!({"q": 1})),
+            "v1",
+            "bbbbbbbbbbbb",
+            &identities,
+        );
+        assert_eq!(a, a_again);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn embedded_source_revision_is_available() {
+        // build.rs guarantees a non-empty identity: the env override, the
+        // git short revision, or the literal "unknown" — never "".
+        assert!(!crate::source_revision().is_empty());
     }
 
     #[test]
