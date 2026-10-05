@@ -21,7 +21,7 @@ use tracing::{debug, info_span, warn};
 
 use super::utils::{build_input_bindings, build_inputs, cascade_skip};
 
-use super::channel::ChannelOperator;
+use super::channel::{ChannelOperator, ChannelStreamState};
 use super::error::DagError;
 use super::execution::{
     TaskExecution, TaskExecutor, TaskInputBinding, TaskInputSource, TaskOutputBinding,
@@ -128,6 +128,17 @@ struct MemoryGuardState {
     peak: Option<MemorySample>,
     source: Option<&'static str>,
     error: Option<String>,
+}
+
+#[derive(Default)]
+struct StreamRuntimeState {
+    node_items: HashMap<NodeId, Vec<serde_json::Value>>,
+    node_counts: HashMap<NodeId, usize>,
+    node_outputs: HashMap<NodeId, HashMap<u8, Vec<serde_json::Value>>>,
+    node_states: HashMap<NodeId, ChannelStreamState>,
+    expected_inputs: HashMap<NodeId, BTreeSet<(NodeId, u8)>>,
+    closed_inputs: HashMap<NodeId, BTreeSet<(NodeId, u8)>>,
+    pending_closes: BTreeSet<NodeId>,
 }
 
 #[derive(Default)]
@@ -786,9 +797,7 @@ impl DAG {
         ready: &mut VecDeque<NodeId>,
         all_ids: &mut Vec<NodeId>,
         streaming_expanded: &mut BTreeSet<NodeId>,
-        stream_node_items: &mut HashMap<NodeId, Vec<serde_json::Value>>,
-        stream_node_counts: &mut HashMap<NodeId, usize>,
-        stream_node_outputs: &mut HashMap<NodeId, HashMap<u8, Vec<serde_json::Value>>>,
+        stream: &mut StreamRuntimeState,
         tx: mpsc::Sender<NodeEvent>,
     ) -> Result<()> {
         let targets = successors.get(from).cloned().unwrap_or_default();
@@ -812,7 +821,7 @@ impl DAG {
                 .is_some_and(|(kind, _)| kind == "dynamic_fanout")
             {
                 for _label in labels {
-                    let sequence = *stream_node_counts.entry(target.clone()).or_insert(0);
+                    let sequence = *stream.node_counts.entry(target.clone()).or_insert(0);
                     self.expand_dynamic_fanout_item(
                         target.as_str(),
                         item.clone(),
@@ -824,7 +833,7 @@ impl DAG {
                         all_ids,
                         streaming_expanded,
                     )?;
-                    *stream_node_counts.entry(target.clone()).or_insert(0) += 1;
+                    *stream.node_counts.entry(target.clone()).or_insert(0) += 1;
                 }
                 continue;
             }
@@ -833,6 +842,13 @@ impl DAG {
                 continue;
             };
             let _ = operator;
+            if !stream.expected_inputs.contains_key(&target) {
+                continue;
+            }
+            let input_port = labels
+                .first()
+                .map(|label| label.to_port)
+                .unwrap_or_default();
 
             for label in labels {
                 let Some(from_idx) = self.id_to_idx.get(from) else {
@@ -854,15 +870,17 @@ impl DAG {
                 }
             }
             self.statuses.insert(target.clone(), RuntimeStatus::Running);
-            stream_node_items
+            stream
+                .node_items
                 .entry(target.clone())
                 .or_default()
                 .push(item.clone());
-            let input_count = stream_node_items
+            let input_count = stream
+                .node_items
                 .get(&target)
                 .map(Vec::len)
                 .unwrap_or_default();
-            stream_node_counts.insert(target.clone(), input_count);
+            stream.node_counts.insert(target.clone(), input_count);
 
             let outputs = {
                 let Some(node) = self.nodes.get(&target) else {
@@ -874,11 +892,20 @@ impl DAG {
                     .downcast_ref::<super::channel::ChannelNode>()
                     .unwrap()
                     .clone();
-                node.process_stream_item(from_port, item.clone()).await?
+                let state = stream.node_states.entry(target.clone()).or_default();
+                node.process_stream_item(state, input_port, item.clone())
+                    .await?
             };
-            let sequence = *stream_node_counts.get(&target).unwrap();
             for (output_port, output_item) in outputs {
-                stream_node_outputs
+                let sequence = stream
+                    .node_outputs
+                    .entry(target.clone())
+                    .or_default()
+                    .entry(output_port)
+                    .or_default()
+                    .len() as u64;
+                stream
+                    .node_outputs
                     .entry(target.clone())
                     .or_default()
                     .entry(output_port)
@@ -886,7 +913,7 @@ impl DAG {
                     .push(output_item.clone());
                 let reporter = NodeReporter::new(target.clone(), tx.clone());
                 reporter
-                    .emit_channel_item(output_port, sequence as u64, output_item)
+                    .emit_channel_item(output_port, sequence, output_item)
                     .await;
             }
         }
@@ -897,12 +924,11 @@ impl DAG {
     async fn close_stream_successors(
         &mut self,
         from: &str,
+        from_port: u8,
         successors: &mut HashMap<NodeId, Vec<NodeId>>,
         pending: &mut HashMap<NodeId, usize>,
         ready: &mut VecDeque<NodeId>,
-        stream_node_items: &mut HashMap<NodeId, Vec<serde_json::Value>>,
-        stream_node_counts: &mut HashMap<NodeId, usize>,
-        stream_node_outputs: &mut HashMap<NodeId, HashMap<u8, Vec<serde_json::Value>>>,
+        stream: &mut StreamRuntimeState,
         tx: mpsc::Sender<NodeEvent>,
     ) -> Result<()> {
         let targets = successors.get(from).cloned().unwrap_or_default();
@@ -910,31 +936,113 @@ impl DAG {
             let Some(_operator) = self.streaming_operator(target.as_str())? else {
                 continue;
             };
-            if self.statuses.get(&target) != Some(&RuntimeStatus::Running) {
+            let Some(expected) = stream.expected_inputs.get(&target).cloned() else {
+                continue;
+            };
+            if !expected.contains(&(from.to_string(), from_port)) {
                 continue;
             }
-            let _items = stream_node_items.remove(&target);
-            let output_items = stream_node_outputs.remove(&target).unwrap_or_default();
+            stream
+                .closed_inputs
+                .entry(target.clone())
+                .or_default()
+                .insert((from.to_string(), from_port));
+            if stream.closed_inputs.get(&target) != Some(&expected) {
+                continue;
+            }
+
+            let _items = stream.node_items.remove(&target);
+            let _input_count = stream.node_counts.remove(&target).unwrap_or_default();
+            let state = stream.node_states.remove(&target).unwrap_or_default();
+            let existing_output_items = stream.node_outputs.remove(&target).unwrap_or_default();
+            let finalized = {
+                let Some(node) = self.nodes.get(&target) else {
+                    continue;
+                };
+                let node_box = node.clone_box();
+                let node = node_box
+                    .as_any()
+                    .downcast_ref::<super::channel::ChannelNode>()
+                    .unwrap();
+                let mut state = state;
+                node.finish_stream(&mut state).await?
+            };
+            let finalized_count = finalized.len();
+            stream
+                .node_outputs
+                .insert(target.clone(), existing_output_items);
+            for (output_port, output_item) in finalized {
+                let sequence = stream
+                    .node_outputs
+                    .get_mut(&target)
+                    .unwrap()
+                    .entry(output_port)
+                    .or_default()
+                    .len() as u64;
+                stream
+                    .node_outputs
+                    .get_mut(&target)
+                    .unwrap()
+                    .get_mut(&output_port)
+                    .unwrap()
+                    .push(output_item.clone());
+                let reporter = NodeReporter::new(target.clone(), tx.clone());
+                reporter
+                    .emit_channel_item(output_port, sequence, output_item)
+                    .await;
+            }
+
+            let declared_ports = self
+                .nodes
+                .get(&target)
+                .map(|node| {
+                    node.ports()
+                        .output_ports()
+                        .iter()
+                        .map(|port| port.index)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
             let mut outputs = PortOutputs::new();
-            for (port, items) in output_items {
+            for port in declared_ports {
+                let items = stream
+                    .node_outputs
+                    .get(&target)
+                    .and_then(|items| items.get(&port))
+                    .cloned()
+                    .unwrap_or_default();
                 outputs.insert(port, crate::ChannelValue { items });
             }
             self.outputs.insert(target.clone(), outputs);
             self.statuses.insert(target.clone(), RuntimeStatus::Success);
             self.fingerprints.remove(&target);
 
-            let item_count = stream_node_counts.get(&target).copied().unwrap_or_default();
             let ports = self
                 .outputs
                 .get(&target)
                 .map(|outputs| outputs.iter().map(|(port, _)| *port).collect::<Vec<_>>())
                 .unwrap_or_default();
             for port in ports {
+                let item_count = stream
+                    .node_outputs
+                    .get(&target)
+                    .and_then(|items| items.get(&port))
+                    .map(Vec::len)
+                    .unwrap_or_default();
                 let reporter = NodeReporter::new(target.clone(), tx.clone());
+                stream.pending_closes.insert(target.clone());
                 reporter.close_channel(port, item_count as u64).await;
             }
 
             for successor in successors.get(&target).cloned().unwrap_or_default() {
+                let streaming_successor = stream.expected_inputs.contains_key(&successor)
+                    || self
+                        .specs
+                        .get(successor.as_str())
+                        .is_some_and(|(kind, _)| kind == "dynamic_fanout");
+                if streaming_successor && finalized_count > 0 {
+                    continue;
+                }
                 let left = {
                     let count = pending.entry(successor.clone()).or_insert(0);
                     count.saturating_sub(1)
@@ -1428,9 +1536,7 @@ impl DAG {
 
         let mut all_ids = self.node_ids();
         let mut streaming_expanded = BTreeSet::<NodeId>::new();
-        let mut stream_node_items = HashMap::<NodeId, Vec<serde_json::Value>>::new();
-        let mut stream_node_counts = HashMap::<NodeId, usize>::new();
-        let mut stream_node_outputs = HashMap::<NodeId, HashMap<u8, Vec<serde_json::Value>>>::new();
+        let mut stream = StreamRuntimeState::default();
 
         // Precompute adjacency + per-node port assignment so the dispatch loop only
         // needs a single mutable borrow of `self`.
@@ -1457,6 +1563,33 @@ impl DAG {
             pending.insert(id.clone(), preds.len() + extra_pending.len());
             let inc = self.incoming_edges_with_ports(id);
             incoming.insert(id.clone(), inc);
+        }
+
+        if !incremental {
+            for id in &all_ids {
+                if self.streaming_operator(id)?.is_none() {
+                    continue;
+                }
+                let Some(inputs) = incoming.get(id) else {
+                    continue;
+                };
+                if inputs.is_empty()
+                    || !inputs.iter().all(|(from, _)| {
+                        self.specs
+                            .get(from.as_str())
+                            .is_some_and(|(kind, _)| kind == "channel")
+                    })
+                {
+                    continue;
+                }
+                stream.expected_inputs.insert(
+                    id.clone(),
+                    inputs
+                        .iter()
+                        .map(|(from, label)| (from.clone(), label.from_port))
+                        .collect::<BTreeSet<_>>(),
+                );
+            }
         }
 
         // Every node starts Pending; a reused node flips back to Success at
@@ -1787,9 +1920,11 @@ impl DAG {
                 job_handles.push(AbortOnDropHandle(Some(handle)));
             }
 
-            let streaming_active = stream_node_counts
+            let streaming_active = stream
+                .node_counts
                 .keys()
-                .any(|node| self.statuses.get(node) == Some(&RuntimeStatus::Running));
+                .any(|node| self.statuses.get(node) == Some(&RuntimeStatus::Running))
+                || !stream.pending_closes.is_empty();
             if in_flight == 0 && !streaming_active {
                 break;
             }
@@ -1869,10 +2004,6 @@ impl DAG {
                     item,
                 } => {
                     let source = msg.node_id.clone();
-                    stream_node_items
-                        .entry(msg.node_id.clone())
-                        .or_default()
-                        .push(item.clone());
                     self.propagate_stream_item(
                         &source,
                         port,
@@ -1883,23 +2014,27 @@ impl DAG {
                         &mut ready,
                         &mut all_ids,
                         &mut streaming_expanded,
-                        &mut stream_node_items,
-                        &mut stream_node_counts,
-                        &mut stream_node_outputs,
+                        &mut stream,
                         tx.clone(),
                     )
                     .await?;
                     continue;
                 }
                 NodeEventKind::ChannelClosed { .. } => {
+                    stream.pending_closes.remove(&msg.node_id);
+                    let NodeEventKind::ChannelClosed {
+                        port: from_port, ..
+                    } = msg.kind
+                    else {
+                        unreachable!("matched ChannelClosed");
+                    };
                     self.close_stream_successors(
                         &msg.node_id,
+                        from_port,
                         &mut successors,
                         &mut pending,
                         &mut ready,
-                        &mut stream_node_items,
-                        &mut stream_node_counts,
-                        &mut stream_node_outputs,
+                        &mut stream,
                         tx.clone(),
                     )
                     .await?;
@@ -4364,6 +4499,62 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn streaming_join_waits_for_both_inputs_then_finalizes() -> Result<()> {
+        let logical = crate::dag::LogicalGraph::builder()
+            .add_node(crate::dag::LogicalNode::channel(
+                "left",
+                ChannelOperator::OfItems {
+                    items: vec![serde_json::json!({"id": "one", "value": 1})],
+                },
+            ))
+            .add_node(crate::dag::LogicalNode::channel(
+                "right",
+                ChannelOperator::OfItems {
+                    items: vec![serde_json::json!({"sample": "one", "score": 2})],
+                },
+            ))
+            .add_node(crate::dag::LogicalNode::channel(
+                "joined",
+                ChannelOperator::Join {
+                    left_key: "id".into(),
+                    right_key: "sample".into(),
+                },
+            ))
+            .add_node(crate::dag::LogicalNode::channel(
+                "output",
+                ChannelOperator::Collect,
+            ))
+            .add_edge("left", "joined", 0, 0)
+            .add_edge("right", "joined", 0, 1)
+            .add_edge("joined", "output", 0, 0)
+            .build();
+        let physical = logical
+            .compile(|_, _| unreachable!("channel nodes are built by the planner"))
+            .unwrap();
+        let mut dag = DAG::default();
+        dag.install_compiled_graph(logical, physical)?;
+
+        let report = dag
+            .run(&crate::dag::SchedulerConfig::default(), &test_ctx(), None)
+            .await?;
+        assert!(report.ok, "{report:?}");
+        assert_eq!(dag.status("left#0"), Some(RuntimeStatus::Success));
+        assert_eq!(dag.status("right#0"), Some(RuntimeStatus::Success));
+        assert_eq!(dag.status("joined#0"), Some(RuntimeStatus::Success));
+        assert_eq!(dag.status("output#0"), Some(RuntimeStatus::Success));
+
+        let NodeValue::Channel(channel) = &dag.output("output#0").unwrap()[&0] else {
+            panic!("streaming join should produce a channel");
+        };
+        assert_eq!(channel.items.len(), 1);
+        assert_eq!(channel.items[0]["left_id"], "one");
+        assert_eq!(channel.items[0]["right_sample"], "one");
+        assert_eq!(channel.items[0]["left_value"], 1);
+        assert_eq!(channel.items[0]["right_score"], 2);
+        Ok(())
+    }
+
     #[test]
     fn topo_order_diamond() {
         let dag = get_diamond_dag();
@@ -5054,6 +5245,7 @@ mod tests {
                 stdout_log: None,
                 stderr_log: None,
                 output_artifacts: Vec::new(),
+                output_artifacts_by_port: Default::default(),
                 workspace: None,
                 task_manifest: None,
             });

@@ -917,5 +917,6 @@ fn run_details(
         workspace: None,
         task_manifest: None,
         output_artifacts: Vec::new(),
+        output_artifacts_by_port: Default::default(),
     }
 }

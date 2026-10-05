@@ -271,6 +271,9 @@ pub struct NodeRunDetails {
     /// are materialized as JSON. This is the cross-executor transfer contract.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub output_artifacts: Vec<crate::value::FileRef>,
+    /// Output artifacts grouped by the originating output port.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub output_artifacts_by_port: BTreeMap<u8, Vec<crate::value::FileRef>>,
 }
 
 /// One resolved upstream input of a node, recorded at dispatch time.
