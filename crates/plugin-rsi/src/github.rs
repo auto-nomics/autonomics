@@ -52,6 +52,77 @@ pub struct PublishOutcome {
     pub repository_created: bool,
 }
 
+/// Immutable result of opening one plugin update PR.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PullRequestOutcome {
+    /// Remote containing the pushed update branch.
+    pub remote: String,
+    /// Reviewed commit pushed to the update branch.
+    pub commit: String,
+    /// Branch created for this update proposal.
+    pub branch: String,
+    /// GitHub PR number.
+    pub number: u64,
+    /// Human-reviewable GitHub PR URL.
+    pub url: String,
+}
+
+/// Immutable result of merging one plugin update PR.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MergeOutcome {
+    /// Remote whose default branch received the merge.
+    pub remote: String,
+    /// Immutable commit produced by the merge.
+    pub commit: String,
+}
+
+/// Trusted publisher abstraction used by the plugin lifecycle.
+///
+/// Production uses [`GhPublisher`]; hosts and tests may inject another
+/// implementation without granting agents raw GitHub access.
+pub trait PluginPublisher {
+    /// Publish one reviewed plugin repository and report its immutable source.
+    fn publish_plugin(&self, plugin_name: &str, repo: &GitRepo) -> Result<PublishOutcome>;
+}
+
+/// Trusted PR abstraction used by update proposals.
+///
+/// As with publication, agents never see this interface; only the daemon can
+/// push review branches and call the GitHub CLI.
+pub trait PluginPullRequestPublisher {
+    /// Push one reviewed update branch and open a PR against its base.
+    fn open_pull_request(
+        &self,
+        plugin_name: &str,
+        branch: &str,
+        repo: &GitRepo,
+    ) -> Result<PullRequestOutcome>;
+
+    /// Merge one previously opened PR and return its immutable merge commit.
+    fn merge_pull_request(&self, remote: &str, number: u64) -> Result<MergeOutcome>;
+}
+
+impl PluginPublisher for GhPublisher {
+    fn publish_plugin(&self, plugin_name: &str, repo: &GitRepo) -> Result<PublishOutcome> {
+        self.publish(plugin_name, repo)
+    }
+}
+
+impl PluginPullRequestPublisher for GhPublisher {
+    fn open_pull_request(
+        &self,
+        plugin_name: &str,
+        branch: &str,
+        repo: &GitRepo,
+    ) -> Result<PullRequestOutcome> {
+        self.open_update_pull_request(plugin_name, branch, repo)
+    }
+
+    fn merge_pull_request(&self, remote: &str, number: u64) -> Result<MergeOutcome> {
+        self.merge_update_pull_request(remote, number)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct GhPublisher {
     config: GhPublisherConfig,
@@ -180,6 +251,102 @@ impl GhPublisher {
         })
     }
 
+    /// Push an update branch and open a GitHub PR.
+    pub fn open_update_pull_request(
+        &self,
+        plugin_name: &str,
+        branch: &str,
+        repo: &GitRepo,
+    ) -> Result<PullRequestOutcome> {
+        if !self.status().authenticated {
+            return Err(Error::GitHub("gh is not authenticated".into()));
+        }
+        crate::validate_plugin_name(plugin_name)?;
+        validate_branch_name(branch)?;
+        if !repo.is_clean()? {
+            return Err(Error::GitHub(
+                "repository has uncommitted content; only reviewed commits can publish".into(),
+            ));
+        }
+        let commit = repo.head()?;
+        let remote = repo
+            .remote_url("origin")?
+            .ok_or_else(|| Error::GitHub("update workspace has no origin remote".into()))?;
+        let slug = github_slug(&remote)?;
+        repo.switch_new_branch(branch)?;
+        repo.push("origin", branch)?;
+        let created = self.run_gh_capture(&[
+            "pr",
+            "create",
+            "--repo",
+            &slug,
+            "--head",
+            branch,
+            "--base",
+            &self.config.default_branch,
+            "--title",
+            &format!("plugin-rsi: optimize {plugin_name}"),
+            "--body",
+            "Automated plugin update reviewed by the RSI lifecycle.",
+        ])?;
+        let url = created
+            .trim()
+            .lines()
+            .last()
+            .unwrap_or_default()
+            .to_string();
+        let number = parse_pr_number(&url)?;
+        if repo.head()? != commit {
+            return Err(Error::GitHub(
+                "local HEAD moved while opening the PR; update is not immutable".into(),
+            ));
+        }
+        Ok(PullRequestOutcome {
+            remote,
+            commit,
+            branch: branch.to_string(),
+            number,
+            url,
+        })
+    }
+
+    /// Merge one update PR and return its merge commit.
+    pub fn merge_update_pull_request(&self, remote: &str, number: u64) -> Result<MergeOutcome> {
+        if !self.status().authenticated {
+            return Err(Error::GitHub("gh is not authenticated".into()));
+        }
+        let slug = github_slug(remote)?;
+        let number = number.to_string();
+        self.run_gh(&[
+            "pr",
+            "merge",
+            &number,
+            "--repo",
+            &slug,
+            "--squash",
+            "--delete-branch",
+        ])?;
+        let view = self.run_gh_capture(&[
+            "pr",
+            "view",
+            &number,
+            "--repo",
+            &slug,
+            "--json",
+            "mergeCommit",
+        ])?;
+        let parsed: MergeView = serde_json::from_str(&view)
+            .map_err(|source| Error::GitHub(format!("cannot parse gh pr view output: {source}")))?;
+        let commit = parsed.merge_commit.oid;
+        if commit.len() != 40 || !commit.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(Error::GitHub("gh returned an invalid merge commit".into()));
+        }
+        Ok(MergeOutcome {
+            remote: remote.to_string(),
+            commit,
+        })
+    }
+
     fn run_gh(&self, args: &[&str]) -> Result<()> {
         let output = self.spawn(args)?;
         if output.status.success() {
@@ -204,6 +371,58 @@ impl GhPublisher {
             .output()
             .map_err(|source| Error::GitHub(format!("cannot run gh: {source}")))
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct MergeView {
+    merge_commit: MergeCommit,
+}
+
+#[derive(Debug, Deserialize)]
+struct MergeCommit {
+    oid: String,
+}
+
+fn validate_branch_name(branch: &str) -> Result<()> {
+    let valid = branch == "plugin-rsi-latest"
+        || branch.strip_prefix("plugin-rsi/").is_some_and(|suffix| {
+            !suffix.is_empty()
+                && !suffix.contains('/')
+                && suffix
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        });
+    if valid {
+        Ok(())
+    } else {
+        Err(Error::GitHub(
+            "PR branch must be `plugin-rsi/<alphanumeric-or-dash>`".into(),
+        ))
+    }
+}
+
+fn github_slug(remote: &str) -> Result<String> {
+    let without_git = remote.trim_end_matches(".git");
+    let path = remote
+        .strip_prefix("git@github.com:")
+        .or_else(|| without_git.strip_prefix("https://github.com/"))
+        .map(str::to_string);
+    let Some(path) = path else {
+        return Err(Error::GitHub(format!("remote `{remote}` is not on GitHub")));
+    };
+    if path.split('/').count() != 2 {
+        return Err(Error::GitHub(format!("invalid GitHub remote `{remote}`")));
+    }
+    Ok(path)
+}
+
+fn parse_pr_number(url: &str) -> Result<u64> {
+    url.trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .ok_or_else(|| Error::GitHub("gh did not return a PR URL".into()))
 }
 
 fn account_from_status(output: &str) -> Option<String> {

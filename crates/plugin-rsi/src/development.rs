@@ -350,7 +350,63 @@ impl<'a> PluginDevelopment<'a> {
             .map_err(|source| Error::Validation(format!("invalid report JSON: {source}")))
     }
 
-    fn refresh(&mut self) -> Result<()> {
+    /// Begin trusted publication of an approved proposal.
+    pub fn start_publish(&mut self) -> Result<Proposal> {
+        self.refresh()?;
+        self.store.start_publish(self.id())
+    }
+
+    /// Record a successful publication push.
+    pub fn mark_published(&mut self, remote: &str, commit: &str) -> Result<Proposal> {
+        let proposal = self.store.mark_published(self.id(), remote, commit)?;
+        self.proposal = proposal.clone();
+        Ok(proposal)
+    }
+
+    /// Record a failed publication push and return the proposal to repair.
+    pub fn mark_publish_failed(&mut self) -> Result<Proposal> {
+        let proposal = self.store.mark_publish_failed(self.id())?;
+        self.proposal = proposal.clone();
+        Ok(proposal)
+    }
+
+    /// Record the PR opened for an approved update proposal.
+    pub fn mark_pull_request_open(
+        &mut self,
+        remote: &str,
+        commit: &str,
+        number: u64,
+        url: &str,
+    ) -> Result<Proposal> {
+        let proposal = self
+            .store
+            .mark_pull_request_open(self.id(), remote, commit, number, url)?;
+        self.proposal = proposal.clone();
+        Ok(proposal)
+    }
+
+    /// Record the merge commit of an update proposal.
+    pub fn mark_pull_request_merged(&mut self, commit: &str) -> Result<Proposal> {
+        let proposal = self.store.mark_pull_request_merged(self.id(), commit)?;
+        self.proposal = proposal.clone();
+        Ok(proposal)
+    }
+
+    /// Begin installation of a published proposal.
+    pub fn mark_install_pending(&mut self) -> Result<Proposal> {
+        let proposal = self.store.mark_install_pending(self.id())?;
+        self.proposal = proposal.clone();
+        Ok(proposal)
+    }
+
+    /// Record completion of the local plugin source installation.
+    pub fn mark_installed(&mut self) -> Result<Proposal> {
+        let proposal = self.store.mark_installed(self.id())?;
+        self.proposal = proposal.clone();
+        Ok(proposal)
+    }
+
+    pub(crate) fn refresh(&mut self) -> Result<()> {
         self.proposal = self.store.load(self.id())?;
         Ok(())
     }

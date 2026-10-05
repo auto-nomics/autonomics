@@ -10,13 +10,16 @@ use sha2::{Digest, Sha256};
 use crate::{
     Error, GitRepo, Result,
     development::PluginDevelopment,
+    install::InstalledPluginSource,
     request::{RequestStore, atomic_toml, unix_now},
+    validate::EnvironmentCatalog,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProposalAction {
     NewPlugin,
+    UpdatePlugin,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -29,6 +32,8 @@ pub enum ProposalStatus {
     Approved,
     Publishing,
     Published,
+    PullRequestOpen,
+    PullRequestMerged,
     InstallPending,
     Installed,
     PublishFailed,
@@ -43,6 +48,9 @@ pub struct Proposal {
     /// Runtime kinds currently declared by the proposal's plugin manifest.
     #[serde(default)]
     pub node_kinds: Vec<String>,
+    /// Runtime kinds owned by the installed plugin this proposal updates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_node_kinds: Option<Vec<String>>,
     pub action: ProposalAction,
     pub status: ProposalStatus,
     pub authored_by: String,
@@ -53,17 +61,48 @@ pub struct Proposal {
     /// Digest-pinned reference resolved from the environment catalog.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub environment_reference: Option<String>,
+    /// Immutable installed revision from which an update proposal started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_commit: Option<String>,
+    /// Installed remote from which an update proposal started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_remote: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_commit: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pushed_commit: Option<String>,
+    /// GitHub PR created for an update proposal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_request_number: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_request_url: Option<String>,
+    /// Commit installed after the update PR merged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merged_commit: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub latest_report: Option<String>,
     pub rationale: String,
     pub created_at: i64,
     pub updated_at: i64,
+}
+
+/// Creates the baseline workspace for an update proposal.
+pub trait PluginSourceFetcher {
+    /// Materialize `source.remote` at `source.commit` in `destination`.
+    fn fetch(&self, source: &InstalledPluginSource, destination: &Path) -> Result<()>;
+}
+
+/// Production fetcher backed by the system git CLI.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct GitPluginSourceFetcher;
+
+impl PluginSourceFetcher for GitPluginSourceFetcher {
+    fn fetch(&self, source: &InstalledPluginSource, destination: &Path) -> Result<()> {
+        GitRepo::clone_at(destination, &source.remote, &source.commit, "origin")?;
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -97,22 +136,7 @@ impl ProposalStore {
         requests: &RequestStore,
     ) -> Result<PluginDevelopment<'_>> {
         crate::validate_plugin_name(plugin_name)?;
-        let requested = BTreeSet::from_iter(request_ids.iter().cloned());
-        if requested.is_empty() {
-            return Err(Error::InvalidRequest(
-                "at least one request id is required".into(),
-            ));
-        }
-        let missing = requests.missing_ids(&requested);
-        if !missing.is_empty() {
-            return Err(Error::InvalidRequest(format!(
-                "unknown request ids: {}",
-                missing.join(", ")
-            )));
-        }
-        if rationale.trim().is_empty() {
-            return Err(Error::InvalidRequest("rationale is required".into()));
-        }
+        let requested = self.validate_requests(plugin_name, request_ids, requests, rationale)?;
 
         let now = unix_now();
         let proposal_id = proposal_id(plugin_name, &requested, now);
@@ -129,15 +153,111 @@ impl ProposalStore {
             proposal_id,
             plugin_name: plugin_name.to_string(),
             node_kinds: Vec::new(),
+            base_node_kinds: None,
             action: ProposalAction::NewPlugin,
             status: ProposalStatus::Draft,
             authored_by: "agent".to_string(),
             request_ids: request_ids.to_vec(),
             environment_id: None,
             environment_reference: None,
+            base_commit: None,
+            base_remote: None,
             source_commit: None,
             remote: None,
             pushed_commit: None,
+            pull_request_number: None,
+            pull_request_url: None,
+            merged_commit: None,
+            latest_report: None,
+            rationale: rationale.trim().to_string(),
+            created_at: now,
+            updated_at: now,
+        };
+        self.save(&proposal)?;
+        Ok(PluginDevelopment::new(self, proposal))
+    }
+
+    /// Create an update proposal from one installed plugin's pinned source.
+    ///
+    /// The resulting workspace is detached at the installed commit. Existing
+    /// node kinds are copied into the proposal so later validation can allow
+    /// ownership changes while still rejecting collisions with other plugins.
+    pub fn create_update(
+        &self,
+        plugin_name: &str,
+        request_ids: &[String],
+        rationale: &str,
+        requests: &RequestStore,
+        source: &InstalledPluginSource,
+        catalog: &EnvironmentCatalog,
+        fetcher: &dyn PluginSourceFetcher,
+    ) -> Result<PluginDevelopment<'_>> {
+        let requested = self.validate_requests(plugin_name, request_ids, requests, rationale)?;
+        validate_update_source(source)?;
+
+        let now = unix_now();
+        let proposal_id = proposal_id(plugin_name, &requested, now);
+        let path = self.proposal_path(&proposal_id);
+        if path.exists() {
+            return Err(Error::InvalidRequest(format!(
+                "proposal directory already exists: {}",
+                path.display()
+            )));
+        }
+        let repo_path = path.join("repo");
+        fetcher.fetch(source, &repo_path)?;
+        let manifest_text =
+            std::fs::read_to_string(repo_path.join("manifest.toml")).map_err(|source| {
+                Error::ReadFile {
+                    path: repo_path.join("manifest.toml"),
+                    source,
+                }
+            })?;
+        let manifest: container_plugin::manifest::PluginManifest =
+            toml::from_str(&manifest_text).map_err(|source| Error::ParseToml {
+                path: repo_path.join("manifest.toml"),
+                source,
+            })?;
+        if manifest.plugin_name != plugin_name {
+            return Err(Error::Validation(format!(
+                "installed manifest names `{}`, expected `{plugin_name}`",
+                manifest.plugin_name
+            )));
+        }
+        let environment_reference = manifest.image.reference.as_str().to_string();
+        let environment_id = catalog
+            .find_reference(&environment_reference)
+            .ok_or_else(|| {
+                Error::Validation(format!(
+                    "installed environment `{environment_reference}` is not in the approved catalog"
+                ))
+            })?
+            .to_string();
+        let node_kinds = manifest
+            .nodes
+            .iter()
+            .map(|node| node.kind.clone())
+            .collect::<Vec<_>>();
+        let proposal = Proposal {
+            schema_version: 1,
+            proposal_id,
+            plugin_name: plugin_name.to_string(),
+            node_kinds: node_kinds.clone(),
+            base_node_kinds: Some(node_kinds),
+            action: ProposalAction::UpdatePlugin,
+            status: ProposalStatus::Draft,
+            authored_by: "agent".to_string(),
+            request_ids: request_ids.to_vec(),
+            environment_id: Some(environment_id),
+            environment_reference: Some(environment_reference),
+            base_commit: Some(source.commit.clone()),
+            base_remote: Some(source.remote.clone()),
+            source_commit: Some(source.commit.clone()),
+            remote: Some(source.remote.clone()),
+            pushed_commit: None,
+            pull_request_number: None,
+            pull_request_url: None,
+            merged_commit: None,
             latest_report: None,
             rationale: rationale.trim().to_string(),
             created_at: now,
@@ -203,10 +323,16 @@ impl ProposalStore {
     }
 
     pub fn mark_published(&self, id: &str, remote: &str, commit: &str) -> Result<Proposal> {
+        let current = self.load(id)?;
+        if current.action != ProposalAction::NewPlugin
+            || current.status != ProposalStatus::Publishing
+        {
+            return Err(Error::InvalidTransition {
+                from: format!("{:?}", current.status),
+                to: "published".into(),
+            });
+        }
         self.update(id, |proposal| {
-            if proposal.status != ProposalStatus::Publishing {
-                return;
-            }
             proposal.status = ProposalStatus::Published;
             proposal.remote = Some(remote.to_string());
             proposal.pushed_commit = Some(commit.to_string());
@@ -215,6 +341,50 @@ impl ProposalStore {
 
     pub fn mark_publish_failed(&self, id: &str) -> Result<Proposal> {
         self.transition(id, ProposalStatus::PublishFailed)
+    }
+
+    /// Record the GitHub PR opened for an approved update proposal.
+    pub fn mark_pull_request_open(
+        &self,
+        id: &str,
+        remote: &str,
+        commit: &str,
+        number: u64,
+        url: &str,
+    ) -> Result<Proposal> {
+        let current = self.load(id)?;
+        if current.action != ProposalAction::UpdatePlugin
+            || current.status != ProposalStatus::Publishing
+        {
+            return Err(Error::InvalidTransition {
+                from: format!("{:?}", current.status),
+                to: "pull_request_open".into(),
+            });
+        }
+        self.update(id, |proposal| {
+            proposal.status = ProposalStatus::PullRequestOpen;
+            proposal.remote = Some(remote.to_string());
+            proposal.pushed_commit = Some(commit.to_string());
+            proposal.pull_request_number = Some(number);
+            proposal.pull_request_url = Some(url.to_string());
+        })
+    }
+
+    /// Record the merge commit produced for one update PR.
+    pub fn mark_pull_request_merged(&self, id: &str, commit: &str) -> Result<Proposal> {
+        let current = self.load(id)?;
+        if current.action != ProposalAction::UpdatePlugin
+            || current.status != ProposalStatus::PullRequestOpen
+        {
+            return Err(Error::InvalidTransition {
+                from: format!("{:?}", current.status),
+                to: "pull_request_merged".into(),
+            });
+        }
+        self.update(id, |proposal| {
+            proposal.status = ProposalStatus::PullRequestMerged;
+            proposal.merged_commit = Some(commit.to_string());
+        })
     }
 
     pub fn mark_install_pending(&self, id: &str) -> Result<Proposal> {
@@ -254,9 +424,12 @@ impl ProposalStore {
             | (ProposalStatus::PendingReview, ProposalStatus::Rejected)
             | (ProposalStatus::Approved, ProposalStatus::Publishing)
             | (ProposalStatus::Publishing, ProposalStatus::Published)
+            | (ProposalStatus::Publishing, ProposalStatus::PullRequestOpen)
             | (ProposalStatus::Publishing, ProposalStatus::PublishFailed)
             | (ProposalStatus::PublishFailed, ProposalStatus::Approved)
+            | (ProposalStatus::PullRequestOpen, ProposalStatus::PullRequestMerged)
             | (ProposalStatus::Published, ProposalStatus::InstallPending)
+            | (ProposalStatus::PullRequestMerged, ProposalStatus::InstallPending)
             | (ProposalStatus::InstallPending, ProposalStatus::Installed) => true,
             (from, to) if from == to => true,
             _ => false,
@@ -295,6 +468,49 @@ impl ProposalStore {
     pub(crate) fn author_email(&self) -> &str {
         &self.author_email
     }
+
+    fn validate_requests(
+        &self,
+        plugin_name: &str,
+        request_ids: &[String],
+        requests: &RequestStore,
+        rationale: &str,
+    ) -> Result<BTreeSet<String>> {
+        crate::validate_plugin_name(plugin_name)?;
+        let requested = BTreeSet::from_iter(request_ids.iter().cloned());
+        if requested.is_empty() {
+            return Err(Error::InvalidRequest(
+                "at least one request id is required".into(),
+            ));
+        }
+        let missing = requests.missing_ids(&requested);
+        if !missing.is_empty() {
+            return Err(Error::InvalidRequest(format!(
+                "unknown request ids: {}",
+                missing.join(", ")
+            )));
+        }
+        if rationale.trim().is_empty() {
+            return Err(Error::InvalidRequest("rationale is required".into()));
+        }
+        Ok(requested)
+    }
+}
+
+fn validate_update_source(source: &InstalledPluginSource) -> Result<()> {
+    if !source.remote.starts_with("https://github.com/")
+        && !source.remote.starts_with("git@github.com:")
+    {
+        return Err(Error::Validation(
+            "update proposals require a GitHub source".into(),
+        ));
+    }
+    if source.commit.len() != 40 || !source.commit.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(Error::Validation(
+            "update base commit must be a full 40-hex SHA".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn proposal_id(plugin_name: &str, request_ids: &BTreeSet<String>, now: i64) -> String {

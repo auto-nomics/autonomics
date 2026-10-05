@@ -78,7 +78,7 @@ fn greenfield_proposal_reaches_review_gate() {
     let mut development = proposals
         .create(
             "demo-plugin",
-            &[request.id.clone()],
+            std::slice::from_ref(&request.id),
             "The request needs a deterministic adapter.",
             &requests,
         )

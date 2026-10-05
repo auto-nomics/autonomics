@@ -27,6 +27,47 @@ impl GitRepo {
         Ok(repo)
     }
 
+    /// Clone `remote` into `path` and detach to an immutable commit.
+    ///
+    /// Update proposals must start from the exact revision recorded in
+    /// `plugins.toml`, never from a mutable default branch.
+    pub fn clone_at(
+        path: impl AsRef<Path>,
+        remote: &str,
+        commit: &str,
+        origin: &str,
+    ) -> Result<Self> {
+        let path = path.as_ref();
+        std::fs::create_dir_all(path.parent().ok_or_else(|| {
+            Error::Validation("clone destination has no parent directory".into())
+        })?)?;
+        let output = Command::new("git")
+            .current_dir(path.parent().unwrap())
+            .args(["clone", "--no-checkout", "--origin", origin, remote])
+            .arg(path)
+            .output()
+            .map_err(|source| Error::Git {
+                command: "clone".into(),
+                stderr: source.to_string(),
+            })?;
+        if !output.status.success() {
+            return Err(Error::Git {
+                command: "clone".into(),
+                stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            });
+        }
+        let repo = Self {
+            path: path.to_path_buf(),
+        };
+        repo.run(&["checkout", "--detach", commit])?;
+        if repo.head()? != commit {
+            return Err(Error::Validation(format!(
+                "cloned repository is not at requested commit {commit}"
+            )));
+        }
+        Ok(repo)
+    }
+
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -38,6 +79,11 @@ impl GitRepo {
 
     pub fn head(&self) -> Result<String> {
         Ok(self.run_capture(&["rev-parse", "HEAD"])?.trim().to_string())
+    }
+
+    /// Create and switch to a review branch at the current `HEAD`.
+    pub fn switch_new_branch(&self, branch: &str) -> Result<()> {
+        self.run(&["switch", "-c", branch])
     }
 
     pub fn remote_url(&self, remote: &str) -> Result<Option<String>> {

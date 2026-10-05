@@ -37,6 +37,14 @@ impl EnvironmentCatalog {
     pub fn get(&self, id: &str) -> Option<&Environment> {
         self.environments.get(id)
     }
+
+    /// Return the catalog id owning one digest-pinned reference.
+    pub fn find_reference(&self, reference: &str) -> Option<&str> {
+        self.environments
+            .iter()
+            .find(|(_, environment)| environment.reference == reference)
+            .map(|(id, _)| id.as_str())
+    }
 }
 
 pub fn validate_workspace(
@@ -64,10 +72,11 @@ pub fn validate_workspace(
         }
     }
 
+    let owned_kinds = proposal.base_node_kinds.as_deref().unwrap_or(&[]);
     let collisions = proposal
         .node_kinds
         .iter()
-        .filter(|kind| installed_kinds.contains(kind))
+        .filter(|kind| installed_kinds.contains(kind) && !owned_kinds.contains(kind))
         .cloned()
         .collect::<Vec<_>>();
     if !collisions.is_empty() {
@@ -400,15 +409,21 @@ script_file = "scripts/adapter.sh"
             proposal_id: "P-test".into(),
             plugin_name: "demo-plugin".into(),
             node_kinds: vec!["demo_plugin".into()],
+            base_node_kinds: None,
             action: ProposalAction::NewPlugin,
             status: ProposalStatus::Draft,
             authored_by: "agent".into(),
             request_ids: vec!["R-test".into()],
             environment_id: Some("demo".into()),
             environment_reference: Some(ENVIRONMENT_REFERENCE.into()),
+            base_commit: None,
+            base_remote: None,
             source_commit: None,
             remote: None,
             pushed_commit: None,
+            pull_request_number: None,
+            pull_request_url: None,
+            merged_commit: None,
             latest_report: None,
             rationale: "test".into(),
             created_at: 0,
@@ -475,5 +490,21 @@ script_file = "scripts/adapter.sh"
         let report = validate_workspace(&proposal2, &workspace2, &catalog2, &[], 1);
         assert_eq!(report.overall, GateStatus::Fail);
         assert!(report.gates.iter().any(|gate| gate.name == "script_static"));
+    }
+
+    #[test]
+    fn updates_keep_existing_kind_ownership() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (mut proposal, workspace, catalog) = setup(tmp.path());
+        proposal.action = ProposalAction::UpdatePlugin;
+        proposal.base_node_kinds = Some(proposal.node_kinds.clone());
+        let report = validate_workspace(
+            &proposal,
+            &workspace,
+            &catalog,
+            &["demo_plugin".to_string()],
+            1,
+        );
+        assert_eq!(report.overall, GateStatus::Pass, "{report:?}");
     }
 }

@@ -24,7 +24,7 @@ use serde_json::{Value, json};
 use crate::{Error, PluginDevelopment, ProposalWorkspace, Result as RsiResult};
 
 const MANIFEST_FILE: &str = "manifest.toml";
-const MAX_AGENT_ID_BYTES: usize = 256;
+pub(crate) const MAX_AGENT_ID_BYTES: usize = 256;
 const DEFAULT_TOOL_TIMEOUT_SECS: u64 = 900;
 
 /// One agent's exclusive assignment to develop a plugin candidate.
@@ -212,6 +212,9 @@ pub fn plugin_development_tool_registrations(agent_id: impl Into<String>) -> Vec
         ToolRegistration::from(PluginNodeSpecTool {
             state: state.clone(),
         }),
+        ToolRegistration::from(PluginNodeCreateTool {
+            state: state.clone(),
+        }),
         ToolRegistration::from(PluginNodeUpdateDocTool {
             state: state.clone(),
         }),
@@ -344,6 +347,52 @@ impl ToolFunction for PluginNodeSpecTool {
         Ok(ToolResult::success_json(
             serde_json::to_value(node).map_err(tool_error)?,
         ))
+    }
+}
+
+#[tool(
+    name = "plugin_node_create",
+    description = "Add one complete node definition to the assigned plugin candidate. Create the referenced script separately before host adoption."
+)]
+struct PluginNodeCreateInput {
+    /// Complete NodeDefinition value in container-plugin JSON form.
+    node: Value,
+}
+
+struct PluginNodeCreateTool {
+    state: PluginToolState,
+}
+
+#[async_trait]
+impl ToolFunction for PluginNodeCreateTool {
+    type Input = PluginNodeCreateInput;
+
+    async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
+        let node: NodeDefinition =
+            serde_json::from_value(input.node).map_err(|error| ToolError::ValidationFailed {
+                message: format!("invalid node definition: {error}"),
+            })?;
+        container_plugin::node_definition::validate(&node).map_err(|error| {
+            ToolError::ValidationFailed {
+                message: format!("invalid node definition: {error}"),
+            }
+        })?;
+
+        let binding = resolve_binding(&self.state).map_err(tool_error)?;
+        let workspace = binding.workspace();
+        let mut manifest = load_manifest(&workspace).map_err(tool_error)?;
+        if manifest
+            .nodes
+            .iter()
+            .any(|existing| existing.kind == node.kind)
+        {
+            return Err(ToolError::ValidationFailed {
+                message: format!("node kind `{}` already exists", node.kind),
+            });
+        }
+        manifest.nodes.push(node);
+        save_manifest(&workspace, &manifest).map_err(tool_error)?;
+        Ok(ToolResult::success("created node"))
     }
 }
 
@@ -765,7 +814,7 @@ mod tests {
             .bind_plugin_agent("agent-a", &mut development, "attempt-1")
             .unwrap();
         let tools = plugin_development_tool_registrations("agent-a");
-        assert_eq!(tools.len(), 9);
+        assert_eq!(tools.len(), 10);
 
         let status = execute(&tools, "plugin_development_status", json!({}))
             .await
@@ -833,12 +882,14 @@ mod tests {
             }
             other => panic!("unexpected run result: {other:?}"),
         }
-        let requests = requests.lock().unwrap();
-        assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].image, ENVIRONMENT_REFERENCE);
-        assert_eq!(requests[0].command, vec!["sh", "scripts/adapter.sh"]);
-        assert_eq!(requests[0].timeout_secs, 17);
-        assert_eq!(requests[0].network, ContainerNetwork::Isolated);
+        {
+            let requests = requests.lock().unwrap();
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0].image, ENVIRONMENT_REFERENCE);
+            assert_eq!(requests[0].command, vec!["sh", "scripts/adapter.sh"]);
+            assert_eq!(requests[0].timeout_secs, 17);
+            assert_eq!(requests[0].network, ContainerNetwork::Isolated);
+        }
 
         assert!(
             registry
