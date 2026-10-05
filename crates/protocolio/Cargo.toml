@@ -7,9 +7,6 @@ rust-version.workspace = true
 description = "Async Rust SDK for protocols.io with agent tools and DAG source nodes."
 
 [dependencies]
-agentik-core = { path = "../agentik-core" }
-agentik-proc = { path = "../agentik-proc" }
-agentik-sdk = { path = "../agentik-sdk" }
 arrow-array.workspace = true
 arrow-schema.workspace = true
 async-trait.workspace = true

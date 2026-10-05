@@ -65,3 +65,47 @@ pub fn opengwas_registrations(
         R::from(download::DownloadFilesTool::new(client, storage)),
     ]
 }
+
+#[cfg(test)]
+mod deprecation_schema_tests {
+    use super::*;
+
+    /// Survey T3: deprecated tool Inputs advertise `"deprecated": true` in
+    /// the derived JSON Schema so tool-facing agents can route pipelines to
+    /// the DAG nodes.
+    #[test]
+    fn table_fetcher_tools_advertise_deprecated_in_schema() {
+        let storage = Arc::new(vfs::OpendalFileStorage::new_temp());
+        let client = Arc::new(crate::OpengwasClient::new(None).unwrap());
+        for registration in opengwas_registrations(client, storage) {
+            let deprecated = registration
+                .definition
+                .input_schema
+                .additional
+                .get("deprecated")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            match registration.definition.name.as_str() {
+                "opengwas_gwasinfo_count" | "opengwas_ld_matrix" => {
+                    assert!(
+                        deprecated,
+                        "{} must advertise deprecated in its schema",
+                        registration.definition.name
+                    );
+                    assert!(
+                        registration
+                            .definition
+                            .description
+                            .contains("prefer the DAG node"),
+                        "{} description must point at the node",
+                        registration.definition.name
+                    );
+                }
+                "opengwas_download_files" => {
+                    assert!(!deprecated, "download_files has no node equivalent");
+                }
+                _ => {}
+            }
+        }
+    }
+}

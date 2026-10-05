@@ -8,12 +8,9 @@ description = "Async Rust SDK for the arXiv API with agent tools for searching a
 
 [dependencies]
 bib-types = { path = "../bib-types" }
-agentik-core = { path = "../agentik-core" }
-agentik-proc = { path = "../agentik-proc" }
-agentik-sdk = { path = "../agentik-sdk" }
 async-trait = { workspace = true }
 quick-xml = "0.39"
-reqwest = { version = "0.13", features = ["json", "form"] }
+reqwest = { version = "0.13", features = ["json", "form", "query"] }
 serde = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }

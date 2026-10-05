@@ -1,3 +1,9 @@
+// Tool Input structs marked `#[deprecated]` so the derived tool
+// schema advertises `"deprecated": true` (survey T3 dual-track
+// guidance); the module-local allow keeps the macro-generated
+// impls in this file warning-free.
+#![allow(deprecated)]
+
 use std::sync::Arc;
 
 use agentik_core::tools::{ToolError, ToolFunction};
@@ -12,13 +18,14 @@ use crate::format::format_associated_diseases;
 
 #[tool(
     name = "opentargets_associated_diseases",
-    description = "Get diseases associated with a gene (target), ranked by the Open \
+    description = "Pipeline/dataframe use: prefer the DAG node `source_opentargets_associated_diseases` (typed table) — this tool stays for interactive lookup. Get diseases associated with a gene (target), ranked by the Open \
                   Targets overall association score. This is the core target-\
                   prioritisation endpoint: for a given Ensembl gene ID it returns the \
                   top diseases/phenotypes with evidence, including the contributing \
                   datasources and a novelty metric. Set fetch_all=true to retrieve \
                   every association (may be thousands)."
 )]
+#[deprecated(note = "prefer the DAG node source_opentargets_associated_diseases for pipeline use")]
 pub struct AssociatedDiseasesInput {
     #[desc = "Ensembl gene ID, e.g. 'ENSG00000012048'."]
     pub ensembl_id: String,

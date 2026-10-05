@@ -241,6 +241,95 @@ mod tests {
     }
 
     #[test]
+    fn gwascatalog_source_factories_are_registered() {
+        let runtime_env = datafusion::prelude::SessionContext::new().runtime_env();
+        let registry = build_default_registry(runtime_env, None, Arc::new(BundleRegistry::new()));
+
+        for kind in [
+            "source_gwascatalog_search",
+            "source_gwascatalog_studies",
+            "source_gwascatalog_associations",
+            "source_gwascatalog_study_associations",
+            "source_gwascatalog_snps",
+            "source_gwascatalog_efo_traits",
+            "source_gwascatalog_unpublished_studies",
+            "source_gwascatalog_summary_associations",
+            "source_gwascatalog_download",
+        ] {
+            let ports = registry
+                .get_node_ports(kind)
+                .unwrap_or_else(|error| panic!("{kind} must be registered: {error}"));
+            assert_eq!(ports.input_ports().len(), 0);
+            assert_eq!(ports.output_ports().len(), 1);
+        }
+    }
+
+    /// The tool→node migration (dag-generalization survey B2): OpenTargets
+    /// ranked associations, ChEMBL mechanism/indication tables, and the KEGG
+    /// drug–drug interaction table are the node-side counterparts added for
+    /// the previously tool-only capabilities.
+    #[test]
+    fn b2_gap_source_factories_are_registered() {
+        let runtime_env = datafusion::prelude::SessionContext::new().runtime_env();
+        let registry = build_default_registry(runtime_env, None, Arc::new(BundleRegistry::new()));
+
+        for kind in [
+            "source_opentargets_associated_diseases",
+            "source_opentargets_associated_targets",
+            "source_chembl_mechanisms",
+            "source_chembl_indications",
+            "source_kegg_ddi",
+        ] {
+            let ports = registry
+                .get_node_ports(kind)
+                .unwrap_or_else(|error| panic!("{kind} must be registered: {error}"));
+            assert_eq!(ports.output_ports().len(), 1);
+        }
+    }
+
+    /// B5 (M3-② spike): the scalar and matrix OpenGWAS operations fold into
+    /// the DataFrame channel — scalar as a single-row DataFrame, matrix as
+    /// a long-format table. No new `PortType`s.
+    #[test]
+    fn b5_scalar_matrix_factories_are_registered() {
+        let runtime_env = datafusion::prelude::SessionContext::new().runtime_env();
+        let registry = build_default_registry(runtime_env, None, Arc::new(BundleRegistry::new()));
+
+        for kind in [
+            "source_opengwas_gwasinfo_count",
+            "source_opengwas_ld_matrix",
+        ] {
+            let ports = registry
+                .get_node_ports(kind)
+                .unwrap_or_else(|error| panic!("{kind} must be registered: {error}"));
+            assert_eq!(ports.input_ports().len(), 0);
+            assert_eq!(ports.output_ports().len(), 1);
+        }
+    }
+
+    /// B6: the stat-side algorithm wrappers named in the survey §2.4
+    /// (`competing_risk` is already covered by `cuminc` + `fine_gray`).
+    #[test]
+    fn b6_stat_factories_are_registered() {
+        let runtime_env = datafusion::prelude::SessionContext::new().runtime_env();
+        let registry = build_default_registry(runtime_env, None, Arc::new(BundleRegistry::new()));
+
+        for kind in [
+            "epi_multistate",
+            "epi_gbtm",
+            "epi_lca",
+            "epi_rf_shap",
+            "epi_cfa",
+        ] {
+            let ports = registry
+                .get_node_ports(kind)
+                .unwrap_or_else(|error| panic!("{kind} must be registered: {error}"));
+            assert_eq!(ports.input_ports().len(), 1);
+            assert!(!ports.output_ports().is_empty());
+        }
+    }
+
+    #[test]
     fn kegg_source_factories_are_registered() {
         let runtime_env = datafusion::prelude::SessionContext::new().runtime_env();
         let container_execution =

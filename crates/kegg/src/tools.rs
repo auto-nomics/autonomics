@@ -1,5 +1,11 @@
 //! Agent tools for KEGG data previews and information summaries.
 
+// Tool Input structs marked `#[deprecated]` so the derived tool
+// schema advertises `"deprecated": true` (survey T3 dual-track
+// guidance); the module-local allow keeps the macro-generated
+// impls in this file warning-free.
+#![allow(deprecated)]
+
 use std::sync::Arc;
 
 use agentik_core::tools::{ToolError, ToolFunction, ToolRegistration};
@@ -187,8 +193,9 @@ impl ToolFunction for KeggConvertTool {
 
 #[tool(
     name = "kegg_ddi",
-    description = "Preview KEGG drug-drug interactions for one or more drug, compound, or drug-product identifiers."
+    description = "Pipeline/dataframe use: prefer the DAG node `source_kegg_ddi` (typed table) — this tool stays for interactive lookup. Preview KEGG drug-drug interactions for one or more drug, compound, or drug-product identifiers."
 )]
+#[deprecated(note = "prefer the DAG node source_kegg_ddi for pipeline use")]
 pub struct KeggDdiInput {
     #[desc = "One or more KEGG entries joined by '+', e.g. 'D00564' or 'D00564+D00100'."]
     pub entries: String,

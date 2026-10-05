@@ -234,9 +234,6 @@ checksum = "c880a97d28a3681c0267bd29cff89621202715b065127cd445fa0f0fe0aa2880"
 name = "alphafold"
 version = "0.1.0"
 dependencies = [
- "agentik-core",
- "agentik-proc",
- "agentik-sdk",
  "arrow-array",
  "arrow-schema",
  "async-trait",
@@ -713,9 +710,6 @@ dependencies = [
 name = "arxiv"
 version = "0.1.0"
 dependencies = [
- "agentik-core",
- "agentik-proc",
- "agentik-sdk",
  "async-trait",
  "bib-types",
  "quick-xml 0.39.4",
@@ -1224,9 +1218,6 @@ dependencies = [
 name = "biorxiv"
 version = "0.1.0"
 dependencies = [
- "agentik-core",
- "agentik-proc",
- "agentik-sdk",
  "async-trait",
  "bib-types",
  "chrono",
@@ -1944,9 +1935,6 @@ checksum = "1c133bc6a41be0d194c306b5506d15e6feeea7b1d6604bd3f8310dfb2ca96486"
 name = "clinicaltrials"
 version = "0.1.0"
 dependencies = [
- "agentik-core",
- "agentik-proc",
- "agentik-sdk",
  "arrow-array",
  "arrow-schema",
  "async-trait",
@@ -3915,9 +3903,6 @@ checksum = "252afb9ae5eaa683babdc6a068b3f5726eb19e05070c731f9b2a23a7c3e8ed34"
 name = "embase"
 version = "0.1.0"
 dependencies = [
- "agentik-core",
- "agentik-proc",
- "agentik-sdk",
  "async-trait",
  "bib-types",
  "reqwest",
@@ -4215,9 +4200,6 @@ dependencies = [
 name = "europepmc"
 version = "0.1.0"
 dependencies = [
- "agentik-core",
- "agentik-proc",
- "agentik-sdk",
  "async-trait",
  "bib-types",
  "reqwest",
@@ -4234,9 +4216,6 @@ dependencies = [
 name = "eutils"
 version = "0.1.0"
 dependencies = [
- "agentik-core",
- "agentik-proc",
- "agentik-sdk",
  "async-trait",
  "bib-types",
  "reqwest",
@@ -5230,13 +5209,18 @@ dependencies = [
  "agentik-core",
  "agentik-proc",
  "agentik-sdk",
+ "arrow-array",
+ "arrow-schema",
  "async-trait",
  "bib-types",
+ "dag-core",
+ "datafusion",
  "futures",
  "reqwest",
  "schemars",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "thiserror 2.0.20",
  "tokio",
  "vfs",
@@ -6030,9 +6014,6 @@ dependencies = [
 name = "interpro"
 version = "0.1.0"
 dependencies = [
- "agentik-core",
- "agentik-proc",
- "agentik-sdk",
  "arrow-array",
  "arrow-schema",
  "async-trait",
@@ -7823,6 +7804,7 @@ dependencies = [
  "flate2",
  "futures",
  "glob",
+ "gwascatalog-sdk",
  "hdf5",
  "hdf5-sys",
  "interpro",
@@ -9562,9 +9544,6 @@ dependencies = [
 name = "protocolio"
 version = "0.1.0"
 dependencies = [
- "agentik-core",
- "agentik-proc",
- "agentik-sdk",
  "arrow-array",
  "arrow-schema",
  "async-trait",
@@ -9597,9 +9576,6 @@ dependencies = [
 name = "pubchem"
 version = "0.1.0"
 dependencies = [
- "agentik-core",
- "agentik-proc",
- "agentik-sdk",
  "arrow-array",
  "arrow-schema",
  "async-trait",
@@ -10571,14 +10547,12 @@ dependencies = [
  "agentik-proc",
  "agentik-sdk",
  "agentik-types",
- "alphafold",
  "anyhow",
  "arc-swap",
  "async-trait",
  "bib-base",
  "chembl",
  "chrono",
- "clinicaltrials",
  "container-plugin",
  "container-runtime",
  "dag-core",
@@ -10588,15 +10562,12 @@ dependencies = [
  "datafusion",
  "futures",
  "gwascatalog-sdk",
- "interpro",
  "kegg",
  "kms",
  "kms-tools",
  "libc",
  "opengwas",
  "opentargets",
- "protocolio",
- "pubchem",
  "rcsb",
  "rusqlite",
  "schemars",

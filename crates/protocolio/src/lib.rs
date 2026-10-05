@@ -6,11 +6,9 @@
 pub mod client;
 pub mod convert;
 pub mod error;
-pub mod format;
 pub mod nodes;
 pub mod query;
 pub mod rate;
-pub mod tools;
 pub mod types;
 
 pub use client::{DEFAULT_ENDPOINT, ENV_ENDPOINT, ENV_TOKEN, ProtocolioClient};

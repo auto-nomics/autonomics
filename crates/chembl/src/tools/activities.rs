@@ -1,3 +1,9 @@
+// Tool Input structs marked `#[deprecated]` so the derived tool
+// schema advertises `"deprecated": true` (survey T3 dual-track
+// guidance); the module-local allow keeps the macro-generated
+// impls in this file warning-free.
+#![allow(deprecated)]
+
 use std::sync::Arc;
 
 use agentik_core::tools::{ToolError, ToolFunction};
@@ -10,10 +16,11 @@ use crate::{ChEMBLClient, format::format_activities};
 
 #[tool(
     name = "chembl_activities",
-    description = "Preview standardized bioactivity records for a ChEMBL molecule or target. \
+    description = "Pipeline/dataframe use: prefer the DAG node `source_chembl_activities` (typed table) — this tool stays for interactive lookup. Preview standardized bioactivity records for a ChEMBL molecule or target. \
                   Provide exactly one of molecule_chembl_id or target_chembl_id. Results include \
                   assay, standard activity type/value/units, relation, and pChEMBL."
 )]
+#[deprecated(note = "prefer the DAG node source_chembl_activities for pipeline use")]
 pub struct ActivitiesInput {
     #[desc = "Optional molecule ID filter, e.g. 'CHEMBL25'."]
     pub molecule_chembl_id: Option<String>,

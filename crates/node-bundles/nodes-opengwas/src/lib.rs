@@ -24,6 +24,7 @@
 //! | `source_opengwas_tophits` | `/tophits` | top-associated SNPs (optionally clumped) |
 
 pub mod associations;
+pub mod count_matrix;
 pub mod gwasinfo;
 pub mod gwasinfo_search;
 pub mod ld_clump;
@@ -47,6 +48,11 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(gwasinfo_search::OpengwasGwasinfoSearchNodeFactory));
         registry.register(Box::new(variants_rsid::OpengwasVariantsRsidNodeFactory));
         registry.register(Box::new(variants_chrpos::OpengwasVariantsChrposNodeFactory));
+        // M3-② spike: the scalar and matrix operations the OpenGWAS tool
+        // layer kept back, folded into the DataFrame channel (T2 rule —
+        // scalar = single-row DataFrame, matrix = long-format DataFrame).
+        registry.register(Box::new(count_matrix::OpengwasGwasinfoCountNodeFactory));
+        registry.register(Box::new(count_matrix::OpengwasLdMatrixNodeFactory));
         registry.register(Box::new(ld_clump::OpengwasLdClumpNodeFactory));
         registry.register(Box::new(tophits::OpengwasTophitsNodeFactory {}));
     }
