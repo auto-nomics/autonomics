@@ -6,6 +6,19 @@
 //! (in a sibling module) is interpreted by the tool's language, so its
 //! escaping policy is chosen by `interpreter`. Param values flow through
 //! the already-resolved map the caller hands in.
+//!
+//! The renderer is deliberately type-blind and carries pure **value
+//! semantics**: every JSON value renders its own spelling, the same on
+//! every surface. The two boolean vocabularies of the param DSL split one
+//! step upstream of here:
+//!
+//! * `bool` params keep value semantics — `false` renders `"false"`, so
+//!   value-reading consumers (`as.logical()` in R, `== "true"` in
+//!   python, env-logical shell helpers) get the submitted value;
+//! * `flag` params (and optional-and-absent params of any type) carry
+//!   presence semantics — the compile step maps `flag = false` to null
+//!   before rendering, and null is the one value that renders `""`, so
+//!   `[ -n "$VAR" ]` presence tests see "unset".
 
 use std::collections::BTreeMap;
 
@@ -32,21 +45,26 @@ fn resolve_token(token: &str, resolved: &BTreeMap<String, Value>) -> Result<Stri
 }
 
 /// Serialise a resolved param value for the argv/env surfaces: numbers
-/// and booleans render unquoted (`--time_limit 1.0`, `--force true`);
-/// strings and string arrays render verbatim (podman never re-shells
-/// argv, and env values pass through `execve`'s raw byte buffer).
+/// and booleans render unquoted (`--time_limit 1.0`, `--force true`,
+/// `--force false`); strings and string arrays render verbatim (podman
+/// never re-shells argv, and env values pass through `execve`'s raw byte
+/// buffer). Null is the one value that renders empty — the presence
+/// channel for optional-and-absent params and for `flag = false` (the
+/// compile step performs that null mapping before rendering).
 fn serialise_value(value: &Value) -> Option<String> {
     Some(match value {
-        // Optional-and-absent params resolve to null and render as an
-        // empty string: env consumers see "" and `[ -n "$VAR" ]` is false.
+        // Null is the presence channel: env consumers see "" and
+        // `[ -n "$VAR" ]` is false. Only optional-and-absent params and
+        // pre-mapped `flag = false` values arrive here; a `bool` param
+        // with a submitted or defaulted false never does.
         Value::Null => String::new(),
-        // Booleans carry *presence* semantics: `false` renders as "" so
-        // both consumer idioms agree — `[ -n "$VAR" ]` presence tests are
-        // off, and `= "true"` equality tests are off. Rendering the
-        // literal "false" made every presence test true (the flag was
-        // passed whenever a user *explicitly disabled* it).
+        // Booleans carry value semantics and render their literal.
+        // Value-reading consumers contract on this: `as.logical("false")`
+        // is FALSE in R while `as.logical("")` is NA, so rendering ""
+        // here fed NA into mvmr/mrpresso-style branch gates whenever a
+        // boolean was explicitly false (audit F02).
         Value::Bool(true) => "true".to_string(),
-        Value::Bool(false) => String::new(),
+        Value::Bool(false) => "false".to_string(),
         Value::Number(n) => n.to_string(),
         Value::String(s) => s.clone(),
         Value::Array(items) => items
@@ -354,12 +372,37 @@ mod tests {
     }
 
     #[test]
-    fn bool_false_renders_empty_for_presence_semantics() {
-        // Explicit false must be indistinguishable from an unset optional:
-        // `[ -n "$VAR" ]` tests off and `= "true"` comparisons fail.
-        // Rendering the literal "false" passed the flag whenever a user
-        // explicitly disabled it (mtag/ldsc presence-style scripts).
+    fn bool_false_renders_the_literal_false_on_every_surface() {
+        // Value semantics (audit F02): a `bool` param with an explicit
+        // false renders "false" wherever it is substituted. R's
+        // `as.logical("false")` is FALSE while `as.logical("")` is NA, so
+        // the literal is the only spelling value-reading consumers can
+        // parse. The renderer is type-blind; presence semantics for
+        // booleans live in the `flag` param type, mapped to null one step
+        // upstream (see spec_compile).
         let resolved = resolved(&[("force", json!(false))]);
+        let mut env = BTreeMap::new();
+        env.insert("MTAG_FORCE".into(), "{{ force }}".into());
+        let rendered = render_env(&env, &resolved).unwrap();
+        assert_eq!(rendered.get("MTAG_FORCE").unwrap(), "false");
+
+        let argv = vec!["--force".into(), "{{ force }}".into()];
+        assert_eq!(
+            render_argv(&argv, &resolved).unwrap(),
+            vec!["--force", "false"]
+        );
+
+        let script = render_script("force <- {{ force }}", "Rscript", &resolved).unwrap();
+        assert_eq!(script, "force <- false");
+    }
+
+    #[test]
+    fn null_renders_empty_for_presence_consumers() {
+        // Presence semantics ride the null channel: optional-and-absent
+        // params (and `flag = false`, mapped to null before rendering)
+        // render "" so `[ -n "$VAR" ]` tests see "unset". This is the
+        // behaviour mtag/ldsc-style presence scripts contract on.
+        let resolved = resolved(&[("force", json!(null))]);
         let mut env = BTreeMap::new();
         env.insert("MTAG_FORCE".into(), "{{ force }}".into());
         let rendered = render_env(&env, &resolved).unwrap();

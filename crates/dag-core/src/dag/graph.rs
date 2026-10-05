@@ -243,11 +243,12 @@ pub struct DAG {
     /// Execution fingerprint of each node's last successful execution
     /// (see [`crate::fingerprint::compute_node_fingerprint`]). The reuse key
     /// for incremental runs: at dispatch a node whose candidate fingerprint
-    /// matches the recorded one — and whose cached outputs are still present
-    /// — is skipped. Mutations drop the affected node's entry; staleness of
-    /// cached file outputs drops it at run start; descendants never need
-    /// explicit invalidation because their identities chain through upstream
-    /// fingerprints.
+    /// — computed over kind, spec, input identities, engine version, and
+    /// the build's source revision — matches the recorded one, and whose
+    /// cached outputs are still present, is skipped. Mutations drop the
+    /// affected node's entry; staleness of cached file outputs drops it at
+    /// run start; descendants never need explicit invalidation because
+    /// their identities chain through upstream fingerprints.
     fingerprints: HashMap<NodeId, String>,
     /// Upstream bindings captured at dispatch time, for the run report's
     /// audit trail. Cleared at the start of every run so the report expresses
@@ -437,6 +438,22 @@ impl DAG {
         // no longer match their recorded identity, and the dispatch-time
         // fingerprint comparison decides reuse per node.
         if incremental {
+            // Research-grade posture note (F15): fingerprint reuse is only
+            // as trustworthy as the identity evidence under it. Metadata
+            // identity (size + mtime) misses in-place content edits, so a
+            // cache hit can silently reuse stale outputs. The default
+            // stays Metadata (zero extra I/O) — this warning makes the
+            // trade-off visible on every affected run instead of changing
+            // behaviour.
+            if cfg.input_hashing != InputHashing::Content {
+                tracing::warn!(
+                    input_hashing = ?cfg.input_hashing,
+                    "incremental execution without content-level input hashing: \
+                     cached outputs may be reused across undetected in-place \
+                     input edits (set SchedulerConfig::input_hashing = \
+                     InputHashing::Content for research-grade reuse)"
+                );
+            }
             self.invalidate_stale_file_outputs(engine_ctx.opendal.as_deref())
                 .await;
             tracing::info!("Incremental execution");
