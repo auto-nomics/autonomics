@@ -6,6 +6,7 @@ use container_plugin::{
     node_definition::{self, NodeDefinition},
 };
 use container_runtime::ContainerNetwork;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     Error, Result,
@@ -17,14 +18,14 @@ use crate::{
 ///
 /// This is not a plugin-owned image: ordinary plugin repositories contain
 /// source and tests, while environment images are managed as shared assets.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Environment {
     pub reference: String,
     pub interpreters: Vec<String>,
 }
 
 /// Approved digest-pinned runtime environments available to plugins.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EnvironmentCatalog {
     environments: BTreeMap<String, Environment>,
 }

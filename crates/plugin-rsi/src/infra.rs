@@ -31,9 +31,9 @@ pub trait PluginRegistryControl: Send + Sync {
 pub struct RsiInfra {
     store: Arc<PluginStore>,
     requests: RequestStore,
-    environments: Arc<RwLock<Arc<EnvironmentCatalog>>>,
-    publisher: Arc<RwLock<Option<SharedPluginPublisher>>>,
-    pull_request_publisher: Arc<RwLock<Option<SharedPullRequestPublisher>>>,
+    environments: Arc<EnvironmentCatalog>,
+    publisher: SharedPluginPublisher,
+    pull_request_publisher: SharedPullRequestPublisher,
     registry: Arc<RwLock<Option<Arc<dyn PluginRegistryControl>>>>,
 }
 
@@ -44,6 +44,9 @@ impl RsiInfra {
         default_branch: &str,
         author_name: &str,
         author_email: &str,
+        environments: EnvironmentCatalog,
+        publisher: SharedPluginPublisher,
+        pull_request_publisher: SharedPullRequestPublisher,
     ) -> Self {
         Self {
             store: Arc::new(PluginStore::open(
@@ -53,9 +56,9 @@ impl RsiInfra {
                 author_email,
             )),
             requests: RequestStore::open(state_dir),
-            environments: Arc::new(RwLock::new(Arc::new(EnvironmentCatalog::default()))),
-            publisher: Arc::new(RwLock::new(None)),
-            pull_request_publisher: Arc::new(RwLock::new(None)),
+            environments: Arc::new(environments),
+            publisher,
+            pull_request_publisher,
             registry: Arc::new(RwLock::new(None)),
         }
     }
@@ -66,24 +69,6 @@ impl RsiInfra {
 
     pub fn requests(&self) -> &RequestStore {
         &self.requests
-    }
-
-    pub fn configure_environments(&self, catalog: EnvironmentCatalog) {
-        *self
-            .environments
-            .write()
-            .expect("RSI environment lock poisoned") = Arc::new(catalog);
-    }
-
-    pub fn configure_publisher(&self, publisher: SharedPluginPublisher) {
-        *self.publisher.write().expect("publisher lock poisoned") = Some(publisher);
-    }
-
-    pub fn configure_pull_request_publisher(&self, publisher: SharedPullRequestPublisher) {
-        *self
-            .pull_request_publisher
-            .write()
-            .expect("pull-request publisher lock poisoned") = Some(publisher);
     }
 
     pub fn configure_registry(&self, control: Arc<dyn PluginRegistryControl>) {
@@ -194,7 +179,7 @@ impl RsiInfra {
             .ok_or_else(|| Error::Validation(format!("unknown plugin `{plugin_name}`")))?;
         let catalog = self.catalog();
         let mut lifecycle = PluginLifecycle::new(&mut operator, &catalog, &installed_kinds);
-        lifecycle.publish_reviewed(self.publisher()?.as_ref())
+        lifecycle.publish_reviewed(self.publisher.as_ref())
     }
 
     pub fn open_update_pull_request(&self, plugin_name: &str) -> Result<PluginStatus> {
@@ -205,7 +190,7 @@ impl RsiInfra {
             .ok_or_else(|| Error::Validation(format!("unknown plugin `{plugin_name}`")))?;
         let catalog = self.catalog();
         let mut lifecycle = PluginLifecycle::new(&mut operator, &catalog, &installed_kinds);
-        lifecycle.open_update_pull_request(self.pull_request_publisher()?.as_ref())
+        lifecycle.open_update_pull_request(self.pull_request_publisher.as_ref())
     }
 
     pub fn merge_update_pull_request(&self, plugin_name: &str) -> Result<PluginStatus> {
@@ -216,7 +201,7 @@ impl RsiInfra {
             .ok_or_else(|| Error::Validation(format!("unknown plugin `{plugin_name}`")))?;
         let catalog = self.catalog();
         let mut lifecycle = PluginLifecycle::new(&mut operator, &catalog, &installed_kinds);
-        lifecycle.merge_update_pull_request(self.pull_request_publisher()?.as_ref())
+        lifecycle.merge_update_pull_request(self.pull_request_publisher.as_ref())
     }
 
     /// Install the reviewed result and ask the runtime to refresh its registry.
@@ -229,7 +214,7 @@ impl RsiInfra {
         let catalog = self.catalog();
         let status = {
             let mut lifecycle = PluginLifecycle::new(&mut operator, &catalog, &installed_kinds);
-            lifecycle.install(self.publisher()?.as_ref())?
+            lifecycle.install(self.publisher.as_ref())?
         };
         self.reload_plugin(plugin_name)?;
         Ok(status)
@@ -276,29 +261,8 @@ impl RsiInfra {
             .reload_plugin(plugin_name)
     }
 
-    fn publisher(&self) -> Result<SharedPluginPublisher> {
-        self.publisher
-            .read()
-            .expect("publisher lock poisoned")
-            .clone()
-            .ok_or_else(|| Error::Validation("plugin publisher is not configured".into()))
-    }
-
-    fn pull_request_publisher(&self) -> Result<SharedPullRequestPublisher> {
-        self.pull_request_publisher
-            .read()
-            .expect("pull-request publisher lock poisoned")
-            .clone()
-            .ok_or_else(|| Error::Validation("pull-request publisher is not configured".into()))
-    }
-
     fn catalog(&self) -> Arc<EnvironmentCatalog> {
-        Arc::clone(
-            &*self
-                .environments
-                .read()
-                .expect("RSI environment lock poisoned"),
-        )
+        Arc::clone(&self.environments)
     }
 
     fn ensure_request_plugin(
@@ -325,7 +289,6 @@ mod tests {
     #[test]
     fn creating_plugin_claims_request_through_the_unified_facade() {
         let state = tempfile::tempdir().unwrap();
-        let infra = RsiInfra::open(state.path(), "main", "Test", "test@example.com");
         let mut catalog = EnvironmentCatalog::default();
         catalog.insert(
             "alpine",
@@ -334,7 +297,19 @@ mod tests {
                 interpreters: vec!["sh".into()],
             },
         );
-        infra.configure_environments(catalog);
+        let publisher = Arc::new(crate::GhPublisher::new(crate::GhPublisherConfig {
+            enabled: false,
+            ..Default::default()
+        }));
+        let infra = RsiInfra::open(
+            state.path(),
+            "main",
+            "Test",
+            "test@example.com",
+            catalog,
+            publisher.clone(),
+            publisher,
+        );
         let request = infra
             .requests()
             .record(RequestRecord {

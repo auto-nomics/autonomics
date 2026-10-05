@@ -194,11 +194,19 @@ impl SharedInfra {
 
         // PluginStore owns `state_dir/plugins.toml` and `state_dir/plugins`;
         // container-plugin remains the protocol and checkout tool layer.
+        let gh_publisher = Arc::new(plugin_rsi::GhPublisher::new(
+            config.plugin_rsi.publisher.clone(),
+        ));
+        let plugin_publisher: plugin_rsi::SharedPluginPublisher = gh_publisher.clone();
+        let pull_request_publisher: plugin_rsi::SharedPullRequestPublisher = gh_publisher;
         let rsi = Arc::new(plugin_rsi::RsiInfra::open(
             &config.state_dir,
             "main",
             "Autonomics RSI",
             "rsi@autonomics.example",
+            config.plugin_rsi.environments.clone(),
+            plugin_publisher,
+            pull_request_publisher,
         ));
         let plugin_report = rsi
             .store()
@@ -225,6 +233,9 @@ impl SharedInfra {
             panel_cache_root = %container_execution.config.panel_cache_root.display(),
             "SharedInfra::open: Podman execution infrastructure ready"
         );
+        plugin_rsi::PluginDevelopmentToolsetRegistry::global()
+            .configure_runtime(Arc::clone(&container_execution.runtime))
+            .map_err(|error| crate::error::Error::Other(error.to_string()))?;
         // Reclaim crash residue and expired scratch from previous runs once at
         // startup, then on the configured interval. Failures are logged and
         // never block the host.
