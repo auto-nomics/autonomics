@@ -36,7 +36,7 @@ pub use combine::{
     tippett::{TippettVariant, tippett_combine, tippett_combine_pvals},
     wilkinson::{wilkinson_combine, wilkinson_combine_pvals},
 };
-pub use dist::{chisq_sf, f_sf, normal_cdf, normal_inv, normal_sf, t_sf};
+pub use dist::{chisq_sf, f_sf, normal_cdf, normal_inv, normal_sf, t_inv, t_sf};
 pub use invert::{ConfidenceSet, confint_wald, confint_z, invert_test};
 pub use primitives::{
     HypothesisTest,

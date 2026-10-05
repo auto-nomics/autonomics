@@ -77,7 +77,9 @@ fn argsort_descending(v: &[f64]) -> Vec<usize> {
 }
 
 /// Core port of `stats::p.adjust`. `n_total` overrides the family size
-/// (R's `n` argument); when `None`, defaults to `p.len()`.
+/// (R's `n` argument); when `None`, defaults to `p.len()`. R's
+/// `stopifnot(n >= lp)` is enforced: an override smaller than the number of
+/// p-values is an error, not a silent re-weighting.
 pub fn p_adjust_raw(p: &[f64], method: AdjustMethod, n_total: Option<usize>) -> Result<Vec<f64>> {
     let n = n_total.unwrap_or(p.len());
     if matches!(method, AdjustMethod::None) {
@@ -85,6 +87,12 @@ pub fn p_adjust_raw(p: &[f64], method: AdjustMethod, n_total: Option<usize>) -> 
     }
     if p.is_empty() {
         return Ok(Vec::new());
+    }
+    if n < p.len() {
+        return Err(HypoError::InvalidInput(format!(
+            "n ({n}) must be >= the number of p-values ({})",
+            p.len()
+        )));
     }
     if n <= 1 {
         return Ok(p.to_vec());
@@ -103,7 +111,8 @@ pub fn p_adjust_raw(p: &[f64], method: AdjustMethod, n_total: Option<usize>) -> 
     Ok(result)
 }
 
-/// Holm step-down: order ascending; rank-i weight = `n − i + 1`; enforce
+/// Holm step-down: order ascending; the j-th smallest p gets multiplier
+/// `n + 1 − j` (R: `(n + 1L - i) * p[o]` with `i = seq_len(lp)`); enforce
 /// monotonicity via cummax; unpermute.
 fn holm(p: &[f64], n: f64) -> Vec<f64> {
     let o = argsort_ascending(p);
@@ -111,7 +120,7 @@ fn holm(p: &[f64], n: f64) -> Vec<f64> {
     let mut sorted_adj = vec![0.0_f64; nn];
     let mut cummax = 0.0_f64;
     for (rank, &idx) in o.iter().enumerate() {
-        let factor = n - rank as f64; // n − i + 1, i = rank+1
+        let factor = n - rank as f64; // n + 1 − j for j = rank+1
         let val = (p[idx] * factor).min(1.0);
         if val > cummax {
             cummax = val;
@@ -125,16 +134,17 @@ fn holm(p: &[f64], n: f64) -> Vec<f64> {
     result
 }
 
-/// Hochberg step-up: order descending; rank-i weight = `i` (the (n−i+1) of
-/// R, where i descends from n to 1); cummin enforces monotonicity; unpermute.
+/// Hochberg step-up: order descending; the k-th largest p gets multiplier
+/// `n + 1 − i` with `i = lp − k + 1` (R runs `i <- lp:1L` over the
+/// descending order), i.e. `n − lp + k`. cummin enforces monotonicity;
+/// unpermute.
 fn hochberg(p: &[f64], n: f64) -> Vec<f64> {
-    let _ = n;
     let nn = p.len();
     let o = argsort_descending(p);
     let mut sorted_adj = vec![0.0_f64; nn];
     let mut cummin = f64::INFINITY;
     for (rank, &idx) in o.iter().enumerate() {
-        let factor = (rank + 1) as f64; // 1, 2, ..., n for largest→smallest
+        let factor = n - nn as f64 + (rank + 1) as f64;
         let val = p[idx] * factor;
         if val < cummin {
             cummin = val;
@@ -148,17 +158,20 @@ fn hochberg(p: &[f64], n: f64) -> Vec<f64> {
     result
 }
 
-/// BH / BY step-up: order descending; rank-i weight = `n / (n − rank)`; scale
-/// by `q` (1 for BH, harmonic number H_n for BY); cummin; unpermute.
+/// BH / BY step-up: order descending; the k-th largest p gets R's rank
+/// `i = lp − k + 1` (`i <- lp:1L`), so its weight is `n / i` — NOT
+/// `n / (n − k + 1)`: when the family size `n` exceeds the number of
+/// p-values `lp` (R `n=` override, or NA rows dropped before the call),
+/// R keeps the rank denominator on `lp`. Scale by `q` (1 for BH, harmonic
+/// number H_n for BY); cummin; unpermute.
 fn bh_by(p: &[f64], n: f64, q: f64) -> Vec<f64> {
     let nn = p.len();
     let o = argsort_descending(p);
     let mut sorted_adj = vec![0.0_f64; nn];
     let mut cummin = f64::INFINITY;
     for (rank, &idx) in o.iter().enumerate() {
-        // For rank=0 (largest p), i = n in R → n/i = 1. For rank=k, i = n-k → n/(n-k).
-        let i_r = n - rank as f64; // R's i in descending order n, n-1, ..., 1
-        let weight = if i_r > 0.0 { n / i_r } else { f64::INFINITY };
+        let i_r = nn as f64 - rank as f64; // R's i in descending order lp, lp-1, ..., 1
+        let weight = n / i_r;
         let val = p[idx] * weight * q;
         if val < cummin {
             cummin = val;
@@ -183,21 +196,31 @@ fn harmonic(n: f64) -> f64 {
 
 /// Hommel (1988) — exact port of R's `p.adjust(method = "hommel")`.
 ///
-/// For `n == 2`, R falls back to Hochberg. For `n > 2`, the algorithm sorts
-/// p ascending, initialises `q = pa = min(n·p_(i)/i)` for all i, then for
-/// each `j` from `n−1` down to `2` refines `q` and accumulates `pa` via
-/// element-wise max. The final result is `pmax(pa, p_sorted)`, unpermuted.
+/// For `n == 2` (the family size, not the vector length), R falls back to
+/// Hochberg. When the family size exceeds the number of p-values
+/// (`n > lp`), R pads the vector with `1`s to length `n`, runs the
+/// step-down over all `n` values, and reports only the first `lp`
+/// unpermuted entries (the padding sits at the tail of the original
+/// order). The algorithm sorts p ascending, initialises
+/// `q = pa = min(n·p_(i)/i)` for all i, then for each `j` from `n−1` down
+/// to `2` refines `q` and accumulates `pa` via element-wise max. The final
+/// result is `pmax(pa, p_sorted)`, unpermuted.
 fn hommel(p: &[f64], n: f64) -> Vec<f64> {
-    let nn = p.len();
-    if nn <= 1 {
+    let lp = p.len();
+    if lp == 0 {
         return p.to_vec();
     }
-    // R special-cases n == 2 hommel → hochberg.
-    if nn == 2 && (n as usize) == 2 {
+    // R special-cases n == 2 hommel → hochberg (checked before padding).
+    if n as usize == 2 {
         return hochberg(p, n);
     }
-    let o = argsort_ascending(p);
-    let p_sorted: Vec<f64> = o.iter().map(|&idx| p[idx]).collect();
+    // R: if (n > lp) p <- c(p, rep.int(1, n - lp)).
+    let mut padded: Vec<f64> = p.to_vec();
+    padded.resize(n as usize, 1.0);
+    let nn = padded.len();
+
+    let o = argsort_ascending(&padded);
+    let p_sorted: Vec<f64> = o.iter().map(|&idx| padded[idx]).collect();
     let n_f = n; // family size (R's n argument)
 
     // Initialise: q = pa = min(n * p_sorted[i] / i) broadcast over all positions.
@@ -233,11 +256,12 @@ fn hommel(p: &[f64], n: f64) -> Vec<f64> {
         }
     }
 
-    // Final: pmax(pa, p_sorted), then unpermute.
+    // Final: pmax(pa, p_sorted), unpermute, keep the first lp entries.
     let mut result = vec![0.0_f64; nn];
     for (rank, &idx) in o.iter().enumerate() {
         result[idx] = pa[rank].max(p_sorted[rank]);
     }
+    result.truncate(lp);
     result
 }
 
@@ -385,5 +409,92 @@ mod tests {
         assert_eq!(AdjustMethod::parse("fdr").unwrap(), AdjustMethod::Bh);
         assert_eq!(AdjustMethod::parse("BY").unwrap(), AdjustMethod::By);
         assert!(AdjustMethod::parse("unknown").is_err());
+    }
+
+    // ── n > lp (family-size override / NA rows dropped before the call) ──────
+    // Golden values from R 4.6.1 `p.adjust(p, method, n = …)` (epsilon 1e-14).
+    // R keeps the rank denominator on lp, not n: BH's i runs lp:1 regardless
+    // of n; Hochberg's multiplier is n + 1 − i; Hommel pads with 1s to n.
+
+    #[test]
+    fn bh_by_with_n_override_matches_r() {
+        // R: p.adjust(c(0.01, 0.02), "BH", n = 10)  = c(0.1, 0.1)
+        // R: p.adjust(c(0.01, 0.02), "BY", n = 10)  = c(0.29289682539682538, …)
+        let p = vec![0.01_f64, 0.02];
+        let bh = p_adjust_raw(&p, AdjustMethod::Bh, Some(10)).unwrap();
+        assert!(close(&bh, &[0.1, 0.1], 1e-14));
+        let by = p_adjust_raw(&p, AdjustMethod::By, Some(10)).unwrap();
+        assert!(close(&by, &[0.292_896_825_396_825_38; 2], 1e-14));
+    }
+
+    #[test]
+    fn bh_with_effective_n_from_na_family_matches_r() {
+        // Family of 4 with one NA: the node layer passes the 3 estimable
+        // p-values with the full family size n = 4.
+        // R: p.adjust(c(0.001, 0.02, 0.5), "BH", n = 4) = c(0.004, 0.04, 0.66666666666666663)
+        let p = vec![0.001_f64, 0.02, 0.5];
+        let bh = p_adjust_raw(&p, AdjustMethod::Bh, Some(4)).unwrap();
+        assert!(close(&bh, &[0.004, 0.04, 0.666_666_666_666_666_63], 1e-14));
+        // R: p.adjust(c(0.001, 0.02, 0.5), "BY", n = 4) = c(0.008333333333333335, 0.083333333333333343, 1)
+        let by = p_adjust_raw(&p, AdjustMethod::By, Some(4)).unwrap();
+        assert!(close(
+            &by,
+            &[0.008_333_333_333_333_335, 0.083_333_333_333_333_343, 1.0],
+            1e-14
+        ));
+    }
+
+    #[test]
+    fn holm_with_n_override_matches_r() {
+        // R: p.adjust(c(0.01, 0.02), "holm", n = 10) = c(0.1, 0.18)
+        let p = vec![0.01_f64, 0.02];
+        let adj = p_adjust_raw(&p, AdjustMethod::Holm, Some(10)).unwrap();
+        assert!(close(&adj, &[0.1, 0.18], 1e-14));
+        // R: p.adjust(c(0.001, 0.02, 0.5), "holm", n = 4) = c(0.004, 0.06, 1)
+        let p = vec![0.001_f64, 0.02, 0.5];
+        let adj = p_adjust_raw(&p, AdjustMethod::Holm, Some(4)).unwrap();
+        assert!(close(&adj, &[0.004, 0.06, 1.0], 1e-14));
+    }
+
+    #[test]
+    fn hochberg_with_n_override_matches_r() {
+        // R: p.adjust(c(0.01, 0.02), "hochberg", n = 10) = c(0.1, 0.18)
+        let p = vec![0.01_f64, 0.02];
+        let adj = p_adjust_raw(&p, AdjustMethod::Hochberg, Some(10)).unwrap();
+        assert!(close(&adj, &[0.1, 0.18], 1e-14));
+        // R: p.adjust(c(0.001, 0.02, 0.5), "hochberg", n = 4) = c(0.004, 0.06, 1)
+        let p = vec![0.001_f64, 0.02, 0.5];
+        let adj = p_adjust_raw(&p, AdjustMethod::Hochberg, Some(4)).unwrap();
+        assert!(close(&adj, &[0.004, 0.06, 1.0], 1e-14));
+    }
+
+    #[test]
+    fn hommel_with_padding_matches_r() {
+        // R: p.adjust(c(0.3), "hommel", n = 3) = 0.9  (padded with 1s to length 3)
+        let adj = p_adjust_raw(&[0.3], AdjustMethod::Hommel, Some(3)).unwrap();
+        assert!(close(&adj, &[0.9], 1e-14));
+        // R: p.adjust(c(0.001, 0.02, 0.5), "hommel", n = 4) = c(0.004, 0.06, 1)
+        let p = vec![0.001_f64, 0.02, 0.5];
+        let adj = p_adjust_raw(&p, AdjustMethod::Hommel, Some(4)).unwrap();
+        assert!(close(&adj, &[0.004, 0.06, 1.0], 1e-14));
+        // R: p.adjust(c(0.10, 0.01, 0.07), "hommel", n = 4) = c(0.2, 0.04, 0.15)
+        let p = vec![0.10_f64, 0.01, 0.07];
+        let adj = p_adjust_raw(&p, AdjustMethod::Hommel, Some(4)).unwrap();
+        assert!(close(&adj, &[0.2, 0.04, 0.15], 1e-14));
+    }
+
+    #[test]
+    fn bonferroni_with_n_override_matches_r() {
+        // R: p.adjust(c(0.01, 0.02), "bonferroni", n = 10) = c(0.1, 0.2)
+        let p = vec![0.01_f64, 0.02];
+        let adj = p_adjust_raw(&p, AdjustMethod::Bonferroni, Some(10)).unwrap();
+        assert!(close(&adj, &[0.1, 0.2], 1e-14));
+    }
+
+    #[test]
+    fn n_smaller_than_p_count_errors() {
+        // R: p.adjust(c(0.1, 0.2, 0.3), n = 2) → stopifnot(n >= lp) fails.
+        let err = p_adjust_raw(&[0.1, 0.2, 0.3], AdjustMethod::Bh, Some(2));
+        assert!(err.is_err());
     }
 }
