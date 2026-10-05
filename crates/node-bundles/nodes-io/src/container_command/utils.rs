@@ -141,7 +141,7 @@ pub(crate) fn input_path(value: &NodeValue) -> Result<String, String> {
             .collect::<Vec<_>>()
             .join(",")),
         NodeValue::FileSet(_) => Err("an empty FileSet cannot be bound to a command input".into()),
-        NodeValue::DataFrame(_) => {
+        NodeValue::DataFrame(_) | NodeValue::Channel(_) => {
             Err("container_command inputs must be File or FileSet values".into())
         }
     }

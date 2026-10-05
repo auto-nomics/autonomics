@@ -332,7 +332,7 @@ pub(super) async fn stage_inputs(
                 }
                 NodeValue::FileSet(staged_files)
             }
-            NodeValue::DataFrame(_) => {
+            NodeValue::DataFrame(_) | NodeValue::Channel(_) => {
                 return Err("container_command inputs must be File or FileSet values".into());
             }
         };

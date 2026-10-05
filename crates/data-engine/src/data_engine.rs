@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use container_runtime::ContainerExecutionInfra;
@@ -10,7 +11,10 @@ use datafusion::{
 use serde::Serialize;
 use vfs::{MountedObjectStore, OpendalFileStorage};
 
-use crate::dag::{DAG, DagError, DagHistory, RunRecord, RunReport, RuntimeStatus, SchedulerConfig};
+use crate::dag::{
+    DAG, DagError, DagHistory, GatherNode, LogicalGraph, PhysicalJobRef, RunRecord, RunReport,
+    RuntimeStatus, SchedulerConfig,
+};
 use crate::error::{Error, Result};
 use crate::node_registry::registry::NodeRegistry;
 use crate::nodes::DagNode;
@@ -24,6 +28,15 @@ pub struct ClearDagOutcome {
     pub node_count: usize,
     pub edge_count: usize,
     pub warnings: Vec<String>,
+}
+
+/// Result of compiling and installing a logical graph.
+#[derive(Debug, Clone, Serialize)]
+pub struct LogicalInstallReport {
+    pub logical_node_count: usize,
+    pub physical_job_count: usize,
+    pub physical_edge_count: usize,
+    pub jobs: std::collections::BTreeMap<String, PhysicalJobRef>,
 }
 
 /// `DataEngine` is the core object that implements the data analysis engine.
@@ -78,6 +91,17 @@ impl DataEngine {
         Ok(())
     }
 
+    fn dynamic_node_builder(registry: Arc<NodeRegistry>) -> dag_core::dag::DynamicNodeBuilder {
+        Arc::new(move |kind, spec| {
+            Self::ensure_node_kind_allowed(kind).map_err(|error| {
+                DagError::Schedule(format!("cannot install logical node `{kind}`: {error}"))
+            })?;
+            registry
+                .build_node(kind, spec)
+                .map_err(|error| DagError::Schedule(error.to_string()))
+        })
+    }
+
     fn new_from_parts(
         ctx: SessionContext,
         runtime_env: Arc<RuntimeEnv>,
@@ -110,11 +134,14 @@ impl DataEngine {
                 Arc::clone(&container_execution),
                 None,
             );
+        let node_registry = Arc::new(node_registry);
+        let mut dag = DAG::default();
+        dag.set_dynamic_node_builder(Self::dynamic_node_builder(Arc::clone(&node_registry)));
         Self {
             ctx,
             engine_ctx,
-            dag: DAG::default(),
-            node_registry: Arc::new(node_registry),
+            dag,
+            node_registry,
             container_execution,
             config: SchedulerConfig {
                 memory_guard: Self::memory_guard_from_env(),
@@ -213,6 +240,26 @@ impl DataEngine {
         self.dag
             .add_node_with_spec(node_id.into(), node, kind.to_string(), spec)?;
         Ok(())
+    }
+
+    /// Compile a logical graph into physical jobs and install them in the DAG.
+    pub fn add_logical_graph(&mut self, graph: LogicalGraph) -> Result<LogicalInstallReport> {
+        let logical_node_count = graph.nodes().len();
+        let physical = graph.clone().compile(|kind, spec| {
+            Self::ensure_node_kind_allowed(kind).map_err(|error| {
+                DagError::Schedule(format!("cannot install logical node `{kind}`: {error}"))
+            })?;
+            self.node_registry
+                .build_node(kind, spec)
+                .map_err(|error| DagError::Schedule(error.to_string()))
+        })?;
+        let installed = self.dag.install_compiled_graph(graph, physical)?;
+        Ok(LogicalInstallReport {
+            logical_node_count,
+            physical_job_count: installed.node_count,
+            physical_edge_count: installed.edge_count,
+            jobs: installed.jobs,
+        })
     }
 
     /// Query the JSON Schema of a registered node kind.
@@ -692,12 +739,23 @@ impl DataEngine {
     /// Internal helper: clear the DAG and rebuild nodes + edges from a
     /// manifest.
     fn rebuild_dag_from_manifest(&mut self, manifest: &crate::dag::DagManifest) -> Result<()> {
+        manifest
+            .validate_layers()
+            .map_err(|e| Error::Custom(format!("manifest layer validation: {e}")))?;
         self.dag.clear();
         for entry in &manifest.nodes {
             Self::ensure_node_kind_allowed(&entry.kind)?;
-            let node = self
-                .node_registry
-                .build_node(&entry.kind, entry.spec.clone())?;
+            let node = if entry.kind == "logical_gather" {
+                Box::new(GatherNode::default()) as Box<dyn crate::nodes::DagNode>
+            } else if entry.kind == "channel" {
+                Box::new(crate::dag::ChannelNode::from_spec(&entry.spec)?)
+                    as Box<dyn crate::nodes::DagNode>
+            } else if entry.kind == "dynamic_fanout" {
+                Box::new(crate::dag::DynamicFanoutNode::default()) as Box<dyn crate::nodes::DagNode>
+            } else {
+                self.node_registry
+                    .build_node(&entry.kind, entry.spec.clone())?
+            };
             self.dag.add_node_with_spec(
                 entry.id.clone(),
                 node,
@@ -713,6 +771,10 @@ impl DataEngine {
                 edge.to_port,
             )?;
         }
+        self.dag.restore_layers(
+            manifest.logical.graphs.clone(),
+            manifest.physical_jobs.clone(),
+        )?;
         Ok(())
     }
 
@@ -1273,9 +1335,32 @@ fn format_manifest_diff(old: &crate::dag::DagManifest, new: &crate::dag::DagMani
         .iter()
         .map(|e| format!("{}.[{}] → {}.[{}]", e.from, e.from_port, e.to, e.to_port))
         .collect();
+    let old_logical = logical_manifest_entries(old);
+    let new_logical = logical_manifest_entries(new);
 
     let mut out = String::new();
     let mut changes = 0;
+
+    for (key, definition) in &new_logical {
+        match old_logical.get(key) {
+            None => {
+                out.push_str(&format!("  + logical {key}\n"));
+                changes += 1;
+            }
+            Some(old_definition) if old_definition != definition => {
+                out.push_str(&format!("  ~ logical {key}\n"));
+                changes += 1;
+            }
+            _ => {}
+        }
+    }
+    for key in old_logical
+        .keys()
+        .filter(|key| !new_logical.contains_key(*key))
+    {
+        out.push_str(&format!("  - logical {key}\n"));
+        changes += 1;
+    }
 
     for n in &new.nodes {
         if !old_nodes.contains_key(n.id.as_str()) {
@@ -1305,6 +1390,27 @@ fn format_manifest_diff(old: &crate::dag::DagManifest, new: &crate::dag::DagMani
         out.push_str(&format!("  - edge {e}\n"));
         changes += 1;
     }
+    for (id, job) in &new.physical_jobs {
+        match old.physical_jobs.get(id) {
+            None => {
+                out.push_str(&format!("  + physical job {id} → {}\n", job.logical_node));
+                changes += 1;
+            }
+            Some(old_job) if old_job != job => {
+                out.push_str(&format!("  ~ physical job {id} → {}\n", job.logical_node));
+                changes += 1;
+            }
+            _ => {}
+        }
+    }
+    for id in old
+        .physical_jobs
+        .keys()
+        .filter(|id| !new.physical_jobs.contains_key(*id))
+    {
+        out.push_str(&format!("  - physical job {id}\n"));
+        changes += 1;
+    }
 
     if changes == 0 {
         out.push_str("(no changes)");
@@ -1312,6 +1418,39 @@ fn format_manifest_diff(old: &crate::dag::DagManifest, new: &crate::dag::DagMani
         out.push_str(&format!("\n{changes} change(s)"));
     }
     out
+}
+
+fn logical_manifest_entries(
+    manifest: &crate::dag::DagManifest,
+) -> BTreeMap<String, serde_json::Value> {
+    manifest
+        .logical
+        .graphs
+        .iter()
+        .enumerate()
+        .flat_map(|(graph_index, graph)| {
+            let nodes = graph.nodes().iter().map(move |node| {
+                (
+                    format!("graph {graph_index} node {}", node.id),
+                    serde_json::to_value(node).unwrap_or(serde_json::Value::Null),
+                )
+            });
+            let edges = graph
+                .edges()
+                .iter()
+                .enumerate()
+                .map(move |(edge_index, edge)| {
+                    (
+                        format!(
+                            "graph {graph_index} edge {edge_index}: {}.[{}] → {}.[{}]",
+                            edge.from, edge.from_port, edge.to, edge.to_port
+                        ),
+                        serde_json::to_value(edge).unwrap_or(serde_json::Value::Null),
+                    )
+                });
+            nodes.chain(edges)
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -1637,6 +1776,201 @@ mod tests {
         for n in ["load", "a", "b"] {
             assert_eq!(report.status(n), Some(RuntimeStatus::Success), "{n}");
         }
+    }
+
+    #[tokio::test]
+    async fn logical_scatter_compiles_to_physical_jobs_and_gathers() {
+        let mut engine = DataEngine::builder().build();
+        let iris = datasets_dir().join("Iris.csv");
+        let graph = crate::dag::LogicalGraph::builder()
+            .add_node(crate::dag::LogicalNode::for_each(
+                "read",
+                "file_to_dataframe",
+                serde_json::json!({"path": "{{item.path}}"}),
+                "sample",
+                vec![
+                    serde_json::json!({
+                        "key": "setosa",
+                        "path": iris.to_str().unwrap()
+                    }),
+                    serde_json::json!({
+                        "key": "virginica",
+                        "path": iris.to_str().unwrap()
+                    }),
+                ],
+            ))
+            .add_node(crate::dag::LogicalNode::registry(
+                "filter",
+                "sql",
+                serde_json::json!({
+                    "sql_query": r#"SELECT * FROM port_0 WHERE "Species" = 'Iris-{{item.key}}'"#
+                }),
+            ))
+            .add_node(crate::dag::LogicalNode::gather("gather"))
+            .add_node(crate::dag::LogicalNode::registry(
+                "summary",
+                "sql",
+                serde_json::json!({"sql_query": "SELECT COUNT(*) AS cnt FROM port_0"}),
+            ))
+            .add_edge("read", "filter", 0, 0)
+            .add_edge("filter", "gather", 0, 0)
+            .add_edge("gather", "summary", 0, 0)
+            .build();
+
+        let installed = engine.add_logical_graph(graph).unwrap();
+        assert_eq!(installed.logical_node_count, 4);
+        assert_eq!(installed.physical_job_count, 6);
+        assert_eq!(installed.physical_edge_count, 5);
+        assert!(installed.jobs.contains_key("read#sample=setosa"));
+        assert!(installed.jobs.contains_key("filter#sample=virginica"));
+        assert!(installed.jobs.contains_key("gather#0"));
+
+        let report = engine.run().await.unwrap();
+        assert!(
+            report.ok,
+            "statuses: {:?}; errors: {:?}",
+            report.statuses, report.errors
+        );
+        let read = report
+            .nodes
+            .iter()
+            .find(|node| node.id == "read#sample=setosa")
+            .unwrap();
+        assert_eq!(read.logical_node.as_deref(), Some("read"));
+        assert_eq!(read.scatter_axis.as_deref(), Some("sample"));
+        assert_eq!(read.item_key.as_deref(), Some("setosa"));
+        let gather = report
+            .nodes
+            .iter()
+            .find(|node| node.id == "gather#0")
+            .unwrap();
+        assert_eq!(gather.node_type, "logical_gather");
+        assert_eq!(gather.logical_node.as_deref(), Some("gather"));
+        assert_eq!(report.status("summary#0"), Some(RuntimeStatus::Success));
+        assert_eq!(report.logical_nodes.len(), 4);
+        let read_summary = report
+            .logical_nodes
+            .iter()
+            .find(|summary| summary.logical_node == "read")
+            .unwrap();
+        assert_eq!(read_summary.status, RuntimeStatus::Success);
+        assert_eq!(read_summary.execution_strategy, Some("for_each"));
+        assert_eq!(
+            read_summary.logical_node_type.as_deref(),
+            Some("file_to_dataframe")
+        );
+        assert_eq!(read_summary.physical_job_count, 2);
+        assert_eq!(read_summary.status_counts.get("success"), Some(&2));
+        assert_eq!(read_summary.scatter_axis.as_deref(), Some("sample"));
+        assert_eq!(read_summary.item_keys, vec!["setosa", "virginica"]);
+        assert!(read_summary.failed_item_keys.is_empty());
+        assert_eq!(
+            read_summary.physical_job_ids,
+            vec!["read#sample=setosa", "read#sample=virginica"]
+        );
+        let gather_summary = report
+            .logical_nodes
+            .iter()
+            .find(|summary| summary.logical_node == "gather")
+            .unwrap();
+        assert_eq!(gather_summary.execution_strategy, Some("gather"));
+        assert_eq!(
+            gather_summary.logical_node_type.as_deref(),
+            Some("logical_gather")
+        );
+        assert_eq!(gather_summary.physical_job_count, 1);
+        let encoded = serde_json::to_value(&report).unwrap();
+        assert!(encoded["logical_nodes"].is_array());
+    }
+
+    #[tokio::test]
+    async fn history_restore_preserves_logical_and_physical_layers() {
+        let directory = tempfile::tempdir().unwrap();
+        let history = DagHistory::open(&directory.path().join("history.db"))
+            .await
+            .unwrap();
+        let mut engine = DataEngine::builder().build().with_history(history);
+        let iris = datasets_dir().join("Iris.csv");
+        let graph = crate::dag::LogicalGraph::builder()
+            .add_node(crate::dag::LogicalNode::for_each(
+                "read",
+                "file_to_dataframe",
+                serde_json::json!({"path": "{{item.path}}"}),
+                "sample",
+                vec![
+                    serde_json::json!({"key": "setosa", "path": iris.to_str().unwrap()}),
+                    serde_json::json!({"key": "virginica", "path": iris.to_str().unwrap()}),
+                ],
+            ))
+            .build();
+
+        engine.add_logical_graph(graph).unwrap();
+        let first_run = engine.run().await.unwrap();
+        assert!(first_run.ok);
+
+        let head = engine.dag_log(Some("main"), 1).await.unwrap().remove(0);
+        let manifest = head.manifest().unwrap();
+        assert_eq!(manifest.schema_version, 2);
+        assert_eq!(manifest.logical.graphs.len(), 1);
+        assert!(manifest.physical_jobs.contains_key("read#sample=setosa"));
+        assert!(manifest.physical_jobs.contains_key("read#sample=virginica"));
+
+        engine.new_dag_ref("empty").await.unwrap();
+        engine.switch_dag_ref("main").await.unwrap();
+        let restored_run = engine.run().await.unwrap();
+        assert!(restored_run.ok);
+        let read = restored_run
+            .nodes
+            .iter()
+            .find(|node| node.id == "read#sample=setosa")
+            .unwrap();
+        assert_eq!(read.logical_node.as_deref(), Some("read"));
+        assert_eq!(read.scatter_axis.as_deref(), Some("sample"));
+        assert_eq!(read.item_key.as_deref(), Some("setosa"));
+    }
+
+    #[tokio::test]
+    async fn history_restores_v1_physical_only_manifest() {
+        let directory = tempfile::tempdir().unwrap();
+        let history = DagHistory::open(&directory.path().join("history.db"))
+            .await
+            .unwrap();
+        let mut engine = DataEngine::builder().build().with_history(history.clone());
+        let iris = datasets_dir().join("Iris.csv");
+        engine
+            .add_node_from_registry(
+                "load",
+                "file_to_dataframe",
+                serde_json::json!({"path": iris.to_str().unwrap()}),
+            )
+            .unwrap();
+        assert!(engine.run().await.unwrap().ok);
+
+        let current = engine.dag_log(Some("main"), 1).await.unwrap().remove(0);
+        let mut legacy = current.manifest().unwrap();
+        legacy.schema_version = 1;
+        legacy.logical = Default::default();
+        legacy.physical_jobs.clear();
+        history
+            .commit(
+                "legacy",
+                &legacy,
+                None::<&crate::dag::RunReport>,
+                "physical-only snapshot",
+            )
+            .await
+            .unwrap();
+
+        engine.new_dag_ref("empty").await.unwrap();
+        engine.switch_dag_ref("legacy").await.unwrap();
+        let report = engine.run().await.unwrap();
+        assert!(report.ok);
+        assert_eq!(report.nodes[0].logical_node, None);
+        let head = engine.dag_log(Some("legacy"), 1).await.unwrap().remove(0);
+        let manifest = head.manifest().unwrap();
+        assert_eq!(manifest.schema_version, 2);
+        assert!(manifest.logical.graphs.is_empty());
+        assert!(manifest.physical_jobs.is_empty());
     }
 
     /// A multi-input join: two sources feed a single SqlNode's `left`/`right`

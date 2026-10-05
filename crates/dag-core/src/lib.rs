@@ -16,6 +16,7 @@ pub mod resource;
 pub mod sink;
 pub mod value;
 
+pub use dag::{ChannelBranch, ChannelNode, ChannelOperator};
 pub use node::{
     BundleRegistry, BundleRegistryError, DEFAULT_PORT, DagNode, DataBundle, DataBundleBinding,
     NodeId, NodeInput, NodePorts, Port, PortId, ResolvedDataBundle,
@@ -23,7 +24,7 @@ pub use node::{
 pub use plugin::NodePlugin;
 pub use registry::{NodeCtx, NodeFactory, NodeInfo, NodeRegistry, new_isolated_ctx};
 // pub use sink::SinkMode;
-pub use value::{ArtifactRef, FileFingerprint, FileRef, NodeValue, PortType};
+pub use value::{ArtifactRef, ChannelValue, FileFingerprint, FileRef, NodeValue, PortType};
 
 /// The git commit (short form) this crate was built from, recorded alongside
 /// run history for reproducibility evidence.

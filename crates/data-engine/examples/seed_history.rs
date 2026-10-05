@@ -19,6 +19,7 @@ async fn main() {
             spec: serde_json::json!({"path": "/data/iris.csv"}),
         }],
         edges: vec![],
+        ..Default::default()
     };
     let id1 = history
         .commit("main", &m1, None::<&serde_json::Value>, "初始：加载数据")
@@ -45,6 +46,7 @@ async fn main() {
             to: "agg".into(),
             to_port: 0,
         }],
+        ..Default::default()
     };
     let id2 = history
         .commit("main", &m2, None::<&serde_json::Value>, "增加 SQL 聚合节点")
@@ -84,6 +86,7 @@ async fn main() {
                 to_port: 0,
             },
         ],
+        ..Default::default()
     };
     let id3 = history
         .commit("main", &m3, None::<&serde_json::Value>, "增加文件输出节点")

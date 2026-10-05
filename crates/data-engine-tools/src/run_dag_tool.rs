@@ -114,6 +114,18 @@ fn build_report_json(report: RunReport) -> serde_json::Value {
             obj.insert("id".into(), serde_json::json!(nr.id));
             obj.insert("status".into(), serde_json::json!(nr.status));
             obj.insert("node_type".into(), serde_json::json!(nr.node_type));
+            if let Some(logical_node) = nr.logical_node {
+                obj.insert("logical_node".into(), serde_json::json!(logical_node));
+            }
+            if let Some(physical_job_id) = nr.physical_job_id {
+                obj.insert("physical_job_id".into(), serde_json::json!(physical_job_id));
+            }
+            if let Some(scatter_axis) = nr.scatter_axis {
+                obj.insert("scatter_axis".into(), serde_json::json!(scatter_axis));
+            }
+            if let Some(item_key) = nr.item_key {
+                obj.insert("item_key".into(), serde_json::json!(item_key));
+            }
             if let Some(output_type) = nr.output_type {
                 obj.insert("output_type".into(), serde_json::json!(output_type));
             }
@@ -195,6 +207,8 @@ fn build_report_json(report: RunReport) -> serde_json::Value {
         }
     }
     let total = nodes.len();
+    let logical_nodes =
+        serde_json::to_value(&report.logical_nodes).unwrap_or(serde_json::Value::Array(Vec::new()));
 
     serde_json::json!({
         "ok": report.ok,
@@ -209,6 +223,7 @@ fn build_report_json(report: RunReport) -> serde_json::Value {
             "cancelled": cancelled,
         },
         "nodes": nodes,
+        "logical_nodes": logical_nodes,
     })
 }
 
@@ -305,6 +320,7 @@ mod tests {
             snapshot_id: None,
             resource: Default::default(),
             nodes: Vec::new(),
+            logical_nodes: Vec::new(),
             statuses: Default::default(),
             errors: Default::default(),
         };
@@ -338,6 +354,10 @@ mod tests {
             id: "sink".into(),
             status: RuntimeStatus::Success,
             node_type: "dataframe_to_file".into(),
+            logical_node: None,
+            physical_job_id: None,
+            scatter_axis: None,
+            item_key: None,
             output_type: Some("File".into()),
             output_files: vec![file.clone()],
             port_assignments: [(0u8, file)].into_iter().collect(),
@@ -366,6 +386,7 @@ mod tests {
             snapshot_id: None,
             resource: Default::default(),
             nodes: vec![node],
+            logical_nodes: Vec::new(),
             statuses: Default::default(),
             errors: Default::default(),
         };
