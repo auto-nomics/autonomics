@@ -9,9 +9,8 @@ pub(crate) mod text_layout;
 use ratatui::{
     layout::Rect,
     prelude::{StatefulWidget, Widget},
-    style::{Color, Style},
     text::Line,
-    widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap},
+    widgets::{Paragraph, Wrap},
 };
 
 /// State for [`ChatWidget`].
@@ -118,17 +117,6 @@ impl StatefulWidget for ChatWidget<'_> {
             area.width,
         );
         Paragraph::new(window).render(area, buf);
-
-        // Render scrollbar overlaid on the right edge of the chat area
-        if state.total_lines > area.height as usize {
-            let mut scrollbar_state = ScrollbarState::new(state.total_lines - area.height as usize)
-                .position(state.scroll_offset)
-                .viewport_content_length(area.height as usize);
-            let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-                .thumb_style(Style::default().fg(Color::DarkGray))
-                .track_style(Style::default().fg(Color::Rgb(40, 40, 40)));
-            scrollbar.render(area, buf, &mut scrollbar_state);
-        }
     }
 }
 
