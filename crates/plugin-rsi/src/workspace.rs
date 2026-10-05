@@ -11,11 +11,11 @@ pub const MAX_FILES: usize = 256;
 /// A daemon-owned plugin repository. Agent-facing APIs accept only relative
 /// paths under this root and can never address `.git` or host paths.
 #[derive(Debug, Clone)]
-pub struct ProposalWorkspace {
+pub struct PluginWorkspace {
     repo_path: PathBuf,
 }
 
-impl ProposalWorkspace {
+impl PluginWorkspace {
     pub fn new(repo_path: impl Into<PathBuf>) -> Self {
         Self {
             repo_path: repo_path.into(),
@@ -92,9 +92,9 @@ impl ProposalWorkspace {
                 path: relative.to_string(),
             });
         }
-        let candidate = Path::new(relative);
-        if candidate.is_absolute()
-            || !candidate
+        let path = Path::new(relative);
+        if path.is_absolute()
+            || !path
                 .components()
                 .all(|component| matches!(component, Component::Normal(_)))
         {
@@ -102,7 +102,7 @@ impl ProposalWorkspace {
                 path: relative.to_string(),
             });
         }
-        if candidate.components().any(|component| {
+        if path.components().any(|component| {
             component
                 .as_os_str()
                 .to_str()
@@ -112,7 +112,7 @@ impl ProposalWorkspace {
                 path: relative.to_string(),
             });
         }
-        Ok(self.repo_path.join(candidate))
+        Ok(self.repo_path.join(path))
     }
 
     fn assert_file_budget(&self) -> Result<()> {
@@ -192,7 +192,7 @@ mod tests {
     #[test]
     fn rejects_escape_and_git_paths() {
         let tmp = tempfile::tempdir().unwrap();
-        let workspace = ProposalWorkspace::new(tmp.path());
+        let workspace = PluginWorkspace::new(tmp.path());
         for path in [
             "/etc/passwd",
             "../escape",
@@ -207,7 +207,7 @@ mod tests {
     #[test]
     fn writes_and_lists_without_git_metadata() {
         let tmp = tempfile::tempdir().unwrap();
-        let workspace = ProposalWorkspace::new(tmp.path());
+        let workspace = PluginWorkspace::new(tmp.path());
         workspace.write_text("manifest.toml", "x = 1").unwrap();
         workspace
             .write_text("scripts/adapter.sh", "set -eu\n")
@@ -223,7 +223,7 @@ mod tests {
     #[test]
     fn refuses_existing_symlink() {
         let tmp = tempfile::tempdir().unwrap();
-        let workspace = ProposalWorkspace::new(tmp.path());
+        let workspace = PluginWorkspace::new(tmp.path());
         std::fs::create_dir_all(tmp.path().join("scripts")).unwrap();
         let outside = tempfile::tempdir().unwrap();
         std::os::unix::fs::symlink(

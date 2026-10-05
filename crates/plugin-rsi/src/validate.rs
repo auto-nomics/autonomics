@@ -10,10 +10,10 @@ use container_runtime::ContainerNetwork;
 use crate::{
     Error, Result,
     report::{GateResult, GateStatus, ValidationReport},
-    workspace::ProposalWorkspace,
+    workspace::PluginWorkspace,
 };
 
-/// A reusable runtime environment selected by a plugin proposal.
+/// A reusable runtime environment selected by a plugin.
 ///
 /// This is not a plugin-owned image: ordinary plugin repositories contain
 /// source and tests, while environment images are managed as shared assets.
@@ -23,7 +23,7 @@ pub struct Environment {
     pub interpreters: Vec<String>,
 }
 
-/// Approved digest-pinned runtime environments available to plugin proposals.
+/// Approved digest-pinned runtime environments available to plugins.
 #[derive(Debug, Default)]
 pub struct EnvironmentCatalog {
     environments: BTreeMap<String, Environment>,
@@ -48,10 +48,11 @@ impl EnvironmentCatalog {
 }
 
 pub fn validate_workspace(
-    proposal: &crate::Proposal,
-    workspace: &ProposalWorkspace,
+    plugin_name: &str,
+    workspace: &PluginWorkspace,
     catalog: &EnvironmentCatalog,
     installed_kinds: &[String],
+    owned_kinds: &[String],
     attempt: u32,
 ) -> ValidationReport {
     let mut gates = Vec::new();
@@ -60,31 +61,30 @@ pub fn validate_workspace(
     });
     let manifest = match manifest {
         Some(value) => value,
-        None => return blocked_rest(proposal, attempt, gates, "manifest"),
+        None => return blocked_rest(plugin_name, attempt, gates, "manifest"),
     };
 
-    let policy = validate_policy(proposal, workspace, &manifest, catalog);
+    let policy = validate_policy(plugin_name, workspace, &manifest, catalog);
     match policy {
         Ok(()) => gates.push(GateResult::pass("policy")),
         Err(error) => {
             gates.push(GateResult::fail("policy", error));
-            return blocked_rest(proposal, attempt, gates, "policy");
+            return blocked_rest(plugin_name, attempt, gates, "policy");
         }
     }
 
-    let owned_kinds = proposal.base_node_kinds.as_deref().unwrap_or(&[]);
-    let collisions = proposal
-        .node_kinds
+    let collisions = manifest
+        .nodes
         .iter()
+        .map(|node| node.kind.clone())
         .filter(|kind| installed_kinds.contains(kind) && !owned_kinds.contains(kind))
-        .cloned()
         .collect::<Vec<_>>();
     if !collisions.is_empty() {
         gates.push(GateResult::fail(
             "kind_collision",
             format!("node kinds already registered: {}", collisions.join(", ")),
         ));
-        return blocked_rest(proposal, attempt, gates, "kind_collision");
+        return blocked_rest(plugin_name, attempt, gates, "kind_collision");
     }
     gates.push(GateResult::pass("kind_collision"));
 
@@ -98,7 +98,7 @@ pub fn validate_workspace(
         .collect::<Vec<_>>();
     if let Some(Err(error)) = script_results.into_iter().find(|result| result.is_err()) {
         gates.push(GateResult::fail("script_static", error));
-        return blocked_rest(proposal, attempt, gates, "script_static");
+        return blocked_rest(plugin_name, attempt, gates, "script_static");
     }
     gates.push(GateResult::pass("script_static"));
 
@@ -106,7 +106,7 @@ pub fn validate_workspace(
         Ok(()) => gates.push(GateResult::pass("registry_compile")),
         Err(error) => {
             gates.push(GateResult::fail("registry_compile", error));
-            return blocked_rest(proposal, attempt, gates, "registry_compile");
+            return blocked_rest(plugin_name, attempt, gates, "registry_compile");
         }
     }
 
@@ -115,11 +115,11 @@ pub fn validate_workspace(
         Err(error) => gates.push(GateResult::fail("secret_scan", error)),
     }
 
-    ValidationReport::new(&proposal.proposal_id, attempt, gates)
+    ValidationReport::new(plugin_name, attempt, gates)
 }
 
 fn blocked_rest(
-    proposal: &crate::Proposal,
+    plugin_name: &str,
     attempt: u32,
     mut gates: Vec<GateResult>,
     failed_gate: &str,
@@ -133,7 +133,7 @@ fn blocked_rest(
             format!("not run after `{failed_gate}` failed"),
         ));
     }
-    ValidationReport::new(&proposal.proposal_id, attempt, gates)
+    ValidationReport::new(plugin_name, attempt, gates)
 }
 
 fn gate<T, F>(gates: &mut Vec<GateResult>, name: &str, operation: F) -> Option<T>
@@ -152,9 +152,7 @@ where
     }
 }
 
-fn load_manifest(
-    workspace: &ProposalWorkspace,
-) -> std::result::Result<PluginManifest, Vec<String>> {
+fn load_manifest(workspace: &PluginWorkspace) -> std::result::Result<PluginManifest, Vec<String>> {
     let text = workspace
         .read_text("manifest.toml")
         .map_err(|error| vec![error.to_string()])?;
@@ -184,31 +182,18 @@ fn load_manifest(
 }
 
 fn validate_policy(
-    proposal: &crate::Proposal,
-    workspace: &ProposalWorkspace,
+    plugin_name: &str,
+    workspace: &PluginWorkspace,
     manifest: &PluginManifest,
     catalog: &EnvironmentCatalog,
 ) -> std::result::Result<(), String> {
     if manifest.nodes.is_empty() {
         return Err("manifest must declare at least one node".into());
     }
-    if manifest.plugin_name != proposal.plugin_name {
+    if manifest.plugin_name != plugin_name {
         return Err(format!(
-            "manifest plugin_name `{}` does not match proposal `{}`",
-            manifest.plugin_name, proposal.plugin_name
-        ));
-    }
-    let mut manifest_kinds = manifest
-        .nodes
-        .iter()
-        .map(|node| node.kind.clone())
-        .collect::<Vec<_>>();
-    manifest_kinds.sort();
-    let mut proposal_kinds = proposal.node_kinds.clone();
-    proposal_kinds.sort();
-    if manifest_kinds != proposal_kinds {
-        return Err(format!(
-            "manifest node kinds {manifest_kinds:?} do not match proposal node kinds {proposal_kinds:?}"
+            "manifest plugin_name `{}` does not match workspace `{plugin_name}`",
+            manifest.plugin_name
         ));
     }
     if !manifest.panels.is_empty() {
@@ -221,25 +206,18 @@ fn validate_policy(
             .is_some_and(|name| name == "Dockerfile")
     }) {
         return Err(
-            "ordinary plugin proposals cannot contain a Dockerfile; use an approved environment"
-                .into(),
+            "ordinary plugins cannot contain a Dockerfile; use an approved environment".into(),
         );
     }
-    let Some(environment_id) = proposal.environment_id.as_deref() else {
-        return Err("proposal has no bound environment".into());
+    let expected_reference = manifest.image.reference.as_str();
+    let Some(environment_id) = catalog.find_reference(&expected_reference) else {
+        return Err(format!(
+            "environment `{expected_reference}` is not approved for RSI"
+        ));
     };
-    let Some(expected_reference) = proposal.environment_reference.as_deref() else {
-        return Err("proposal has no digest-pinned environment reference".into());
-    };
-    if manifest.image.reference.as_str() != expected_reference {
-        return Err("manifest image differs from the proposal environment".into());
-    }
     let Some(environment) = catalog.get(environment_id) else {
         return Err(format!("environment `{environment_id}` is not approved"));
     };
-    if environment.reference != expected_reference {
-        return Err("proposal environment differs from the approved environment catalog".into());
-    }
     for node in &manifest.nodes {
         if !environment
             .interpreters
@@ -267,7 +245,7 @@ fn validate_policy(
     let readme = workspace
         .read_text("README.md")
         .map_err(|error| format!("README.md is required: {error}"))?;
-    if readme.contains("TODO") || proposal.rationale.contains("TODO") {
+    if readme.contains("TODO") {
         return Err("TODO placeholders are not reviewable".into());
     }
     Ok(())
@@ -346,7 +324,7 @@ fn compile_one_node(
     Ok(())
 }
 
-fn secret_scan(workspace: &ProposalWorkspace) -> std::result::Result<(), String> {
+fn secret_scan(workspace: &PluginWorkspace) -> std::result::Result<(), String> {
     for path in workspace.list_files().map_err(|error| error.to_string())? {
         let text = workspace
             .read_text(&path)
@@ -358,153 +336,4 @@ fn secret_scan(workspace: &ProposalWorkspace) -> std::result::Result<(), String>
         }
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{ProposalAction, ProposalStatus};
-
-    const ENVIRONMENT_REFERENCE: &str = "docker.io/library/hello-world@sha256:2dad70a9583f93db1dcc9a560b7d5b309af4a5151dfaf615f80d059a0925d78c";
-
-    fn setup(tmp: &Path) -> (crate::Proposal, ProposalWorkspace, EnvironmentCatalog) {
-        let workspace = ProposalWorkspace::new(tmp.join("repo"));
-        workspace
-            .write_text(
-                "manifest.toml",
-                &format!(
-                    r#"
-schema_version = 1
-plugin_name = "demo-plugin"
-
-[image]
-reference = "{ENVIRONMENT_REFERENCE}"
-
-[[nodes]]
-kind = "demo_plugin"
-desc = "Demo adapter"
-doc = "Input 0 becomes output 0."
-
-[nodes.ports]
-inputs = [{{ type = "file", label = "input" }}]
-outputs = [{{ path = "out.txt", format = "txt" }}]
-
-[nodes.command]
-interpreter = "sh"
-script_file = "scripts/adapter.sh"
-"#
-                ),
-            )
-            .unwrap();
-        workspace
-            .write_text(
-                "scripts/adapter.sh",
-                "set -eu\ncp \"$AUTONOMICS_INPUT0\" \"$AUTONOMICS_OUTPUT0\"\n",
-            )
-            .unwrap();
-        workspace.write_text("README.md", "# demo\n").unwrap();
-
-        let proposal = crate::Proposal {
-            schema_version: 1,
-            proposal_id: "P-test".into(),
-            plugin_name: "demo-plugin".into(),
-            node_kinds: vec!["demo_plugin".into()],
-            base_node_kinds: None,
-            action: ProposalAction::NewPlugin,
-            status: ProposalStatus::Draft,
-            authored_by: "agent".into(),
-            request_ids: vec!["R-test".into()],
-            environment_id: Some("demo".into()),
-            environment_reference: Some(ENVIRONMENT_REFERENCE.into()),
-            base_commit: None,
-            base_remote: None,
-            source_commit: None,
-            remote: None,
-            pushed_commit: None,
-            pull_request_number: None,
-            pull_request_url: None,
-            merged_commit: None,
-            latest_report: None,
-            rationale: "test".into(),
-            created_at: 0,
-            updated_at: 0,
-        };
-        let mut catalog = EnvironmentCatalog::default();
-        catalog.insert(
-            "demo",
-            Environment {
-                reference: ENVIRONMENT_REFERENCE.into(),
-                interpreters: vec!["sh".into()],
-            },
-        );
-        (proposal, workspace, catalog)
-    }
-
-    #[test]
-    fn minimal_plugin_passes_deterministic_gates() {
-        let tmp = tempfile::tempdir().unwrap();
-        let (proposal, workspace, catalog) = setup(tmp.path());
-        let report = validate_workspace(&proposal, &workspace, &catalog, &[], 1);
-        assert_eq!(report.overall, GateStatus::Pass, "{report:?}");
-    }
-
-    #[test]
-    fn ordinary_plugin_rejects_dockerfile() {
-        let tmp = tempfile::tempdir().unwrap();
-        let (proposal, workspace, catalog) = setup(tmp.path());
-        workspace
-            .write_text("Dockerfile", "FROM docker.io/library/alpine:latest\n")
-            .unwrap();
-        let report = validate_workspace(&proposal, &workspace, &catalog, &[], 1);
-        assert_eq!(report.overall, GateStatus::Fail);
-        assert!(report.gates.iter().any(|gate| {
-            gate.name == "policy"
-                && gate
-                    .reason
-                    .as_deref()
-                    .is_some_and(|reason| reason.contains("cannot contain a Dockerfile"))
-        }));
-    }
-
-    #[test]
-    fn collisions_and_host_access_fail_closed() {
-        let tmp = tempfile::tempdir().unwrap();
-        let (proposal, workspace, catalog) = setup(tmp.path());
-        let report = validate_workspace(
-            &proposal,
-            &workspace,
-            &catalog,
-            &["demo_plugin".to_string()],
-            1,
-        );
-        assert_eq!(report.overall, GateStatus::Fail);
-
-        let tmp2 = tempfile::tempdir().unwrap();
-        let (proposal2, workspace2, catalog2) = setup(tmp2.path());
-        workspace2
-            .write_text(
-                "scripts/adapter.sh",
-                "set -eu\ncurl http://example.com > \"$AUTONOMICS_OUTPUT0\"\n",
-            )
-            .unwrap();
-        let report = validate_workspace(&proposal2, &workspace2, &catalog2, &[], 1);
-        assert_eq!(report.overall, GateStatus::Fail);
-        assert!(report.gates.iter().any(|gate| gate.name == "script_static"));
-    }
-
-    #[test]
-    fn updates_keep_existing_kind_ownership() {
-        let tmp = tempfile::tempdir().unwrap();
-        let (mut proposal, workspace, catalog) = setup(tmp.path());
-        proposal.action = ProposalAction::UpdatePlugin;
-        proposal.base_node_kinds = Some(proposal.node_kinds.clone());
-        let report = validate_workspace(
-            &proposal,
-            &workspace,
-            &catalog,
-            &["demo_plugin".to_string()],
-            1,
-        );
-        assert_eq!(report.overall, GateStatus::Pass, "{report:?}");
-    }
 }

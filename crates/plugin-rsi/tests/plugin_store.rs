@@ -85,7 +85,6 @@ async fn plugin_store_develops_one_repository_in_place() {
 
     assert_eq!(operator.status(), PluginStatus::Draft);
     assert_eq!(store.list().unwrap().len(), 1);
-    assert!(!state.path().join("plugin-rsi/proposals").exists());
 
     let profile = AgentProfile::new("direct-plugin-agent").unwrap();
     profile

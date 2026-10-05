@@ -29,7 +29,7 @@ impl GitRepo {
 
     /// Clone `remote` into `path` and detach to an immutable commit.
     ///
-    /// Update proposals must start from the exact revision recorded in
+    /// Plugin updates must start from the exact revision recorded in
     /// `plugins.toml`, never from a mutable default branch.
     pub fn clone_at(
         path: impl AsRef<Path>,
@@ -84,6 +84,25 @@ impl GitRepo {
     /// Create and switch to a review branch at the current `HEAD`.
     pub fn switch_new_branch(&self, branch: &str) -> Result<()> {
         self.run(&["switch", "-c", branch])
+    }
+
+    /// Force a local branch to point at the current detached `HEAD`.
+    pub fn switch_forced_branch(&self, branch: &str) -> Result<()> {
+        self.run(&["switch", "-C", branch])
+    }
+
+    /// Fetch if needed, then detach to an immutable commit.
+    pub fn checkout_commit(&self, commit: &str) -> Result<()> {
+        if self.run_capture(&["cat-file", "-e", commit]).is_err() {
+            self.run(&["fetch", "origin"])?;
+        }
+        self.run(&["checkout", "--detach", commit])?;
+        if self.head()? != commit {
+            return Err(Error::Validation(format!(
+                "repository is not at requested commit {commit}"
+            )));
+        }
+        Ok(())
     }
 
     pub fn remote_url(&self, remote: &str) -> Result<Option<String>> {

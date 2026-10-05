@@ -4,15 +4,15 @@ use agentik_core::agent_builder::AgentBuilder;
 use agentik_core::tools::ToolRegistration;
 
 use crate::{
-    Error, PluginDevelopment, PluginDevelopmentToolsetRegistry, PluginOperator, Result,
-    plugin_development_tool_registrations, tools::PluginDevelopmentBinding,
+    Error, PluginOperator, Result, plugin_development_tool_registrations,
+    tools::PluginDevelopmentBinding,
 };
 
 /// Configuration for one plugin development agent.
 ///
 /// The profile connects one stable agent identity to the specialized plugin
-/// development toolset. It does not own runtime state: candidate leases remain
-/// in [`PluginDevelopmentToolsetRegistry`], while the host supplies the model
+/// development toolset. It does not own runtime state: workspace leases
+/// remain in the process-wide registry, while the host supplies the model
 /// and lifecycle when it builds the agent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentProfile {
@@ -78,19 +78,6 @@ impl AgentProfile {
         plugin_development_tool_registrations(self.agent_id.clone())
     }
 
-    /// Bind this agent identity to one plugin development candidate.
-    pub fn bind_plugin(
-        &self,
-        development: &mut PluginDevelopment<'_>,
-        run_id: &str,
-    ) -> Result<PluginDevelopmentBinding> {
-        PluginDevelopmentToolsetRegistry::global().bind_plugin_agent(
-            self.agent_id.as_str(),
-            development,
-            run_id,
-        )
-    }
-
     /// Bind this agent directly to one long-lived plugin workspace.
     ///
     /// This is the no-copy development path; the plugin manifest's lifecycle
@@ -99,7 +86,7 @@ impl AgentProfile {
         &self,
         operator: &mut PluginOperator<'_>,
         run_id: &str,
-    ) -> Result<()> {
+    ) -> Result<PluginDevelopmentBinding> {
         operator.bind_agent(&self.agent_id, run_id)
     }
 
@@ -131,7 +118,7 @@ fn default_system_prompt() -> String {
     "You develop exactly one assigned plugin. Start with plugin_development_status, \
     modify its nodes and files only through the plugin tools, and use \
     plugin_container_run to turn failures into implementation feedback. Do not claim \
-    completion without checking the candidate in its selected environment."
+    completion without checking the workspace in its selected environment."
         .into()
 }
 

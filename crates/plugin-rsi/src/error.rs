@@ -8,8 +8,11 @@ pub enum Error {
     #[error("invalid request: {0}")]
     InvalidRequest(String),
 
-    #[error("invalid proposal transition {from} -> {to}")]
+    #[error("invalid plugin transition {from} -> {to}")]
     InvalidTransition { from: String, to: String },
+
+    #[error("plugin registry operation failed: {0}")]
+    PluginRegistry(String),
 
     #[error("unsafe workspace path `{path}`")]
     UnsafePath { path: String },

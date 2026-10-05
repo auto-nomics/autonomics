@@ -62,6 +62,8 @@ impl Default for ImageMetadata {
 #[serde(rename_all = "snake_case")]
 pub enum PluginStatus {
     Draft,
+    /// An installed plugin is being changed in its long-lived workspace.
+    Updating,
     Validating,
     NeedsFix,
     PendingReview,
@@ -74,6 +76,46 @@ pub enum PluginStatus {
     Installed,
     PublishFailed,
     Rejected,
+}
+
+/// Daemon-owned publication and update facts associated with one plugin.
+///
+/// Runtime consumers only need the node declarations and environment. These
+/// fields let the RSI host recover lifecycle context from the same manifest
+/// that carries `PluginStatus`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PluginLifecycleMetadata {
+    /// Requests that motivated the current development or update.
+    #[serde(default)]
+    pub request_ids: Vec<String>,
+    /// Host-provided reason retained with the lifecycle record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rationale: Option<String>,
+    /// Installed revision from which the current update started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_commit: Option<String>,
+    /// Installed remote from which the current update started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_remote: Option<String>,
+    /// Remote created or updated by publication.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote: Option<String>,
+    /// Commit reviewed and pushed for a new plugin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub published_commit: Option<String>,
+    /// Open update PR number.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_request_number: Option<u64>,
+    /// Open update PR URL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_request_url: Option<String>,
+    /// Immutable commit produced when the update PR merged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merged_commit: Option<String>,
+    /// Repository-relative latest validation report.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_report: Option<String>,
 }
 
 fn default_plugin_status() -> PluginStatus {
@@ -91,6 +133,9 @@ pub struct PluginManifest {
     /// read it but must not treat it as an editable plugin field.
     #[serde(default = "default_plugin_status")]
     pub status: PluginStatus,
+    /// Publication and update metadata owned by the RSI daemon.
+    #[serde(default)]
+    pub lifecycle: PluginLifecycleMetadata,
     pub image: ImageMetadata,
     /// Panel-free families (mrpresso, mvmr) legitimately omit this.
     #[serde(default)]
@@ -105,6 +150,7 @@ impl Default for PluginManifest {
             schema_version: 1,
             plugin_name: "new_plugin".to_string(),
             status: default_plugin_status(),
+            lifecycle: Default::default(),
             image: Default::default(),
             panels: Default::default(),
             nodes: Default::default(),

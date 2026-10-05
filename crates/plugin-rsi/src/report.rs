@@ -50,14 +50,14 @@ impl GateResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValidationReport {
     pub report_id: String,
-    pub proposal_id: String,
+    pub plugin_name: String,
     pub created_at: i64,
     pub overall: GateStatus,
     pub gates: Vec<GateResult>,
 }
 
 impl ValidationReport {
-    pub fn new(proposal_id: &str, attempt: u32, gates: Vec<GateResult>) -> Self {
+    pub fn new(plugin_name: &str, attempt: u32, gates: Vec<GateResult>) -> Self {
         let overall = if gates.iter().any(|gate| gate.status == GateStatus::Fail) {
             GateStatus::Fail
         } else if gates.iter().any(|gate| gate.status == GateStatus::Blocked) {
@@ -67,7 +67,7 @@ impl ValidationReport {
         };
         Self {
             report_id: format!("attempt-{attempt}"),
-            proposal_id: proposal_id.to_string(),
+            plugin_name: plugin_name.to_string(),
             created_at: unix_now(),
             overall,
             gates,

@@ -59,7 +59,7 @@ pub struct PullRequestOutcome {
     pub remote: String,
     /// Reviewed commit pushed to the update branch.
     pub commit: String,
-    /// Branch created for this update proposal.
+    /// Branch created for this plugin update.
     pub branch: String,
     /// GitHub PR number.
     pub number: u64,
@@ -85,7 +85,7 @@ pub trait PluginPublisher {
     fn publish_plugin(&self, plugin_name: &str, repo: &GitRepo) -> Result<PublishOutcome>;
 }
 
-/// Trusted PR abstraction used by update proposals.
+/// Trusted PR abstraction used by plugin updates.
 ///
 /// As with publication, agents never see this interface; only the daemon can
 /// push review branches and call the GitHub CLI.

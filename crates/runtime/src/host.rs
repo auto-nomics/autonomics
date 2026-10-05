@@ -143,6 +143,8 @@ pub struct SharedInfra {
     /// Process-wide Podman connection and immutable panel cache shared by
     /// all DAG sessions.
     pub container_execution: Arc<ContainerExecutionInfra>,
+    /// Persistent plugin registry plus the unified RSI plugin workspaces.
+    pub plugins: Arc<plugin_rsi::PluginStore>,
     pub storage: Arc<dyn AgentStorage>,
     /// Profile registry (same DB connection, separate trait object).
     /// Used by RuntimeHost for dynamic profile derivation.
@@ -190,18 +192,17 @@ impl SharedInfra {
     pub async fn open(config: &RuntimeConfig) -> Result<Self> {
         tracing::info!("SharedInfra::open: starting");
 
-        // Materialize declared plugins before anything scans for them:
-        // `state_dir/plugins.toml` lists installation sources (git pins or
-        // local symlinks) and lands under `state_dir/plugins`, which the
-        // data-engine registry then loads. Missing config = nothing
-        // declared; a declared-but-broken plugin aborts startup.
-        let plugin_report = container_plugin::sync::sync(
-            &config
-                .state_dir
-                .join(container_plugin::sync::PLUGIN_CONFIG_FILE),
-            &config.state_dir.join("plugins"),
-        )
-        .map_err(|error| crate::error::Error::Other(error.to_string()))?;
+        // PluginStore owns `state_dir/plugins.toml` and `state_dir/plugins`;
+        // container-plugin remains the protocol and checkout tool layer.
+        let plugins = Arc::new(plugin_rsi::PluginStore::open(
+            &config.state_dir,
+            "main",
+            "Autonomics RSI",
+            "rsi@autonomics.example",
+        ));
+        let plugin_report = plugins
+            .materialize_registry()
+            .map_err(|error| crate::error::Error::Other(error.to_string()))?;
         if !plugin_report.outcomes.is_empty() {
             tracing::info!("plugins: {}", plugin_report.summary());
         }
@@ -403,6 +404,7 @@ impl SharedInfra {
             file_storage,
             vfs,
             container_execution,
+            plugins,
             catalog: catalog_service,
             storage,
             profile_storage,

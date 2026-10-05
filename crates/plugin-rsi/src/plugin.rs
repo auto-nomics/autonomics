@@ -2,26 +2,47 @@
 //!
 //! A plugin directory is both the git repository and the lifecycle record.
 //! Requests point at it, agents edit it in place, and `manifest.toml.status`
-//! is the daemon-owned state marker. This avoids proposal-specific repository
+//! is the daemon-owned state marker. This avoids separate development repositories
 //! copies in the direct-development path.
 
-use std::{collections::BTreeSet, path::PathBuf};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::{Path, PathBuf},
+};
 
-use container_plugin::manifest::{ImageMetadata, PluginManifest, PluginStatus};
+use container_plugin::manifest::{
+    ImageMetadata, PluginLifecycleMetadata, PluginManifest, PluginStatus,
+};
 use container_runtime::ImageReference;
 
 use crate::{
-    Error, GitRepo, PluginDevelopmentToolsetRegistry, ProposalWorkspace, RequestStore, Result,
-    validate::EnvironmentCatalog,
+    Error, GitRepo, InstalledPluginSource, PluginDevelopmentToolsetRegistry, PluginWorkspace,
+    RequestStore, Result, validate::EnvironmentCatalog,
 };
 
 /// Creates and opens plugin repositories under one root.
 #[derive(Debug, Clone)]
 pub struct PluginStore {
     root: PathBuf,
+    registry_path: PathBuf,
     default_branch: String,
     author_name: String,
     author_email: String,
+}
+
+/// Materializes an installed source into the unified plugin root.
+pub trait PluginSourceFetcher {
+    fn fetch(&self, source: &InstalledPluginSource, destination: &Path) -> Result<()>;
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct GitPluginSourceFetcher;
+
+impl PluginSourceFetcher for GitPluginSourceFetcher {
+    fn fetch(&self, source: &InstalledPluginSource, destination: &Path) -> Result<()> {
+        GitRepo::clone_at(destination, &source.remote, &source.commit, "origin")?;
+        Ok(())
+    }
 }
 
 /// A host-owned handle to one long-lived plugin workspace.
@@ -42,10 +63,107 @@ impl PluginStore {
     ) -> Self {
         Self {
             root: state_dir.join("plugins"),
+            registry_path: state_dir.join(container_plugin::sync::PLUGIN_CONFIG_FILE),
             default_branch: default_branch.to_string(),
             author_name: author_name.to_string(),
             author_email: author_email.to_string(),
         }
+    }
+
+    /// Return the daemon-owned plugin root.
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    /// Return the persistent registry that pins installed plugin sources.
+    pub fn registry_path(&self) -> &Path {
+        &self.registry_path
+    }
+
+    /// Materialize the persistent registry into the plugin root.
+    ///
+    /// `container-plugin` provides the low-level checkout tooling; this method
+    /// is the only system entry point that decides the root and protects an
+    /// in-place update from being reset to the old pin.
+    pub fn materialize_registry(&self) -> Result<container_plugin::sync::SyncReport> {
+        container_plugin::sync::sync(&self.registry_path, &self.root)
+            .map_err(|error| Error::PluginRegistry(error.to_string()))
+    }
+
+    /// Read the persistent source declarations indexed by plugin name.
+    pub fn registry_sources(
+        &self,
+    ) -> Result<BTreeMap<String, container_plugin::sync::PluginSource>> {
+        let text = match std::fs::read_to_string(&self.registry_path) {
+            Ok(text) => text,
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Default::default());
+            }
+            Err(source) => {
+                return Err(Error::ReadFile {
+                    path: self.registry_path.clone(),
+                    source,
+                });
+            }
+        };
+        let config: container_plugin::sync::PluginsConfig =
+            toml::from_str(&text).map_err(|source| Error::ParseToml {
+                path: self.registry_path.clone(),
+                source,
+            })?;
+        Ok(config
+            .plugin
+            .into_iter()
+            .map(|source| (source.name.clone(), source))
+            .collect())
+    }
+
+    /// Pin one installed plugin in the persistent registry.
+    pub fn install_source(&self, plugin_name: &str, remote: &str, commit: &str) -> Result<()> {
+        crate::write_git_plugin_source(&self.registry_path, plugin_name, remote, commit)
+    }
+
+    /// Read one plugin's immutable installed source.
+    pub fn installed_source(&self, plugin_name: &str) -> Result<InstalledPluginSource> {
+        crate::read_git_plugin_source(&self.registry_path, plugin_name)
+    }
+
+    /// Roll an updated plugin back to the immutable revision it replaced.
+    pub fn rollback(&self, plugin_name: &str) -> Result<InstalledPluginSource> {
+        let current = self.installed_source(plugin_name)?;
+        let mut operator = self
+            .develop(plugin_name)?
+            .ok_or_else(|| Error::Validation(format!("plugin `{plugin_name}` is not present")))?;
+        let lifecycle = &operator.manifest().lifecycle;
+        let Some(base_commit) = lifecycle.base_commit.clone() else {
+            return Err(Error::Validation(format!(
+                "plugin `{plugin_name}` has no rollback base"
+            )));
+        };
+        let Some(base_remote) = lifecycle.base_remote.clone() else {
+            return Err(Error::Validation(format!(
+                "plugin `{plugin_name}` has no rollback remote"
+            )));
+        };
+        if base_remote != current.remote || current.commit == base_commit {
+            return Err(Error::Validation(
+                "plugin has no prior source to roll back to".into(),
+            ));
+        }
+        let repository = operator.repository();
+        if !repository.is_clean()? || repository.head()? != current.commit {
+            return Err(Error::Validation(
+                "plugin workspace must be clean at the installed revision before rollback".into(),
+            ));
+        }
+        repository.checkout_commit(&base_commit)?;
+        repository.switch_forced_branch(&self.default_branch)?;
+        self.install_source(plugin_name, &base_remote, &base_commit)?;
+        operator.refresh()?;
+        Ok(InstalledPluginSource {
+            remote: base_remote,
+            commit: base_commit,
+        })
     }
 
     /// Create one named plugin repository and bind its approved environment.
@@ -82,10 +200,15 @@ impl PluginStore {
         let manifest = PluginManifest {
             plugin_name: plugin_name.to_string(),
             status: PluginStatus::Draft,
+            lifecycle: PluginLifecycleMetadata {
+                request_ids: request_ids.to_vec(),
+                rationale: Some(rationale.trim().to_string()),
+                ..Default::default()
+            },
             image,
             ..PluginManifest::default()
         };
-        let workspace = ProposalWorkspace::new(&path);
+        let workspace = PluginWorkspace::new(&path);
         save_manifest(&workspace, &manifest)?;
         let repo = GitRepo::open(path);
         repo.snapshot_commit(
@@ -98,6 +221,83 @@ impl PluginStore {
             plugin_name: plugin_name.to_string(),
             manifest,
         })
+    }
+
+    /// Materialize an installed plugin for in-place update.
+    pub fn create_update(
+        &self,
+        plugin_name: &str,
+        request_ids: &[String],
+        rationale: &str,
+        requests: &RequestStore,
+        source: &InstalledPluginSource,
+        catalog: &EnvironmentCatalog,
+        fetcher: &dyn PluginSourceFetcher,
+    ) -> Result<PluginOperator<'_>> {
+        crate::validate_plugin_name(plugin_name)?;
+        validate_requests(request_ids, requests, rationale)?;
+        let path = self.plugin_path(plugin_name);
+        if path.exists() {
+            let mut operator = self
+                .develop(plugin_name)?
+                .ok_or_else(|| Error::Validation("plugin workspace has no manifest".into()))?;
+            let environment_reference = operator.manifest.image.reference.as_str();
+            if catalog.find_reference(&environment_reference).is_none() {
+                return Err(Error::Validation(
+                    "installed environment is not approved for RSI".into(),
+                ));
+            }
+            if operator.repository().remote_url("origin")?.as_deref()
+                != Some(source.remote.as_str())
+            {
+                return Err(Error::Validation(
+                    "installed workspace does not match the requested source".into(),
+                ));
+            }
+            operator.mutate_manifest(|manifest| {
+                manifest.lifecycle.request_ids = request_ids.to_vec();
+                manifest.lifecycle.rationale = Some(rationale.trim().to_string());
+            })?;
+            if operator.status() == PluginStatus::Updating {
+                operator.snapshot("plugin: attach update feedback")?;
+                return Ok(operator);
+            }
+            operator.mutate_manifest(|manifest| {
+                manifest.lifecycle.base_commit = Some(source.commit.clone());
+                manifest.lifecycle.base_remote = Some(source.remote.clone());
+            })?;
+            operator
+                .transition_snapshot(PluginStatus::Updating, "plugin: start in-place update")?;
+            return Ok(operator);
+        }
+        fetcher.fetch(source, &path)?;
+        let workspace = PluginWorkspace::new(&path);
+        let mut manifest = load_manifest(&workspace)?;
+        if manifest.plugin_name != plugin_name {
+            return Err(Error::Validation(format!(
+                "installed manifest plugin_name `{}` does not match `{plugin_name}`",
+                manifest.plugin_name
+            )));
+        }
+        let environment_reference = manifest.image.reference.as_str();
+        if catalog.find_reference(&environment_reference).is_none() {
+            return Err(Error::Validation(
+                "installed environment is not approved for RSI".into(),
+            ));
+        }
+        manifest.status = PluginStatus::Updating;
+        manifest.lifecycle.request_ids = request_ids.to_vec();
+        manifest.lifecycle.rationale = Some(rationale.trim().to_string());
+        manifest.lifecycle.base_commit = Some(source.commit.clone());
+        manifest.lifecycle.base_remote = Some(source.remote.clone());
+        let mut operator = PluginOperator {
+            store: self,
+            plugin_name: plugin_name.to_string(),
+            manifest,
+        };
+        operator.mutate_manifest(|manifest| manifest.status = PluginStatus::Updating)?;
+        operator.snapshot("plugin: start update")?;
+        Ok(operator)
     }
 
     /// List plugins represented by a readable root manifest.
@@ -141,7 +341,7 @@ impl PluginStore {
         if !path.join("manifest.toml").is_file() {
             return Ok(None);
         }
-        let workspace = ProposalWorkspace::new(path);
+        let workspace = PluginWorkspace::new(path);
         let manifest = load_manifest(&workspace)?;
         Ok(Some(PluginOperator {
             store: self,
@@ -174,9 +374,35 @@ impl PluginOperator<'_> {
         &self.manifest
     }
 
+    /// Node kinds whose registry collisions are owned by this workspace.
+    pub fn owned_node_kinds(&self) -> Vec<String> {
+        self.manifest
+            .nodes
+            .iter()
+            .map(|node| node.kind.clone())
+            .collect()
+    }
+
+    pub(crate) fn repository(&self) -> GitRepo {
+        GitRepo::open(self.store.plugin_path(&self.plugin_name))
+    }
+
+    pub(crate) fn plugin_path(&self) -> PathBuf {
+        self.store.plugin_path(&self.plugin_name)
+    }
+
+    pub(crate) fn install_registry_source(&self, remote: &str, commit: &str) -> Result<()> {
+        self.store.install_source(&self.plugin_name, remote, commit)
+    }
+
+    /// Append-only reports live beside the manifest but outside node loading.
+    pub fn reports_dir(&self) -> PathBuf {
+        self.plugin_path().join(".rsi").join("reports")
+    }
+
     /// Return the plugin's own git-backed safe workspace.
-    pub fn workspace(&self) -> ProposalWorkspace {
-        ProposalWorkspace::new(self.store.plugin_path(&self.plugin_name))
+    pub fn workspace(&self) -> PluginWorkspace {
+        PluginWorkspace::new(self.store.plugin_path(&self.plugin_name))
     }
 
     /// Bind a different approved environment while development is editable.
@@ -204,6 +430,30 @@ impl PluginOperator<'_> {
         repo.snapshot_commit(message, &self.store.author_name, &self.store.author_email)
     }
 
+    /// Persist one host-owned lifecycle mutation without committing it.
+    pub(crate) fn mutate_manifest(
+        &mut self,
+        mutate: impl FnOnce(&mut PluginManifest),
+    ) -> Result<()> {
+        let before = self.manifest.status;
+        mutate(&mut self.manifest);
+        let after = self.manifest.status;
+        if before != after {
+            ensure_transition(before, after)?;
+        }
+        save_manifest(&self.workspace(), &self.manifest)
+    }
+
+    /// Transition and commit one lifecycle marker change.
+    pub fn transition_snapshot(
+        &mut self,
+        to: PluginStatus,
+        message: &str,
+    ) -> Result<Option<String>> {
+        self.mutate_manifest(|manifest| manifest.status = to)?;
+        self.snapshot(message)
+    }
+
     /// Transition the manifest lifecycle marker.
     pub fn transition(&mut self, to: PluginStatus) -> Result<PluginStatus> {
         let from = self.manifest.status;
@@ -215,9 +465,13 @@ impl PluginOperator<'_> {
 
     /// Bind one agent directly to this plugin workspace.
     ///
-    /// There is no detached candidate copy. Exclusive agent leasing and the
-    /// manifest's editable status are the development guards.
-    pub fn bind_agent(&mut self, agent_id: &str, run_id: &str) -> Result<()> {
+    /// Exclusive agent leasing and the manifest's editable status are the
+    /// development guards.
+    pub fn bind_agent(
+        &mut self,
+        agent_id: &str,
+        run_id: &str,
+    ) -> Result<crate::tools::PluginDevelopmentBinding> {
         self.ensure_editable()?;
         let environment_reference = self.manifest.image.reference.as_str();
         PluginDevelopmentToolsetRegistry::global().bind_plugin_workspace(
@@ -226,8 +480,7 @@ impl PluginOperator<'_> {
             self.store.plugin_path(&self.plugin_name),
             &environment_reference,
             run_id,
-        )?;
-        Ok(())
+        )
     }
 
     fn ensure_editable(&self) -> Result<()> {
@@ -242,7 +495,7 @@ impl PluginOperator<'_> {
     }
 }
 
-fn load_manifest(workspace: &ProposalWorkspace) -> Result<PluginManifest> {
+fn load_manifest(workspace: &PluginWorkspace) -> Result<PluginManifest> {
     let path = workspace.path().join("manifest.toml");
     let text = std::fs::read_to_string(&path).map_err(|source| Error::ReadFile {
         path: path.clone(),
@@ -251,7 +504,7 @@ fn load_manifest(workspace: &ProposalWorkspace) -> Result<PluginManifest> {
     toml::from_str(&text).map_err(|source| Error::ParseToml { path, source })
 }
 
-fn save_manifest(workspace: &ProposalWorkspace, manifest: &PluginManifest) -> Result<()> {
+fn save_manifest(workspace: &PluginWorkspace, manifest: &PluginManifest) -> Result<()> {
     let text = toml::to_string_pretty(manifest).map_err(|source| Error::SerializeToml {
         path: workspace.path().join("manifest.toml"),
         source,
@@ -286,13 +539,18 @@ fn validate_requests(
 pub(crate) fn is_editable(status: PluginStatus) -> bool {
     matches!(
         status,
-        PluginStatus::Draft | PluginStatus::NeedsFix | PluginStatus::PublishFailed
+        PluginStatus::Draft
+            | PluginStatus::Updating
+            | PluginStatus::NeedsFix
+            | PluginStatus::PublishFailed
     )
 }
 
 pub(crate) fn ensure_transition(from: PluginStatus, to: PluginStatus) -> Result<()> {
     let valid = match (from, to) {
         (PluginStatus::Draft, PluginStatus::Validating)
+        | (PluginStatus::Installed, PluginStatus::Updating)
+        | (PluginStatus::Updating, PluginStatus::Validating)
         | (PluginStatus::NeedsFix, PluginStatus::Validating)
         | (PluginStatus::Validating, PluginStatus::NeedsFix)
         | (PluginStatus::Validating, PluginStatus::PendingReview)
@@ -302,7 +560,8 @@ pub(crate) fn ensure_transition(from: PluginStatus, to: PluginStatus) -> Result<
         | (PluginStatus::Publishing, PluginStatus::Published)
         | (PluginStatus::Publishing, PluginStatus::PullRequestOpen)
         | (PluginStatus::Publishing, PluginStatus::PublishFailed)
-        | (PluginStatus::PublishFailed, PluginStatus::Validating)
+        | (PluginStatus::PublishFailed, PluginStatus::Updating)
+        | (PluginStatus::Published, PluginStatus::Updating)
         | (PluginStatus::PullRequestOpen, PluginStatus::PullRequestMerged)
         | (PluginStatus::Published, PluginStatus::InstallPending)
         | (PluginStatus::PullRequestMerged, PluginStatus::InstallPending)

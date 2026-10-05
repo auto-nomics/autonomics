@@ -41,15 +41,15 @@ pub enum RequestIntent {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-/// Lifecycle state of a request, independent of any proposal implementing it.
+/// Lifecycle state of a request, independent of the plugin implementing it.
 pub enum RequestStatus {
     /// Recorded and waiting for triage.
     Open,
     /// An RSI run has claimed the request.
     Working,
-    /// A proposal has been submitted for review.
-    ProposalPending,
-    /// A reviewed proposal has resolved the request.
+    /// A plugin has been submitted for review.
+    ReviewPending,
+    /// A reviewed plugin has resolved the request.
     Consumed,
     /// Rejected by triage or review; retained as negative feedback.
     Rejected,
@@ -58,8 +58,8 @@ pub enum RequestStatus {
 /// A durable request for a plugin change.
 ///
 /// A request describes demand and evidence. It intentionally does not define
-/// implementation decisions such as node kinds, scripts, or images; those
-/// belong to the [`crate::Proposal`] produced in response to the request.
+/// implementation decisions such as node kinds, scripts, or environments; those
+/// belong to the plugin workspace produced in response to the request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RequestRecord {
     /// Content-derived stable identifier, assigned by the store.

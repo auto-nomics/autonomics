@@ -1,8 +1,8 @@
 //! Agent tools for specialized plugin development.
 //!
 //! The registry is the process-wide trust boundary. The host binds one agent
-//! identity to one proposal, plugin, and detached candidate run; tool instances
-//! carry only that identity and resolve everything else through the registry.
+//! identity to one long-lived plugin workspace; tool instances carry only that
+//! identity and resolve everything else through the registry.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -21,9 +21,7 @@ use container_runtime::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::{
-    Error, PluginDevelopment, ProposalWorkspace, Result as RsiResult, plugin::is_editable,
-};
+use crate::{Error, PluginWorkspace, Result as RsiResult, plugin::is_editable};
 
 const MANIFEST_FILE: &str = "manifest.toml";
 pub(crate) const MAX_AGENT_ID_BYTES: usize = 256;
@@ -32,23 +30,19 @@ const DEFAULT_TOOL_TIMEOUT_SECS: u64 = 900;
 /// One agent's exclusive assignment to develop a plugin workspace.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginDevelopmentBinding {
-    /// Persistent proposal identifier for the legacy detached-candidate path.
-    pub proposal_id: Option<String>,
-    /// Immutable plugin name recorded by the proposal.
+    /// Immutable plugin name recorded by the workspace.
     pub plugin_name: String,
     /// Development session identifier.
     pub run_id: String,
-    /// Approved environment image selected by the proposal.
+    /// Approved environment image selected by the plugin.
     pub environment_reference: String,
     workspace: PathBuf,
-    /// Direct plugin workspaces trust manifest.status as their lifecycle gate.
-    lifecycle_manifest: bool,
 }
 
 impl PluginDevelopmentBinding {
     /// Return the safe workspace owned by this assignment.
-    pub fn workspace(&self) -> ProposalWorkspace {
-        ProposalWorkspace::new(self.workspace.clone())
+    pub fn workspace(&self) -> PluginWorkspace {
+        PluginWorkspace::new(self.workspace.clone())
     }
 }
 
@@ -85,53 +79,9 @@ impl PluginDevelopmentToolsetRegistry {
         })
     }
 
-    /// Bind one agent exclusively to a legacy proposal candidate run.
-    ///
-    /// The assignment always operates on the detached candidate created here;
-    /// adoption remains a host-side `PluginDevelopment` operation.
-    pub fn bind_plugin_agent(
-        &self,
-        agent_id: &str,
-        development: &mut PluginDevelopment<'_>,
-        run_id: &str,
-    ) -> RsiResult<PluginDevelopmentBinding> {
-        validate_agent_id(agent_id)?;
-        let Some(environment_reference) = development.proposal().environment_reference.clone()
-        else {
-            return Err(Error::Validation(
-                "proposal must bind an environment before plugin development".into(),
-            ));
-        };
-        self.reserve_agent(agent_id)?;
-        let candidate = match development.prepare_development_candidate(run_id) {
-            Ok(candidate) => candidate,
-            Err(error) => {
-                let _ = self.release_reservation(agent_id);
-                return Err(error);
-            }
-        };
-        let binding = PluginDevelopmentBinding {
-            proposal_id: Some(development.id().to_string()),
-            plugin_name: development.proposal().plugin_name.clone(),
-            run_id: run_id.to_string(),
-            environment_reference,
-            workspace: candidate.path().to_path_buf(),
-            lifecycle_manifest: false,
-        };
-        let binding = match self.insert_binding(agent_id, binding) {
-            Ok(binding) => binding,
-            Err(error) => {
-                let _ = self.release_reservation(agent_id);
-                return Err(error);
-            }
-        };
-        Ok(binding)
-    }
-
     /// Bind one agent directly to a long-lived plugin repository.
     ///
-    /// Unlike the legacy proposal path this creates no detached copy. The
-    /// manifest must be in an editable daemon-owned lifecycle state.
+    /// The manifest must be in an editable daemon-owned lifecycle state.
     pub fn bind_plugin_workspace(
         &self,
         agent_id: &str,
@@ -144,7 +94,7 @@ impl PluginDevelopmentToolsetRegistry {
         validate_run_id(run_id)?;
         self.reserve_agent(agent_id)?;
 
-        let workspace = ProposalWorkspace::new(workspace_path);
+        let workspace = PluginWorkspace::new(workspace_path);
         let binding = match load_manifest(&workspace).and_then(|manifest| {
             if manifest.plugin_name != plugin_name {
                 return Err(Error::Validation(format!(
@@ -164,12 +114,10 @@ impl PluginDevelopmentToolsetRegistry {
                 )));
             }
             Ok(PluginDevelopmentBinding {
-                proposal_id: None,
                 plugin_name: plugin_name.to_string(),
                 run_id: run_id.to_string(),
                 environment_reference: environment_reference.to_string(),
                 workspace: workspace.path().to_path_buf(),
-                lifecycle_manifest: true,
             })
         }) {
             Ok(binding) => binding,
@@ -193,7 +141,7 @@ impl PluginDevelopmentToolsetRegistry {
         self.lock(|state| Ok(state.bindings.get(agent_id).cloned()))
     }
 
-    /// Release an agent assignment without touching its candidate directory.
+    /// Release an agent assignment without touching its plugin directory.
     pub fn unbind_agent(&self, agent_id: &str) -> RsiResult<()> {
         self.lock(|state| {
             state.bindings.remove(agent_id);
@@ -346,14 +294,14 @@ fn tool_error(error: impl std::fmt::Display) -> ToolError {
     }
 }
 
-fn load_manifest(workspace: &ProposalWorkspace) -> RsiResult<PluginManifest> {
+fn load_manifest(workspace: &PluginWorkspace) -> RsiResult<PluginManifest> {
     toml::from_str(&workspace.read_text(MANIFEST_FILE)?)
         .map_err(|error| Error::Validation(format!("invalid {MANIFEST_FILE}: {error}")))
 }
 
 fn editable_manifest(binding: &PluginDevelopmentBinding) -> RsiResult<PluginManifest> {
     let manifest = load_manifest(&binding.workspace())?;
-    if binding.lifecycle_manifest && !is_editable(manifest.status) {
+    if !is_editable(manifest.status) {
         return Err(Error::Validation(format!(
             "plugin `{}` cannot be edited from manifest status {:?}",
             binding.plugin_name, manifest.status
@@ -362,7 +310,7 @@ fn editable_manifest(binding: &PluginDevelopmentBinding) -> RsiResult<PluginMani
     Ok(manifest)
 }
 
-fn save_manifest(workspace: &ProposalWorkspace, manifest: &PluginManifest) -> RsiResult<()> {
+fn save_manifest(workspace: &PluginWorkspace, manifest: &PluginManifest) -> RsiResult<()> {
     toml::to_string_pretty(manifest)
         .map_err(|error| Error::Validation(format!("cannot encode manifest: {error}")))
         .and_then(|text| workspace.write_text(MANIFEST_FILE, &text))
@@ -376,7 +324,7 @@ fn selected_node(manifest: &PluginManifest, node_kind: &str) -> RsiResult<NodeDe
         .cloned()
         .ok_or_else(|| {
             Error::Validation(format!(
-                "selected node `{}` is missing from the candidate manifest",
+                "selected node `{}` is missing from the plugin manifest",
                 node_kind
             ))
         })
@@ -393,7 +341,7 @@ fn resolve_binding(state: &PluginToolState) -> RsiResult<PluginDevelopmentBindin
 
 #[tool(
     name = "plugin_development_status",
-    description = "Show the proposal, plugin nodes, run, environment, and candidate files assigned to this agent."
+    description = "Show the plugin nodes, run, environment, status, and files assigned to this agent."
 )]
 struct PluginStatusInput {}
 
@@ -415,7 +363,6 @@ impl ToolFunction for PluginStatusTool {
             .map(|node| node.kind)
             .collect::<Vec<_>>();
         Ok(ToolResult::success_json(json!({
-            "proposal_id": binding.proposal_id,
             "plugin_name": binding.plugin_name,
             "node_kinds": node_kinds,
             "run_id": binding.run_id,
@@ -768,254 +715,5 @@ impl ToolFunction for PluginContainerRunTool {
 
     fn timeout_seconds(&self) -> u64 {
         DEFAULT_TOOL_TIMEOUT_SECS
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{
-        Environment, EnvironmentCatalog, ProposalStore, RequestIntent, RequestRecord,
-        RequestSource, RequestStatus, RequestStore,
-    };
-    use agentik_sdk::types::ToolResultContent;
-    use container_plugin::node_definition::{
-        CommandSpec, OutputSpec, PortKind, PortLayout, PortSpec,
-    };
-    use std::collections::BTreeMap;
-
-    const ENVIRONMENT_REFERENCE: &str = "docker.io/library/alpine@sha256:0123456789012345678901234567890123456789012345678901234567890123";
-
-    struct FakeRuntime {
-        root: PathBuf,
-        requests: Arc<Mutex<Vec<ContainerRunRequest>>>,
-    }
-
-    #[async_trait]
-    impl PodmanConnection for FakeRuntime {
-        async fn run(
-            &self,
-            request: ContainerRunRequest,
-        ) -> Result<ContainerRunResult, container_runtime::ContainerRuntimeError> {
-            self.requests.lock().unwrap().push(request);
-            Ok(ContainerRunResult {
-                exit_code: 0,
-                stdout: "development command completed".into(),
-                stderr: String::new(),
-            })
-        }
-
-        fn workspace_root(&self) -> &std::path::Path {
-            &self.root
-        }
-    }
-
-    fn catalog() -> EnvironmentCatalog {
-        let mut catalog = EnvironmentCatalog::default();
-        catalog.insert(
-            "demo",
-            Environment {
-                reference: ENVIRONMENT_REFERENCE.into(),
-                interpreters: vec!["sh".into()],
-            },
-        );
-        catalog
-    }
-
-    fn setup(state: &tempfile::TempDir) -> PluginDevelopment<'static> {
-        let requests = RequestStore::open(state.path());
-        let request = requests
-            .record(RequestRecord {
-                id: String::new(),
-                created_at: 0,
-                source: RequestSource::User,
-                intent: RequestIntent::NewNode,
-                summary: "Develop a plugin node".into(),
-                body: "Use the specialized plugin development tools.".into(),
-                plugin_name: Some("tools-plugin".into()),
-                evidence_ids: Vec::new(),
-                status: RequestStatus::Open,
-            })
-            .unwrap();
-        let store = Box::leak(Box::new(ProposalStore::open(
-            state.path(),
-            "main",
-            "Autonomics RSI",
-            "rsi@example.com",
-        )));
-        let mut development = store
-            .create(
-                "tools-plugin",
-                &[request.id],
-                "Develop through the dedicated toolset.",
-                &requests,
-            )
-            .unwrap();
-        development.bind_environment("demo", &catalog()).unwrap();
-        let mut node = development
-            .create_node(NodeDefinition {
-                kind: "tools_plugin".into(),
-                desc: "Demo adapter".into(),
-                doc: "Original documentation.".into(),
-                deprecated: false,
-                timeout_secs: 3600,
-                artifact_prefix: None,
-                ports: PortLayout {
-                    inputs: vec![PortSpec {
-                        r#type: PortKind::File,
-                        label: Some("input".into()),
-                        accepted_formats: Vec::new(),
-                    }],
-                    outputs: vec![OutputSpec {
-                        path: "result.txt".into(),
-                        format: Some("txt".into()),
-                        label: None,
-                    }],
-                },
-                params: BTreeMap::new(),
-                command: CommandSpec {
-                    interpreter: "sh".into(),
-                    argv: Vec::new(),
-                    script: None,
-                    script_file: Some("scripts/adapter.sh".into()),
-                    env: BTreeMap::new(),
-                    files: BTreeMap::new(),
-                },
-                resources: Default::default(),
-            })
-            .unwrap();
-        node.write_script("#!/bin/sh\n").unwrap();
-        development
-    }
-
-    async fn execute(
-        tools: &[ToolRegistration],
-        name: &str,
-        input: Value,
-    ) -> Result<ToolResult, ToolError> {
-        tools
-            .iter()
-            .find(|tool| tool.definition.name == name)
-            .unwrap()
-            .implementation
-            .execute(input)
-            .await
-    }
-
-    #[tokio::test]
-    async fn toolset_is_bound_to_one_plugin_candidate() {
-        let state = tempfile::tempdir().unwrap();
-        let mut development = setup(&state);
-        let requests = Arc::new(Mutex::new(Vec::new()));
-        let runtime = Arc::new(FakeRuntime {
-            root: state.path().to_path_buf(),
-            requests: requests.clone(),
-        });
-        let registry = PluginDevelopmentToolsetRegistry::global();
-        registry.configure_runtime(runtime).unwrap();
-
-        let binding = registry
-            .bind_plugin_agent("agent-a", &mut development, "attempt-1")
-            .unwrap();
-        let tools = plugin_development_tool_registrations("agent-a");
-        assert_eq!(tools.len(), 10);
-
-        let status = execute(&tools, "plugin_development_status", json!({}))
-            .await
-            .unwrap();
-        match status.content {
-            ToolResultContent::Json(value) => {
-                assert_eq!(value["plugin_name"], "tools-plugin");
-                assert_eq!(value["node_kinds"], json!(["tools_plugin"]));
-                assert_eq!(value["run_id"], "attempt-1");
-            }
-            other => panic!("unexpected status result: {other:?}"),
-        }
-
-        execute(
-            &tools,
-            "plugin_node_write_script",
-            json!({
-                "node_kind": "tools_plugin",
-                "contents": "#!/bin/sh\nupdated\n"
-            }),
-        )
-        .await
-        .unwrap();
-        let script = execute(
-            &tools,
-            "plugin_node_read_script",
-            json!({ "node_kind": "tools_plugin" }),
-        )
-        .await
-        .unwrap();
-        match script.content {
-            ToolResultContent::Json(value) => {
-                assert_eq!(value["contents"], "#!/bin/sh\nupdated\n");
-            }
-            other => panic!("unexpected script result: {other:?}"),
-        }
-        assert_ne!(
-            development
-                .workspace()
-                .read_text("scripts/adapter.sh")
-                .unwrap(),
-            "#!/bin/sh\nupdated\n"
-        );
-
-        execute(
-            &tools,
-            "plugin_node_update_doc",
-            json!({
-                "node_kind": "tools_plugin",
-                "doc": "Updated documentation."
-            }),
-        )
-        .await
-        .unwrap();
-        let run = execute(
-            &tools,
-            "plugin_container_run",
-            json!({ "argv": ["sh", "scripts/adapter.sh"], "timeout_secs": 17 }),
-        )
-        .await
-        .unwrap();
-        match run.content {
-            ToolResultContent::Json(value) => {
-                assert_eq!(value["exit_code"], 0);
-            }
-            other => panic!("unexpected run result: {other:?}"),
-        }
-        {
-            let requests = requests.lock().unwrap();
-            assert_eq!(requests.len(), 1);
-            assert_eq!(requests[0].image, ENVIRONMENT_REFERENCE);
-            assert_eq!(requests[0].command, vec!["sh", "scripts/adapter.sh"]);
-            assert_eq!(requests[0].timeout_secs, 17);
-            assert_eq!(requests[0].network, ContainerNetwork::Isolated);
-        }
-
-        assert!(
-            registry
-                .bind_plugin_agent("agent-a", &mut development, "attempt-2")
-                .is_err()
-        );
-        assert!(
-            !state
-                .path()
-                .join("proposals")
-                .join(development.id())
-                .join("development-candidates")
-                .join("attempt-2")
-                .exists()
-        );
-        let unbound = plugin_development_tool_registrations("agent-b");
-        assert!(
-            execute(&unbound, "plugin_development_status", json!({}))
-                .await
-                .is_err()
-        );
-        assert!(binding.workspace().path().is_dir());
-        registry.unbind_agent("agent-a").unwrap();
     }
 }

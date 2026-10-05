@@ -1,19 +1,14 @@
-//! Manifest plugin inspection handlers.
+//! Plugin lifecycle inspection handlers.
 
 use std::collections::HashSet;
 
-use axum::Json;
-use axum::extract::State;
+use axum::{Json, extract::State};
 
 use super::state::GatewayState;
 use crate::proto::*;
 
-// ── plugins ──────────────────────────────────────────────────────────
-
-/// Installed manifest plugin families: what the plugins root holds, what
-/// `plugins.toml` beside it declares, and which families the live node
-/// registry actually registered at startup. Built-in node bundles are
-/// compiled into the binary — a node-listing endpoint covers those.
+/// Plugin families from the daemon-owned PluginStore: lifecycle state,
+/// persistent source declaration, and live registry registration.
 #[utoipa::path(
     get,
     path = "/api/v1/plugins",
@@ -21,15 +16,8 @@ use crate::proto::*;
     responses((status = 200, body = PluginListView))
 )]
 pub(crate) async fn list_plugins(State(state): State<GatewayState>) -> Json<PluginListView> {
-    // Same resolution the registry build used: the startup sync pins
-    // AUTONOMICS_PLUGIN_ROOT when plugins.toml exists, else the loader
-    // default — so this is the root the daemon actually scanned.
-    let root = container_plugin::loader::default_plugins_root();
-    let declared = container_plugin::manager::declared_sources(
-        &container_plugin::manager::default_config_path(&root),
-    )
-    .unwrap_or_default()
-    .unwrap_or_default();
+    let store = &state.infra.plugins;
+    let declared = store.registry_sources().unwrap_or_default();
     let registered: HashSet<String> = state
         .infra
         .engine_manager
@@ -38,61 +26,62 @@ pub(crate) async fn list_plugins(State(state): State<GatewayState>) -> Json<Plug
         .map(|node| node.kind)
         .collect();
 
-    let plugins = container_plugin::manager::inspect_root(&root)
-        .into_iter()
-        .map(|family| {
-            let source = declared.get(&family.dir).map(plugin_source_view);
-            match family.manifest {
-                Ok(manifest) => {
-                    let kinds: Vec<String> = manifest
-                        .nodes
+    let plugins = match store.list() {
+        Ok(manifests) => manifests
+            .into_iter()
+            .map(|manifest| {
+                let kinds: Vec<String> = manifest
+                    .nodes
+                    .iter()
+                    .map(|node| node.kind.clone())
+                    .collect();
+                let is_registered =
+                    !kinds.is_empty() && kinds.iter().all(|kind| registered.contains(kind));
+                PluginView {
+                    name: manifest.plugin_name.clone(),
+                    status: status_text(manifest.status),
+                    image: Some(manifest.image.reference.to_string()),
+                    kinds,
+                    panels: manifest
+                        .panels
                         .iter()
-                        .map(|node| node.kind.clone())
-                        .collect();
-                    // A nodeless family registers nothing; vacuous truth
-                    // would report it as registered.
-                    let is_registered =
-                        !kinds.is_empty() && kinds.iter().all(|kind| registered.contains(kind));
-                    PluginView {
-                        name: manifest.plugin_name.clone(),
-                        image: Some(manifest.image.reference.to_string()),
-                        kinds,
-                        panels: manifest
-                            .panels
-                            .iter()
-                            .map(|panel| PluginPanelView {
-                                binding: panel.binding.clone(),
-                                mount: panel.mount.clone(),
-                                bundle: panel.bundle.to_string(),
-                            })
-                            .collect(),
-                        source,
-                        registered: is_registered,
-                        error: None,
-                    }
+                        .map(|panel| PluginPanelView {
+                            binding: panel.binding.clone(),
+                            mount: panel.mount.clone(),
+                            bundle: panel.bundle.to_string(),
+                        })
+                        .collect(),
+                    source: declared.get(&manifest.plugin_name).map(plugin_source_view),
+                    registered: is_registered,
+                    error: None,
                 }
-                Err(detail) => PluginView {
-                    // The directory name is all the identity a broken
-                    // family has.
-                    name: family.dir.clone(),
-                    image: None,
-                    kinds: Vec::new(),
-                    panels: Vec::new(),
-                    source,
-                    registered: false,
-                    error: Some(detail),
-                },
-            }
-        })
-        .collect();
+            })
+            .collect(),
+        Err(error) => vec![PluginView {
+            name: "<plugin-store>".into(),
+            status: "error".into(),
+            image: None,
+            kinds: Vec::new(),
+            panels: Vec::new(),
+            source: None,
+            registered: false,
+            error: Some(error.to_string()),
+        }],
+    };
 
     Json(PluginListView {
-        root: root.display().to_string(),
+        root: store.root().display().to_string(),
         plugins,
     })
 }
 
-/// Map a `plugins.toml` source entry onto its wire view.
+fn status_text(status: container_plugin::manifest::PluginStatus) -> String {
+    serde_json::to_value(status)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_string))
+        .unwrap_or_else(|| format!("{status:?}").to_lowercase())
+}
+
 fn plugin_source_view(source: &container_plugin::sync::PluginSource) -> PluginSourceView {
     PluginSourceView {
         git: source.git.clone(),

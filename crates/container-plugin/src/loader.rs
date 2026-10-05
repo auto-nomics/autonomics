@@ -17,7 +17,7 @@ use std::sync::Arc;
 use thiserror::Error;
 
 use crate::factory::Plugin;
-use crate::manifest::PluginManifest;
+use crate::manifest::{PluginManifest, PluginStatus};
 use dag_core::NodePlugin;
 
 pub const MANIFEST_FILE: &str = "manifest.toml";
@@ -92,6 +92,22 @@ pub fn load(
         let dir = entry.path();
         let manifest_path = dir.join(MANIFEST_FILE);
         if !dir.is_dir() || !manifest_path.is_file() {
+            continue;
+        }
+        // The plugins root is also the daemon's development root. Only
+        // runtime-ready manifests enter the node registry; draft and update
+        // states remain visible to RSI management instead.
+        let manifest_text =
+            std::fs::read_to_string(&manifest_path).map_err(|source| Error::ReadFile {
+                path: manifest_path.clone(),
+                source,
+            })?;
+        if let Ok(manifest) = toml::from_str::<PluginManifest>(&manifest_text)
+            && !matches!(
+                manifest.status,
+                PluginStatus::Published | PluginStatus::Installed
+            )
+        {
             continue;
         }
         let plugin = load_one(&dir, &manifest_path, runtime.clone(), panel_cache.clone())?;
@@ -424,6 +440,23 @@ script_file = "scripts/h2.sh"
             new.script_sha256.as_deref(),
             Some(independent_sha256(edited_script.as_bytes()).as_str())
         );
+    }
+
+    #[test]
+    fn draft_plugins_do_not_enter_the_runtime_registry() {
+        let (runtime, cache, state) = infra();
+        let plugins_root = state.path().join("plugins");
+        let draft = GOOD_LDSC.replacen(
+            "plugin_name = \"ldsc\"",
+            "plugin_name = \"ldsc\"\nstatus = \"draft\"",
+            1,
+        );
+        write_plugin(&plugins_root, "ldsc", &draft);
+        let ldsc_dir = plugins_root.join("ldsc");
+        std::fs::create_dir_all(ldsc_dir.join("scripts")).unwrap();
+        std::fs::write(ldsc_dir.join("scripts/h2.sh"), "set -eu\ntrue\n").unwrap();
+
+        assert!(load(&plugins_root, runtime, cache).unwrap().is_empty());
     }
 
     #[test]

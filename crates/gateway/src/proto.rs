@@ -528,6 +528,8 @@ pub struct PluginView {
     /// Family name from the manifest (the directory name while the
     /// manifest is unparseable).
     pub name: String,
+    /// Daemon-owned lifecycle state from the plugin manifest.
+    pub status: String,
     /// Image reference `host/path@sha256:…` (absent when the manifest
     /// failed to parse).
     pub image: Option<String>,
