@@ -265,6 +265,12 @@ pub struct NodeRunDetails {
     pub stdout_log: Option<crate::value::FileRef>,
     /// Persisted stderr capture (`vfs://` URI + sha256), when non-empty.
     pub stderr_log: Option<crate::value::FileRef>,
+    /// File-backed outputs produced by the executor.
+    ///
+    /// DataFrame outputs are materialized as Arrow IPC files; Channel outputs
+    /// are materialized as JSON. This is the cross-executor transfer contract.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub output_artifacts: Vec<crate::value::FileRef>,
 }
 
 /// One resolved upstream input of a node, recorded at dispatch time.

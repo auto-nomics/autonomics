@@ -916,5 +916,6 @@ fn run_details(
         stderr_log: logs.1,
         workspace: None,
         task_manifest: None,
+        output_artifacts: Vec::new(),
     }
 }

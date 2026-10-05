@@ -599,6 +599,7 @@ impl DAG {
                         name: self.output_name(id, port.index),
                         port: port.index,
                         payload: port.data_type.to_string(),
+                        artifact_paths: Vec::new(),
                     })
                     .collect::<Vec<_>>()
             })
@@ -2821,7 +2822,7 @@ fn canonical_file_path(path: &str) -> &str {
 mod tests {
     use crate::dag::{
         ChannelBranch, ChannelNode, ChannelOperator, LocalTaskExecutor, NodeInput, NodePorts,
-        TaskExecutor, TaskInputSource, TaskSubmission,
+        TaskAttemptReceipt, TaskExecutor, TaskInputSource, TaskSubmission,
     };
     use crate::value::{FileRef, PortType};
     use std::assert_matches;
@@ -3368,6 +3369,143 @@ mod tests {
             serde_json::from_str(&std::fs::read_to_string(manifest_path).unwrap()).unwrap();
         assert_eq!(manifest["spec"]["inputs"][0]["staged_paths"][0], paths[0]);
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn local_executor_stages_and_publishes_dataframe_artifacts() -> Result<()> {
+        let workspace_root = tempfile::tempdir().unwrap();
+        let mut dag = DAG::default();
+        dag.set_task_executor(std::sync::Arc::new(
+            LocalTaskExecutor::with_workspace_root_resource_limits_and_input_staging(
+                workspace_root.path(),
+                Some(1),
+                Some(1024),
+            )?,
+        ));
+        dag.add_node_with_spec(
+            "source".into(),
+            Box::new(EchoNode::default()),
+            "echo".into(),
+            serde_json::json!({}),
+        )?;
+        dag.add_node_with_spec(
+            "target".into(),
+            Box::new(EchoNode::from_ports(
+                NodePorts::new()
+                    .add_input_port_of_type(None, PortType::DataFrame)
+                    .add_output_port_of_type(None, PortType::DataFrame),
+            )),
+            "echo".into(),
+            serde_json::json!({}),
+        )?;
+        dag.add_edge("source", "target", 0, 0)?;
+
+        let report = dag
+            .run(&crate::dag::SchedulerConfig::default(), &test_ctx(), None)
+            .await?;
+        assert!(report.ok, "{report:?}");
+        let source = report
+            .nodes
+            .iter()
+            .find(|node| node.id == "source")
+            .unwrap();
+        let source_artifact = source
+            .execution
+            .as_ref()
+            .unwrap()
+            .output_artifacts
+            .first()
+            .unwrap();
+        assert!(source_artifact.path.ends_with("outputs/port-0.arrow"));
+        assert!(std::path::Path::new(&source_artifact.path).is_file());
+        let receipt: TaskAttemptReceipt = serde_json::from_str(
+            &std::fs::read_to_string(
+                std::path::Path::new(
+                    source
+                        .execution
+                        .as_ref()
+                        .unwrap()
+                        .workspace
+                        .as_deref()
+                        .unwrap(),
+                )
+                .join("attempt.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(receipt.task_id, "source");
+        assert_eq!(receipt.executor, "local");
+        assert_eq!(receipt.status, "success");
+        assert_eq!(receipt.output_artifacts.len(), 1);
+        assert_eq!(receipt.output_artifacts[0].path, source_artifact.path);
+
+        let target = report
+            .nodes
+            .iter()
+            .find(|node| node.id == "target")
+            .unwrap();
+        let target_manifest: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(
+                target
+                    .execution
+                    .as_ref()
+                    .unwrap()
+                    .task_manifest
+                    .as_ref()
+                    .unwrap()
+                    .path
+                    .clone(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let staged_path = target_manifest["spec"]["inputs"][0]["staged_paths"][0]
+            .as_str()
+            .unwrap();
+        assert!(staged_path.ends_with(".arrow"));
+        assert!(std::path::Path::new(staged_path).is_file());
+        Ok(())
+    }
+
+    #[test]
+    fn remote_dispatch_requires_staged_artifacts() {
+        let input = |staged_paths: Vec<String>| crate::dag::TaskInputBinding {
+            name: "frame".into(),
+            port: 0,
+            source: TaskInputSource::UpstreamPort {
+                from: "source".into(),
+                from_port: 0,
+            },
+            payload: "DataFrame".into(),
+            path: None,
+            fingerprint: None,
+            staged_paths,
+        };
+        let submission = |input: crate::dag::TaskInputBinding| TaskSubmission {
+            spec: crate::dag::TaskSpec {
+                id: "remote".into(),
+                logical_node: Some("process".into()),
+                kind: "test".into(),
+                spec: serde_json::json!({}),
+                axis: None,
+                item_key: None,
+                item: None,
+                inputs: vec![input],
+                outputs: Vec::new(),
+            },
+            inputs: Vec::new(),
+            resources: Default::default(),
+        };
+
+        let dispatch = submission(input(vec!["/work/input-0.arrow".into()]))
+            .into_remote_dispatch()
+            .unwrap();
+        assert_eq!(dispatch.spec.id, "remote");
+        let error = submission(input(Vec::new()))
+            .into_remote_dispatch()
+            .unwrap_err();
+        assert!(error.to_string().contains("staged artifact"));
     }
 
     #[test]
@@ -4397,6 +4535,8 @@ mod tests {
             _inputs: &[NodeInput],
             reporter: &crate::dag::node_event::NodeReporter,
         ) -> std::result::Result<PortOutputs, DagError> {
+            reporter.info("detailed node started");
+            reporter.error("detailed node error stream");
             reporter.set_run_details(NodeRunDetails {
                 image: Some("localhost/test@sha256:abc".into()),
                 image_digest: Some("sha256:abc".into()),
@@ -4404,6 +4544,7 @@ mod tests {
                 run_name: Some("autonomics-container-command-1-1".into()),
                 stdout_log: None,
                 stderr_log: None,
+                output_artifacts: Vec::new(),
                 workspace: None,
                 task_manifest: None,
             });
@@ -4496,6 +4637,24 @@ mod tests {
             details.run_name.as_deref(),
             Some("autonomics-container-command-1-1")
         );
+        assert!(
+            details
+                .stdout_log
+                .as_ref()
+                .unwrap()
+                .path
+                .ends_with("stdout.log")
+        );
+        assert!(
+            details
+                .stderr_log
+                .as_ref()
+                .unwrap()
+                .path
+                .ends_with("stderr.log")
+        );
+        assert!(std::path::Path::new(&details.stdout_log.as_ref().unwrap().path).is_file());
+        assert!(std::path::Path::new(&details.stderr_log.as_ref().unwrap().path).is_file());
 
         let bad = report.nodes.iter().find(|node| node.id == "bad").unwrap();
         assert_eq!(bad.status, RuntimeStatus::Failed);

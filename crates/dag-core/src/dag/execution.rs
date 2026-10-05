@@ -17,12 +17,13 @@ use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
-use super::node_event::{JobResult, NodeReporter};
+use super::node_event::{EventLevel, JobResult, NodeReporter, ReportedLog};
 use super::{DagNode, NodeInput};
 use crate::dag::DagError;
 use crate::dag::graph::PortOutputs;
 use crate::registry::NodeCtx;
 use crate::value::{FileRef, NodeValue};
+use arrow::ipc::writer::FileWriter as ArrowFileWriter;
 
 /// Resource requests associated with one task.
 ///
@@ -107,6 +108,8 @@ pub struct TaskOutputBinding {
     pub name: String,
     pub port: u8,
     pub payload: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifact_paths: Vec<String>,
 }
 
 /// Everything an executor needs for one attempt.
@@ -114,6 +117,35 @@ pub struct TaskOutputBinding {
 pub struct TaskSubmission {
     pub spec: TaskSpec,
     pub inputs: Vec<NodeInput>,
+    pub resources: TaskResources,
+}
+
+impl TaskSubmission {
+    /// Build the serializable envelope consumed by a remote executor.
+    ///
+    /// Remote execution rejects unstaged in-memory inputs: once this method
+    /// succeeds, every DataFrame/File/FileSet/Channel input has a path in
+    /// `TaskSpec::inputs` and can be transferred without process memory.
+    pub fn into_remote_dispatch(self) -> Result<TaskDispatch, DagError> {
+        for input in &self.spec.inputs {
+            if input.staged_paths.is_empty() {
+                return Err(DagError::Schedule(format!(
+                    "remote dispatch requires a staged artifact for task `{}` input `{}`",
+                    self.spec.id, input.name
+                )));
+            }
+        }
+        Ok(TaskDispatch {
+            spec: self.spec,
+            resources: self.resources,
+        })
+    }
+}
+
+/// Serializable, memory-independent work order for a remote executor.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskDispatch {
+    pub spec: TaskSpec,
     pub resources: TaskResources,
 }
 
@@ -125,6 +157,24 @@ pub struct TaskExecution {
     pub engine_ctx: Arc<NodeCtx>,
     pub reporter: NodeReporter,
     pub cancellation: CancellationToken,
+}
+
+/// Serializable terminal evidence for one executor attempt.
+///
+/// A remote executor writes this receipt next to its task artifacts. The
+/// coordinating executor uses it to distinguish an actually finished task from
+/// a lost lease and to locate every output that must be transferred back.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskAttemptReceipt {
+    pub task_id: String,
+    pub executor: String,
+    pub status: String,
+    pub elapsed_ms: u64,
+    pub exit_code: i32,
+    pub workspace: String,
+    pub task_manifest: FileRef,
+    /// File-backed outputs that must be transferred back to the coordinator.
+    pub output_artifacts: Vec<FileRef>,
 }
 
 /// Execution backend for physical DAG tasks.
@@ -374,6 +424,43 @@ impl LocalTaskWorkspace {
         FileRef::local(&manifest_path, Some("json".into()))
     }
 
+    async fn write_dataframe(
+        path: &std::path::Path,
+        dataframe: &datafusion::prelude::DataFrame,
+    ) -> Result<FileRef, DagError> {
+        let schema = dataframe.schema();
+        let batches = dataframe.clone().collect().await.map_err(|error| {
+            DagError::Schedule(format!("cannot materialize DataFrame output: {error}"))
+        })?;
+        let file = std::fs::File::create(path).map_err(|error| {
+            DagError::Schedule(format!(
+                "cannot create Arrow IPC artifact `{}`: {error}",
+                path.display()
+            ))
+        })?;
+        let mut writer = ArrowFileWriter::try_new(file, schema.as_ref()).map_err(|error| {
+            DagError::Schedule(format!(
+                "cannot initialize Arrow IPC artifact `{}`: {error}",
+                path.display()
+            ))
+        })?;
+        for batch in &batches {
+            writer.write(batch).map_err(|error| {
+                DagError::Schedule(format!(
+                    "cannot write Arrow IPC artifact `{}`: {error}",
+                    path.display()
+                ))
+            })?;
+        }
+        writer.finish().map_err(|error| {
+            DagError::Schedule(format!(
+                "cannot finalize Arrow IPC artifact `{}`: {error}",
+                path.display()
+            ))
+        })?;
+        FileRef::local(path, Some("arrow".into()))
+    }
+
     async fn read_source(
         path: &str,
         storage: Option<&vfs::OpendalFileStorage>,
@@ -427,6 +514,22 @@ impl LocalTaskWorkspace {
         Ok(staged)
     }
 
+    fn write_json_artifact(
+        path: &std::path::Path,
+        value: &serde_json::Value,
+    ) -> Result<FileRef, DagError> {
+        let bytes = serde_json::to_vec_pretty(value).map_err(|error| {
+            DagError::Schedule(format!("cannot serialize JSON artifact: {error}"))
+        })?;
+        std::fs::write(path, bytes).map_err(|error| {
+            DagError::Schedule(format!(
+                "cannot write JSON artifact `{}`: {error}",
+                path.display()
+            ))
+        })?;
+        FileRef::local(path, Some("json".into()))
+    }
+
     async fn stage_inputs(
         &mut self,
         submission: &mut TaskSubmission,
@@ -443,6 +546,26 @@ impl LocalTaskWorkspace {
         let mut staged_by_port = std::collections::BTreeMap::<u8, Vec<String>>::new();
 
         for input in &mut submission.inputs {
+            if let NodeValue::DataFrame(dataframe) = &input.data {
+                let path = input_root.join(format!("input-{sequence}.arrow"));
+                sequence += 1;
+                let artifact = Self::write_dataframe(&path, dataframe).await?;
+                staged_by_port
+                    .entry(input.port)
+                    .or_default()
+                    .push(artifact.path.clone());
+                continue;
+            }
+            if let NodeValue::Channel(channel) = &input.data {
+                let path = input_root.join(format!("input-{sequence}.json"));
+                sequence += 1;
+                let artifact = Self::write_json_artifact(&path, &serde_json::json!(channel.items))?;
+                staged_by_port
+                    .entry(input.port)
+                    .or_default()
+                    .push(artifact.path.clone());
+                continue;
+            }
             let (sources, is_file_set) = match &input.data {
                 NodeValue::File(file) => (vec![file.clone()], false),
                 NodeValue::FileSet(files) => (files.clone(), true),
@@ -477,7 +600,131 @@ impl LocalTaskWorkspace {
         Ok(())
     }
 
-    fn finish(&self, status: &str, duration: Duration) {
+    async fn publish_outputs(
+        &mut self,
+        submission: &mut TaskSubmission,
+        outputs: &PortOutputs,
+    ) -> Result<Vec<FileRef>, DagError> {
+        let output_root = self.root.join("outputs");
+        std::fs::create_dir_all(&output_root).map_err(|error| {
+            DagError::Schedule(format!(
+                "cannot create output artifact directory `{}`: {error}",
+                output_root.display()
+            ))
+        })?;
+        let mut artifacts_by_port = std::collections::BTreeMap::<u8, Vec<String>>::new();
+        let mut artifacts = Vec::new();
+        let mut ports = outputs.iter().map(|(port, _)| *port).collect::<Vec<_>>();
+        ports.sort_unstable();
+        ports.dedup();
+
+        for port in ports {
+            let value = outputs
+                .get(&port)
+                .ok_or_else(|| DagError::Schedule(format!("output port {port} disappeared")))?;
+            let mut port_artifacts = Vec::new();
+            match value {
+                NodeValue::DataFrame(dataframe) => {
+                    let path = output_root.join(format!("port-{port}.arrow"));
+                    let artifact = Self::write_dataframe(&path, dataframe).await?;
+                    port_artifacts.push(artifact);
+                }
+                NodeValue::File(file) => port_artifacts.push(file.clone()),
+                NodeValue::FileSet(files) => port_artifacts.extend(files.iter().cloned()),
+                NodeValue::Channel(channel) => {
+                    let path = output_root.join(format!("port-{port}.json"));
+                    let artifact =
+                        Self::write_json_artifact(&path, &serde_json::json!(channel.items))?;
+                    port_artifacts.push(artifact);
+                }
+            }
+            artifacts_by_port.insert(
+                port,
+                port_artifacts
+                    .iter()
+                    .map(|artifact| artifact.path.clone())
+                    .collect::<Vec<_>>(),
+            );
+            artifacts.extend(port_artifacts);
+        }
+        for output in &mut submission.spec.outputs {
+            if let Some(paths) = artifacts_by_port.get(&output.port) {
+                output.artifact_paths = paths.clone();
+            }
+        }
+        self.manifest = Self::write_manifest(&self.root, submission)?;
+        Ok(artifacts)
+    }
+
+    fn capture_logs(&self, logs: Vec<ReportedLog>) -> (Option<FileRef>, Option<FileRef>) {
+        let write = |name: &str, entries: Vec<&ReportedLog>| -> Option<FileRef> {
+            if entries.is_empty() {
+                return None;
+            }
+            let path = self.root.join(name);
+            let rendered = entries
+                .iter()
+                .map(|entry| {
+                    format!(
+                        "{} {}",
+                        serde_json::to_string(&entry.level).unwrap_or_default(),
+                        entry.message
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            std::fs::write(path, format!("{rendered}\n")).ok()?;
+            FileRef::local(self.root.join(name), Some("text".into())).ok()
+        };
+        let stdout = write(
+            "stdout.log",
+            logs.iter()
+                .filter(|entry| !matches!(entry.level, EventLevel::Warn | EventLevel::Error))
+                .collect(),
+        );
+        let stderr = write(
+            "stderr.log",
+            logs.iter()
+                .filter(|entry| matches!(entry.level, EventLevel::Warn | EventLevel::Error))
+                .collect(),
+        );
+        (stdout, stderr)
+    }
+
+    fn complete(
+        &self,
+        task_id: &str,
+        executor: &str,
+        details: &mut Option<super::runtime::NodeRunDetails>,
+        logs: Vec<ReportedLog>,
+        exit_code: i32,
+        status: &str,
+        duration: Duration,
+    ) {
+        let (stdout_log, stderr_log) = self.capture_logs(logs);
+        let details = details.get_or_insert_with(Default::default);
+        if details.stdout_log.is_none() {
+            details.stdout_log = stdout_log;
+        }
+        if details.stderr_log.is_none() {
+            details.stderr_log = stderr_log;
+        }
+        details.workspace = Some(self.root.to_string_lossy().into_owned());
+        details.task_manifest = Some(self.manifest.clone());
+        if details.exit_code.is_none() {
+            details.exit_code = Some(exit_code);
+        }
+        self.finish(task_id, executor, details, status, duration);
+    }
+
+    fn finish(
+        &self,
+        task_id: &str,
+        executor: &str,
+        details: &super::runtime::NodeRunDetails,
+        status: &str,
+        duration: Duration,
+    ) {
         let status_json = serde_json::json!({
             "status": status,
             "elapsed_ms": duration.as_millis().min(u64::MAX as u128) as u64,
@@ -493,14 +740,38 @@ impl LocalTaskWorkspace {
                 "cannot write local task status"
             );
         }
-    }
 
-    fn attach(&self, details: &mut Option<super::runtime::NodeRunDetails>, exit_code: i32) {
-        let details = details.get_or_insert_with(Default::default);
-        details.workspace = Some(self.root.to_string_lossy().into_owned());
-        details.task_manifest = Some(self.manifest.clone());
-        if details.exit_code.is_none() {
-            details.exit_code = Some(exit_code);
+        let receipt = TaskAttemptReceipt {
+            task_id: task_id.to_string(),
+            executor: executor.to_string(),
+            status: status.to_string(),
+            elapsed_ms: duration.as_millis().min(u64::MAX as u128) as u64,
+            exit_code: details
+                .exit_code
+                .unwrap_or(if status == "success" { 0 } else { 1 }),
+            workspace: self.root.to_string_lossy().into_owned(),
+            task_manifest: self.manifest.clone(),
+            output_artifacts: details.output_artifacts.clone(),
+        };
+        let receipt_path = self.root.join("attempt.json");
+        let write_result = serde_json::to_vec_pretty(&receipt)
+            .map_err(|error| {
+                DagError::Schedule(format!("cannot serialize task attempt receipt: {error}"))
+            })
+            .and_then(|bytes| {
+                std::fs::write(&receipt_path, bytes).map_err(|error| {
+                    DagError::Schedule(format!(
+                        "cannot write task attempt receipt `{}`: {error}",
+                        receipt_path.display()
+                    ))
+                })
+            });
+        if let Err(error) = write_result {
+            warn!(
+                workspace = %self.root.display(),
+                error = %error,
+                "cannot write local task attempt receipt"
+            );
         }
     }
 }
@@ -545,9 +816,17 @@ impl TaskExecutor for LocalTaskExecutor {
                 Err(error) => {
                     let duration = start.elapsed();
                     let mut details = execution.reporter.take_run_details();
+                    let logs = execution.reporter.take_logs();
                     if let Some(workspace) = &workspace {
-                        workspace.attach(&mut details, 125);
-                        workspace.finish("resource_rejected", duration);
+                        workspace.complete(
+                            &task_id,
+                            self.name(),
+                            &mut details,
+                            logs,
+                            125,
+                            "resource_rejected",
+                            duration,
+                        );
                     }
                     return JobResult::Failed {
                         id: task_id,
@@ -560,9 +839,17 @@ impl TaskExecutor for LocalTaskExecutor {
             _ = cancellation.cancelled() => {
                 let duration = start.elapsed();
                 let mut details = execution.reporter.take_run_details();
+                let logs = execution.reporter.take_logs();
                 if let Some(workspace) = &workspace {
-                    workspace.attach(&mut details, 130);
-                    workspace.finish("cancelled", duration);
+                    workspace.complete(
+                        &task_id,
+                        self.name(),
+                        &mut details,
+                        logs,
+                        130,
+                        "cancelled",
+                        duration,
+                    );
                 }
                 return JobResult::Failed {
                     id: task_id,
@@ -576,9 +863,17 @@ impl TaskExecutor for LocalTaskExecutor {
             _ = tokio::time::sleep(timeout.unwrap_or(Duration::MAX)), if timeout.is_some() => {
                 let duration = start.elapsed();
                 let mut details = execution.reporter.take_run_details();
+                let logs = execution.reporter.take_logs();
                 if let Some(workspace) = &workspace {
-                    workspace.attach(&mut details, 124);
-                    workspace.finish("timeout", duration);
+                    workspace.complete(
+                        &task_id,
+                        self.name(),
+                        &mut details,
+                        logs,
+                        124,
+                        "timeout",
+                        duration,
+                    );
                 }
                 return JobResult::Failed {
                     id: task_id,
@@ -605,8 +900,16 @@ impl TaskExecutor for LocalTaskExecutor {
             drop(resource_lease);
             let duration = start.elapsed();
             let mut details = execution.reporter.take_run_details();
-            workspace.attach(&mut details, 126);
-            workspace.finish("input_staging_failed", duration);
+            let logs = execution.reporter.take_logs();
+            workspace.complete(
+                &task_id,
+                self.name(),
+                &mut details,
+                logs,
+                126,
+                "input_staging_failed",
+                duration,
+            );
             return JobResult::Failed {
                 id: task_id,
                 error,
@@ -625,9 +928,17 @@ impl TaskExecutor for LocalTaskExecutor {
             _ = cancellation.cancelled() => {
                 let duration = start.elapsed();
                 let mut details = execution.reporter.take_run_details();
+                let logs = execution.reporter.take_logs();
                 if let Some(workspace) = &workspace {
-                    workspace.attach(&mut details, 130);
-                    workspace.finish("cancelled", duration);
+                    workspace.complete(
+                        &task_id,
+                        self.name(),
+                        &mut details,
+                        logs,
+                        130,
+                        "cancelled",
+                        duration,
+                    );
                 }
                 return JobResult::Failed {
                     id: task_id,
@@ -641,9 +952,17 @@ impl TaskExecutor for LocalTaskExecutor {
             _ = tokio::time::sleep(timeout.unwrap_or(Duration::MAX)), if timeout.is_some() => {
                 let duration = start.elapsed();
                 let mut details = execution.reporter.take_run_details();
+                let logs = execution.reporter.take_logs();
                 if let Some(workspace) = &workspace {
-                    workspace.attach(&mut details, 124);
-                    workspace.finish("timeout", duration);
+                    workspace.complete(
+                        &task_id,
+                        self.name(),
+                        &mut details,
+                        logs,
+                        124,
+                        "timeout",
+                        duration,
+                    );
                 }
                 return JobResult::Failed {
                     id: task_id,
@@ -660,11 +979,59 @@ impl TaskExecutor for LocalTaskExecutor {
         drop(resource_lease);
 
         let duration = start.elapsed();
+        let mut output_artifacts = Vec::new();
+        let mut output_publish_error = None;
+        if let Some(workspace) = workspace.as_mut()
+            && let Ok(Ok(outputs)) = &result
+        {
+            match workspace
+                .publish_outputs(&mut execution.submission, outputs)
+                .await
+            {
+                Ok(artifacts) => output_artifacts.extend(artifacts),
+                Err(error) => output_publish_error = Some(error),
+            }
+        }
+        if let Some(error) = output_publish_error {
+            let mut details = execution.reporter.take_run_details();
+            let logs = execution.reporter.take_logs();
+            if let Some(workspace) = &workspace {
+                workspace.complete(
+                    &task_id,
+                    self.name(),
+                    &mut details,
+                    logs,
+                    127,
+                    "output_publish_failed",
+                    duration,
+                );
+            }
+            return JobResult::Failed {
+                id: task_id,
+                error,
+                duration,
+                details,
+            };
+        }
+
         let mut details = execution.reporter.take_run_details();
+        let logs = execution.reporter.take_logs();
         let succeeded = matches!(result, Ok(Ok(_)));
+        if succeeded {
+            details
+                .get_or_insert_with(Default::default)
+                .output_artifacts = output_artifacts;
+        }
         if let Some(workspace) = &workspace {
-            workspace.attach(&mut details, if succeeded { 0 } else { 1 });
-            workspace.finish(if succeeded { "success" } else { "failed" }, duration);
+            workspace.complete(
+                &task_id,
+                self.name(),
+                &mut details,
+                logs,
+                if succeeded { 0 } else { 1 },
+                if succeeded { "success" } else { "failed" },
+                duration,
+            );
         }
         match result {
             Ok(Ok(outputs)) => JobResult::Success {

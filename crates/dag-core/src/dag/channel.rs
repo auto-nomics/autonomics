@@ -425,11 +425,11 @@ impl DagNode for ChannelNode {
                 }
             }
             for (port, channel) in branch_outputs.into_iter().enumerate() {
-                outputs.insert(port as u8, channel);
+                outputs.insert(port as u8, channel.via_bounded_stream(128).await?);
             }
         } else {
             let channel = self.apply(inputs)?;
-            outputs.insert(0, channel);
+            outputs.insert(0, channel.via_bounded_stream(128).await?);
         }
         Ok(outputs)
     }
@@ -474,6 +474,20 @@ mod tests {
         let (sender, _receiver) = tokio::sync::mpsc::channel(1);
         let reporter = NodeReporter::new("channel-test", sender);
         node.execute(&context, &inputs, &reporter).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn bounded_channel_preserves_item_order_under_capacity_one() {
+        let items = (0..500)
+            .map(|index| serde_json::json!(index))
+            .collect::<Vec<_>>();
+        let channel = ChannelValue { items }.via_bounded_stream(1).await.unwrap();
+        assert_eq!(
+            channel.items,
+            (0..500)
+                .map(|index| serde_json::json!(index))
+                .collect::<Vec<_>>()
+        );
     }
 
     #[tokio::test]

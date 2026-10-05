@@ -13,6 +13,7 @@ vfs = { path = "../vfs" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 datafusion.workspace = true
+arrow.workspace = true
 tokio = { workspace = true }
 tokio-util = { version = "0.7", features = ["rt"] }
 arrow-array.workspace = true

@@ -142,6 +142,14 @@ pub struct NodeReporter {
     /// persisted log URIs). Shared across clones but scoped to a single
     /// dispatch — the scheduler creates a fresh reporter per node execution.
     run_details: std::sync::Arc<std::sync::Mutex<Option<NodeRunDetails>>>,
+    logs: std::sync::Arc<std::sync::Mutex<Vec<ReportedLog>>>,
+}
+
+/// One log observation retained for task execution evidence.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ReportedLog {
+    pub level: EventLevel,
+    pub message: String,
 }
 
 impl NodeReporter {
@@ -152,6 +160,7 @@ impl NodeReporter {
             node_id: node_id.into(),
             tx,
             run_details: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            logs: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         }
     }
 
@@ -182,10 +191,15 @@ impl NodeReporter {
     }
 
     pub fn log(&self, level: EventLevel, message: impl Into<String>) {
-        self.emit(NodeEventKind::Log {
-            level,
-            message: message.into(),
-        });
+        let message = message.into();
+        self.logs
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .push(ReportedLog {
+                level,
+                message: message.clone(),
+            });
+        self.emit(NodeEventKind::Log { level, message });
     }
 
     pub fn info(&self, message: impl Into<String>) {
@@ -221,5 +235,10 @@ impl NodeReporter {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .take()
+    }
+
+    pub fn take_logs(&self) -> Vec<ReportedLog> {
+        let mut logs = self.logs.lock().unwrap_or_else(|error| error.into_inner());
+        std::mem::take(&mut logs)
     }
 }
