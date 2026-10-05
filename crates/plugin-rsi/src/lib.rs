@@ -8,6 +8,7 @@
 pub mod error;
 pub mod github;
 pub mod gitrepo;
+pub mod infra;
 pub mod install;
 pub mod lifecycle;
 pub mod names;
@@ -26,6 +27,9 @@ pub use github::{
     PluginPullRequestPublisher, PublishOutcome, PullRequestOutcome,
 };
 pub use gitrepo::GitRepo;
+pub use infra::{
+    PluginRegistryControl, RsiInfra, SharedPluginPublisher, SharedPullRequestPublisher,
+};
 pub use install::{InstalledPluginSource, read_git_plugin_source, write_git_plugin_source};
 pub use lifecycle::{PluginLifecycle, ValidationOutcome};
 pub use names::validate_plugin_name;

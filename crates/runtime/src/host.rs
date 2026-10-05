@@ -143,8 +143,8 @@ pub struct SharedInfra {
     /// Process-wide Podman connection and immutable panel cache shared by
     /// all DAG sessions.
     pub container_execution: Arc<ContainerExecutionInfra>,
-    /// Persistent plugin registry plus the unified RSI plugin workspaces.
-    pub plugins: Arc<plugin_rsi::PluginStore>,
+    /// Unified plugin request, development, publication, and registration.
+    pub rsi: Arc<plugin_rsi::RsiInfra>,
     pub storage: Arc<dyn AgentStorage>,
     /// Profile registry (same DB connection, separate trait object).
     /// Used by RuntimeHost for dynamic profile derivation.
@@ -194,13 +194,14 @@ impl SharedInfra {
 
         // PluginStore owns `state_dir/plugins.toml` and `state_dir/plugins`;
         // container-plugin remains the protocol and checkout tool layer.
-        let plugins = Arc::new(plugin_rsi::PluginStore::open(
+        let rsi = Arc::new(plugin_rsi::RsiInfra::open(
             &config.state_dir,
             "main",
             "Autonomics RSI",
             "rsi@autonomics.example",
         ));
-        let plugin_report = plugins
+        let plugin_report = rsi
+            .store()
             .materialize_registry()
             .map_err(|error| crate::error::Error::Other(error.to_string()))?;
         if !plugin_report.outcomes.is_empty() {
@@ -281,6 +282,11 @@ impl SharedInfra {
         }
 
         let engine_manager = Arc::new(DataEngineManager::new(engine));
+        rsi.configure_registry(Arc::new(SharedPluginRegistryControl {
+            manager: Arc::clone(&engine_manager),
+            execution: Arc::clone(&container_execution),
+            store: rsi.store(),
+        }));
         tracing::info!("SharedInfra::open: DataEngineManager created");
 
         // ── Agent storage ────────────────────────────────────────────
@@ -404,7 +410,7 @@ impl SharedInfra {
             file_storage,
             vfs,
             container_execution,
-            plugins,
+            rsi,
             catalog: catalog_service,
             storage,
             profile_storage,
@@ -628,6 +634,39 @@ impl SharedInfra {
         ));
 
         Ok(tools)
+    }
+}
+
+/// Runtime adapter that lets PluginStore refresh node factories without
+/// rebuilding the whole DataEngine.
+#[derive(Clone)]
+struct SharedPluginRegistryControl {
+    manager: Arc<DataEngineManager>,
+    execution: Arc<ContainerExecutionInfra>,
+    store: Arc<plugin_rsi::PluginStore>,
+}
+
+impl plugin_rsi::PluginRegistryControl for SharedPluginRegistryControl {
+    fn installed_node_kinds(&self) -> plugin_rsi::Result<Vec<String>> {
+        Ok(self
+            .manager
+            .list_nodes()
+            .into_iter()
+            .map(|node| node.kind)
+            .collect())
+    }
+
+    fn reload_plugin(&self, plugin_name: &str) -> plugin_rsi::Result<()> {
+        plugin_rsi::validate_plugin_name(plugin_name)?;
+        let directory = self.store.root().join(plugin_name);
+        let plugin = container_plugin::loader::load_plugin(
+            &directory,
+            Arc::clone(&self.execution.runtime),
+            Arc::clone(&self.execution.panel_cache),
+        )
+        .map_err(|error| plugin_rsi::Error::PluginRegistry(error.to_string()))?;
+        self.manager.reload_plugin(plugin);
+        Ok(())
     }
 }
 
@@ -5006,7 +5045,7 @@ mod agent_persistence_tests {
             agentik_core::testing::get_mock_model("layout-restart-test"),
         )));
         let restored = host
-            .restore_persisted_agents(&[profile.clone()], model, |spec| {
+            .restore_persisted_agents(std::slice::from_ref(&profile), model, |spec| {
                 panic!("unexpected model preference `{spec}`")
             })
             .await

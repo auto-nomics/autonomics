@@ -1242,6 +1242,11 @@ impl DataEngineManager {
         self.node_registry.list_nodes()
     }
 
+    /// Replace factories declared by one runtime-ready manifest plugin.
+    pub fn reload_plugin(&self, plugin: container_plugin::factory::Plugin) {
+        self.node_registry.reload_plugin(&plugin);
+    }
+
     /// Get (or lazily create) a [`DataEngineClient`] for `session_id`.
     ///
     /// The first call for a given session spawns a dedicated tokio task.

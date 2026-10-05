@@ -16,7 +16,7 @@ use crate::proto::*;
     responses((status = 200, body = PluginListView))
 )]
 pub(crate) async fn list_plugins(State(state): State<GatewayState>) -> Json<PluginListView> {
-    let store = &state.infra.plugins;
+    let store = &state.infra.rsi.store();
     let declared = store.registry_sources().unwrap_or_default();
     let registered: HashSet<String> = state
         .infra

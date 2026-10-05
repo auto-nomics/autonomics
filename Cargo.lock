@@ -10602,8 +10602,6 @@ dependencies = [
  "opengwas",
  "opentargets",
  "plugin-rsi",
- "protocolio",
- "pubchem",
  "rcsb",
  "rusqlite",
  "schemars",

@@ -132,6 +132,16 @@ pub fn load(
     Ok(plugins)
 }
 
+/// Load one runtime-ready plugin directory into a runtime [`Plugin`].
+pub fn load_plugin(
+    dir: &Path,
+    runtime: Arc<dyn container_runtime::PodmanConnection>,
+    panel_cache: Arc<container_runtime::PanelCache>,
+) -> Result<Plugin> {
+    let manifest_path = dir.join(MANIFEST_FILE);
+    load_one(dir, &manifest_path, runtime, panel_cache)
+}
+
 /// Load one plugin directory: read, parse, inline script files, validate
 /// (family-level plus per-node), construct.
 fn load_one(

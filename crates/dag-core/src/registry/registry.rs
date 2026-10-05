@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use datafusion::{
     common::HashMap,
@@ -185,10 +185,10 @@ pub struct NodeInfo {
 /// methods.
 pub struct NodeRegistry {
     node_ctx: NodeCtx,
-    nodes: HashMap<String, Box<dyn NodeFactory>>,
+    nodes: RwLock<HashMap<String, Arc<dyn NodeFactory>>>,
     /// Kinds registered more than once (last write still wins, but the
     /// conflict is recorded and surfaces via [`Self::assert_no_conflicts`]).
-    conflicts: Vec<String>,
+    conflicts: RwLock<Vec<String>>,
 }
 
 impl NodeRegistry {
@@ -200,8 +200,8 @@ impl NodeRegistry {
     pub fn new(node_ctx: NodeCtx) -> Self {
         Self {
             node_ctx,
-            nodes: Default::default(),
-            conflicts: Vec::new(),
+            nodes: RwLock::new(Default::default()),
+            conflicts: RwLock::new(Vec::new()),
         }
     }
 
@@ -222,14 +222,25 @@ impl NodeRegistry {
     /// [`Self::assert_no_conflicts`] reports it.
     pub fn register(&mut self, factory: Box<dyn NodeFactory>) {
         let kind = factory.kind().to_string();
-        if self.nodes.insert(kind.clone(), factory).is_some() && !self.conflicts.contains(&kind) {
-            self.conflicts.push(kind);
+        let arc: Arc<dyn NodeFactory> = Arc::from(factory);
+        let replaced = {
+            let mut nodes = self.nodes.write().expect("node registry lock poisoned");
+            nodes.insert(kind.clone(), arc).is_some()
+        };
+        if replaced {
+            let mut conflicts = self.conflicts.write().expect("node registry lock poisoned");
+            if !conflicts.contains(&kind) {
+                conflicts.push(kind);
+            }
         }
     }
 
     /// Kinds that were registered more than once.
-    pub fn conflicts(&self) -> &[String] {
-        &self.conflicts
+    pub fn conflicts(&self) -> Vec<String> {
+        self.conflicts
+            .read()
+            .expect("node registry lock poisoned")
+            .clone()
     }
 
     /// Error if any node kind was registered more than once.
@@ -238,12 +249,13 @@ impl NodeRegistry {
     /// registered, so silent factory overwrites surface at startup instead
     /// of producing a node that runs the wrong implementation.
     pub fn assert_no_conflicts(&self) -> Result<()> {
-        if self.conflicts.is_empty() {
+        let conflicts = self.conflicts();
+        if conflicts.is_empty() {
             Ok(())
         } else {
             Err(Error::Unknown(format!(
                 "duplicate node kind registrations (last write won): {}",
-                self.conflicts.join(", ")
+                conflicts.join(", ")
             )))
         }
     }
@@ -253,15 +265,34 @@ impl NodeRegistry {
         plugin.register(self);
     }
 
+    /// Replace factories declared by one plugin without rebuilding the engine.
+    ///
+    /// Factories are keyed by kind, so this safely replaces an updated
+    /// implementation. Removing or renaming a kind requires a full registry
+    /// rebuild and remains a deliberate restart-level operation.
+    pub fn reload_plugin(&self, plugin: &dyn crate::plugin::NodePlugin) {
+        let mut nodes = self.nodes.write().expect("node registry lock poisoned");
+        let mut temporary = NodeRegistry {
+            node_ctx: self.node_ctx.clone(),
+            nodes: RwLock::new(std::mem::take(&mut *nodes)),
+            // `reload_plugin` is a deliberate, supervised replacement;
+            // duplicate-kind detections within the temporary batch are
+            // expected and don't need to surface as registry-level conflicts.
+            conflicts: RwLock::new(Vec::new()),
+        };
+        plugin.register(&mut temporary);
+        *nodes = temporary.into_nodes();
+    }
+
     /// Borrow the shared [`NodeCtx`] (handed to every factory's `build`).
     pub fn ctx(&self) -> &NodeCtx {
         &self.node_ctx
     }
 
-    fn get_node_factory(&self, node_kind: &str) -> Result<&dyn NodeFactory> {
-        self.nodes
+    fn get_node_factory(&self, node_kind: &str) -> Result<Arc<dyn NodeFactory>> {
+        self.nodes()
             .get(node_kind)
-            .map(|b| b.as_ref())
+            .map(Arc::clone)
             .ok_or(Error::FactoryNotFound {
                 kind: node_kind.to_string(),
             })
@@ -304,7 +335,7 @@ impl NodeRegistry {
     }
 
     /// Look up a node factory by kind string.
-    pub fn get_factory(&self, kind: &str) -> Result<&dyn NodeFactory> {
+    pub fn get_factory(&self, kind: &str) -> Result<Arc<dyn NodeFactory>> {
         self.get_node_factory(kind)
     }
 
@@ -329,7 +360,7 @@ impl NodeRegistry {
 
     /// Return metadata of every registered node kind (kind + JSON Schema + ports).
     pub fn list_nodes(&self) -> Vec<NodeInfo> {
-        self.nodes
+        self.nodes()
             .iter()
             .map(|(kind, factory)| NodeInfo {
                 kind: kind.clone(),
@@ -338,6 +369,18 @@ impl NodeRegistry {
                 data_bundles: factory.data_bundles(),
             })
             .collect()
+    }
+}
+
+impl NodeRegistry {
+    fn nodes(&self) -> std::sync::RwLockReadGuard<'_, HashMap<String, Arc<dyn NodeFactory>>> {
+        self.nodes.read().expect("node registry lock poisoned")
+    }
+
+    fn into_nodes(self) -> HashMap<String, Arc<dyn NodeFactory>> {
+        self.nodes
+            .into_inner()
+            .expect("node registry lock poisoned")
     }
 }
 
@@ -390,7 +433,7 @@ mod tests {
         // the conflict is recorded (once, even on a third registration).
         reg.register(Box::new(FakeFactory { kind: "dup_kind" }));
         reg.register(Box::new(FakeFactory { kind: "dup_kind" }));
-        assert_eq!(reg.conflicts(), ["dup_kind"]);
+        assert_eq!(reg.conflicts(), vec!["dup_kind".to_string()]);
         let err = reg.assert_no_conflicts().expect_err("duplicate must error");
         assert!(
             err.to_string().contains("dup_kind"),

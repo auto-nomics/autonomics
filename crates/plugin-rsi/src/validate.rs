@@ -24,7 +24,7 @@ pub struct Environment {
 }
 
 /// Approved digest-pinned runtime environments available to plugins.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct EnvironmentCatalog {
     environments: BTreeMap<String, Environment>,
 }
