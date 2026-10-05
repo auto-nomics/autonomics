@@ -8,6 +8,7 @@
 //! - [`error`] — [`DagError`].
 //! - [`runtime`] — the async readiness scheduler and [`RunReport`].
 
+pub mod channel;
 pub mod error;
 pub mod export;
 pub mod graph;
@@ -23,16 +24,18 @@ pub mod view;
 // and so that dag internals (graph.rs, runtime.rs) can use `super::DagNode` etc.
 pub use crate::node::{DagNode, NodeId, NodeInput, NodePorts};
 
+pub use channel::{ChannelNode, ChannelOperator};
 pub use error::{DagError, NodeError};
 pub use export::{ExportFile, ExportFormat, ExportSummary, SkippedFile};
-pub use graph::DAG;
+pub use graph::{DAG, DynamicNodeBuilder};
 pub use history::{DagHistory, DagManifest, RunRecord, Snapshot};
 pub use logical::{
     LogicalEdge, LogicalExecutionStrategy, LogicalGraph, LogicalGraphBuilder, LogicalNode,
     LogicalNodeDefinition,
 };
 pub use physical::{
-    GatherNode, PhysicalEdge, PhysicalGraph, PhysicalInstallReport, PhysicalJobRef, PhysicalNode,
+    DynamicFanoutNode, GatherNode, PhysicalEdge, PhysicalGraph, PhysicalInstallReport,
+    PhysicalJobRef, PhysicalNode,
 };
 pub use runtime::{
     InputBinding, InputHashing, LogicalJobError, LogicalRunSummary, NodeRunDetails, RunReport,

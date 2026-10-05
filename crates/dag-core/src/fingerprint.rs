@@ -68,6 +68,8 @@ pub enum IdentityValue {
     /// after an upgrade, spec-less test nodes) — encoded as an explicit
     /// `pending` marker, stable but visibly not content-level.
     DataFrame { upstream: Option<String> },
+    /// Canonical JSON content of all channel items, preserving order.
+    Channel(Vec<serde_json::Value>),
 }
 
 /// Gather a node's input identities from the wiring edges, mirroring
@@ -105,6 +107,7 @@ pub fn collect_input_identities(
             NodeValue::DataFrame(_) => IdentityValue::DataFrame {
                 upstream: fingerprints.get(from).cloned(),
             },
+            NodeValue::Channel(channel) => IdentityValue::Channel(channel.items.clone()),
         };
         identities.push(InputIdentity {
             from: from.clone(),
@@ -200,6 +203,13 @@ fn encode_value(feed: &mut dyn FnMut(&[u8]), identity: &InputIdentity) {
                 None => {
                     feed(format!("pending:{}:{}", identity.from, identity.from_port).as_bytes())
                 }
+            }
+        }
+        IdentityValue::Channel(items) => {
+            feed(b"channel:");
+            for item in items {
+                feed(&serde_json::to_vec(item).unwrap_or_default());
+                feed(&[0]);
             }
         }
     }
@@ -305,6 +315,7 @@ pub async fn upgrade_identities_with_content_hashes(
                 }
             }
             IdentityValue::DataFrame { .. } => {}
+            IdentityValue::Channel { .. } => {}
         }
     }
 }

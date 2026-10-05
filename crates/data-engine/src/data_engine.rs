@@ -91,6 +91,17 @@ impl DataEngine {
         Ok(())
     }
 
+    fn dynamic_node_builder(registry: Arc<NodeRegistry>) -> dag_core::dag::DynamicNodeBuilder {
+        Arc::new(move |kind, spec| {
+            Self::ensure_node_kind_allowed(kind).map_err(|error| {
+                DagError::Schedule(format!("cannot install logical node `{kind}`: {error}"))
+            })?;
+            registry
+                .build_node(kind, spec)
+                .map_err(|error| DagError::Schedule(error.to_string()))
+        })
+    }
+
     fn new_from_parts(
         ctx: SessionContext,
         runtime_env: Arc<RuntimeEnv>,
@@ -123,11 +134,14 @@ impl DataEngine {
                 Arc::clone(&container_execution),
                 None,
             );
+        let node_registry = Arc::new(node_registry);
+        let mut dag = DAG::default();
+        dag.set_dynamic_node_builder(Self::dynamic_node_builder(Arc::clone(&node_registry)));
         Self {
             ctx,
             engine_ctx,
-            dag: DAG::default(),
-            node_registry: Arc::new(node_registry),
+            dag,
+            node_registry,
             container_execution,
             config: SchedulerConfig {
                 memory_guard: Self::memory_guard_from_env(),
@@ -733,6 +747,11 @@ impl DataEngine {
             Self::ensure_node_kind_allowed(&entry.kind)?;
             let node = if entry.kind == "logical_gather" {
                 Box::new(GatherNode::default()) as Box<dyn crate::nodes::DagNode>
+            } else if entry.kind == "channel" {
+                Box::new(crate::dag::ChannelNode::from_spec(&entry.spec)?)
+                    as Box<dyn crate::nodes::DagNode>
+            } else if entry.kind == "dynamic_fanout" {
+                Box::new(crate::dag::DynamicFanoutNode::default()) as Box<dyn crate::nodes::DagNode>
             } else {
                 self.node_registry
                     .build_node(&entry.kind, entry.spec.clone())?

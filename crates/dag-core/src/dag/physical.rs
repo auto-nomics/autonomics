@@ -198,6 +198,62 @@ impl DagNode for GatherNode {
     }
 }
 
+/// Runtime placeholder for a logical dynamic fanout.
+///
+/// The scheduler consumes its upstream Channel, replaces this coordinator with
+/// concrete physical jobs, and rewires the coordinator's downstream edges. It
+/// is never intended to reach `execute`.
+#[derive(Clone)]
+pub struct DynamicFanoutNode {
+    ports: NodePorts,
+}
+
+impl DynamicFanoutNode {
+    fn new_ports() -> NodePorts {
+        NodePorts::new()
+            .add_input_port_of_type(None, PortType::Channel)
+            .add_output_port_of_type(None, PortType::Any)
+    }
+}
+
+impl Default for DynamicFanoutNode {
+    fn default() -> Self {
+        Self {
+            ports: Self::new_ports(),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl DagNode for DynamicFanoutNode {
+    fn ports(&self) -> &NodePorts {
+        &self.ports
+    }
+
+    async fn execute(
+        &mut self,
+        _ctx: &crate::registry::NodeCtx,
+        _inputs: &[NodeInput],
+        _reporter: &NodeReporter,
+    ) -> std::result::Result<PortOutputs, DagError> {
+        Err(DagError::Schedule(
+            "dynamic fanout coordinator must be expanded by the scheduler".into(),
+        ))
+    }
+
+    fn kind(&self) -> &'static str {
+        "dynamic_fanout"
+    }
+
+    fn clone_box(&self) -> Box<dyn DagNode> {
+        Box::new(self.clone())
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
 impl DAG {
     /// Install a logical graph together with its already-expanded physical form.
     pub fn install_compiled_graph(

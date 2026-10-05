@@ -9,8 +9,11 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use serde::{Deserialize, Serialize};
 
+use super::channel::{ChannelNode, ChannelOperator};
 use super::error::DagError;
-use super::physical::{GatherNode, PhysicalEdge, PhysicalGraph, PhysicalJobRef, PhysicalNode};
+use super::physical::{
+    DynamicFanoutNode, GatherNode, PhysicalEdge, PhysicalGraph, PhysicalJobRef, PhysicalNode,
+};
 use super::{DagNode, NodeId};
 
 pub type Result<T> = std::result::Result<T, DagError>;
@@ -25,6 +28,8 @@ pub enum LogicalExecutionStrategy {
         axis: String,
         items: Vec<serde_json::Value>,
     },
+    /// Run one physical job per item discovered from an upstream Channel.
+    DynamicForEach { axis: String },
     /// Collapse all upstream jobs into one physical job.
     Gather,
 }
@@ -37,6 +42,15 @@ pub enum LogicalNodeDefinition {
         spec: serde_json::Value,
     },
     Gather,
+    Channel(ChannelOperator),
+}
+
+/// Serializable payload retained by a dynamic fanout coordinator.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DynamicFanoutSpec {
+    pub kind: String,
+    pub spec: serde_json::Value,
+    pub axis: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,6 +101,30 @@ impl LogicalNode {
             id: id.into(),
             definition: LogicalNodeDefinition::Gather,
             strategy: LogicalExecutionStrategy::Gather,
+        }
+    }
+
+    pub fn channel(id: impl Into<String>, operator: ChannelOperator) -> Self {
+        Self {
+            id: id.into(),
+            definition: LogicalNodeDefinition::Channel(operator),
+            strategy: LogicalExecutionStrategy::Once,
+        }
+    }
+
+    pub fn dynamic_for_each(
+        id: impl Into<String>,
+        kind: impl Into<String>,
+        spec: serde_json::Value,
+        axis: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            definition: LogicalNodeDefinition::Registry {
+                kind: kind.into(),
+                spec,
+            },
+            strategy: LogicalExecutionStrategy::DynamicForEach { axis: axis.into() },
         }
     }
 }
@@ -181,6 +219,20 @@ impl LogicalGraph {
                     )));
                 }
             }
+            if let LogicalExecutionStrategy::DynamicForEach { axis } = &node.strategy {
+                if axis.trim().is_empty() {
+                    return Err(DagError::Schedule(format!(
+                        "logical node `{}` has an empty dynamic fanout axis",
+                        node.id
+                    )));
+                }
+                if !matches!(node.definition, LogicalNodeDefinition::Registry { .. }) {
+                    return Err(DagError::Schedule(format!(
+                        "logical node `{}` must use a registry definition with dynamic fanout",
+                        node.id
+                    )));
+                }
+            }
             match (&node.definition, &node.strategy) {
                 (LogicalNodeDefinition::Gather, LogicalExecutionStrategy::Gather) => {}
                 (LogicalNodeDefinition::Registry { .. }, LogicalExecutionStrategy::Gather) => {
@@ -199,6 +251,16 @@ impl LogicalGraph {
             }
         }
 
+        let strategy_by_id = self
+            .nodes
+            .iter()
+            .map(|node| (node.id.as_str(), &node.strategy))
+            .collect::<HashMap<_, _>>();
+        let definition_by_id = self
+            .nodes
+            .iter()
+            .map(|node| (node.id.as_str(), &node.definition))
+            .collect::<HashMap<_, _>>();
         for edge in &self.edges {
             if !ids.contains(&edge.from) {
                 return Err(DagError::UnknownNode(edge.from.clone()));
@@ -215,16 +277,73 @@ impl LogicalGraph {
         }
 
         let mut outgoing = HashMap::<&str, Vec<&str>>::new();
+        let mut incoming_count = HashMap::<&str, usize>::new();
         for edge in &self.edges {
             outgoing
                 .entry(edge.from.as_str())
                 .or_default()
                 .push(&edge.to);
+            *incoming_count.entry(edge.to.as_str()).or_default() += 1;
         }
         let mut state = HashMap::<&str, u8>::new();
         let mut ordered = Vec::new();
         for node in &self.nodes {
             self.visit_topological(node.id.as_str(), &outgoing, &mut state, &mut ordered)?;
+        }
+
+        for node in &self.nodes {
+            let incoming = incoming_count.get(node.id.as_str()).copied().unwrap_or(0);
+            let expected_inputs = match &node.definition {
+                LogicalNodeDefinition::Channel(ChannelOperator::OfItems { .. }) => 0,
+                LogicalNodeDefinition::Channel(
+                    ChannelOperator::Mix | ChannelOperator::Combine | ChannelOperator::Join { .. },
+                ) => 2,
+                LogicalNodeDefinition::Channel(_) => 1,
+                LogicalNodeDefinition::Registry { .. } => {
+                    if matches!(
+                        node.strategy,
+                        LogicalExecutionStrategy::DynamicForEach { .. }
+                    ) {
+                        1
+                    } else {
+                        continue;
+                    }
+                }
+                LogicalNodeDefinition::Gather => continue,
+            };
+            if incoming != expected_inputs {
+                return Err(DagError::Schedule(format!(
+                    "logical node `{}` expects {expected_inputs} incoming edge(s), got {incoming}",
+                    node.id
+                )));
+            }
+        }
+
+        for edge in &self.edges {
+            if !matches!(
+                strategy_by_id[edge.from.as_str()],
+                LogicalExecutionStrategy::DynamicForEach { .. }
+            ) {
+                continue;
+            }
+            if matches!(
+                definition_by_id[edge.to.as_str()],
+                LogicalNodeDefinition::Channel(
+                    ChannelOperator::Collect
+                        | ChannelOperator::Mix
+                        | ChannelOperator::Combine
+                        | ChannelOperator::Join { .. }
+                )
+            ) || matches!(
+                definition_by_id[edge.to.as_str()],
+                LogicalNodeDefinition::Gather
+            ) {
+                continue;
+            }
+            return Err(DagError::Schedule(format!(
+                "dynamic fanout target `{}` must be channel.collect or logical gather",
+                edge.to
+            )));
         }
 
         let gather_ids = self
@@ -326,6 +445,7 @@ impl LogicalGraph {
                     (Some(axis.clone()), keyed)
                 }
                 LogicalExecutionStrategy::Gather => (None, BTreeMap::new()),
+                LogicalExecutionStrategy::DynamicForEach { .. } => (None, BTreeMap::new()),
                 LogicalExecutionStrategy::Once => {
                     let incoming_axes = incoming
                         .get(logical_id)
@@ -358,7 +478,17 @@ impl LogicalGraph {
                     item: None,
                 }]
             } else {
-                if axis.is_none() {
+                if matches!(
+                    node.strategy,
+                    LogicalExecutionStrategy::DynamicForEach { .. }
+                ) {
+                    vec![PhysicalJobRef {
+                        logical_node: node.id.clone(),
+                        axis: None,
+                        item_key: None,
+                        item: None,
+                    }]
+                } else if axis.is_none() {
                     vec![PhysicalJobRef {
                         logical_node: node.id.clone(),
                         axis: None,
@@ -387,6 +517,34 @@ impl LogicalGraph {
                         GatherNode::default().kind().to_string(),
                         serde_json::json!({ "kind": "logical_gather" }),
                         Box::new(GatherNode::default()) as Box<dyn DagNode>,
+                    )
+                } else if let LogicalExecutionStrategy::DynamicForEach { axis } = &node.strategy {
+                    let LogicalNodeDefinition::Registry { kind, spec } = &node.definition else {
+                        unreachable!("dynamic fanout validation handled registry definitions");
+                    };
+                    let coordinator_spec = serde_json::to_value(DynamicFanoutSpec {
+                        kind: kind.clone(),
+                        spec: spec.clone(),
+                        axis: axis.clone(),
+                    })
+                    .map_err(|error| {
+                        DagError::Schedule(format!(
+                            "cannot serialize dynamic fanout `{}`: {error}",
+                            node.id
+                        ))
+                    })?;
+                    (
+                        DynamicFanoutNode::default().kind().to_string(),
+                        coordinator_spec,
+                        Box::new(DynamicFanoutNode::default()) as Box<dyn DagNode>,
+                    )
+                } else if let LogicalNodeDefinition::Channel(operator) = &node.definition {
+                    let channel_node = ChannelNode::new(operator.clone());
+                    let spec = channel_node.spec();
+                    (
+                        channel_node.kind().to_string(),
+                        spec,
+                        Box::new(channel_node) as Box<dyn DagNode>,
                     )
                 } else {
                     let LogicalNodeDefinition::Registry { kind, spec } = &node.definition else {
@@ -555,7 +713,7 @@ fn keyed_items(
     Ok(keyed)
 }
 
-fn item_key(item: &serde_json::Value, index: usize) -> Result<String> {
+pub(crate) fn item_key(item: &serde_json::Value, index: usize) -> Result<String> {
     let raw = match item {
         serde_json::Value::String(value) => Some(value.clone()),
         serde_json::Value::Object(fields) => fields
@@ -587,7 +745,11 @@ fn item_key(item: &serde_json::Value, index: usize) -> Result<String> {
     Ok(key)
 }
 
-fn physical_id(logical_id: &str, axis: &Option<String>, item_key: &Option<String>) -> NodeId {
+pub(crate) fn physical_id(
+    logical_id: &str,
+    axis: &Option<String>,
+    item_key: &Option<String>,
+) -> NodeId {
     match item_key {
         Some(item_key) => match axis {
             Some(axis) => format!("{logical_id}#{axis}={item_key}"),
@@ -597,7 +759,10 @@ fn physical_id(logical_id: &str, axis: &Option<String>, item_key: &Option<String
     }
 }
 
-fn render_spec(spec: &serde_json::Value, item: &serde_json::Value) -> Result<serde_json::Value> {
+pub(crate) fn render_spec(
+    spec: &serde_json::Value,
+    item: &serde_json::Value,
+) -> Result<serde_json::Value> {
     match spec {
         serde_json::Value::String(template) => render_string(template, item),
         serde_json::Value::Array(values) => values

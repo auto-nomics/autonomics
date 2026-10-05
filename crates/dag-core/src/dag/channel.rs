@@ -1,0 +1,458 @@
+//! Built-in dataflow channel operators.
+//!
+//! A channel is a value containing ordered JSON items. Logical edges route
+//! channel values between operators; dynamic fanout turns each item into a
+//! physical job at runtime.
+
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
+
+use super::error::DagError;
+use super::logical::render_spec;
+use super::{DagNode, NodeInput, NodePorts};
+use crate::dag::graph::PortOutputs;
+use crate::dag::node_event::NodeReporter;
+use crate::value::{ChannelValue, FileRef, NodeValue, PortType};
+
+pub type Result<T> = std::result::Result<T, DagError>;
+
+/// A declarative, deterministic subset of Nextflow-style channel operators.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "operator", rename_all = "snake_case")]
+pub enum ChannelOperator {
+    OfItems { items: Vec<Value> },
+    Map { template: Value },
+    Filter { path: String, equals: Value },
+    Flatten,
+    Mix,
+    Collect,
+    Combine,
+    Join { left_key: String, right_key: String },
+    GroupTuple { key: String },
+}
+
+#[derive(Clone)]
+pub struct ChannelNode {
+    operator: ChannelOperator,
+    ports: NodePorts,
+}
+
+impl ChannelNode {
+    pub fn new(operator: ChannelOperator) -> Self {
+        let mut ports = Self::base_ports(&operator);
+        ports = match input_count(&operator) {
+            0 => ports.set_fixed_input(true),
+            1 if matches!(operator, ChannelOperator::Collect) => ports,
+            1 => ports
+                .add_input_port_of_type(None, input_type(&operator))
+                .set_fixed_input(true),
+            _ => {
+                let ports = ports
+                    .add_input_port_of_type(None, PortType::Channel)
+                    .add_input_port_of_type(None, PortType::Channel);
+                ports
+            }
+        };
+        ports = ports.add_output_port_of_type(None, PortType::Channel);
+        Self { operator, ports }
+    }
+
+    pub fn from_spec(spec: &Value) -> Result<Self> {
+        let operator =
+            serde_json::from_value::<ChannelOperator>(spec.clone()).map_err(|error| {
+                DagError::Schedule(format!("invalid channel operator specification: {error}"))
+            })?;
+        Ok(Self::new(operator))
+    }
+
+    pub fn operator(&self) -> &ChannelOperator {
+        &self.operator
+    }
+
+    pub fn spec(&self) -> Value {
+        serde_json::to_value(&self.operator).unwrap_or(Value::Null)
+    }
+
+    fn base_ports(operator: &ChannelOperator) -> NodePorts {
+        let mut ports = NodePorts::new();
+        if let ChannelOperator::Collect = operator {
+            ports = ports.add_input_port_of_type(None, PortType::Any);
+            return ports.set_fixed_input(false);
+        }
+        ports
+    }
+
+    fn apply(&self, inputs: &[NodeInput]) -> Result<ChannelValue> {
+        let operator = self.operator.clone();
+        match operator {
+            ChannelOperator::OfItems { items } => Ok(ChannelValue { items }),
+            ChannelOperator::Map { template } => {
+                let items = channel_items(inputs, 0)?;
+                let items = items
+                    .into_iter()
+                    .map(|item| render_spec(&template, &item))
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(ChannelValue { items })
+            }
+            ChannelOperator::Filter { path, equals } => {
+                let items = channel_items(inputs, 0)?;
+                Ok(ChannelValue {
+                    items: items
+                        .into_iter()
+                        .filter(|item| item.pointer(&pointer_path(&path)) == Some(&equals))
+                        .collect(),
+                })
+            }
+            ChannelOperator::Flatten => {
+                let mut items = Vec::new();
+                for item in channel_items(inputs, 0)? {
+                    match item {
+                        Value::Array(values) => items.extend(values),
+                        value => {
+                            return Err(DagError::Schedule(format!(
+                                "channel.flatten requires array items, got {value}"
+                            )));
+                        }
+                    }
+                }
+                Ok(ChannelValue { items })
+            }
+            ChannelOperator::Mix => {
+                let mut items = Vec::new();
+                for input in inputs {
+                    items.extend(channel_items(std::slice::from_ref(input), input.port)?);
+                }
+                Ok(ChannelValue { items })
+            }
+            ChannelOperator::Collect => {
+                let mut items = Vec::new();
+                for input in inputs {
+                    match &input.data {
+                        NodeValue::Channel(channel) => items.extend(channel.items.iter().cloned()),
+                        NodeValue::File(file) => items.push(file_item(file)?),
+                        NodeValue::FileSet(files) => {
+                            for file in files {
+                                items.push(file_item(file)?);
+                            }
+                        }
+                        NodeValue::DataFrame(_) => {
+                            return Err(DagError::Schedule(
+                                "channel.collect cannot serialize DataFrame outputs".into(),
+                            ));
+                        }
+                    }
+                }
+                Ok(ChannelValue { items })
+            }
+            ChannelOperator::Combine => {
+                let left = channel_items(inputs, 0)?;
+                let right = channel_items(inputs, 1)?;
+                let mut items = Vec::with_capacity(left.len().saturating_mul(right.len()));
+                for left_item in left {
+                    for right_item in &right {
+                        let mut combined = Map::new();
+                        combined.insert("left".into(), left_item.clone());
+                        combined.insert("right".into(), right_item.clone());
+                        items.push(Value::Object(combined));
+                    }
+                }
+                Ok(ChannelValue { items })
+            }
+            ChannelOperator::Join {
+                left_key,
+                right_key,
+            } => {
+                let left = channel_items(inputs, 0)?;
+                let right = channel_items(inputs, 1)?;
+                let mut right_by_key = Vec::<(String, Value)>::new();
+                for item in right {
+                    if let Some(key) = item.pointer(&pointer_path(&right_key)) {
+                        right_by_key.push((canonical_json(key), item));
+                    }
+                }
+                let mut items = Vec::new();
+                for left_item in left {
+                    let Some(left_value) = left_item.pointer(&pointer_path(&left_key)) else {
+                        continue;
+                    };
+                    let left_key = canonical_json(left_value);
+                    for (right_value, right_item) in &right_by_key {
+                        if *right_value == left_key {
+                            let mut joined = Map::new();
+                            if let (Value::Object(left), Value::Object(right)) =
+                                (&left_item, right_item)
+                            {
+                                for (name, value) in left {
+                                    joined.insert(format!("left_{name}"), value.clone());
+                                }
+                                for (name, value) in right {
+                                    joined.insert(format!("right_{name}"), value.clone());
+                                }
+                            } else {
+                                joined.insert("left".into(), left_item.clone());
+                                joined.insert("right".into(), (*right_item).clone());
+                            }
+                            items.push(Value::Object(joined));
+                        }
+                    }
+                }
+                Ok(ChannelValue { items })
+            }
+            ChannelOperator::GroupTuple { key } => {
+                let mut groups = Vec::<(String, Value, Vec<Value>)>::new();
+                for item in channel_items(inputs, 0)? {
+                    let Some(key_value) = item.pointer(&pointer_path(&key)) else {
+                        continue;
+                    };
+                    let key_text = canonical_json(key_value);
+                    match groups
+                        .iter_mut()
+                        .find(|(existing, _, _)| *existing == key_text)
+                    {
+                        Some((_, _, values)) => values.push(item),
+                        None => groups.push((key_text, key_value.clone(), vec![item])),
+                    }
+                }
+                Ok(ChannelValue {
+                    items: groups
+                        .into_iter()
+                        .map(|(_, key, values)| Value::Array(vec![key, Value::Array(values)]))
+                        .collect(),
+                })
+            }
+        }
+    }
+}
+
+fn input_count(operator: &ChannelOperator) -> usize {
+    match operator {
+        ChannelOperator::OfItems { .. } => 0,
+        ChannelOperator::Mix | ChannelOperator::Combine | ChannelOperator::Join { .. } => 2,
+        ChannelOperator::Map { .. }
+        | ChannelOperator::Filter { .. }
+        | ChannelOperator::Flatten
+        | ChannelOperator::Collect
+        | ChannelOperator::GroupTuple { .. } => 1,
+    }
+}
+
+fn input_type(operator: &ChannelOperator) -> PortType {
+    match operator {
+        ChannelOperator::Collect => PortType::Any,
+        _ => PortType::Channel,
+    }
+}
+
+fn channel_items(inputs: &[NodeInput], port: u8) -> Result<Vec<Value>> {
+    let mut items = Vec::new();
+    for input in inputs.iter().filter(|input| input.port == port) {
+        items.extend(input.data.as_channel()?.items.clone());
+    }
+    Ok(items)
+}
+
+fn file_item(file: &FileRef) -> Result<Value> {
+    serde_json::to_value(file)
+        .map_err(|error| DagError::Schedule(format!("cannot serialize file channel item: {error}")))
+}
+
+fn pointer_path(path: &str) -> String {
+    format!("/{}", path.trim_start_matches('.').replace('.', "/"))
+}
+
+fn canonical_json(value: &Value) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| value.to_string())
+}
+
+#[async_trait::async_trait]
+impl DagNode for ChannelNode {
+    fn ports(&self) -> &NodePorts {
+        &self.ports
+    }
+
+    async fn execute(
+        &mut self,
+        _ctx: &crate::registry::NodeCtx,
+        inputs: &[NodeInput],
+        _reporter: &NodeReporter,
+    ) -> std::result::Result<PortOutputs, DagError> {
+        let expected = if matches!(self.operator, ChannelOperator::Collect) {
+            0
+        } else {
+            input_count(&self.operator)
+        };
+        let actual = if matches!(self.operator, ChannelOperator::Collect) {
+            inputs.len()
+        } else {
+            expected
+        };
+        if actual < expected {
+            return Err(DagError::Schedule(format!(
+                "channel operator {:?} requires {expected} input(s), got {actual}",
+                self.operator
+            )));
+        }
+        let channel = self.apply(inputs)?;
+        let mut outputs = PortOutputs::new();
+        outputs.insert(0, channel);
+        Ok(outputs)
+    }
+
+    fn kind(&self) -> &'static str {
+        "channel"
+    }
+
+    fn clone_box(&self) -> Box<dyn DagNode> {
+        Box::new(self.clone())
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn channel_input(port: u8, items: Vec<Value>) -> NodeInput {
+        NodeInput {
+            port,
+            data: NodeValue::Channel(ChannelValue { items }),
+        }
+    }
+
+    async fn apply(operator: ChannelOperator, inputs: Vec<NodeInput>) -> ChannelValue {
+        let mut node = ChannelNode::new(operator);
+        let context = crate::registry::NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        );
+        let (sender, _receiver) = tokio::sync::mpsc::channel(1);
+        let reporter = NodeReporter::new("channel-test", sender);
+        let outputs = node.execute(&context, &inputs, &reporter).await.unwrap();
+        outputs[&0].as_channel().unwrap().clone()
+    }
+
+    #[tokio::test]
+    async fn maps_and_filters_json_items() {
+        let items = vec![
+            serde_json::json!({"id": "one", "type": "keep"}),
+            serde_json::json!({"id": "two", "type": "drop"}),
+        ];
+        let mapped = apply(
+            ChannelOperator::Map {
+                template: serde_json::json!({"id": "{{item.id}}", "mapped": true}),
+            },
+            vec![channel_input(0, items)],
+        )
+        .await;
+        assert_eq!(mapped.items.len(), 2);
+        assert_eq!(mapped.items[0]["id"], "one");
+        assert_eq!(mapped.items[1]["mapped"], true);
+
+        let filtered = apply(
+            ChannelOperator::Filter {
+                path: "type".into(),
+                equals: serde_json::json!("keep"),
+            },
+            vec![channel_input(
+                0,
+                vec![
+                    serde_json::json!({"type": "keep"}),
+                    serde_json::json!({"type": "drop"}),
+                ],
+            )],
+        )
+        .await;
+        assert_eq!(filtered.items, vec![serde_json::json!({"type": "keep"})]);
+    }
+
+    #[tokio::test]
+    async fn flattens_mixes_collects_and_combines() {
+        let flattened = apply(
+            ChannelOperator::Flatten,
+            vec![channel_input(
+                0,
+                vec![serde_json::json!([1, 2]), serde_json::json!([3])],
+            )],
+        )
+        .await;
+        assert_eq!(
+            flattened.items,
+            vec![
+                serde_json::json!(1),
+                serde_json::json!(2),
+                serde_json::json!(3)
+            ]
+        );
+
+        let mixed = apply(
+            ChannelOperator::Mix,
+            vec![
+                channel_input(0, vec![serde_json::json!("a")]),
+                channel_input(1, vec![serde_json::json!("b")]),
+            ],
+        )
+        .await;
+        assert_eq!(mixed.items.len(), 2);
+
+        let collected = apply(
+            ChannelOperator::Collect,
+            vec![NodeInput {
+                port: 0,
+                data: NodeValue::File(FileRef::new("/one.csv", Some("csv".into()))),
+            }],
+        )
+        .await;
+        assert_eq!(collected.items[0]["path"], "/one.csv");
+
+        let combined = apply(
+            ChannelOperator::Combine,
+            vec![
+                channel_input(0, vec![serde_json::json!(1), serde_json::json!(2)]),
+                channel_input(1, vec![serde_json::json!("x"), serde_json::json!("y")]),
+            ],
+        )
+        .await;
+        assert_eq!(combined.items.len(), 4);
+        assert_eq!(combined.items[0]["left"], 1);
+        assert_eq!(combined.items[0]["right"], "x");
+    }
+
+    #[tokio::test]
+    async fn joins_and_groups_keyed_items() {
+        let joined = apply(
+            ChannelOperator::Join {
+                left_key: "id".into(),
+                right_key: "sample".into(),
+            },
+            vec![
+                channel_input(0, vec![serde_json::json!({"id": "a", "value": 1})]),
+                channel_input(1, vec![serde_json::json!({"sample": "a", "score": 2})]),
+            ],
+        )
+        .await;
+        assert_eq!(joined.items.len(), 1);
+        assert_eq!(joined.items[0]["left_id"], "a");
+        assert_eq!(joined.items[0]["right_sample"], "a");
+        assert_eq!(joined.items[0]["left_value"], 1);
+        assert_eq!(joined.items[0]["right_score"], 2);
+
+        let grouped = apply(
+            ChannelOperator::GroupTuple { key: "type".into() },
+            vec![channel_input(
+                0,
+                vec![
+                    serde_json::json!({"type": "a", "id": 1}),
+                    serde_json::json!({"type": "b", "id": 2}),
+                    serde_json::json!({"type": "a", "id": 3}),
+                ],
+            )],
+        )
+        .await;
+        assert_eq!(grouped.items.len(), 2);
+        assert_eq!(grouped.items[0][0], serde_json::json!("a"));
+        assert_eq!(grouped.items[0][1].as_array().unwrap().len(), 2);
+    }
+}
