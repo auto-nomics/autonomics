@@ -350,6 +350,15 @@ impl PluginStore {
         }))
     }
 
+    /// Return the plugin that owns a node kind, if any.
+    pub fn owner_of_node_kind(&self, node_kind: &str) -> Result<Option<String>> {
+        Ok(self
+            .list()?
+            .into_iter()
+            .find(|manifest| manifest.nodes.iter().any(|node| node.kind == node_kind))
+            .map(|manifest| manifest.plugin_name))
+    }
+
     fn plugin_path(&self, plugin_name: &str) -> PathBuf {
         self.root.join(plugin_name)
     }

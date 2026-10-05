@@ -4,12 +4,21 @@
 //! routes trusted publishers and runtime registration behind host-only
 //! adapters, so callers never reassemble the lifecycle from its pieces.
 
-use std::sync::{Arc, RwLock};
+use std::{
+    path::Path,
+    sync::{Arc, RwLock},
+};
+
+use skills::observation::ObservationInput;
 
 use crate::{
-    EnvironmentCatalog, Error, PluginLifecycle, PluginPublisher, PluginPullRequestPublisher,
-    PluginStatus, PluginStore, RequestRecord, RequestStatus, RequestStore, Result,
-    ValidationOutcome,
+    EnvironmentCatalog, Error, ObservationRequest, PluginLifecycle, PluginPublisher,
+    PluginPullRequestPublisher, PluginStatus, PluginStore, RequestIntent, RequestRecord,
+    RequestStatus, RequestStore, Result, ValidationOutcome,
+    feedback::{
+        ObservationAudience, ObservationRoute, ObservationRouteStatus, ObservationRouteStore,
+        default_request_intent, observation_request, observation_route,
+    },
 };
 
 /// Trusted publisher used for plugin releases and installs.
@@ -31,6 +40,8 @@ pub trait PluginRegistryControl: Send + Sync {
 pub struct RsiInfra {
     store: Arc<PluginStore>,
     requests: RequestStore,
+    skills: Arc<skills::SkillManager>,
+    routes: ObservationRouteStore,
     environments: Arc<EnvironmentCatalog>,
     publisher: SharedPluginPublisher,
     pull_request_publisher: SharedPullRequestPublisher,
@@ -44,23 +55,37 @@ impl RsiInfra {
         default_branch: &str,
         author_name: &str,
         author_email: &str,
+        skills: Arc<skills::SkillManager>,
         environments: EnvironmentCatalog,
         publisher: SharedPluginPublisher,
         pull_request_publisher: SharedPullRequestPublisher,
-    ) -> Self {
-        Self {
-            store: Arc::new(PluginStore::open(
-                state_dir,
-                default_branch,
-                author_name,
-                author_email,
-            )),
+    ) -> Result<Self> {
+        let store = Arc::new(PluginStore::open(
+            state_dir,
+            default_branch,
+            author_name,
+            author_email,
+        ));
+        let state_root = store
+            .root()
+            .parent()
+            .ok_or_else(|| Error::Validation("plugin root has no parent state directory".into()))?;
+        let routes = ObservationRouteStore::open(state_root);
+        Ok(Self {
+            store: Arc::clone(&store),
             requests: RequestStore::open(state_dir),
+            skills,
+            routes,
             environments: Arc::new(environments),
             publisher,
             pull_request_publisher,
             registry: Arc::new(RwLock::new(None)),
-        }
+        })
+    }
+
+    /// Return every durable routing decision for shared observations.
+    pub fn observation_routes(&self) -> Vec<ObservationRoute> {
+        self.routes.list()
     }
 
     pub fn store(&self) -> Arc<PluginStore> {
@@ -69,6 +94,115 @@ impl RsiInfra {
 
     pub fn requests(&self) -> &RequestStore {
         &self.requests
+    }
+
+    /// Record shared observation evidence without creating plugin demand.
+    pub fn record_observation(
+        &self,
+        input: ObservationInput,
+    ) -> Result<skills::observation::Observation> {
+        self.skills
+            .record_observation(input)
+            .map_err(|error| Error::Validation(format!("cannot record observation: {error}")))
+    }
+
+    /// Promote an existing shared observation into plugin demand.
+    ///
+    /// The observation id becomes the request's first evidence id, so later
+    /// skill distillation and plugin review reference the same evidence.
+    pub fn create_plugin_request_from_observation(
+        &self,
+        observation_id: &str,
+        intent: RequestIntent,
+        plugin_name: Option<&str>,
+    ) -> Result<ObservationRequest> {
+        observation_request(
+            &self.requests,
+            &self.skills.observations(),
+            observation_id,
+            intent,
+            plugin_name,
+        )
+    }
+
+    /// Record one observation and immediately promote it to plugin demand.
+    pub fn record_plugin_observation(
+        &self,
+        input: ObservationInput,
+        intent: RequestIntent,
+        plugin_name: &str,
+    ) -> Result<ObservationRequest> {
+        let observation = self.record_observation(input)?;
+        self.create_plugin_request_from_observation(&observation.id, intent, Some(plugin_name))
+    }
+
+    /// Record shared evidence, classify it, and create plugin demand when owned.
+    pub fn record_and_route_observation(
+        &self,
+        input: ObservationInput,
+        plugin_name: Option<&str>,
+        intent: Option<RequestIntent>,
+    ) -> Result<ObservationRouting> {
+        let observation = self.record_observation(input)?;
+        self.route_existing_observation(&observation.id, plugin_name, intent)
+    }
+
+    /// Route an observation that already exists in the shared store.
+    pub fn route_existing_observation(
+        &self,
+        observation_id: &str,
+        plugin_name: Option<&str>,
+        intent: Option<RequestIntent>,
+    ) -> Result<ObservationRouting> {
+        let observation = self
+            .skills
+            .observations()
+            .list()
+            .into_iter()
+            .find(|observation| observation.id == observation_id)
+            .ok_or_else(|| {
+                Error::InvalidRequest(format!("unknown observation {observation_id:?}"))
+            })?;
+        let plugin_owner = if plugin_name.is_some() {
+            None
+        } else {
+            observation
+                .node_kind
+                .as_deref()
+                .map(|kind| self.store.owner_of_node_kind(kind))
+                .transpose()?
+                .flatten()
+        };
+        let (_, route) = observation_route(&observation, plugin_name, plugin_owner.as_deref());
+        let route = self.routes.record(route)?;
+        let mut request = None;
+        let mut route = route;
+        if matches!(
+            route.audience,
+            ObservationAudience::Plugin | ObservationAudience::Both
+        ) {
+            let target = route.plugin_name.as_deref().ok_or_else(|| {
+                Error::Validation("plugin route is missing its target plugin".into())
+            })?;
+            let promoted = observation_request(
+                &self.requests,
+                &self.skills.observations(),
+                &route.observation_id,
+                intent.unwrap_or_else(|| default_request_intent(observation.kind)),
+                Some(target),
+            )?;
+            self.routes.consume(&route.id, &promoted.request.id)?;
+            route.request_id = Some(promoted.request.id.clone());
+            route.status = ObservationRouteStatus::Consumed;
+            request = Some(promoted);
+        }
+
+        Ok(ObservationRouting {
+            observation,
+            decision_reason: route.reason.clone(),
+            route,
+            request,
+        })
     }
 
     pub fn configure_registry(&self, control: Arc<dyn PluginRegistryControl>) {
@@ -281,14 +415,29 @@ impl RsiInfra {
     }
 }
 
+/// The result of routing one shared observation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ObservationRouting {
+    /// The canonical observation retained for skill evolution.
+    pub observation: skills::observation::Observation,
+    /// Why the router selected the audience.
+    pub decision_reason: String,
+    /// The durable route record.
+    pub route: ObservationRoute,
+    /// Plugin demand, present only for plugin/both routes.
+    pub request: Option<ObservationRequest>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{Environment, RequestIntent, RequestSource};
+    use skills::observation::{ObservationKind, ObservationSource as SkillObservationSource};
 
     #[test]
     fn creating_plugin_claims_request_through_the_unified_facade() {
         let state = tempfile::tempdir().unwrap();
+        let skills = skills::SkillManager::init(skills::SkillManager::new(state.path()));
         let mut catalog = EnvironmentCatalog::default();
         catalog.insert(
             "alpine",
@@ -306,10 +455,12 @@ mod tests {
             "main",
             "Test",
             "test@example.com",
+            skills,
             catalog,
             publisher.clone(),
             publisher,
-        );
+        )
+        .unwrap();
         let request = infra
             .requests()
             .record(RequestRecord {
@@ -329,6 +480,95 @@ mod tests {
         assert_eq!(
             infra.requests().find(&request.id).unwrap().unwrap().status,
             RequestStatus::Working
+        );
+    }
+
+    #[test]
+    fn observations_feed_both_skill_and_plugin_feedback_systems() {
+        let state = tempfile::tempdir().unwrap();
+        let skills = skills::SkillManager::init(skills::SkillManager::new(state.path()));
+        let catalog = EnvironmentCatalog::default();
+        let publisher = Arc::new(crate::GhPublisher::new(crate::GhPublisherConfig {
+            enabled: false,
+            ..Default::default()
+        }));
+        let infra = RsiInfra::open(
+            state.path(),
+            "main",
+            "Test",
+            "test@example.com",
+            skills.clone(),
+            catalog,
+            publisher.clone(),
+            publisher,
+        )
+        .unwrap();
+
+        let feedback = infra
+            .record_plugin_observation(
+                ObservationInput {
+                    kind: ObservationKind::Failure,
+                    source: SkillObservationSource::Eval,
+                    summary: "adapter rejects empty input".into(),
+                    body: "The current script silently copies empty inputs.".into(),
+                    node_kind: Some("demo_adapter".into()),
+                    error: Some("empty input accepted".into()),
+                },
+                RequestIntent::FixNode,
+                "demo-plugin",
+            )
+            .unwrap();
+
+        assert_eq!(
+            feedback.request.evidence_ids,
+            vec![feedback.observation.id.clone()]
+        );
+        assert_eq!(feedback.request.source, RequestSource::Eval);
+        assert_eq!(feedback.request.plugin_name.as_deref(), Some("demo-plugin"));
+        assert!(
+            skills
+                .observations()
+                .list()
+                .iter()
+                .any(|observation| observation.id == feedback.observation.id)
+        );
+        let routing = infra
+            .record_and_route_observation(
+                ObservationInput {
+                    kind: ObservationKind::Failure,
+                    source: SkillObservationSource::Eval,
+                    summary: "adapter rejects malformed input".into(),
+                    body: "The adapter should fail with a useful validation error.".into(),
+                    node_kind: Some("demo_adapter".into()),
+                    error: Some("malformed input".into()),
+                },
+                Some("demo-plugin"),
+                Some(RequestIntent::FixNode),
+            )
+            .unwrap();
+
+        assert_eq!(routing.route.audience, ObservationAudience::Plugin);
+        assert_eq!(
+            routing.route.request_id,
+            Some(routing.request.as_ref().unwrap().request.id.clone())
+        );
+        assert_eq!(
+            infra.observation_routes().len(),
+            1,
+            "routing must be idempotent across shared observations"
+        );
+        let persisted = infra
+            .observation_routes()
+            .into_iter()
+            .find(|route| route.id == routing.route.id)
+            .unwrap();
+        assert_eq!(persisted.status, ObservationRouteStatus::Consumed);
+        assert_eq!(
+            persisted.request_id,
+            routing
+                .request
+                .as_ref()
+                .map(|feedback| feedback.request.id.clone())
         );
     }
 }

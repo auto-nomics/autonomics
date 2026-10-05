@@ -6,6 +6,7 @@
 //! live-registry access.
 
 pub mod error;
+pub mod feedback;
 pub mod github;
 pub mod gitrepo;
 pub mod infra;
@@ -22,6 +23,10 @@ pub mod workspace;
 
 pub use container_plugin::manifest::PluginStatus;
 pub use error::{Error, Result};
+pub use feedback::{
+    ObservationAudience, ObservationRequest, ObservationRoute, ObservationRouteStatus,
+    ObservationRouteStore, RouteDecision,
+};
 pub use github::{
     GhPublisher, GhPublisherConfig, GhStatus, MergeOutcome, PluginPublisher,
     PluginPullRequestPublisher, PublishOutcome, PullRequestOutcome,

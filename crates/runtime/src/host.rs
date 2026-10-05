@@ -192,6 +192,12 @@ impl SharedInfra {
     pub async fn open(config: &RuntimeConfig) -> Result<Self> {
         tracing::info!("SharedInfra::open: starting");
 
+        // Skill and plugin evolution share one state dir. Install the skill
+        // manager first so RSI can promote its observations into plugin
+        // requests without duplicating the evidence store.
+        let skills = skills::SkillManager::init(skills::SkillManager::new(&config.state_dir));
+        skills.load_usage();
+
         // PluginStore owns `state_dir/plugins.toml` and `state_dir/plugins`;
         // container-plugin remains the protocol and checkout tool layer.
         let gh_publisher = Arc::new(plugin_rsi::GhPublisher::new(
@@ -199,15 +205,19 @@ impl SharedInfra {
         ));
         let plugin_publisher: plugin_rsi::SharedPluginPublisher = gh_publisher.clone();
         let pull_request_publisher: plugin_rsi::SharedPullRequestPublisher = gh_publisher;
-        let rsi = Arc::new(plugin_rsi::RsiInfra::open(
-            &config.state_dir,
-            "main",
-            "Autonomics RSI",
-            "rsi@autonomics.example",
-            config.plugin_rsi.environments.clone(),
-            plugin_publisher,
-            pull_request_publisher,
-        ));
+        let rsi = Arc::new(
+            plugin_rsi::RsiInfra::open(
+                &config.state_dir,
+                "main",
+                "Autonomics RSI",
+                "rsi@autonomics.example",
+                skills.clone(),
+                config.plugin_rsi.environments.clone(),
+                plugin_publisher,
+                pull_request_publisher,
+            )
+            .map_err(|error| crate::error::Error::Other(error.to_string()))?,
+        );
         let plugin_report = rsi
             .store()
             .materialize_registry()
@@ -381,15 +391,6 @@ impl SharedInfra {
 
         tracing::info!("SharedInfra::open: all infrastructure ready");
 
-        // ── Skill evolution service ────────────────────────────────
-        // The trigger half of the evolution loop: observation events
-        // and a periodic sweep wake the idempotent workflow (distill
-        // → propose → policy). The manager is the process-wide
-        // singleton so every observation-recording path — agent tool,
-        // eval auto-capture — reaches the worker.
-        let skills = skills::SkillManager::init(skills::SkillManager::new(&config.state_dir));
-        // Reclaim the fitness signal from the previous process.
-        skills.load_usage();
         let skill_evolution = if config.enable_skill_evolution {
             let handle = skills::evolution::start(
                 skills.clone(),

@@ -60,7 +60,7 @@ pub enum RequestStatus {
 /// A request describes demand and evidence. It intentionally does not define
 /// implementation decisions such as node kinds, scripts, or environments; those
 /// belong to the plugin workspace produced in response to the request.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RequestRecord {
     /// Content-derived stable identifier, assigned by the store.
     pub id: String,
@@ -129,9 +129,20 @@ impl RequestStore {
 
         let path = self.root.join(format!("{}.toml", record.id));
         if path.exists() {
-            return self.find(&record.id)?.ok_or(Error::InvalidRequest(
+            let mut existing = self.find(&record.id)?.ok_or(Error::InvalidRequest(
                 "existing request record is unreadable".into(),
-            ));
+            ))?;
+            let mut changed = false;
+            for evidence_id in record.evidence_ids {
+                if !existing.evidence_ids.contains(&evidence_id) {
+                    existing.evidence_ids.push(evidence_id);
+                    changed = true;
+                }
+            }
+            if changed {
+                atomic_toml(&path, &existing)?;
+            }
+            return Ok(existing);
         }
         std::fs::create_dir_all(&self.root)?;
         atomic_toml(&path, &record)?;
@@ -264,6 +275,12 @@ mod tests {
         let second = store.record(input("Create demo")).unwrap();
         assert_eq!(first.id, second.id);
         assert_eq!(store.list().len(), 1);
+
+        let mut updated = first.clone();
+        updated.evidence_ids.push("O-second".into());
+        let merged = store.record(updated).unwrap();
+        assert_eq!(merged.id, first.id);
+        assert_eq!(merged.evidence_ids, vec!["O-second".to_string()]);
     }
 
     #[test]
