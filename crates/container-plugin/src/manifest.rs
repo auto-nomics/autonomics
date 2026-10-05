@@ -58,11 +58,39 @@ impl Default for ImageMetadata {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginStatus {
+    Draft,
+    Validating,
+    NeedsFix,
+    PendingReview,
+    Approved,
+    Publishing,
+    Published,
+    PullRequestOpen,
+    PullRequestMerged,
+    InstallPending,
+    Installed,
+    PublishFailed,
+    Rejected,
+}
+
+fn default_plugin_status() -> PluginStatus {
+    // Existing manifests predate daemon-owned lifecycle tracking. They are
+    // loaded from published sources, so published is the conservative default.
+    PluginStatus::Published
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PluginManifest {
     pub schema_version: u32,
     pub plugin_name: String,
+    /// Daemon-owned lifecycle marker. Host code transitions it; agents can
+    /// read it but must not treat it as an editable plugin field.
+    #[serde(default = "default_plugin_status")]
+    pub status: PluginStatus,
     pub image: ImageMetadata,
     /// Panel-free families (mrpresso, mvmr) legitimately omit this.
     #[serde(default)]
@@ -76,6 +104,7 @@ impl Default for PluginManifest {
         Self {
             schema_version: 1,
             plugin_name: "new_plugin".to_string(),
+            status: default_plugin_status(),
             image: Default::default(),
             panels: Default::default(),
             nodes: Default::default(),
@@ -111,6 +140,12 @@ bundle = "wjixiang/catalog-mtag-ld-ref-1000g-eur-w-ld"
             reference.digest().as_str(),
             "sha256:28ac0a0a0ee741340390b7588bf8ba36e6b316d62adc0cab7fd4494f5dd6a90c"
         );
+    }
+
+    #[test]
+    fn legacy_manifests_default_to_published_status() {
+        let manifest: PluginManifest = toml::from_str(MANIFEST_TOML).unwrap();
+        assert!(matches!(manifest.status, PluginStatus::Published));
     }
 
     #[test]

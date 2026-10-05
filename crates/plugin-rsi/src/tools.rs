@@ -21,30 +21,34 @@ use container_runtime::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::{Error, PluginDevelopment, ProposalWorkspace, Result as RsiResult};
+use crate::{
+    Error, PluginDevelopment, ProposalWorkspace, Result as RsiResult, plugin::is_editable,
+};
 
 const MANIFEST_FILE: &str = "manifest.toml";
 pub(crate) const MAX_AGENT_ID_BYTES: usize = 256;
 const DEFAULT_TOOL_TIMEOUT_SECS: u64 = 900;
 
-/// One agent's exclusive assignment to develop a plugin candidate.
+/// One agent's exclusive assignment to develop a plugin workspace.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginDevelopmentBinding {
-    /// Persistent proposal identifier.
-    pub proposal_id: String,
+    /// Persistent proposal identifier for the legacy detached-candidate path.
+    pub proposal_id: Option<String>,
     /// Immutable plugin name recorded by the proposal.
     pub plugin_name: String,
-    /// The detached candidate run created for this assignment.
+    /// Development session identifier.
     pub run_id: String,
     /// Approved environment image selected by the proposal.
     pub environment_reference: String,
-    candidate_workspace: PathBuf,
+    workspace: PathBuf,
+    /// Direct plugin workspaces trust manifest.status as their lifecycle gate.
+    lifecycle_manifest: bool,
 }
 
 impl PluginDevelopmentBinding {
-    /// Return the detached workspace owned by this assignment.
+    /// Return the safe workspace owned by this assignment.
     pub fn workspace(&self) -> ProposalWorkspace {
-        ProposalWorkspace::new(self.candidate_workspace.clone())
+        ProposalWorkspace::new(self.workspace.clone())
     }
 }
 
@@ -55,7 +59,7 @@ struct RegistryState {
     reserved: BTreeSet<String>,
 }
 
-/// Process-wide registry binding development agents to plugin candidates.
+/// Process-wide registry binding development agents to plugin workspaces.
 ///
 /// An agent id can have at most one active binding. This is deliberately a
 /// singleton because all copies of the toolset must observe the same lease and
@@ -81,7 +85,7 @@ impl PluginDevelopmentToolsetRegistry {
         })
     }
 
-    /// Bind one agent exclusively to a plugin and create its candidate run.
+    /// Bind one agent exclusively to a legacy proposal candidate run.
     ///
     /// The assignment always operates on the detached candidate created here;
     /// adoption remains a host-side `PluginDevelopment` operation.
@@ -107,22 +111,74 @@ impl PluginDevelopmentToolsetRegistry {
             }
         };
         let binding = PluginDevelopmentBinding {
-            proposal_id: development.id().to_string(),
+            proposal_id: Some(development.id().to_string()),
             plugin_name: development.proposal().plugin_name.clone(),
             run_id: run_id.to_string(),
             environment_reference,
-            candidate_workspace: candidate.path().to_path_buf(),
+            workspace: candidate.path().to_path_buf(),
+            lifecycle_manifest: false,
         };
-        let binding = match self.lock(|state| {
-            if state.bindings.contains_key(agent_id) {
+        let binding = match self.insert_binding(agent_id, binding) {
+            Ok(binding) => binding,
+            Err(error) => {
+                let _ = self.release_reservation(agent_id);
+                return Err(error);
+            }
+        };
+        Ok(binding)
+    }
+
+    /// Bind one agent directly to a long-lived plugin repository.
+    ///
+    /// Unlike the legacy proposal path this creates no detached copy. The
+    /// manifest must be in an editable daemon-owned lifecycle state.
+    pub fn bind_plugin_workspace(
+        &self,
+        agent_id: &str,
+        plugin_name: &str,
+        workspace_path: impl Into<PathBuf>,
+        environment_reference: &str,
+        run_id: &str,
+    ) -> RsiResult<PluginDevelopmentBinding> {
+        validate_agent_id(agent_id)?;
+        validate_run_id(run_id)?;
+        self.reserve_agent(agent_id)?;
+
+        let workspace = ProposalWorkspace::new(workspace_path);
+        let binding = match load_manifest(&workspace).and_then(|manifest| {
+            if manifest.plugin_name != plugin_name {
                 return Err(Error::Validation(format!(
-                    "agent `{agent_id}` is already bound to a plugin development task"
+                    "workspace plugin_name `{}` does not match assigned plugin `{plugin_name}`",
+                    manifest.plugin_name
                 )));
             }
-            state.bindings.insert(agent_id.to_string(), binding.clone());
-            state.reserved.remove(agent_id);
-            Ok(binding)
+            if manifest.image.reference.as_str() != environment_reference {
+                return Err(Error::Validation(
+                    "assigned environment does not match plugin manifest".into(),
+                ));
+            }
+            if !is_editable(manifest.status) {
+                return Err(Error::Validation(format!(
+                    "plugin `{plugin_name}` cannot be edited from status {:?}",
+                    manifest.status
+                )));
+            }
+            Ok(PluginDevelopmentBinding {
+                proposal_id: None,
+                plugin_name: plugin_name.to_string(),
+                run_id: run_id.to_string(),
+                environment_reference: environment_reference.to_string(),
+                workspace: workspace.path().to_path_buf(),
+                lifecycle_manifest: true,
+            })
         }) {
+            Ok(binding) => binding,
+            Err(error) => {
+                let _ = self.release_reservation(agent_id);
+                return Err(error);
+            }
+        };
+        let binding = match self.insert_binding(agent_id, binding) {
             Ok(binding) => binding,
             Err(error) => {
                 let _ = self.release_reservation(agent_id);
@@ -187,6 +243,23 @@ impl PluginDevelopmentToolsetRegistry {
             Ok(())
         })
     }
+
+    fn insert_binding(
+        &self,
+        agent_id: &str,
+        binding: PluginDevelopmentBinding,
+    ) -> RsiResult<PluginDevelopmentBinding> {
+        self.lock(|state| {
+            if state.bindings.contains_key(agent_id) {
+                return Err(Error::Validation(format!(
+                    "agent `{agent_id}` is already bound to a plugin development task"
+                )));
+            }
+            state.bindings.insert(agent_id.to_string(), binding.clone());
+            state.reserved.remove(agent_id);
+            Ok(binding)
+        })
+    }
 }
 
 #[derive(Clone)]
@@ -249,6 +322,24 @@ fn validate_agent_id(agent_id: &str) -> RsiResult<()> {
     Ok(())
 }
 
+fn validate_run_id(run_id: &str) -> RsiResult<()> {
+    let valid = !run_id.is_empty()
+        && run_id.len() <= 128
+        && run_id.chars().all(|character| {
+            character.is_ascii_lowercase()
+                || character.is_ascii_digit()
+                || character == '-'
+                || character == '_'
+        });
+    if valid {
+        Ok(())
+    } else {
+        Err(Error::Validation(
+            "development run id must be `[a-z0-9_-]` and at most 128 bytes".into(),
+        ))
+    }
+}
+
 fn tool_error(error: impl std::fmt::Display) -> ToolError {
     ToolError::ExecutionFailed {
         source: error.to_string().into(),
@@ -258,6 +349,17 @@ fn tool_error(error: impl std::fmt::Display) -> ToolError {
 fn load_manifest(workspace: &ProposalWorkspace) -> RsiResult<PluginManifest> {
     toml::from_str(&workspace.read_text(MANIFEST_FILE)?)
         .map_err(|error| Error::Validation(format!("invalid {MANIFEST_FILE}: {error}")))
+}
+
+fn editable_manifest(binding: &PluginDevelopmentBinding) -> RsiResult<PluginManifest> {
+    let manifest = load_manifest(&binding.workspace())?;
+    if binding.lifecycle_manifest && !is_editable(manifest.status) {
+        return Err(Error::Validation(format!(
+            "plugin `{}` cannot be edited from manifest status {:?}",
+            binding.plugin_name, manifest.status
+        )));
+    }
+    Ok(manifest)
 }
 
 fn save_manifest(workspace: &ProposalWorkspace, manifest: &PluginManifest) -> RsiResult<()> {
@@ -318,6 +420,7 @@ impl ToolFunction for PluginStatusTool {
             "node_kinds": node_kinds,
             "run_id": binding.run_id,
             "environment_reference": binding.environment_reference,
+            "status": manifest.status,
             "files": files,
         })))
     }
@@ -352,7 +455,7 @@ impl ToolFunction for PluginNodeSpecTool {
 
 #[tool(
     name = "plugin_node_create",
-    description = "Add one complete node definition to the assigned plugin candidate. Create the referenced script separately before host adoption."
+    description = "Add one complete node definition to the assigned plugin workspace. Create the referenced script separately before review."
 )]
 struct PluginNodeCreateInput {
     /// Complete NodeDefinition value in container-plugin JSON form.
@@ -380,7 +483,7 @@ impl ToolFunction for PluginNodeCreateTool {
 
         let binding = resolve_binding(&self.state).map_err(tool_error)?;
         let workspace = binding.workspace();
-        let mut manifest = load_manifest(&workspace).map_err(tool_error)?;
+        let mut manifest = editable_manifest(&binding).map_err(tool_error)?;
         if manifest
             .nodes
             .iter()
@@ -423,7 +526,7 @@ impl ToolFunction for PluginNodeUpdateDocTool {
         }
         let binding = resolve_binding(&self.state).map_err(tool_error)?;
         let workspace = binding.workspace();
-        let mut manifest = load_manifest(&workspace).map_err(tool_error)?;
+        let mut manifest = editable_manifest(&binding).map_err(tool_error)?;
         let mut node = selected_node(&manifest, &input.node_kind).map_err(tool_error)?;
         node.doc = input.doc;
         let index = manifest
@@ -507,7 +610,7 @@ impl ToolFunction for PluginNodeWriteScriptTool {
 
 #[tool(
     name = "plugin_workspace_list",
-    description = "List safe text files in this agent's detached plugin candidate."
+    description = "List safe text files in this agent's assigned plugin workspace."
 )]
 struct PluginWorkspaceListInput {}
 
@@ -530,7 +633,7 @@ impl ToolFunction for PluginWorkspaceListTool {
 
 #[tool(
     name = "plugin_workspace_read",
-    description = "Read one safe text file from this agent's detached plugin candidate."
+    description = "Read one safe text file from this agent's assigned plugin workspace."
 )]
 struct PluginWorkspaceReadInput {
     /// Repository-relative file path.
@@ -557,7 +660,7 @@ impl ToolFunction for PluginWorkspaceReadTool {
 
 #[tool(
     name = "plugin_workspace_write",
-    description = "Write one safe text file in this agent's detached plugin candidate. Structured manifest and Dockerfile changes are rejected."
+    description = "Write one safe text file in this agent's assigned plugin workspace. Structured manifest and Dockerfile changes are rejected."
 )]
 struct PluginWorkspaceWriteInput {
     /// Repository-relative file path.
@@ -587,6 +690,7 @@ impl ToolFunction for PluginWorkspaceWriteTool {
             });
         }
         let binding = resolve_binding(&self.state).map_err(tool_error)?;
+        editable_manifest(&binding).map_err(tool_error)?;
         binding
             .workspace()
             .write_text(&input.path, &input.contents)
@@ -597,7 +701,7 @@ impl ToolFunction for PluginWorkspaceWriteTool {
 
 #[tool(
     name = "plugin_container_run",
-    description = "Run one argv command in the approved environment with the detached candidate mounted at /work. The container is isolated, resource-limited, and ephemeral."
+    description = "Run one argv command in the approved environment with the assigned plugin workspace mounted at /work. The container is isolated, resource-limited, and ephemeral."
 )]
 struct PluginContainerRunInput {
     /// Executable and arguments. No shell string is accepted.

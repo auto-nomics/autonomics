@@ -5,7 +5,7 @@ use crate::{
     node::NodeDevelopment, validate::EnvironmentCatalog, workspace::ProposalWorkspace,
 };
 use container_plugin::{
-    manifest::{ImageMetadata, PluginManifest},
+    manifest::{ImageMetadata, PluginManifest, PluginStatus},
     node_definition::{self, NodeDefinition},
 };
 use container_runtime::ImageReference;
@@ -241,6 +241,7 @@ impl<'a> PluginDevelopment<'a> {
             PluginManifest {
                 schema_version: 1,
                 plugin_name: self.proposal.plugin_name.clone(),
+                status: PluginStatus::Draft,
                 image,
                 panels: Vec::new(),
                 nodes: Vec::new(),

@@ -4,7 +4,7 @@ use agentik_core::agent_builder::AgentBuilder;
 use agentik_core::tools::ToolRegistration;
 
 use crate::{
-    Error, PluginDevelopment, PluginDevelopmentToolsetRegistry, Result,
+    Error, PluginDevelopment, PluginDevelopmentToolsetRegistry, PluginOperator, Result,
     plugin_development_tool_registrations, tools::PluginDevelopmentBinding,
 };
 
@@ -89,6 +89,18 @@ impl AgentProfile {
             development,
             run_id,
         )
+    }
+
+    /// Bind this agent directly to one long-lived plugin workspace.
+    ///
+    /// This is the no-copy development path; the plugin manifest's lifecycle
+    /// status gates every mutating tool call.
+    pub fn bind_direct_plugin(
+        &self,
+        operator: &mut PluginOperator<'_>,
+        run_id: &str,
+    ) -> Result<()> {
+        operator.bind_agent(&self.agent_id, run_id)
     }
 
     /// Attach the profile's prompts and specialized tools to an agent builder.
