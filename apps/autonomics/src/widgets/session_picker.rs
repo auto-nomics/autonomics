@@ -56,6 +56,57 @@ pub struct PickerSession {
     pub last_assistant_message: Option<String>,
 }
 
+/// Which sub-view is rendered in the right-hand panel of the session picker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InfoTab {
+    /// Title, status, IDs, timestamps, and first/last message snippets.
+    #[default]
+    Preview,
+    /// Per-session message-count bar chart and token/time telemetry.
+    Telemetry,
+}
+
+impl InfoTab {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Preview => "Preview",
+            Self::Telemetry => "Telemetry",
+        }
+    }
+
+    /// Cycle to the next tab (wraps around).
+    fn next(self) -> Self {
+        match self {
+            Self::Preview => Self::Telemetry,
+            Self::Telemetry => Self::Preview,
+        }
+    }
+}
+
+/// Which column of the session picker currently holds focus.
+///
+/// Focus is purely a visual indicator here — keyboard shortcuts continue to
+/// apply globally (search filter, list navigation, info-tab cycling) so the
+/// user can interleave typing and tabbing without mode switching. The
+/// accent colour follows the focused panel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PanelFocus {
+    /// Left column = searchable session list.
+    #[default]
+    Left,
+    /// Right column = info tabs (Preview / Telemetry).
+    Right,
+}
+
+impl PanelFocus {
+    fn toggle(self) -> Self {
+        match self {
+            Self::Left => Self::Right,
+            Self::Right => Self::Left,
+        }
+    }
+}
+
 /// Statistics extracted from a slice of `ChatLine` messages.
 pub struct SessionStats {
     pub user_message_count: usize,
@@ -131,6 +182,10 @@ pub struct SessionPickerState {
     pub active_id: Option<uuid::Uuid>,
     pub selected: usize,
     pub list_state: ListState,
+    /// Which sub-view is currently shown in the right panel.
+    pub info_tab: InfoTab,
+    /// Which column (left list / right info) currently holds focus.
+    pub focus: PanelFocus,
 }
 
 impl SessionPickerState {
@@ -141,6 +196,8 @@ impl SessionPickerState {
         self.agent_name = agent_name;
         self.query.clear();
         self.selected = 0;
+        self.info_tab = InfoTab::default();
+        self.focus = PanelFocus::default();
         self.sync_list_state();
     }
 
@@ -228,6 +285,16 @@ impl SessionPickerState {
             self.selected += 1;
         }
         self.sync_list_state();
+    }
+
+    /// Cycle the right-panel info tab (Preview ↔ Telemetry).
+    pub fn cycle_tab(&mut self) {
+        self.info_tab = self.info_tab.next();
+    }
+
+    /// Toggle keyboard focus between the left list and right info panel.
+    pub fn cycle_focus(&mut self) {
+        self.focus = self.focus.toggle();
     }
 
     /// Returns the currently selected session ID (if any).
@@ -344,11 +411,10 @@ impl StatefulWidget for SessionPicker {
             .split(v_regions[2]);
 
         self.render_list_block(h_regions[0], buf, state);
-        self.render_preview_block(h_regions[1], buf, state);
+        self.render_info_block(h_regions[1], buf, state);
 
         // ── Footer ──
-        let hint =
-            " ↑↓ navigate  Enter switch  Ctrl+N new  Ctrl+R rename  Ctrl+D close  Esc cancel";
+        let hint = " ↑↓ nav  Tab tabs  Ctrl+Tab focus  ⏎ select  ^N new  ^R rename  ^D close  Esc cancel";
         let p = Paragraph::new(hint).style(
             Style::default()
                 .fg(Color::DarkGray)
@@ -361,13 +427,15 @@ impl StatefulWidget for SessionPicker {
 impl SessionPicker {
     /// Render the left block: session list.
     fn render_list_block(&self, area: Rect, buf: &mut Buffer, state: &mut SessionPickerState) {
+        let focused = state.focus == PanelFocus::Left;
+        let accent_color = if focused { self.accent } else { Color::DarkGray };
         let block = Block::default()
             .borders(Borders::RIGHT)
-            .border_style(Style::default().fg(Color::DarkGray))
+            .border_style(Style::default().fg(accent_color))
             .title(Span::styled(
                 " Sessions ",
                 Style::default()
-                    .fg(self.accent)
+                    .fg(accent_color)
                     .add_modifier(Modifier::BOLD),
             ));
         let inner = block.inner(area);
@@ -415,18 +483,79 @@ impl SessionPicker {
         StatefulWidget::render(list, inner, buf, &mut state.list_state);
     }
 
-    /// Render the right block: rich preview of the selected session.
-    fn render_preview_block(&self, area: Rect, buf: &mut Buffer, state: &SessionPickerState) {
-        let block = Block::default().borders(Borders::NONE).title(Span::styled(
-            " Preview ",
-            Style::default()
-                .fg(self.accent)
-                .add_modifier(Modifier::BOLD),
-        ));
-        let inner = block.inner(area);
-        block.render(area, buf);
+    /// Render the right block: title + tab bar + body.
+    fn render_info_block(&self, area: Rect, buf: &mut Buffer, state: &mut SessionPickerState) {
+        let regions = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1), // Title row (active view)
+                Constraint::Length(1), // Tab bar
+                Constraint::Min(0),     // Body
+            ])
+            .split(area);
 
+        let right_focused = state.focus == PanelFocus::Right;
+        let border_color = if right_focused {
+            self.accent
+        } else {
+            Color::DarkGray
+        };
+
+        // ── Title row: section title reflecting the active info tab ──
+        let title_line = Line::from(vec![
+            Span::styled("── ", Style::default().fg(border_color)),
+            Span::styled(
+                state.info_tab.label().to_string(),
+                Style::default()
+                    .fg(border_color)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" ──", Style::default().fg(border_color)),
+        ]);
+        Widget::render(
+            Paragraph::new(title_line).alignment(ratatui::layout::Alignment::Center),
+            regions[0],
+            buf,
+        );
+
+        // ── Tab bar with bottom border ──
+        let tab_block = Block::default()
+            .borders(Borders::BOTTOM)
+            .border_style(Style::default().fg(border_color));
+        let tab_inner = tab_block.inner(regions[1]);
+        tab_block.render(regions[1], buf);
+
+        let tabs = [InfoTab::Preview, InfoTab::Telemetry];
+        let mut spans: Vec<Span> = vec![Span::raw(" ")];
+        for (i, tab) in tabs.iter().enumerate() {
+            if i > 0 {
+                spans.push(Span::styled(
+                    "   │   ",
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+            let is_active = state.info_tab == *tab;
+            if is_active {
+                spans.push(Span::styled("▸ ", Style::default().fg(self.accent)));
+                spans.push(Span::styled(
+                    tab.label().to_string(),
+                    Style::default()
+                        .fg(self.accent)
+                        .add_modifier(Modifier::BOLD),
+                ));
+            } else {
+                spans.push(Span::styled(
+                    tab.label().to_string(),
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+        }
+        Widget::render(Paragraph::new(Line::from(spans)), tab_inner, buf);
+
+        // ── Body ──
+        let body_area = regions[2];
         let filtered = state.filtered_items();
+        let label_style = Style::default().fg(Color::DarkGray);
         let Some(session) = filtered.get(state.selected) else {
             let line = Line::from(Span::styled(
                 "  No session selected.",
@@ -434,121 +563,39 @@ impl SessionPicker {
                     .fg(Color::DarkGray)
                     .add_modifier(Modifier::DIM),
             ));
-            let area = Rect {
-                x: inner.x,
-                y: inner.y + 1,
-                width: inner.width,
-                height: 1,
-            };
-            Widget::render(Paragraph::new(line), area, buf);
+            let y = body_area.y + body_area.height.saturating_sub(1) / 2;
+            Widget::render(
+                Paragraph::new(line),
+                Rect {
+                    x: body_area.x,
+                    y,
+                    width: body_area.width,
+                    height: 1,
+                },
+                buf,
+            );
             return;
         };
-
-        let mut lines: Vec<Line> = Vec::new();
-        let label_style = Style::default().fg(Color::DarkGray);
-
-        // ── Metadata section ──
         let is_active = state.active_id == Some(session.id);
-
-        // Title
-        lines.push(Line::from(vec![
-            Span::styled("  Title    ", label_style),
-            Span::styled(
-                session.title.clone().unwrap_or_else(|| "(untitled)".into()),
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]));
-
-        // Status
-        let (status_text, status_color) = if is_active {
-            ("● active", self.accent)
-        } else {
-            ("○ inactive", Color::DarkGray)
-        };
-        lines.push(Line::from(vec![
-            Span::styled("  Status  ", label_style),
-            Span::styled(status_text, Style::default().fg(status_color)),
-        ]));
-
-        // Session ID (truncated)
-        let id_short = &session.id.to_string()[..8];
-        lines.push(Line::from(vec![
-            Span::styled("  ID      ", label_style),
-            Span::styled(format!("{}…", id_short), Style::default().fg(Color::Gray)),
-        ]));
-
-        // Created
-        if session.created_at > 0 {
-            let created_str = format_timestamp(session.created_at);
-            lines.push(Line::from(vec![
-                Span::styled("  Created ", label_style),
-                Span::styled(created_str, Style::default().fg(Color::Gray)),
-            ]));
-        }
-
-        // Last active
-        let last_active_str = format_timestamp(session.last_active);
-        lines.push(Line::from(vec![
-            Span::styled("  Last    ", label_style),
-            Span::styled(last_active_str, Style::default().fg(Color::Gray)),
-        ]));
-
-        // ── Separator ──
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            "  ── Messages ──",
-            label_style.add_modifier(Modifier::BOLD),
-        )));
-
-        // ── Message previews ──
-        let has_preview = session
-            .first_user_message
-            .as_ref()
-            .is_some_and(|s| !s.is_empty())
-            || session
-                .last_assistant_message
-                .as_ref()
-                .is_some_and(|s| !s.is_empty());
-
-        if has_preview {
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "  ── Preview ──",
-                label_style.add_modifier(Modifier::BOLD),
-            )));
-
-            let preview_width = (inner.width as usize).saturating_sub(6).max(1);
-            if let Some(ref first_msg) = session.first_user_message {
-                lines.push(Line::from(vec![Span::styled(
-                    "  ❯ ",
-                    Style::default().fg(Color::Cyan),
-                )]));
-                push_wrapped_preview(
-                    &mut lines,
-                    first_msg,
-                    preview_width,
-                    Style::default().fg(Color::Gray),
-                );
+        match state.info_tab {
+            InfoTab::Preview => {
+                self.render_preview_body(body_area, buf, session, is_active, label_style);
             }
-
-            if let Some(ref last_msg) = session.last_assistant_message {
-                lines.push(Line::from(""));
-                lines.push(Line::from(vec![Span::styled(
-                    "  🤖 ",
-                    Style::default().fg(Color::Green),
-                )]));
-                push_wrapped_preview(
-                    &mut lines,
-                    last_msg,
-                    preview_width,
-                    Style::default().fg(Color::Gray),
-                );
+            InfoTab::Telemetry => {
+                self.render_telemetry_body(body_area, buf, session, label_style);
             }
         }
+    }
 
-        // ── Message statistics ──
+    /// Body content for the Telemetry tab: message-count bar chart and token/time stats.
+    fn render_telemetry_body(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        session: &PickerSession,
+        label_style: Style,
+    ) {
+        let mut lines: Vec<Line> = Vec::new();
         let total =
             session.user_message_count + session.assistant_message_count + session.tool_call_count;
 
@@ -563,7 +610,7 @@ impl SessionPicker {
         .unwrap_or(1)
         .max(1);
 
-        let bar_width = 12usize;
+        let bar_width = (area.width - 3) as usize;
 
         // User messages
         let user_bar_len = (session.user_message_count * bar_width) / max_cat;
@@ -667,8 +714,109 @@ impl SessionPicker {
             ]));
         }
 
+        Widget::render(Paragraph::new(lines), area, buf);
+    }
+
+    /// Body content for the Preview tab: metadata + first/last message snippets.
+    fn render_preview_body(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        session: &PickerSession,
+        is_active: bool,
+        label_style: Style,
+    ) {
+        let mut lines: Vec<Line> = Vec::new();
+
+        // Title
+        lines.push(Line::from(vec![
+            Span::styled("  Title    ", label_style),
+            Span::styled(
+                session.title.clone().unwrap_or_else(|| "(untitled)".into()),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+
+        // Status
+        let (status_text, status_color) = if is_active {
+            ("● active", self.accent)
+        } else {
+            ("○ inactive", Color::DarkGray)
+        };
+        lines.push(Line::from(vec![
+            Span::styled("  Status  ", label_style),
+            Span::styled(status_text, Style::default().fg(status_color)),
+        ]));
+
+        // Session ID (truncated)
+        let id_short = &session.id.to_string()[..8];
+        lines.push(Line::from(vec![
+            Span::styled("  ID      ", label_style),
+            Span::styled(format!("{}…", id_short), Style::default().fg(Color::Gray)),
+        ]));
+
+        // Created
+        if session.created_at > 0 {
+            let created_str = format_timestamp(session.created_at);
+            lines.push(Line::from(vec![
+                Span::styled("  Created ", label_style),
+                Span::styled(created_str, Style::default().fg(Color::Gray)),
+            ]));
+        }
+
+        // Last active
+        let last_active_str = format_timestamp(session.last_active);
+        lines.push(Line::from(vec![
+            Span::styled("  Last    ", label_style),
+            Span::styled(last_active_str, Style::default().fg(Color::Gray)),
+        ]));
+
+        // ── Message previews ──
+        let has_preview = session
+            .first_user_message
+            .as_ref()
+            .is_some_and(|s| !s.is_empty())
+            || session
+                .last_assistant_message
+                .as_ref()
+                .is_some_and(|s| !s.is_empty());
+
+        if has_preview {
+            lines.push(Line::from(""));
+
+            let preview_width = (area.width as usize).saturating_sub(6).max(1);
+            if let Some(ref first_msg) = session.first_user_message {
+                lines.push(Line::from(vec![Span::styled(
+                    "  ❯ ",
+                    Style::default().fg(Color::Cyan),
+                )]));
+                push_wrapped_preview(
+                    &mut lines,
+                    first_msg,
+                    preview_width,
+                    Style::default().fg(Color::Gray),
+                );
+            }
+
+            if let Some(ref last_msg) = session.last_assistant_message {
+                lines.push(Line::from(""));
+                lines.push(Line::from(vec![Span::styled(
+                    "  🤖 ",
+                    Style::default().fg(Color::Green),
+                )]));
+                push_wrapped_preview(
+                    &mut lines,
+                    last_msg,
+                    preview_width,
+                    Style::default().fg(Color::Gray),
+                );
+            }
+        }
+
         // Truncate to fit available height.
-        let max_lines = inner.height as usize;
+        let max_lines = area.height as usize;
         if lines.len() > max_lines {
             lines.truncate(max_lines.saturating_sub(1));
             lines.push(Line::from(Span::styled(
@@ -677,7 +825,7 @@ impl SessionPicker {
             )));
         }
 
-        Widget::render(Paragraph::new(lines), inner, buf);
+        Widget::render(Paragraph::new(lines), area, buf);
     }
 }
 
@@ -840,6 +988,49 @@ mod tests {
 
         assert_eq!(lines.len(), 2);
         assert!(last_line.starts_with("    Last "));
+    }
+
+    #[test]
+    fn cycle_focus_toggles_between_panels() {
+        let mut state = SessionPickerState::default();
+        assert_eq!(state.focus, PanelFocus::Left);
+
+        state.cycle_focus();
+        assert_eq!(state.focus, PanelFocus::Right);
+
+        state.cycle_focus();
+        assert_eq!(state.focus, PanelFocus::Left);
+    }
+
+    #[test]
+    fn cycle_tab_and_cycle_focus_are_independent() {
+        let mut state = SessionPickerState::default();
+        assert_eq!(state.info_tab, InfoTab::Preview);
+        assert_eq!(state.focus, PanelFocus::Left);
+
+        state.cycle_tab();
+        assert_eq!(state.info_tab, InfoTab::Telemetry);
+        assert_eq!(state.focus, PanelFocus::Left, "cycle_tab must not move focus");
+
+        state.cycle_focus();
+        assert_eq!(state.focus, PanelFocus::Right);
+        assert_eq!(
+            state.info_tab,
+            InfoTab::Telemetry,
+            "cycle_focus must not move info tab"
+        );
+    }
+
+    #[test]
+    fn open_resets_focus_and_tab() {
+        let mut state = SessionPickerState::default();
+        state.focus = PanelFocus::Right;
+        state.info_tab = InfoTab::Telemetry;
+
+        state.open(uuid::Uuid::new_v4(), "agent".into());
+
+        assert_eq!(state.focus, PanelFocus::Left);
+        assert_eq!(state.info_tab, InfoTab::Preview);
     }
 }
 
