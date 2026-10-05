@@ -25,11 +25,29 @@ use serde_json::json;
 const IMAGE_REFERENCE: &str = "ghcr.io/auto-nomics/autonomics/bulk-rnaseq@sha256:23071886af3864a0338242987980727753923a0a67f362aef7366d1277c39734";
 
 fn plugin_root() -> Option<PathBuf> {
-    let root = std::env::var_os("NODE_PLUGINS_ROOT")
+    let explicit = std::env::var_os("NODE_PLUGINS_ROOT");
+    let root = explicit
+        .clone()
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/mnt/projects/node-plugins"));
     let manifest = root.join("bulk-rnaseq").join("manifest.toml");
-    manifest.is_file().then_some(root)
+    if manifest.is_file() {
+        return Some(root);
+    }
+    if explicit.is_some() {
+        // fix-review R04 (2026-10-05): an explicitly set NODE_PLUGINS_ROOT
+        // means migration parity was requested. A missing family must fail
+        // loudly — early-returns here used to count as *passed* tests, so a
+        // green summary claimed coverage that never ran.
+        panic!(
+            "NODE_PLUGINS_ROOT is set but the bulk-rnaseq family is not deployed \
+             under it ({}) — migration parity cannot run. Deploy the family \
+             or unset NODE_PLUGINS_ROOT to skip these tests deliberately.",
+            manifest.display()
+        );
+    }
+    eprintln!("skipping: bulk-rnaseq plugin directory not present (NODE_PLUGINS_ROOT unset)");
+    None
 }
 
 fn load_manifest(root: &PathBuf) -> PluginManifest {
