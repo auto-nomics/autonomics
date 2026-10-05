@@ -3,25 +3,9 @@
 //! Wraps the [`mrlap`] crate's full pipeline (cross-trait LDSC → IVW-MR →
 //! de-biasing correction) as a single DAG node with two GWAS sumstat inputs.
 //!
-//! Implements the MRlap-internal LD-score-regression stage (inner join of the
-//! allele-harmonised SNP table × the VFS LD-score panel) and emits the
-//! correction results as a one-row summary table.
-//!
-//! # Unvalidated deviations from official MRlap `run_LDSC.R`
-//!
-//! These differences are documented, not fixed — validating them requires the
-//! official R pipeline end-to-end:
-//!
-//! - the LD-score panel is the fixed 1000G EUR bundle, not a
-//!   population-matched panel per trait;
-//! - M (total SNP count) is the LD panel row count, not the munged-panel M
-//!   the official pipeline derives;
-//! - jackknife blocks are contiguous slices of position-sorted rows, not the
-//!   official block assignment over the merged panel.
-//!
-//! Palindromic-SNP handling by allele frequency (the eaf-based ambiguity
-//! rules of a full harmonisation scheme) is likewise not implemented; `eaf`
-//! columns are only used for a consistency diagnostic.
+//! Implements the MRlap-internal LD-score-regression stage
+//! (3-way inner join of exposure × outcome × the VFS LD-score panel) and emits
+//! the correction results as a one-row summary table.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -58,7 +42,6 @@ const IN_SE: &str = "se";
 const IN_OR: &str = "or";
 const IN_Z: &str = "z";
 const IN_N: &str = "n";
-const IN_EAF: &str = "eaf";
 
 fn result_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
@@ -163,13 +146,8 @@ impl NodeFactory for MrlapNodeFactory {
          IVW-MR, and the de-biasing correction for sample overlap / weak \
          instruments / Winner's curse. Each GWAS input requires lowercase \
          rsid, chr, pos, ea, nea, and n columns, plus either z or beta/se \
-         (or/se is also accepted); the same derived z and allele-alignment \
-         direction are used by the LDSC and MR stages. eaf, when present on \
-         both inputs, is used only for an allele-frequency consistency \
-         diagnostic (palindromic-SNP rules are not implemented). The LD \
-         panel is the fixed 1000G EUR bundle and M is its row count — \
-         deviations from official MRlap run_LDSC.R are documented in the \
-         module docs and unvalidated. Emits a one-row summary."
+         (or/se is also accepted). eaf may be present and is ignored by this \
+         implementation. Emits a one-row summary."
     }
     fn spec_schema(&self) -> schemars::Schema {
         schema_for!(MrlapSpec)
@@ -420,149 +398,6 @@ fn column_type(batches: &[RecordBatch], name: &str) -> String {
         .unwrap_or_else(|| "missing".into())
 }
 
-// ---- LDSC stage: join the harmonised SNP table with the LD panel ----
-
-/// Per-SNP columns fed to the cross-trait LDSC regression.
-struct LdscColumns {
-    z1: Vec<f64>,
-    z2: Vec<f64>,
-    n1: Vec<f64>,
-    n2: Vec<f64>,
-    ref_ld: Vec<f64>,
-    w_ld: Vec<f64>,
-}
-
-/// Build the harmonised per-SNP table consumed by the LDSC join.
-///
-/// z is recovered as `std_beta * sqrt(n)` — exactly the standardised
-/// quantities the MR stage consumes — so the z-scores reaching LDSC are
-/// same-source and same-direction as MR by construction: the outcome column
-/// already carries the allele-alignment flip applied by
-/// [`mrlap::harmonise::harmonise`], and beta/se-only or or/se-only inputs
-/// (which have no `z` column) are handled by the same tidy derivation
-/// instead of being read from the raw sumstat tables.
-fn harmonised_ldsc_batch(
-    harm: &[mrlap::harmonise::HarmonisedRow],
-) -> Result<RecordBatch, DagError> {
-    let n_rows = harm.len();
-    let mut rsid = Vec::with_capacity(n_rows);
-    let mut z1 = Vec::with_capacity(n_rows);
-    let mut z2 = Vec::with_capacity(n_rows);
-    let mut n1 = Vec::with_capacity(n_rows);
-    let mut n2 = Vec::with_capacity(n_rows);
-    for row in harm {
-        rsid.push(row.rsid.clone());
-        z1.push(row.std_beta_exp * row.n_exp.sqrt());
-        z2.push(row.std_beta_out * row.n_out.sqrt());
-        n1.push(row.n_exp);
-        n2.push(row.n_out);
-    }
-    let batch = RecordBatch::try_new(
-        Arc::new(Schema::new(vec![
-            Field::new("rsid", DataType::Utf8, false),
-            Field::new("z1", DataType::Float64, false),
-            Field::new("z2", DataType::Float64, false),
-            Field::new("n1", DataType::Float64, false),
-            Field::new("n2", DataType::Float64, false),
-        ])),
-        vec![
-            Arc::new(StringArray::from(rsid)),
-            Arc::new(Float64Array::from(z1)),
-            Arc::new(Float64Array::from(z2)),
-            Arc::new(Float64Array::from(n1)),
-            Arc::new(Float64Array::from(n2)),
-        ],
-    )
-    .map_err(|e| err(format!("harmonised LDSC table: {e}")))?;
-    Ok(batch)
-}
-
-/// Join the harmonised SNP table with the LD-score panel and collect the
-/// per-SNP LDSC columns (ordered by panel position).
-async fn ldsc_join_columns(
-    ctx: &datafusion::prelude::SessionContext,
-    harm: &[mrlap::harmonise::HarmonisedRow],
-    panel_table: &str,
-) -> Result<LdscColumns, DagError> {
-    let batch = harmonised_ldsc_batch(harm)?;
-    let df = ctx
-        .read_batch(batch)
-        .map_err(|e| err(format!("harmonised table: {e}")))?;
-    ctx.register_table("mrlap_harmonised", df.into_view())
-        .map_err(|e| err(format!("register harmonised table: {e}")))?;
-    let sql = format!(
-        r#"SELECT h."z1" AS z1, h."z2" AS z2,
-                  h."n1" AS n1, h."n2" AS n2,
-                  CAST(l.ld_score AS DOUBLE) AS ref_ld,
-                  CAST(l.w_ld AS DOUBLE) AS w_ld
-           FROM mrlap_harmonised AS h
-           INNER JOIN {tbl} AS l
-             ON CAST(h."rsid" AS VARCHAR) = CAST(l.rsid AS VARCHAR)
-           ORDER BY l.locus.position"#,
-        tbl = nodes_ldsc::ldsc_common::quote_table(panel_table),
-    );
-    let joined = ctx
-        .sql(&sql)
-        .await
-        .map_err(|e| err(format!("ldsc join: {e}")))?;
-    let jb = joined
-        .collect()
-        .await
-        .map_err(|e| err(format!("ldsc collect: {e}")))?;
-    Ok(LdscColumns {
-        z1: col_f64(&jb, "z1").map_err(err)?,
-        z2: col_f64(&jb, "z2").map_err(err)?,
-        n1: col_f64(&jb, "n1").map_err(err)?,
-        n2: col_f64(&jb, "n2").map_err(err)?,
-        ref_ld: col_f64(&jb, "ref_ld").map_err(err)?,
-        w_ld: col_f64(&jb, "w_ld").map_err(err)?,
-    })
-}
-
-/// eaf consistency diagnostic over the harmonised SNPs.
-///
-/// Full palindromic-SNP / allele-ambiguity rules are a scheme-level concern
-/// and deliberately NOT implemented here; this only counts harmonised SNPs
-/// whose effect-allele frequencies point in opposite directions
-/// (|eaf_exp − eaf_out| > 0.5), which a real frequency-aware harmonisation
-/// would resolve. Returns `None` when either input lacks an `eaf` column.
-fn eaf_discordance_diagnostic(
-    b1: &[RecordBatch],
-    b2: &[RecordBatch],
-    harm: &[mrlap::harmonise::HarmonisedRow],
-) -> Result<Option<(usize, usize)>, DagError> {
-    let e1 = optional_col_f64(b1, &[IN_EAF]).map_err(err)?;
-    let e2 = optional_col_f64(b2, &[IN_EAF]).map_err(err)?;
-    let (Some(e1), Some(e2)) = (e1, e2) else {
-        return Ok(None);
-    };
-    let r1 = col_str(b1, IN_RSID).map_err(err)?;
-    let r2 = col_str(b2, IN_RSID).map_err(err)?;
-    let map1: HashMap<&str, f64> = r1
-        .iter()
-        .zip(e1.iter())
-        .filter(|(_, e)| e.is_finite())
-        .map(|(r, e)| (r.as_str(), *e))
-        .collect();
-    let map2: HashMap<&str, f64> = r2
-        .iter()
-        .zip(e2.iter())
-        .filter(|(_, e)| e.is_finite())
-        .map(|(r, e)| (r.as_str(), *e))
-        .collect();
-    let mut discordant = 0usize;
-    let mut checked = 0usize;
-    for row in harm {
-        if let (Some(a), Some(b)) = (map1.get(row.rsid.as_str()), map2.get(row.rsid.as_str())) {
-            checked += 1;
-            if (a - b).abs() > 0.5 {
-                discordant += 1;
-            }
-        }
-    }
-    Ok(Some((discordant, checked)))
-}
-
 fn no_harmonised_snps_message(
     b1: &[RecordBatch],
     b2: &[RecordBatch],
@@ -657,13 +492,13 @@ impl DagNode for MrlapNode {
             return Err(err(no_harmonised_snps_message(&b1, &b2, &tidy1, &tidy2)));
         }
 
-        // ---- LDSC stage: harmonised SNP table joined with the VFS LD panel ----
-        // The join consumes the harmonised rows (z already aligned to the
-        // exposure effect allele), so the cross-trait z products used by LDSC
-        // are same-source and same-direction as the MR stage, and beta/se-only
-        // inputs reach LDSC through the tidy derivation instead of requiring a
-        // raw `z` column.
+        // ---- LDSC stage: 3-way join via the VFS LD panel ----
         let ctx = node_ctx.session();
+        ctx.register_table("sumstats1", in0.dataframe()?.clone().into_view())
+            .map_err(|e| err(format!("register sumstats1: {e}")))?;
+        ctx.register_table("sumstats2", in1.dataframe()?.clone().into_view())
+            .map_err(|e| err(format!("register sumstats2: {e}")))?;
+
         nodes_ldsc::ldsc_common::register_listing_table(
             &ctx,
             "ld_panel",
@@ -672,30 +507,38 @@ impl DagNode for MrlapNode {
         .await
         .map_err(|e| err(format!("register ld panel: {e}")))?;
 
-        if let Some((discordant, checked)) = eaf_discordance_diagnostic(&b1, &b2, &harm)? {
-            let message = format!(
-                "mrlap eaf diagnostic: {discordant}/{checked} harmonised SNPs have \
-                 |eaf_exp - eaf_out| > 0.5; palindromic-SNP frequency rules are not \
-                 implemented (see module docs)"
-            );
-            if discordant > 0 {
-                reporter.warn(message);
-            } else if checked > 0 {
-                reporter.info(message);
-            }
-        }
-
         // M = total SNPs in the LD panel.
         let m = count_panel_snp(&ctx, "ld_panel").await?;
-        let cols = ldsc_join_columns(&ctx, &harm, "ld_panel").await?;
-        let LdscColumns {
-            z1,
-            z2,
-            n1,
-            n2,
-            ref_ld,
-            w_ld,
-        } = cols;
+        let sql = format!(
+            r#"SELECT CAST(s1."{z}" AS DOUBLE) AS z1, CAST(s2."{z}" AS DOUBLE) AS z2,
+                      CAST(s1."{n}" AS DOUBLE) AS n1, CAST(s2."{n}" AS DOUBLE) AS n2,
+                      CAST(l.ld_score AS DOUBLE) AS ref_ld,
+                      CAST(l.w_ld AS DOUBLE) AS w_ld
+               FROM sumstats1 AS s1
+               INNER JOIN sumstats2 AS s2
+                 ON CAST(s1."{rsid}" AS VARCHAR) = CAST(s2."{rsid}" AS VARCHAR)
+               INNER JOIN {tbl} AS l
+                 ON CAST(s1."{rsid}" AS VARCHAR) = CAST(l.rsid AS VARCHAR)
+               ORDER BY l.locus.position"#,
+            z = IN_Z,
+            n = IN_N,
+            rsid = IN_RSID,
+            tbl = nodes_ldsc::ldsc_common::quote_table("ld_panel"),
+        );
+        let joined = ctx
+            .sql(&sql)
+            .await
+            .map_err(|e| err(format!("ldsc join: {e}")))?;
+        let jb = joined
+            .collect()
+            .await
+            .map_err(|e| err(format!("ldsc collect: {e}")))?;
+        let z1 = col_f64(&jb, "z1").map_err(err)?;
+        let z2 = col_f64(&jb, "z2").map_err(err)?;
+        let n1 = col_f64(&jb, "n1").map_err(err)?;
+        let n2 = col_f64(&jb, "n2").map_err(err)?;
+        let ref_ld = col_f64(&jb, "ref_ld").map_err(err)?;
+        let w_ld = col_f64(&jb, "w_ld").map_err(err)?;
         let n_snp = z1.len();
         if n_snp < 2 {
             return Err(err("LDSC join yielded < 2 shared SNPs"));
@@ -856,277 +699,6 @@ mod tests {
     use super::*;
     use arrow_array::UInt32Array;
     use arrow_schema::{Field, Schema};
-
-    // ---- in-memory LDSC SQL harness ----
-
-    /// Register a mock LD-score panel (rsid, ld_score, w_ld, locus.position)
-    /// whose positions deliberately do not follow rsid sort order.
-    fn register_mock_ld_panel(ctx: &datafusion::prelude::SessionContext) {
-        use arrow_array::{Array, Int64Array, StructArray};
-        use datafusion::catalog::MemTable;
-
-        let rows: &[(&str, i64, f64, f64)] = &[
-            ("rs9", 100, 1.0, 1.0),
-            ("rs1", 110, 1.5, 0.5),
-            ("rs5", 120, 2.0, 0.6),
-            ("rs2", 130, 2.5, 0.7),
-            ("rs3", 140, 3.0, 0.8),
-        ];
-        let position_field = Arc::new(Field::new("position", DataType::Int64, false));
-        let locus = StructArray::new(
-            vec![position_field].into(),
-            vec![Arc::new(Int64Array::from(
-                rows.iter().map(|(_, pos, _, _)| *pos).collect::<Vec<_>>(),
-            )) as Arc<dyn Array>],
-            None,
-        );
-        let batch = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![
-                Field::new("rsid", DataType::Utf8, false),
-                Field::new("ld_score", DataType::Float64, false),
-                Field::new("w_ld", DataType::Float64, false),
-                Field::new(
-                    "locus",
-                    DataType::Struct(
-                        vec![Arc::new(Field::new("position", DataType::Int64, false))].into(),
-                    ),
-                    false,
-                ),
-            ])),
-            vec![
-                Arc::new(StringArray::from(
-                    rows.iter().map(|(rsid, _, _, _)| *rsid).collect::<Vec<_>>(),
-                )),
-                Arc::new(Float64Array::from(
-                    rows.iter().map(|(_, _, ld, _)| *ld).collect::<Vec<_>>(),
-                )),
-                Arc::new(Float64Array::from(
-                    rows.iter().map(|(_, _, _, w)| *w).collect::<Vec<_>>(),
-                )),
-                Arc::new(locus) as Arc<dyn Array>,
-            ],
-        )
-        .unwrap();
-        let table =
-            MemTable::try_new(batch.schema(), vec![vec![batch]]).expect("mock LD panel schema");
-        ctx.register_table("mock_panel", Arc::new(table))
-            .expect("register mock panel");
-    }
-
-    /// Build a minimal GWAS batch: effect given either as beta/se or as z.
-    #[allow(clippy::too_many_arguments)]
-    fn gwas_batch(
-        rsids: &[&str],
-        alleles: &[(&str, &str)],
-        beta: Option<&[f64]>,
-        se: Option<&[f64]>,
-        z: Option<&[f64]>,
-        eaf: Option<&[f64]>,
-        n: f64,
-    ) -> RecordBatch {
-        let mut fields = vec![
-            Field::new("rsid", DataType::Utf8, false),
-            Field::new("chr", DataType::Int64, false),
-            Field::new("pos", DataType::Int64, false),
-            Field::new("ea", DataType::Utf8, false),
-            Field::new("nea", DataType::Utf8, false),
-        ];
-        let mut columns: Vec<ArrayRef> = vec![
-            Arc::new(StringArray::from(rsids.to_vec())),
-            Arc::new(Int64Array::from(vec![1; rsids.len()])),
-            Arc::new(Int64Array::from(
-                (1000..1000 + rsids.len() as i64).collect::<Vec<_>>(),
-            )),
-            Arc::new(StringArray::from(
-                alleles.iter().map(|(ea, _)| *ea).collect::<Vec<_>>(),
-            )),
-            Arc::new(StringArray::from(
-                alleles.iter().map(|(_, nea)| *nea).collect::<Vec<_>>(),
-            )),
-        ];
-        if let (Some(beta), Some(se)) = (beta, se) {
-            fields.push(Field::new("beta", DataType::Float64, false));
-            columns.push(Arc::new(Float64Array::from(beta.to_vec())));
-            fields.push(Field::new("se", DataType::Float64, false));
-            columns.push(Arc::new(Float64Array::from(se.to_vec())));
-        }
-        if let Some(z) = z {
-            fields.push(Field::new("z", DataType::Float64, false));
-            columns.push(Arc::new(Float64Array::from(z.to_vec())));
-        }
-        if let Some(eaf) = eaf {
-            fields.push(Field::new("eaf", DataType::Float64, false));
-            columns.push(Arc::new(Float64Array::from(eaf.to_vec())));
-        }
-        fields.push(Field::new("n", DataType::Float64, false));
-        columns.push(Arc::new(Float64Array::from(vec![n; rsids.len()])));
-
-        RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).unwrap()
-    }
-
-    fn harmonise_batches(
-        b1: &RecordBatch,
-        b2: &RecordBatch,
-    ) -> Vec<mrlap::harmonise::HarmonisedRow> {
-        let raw1 = parse_gwas(std::slice::from_ref(b1)).unwrap();
-        let raw2 = parse_gwas(std::slice::from_ref(b2)).unwrap();
-        let tidy1 = mrlap::input::tidy(&raw1, true).unwrap();
-        let tidy2 = mrlap::input::tidy(&raw2, true).unwrap();
-        mrlap::harmonise::harmonise(&tidy1, &tidy2)
-    }
-
-    #[tokio::test]
-    async fn ldsc_join_derives_z_from_beta_se_and_flips_swapped_alleles() {
-        let ctx = datafusion::prelude::SessionContext::new();
-        register_mock_ld_panel(&ctx);
-
-        // beta/se-only inputs (no z column): previously the LDSC SQL failed
-        // on the missing `z` column even though parse_gwas accepts beta/se.
-        let exposure = gwas_batch(
-            &["rs1", "rs2", "rs3"],
-            &[("A", "G"), ("A", "G"), ("A", "G")],
-            Some(&[2.0, 3.0, -1.0]),
-            Some(&[1.0, 2.0, 2.0]),
-            None,
-            None,
-            100.0,
-        );
-        // rs2 has swapped effect alleles in the outcome → harmonise must flip
-        // its z before it reaches the cross-trait LDSC products.
-        let outcome = gwas_batch(
-            &["rs1", "rs2", "rs3"],
-            &[("A", "G"), ("G", "A"), ("A", "G")],
-            Some(&[1.0, 1.5, -5.0]),
-            Some(&[1.0, 2.0, 4.0]),
-            None,
-            None,
-            400.0,
-        );
-
-        let harm = harmonise_batches(&exposure, &outcome);
-        assert_eq!(harm.len(), 3);
-        let cols = ldsc_join_columns(&ctx, &harm, "mock_panel").await.unwrap();
-
-        // Panel-position order: rs1 (110) < rs2 (130) < rs3 (140).
-        for (got, want) in cols.z1.iter().zip([2.0, 1.5, -0.5]) {
-            assert!(
-                (got - want).abs() < 1e-12,
-                "z1 derived from beta/se: got {got}, want {want}"
-            );
-        }
-        for (got, want) in cols.z2.iter().zip([1.0, -0.75, -1.25]) {
-            assert!(
-                (got - want).abs() < 1e-12,
-                "z2 must carry the harmonisation flip (rs2 swapped): got {got}, want {want}"
-            );
-        }
-        assert!(cols.n1.iter().all(|v| (*v - 100.0).abs() < 1e-12));
-        assert!(cols.n2.iter().all(|v| (*v - 400.0).abs() < 1e-12));
-        // Only panel SNPs survive the join, with panel LD columns attached.
-        for (got, want) in cols.ref_ld.iter().zip([1.5, 2.5, 3.0]) {
-            assert!((got - want).abs() < 1e-12);
-        }
-    }
-
-    #[tokio::test]
-    async fn ldsc_join_applies_the_same_flip_to_z_column_inputs() {
-        let ctx = datafusion::prelude::SessionContext::new();
-        register_mock_ld_panel(&ctx);
-
-        let exposure = gwas_batch(
-            &["rs1", "rs2", "rs3"],
-            &[("A", "G"), ("A", "G"), ("A", "G")],
-            None,
-            None,
-            Some(&[2.0, 1.5, -0.5]),
-            None,
-            100.0,
-        );
-        // rs2 outcome z is +0.75 on swapped alleles → LDSC must see −0.75,
-        // i.e. the z-column path goes through the same alignment as MR.
-        let outcome = gwas_batch(
-            &["rs1", "rs2", "rs3"],
-            &[("A", "G"), ("G", "A"), ("A", "G")],
-            None,
-            None,
-            Some(&[1.0, 0.75, -1.25]),
-            None,
-            400.0,
-        );
-
-        let harm = harmonise_batches(&exposure, &outcome);
-        let cols = ldsc_join_columns(&ctx, &harm, "mock_panel").await.unwrap();
-
-        for (got, want) in cols.z1.iter().zip([2.0, 1.5, -0.5]) {
-            assert!((got - want).abs() < 1e-12, "z1: got {got}, want {want}");
-        }
-        for (got, want) in cols.z2.iter().zip([1.0, -0.75, -1.25]) {
-            assert!(
-                (got - want).abs() < 1e-12,
-                "z2 flip from z column: got {got}, want {want}"
-            );
-        }
-    }
-
-    #[test]
-    fn eaf_diagnostic_counts_discordant_frequencies_only_when_present() {
-        // Exposure eaf ~ T allele freq; outcome rs2 reports the freq of the
-        // opposite allele (swapped alleles) → |eaf diff| > 0.5 for rs2.
-        let exposure = gwas_batch(
-            &["rs1", "rs2", "rs3"],
-            &[("A", "G"), ("A", "G"), ("A", "G")],
-            None,
-            None,
-            Some(&[2.0, 1.5, -0.5]),
-            Some(&[0.9, 0.8, 0.3]),
-            100.0,
-        );
-        let outcome = gwas_batch(
-            &["rs1", "rs2", "rs3"],
-            &[("A", "G"), ("G", "A"), ("A", "G")],
-            None,
-            None,
-            Some(&[1.0, 0.75, -1.25]),
-            Some(&[0.85, 0.75, 0.35]),
-            400.0,
-        );
-        let harm = harmonise_batches(&exposure, &outcome);
-        let diagnostic =
-            eaf_discordance_diagnostic(&[exposure.clone()], &[outcome.clone()], &harm).unwrap();
-        assert_eq!(diagnostic, Some((0, 3)), "no discordance in this fixture");
-
-        let outcome_flipped = gwas_batch(
-            &["rs1", "rs2", "rs3"],
-            &[("A", "G"), ("G", "A"), ("A", "G")],
-            None,
-            None,
-            Some(&[1.0, 0.75, -1.25]),
-            Some(&[0.85, 0.1, 0.35]),
-            400.0,
-        );
-        let harm = harmonise_batches(&exposure, &outcome_flipped);
-        let diagnostic =
-            eaf_discordance_diagnostic(&[exposure.clone()], &[outcome_flipped.clone()], &harm)
-                .unwrap();
-        assert_eq!(diagnostic, Some((1, 3)), "rs2 |0.8 - 0.1| > 0.5");
-
-        // No eaf columns on the outcome → diagnostic is unavailable.
-        let outcome_no_eaf = gwas_batch(
-            &["rs1", "rs2", "rs3"],
-            &[("A", "G"), ("G", "A"), ("A", "G")],
-            None,
-            None,
-            Some(&[1.0, 0.75, -1.25]),
-            None,
-            400.0,
-        );
-        let harm = harmonise_batches(&exposure, &outcome_no_eaf);
-        assert!(
-            eaf_discordance_diagnostic(&[exposure], &[outcome_no_eaf], &harm)
-                .unwrap()
-                .is_none()
-        );
-    }
 
     #[tokio::test]
     async fn missing_inputs_yield_clear_error() {

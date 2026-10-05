@@ -39,7 +39,7 @@ fn t_test_one_matches_r_pt() {
     //   t = (x̄ - μ) / s/√n = 2.325 - 2.0) / (0.4232/√8) ≈ 2.171
     //   df = 7, p = 2·pt(-|t|, 7)
     let x = vec![2.1, 2.5, 1.8, 3.0, 2.7, 1.9, 2.4, 2.2];
-    let t = h::t_test_one(&x, 2.0, h::Alternative::TwoSided, 0.95).unwrap();
+    let t = h::t_test_one(&x, 2.0, h::Alternative::TwoSided).unwrap();
     let mean: f64 = x.iter().sum::<f64>() / 8.0;
     let sd = (x.iter().map(|&xi| (xi - mean).powi(2)).sum::<f64>() / 7.0).sqrt();
     let t_expected = (mean - 2.0) / (sd / 8.0_f64.sqrt());
@@ -52,7 +52,7 @@ fn t_test_paired_matches_r_pt() {
     // R: t.test(c(2.5,3.5,3.2,4.0,4.8,5.5,5.4,6.2), c(2.1,2.9,3.3,4.1,4.7,5.4,5.2,6.0), paired=T)
     let a = vec![2.5, 3.5, 3.2, 4.0, 4.8, 5.5, 5.4, 6.2];
     let b = vec![2.1, 2.9, 3.3, 4.1, 4.7, 5.4, 5.2, 6.0];
-    let t = h::t_test_paired(&a, &b, 0.0, h::Alternative::TwoSided, 0.95).unwrap();
+    let t = h::t_test_paired(&a, &b, h::Alternative::TwoSided).unwrap();
     let d: Vec<f64> = a.iter().zip(&b).map(|(p, q)| p - q).collect();
     let dm: f64 = d.iter().sum::<f64>() / d.len() as f64;
     let dvar: f64 = d.iter().map(|&di| (di - dm).powi(2)).sum::<f64>() / 7.0;
@@ -71,7 +71,7 @@ fn t_test_two_welch_matches_r_pt() {
     // R: t.test(c(2.1,2.5,1.8,3.0,2.7,1.9,2.4,2.2), c(3.0,3.5,3.2,4.0,4.8,5.5,5.4,6.2), var.equal=F)
     let x = vec![2.1, 2.5, 1.8, 3.0, 2.7, 1.9, 2.4, 2.2];
     let y = vec![3.0, 3.5, 3.2, 4.0, 4.8, 5.5, 5.4, 6.2];
-    let t = h::t_test_two(&x, &y, false, 0.0, h::Alternative::TwoSided, 0.95).unwrap();
+    let t = h::t_test_two(&x, &y, false, h::Alternative::TwoSided).unwrap();
     let (n1f, n2f) = (8.0_f64, 8.0_f64);
     let m1: f64 = x.iter().sum::<f64>() / n1f;
     let m2: f64 = y.iter().sum::<f64>() / n2f;
@@ -96,7 +96,7 @@ fn t_test_two_pooled_matches_r_pt() {
     // R: t.test(x, y, var.equal=TRUE) — df = n1+n2-2
     let x = vec![2.1, 2.5, 1.8, 3.0, 2.7, 1.9, 2.4, 2.2];
     let y = vec![3.0, 3.5, 3.2, 4.0, 4.8, 5.5, 5.4, 6.2];
-    let t = h::t_test_two(&x, &y, true, 0.0, h::Alternative::TwoSided, 0.95).unwrap();
+    let t = h::t_test_two(&x, &y, true, h::Alternative::TwoSided).unwrap();
     assert!((t.dof - 14.0).abs() < 1e-12, "df should be n1+n2-2");
     let (m1, m2) = (x.iter().sum::<f64>() / 8.0, y.iter().sum::<f64>() / 8.0);
     let sp2: f64 = (x.iter().map(|&xi| (xi - m1).powi(2)).sum::<f64>()
@@ -106,46 +106,13 @@ fn t_test_two_pooled_matches_r_pt() {
     assert_close(t.stat, t_expected, 1e-12, "t pooled");
 }
 
-/// R (2026-10-05, options(digits=15)):
-/// t.test(c(1,10), c(0,2), paired=TRUE, mu=1) → t=1, p=0.5
-/// (mean difference 4.5, se 3.5, df 1).
-#[test]
-fn t_test_paired_mu_matches_r() {
-    let a = vec![1.0, 10.0];
-    let b = vec![0.0, 2.0];
-    let r = h::t_test_paired(&a, &b, 1.0, h::Alternative::TwoSided, 0.95).unwrap();
-    assert_close(r.stat, 1.0, 1e-12, "t paired mu=1");
-    assert_close(r.p_value, 0.5, 1e-12, "p paired mu=1");
-    // mu=0 keeps the pre-mu-fix behavior on the same data.
-    let r0 = h::t_test_paired(&a, &b, 0.0, h::Alternative::TwoSided, 0.95).unwrap();
-    let t0 = 4.5_f64 / 3.5_f64;
-    assert_close(r0.stat, t0, 1e-12, "t paired mu=0");
-}
-
-/// R (2026-10-05, options(digits=15)):
-/// t.test(c(1,5,10), c(0,3,2), mu=1.5) → t=0.78824078136808, p=0.49957306847202
-/// t.test(c(1,5,10), c(0,3,2), var.equal=TRUE, mu=1) → t=0.97014250014533,
-/// p=0.38691164171793, df=4.
-#[test]
-fn t_test_two_mu_matches_r() {
-    let x = vec![1.0, 5.0, 10.0];
-    let y = vec![0.0, 3.0, 2.0];
-    let welch = h::t_test_two(&x, &y, false, 1.5, h::Alternative::TwoSided, 0.95).unwrap();
-    assert_close(welch.stat, 0.78824078136808, 1e-12, "t welch mu=1.5");
-    assert_close(welch.p_value, 0.49957306847202, 1e-12, "p welch mu=1.5");
-    let pooled = h::t_test_two(&x, &y, true, 1.0, h::Alternative::TwoSided, 0.95).unwrap();
-    assert_close(pooled.stat, 0.97014250014533, 1e-12, "t pooled mu=1");
-    assert_close(pooled.p_value, 0.38691164171793, 1e-12, "p pooled mu=1");
-    assert!((pooled.dof - 4.0).abs() < 1e-12, "df pooled mu=1");
-}
-
 #[test]
 fn t_test_directions_match_r() {
     // R: pt(t, df) for less; pt(-t, df) for greater; 2*pt(-|t|, df) for two-sided
     let x = vec![2.1, 2.5, 1.8, 3.0, 2.7, 1.9, 2.4, 2.2];
-    let t = h::t_test_one(&x, 0.0, h::Alternative::TwoSided, 0.95).unwrap();
-    let p_less = h::t_test_one(&x, 0.0, h::Alternative::Less, 0.95).unwrap();
-    let p_greater = h::t_test_one(&x, 0.0, h::Alternative::Greater, 0.95).unwrap();
+    let t = h::t_test_one(&x, 0.0, h::Alternative::TwoSided).unwrap();
+    let p_less = h::t_test_one(&x, 0.0, h::Alternative::Less).unwrap();
+    let p_greater = h::t_test_one(&x, 0.0, h::Alternative::Greater).unwrap();
     assert_close(
         p_less.p_value + p_greater.p_value,
         1.0,

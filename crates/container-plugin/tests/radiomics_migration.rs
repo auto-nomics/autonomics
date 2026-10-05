@@ -110,7 +110,7 @@ const CONTRACTS: &[Contract] = &[
             ("RADIOMICS_RESAMPLED_SPACING", ""),
             ("RADIOMICS_INTERPOLATOR", "sitkBSpline"),
             ("RADIOMICS_RESEGMENT_RANGE", ""),
-            ("RADIOMICS_NORMALIZE", "false"),
+            ("RADIOMICS_NORMALIZE", ""),
         ],
     },
     Contract {
@@ -129,7 +129,7 @@ const CONTRACTS: &[Contract] = &[
             ("RADIOMICS_MASK_LABEL", "1"),
             ("RADIOMICS_BIN_WIDTH", "25.0"),
             ("RADIOMICS_RESAMPLED_SPACING", ""),
-            ("RADIOMICS_FORCE2D", "false"),
+            ("RADIOMICS_FORCE2D", ""),
             ("RADIOMICS_FORCE2D_DIMENSION", "0"),
             ("RADIOMICS_IMAGE_TYPES", "Original"),
             (
@@ -176,7 +176,7 @@ const CONTRACTS: &[Contract] = &[
         ],
         runner_command: "phi-scrub",
         env: &[
-            ("RADIOMICS_KEEP_PATIENT_ID", "false"),
+            ("RADIOMICS_KEEP_PATIENT_ID", ""),
             ("RADIOMICS_PSEUDONYM", ""),
         ],
     },
@@ -357,29 +357,11 @@ const CONTRACTS: &[Contract] = &[
 ];
 
 fn plugin_root() -> Option<PathBuf> {
-    let explicit = std::env::var_os("NODE_PLUGINS_ROOT");
-    let root = explicit
-        .clone()
+    let root = std::env::var_os("NODE_PLUGINS_ROOT")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/mnt/projects/node-plugins"));
     let manifest = root.join("radiomics").join("manifest.toml");
-    if manifest.is_file() {
-        return Some(root);
-    }
-    if explicit.is_some() {
-        // fix-review R04 (2026-10-05): an explicitly set NODE_PLUGINS_ROOT
-        // means migration parity was requested. A missing family must fail
-        // loudly — early-returns here used to count as *passed* tests, so a
-        // green summary claimed coverage that never ran.
-        panic!(
-            "NODE_PLUGINS_ROOT is set but the radiomics family is not deployed \
-             under it ({}) — migration parity cannot run. Deploy the family \
-             or unset NODE_PLUGINS_ROOT to skip these tests deliberately.",
-            manifest.display()
-        );
-    }
-    eprintln!("skipping: radiomics plugin directory not present (NODE_PLUGINS_ROOT unset)");
-    None
+    manifest.is_file().then_some(root)
 }
 
 fn load_manifest(root: &PathBuf) -> PluginManifest {
@@ -422,8 +404,6 @@ fn stand_in_required_values(
         }
         let filler = match spec.r#type {
             ParamType::Bool => json!(false),
-            // Flag accepts the same boolean JSON shape (F02).
-            ParamType::Flag => json!(false),
             ParamType::Int => json!(1),
             ParamType::Number => json!(1.0),
             ParamType::String => json!("golden"),

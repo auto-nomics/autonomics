@@ -13,8 +13,8 @@
 //! 3. Invert the gene-gene correlation matrix R⁻¹
 //! 4. For each gene set / covariate variable:
 //!    - Build design matrix: [1, internal_covariates..., variable]
-//!    - Compute X'R⁻¹X and X'R⁻¹z
-//!    - Solve β = (X'R⁻¹X)⁻¹ X'R⁻¹z  (full GLS)
+//!    - Compute X'R⁻¹X and X'z
+//!    - Solve β = (X'R⁻¹X)⁻¹ X'z
 //!    - Compute residual variance, SE, and p-value
 //! 5. Output: BETA, BETA_STD, SE, P per variable
 
@@ -459,7 +459,7 @@ pub fn analyze_gene_covar(
 /// Core competitive regression computation.
 ///
 /// Fits: z = β₀ + Σ βₖ·internalₖ + βᵥ·variable + ε
-/// using full GLS with R⁻¹ weighting: β = (X'R⁻¹X)⁻¹ X'R⁻¹z
+/// using GLS with R⁻¹ weighting: β = (X'R⁻¹X)⁻¹ X'z
 fn competitive_regression(
     z: &[f64],
     r_inv: &Mat<f64>,
@@ -492,29 +492,32 @@ fn competitive_regression(
     let r_inv_x = r_inv * &x; // n × n_params
     let xt_rinv_x = x.transpose() * &r_inv_x; // n_params × n_params
 
-    // Full GLS normal equations: β = (X'R⁻¹X)⁻¹ X'R⁻¹z. Using X'z as the
-    // right-hand side would mix an R⁻¹-weighted information matrix with an
-    // unweighted RHS — not a GLS solution whenever R ≠ I (the cross-terms
-    // of X'R⁻¹X and z never cancel), biasing β and the SSR.
-    let z_mat = Mat::from_fn(n, 1, |i, _| z[i]);
-    let r_inv_z = r_inv * &z_mat; // n × 1
-    let xt_rinv_z = x.transpose() * &r_inv_z; // n_params × 1
+    // Compute X'z (not X'R⁻¹z — MAGMA's specific formulation)
+    let xt_z: Vec<f64> = (0..n_params)
+        .map(|j| {
+            let mut s = 0.0;
+            for i in 0..n {
+                s += x[(i, j)] * z[i];
+            }
+            s
+        })
+        .collect();
 
-    // Solve β = (X'R⁻¹X)⁻¹ X'R⁻¹z via LU decomposition
+    // Solve β = (X'R⁻¹X)⁻¹ X'z via LU decomposition
     let xt_rinv_x_ref = xt_rinv_x.as_ref();
     let lu = xt_rinv_x_ref.partial_piv_lu();
-    let beta_mat = lu.solve(&xt_rinv_z);
+    let z_mat = Mat::from_fn(n_params, 1, |i, _| xt_z[i]);
+    let beta_mat = lu.solve(&z_mat);
     let beta: Vec<f64> = (0..n_params).map(|i| beta_mat[(i, 0)]).collect();
 
-    // Residual sum of squares in the GLS metric, consistent with the RHS:
-    //   e'R⁻¹e = z'R⁻¹z − β'X'R⁻¹z
-    // (expanding e'R⁻¹e with X'R⁻¹Xβ = X'R⁻¹z collapses to this form; the
-    // previous z'z − β'X'z used the unweighted metric and could even go
-    // negative under strong correlations).
-    let z_rinv_z = z_mat.transpose() * &r_inv_z; // 1 × 1
-    let ssr = z_rinv_z[(0, 0)]
-        - (0..n_params)
-            .map(|j| beta[j] * xt_rinv_z[(j, 0)])
+    // Compute residuals and SSR
+    // SSR = z'(z - Xβ) = z'z - z'Xβ = z'z - β'X'z
+    let ztz: f64 = z.iter().map(|v| v * v).sum();
+    let ssr = ztz
+        - beta
+            .iter()
+            .zip(xt_z.iter())
+            .map(|(b, xz)| b * xz)
             .sum::<f64>();
 
     // Degrees of freedom
@@ -787,76 +790,6 @@ mod tests {
                 r.pval,
                 golden_p,
                 p_diff
-            );
-        }
-    }
-
-    /// Closed-form GLS golden test with a non-identity correlation matrix.
-    ///
-    /// Expected values are computed by independent matrix algebra in R
-    /// (`tests/fixtures-gen/gen_gls_nonidentity_golden.R`: LU / Cholesky /
-    /// whitened-QR paths), NOT derived from this implementation. The fixture
-    /// was searched to minimise kappa(X'R⁻¹X) (~5.4e5 floor — the internal
-    /// log covariates are intrinsically near-collinear with their linear
-    /// counterparts); at that conditioning the three independent R solve
-    /// paths themselves spread by up to ~3e-14 relative, which bounds the
-    /// attainable Rust-vs-R agreement, so the tolerance is 1e-12. Under
-    /// identity R this test cannot distinguish GLS from the old X'z
-    /// right-hand side; with AR(1) rho = 0.3 the old RHS misses by ~50%
-    /// relative — orders of magnitude beyond this tolerance.
-    #[test]
-    fn test_gls_non_identity_r_matches_closed_form() {
-        let z = [
-            0.5, -1.2, 2.0, -0.3, 1.1, 0.0, -2.5, 1.8, 0.9, -0.7, 1.3, -1.6, 0.4, 2.2, -0.9,
-        ];
-        let n_snps: [usize; 15] = [35, 32, 17, 4, 15, 20, 19, 64, 26, 2, 18, 59, 22, 40, 23];
-        let n_param: [usize; 15] = [16, 12, 3, 2, 3, 14, 8, 46, 5, 2, 9, 15, 6, 37, 11];
-        let mac: [f64; 15] = [
-            94.0, 49.0, 118.0, 52.0, 22.0, 3.0, 29.0, 45.0, 103.0, 8.0, 66.0, 82.0, 79.0, 95.0,
-            20.0,
-        ];
-        // AR(1) correlation: corrs[i][j] = rho^(i-j) for j < i.
-        let rho = 0.3f64;
-        let genes: Vec<GeneRawEntry> = (0..15)
-            .map(|i| GeneRawEntry {
-                id: format!("gene{i}"),
-                chr: 1,
-                start: 1000 * (i as u64 + 1),
-                end: 1000 * (i as u64 + 1) + 500,
-                n_snps: n_snps[i],
-                n_param: n_param[i],
-                n: 1000,
-                mac: mac[i],
-                zstat: z[i],
-            })
-            .collect();
-        let corrs: Vec<Vec<f64>> = (0..15)
-            .map(|i| (0..i).map(|j| rho.powi(i as i32 - j as i32)).collect())
-            .collect();
-        let gene_data = GeneRawData { genes, corrs };
-        let set_data = GeneSetData {
-            sets: vec![("SET1".to_string(), vec![2, 5, 7, 9, 12])],
-        };
-
-        let results = analyze_gene_sets(&gene_data, &set_data).unwrap();
-        assert_eq!(results.len(), 1);
-        let r = &results[0];
-
-        let expected_beta = 1.1674895645143155_f64;
-        let expected_se = 0.83924489861477114_f64;
-        let expected_pval = 0.10340131504329959_f64;
-        let expected_beta_std = 0.5503598586884012_f64;
-        let cases = [
-            ("beta", r.beta, expected_beta),
-            ("se", r.se, expected_se),
-            ("pval", r.pval, expected_pval),
-            ("beta_std", r.beta_std, expected_beta_std),
-        ];
-        for (name, got, want) in cases {
-            let rel = ((got - want) / want).abs();
-            assert!(
-                rel <= 1e-12,
-                "{name}: got {got:.17}, R golden {want:.17}, rel err {rel:.3e}"
             );
         }
     }

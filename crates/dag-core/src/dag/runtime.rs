@@ -154,20 +154,13 @@ pub struct SchedulerConfig {
     /// unconditionally.
     ///
     /// The fingerprint covers kind + spec + input identities + engine
-    /// version + source revision, so spec edits, rewiring, upstream
-    /// changes, and engine rebuilds all produce a different fingerprint
-    /// and force re-execution without any explicit dirty propagation.
-    /// External file changes are detected separately by the run-start
-    /// staleness check (content-hash confirmed when recorded). Note that
-    /// with the default [`InputHashing::Metadata`] identity, in-place
-    /// input edits can go undetected — a warning is logged on every
-    /// incremental run that does not use [`InputHashing::Content`]
-    /// (research-grade posture).
+    /// version, so spec edits, rewiring, and upstream changes all produce a
+    /// different fingerprint and force re-execution without any explicit
+    /// dirty propagation. External file changes are detected separately by
+    /// the run-start staleness check (content-hash confirmed when recorded).
     pub incremental: bool,
     /// Input identity depth for fingerprint computation (see
-    /// [`InputHashing`]). Defaults to [`InputHashing::Metadata`]:
-    /// [`InputHashing::Content`] is the research-grade setting for
-    /// incremental reuse.
+    /// [`InputHashing`]). Defaults to [`InputHashing::Metadata`].
     pub input_hashing: InputHashing,
     /// Stop a DAG when sampled process/cgroup memory reaches this fraction of
     /// its memory limit. `None` disables the guard.

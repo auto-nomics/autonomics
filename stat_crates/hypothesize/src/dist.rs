@@ -52,19 +52,6 @@ pub fn t_sf(x: f64, df: f64) -> f64 {
     }
 }
 
-/// Student-t inverse CDF (quantile) for `df` degrees of freedom
-/// (= `qt(p, df)`). Same statrs `ContinuousCDF::inverse_cdf` machinery as
-/// [`normal_inv`].
-pub fn t_inv(p: f64, df: f64) -> f64 {
-    if df <= 0.0 {
-        return f64::NAN;
-    }
-    match StudentsT::new(0.0, 1.0, df) {
-        Ok(d) => d.inverse_cdf(p),
-        Err(_) => f64::NAN,
-    }
-}
-
 /// Two-sided t p-value `2·P(T > |x|)`.
 pub fn t_two_sided_p(x: f64, df: f64) -> f64 {
     2.0 * t_sf(x.abs(), df)
@@ -142,37 +129,6 @@ mod tests {
         assert!((f_sf(4.468_342, 4.0, 10.0) - 0.025).abs() < 1e-3);
         // R: pf(4.7472, 4, 10, lower.tail=FALSE) ≈ 0.02088
         assert!((f_sf(4.7472, 4.0, 10.0) - 0.020_884).abs() < 1e-4);
-    }
-
-    #[test]
-    fn t_inv_matches_r_qt() {
-        // R 4.6.1: qt(p, df), epsilon 1e-14.
-        let cases: &[(f64, f64, f64)] = &[
-            // (p, df, R qt)
-            (0.025, 1.0, -12.706204736174707),
-            (0.05, 1.0, -6.3137515146750438),
-            (0.95, 1.0, 6.3137515146750376),
-            (0.975, 1.0, 12.706204736174694),
-            (0.995, 1.0, 63.656741162871526),
-            (0.025, 4.0, -2.7764451051977943),
-            (0.95, 4.0, 2.131846786326649),
-            (0.975, 4.0, 2.7764451051977934),
-            (0.995, 4.0, 4.6040948713499921),
-            (0.05, 6.9748473753994835, -1.8956070090401675),
-            (0.975, 6.9748473753994835, 2.3663539841431169),
-            (0.95, 7.0, 1.8945786050900062),
-            (0.975, 7.0, 2.3646242515927844),
-            (0.975, 8.0, 2.3060041352041658),
-        ];
-        for &(p, df, expected) in cases {
-            let got = t_inv(p, df);
-            // Absolute 1e-14 for moderate quantiles; for the df=1 Cauchy
-            // tail (|q| ≫ 1) an ULP already exceeds 1e-14, so fall back to a
-            // relative check there.
-            let ok = (got - expected).abs() < 1e-14
-                || (got - expected).abs() < 1e-12 * expected.abs().max(1.0);
-            assert!(ok, "qt({p}, {df}): got {got}, expected {expected}");
-        }
     }
 
     #[test]

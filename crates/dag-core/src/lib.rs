@@ -25,16 +25,11 @@ pub use registry::{NodeCtx, NodeFactory, NodeInfo, NodeRegistry, new_isolated_ct
 // pub use sink::SinkMode;
 pub use value::{ArtifactRef, FileFingerprint, FileRef, NodeValue, PortType};
 
-/// The source identity this crate was built from: the git commit (short
-/// form), recorded alongside run history for reproducibility evidence and
-/// folded into every node execution fingerprint — so same-version builds
-/// from different commits never silently reuse each other's incremental
-/// cache entries.
+/// The git commit (short form) this crate was built from, recorded alongside
+/// run history for reproducibility evidence.
 ///
-/// Injected by `build.rs` with the precedence: the `AUTONOMICS_SOURCE_REVISION`
-/// env override (release/CI stamping) > the workspace's checked-out commit >
-/// `"unknown"` when the build tree has no usable `.git` (e.g. a release
-/// tarball).
+/// Injected by `build.rs` from the workspace repository; `"unknown"` when the
+/// build tree has no `.git` (e.g. a release tarball).
 pub fn source_revision() -> &'static str {
     option_env!("AUTONOMICS_SOURCE_REVISION").unwrap_or("unknown")
 }

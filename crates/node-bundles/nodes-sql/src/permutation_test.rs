@@ -1,7 +1,4 @@
 //! Label-permutation test over an upstream DataFrame.
-//!
-//! The null model is a global shuffle of the group labels across all rows —
-//! no spatial, donor/subject, or network-constrained background is modelled.
 
 use arrow_array::{Float64Array, RecordBatch, StringArray, UInt32Array};
 use arrow_schema::{DataType, Field, Schema};
@@ -277,18 +274,14 @@ impl NodeFactory for PermutationTestNodeFactory {
     }
 
     fn desc(&self) -> &'static str {
-        "Global group-label permutation test for one aggregate SQL statistic \
-         (no spatial/donor/network background model)."
+        "Permutes labels and evaluates an aggregate SQL statistic expression."
     }
 
     fn doc(&self) -> &'static str {
         "The supplied statistic_sql must be a single aggregate expression such as \
         AVG(value), STDDEV(value), or SUM(CASE WHEN group = 'A' THEN value ELSE 0 END). \
         group_column values are shuffled across rows for each permutation. The add-one \
-        p-value supports greater, less, and two-sided alternatives. The null model is a \
-        global two-group label exchangeability assumption over all rows: it does NOT \
-        include spatial, donor/subject, or network-constrained background nulls, so \
-        clustered or stratified inputs will have anti-conservative p-values."
+        p-value supports greater, less, and two-sided alternatives."
     }
 
     fn spec_schema(&self) -> schemars::Schema {

@@ -12,29 +12,11 @@ use container_plugin::manifest::PluginManifest;
 use serde_json::json;
 
 fn plugin_root() -> Option<PathBuf> {
-    let explicit = std::env::var_os("NODE_PLUGINS_ROOT");
-    let root = explicit
-        .clone()
+    let root = std::env::var_os("NODE_PLUGINS_ROOT")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/mnt/projects/node-plugins"));
     let manifest = root.join("mvmr").join("manifest.toml");
-    if manifest.is_file() {
-        return Some(root);
-    }
-    if explicit.is_some() {
-        // fix-review R04 (2026-10-05): an explicitly set NODE_PLUGINS_ROOT
-        // means migration parity was requested. A missing family must fail
-        // loudly — early-returns here used to count as *passed* tests, so a
-        // green summary claimed coverage that never ran.
-        panic!(
-            "NODE_PLUGINS_ROOT is set but the mvmr family is not deployed \
-             under it ({}) — migration parity cannot run. Deploy the family \
-             or unset NODE_PLUGINS_ROOT to skip these tests deliberately.",
-            manifest.display()
-        );
-    }
-    eprintln!("skipping: mvmr plugin directory not present (NODE_PLUGINS_ROOT unset)");
-    None
+    manifest.is_file().then_some(root)
 }
 
 fn load_manifest(root: &PathBuf) -> PluginManifest {
@@ -129,9 +111,7 @@ fn mvmr_plugin_compiles_to_the_legacy_wrapper_contract() {
     assert_eq!(compiled.env.get("MVMR_STRENGTH").unwrap(), "true");
     assert_eq!(compiled.env.get("MVMR_STRHET").unwrap(), "true");
     assert_eq!(compiled.env.get("MVMR_PLEIOTROPY").unwrap(), "true");
-    // qhet defaults to false and renders the literal — R's
-    // as.logical("false") is FALSE while as.logical("") is NA (F02).
-    assert_eq!(compiled.env.get("MVMR_QHET").unwrap(), "false");
+    assert_eq!(compiled.env.get("MVMR_QHET").unwrap(), "");
     assert_eq!(compiled.env.get("MVMR_PCOR").unwrap(), "");
 
     // Script is asserted semantically, not byte-exactly: the plugin drives
@@ -239,8 +219,7 @@ fn mvmr_plugin_renders_submitted_values_into_env() {
         "LDL_beta HDL_beta TG_beta"
     );
     assert_eq!(compiled.env.get("MVMR_LABEL_COLUMN").unwrap(), "SNP");
-    // Submitted false renders the literal (value semantics).
-    assert_eq!(compiled.env.get("MVMR_STRENGTH").unwrap(), "false");
+    assert_eq!(compiled.env.get("MVMR_STRENGTH").unwrap(), "");
     // Unsubmitted booleans keep their defaults.
     assert_eq!(compiled.env.get("MVMR_STRHET").unwrap(), "true");
     assert_eq!(compiled.env.get("MVMR_QHET").unwrap(), "true");

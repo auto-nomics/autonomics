@@ -66,9 +66,6 @@ pub fn compile_schema(params: &BTreeMap<String, ParamSpec>) -> Schema {
 fn param_value(spec: &ParamSpec) -> Value {
     let mut node = match spec.r#type {
         ParamType::Bool => json!({ "type": "boolean" }),
-        // Flag is a rendering contract (presence semantics on env), not a
-        // distinct JSON shape: agents submit ordinary booleans either way.
-        ParamType::Flag => json!({ "type": "boolean" }),
         ParamType::Int => int_node(spec),
         ParamType::Number => number_node(spec),
         ParamType::String => string_node(spec),
@@ -247,31 +244,6 @@ mod tests {
         assert_eq!(prop["type"], "boolean");
         assert_eq!(prop["default"], false);
         assert_eq!(prop["description"], "Continue on mean-chi-square rejection");
-    }
-
-    #[test]
-    fn flag_compiles_to_the_same_boolean_schema_node() {
-        // Flag differs from bool in rendering contract only, so the
-        // agent-facing schema shape is identical (F02).
-        let schema = compile(&[(
-            "verbose",
-            ParamSpec {
-                r#type: ParamType::Flag,
-                default: Some(json!(false)),
-                optional: false,
-                doc: Some("Emit progress lines".into()),
-                min: None,
-                max: None,
-                exclusive_min: None,
-                exclusive_max: None,
-                min_len: None,
-                max_len: None,
-                requires: Vec::new(),
-            },
-        )]);
-        let prop = &schema["properties"]["verbose"];
-        assert_eq!(prop["type"], "boolean");
-        assert_eq!(prop["default"], false);
     }
 
     #[test]

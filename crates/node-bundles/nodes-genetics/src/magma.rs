@@ -767,12 +767,7 @@ impl NodeFactory for MagmaSetNodeFactory {
         "Takes gene results (from magma_gene or .genes.raw file) and runs \
         competitive regression analysis. For analysis_type='set', reads a \
         gene-set annotation file. For analysis_type='covar', reads a gene \
-        covariate file. NOTE: with a DataFrame input (no gene_raw path) the \
-        gene-gene correlation matrix is unavailable — the identity matrix, a \
-        constant placeholder MAC, and zero coordinates are substituted, so \
-        those results are exploratory only; prefer a .genes.raw file built \
-        from a real LD reference. Outputs variable, type, n_genes, beta, \
-        beta_std, se, pval."
+        covariate file. Outputs variable, type, n_genes, beta, beta_std, se, pval."
     }
     fn spec_schema(&self) -> schemars::Schema {
         schema_for!(MagmaSetConfig)
@@ -817,19 +812,13 @@ impl DagNode for MagmaSetNode {
         &mut self,
         node_ctx: &NodeCtx,
         inputs: &[NodeInput],
-        reporter: &dag_core::dag::node_event::NodeReporter,
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         // Load gene data from .genes.raw file or construct from DataFrame
         let gene_data = if let Some(ref raw_path) = self.config.gene_raw {
             let staged = stage_vfs_file(node_ctx, raw_path).await?;
             magma::setanalysis::GeneRawData::read(staged.as_ref()).map_err(MagmaNodeError::from)?
         } else if !inputs.is_empty() {
-            reporter.warn(
-                "magma_set: the DataFrame input carries no gene-gene correlation matrix, \
-                 no real MAC, and no gene coordinates — start/end default to 0, mac to 100, \
-                 and R to the identity. Without a .genes.raw file (gene_raw) produced from a \
-                 real LD reference the competitive-regression results are exploratory only.",
-            );
             gene_results_to_raw(inputs[0].dataframe()?).await?
         } else {
             return Err(MagmaNodeError::Magma(magma::MagmaError::Input(
@@ -890,16 +879,8 @@ impl DagNode for MagmaSetNode {
 }
 
 /// Convert a gene results DataFrame to GeneRawData (without correlations).
-///
-/// This is used when the set/meta node receives gene results from the gene
-/// node instead of a `.genes.raw` file. The gene-results schema carries no
-/// gene-gene correlations, no MAC, and no gene coordinates, so they are
-/// FABRICATED here: `corrs` default to 0 (identity matrix), `mac` to a
-/// constant 100, and `start`/`end` to 0. Importing real LD-derived
-/// correlations/MAC for a DataFrame input is a scheme-level adaptation that
-/// is intentionally NOT implemented; until then, competitive-regression
-/// results built from this conversion are exploratory only (the caller
-/// emits a runtime WARN). See `MagmaSetNodeFactory::doc`.
+/// This is used when the set node receives gene results from the gene node
+/// instead of a .genes.raw file. Correlations default to 0 (identity matrix).
 async fn gene_results_to_raw(
     df: &datafusion::dataframe::DataFrame,
 ) -> Result<magma::setanalysis::GeneRawData, MagmaNodeError> {
@@ -970,10 +951,7 @@ fn build_set_results_batch(
 /// Config for the meta-analysis node.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct MagmaMetaConfig {
-    /// VFS paths to .genes.raw files for each cohort. Used only when no
-    /// cohort DataFrames are wired to the variadic input port; ignored
-    /// otherwise.
-    #[serde(default)]
+    /// VFS paths to .genes.raw files for each cohort.
     pub cohort_files: Vec<String>,
     /// Optional weights (one per cohort). Default: √N.
     #[serde(default)]
@@ -1008,9 +986,7 @@ impl NodeFactory for MagmaMetaNodeFactory {
     fn doc(&self) -> &'static str {
         "Combines gene-level Z-statistics from multiple cohorts using \
         inverse-variance weighted combination (√N weighting by default). \
-        Cohorts are the wired input DataFrames (gene-results schema, ≥2 \
-        required); when no inputs are wired, .genes.raw paths from the \
-        cohort_files config are used instead. Outputs combined gene results."
+        Outputs combined gene results."
     }
     fn spec_schema(&self) -> schemars::Schema {
         schema_for!(MagmaMetaConfig)
@@ -1054,50 +1030,28 @@ impl DagNode for MagmaMetaNode {
     async fn execute(
         &mut self,
         node_ctx: &NodeCtx,
-        inputs: &[NodeInput],
-        reporter: &dag_core::dag::node_event::NodeReporter,
+        _inputs: &[NodeInput],
+        _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
-        // Cohort inputs: wired DataFrames take precedence over the config
-        // paths, closing the port↔execution contract (the node advertises a
-        // variadic gene-results input but previously ignored it).
-        let cohorts: Vec<magma::setanalysis::GeneRawData> = if inputs.len() >= 2 {
-            reporter.info(format!(
-                "magma_meta: combining {} connected cohort tables",
-                inputs.len()
-            ));
-            let cohort_futures = inputs
-                .iter()
-                .map(|input| input.dataframe().map(gene_results_to_raw))
-                .collect::<Result<Vec<_>, _>>()?;
-            futures::future::try_join_all(cohort_futures).await?
-        } else if inputs.len() == 1 {
+        if self.config.cohort_files.len() < 2 {
             return Err(MagmaNodeError::Magma(magma::MagmaError::Input(
-                "magma_meta has 1 wired cohort input; wire at least 2, or none \
-                 to fall back to the cohort_files config paths"
-                    .into(),
+                "magma_meta requires at least 2 cohort files".into(),
             ))
             .into());
-        } else if self.config.cohort_files.len() >= 2 {
-            let staged_cohorts = futures::future::try_join_all(
-                self.config
-                    .cohort_files
-                    .iter()
-                    .map(|path| stage_vfs_file(node_ctx, path)),
-            )
-            .await?;
-            staged_cohorts
+        }
+
+        let staged_cohorts = futures::future::try_join_all(
+            self.config
+                .cohort_files
                 .iter()
-                .map(|path| magma::setanalysis::GeneRawData::read(path.as_ref()))
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(MagmaNodeError::from)?
-        } else {
-            return Err(MagmaNodeError::Magma(magma::MagmaError::Input(
-                "magma_meta requires at least 2 cohorts: wire ≥2 gene-results \
-                 DataFrames to the input port or list ≥2 cohort_files paths"
-                    .into(),
-            ))
-            .into());
-        };
+                .map(|path| stage_vfs_file(node_ctx, path)),
+        )
+        .await?;
+        let cohorts: Vec<magma::setanalysis::GeneRawData> = staged_cohorts
+            .iter()
+            .map(|path| magma::setanalysis::GeneRawData::read(path.as_ref()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(MagmaNodeError::from)?;
 
         let meta = magma::meta::meta_analyze(&cohorts, self.config.weights.as_deref(), None)
             .map_err(MagmaNodeError::from)?;
@@ -1599,83 +1553,6 @@ mod tests {
         let df = res.dataframe(0).unwrap();
         let count = df.clone().count().await.unwrap();
         assert_eq!(count, 20, "should have 20 genes");
-    }
-
-    #[tokio::test]
-    async fn meta_node_combines_wired_cohort_tables() {
-        let ctx = node_ctx();
-        let make_cohort = |gene_id: &str, n: i64, zstat: f64| {
-            let batch = RecordBatch::try_new(
-                gene_results_schema(),
-                vec![
-                    Arc::new(StringArray::from(vec![gene_id.to_string()])),
-                    Arc::new(Int32Array::from(vec![1])),
-                    Arc::new(UInt32Array::from(vec![1000u32])),
-                    Arc::new(UInt32Array::from(vec![1500u32])),
-                    Arc::new(Int32Array::from(vec![10])),
-                    Arc::new(Int32Array::from(vec![6])),
-                    Arc::new(Int64Array::from(vec![n])),
-                    Arc::new(Float64Array::from(vec![zstat])),
-                    Arc::new(Float64Array::from(vec![0.5])),
-                ],
-            )
-            .unwrap();
-            ctx.session().read_batch(batch).unwrap()
-        };
-
-        // Port↔execution contract: wired cohort tables are the cohort input
-        // even with an empty cohort_files config.
-        let mut node = MagmaMetaNode::new(MagmaMetaConfig {
-            cohort_files: vec![],
-            weights: None,
-        });
-        let res = node
-            .execute(
-                &ctx,
-                &[
-                    NodeInput::new_dataframe(0, make_cohort("geneA", 100, 1.0)),
-                    NodeInput::new_dataframe(1, make_cohort("geneA", 400, 2.0)),
-                ],
-                &dag_core::dag::node_event::NodeReporter::noop(),
-            )
-            .await
-            .expect("wired cohort tables should be meta-analyzed");
-
-        let df = res.dataframe(0).unwrap();
-        let batches = df.clone().collect().await.unwrap();
-        let ids = extract_string_col(&batches, "gene_id").unwrap();
-        let zstats = extract_f64_col(&batches, "zstat").unwrap();
-        let ns = extract_i64_col(&batches, "n").unwrap();
-        assert_eq!(ids.len(), 1);
-        assert_eq!(ids[0], "geneA");
-        // Hand-computed √N weights: (10·1 + 20·2) / √(10² + 20²) = 50/√500.
-        assert!(
-            (zstats[0] - 2.236_067_977_499_79).abs() < 1e-12,
-            "combined zstat: got {}",
-            zstats[0]
-        );
-        assert_eq!(ns[0], Some(500));
-
-        // A single wired cohort cannot be meta-analyzed and is rejected.
-        let error = node
-            .execute(
-                &ctx,
-                &[NodeInput::new_dataframe(0, make_cohort("geneA", 100, 1.0))],
-                &dag_core::dag::node_event::NodeReporter::noop(),
-            )
-            .await
-            .unwrap_err();
-        assert!(
-            error.to_string().contains("1 wired cohort input"),
-            "{error}"
-        );
-
-        // No inputs and no cohort_files is rejected.
-        let error = node
-            .execute(&ctx, &[], &dag_core::dag::node_event::NodeReporter::noop())
-            .await
-            .unwrap_err();
-        assert!(error.to_string().contains("at least 2 cohorts"), "{error}");
     }
 
     #[tokio::test]

@@ -25,9 +25,7 @@ pub fn check_type(
     value: &serde_json::Value,
 ) -> Result<()> {
     let ok = match spec.r#type {
-        // Flag differs from Bool only in rendering contract (presence vs
-        // value); both accept the same JSON shape.
-        ParamType::Bool | ParamType::Flag => value.is_boolean(),
+        ParamType::Bool => value.is_boolean(),
         // `as_i64` rejects f64-backed numbers; the u64 arm admits integers
         // above i64::MAX.
         ParamType::Int => value.as_i64().is_some() || value.as_u64().is_some(),
@@ -176,7 +174,6 @@ mod tests {
     #[test]
     fn type_check_accepts_matching_shapes() {
         assert!(check_type("k", "p", &spec(ParamType::Bool), &json!(true)).is_ok());
-        assert!(check_type("k", "p", &spec(ParamType::Flag), &json!(false)).is_ok());
         assert!(check_type("k", "p", &spec(ParamType::Int), &json!(5)).is_ok());
         assert!(check_type("k", "p", &spec(ParamType::Int), &json!(u64::MAX)).is_ok());
         assert!(check_type("k", "p", &spec(ParamType::Number), &json!(2.5)).is_ok());
@@ -197,15 +194,12 @@ mod tests {
         // Null is nothing.
         for ty in [
             ParamType::Bool,
-            ParamType::Flag,
             ParamType::Int,
             ParamType::Number,
             ParamType::String,
         ] {
             assert!(check_type("k", "p", &spec(ty), &serde_json::Value::Null).is_err());
         }
-        // Flag shares the boolean JSON shape but not the string shape.
-        assert!(check_type("k", "p", &spec(ParamType::Flag), &json!("true")).is_err());
     }
 
     #[test]

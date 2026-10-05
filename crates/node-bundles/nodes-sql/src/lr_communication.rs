@@ -1,9 +1,4 @@
 //! Ligand-receptor communication scoring over a cluster mean table.
-//!
-//! Custom method: L×R cluster mean-expression products with cluster-label
-//! randomisation. Not an implementation of CellPhoneDB, CellChat, or
-//! NicheNet — published catalogs are consumed only as ligand-receptor pair
-//! lists.
 
 use arrow_array::{ArrayRef, Float64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
@@ -823,9 +818,7 @@ impl NodeFactory for LrCommunicationScoreNodeFactory {
     }
 
     fn desc(&self) -> &'static str {
-        "Custom ligand-receptor scoring: cluster mean-expression products with \
-         cluster-label permutation nulls (not the CellPhoneDB/CellChat/NicheNet \
-         algorithms)."
+        "Scores ligand-receptor pairs using mean-expression products and label permutations."
     }
 
     fn doc(&self) -> &'static str {
@@ -835,12 +828,7 @@ impl NodeFactory for LrCommunicationScoreNodeFactory {
         catalog resource and can be overridden with `lr_table_path` or `lr_table_bundle`. \
         For every ordered pair of distinct clusters, score = ligand mean x receptor \
         mean. Permutations shuffle mean values across cluster labels within each \
-        gene; p-values are exact one-sided add-one estimates and BH-adjusted. \
-        NOTE: this is a custom average-expression-product score with cluster-label \
-        randomisation, not an official CellPhoneDB, CellChat, or NicheNet method — \
-        the CellPhoneDB catalog is used only as a ligand-receptor pair list, and no \
-        expression-detection thresholding, complex-formation rules, or pathway \
-        aggregation from those tools is reproduced."
+        gene; p-values are exact one-sided add-one estimates and BH-adjusted."
     }
 
     fn spec_schema(&self) -> schemars::Schema {

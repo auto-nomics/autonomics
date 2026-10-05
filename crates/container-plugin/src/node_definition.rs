@@ -128,19 +128,10 @@ pub struct ParamSpec {
 /// Parameter type vocabulary. Enum-typed params arrive with the panel
 /// selection wave (`from_param`); v0 covers the wrapper shapes being
 /// migrated first (bools, numbers, strings, string arrays).
-///
-/// Two boolean vocabularies: [`ParamType::Bool`] carries **value**
-/// semantics (`false` renders `"false"` — for consumers that read the
-/// value, e.g. R `as.logical()`), while [`ParamType::Flag`] carries
-/// **presence** semantics (`true` renders `"true"`, `false` renders `""`
-/// — for consumers that test `[ -n "$VAR" ]`). Flag is a rendering
-/// contract, not a new JSON shape: both accept JSON booleans and compile
-/// to the same `"type": "boolean"` schema node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ParamType {
     Bool,
-    Flag,
     Int,
     Number,
     String,
@@ -151,7 +142,6 @@ impl std::fmt::Display for ParamType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let name = match self {
             Self::Bool => "boolean",
-            Self::Flag => "boolean flag (presence)",
             Self::Int => "integer",
             Self::Number => "number",
             Self::String => "string",
@@ -345,9 +335,9 @@ pub fn validate(node: &NodeDefinition) -> Result<(), String> {
                     node.kind
                 )
             })?;
-            if !matches!(target_spec.r#type, ParamType::Bool | ParamType::Flag) {
+            if target_spec.r#type != ParamType::Bool {
                 return Err(format!(
-                    "node `{}` param `{name}` requires `{target}`, which is not a bool or flag",
+                    "node `{}` param `{name}` requires `{target}`, which is not a bool",
                     node.kind
                 ));
             }
@@ -360,20 +350,6 @@ pub fn validate(node: &NodeDefinition) -> Result<(), String> {
         if !node.params.contains_key(&reference) {
             return Err(format!(
                 "node `{}` command references undeclared param `{{{{{reference}}}}}`",
-                node.kind
-            ));
-        }
-    }
-    // Flag placement: presence semantics (false renders "") only exist on
-    // the env surface. On argv an empty value would still occupy an
-    // argument slot, and on the script surface the empty value arrives
-    // quoted ('' / "") — both would change the tool invocation rather
-    // than omit a flag. Reject the combination at load time.
-    let outside_env = scan_template_refs_outside_env(node);
-    for (name, spec) in &node.params {
-        if spec.r#type == ParamType::Flag && outside_env.contains(name) {
-            return Err(format!(
-                "node `{}` param `{name}` has type flag; flag params may only be referenced from [command.env]",
                 node.kind
             ));
         }
@@ -401,61 +377,38 @@ fn validate_workspace_relative_path(path: &str) -> Result<(), String> {
 /// multibyte sequences never contain ASCII bytes.
 fn scan_template_refs(node: &NodeDefinition) -> Vec<String> {
     let mut refs = Vec::new();
+    let mut scan = |text: &str| {
+        let bytes = text.as_bytes();
+        let mut i = 0;
+        while i + 1 < bytes.len() {
+            if bytes[i] == b'{' && bytes[i + 1] == b'{' && text[i + 2..].find("}}").is_some() {
+                let end = text[i + 2..].find("}}").unwrap();
+                let token = text[i + 2..i + 2 + end].trim();
+                if !token.is_empty() && token.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                {
+                    refs.push(token.to_string());
+                }
+                i = i + 2 + end + 2;
+                continue;
+            }
+            i += 1;
+        }
+    };
     for arg in &node.command.argv {
-        scan_text_for_refs(arg, &mut refs);
+        scan(arg);
     }
     if let Some(script) = &node.command.script {
-        scan_text_for_refs(script, &mut refs);
+        scan(script);
     }
     for value in node.command.env.values() {
-        scan_text_for_refs(value, &mut refs);
+        scan(value);
     }
     for value in node.command.files.values() {
-        scan_text_for_refs(value, &mut refs);
+        scan(value);
     }
-    finish_refs(refs)
-}
-
-/// References on every templatable surface **except** `command.env`. The
-/// audience of the flag placement rule: presence semantics only exist on
-/// env, so a flag referenced anywhere else is a load-time error.
-fn scan_template_refs_outside_env(node: &NodeDefinition) -> Vec<String> {
-    let mut refs = Vec::new();
-    for arg in &node.command.argv {
-        scan_text_for_refs(arg, &mut refs);
-    }
-    if let Some(script) = &node.command.script {
-        scan_text_for_refs(script, &mut refs);
-    }
-    for value in node.command.files.values() {
-        scan_text_for_refs(value, &mut refs);
-    }
-    finish_refs(refs)
-}
-
-fn finish_refs(mut refs: Vec<String>) -> Vec<String> {
     refs.sort();
     refs.dedup();
     refs
-}
-
-/// Scan one text for `{{token}}` references (see [`scan_template_refs`]
-/// for the byte-level boundary argument).
-fn scan_text_for_refs(text: &str, refs: &mut Vec<String>) {
-    let bytes = text.as_bytes();
-    let mut i = 0;
-    while i + 1 < bytes.len() {
-        if bytes[i] == b'{' && bytes[i + 1] == b'{' && text[i + 2..].find("}}").is_some() {
-            let end = text[i + 2..].find("}}").unwrap();
-            let token = text[i + 2..i + 2 + end].trim();
-            if !token.is_empty() && token.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-                refs.push(token.to_string());
-            }
-            i = i + 2 + end + 2;
-            continue;
-        }
-        i += 1;
-    }
 }
 
 #[cfg(test)]
@@ -566,94 +519,6 @@ mtag --time_limit {{ time_limit_hours }} --out "$AUTONOMICS_OUTPUT2"
             validate(&node).unwrap_err().contains("undeclared param"),
             "undeclared template refs must fail at load, not inside the container"
         );
-    }
-
-    const FLAG_ENTRY_TOML: &str = r#"
-kind = "flag_kind"
-desc = "Flag surface rules"
-doc = "Flag surface rules"
-timeout_secs = 60
-
-[ports]
-outputs = [{ path = "out.txt" }]
-
-[params]
-verbose = { type = "flag", default = false, doc = "Emit progress lines" }
-
-[command]
-interpreter = "sh"
-script = "echo hi"
-
-[command.env]
-VERBOSE = "{{ verbose }}"
-"#;
-
-    #[test]
-    fn flag_params_parse_and_are_env_only() {
-        // `type = "flag"` is the presence-semantics boolean (F02): JSON
-        // booleans in, "true"/"" out through env. Referenced from env it
-        // validates; referenced from the script or argv surface it is
-        // rejected at load time — an empty value there would occupy an
-        // argument slot / arrive quoted instead of omitting a flag.
-        let node: NodeDefinition = toml::from_str(FLAG_ENTRY_TOML).unwrap();
-        assert_eq!(node.params["verbose"].r#type, ParamType::Flag);
-        assert!(validate(&node).is_ok());
-
-        let broken = FLAG_ENTRY_TOML.replacen("echo hi", "echo {{ verbose }}", 1);
-        let node: NodeDefinition = toml::from_str(&broken).unwrap();
-        let error = validate(&node).unwrap_err();
-        assert!(error.contains("type flag"), "{error}");
-        assert!(error.contains("[command.env]"), "{error}");
-
-        let broken = FLAG_ENTRY_TOML.replacen(
-            "script = \"echo hi\"",
-            "argv = [\"--verbose\", \"{{ verbose }}\"]\nscript = \"echo hi\"",
-            1,
-        );
-        let node: NodeDefinition = toml::from_str(&broken).unwrap();
-        assert!(validate(&node).unwrap_err().contains("type flag"));
-    }
-
-    #[test]
-    fn requires_accepts_bool_and_flag_targets() {
-        // `requires` gates fire on true, which both boolean vocabularies
-        // carry; non-boolean targets stay rejected (message now says
-        // "not a bool or flag").
-        let base = FLAG_ENTRY_TOML
-            .replacen(
-                "verbose = { type = \"flag\", default = false, doc = \"Emit progress lines\" }",
-                "verbose = { type = \"flag\", default = false }\n\
-                 mode = { type = \"bool\", default = false }\n\
-                 count = { type = \"int\", default = 1 }",
-                1,
-            )
-            .replacen("kind = \"flag_kind\"", "kind = \"gate_kind\"", 1);
-
-        let bool_target = base.replacen(
-            "count = { type = \"int\", default = 1 }",
-            "count = { type = \"int\", default = 1, requires = [\"mode\"] }",
-            1,
-        );
-        let node: NodeDefinition = toml::from_str(&bool_target).unwrap();
-        assert!(validate(&node).is_ok(), "bool targets remain legal gates");
-
-        let flag_target = base.replacen(
-            "count = { type = \"int\", default = 1 }",
-            "count = { type = \"int\", default = 1, requires = [\"verbose\"] }",
-            1,
-        );
-        let node: NodeDefinition = toml::from_str(&flag_target).unwrap();
-        assert!(validate(&node).is_ok(), "flag targets are legal gates");
-
-        let int_target = base.replacen(
-            "mode = { type = \"bool\", default = false }",
-            "mode = { type = \"bool\", default = false, requires = [\"count\"] }",
-            1,
-        );
-        let node: NodeDefinition = toml::from_str(&int_target).unwrap();
-        assert!(validate(&node)
-            .unwrap_err()
-            .contains("not a bool or flag"));
     }
 
     #[test]

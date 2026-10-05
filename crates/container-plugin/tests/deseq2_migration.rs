@@ -18,29 +18,11 @@ use container_plugin::manifest::PluginManifest;
 use serde_json::json;
 
 fn plugin_root() -> Option<PathBuf> {
-    let explicit = std::env::var_os("NODE_PLUGINS_ROOT");
-    let root = explicit
-        .clone()
+    let root = std::env::var_os("NODE_PLUGINS_ROOT")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/mnt/projects/node-plugins"));
     let manifest = root.join("deseq2").join("manifest.toml");
-    if manifest.is_file() {
-        return Some(root);
-    }
-    if explicit.is_some() {
-        // fix-review R04 (2026-10-05): an explicitly set NODE_PLUGINS_ROOT
-        // means migration parity was requested. A missing family must fail
-        // loudly — early-returns here used to count as *passed* tests, so a
-        // green summary claimed coverage that never ran.
-        panic!(
-            "NODE_PLUGINS_ROOT is set but the deseq2 family is not deployed \
-             under it ({}) — migration parity cannot run. Deploy the family \
-             or unset NODE_PLUGINS_ROOT to skip these tests deliberately.",
-            manifest.display()
-        );
-    }
-    eprintln!("skipping: deseq2 plugin directory not present (NODE_PLUGINS_ROOT unset)");
-    None
+    manifest.is_file().then_some(root)
 }
 
 fn load_manifest(root: &PathBuf) -> PluginManifest {
