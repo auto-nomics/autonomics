@@ -2720,6 +2720,7 @@ dependencies = [
 name = "dag-core"
 version = "0.1.0"
 dependencies = [
+ "arrow",
  "arrow-array",
  "arrow-schema",
  "async-trait",
@@ -2727,6 +2728,7 @@ dependencies = [
  "chrono",
  "datafusion",
  "futures",
+ "glob",
  "opendal",
  "petgraph",
  "schemars",

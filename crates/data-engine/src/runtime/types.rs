@@ -4,8 +4,8 @@ use tokio_util::sync::CancellationToken;
 use crate::dag::graph::PortOutputs;
 use crate::dag::node_event::NodeEvent;
 use crate::dag::runtime::RuntimeStatus;
-use crate::dag::{DagTuiSnapshot, RunReport};
-use crate::data_engine::ClearDagOutcome;
+use crate::dag::{DagTuiSnapshot, LogicalGraph, RunReport};
+use crate::data_engine::{ClearDagOutcome, LogicalInstallReport};
 use crate::error::Result as EngineResult;
 
 /// Envelope that routes a [`DataEngineCmd`] to a session's actor.
@@ -25,6 +25,10 @@ pub enum DataEngineCmd {
         kind: String,
         spec: serde_json::Value,
         reply: oneshot::Sender<EngineResult<()>>,
+    },
+    AddLogicalGraph {
+        graph: LogicalGraph,
+        reply: oneshot::Sender<EngineResult<LogicalInstallReport>>,
     },
     AddEdge {
         from: String,

@@ -28,8 +28,10 @@ pub use crate::node::{DagNode, NodeId, NodeInput, NodePorts};
 pub use channel::{ChannelBranch, ChannelNode, ChannelOperator};
 pub use error::{DagError, NodeError};
 pub use execution::{
-    LocalTaskExecutor, TaskExecution, TaskExecutor, TaskInputBinding, TaskInputSource,
-    TaskOutputBinding, TaskResources, TaskSpec, TaskSubmission, local_task_executor,
+    LocalDirectoryArtifactStore, LocalTaskExecutor, ProcessTaskOutput, ProcessTaskSpec,
+    ProcessTaskTransport, RemoteTaskExecutor, TaskArtifactStore, TaskAttemptReceipt, TaskDispatch,
+    TaskExecution, TaskExecutor, TaskInputBinding, TaskInputSource, TaskLease, TaskOutputBinding,
+    TaskResources, TaskSpec, TaskSubmission, TaskTransport, local_task_executor,
 };
 pub use export::{ExportFile, ExportFormat, ExportSummary, SkippedFile};
 pub use graph::{DAG, DynamicNodeBuilder};

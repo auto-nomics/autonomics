@@ -26,6 +26,92 @@ fn check_ok(result: &ToolResult, label: &str) {
     );
 }
 
+#[tokio::test]
+async fn agent_controls_channel_operators_with_logical_graph_tool() {
+    let engine = DataEngine::builder().build();
+    let (client, _handle) = spawn_with_engine(engine);
+    let tools = data_engine_tools::registrations(Arc::new(client));
+    let mut registry = agentik_core::tools::ToolRegistry::new();
+    registry.register_all(tools).unwrap();
+    let toolset = Toolset::from_registry(Arc::new(registry), None);
+
+    let results = toolset
+        .execute(
+            &[build_tooluse(
+                "channel-graph",
+                "add_logical_graph",
+                json!({
+                    "graph": {
+                        "nodes": [
+                            {
+                                "id": "agent_items",
+                                "definition": {
+                                    "Channel": {
+                                        "operator": "of_items",
+                                        "items": [{"id": "one"}, {"id": "two"}]
+                                    }
+                                },
+                                "strategy": "Once"
+                            },
+                            {
+                                "id": "agent_mapped",
+                                "definition": {
+                                    "Channel": {
+                                        "operator": "map",
+                                        "template": {"name": "{{item.id}}"}
+                                    }
+                                },
+                                "strategy": "Once"
+                            }
+                        ],
+                        "edges": [
+                            {
+                                "from": "agent_items",
+                                "from_port": 0,
+                                "to": "agent_mapped",
+                                "to_port": 0
+                            }
+                        ]
+                    }
+                }),
+            )],
+            None,
+        )
+        .await
+        .unwrap();
+    check_ok(&results[0], "add_logical_graph");
+    let installed = result_json(&results[0]);
+    assert_eq!(installed["logical_node_count"], json!(2));
+    assert!(
+        installed["jobs"]
+            .as_object()
+            .unwrap()
+            .contains_key("agent_items#0")
+    );
+    assert!(
+        installed["jobs"]
+            .as_object()
+            .unwrap()
+            .contains_key("agent_mapped#0")
+    );
+
+    let results = toolset
+        .execute(&[build_tooluse("channel-run", "run_dag", json!({}))], None)
+        .await
+        .unwrap();
+    check_ok(&results[0], "run_dag");
+    let report = result_json(&results[0]);
+    assert_eq!(report["ok"], json!(true));
+    let physical_ids = report["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|node| node["id"].as_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+    assert!(physical_ids.contains(&"agent_items#0".to_string()));
+    assert!(physical_ids.contains(&"agent_mapped#0".to_string()));
+}
+
 fn result_json(result: &ToolResult) -> serde_json::Value {
     match &result.content {
         ToolResultContent::Json(value) => value.clone(),
@@ -568,24 +654,14 @@ async fn test_get_output_vcf_select_star_returns_correct_rows() {
     );
 }
 
-/// Obstacle #2 fix verification: when `collect()` of the limited plan errors
-/// at runtime but `count()` (a separate, column-eliminated plan) succeeds,
-/// `get_output` MUST surface the real error in-band (`collect_error`) instead
-/// of the old behavior — silently swallowing it via `unwrap_or_default()` and
-/// reporting the misleading `returned_rows: 0, total_rows: N`.
-///
-/// We force exactly that divergence with a runtime-erroring projection:
-/// `SELECT cast(s AS int) ...` over a string column that holds non-numeric
-/// values. `count(*)` eliminates the unused (and erroring) cast, so it
-/// returns 5; the `SELECT *` collect materializes the cast and errors.
-///
-/// Before the fix this produced `total_rows=5, returned_rows=0` (silent
-/// swallow). After the fix it produces `total_rows=5, returned_rows=null,
-/// collect_error="<msg>"` — the agent sees the real failure.
+/// When a node fails during execution, it has no cached output. `get_output`
+/// must still return a machine-readable error envelope (not free-form text)
+/// so agents can reliably branch on the failure and tell the user what to do
+/// next. The SQL division-by-zero below forces that path end to end.
 #[tokio::test]
-async fn test_get_output_surfaces_collect_error_instead_of_swallowing() {
+async fn test_get_output_failed_node_returns_structured_error() {
     let vfs = hermetic_vfs();
-    // 5 rows where `s` is non-numeric → cast(s as int) errors at execution.
+    // 5 rows; the downstream SQL divides by zero only when values materialize.
     let csv = b"age,s\n1,abc\n2,def\n3,ghi\n4,jkl\n5,mno\n";
     put_fixture(&vfs, "/badcast.csv", csv);
 
@@ -613,9 +689,8 @@ async fn test_get_output_surfaces_collect_error_instead_of_swallowing() {
         .unwrap();
     check_ok(&res[0], "add_node source");
 
-    // Runtime-erroring projection. `count(*)` over this typically eliminates
-    // the cast (column unused), so it returns 5; `SELECT *` must materialize
-    // the cast and fails.
+    // Runtime-erroring projection. The executor has no cached output after
+    // this node fails.
     let res = toolset
         .execute(
             &[build_tooluse(
@@ -624,7 +699,9 @@ async fn test_get_output_surfaces_collect_error_instead_of_swallowing() {
                 json!({
                     "id": "badcast",
                     "kind": "sql",
-                    "spec": {"sql_query": "SELECT cast(s as int) AS n FROM port_0"}
+                    "spec": {
+                        "sql_query": "SELECT sum(age) / 0 AS n FROM port_0"
+                    }
                 }),
             )],
             None,
@@ -663,34 +740,20 @@ async fn test_get_output_surfaces_collect_error_instead_of_swallowing() {
         )
         .await
         .unwrap();
-    // NOTE: get_output returns success_json (stable envelope) but with a
-    // per-output `collect_error` field instead of the old silent 0 rows.
+    // get_output returns an error result with a stable JSON envelope.
+    assert!(
+        res[0].is_error.unwrap_or(false),
+        "failed-node get_output should be an error result: {:?}",
+        res[0].content
+    );
     let parsed = parse_tool_json(&res[0].content);
-    let entry = &parsed["outputs"][0];
-    let total_rows = entry["total_rows"].as_u64().unwrap() as usize;
-    let collect_error = entry["collect_error"].as_str();
-    let returned_rows = &entry["returned_rows"];
-    eprintln!(
-        "[badcast get_output] total_rows={total_rows} returned_rows={returned_rows} collect_error={collect_error:?}"
-    );
-
-    // total_rows still comes from COUNT(*) which eliminated the cast → 5.
+    assert_eq!(parsed["node"], json!("badcast"));
+    let error = parsed["error"].as_str().unwrap();
     assert!(
-        total_rows > 0,
-        "count(*) should still return the row count (cast eliminated); got {total_rows}."
+        error.contains("failed during the last DAG run"),
+        "unexpected get_output error: {error}"
     );
-    // The fix: the collect error is surfaced in-band, not swallowed.
-    assert!(
-        collect_error.is_some(),
-        "FIX REGRESSION: get_output must surface the collect error in \
-         `collect_error`; got none. entry: {entry}"
-    );
-    // And returned_rows is now `null` (not a misleading 0).
-    assert!(
-        returned_rows.is_null(),
-        "returned_rows must be null when collect errors (was silently 0 \
-         before the fix); got {returned_rows}"
-    );
+    assert!(parsed.get("outputs").is_none());
 }
 
 /// Synthetic baseline: a hand-built Struct column (via `named_struct`) does

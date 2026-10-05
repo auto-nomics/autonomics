@@ -4,6 +4,7 @@
 //! channel values between operators; dynamic fanout turns each item into a
 //! physical job at runtime.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -17,7 +18,7 @@ use crate::value::{ChannelValue, FileRef, NodeValue, PortType};
 pub type Result<T> = std::result::Result<T, DagError>;
 
 /// A declarative, deterministic subset of Nextflow-style channel operators.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "operator", rename_all = "snake_case")]
 pub enum ChannelOperator {
     OfItems { items: Vec<Value> },
@@ -33,7 +34,7 @@ pub enum ChannelOperator {
 }
 
 /// One ordered branch predicate.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ChannelBranch {
     pub name: String,
     pub path: String,
@@ -55,6 +56,18 @@ pub struct ChannelBranch {
 pub struct ChannelNode {
     operator: ChannelOperator,
     ports: NodePorts,
+}
+
+/// Mutable state for a scheduler-owned streaming operator execution.
+#[derive(Debug, Clone, Default)]
+pub struct ChannelStreamState {
+    mixed_items: Vec<Value>,
+    collected_items: Vec<Value>,
+    combine_left: Vec<Value>,
+    combine_right: Vec<Value>,
+    join_left: Vec<Value>,
+    join_right: Vec<Value>,
+    grouped_items: Vec<(Value, Value)>,
 }
 
 impl ChannelNode {
@@ -100,6 +113,25 @@ impl ChannelNode {
 
     pub fn operator(&self) -> &ChannelOperator {
         &self.operator
+    }
+
+    /// Whether this operator can be applied one item at a time.
+    ///
+    /// Stateless operators emit downstream items immediately. Stateful fan-in
+    /// operators buffer into [`ChannelStreamState`] and finalize on close.
+    pub fn supports_stream_item(&self) -> bool {
+        matches!(
+            self.operator,
+            ChannelOperator::Map { .. }
+                | ChannelOperator::Filter { .. }
+                | ChannelOperator::Flatten
+                | ChannelOperator::Branch { .. }
+                | ChannelOperator::Mix
+                | ChannelOperator::Collect
+                | ChannelOperator::Combine
+                | ChannelOperator::Join { .. }
+                | ChannelOperator::GroupTuple { .. }
+        )
     }
 
     pub fn spec(&self) -> Value {
@@ -391,7 +423,7 @@ impl DagNode for ChannelNode {
         &mut self,
         _ctx: &crate::registry::NodeCtx,
         inputs: &[NodeInput],
-        _reporter: &NodeReporter,
+        reporter: &NodeReporter,
     ) -> std::result::Result<PortOutputs, DagError> {
         let expected = if matches!(self.operator, ChannelOperator::Collect) {
             0
@@ -410,7 +442,21 @@ impl DagNode for ChannelNode {
             )));
         }
         let mut outputs = PortOutputs::new();
-        if let ChannelOperator::Branch { branches } = &self.operator {
+        if let ChannelOperator::OfItems { items } = &self.operator {
+            for (sequence, item) in items.iter().enumerate() {
+                reporter
+                    .emit_channel_item(0, sequence as u64, item.clone())
+                    .await;
+                tokio::task::yield_now().await;
+            }
+            reporter.close_channel(0, items.len() as u64).await;
+            outputs.insert(
+                0,
+                ChannelValue {
+                    items: items.clone(),
+                },
+            );
+        } else if let ChannelOperator::Branch { branches } = &self.operator {
             let mut branch_outputs = branches
                 .iter()
                 .map(|_| ChannelValue::default())
@@ -425,11 +471,11 @@ impl DagNode for ChannelNode {
                 }
             }
             for (port, channel) in branch_outputs.into_iter().enumerate() {
-                outputs.insert(port as u8, channel);
+                outputs.insert(port as u8, channel.via_bounded_stream(128).await?);
             }
         } else {
             let channel = self.apply(inputs)?;
-            outputs.insert(0, channel);
+            outputs.insert(0, channel.via_bounded_stream(128).await?);
         }
         Ok(outputs)
     }
@@ -444,6 +490,201 @@ impl DagNode for ChannelNode {
 
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+}
+
+impl ChannelNode {
+    pub async fn process_stream_item(
+        &mut self,
+        state: &mut ChannelStreamState,
+        input_port: u8,
+        item: serde_json::Value,
+    ) -> Result<Vec<(u8, serde_json::Value)>> {
+        let outputs = match self.operator.clone() {
+            ChannelOperator::Map { template } => {
+                vec![(0, render_spec(&template, &item)?)]
+            }
+            ChannelOperator::Filter { path, equals } => {
+                if item.pointer(&pointer_path(&path)) == Some(&equals) {
+                    vec![(0, item)]
+                } else {
+                    Vec::new()
+                }
+            }
+            ChannelOperator::Flatten => match item {
+                serde_json::Value::Array(values) => values
+                    .into_iter()
+                    .map(|value| Ok((0, value)))
+                    .collect::<Result<Vec<_>>>()?,
+                value => {
+                    return Err(DagError::Schedule(format!(
+                        "channel.flatten requires array items, got {value}"
+                    )));
+                }
+            },
+            ChannelOperator::Branch { branches } => {
+                match branches
+                    .iter()
+                    .enumerate()
+                    .find(|(_, branch)| branch_matches(branch, &item))
+                {
+                    Some((index, _)) => vec![(index as u8, item)],
+                    None => Vec::new(),
+                }
+            }
+            ChannelOperator::Mix => {
+                if input_port > 1 {
+                    return Err(DagError::Schedule(format!(
+                        "channel.mix does not accept input port {input_port}"
+                    )));
+                }
+                state.mixed_items.push(item);
+                Vec::new()
+            }
+            ChannelOperator::Collect => {
+                state.collected_items.push(item);
+                Vec::new()
+            }
+            ChannelOperator::Combine => match input_port {
+                0 => {
+                    state.combine_left.push(item);
+                    Vec::new()
+                }
+                1 => {
+                    state.combine_right.push(item);
+                    Vec::new()
+                }
+                port => {
+                    return Err(DagError::Schedule(format!(
+                        "channel.combine does not accept input port {port}"
+                    )));
+                }
+            },
+            ChannelOperator::Join { .. } => match input_port {
+                0 => {
+                    state.join_left.push(item);
+                    Vec::new()
+                }
+                1 => {
+                    state.join_right.push(item);
+                    Vec::new()
+                }
+                port => {
+                    return Err(DagError::Schedule(format!(
+                        "channel.join does not accept input port {port}"
+                    )));
+                }
+            },
+            ChannelOperator::GroupTuple { key } => {
+                if input_port != 0 {
+                    return Err(DagError::Schedule(format!(
+                        "channel.group_tuple does not accept input port {input_port}"
+                    )));
+                }
+                if let Some(key_value) = item.pointer(&pointer_path(&key)) {
+                    state.grouped_items.push((key_value.clone(), item));
+                }
+                Vec::new()
+            }
+            operator => {
+                return Err(DagError::Schedule(format!(
+                    "channel operator `{operator:?}` does not support streaming item execution"
+                )));
+            }
+        };
+        Ok(outputs)
+    }
+
+    pub async fn finish_stream(&self, state: &mut ChannelStreamState) -> Result<Vec<(u8, Value)>> {
+        let outputs = match self.operator.clone() {
+            ChannelOperator::Mix => state
+                .mixed_items
+                .drain(..)
+                .map(|item| (0, item))
+                .collect::<Vec<_>>(),
+            ChannelOperator::Collect => state
+                .collected_items
+                .drain(..)
+                .map(|item| (0, item))
+                .collect::<Vec<_>>(),
+            ChannelOperator::Combine => {
+                let left = state.combine_left.clone();
+                let right = state.combine_right.clone();
+                let mut combined = Vec::with_capacity(left.len().saturating_mul(right.len()));
+                for left_item in left {
+                    for right_item in &right {
+                        let mut combined_item = Map::new();
+                        combined_item.insert("left".into(), left_item.clone());
+                        combined_item.insert("right".into(), right_item.clone());
+                        combined.push((0, Value::Object(combined_item)));
+                    }
+                }
+                state.combine_left.clear();
+                state.combine_right.clear();
+                combined
+            }
+            ChannelOperator::Join {
+                left_key,
+                right_key,
+            } => {
+                let left = state.join_left.clone();
+                let right = state.join_right.clone();
+                let mut right_by_key = Vec::<(String, Value)>::new();
+                for item in right {
+                    if let Some(key) = item.pointer(&pointer_path(&right_key)) {
+                        right_by_key.push((canonical_json(key), item));
+                    }
+                }
+                let mut joined = Vec::new();
+                for left_item in left {
+                    let Some(left_value) = left_item.pointer(&pointer_path(&left_key)) else {
+                        continue;
+                    };
+                    let left_key = canonical_json(left_value);
+                    for (right_value, right_item) in &right_by_key {
+                        if *right_value == left_key {
+                            let mut joined_item = Map::new();
+                            if let (Value::Object(left), Value::Object(right)) =
+                                (&left_item, right_item)
+                            {
+                                for (name, value) in left {
+                                    joined_item.insert(format!("left_{name}"), value.clone());
+                                }
+                                for (name, value) in right {
+                                    joined_item.insert(format!("right_{name}"), value.clone());
+                                }
+                            } else {
+                                joined_item.insert("left".into(), left_item.clone());
+                                joined_item.insert("right".into(), (*right_item).clone());
+                            }
+                            joined.push((0, Value::Object(joined_item)));
+                        }
+                    }
+                }
+                state.join_left.clear();
+                state.join_right.clear();
+                joined
+            }
+            ChannelOperator::GroupTuple { .. } => {
+                let mut groups = Vec::<(String, Value, Vec<Value>)>::new();
+                for (key_value, item) in state.grouped_items.drain(..) {
+                    let key_text = canonical_json(&key_value);
+                    match groups
+                        .iter_mut()
+                        .find(|(existing, _, _)| *existing == key_text)
+                    {
+                        Some((_, _, values)) => values.push(item),
+                        None => groups.push((key_text, key_value, vec![item])),
+                    }
+                }
+                groups
+                    .into_iter()
+                    .map(|(_, key, values)| (0, Value::Array(vec![key, Value::Array(values)])))
+                    .collect::<Vec<_>>()
+            }
+            _ => Vec::new(),
+        };
+        Ok(outputs)
     }
 }
 
@@ -474,6 +715,177 @@ mod tests {
         let (sender, _receiver) = tokio::sync::mpsc::channel(1);
         let reporter = NodeReporter::new("channel-test", sender);
         node.execute(&context, &inputs, &reporter).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn stateless_operators_apply_stream_items_incrementally() {
+        let mut map = ChannelNode::new(ChannelOperator::Map {
+            template: serde_json::json!({"id": "{{item.id}}"}),
+        });
+        let mut state = ChannelStreamState::default();
+        assert_eq!(
+            map.process_stream_item(
+                &mut state,
+                0,
+                serde_json::json!({"id": "one", "kind": "keep"})
+            )
+            .await
+            .unwrap(),
+            vec![(0, serde_json::json!({"id": "one"}))]
+        );
+
+        let mut filter = ChannelNode::new(ChannelOperator::Filter {
+            path: "kind".into(),
+            equals: serde_json::json!("keep"),
+        });
+        let mut state = ChannelStreamState::default();
+        assert_eq!(
+            filter
+                .process_stream_item(&mut state, 0, serde_json::json!({"kind": "keep"}))
+                .await
+                .unwrap(),
+            vec![(0, serde_json::json!({"kind": "keep"}))]
+        );
+        assert!(
+            filter
+                .process_stream_item(&mut state, 0, serde_json::json!({"kind": "drop"}))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        let mut flatten = ChannelNode::new(ChannelOperator::Flatten);
+        let mut state = ChannelStreamState::default();
+        assert_eq!(
+            flatten
+                .process_stream_item(&mut state, 0, serde_json::json!([1, 2]))
+                .await
+                .unwrap(),
+            vec![(0, serde_json::json!(1)), (0, serde_json::json!(2))]
+        );
+
+        let mut branch = ChannelNode::new(ChannelOperator::Branch {
+            branches: vec![
+                crate::dag::ChannelBranch {
+                    name: "keep".into(),
+                    path: "kind".into(),
+                    equals: Some(serde_json::json!("keep")),
+                    not_equals: None,
+                    exists: None,
+                    prefix: None,
+                    suffix: None,
+                    contains: None,
+                },
+                crate::dag::ChannelBranch {
+                    name: "other".into(),
+                    path: "kind".into(),
+                    equals: Some(serde_json::json!("other")),
+                    not_equals: None,
+                    exists: None,
+                    prefix: None,
+                    suffix: None,
+                    contains: None,
+                },
+            ],
+        });
+        let mut state = ChannelStreamState::default();
+        assert_eq!(
+            branch
+                .process_stream_item(&mut state, 0, serde_json::json!({"kind": "other"}))
+                .await
+                .unwrap(),
+            vec![(1, serde_json::json!({"kind": "other"}))]
+        );
+    }
+
+    #[tokio::test]
+    async fn stateful_operators_buffer_items_and_finalize_on_close() {
+        let mut node = ChannelNode::new(ChannelOperator::Mix);
+        let mut state = ChannelStreamState::default();
+        assert!(
+            node.process_stream_item(&mut state, 0, serde_json::json!("left"))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            node.process_stream_item(&mut state, 1, serde_json::json!("right"))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            node.finish_stream(&mut state).await.unwrap(),
+            vec![
+                (0, serde_json::json!("left")),
+                (0, serde_json::json!("right"))
+            ]
+        );
+
+        let mut node = ChannelNode::new(ChannelOperator::Collect);
+        let mut state = ChannelStreamState::default();
+        for item in [serde_json::json!(1), serde_json::json!(2)] {
+            assert!(
+                node.process_stream_item(&mut state, 3, item)
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+        assert_eq!(
+            node.finish_stream(&mut state).await.unwrap(),
+            vec![(0, serde_json::json!(1)), (0, serde_json::json!(2))]
+        );
+
+        let mut node = ChannelNode::new(ChannelOperator::Join {
+            left_key: "id".into(),
+            right_key: "sample".into(),
+        });
+        let mut state = ChannelStreamState::default();
+        node.process_stream_item(&mut state, 0, serde_json::json!({"id": "one", "value": 1}))
+            .await
+            .unwrap();
+        node.process_stream_item(
+            &mut state,
+            1,
+            serde_json::json!({"sample": "one", "score": 2}),
+        )
+        .await
+        .unwrap();
+        let joined = node.finish_stream(&mut state).await.unwrap();
+        assert_eq!(joined.len(), 1);
+        assert_eq!(joined[0].1["left_id"], "one");
+        assert_eq!(joined[0].1["right_sample"], "one");
+        assert_eq!(joined[0].1["left_value"], 1);
+        assert_eq!(joined[0].1["right_score"], 2);
+
+        let mut node = ChannelNode::new(ChannelOperator::GroupTuple { key: "kind".into() });
+        let mut state = ChannelStreamState::default();
+        for item in [
+            serde_json::json!({"kind": "a", "id": 1}),
+            serde_json::json!({"kind": "b", "id": 2}),
+            serde_json::json!({"kind": "a", "id": 3}),
+        ] {
+            node.process_stream_item(&mut state, 0, item).await.unwrap();
+        }
+        let grouped = node.finish_stream(&mut state).await.unwrap();
+        assert_eq!(grouped.len(), 2);
+        assert_eq!(grouped[0].1[0], serde_json::json!("a"));
+        assert_eq!(grouped[0].1[1].as_array().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn bounded_channel_preserves_item_order_under_capacity_one() {
+        let items = (0..500)
+            .map(|index| serde_json::json!(index))
+            .collect::<Vec<_>>();
+        let channel = ChannelValue { items }.via_bounded_stream(1).await.unwrap();
+        assert_eq!(
+            channel.items,
+            (0..500)
+                .map(|index| serde_json::json!(index))
+                .collect::<Vec<_>>()
+        );
     }
 
     #[tokio::test]

@@ -914,5 +914,9 @@ fn run_details(
         run_name: Some(run_name.to_string()),
         stdout_log: logs.0,
         stderr_log: logs.1,
+        workspace: None,
+        task_manifest: None,
+        output_artifacts: Vec::new(),
+        output_artifacts_by_port: Default::default(),
     }
 }
