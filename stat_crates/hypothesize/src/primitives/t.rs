@@ -103,6 +103,7 @@ pub fn t_test_one(x: &[f64], mu0: f64, alt: Alternative, conf_level: f64) -> Res
 pub fn t_test_paired(
     x: &[f64],
     y: &[f64],
+    mu0: f64,
     alt: Alternative,
     conf_level: f64,
 ) -> Result<HypothesisTest> {
@@ -130,7 +131,9 @@ pub fn t_test_paired(
             "all differences are identical (SE = 0)".into(),
         ));
     }
-    let t = mean / se;
+    // R t.test(paired=TRUE, mu=…): the null mean of the differences is mu0,
+    // not 0; the CI stays on the unshifted mean difference.
+    let t = (mean - mu0) / se;
     let df = n_f - 1.0;
     let p = p_value_t(t, df, alt);
     let (conf_low, conf_high) = conf_int_t(mean, se, df, alt, conf_level);
@@ -143,7 +146,7 @@ pub fn t_test_paired(
         extras([
             (KEY_KIND, json!("t_test")),
             ("estimate", json!(mean)),
-            ("null_value", json!(0.0)),
+            ("null_value", json!(mu0)),
             ("stderr", json!(se)),
             ("conf_low", ci_bound_json(conf_low)),
             ("conf_high", ci_bound_json(conf_high)),
@@ -163,6 +166,7 @@ pub fn t_test_two(
     x: &[f64],
     y: &[f64],
     var_equal: bool,
+    mu0: f64,
     alt: Alternative,
     conf_level: f64,
 ) -> Result<HypothesisTest> {
@@ -198,7 +202,9 @@ pub fn t_test_two(
         ));
     }
     let est = m1 - m2;
-    let t = est / se;
+    // R t.test(x, y, mu=…): the null difference in means is mu0, not 0;
+    // the CI stays on the unshifted difference.
+    let t = (est - mu0) / se;
     let p = p_value_t(t, df, alt);
     let (conf_low, conf_high) = conf_int_t(est, se, df, alt, conf_level);
     let method = if var_equal {
@@ -217,6 +223,7 @@ pub fn t_test_two(
             ("estimate1", json!(m1)),
             ("estimate2", json!(m2)),
             ("estimate", json!(est)),
+            ("null_value", json!(mu0)),
             ("stderr", json!(se)),
             ("conf_low", ci_bound_json(conf_low)),
             ("conf_high", ci_bound_json(conf_high)),
@@ -272,7 +279,7 @@ mod tests {
     fn two_sample_welch() {
         let x = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         let y = vec![2.0, 3.0, 4.0, 5.0, 6.0];
-        let t = t_test_two(&x, &y, false, Alternative::TwoSided, 0.95).unwrap();
+        let t = t_test_two(&x, &y, false, 0.0, Alternative::TwoSided, 0.95).unwrap();
         // mean diff = -1, both groups same variance → Welch = pooled here
         assert!((t.stat + 1.0_f64).abs() < 0.5); // roughly t≈-1
         assert!(t.dof < 8.5 && t.dof > 7.5); // ≈8
@@ -284,7 +291,7 @@ mod tests {
     fn two_sample_pooled() {
         let x = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         let y = vec![2.0, 3.0, 4.0, 5.0, 6.0];
-        let t = t_test_two(&x, &y, true, Alternative::TwoSided, 0.95).unwrap();
+        let t = t_test_two(&x, &y, true, 0.0, Alternative::TwoSided, 0.95).unwrap();
         assert!((t.dof - 8.0).abs() < 1e-12);
         assert_eq!(t.extra_f64("n"), Some(10.0));
     }
@@ -294,12 +301,12 @@ mod tests {
         let x = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         let y = vec![2.0, 3.0, 4.0, 5.0, 6.0];
         // differences all = -1, sd=0 → error
-        assert!(t_test_paired(&x, &y, Alternative::TwoSided, 0.95).is_err());
+        assert!(t_test_paired(&x, &y, 0.0, Alternative::TwoSided, 0.95).is_err());
 
         // Non-degenerate paired
         let a = vec![1.0, 3.0, 2.0, 4.0, 5.0];
         let b = vec![2.0, 1.0, 4.0, 3.0, 5.0];
-        let t = t_test_paired(&a, &b, Alternative::TwoSided, 0.95).unwrap();
+        let t = t_test_paired(&a, &b, 0.0, Alternative::TwoSided, 0.95).unwrap();
         let d: Vec<f64> = a.iter().zip(&b).map(|(p, q)| p - q).collect();
         let dmean = d.iter().sum::<f64>() / 5.0;
         let dss = d.iter().map(|&di| (di - dmean).powi(2)).sum::<f64>();
@@ -315,9 +322,9 @@ mod tests {
         assert!(t_test_one(&[1.0], 0.0, Alternative::TwoSided, 0.95).is_err());
         assert!(t_test_one(&[], 0.0, Alternative::TwoSided, 0.95).is_err());
         assert!(
-            t_test_two(&[1.0], &[2.0], false, Alternative::TwoSided, 0.95).is_err()
+            t_test_two(&[1.0], &[2.0], false, 0.0, Alternative::TwoSided, 0.95).is_err()
         );
-        assert!(t_test_paired(&[1.0, 2.0], &[1.0], Alternative::TwoSided, 0.95).is_err());
+        assert!(t_test_paired(&[1.0, 2.0], &[1.0], 0.0, Alternative::TwoSided, 0.95).is_err());
         for bad in [0.0, 1.0, -0.1, 1.1] {
             assert!(
                 t_test_one(&[1.0, 2.0], 0.0, Alternative::TwoSided, bad).is_err(),
@@ -335,7 +342,7 @@ mod tests {
     fn paired_audit_example_matches_r() {
         let xs = vec![1.0, 10.0];
         let ys = vec![0.0, 2.0];
-        let t = t_test_paired(&xs, &ys, Alternative::TwoSided, 0.95).unwrap();
+        let t = t_test_paired(&xs, &ys, 0.0, Alternative::TwoSided, 0.95).unwrap();
         assert!((t.extra_f64("estimate").unwrap() - 4.5).abs() < 1e-14);
         assert!((t.extra_f64("stderr").unwrap() - 3.5).abs() < 1e-14);
         assert!((t.stat - 1.2857142857142858).abs() < 1e-14);
@@ -350,7 +357,7 @@ mod tests {
     /// one-sided with a +Inf upper bound (null in extras JSON).
     #[test]
     fn paired_greater_matches_r() {
-        let t = t_test_paired(&[1.0, 10.0], &[0.0, 2.0], Alternative::Greater, 0.95).unwrap();
+        let t = t_test_paired(&[1.0, 10.0], &[0.0, 2.0], 0.0, Alternative::Greater, 0.95).unwrap();
         assert!((t.p_value - 0.21041657583943429).abs() < 1e-14);
         assert!((t.extra_f64("conf_low").unwrap() - (-17.59813030136263)).abs() < 1e-12);
         assert_eq!(t.extra_f64("conf_high"), None); // +Inf → JSON null
@@ -359,22 +366,21 @@ mod tests {
     /// R: t.test(x, y, paired=TRUE, conf.level=0.9).
     #[test]
     fn paired_conf_90_matches_r() {
-        let t = t_test_paired(&[1.0, 10.0], &[0.0, 2.0], Alternative::TwoSided, 0.9).unwrap();
+        let t = t_test_paired(&[1.0, 10.0], &[0.0, 2.0], 0.0, Alternative::TwoSided, 0.9).unwrap();
         assert!((t.p_value - 0.42083315167886859).abs() < 1e-14);
         assert!((t.extra_f64("conf_low").unwrap() - (-17.59813030136263)).abs() < 1e-12);
         assert!((t.extra_f64("conf_high").unwrap() - 26.59813030136263).abs() < 1e-12);
     }
 
-    /// R: t.test(c(1.2,NA,2.4,3.1,NA,4.7), c(2.1,3.5,NA,4.0,5.2,6.8)) — wide
-    /// complete-case → x=[1.2,3.1,4.7], y=[2.1,4.0,6.8]:
+    /// R: t.test(c(1.2,3.1,4.7), c(2.1,4.0,6.8)) —
     /// m1=3, m2=4.3, se=1.69901932498329, t=-0.765147271066377,
     /// df=3.68773387751088, p=0.490202972932868,
     /// CI=(-6.17901953916217, 3.57901953916217).
     #[test]
-    fn welch_complete_case_matches_r() {
+    fn welch_matches_r() {
         let x = vec![1.2, 3.1, 4.7];
         let y = vec![2.1, 4.0, 6.8];
-        let t = t_test_two(&x, &y, false, Alternative::TwoSided, 0.95).unwrap();
+        let t = t_test_two(&x, &y, false, 0.0, Alternative::TwoSided, 0.95).unwrap();
         assert_eq!(t.method, "Welch Two Sample t-test");
         assert!((t.extra_f64("estimate1").unwrap() - 3.0).abs() < 1e-14);
         assert!((t.extra_f64("estimate2").unwrap() - 4.3).abs() < 1e-14);
@@ -387,13 +393,13 @@ mod tests {
         assert!((t.extra_f64("conf_high").unwrap() - 3.57901953916217).abs() < 1e-12);
     }
 
-    /// R: same data, var.equal=TRUE — se identical (n₁=n₂), df=4,
+    /// R: same vectors, var.equal=TRUE — se identical (n₁=n₂), df=4,
     /// p=0.486834417888926, CI=(-6.01723388848631, 3.41723388848631).
     #[test]
-    fn pooled_complete_case_matches_r() {
+    fn pooled_matches_r() {
         let x = vec![1.2, 3.1, 4.7];
         let y = vec![2.1, 4.0, 6.8];
-        let t = t_test_two(&x, &y, true, Alternative::TwoSided, 0.95).unwrap();
+        let t = t_test_two(&x, &y, true, 0.0, Alternative::TwoSided, 0.95).unwrap();
         assert_eq!(t.method, "Two Sample t-test (pooled)");
         assert!((t.extra_f64("estimate").unwrap() - (3.0 - 4.3)).abs() < 1e-14);
         assert!((t.extra_f64("stderr").unwrap() - 1.69901932498329).abs() < 1e-14);

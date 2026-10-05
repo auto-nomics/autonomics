@@ -191,13 +191,14 @@ async fn paired_conf_level_90_matches_r() {
     );
 }
 
-/// R: t.test(c(1.2,NA,2.4,3.1,NA,4.7), c(2.1,3.5,NA,4.0,5.2,6.8)) — wide
-/// two-sample complete-case → Welch on x=[1.2,3.1,4.7], y=[2.1,4.0,6.8]:
-/// m1=3, m2=4.3, stderr 1.69901932498329, t -0.765147271066377,
-/// df 3.68773387751088, p 0.490202972932868,
-/// CI (-6.17901953916217, 3.57901953916217).
+/// R (2026-10-05): t.test(c(1.2,NA,2.4,3.1,NA,4.7), c(2.1,3.5,NA,4.0,5.2,6.8))
+/// — wide two-sample drops NA per column (vector semantics): Welch on
+/// x=[1.2,2.4,3.1,4.7], y=[2.1,3.5,4.0,5.2,6.8]:
+/// m1=2.85, m2=4.32, est=-1.47, stderr 1.07961412859719,
+/// t -1.36159759404970, df 6.97484737539948, p 0.21566981730390,
+/// CI (-4.02474919454316, 1.08474919454316), n=9.
 #[tokio::test]
-async fn wide_welch_complete_case_matches_r() {
+async fn wide_welch_independent_na_matches_r() {
     let batch = wide_batch(
         &[Some(1.2), None, Some(2.4), Some(3.1), None, Some(4.7)],
         &[Some(2.1), Some(3.5), None, Some(4.0), Some(5.2), Some(6.8)],
@@ -207,45 +208,45 @@ async fn wide_welch_complete_case_matches_r() {
         vec![batch],
     )
     .await;
-    assert_close(opt_f64(&row, "estimate"), 3.0 - 4.3, "estimate");
+    assert_close(opt_f64(&row, "estimate"), -1.47, "estimate");
     assert_close(
         opt_f64(&row, "stderr"),
-        1.69901932498329,
+        1.07961412859719,
         "stderr",
     );
     assert_close(
         opt_f64(&row, "statistic"),
-        -0.765147271066377,
+        -1.36159759404970,
         "statistic",
     );
     assert_close(
         opt_f64(&row, "dof"),
-        3.68773387751088,
+        6.97484737539948,
         "dof",
     );
     assert_close(
         opt_f64(&row, "p_value"),
-        0.490202972932868,
+        0.21566981730390,
         "p_value",
     );
     assert_close(
         opt_f64(&row, "conf_low"),
-        -6.17901953916217,
+        -4.02474919454316,
         "conf_low",
     );
     assert_close(
         opt_f64(&row, "conf_high"),
-        3.57901953916217,
+        1.08474919454316,
         "conf_high",
     );
-    assert_eq!(opt_i32(&row, "n"), Some(6));
+    assert_eq!(opt_i32(&row, "n"), Some(9));
 }
 
-/// R: same wide table, var.equal=TRUE — stderr identical (n₁=n₂),
-/// t -0.765147271066377, df 4, p 0.486834417888926,
-/// CI (-6.01723388848631, 3.41723388848631).
+/// R (2026-10-05): same wide table, var.equal=TRUE, per-column NA drop —
+/// stderr 1.10628722697653, t -1.32876884425168, df 7,
+/// p 0.22560080879041, CI (-4.08595360613604, 1.14595360613604).
 #[tokio::test]
-async fn wide_pooled_complete_case_matches_r() {
+async fn wide_pooled_independent_na_matches_r() {
     let batch = wide_batch(
         &[Some(1.2), None, Some(2.4), Some(3.1), None, Some(4.7)],
         &[Some(2.1), Some(3.5), None, Some(4.0), Some(5.2), Some(6.8)],
@@ -257,30 +258,93 @@ async fn wide_pooled_complete_case_matches_r() {
     .await;
     assert_close(
         opt_f64(&row, "stderr"),
-        1.69901932498329,
+        1.10628722697653,
         "stderr",
     );
     assert_close(
         opt_f64(&row, "statistic"),
-        -0.765147271066377,
+        -1.32876884425168,
         "statistic",
     );
-    assert_close(opt_f64(&row, "dof"), 4.0, "dof");
+    assert_close(opt_f64(&row, "dof"), 7.0, "dof");
     assert_close(
         opt_f64(&row, "p_value"),
-        0.486834417888926,
+        0.22560080879041,
         "p_value",
     );
     assert_close(
         opt_f64(&row, "conf_low"),
-        -6.01723388848631,
+        -4.08595360613604,
         "conf_low",
     );
     assert_close(
         opt_f64(&row, "conf_high"),
-        3.41723388848631,
+        1.14595360613604,
         "conf_high",
     );
+}
+
+/// Fix-review R02 (2026-10-05): unpaired wide columns are independent
+/// samples; NA rows must drop per column, never pairwise. R:
+/// t.test(c(1,NA,5,10), c(0,3,NA,2)) → est 11/3, t 1.33394593769983,
+/// df 2.45305039787798, p 0.29254219697638,
+/// CI (-6.29498360849420, 13.62831694182753).
+#[tokio::test]
+async fn unpaired_wide_independent_na_matches_r_review_r02() {
+    let batch = wide_batch(
+        &[Some(1.0), None, Some(5.0), Some(10.0)],
+        &[Some(0.0), Some(3.0), None, Some(2.0)],
+    );
+    let row = run_t_test(
+        serde_json::json!({"x_column": "x", "y_column": "y"}),
+        vec![batch],
+    )
+    .await;
+    assert_close(opt_f64(&row, "estimate"), 11.0 / 3.0, "estimate");
+    assert_close(
+        opt_f64(&row, "statistic"),
+        1.33394593769983,
+        "statistic",
+    );
+    assert_close(
+        opt_f64(&row, "dof"),
+        2.45305039787798,
+        "dof",
+    );
+    assert_close(
+        opt_f64(&row, "p_value"),
+        0.29254219697638,
+        "p_value",
+    );
+    assert_close(
+        opt_f64(&row, "conf_low"),
+        -6.29498360849420,
+        "conf_low",
+    );
+    assert_close(
+        opt_f64(&row, "conf_high"),
+        13.62831694182753,
+        "conf_high",
+    );
+}
+
+/// Fix-review R03 (2026-10-05): mu is the null value in every mode.
+/// R: t.test(c(1,10), c(0,2), paired=TRUE, mu=1) → t=1, p=0.5 (audit
+/// fixture complete pairs; mu=0 keeps t=9/7≈1.285714).
+#[tokio::test]
+async fn paired_mu_is_honored_matches_r_review_r03() {
+    let batch = wide_batch(
+        &[Some(1.0), None, Some(5.0), Some(10.0)],
+        &[Some(0.0), Some(3.0), None, Some(2.0)],
+    );
+    let row = run_t_test(
+        serde_json::json!({"x_column": "x", "y_column": "y", "paired": true, "mu": 1.0}),
+        vec![batch],
+    )
+    .await;
+    assert_close(opt_f64(&row, "estimate"), 4.5, "estimate");
+    assert_close(opt_f64(&row, "statistic"), 1.0, "statistic");
+    assert_close(opt_f64(&row, "p_value"), 0.5, "p_value");
 }
 
 /// The emitted row conforms to the standard test-row schema, including the

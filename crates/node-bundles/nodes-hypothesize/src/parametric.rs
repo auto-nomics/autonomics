@@ -57,12 +57,16 @@ impl NodeFactory for TTestNodeFactory {
         "One-sample, two-sample, or paired t-test."
     }
     fn doc(&self) -> &'static str {
-        "Performs a t-test on column data. Supports one-sample (mu), \
+        "Performs a t-test on column data. Supports one-sample, \
         two-sample (group_column or y_column with var_equal), and paired \
-        (paired=true with y_column) modes. Paired and wide two-sample \
-        branches drop a row when either column is null (R complete-case, \
-        not independent per-column NA-dropping). Emits a standard test row \
-        with stderr/conf_low/conf_high at conf_level (default 0.95)."
+        (paired=true with y_column) modes. mu is the null value in every \
+        mode (R t.test mu: one-sample mean, paired mean of differences, \
+        two-sample difference in means). Paired drops a pair when either \
+        side is null (R complete.cases); wide two-sample treats the \
+        columns as independent samples and drops NA rows per column (R \
+        t.test(x, y) vector semantics); group_column follows R formula \
+        na.omit. Emits a standard test row with stderr/conf_low/conf_high \
+        at conf_level (default 0.95)."
     }
     fn spec_schema(&self) -> schemars::Schema {
         schema_for!(TTestNodeSpec)
@@ -131,7 +135,7 @@ impl DagNode for TTestNode {
             let (pairs, n_dropped) = extract_paired_columns(&batches, &self.spec.x_column, yc)?;
             let xs: Vec<f64> = pairs.iter().map(|(a, _)| *a).collect();
             let ys: Vec<f64> = pairs.iter().map(|(_, b)| *b).collect();
-            let mut r = h::t_test_paired(&xs, &ys, alt, cl)
+            let mut r = h::t_test_paired(&xs, &ys, self.spec.mu, alt, cl)
                 .map_err(|e| HypoNodeError::Test(e.to_string()))?;
             r.extras
                 .insert("n_dropped".into(), serde_json::json!(n_dropped));
@@ -144,18 +148,22 @@ impl DagNode for TTestNode {
             if groups.len() < 2 {
                 return Err(HypoNodeError::Insufficient("need ≥ 2 groups".into()).into());
             }
-            h::t_test_two(&groups[0].1, &groups[1].1, self.spec.var_equal, alt, cl)
+            h::t_test_two(&groups[0].1, &groups[1].1, self.spec.var_equal, self.spec.mu, alt, cl)
                 .map_err(|e| HypoNodeError::Test(e.to_string()))?
         } else if let Some(yc) = &self.spec.y_column {
-            // Wide two-sample: complete-case, same as R on data.frame input.
-            let (pairs, n_dropped) =
-                extract_paired_columns(&batches, &self.spec.x_column, yc)?;
-            let xs: Vec<f64> = pairs.iter().map(|(a, _)| *a).collect();
-            let ys: Vec<f64> = pairs.iter().map(|(_, b)| *b).collect();
-            let mut r = h::t_test_two(&xs, &ys, self.spec.var_equal, alt, cl)
+            // Wide two-sample: the two columns are independent samples (R
+            // t.test(x, y)), so NA rows drop per column, not pairwise —
+            // extract_f64_column skips nulls within each column while
+            // preserving cross-batch row order. Complete-case here would
+            // silently import paired semantics into an unpaired test.
+            let xs = extract_f64_column(&batches, &self.spec.x_column)?;
+            let ys = extract_f64_column(&batches, yc)?;
+            let mut r = h::t_test_two(&xs, &ys, self.spec.var_equal, self.spec.mu, alt, cl)
                 .map_err(|e| HypoNodeError::Test(e.to_string()))?;
             r.extras
-                .insert("n_dropped".into(), serde_json::json!(n_dropped));
+                .insert("n_x".into(), serde_json::json!(xs.len()));
+            r.extras
+                .insert("n_y".into(), serde_json::json!(ys.len()));
             r
         } else {
             let x = extract_f64_column(&batches, &self.spec.x_column)?;
