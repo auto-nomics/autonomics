@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use serde::{Deserialize, Serialize};
 
-use super::channel::{ChannelNode, ChannelOperator};
+use super::channel::{ChannelNode, ChannelOperator, validate_branches};
 use super::error::DagError;
 use super::physical::{
     DynamicFanoutNode, GatherNode, PhysicalEdge, PhysicalGraph, PhysicalJobRef, PhysicalNode,
@@ -316,6 +316,22 @@ impl LogicalGraph {
                     "logical node `{}` expects {expected_inputs} incoming edge(s), got {incoming}",
                     node.id
                 )));
+            }
+        }
+
+        for node in &self.nodes {
+            if let LogicalNodeDefinition::Channel(ChannelOperator::Branch { branches }) =
+                &node.definition
+            {
+                validate_branches(branches)?;
+                for edge in self.edges.iter().filter(|edge| edge.from == node.id) {
+                    if edge.from_port as usize >= branches.len() {
+                        return Err(DagError::Schedule(format!(
+                            "edge {} -> {} uses undefined branch output port {}",
+                            edge.from, edge.to, edge.from_port
+                        )));
+                    }
+                }
             }
         }
 
@@ -839,6 +855,7 @@ fn scalar_display(value: &serde_json::Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ChannelBranch;
     use crate::NodePorts;
     use crate::dag::graph::PortOutputs;
     use crate::dag::node_event::NodeReporter;
@@ -1046,6 +1063,38 @@ mod tests {
             Err(error) => error,
         };
         assert!(error.to_string().contains("inconsistent item sets"));
+    }
+
+    #[test]
+    fn rejects_edges_to_undefined_channel_branch_outputs() {
+        let graph = LogicalGraph::builder()
+            .add_node(LogicalNode::channel(
+                "source",
+                ChannelOperator::OfItems {
+                    items: vec![serde_json::json!(1)],
+                },
+            ))
+            .add_node(LogicalNode::channel(
+                "branch",
+                ChannelOperator::Branch {
+                    branches: vec![ChannelBranch {
+                        name: "only".into(),
+                        path: "$".into(),
+                        equals: Some(serde_json::json!(1)),
+                        not_equals: None,
+                        exists: None,
+                        prefix: None,
+                        suffix: None,
+                        contains: None,
+                    }],
+                },
+            ))
+            .add_node(LogicalNode::registry("sink", "stub", serde_json::json!({})))
+            .add_edge("source", "branch", 0, 0)
+            .add_edge("branch", "sink", 1, 0)
+            .build();
+        let error = graph.validate().unwrap_err();
+        assert!(error.to_string().contains("undefined branch output port"));
     }
 
     #[test]

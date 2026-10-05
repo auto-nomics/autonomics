@@ -29,9 +29,29 @@ pub enum ChannelOperator {
     Combine,
     Join { left_key: String, right_key: String },
     GroupTuple { key: String },
+    Branch { branches: Vec<ChannelBranch> },
 }
 
-#[derive(Clone)]
+/// One ordered branch predicate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChannelBranch {
+    pub name: String,
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equals: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_equals: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exists: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefix: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suffix: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contains: Option<String>,
+}
+
+#[derive(Clone, Debug)]
 pub struct ChannelNode {
     operator: ChannelOperator,
     ports: NodePorts,
@@ -53,7 +73,17 @@ impl ChannelNode {
                 ports
             }
         };
-        ports = ports.add_output_port_of_type(None, PortType::Channel);
+        if let ChannelOperator::Branch { branches } = &operator {
+            for branch in branches {
+                ports = ports.add_output_port_of_type_with_label(
+                    None,
+                    PortType::Channel,
+                    branch.name.clone(),
+                );
+            }
+        } else {
+            ports = ports.add_output_port_of_type(None, PortType::Channel);
+        }
         Self { operator, ports }
     }
 
@@ -62,6 +92,9 @@ impl ChannelNode {
             serde_json::from_value::<ChannelOperator>(spec.clone()).map_err(|error| {
                 DagError::Schedule(format!("invalid channel operator specification: {error}"))
             })?;
+        if let ChannelOperator::Branch { branches } = &operator {
+            validate_branches(branches)?;
+        }
         Ok(Self::new(operator))
     }
 
@@ -220,8 +253,52 @@ impl ChannelNode {
                         .collect(),
                 })
             }
+            ChannelOperator::Branch { .. } => {
+                unreachable!("branch outputs are materialized by `execute`")
+            }
         }
     }
+}
+
+pub(crate) fn validate_branches(branches: &[ChannelBranch]) -> Result<()> {
+    if branches.is_empty() {
+        return Err(DagError::Schedule(
+            "channel.branch requires at least one branch".into(),
+        ));
+    }
+    let mut names = std::collections::BTreeSet::new();
+    for branch in branches {
+        if branch.name.trim().is_empty() {
+            return Err(DagError::Schedule(
+                "channel.branch names cannot be empty".into(),
+            ));
+        }
+        if !names.insert(branch.name.clone()) {
+            return Err(DagError::Schedule(format!(
+                "channel.branch contains duplicate output `{}`",
+                branch.name
+            )));
+        }
+        if branch.path.trim().is_empty() {
+            return Err(DagError::Schedule(format!(
+                "channel.branch `{}` has an empty item path",
+                branch.name
+            )));
+        }
+        let has_predicate = branch.equals.is_some()
+            || branch.not_equals.is_some()
+            || branch.exists.is_some()
+            || branch.prefix.is_some()
+            || branch.suffix.is_some()
+            || branch.contains.is_some();
+        if !has_predicate {
+            return Err(DagError::Schedule(format!(
+                "channel.branch `{}` requires at least one predicate",
+                branch.name
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn input_count(operator: &ChannelOperator) -> usize {
@@ -232,7 +309,8 @@ fn input_count(operator: &ChannelOperator) -> usize {
         | ChannelOperator::Filter { .. }
         | ChannelOperator::Flatten
         | ChannelOperator::Collect
-        | ChannelOperator::GroupTuple { .. } => 1,
+        | ChannelOperator::GroupTuple { .. }
+        | ChannelOperator::Branch { .. } => 1,
     }
 }
 
@@ -264,6 +342,45 @@ fn canonical_json(value: &Value) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| value.to_string())
 }
 
+fn branch_matches(branch: &ChannelBranch, item: &Value) -> bool {
+    let actual = item.pointer(&pointer_path(&branch.path));
+    if actual.is_none() {
+        return branch.exists == Some(false);
+    }
+    if let Some(exists) = branch.exists
+        && actual.is_some() != exists
+    {
+        return false;
+    }
+    if let Some(expected) = &branch.equals
+        && actual != Some(expected)
+    {
+        return false;
+    }
+    if let Some(unexpected) = &branch.not_equals
+        && actual == Some(unexpected)
+    {
+        return false;
+    }
+    let text = actual.and_then(Value::as_str);
+    if let Some(expected) = &branch.prefix
+        && !text.is_some_and(|value| value.starts_with(expected))
+    {
+        return false;
+    }
+    if let Some(expected) = &branch.suffix
+        && !text.is_some_and(|value| value.ends_with(expected))
+    {
+        return false;
+    }
+    if let Some(expected) = &branch.contains
+        && !text.is_some_and(|value| value.contains(expected.as_str()))
+    {
+        return false;
+    }
+    true
+}
+
 #[async_trait::async_trait]
 impl DagNode for ChannelNode {
     fn ports(&self) -> &NodePorts {
@@ -292,9 +409,28 @@ impl DagNode for ChannelNode {
                 self.operator
             )));
         }
-        let channel = self.apply(inputs)?;
         let mut outputs = PortOutputs::new();
-        outputs.insert(0, channel);
+        if let ChannelOperator::Branch { branches } = &self.operator {
+            let mut branch_outputs = branches
+                .iter()
+                .map(|_| ChannelValue::default())
+                .collect::<Vec<_>>();
+            for item in channel_items(inputs, 0)? {
+                if let Some((index, _)) = branches
+                    .iter()
+                    .enumerate()
+                    .find(|(_, branch)| branch_matches(branch, &item))
+                {
+                    branch_outputs[index].items.push(item);
+                }
+            }
+            for (port, channel) in branch_outputs.into_iter().enumerate() {
+                outputs.insert(port as u8, channel);
+            }
+        } else {
+            let channel = self.apply(inputs)?;
+            outputs.insert(0, channel);
+        }
         Ok(outputs)
     }
 
@@ -323,15 +459,94 @@ mod tests {
     }
 
     async fn apply(operator: ChannelOperator, inputs: Vec<NodeInput>) -> ChannelValue {
-        let mut node = ChannelNode::new(operator);
+        let outputs = execute_node(ChannelNode::new(operator), inputs).await;
+        outputs[&0].as_channel().unwrap().clone()
+    }
+
+    async fn execute_node(
+        mut node: ChannelNode,
+        inputs: Vec<NodeInput>,
+    ) -> crate::dag::graph::PortOutputs {
         let context = crate::registry::NodeCtx::new(
             datafusion::prelude::SessionContext::new().runtime_env(),
             None,
         );
         let (sender, _receiver) = tokio::sync::mpsc::channel(1);
         let reporter = NodeReporter::new("channel-test", sender);
-        let outputs = node.execute(&context, &inputs, &reporter).await.unwrap();
-        outputs[&0].as_channel().unwrap().clone()
+        node.execute(&context, &inputs, &reporter).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn branch_routes_items_to_labeled_output_ports() {
+        let spec = serde_json::json!({
+            "operator": "branch",
+            "branches": [
+                {"name": "high", "path": "score", "not_equals": 0},
+                {"name": "zero", "path": "score", "equals": 0},
+                {"name": "text", "path": "id", "prefix": "x"}
+            ]
+        });
+        let node = ChannelNode::from_spec(&spec).unwrap();
+        assert_eq!(
+            node.ports().output_port(0).unwrap().label.as_deref(),
+            Some("high")
+        );
+        assert_eq!(
+            node.ports().output_port(1).unwrap().label.as_deref(),
+            Some("zero")
+        );
+        assert_eq!(
+            node.ports().output_port(2).unwrap().label.as_deref(),
+            Some("text")
+        );
+
+        let inputs = vec![channel_input(
+            0,
+            vec![
+                serde_json::json!({"id": "one", "score": 10}),
+                serde_json::json!({"id": "two", "score": 0}),
+                serde_json::json!({"id": "x-three", "score": 0}),
+                serde_json::json!({"id": "unmatched"}),
+            ],
+        )];
+        let outputs = execute_node(node, inputs).await;
+        let high = outputs[&0].as_channel().unwrap();
+        let zero = outputs[&1].as_channel().unwrap();
+        let text = outputs[&2].as_channel().unwrap();
+        assert_eq!(
+            high.items,
+            vec![serde_json::json!({"id": "one", "score": 10})]
+        );
+        assert_eq!(
+            zero.items,
+            vec![
+                serde_json::json!({"id": "two", "score": 0}),
+                serde_json::json!({"id": "x-three", "score": 0})
+            ]
+        );
+        assert!(text.items.is_empty());
+    }
+
+    #[test]
+    fn branch_specifications_require_predicates_and_unique_outputs() {
+        let duplicate = serde_json::json!({
+            "operator": "branch",
+            "branches": [
+                {"name": "same", "path": "id", "equals": "a"},
+                {"name": "same", "path": "id", "equals": "b"}
+            ]
+        });
+        let error = ChannelNode::from_spec(&duplicate).unwrap_err();
+        assert!(error.to_string().contains("duplicate output"));
+
+        let missing_predicate =
+            serde_json::json!({"operator": "branch", "branches": [{"name": "out", "path": "id"}]});
+        let error = ChannelNode::from_spec(&missing_predicate).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("requires at least one predicate")
+        );
     }
 
     #[tokio::test]

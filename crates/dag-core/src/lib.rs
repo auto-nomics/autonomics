@@ -16,6 +16,7 @@ pub mod resource;
 pub mod sink;
 pub mod value;
 
+pub use dag::{ChannelBranch, ChannelNode, ChannelOperator};
 pub use node::{
     BundleRegistry, BundleRegistryError, DEFAULT_PORT, DagNode, DataBundle, DataBundleBinding,
     NodeId, NodeInput, NodePorts, Port, PortId, ResolvedDataBundle,

@@ -2644,7 +2644,7 @@ fn canonical_file_path(path: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use crate::dag::{ChannelNode, ChannelOperator, NodeInput, NodePorts};
+    use crate::dag::{ChannelBranch, ChannelNode, ChannelOperator, NodeInput, NodePorts};
     use crate::value::{FileRef, PortType};
     use std::assert_matches;
 
@@ -2846,6 +2846,89 @@ mod tests {
     fn test_ctx() -> crate::registry::NodeCtx {
         use datafusion::prelude::SessionContext;
         crate::registry::NodeCtx::new(SessionContext::new().runtime_env(), None)
+    }
+
+    #[tokio::test]
+    async fn channel_branch_compiles_to_multiple_output_ports() -> Result<()> {
+        let logical = crate::dag::LogicalGraph::builder()
+            .add_node(crate::dag::LogicalNode::channel(
+                "source",
+                ChannelOperator::OfItems {
+                    items: vec![
+                        serde_json::json!({"kind": "high"}),
+                        serde_json::json!({"kind": "low"}),
+                        serde_json::json!({"kind": "unknown"}),
+                    ],
+                },
+            ))
+            .add_node(crate::dag::LogicalNode::channel(
+                "branch",
+                ChannelOperator::Branch {
+                    branches: vec![
+                        ChannelBranch {
+                            name: "high".into(),
+                            path: "kind".into(),
+                            equals: Some(serde_json::json!("high")),
+                            not_equals: None,
+                            exists: None,
+                            prefix: None,
+                            suffix: None,
+                            contains: None,
+                        },
+                        ChannelBranch {
+                            name: "low".into(),
+                            path: "kind".into(),
+                            equals: Some(serde_json::json!("low")),
+                            not_equals: None,
+                            exists: None,
+                            prefix: None,
+                            suffix: None,
+                            contains: None,
+                        },
+                    ],
+                },
+            ))
+            .add_node(crate::dag::LogicalNode::channel(
+                "collect_high",
+                ChannelOperator::Collect,
+            ))
+            .add_node(crate::dag::LogicalNode::channel(
+                "collect_low",
+                ChannelOperator::Collect,
+            ))
+            .add_edge("source", "branch", 0, 0)
+            .add_edge("branch", "collect_high", 0, 0)
+            .add_edge("branch", "collect_low", 1, 0)
+            .build();
+        let physical = logical
+            .compile(|_, _| unreachable!("channel nodes are built by the planner"))
+            .unwrap();
+        let mut dag = DAG::default();
+        dag.install_compiled_graph(logical, physical)?;
+        assert_eq!(
+            dag.get_node("branch#0")
+                .unwrap()
+                .ports()
+                .output_port(1)
+                .unwrap()
+                .label,
+            Some("low".into())
+        );
+
+        let report = dag
+            .run(&crate::dag::SchedulerConfig::default(), &test_ctx(), None)
+            .await?;
+        assert!(report.ok, "{report:?}");
+        let NodeValue::Channel(high) = &dag.output("collect_high#0").unwrap()[&0] else {
+            panic!("high branch should emit a channel");
+        };
+        let NodeValue::Channel(low) = &dag.output("collect_low#0").unwrap()[&0] else {
+            panic!("low branch should emit a channel");
+        };
+        assert_eq!(high.items, vec![serde_json::json!({"kind": "high"})]);
+        assert_eq!(low.items, vec![serde_json::json!({"kind": "low"})]);
+        dag.to_manifest().validate_layers()?;
+        Ok(())
     }
 
     #[tokio::test]

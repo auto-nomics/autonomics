@@ -75,7 +75,7 @@ pub const MANIFEST_SCHEMA_VERSION: u16 = 2;
 /// The stored physical graph remains authoritative for exact restore. This
 /// version makes compiler drift visible when a historical logical graph is
 /// re-expanded with a newer planner.
-pub const LOGICAL_COMPILER_VERSION: u16 = 2;
+pub const LOGICAL_COMPILER_VERSION: u16 = 3;
 
 /// A pure-data, fully serializable description of a DAG's logical source and
 /// expanded physical topology — sufficient to reconstruct the DAG from a

@@ -24,7 +24,7 @@ pub mod view;
 // and so that dag internals (graph.rs, runtime.rs) can use `super::DagNode` etc.
 pub use crate::node::{DagNode, NodeId, NodeInput, NodePorts};
 
-pub use channel::{ChannelNode, ChannelOperator};
+pub use channel::{ChannelBranch, ChannelNode, ChannelOperator};
 pub use error::{DagError, NodeError};
 pub use export::{ExportFile, ExportFormat, ExportSummary, SkippedFile};
 pub use graph::{DAG, DynamicNodeBuilder};
