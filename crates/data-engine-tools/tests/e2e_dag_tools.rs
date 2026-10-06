@@ -26,8 +26,32 @@ fn check_ok(result: &ToolResult, label: &str) {
     );
 }
 
+async fn dag_shell(toolset: &Toolset, id: &str, script: &str) -> serde_json::Value {
+    let results = toolset
+        .execute(
+            &[build_tooluse(id, "dag_shell", json!({"script": script}))],
+            None,
+        )
+        .await
+        .unwrap();
+    check_ok(&results[0], id);
+    result_json(&results[0])
+}
+
+async fn build_source_sink(toolset: &Toolset, id: &str, output: &str) {
+    let script = format!(
+        r#"
+        node("src", "file_to_dataframe", #{{path: "/insurance.csv"}});
+        node("sink", "dataframe_to_file", #{{path: "{output}", format: "csv", mode: "overwrite"}});
+        edge("src", 0, "sink", 0);
+        commit();
+        "#,
+    );
+    dag_shell(toolset, id, &script).await;
+}
+
 #[tokio::test]
-async fn agent_controls_channel_operators_with_logical_graph_tool() {
+async fn agent_controls_channel_operators_with_dag_shell() {
     let engine = DataEngine::builder().build();
     let (client, _handle) = spawn_with_engine(engine);
     let tools = data_engine_tools::registrations(Arc::new(client));
@@ -35,65 +59,31 @@ async fn agent_controls_channel_operators_with_logical_graph_tool() {
     registry.register_all(tools).unwrap();
     let toolset = Toolset::from_registry(Arc::new(registry), None);
 
-    let results = toolset
-        .execute(
-            &[build_tooluse(
-                "channel-graph",
-                "add_logical_graph",
-                json!({
-                    "graph": {
-                        "nodes": [
-                            {
-                                "id": "agent_items",
-                                "definition": {
-                                    "Channel": {
-                                        "operator": "of_items",
-                                        "items": [{"id": "one"}, {"id": "two"}]
-                                    }
-                                },
-                                "strategy": "Once"
-                            },
-                            {
-                                "id": "agent_mapped",
-                                "definition": {
-                                    "Channel": {
-                                        "operator": "map",
-                                        "template": {"name": "{{item.id}}"}
-                                    }
-                                },
-                                "strategy": "Once"
-                            }
-                        ],
-                        "edges": [
-                            {
-                                "from": "agent_items",
-                                "from_port": 0,
-                                "to": "agent_mapped",
-                                "to_port": 0
-                            }
-                        ]
-                    }
-                }),
-            )],
-            None,
-        )
-        .await
-        .unwrap();
-    check_ok(&results[0], "add_logical_graph");
-    let installed = result_json(&results[0]);
-    assert_eq!(installed["logical_node_count"], json!(2));
-    assert!(
-        installed["jobs"]
-            .as_object()
-            .unwrap()
-            .contains_key("agent_items#0")
-    );
-    assert!(
-        installed["jobs"]
-            .as_object()
-            .unwrap()
-            .contains_key("agent_mapped#0")
-    );
+    let installed = dag_shell(
+        &toolset,
+        "channel-graph",
+        r#"
+        add_logical_graph(#{
+            nodes: [
+                #{
+                    id: "agent_items",
+                    definition: #{Channel: #{operator: "of_items", items: [#{id: "one"}, #{id: "two"}]}},
+                    strategy: "Once"
+                },
+                #{
+                    id: "agent_mapped",
+                    definition: #{Channel: #{operator: "map", template: #{name: "{{item.id}}"}}},
+                    strategy: "Once"
+                }
+            ],
+            edges: [#{from: "agent_items", from_port: 0, to: "agent_mapped", to_port: 0}]
+        });
+        commit();
+        "#,
+    )
+    .await;
+    assert_eq!(installed["ok"], json!(true));
+    assert_eq!(installed["graph"]["logical_graph_count"], json!(1));
 
     let results = toolset
         .execute(&[build_tooluse("channel-run", "run_dag", json!({}))], None)
@@ -199,88 +189,22 @@ async fn test_add_source_sql_run_dag() {
     registry.register_all(tools).unwrap();
     let toolset = Toolset::from_registry(Arc::new(registry), None);
 
-    // 4. Add source node via generic add_node
-    let results = toolset
-        .execute(
-            &[build_tooluse(
-                "tc1",
-                "add_node",
-                json!({"id": "src", "kind": "file_to_dataframe", "spec": {"path": "/insurance.csv"}}),
-            )],
-            None,
-        )
-        .await
-        .unwrap();
-    assert_eq!(results.len(), 1);
-    check_ok(&results[0], "add_node source");
-
-    // 5. Add SQL node via generic add_node
-    let results = toolset
-        .execute(
-            &[build_tooluse(
-                "tc2",
-                "add_node",
-                json!({
-                    "id": "sql",
-                    "kind": "sql",
-                    "spec": {"sql_query": "SELECT age, charges FROM port_0 WHERE age > 30 LIMIT 5"}
-                }),
-            )],
-            None,
-        )
-        .await
-        .unwrap();
-    assert_eq!(results.len(), 1);
-    check_ok(&results[0], "add_node sql");
-
-    // 6. Add edge (src -> sql) via tool
-    let results = toolset
-        .execute(
-            &[build_tooluse(
-                "tc3",
-                "add_edge",
-                json!({"from": "src", "from_port": 0, "to": "sql", "to_port": 0}),
-            )],
-            None,
-        )
-        .await
-        .unwrap();
-    assert_eq!(results.len(), 1);
-    check_ok(&results[0], "add_edge");
-
-    // 7. Add file sink node via generic add_node
-    let results = toolset
-        .execute(
-            &[build_tooluse(
-                "tc4",
-                "add_node",
-                json!({
-                    "id": "sink",
-                    "kind": "dataframe_to_file",
-                    "spec": {"path": "/output.csv", "format": "csv", "mode": "overwrite"}
-                }),
-            )],
-            None,
-        )
-        .await
-        .unwrap();
-    assert_eq!(results.len(), 1);
-    check_ok(&results[0], "add_node file_sink");
-
-    // 8. Edge (sql -> sink) via tool
-    let results = toolset
-        .execute(
-            &[build_tooluse(
-                "tc5",
-                "add_edge",
-                json!({"from": "sql", "from_port": 0, "to": "sink", "to_port": 0}),
-            )],
-            None,
-        )
-        .await
-        .unwrap();
-    assert_eq!(results.len(), 1);
-    check_ok(&results[0], "add_edge sql->sink");
+    // Build the whole graph in one transaction.
+    let outcome = dag_shell(
+        &toolset,
+        "build",
+        r#"
+        node("src", "file_to_dataframe", #{path: "/insurance.csv"});
+        node("sql", "sql", #{sql_query: "SELECT age, charges FROM port_0 WHERE age > 30 LIMIT 5"});
+        node("sink", "dataframe_to_file", #{path: "/output.csv", format: "csv", mode: "overwrite"});
+        edge("src", 0, "sql", 0);
+        edge("sql", 0, "sink", 0);
+        commit();
+        "#,
+    )
+    .await;
+    assert_eq!(outcome["applied"], json!(true));
+    assert_eq!(outcome["graph"]["node_count"], json!(3));
 }
 
 #[tokio::test]
@@ -374,22 +298,10 @@ async fn test_get_output_file_to_dataframe_csv_parquet_json() {
     let toolset = Toolset::from_registry(Arc::new(registry), None);
 
     for format in ["csv", "json", "parquet"] {
-        let results = toolset
-            .execute(
-                &[build_tooluse(
-                    "add",
-                    "add_node",
-                    json!({
-                        "id": "source",
-                        "kind": "file_to_dataframe",
-                        "spec": {"path": format!("/source.{format}")}
-                    }),
-                )],
-                None,
-            )
-            .await
-            .unwrap();
-        check_ok(&results[0], format!("add {format} source").as_str());
+        let script = format!(
+            r#"node("source", "file_to_dataframe", #{{path: "/source.{format}"}}); commit();"#
+        );
+        dag_shell(&toolset, "add", &script).await;
 
         let results = toolset
             .execute(&[build_tooluse("run", "run_dag", json!({}))], None)
@@ -437,23 +349,12 @@ async fn test_get_output_file_to_dataframe_csv_parquet_json() {
             "{format} source output: {parsed}"
         );
 
-        let results = toolset
-            .execute(
-                &[build_tooluse(
-                    "remove",
-                    "remove_node",
-                    json!({"id": "source"}),
-                )],
-                None,
-            )
-            .await
-            .unwrap();
-        check_ok(&results[0], format!("remove {format} source").as_str());
+        dag_shell(&toolset, "remove", r#"remove_node("source"); commit();"#).await;
     }
 }
 
 #[tokio::test]
-async fn same_turn_add_nodes_and_edge_then_remove_edge_and_upstream() {
+async fn dag_shell_builds_then_removes_edge_and_node() {
     let engine = DataEngine::builder().build();
     let (client, _handle) = spawn_with_engine(engine);
     let tools = data_engine_tools::registrations(Arc::new(client));
@@ -461,59 +362,29 @@ async fn same_turn_add_nodes_and_edge_then_remove_edge_and_upstream() {
     registry.register_all(tools).unwrap();
     let toolset = Toolset::from_registry(Arc::new(registry), None);
 
-    let results = toolset
-        .execute(
-            &[
-                build_tooluse(
-                    "add-source",
-                    "add_node",
-                    json!({"id": "source", "kind": "file_to_dataframe", "spec": {"path": null}}),
-                ),
-                build_tooluse(
-                    "add-sql",
-                    "add_node",
-                    json!({"id": "transform", "kind": "sql", "spec": {"sql_query": "SELECT * FROM port_0"}}),
-                ),
-                build_tooluse(
-                    "connect",
-                    "add_edge",
-                    json!({"from": "source", "from_port": 0, "to": "transform", "to_port": 0}),
-                ),
-            ],
-            None,
-        )
-        .await
-        .unwrap();
-    assert_eq!(results.len(), 3);
-    for (index, result) in results.iter().enumerate() {
-        check_ok(result, &format!("same-turn result {index}"));
-    }
+    dag_shell(
+        &toolset,
+        "build",
+        r#"
+        node("source", "file_to_dataframe", #{path: ()});
+        node("transform", "sql", #{sql_query: "SELECT * FROM port_0"});
+        edge("source", 0, "transform", 0);
+        commit();
+        "#,
+    )
+    .await;
 
-    let results = toolset
-        .execute(
-            &[build_tooluse(
-                "disconnect",
-                "remove_edge",
-                json!({"from": "source", "from_port": 0, "to": "transform", "to_port": 0}),
-            )],
-            None,
-        )
-        .await
-        .unwrap();
-    check_ok(&results[0], "remove_edge");
-
-    let results = toolset
-        .execute(
-            &[build_tooluse(
-                "remove-source",
-                "remove_node",
-                json!({"id": "source"}),
-            )],
-            None,
-        )
-        .await
-        .unwrap();
-    check_ok(&results[0], "remove source after disconnect");
+    let removed = dag_shell(
+        &toolset,
+        "remove",
+        r#"
+        remove_edge("source", 0, "transform", 0);
+        remove_node("transform");
+        commit();
+        "#,
+    )
+    .await;
+    assert_eq!(removed["graph"]["node_count"], json!(1));
 }
 
 /// Regression: when a SqlNode output contains a Struct-typed column,
@@ -552,53 +423,17 @@ async fn test_get_output_vcf_select_star_returns_correct_rows() {
     registry.register_all(tools).unwrap();
     let toolset = Toolset::from_registry(Arc::new(registry), None);
 
-    // 1. VCF source — auto-detected from the `.vcf.gz` extension.
-    let res = toolset
-        .execute(
-            &[build_tooluse(
-                "v1",
-                "add_node",
-                json!({"id": "vcf_src", "kind": "file_to_dataframe", "spec": {"path": "/sample.vcf.gz"}}),
-            )],
-            None,
-        )
-        .await
-        .unwrap();
-    check_ok(&res[0], "add_node source (vcf)");
-
-    // 2. `SELECT * FROM port_0 LIMIT 5` — the exact query from the agent's
-    //    obstacle #2 report. Forces the VCF (Struct + Dictionary/List info
-    //    subfields) through the SqlNode collect path.
-    let res = toolset
-        .execute(
-            &[build_tooluse(
-                "v2",
-                "add_node",
-                json!({
-                    "id": "preview",
-                    "kind": "sql",
-                    "spec": {"sql_query": "SELECT * FROM port_0 LIMIT 5"}
-                }),
-            )],
-            None,
-        )
-        .await
-        .unwrap();
-    check_ok(&res[0], "add_node sql (SELECT * LIMIT 5)");
-
-    // 3. Edge + run.
-    let res = toolset
-        .execute(
-            &[build_tooluse(
-                "v3",
-                "add_edge",
-                json!({"from": "vcf_src", "from_port": 0, "to": "preview", "to_port": 0}),
-            )],
-            None,
-        )
-        .await
-        .unwrap();
-    check_ok(&res[0], "add_edge vcf_src->preview");
+    dag_shell(
+        &toolset,
+        "build",
+        r#"
+        node("vcf_src", "file_to_dataframe", #{path: "/sample.vcf.gz"});
+        node("preview", "sql", #{sql_query: "SELECT * FROM port_0 LIMIT 5"});
+        edge("vcf_src", 0, "preview", 0);
+        commit();
+        "#,
+    )
+    .await;
 
     let res = toolset
         .execute(&[build_tooluse("v4", "run_dag", json!({}))], None)
@@ -676,52 +511,18 @@ async fn test_get_output_failed_node_returns_structured_error() {
     registry.register_all(tools).unwrap();
     let toolset = Toolset::from_registry(Arc::new(registry), None);
 
-    let res = toolset
-        .execute(
-            &[build_tooluse(
-                "e1",
-                "add_node",
-                json!({"id": "src", "kind": "file_to_dataframe", "spec": {"path": "/badcast.csv"}}),
-            )],
-            None,
-        )
-        .await
-        .unwrap();
-    check_ok(&res[0], "add_node source");
-
-    // Runtime-erroring projection. The executor has no cached output after
-    // this node fails.
-    let res = toolset
-        .execute(
-            &[build_tooluse(
-                "e2",
-                "add_node",
-                json!({
-                    "id": "badcast",
-                    "kind": "sql",
-                    "spec": {
-                        "sql_query": "SELECT sum(age) / 0 AS n FROM port_0"
-                    }
-                }),
-            )],
-            None,
-        )
-        .await
-        .unwrap();
-    check_ok(&res[0], "add_node sql (badcast)");
-
-    let res = toolset
-        .execute(
-            &[build_tooluse(
-                "e3",
-                "add_edge",
-                json!({"from": "src", "from_port": 0, "to": "badcast", "to_port": 0}),
-            )],
-            None,
-        )
-        .await
-        .unwrap();
-    check_ok(&res[0], "add_edge");
+    // Runtime-erroring projection with its source.
+    dag_shell(
+        &toolset,
+        "build",
+        r#"
+        node("src", "file_to_dataframe", #{path: "/badcast.csv"});
+        node("badcast", "sql", #{sql_query: "SELECT sum(age) / 0 AS n FROM port_0"});
+        edge("src", 0, "badcast", 0);
+        commit();
+        "#,
+    )
+    .await;
 
     let res = toolset
         .execute(&[build_tooluse("e4", "run_dag", json!({}))], None)
@@ -780,50 +581,18 @@ async fn test_get_output_synthetic_struct_column_baseline() {
     registry.register_all(tools).unwrap();
     let toolset = Toolset::from_registry(Arc::new(registry), None);
 
-    let res = toolset
-        .execute(
-            &[build_tooluse(
-                "b1",
-                "add_node",
-                json!({"id": "src", "kind": "file_to_dataframe", "spec": {"path": "/insurance.csv"}}),
-            )],
-            None,
-        )
-        .await
-        .unwrap();
-    check_ok(&res[0], "add_node source");
-
-    // Struct column via named_struct — plain Struct(Float64, Float64), no
-    // Dictionary/List encoding. Baseline that should always work.
-    let res = toolset
-        .execute(
-            &[build_tooluse(
-                "b2",
-                "add_node",
-                json!({
-                    "id": "struct_node",
-                    "kind": "sql",
-                    "spec": {"sql_query": "SELECT age, named_struct('lo', 0.0, 'hi', charges) AS bounds FROM port_0 WHERE age > 30 LIMIT 5"}
-                }),
-            )],
-            None,
-        )
-        .await
-        .unwrap();
-    check_ok(&res[0], "add_node sql (synthetic struct)");
-
-    let res = toolset
-        .execute(
-            &[build_tooluse(
-                "b3",
-                "add_edge",
-                json!({"from": "src", "from_port": 0, "to": "struct_node", "to_port": 0}),
-            )],
-            None,
-        )
-        .await
-        .unwrap();
-    check_ok(&res[0], "add_edge");
+    // Struct column via named_struct, as a control for the VCF regression.
+    dag_shell(
+        &toolset,
+        "build",
+        r#"
+        node("src", "file_to_dataframe", #{path: "/insurance.csv"});
+        node("struct_node", "sql", #{sql_query: "SELECT age, named_struct('lo', 0.0, 'hi', charges) AS bounds FROM port_0 WHERE age > 30 LIMIT 5"});
+        edge("src", 0, "struct_node", 0);
+        commit();
+        "#,
+    )
+    .await;
 
     let res = toolset
         .execute(&[build_tooluse("b4", "run_dag", json!({}))], None)
@@ -859,8 +628,8 @@ async fn test_get_output_synthetic_struct_column_baseline() {
 ///
 /// This is the instance-level counterpart of `get_node_spec` (which returns a
 /// kind's parameter *schema*). The test verifies:
-///   1. After `add_node`, `inspect_node` returns the exact spec that was passed.
-///   2. After `update_node`, `inspect_node` reflects the updated spec.
+///   1. After `dag_shell`, `inspect_node` returns the exact spec that was passed.
+///   2. After an update operation, `inspect_node` reflects the updated spec.
 ///   3. `inspect_node` on a non-existent id returns an error hint (not a crash
 ///      and not a silent null).
 #[tokio::test]
@@ -884,24 +653,17 @@ async fn test_inspect_node_returns_live_spec() {
     registry.register_all(tools).unwrap();
     let toolset = Toolset::from_registry(Arc::new(registry), None);
 
-    // 1. Add a SQL node with a known spec.
+    // 1. Build a source and SQL node with a known spec.
     let original_query = "SELECT age, charges FROM port_0 WHERE age > 30 LIMIT 5";
-    let results = toolset
-        .execute(
-            &[build_tooluse(
-                "tc1",
-                "add_node",
-                json!({
-                    "id": "sql",
-                    "kind": "sql",
-                    "spec": {"sql_query": original_query}
-                }),
-            )],
-            None,
-        )
-        .await
-        .unwrap();
-    check_ok(&results[0], "add_node sql");
+    let script = format!(
+        r#"
+        node("src", "file_to_dataframe", #{{path: "/insurance.csv"}});
+        node("sql", "sql", #{{sql_query: "{original_query}"}});
+        edge("src", 0, "sql", 0);
+        commit();
+        "#,
+    );
+    dag_shell(&toolset, "build", &script).await;
 
     // 2. inspect_node must return the exact kind + spec.
     let results = toolset
@@ -923,18 +685,8 @@ async fn test_inspect_node_returns_live_spec() {
 
     // 3. Update the spec; inspect_node must reflect the change.
     let updated_query = "SELECT age FROM port_0 LIMIT 10";
-    let results = toolset
-        .execute(
-            &[build_tooluse(
-                "tc3",
-                "update_node",
-                json!({"id": "sql", "spec": {"sql_query": updated_query}}),
-            )],
-            None,
-        )
-        .await
-        .unwrap();
-    check_ok(&results[0], "update_node sql");
+    let script = format!(r#"update_node("sql", #{{sql_query: "{updated_query}"}}); commit();"#);
+    dag_shell(&toolset, "update", &script).await;
 
     let results = toolset
         .execute(
@@ -1048,32 +800,17 @@ async fn test_dag_runs_log_records_execution_audit_trail() {
     registry.register_all(tools).unwrap();
     let toolset = Toolset::from_registry(Arc::new(registry), None);
 
-    // Minimal pipeline: source -> sql (sequential calls, matching the
-    // established e2e flow).
-    let steps: Vec<(&str, &str, serde_json::Value)> = vec![
-        (
-            "a1",
-            "add_node",
-            json!({"id": "src", "kind": "file_to_dataframe", "spec": {"path": "/insurance.csv"}}),
-        ),
-        (
-            "a2",
-            "add_node",
-            json!({"id": "sql", "kind": "sql", "spec": {"sql_query": "SELECT age FROM port_0 LIMIT 3"}}),
-        ),
-        (
-            "a3",
-            "add_edge",
-            json!({"from": "src", "from_port": 0, "to": "sql", "to_port": 0}),
-        ),
-    ];
-    for (call, name, input) in steps {
-        let results = toolset
-            .execute(&[build_tooluse(call, name, input)], None)
-            .await
-            .unwrap();
-        check_ok(&results[0], name);
-    }
+    dag_shell(
+        &toolset,
+        "build",
+        r#"
+        node("src", "file_to_dataframe", #{path: "/insurance.csv"});
+        node("sql", "sql", #{sql_query: "SELECT age FROM port_0 LIMIT 3"});
+        edge("src", 0, "sql", 0);
+        commit();
+        "#,
+    )
+    .await;
 
     // Two executions through the tool — the audit path under test.
     for call in ["r1", "r2"] {
@@ -1193,31 +930,7 @@ async fn test_dag_export_run_produces_evidence_crate() {
     registry.register_all(tools).unwrap();
     let toolset = Toolset::from_registry(Arc::new(registry), None);
 
-    let steps: Vec<(&str, &str, serde_json::Value)> = vec![
-        (
-            "x1",
-            "add_node",
-            json!({"id": "src", "kind": "file_to_dataframe", "spec": {"path": "/insurance.csv"}}),
-        ),
-        (
-            "x2",
-            "add_node",
-            json!({"id": "sink", "kind": "dataframe_to_file",
-                   "spec": {"path": "/exports/out.csv", "format": "csv", "mode": "overwrite"}}),
-        ),
-        (
-            "x3",
-            "add_edge",
-            json!({"from": "src", "from_port": 0, "to": "sink", "to_port": 0}),
-        ),
-    ];
-    for (call, name, input) in steps {
-        let results = toolset
-            .execute(&[build_tooluse(call, name, input)], None)
-            .await
-            .unwrap();
-        check_ok(&results[0], name);
-    }
+    build_source_sink(&toolset, "build", "/exports/out.csv").await;
     let results = toolset
         .execute(&[build_tooluse("xr", "run_dag", json!({}))], None)
         .await
@@ -1362,30 +1075,7 @@ async fn test_dag_export_run_uploads_into_vfs() {
     registry.register_all(tools).unwrap();
     let toolset = Toolset::from_registry(Arc::new(registry), None);
 
-    for (call, name, input) in [
-        (
-            "v1",
-            "add_node",
-            json!({"id": "src", "kind": "file_to_dataframe", "spec": {"path": "/insurance.csv"}}),
-        ),
-        (
-            "v2",
-            "add_node",
-            json!({"id": "sink", "kind": "dataframe_to_file",
-                   "spec": {"path": "/vfs-exports/out.csv", "format": "csv", "mode": "overwrite"}}),
-        ),
-        (
-            "v3",
-            "add_edge",
-            json!({"from": "src", "from_port": 0, "to": "sink", "to_port": 0}),
-        ),
-    ] {
-        let results = toolset
-            .execute(&[build_tooluse(call, name, input)], None)
-            .await
-            .unwrap();
-        check_ok(&results[0], name);
-    }
+    build_source_sink(&toolset, "build", "/vfs-exports/out.csv").await;
     let results = toolset
         .execute(&[build_tooluse("vr", "run_dag", json!({}))], None)
         .await
@@ -1483,30 +1173,7 @@ async fn test_dag_export_run_prov_carries_specs_edges_and_order() {
     registry.register_all(tools).unwrap();
     let toolset = Toolset::from_registry(Arc::new(registry), None);
 
-    for (call, name, input) in [
-        (
-            "v1",
-            "add_node",
-            json!({"id": "src", "kind": "file_to_dataframe", "spec": {"path": "/insurance.csv"}}),
-        ),
-        (
-            "v2",
-            "add_node",
-            json!({"id": "sink", "kind": "dataframe_to_file",
-                   "spec": {"path": "/vfs-exports/out.csv", "format": "csv", "mode": "overwrite"}}),
-        ),
-        (
-            "v3",
-            "add_edge",
-            json!({"from": "src", "from_port": 0, "to": "sink", "to_port": 0}),
-        ),
-    ] {
-        let results = toolset
-            .execute(&[build_tooluse(call, name, input)], None)
-            .await
-            .unwrap();
-        check_ok(&results[0], name);
-    }
+    build_source_sink(&toolset, "build", "/vfs-exports/out.csv").await;
     let results = toolset
         .execute(&[build_tooluse("vr", "run_dag", json!({}))], None)
         .await

@@ -12,7 +12,7 @@ use crate::ExecError;
     name = "get_node_spec",
     description = "Get the JSON Schema for a specific node kind. \
                   Returns the full parameter specification required to configure \
-                  a node via add_node. Always call this before add_node to get \
+                  a node through dag_shell. Always call it before creating nodes to get \
                   the exact fields and types expected by the chosen node kind."
 )]
 pub struct GetNodeSpecInput {
