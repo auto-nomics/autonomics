@@ -14,9 +14,9 @@
 //! The trait is **sugar, not storage** (NC7b): implementors are
 //! resolved once at insertion into plain data — label, size, kind tag,
 //! optional painter fn, payload — so the object may be a temporary and
-//! no `&dyn` is stored anywhere. All five fields travel both IRs
-//! (including graphs built directly on `CsrGraphBuilder`) and drive
-//! rendering; custom nodes serialize their kind and payload to JSON.
+//! no `&dyn` is stored anywhere. All five fields travel through the IRs
+//! and drive rendering; custom nodes serialize their kind and payload to
+//! JSON.
 //! Rich typed state must flatten into `payload`; the painter parses it
 //! back as it draws (zero-alloc iteration — see the trait docs).
 
@@ -42,12 +42,12 @@ pub enum NodeKindTag {
 }
 
 impl NodeKindTag {
-    /// Stable storage value (CSR `NODE_FLAGS` bits / heap tag array).
+    /// Stable storage value used by arena-backed IR.
     ///
-    /// Exhaustive on purpose — the CSR-tag-drift guard: a new kind
-    /// added here fails to compile until every conversion handles it.
+    /// Exhaustive on purpose: a new kind added here fails to compile
+    /// until every conversion handles it.
     #[inline]
-    // Consumers: Graph resolution (alloc) and CsrGraphBuilder (arena).
+    // Consumers: Graph resolution and arena-backed IR.
     #[cfg_attr(not(any(feature = "alloc", feature = "arena")), allow(dead_code))]
     pub(crate) fn to_u8(self) -> u8 {
         match self {

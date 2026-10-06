@@ -223,7 +223,7 @@ pub struct LayoutEdgeArena {
 /// `&str` lifetime by storing label offset/length into shared label storage.
 #[derive(Debug, Clone, Copy)]
 pub struct SubgraphInfoArena {
-    /// Subgraph ID (matches CsrGraph subgraph index)
+    /// Subgraph ID.
     pub id: usize,
     /// Parent subgraph index (`usize::MAX` = top-level)
     pub parent_idx: usize,

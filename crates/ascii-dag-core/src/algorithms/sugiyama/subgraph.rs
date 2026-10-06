@@ -1719,7 +1719,7 @@ pub(crate) fn compute_bounding_boxes<'a, A: Axis>(
 
     // Pass 2: propagate child bounding boxes to parents (bottom-up).
     // The child bbox already includes its own cross-axis pads; the parent
-    // adds only its border column (shared rule with the CSR backend).
+    // adds only its border column.
     for &sg_idx in &order {
         let sg = &dag.subgraphs[sg_idx];
         if let Some(parent_id) = sg.parent_id {

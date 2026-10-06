@@ -1,13 +1,8 @@
-//! Cluster-geometry constants shared by both layout backends.
+//! Cluster-geometry constants shared by layout and sizing helpers.
 //!
-//! The heap path (`heap.rs` / `subgraph.rs`) and the no-alloc CSR path
-//! (`arena_csr.rs`) must render subgraphs identically. Every spacing
-//! constant they share lives here — defining one locally in a backend
-//! is a bug, because the two copies can silently drift apart with one
-//! bad edit.
-//!
-//! This module is unconditional (no `alloc` requirement) so the CSR
-//! path can use it in `no_std` builds.
+//! Every spacing constant shared beyond one implementation lives here —
+//! defining another copy can silently drift with one bad edit. The
+//! module is unconditional so it is available in `no_std` builds.
 
 /// Horizontal padding between a subgraph border and its member nodes
 /// (chars on each side).
@@ -57,8 +52,8 @@ pub(crate) const ENVELOPE_CLEARANCE: usize = 1;
 /// Which node dimension and which spacing constants feed the level
 /// axis vs the cross axis. Implemented by zero-sized marker types;
 /// never stored, never public — layout-internal only.
-// Consumers: heap layout (alloc) and CSR layout (arena); the trait is
-// wholly unused in builds with neither feature.
+// Consumers: heap layout and arena-backed helpers; the trait is wholly
+// unused in builds with neither feature.
 #[cfg_attr(not(any(feature = "alloc", feature = "arena")), allow(dead_code))]
 pub(crate) trait Axis {
     /// Node extent along the level (flow) axis. Vertical: height.
@@ -458,14 +453,10 @@ impl CrossSpan {
 }
 
 // Lane-pass budget (temp/09 P3/P4). The chain-lane allocator's scratch
-// scales with claims × levels, which is unbounded on stress-scale graphs
-// — and the CSR backend must pre-size every buffer in the caller's arena.
-// Rather than let the estimator explode (or silently cap quality on one
-// backend only), the pass runs under a budget BOTH backends evaluate
-// identically: over budget → the graph keeps its packed routing, exactly
-// the 0.10.0 output. Human-scale graphs (the entire quality corpus) are
-// far inside the budget; a 50k-node stress diamond is far outside and
-// pays zero arena bytes for the feature.
+// scales with claims × levels, which is unbounded on stress-scale graphs.
+// The pass therefore runs under a fixed budget: over budget → the graph
+// keeps its packed routing, exactly the 0.10.0 output. Human-scale graphs
+// are far inside the budget; a 50k-node stress diamond is far outside.
 
 /// Work ceiling: the pass is skipped when edges or dummies exceed this.
 pub(crate) const LANE_PASS_MAX_WORK: usize = 16_384;
@@ -490,9 +481,7 @@ pub(crate) const LANE_WORK_BUDGET: usize = 1 << 20;
 /// `rows` are candidate counts per interior level; `claims_per_gap` are
 /// the chain's filtered claim counts, one per traversed gap
 /// (`rows.len() + 1` entries — source-side gap first, target-side last).
-// Called by the heap backend; the CSR backend mirrors this arithmetic
-// inline (it cannot build the input slices without alloc). The unit
-// tests below pin the shared formula both implementations must match.
+// Called by the heap backend; the unit tests below pin the formula.
 #[cfg_attr(not(feature = "alloc"), allow(dead_code))]
 pub(crate) fn lane_dp_work(rows: &[usize], claims_per_gap: &[usize]) -> usize {
     if rows.is_empty() {
@@ -521,17 +510,13 @@ pub(crate) fn lane_scan_work(span_need: usize, components: usize, waypoints: usi
 pub(crate) fn lane_admissible(p: usize) -> bool {
     p <= LANE_MAX_CROSS
 }
-/// Largest representable cross coordinate: the CSR backend stores
-/// coordinates as `u16`, so a lane beyond this cannot exist there.
-/// BOTH backends refuse such lanes (heap included, though `usize` could
-/// hold them) — clamping instead would write a coordinate the fan
-/// arithmetic never cleared, and letting only one backend refuse would
-/// fork the outputs.
+/// Largest representable cross coordinate. Arena-backed consumers use
+/// `u16` coordinates, so a lane beyond this cannot exist; clamping
+/// instead would write a coordinate the fan arithmetic never cleared.
 pub(crate) const LANE_MAX_CROSS: usize = u16::MAX as usize;
 
-/// Whether the chain-lane pass runs at all. Evaluated identically by the
-/// heap backend, the CSR backend, and the arena estimator — the three
-/// must agree or backends diverge / arenas under-provision.
+/// Whether the chain-lane pass runs at all. Layout and arena sizing
+/// helpers must evaluate this identically or arenas under-provision.
 pub(crate) fn lane_pass_enabled(n_levels: usize, n_edges: usize, dummies: usize) -> bool {
     dummies > 0
         && dummies <= LANE_PASS_MAX_WORK

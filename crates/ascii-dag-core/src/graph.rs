@@ -942,7 +942,7 @@ impl<'a> Graph<'a> {
 
     /// The rank direction set via [`set_direction`](Self::set_direction)
     /// (`TopDown` by default) — e.g. to carry it into a
-    /// [`LayoutConfig`] for the CSR pipeline.
+    /// [`LayoutConfig`] for layout.
     pub fn direction(&self) -> Direction {
         self.direction
     }

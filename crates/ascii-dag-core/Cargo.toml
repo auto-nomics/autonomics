@@ -21,9 +21,6 @@ arena = []
 arena-idx-u8 = ["arena"]
 arena-idx-u16 = ["arena"]
 arena-idx-u32 = ["arena"]
-# Reserved for the CSR graph backend (CsrGraph, Graph::to_csr) —
-# nothing implements it yet; it gates that backend's tests.
-csr = ["ports"]
 
 [lints]
 workspace = true

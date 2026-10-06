@@ -8,7 +8,7 @@
 //! | Aspect | Arena | Heap |
 //! |--------|-------|------|
 //! | Speed | ⚡ Very fast (pointer bump) | Slower (bookkeeping) |
-//! | Memory | Uses ~5-30x CSR estimate | Uses only what's needed |
+//! | Memory | Must estimate upfront | Uses only what's needed |
 //! | `no_std` | ✅ Works | ❌ Needs allocator |
 //! | Predictability | Must estimate upfront | Allocates on demand |
 //!

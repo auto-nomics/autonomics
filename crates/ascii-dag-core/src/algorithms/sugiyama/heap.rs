@@ -12,13 +12,8 @@
 //! 5. **Slot allocation** — horizontal channel assignment for edge separation
 //! 6. **Edge routing** — direct, corner, or multi-segment paths
 //!
-//! # Relationship to CSR Path
-//!
-//! The CSR-based layout in `arena_csr.rs` implements the same algorithm
-//! using arena allocation and `Idx`-typed indices. The two paths produce
-//! visually compatible output but operate on different type systems.
-//! Shared spacing constants live in [`super::geometry`] so the backends
-//! cannot drift apart.
+//! Shared spacing constants live in [`super::geometry`] so layout and
+//! sizing behavior cannot drift apart.
 
 use crate::algorithms::sugiyama::config::{CycleBreaking, LayoutConfig};
 use crate::algorithms::sugiyama::crossing::{CrossingReducer, count_crossings_pair};
@@ -97,9 +92,7 @@ pub(crate) fn compute_layout_cfg<'a, A: Axis>(
 
     // 2-node-cycle detection in O(E log E): sort edge indices by their
     // normalized endpoint pair, then scan each run for an anti-parallel
-    // twin with the opposite back flag. Previously the CSR backend did
-    // this with an O(E) scan per straight edge (O(E²) worst case) and
-    // the heap backend lacked the feature entirely.
+    // twin with the opposite back flag.
     let edge_in_two_cycle = {
         let mut flags = vec![false; dag.edges.len()];
         let pair_key = |ei: usize| {
@@ -117,7 +110,7 @@ pub(crate) fn compute_layout_cfg<'a, A: Axis>(
             }
             // Bucket the run by (direction, back-flag); an edge is in a
             // 2-node cycle iff an opposite-direction, opposite-flag twin
-            // exists (matches the CSR predicate exactly).
+            // exists.
             let mut counts = [[0usize; 2]; 2];
             for &ei in &order[run_start..run_end] {
                 let (f, t, _) = dag.edges[ei];
@@ -575,8 +568,7 @@ pub(crate) fn compute_layout_cfg<'a, A: Axis>(
     // routing row, directly below its layout-source. Pre-occupy that
     // cell (± ARROW_CELL_PAD) on slot 0 so any horizontal span that
     // would run through the arrowhead is pushed to a deeper slot by
-    // the normal interval-collision logic below. Mirrored in the CSR
-    // allocator — the two must not drift.
+    // the normal interval-collision logic below.
     for (ei, &(from_id, to_id, _)) in dag.edges.iter().enumerate() {
         if from_id == to_id || !back_edges.get(ei).copied().unwrap_or(false) {
             continue;
@@ -952,7 +944,6 @@ pub(crate) fn compute_layout_cfg<'a, A: Axis>(
     // 1. Assign slots greedy — in layout direction, so back edges
     // participate: their own horizontal always covers their own arrow
     // column, so the seeded cell forces them below the arrow row.
-    // (Matches the CSR allocator, which already worked in layout space.)
     for (i, &(from_id, to_id, _)) in dag.edges.iter().enumerate() {
         if let (Some(from_idx), Some(to_idx)) = (dag.node_index(from_id), dag.node_index(to_id)) {
             let is_back = back_edges.get(i).copied().unwrap_or(false);
@@ -1054,7 +1045,7 @@ pub(crate) fn compute_layout_cfg<'a, A: Axis>(
     // (next waypoint, or the layout-target center), because the bend to a
     // new column is painted right below the kept row. Straight pass-through
     // dummies keep their reserved column in the level packing but need no
-    // routing row of their own. Mirrored in the CSR backend.
+    // routing row of their own.
     let mut kept_wps: Vec<Vec<bool>> = Vec::with_capacity(dag.edges.len());
     let mut level_jog_count = vec![0usize; max_level + 1];
     // Jog bend rows share the band's slot rows (bend `k` of a level
@@ -1117,7 +1108,7 @@ pub(crate) fn compute_layout_cfg<'a, A: Axis>(
 
     // Per-level label-source flags: the label row is budgeted only in the
     // bands of levels that actually source a labeled edge (labels paint in
-    // the layout-source's band). Mirrored in the CSR backend.
+    // the layout-source's band).
     let mut level_labeled_src = vec![false; max_level + 1];
     for (ei, &(from_id, to_id, label)) in dag.edges.iter().enumerate() {
         if label.is_none() || from_id == to_id {
@@ -1330,7 +1321,7 @@ pub(crate) fn compute_layout_cfg<'a, A: Axis>(
 
         // 2. Rows for edges passing through: only jogging waypoints claim
         // a row (straight pass-throughs are pure verticals), plus the
-        // bend row below the deepest jog (shared rule with CSR).
+        // bend row below the deepest jog.
         let skip_slots =
             crate::algorithms::sugiyama::geometry::passthrough_extent(level_jog_count[level]);
 
@@ -1339,7 +1330,7 @@ pub(crate) fn compute_layout_cfg<'a, A: Axis>(
         let extra_lines = slots_needed.saturating_sub(1);
 
         // Per-level overhead: the label row is budgeted only where a
-        // labeled edge is sourced (shared rule with the CSR backend).
+        // labeled edge is sourced.
         let routing_overhead =
             crate::algorithms::sugiyama::geometry::routing_overhead(level_labeled_src[level]);
         let height =
@@ -1588,8 +1579,7 @@ pub(crate) fn compute_layout_cfg<'a, A: Axis>(
             };
             // 2-node cycle sharing a column: offset the forward edge left
             // and the back edge right so the anti-parallel pair renders
-            // side by side (↓ next to ⇡) instead of overlapping. Matches
-            // the CSR backend.
+            // side by side (↓ next to ⇡) instead of overlapping.
             // Endpoint-shift separation needs cross-wide nodes
             // (Vertical: every node spans ≥3 columns). Horizontal nodes
             // are typically ONE row tall — shifted endpoints leave the
@@ -1918,8 +1908,7 @@ pub(crate) fn compute_layout_cfg<'a, A: Axis>(
                 .map(|lbl| {
                     let label_len = lbl.chars().count() + 2; // +2 for quotes
 
-                    // First row below the source level's routing block — shared
-                    // with the CSR backend so label rows cannot drift.
+                    // First row below the source level's routing block.
                     let label_y = band_trailing
                         + crate::algorithms::sugiyama::geometry::edge_label_offset(
                             level_occupied_slots[layout_from_level].len(),
@@ -2253,8 +2242,7 @@ fn allocate_chain_lanes<A: Axis>(
         return 0;
     }
     // Shared budget (geometry.rs): outside it, the graph keeps its packed
-    // routing — evaluated identically by the CSR backend and the arena
-    // estimator, so backends cannot diverge and arenas cannot under-provision.
+    // routing.
     let total_dummies: usize = dummy_positions.iter().map(|v| v.len()).sum();
     if !lane_pass_enabled(n_levels, dag.edges.len(), total_dummies) {
         return 0;
@@ -2404,8 +2392,8 @@ fn allocate_chain_lanes<A: Axis>(
 
         let mut placed: Option<Vec<usize>> = None;
 
-        // Per-chain span budget (LANE_SPAN_CAP), shared with CSR: the
-        // union scratch this chain needs, counted before building it.
+        // Per-chain span budget (LANE_SPAN_CAP): the union scratch this
+        // chain needs, counted before building it.
         let mut span_need = 0usize;
         for gap in ch.s_level..ch.t_level {
             span_need += fixed[gap]
@@ -2473,8 +2461,8 @@ fn allocate_chain_lanes<A: Axis>(
 
                 let mut best: Option<(usize, usize)> = None; // (dist, coord)
                 let mut consider = |p: usize| {
-                    // §4.6/review: a lane the CSR backend cannot
-                    // represent does not exist for either backend.
+                    // A lane outside the shared representability limit
+                    // does not exist.
                     if !crate::algorithms::sugiyama::geometry::lane_admissible(p) {
                         return;
                     }
@@ -2677,19 +2665,14 @@ fn chain_lane_dp<A: Axis>(
                 c.push(p);
             }
         }
-        // The candidate budget counts RAW pushes — before filtering and
-        // deduplication — because that is the quantity the CSR backend
-        // can meter without buffering past its arena slice. Counting
-        // post-dedup here while CSR counts raw would let a candidate-
-        // heavy chain run the DP on one backend and keep packed routing
-        // on the other.
+        // The candidate budget counts raw pushes before filtering and
+        // deduplication, keeping the meter simple and deterministic.
         total_cands += c.len();
         if total_cands > LANE_CAND_CAP {
             return None; // shared budget exhausted — keep packed
         }
         // Filter by the level's own obstacles, and by representability
-        // (`LANE_MAX_CROSS`): CSR stores coordinates as u16, and a
-        // coordinate only one backend can hold must not exist in either.
+        // (`LANE_MAX_CROSS`).
         c.retain(|&p| {
             crate::algorithms::sugiyama::geometry::lane_admissible(p)
                 && !obs[..on].iter().any(|s| s.contains(p))

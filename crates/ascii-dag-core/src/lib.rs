@@ -26,8 +26,8 @@
 //!   these keep visited sets keyed by the caller's id type, bounded
 //!   `Eq + Hash`, so they need a real `HashSet`.
 //! - `alloc`: Heap-based `Graph` API without `std`
-//! - `arena` (+ `arena-idx-u8`/`u16`/`u32`): No-alloc CSR layout and
-//!   rendering on caller-provided arenas
+//! - `arena` (+ `arena-idx-u8`/`u16`/`u32`): no-alloc arena helpers on
+//!   caller-provided buffers
 //! - `ports` (default): declared edge attachment sides and their per-face
 //!   positioning; off, attachment is the port-free rule and nothing of the
 //!   machinery is linked (the embedded examples build without it)
@@ -194,7 +194,7 @@ extern crate alloc;
 
 // ── Module hierarchy ─────────────────────────────────────────────────────
 //
-//   graph/          DAG struct + arena allocator + CSR graph
+//   graph/          DAG struct + arena allocator
 //   algorithms/     cycles, generic analysis, Sugiyama layout
 //   ir/             layout intermediate representation
 //   render/         unified render engine + glyph/palette utilities
