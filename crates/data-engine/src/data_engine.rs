@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use container_runtime::ContainerExecutionInfra;
@@ -339,6 +339,32 @@ impl DataEngine {
         Ok(dag.install_compiled_graph(graph, physical)?)
     }
 
+    fn remove_node_cascade(dag: &mut DAG, id: &str) -> std::result::Result<(), DagError> {
+        if dag.get_node(id).is_none() {
+            return Err(DagError::UnknownNode(id.to_string()));
+        }
+
+        let mut downstream = BTreeSet::from([id.to_string()]);
+        let mut pending = vec![id.to_string()];
+        while let Some(current) = pending.pop() {
+            for successor in dag.successors(&current) {
+                if downstream.insert(successor.clone()) {
+                    pending.push(successor);
+                }
+            }
+        }
+
+        for node in dag
+            .topo_order()?
+            .into_iter()
+            .rev()
+            .filter(|node| downstream.contains(node))
+        {
+            dag.delete_node(&node)?;
+        }
+        Ok(())
+    }
+
     fn apply_graph_edit_ops_to_candidate(&self, operations: &[GraphEditOp]) -> Result<DAG> {
         let mut candidate = self.dag.clone();
         for (index, operation) in operations.iter().enumerate() {
@@ -364,7 +390,14 @@ impl DataEngine {
                     candidate.replace_node_with_spec(id, node, kind, spec.clone())?;
                     Ok(())
                 }
-                GraphEditOp::RemoveNode { id } => candidate.delete_node(id).map_err(Error::from),
+                GraphEditOp::RemoveNode { id, cascade } => {
+                    if !*cascade {
+                        candidate.delete_node(id).map_err(Error::from)?;
+                        Ok(())
+                    } else {
+                        Self::remove_node_cascade(&mut candidate, id).map_err(Error::from)
+                    }
+                }
                 GraphEditOp::AddEdge {
                     from,
                     from_port,

@@ -8,6 +8,11 @@ use data_engine::runtime::DataEngineClient;
 
 use crate::ExecError;
 
+/// `dag_export_run` resolves a non-exact id against the most recent 1000
+/// records, so listing prefixes must be unique within that same window.
+const RUN_RESOLVE_POOL_LIMIT: usize = 1_000;
+const RUN_ID_PREFIX_MIN: usize = 12;
+
 #[tool(
     name = "dag_runs_log",
     description = "Query the execution audit trail of the data engine. \
@@ -89,9 +94,35 @@ impl ToolFunction for DagRunsLogTool {
             return Ok(ToolResult::success_json(run_detail_json(run)));
         }
 
+        let displayed_count = runs.len().min(limit);
+        let global_resolver_runs = self
+            .client
+            .dag_runs_log(None, RUN_RESOLVE_POOL_LIMIT, None)
+            .await
+            .map_err(ExecError::from)?;
+        let resolver_pool = global_resolver_runs
+            .iter()
+            .take(RUN_RESOLVE_POOL_LIMIT)
+            .map(|run| run.id.as_str())
+            .collect::<Vec<_>>();
+        let resolver_ids = resolver_pool
+            .iter()
+            .copied()
+            .collect::<std::collections::HashSet<_>>();
+        let display_ids = runs
+            .iter()
+            .take(displayed_count)
+            .map(|run| {
+                if resolver_ids.contains(run.id.as_str()) {
+                    resolver_safe_run_prefix(&run.id, &resolver_pool)
+                } else {
+                    run.id.clone()
+                }
+            })
+            .collect::<Vec<_>>();
+
         let mut out = String::new();
-        for run in &runs {
-            let short_id = &run.id[..12.min(run.id.len())];
+        for (run, short_id) in runs.iter().take(displayed_count).zip(&display_ids) {
             let snapshot = run
                 .snapshot_id
                 .as_ref()
@@ -106,13 +137,14 @@ impl ToolFunction for DagRunsLogTool {
                 "failed"
             };
             out.push_str(&format!(
-                "{short_id}  snapshot={snapshot}  {outcome}  {}  trigger={trigger}\n",
+                "run_id={short_id}  snapshot={snapshot}  {outcome}  {}  trigger={trigger}\n",
                 &run.started_at[..19.min(run.started_at.len())],
             ));
         }
         out.push_str(&format!(
-            "\n{} runs (limit {limit}). Pass run_id for the full per-node report.",
-            runs.len()
+            "\n{} runs (limit {limit}). Listed run ids are accepted by dag_export_run; \
+             pass run_id for the full per-node report.",
+            displayed_count
         ));
 
         Ok(ToolResult::success(out))
@@ -250,6 +282,21 @@ fn copy_present_fields(source: &serde_json::Value, keys: &[&str]) -> serde_json:
     serde_json::Value::Object(obj)
 }
 
+fn resolver_safe_run_prefix(id: &str, resolver_pool: &[&str]) -> String {
+    let mut required = RUN_ID_PREFIX_MIN.min(id.len());
+
+    for neighbor in resolver_pool.iter().filter(|neighbor| ***neighbor != *id) {
+        let shared = id
+            .bytes()
+            .zip(neighbor.bytes())
+            .take_while(|(left, right)| left == right)
+            .count();
+        required = required.max(shared + 1);
+    }
+
+    id[..required.min(id.len())].to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -372,5 +419,28 @@ mod tests {
         assert_eq!(detail["warnings"], serde_json::json!(["w"]));
         assert_eq!(detail["nodes"].as_array().map(Vec::len), Some(0));
         assert!(detail.get("logical_nodes").is_none());
+    }
+
+    #[test]
+    fn run_prefixes_extend_past_collisions() {
+        let first = "6821f700-8f80000000000000000000000000001";
+        let second = "6821f700-8f80000000000000000000000000002";
+        let distinct = "aaaaaaaa-bbbb-cccc-dddd-eeeeffff0001";
+        let pool = [first, second, distinct];
+
+        let first_prefix = resolver_safe_run_prefix(first, &pool);
+        let second_prefix = resolver_safe_run_prefix(second, &pool);
+        let distinct_prefix = resolver_safe_run_prefix(distinct, &pool);
+
+        assert_eq!(distinct_prefix.len(), RUN_ID_PREFIX_MIN);
+        assert_eq!(first_prefix, first);
+        assert_eq!(second_prefix, second);
+        assert_ne!(first_prefix, second_prefix);
+        assert!(
+            pool.iter()
+                .filter(|candidate| candidate.starts_with(&first_prefix))
+                .count()
+                == 1
+        );
     }
 }

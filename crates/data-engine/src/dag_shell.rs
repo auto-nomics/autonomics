@@ -45,6 +45,7 @@ pub enum GraphEditOp {
     },
     RemoveNode {
         id: String,
+        cascade: bool,
     },
     AddEdge {
         from: String,
@@ -87,6 +88,8 @@ pub struct OperationTrace {
     pub from: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub to: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cascade: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -305,7 +308,30 @@ fn register_graph_functions(
     });
     let s = Arc::clone(&state);
     engine.register_fn("remove_node", move |id: String| {
-        stage(&s, GraphEditOp::RemoveNode { id })
+        stage(&s, GraphEditOp::RemoveNode { id, cascade: false })
+    });
+    let s = Arc::clone(&state);
+    engine.register_fn("remove_node", move |id: String, cascade: bool| {
+        stage(&s, GraphEditOp::RemoveNode { id, cascade })
+    });
+    let s = Arc::clone(&state);
+    engine.register_fn("remove_node", move |id: String, options: Dynamic| {
+        let options = require_json(options)?;
+        let options = options
+            .as_object()
+            .ok_or_else(|| eval_error("remove_node options must be a map".to_string()))?;
+        let cascade = options
+            .get("cascade")
+            .and_then(serde_json::Value::as_bool)
+            .ok_or_else(|| {
+                eval_error("remove_node options require a boolean `cascade` field".to_string())
+            })?;
+        if options.len() != 1 {
+            return Err(eval_error(
+                "remove_node supports only the `cascade` option".to_string(),
+            ));
+        }
+        stage(&s, GraphEditOp::RemoveNode { id, cascade })
     });
     let s = Arc::clone(&state);
     engine.register_fn(
@@ -614,12 +640,16 @@ pub fn operation_traces(operations: &[GraphEditOp]) -> Vec<OperationTrace> {
                 id: None,
                 from: None,
                 to: None,
+                cascade: None,
             };
             match operation {
                 GraphEditOp::AddNode { id, .. }
                 | GraphEditOp::UpdateNode { id, .. }
-                | GraphEditOp::RemoveNode { id } => {
+                | GraphEditOp::RemoveNode { id, .. } => {
                     trace.id = Some(id.clone());
+                    if matches!(operation, GraphEditOp::RemoveNode { cascade: true, .. }) {
+                        trace.cascade = Some(true);
+                    }
                 }
                 GraphEditOp::AddEdge { from, to, .. }
                 | GraphEditOp::RemoveEdge { from, to, .. } => {

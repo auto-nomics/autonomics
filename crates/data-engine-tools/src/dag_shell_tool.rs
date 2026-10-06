@@ -12,7 +12,9 @@ use crate::ExecError;
     name = "dag_shell",
     description = "Build or modify several DAG nodes, edges, and logical subgraphs in one \
                   transactional Rhai script. Use node(id, kind, spec), update_node, remove_node, \
-                  edge, remove_edge, and add_logical_graph; all modifications must be followed by \
+                  edge, remove_edge, and add_logical_graph. remove_node also accepts \
+                  remove_node(id, true) or remove_node(id, #{cascade: true}) to delete all \
+                  downstream nodes in the same transaction. All modifications must be followed by \
                   commit(). Queries see the DAG snapshot from script start. Dry-run validates the \
                   plan without applying it. The shell cannot read files, access the network or \
                   environment, inspect output data, or execute the DAG; call run_dag separately."
@@ -133,6 +135,58 @@ mod tests {
         assert_eq!(report["error"]["code"], "unknown_node_kind");
         assert_eq!(report["error"]["operation_index"], 1);
         assert_eq!(report["graph"]["node_count"], 0);
+    }
+
+    #[tokio::test]
+    async fn cascade_remove_deletes_downstream_and_allows_rest_of_batch() {
+        let engine = data_engine::data_engine::DataEngine::builder().build();
+        let (client, _handle) = data_engine::runtime::spawn_with_engine(engine);
+        let tool = DagShellTool::new(Arc::new(client.clone()));
+
+        let built = tool
+            .run(input(
+                r#"
+                node("source", "echo", #{});
+                node("transform", "echo", #{});
+                node("sink", "echo", #{});
+                node("independent", "echo", #{});
+                edge("source", 0, "transform", 0);
+                edge("transform", 0, "sink", 0);
+                commit();
+                "#,
+                false,
+            ))
+            .await
+            .unwrap();
+        let ToolResultContent::Json(report) = built.content else {
+            panic!("dag_shell result should be JSON");
+        };
+        assert_eq!(report["ok"], true, "build failed: {report}");
+
+        let removed = tool
+            .run(input(
+                r#"
+                remove_node("source", #{cascade: true});
+                node("replacement", "echo", #{});
+                commit();
+                "#,
+                false,
+            ))
+            .await
+            .unwrap();
+        let ToolResultContent::Json(report) = removed.content else {
+            panic!("dag_shell result should be JSON");
+        };
+
+        assert_eq!(report["ok"], true, "cascade remove failed: {report}");
+        assert_eq!(report["applied"], true);
+        assert_eq!(report["operations"][0]["cascade"], true);
+        assert_eq!(report["graph"]["node_count"], 2);
+        for id in ["source", "transform", "sink"] {
+            assert!(!client.node_exists(id.into()).await.unwrap());
+        }
+        assert!(client.node_exists("independent".into()).await.unwrap());
+        assert!(client.node_exists("replacement".into()).await.unwrap());
     }
 
     #[tokio::test]

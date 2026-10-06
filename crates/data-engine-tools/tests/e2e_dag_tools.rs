@@ -109,6 +109,13 @@ fn result_json(result: &ToolResult) -> serde_json::Value {
     }
 }
 
+fn result_text(result: &ToolResult) -> &str {
+    match &result.content {
+        ToolResultContent::Text(text) => text,
+        other => panic!("expected text tool result, got: {other:?}"),
+    }
+}
+
 /// Hermetic per-test storage: a tempdir-backed mount at `/`, the shape
 /// production engines run with. Fixture files are written into `files`
 /// (the mount source) with `std::fs`; nodes address them by their virtual
@@ -937,6 +944,27 @@ async fn test_dag_export_run_produces_evidence_crate() {
         .unwrap();
     check_ok(&results[0], "run_dag");
 
+    let results = toolset
+        .execute(
+            &[build_tooluse("xl", "dag_runs_log", json!({"limit": 5}))],
+            None,
+        )
+        .await
+        .unwrap();
+    check_ok(&results[0], "dag_runs_log export-list");
+    let listing = result_text(&results[0]);
+    let listed_run_id = listing
+        .lines()
+        .next()
+        .and_then(|line| line.split("run_id=").nth(1))
+        .and_then(|rest| rest.split_whitespace().next())
+        .expect("run listing exposes run id")
+        .to_string();
+    assert!(
+        listed_run_id.len() < 36,
+        "listing should expose a reusable short prefix, got {listed_run_id}"
+    );
+
     // Export the run through the agent tool. out_dir "/" is VFS-visible (the
     // mount covers "/"), so the crate is uploaded into the object store and
     // stays readable through the same VFS the agent sees.
@@ -945,7 +973,7 @@ async fn test_dag_export_run_produces_evidence_crate() {
             &[build_tooluse(
                 "xe",
                 "dag_export_run",
-                json!({"run_id": "", "format": "crate", "out_dir": "/"}),
+                json!({"run_id": listed_run_id, "format": "crate", "out_dir": "/"}),
             )],
             None,
         )
@@ -996,7 +1024,7 @@ async fn test_dag_export_run_produces_evidence_crate() {
             &[build_tooluse(
                 "xp",
                 "dag_export_run",
-                json!({"run_id": "", "format": "prov", "out_dir": "/"}),
+                json!({"run_id": listed_run_id, "format": "prov", "out_dir": "/"}),
             )],
             None,
         )
