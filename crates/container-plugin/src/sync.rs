@@ -70,6 +70,12 @@ pub struct PluginSource {
     /// `git`.
     #[serde(default)]
     pub path: Option<PathBuf>,
+    /// Commit in the plugin development workspace for daemon-owned local sources.
+    #[serde(default)]
+    pub local_commit: Option<String>,
+    /// Tree digest of a daemon-owned local snapshot.
+    #[serde(default)]
+    pub local_digest: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]

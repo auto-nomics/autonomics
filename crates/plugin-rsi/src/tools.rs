@@ -16,7 +16,7 @@ use async_trait::async_trait;
 use container_plugin::{manifest::PluginManifest, node_definition::NodeDefinition};
 use container_runtime::{
     ContainerNetwork, ContainerRunRequest, ContainerRunResult, DEFAULT_CONTAINER_WORKDIR,
-    GpuRequest, PodmanConnection, PullPolicy, unique_container_name, workspace_ref,
+    GpuRequest, PodmanConnection, PullPolicy, trusted_workspace_ref, unique_container_name,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -678,12 +678,8 @@ impl ToolFunction for PluginContainerRunTool {
             .resolve(&self.state.agent_id)
             .map_err(tool_error)?;
         let workspace = binding.workspace();
-        let workspace_ref = workspace_ref(
-            runtime.workspace_root(),
-            workspace.path(),
-            DEFAULT_CONTAINER_WORKDIR,
-        )
-        .map_err(tool_error)?;
+        let workspace_ref = trusted_workspace_ref(workspace.path(), DEFAULT_CONTAINER_WORKDIR)
+            .map_err(tool_error)?;
         let request = ContainerRunRequest {
             image: binding.environment_reference.clone(),
             command: input.argv,

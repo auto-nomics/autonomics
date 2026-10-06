@@ -200,6 +200,18 @@ async fn plugin_is_developed_published_updated_and_installed_in_one_workspace() 
         lifecycle.plugin().lifecycle.request_ids,
         vec![first_request.id.clone()]
     );
+    let local_install = store.install_local("unified-plugin").unwrap();
+    assert!(local_install.path.join("manifest.toml").is_file());
+    assert!(!local_install.path.join(".git").exists());
+    assert!(state.path().join("plugin-runtime/unified-plugin").is_dir());
+    assert!(matches!(
+        plugin_rsi::read_installed_plugin_source(
+            &state.path().join("plugins.toml"),
+            "unified-plugin"
+        )
+        .unwrap(),
+        plugin_rsi::InstalledPluginSource::Local(_)
+    ));
     lifecycle.review(true).unwrap();
     let publisher = FakePublisher::default();
     lifecycle.publish_reviewed(&publisher).unwrap();
@@ -222,7 +234,7 @@ async fn plugin_is_developed_published_updated_and_installed_in_one_workspace() 
             &[second_request.id],
             "The adapter should reject empty input.",
             &requests,
-            &installed,
+            &plugin_rsi::InstalledPluginSource::Git(installed.clone()),
             &catalog(),
             &plugin_rsi::GitPluginSourceFetcher,
         )
@@ -268,8 +280,10 @@ async fn plugin_is_developed_published_updated_and_installed_in_one_workspace() 
     assert_ne!(source.commit, installed.commit);
     assert_eq!(source.remote, REMOTE);
     assert!(state.path().join("plugins/unified-plugin").is_dir());
-
     let rolled_back = store.rollback("unified-plugin").unwrap();
+    let plugin_rsi::InstalledPluginSource::Git(rolled_back) = rolled_back else {
+        panic!("rollback must return the installed GitHub source");
+    };
     assert_eq!(rolled_back.commit, installed.commit);
     assert_eq!(rolled_back.remote, REMOTE);
     update.refresh().unwrap();

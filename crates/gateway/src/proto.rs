@@ -569,4 +569,8 @@ pub struct PluginSourceView {
     pub rev: Option<String>,
     /// Local directory installed as a symlink (development iterations).
     pub path: Option<String>,
+    /// Development-workspace commit for a daemon-owned local snapshot.
+    pub local_commit: Option<String>,
+    /// Immutable tree digest for a daemon-owned local snapshot.
+    pub local_digest: Option<String>,
 }

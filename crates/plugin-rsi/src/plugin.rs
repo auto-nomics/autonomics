@@ -11,19 +11,23 @@ use std::{
 };
 
 use container_plugin::manifest::{
-    ImageMetadata, PluginLifecycleMetadata, PluginManifest, PluginStatus,
+    ImageMetadata, PluginInstallationMetadata, PluginInstallationStatus, PluginLifecycleMetadata,
+    PluginManifest, PluginStatus,
 };
 use container_runtime::ImageReference;
 
 use crate::{
-    Error, GitRepo, InstalledPluginSource, PluginDevelopmentToolsetRegistry, PluginWorkspace,
-    RequestStore, Result, validate::EnvironmentCatalog,
+    Error, GitInstalledPluginSource, GitRepo, InstalledPluginSource, LocalInstalledPluginSource,
+    PluginDevelopmentToolsetRegistry, PluginWorkspace, RequestStore, Result,
+    validate::EnvironmentCatalog,
 };
 
 /// Creates and opens plugin repositories under one root.
 #[derive(Debug, Clone)]
 pub struct PluginStore {
-    root: PathBuf,
+    workspace_root: PathBuf,
+    runtime_root: PathBuf,
+    snapshot_root: PathBuf,
     registry_path: PathBuf,
     default_branch: String,
     author_name: String,
@@ -40,8 +44,15 @@ pub struct GitPluginSourceFetcher;
 
 impl PluginSourceFetcher for GitPluginSourceFetcher {
     fn fetch(&self, source: &InstalledPluginSource, destination: &Path) -> Result<()> {
-        GitRepo::clone_at(destination, &source.remote, &source.commit, "origin")?;
-        Ok(())
+        match source {
+            InstalledPluginSource::Git(source) => {
+                GitRepo::clone_at(destination, &source.remote, &source.commit, "origin")?;
+                Ok(())
+            }
+            InstalledPluginSource::Local(_) => Err(Error::Validation(
+                "local snapshots use the existing development workspace".into(),
+            )),
+        }
     }
 }
 
@@ -62,7 +73,9 @@ impl PluginStore {
         author_email: &str,
     ) -> Self {
         Self {
-            root: state_dir.join("plugins"),
+            workspace_root: state_dir.join("plugins"),
+            runtime_root: state_dir.join("plugin-runtime"),
+            snapshot_root: state_dir.join("plugin-installs"),
             registry_path: state_dir.join(container_plugin::sync::PLUGIN_CONFIG_FILE),
             default_branch: default_branch.to_string(),
             author_name: author_name.to_string(),
@@ -72,7 +85,12 @@ impl PluginStore {
 
     /// Return the daemon-owned plugin root.
     pub fn root(&self) -> &Path {
-        &self.root
+        &self.workspace_root
+    }
+
+    /// Return the immutable runtime materialization root.
+    pub fn runtime_root(&self) -> &Path {
+        &self.runtime_root
     }
 
     /// Return the persistent registry that pins installed plugin sources.
@@ -86,7 +104,7 @@ impl PluginStore {
     /// is the only system entry point that decides the root and protects an
     /// in-place update from being reset to the old pin.
     pub fn materialize_registry(&self) -> Result<container_plugin::sync::SyncReport> {
-        container_plugin::sync::sync(&self.registry_path, &self.root)
+        container_plugin::sync::sync(&self.registry_path, &self.runtime_root)
             .map_err(|error| Error::PluginRegistry(error.to_string()))
     }
 
@@ -125,7 +143,99 @@ impl PluginStore {
 
     /// Read one plugin's immutable installed source.
     pub fn installed_source(&self, plugin_name: &str) -> Result<InstalledPluginSource> {
-        crate::read_git_plugin_source(&self.registry_path, plugin_name)
+        crate::read_installed_plugin_source(&self.registry_path, plugin_name)
+    }
+
+    /// Install the clean, validated workspace commit as a local snapshot.
+    ///
+    /// The development workspace remains mutable and keeps its development
+    /// status; the DAG always reads the immutable snapshot selected here.
+    pub fn install_local(&self, plugin_name: &str) -> Result<LocalInstalledPluginSource> {
+        let operator = self
+            .develop(plugin_name)?
+            .ok_or_else(|| Error::Validation(format!("unknown plugin `{plugin_name}`")))?;
+        if !matches!(
+            operator.status(),
+            PluginStatus::PendingReview
+                | PluginStatus::Approved
+                | PluginStatus::Published
+                | PluginStatus::PullRequestMerged
+        ) {
+            return Err(Error::Validation(format!(
+                "plugin `{plugin_name}` cannot be locally installed from development status {:?}",
+                operator.status()
+            )));
+        }
+        let repository = operator.repository();
+        if !repository.is_clean()? {
+            return Err(Error::Validation(
+                "plugin workspace has uncommitted content".into(),
+            ));
+        }
+        let latest_report = operator
+            .manifest()
+            .lifecycle
+            .latest_report
+            .clone()
+            .ok_or_else(|| Error::Validation("plugin has no validation report".into()))?;
+        let report_path = repository.path().join(&latest_report);
+        let report_text =
+            std::fs::read_to_string(&report_path).map_err(|source| Error::ReadFile {
+                path: report_path.clone(),
+                source,
+            })?;
+        let report: crate::ValidationReport = serde_json::from_str(&report_text)
+            .map_err(|source| Error::Validation(format!("invalid report JSON: {source}")))?;
+        if !report.passed() {
+            return Err(Error::Validation(
+                "plugin's latest validation report did not pass".into(),
+            ));
+        }
+
+        let commit = repository.head()?;
+        let tree_digest = repository.tree_digest()?;
+        let digest = format!("sha256:{tree_digest}");
+        let destination = self.snapshot_root.join(plugin_name).join(&tree_digest);
+        if destination.exists() {
+            let existing = destination.join("manifest.toml");
+            if !existing.is_file() {
+                return Err(Error::Validation(format!(
+                    "local snapshot directory is incomplete: {}",
+                    destination.display()
+                )));
+            }
+        } else {
+            GitRepo::clone_at(
+                &destination,
+                &repository.path().to_string_lossy(),
+                &commit,
+                "origin",
+            )?;
+            std::fs::remove_dir_all(destination.join(".git"))?;
+        }
+
+        let workspace = PluginWorkspace::new(&destination);
+        let mut manifest = load_manifest(&workspace)?;
+        manifest.installation = PluginInstallationMetadata {
+            status: Some(PluginInstallationStatus::LocalActive),
+            local_commit: Some(commit.clone()),
+            local_digest: Some(digest.clone()),
+            ..Default::default()
+        };
+        save_manifest(&workspace, &manifest)?;
+        crate::write_local_plugin_source(
+            &self.registry_path,
+            plugin_name,
+            &destination,
+            &commit,
+            &digest,
+        )?;
+        self.materialize_registry()?;
+        Ok(LocalInstalledPluginSource {
+            path: destination,
+            commit,
+            digest,
+        })
     }
 
     /// Roll an updated plugin back to the immutable revision it replaced.
@@ -145,6 +255,11 @@ impl PluginStore {
                 "plugin `{plugin_name}` has no rollback remote"
             )));
         };
+        let InstalledPluginSource::Git(current) = current else {
+            return Err(Error::Validation(
+                "local plugin rollback history is not implemented yet".into(),
+            ));
+        };
         if base_remote != current.remote || current.commit == base_commit {
             return Err(Error::Validation(
                 "plugin has no prior source to roll back to".into(),
@@ -160,10 +275,10 @@ impl PluginStore {
         repository.switch_forced_branch(&self.default_branch)?;
         self.install_source(plugin_name, &base_remote, &base_commit)?;
         operator.refresh()?;
-        Ok(InstalledPluginSource {
+        Ok(InstalledPluginSource::Git(GitInstalledPluginSource {
             remote: base_remote,
             commit: base_commit,
-        })
+        }))
     }
 
     /// Create one named plugin repository and bind its approved environment.
@@ -247,12 +362,17 @@ impl PluginStore {
                     "installed environment is not approved for RSI".into(),
                 ));
             }
-            if operator.repository().remote_url("origin")?.as_deref()
-                != Some(source.remote.as_str())
-            {
-                return Err(Error::Validation(
-                    "installed workspace does not match the requested source".into(),
-                ));
+            match source {
+                InstalledPluginSource::Git(source) => {
+                    if operator.repository().remote_url("origin")?.as_deref()
+                        != Some(source.remote.as_str())
+                    {
+                        return Err(Error::Validation(
+                            "installed workspace does not match the requested source".into(),
+                        ));
+                    }
+                }
+                InstalledPluginSource::Local(_) => {}
             }
             operator.mutate_manifest(|manifest| {
                 manifest.lifecycle.request_ids = request_ids.to_vec();
@@ -263,8 +383,11 @@ impl PluginStore {
                 return Ok(operator);
             }
             operator.mutate_manifest(|manifest| {
-                manifest.lifecycle.base_commit = Some(source.commit.clone());
-                manifest.lifecycle.base_remote = Some(source.remote.clone());
+                manifest.lifecycle.base_commit = Some(source.commit().to_string());
+                manifest.lifecycle.base_remote = match source {
+                    InstalledPluginSource::Git(source) => Some(source.remote.clone()),
+                    InstalledPluginSource::Local(_) => None,
+                };
             })?;
             operator
                 .transition_snapshot(PluginStatus::Updating, "plugin: start in-place update")?;
@@ -288,8 +411,11 @@ impl PluginStore {
         manifest.status = PluginStatus::Updating;
         manifest.lifecycle.request_ids = request_ids.to_vec();
         manifest.lifecycle.rationale = Some(rationale.trim().to_string());
-        manifest.lifecycle.base_commit = Some(source.commit.clone());
-        manifest.lifecycle.base_remote = Some(source.remote.clone());
+        manifest.lifecycle.base_commit = Some(source.commit().to_string());
+        manifest.lifecycle.base_remote = match source {
+            InstalledPluginSource::Git(source) => Some(source.remote.clone()),
+            InstalledPluginSource::Local(_) => None,
+        };
         let mut operator = PluginOperator {
             store: self,
             plugin_name: plugin_name.to_string(),
@@ -302,7 +428,7 @@ impl PluginStore {
 
     /// List plugins represented by a readable root manifest.
     pub fn list(&self) -> Result<Vec<PluginManifest>> {
-        let entries = match std::fs::read_dir(&self.root) {
+        let entries = match std::fs::read_dir(self.root()) {
             Ok(entries) => entries,
             Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(source) => return Err(source.into()),
@@ -330,6 +456,22 @@ impl PluginStore {
                 )));
             }
             manifests.push(manifest);
+        }
+        let sources = self.registry_sources()?;
+        for manifest in &mut manifests {
+            match sources.get(&manifest.plugin_name) {
+                Some(source) if source.git.is_some() => {
+                    manifest.installation.status = Some(PluginInstallationStatus::GithubActive);
+                    manifest.installation.remote = source.git.clone();
+                    manifest.installation.remote_commit = source.rev.clone();
+                }
+                Some(source) if source.path.is_some() => {
+                    manifest.installation.status = Some(PluginInstallationStatus::LocalActive);
+                    manifest.installation.local_commit = source.local_commit.clone();
+                    manifest.installation.local_digest = source.local_digest.clone();
+                }
+                _ => {}
+            }
         }
         manifests.sort_by(|a, b| a.plugin_name.cmp(&b.plugin_name));
         Ok(manifests)
@@ -360,7 +502,7 @@ impl PluginStore {
     }
 
     fn plugin_path(&self, plugin_name: &str) -> PathBuf {
-        self.root.join(plugin_name)
+        self.workspace_root.join(plugin_name)
     }
 }
 

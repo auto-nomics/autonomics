@@ -107,6 +107,7 @@ pub fn load(
                 manifest.status,
                 PluginStatus::Published | PluginStatus::Installed
             )
+            && !manifest.installation.is_runtime_active()
         {
             continue;
         }
@@ -467,6 +468,25 @@ script_file = "scripts/h2.sh"
         std::fs::write(ldsc_dir.join("scripts/h2.sh"), "set -eu\ntrue\n").unwrap();
 
         assert!(load(&plugins_root, runtime, cache).unwrap().is_empty());
+    }
+
+    #[test]
+    fn locally_active_snapshots_enter_the_runtime_registry() {
+        let (runtime, cache, state) = infra();
+        let plugins_root = state.path().join("plugins");
+        let local = GOOD_LDSC.replacen(
+            "plugin_name = \"ldsc\"",
+            "plugin_name = \"ldsc\"\nstatus = \"draft\"\n\n[installation]\nstatus = \"local_active\"",
+            1,
+        );
+        write_plugin(&plugins_root, "ldsc", &local);
+        let ldsc_dir = plugins_root.join("ldsc");
+        std::fs::create_dir_all(ldsc_dir.join("scripts")).unwrap();
+        std::fs::write(ldsc_dir.join("scripts/h2.sh"), "set -eu\ntrue\n").unwrap();
+
+        let plugins = load(&plugins_root, runtime, cache).unwrap();
+        assert_eq!(plugins.len(), 1);
+        assert_eq!(plugins[0].registered_kinds(), vec!["ldsc_h2"]);
     }
 
     #[test]

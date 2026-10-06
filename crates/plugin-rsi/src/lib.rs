@@ -36,7 +36,11 @@ pub use gitrepo::GitRepo;
 pub use infra::{
     PluginRegistryControl, RsiInfra, SharedPluginPublisher, SharedPullRequestPublisher,
 };
-pub use install::{InstalledPluginSource, read_git_plugin_source, write_git_plugin_source};
+pub use install::{
+    GitInstalledPluginSource, InstalledPluginSource, LocalInstalledPluginSource,
+    read_git_plugin_source, read_installed_plugin_source, write_git_plugin_source,
+    write_local_plugin_source,
+};
 pub use lifecycle::{PluginLifecycle, ValidationOutcome};
 pub use names::validate_plugin_name;
 pub use plugin::{GitPluginSourceFetcher, PluginOperator, PluginSourceFetcher, PluginStore};

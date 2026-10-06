@@ -3,6 +3,8 @@ use std::{
     process::Command,
 };
 
+use sha2::{Digest, Sha256};
+
 use crate::{Error, Result};
 
 #[derive(Debug, Clone)]
@@ -79,6 +81,26 @@ impl GitRepo {
 
     pub fn head(&self) -> Result<String> {
         Ok(self.run_capture(&["rev-parse", "HEAD"])?.trim().to_string())
+    }
+
+    /// Return the immutable tree digest at `HEAD`.
+    pub fn tree_digest(&self) -> Result<String> {
+        let tree = format!("{}^{{tree}}", self.head()?);
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&self.path)
+            .args(["cat-file", "tree", &tree])
+            .output()
+            .map_err(|source| self.git_error("cat-file tree", source, Vec::new()))?;
+        if !output.status.success() {
+            return Err(self.git_error(
+                "cat-file tree",
+                std::io::Error::other("git exited with failure"),
+                output.stderr,
+            ));
+        }
+        let digest = Sha256::digest(&output.stdout);
+        Ok(digest.iter().map(|byte| format!("{byte:02x}")).collect())
     }
 
     /// Create and switch to a review branch at the current `HEAD`.

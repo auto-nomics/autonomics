@@ -353,6 +353,16 @@ impl RsiInfra {
         Ok(status)
     }
 
+    /// Install the clean, validated workspace as a local runtime snapshot.
+    ///
+    /// This integrates the plugin with the DAG before GitHub publication.
+    /// The development workspace stays independent of the immutable snapshot.
+    pub fn install_local(&self, plugin_name: &str) -> Result<crate::LocalInstalledPluginSource> {
+        let source = self.store.install_local(plugin_name)?;
+        self.reload_plugin(plugin_name)?;
+        Ok(source)
+    }
+
     /// Roll back to the previous immutable source and refresh registration.
     pub fn rollback(&self, plugin_name: &str) -> Result<crate::InstalledPluginSource> {
         let source = self.store.rollback(plugin_name)?;

@@ -670,7 +670,7 @@ impl plugin_rsi::PluginRegistryControl for SharedPluginRegistryControl {
 
     fn reload_plugin(&self, plugin_name: &str) -> plugin_rsi::Result<()> {
         plugin_rsi::validate_plugin_name(plugin_name)?;
-        let directory = self.store.root().join(plugin_name);
+        let directory = self.store.runtime_root().join(plugin_name);
         let plugin = container_plugin::loader::load_plugin(
             &directory,
             Arc::clone(&self.execution.runtime),
@@ -707,7 +707,9 @@ pub fn bibliography_file_storage(config: &RuntimeConfig) -> Result<Arc<vfs::Open
 /// Unix.
 fn build_vfs(config: &RuntimeConfig) -> Result<MountedObjectStore> {
     let state = load_or_create_vfs_manifest(config)?;
-    MountedObjectStore::from_manifest(&state.manifest).map_err(|e| Error::Other(e.to_string()))
+    let mut manifest = state.manifest;
+    ensure_plugin_active_mounts(&mut manifest, config)?;
+    MountedObjectStore::from_manifest(&manifest).map_err(|e| Error::Other(e.to_string()))
 }
 
 async fn build_vfs_with_catalog(
@@ -719,6 +721,7 @@ async fn build_vfs_with_catalog(
 )> {
     let state = load_or_create_vfs_manifest(config)?;
     let mut manifest = state.manifest;
+    ensure_plugin_active_mounts(&mut manifest, config)?;
 
     let mut catalog_registry = dag_core::BundleRegistry::new();
     let mut catalog = None;
@@ -782,6 +785,53 @@ async fn build_vfs_with_catalog(
     MountedObjectStore::from_manifest(&manifest)
         .map_err(|e| Error::Other(e.to_string()))
         .map(|store| (store, catalog_registry, catalog))
+}
+
+fn ensure_plugin_active_mounts(
+    manifest: &mut vfs::VfsManifest,
+    config: &RuntimeConfig,
+) -> Result<()> {
+    const BACKEND_ID: &str = "autonomics-plugin-runtime";
+    let registry_path = config
+        .state_dir
+        .join(container_plugin::sync::PLUGIN_CONFIG_FILE);
+    let Ok(text) = std::fs::read_to_string(&registry_path) else {
+        return Ok(());
+    };
+    let parsed: container_plugin::sync::PluginsConfig = toml::from_str(&text)
+        .map_err(|error| Error::Other(format!("parse `{}`: {error}", registry_path.display())))?;
+    if parsed.plugin.is_empty() {
+        return Ok(());
+    }
+    if manifest
+        .backend
+        .iter()
+        .any(|backend| backend.id == BACKEND_ID)
+    {
+        return Err(Error::Other(format!(
+            "backend `{BACKEND_ID}` is reserved for installed plugins"
+        )));
+    }
+    let runtime_root = config.state_dir.join("plugin-runtime");
+    manifest.backend.push(vfs::BackendDefinition {
+        id: BACKEND_ID.into(),
+        config: vfs::BackendConfig::local(runtime_root.to_string_lossy().into_owned()),
+    });
+    for source in parsed.plugin {
+        let mount_path = format!("/plugins/{}/active", source.name);
+        if manifest.mount.iter().any(|mount| mount.path == mount_path) {
+            return Err(Error::Other(format!(
+                "VFS mount path `{mount_path}` collides with a static mount"
+            )));
+        }
+        manifest.mount.push(vfs::MountDefinition {
+            path: mount_path,
+            backend: BACKEND_ID.into(),
+            source: source.name,
+            read_only: true,
+        });
+    }
+    Ok(())
 }
 
 struct VfsManifestState {
@@ -5319,5 +5369,53 @@ mod literature_mount_tests {
         assert!(!ensure_literature_mount(&mut manifest, &config));
         assert_eq!(manifest.mount.len(), mount_count);
         assert_eq!(manifest.backend.len(), backend_count);
+    }
+}
+
+#[cfg(test)]
+mod plugin_vfs_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn installed_plugins_have_read_only_vfs_views() {
+        let state = tempfile::tempdir().unwrap();
+        let data = tempfile::tempdir().unwrap();
+        let runtime_root = state.path().join("plugin-runtime");
+        let plugin_root = runtime_root.join("demo-plugin");
+        std::fs::create_dir_all(&plugin_root).unwrap();
+        std::fs::write(plugin_root.join("manifest.toml"), "# demo\n").unwrap();
+        std::fs::write(
+            state.path().join("plugins.toml"),
+            format!(
+                "[[plugin]]\nname = \"demo-plugin\"\npath = \"{}\"\nlocal_commit = \"{}\"\nlocal_digest = \"{}\"\n",
+                plugin_root.display(),
+                "0123456789abcdef0123456789abcdef01234567",
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            ),
+        )
+        .unwrap();
+
+        let mut config = RuntimeConfig::default();
+        config.state_dir = state.path().to_path_buf();
+        config.data_dir = data.path().to_path_buf();
+        let mut manifest = VfsManifest::local_root(data.path().to_string_lossy().into_owned());
+        ensure_plugin_active_mounts(&mut manifest, &config).unwrap();
+        let mounts = Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap());
+        let storage = vfs::OpendalFileStorage::with_mounts(data.path(), mounts);
+
+        let contents = storage
+            .read_range("/plugins/demo-plugin/active/manifest.toml", 0..7)
+            .await
+            .unwrap();
+        assert_eq!(contents.to_vec(), b"# demo\n");
+        assert!(
+            storage
+                .write_bytes(
+                    "/plugins/demo-plugin/active/manifest.toml",
+                    b"changed".to_vec()
+                )
+                .await
+                .is_err()
+        );
     }
 }

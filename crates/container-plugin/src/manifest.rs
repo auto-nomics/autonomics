@@ -78,6 +78,43 @@ pub enum PluginStatus {
     Rejected,
 }
 
+/// Installation channel for a plugin whose development workspace and runtime
+/// installation are managed independently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginInstallationStatus {
+    NotInstalled,
+    LocalActive,
+    GithubActive,
+    Retired,
+}
+
+/// Daemon-owned installation facts. Unlike `status`, these fields describe
+/// the immutable runtime source rather than the mutable development state.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PluginInstallationMetadata {
+    #[serde(default)]
+    pub status: Option<PluginInstallationStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_commit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_commit: Option<String>,
+}
+
+impl PluginInstallationMetadata {
+    pub fn is_runtime_active(&self) -> bool {
+        matches!(
+            self.status,
+            Some(PluginInstallationStatus::LocalActive | PluginInstallationStatus::GithubActive)
+        )
+    }
+}
+
 /// Daemon-owned publication and update facts associated with one plugin.
 ///
 /// Runtime consumers only need the node declarations and environment. These
@@ -133,6 +170,9 @@ pub struct PluginManifest {
     /// read it but must not treat it as an editable plugin field.
     #[serde(default = "default_plugin_status")]
     pub status: PluginStatus,
+    /// Immutable runtime installation record, independent of development state.
+    #[serde(default)]
+    pub installation: PluginInstallationMetadata,
     /// Publication and update metadata owned by the RSI daemon.
     #[serde(default)]
     pub lifecycle: PluginLifecycleMetadata,
@@ -150,6 +190,7 @@ impl Default for PluginManifest {
             schema_version: 1,
             plugin_name: "new_plugin".to_string(),
             status: default_plugin_status(),
+            installation: Default::default(),
             lifecycle: Default::default(),
             image: Default::default(),
             panels: Default::default(),

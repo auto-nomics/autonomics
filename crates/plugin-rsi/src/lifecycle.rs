@@ -253,17 +253,6 @@ impl<'a, 'b> PluginLifecycle<'a, 'b> {
                 "installed plugin repository has uncommitted content".into(),
             ));
         }
-        let remote = self
-            .operator
-            .manifest()
-            .lifecycle
-            .remote
-            .clone()
-            .ok_or_else(|| Error::Validation("installed plugin has no remote".into()))?;
-        self.operator
-            .mutate_manifest(|manifest| manifest.lifecycle.remote = Some(remote.clone()))?;
-        self.operator
-            .snapshot("lifecycle: record installed source")?;
         let repository = self.operator.repository();
         let outcome = publisher.publish_plugin(self.operator.plugin_name(), &repository)?;
         let remote = outcome.remote;

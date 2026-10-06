@@ -39,7 +39,7 @@ pub(crate) async fn list_plugins(State(state): State<GatewayState>) -> Json<Plug
                     !kinds.is_empty() && kinds.iter().all(|kind| registered.contains(kind));
                 PluginView {
                     name: manifest.plugin_name.clone(),
-                    status: status_text(manifest.status),
+                    status: status_text(&manifest),
                     image: Some(manifest.image.reference.to_string()),
                     kinds,
                     panels: manifest
@@ -75,11 +75,18 @@ pub(crate) async fn list_plugins(State(state): State<GatewayState>) -> Json<Plug
     })
 }
 
-fn status_text(status: container_plugin::manifest::PluginStatus) -> String {
-    serde_json::to_value(status)
+fn status_label<T: serde::Serialize + std::fmt::Debug>(status: T) -> String {
+    serde_json::to_value(&status)
         .ok()
         .and_then(|value| value.as_str().map(str::to_string))
         .unwrap_or_else(|| format!("{status:?}").to_lowercase())
+}
+
+fn status_text(manifest: &container_plugin::manifest::PluginManifest) -> String {
+    if let Some(status) = manifest.installation.status {
+        return status_label(status);
+    }
+    status_label(manifest.status)
 }
 
 fn plugin_source_view(source: &container_plugin::sync::PluginSource) -> PluginSourceView {
@@ -87,5 +94,7 @@ fn plugin_source_view(source: &container_plugin::sync::PluginSource) -> PluginSo
         git: source.git.clone(),
         rev: source.rev.clone(),
         path: source.path.as_ref().map(|path| path.display().to_string()),
+        local_commit: source.local_commit.clone(),
+        local_digest: source.local_digest.clone(),
     }
 }
