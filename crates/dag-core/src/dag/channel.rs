@@ -79,12 +79,9 @@ impl ChannelNode {
             1 => ports
                 .add_input_port_of_type(None, input_type(&operator))
                 .set_fixed_input(true),
-            _ => {
-                let ports = ports
-                    .add_input_port_of_type(None, PortType::Channel)
-                    .add_input_port_of_type(None, PortType::Channel);
-                ports
-            }
+            _ => ports
+                .add_input_port_of_type(None, PortType::Channel)
+                .add_input_port_of_type(None, PortType::Channel),
         };
         if let ChannelOperator::Branch { branches } = &operator {
             for branch in branches {

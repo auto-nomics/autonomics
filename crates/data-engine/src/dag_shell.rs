@@ -141,7 +141,7 @@ impl DagShellSnapshot {
                 ShellNode {
                     kind: node.kind.clone(),
                     spec: retained.map(|(_, spec)| spec),
-                    ports: serde_json::to_value(&node)
+                    ports: serde_json::to_value(node)
                         .unwrap_or_else(|_| serde_json::json!({"id": node.id, "kind": node.kind})),
                 },
             );
@@ -151,8 +151,7 @@ impl DagShellSnapshot {
             edges: snapshot
                 .edges
                 .iter()
-                .map(serde_json::to_value)
-                .flatten()
+                .flat_map(serde_json::to_value)
                 .collect(),
             dot: dag.to_dot(),
             logical_graph_count: dag.logical_graphs().len(),
@@ -417,7 +416,7 @@ fn register_graph_functions(
 }
 
 fn stage(state: &Arc<std::sync::Mutex<ScriptState>>, operation: GraphEditOp) -> ShellResult<()> {
-    let mut state = lock(&state)?;
+    let mut state = lock(state)?;
     if state.committed {
         return Err(eval_error(
             "commit() was already called; graph operations cannot be staged afterward",
@@ -432,7 +431,7 @@ fn stage(state: &Arc<std::sync::Mutex<ScriptState>>, operation: GraphEditOp) -> 
 }
 
 fn begin_query(state: &Arc<std::sync::Mutex<ScriptState>>) -> ShellResult<()> {
-    let mut state = lock(&state)?;
+    let mut state = lock(state)?;
     state.api_operations += 1;
     if state.api_operations > MAX_API_OPERATIONS {
         return Err(eval_error(LIMIT_TOKEN));

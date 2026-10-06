@@ -109,9 +109,8 @@ pub async fn fetch_fulltext_stored(
         .map(|pmc| format!("oa-{pmc}.txt"))
         .unwrap_or_else(|| "oa-fulltext.txt".to_string());
     let stored = stored_fulltext(&article.id, &name, text.as_bytes());
-    let Some(virtual_path) = vfs_virtual_path(&stored.path) else {
-        return None;
-    };
+    let virtual_path = vfs_virtual_path(&stored.path)?;
+
     let byte_len = text.len();
     if let Err(error) = storage.write_bytes(&virtual_path, text.into_bytes()).await {
         tracing::warn!(

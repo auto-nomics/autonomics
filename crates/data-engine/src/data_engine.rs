@@ -344,7 +344,6 @@ impl DataEngine {
         for (index, operation) in operations.iter().enumerate() {
             let result = match operation {
                 GraphEditOp::AddNode { id, kind, spec } => Self::ensure_node_kind_allowed(kind)
-                    .and_then(|_| Ok(()))
                     .and_then(|_| {
                         let node = self.node_registry.build_node(kind, spec.clone())?;
                         candidate.add_node_with_spec(
@@ -1704,9 +1703,11 @@ fn transaction_error(error: Error) -> DagShellError {
         "invalid_spec"
     } else if lower.contains("port not found") || lower.contains("overconnected") {
         "port_not_found"
-    } else if lower.contains("input port") || lower.contains("not connected") {
-        "invalid_edge"
-    } else if lower.contains("edge") || lower.contains("cycle") {
+    } else if lower.contains("input port")
+        || lower.contains("not connected")
+        || lower.contains("edge")
+        || lower.contains("cycle")
+    {
         "invalid_edge"
     } else if lower.contains("disabled") {
         "invalid_operation"

@@ -1696,9 +1696,7 @@ pub fn local_task_executor() -> Arc<dyn TaskExecutor> {
 /// Placeholder kept explicit so future remote executors cannot accidentally
 /// treat an absent timeout as an infinite lease.
 pub fn task_timeout(resources: &TaskResources) -> Option<Duration> {
-    resources
-        .max_duration_ms
-        .map(|milliseconds| Duration::from_millis(milliseconds))
+    resources.max_duration_ms.map(Duration::from_millis)
 }
 
 /// Shared-filesystem implementation of the remote artifact transfer contract.

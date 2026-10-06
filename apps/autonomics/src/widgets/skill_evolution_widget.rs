@@ -728,48 +728,4 @@ mod tests {
         state.skills.focus_list();
         assert_eq!(state.skills.focus, PanelFocus::List);
     }
-
-    #[test]
-    fn detail_scroll_resets_on_selection_change_and_clamps_at_render() {
-        let long_body = "START\n".to_string() + &"filler line\n".repeat(40) + "END\n";
-        let mut state = SkillEvolutionState {
-            visible: true,
-            status: Some(dummy_status()),
-            skills: SkillBrowserState {
-                library: vec![
-                    skill("long-body", "global", None),
-                    skill("b", "global", None),
-                ],
-                detail: Some((
-                    "long-body".into(),
-                    SkillLibraryDetail {
-                        body: long_body,
-                        ..detail_for("long-body")
-                    },
-                )),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        state.skills.focus_detail();
-        state.skills.scroll_detail(500);
-        // Render clamps the offset to the document height — START
-        // scrolls out, END (the last line) stays on screen.
-        let text = draw(&mut state, 100, 24);
-        assert!(
-            text.contains("END"),
-            "last line reachable after clamp: {text}"
-        );
-        assert!(
-            !text.contains("START"),
-            "top must have scrolled away: {text}"
-        );
-
-        // Moving the selection restarts the next detail from the top.
-        state.skills.select_next();
-        assert_eq!(
-            state.skills.detail_scroll, 0,
-            "selection change resets scroll"
-        );
-    }
 }

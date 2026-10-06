@@ -22,7 +22,7 @@ pub mod utils;
 pub mod view;
 
 // Re-export node abstractions from the node module for backward compatibility
-// and so that dag internals (graph.rs, runtime.rs) can use `super::DagNode` etc.
+// and so that dag internals (graph/, runtime.rs) can use `super::DagNode` etc.
 pub use crate::node::{DagNode, NodeId, NodeInput, NodePorts};
 
 pub use channel::{ChannelBranch, ChannelNode, ChannelOperator};

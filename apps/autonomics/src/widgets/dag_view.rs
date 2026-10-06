@@ -550,7 +550,7 @@ fn cell_color(color: CellColor) -> Color {
 
 fn decode_cell(kind: CellKind) -> char {
     match kind {
-        CellKind::Empty => return ' ',
+        CellKind::Empty => ' ',
         CellKind::Text { ch } => ch,
         CellKind::Marker { marker } => marker_char(marker),
         CellKind::Stroke { arms } => stroke_char(
@@ -628,7 +628,7 @@ fn stroke_char(up: u8, down: u8, left: u8, right: u8) -> char {
                 mask |= 8;
             }
             match mask {
-                1 | 2 | 3 => '│',
+                1..=3 => '│',
                 4 | 8 | 12 => '─',
                 6 => '┌',
                 5 => '┐',
@@ -685,7 +685,11 @@ fn render_status_line(
         ),
     ];
     if focused {
-        let fixture_hint = fixture_help.then_some(" · Space fixture").unwrap_or("");
+        let fixture_hint = if fixture_help {
+            " · Space fixture"
+        } else {
+            ""
+        };
         spans.push(Span::styled(
             format!("  ←→ dataflow · ↑↓ siblings · Tab next{fixture_hint} · R refresh · Esc close"),
             Style::default().fg(Color::DarkGray),
