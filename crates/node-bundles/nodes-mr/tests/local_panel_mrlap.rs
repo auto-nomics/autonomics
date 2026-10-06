@@ -24,6 +24,7 @@ fn session_and_ctx() -> (SessionContext, NodeCtx) {
             backend: "local-mrlap-panel".into(),
             source: PANEL_DIRECTORY.into(),
             read_only: true,
+            permissions: Default::default(),
         }],
     };
     let mounted = Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap());

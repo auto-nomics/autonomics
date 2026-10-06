@@ -214,12 +214,14 @@ mod tests {
                     backend: "runtime".into(),
                     source: "/".into(),
                     read_only: false,
+                    permissions: Default::default(),
                 },
                 MountDefinition {
                     path: "/bundles/panels".into(),
                     backend: "external".into(),
                     source: "/".into(),
                     read_only: true,
+                    permissions: Default::default(),
                 },
             ],
         };

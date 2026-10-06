@@ -128,6 +128,20 @@ pub const ENV_USE_MEMORY: &str = "AUTONOMICS_USE_MEMORY";
 /// Env var enabling or disabling startup memory generation.
 pub const ENV_GENERATE_MEMORY: &str = "AUTONOMICS_GENERATE_MEMORY";
 
+/// Fully resolved RSI plugin subsystem configuration.
+///
+/// The environment catalog and trusted GitHub publisher are startup
+/// dependencies of `RsiInfra`, not optional runtime patches.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct PluginRsiConfig {
+    /// Approved digest-pinned environments available to plugin development.
+    #[serde(default)]
+    pub environments: plugin_rsi::EnvironmentCatalog,
+    /// Trusted GitHub publication and update-PR configuration.
+    #[serde(default)]
+    pub publisher: plugin_rsi::GhPublisherConfig,
+}
+
 // ---------------------------------------------------------------------------
 // RuntimeConfig
 // ---------------------------------------------------------------------------
@@ -258,6 +272,9 @@ pub struct RuntimeConfig {
     /// [`ENV_HTTP_REQUEST_TIMEOUT_SECS`], and [`ENV_HTTP_PROXY`].
     #[serde(default)]
     pub bib_http: BibHttpOptions,
+    /// Plugin-based recursive self-improvement services.
+    #[serde(default)]
+    pub plugin_rsi: PluginRsiConfig,
 }
 
 impl Default for RuntimeConfig {
@@ -406,6 +423,7 @@ impl RuntimeConfig {
                 .and_then(|b| b.skill_evolution_interval_secs)
                 .unwrap_or(DEFAULT_SKILL_EVOLUTION_INTERVAL_SECS),
             bib_http: resolve_bib_http(base),
+            plugin_rsi: base.and_then(|b| b.plugin_rsi.clone()).unwrap_or_default(),
         }
     }
 }
@@ -793,7 +811,8 @@ impl RuntimeConfig {
             "RuntimeConfig {{ name: {:?}, data_dir: {}, state_dir: {}, \
              dag_history_db: {}, bib_db: {}, app_db: {}, \
              dag_history: {}, bib: {}, opengwas: {}, \
-             opentargets: {}, gwascatalog: {}, chembl: {}, rcsb: {}, string: {}, kegg: {} }}",
+             opentargets: {}, gwascatalog: {}, chembl: {}, rcsb: {}, string: {}, kegg: {}, \
+             rsi_publisher: {} }}",
             self.name,
             self.data_dir.display(),
             self.state_dir.display(),
@@ -809,6 +828,7 @@ impl RuntimeConfig {
             self.enable_rcsb,
             self.enable_string,
             self.enable_kegg,
+            self.plugin_rsi.publisher.enabled,
         )
     }
 }
@@ -856,6 +876,7 @@ pub struct RuntimeConfigBuilder {
     pub(crate) skill_evolution_auto_approve: Option<bool>,
     pub(crate) skill_evolution_interval_secs: Option<u64>,
     pub(crate) bib_http: Option<BibHttpOptions>,
+    pub(crate) plugin_rsi: Option<PluginRsiConfig>,
 }
 
 impl RuntimeConfigBuilder {
@@ -1034,6 +1055,12 @@ impl RuntimeConfigBuilder {
     /// [`RuntimeConfig::resolve`].
     pub fn bib_http(mut self, opts: BibHttpOptions) -> Self {
         self.bib_http = Some(opts);
+        self
+    }
+
+    /// Configure the RSI plugin subsystem.
+    pub fn plugin_rsi(mut self, config: PluginRsiConfig) -> Self {
+        self.plugin_rsi = Some(config);
         self
     }
 
@@ -1292,6 +1319,42 @@ mod tests {
         assert!(!cfg.enable_skill_evolution);
         assert!(cfg.skill_evolution_auto_approve);
         assert_eq!(cfg.skill_evolution_interval_secs, 600);
+    }
+
+    #[test]
+    fn plugin_rsi_defaults_builder_and_backward_compatibility() {
+        let config = RuntimeConfig::default();
+        assert!(config.plugin_rsi.environments.get("alpine").is_none());
+        assert!(config.plugin_rsi.publisher.enabled);
+        assert_eq!(config.plugin_rsi.publisher.owner, "auto-nomics");
+
+        let mut environments = plugin_rsi::EnvironmentCatalog::default();
+        environments.insert(
+            "alpine",
+            plugin_rsi::Environment {
+                reference: "docker.io/library/alpine@sha256:0123456789012345678901234567890123456789012345678901234567890123".into(),
+                interpreters: vec!["sh".into()],
+            },
+        );
+        let config = RuntimeConfig::builder()
+            .plugin_rsi(PluginRsiConfig {
+                environments,
+                publisher: plugin_rsi::GhPublisherConfig {
+                    enabled: false,
+                    owner: "example".into(),
+                    ..Default::default()
+                },
+            })
+            .build();
+        assert!(config.plugin_rsi.environments.get("alpine").is_some());
+        assert!(!config.plugin_rsi.publisher.enabled);
+        assert_eq!(config.plugin_rsi.publisher.owner, "example");
+
+        let mut legacy = serde_json::to_value(RuntimeConfig::default()).unwrap();
+        legacy.as_object_mut().unwrap().remove("plugin_rsi");
+        let config: RuntimeConfig = serde_json::from_value(legacy).unwrap();
+        assert!(config.plugin_rsi.environments.get("alpine").is_none());
+        assert!(config.plugin_rsi.publisher.enabled);
     }
 
     #[test]

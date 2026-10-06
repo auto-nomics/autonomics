@@ -230,8 +230,7 @@ mod tests {
         };
         let path = format!("/tmp/export-node-{tag}-{}.json", uuid::Uuid::new_v4());
         storage
-            .op
-            .write(&path, set.to_bytes().unwrap())
+            .write_bytes(&path, set.to_bytes().unwrap())
             .await
             .unwrap();
         path

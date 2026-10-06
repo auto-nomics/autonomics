@@ -32,12 +32,14 @@ fn mounted_ctx() -> (NodeCtx, Arc<MountedObjectStore>) {
                 backend: "magma-local".into(),
                 source: GENE_ROOT.into(),
                 read_only: true,
+                permissions: Default::default(),
             },
             MountDefinition {
                 path: "/data/kegg_data".into(),
                 backend: "kegg-local".into(),
                 source: KEGG_ROOT.into(),
                 read_only: true,
+                permissions: Default::default(),
             },
         ],
     };

@@ -25,7 +25,10 @@ use std::process::Command;
 use serde::Deserialize;
 use thiserror::Error;
 
-use crate::loader::PLUGIN_ROOT_ENV;
+use crate::{
+    loader::PLUGIN_ROOT_ENV,
+    manifest::{PluginManifest, PluginStatus},
+};
 
 pub const PLUGIN_CONFIG_FILE: &str = "plugins.toml";
 
@@ -67,6 +70,12 @@ pub struct PluginSource {
     /// `git`.
     #[serde(default)]
     pub path: Option<PathBuf>,
+    /// Commit in the plugin development workspace for daemon-owned local sources.
+    #[serde(default)]
+    pub local_commit: Option<String>,
+    /// Tree digest of a daemon-owned local snapshot.
+    #[serde(default)]
+    pub local_digest: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -215,6 +224,10 @@ fn sync_git(name: &str, url: &str, rev: &str, target: &Path) -> Result<EntryOutc
         return Ok(outcome);
     }
 
+    if development_in_progress(target)? {
+        return Ok(EntryOutcome::Unchanged);
+    }
+
     // Already a checkout: is the pinned rev already what we have?
     let head = run_git_capture(name, target, &["rev-parse", "HEAD"])?;
     if head.trim() == rev {
@@ -222,6 +235,36 @@ fn sync_git(name: &str, url: &str, rev: &str, target: &Path) -> Result<EntryOutc
     }
     checkout_pinned(name, target, rev)?;
     Ok(EntryOutcome::Updated)
+}
+
+/// Whether daemon-owned development owns this checkout at startup.
+///
+/// A plugin can be installed and updated in the same directory. While its
+/// manifest is outside a runtime-ready state, sync must not hard-reset the
+/// in-progress workspace back to the older revision in `plugins.toml`.
+fn development_in_progress(target: &Path) -> Result<bool> {
+    let path = target.join("manifest.toml");
+    if !path.is_file() {
+        return Ok(false);
+    }
+    let text = std::fs::read_to_string(&path).map_err(|source| SyncError::Invalid {
+        name: target
+            .file_name()
+            .map(|value| value.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "<plugin>".into()),
+        message: format!("cannot read `{}`: {source}", path.display()),
+    })?;
+    let manifest: PluginManifest = toml::from_str(&text).map_err(|error| SyncError::Invalid {
+        name: target
+            .file_name()
+            .map(|value| value.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "<plugin>".into()),
+        message: format!("cannot parse `{}`: {error}", path.display()),
+    })?;
+    Ok(!matches!(
+        manifest.status,
+        PluginStatus::Published | PluginStatus::Installed
+    ))
 }
 
 fn is_commit_sha(rev: &str) -> bool {
@@ -475,6 +518,48 @@ rev = "{rev}"
         // Re-sync at the same rev is a no-op (offline-safe path).
         let report = sync(&config, &root).unwrap();
         assert_eq!(report.outcomes[0].1, EntryOutcome::Unchanged);
+    }
+
+    #[test]
+    fn sync_does_not_reset_a_plugin_update_in_progress() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, rev) = make_plugin_repo(dir.path(), "updating");
+        let config = write_config(
+            dir.path(),
+            &format!(
+                r#"
+[[plugin]]
+name = "updating"
+git = "{url}"
+rev = "{rev}"
+"#,
+                url = repo.to_string_lossy(),
+                rev = rev
+            ),
+        );
+        let root = dir.path().join("plugins");
+        sync(&config, &root).unwrap();
+
+        let workspace = root.join("updating");
+        let manifest_path = workspace.join("manifest.toml");
+        let manifest = std::fs::read_to_string(&manifest_path).unwrap();
+        std::fs::write(
+            &manifest_path,
+            manifest.replacen(
+                "schema_version = 1",
+                "schema_version = 1\nstatus = \"updating\"",
+                1,
+            ),
+        )
+        .unwrap();
+        std::fs::write(workspace.join("in-progress.txt"), "preserve me").unwrap();
+
+        let report = sync(&config, &root).unwrap();
+        assert_eq!(report.outcomes[0].1, EntryOutcome::Unchanged);
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("in-progress.txt")).unwrap(),
+            "preserve me"
+        );
     }
 
     #[test]

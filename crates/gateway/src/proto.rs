@@ -528,6 +528,8 @@ pub struct PluginView {
     /// Family name from the manifest (the directory name while the
     /// manifest is unparseable).
     pub name: String,
+    /// Daemon-owned lifecycle state from the plugin manifest.
+    pub status: String,
     /// Image reference `host/path@sha256:…` (absent when the manifest
     /// failed to parse).
     pub image: Option<String>,
@@ -567,4 +569,8 @@ pub struct PluginSourceView {
     pub rev: Option<String>,
     /// Local directory installed as a symlink (development iterations).
     pub path: Option<String>,
+    /// Development-workspace commit for a daemon-owned local snapshot.
+    pub local_commit: Option<String>,
+    /// Immutable tree digest for a daemon-owned local snapshot.
+    pub local_digest: Option<String>,
 }

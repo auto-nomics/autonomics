@@ -25,6 +25,7 @@ data-engine = { path = "../data-engine" }
 data-engine-tools = { path = "../data-engine-tools" }
 data-catalog = { path = "../data-catalog" }
 container-plugin = { path = "../container-plugin" }
+plugin-rsi = { path = "../plugin-rsi" }
 dag-core = { path = "../dag-core" }
 container-runtime = { path = "../container-runtime" }
 anyhow = "1"

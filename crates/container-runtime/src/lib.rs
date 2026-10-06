@@ -22,7 +22,7 @@ pub use config::{
 };
 pub use connection::{
     DEFAULT_CONTAINER_WORKDIR, DEFAULT_TIMEOUT_SECS, MAX_CAPTURED_OUTPUT_BYTES, PodmanConnection,
-    unique_container_name, workspace_ref,
+    trusted_workspace_ref, unique_container_name, workspace_ref,
 };
 pub use error::ContainerRuntimeError;
 pub use execution::ContainerExecutionInfra;

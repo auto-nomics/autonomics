@@ -143,6 +143,8 @@ pub struct SharedInfra {
     /// Process-wide Podman connection and immutable panel cache shared by
     /// all DAG sessions.
     pub container_execution: Arc<ContainerExecutionInfra>,
+    /// Unified plugin request, development, publication, and registration.
+    pub rsi: Arc<plugin_rsi::RsiInfra>,
     pub storage: Arc<dyn AgentStorage>,
     /// Profile registry (same DB connection, separate trait object).
     /// Used by RuntimeHost for dynamic profile derivation.
@@ -190,18 +192,36 @@ impl SharedInfra {
     pub async fn open(config: &RuntimeConfig) -> Result<Self> {
         tracing::info!("SharedInfra::open: starting");
 
-        // Materialize declared plugins before anything scans for them:
-        // `state_dir/plugins.toml` lists installation sources (git pins or
-        // local symlinks) and lands under `state_dir/plugins`, which the
-        // data-engine registry then loads. Missing config = nothing
-        // declared; a declared-but-broken plugin aborts startup.
-        let plugin_report = container_plugin::sync::sync(
-            &config
-                .state_dir
-                .join(container_plugin::sync::PLUGIN_CONFIG_FILE),
-            &config.state_dir.join("plugins"),
-        )
-        .map_err(|error| crate::error::Error::Other(error.to_string()))?;
+        // Skill and plugin evolution share one state dir. Install the skill
+        // manager first so RSI can promote its observations into plugin
+        // requests without duplicating the evidence store.
+        let skills = skills::SkillManager::init(skills::SkillManager::new(&config.state_dir));
+        skills.load_usage();
+
+        // PluginStore owns `state_dir/plugins.toml` and `state_dir/plugins`;
+        // container-plugin remains the protocol and checkout tool layer.
+        let gh_publisher = Arc::new(plugin_rsi::GhPublisher::new(
+            config.plugin_rsi.publisher.clone(),
+        ));
+        let plugin_publisher: plugin_rsi::SharedPluginPublisher = gh_publisher.clone();
+        let pull_request_publisher: plugin_rsi::SharedPullRequestPublisher = gh_publisher;
+        let rsi = Arc::new(
+            plugin_rsi::RsiInfra::open(
+                &config.state_dir,
+                "main",
+                "Autonomics RSI",
+                "rsi@autonomics.example",
+                skills.clone(),
+                config.plugin_rsi.environments.clone(),
+                plugin_publisher,
+                pull_request_publisher,
+            )
+            .map_err(|error| crate::error::Error::Other(error.to_string()))?,
+        );
+        let plugin_report = rsi
+            .store()
+            .materialize_registry()
+            .map_err(|error| crate::error::Error::Other(error.to_string()))?;
         if !plugin_report.outcomes.is_empty() {
             tracing::info!("plugins: {}", plugin_report.summary());
         }
@@ -223,6 +243,9 @@ impl SharedInfra {
             panel_cache_root = %container_execution.config.panel_cache_root.display(),
             "SharedInfra::open: Podman execution infrastructure ready"
         );
+        plugin_rsi::PluginDevelopmentToolsetRegistry::global()
+            .configure_runtime(Arc::clone(&container_execution.runtime))
+            .map_err(|error| crate::error::Error::Other(error.to_string()))?;
         // Reclaim crash residue and expired scratch from previous runs once at
         // startup, then on the configured interval. Failures are logged and
         // never block the host.
@@ -280,6 +303,11 @@ impl SharedInfra {
         }
 
         let engine_manager = Arc::new(DataEngineManager::new(engine));
+        rsi.configure_registry(Arc::new(SharedPluginRegistryControl {
+            manager: Arc::clone(&engine_manager),
+            execution: Arc::clone(&container_execution),
+            store: rsi.store(),
+        }));
         tracing::info!("SharedInfra::open: DataEngineManager created");
 
         // ── Agent storage ────────────────────────────────────────────
@@ -363,15 +391,6 @@ impl SharedInfra {
 
         tracing::info!("SharedInfra::open: all infrastructure ready");
 
-        // ── Skill evolution service ────────────────────────────────
-        // The trigger half of the evolution loop: observation events
-        // and a periodic sweep wake the idempotent workflow (distill
-        // → propose → policy). The manager is the process-wide
-        // singleton so every observation-recording path — agent tool,
-        // eval auto-capture — reaches the worker.
-        let skills = skills::SkillManager::init(skills::SkillManager::new(&config.state_dir));
-        // Reclaim the fitness signal from the previous process.
-        skills.load_usage();
         let skill_evolution = if config.enable_skill_evolution {
             let handle = skills::evolution::start(
                 skills.clone(),
@@ -403,6 +422,7 @@ impl SharedInfra {
             file_storage,
             vfs,
             container_execution,
+            rsi,
             catalog: catalog_service,
             storage,
             profile_storage,
@@ -531,7 +551,10 @@ impl SharedInfra {
         use crate::tools::*;
         use agentik_core::tools::ToolRegistration;
 
-        let file_storage = self.file_storage.clone();
+        let file_storage = Arc::new(
+            self.file_storage
+                .with_principal(agent_vfs_principal(agent_path.as_str())),
+        );
         // Use the agent's unique hierarchical path (e.g. "/root/researcher/worker1")
         // as the session key — NOT profile.path, which is shared by all agents
         // spawned from the same profile blueprint. Using profile.path here was
@@ -629,6 +652,39 @@ impl SharedInfra {
     }
 }
 
+/// Runtime adapter that lets PluginStore refresh node factories without
+/// rebuilding the whole DataEngine.
+#[derive(Clone)]
+struct SharedPluginRegistryControl {
+    manager: Arc<DataEngineManager>,
+    execution: Arc<ContainerExecutionInfra>,
+    store: Arc<plugin_rsi::PluginStore>,
+}
+
+impl plugin_rsi::PluginRegistryControl for SharedPluginRegistryControl {
+    fn installed_node_kinds(&self) -> plugin_rsi::Result<Vec<String>> {
+        Ok(self
+            .manager
+            .list_nodes()
+            .into_iter()
+            .map(|node| node.kind)
+            .collect())
+    }
+
+    fn reload_plugin(&self, plugin_name: &str) -> plugin_rsi::Result<()> {
+        plugin_rsi::validate_plugin_name(plugin_name)?;
+        let directory = self.store.runtime_root().join(plugin_name);
+        let plugin = container_plugin::loader::load_plugin(
+            &directory,
+            Arc::clone(&self.execution.runtime),
+            Arc::clone(&self.execution.panel_cache),
+        )
+        .map_err(|error| plugin_rsi::Error::PluginRegistry(error.to_string()))?;
+        self.manager.reload_plugin(plugin);
+        Ok(())
+    }
+}
+
 /// Build the bibliography VFS without opening agent or writing-system storage.
 ///
 /// CLI commands use this to ensure they follow exactly the same
@@ -654,7 +710,9 @@ pub fn bibliography_file_storage(config: &RuntimeConfig) -> Result<Arc<vfs::Open
 /// Unix.
 fn build_vfs(config: &RuntimeConfig) -> Result<MountedObjectStore> {
     let state = load_or_create_vfs_manifest(config)?;
-    MountedObjectStore::from_manifest(&state.manifest).map_err(|e| Error::Other(e.to_string()))
+    let mut manifest = state.manifest;
+    ensure_plugin_mounts(&mut manifest, config)?;
+    MountedObjectStore::from_manifest(&manifest).map_err(|e| Error::Other(e.to_string()))
 }
 
 async fn build_vfs_with_catalog(
@@ -666,6 +724,7 @@ async fn build_vfs_with_catalog(
 )> {
     let state = load_or_create_vfs_manifest(config)?;
     let mut manifest = state.manifest;
+    ensure_plugin_mounts(&mut manifest, config)?;
 
     let mut catalog_registry = dag_core::BundleRegistry::new();
     let mut catalog = None;
@@ -729,6 +788,107 @@ async fn build_vfs_with_catalog(
     MountedObjectStore::from_manifest(&manifest)
         .map_err(|e| Error::Other(e.to_string()))
         .map(|store| (store, catalog_registry, catalog))
+}
+
+fn ensure_plugin_mounts(manifest: &mut vfs::VfsManifest, config: &RuntimeConfig) -> Result<()> {
+    const ACTIVE_BACKEND_ID: &str = "autonomics-plugin-runtime";
+    const DEV_BACKEND_ID: &str = "autonomics-plugin-development";
+    let registry_path = config
+        .state_dir
+        .join(container_plugin::sync::PLUGIN_CONFIG_FILE);
+    let Ok(text) = std::fs::read_to_string(&registry_path) else {
+        return Ok(());
+    };
+    let parsed: container_plugin::sync::PluginsConfig = toml::from_str(&text)
+        .map_err(|error| Error::Other(format!("parse `{}`: {error}", registry_path.display())))?;
+    if manifest
+        .backend
+        .iter()
+        .any(|backend| backend.id == ACTIVE_BACKEND_ID || backend.id == DEV_BACKEND_ID)
+    {
+        return Err(Error::Other(
+            "plugin runtime backends are reserved for lifecycle-managed plugin mounts".to_string(),
+        ));
+    }
+
+    let development_root = config.state_dir.join("plugins");
+    std::fs::create_dir_all(&development_root)
+        .map_err(|error| Error::Other(format!("create `{development_root:?}`: {error}")))?;
+    manifest.backend.push(vfs::BackendDefinition {
+        id: DEV_BACKEND_ID.into(),
+        config: vfs::BackendConfig::local(development_root.to_string_lossy().into_owned()),
+    });
+    manifest.mount.push(vfs::MountDefinition {
+        path: "/plugins/dev".into(),
+        backend: DEV_BACKEND_ID.into(),
+        source: "/".into(),
+        read_only: false,
+        permissions: plugin_development_permissions(),
+    });
+
+    if !parsed.plugin.is_empty() {
+        let runtime_root = config.state_dir.join("plugin-runtime");
+        manifest.backend.push(vfs::BackendDefinition {
+            id: ACTIVE_BACKEND_ID.into(),
+            config: vfs::BackendConfig::local(runtime_root.to_string_lossy().into_owned()),
+        });
+        manifest.mount.push(vfs::MountDefinition {
+            path: "/plugins/active".into(),
+            backend: ACTIVE_BACKEND_ID.into(),
+            source: "/".into(),
+            read_only: true,
+            permissions: vfs::permission::MountPermissions::unix(
+                vfs::permission::VfsOwnership::root(),
+                vfs::permission::VfsMode::from_bits(0o555),
+                vfs::permission::VfsMode::from_bits(0o444),
+                vfs::permission::VfsMode::from_bits(0o555),
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn plugin_development_permissions() -> vfs::permission::MountPermissions {
+    use vfs::permission::{VfsAccess, VfsMode, VfsPathRule};
+
+    let deny = |path: &str| VfsPathRule::Deny {
+        path: path.to_string(),
+        access: vec![VfsAccess::Read, VfsAccess::Write, VfsAccess::Execute],
+    };
+    vfs::permission::MountPermissions::unix(
+        vfs::permission::VfsOwnership {
+            uid: vfs::permission::VFS_ROOT_UID,
+            gid: vfs::permission::VFS_PLUGIN_DEVELOPER_GID,
+        },
+        VfsMode::from_bits(0o775),
+        VfsMode::from_bits(0o664),
+        VfsMode::from_bits(0o775),
+    )
+    .with_rules(vec![
+        deny(".git"),
+        deny(".git/**"),
+        deny("**/.git"),
+        deny("**/.git/**"),
+        VfsPathRule::Deny {
+            path: "*/manifest.toml".into(),
+            access: vec![VfsAccess::Write],
+        },
+    ])
+}
+
+/// Map an agent path to a stable, non-root Unix identity.
+///
+/// All agents initially receive the plugin-developer group; profile-specific
+/// group membership can replace this deterministic mapping once persisted in
+/// AgentProfile.
+fn agent_vfs_principal(agent_path: &str) -> vfs::permission::VfsPrincipal {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in agent_path.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    let uid = 10_000_u32 + u32::try_from(hash % 55_536).unwrap_or_default();
+    vfs::permission::VfsPrincipal::plugin_developer(uid)
 }
 
 struct VfsManifestState {
@@ -900,6 +1060,7 @@ fn default_vfs_manifest(config: &RuntimeConfig) -> VfsManifest {
         backend: "default".into(),
         source: config.data_dir.to_string_lossy().to_string(),
         read_only: false,
+        permissions: Default::default(),
     }];
     let literature_root = config.state_dir.join("literature");
     backend.push(BackendDefinition {
@@ -911,6 +1072,7 @@ fn default_vfs_manifest(config: &RuntimeConfig) -> VfsManifest {
         backend: "literature".into(),
         source: "/".into(),
         read_only: false,
+        permissions: Default::default(),
     });
 
     if let (Ok(bucket), Ok(ak), Ok(sk)) = (
@@ -929,6 +1091,7 @@ fn default_vfs_manifest(config: &RuntimeConfig) -> VfsManifest {
             backend: "oss-prod".into(),
             source: "/".into(),
             read_only: true,
+            permissions: Default::default(),
         });
     }
 
@@ -969,6 +1132,7 @@ fn ensure_literature_mount(manifest: &mut VfsManifest, config: &RuntimeConfig) -
         backend: backend_id,
         source: "/".into(),
         read_only: false,
+        permissions: Default::default(),
     });
     true
 }
@@ -5004,7 +5168,7 @@ mod agent_persistence_tests {
             agentik_core::testing::get_mock_model("layout-restart-test"),
         )));
         let restored = host
-            .restore_persisted_agents(&[profile.clone()], model, |spec| {
+            .restore_persisted_agents(std::slice::from_ref(&profile), model, |spec| {
                 panic!("unexpected model preference `{spec}`")
             })
             .await
@@ -5203,6 +5367,7 @@ mod literature_mount_tests {
                 backend: "default".into(),
                 source: "/".into(),
                 read_only: false,
+                permissions: Default::default(),
             }],
         }
     }
@@ -5266,5 +5431,92 @@ mod literature_mount_tests {
         assert!(!ensure_literature_mount(&mut manifest, &config));
         assert_eq!(manifest.mount.len(), mount_count);
         assert_eq!(manifest.backend.len(), backend_count);
+    }
+}
+
+#[cfg(test)]
+mod plugin_vfs_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn plugin_mounts_apply_lifecycle_permissions() {
+        let state = tempfile::tempdir().unwrap();
+        let data = tempfile::tempdir().unwrap();
+        let runtime_root = state.path().join("plugin-runtime");
+        let plugin_root = runtime_root.join("demo-plugin");
+        let development_root = state.path().join("plugins");
+        let development_plugin = development_root.join("demo-plugin");
+        std::fs::create_dir_all(&plugin_root).unwrap();
+        std::fs::create_dir_all(development_plugin.join(".git")).unwrap();
+        std::fs::write(plugin_root.join("manifest.toml"), "# demo\n").unwrap();
+        std::fs::write(development_plugin.join("manifest.toml"), "# dev\n").unwrap();
+        std::fs::write(
+            development_plugin.join(".git").join("HEAD"),
+            "ref: refs/heads/main\n",
+        )
+        .unwrap();
+        std::fs::write(
+            state.path().join("plugins.toml"),
+            format!(
+                "[[plugin]]\nname = \"demo-plugin\"\npath = \"{}\"\nlocal_commit = \"{}\"\nlocal_digest = \"{}\"\n",
+                plugin_root.display(),
+                "0123456789abcdef0123456789abcdef01234567",
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            ),
+        )
+        .unwrap();
+
+        let mut config = RuntimeConfig::default();
+        config.state_dir = state.path().to_path_buf();
+        config.data_dir = data.path().to_path_buf();
+        let mut manifest = VfsManifest::local_root(data.path().to_string_lossy().into_owned());
+        ensure_plugin_mounts(&mut manifest, &config).unwrap();
+        let mounts = Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap());
+        let storage = vfs::OpendalFileStorage::with_mounts(data.path(), mounts);
+        let developer =
+            storage.with_principal(vfs::permission::VfsPrincipal::plugin_developer(10_000));
+        let observer = storage.with_principal(vfs::permission::VfsPrincipal::new(20_000, 20_000));
+
+        let contents = storage
+            .read_range("/plugins/active/demo-plugin/manifest.toml", 0..7)
+            .await
+            .unwrap();
+        assert_eq!(contents.to_vec(), b"# demo\n");
+        assert!(
+            storage
+                .write_bytes(
+                    "/plugins/active/demo-plugin/manifest.toml",
+                    b"changed".to_vec()
+                )
+                .await
+                .is_err()
+        );
+        developer
+            .write_bytes("/plugins/dev/demo-plugin/README.md", b"hello".to_vec())
+            .await
+            .unwrap();
+        let git_access = developer.check_readable("/plugins/dev/demo-plugin/.git/HEAD");
+        assert!(git_access.is_err(), "git_access={git_access:?}");
+        assert!(
+            developer
+                .write_bytes(
+                    "/plugins/dev/demo-plugin/manifest.toml",
+                    b"changed".to_vec()
+                )
+                .await
+                .is_err()
+        );
+        assert!(
+            observer
+                .read_range("/plugins/dev/demo-plugin/README.md", 0..5)
+                .await
+                .is_ok()
+        );
+        assert!(
+            observer
+                .write_bytes("/plugins/dev/demo-plugin/README.md", b"changed".to_vec())
+                .await
+                .is_err()
+        );
     }
 }

@@ -4252,6 +4252,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "evolution-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.20",
+ "toml 1.1.6+spec-1.1.0",
+ "tracing",
+]
+
+[[package]]
 name = "eyre"
 version = "0.6.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9313,6 +9325,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "plugin-rsi"
+version = "0.1.0"
+dependencies = [
+ "agentik-core",
+ "agentik-proc",
+ "agentik-sdk",
+ "async-trait",
+ "container-plugin",
+ "container-runtime",
+ "evolution-core",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "skills",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "toml 1.1.6+spec-1.1.0",
+]
+
+[[package]]
 name = "png"
 version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10581,6 +10615,7 @@ dependencies = [
  "libc",
  "opengwas",
  "opentargets",
+ "plugin-rsi",
  "rcsb",
  "rusqlite",
  "schemars",
@@ -11380,6 +11415,7 @@ dependencies = [
  "arc-swap",
  "async-trait",
  "clap",
+ "evolution-core",
  "schemars",
  "serde",
  "serde_json",

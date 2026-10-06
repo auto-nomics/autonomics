@@ -21,14 +21,18 @@ use opendal::Operator;
 use opendal::services::Fs;
 use tempfile::TempDir;
 
+use crate::authorized::{AuthorizedMountPolicy, AuthorizedOperatorConfig, authorize_operator};
+use crate::permission::{VfsAccess, VfsPrincipal};
 use crate::{MountHandle, MountedObjectStore};
 
+#[derive(Clone)]
 pub struct OpendalFileStorage {
-    pub op: Operator,
+    op: Operator,
     pub mounts: Option<Arc<MountedObjectStore>>,
+    principal: VfsPrincipal,
     path_locks: Arc<PathLocks>,
     /// Keeps the temp directory alive until this storage is dropped.
-    _temp_guard: Option<TempDir>,
+    _temp_guard: Arc<Option<TempDir>>,
 }
 
 type PathLocks = std::sync::RwLock<StdHashMap<String, Arc<tokio::sync::RwLock<()>>>>;
@@ -65,6 +69,17 @@ impl OpendalFileStorage {
         }
     }
 
+    /// Return a credential-carrying view sharing operators, mounts, and locks.
+    pub fn with_principal(&self, principal: VfsPrincipal) -> Self {
+        Self {
+            op: self.op.clone(),
+            mounts: self.mounts.clone(),
+            principal,
+            path_locks: Arc::clone(&self.path_locks),
+            _temp_guard: Arc::clone(&self._temp_guard),
+        }
+    }
+
     /// Build a storage whose default backend is the local FS at
     /// `data_dir`, with a mount table layered on top. Paths under a
     /// mount are routed to that mount's backend operator (see
@@ -77,8 +92,9 @@ impl OpendalFileStorage {
         Self {
             op,
             mounts: Some(mounts),
+            principal: VfsPrincipal::root(),
             path_locks: Arc::new(PathLocks::default()),
-            _temp_guard: None,
+            _temp_guard: Arc::new(None),
         }
     }
 
@@ -88,8 +104,9 @@ impl OpendalFileStorage {
         Self {
             op,
             mounts: None,
+            principal: VfsPrincipal::root(),
             path_locks: Arc::new(PathLocks::default()),
-            _temp_guard: None,
+            _temp_guard: Arc::new(None),
         }
     }
 
@@ -102,8 +119,9 @@ impl OpendalFileStorage {
         Self {
             op,
             mounts: None,
+            principal: VfsPrincipal::root(),
             path_locks: Arc::new(PathLocks::default()),
-            _temp_guard: None,
+            _temp_guard: Arc::new(None),
         }
     }
 
@@ -118,8 +136,9 @@ impl OpendalFileStorage {
         Self {
             op,
             mounts: None,
+            principal: VfsPrincipal::root(),
             path_locks: Arc::new(PathLocks::default()),
-            _temp_guard: Some(tmp),
+            _temp_guard: Arc::new(Some(tmp)),
         }
     }
 
@@ -134,12 +153,39 @@ impl OpendalFileStorage {
     /// owns it. Internal helper; public callers should use the `&str`
     /// wrapper [`Self::resolve`].
     fn dispatch_op(&self, path: &Path) -> Operator {
+        let mounted = self
+            .mounts
+            .as_ref()
+            .and_then(|mounts| mounts.handle_for(path));
+        let (operator, backend) = match &mounted {
+            Some(handle) => ((*handle.backend_op).clone(), handle.backend_op.clone()),
+            None => {
+                let backend = Arc::new(self.op.clone());
+                (self.op.clone(), backend)
+            }
+        };
+        let mut config = AuthorizedOperatorConfig::default_backend(self.principal.clone());
         if let Some(mounts) = &self.mounts {
-            if let Some(handle) = mounts.handle_for(path) {
-                return (*handle.backend_op).clone();
+            config.policies = mounts
+                .mount_paths()
+                .into_iter()
+                .filter_map(|virtual_path| {
+                    let ds_path = Path::parse(&virtual_path).ok()?;
+                    mounts.handle_for(&ds_path)
+                })
+                .filter(|handle| Arc::ptr_eq(&handle.backend_op, &backend))
+                .map(|handle| AuthorizedMountPolicy {
+                    virtual_prefix: handle.definition.path,
+                    source_prefix: handle.source_prefix.as_ref().trim_matches('/').to_string(),
+                    permissions: handle.permissions,
+                    read_only: handle.read_only,
+                })
+                .collect();
+            if config.policies.is_empty() {
+                config = AuthorizedOperatorConfig::default_backend(self.principal.clone());
             }
         }
-        self.op.clone()
+        authorize_operator(operator, config)
     }
 
     /// Translate a virtual path to the key used on the resolved backend
@@ -181,26 +227,66 @@ impl OpendalFileStorage {
         Path::parse(&joined).unwrap_or(Path::ROOT)
     }
 
-    /// Reject writes through read-only mounts. Internal helper; public
-    /// callers should use the `&str` wrapper [`Self::check_writable`].
-    fn check_writable_path(&self, path: &Path) -> Result<(), ObjectStoreError> {
+    fn authorize_access_path(
+        &self,
+        path: &Path,
+        access: VfsAccess,
+        is_directory: bool,
+    ) -> Result<(), ObjectStoreError> {
         if let Some(mounts) = &self.mounts {
             if let Some(handle) = mounts.handle_for(path) {
-                if handle.read_only {
+                if handle.read_only && access == VfsAccess::Write {
                     return Err(ObjectStoreError::NotSupported {
                         source: format!("mount '{}' is read-only", handle.definition.path).into(),
                     });
                 }
             }
         }
-        Ok(())
+
+        let handle = self
+            .mounts
+            .as_ref()
+            .and_then(|mounts| mounts.handle_for(path));
+        let permissions = handle
+            .clone()
+            .map(|handle| handle.permissions)
+            .unwrap_or_default();
+        let relative = handle
+            .clone()
+            .map(|handle| handle.relative_path(path))
+            .unwrap_or_else(|| path.as_ref().trim_matches('/').to_string());
+        let segments: Vec<&str> = relative
+            .split('/')
+            .filter(|part| !part.is_empty())
+            .collect();
+        for index in 0..segments.len().saturating_sub(1) {
+            let prefix = segments[..=index].join("/");
+            permissions
+                .authorize(&self.principal, &prefix, true, VfsAccess::Execute)
+                .map_err(|error| permission_object_error(error.to_string()))?;
+        }
+        permissions
+            .authorize(&self.principal, &relative, is_directory, access)
+            .map_err(|error| permission_object_error(error.to_string()))
     }
 
-    /// Public `&str` wrapper around [`Self::dispatch_op`]. The path is
-    /// first normalised via [`Self::normalize_path`] so lexical `..`
-    /// segments are clamped to the virtual root before the mount
-    /// lookup runs (avoids `/foo/../data/ldsc` escaping a mount that
-    /// covers `/data/ldsc`).
+    fn is_readable_path(&self, path: &Path, is_directory: bool) -> bool {
+        self.authorize_access_path(path, VfsAccess::Read, is_directory)
+            .is_ok()
+    }
+
+    /// Reject writes through read-only mounts. Internal helper; public
+    /// callers should use the `&str` wrapper [`Self::check_writable`].
+    fn check_writable_path(&self, path: &Path) -> Result<(), ObjectStoreError> {
+        self.authorize_access_path(path, VfsAccess::Write, false)
+    }
+
+    /// Resolve a virtual path to a backend operator carrying the current
+    /// VFS principal and mount policy.
+    ///
+    /// The returned operator remains permission-scoped: changing its backend
+    /// key does not bypass VFS authorization. Paths are normalized before the
+    /// mount lookup runs.
     pub fn resolve(&self, path: &str) -> Operator {
         let v = Self::normalize_path(path);
         match Path::parse(&v) {
@@ -218,13 +304,32 @@ impl OpendalFileStorage {
         }
     }
 
+    /// Authorize a read for the storage's attached principal.
+    pub fn check_readable(&self, path: &str) -> Result<(), opendal::Error> {
+        self.check_access(path, VfsAccess::Read, false)
+    }
+
+    /// Authorize a directory listing for the storage's attached principal.
+    pub fn check_listable(&self, path: &str) -> Result<(), opendal::Error> {
+        self.check_access(path, VfsAccess::Read, true)
+    }
+
     /// Reject writes through read-only mounts. Callers should run this
     /// BEFORE dispatching a write/delete/rename/copy-target to a
     /// backend operator. Public `&str` wrapper.
     pub fn check_writable(&self, path: &str) -> Result<(), opendal::Error> {
+        self.check_access(path, VfsAccess::Write, false)
+    }
+
+    fn check_access(
+        &self,
+        path: &str,
+        access: VfsAccess,
+        is_directory: bool,
+    ) -> Result<(), opendal::Error> {
         let v = Self::normalize_path(path);
         if let Ok(p) = Path::parse(&v) {
-            if let Err(e) = self.check_writable_path(&p) {
+            if let Err(e) = self.authorize_access_path(&p, access, is_directory) {
                 return Err(opendal::Error::new(
                     opendal::ErrorKind::PermissionDenied,
                     format!("{e}"),
@@ -268,6 +373,7 @@ impl OpendalFileStorage {
         virtual_path: &str,
         range: std::ops::Range<u64>,
     ) -> Result<opendal::Buffer, opendal::Error> {
+        self.check_readable(virtual_path)?;
         let operator = self.resolve(virtual_path);
         let key = self.resolve_path(virtual_path);
         let lock = self.object_lock(&key);
@@ -285,6 +391,7 @@ impl OpendalFileStorage {
         range: std::ops::Range<u64>,
     ) -> Result<impl Stream<Item = Result<Bytes, opendal::Error>> + Send + 'static, opendal::Error>
     {
+        self.check_readable(virtual_path)?;
         let operator = self.resolve(virtual_path);
         let key = self.resolve_path(virtual_path);
         let lock = self.object_lock(&key);
@@ -305,6 +412,7 @@ impl OpendalFileStorage {
 
     /// Return an object's byte length.
     pub async fn content_length(&self, virtual_path: &str) -> Result<u64, opendal::Error> {
+        self.check_readable(virtual_path)?;
         let operator = self.resolve(virtual_path);
         let key = self.resolve_path(virtual_path);
         let meta = operator.stat(&key).await?;
@@ -377,13 +485,6 @@ impl OpendalFileStorage {
         Path::parse(&normalized)
             .map(|path| mounts.handle_for(&path).is_some())
             .unwrap_or(false)
-    }
-
-    /// Default local-FS operator. Used by download tools
-    /// (OpenGWAS, GWAS Catalog) that MUST land files on a writable
-    /// local path even when the user has read-only mounts configured.
-    pub fn downloads_op(&self) -> &Operator {
-        &self.op
     }
 
     /// Return true iff `path_a` and `path_b` resolve to the same
@@ -472,6 +573,12 @@ fn lock_object(path_locks: &PathLocks, path: &str) -> Arc<tokio::sync::RwLock<()
         .entry(path.to_string())
         .or_insert_with(|| Arc::new(tokio::sync::RwLock::new(())))
         .clone()
+}
+
+fn permission_object_error(message: String) -> ObjectStoreError {
+    ObjectStoreError::NotSupported {
+        source: message.into(),
+    }
 }
 
 impl Debug for OpendalFileStorage {
@@ -615,6 +722,9 @@ impl ObjectStore for OpendalFileStorage {
         'life1: 'async_trait,
         Self: 'async_trait,
     {
+        if let Err(e) = self.authorize_access_path(location, VfsAccess::Read, false) {
+            return Box::pin(async move { Err(e) });
+        }
         // ObjectStore::get_opts resolves one virtual object to a byte stream.
         // Callers may supply a byte range; an absent range means the whole
         // object. Keep the OpenDAL reader lazy and chunked here: materializing
@@ -678,6 +788,9 @@ impl ObjectStore for OpendalFileStorage {
         prefix: Option<&Path>,
     ) -> BoxStream<'static, Result<ObjectMeta, ObjectStoreError>> {
         let effective = prefix.cloned().unwrap_or(Path::ROOT);
+        if let Err(error) = self.authorize_access_path(&effective, VfsAccess::Read, true) {
+            return futures::stream::iter(Err(error)).boxed();
+        }
 
         // Snapshot mount metadata we need inside the stream.
         let dispatch_handle = self.mounts.as_ref().and_then(|m| m.handle_for(&effective));
@@ -695,6 +808,9 @@ impl ObjectStore for OpendalFileStorage {
                         if !effective.prefix_matches(&parent) || parent == Path::ROOT {
                             return None;
                         }
+                        if !self.is_readable_path(&ds, true) {
+                            return None;
+                        }
                         m.handle_for(&ds).map(|h| (p, h))
                     })
                     .collect()
@@ -705,6 +821,7 @@ impl ObjectStore for OpendalFileStorage {
         let op = self.op.clone();
         let scan_path = effective.to_string();
 
+        let auth = self.clone();
         let stream = async_stream::stream! {
             // Case A: dispatch entirely into a single mount.
             if let Some(handle) = dispatch_handle {
@@ -718,8 +835,12 @@ impl ObjectStore for OpendalFileStorage {
                 if let Ok(meta) = op.stat(&key).await {
                     if meta.is_file() {
                         let mut object_meta = opendal_meta_to_object_meta(&key, &meta);
-                        object_meta.location =
+                        let virtual_path =
                             Self::remap_to_virtual(&Path::parse(&key).unwrap_or_default(), &handle);
+                        if !auth.is_readable_path(&virtual_path, false) {
+                            return;
+                        }
+                        object_meta.location = virtual_path;
                         yield Ok(object_meta);
                         return;
                     }
@@ -735,10 +856,14 @@ impl ObjectStore for OpendalFileStorage {
                     match entry {
                         Ok(e) => {
                             if let Some(mut meta) = entry_to_meta(&e) {
-                                meta.location = Self::remap_to_virtual(
+                                let virtual_path = Self::remap_to_virtual(
                                     &Path::parse(e.path()).unwrap_or(Path::ROOT),
                                     &handle,
                                 );
+                                if !auth.is_readable_path(&virtual_path, e.metadata().is_dir()) {
+                                    continue;
+                                }
+                                meta.location = virtual_path;
                                 yield Ok(meta);
                             }
                         }
@@ -771,6 +896,11 @@ impl ObjectStore for OpendalFileStorage {
                         }
                         if e.metadata().is_file() {
                             if let Some(meta) = entry_to_meta(&e) {
+                                if let Ok(virtual_path) = Path::parse(&entry_path)
+                                    && !auth.is_readable_path(&virtual_path, false)
+                                {
+                                    continue;
+                                }
                                 yield Ok(meta);
                             }
                         }
@@ -800,10 +930,14 @@ impl ObjectStore for OpendalFileStorage {
                     match entry {
                         Ok(e) => {
                             if let Some(mut meta) = entry_to_meta(&e) {
-                                meta.location = Self::remap_to_virtual(
+                                let virtual_path = Self::remap_to_virtual(
                                     &Path::parse(e.path()).unwrap_or(Path::ROOT),
                                     &handle,
                                 );
+                                if !auth.is_readable_path(&virtual_path, e.metadata().is_dir()) {
+                                    continue;
+                                }
+                                meta.location = virtual_path;
                                 yield Ok(meta);
                             }
                         }
@@ -831,6 +965,9 @@ impl ObjectStore for OpendalFileStorage {
         Self: 'async_trait,
     {
         let effective = prefix.cloned().unwrap_or(Path::ROOT);
+        if let Err(error) = self.authorize_access_path(&effective, VfsAccess::Read, true) {
+            return Box::pin(async move { Err(error) });
+        }
 
         // Case 1: path is STRICTLY under a mount (or IS a non-root
         // mount's root) → list inside that mount's backend. Only the
@@ -842,14 +979,22 @@ impl ObjectStore for OpendalFileStorage {
                 if !is_root_mount {
                     let op = (*handle.backend_op).clone();
                     let remote = self.dispatch_path(&effective);
+                    let auth = self.clone();
                     return Box::pin(async move {
                         if let Ok(meta) = op.stat(&remote).await {
                             if meta.is_file() {
                                 let mut object = opendal_meta_to_object_meta(&remote, &meta);
-                                object.location = Self::remap_to_virtual(
+                                let virtual_path = Self::remap_to_virtual(
                                     &Path::parse(&remote).unwrap_or_default(),
                                     &handle,
                                 );
+                                if !auth.is_readable_path(&virtual_path, false) {
+                                    return Ok(ListResult {
+                                        common_prefixes: Vec::new(),
+                                        objects: Vec::new(),
+                                    });
+                                }
+                                object.location = virtual_path;
                                 return Ok(ListResult {
                                     common_prefixes: Vec::new(),
                                     objects: vec![object],
@@ -878,10 +1023,18 @@ impl ObjectStore for OpendalFileStorage {
                                 let mut meta = entry_to_meta(&entry).unwrap_or_else(|| {
                                     opendal_meta_to_object_meta(&entry_path, entry.metadata())
                                 });
-                                meta.location = Self::remap_to_virtual(&entry_ds, &handle);
+                                let virtual_path = Self::remap_to_virtual(&entry_ds, &handle);
+                                if !auth.is_readable_path(&virtual_path, false) {
+                                    continue;
+                                }
+                                meta.location = virtual_path;
                                 objects.push(meta);
                             } else if entry.metadata().is_dir() {
-                                common_prefixes.push(Self::remap_to_virtual(&entry_ds, &handle));
+                                let virtual_path = Self::remap_to_virtual(&entry_ds, &handle);
+                                if !auth.is_readable_path(&virtual_path, true) {
+                                    continue;
+                                }
+                                common_prefixes.push(virtual_path);
                             }
                         }
                         Ok(ListResult {
@@ -925,12 +1078,16 @@ impl ObjectStore for OpendalFileStorage {
                         if parent != effective {
                             return None;
                         }
+                        if !self.is_readable_path(&ds, true) {
+                            return None;
+                        }
                         m.handle_for(&ds).map(|h| (p, h.backend_op))
                     })
                     .collect()
             })
             .unwrap_or_default();
         let stream_root_mount = root_mount.clone();
+        let auth = self.clone();
         Box::pin(async move {
             // A root-mounted virtual path can itself be a file. OpenDAL's
             // directory lister returns an empty stream for `file/`, which
@@ -975,6 +1132,9 @@ impl ObjectStore for OpendalFileStorage {
                     .map(|h| Self::remap_to_virtual(&entry_ds, h))
                     .unwrap_or(entry_ds);
                 let trimmed = virtual_entry.as_ref().trim_end_matches('/').to_string();
+                if !auth.is_readable_path(&virtual_entry, entry.metadata().is_dir()) {
+                    continue;
+                }
                 if entry.metadata().is_file() {
                     if let Some(mut meta) = entry_to_meta(&entry) {
                         meta.location = virtual_entry;
@@ -1007,27 +1167,18 @@ impl ObjectStore for OpendalFileStorage {
         &self,
         locations: BoxStream<'static, Result<Path, ObjectStoreError>>,
     ) -> BoxStream<'static, Result<Path, ObjectStoreError>> {
-        let this_op = self.op.clone();
-        let this_mounts = self.mounts.clone();
+        let storage = self.clone();
         let path_locks = self.path_locks.clone();
         locations
             .map(move |location| {
-                let op = this_op.clone();
-                let mounts = this_mounts.clone();
+                let storage = storage.clone();
                 let path_locks = path_locks.clone();
                 async move {
                     let location = location?;
-                    if let Some(mounts) = mounts {
+                    storage.check_writable_path(&location)?;
+                    let op = storage.op.clone();
+                    if let Some(mounts) = storage.mounts.as_ref() {
                         if let Some(handle) = mounts.handle_for(&location) {
-                            if handle.read_only {
-                                return Err(ObjectStoreError::NotSupported {
-                                    source: format!(
-                                        "mount '{}' is read-only",
-                                        handle.definition.path
-                                    )
-                                    .into(),
-                                });
-                            }
                             let final_path = mount_key(&handle, &location);
                             let object_lock = lock_object(&path_locks, &final_path);
                             let _guard = object_lock.write().await;
@@ -1070,6 +1221,9 @@ impl ObjectStore for OpendalFileStorage {
         Self: 'async_trait,
     {
         if let Err(e) = self.check_writable_path(to) {
+            return Box::pin(async move { Err(e) });
+        }
+        if let Err(e) = self.authorize_access_path(from, VfsAccess::Read, false) {
             return Box::pin(async move { Err(e) });
         }
         let from_op = self.dispatch_op(from);
@@ -1346,6 +1500,7 @@ fn hex_lower(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::OpendalFileStorage;
+    use crate::permission::MountPermissions;
 
     #[test]
     fn normalize_absolute_path() {
@@ -1639,12 +1794,14 @@ mod tests {
                     backend: "default".into(),
                     source: "/".into(),
                     read_only: false,
+                    permissions: MountPermissions::default(),
                 },
                 MountDefinition {
                     path: "/data".into(),
                     backend: "source".into(),
                     source: "/".into(),
                     read_only: true,
+                    permissions: MountPermissions::default(),
                 },
             ],
         };
@@ -1762,7 +1919,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn downloads_op_bypasses_mounts() {
+    async fn default_backend_write_uses_default_operator() {
         let MountedStorageHarness {
             storage,
             data_dir,
@@ -1770,13 +1927,136 @@ mod tests {
         } = make_mounted_storage(&[]);
         let remote = storage.resolve_path("/scratch.txt");
         storage
-            .downloads_op()
+            .resolve("/scratch.txt")
             .write(&remote, b"downloads".to_vec())
             .await
             .unwrap();
         let on_disk = std::fs::read(data_dir.path().join("scratch.txt")).unwrap();
         assert_eq!(on_disk, b"downloads");
         assert!(std::fs::read_dir(src).unwrap().next().is_none());
+    }
+
+    #[tokio::test]
+    async fn resolved_operator_remains_permission_scoped() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join(".git")).unwrap();
+        std::fs::write(root.path().join(".git/HEAD"), "secret\n").unwrap();
+        let deny_all = |path: &str| crate::permission::VfsPathRule::Deny {
+            path: path.to_string(),
+            access: vec![
+                crate::permission::VfsAccess::Read,
+                crate::permission::VfsAccess::Write,
+                crate::permission::VfsAccess::Execute,
+            ],
+        };
+        let manifest = crate::VfsManifest {
+            backend: vec![crate::BackendDefinition {
+                id: "secure".into(),
+                config: crate::BackendConfig::local(root.path().to_string_lossy().into_owned()),
+            }],
+            mount: vec![crate::MountDefinition {
+                path: "/secure".into(),
+                backend: "secure".into(),
+                source: "/".into(),
+                read_only: false,
+                permissions: crate::permission::MountPermissions::unix(
+                    crate::permission::VfsOwnership { uid: 0, gid: 100 },
+                    crate::permission::VfsMode::from_bits(0o775),
+                    crate::permission::VfsMode::from_bits(0o664),
+                    crate::permission::VfsMode::from_bits(0o775),
+                )
+                .with_rules(vec![
+                    deny_all(".git"),
+                    deny_all(".git/**"),
+                    deny_all("**/.git"),
+                    deny_all("**/.git/**"),
+                ]),
+            }],
+        };
+        let mounts = Arc::new(crate::MountedObjectStore::from_manifest(&manifest).unwrap());
+        let storage = OpendalFileStorage::with_mounts(root.path(), mounts)
+            .with_principal(crate::permission::VfsPrincipal::plugin_developer(10_000));
+        let operator = storage.resolve("/secure/README.md");
+
+        operator.write("README.md", b"safe".to_vec()).await.unwrap();
+        assert!(
+            operator.read(".git/HEAD").await.is_err(),
+            "resolved operator leaked denied read path"
+        );
+        assert!(
+            operator
+                .write(".git/HEAD", b"changed".to_vec())
+                .await
+                .is_err(),
+            "resolved operator leaked denied write path"
+        );
+
+        let entries = operator.list("/").await.unwrap();
+        let paths: Vec<String> = entries
+            .iter()
+            .map(|entry| entry.path().to_string())
+            .collect();
+        assert!(
+            !paths.iter().any(|path| path.contains(".git")),
+            "resolved operator leaked denied list paths: {paths:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolved_operator_honors_nested_mount_policy() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("secret/.git")).unwrap();
+        std::fs::write(root.path().join("secret/.git/HEAD"), "secret\n").unwrap();
+        let deny_all = |path: &str| crate::permission::VfsPathRule::Deny {
+            path: path.to_string(),
+            access: vec![
+                crate::permission::VfsAccess::Read,
+                crate::permission::VfsAccess::Write,
+                crate::permission::VfsAccess::Execute,
+            ],
+        };
+        let manifest = crate::VfsManifest {
+            backend: vec![crate::BackendDefinition {
+                id: "shared".into(),
+                config: crate::BackendConfig::local(root.path().to_string_lossy().into_owned()),
+            }],
+            mount: vec![
+                crate::MountDefinition {
+                    path: "/".into(),
+                    backend: "shared".into(),
+                    source: "/".into(),
+                    read_only: false,
+                    permissions: crate::permission::MountPermissions::default(),
+                },
+                crate::MountDefinition {
+                    path: "/secret".into(),
+                    backend: "shared".into(),
+                    source: "secret".into(),
+                    read_only: false,
+                    permissions: crate::permission::MountPermissions::unix(
+                        crate::permission::VfsOwnership { uid: 0, gid: 100 },
+                        crate::permission::VfsMode::from_bits(0o775),
+                        crate::permission::VfsMode::from_bits(0o664),
+                        crate::permission::VfsMode::from_bits(0o775),
+                    )
+                    .with_rules(vec![
+                        deny_all(".git"),
+                        deny_all(".git/**"),
+                        deny_all("**/.git"),
+                        deny_all("**/.git/**"),
+                    ]),
+                },
+            ],
+        };
+        let mounts = Arc::new(crate::MountedObjectStore::from_manifest(&manifest).unwrap());
+        let storage = OpendalFileStorage::with_mounts(root.path(), mounts)
+            .with_principal(crate::permission::VfsPrincipal::plugin_developer(10_000));
+
+        let operator = storage.resolve("/outside/README.md");
+        assert!(
+            operator.read("secret/.git/HEAD").await.is_err(),
+            "broad-mount operator bypassed nested mount policy"
+        );
     }
 
     // ── mount with a non-empty `source` (mirrors real vfs.toml) ──
@@ -1805,6 +2085,7 @@ mod tests {
                 backend: "default".into(),
                 source: source_dir.to_string_lossy().to_string(),
                 read_only: false,
+                permissions: MountPermissions::default(),
             }],
         };
         let vfs = Arc::new(crate::MountedObjectStore::from_manifest(&manifest).unwrap());

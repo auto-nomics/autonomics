@@ -46,6 +46,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::OpendalFileStorage;
+use crate::permission::{MountPermissions, VfsAccess, VfsPrincipal};
 
 #[derive(Debug, Error)]
 pub enum MountError {
@@ -220,6 +221,9 @@ pub struct MountDefinition {
     /// Reject mutations through this mount.
     #[serde(default)]
     pub read_only: bool,
+    /// Unix-style defaults and path policies enforced by this mount.
+    #[serde(default)]
+    pub permissions: MountPermissions,
 }
 
 /// Complete declarative mount manifest.
@@ -251,6 +255,7 @@ impl VfsManifest {
                 backend: "default".into(),
                 source: "/".into(),
                 read_only: false,
+                permissions: MountPermissions::default(),
             }],
         }
     }
@@ -298,12 +303,29 @@ struct Mount {
 #[derive(Clone)]
 pub struct MountHandle {
     pub definition: MountDefinition,
-    pub backend_op: Arc<opendal::Operator>,
+    pub(crate) backend_op: Arc<opendal::Operator>,
     pub read_only: bool,
+    pub permissions: MountPermissions,
     /// Backend-relative key that `definition.source` maps to inside the
     /// backend operator. Mirrors `Mount::source_prefix`; callers that
     /// dispatch to `backend_op` must prepend this to the virtual suffix.
     pub source_prefix: Path,
+}
+
+impl MountHandle {
+    /// Return the suffix of `path` relative to this mount point.
+    pub fn relative_path(&self, path: &Path) -> String {
+        let mount_path =
+            Path::parse(self.definition.path.trim_end_matches('/')).unwrap_or(Path::ROOT);
+        path.prefix_match(&mount_path)
+            .map(|parts| {
+                parts
+                    .map(|part| part.as_ref().to_string())
+                    .collect::<Vec<_>>()
+                    .join("/")
+            })
+            .unwrap_or_else(|| path.as_ref().trim_matches('/').to_string())
+    }
 }
 
 /// Resolve a mount's declarative source path to a backend key.
@@ -367,6 +389,7 @@ fn lexical_absolute(path: PathBuf) -> PathBuf {
 #[derive(Clone, Default)]
 pub struct MountedObjectStore {
     mounts: Vec<Mount>,
+    principal: VfsPrincipal,
 }
 
 impl MountedObjectStore {
@@ -376,6 +399,19 @@ impl MountedObjectStore {
             if backends.insert(definition.id.clone(), definition).is_some() {
                 return Err(MountError::DuplicateBackend(definition.id.clone()));
             }
+        }
+
+        let mut built_backends: HashMap<String, Arc<opendal::Operator>> = HashMap::new();
+        for definition in &manifest.backend {
+            let operator =
+                definition
+                    .config
+                    .build()
+                    .map_err(|source| MountError::BuildBackend {
+                        id: definition.id.clone(),
+                        source,
+                    })?;
+            built_backends.insert(definition.id.clone(), Arc::new(operator));
         }
 
         let mut mounts = Vec::new();
@@ -391,19 +427,19 @@ impl MountedObjectStore {
                         path: definition.path.clone(),
                         backend: definition.backend.clone(),
                     })?;
-            let operator = backend
-                .config
-                .build()
-                .map_err(|source| MountError::BuildBackend {
-                    id: backend.id.clone(),
-                    source,
+            let operator = built_backends
+                .get(&definition.backend)
+                .cloned()
+                .ok_or_else(|| MountError::UnknownBackend {
+                    path: definition.path.clone(),
+                    backend: definition.backend.clone(),
                 })?;
             // Share the same operator between the DataFusion-side
             // `store` (which already wraps it as an ObjectStore) and
             // the OpenDAL-side `backend_op` exposed via MountHandle.
             // Cloning the Operator is cheap (Arc inside).
             let store: Arc<dyn ObjectStore> =
-                Arc::new(OpendalFileStorage::from_operator(operator.clone()));
+                Arc::new(OpendalFileStorage::from_operator((*operator).clone()));
             if seen_mount_paths
                 .insert(definition.path.clone(), mounts.len())
                 .is_some()
@@ -423,7 +459,7 @@ impl MountedObjectStore {
                 virtual_prefix,
                 source_prefix,
                 store,
-                backend_op: Arc::new(operator),
+                backend_op: operator,
                 read_only: definition.read_only,
                 definition: definition.clone(),
             });
@@ -437,7 +473,10 @@ impl MountedObjectStore {
                 .cmp(&a.virtual_prefix.as_ref().len())
                 .then_with(|| a.virtual_prefix.as_ref().cmp(b.virtual_prefix.as_ref()))
         });
-        Ok(Self { mounts })
+        Ok(Self {
+            mounts,
+            principal: VfsPrincipal::root(),
+        })
     }
 
     pub fn mount_paths(&self) -> Vec<String> {
@@ -465,8 +504,17 @@ impl MountedObjectStore {
             definition: m.definition.clone(),
             backend_op: m.backend_op.clone(),
             read_only: m.read_only,
+            permissions: m.definition.permissions.clone(),
             source_prefix: m.source_prefix.clone(),
         })
+    }
+
+    /// Return a credential-carrying view of the same mount table.
+    pub fn with_principal(&self, principal: VfsPrincipal) -> Self {
+        Self {
+            mounts: self.mounts.clone(),
+            principal,
+        }
     }
 
     /// Returns a snapshot of every mount's declarative definition, in
@@ -492,18 +540,43 @@ impl MountedObjectStore {
         Ok((mount, remote))
     }
 
-    fn reject_write(&self, path: &Path) -> Result<(), ObjectStoreError> {
-        if self
-            .find(path)
-            .map(|mount| mount.read_only)
-            .unwrap_or(false)
-        {
-            return Err(ObjectStoreError::NotSupported {
-                source: "read-only VFS mount".into(),
-            });
+    fn authorize(
+        &self,
+        path: &Path,
+        access: VfsAccess,
+        is_directory: bool,
+    ) -> Result<(), ObjectStoreError> {
+        let mount = self.find(path).ok_or_else(|| not_mounted(path))?;
+        if mount.read_only && access == VfsAccess::Write {
+            return Err(permission_error(format!(
+                "mount '{}' is read-only",
+                mount.definition.path
+            )));
         }
-        Ok(())
+        let relative = mount_relative_path(mount, path);
+        mount
+            .definition
+            .permissions
+            .authorize(&self.principal, &relative, is_directory, access)
+            .map_err(|error| permission_error(error.to_string()))
     }
+}
+
+fn permission_error(message: String) -> ObjectStoreError {
+    ObjectStoreError::NotSupported {
+        source: message.into(),
+    }
+}
+
+fn mount_relative_path(mount: &Mount, path: &Path) -> String {
+    path.prefix_match(&mount.virtual_prefix)
+        .map(|parts| {
+            parts
+                .map(|part| part.as_ref().to_string())
+                .collect::<Vec<_>>()
+                .join("/")
+        })
+        .unwrap_or_default()
 }
 
 impl fmt::Display for MountedObjectStore {
@@ -535,7 +608,7 @@ impl ObjectStore for MountedObjectStore {
         payload: PutPayload,
         opts: PutOptions,
     ) -> Result<PutResult> {
-        self.reject_write(location)?;
+        self.authorize(location, VfsAccess::Write, false)?;
         let (mount, remote) = self.resolve(location).map_err(|_| not_mounted(location))?;
         mount.store.put_opts(&remote, payload, opts).await
     }
@@ -545,7 +618,8 @@ impl ObjectStore for MountedObjectStore {
         location: &Path,
         opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>> {
-        self.reject_write(location)?;
+        self.authorize(location, VfsAccess::Write, false)?;
+        self.authorize(location, VfsAccess::Read, false)?;
         let (mount, remote) = self.resolve(location).map_err(|_| not_mounted(location))?;
         mount.store.put_multipart_opts(&remote, opts).await
     }
@@ -575,6 +649,9 @@ impl ObjectStore for MountedObjectStore {
         let Some(prefix) = prefix else {
             return futures::stream::iter(Err(not_mounted(&Path::ROOT))).boxed();
         };
+        if let Err(error) = self.authorize(prefix, VfsAccess::Read, true) {
+            return futures::stream::iter(Err(error)).boxed();
+        }
         let Ok((mount, remote)) = self.resolve(prefix) else {
             return futures::stream::iter(Err(not_mounted(prefix))).boxed();
         };
@@ -596,6 +673,8 @@ impl ObjectStore for MountedObjectStore {
         let Some(prefix) = prefix else {
             return Err(not_mounted(&Path::ROOT));
         };
+        self.authorize(prefix, VfsAccess::Read, true)
+            .map_err(|_| not_mounted(prefix))?;
         let (mount, remote) = self.resolve(prefix).map_err(|_| not_mounted(prefix))?;
         let result = mount.store.list_with_delimiter(Some(&remote)).await?;
         let mount_prefix = mount.virtual_prefix.clone();
@@ -630,7 +709,7 @@ impl ObjectStore for MountedObjectStore {
             .and_then(move |location| {
                 let this = this.clone();
                 async move {
-                    this.reject_write(&location)?;
+                    this.authorize(&location, VfsAccess::Write, false)?;
                     let (mount, remote) = this
                         .resolve(&location)
                         .map_err(|_| not_mounted(&location))?;
@@ -647,7 +726,8 @@ impl ObjectStore for MountedObjectStore {
         to: &Path,
         options: datafusion::object_store::CopyOptions,
     ) -> Result<()> {
-        self.reject_write(to)?;
+        self.authorize(to, VfsAccess::Write, false)?;
+        self.authorize(from, VfsAccess::Read, false)?;
         let (from_mount, from_remote) = self.resolve(from).map_err(|_| not_mounted(from))?;
         let (to_mount, to_remote) = self.resolve(to).map_err(|_| not_mounted(to))?;
         if !Arc::ptr_eq(&from_mount.store, &to_mount.store) {
@@ -705,12 +785,14 @@ mod tests {
                     backend: "default".into(),
                     source: root.to_string_lossy().to_string(),
                     read_only: false,
+                    permissions: MountPermissions::default(),
                 },
                 MountDefinition {
                     path: "/data/panels".into(),
                     backend: "nested".into(),
                     source: nested.join("remote-prefix").to_string_lossy().to_string(),
                     read_only: true,
+                    permissions: MountPermissions::default(),
                 },
             ],
         }
@@ -725,7 +807,7 @@ mod tests {
 
         // Physical backend key includes the mounted source; VFS callers do not.
         OpendalFileStorage::new(nested.path())
-            .op
+            .resolve("/remote-prefix/panel.parquet")
             .write("remote-prefix/panel.parquet", b"panel".to_vec())
             .await
             .unwrap();
@@ -792,6 +874,7 @@ mod tests {
                 backend: "local".into(),
                 source: outside.path().to_string_lossy().to_string(),
                 read_only: true,
+                permissions: MountPermissions::default(),
             }],
         };
         assert!(matches!(
@@ -812,6 +895,7 @@ mod tests {
             backend: "default".into(),
             source: "/".into(),
             read_only: false,
+            permissions: MountPermissions::default(),
         };
         let manifest = VfsManifest {
             backend: vec![backend],
@@ -845,6 +929,7 @@ mod single_file_tests {
                 backend: "local".into(),
                 source: source.to_string_lossy().to_string(),
                 read_only: true,
+                permissions: MountPermissions::default(),
             }],
         };
         let vfs = MountedObjectStore::from_manifest(&manifest).unwrap();

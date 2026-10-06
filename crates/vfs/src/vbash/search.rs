@@ -285,6 +285,9 @@ pub async fn op_grep(
 ) -> Result<AgentToolResult, ToolError> {
     let vpath = OpendalFileStorage::normalize_path(path.unwrap_or("/"));
     let pattern = pattern.ok_or("missing 'pattern' for grep")?;
+    if let Err(error) = storage.check_listable(&vpath) {
+        return Ok(AgentToolResult::error(format!("grep: '{vpath}': {error}")));
+    }
     let op = storage.resolve(&vpath);
     let remote = storage.resolve_path(&vpath);
 
@@ -374,6 +377,10 @@ pub async fn op_grep(
 
         let entry_path = entry.path().to_string();
         let display_path = storage.remap_entry_to_virtual(&vpath, &entry_path);
+        if storage.check_readable(&display_path).is_err() {
+            files_skipped += 1;
+            continue;
+        }
 
         // Apply glob filename filter.
         if let Some(ref gp) = glob_pat {
@@ -434,6 +441,9 @@ pub async fn op_glob(
 ) -> Result<AgentToolResult, ToolError> {
     let vpath = OpendalFileStorage::normalize_path(path.unwrap_or("/"));
     let pattern = pattern.ok_or("missing 'pattern' for glob")?;
+    if let Err(error) = storage.check_listable(&vpath) {
+        return Ok(AgentToolResult::error(format!("glob: '{vpath}': {error}")));
+    }
     let op = storage.resolve(&vpath);
     let remote = storage.resolve_path(&vpath);
 
@@ -460,6 +470,9 @@ pub async fn op_glob(
         // Strip the search prefix so the pattern matches relative paths.
         let rel = p.strip_prefix(prefix).unwrap_or(&p).trim_start_matches('/');
         let display = storage.remap_entry_to_virtual(&vpath, &p);
+        if storage.check_readable(&display).is_err() {
+            continue;
+        }
 
         if pat.matches(rel) || pat.matches(&display) {
             let rendered = if display.starts_with('/') {

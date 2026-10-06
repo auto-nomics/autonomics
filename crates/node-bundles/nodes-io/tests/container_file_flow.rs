@@ -160,6 +160,7 @@ fn workspace_vfs(workspace_root: &Path) -> (Arc<MountedObjectStore>, NodeCtx) {
             backend: "workspace".into(),
             source: workspace_root.to_string_lossy().into_owned(),
             read_only: false,
+            permissions: Default::default(),
         }],
     };
     let mounted = Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap());

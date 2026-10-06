@@ -464,8 +464,7 @@ mod tests {
             ..Default::default()
         };
         storage
-            .op
-            .write(&path, set.to_bytes().unwrap())
+            .write_bytes(&path, set.to_bytes().unwrap())
             .await
             .unwrap();
         path
@@ -627,14 +626,9 @@ mod tests {
         assert_eq!(row.file_path, files[0].path);
         // And the object is readable through the library storage.
         let virtual_path = vfs_virtual_path(&row.file_path).unwrap();
-        let bytes = shared
-            .file_storage
-            .as_ref()
-            .unwrap()
-            .op
-            .read(&virtual_path)
-            .await
-            .unwrap();
+        let storage = shared.file_storage.as_ref().unwrap();
+        let size = storage.content_length(&virtual_path).await.unwrap();
+        let bytes = storage.read_range(&virtual_path, 0..size).await.unwrap();
         assert_eq!(bytes.to_vec(), b"full text words");
     }
 

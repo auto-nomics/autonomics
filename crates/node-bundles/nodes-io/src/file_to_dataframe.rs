@@ -1832,6 +1832,7 @@ mod tests {
                 backend: "default".into(),
                 source: backend_root.path().to_string_lossy().to_string(),
                 read_only: true,
+                permissions: Default::default(),
             }],
         };
         let mounted = Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap());
@@ -1901,7 +1902,7 @@ mod tests {
     async fn test_load_vcf() {
         let (ctx, fs) = OpendalFileStorage::new_temp().register_to_ctx();
         let test_vcf = sample_vcf_bytes();
-        fs.op.write("/sample.vcf", test_vcf).await.unwrap();
+        fs.write_bytes("/sample.vcf", test_vcf).await.unwrap();
 
         let res = ctx
             .read_vcf("/sample.vcf", BioReadOptions::default())
@@ -1919,7 +1920,7 @@ mod tests {
         let (ctx, fs) = OpendalFileStorage::new_temp().register_to_ctx();
         dbg!("start copy data");
         let test_vcf_gz = std::fs::read(fixture("sample.vcf.gz")).unwrap();
-        fs.op.write("/sample.vcf.gz", test_vcf_gz).await.unwrap();
+        fs.write_bytes("/sample.vcf.gz", test_vcf_gz).await.unwrap();
         dbg!("copy data finished");
 
         let res = ctx
@@ -1945,7 +1946,7 @@ mod tests {
     async fn test_vcf_info_column_is_literally_named_info() {
         let (ctx, fs) = OpendalFileStorage::new_temp().register_to_ctx();
         let test_vcf_gz = std::fs::read(fixture("sample.vcf.gz")).unwrap();
-        fs.op.write("/sample.vcf.gz", test_vcf_gz).await.unwrap();
+        fs.write_bytes("/sample.vcf.gz", test_vcf_gz).await.unwrap();
 
         let res = ctx
             .read_vcf("/sample.vcf.gz", BioReadOptions::default())
@@ -1999,7 +2000,7 @@ mod tests {
     async fn test_get_field_on_vcf_info_succeeds() {
         let (ctx, fs) = OpendalFileStorage::new_temp().register_to_ctx();
         let test_vcf_gz = std::fs::read(fixture("sample.vcf.gz")).unwrap();
-        fs.op.write("/sample.vcf.gz", test_vcf_gz).await.unwrap();
+        fs.write_bytes("/sample.vcf.gz", test_vcf_gz).await.unwrap();
 
         let res = ctx
             .read_vcf("/sample.vcf.gz", BioReadOptions::default())
@@ -2275,6 +2276,7 @@ mod tests {
                 backend: "default".into(),
                 source: source_dir.to_string_lossy().to_string(),
                 read_only: true,
+                permissions: Default::default(),
             }],
         };
         let mounted = Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap());

@@ -1627,6 +1627,7 @@ mod tests {
                 backend: "default".into(),
                 source: backend.path().to_string_lossy().to_string(),
                 read_only: true,
+                permissions: Default::default(),
             }],
         };
         let storage = Arc::new(OpendalFileStorage::with_mounts(

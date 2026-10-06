@@ -151,6 +151,39 @@ pub fn workspace_ref(
     })
 }
 
+/// Bind a daemon-owned plugin workspace without requiring it to live below
+/// the generic scratch workspace root.
+///
+/// The caller must already hold host authority over `host_path`; this check
+/// still validates that the path is an existing directory and canonicalizes
+/// symlinks before Podman receives the mount.
+pub fn trusted_workspace_ref(
+    host_path: &Path,
+    container_workdir: &str,
+) -> Result<WorkspaceRef, ContainerRuntimeError> {
+    let canonical = host_path.canonicalize().map_err(|source| {
+        ContainerRuntimeError::Invalid(format!(
+            "trusted workspace `{}` is unavailable: {source}",
+            host_path.display()
+        ))
+    })?;
+    if !canonical.is_dir() {
+        return Err(ContainerRuntimeError::Invalid(format!(
+            "trusted workspace `{}` is not a directory",
+            canonical.display()
+        )));
+    }
+    if !container_workdir.starts_with('/') || container_workdir == "/" {
+        return Err(ContainerRuntimeError::Invalid(
+            "trusted workspace container directory must be an absolute non-root path".into(),
+        ));
+    }
+    Ok(WorkspaceRef {
+        host_path: canonical,
+        container_workdir: container_workdir.to_string(),
+    })
+}
+
 pub(crate) fn request_user_ids(request: &ContainerRunRequest) -> (i64, i64) {
     #[cfg(unix)]
     let default = (unsafe { libc::getuid() as i64 }, unsafe {
@@ -202,5 +235,16 @@ mod tests {
         assert_eq!(ok.container_workdir, "/work");
         assert!(workspace_ref(Path::new("/workspace"), Path::new("/tmp/x"), "/work").is_err());
         assert!(workspace_ref(Path::new("/workspace"), Path::new("/workspace"), "/work").is_err());
+    }
+
+    #[test]
+    fn trusted_workspace_can_use_daemon_owned_plugin_directories() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("plugin");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let reference = trusted_workspace_ref(&workspace, "/work").unwrap();
+        assert_eq!(reference.host_path, workspace.canonicalize().unwrap());
+        assert!(trusted_workspace_ref(&workspace, "/").is_err());
+        assert!(trusted_workspace_ref(&root.path().join("missing"), "/work").is_err());
     }
 }

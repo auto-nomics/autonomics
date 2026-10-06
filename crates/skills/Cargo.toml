@@ -10,6 +10,7 @@ agentik-core = { path = "../agentik-core" }
 agentik-proc = { path = "../agentik-proc" }
 agentik-sdk = { path = "../agentik-sdk" }
 async-trait = { workspace = true }
+evolution-core = { path = "../evolution-core" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_yaml = "0.9"

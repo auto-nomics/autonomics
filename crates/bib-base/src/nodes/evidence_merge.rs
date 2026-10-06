@@ -224,7 +224,7 @@ mod tests {
             ..Default::default()
         };
         let bytes = set.to_bytes().unwrap();
-        storage.op.write(&path, bytes).await.unwrap();
+        storage.write_bytes(&path, bytes).await.unwrap();
         let file = FileRef::new(&path, Some(FORMAT.into()));
         (path, file)
     }
@@ -302,8 +302,7 @@ mod tests {
         // input must trip the format check before any read happens.
         let path = format!("/tmp/merge-node-plain-{}.csv", uuid::Uuid::new_v4());
         storage
-            .op
-            .write(&path, b"a,b\n1,2\n".to_vec())
+            .write_bytes(&path, b"a,b\n1,2\n".to_vec())
             .await
             .unwrap();
         let plain = FileRef::new(&path, Some("csv".into()));
@@ -324,8 +323,7 @@ mod tests {
         let (ctx, storage) = node_ctx();
         let path = format!("/tmp/merge-node-v2-{}.json", uuid::Uuid::new_v4());
         storage
-            .op
-            .write(&path, br#"{"schema_version": 2, "records": []}"#.to_vec())
+            .write_bytes(&path, br#"{"schema_version": 2, "records": []}"#.to_vec())
             .await
             .unwrap();
         let file = FileRef::new(&path, Some(FORMAT.into()));
