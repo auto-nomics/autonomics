@@ -259,15 +259,16 @@ mod tests {
     }
 
     /// The tool→node migration (dag-generalization survey B2): OpenTargets
-    /// ranked associations, ChEMBL mechanism/indication tables, and the KEGG
-    /// drug–drug interaction table are the node-side counterparts added for
-    /// the previously tool-only capabilities.
+    /// search and ranked associations, ChEMBL mechanism/indication tables, and
+    /// the KEGG drug–drug interaction table are the node-side counterparts
+    /// added for the previously tool-only capabilities.
     #[test]
     fn b2_gap_source_factories_are_registered() {
         let runtime_env = datafusion::prelude::SessionContext::new().runtime_env();
         let registry = build_default_registry(runtime_env, None, Arc::new(BundleRegistry::new()));
 
         for kind in [
+            "source_opentargets_search",
             "source_opentargets_associated_diseases",
             "source_opentargets_associated_targets",
             "source_chembl_mechanisms",

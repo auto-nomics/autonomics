@@ -5,7 +5,6 @@
 //! are pure functions over the typed SDK structs.
 
 use crate::associations::{AssociatedDisease, AssociatedTarget};
-use crate::search::{SearchResult, SearchResults};
 use crate::types::{Disease, Drug, Study, Target, Variant};
 
 /// Format a single line of comma-joined datasource scores, keeping only the
@@ -23,49 +22,6 @@ fn top_datasources(scores: &[crate::types::ScoredComponent], max: usize) -> Stri
         .map(|s| format!("{}:{:.2}", s.id, s.score))
         .collect::<Vec<_>>()
         .join(", ")
-}
-
-// ---------------------------------------------------------------------------
-// Search
-// ---------------------------------------------------------------------------
-
-/// Format search results as a compact Markdown table.
-pub fn format_search(results: &SearchResults) -> String {
-    if results.hits.is_empty() {
-        return format!("No hits found (total reported: {}).", results.total);
-    }
-    let mut out = String::with_capacity(2048);
-    out.push_str(&format!(
-        "**{} hits** (total {})\n\n",
-        results.hits.len(),
-        results.total
-    ));
-    out.push_str("| # | Entity | ID | Name | Score | Description |\n");
-    out.push_str("|---|---------|----|------|-------|-------------|\n");
-    for (i, h) in results.hits.iter().enumerate() {
-        out.push_str(&format!(
-            "| {} | {} | `{}` | {} | {:.1} | {} |\n",
-            i + 1,
-            h.entity,
-            h.id,
-            h.name.replace('|', "\\|"),
-            h.score,
-            h.description.as_deref().unwrap_or("-").replace('|', "\\|"),
-        ));
-    }
-    out
-}
-
-/// Render a single search hit (used by the lookup helpers).
-pub fn format_search_hit(h: &SearchResult) -> String {
-    format!(
-        "| {} | `{}` | {} | {:.1} | {} |",
-        h.entity,
-        h.id,
-        h.name,
-        h.score,
-        h.description.as_deref().unwrap_or("-")
-    )
 }
 
 // ---------------------------------------------------------------------------

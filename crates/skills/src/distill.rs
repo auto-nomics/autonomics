@@ -134,8 +134,7 @@ impl DistillReport {
 /// kind is part of the key, so the three never coalesce into one
 /// cluster.
 pub fn candidates(observations: &[Observation]) -> Vec<Candidate> {
-    let mut groups: BTreeMap<(String, String, ObservationKind), Vec<Observation>> =
-        BTreeMap::new();
+    let mut groups: BTreeMap<(String, String, ObservationKind), Vec<Observation>> = BTreeMap::new();
     for observation in observations {
         // The structural anchor is mandatory for every kind: without
         // a node kind there is nothing to cluster on.
@@ -472,12 +471,7 @@ mod tests {
             .unwrap();
     }
 
-    fn observe_kind(
-        store: &ObservationStore,
-        kind: ObservationKind,
-        summary: &str,
-        body: &str,
-    ) {
+    fn observe_kind(store: &ObservationStore, kind: ObservationKind, summary: &str, body: &str) {
         store
             .record(ObservationInput {
                 kind,

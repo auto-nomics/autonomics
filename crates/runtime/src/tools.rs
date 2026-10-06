@@ -267,11 +267,20 @@ mod tests {
             "chembl_search",
             "chembl_molecule_summary",
             "chembl_target_summary",
+        ] {
+            assert!(names.contains(&name.to_string()), "missing tool: {name}");
+        }
+        // The table surfaces were deregistered in favor of the
+        // `source_chembl_*` DAG nodes.
+        for removed in [
             "chembl_activities",
             "chembl_mechanisms",
             "chembl_indications",
         ] {
-            assert!(names.contains(&name.to_string()), "missing tool: {name}");
+            assert!(
+                !names.contains(&removed.to_string()),
+                "deregistered tool still present: {removed}"
+            );
         }
     }
 
@@ -283,36 +292,9 @@ mod tests {
             .map(|tool| tool.definition.name.as_str())
             .collect::<Vec<_>>();
 
-        assert!(names.contains(&"rcsb_search"));
-        assert!(names.contains(&"rcsb_entry"));
-        assert!(names.contains(&"rcsb_polymer"));
-        assert!(names.contains(&"rcsb_structure_preview"));
-        assert_eq!(tools.len(), 4);
-    }
-
-    #[tokio::test]
-    #[ignore = "live RCSB API test"]
-    async fn rcsb_entry_tool_executes_through_registration() {
-        let tools = rcsb_tools();
-        let tool = tools
-            .into_iter()
-            .find(|tool| tool.definition.name == "rcsb_entry")
-            .expect("rcsb_entry registration");
-
-        let result = tool
-            .implementation
-            .execute(serde_json::json!({ "entry_id": "4HHB" }))
-            .await
-            .expect("RCSB entry tool should execute");
-
-        assert!(result.is_error.is_none());
-        match result.content {
-            agentik_sdk::types::ToolResultContent::Text(markdown) => {
-                assert!(markdown.contains("4HHB"));
-                assert!(markdown.contains("X-RAY DIFFRACTION"));
-            }
-            other => panic!("expected text result, got {other:?}"),
-        }
+        // Only the bounded structure preview survives; the table surfaces
+        // moved to the `source_rcsb_*` DAG nodes.
+        assert_eq!(names, ["rcsb_structure_preview"]);
     }
 
     #[test]
@@ -324,12 +306,21 @@ mod tests {
             .collect();
         for name in [
             "string_resolve_identifiers",
-            "string_network_interactions",
-            "string_functional_enrichment",
             "string_network_summary",
             "string_network_image",
         ] {
             assert!(names.contains(&name), "missing tool: {name}");
+        }
+        // The table surfaces were deregistered in favor of the
+        // `source_string_*` DAG nodes.
+        for removed in [
+            "string_network_interactions",
+            "string_functional_enrichment",
+        ] {
+            assert!(
+                !names.contains(&removed),
+                "deregistered tool still present: {removed}"
+            );
         }
     }
 
@@ -347,8 +338,7 @@ mod tests {
                 "kegg_find",
                 "kegg_entry_preview",
                 "kegg_link",
-                "kegg_convert",
-                "kegg_ddi"
+                "kegg_convert"
             ]
         );
         assert!(

@@ -1,7 +1,4 @@
-pub mod activities;
 pub mod helpers;
-pub mod indications;
-pub mod mechanisms;
 pub mod molecule;
 pub mod search;
 pub mod target;
@@ -23,15 +20,6 @@ pub fn chembl_registrations(client: Arc<ChEMBLClient>) -> Vec<ToolRegistration> 
         Registration::from(molecule::MoleculeTool {
             client: client.clone(),
         }),
-        Registration::from(target::TargetTool {
-            client: client.clone(),
-        }),
-        Registration::from(activities::ActivitiesTool {
-            client: client.clone(),
-        }),
-        Registration::from(mechanisms::MechanismsTool {
-            client: client.clone(),
-        }),
-        Registration::from(indications::IndicationsTool { client }),
+        Registration::from(target::TargetTool { client }),
     ]
 }

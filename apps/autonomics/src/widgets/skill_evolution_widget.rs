@@ -303,15 +303,15 @@ fn activity_line(status: &SkillEvolutionStatus) -> Line<'static> {
     // 1) The current phase — colored so the difference between
     //    idle / coalescing / distilling is unmistakable at a glance.
     let (label, style) = match status.phase.as_str() {
-        "idle" => (
-            "distillation idle".to_string(),
-            normal,
-        ),
+        "idle" => ("distillation idle".to_string(), normal),
         "coalescing" => (
             if status.phase_queued == 1 {
                 "distillation queued: 1 trigger, batch forming…".to_string()
             } else {
-                format!("distillation queued: {} triggers, batch forming…", status.phase_queued)
+                format!(
+                    "distillation queued: {} triggers, batch forming…",
+                    status.phase_queued
+                )
             },
             Style::new().fg(Color::Yellow),
         ),
