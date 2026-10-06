@@ -505,6 +505,7 @@ mod tests {
                 backend: "test".into(),
                 source: root.path().to_string_lossy().to_string(),
                 read_only: true,
+                permissions: Default::default(),
             }],
         };
         let mounted = Arc::new(vfs::MountedObjectStore::from_manifest(&manifest).unwrap());

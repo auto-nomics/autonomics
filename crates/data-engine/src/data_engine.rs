@@ -1892,8 +1892,7 @@ mod tests {
         let file_session = Arc::new(OpendalFileStorage::new_temp());
         let test_data_file = std::fs::read("test_datasets/Iris.csv").unwrap();
         let _write_res = file_session
-            .op
-            .write("/iris.csv", test_data_file)
+            .write_bytes("/iris.csv", test_data_file)
             .await
             .unwrap();
         let builder = DataEngine::builder()

@@ -78,6 +78,14 @@ fn tree_path_cmp(left: &str, right: &str) -> std::cmp::Ordering {
     }
 }
 
+fn entry_is_readable(storage: &OpendalFileStorage, path: &str, is_directory: bool) -> bool {
+    if is_directory {
+        storage.check_listable(path).is_ok()
+    } else {
+        storage.check_readable(path).is_ok()
+    }
+}
+
 fn safe_local_join(root: &Path, remote: &str) -> PathBuf {
     let mut path = root.to_path_buf();
     for component in Path::new(remote).components() {
@@ -230,6 +238,9 @@ pub async fn op_read(
 ) -> Result<AgentToolResult, ToolError> {
     let raw_path = require_path(path, "read")?;
     let vpath = OpendalFileStorage::normalize_path(raw_path);
+    storage
+        .check_readable(&vpath)
+        .map_err(|error| error.to_string())?;
     let op = storage.resolve(&vpath);
     let remote = storage.resolve_path(&vpath);
 
@@ -265,6 +276,11 @@ pub async fn op_cat(
     }
 
     let vpath = OpendalFileStorage::normalize_path(raw_path);
+    if let Err(error) = storage.check_readable(&vpath) {
+        return Ok(AgentToolResult::error(format!(
+            "cat: '{raw_path}': {error}"
+        )));
+    }
     let op = storage.resolve(&vpath);
     let remote = storage.resolve_path(&vpath);
 
@@ -338,6 +354,11 @@ pub async fn op_head(
     let vpath = OpendalFileStorage::normalize_path(raw_path);
     let n = limit.unwrap_or(10);
     let start = offset.unwrap_or(1).saturating_sub(1);
+    if let Err(error) = storage.check_readable(&vpath) {
+        return Ok(AgentToolResult::error(format!(
+            "head: '{raw_path}': {error}"
+        )));
+    }
     let op = storage.resolve(&vpath);
     let remote = storage.resolve_path(&vpath);
 
@@ -392,6 +413,11 @@ pub async fn op_tail(
     let raw_path = require_path(path, "tail")?;
     let vpath = OpendalFileStorage::normalize_path(raw_path);
     let n = limit.unwrap_or(10);
+    if let Err(error) = storage.check_readable(&vpath) {
+        return Ok(AgentToolResult::error(format!(
+            "tail: '{raw_path}': {error}"
+        )));
+    }
     let op = storage.resolve(&vpath);
     let remote = storage.resolve_path(&vpath);
 
@@ -534,6 +560,11 @@ pub async fn op_edit(
     }
 
     let vpath = OpendalFileStorage::normalize_path(raw_path);
+    if let Err(error) = storage.check_readable(&vpath) {
+        return Ok(AgentToolResult::error(format!(
+            "edit: '{raw_path}': {error}"
+        )));
+    }
     let op = storage.resolve(&vpath);
     let remote = storage.resolve_path(&vpath);
 
@@ -570,6 +601,11 @@ pub async fn op_edit(
             count,
             fuzzy,
         } => {
+            if let Err(error) = storage.check_writable(&vpath) {
+                return Ok(AgentToolResult::error(format!(
+                    "edit: '{raw_path}': {error}"
+                )));
+            }
             if let Err(e) = op.write(&remote, new_content.into_bytes()).await {
                 return Ok(AgentToolResult::error(format!(
                     "Failed to write {raw_path}: {e}"
@@ -809,6 +845,9 @@ pub async fn op_ls(
     offset: Option<usize>,
 ) -> Result<AgentToolResult, ToolError> {
     let vpath = OpendalFileStorage::normalize_path(path.unwrap_or("/"));
+    if let Err(error) = storage.check_listable(&vpath) {
+        return Ok(AgentToolResult::error(format!("ls: '{vpath}': {error}")));
+    }
     let recursive = recursive.unwrap_or(false);
     let max = limit.unwrap_or(DEFAULT_LS_LIMIT).max(1);
     let skip = offset.unwrap_or(0);
@@ -862,6 +901,10 @@ pub async fn op_ls(
                 .collect()
         })
         .unwrap_or_default();
+    let child_mounts = child_mounts
+        .into_iter()
+        .filter(|mount| storage.check_listable(mount).is_ok())
+        .collect::<Vec<_>>();
 
     // ── Case 1: recursive — use ObjectStore-style stream via opendal ──
     if recursive {
@@ -889,6 +932,9 @@ pub async fn op_ls(
             // Remap the backend-local entry back into the virtual
             // namespace for display and shadow checks.
             let display = storage.remap_entry_to_virtual(&vpath, &entry_path);
+            if !entry_is_readable(storage, &display, entry.metadata().is_dir()) {
+                continue;
+            }
             // Skip the scan-root self-entry.
             if entry.metadata().is_dir() && entry_path.trim_end_matches('/') == scan_root {
                 continue;
@@ -940,6 +986,13 @@ pub async fn op_ls(
                                 };
                             while let Some(entry) = ml.next().await {
                                 if let Ok(entry) = entry {
+                                    let meta = entry.metadata();
+                                    let entry_path = entry.path().to_string();
+                                    let display = storage.remap_entry_to_virtual(mp, &entry_path);
+                                    let is_dir = meta.is_dir();
+                                    if !entry_is_readable(storage, &display, is_dir) {
+                                        continue;
+                                    }
                                     idx += 1;
                                     if idx <= skip {
                                         continue;
@@ -948,10 +1001,6 @@ pub async fn op_ls(
                                         truncated = true;
                                         break;
                                     }
-                                    let meta = entry.metadata();
-                                    let entry_path = entry.path().to_string();
-                                    let display = storage.remap_entry_to_virtual(mp, &entry_path);
-                                    let is_dir = meta.is_dir();
                                     let size = if is_dir { 0 } else { meta.content_length() };
                                     items.push(serde_json::json!({
                                         "name": display,
@@ -1032,6 +1081,9 @@ pub async fn op_ls(
                 // Remap to virtual form (strip the mount's backend
                 // source prefix, re-attach the virtual prefix).
                 let display = storage.remap_entry_to_virtual(&vpath, &entry_path_raw);
+                if !entry_is_readable(storage, &display, metadata.is_dir()) {
+                    continue;
+                }
                 if metadata.is_dir()
                     && child_mounts
                         .iter()
@@ -1082,6 +1134,9 @@ pub async fn op_ls(
                 let entry_path_raw = entry.path().to_string();
                 let trimmed = entry_path_raw.trim_end_matches('/').to_string();
                 let metadata = followed_entry_metadata(&op, &entry).await?;
+                if !entry_is_readable(storage, &entry_path_raw, metadata.is_dir()) {
+                    continue;
+                }
                 // Skip default-fs directories that are shadowed by mounts.
                 if metadata.is_dir()
                     && child_mounts
@@ -1137,6 +1192,11 @@ pub async fn op_stat(
 ) -> Result<AgentToolResult, ToolError> {
     let raw_path = require_path(path, "stat")?;
     let vpath = OpendalFileStorage::normalize_path(raw_path);
+    if let Err(error) = storage.check_readable(&vpath) {
+        return Ok(AgentToolResult::error(format!(
+            "stat: '{raw_path}': {error}"
+        )));
+    }
     let op = storage.resolve(&vpath);
     let remote = storage.resolve_path(&vpath);
     let meta = match op.stat(&remote).await {
@@ -1288,6 +1348,9 @@ pub async fn op_cp(
     let raw_dst = require_named_path(dst, "dst", "cp")?;
     let vsrc = OpendalFileStorage::normalize_path(raw_src);
     let vdst = OpendalFileStorage::normalize_path(raw_dst);
+    if let Err(e) = storage.check_readable(&vsrc) {
+        return Ok(AgentToolResult::error(format!("cp: {raw_src}: {e}")));
+    }
     if let Err(e) = storage.check_writable(&vdst) {
         return Ok(AgentToolResult::error(format!("cp: {raw_dst}: {e}")));
     }
@@ -1368,6 +1431,9 @@ pub async fn op_wc(
 ) -> Result<AgentToolResult, ToolError> {
     let raw_path = require_path(path, "wc")?;
     let vpath = OpendalFileStorage::normalize_path(raw_path);
+    if let Err(error) = storage.check_readable(&vpath) {
+        return Ok(AgentToolResult::error(format!("wc: '{raw_path}': {error}")));
+    }
     let op = storage.resolve(&vpath);
     let remote = storage.resolve_path(&vpath);
 
@@ -1396,6 +1462,9 @@ pub async fn op_tree(
     offset: Option<usize>,
 ) -> Result<AgentToolResult, ToolError> {
     let vpath = OpendalFileStorage::normalize_path(path.unwrap_or("/"));
+    if let Err(error) = storage.check_listable(&vpath) {
+        return Ok(AgentToolResult::error(format!("tree: '{vpath}': {error}")));
+    }
     let max_entries = limit.unwrap_or(DEFAULT_TREE_LIMIT).clamp(1, TREE_MAX_LIMIT);
     let skip = offset.unwrap_or(0);
     // One extra entry makes `truncated` exact even when a page is full.
@@ -1453,6 +1522,9 @@ pub async fn op_tree(
         let remapped = storage.remap_entry_to_virtual(&vpath, &p_raw);
         let normalized = remapped.trim_end_matches('/');
         let p = format!("/{}", normalized.trim_start_matches('/'));
+        if !entry_is_readable(storage, &p, is_dir) {
+            continue;
+        }
         let rel = if prefix.is_empty() {
             p.as_str()
         } else {

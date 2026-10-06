@@ -267,6 +267,7 @@ mod tests {
                 backend: "workspace".into(),
                 source: root.to_string_lossy().into_owned(),
                 read_only: true,
+                permissions: Default::default(),
             }],
         };
         let mounted = Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap());

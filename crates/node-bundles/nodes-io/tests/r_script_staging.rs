@@ -100,6 +100,7 @@ async fn legacy_r_script_stages_a_one_row_dataframe() {
             backend: "r-script-staging".into(),
             source: root.path().to_string_lossy().into_owned(),
             read_only: false,
+            permissions: Default::default(),
         }],
     };
     let mounted = Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap());

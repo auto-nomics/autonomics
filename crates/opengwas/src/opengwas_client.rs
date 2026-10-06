@@ -959,7 +959,7 @@ impl OpengwasClient {
         let bytes = resp.bytes().await?;
         let size = bytes.len() as u64;
 
-        storage.op.write(path, bytes.to_vec()).await?;
+        storage.write_bytes(path, bytes.to_vec()).await?;
 
         Ok(size)
     }
@@ -1006,7 +1006,7 @@ impl OpengwasClient {
             on_progress(downloaded, total);
         }
 
-        storage.op.write(path, buf).await?;
+        storage.write_bytes(path, buf).await?;
 
         Ok(downloaded)
     }

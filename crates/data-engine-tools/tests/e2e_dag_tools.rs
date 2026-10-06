@@ -145,6 +145,7 @@ fn hermetic_vfs() -> HermeticVfs {
             backend: "default".into(),
             source: files.path().to_string_lossy().to_string(),
             read_only: false,
+            permissions: Default::default(),
         }],
     };
     let mounted = Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap());
@@ -221,6 +222,7 @@ async fn test_get_output_file_to_dataframe_csv_parquet_json() {
             backend: "default".into(),
             source: mounted_root.path().to_string_lossy().to_string(),
             read_only: false,
+            permissions: Default::default(),
         }],
     };
     let mounted = Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap());
@@ -767,6 +769,7 @@ async fn test_dag_runs_log_records_execution_audit_trail() {
             backend: "default".into(),
             source: mounted_root.path().to_string_lossy().to_string(),
             read_only: false,
+            permissions: Default::default(),
         }],
     };
     let mounted = Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap());
@@ -897,6 +900,7 @@ async fn test_dag_export_run_produces_evidence_crate() {
             backend: "default".into(),
             source: mounted_root.path().to_string_lossy().to_string(),
             read_only: false,
+            permissions: Default::default(),
         }],
     };
     let mounted = Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap());
@@ -1042,6 +1046,7 @@ async fn test_dag_export_run_uploads_into_vfs() {
             backend: "default".into(),
             source: mounted_root.path().to_string_lossy().to_string(),
             read_only: false,
+            permissions: Default::default(),
         }],
     };
     let mounted = Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap());
@@ -1140,6 +1145,7 @@ async fn test_dag_export_run_prov_carries_specs_edges_and_order() {
             backend: "default".into(),
             source: mounted_root.path().to_string_lossy().to_string(),
             read_only: false,
+            permissions: Default::default(),
         }],
     };
     let mounted = Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap());

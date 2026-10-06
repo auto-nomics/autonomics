@@ -1129,6 +1129,7 @@ mod tests {
                 backend: "workspace".into(),
                 source: root.to_string_lossy().into_owned(),
                 read_only: false,
+                permissions: Default::default(),
             }],
         };
         let mounted = vfs::MountedObjectStore::from_manifest(&manifest).unwrap();

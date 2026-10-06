@@ -327,6 +327,9 @@ pub fn vbash_registrations(storage: Arc<OpendalFileStorage>) -> Vec<ToolRegistra
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::permission::{
+        MountPermissions, VfsAccess, VfsMode, VfsOwnership, VfsPathRule, VfsPrincipal,
+    };
     use agentik_sdk::types::ToolResultContent;
 
     /// Helper: create a `VfsBashTool` backed by a temp directory.
@@ -359,6 +362,78 @@ mod tests {
             limit: None,
             max_bytes: None,
         }
+    }
+
+    #[tokio::test]
+    async fn recursive_tools_hide_denied_paths() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join(".git")).unwrap();
+        std::fs::write(root.path().join(".git").join("HEAD"), "needle\n").unwrap();
+        std::fs::write(root.path().join("README.md"), "safe needle\n").unwrap();
+        let deny_all = |path: &str| VfsPathRule::Deny {
+            path: path.to_string(),
+            access: vec![VfsAccess::Read, VfsAccess::Write, VfsAccess::Execute],
+        };
+        let manifest = crate::VfsManifest {
+            backend: vec![crate::BackendDefinition {
+                id: "secure".into(),
+                config: crate::BackendConfig::local(root.path().to_string_lossy().into_owned()),
+            }],
+            mount: vec![crate::MountDefinition {
+                path: "/secure".into(),
+                backend: "secure".into(),
+                source: "/".into(),
+                read_only: false,
+                permissions: MountPermissions::unix(
+                    VfsOwnership { uid: 0, gid: 100 },
+                    VfsMode::from_bits(0o777),
+                    VfsMode::from_bits(0o666),
+                    VfsMode::from_bits(0o777),
+                )
+                .with_rules(vec![
+                    deny_all(".git"),
+                    deny_all(".git/**"),
+                    deny_all("**/.git"),
+                    deny_all("**/.git/**"),
+                ]),
+            }],
+        };
+        let mounts = Arc::new(crate::MountedObjectStore::from_manifest(&manifest).unwrap());
+        let storage = OpendalFileStorage::with_mounts(root.path(), mounts)
+            .with_principal(VfsPrincipal::plugin_developer(10_000));
+        let tool = VfsBashTool {
+            storage: Arc::new(storage),
+        };
+
+        let mut ls = input("ls");
+        ls.path = Some("/secure".into());
+        ls.recursive = Some(true);
+        let rendered = result_json(tool.run(ls).await.unwrap()).to_string();
+        assert!(
+            !rendered.contains(".git"),
+            "ls leaked denied path: {rendered}"
+        );
+
+        let mut grep = input("grep");
+        grep.path = Some("/secure".into());
+        grep.pattern = Some("needle".into());
+        let rendered = result_json(tool.run(grep).await.unwrap()).to_string();
+        assert!(
+            rendered.contains("README.md"),
+            "expected safe match: {rendered}"
+        );
+        assert!(
+            !rendered.contains(".git"),
+            "grep leaked denied path: {rendered}"
+        );
+
+        let mut tree = input("tree");
+        tree.path = Some("/secure".into());
+        let rendered = result_json(tool.run(tree).await.unwrap()).to_string();
+        assert!(
+            !rendered.contains(".git"),
+            "tree leaked denied path: {rendered}"
+        );
     }
 
     /// Helper: extract JSON from a successful tool result.
@@ -1609,6 +1684,7 @@ mod tests {
                 backend: "local".into(),
                 source: source_link.to_string_lossy().to_string(),
                 read_only: true,
+                permissions: MountPermissions::default(),
             }],
         };
         let mounts = Arc::new(crate::MountedObjectStore::from_manifest(&manifest).unwrap());
@@ -1765,6 +1841,7 @@ mod tests {
                 backend: "default".into(),
                 source: source_dir.to_string_lossy().to_string(),
                 read_only: false,
+                permissions: MountPermissions::default(),
             }],
         };
         let vfs = Arc::new(crate::MountedObjectStore::from_manifest(&manifest).unwrap());
@@ -1798,12 +1875,14 @@ mod tests {
                     backend: "default".into(),
                     source: "/".into(),
                     read_only: false,
+                    permissions: MountPermissions::default(),
                 },
                 MountDefinition {
                     path: "/data/ldsc".into(),
                     backend: "default".into(),
                     source: "source".into(),
                     read_only: true,
+                    permissions: MountPermissions::default(),
                 },
             ],
         };

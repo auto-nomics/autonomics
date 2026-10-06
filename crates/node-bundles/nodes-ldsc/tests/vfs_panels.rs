@@ -24,12 +24,14 @@ fn panel_vfs() -> MountedObjectStore {
                 backend: "ldsc-local".into(),
                 source: LOCAL_PANEL_ROOT.into(),
                 read_only: true,
+                permissions: Default::default(),
             },
             MountDefinition {
                 path: "/data/ukbb".into(),
                 backend: "ldsc-local".into(),
                 source: "/mnt/disk3/ld_score".into(),
                 read_only: true,
+                permissions: Default::default(),
             },
         ],
     };

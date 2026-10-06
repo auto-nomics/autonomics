@@ -482,6 +482,7 @@ impl LocalCatalog {
                 backend: backend_id.into(),
                 source: "/".into(),
                 read_only: true,
+                permissions: Default::default(),
             });
         }
         for entry in index.current_entries() {
@@ -492,12 +493,14 @@ impl LocalCatalog {
                 backend: backend_id.into(),
                 source: source.clone(),
                 read_only: true,
+                permissions: Default::default(),
             });
             mounts.push(MountDefinition {
                 path: entry.vfs_alias(),
                 backend: backend_id.into(),
                 source,
                 read_only: true,
+                permissions: Default::default(),
             });
         }
         Ok(mounts)

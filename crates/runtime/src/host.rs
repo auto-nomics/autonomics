@@ -551,7 +551,10 @@ impl SharedInfra {
         use crate::tools::*;
         use agentik_core::tools::ToolRegistration;
 
-        let file_storage = self.file_storage.clone();
+        let file_storage = Arc::new(
+            self.file_storage
+                .with_principal(agent_vfs_principal(agent_path.as_str())),
+        );
         // Use the agent's unique hierarchical path (e.g. "/root/researcher/worker1")
         // as the session key — NOT profile.path, which is shared by all agents
         // spawned from the same profile blueprint. Using profile.path here was
@@ -708,7 +711,7 @@ pub fn bibliography_file_storage(config: &RuntimeConfig) -> Result<Arc<vfs::Open
 fn build_vfs(config: &RuntimeConfig) -> Result<MountedObjectStore> {
     let state = load_or_create_vfs_manifest(config)?;
     let mut manifest = state.manifest;
-    ensure_plugin_active_mounts(&mut manifest, config)?;
+    ensure_plugin_mounts(&mut manifest, config)?;
     MountedObjectStore::from_manifest(&manifest).map_err(|e| Error::Other(e.to_string()))
 }
 
@@ -721,7 +724,7 @@ async fn build_vfs_with_catalog(
 )> {
     let state = load_or_create_vfs_manifest(config)?;
     let mut manifest = state.manifest;
-    ensure_plugin_active_mounts(&mut manifest, config)?;
+    ensure_plugin_mounts(&mut manifest, config)?;
 
     let mut catalog_registry = dag_core::BundleRegistry::new();
     let mut catalog = None;
@@ -787,11 +790,9 @@ async fn build_vfs_with_catalog(
         .map(|store| (store, catalog_registry, catalog))
 }
 
-fn ensure_plugin_active_mounts(
-    manifest: &mut vfs::VfsManifest,
-    config: &RuntimeConfig,
-) -> Result<()> {
-    const BACKEND_ID: &str = "autonomics-plugin-runtime";
+fn ensure_plugin_mounts(manifest: &mut vfs::VfsManifest, config: &RuntimeConfig) -> Result<()> {
+    const ACTIVE_BACKEND_ID: &str = "autonomics-plugin-runtime";
+    const DEV_BACKEND_ID: &str = "autonomics-plugin-development";
     let registry_path = config
         .state_dir
         .join(container_plugin::sync::PLUGIN_CONFIG_FILE);
@@ -800,38 +801,94 @@ fn ensure_plugin_active_mounts(
     };
     let parsed: container_plugin::sync::PluginsConfig = toml::from_str(&text)
         .map_err(|error| Error::Other(format!("parse `{}`: {error}", registry_path.display())))?;
-    if parsed.plugin.is_empty() {
-        return Ok(());
-    }
     if manifest
         .backend
         .iter()
-        .any(|backend| backend.id == BACKEND_ID)
+        .any(|backend| backend.id == ACTIVE_BACKEND_ID || backend.id == DEV_BACKEND_ID)
     {
-        return Err(Error::Other(format!(
-            "backend `{BACKEND_ID}` is reserved for installed plugins"
-        )));
+        return Err(Error::Other(
+            "plugin runtime backends are reserved for lifecycle-managed plugin mounts".to_string(),
+        ));
     }
-    let runtime_root = config.state_dir.join("plugin-runtime");
+
+    let development_root = config.state_dir.join("plugins");
+    std::fs::create_dir_all(&development_root)
+        .map_err(|error| Error::Other(format!("create `{development_root:?}`: {error}")))?;
     manifest.backend.push(vfs::BackendDefinition {
-        id: BACKEND_ID.into(),
-        config: vfs::BackendConfig::local(runtime_root.to_string_lossy().into_owned()),
+        id: DEV_BACKEND_ID.into(),
+        config: vfs::BackendConfig::local(development_root.to_string_lossy().into_owned()),
     });
-    for source in parsed.plugin {
-        let mount_path = format!("/plugins/{}/active", source.name);
-        if manifest.mount.iter().any(|mount| mount.path == mount_path) {
-            return Err(Error::Other(format!(
-                "VFS mount path `{mount_path}` collides with a static mount"
-            )));
-        }
+    manifest.mount.push(vfs::MountDefinition {
+        path: "/plugins/dev".into(),
+        backend: DEV_BACKEND_ID.into(),
+        source: "/".into(),
+        read_only: false,
+        permissions: plugin_development_permissions(),
+    });
+
+    if !parsed.plugin.is_empty() {
+        let runtime_root = config.state_dir.join("plugin-runtime");
+        manifest.backend.push(vfs::BackendDefinition {
+            id: ACTIVE_BACKEND_ID.into(),
+            config: vfs::BackendConfig::local(runtime_root.to_string_lossy().into_owned()),
+        });
         manifest.mount.push(vfs::MountDefinition {
-            path: mount_path,
-            backend: BACKEND_ID.into(),
-            source: source.name,
+            path: "/plugins/active".into(),
+            backend: ACTIVE_BACKEND_ID.into(),
+            source: "/".into(),
             read_only: true,
+            permissions: vfs::permission::MountPermissions::unix(
+                vfs::permission::VfsOwnership::root(),
+                vfs::permission::VfsMode::from_bits(0o555),
+                vfs::permission::VfsMode::from_bits(0o444),
+                vfs::permission::VfsMode::from_bits(0o555),
+            ),
         });
     }
     Ok(())
+}
+
+fn plugin_development_permissions() -> vfs::permission::MountPermissions {
+    use vfs::permission::{VfsAccess, VfsMode, VfsPathRule};
+
+    let deny = |path: &str| VfsPathRule::Deny {
+        path: path.to_string(),
+        access: vec![VfsAccess::Read, VfsAccess::Write, VfsAccess::Execute],
+    };
+    vfs::permission::MountPermissions::unix(
+        vfs::permission::VfsOwnership {
+            uid: vfs::permission::VFS_ROOT_UID,
+            gid: vfs::permission::VFS_PLUGIN_DEVELOPER_GID,
+        },
+        VfsMode::from_bits(0o775),
+        VfsMode::from_bits(0o664),
+        VfsMode::from_bits(0o775),
+    )
+    .with_rules(vec![
+        deny(".git"),
+        deny(".git/**"),
+        deny("**/.git"),
+        deny("**/.git/**"),
+        VfsPathRule::Deny {
+            path: "*/manifest.toml".into(),
+            access: vec![VfsAccess::Write],
+        },
+    ])
+}
+
+/// Map an agent path to a stable, non-root Unix identity.
+///
+/// All agents initially receive the plugin-developer group; profile-specific
+/// group membership can replace this deterministic mapping once persisted in
+/// AgentProfile.
+fn agent_vfs_principal(agent_path: &str) -> vfs::permission::VfsPrincipal {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in agent_path.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    let uid = 10_000_u32 + u32::try_from(hash % 55_536).unwrap_or_default();
+    vfs::permission::VfsPrincipal::plugin_developer(uid)
 }
 
 struct VfsManifestState {
@@ -1003,6 +1060,7 @@ fn default_vfs_manifest(config: &RuntimeConfig) -> VfsManifest {
         backend: "default".into(),
         source: config.data_dir.to_string_lossy().to_string(),
         read_only: false,
+        permissions: Default::default(),
     }];
     let literature_root = config.state_dir.join("literature");
     backend.push(BackendDefinition {
@@ -1014,6 +1072,7 @@ fn default_vfs_manifest(config: &RuntimeConfig) -> VfsManifest {
         backend: "literature".into(),
         source: "/".into(),
         read_only: false,
+        permissions: Default::default(),
     });
 
     if let (Ok(bucket), Ok(ak), Ok(sk)) = (
@@ -1032,6 +1091,7 @@ fn default_vfs_manifest(config: &RuntimeConfig) -> VfsManifest {
             backend: "oss-prod".into(),
             source: "/".into(),
             read_only: true,
+            permissions: Default::default(),
         });
     }
 
@@ -1072,6 +1132,7 @@ fn ensure_literature_mount(manifest: &mut VfsManifest, config: &RuntimeConfig) -
         backend: backend_id,
         source: "/".into(),
         read_only: false,
+        permissions: Default::default(),
     });
     true
 }
@@ -5306,6 +5367,7 @@ mod literature_mount_tests {
                 backend: "default".into(),
                 source: "/".into(),
                 read_only: false,
+                permissions: Default::default(),
             }],
         }
     }
@@ -5377,13 +5439,22 @@ mod plugin_vfs_tests {
     use super::*;
 
     #[tokio::test]
-    async fn installed_plugins_have_read_only_vfs_views() {
+    async fn plugin_mounts_apply_lifecycle_permissions() {
         let state = tempfile::tempdir().unwrap();
         let data = tempfile::tempdir().unwrap();
         let runtime_root = state.path().join("plugin-runtime");
         let plugin_root = runtime_root.join("demo-plugin");
+        let development_root = state.path().join("plugins");
+        let development_plugin = development_root.join("demo-plugin");
         std::fs::create_dir_all(&plugin_root).unwrap();
+        std::fs::create_dir_all(development_plugin.join(".git")).unwrap();
         std::fs::write(plugin_root.join("manifest.toml"), "# demo\n").unwrap();
+        std::fs::write(development_plugin.join("manifest.toml"), "# dev\n").unwrap();
+        std::fs::write(
+            development_plugin.join(".git").join("HEAD"),
+            "ref: refs/heads/main\n",
+        )
+        .unwrap();
         std::fs::write(
             state.path().join("plugins.toml"),
             format!(
@@ -5399,21 +5470,51 @@ mod plugin_vfs_tests {
         config.state_dir = state.path().to_path_buf();
         config.data_dir = data.path().to_path_buf();
         let mut manifest = VfsManifest::local_root(data.path().to_string_lossy().into_owned());
-        ensure_plugin_active_mounts(&mut manifest, &config).unwrap();
+        ensure_plugin_mounts(&mut manifest, &config).unwrap();
         let mounts = Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap());
         let storage = vfs::OpendalFileStorage::with_mounts(data.path(), mounts);
+        let developer =
+            storage.with_principal(vfs::permission::VfsPrincipal::plugin_developer(10_000));
+        let observer = storage.with_principal(vfs::permission::VfsPrincipal::new(20_000, 20_000));
 
         let contents = storage
-            .read_range("/plugins/demo-plugin/active/manifest.toml", 0..7)
+            .read_range("/plugins/active/demo-plugin/manifest.toml", 0..7)
             .await
             .unwrap();
         assert_eq!(contents.to_vec(), b"# demo\n");
         assert!(
             storage
                 .write_bytes(
-                    "/plugins/demo-plugin/active/manifest.toml",
+                    "/plugins/active/demo-plugin/manifest.toml",
                     b"changed".to_vec()
                 )
+                .await
+                .is_err()
+        );
+        developer
+            .write_bytes("/plugins/dev/demo-plugin/README.md", b"hello".to_vec())
+            .await
+            .unwrap();
+        let git_access = developer.check_readable("/plugins/dev/demo-plugin/.git/HEAD");
+        assert!(git_access.is_err(), "git_access={git_access:?}");
+        assert!(
+            developer
+                .write_bytes(
+                    "/plugins/dev/demo-plugin/manifest.toml",
+                    b"changed".to_vec()
+                )
+                .await
+                .is_err()
+        );
+        assert!(
+            observer
+                .read_range("/plugins/dev/demo-plugin/README.md", 0..5)
+                .await
+                .is_ok()
+        );
+        assert!(
+            observer
+                .write_bytes("/plugins/dev/demo-plugin/README.md", b"changed".to_vec())
                 .await
                 .is_err()
         );

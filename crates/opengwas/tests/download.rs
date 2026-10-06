@@ -23,7 +23,7 @@ async fn test_download_ieu_a_2() {
 
     dbg!(&result);
 
-    let file_list = storage.op.list("/").await.unwrap();
+    let file_list = storage.resolve("/").list("/").await.unwrap();
     dbg!(&file_list);
     assert!(
         !file_list.is_empty(),

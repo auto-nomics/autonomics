@@ -1274,6 +1274,7 @@ mod tests {
                 backend: "magma-test".into(),
                 source: source_root.to_string_lossy().to_string(),
                 read_only: true,
+                permissions: Default::default(),
             }],
         };
         let mounts =

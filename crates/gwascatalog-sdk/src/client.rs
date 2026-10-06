@@ -238,8 +238,7 @@ impl GwasCatalogClient {
         }
 
         storage
-            .op
-            .write(path, buf)
+            .write_bytes(path, buf)
             .await
             .map_err(|e| GwasCatalogError::Storage(e.to_string()))?;
 

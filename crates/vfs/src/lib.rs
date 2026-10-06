@@ -1,4 +1,7 @@
+mod authorized;
+
 pub mod mount;
+pub mod permission;
 pub mod storage;
 pub mod vbash;
 

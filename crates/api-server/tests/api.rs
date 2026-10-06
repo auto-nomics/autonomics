@@ -205,6 +205,7 @@ async fn bib_upload_preserves_and_serves_the_original_file() {
             backend: "literature".to_owned(),
             source: "/".to_owned(),
             read_only: false,
+            permissions: Default::default(),
         }],
     };
     let vfs = Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap());
@@ -739,6 +740,7 @@ async fn build_app_with_vfs() -> (axum::Router, BibShared, tempfile::TempDir) {
             backend: "literature".to_owned(),
             source: "/".to_owned(),
             read_only: false,
+            permissions: Default::default(),
         }],
     };
     let vfs = Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap());

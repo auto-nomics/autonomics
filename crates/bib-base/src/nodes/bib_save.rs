@@ -830,8 +830,7 @@ mod tests {
             ..Default::default()
         };
         storage
-            .op
-            .write(&path, set.to_bytes().unwrap())
+            .write_bytes(&path, set.to_bytes().unwrap())
             .await
             .unwrap();
         path
