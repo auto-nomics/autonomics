@@ -14,7 +14,7 @@ use crate::format::format_target;
     description = "Get the annotation card for a gene / target by Ensembl ID. Returns \
                   approved symbol & name, biotype, genomic location, function \
                   descriptions, and essentiality. If you only have a gene symbol, use \
-                  opentargets_search first to resolve the Ensembl ID (ENSG...)."
+                  source_opentargets_search first to resolve the Ensembl ID (ENSG...)."
 )]
 pub struct TargetInput {
     #[desc = "Ensembl gene ID, e.g. 'ENSG00000012048'."]

@@ -444,13 +444,13 @@ const PROMPT_BIBLIOGRAPHY: &str = "\n\
 
 const PROMPT_OPENGWAS: &str = "\n\
 ### Genomics & GWAS (OpenGWAS API)\n\
-- Use `gwasinfo_count` to check how many records exist in a GWAS dataset.\n\
-- Use `ld_matrix` to compute LD matrices between variants.\n\
-- Use `download_files` to download summary-statistics files from OpenGWAS.\n\
-- For fetching GWAS summary-statistics tables as pipeline inputs, use the DAG \
-  source nodes `source_opengwas_*` (e.g. `source_opengwas_phewas`, \
-  `source_opengwas_variants_rsid`, `source_opengwas_associations`, \
-  `source_opengwas_ld_clump`).\n\
+- For GWAS summary-statistics tables (associations, PheWAS, variants, LD clumping) \
+  and even scalar/matrix needs (dataset count, LD values), use the DAG source nodes \
+  `source_opengwas_*` (e.g. `source_opengwas_phewas`, `source_opengwas_variants_rsid`, \
+  `source_opengwas_associations`, `source_opengwas_ld_clump`, \
+  `source_opengwas_gwasinfo_count`, `source_opengwas_ld_matrix`).\n\
+- Use `opengwas_download_files` (tool) for authenticated bulk summary-statistics \
+  file downloads.\n\
 - Interpret results with appropriate statistical context (p-values, effect sizes, \
   odds ratios).";
 
@@ -459,46 +459,42 @@ const PROMPT_OPENTARGETS: &str = "\n\
 - Query the Open Targets Platform for genes, diseases, drugs, studies, and variants.\n\
 - Look up target/disease associations, associated diseases for a target (and vice versa), \
   drug info, GWAS study metadata, and variant records.\n\
-- Use `opentargets_search` for free-text discovery across all entity types.
-- In pipelines, prefer the DAG nodes `source_opentargets_associated_diseases` /
-  `source_opentargets_associated_targets` (ranked tables with per-datasource score
-  columns), `source_opentargets_associations`, and `source_opentargets_search`;
-  the `opentargets_*` tools are for interactive lookup of annotation cards.";
+- Use `source_opentargets_search` for free-text discovery across all entity types.
+- For association data in pipelines, use the DAG nodes `source_opentargets_associated_diseases` /
+  `source_opentargets_associated_targets` (ranked tables with per-datasource score columns)
+  and `source_opentargets_associations`; the `opentargets_*` tools are for interactive
+  lookup of entity annotation cards, studies, and variants.";
 
 const PROMPT_GWASCATALOG: &str = "\n\
 ### GWAS Catalog (EBI)\n\
-- Search curated GWAS Catalog studies, associations, EFO traits, SNPs, and unpublished \
-  submissions (`gwascatalog_*` tools).\n\
-- Use `gwascatalog_search` first for cross-resource discovery (Solr full-text across studies, \
-  variants, traits, genes, publications).\n\
-- In pipelines, prefer the DAG nodes `source_gwascatalog_search`, \
-  `source_gwascatalog_studies`, `source_gwascatalog_associations`, \
-  `source_gwascatalog_study_associations`, `source_gwascatalog_snps`, \
-  `source_gwascatalog_efo_traits`, `source_gwascatalog_unpublished_studies`, \
-  `source_gwascatalog_summary_associations` (per-variant harmonised stats), and \
-  `source_gwascatalog_download` (full summary-statistics files); the `gwascatalog_*` \
-  tools are for interactive browsing of the same resources.";
+- All curated resources (studies, associations, SNPs, EFO traits, unpublished \
+  submissions) and per-variant harmonised summary statistics flow through the DAG \
+  nodes `source_gwascatalog_search`, `source_gwascatalog_studies`, \
+  `source_gwascatalog_associations`, `source_gwascatalog_study_associations`, \
+  `source_gwascatalog_snps`, `source_gwascatalog_efo_traits`, \
+  `source_gwascatalog_unpublished_studies`, and \
+  `source_gwascatalog_summary_associations`.\n\
+- Use `gwascatalog_download_summary_stats` (tool) or the \
+  `source_gwascatalog_download` node for the full per-study summary-statistics \
+  files on the EBI FTP mirror.";
 
 const PROMPT_CHEMBL: &str = "\n\
 ### Drug & Bioactivity Data (ChEMBL)\n\
 - Use `chembl_search` to resolve compound or target names into stable ChEMBL IDs.\n\
-- Use `chembl_molecule_summary`, `chembl_target_summary`, and `chembl_activities` for \
-  compound properties, protein components, and standardized activity measurements.\n\
-- Use `chembl_mechanisms` and `chembl_indications` for mechanisms of action and drug \
-  indications. In pipelines, use the DAG nodes `source_chembl_activities`, \
-  `source_chembl_molecules`, `source_chembl_mechanisms`, and \
-  `source_chembl_indications` to obtain typed tables for SQL and analysis nodes; \
-  the `chembl_*` tools are for interactive lookup.";
+- Use `chembl_molecule_summary` and `chembl_target_summary` for compound properties \
+  and protein components (interactive lookup).\n\
+- For pipeline data — activities, molecules, mechanisms of action, drug indications — \
+  use the DAG nodes `source_chembl_activities`, `source_chembl_molecules`, \
+  `source_chembl_mechanisms`, and `source_chembl_indications` to obtain typed \
+  tables for SQL and analysis nodes.";
 
 const PROMPT_RCSB: &str = "\
 ### Structural Biology (RCSB PDB)\n\
-- Use `rcsb_search` to discover PDB entries by free text or an expert RCSB query.\n\
-- Use `rcsb_entry` to summarize an entry's experiment, resolution, composition, \
-deposition dates, and primary citation.\n\
-- Use `rcsb_polymer` to inspect sequence length, UniProt mapping, source organism, \
-genes, and polymer copy count.\n\
-- Use `rcsb_structure_preview` for a bounded mmCIF/PDB/FASTA preview. For complete \
-structure files or downstream computation, prefer the `source_rcsb_*` DAG nodes.";
+- Structure discovery, entry/polymer/assembly metadata, and structure files flow \
+  through the DAG nodes `source_rcsb_search`, `source_rcsb_entry`, \
+  `source_rcsb_polymer_entity`, `source_rcsb_assembly`, and `source_rcsb_structure`.\n\
+- Use `rcsb_structure_preview` (tool) for a bounded mmCIF/PDB/FASTA preview when \
+  reading a structure interactively inside the conversation";
 
 const PROMPT_STRING: &str = "\n\
 ### Protein Association (STRING)\n\
@@ -507,7 +503,8 @@ const PROMPT_STRING: &str = "\n\
   evidence; require at least two proteins so enrichment is not computed on an auto-expanded \
   one-protein neighborhood.\n\
 - Use `string_network_image` only when the user needs visual preview. For pipeline calculations, \
-  prefer the `source_string_*` DAG nodes.";
+  use the `source_string_*` DAG nodes (`source_string_network`, `source_string_enrichment`, \
+  `source_string_ppi_enrichment`, `source_string_id_map`).";
 const PROMPT_KEGG: &str = "\n\
 ### KEGG (Academic Use)\n\
 - Use `kegg_info`, `kegg_find`, and `kegg_entry_preview` to inspect pathways, genes, \

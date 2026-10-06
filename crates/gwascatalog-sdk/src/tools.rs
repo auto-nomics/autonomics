@@ -1,17 +1,20 @@
 //! Agent tool layer wrapping the GWAS Catalog SDK.
 //!
+//! The table-fetching endpoints (Solr search, curated REST studies /
+//! associations / SNPs / EFO traits / unpublished submissions, and the
+//! Summary Statistics API) have been migrated to DAG source nodes
+//! (`source_gwascatalog_*`, registered by the io bundle) and their tool
+//! layers removed. The one tool left here covers the operation with no
+//! node-side equivalent in the paginated-JSON sense:
+//!
+//! - `download` — full per-study summary-statistics **files** from the
+//!   HTTPS FTP mirror (hundreds of MiB). The `source_gwascatalog_download`
+//!   node wraps the same fetch as a FileSet output; this tool remains for
+//!   interactive, progress-streamed downloads outside a DAG.
+//!
 //! Wire into an agent's toolset via [`gwascatalog_registrations`].
 
-mod associations;
 pub mod download;
-mod efo_traits;
-mod search;
-mod snp;
-mod studies;
-mod study_associations;
-mod summary_associations;
-mod summary_variant;
-mod unpublished;
 
 use std::sync::Arc;
 
@@ -41,44 +44,18 @@ mod helpers {
 // Registration
 // ---------------------------------------------------------------------------
 
-/// Build [`ToolRegistration`]s for all GWAS Catalog tools.
+/// Build [`ToolRegistration`]s for the remaining GWAS Catalog tool.
 ///
-/// Pass a shared [`GwasCatalogClient`] so every tool reuses the same HTTP
-/// connection pool, and a shared [`OpendalFileStorage`] for the summary-
-/// statistics download tool.
+/// Pass a shared [`GwasCatalogClient`] so the tool reuses the same HTTP
+/// connection pool, and a shared [`OpendalFileStorage`] for the
+/// summary-statistics file download.
 pub fn gwascatalog_registrations(
     client: Arc<GwasCatalogClient>,
     storage: Arc<OpendalFileStorage>,
 ) -> Vec<ToolRegistration> {
     use agentik_core::tools::ToolRegistration as R;
-    vec![
-        R::from(search::SearchTool {
-            client: client.clone(),
-        }),
-        R::from(studies::StudiesTool {
-            client: client.clone(),
-        }),
-        R::from(study_associations::StudyAssociationsTool {
-            client: client.clone(),
-        }),
-        R::from(associations::AssociationsTool {
-            client: client.clone(),
-        }),
-        R::from(snp::SnpTool {
-            client: client.clone(),
-        }),
-        R::from(efo_traits::EfoTraitsTool {
-            client: client.clone(),
-        }),
-        R::from(unpublished::UnpublishedTool {
-            client: client.clone(),
-        }),
-        R::from(summary_associations::SummaryAssociationsTool {
-            client: client.clone(),
-        }),
-        R::from(summary_variant::SummaryVariantTool {
-            client: client.clone(),
-        }),
-        R::from(download::DownloadSummaryStatsTool { client, storage }),
-    ]
+    vec![R::from(download::DownloadSummaryStatsTool {
+        client,
+        storage,
+    })]
 }
