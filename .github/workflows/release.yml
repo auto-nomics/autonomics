@@ -11,7 +11,6 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   CARGO_TARGET_DIR: target
-  RUSTFLAGS: -C target-cpu=generic -C linker-features=-lld
   CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
   CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
   CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++
@@ -26,12 +25,16 @@ jobs:
         include:
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
+            rustflags: -C target-cpu=generic -C linker-features=-lld
           - os: ubuntu-22.04
             target: aarch64-unknown-linux-gnu
+            rustflags: -C target-cpu=generic -C linker-features=-lld
           - os: macos-14
             target: aarch64-apple-darwin
+            rustflags: -C target-cpu=generic
           - os: macos-14
             target: x86_64-apple-darwin
+            rustflags: -C target-cpu=generic
 
     steps:
       - uses: actions/checkout@v4
@@ -52,6 +55,7 @@ jobs:
         run: cargo build --release --locked -p autonomics --target "$TARGET"
         env:
           TARGET: ${{ matrix.target }}
+          RUSTFLAGS: ${{ matrix.rustflags }}
       - name: Package release binary
         run: |
           set -euo pipefail
