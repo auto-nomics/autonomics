@@ -28,7 +28,7 @@ jobs:
             rustflags: -C target-cpu=generic -C linker-features=-lld
           - os: ubuntu-22.04
             target: aarch64-unknown-linux-gnu
-            rustflags: -C target-cpu=generic -C linker-features=-lld
+            rustflags: -C target-cpu=generic
           - os: macos-14
             target: aarch64-apple-darwin
             rustflags: -C target-cpu=generic
