@@ -19,6 +19,14 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 
 schemars.workspace = true
+# DAG node dependencies
+dag-core = { path = "../dag-core" }
+arrow-array = "58.3.0"
+arrow-schema = "58.3.0"
+datafusion = { version = "53" }
+sha2.workspace = true
+tokio = { workspace = true, features = ["fs"] }
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 

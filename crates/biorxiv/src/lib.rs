@@ -12,8 +12,6 @@
 //!   - **Details by recency** — most recent *N* papers or last *N* days.
 //!   - **Auto-pagination** — [`BiorxivClient::details_all`] follows cursors.
 //!   - **Pub mappings** — preprint DOI → published journal DOI.
-//! - **Agent tools** — pre-built [`ToolFunction`] implementations that expose
-//!   browsing and structured-search capabilities to an agentik agent.
 //!
 //! # Important limitation
 //!
@@ -46,27 +44,15 @@
 //! # }
 //! ```
 //!
-//! # Wiring tools into an agent
-//!
-//! ```no_run,ignore
-//! use biorxiv::{BiorxivClient, biorxiv_registrations};
-//! use std::sync::Arc;
-//!
-//! let client = Arc::new(BiorxivClient::new());
-//! let tools = biorxiv_registrations(client);
-//! // pass `tools` to Agent::builder().with_tools(tools)
-//! ```
 
 pub mod client;
 pub mod convert;
 pub mod error;
 pub mod format;
 pub mod query;
-pub mod tools;
 pub mod types;
 
 pub use client::BiorxivClient;
 pub use convert::entries_to_articles;
 pub use error::BiorxivError;
-pub use tools::biorxiv_registrations;
 pub use types::Server;

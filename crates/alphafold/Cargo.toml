@@ -7,9 +7,6 @@ rust-version.workspace = true
 description = "Async Rust SDK for the AlphaFold Protein Structure Database with tools and DAG nodes."
 
 [dependencies]
-agentik-core = { path = "../agentik-core" }
-agentik-proc = { path = "../agentik-proc" }
-agentik-sdk = { path = "../agentik-sdk" }
 arrow-array.workspace = true
 arrow-schema.workspace = true
 async-trait.workspace = true

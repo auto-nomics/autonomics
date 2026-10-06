@@ -12,10 +12,10 @@ use crate::ExecError;
     name = "inspect_node",
     description = "Get the current configuration of an existing node instance in \
                   the DAG. Returns the node's `kind` and stored `spec` (the JSON \
-                  configuration passed to add_node / update_node). \
+                  configuration installed or updated through dag_shell). \
                   \
                   Use this to inspect what is actually configured on a node before \
-                  updating it, debugging why an add_node/update_node call was \
+                  updating it, debugging why a dag_shell operation was \
                   rejected, or confirming the live spec matches your intent. \
                   \
                   Distinct from `get_node_spec`, which returns the parameter \
@@ -23,7 +23,7 @@ use crate::ExecError;
                   concrete configuration currently stored on a node instance."
 )]
 pub struct InspectNodeInput {
-    /// The node id to inspect (the id used in add_node, not the kind).
+    /// The node id to inspect (the id used in dag_shell, not the kind).
     pub id: String,
 }
 
@@ -61,7 +61,7 @@ impl ToolFunction for InspectNodeTool {
                 format!(
                     "Node '{}' exists but has no retained spec (it was added via \
                      a raw path that bypasses the registry). Its configuration \
-                     cannot be inspected; remove and re-add it via `add_node` if \
+                     cannot be inspected; remove and re-add it via `dag_shell` if \
                      you need an inspectable spec.",
                     input.id
                 )

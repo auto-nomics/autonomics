@@ -134,7 +134,7 @@ zip = { version = "8.6.0", default-features = false, features = [
 ] }
 toml = "1"
 uuid = "1.24"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "process"] }
 chrono = { version = "0.4", features = ["serde"] }
 tracing = "0.1"
 async-trait = "0.1"
@@ -142,6 +142,7 @@ derive_more = { version = "2.1.1", features = ["from"] }
 rayon = "1.12.0"
 futures = "0.3"
 schemars = "1.2.1"
+rhai = "1.19.0"
 arc-swap = "1.9.2"
 unicode-width = "0.2"
 

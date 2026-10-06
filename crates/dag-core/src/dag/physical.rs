@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use super::error::DagError;
 use super::graph::{DAG, PortOutputs};
+use super::history::LogicalManifest;
 use super::logical::LogicalGraph;
 use super::{DagNode, NodeId, NodeInput, NodePorts};
 use crate::dag::node_event::NodeReporter;
@@ -343,8 +344,23 @@ impl DAG {
         logical_graphs: Vec<LogicalGraph>,
         physical_jobs: BTreeMap<NodeId, PhysicalJobRef>,
     ) -> Result<()> {
+        self.restore_execution_layers(
+            LogicalManifest {
+                graphs: logical_graphs,
+                ..LogicalManifest::default()
+            },
+            physical_jobs,
+        )
+    }
+
+    /// Restore logical/physical provenance and execution directives.
+    pub fn restore_execution_layers(
+        &mut self,
+        logical: LogicalManifest,
+        physical_jobs: BTreeMap<NodeId, PhysicalJobRef>,
+    ) -> Result<()> {
         let mut logical_ids = BTreeSet::new();
-        for graph in &logical_graphs {
+        for graph in &logical.graphs {
             graph.validate()?;
             for node in graph.nodes() {
                 if !logical_ids.insert(node.id.as_str()) {
@@ -363,8 +379,26 @@ impl DAG {
                 )));
             }
         }
-        self.logical_graphs = logical_graphs;
+        logical.default_task_resources.validate()?;
+        for (logical_node, resources) in &logical.logical_task_resources {
+            resources.validate()?;
+            if !logical_ids.contains(logical_node.as_str()) {
+                return Err(DagError::Schedule(format!(
+                    "task resources reference missing logical node `{logical_node}`"
+                )));
+            }
+        }
+        for (physical_node, resources) in &logical.physical_task_resources {
+            resources.validate()?;
+            if !self.nodes.contains_key(physical_node) {
+                return Err(DagError::UnknownNode(physical_node.clone()));
+            }
+        }
+        self.logical_graphs = logical.graphs;
         self.physical_jobs = physical_jobs.into_iter().collect();
+        self.default_task_resources = logical.default_task_resources;
+        self.logical_task_resources = logical.logical_task_resources.into_iter().collect();
+        self.task_resources = logical.physical_task_resources.into_iter().collect();
         Ok(())
     }
 }

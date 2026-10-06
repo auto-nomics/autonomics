@@ -82,6 +82,10 @@ impl App {
             KeyCode::Up => self.state.session_picker.move_up(),
             KeyCode::Down => self.state.session_picker.move_down(),
             KeyCode::Backspace => self.state.session_picker.pop_char(),
+            KeyCode::Tab if ctrl => self.state.session_picker.cycle_focus(),
+            KeyCode::BackTab if ctrl => self.state.session_picker.cycle_focus(),
+            KeyCode::BackTab => self.state.session_picker.cycle_tab(),
+            KeyCode::Tab => self.state.session_picker.cycle_tab(),
             // Ctrl+N: new session
             KeyCode::Char('n') if ctrl => {
                 self.state.session_picker.close();

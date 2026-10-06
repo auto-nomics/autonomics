@@ -59,6 +59,12 @@ pub struct ContainerCommandNode {
     shm_size: Option<String>,
     gpus: GpuRequest,
     user: Option<String>,
+    /// Identity of the plugin family this node was built from, when it was
+    /// (the manifest-factory path). Participates in the execution
+    /// fingerprint so plugin edits invalidate cached outputs (WO-R09).
+    /// `None` for plain `container_command` nodes, whose whole behavior is
+    /// already captured by their spec.
+    plugin_identity: Option<dag_core::fingerprint::PluginIdentity>,
     runtime: Arc<dyn PodmanConnection>,
     panel_cache: Arc<PanelCache>,
 }
@@ -134,6 +140,7 @@ impl ContainerCommandNode {
                 Some(value) => GpuRequest::parse(value).map_err(ContainerCommandError::Invalid)?,
             },
             user: spec.user,
+            plugin_identity: None,
             runtime,
             panel_cache,
         })
@@ -150,6 +157,16 @@ impl ContainerCommandNode {
     /// "succeeding" on an empty FileSet.
     pub fn with_ports(mut self, ports: NodePorts) -> Self {
         self.ports = ports;
+        self
+    }
+
+    /// Attach the identity of the plugin family this node was built from
+    /// (WO-R09). Only the manifest-factory path sets this; the identity then
+    /// rides on the node payload into the scheduler, where it joins the
+    /// execution fingerprint — so editing the family's manifest, script, or
+    /// image invalidates cached incremental outputs.
+    pub fn with_plugin_identity(mut self, identity: dag_core::fingerprint::PluginIdentity) -> Self {
+        self.plugin_identity = Some(identity);
         self
     }
 
@@ -374,6 +391,7 @@ impl DagNode for ContainerCommandNode {
             shm_size: self.shm_size.clone(),
             gpus: self.gpus.clone(),
             user: self.user.clone(),
+            plugin_identity: self.plugin_identity.clone(),
             runtime: Arc::clone(&self.runtime),
             panel_cache: Arc::clone(&self.panel_cache),
         })
@@ -385,6 +403,10 @@ impl DagNode for ContainerCommandNode {
 
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    fn plugin_identity(&self) -> Option<&dag_core::fingerprint::PluginIdentity> {
+        self.plugin_identity.as_ref()
     }
 
     async fn execute(
@@ -914,5 +936,9 @@ fn run_details(
         run_name: Some(run_name.to_string()),
         stdout_log: logs.0,
         stderr_log: logs.1,
+        workspace: None,
+        task_manifest: None,
+        output_artifacts: Vec::new(),
+        output_artifacts_by_port: Default::default(),
     }
 }

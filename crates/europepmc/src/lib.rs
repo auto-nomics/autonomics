@@ -9,8 +9,6 @@
 //!
 //! - **`EuropePmcClient`** — an async HTTP client supporting search, article
 //!   retrieval, citations, references, profile, and database links.
-//! - **Agent tools** — pre-built [`ToolFunction`] implementations that expose
-//!   Europe PMC capabilities to an agentik agent.
 //!
 //! # Quick start (SDK only)
 //!
@@ -30,17 +28,6 @@
 //! # }
 //! ```
 //!
-//! # Wiring tools into an agent
-//!
-//! ```no_run,ignore
-//! use europepmc::{EuropePmcClient, europepmc_registrations};
-//! use std::sync::Arc;
-//!
-//! let client = Arc::new(EuropePmcClient::new());
-//! let tools = europepmc_registrations(client);
-//! // pass `tools` to Agent::builder().with_tools(tools)
-//! ```
-//!
 //! # Rate limits
 //!
 //! The Europe PMC API is free and does not require an API key, but please be
@@ -52,10 +39,8 @@ pub mod convert;
 pub mod error;
 pub mod format;
 pub mod query;
-pub mod tools;
 pub mod types;
 
 pub use client::EuropePmcClient;
 pub use convert::results_to_articles;
 pub use error::EuropePmcError;
-pub use tools::europepmc_registrations;

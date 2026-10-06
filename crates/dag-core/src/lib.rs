@@ -17,9 +17,11 @@ pub mod sink;
 pub mod value;
 
 pub use dag::{
-    ChannelBranch, ChannelNode, ChannelOperator, LocalTaskExecutor, TaskExecution, TaskExecutor,
-    TaskInputBinding, TaskInputSource, TaskOutputBinding, TaskResources, TaskSpec, TaskSubmission,
-    local_task_executor,
+    ChannelBranch, ChannelNode, ChannelOperator, LocalDirectoryArtifactStore, LocalTaskExecutor,
+    ProcessTaskOutput, ProcessTaskSpec, ProcessTaskTransport, RemoteTaskExecutor,
+    TaskArtifactStore, TaskAttemptReceipt, TaskDispatch, TaskExecution, TaskExecutor,
+    TaskInputBinding, TaskInputSource, TaskLease, TaskOutputBinding, TaskResources, TaskSpec,
+    TaskSubmission, TaskTransport, local_task_executor,
 };
 pub use node::{
     BundleRegistry, BundleRegistryError, DEFAULT_PORT, DagNode, DataBundle, DataBundleBinding,

@@ -10,18 +10,13 @@ use std::sync::Arc;
 use writing_base::LatexEngine;
 
 use agentik_core::tools::ToolRegistration;
-use alphafold::AlphaFoldClient;
-use bib_base::BibBase;
+use bib_base::{BibBase, LiteratureGateway};
 use chembl::ChEMBLClient;
-use clinicaltrials::ClinicalTrialsClient;
 use data_engine::runtime::DataEngineClient;
 use gwascatalog_sdk::GwasCatalogClient;
-use interpro::InterProClient;
 use kegg::KeggClient;
 use opengwas::OpengwasClient;
 use opentargets::OpenTargetsClient;
-use protocolio::ProtocolioClient;
-use pubchem::PubChemClient;
 use rcsb::RcsbClient;
 use string_sdk::StringDbClient;
 use vfs::OpendalFileStorage;
@@ -90,42 +85,12 @@ pub fn kegg_tools() -> Vec<ToolRegistration> {
     kegg::kegg_registrations(client)
 }
 
-/// Public biomedical reference APIs in the first resource-expansion batch.
-/// None of these clients require credentials or provider-specific SDK setup.
-pub fn biomedical_resources_tools() -> Vec<ToolRegistration> {
-    let mut tools = Vec::new();
-    tools.extend(alphafold::registrations(Arc::new(AlphaFoldClient::new())));
-    tools.extend(interpro::registrations(Arc::new(InterProClient::new())));
-    tools.extend(pubchem::registrations(Arc::new(PubChemClient::new())));
-    tools.extend(clinicaltrials::registrations(Arc::new(
-        ClinicalTrialsClient::new(),
-    )));
-    tools
-}
-
 /// GWAS Catalog tools (curated studies, associations, EFO traits, SNPs,
 /// unpublished submissions, summary statistics, full summary-stats file
 /// download, and Solr full-text search).
 pub fn gwascatalog_tools(storage: Arc<OpendalFileStorage>) -> Vec<ToolRegistration> {
     let client = Arc::new(GwasCatalogClient::new());
     gwascatalog_sdk::gwascatalog_registrations(client, storage)
-}
-
-/// protocols.io tools (protocol search/details/steps/materials and PDF export).
-///
-/// The API requires a Bearer token. If `PROTOCOLS_IO_ACCESS_TOKEN` is absent,
-/// the tools are disabled rather than failing the entire runtime startup.
-pub fn protocolio_tools(storage: Arc<OpendalFileStorage>) -> Vec<ToolRegistration> {
-    match ProtocolioClient::new() {
-        Ok(client) => {
-            let client = Arc::new(client);
-            protocolio::tools::registrations(client, storage)
-        }
-        Err(error) => {
-            eprintln!("[runtime] WARNING: protocols.io tools disabled: {error}");
-            Vec::new()
-        }
-    }
 }
 
 /// Default on-disk location for the bibliography database, mirroring the
@@ -252,8 +217,12 @@ pub async fn tool_set_from_config(
         tools.extend(kegg_tools());
     }
 
-    tools.extend(biomedical_resources_tools());
-    tools.extend(protocolio_tools(file_storage.clone()));
+    // The alphafold/interpro/pubchem/clinicaltrials/protocolio tool layers
+    // were removed in the dag-generalization migration — their DAG node
+    // counterparts (`source_alphafold_prediction`, `source_interpro_entry`,
+    // `source_pubchem_compound`, `source_clinicaltrials_study`,
+    // `source_protocolio_*`) are the surviving surface, registered by the
+    // io bundle.
 
     tools.extend(data_engine_tools::registrations(data_engine_client));
 
@@ -292,11 +261,20 @@ mod tests {
             "chembl_search",
             "chembl_molecule_summary",
             "chembl_target_summary",
+        ] {
+            assert!(names.contains(&name.to_string()), "missing tool: {name}");
+        }
+        // The table surfaces were deregistered in favor of the
+        // `source_chembl_*` DAG nodes.
+        for removed in [
             "chembl_activities",
             "chembl_mechanisms",
             "chembl_indications",
         ] {
-            assert!(names.contains(&name.to_string()), "missing tool: {name}");
+            assert!(
+                !names.contains(&removed.to_string()),
+                "deregistered tool still present: {removed}"
+            );
         }
     }
 
@@ -308,36 +286,9 @@ mod tests {
             .map(|tool| tool.definition.name.as_str())
             .collect::<Vec<_>>();
 
-        assert!(names.contains(&"rcsb_search"));
-        assert!(names.contains(&"rcsb_entry"));
-        assert!(names.contains(&"rcsb_polymer"));
-        assert!(names.contains(&"rcsb_structure_preview"));
-        assert_eq!(tools.len(), 4);
-    }
-
-    #[tokio::test]
-    #[ignore = "live RCSB API test"]
-    async fn rcsb_entry_tool_executes_through_registration() {
-        let tools = rcsb_tools();
-        let tool = tools
-            .into_iter()
-            .find(|tool| tool.definition.name == "rcsb_entry")
-            .expect("rcsb_entry registration");
-
-        let result = tool
-            .implementation
-            .execute(serde_json::json!({ "entry_id": "4HHB" }))
-            .await
-            .expect("RCSB entry tool should execute");
-
-        assert!(result.is_error.is_none());
-        match result.content {
-            agentik_sdk::types::ToolResultContent::Text(markdown) => {
-                assert!(markdown.contains("4HHB"));
-                assert!(markdown.contains("X-RAY DIFFRACTION"));
-            }
-            other => panic!("expected text result, got {other:?}"),
-        }
+        // Only the bounded structure preview survives; the table surfaces
+        // moved to the `source_rcsb_*` DAG nodes.
+        assert_eq!(names, ["rcsb_structure_preview"]);
     }
 
     #[test]
@@ -349,12 +300,21 @@ mod tests {
             .collect();
         for name in [
             "string_resolve_identifiers",
-            "string_network_interactions",
-            "string_functional_enrichment",
             "string_network_summary",
             "string_network_image",
         ] {
             assert!(names.contains(&name), "missing tool: {name}");
+        }
+        // The table surfaces were deregistered in favor of the
+        // `source_string_*` DAG nodes.
+        for removed in [
+            "string_network_interactions",
+            "string_functional_enrichment",
+        ] {
+            assert!(
+                !names.contains(&removed),
+                "deregistered tool still present: {removed}"
+            );
         }
     }
 
@@ -372,39 +332,13 @@ mod tests {
                 "kegg_find",
                 "kegg_entry_preview",
                 "kegg_link",
-                "kegg_convert",
-                "kegg_ddi"
+                "kegg_convert"
             ]
         );
         assert!(
             registrations.iter().all(|registration| {
                 !registration.definition.input_schema.properties.is_empty()
             })
-        );
-    }
-
-    #[test]
-    fn biomedical_resources_tools_are_registered_with_nonempty_schemas() {
-        let registrations = biomedical_resources_tools();
-        let names = registrations
-            .iter()
-            .map(|registration| registration.definition.name.as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            names,
-            [
-                "alphafold_lookup",
-                "interpro_lookup",
-                "pubchem_compound_lookup",
-                "clinicaltrials_study_lookup"
-            ]
-        );
-        assert!(
-            registrations.iter().all(|registration| !registration
-                .definition
-                .input_schema
-                .properties
-                .is_empty())
         );
     }
 }

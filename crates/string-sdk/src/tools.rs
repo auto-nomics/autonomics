@@ -102,124 +102,6 @@ impl ToolFunction for ResolveIdentifiersTool {
 }
 
 #[tool(
-    name = "string_network_interactions",
-    description = "Retrieve STRING protein-protein interactions as a concise Markdown preview. \
-                   With one input protein STRING adds a confidence-ranked neighborhood; with two \
-                   or more it returns interactions among the supplied proteins."
-)]
-pub struct NetworkInteractionsInput {
-    #[desc = "Protein, gene, or STRING identifiers."]
-    pub identifiers: Vec<String>,
-    #[desc = "Optional NCBI/STRING taxon ID. Required for sets larger than 10 proteins."]
-    pub species: Option<String>,
-    #[desc = "Optional STRING significance threshold from 0 to 1000; omit to use STRING's default."]
-    pub required_score: Option<u16>,
-    #[desc = "'functional' (default) or 'physical'."]
-    pub network_type: Option<String>,
-    #[desc = "Number of interactions to display (default 20)."]
-    pub limit: Option<usize>,
-    #[desc = "Optional endpoint override for tests or version-pinned deployments."]
-    pub endpoint: Option<String>,
-}
-
-pub struct NetworkInteractionsTool {
-    client: Arc<StringDbClient>,
-}
-
-impl NetworkInteractionsTool {
-    pub fn new(client: Arc<StringDbClient>) -> Self {
-        Self { client }
-    }
-}
-
-#[async_trait]
-impl ToolFunction for NetworkInteractionsTool {
-    type Input = NetworkInteractionsInput;
-
-    async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
-        let query = network_query(
-            input.identifiers,
-            input.species,
-            input.required_score,
-            network_type(input.network_type.as_deref())?,
-        )?;
-        if query.identifiers.is_empty() {
-            return Err(validation("identifiers must contain at least one value"));
-        }
-        let rows = if let Some(endpoint) = input.endpoint {
-            endpoint_client(endpoint)?
-                .network(&query)
-                .await
-                .map_err(request_error)?
-        } else {
-            self.client.network(&query).await.map_err(request_error)?
-        };
-        let limit = input.limit.unwrap_or(20).max(1);
-        Ok(AgentToolResult::success(format::format_interactions(
-            &rows, limit,
-        )))
-    }
-}
-
-#[tool(
-    name = "string_functional_enrichment",
-    description = "Run STRING over-representation enrichment for a protein set and return the \
-                   most significant functional terms, sorted by FDR."
-)]
-pub struct FunctionalEnrichmentInput {
-    #[desc = "Protein, gene, or STRING identifiers comprising the measured set."]
-    pub identifiers: Vec<String>,
-    #[desc = "Optional NCBI/STRING taxon ID."]
-    pub species: Option<String>,
-    #[desc = "Optional STRING identifiers defining the experiment background."]
-    pub background_string_identifiers: Option<Vec<String>>,
-    #[desc = "Maximum terms to display (default 15)."]
-    pub limit: Option<usize>,
-    #[desc = "Optional endpoint override for tests or version-pinned deployments."]
-    pub endpoint: Option<String>,
-}
-
-pub struct FunctionalEnrichmentTool {
-    client: Arc<StringDbClient>,
-}
-
-impl FunctionalEnrichmentTool {
-    pub fn new(client: Arc<StringDbClient>) -> Self {
-        Self { client }
-    }
-}
-
-#[async_trait]
-impl ToolFunction for FunctionalEnrichmentTool {
-    type Input = FunctionalEnrichmentInput;
-
-    async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
-        if input.identifiers.is_empty() {
-            return Err(validation("identifiers must contain at least one value"));
-        }
-        let mut query = EnrichmentQuery::new(input.identifiers).species_opt(input.species);
-        if let Some(background) = input.background_string_identifiers {
-            query = query.background(background);
-        }
-        let rows = if let Some(endpoint) = input.endpoint {
-            endpoint_client(endpoint)?
-                .enrichment(&query)
-                .await
-                .map_err(request_error)?
-        } else {
-            self.client
-                .enrichment(&query)
-                .await
-                .map_err(request_error)?
-        };
-        let limit = input.limit.unwrap_or(15).max(1);
-        Ok(AgentToolResult::success(format::format_enrichment(
-            &rows, limit,
-        )))
-    }
-}
-
-#[tool(
     name = "string_network_summary",
     description = "Build a compact STRING biological summary: top interactions, PPI enrichment, \
                    and most significant functional enrichment terms for a protein set."
@@ -430,8 +312,6 @@ impl ToolFunction for NetworkImageTool {
 pub fn string_registrations(client: Arc<StringDbClient>) -> Vec<ToolRegistration> {
     vec![
         ToolRegistration::from(ResolveIdentifiersTool::new(client.clone())),
-        ToolRegistration::from(NetworkInteractionsTool::new(client.clone())),
-        ToolRegistration::from(FunctionalEnrichmentTool::new(client.clone())),
         ToolRegistration::from(NetworkSummaryTool::new(client.clone())),
         ToolRegistration::from(NetworkImageTool::new(client)),
     ]

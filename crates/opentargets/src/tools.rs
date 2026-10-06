@@ -2,12 +2,16 @@
 //!
 //! Each tool maps to one SDK method and renders the result as LLM-friendly
 //! Markdown. Wire them into an agent's toolset via [`opentargets_registrations`].
+//!
+//! The ranked association tables (`associated_diseases`, `associated_targets`)
+//! have been deregistered in favor of the DAG nodes
+//! `source_opentargets_associated_diseases` / `source_opentargets_associated_targets`
+//! (same rows plus per-datasource/datatype score columns). Search has also been
+//! deregistered in favor of `source_opentargets_search`. The remaining tools
+//! are the interactive lookup half: entity cards, study, variant.
 
-pub mod associated_diseases;
-pub mod associated_targets;
 pub mod disease;
 pub mod drug;
-pub mod search;
 pub mod study;
 pub mod target;
 pub mod variant;
@@ -49,19 +53,10 @@ mod helpers {
 pub fn opentargets_registrations(client: Arc<OpenTargetsClient>) -> Vec<ToolRegistration> {
     use agentik_core::tools::ToolRegistration as R;
     vec![
-        R::from(search::SearchTool {
-            client: client.clone(),
-        }),
         R::from(target::TargetTool {
             client: client.clone(),
         }),
         R::from(disease::DiseaseTool {
-            client: client.clone(),
-        }),
-        R::from(associated_diseases::AssociatedDiseasesTool {
-            client: client.clone(),
-        }),
-        R::from(associated_targets::AssociatedTargetsTool {
             client: client.clone(),
         }),
         R::from(drug::DrugTool {

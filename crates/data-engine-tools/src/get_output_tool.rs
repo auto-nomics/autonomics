@@ -354,7 +354,12 @@ impl ToolFunction for GetOutputTool {
                 ),
             };
 
-            return Ok(ToolResult::error(hint));
+            let mut result = ToolResult::success_json(serde_json::json!({
+                "node": input.id,
+                "error": hint,
+            }));
+            result.is_error = Some(true);
+            return Ok(result);
         };
 
         let offset = input.offset.unwrap_or(0);

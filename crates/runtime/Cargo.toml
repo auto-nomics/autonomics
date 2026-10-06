@@ -20,11 +20,6 @@ chembl = { path = "../chembl" }
 rcsb = { path = "../rcsb" }
 string-sdk = { path = "../string-sdk" }
 kegg = { path = "../kegg" }
-alphafold = { path = "../alphafold" }
-interpro = { path = "../interpro" }
-pubchem = { path = "../pubchem" }
-protocolio = { path = "../protocolio" }
-clinicaltrials = { path = "../clinicaltrials" }
 gwascatalog-sdk = { path = "../gwascatalog-sdk" }
 data-engine = { path = "../data-engine" }
 data-engine-tools = { path = "../data-engine-tools" }

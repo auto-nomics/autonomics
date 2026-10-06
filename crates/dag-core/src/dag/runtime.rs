@@ -253,6 +253,10 @@ pub struct DagErrorReport {
 /// both the success and the failure path.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct NodeRunDetails {
+    /// Local or remote task workspace retained for debugging and resume.
+    pub workspace: Option<String>,
+    /// Machine-readable task manifest containing process identity and I/O contracts.
+    pub task_manifest: Option<crate::value::FileRef>,
     /// Full container image reference used for the execution, if any.
     pub image: Option<String>,
     /// The `sha256:` digest parsed from `image`, when the reference is
@@ -268,6 +272,15 @@ pub struct NodeRunDetails {
     pub stdout_log: Option<crate::value::FileRef>,
     /// Persisted stderr capture (`vfs://` URI + sha256), when non-empty.
     pub stderr_log: Option<crate::value::FileRef>,
+    /// File-backed outputs produced by the executor.
+    ///
+    /// DataFrame outputs are materialized as Arrow IPC files; Channel outputs
+    /// are materialized as JSON. This is the cross-executor transfer contract.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub output_artifacts: Vec<crate::value::FileRef>,
+    /// Output artifacts grouped by the originating output port.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub output_artifacts_by_port: BTreeMap<u8, Vec<crate::value::FileRef>>,
 }
 
 /// One resolved upstream input of a node, recorded at dispatch time.
@@ -340,6 +353,8 @@ pub struct NodeReport {
     pub node_type: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub executor: Option<&'static str>,
+    /// Resource request submitted for this task.
+    pub resources: crate::dag::execution::TaskResources,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub logical_node: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -390,10 +405,11 @@ pub struct NodeReport {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub inputs: Vec<InputBinding>,
     /// Execution fingerprint of this node (kind + spec + input identities +
-    /// engine version). Equal fingerprints across two executions imply the
-    /// same inputs, code, and environment — the reuse key for incremental
-    /// runs. `None` when the node failed (its fingerprint is dropped on
-    /// failure) or for nodes that never dispatched.
+    /// engine version + plugin identity for plugin-backed nodes). Equal
+    /// fingerprints across two executions imply the same inputs, code, and
+    /// environment — the reuse key for incremental runs. `None` when the
+    /// node failed (its fingerprint is dropped on failure) or for nodes that
+    /// never dispatched.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fingerprint: Option<String>,
 }

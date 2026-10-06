@@ -182,7 +182,10 @@ fn load_one(
             .map_err(|message| invalid(format!("node `{}`: {message}", node.kind)))?;
     }
 
-    Ok(Plugin::new(manifest, runtime, panel_cache))
+    // The exact manifest bytes join every node's plugin identity (WO-R09):
+    // any edit to the family definition invalidates cached outputs of its
+    // nodes. `text` is the file read verbatim, so this is byte-level.
+    Ok(Plugin::new(manifest, text.as_bytes(), runtime, panel_cache))
 }
 
 /// Read a script file referenced relative to the plugin root, rejecting
@@ -279,6 +282,149 @@ script_file = "scripts/h2.sh"
             vec!["ldsc_h2"],
             "script_file contents are inlined before validation, so the \
              template-closure check runs over the real script"
+        );
+    }
+
+    // ── plugin identity (WO-R09) ─────────────────────────────────────────
+    //
+    // Expected hashes are constructed independently in each test: sha256 is
+    // computed straight over bytes read from the fixture files with
+    // `sha2::Sha256`, never through the implementation's own hashing path.
+
+    use sha2::{Digest, Sha256};
+
+    fn independent_sha256(bytes: &[u8]) -> String {
+        let digest = Sha256::digest(bytes);
+        let hex = digest
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        format!("sha256:{hex}")
+    }
+
+    /// Write the GOOD_LDSC fixture with `script` content and load it,
+    /// returning the loaded plugin.
+    fn load_ldsc(
+        root: &std::path::Path,
+        manifest_body: &str,
+        script_body: &str,
+    ) -> Plugin {
+        let (runtime, cache, _state) = infra();
+        let dir = root.join("ldsc");
+        std::fs::create_dir_all(dir.join("scripts")).unwrap();
+        std::fs::write(dir.join(MANIFEST_FILE), manifest_body).unwrap();
+        std::fs::write(dir.join("scripts/h2.sh"), script_body).unwrap();
+        let mut plugins = load(root, runtime, cache).unwrap();
+        assert_eq!(plugins.len(), 1);
+        plugins.remove(0)
+    }
+
+    const H2_SCRIPT: &str =
+        "set -eu\nldsc --h2 \"$AUTONOMICS_INPUT0\" > \"$AUTONOMICS_OUTPUT0\" 2>&1\n";
+
+    /// Acceptance: the manifest hash is over the exact file bytes — one
+    /// character (even a semantically inert comment) changes the identity —
+    /// and loading the same directory twice is stable.
+    #[test]
+    fn plugin_identity_hashes_manifest_bytes_exactly() {
+        let state = tempfile::tempdir().unwrap();
+        let root = state.path().join("plugins");
+
+        let first = load_ldsc(&root, GOOD_LDSC, H2_SCRIPT);
+        let identity = first.plugin_identity("ldsc_h2").expect("kind is declared");
+
+        // Golden constructed independently from the file on disk.
+        let manifest_bytes = std::fs::read(root.join("ldsc").join(MANIFEST_FILE)).unwrap();
+        assert_eq!(
+            identity.manifest_sha256,
+            independent_sha256(&manifest_bytes),
+            "manifest hash must be sha256 over the exact manifest.toml bytes"
+        );
+        assert_eq!(
+            identity.script_sha256.as_deref(),
+            Some(independent_sha256(H2_SCRIPT.as_bytes()).as_str()),
+            "script hash must be sha256 over the exact script_file content"
+        );
+        assert_eq!(
+            identity.image_reference,
+            "ghcr.io/auto-nomics/autonomics/ldsc@sha256:2dad70a9583f93db1dcc9a560b7d5b309af4a5151dfaf615f80d059a0925d78c"
+        );
+        assert!(identity.panels.is_empty(), "GOOD_LDSC declares no panels");
+
+        // One character appended — a comment, invisible to the TOML parser —
+        // must still change the manifest identity.
+        let edited = format!("{GOOD_LDSC}\n# c");
+        let second = load_ldsc(&root, &edited, H2_SCRIPT);
+        let edited_identity = second.plugin_identity("ldsc_h2").unwrap();
+        assert_ne!(
+            identity.manifest_sha256, edited_identity.manifest_sha256,
+            "a one-character manifest edit must change the identity"
+        );
+        // Everything the edit did not touch stays identical — the change is
+        // attributable, not a wholesale reshuffle.
+        assert_eq!(identity.script_sha256, edited_identity.script_sha256);
+        assert_eq!(identity.image_reference, edited_identity.image_reference);
+
+        // Stability: loading the same bytes again reproduces the identity.
+        let third = load_ldsc(&root, &edited, H2_SCRIPT);
+        assert_eq!(edited_identity, third.plugin_identity("ldsc_h2").unwrap());
+    }
+
+    /// Acceptance: a different image digest in `[image]` changes the
+    /// identity's image reference (and, being a manifest edit, the manifest
+    /// hash too).
+    #[test]
+    fn plugin_identity_tracks_the_image_digest() {
+        let state = tempfile::tempdir().unwrap();
+        let root = state.path().join("plugins");
+
+        let first = load_ldsc(&root, GOOD_LDSC, H2_SCRIPT);
+        let old = first.plugin_identity("ldsc_h2").unwrap();
+
+        let edited = GOOD_LDSC.replace(
+            "2dad70a9583f93db1dcc9a560b7d5b309af4a5151dfaf615f80d059a0925d78c",
+            "3dad70a9583f93db1dcc9a560b7d5b309af4a5151dfaf615f80d059a0925d78c",
+        );
+        let second = load_ldsc(&root, &edited, H2_SCRIPT);
+        let new = second.plugin_identity("ldsc_h2").unwrap();
+
+        assert_ne!(old.image_reference, new.image_reference);
+        assert!(new.image_reference.ends_with(
+            "@sha256:3dad70a9583f93db1dcc9a560b7d5b309af4a5151dfaf615f80d059a0925d78c"
+        ));
+        assert_ne!(old.manifest_sha256, new.manifest_sha256);
+        // The script did not change.
+        assert_eq!(old.script_sha256, new.script_sha256);
+    }
+
+    /// Acceptance: editing only the referenced script file changes the
+    /// script identity while the manifest bytes — and their hash — stay
+    /// identical. This is exactly the "same fingerprint, different plugin
+    /// implementation" hole WO-R09 closes: the script lives outside
+    /// manifest.toml, so the manifest hash alone cannot see this edit.
+    #[test]
+    fn plugin_identity_tracks_script_file_content() {
+        let state = tempfile::tempdir().unwrap();
+        let root = state.path().join("plugins");
+
+        let first = load_ldsc(&root, GOOD_LDSC, H2_SCRIPT);
+        let old = first.plugin_identity("ldsc_h2").unwrap();
+
+        let edited_script = H2_SCRIPT.replace("ldsc --h2", "ldsc --h2 --yes");
+        let second = load_ldsc(&root, GOOD_LDSC, &edited_script);
+        let new = second.plugin_identity("ldsc_h2").unwrap();
+
+        assert_eq!(
+            old.manifest_sha256, new.manifest_sha256,
+            "manifest bytes are untouched by a script-file edit"
+        );
+        assert_ne!(
+            old.script_sha256, new.script_sha256,
+            "a script_file edit must change the identity"
+        );
+        assert_eq!(
+            new.script_sha256.as_deref(),
+            Some(independent_sha256(edited_script.as_bytes()).as_str())
         );
     }
 

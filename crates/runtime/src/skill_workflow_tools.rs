@@ -49,10 +49,11 @@ pub struct SkillRunWorkflowInput {
 #[tool(
     name = "skill_eval",
     description = "Run one skill's bundled evals: each case instantiates its \
-        workflow with fixed params, runs the DAG, and checks the run report \
-        (statuses, row counts, output files). Returns a pass/fail report per \
-        case. Eval nodes are added and removed from the session DAG \
-        automatically — the session is left as it was."
+        workflow with fixed params, runs the DAG, and checks the full run \
+        report (statuses, summary counts, output files paths, row counts, \
+        output types). Returns a pass/fail report per case. Eval nodes are \
+        added and removed from the session DAG automatically — the session \
+        is left as it was."
 )]
 pub struct SkillEvalInput {
     #[desc = "Exact skill name."]

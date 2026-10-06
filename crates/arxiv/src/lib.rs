@@ -5,8 +5,6 @@
 //! - **`ArxivClient`** — an async HTTP client for the arXiv API.
 //!   Supports searching papers by query, fetching by arXiv ID, and
 //!   paging through results.
-//! - **Agent tools** — pre-built [`ToolFunction`] implementations that expose
-//!   arXiv search and fetch capabilities to an agentik agent.
 //!
 //! # Quick start (SDK only)
 //!
@@ -26,17 +24,6 @@
 //! # }
 //! ```
 //!
-//! # Wiring tools into an agent
-//!
-//! ```no_run,ignore
-//! use arxiv::{ArxivClient, arxiv_registrations};
-//! use std::sync::Arc;
-//!
-//! let client = Arc::new(ArxivClient::new());
-//! let tools = arxiv_registrations(client);
-//! // pass `tools` to Agent::builder().with_tools(tools)
-//! ```
-//!
 //! # Rate limits
 //!
 //! arXiv recommends waiting at least 3 seconds between consecutive API calls.
@@ -48,10 +35,8 @@ pub mod convert;
 pub mod error;
 pub mod format;
 pub mod query;
-pub mod tools;
 pub mod types;
 
 pub use client::ArxivClient;
 pub use convert::atom_to_articles;
 pub use error::ArxivError;
-pub use tools::arxiv_registrations;

@@ -6,8 +6,6 @@
 //! - **`EmbaseClient`** — an async HTTP client for the Embase Search and
 //!   Retrieval APIs (search by query, retrieve by DOI / PII / PMID / Embase
 //!   accession number / LUI).
-//! - **Agent tools** — pre-built [`ToolFunction`] implementations that expose
-//!   Embase search and retrieval capabilities to an agentik agent.
 //!
 //! # Quick start (SDK only)
 //!
@@ -27,17 +25,6 @@
 //! # }
 //! ```
 //!
-//! # Wiring tools into an agent
-//!
-//! ```no_run,ignore
-//! use embase::{EmbaseClient, embase_registrations};
-//! use std::sync::Arc;
-//!
-//! let client = Arc::new(EmbaseClient::from_env());
-//! let tools = embase_registrations(client);
-//! // pass `tools` to Agent::builder().with_tools(tools)
-//! ```
-//!
 //! # Environment variables
 //!
 //! | Variable          | Default          | Description                              |
@@ -51,10 +38,8 @@ pub mod convert;
 pub mod error;
 pub mod format;
 pub mod query;
-pub mod tools;
 pub mod types;
 
 pub use client::EmbaseClient;
 pub use convert::search_results_to_articles;
 pub use error::EmbaseError;
-pub use tools::embase_registrations;

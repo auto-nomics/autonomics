@@ -1,8 +1,8 @@
-//! Live tests for the Open Targets **agent tool** layer.
+//! Tests for the Open Targets **agent tool** layer.
 //!
-//! These exercise the full path: registration → JSON deserialization → SDK
-//! call → Markdown formatting. They hit the real API and are `#[ignore]` by
-//! default:
+//! Registration tests run offline. The remaining live tests exercise JSON
+//! deserialization → SDK call → Markdown formatting. They hit the real API
+//! and are `#[ignore]` by default:
 //!
 //! ```sh
 //! cargo test -p opentargets -- --ignored --test-threads=1
@@ -38,21 +38,15 @@ async fn run_tool(name: &str, input: serde_json::Value) -> String {
 }
 
 #[test]
-#[ignore = "hits the live Open Targets API"]
-fn registrations_count() {
+fn registrations_exclude_migrated_search() {
     let tools = registrations();
-    assert_eq!(tools.len(), 8, "expected 8 Open Targets tools");
-}
-
-#[tokio::test]
-#[ignore = "hits the live Open Targets API"]
-async fn search_tool_runs() {
-    let text = run_tool(
-        "opentargets_search",
-        json!({ "query": "BRCA1", "entity": ["target"], "size": 3 }),
-    )
-    .await;
-    assert!(text.contains("ENSG00000012048"));
+    assert_eq!(tools.len(), 5, "expected 5 Open Targets tools");
+    assert!(
+        !tools
+            .iter()
+            .any(|tool| tool.definition.name == "opentargets_search"),
+        "opentargets_search must not be registered; use source_opentargets_search"
+    );
 }
 
 #[tokio::test]

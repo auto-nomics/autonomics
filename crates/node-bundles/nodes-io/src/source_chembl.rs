@@ -591,3 +591,470 @@ fn build_molecule_batch(rows: Vec<Molecule>) -> Result<RecordBatch, DagError> {
     )
     .map_err(|error| DagError::Schedule(format!("failed to build ChEMBL molecule batch: {error}")))
 }
+
+// ===========================================================================
+// Mechanisms of action
+// ===========================================================================
+
+const MECHANISM_ONLY: [&str; 9] = [
+    "mec_id",
+    "molecule_chembl_id",
+    "target_chembl_id",
+    "mechanism_of_action",
+    "action_type",
+    "direct_interaction",
+    "molecular_mechanism",
+    "disease_efficacy",
+    "max_phase",
+];
+
+/// Spec for [`ChemblMechanismsNode`].
+#[derive(Debug, Clone, JsonSchema, Deserialize)]
+pub struct ChemblMechanismsSpec {
+    /// ChEMBL molecule ID, e.g. `CHEMBL25`.
+    pub molecule_chembl_id: String,
+    /// Fetch every matching page, up to `max_records`.
+    #[serde(default)]
+    pub fetch_all: Option<bool>,
+    /// Maximum rows retained when `fetch_all=true` (default 1000).
+    #[serde(default)]
+    pub max_records: Option<u32>,
+    /// Page size when `fetch_all=false` (default 100, max 1000).
+    #[serde(default)]
+    pub size: Option<u32>,
+    /// Zero-based offset when `fetch_all=false`.
+    #[serde(default)]
+    pub offset: Option<u32>,
+    /// Override the ChEMBL REST endpoint (tests / mirrors).
+    #[serde(default)]
+    pub endpoint: Option<String>,
+}
+
+/// Source node emitting a molecule's mechanisms of action as a table.
+#[derive(Clone)]
+pub struct ChemblMechanismsNode {
+    meta: NodePorts,
+    spec: ChemblMechanismsSpec,
+}
+
+pub struct ChemblMechanismsNodeFactory;
+
+impl NodeFactory for ChemblMechanismsNodeFactory {
+    fn kind(&self) -> &'static str {
+        "source_chembl_mechanisms"
+    }
+
+    fn desc(&self) -> &'static str {
+        "Fetches a molecule's ChEMBL mechanisms of action as a typed table."
+    }
+
+    fn doc(&self) -> &'static str {
+        "A source node over the ChEMBL `mechanism` resource, filtered to one \
+         molecule. This is the pipeline form of the `chembl_mechanisms` \
+         tool: target, action type, development phase, and the \
+         direct-interaction / molecular-mechanism / disease-efficacy flags \
+         as typed columns.\n\n\
+         Output schema: `mec_id, molecule_chembl_id, target_chembl_id, \
+         mechanism_of_action, action_type, direct_interaction, \
+         molecular_mechanism, disease_efficacy, max_phase`.\n\n\
+         Pipe into `sql` to join with `source_chembl_activities` or \
+         `source_chembl_indications` on `molecule_chembl_id`."
+    }
+
+    fn spec_schema(&self) -> schemars::Schema {
+        schema_for!(ChemblMechanismsSpec)
+    }
+
+    fn ports(&self) -> NodePorts {
+        source_ports()
+    }
+
+    fn build(
+        &self,
+        spec: serde_json::Value,
+        _node_ctx: NodeCtx,
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
+        let spec: ChemblMechanismsSpec = serde_json::from_value(spec)?;
+        Ok(Box::new(ChemblMechanismsNode {
+            meta: source_ports(),
+            spec,
+        }))
+    }
+}
+
+#[async_trait]
+impl DagNode for ChemblMechanismsNode {
+    fn ports(&self) -> &NodePorts {
+        &self.meta
+    }
+
+    fn clone_box(&self) -> Box<dyn DagNode> {
+        Box::new(self.clone())
+    }
+
+    fn kind(&self) -> &'static str {
+        "source_chembl_mechanisms"
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    async fn execute(
+        &mut self,
+        ctx: &NodeCtx,
+        _inputs: &[dag_core::dag::NodeInput],
+        _reporter: &dag_core::dag::node_event::NodeReporter,
+    ) -> Result<PortOutputs, DagError> {
+        let spec = &self.spec;
+        let chembl_id = spec.molecule_chembl_id.trim();
+        if chembl_id.is_empty() {
+            return Err(DagError::Schedule(
+                "source_chembl_mechanisms requires `molecule_chembl_id`".into(),
+            ));
+        }
+        let client = client_from_endpoint(&spec.endpoint);
+        let base = ResourceQuery::new()
+            .only(MECHANISM_ONLY)
+            .filter("molecule_chembl_id", chembl_id);
+        let mut rows = if spec.fetch_all.unwrap_or(true) {
+            let mut result = Vec::new();
+            let mut offset = 0_u32;
+            loop {
+                let query = base.clone().limit(1000).offset(offset);
+                let page: chembl::Page<chembl::Mechanism> = client
+                    .list("mechanism", &query)
+                    .await
+                    .map_err(request_error)?;
+                let returned = page.records.len();
+                result.extend(page.records);
+                if returned == 0
+                    || page.page_meta.next.is_none()
+                    || result.len() >= spec.max_records.unwrap_or(1000).max(1) as usize
+                {
+                    break;
+                }
+                offset += returned as u32;
+            }
+            result
+        } else {
+            let query = base
+                .limit(spec.size.unwrap_or(100).min(1000))
+                .offset(spec.offset.unwrap_or(0));
+            let page: chembl::Page<chembl::Mechanism> = client
+                .list("mechanism", &query)
+                .await
+                .map_err(request_error)?;
+            page.records
+        };
+        rows.truncate(spec.max_records.unwrap_or(1000).max(1) as usize);
+
+        let batch = build_mechanism_batch(rows)?;
+        let dataframe = batch_to_df(&ctx.session(), batch)?;
+        let mut outputs = PortOutputs::new();
+        outputs.insert(0, dataframe);
+        Ok(outputs)
+    }
+}
+
+fn build_mechanism_batch(rows: Vec<chembl::Mechanism>) -> Result<RecordBatch, DagError> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("mec_id", DataType::Int64, true),
+        text_field("molecule_chembl_id"),
+        text_field("target_chembl_id"),
+        text_field("mechanism_of_action"),
+        text_field("action_type"),
+        Field::new("direct_interaction", DataType::Boolean, true),
+        Field::new("molecular_mechanism", DataType::Boolean, true),
+        Field::new("disease_efficacy", DataType::Boolean, true),
+        float_field("max_phase"),
+    ]));
+    RecordBatch::try_new(
+        schema,
+        vec![
+            i64_array(rows.iter().map(|r| Some(r.mec_id as i64)).collect()),
+            str_array(
+                rows.iter()
+                    .map(|r| Some(r.molecule_chembl_id.clone()))
+                    .collect(),
+            ),
+            str_array(
+                rows.iter()
+                    .map(|r| Some(r.target_chembl_id.clone()))
+                    .collect(),
+            ),
+            str_array(rows.iter().map(|r| r.mechanism_of_action.clone()).collect()),
+            str_array(rows.iter().map(|r| r.action_type.clone()).collect()),
+            bool_array(
+                rows.iter()
+                    .map(|r| r.direct_interaction.map(|v| v != 0))
+                    .collect(),
+            ),
+            bool_array(
+                rows.iter()
+                    .map(|r| r.molecular_mechanism.map(|v| v != 0))
+                    .collect(),
+            ),
+            bool_array(
+                rows.iter()
+                    .map(|r| r.disease_efficacy.map(|v| v != 0))
+                    .collect(),
+            ),
+            f64_array(rows.iter().map(|r| r.max_phase).collect()),
+        ],
+    )
+    .map_err(|error| DagError::Schedule(format!("failed to build ChEMBL mechanism batch: {error}")))
+}
+
+// ===========================================================================
+// Drug indications
+// ===========================================================================
+
+const INDICATION_ONLY: [&str; 7] = [
+    "drugind_id",
+    "molecule_chembl_id",
+    "efo_id",
+    "efo_term",
+    "mesh_id",
+    "mesh_heading",
+    "max_phase_for_ind",
+];
+
+/// Spec for [`ChemblIndicationsNode`].
+#[derive(Debug, Clone, JsonSchema, Deserialize)]
+pub struct ChemblIndicationsSpec {
+    /// ChEMBL molecule ID, e.g. `CHEMBL25`.
+    pub molecule_chembl_id: String,
+    /// Fetch every matching page, up to `max_records`.
+    #[serde(default)]
+    pub fetch_all: Option<bool>,
+    /// Maximum rows retained when `fetch_all=true` (default 1000).
+    #[serde(default)]
+    pub max_records: Option<u32>,
+    /// Page size when `fetch_all=false` (default 100, max 1000).
+    #[serde(default)]
+    pub size: Option<u32>,
+    /// Zero-based offset when `fetch_all=false`.
+    #[serde(default)]
+    pub offset: Option<u32>,
+    /// Override the ChEMBL REST endpoint (tests / mirrors).
+    #[serde(default)]
+    pub endpoint: Option<String>,
+}
+
+/// Source node emitting a molecule's drug indications as a table.
+#[derive(Clone)]
+pub struct ChemblIndicationsNode {
+    meta: NodePorts,
+    spec: ChemblIndicationsSpec,
+}
+
+pub struct ChemblIndicationsNodeFactory;
+
+impl NodeFactory for ChemblIndicationsNodeFactory {
+    fn kind(&self) -> &'static str {
+        "source_chembl_indications"
+    }
+
+    fn desc(&self) -> &'static str {
+        "Fetches a molecule's ChEMBL drug indications (EFO/Mesh) as a typed table."
+    }
+
+    fn doc(&self) -> &'static str {
+        "A source node over the ChEMBL `drug_indication` resource, filtered \
+         to one molecule — the pipeline form of the `chembl_indications` \
+         tool: EFO and Mesh terminology rows plus the indication's maximum \
+         development phase.\n\n\
+         Output schema: `drugind_id, molecule_chembl_id, efo_id, efo_term, \
+         mesh_id, mesh_heading, max_phase_for_ind`.\n\n\
+         Join with `source_chembl_mechanisms` on `molecule_chembl_id` to \
+         pair what a drug does with what it treats."
+    }
+
+    fn spec_schema(&self) -> schemars::Schema {
+        schema_for!(ChemblIndicationsSpec)
+    }
+
+    fn ports(&self) -> NodePorts {
+        source_ports()
+    }
+
+    fn build(
+        &self,
+        spec: serde_json::Value,
+        _node_ctx: NodeCtx,
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
+        let spec: ChemblIndicationsSpec = serde_json::from_value(spec)?;
+        Ok(Box::new(ChemblIndicationsNode {
+            meta: source_ports(),
+            spec,
+        }))
+    }
+}
+
+#[async_trait]
+impl DagNode for ChemblIndicationsNode {
+    fn ports(&self) -> &NodePorts {
+        &self.meta
+    }
+
+    fn clone_box(&self) -> Box<dyn DagNode> {
+        Box::new(self.clone())
+    }
+
+    fn kind(&self) -> &'static str {
+        "source_chembl_indications"
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    async fn execute(
+        &mut self,
+        ctx: &NodeCtx,
+        _inputs: &[dag_core::dag::NodeInput],
+        _reporter: &dag_core::dag::node_event::NodeReporter,
+    ) -> Result<PortOutputs, DagError> {
+        let spec = &self.spec;
+        let chembl_id = spec.molecule_chembl_id.trim();
+        if chembl_id.is_empty() {
+            return Err(DagError::Schedule(
+                "source_chembl_indications requires `molecule_chembl_id`".into(),
+            ));
+        }
+        let client = client_from_endpoint(&spec.endpoint);
+        let base = ResourceQuery::new()
+            .only(INDICATION_ONLY)
+            .filter("molecule_chembl_id", chembl_id);
+        let mut rows = if spec.fetch_all.unwrap_or(true) {
+            let mut result = Vec::new();
+            let mut offset = 0_u32;
+            loop {
+                let query = base.clone().limit(1000).offset(offset);
+                let page: chembl::Page<chembl::DrugIndication> = client
+                    .list("drug_indication", &query)
+                    .await
+                    .map_err(request_error)?;
+                let returned = page.records.len();
+                result.extend(page.records);
+                if returned == 0
+                    || page.page_meta.next.is_none()
+                    || result.len() >= spec.max_records.unwrap_or(1000).max(1) as usize
+                {
+                    break;
+                }
+                offset += returned as u32;
+            }
+            result
+        } else {
+            let query = base
+                .limit(spec.size.unwrap_or(100).min(1000))
+                .offset(spec.offset.unwrap_or(0));
+            let page: chembl::Page<chembl::DrugIndication> = client
+                .list("drug_indication", &query)
+                .await
+                .map_err(request_error)?;
+            page.records
+        };
+        rows.truncate(spec.max_records.unwrap_or(1000).max(1) as usize);
+
+        let batch = build_indication_batch(rows)?;
+        let dataframe = batch_to_df(&ctx.session(), batch)?;
+        let mut outputs = PortOutputs::new();
+        outputs.insert(0, dataframe);
+        Ok(outputs)
+    }
+}
+
+fn build_indication_batch(rows: Vec<chembl::DrugIndication>) -> Result<RecordBatch, DagError> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("drugind_id", DataType::Int64, true),
+        text_field("molecule_chembl_id"),
+        text_field("efo_id"),
+        text_field("efo_term"),
+        text_field("mesh_id"),
+        text_field("mesh_heading"),
+        float_field("max_phase_for_ind"),
+    ]));
+    RecordBatch::try_new(
+        schema,
+        vec![
+            i64_array(rows.iter().map(|r| Some(r.drugind_id as i64)).collect()),
+            str_array(
+                rows.iter()
+                    .map(|r| Some(r.molecule_chembl_id.clone()))
+                    .collect(),
+            ),
+            str_array(rows.iter().map(|r| r.efo_id.clone()).collect()),
+            str_array(rows.iter().map(|r| r.efo_term.clone()).collect()),
+            str_array(rows.iter().map(|r| r.mesh_id.clone()).collect()),
+            str_array(rows.iter().map(|r| r.mesh_heading.clone()).collect()),
+            f64_array(rows.iter().map(|r| r.max_phase_for_ind).collect()),
+        ],
+    )
+    .map_err(|error| {
+        DagError::Schedule(format!("failed to build ChEMBL indication batch: {error}"))
+    })
+}
+
+#[cfg(test)]
+mod mechanism_indication_tests {
+    use super::*;
+
+    fn mechanism() -> chembl::Mechanism {
+        serde_json::from_value(serde_json::json!({
+            "mec_id": 1361,
+            "molecule_chembl_id": "CHEMBL25",
+            "target_chembl_id": "CHEMBL2094253",
+            "mechanism_of_action": "Mu opioid receptor agonist",
+            "action_type": "AGONIST",
+            "direct_interaction": 1,
+            "molecular_mechanism": 0,
+            "disease_efficacy": 1,
+            "max_phase": 4.0
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn mechanism_batch_types_flags_and_phase() {
+        let batch = build_mechanism_batch(vec![mechanism()]).unwrap();
+        assert_eq!(batch.num_rows(), 1);
+        assert_eq!(batch.num_columns(), 9);
+        let flags = batch
+            .column(5)
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .unwrap();
+        assert!(flags.value(0));
+        let phase = batch
+            .column(8)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap();
+        assert!((phase.value(0) - 4.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn indication_batch_roundtrips_terms() {
+        let indication: chembl::DrugIndication = serde_json::from_value(serde_json::json!({
+            "drugind_id": 7065,
+            "molecule_chembl_id": "CHEMBL25",
+            "efo_id": "EFO_0004263",
+            "efo_term": "pain",
+            "mesh_id": "D010146",
+            "mesh_heading": "Pain",
+            "max_phase_for_ind": 4.0
+        }))
+        .unwrap();
+        let batch = build_indication_batch(vec![indication]).unwrap();
+        assert_eq!(batch.num_columns(), 7);
+        let term = batch
+            .column(3)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(term.value(0), "pain");
+    }
+}

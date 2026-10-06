@@ -8,11 +8,8 @@ description = "Async Rust SDK for NCBI Entrez Programming Utilities (E-utilities
 
 [dependencies]
 bib-types = { path = "../bib-types" }
-agentik-core = { path = "../agentik-core" }
-agentik-proc = { path = "../agentik-proc" }
-agentik-sdk = { path = "../agentik-sdk" }
 async-trait = { workspace = true }
-reqwest = { version = "0.13", features = ["json", "form"] }
+reqwest = { version = "0.13", features = ["json", "form", "query"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
