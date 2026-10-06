@@ -163,7 +163,10 @@ fn slim_node_report(nr: &NodeReport) -> serde_json::Value {
             .port_assignments
             .iter()
             .map(|(port, file)| {
-                (port.to_string(), to_value_without_field(file, "fingerprint"))
+                (
+                    port.to_string(),
+                    to_value_without_field(file, "fingerprint"),
+                )
             })
             .collect();
         obj.insert("port_assignments".into(), serde_json::Value::Object(ports));
@@ -220,7 +223,10 @@ fn slim_logical_summary(ls: &LogicalRunSummary) -> serde_json::Value {
         "item_keys".into(),
         serde_json::json!(ls.item_keys[..ls.item_keys.len().min(SLIM_ITEM_KEYS)]),
     );
-    obj.insert("item_keys_total".into(), serde_json::json!(ls.item_keys.len()));
+    obj.insert(
+        "item_keys_total".into(),
+        serde_json::json!(ls.item_keys.len()),
+    );
     obj.insert(
         "failed_item_keys".into(),
         serde_json::json!(ls.failed_item_keys),
@@ -611,8 +617,8 @@ mod tests {
     #[test]
     fn logical_nodes_truncate_item_keys() {
         use data_engine::dag::LogicalJobError;
-        use data_engine::dag::runtime::DagErrorReport;
         use data_engine::dag::RuntimeStatus;
+        use data_engine::dag::runtime::DagErrorReport;
         use std::collections::BTreeMap;
 
         let item_keys: Vec<String> = (0..20).map(|i| format!("item_{i}")).collect();
@@ -632,10 +638,7 @@ mod tests {
             logical_node_type: Some("map".into()),
             status: RuntimeStatus::Failed,
             physical_job_count: 20,
-            status_counts: BTreeMap::from([
-                ("failed".to_string(), 5),
-                ("success".to_string(), 15),
-            ]),
+            status_counts: BTreeMap::from([("failed".to_string(), 5), ("success".to_string(), 15)]),
             scatter_axis: Some("sample".into()),
             item_keys,
             failed_item_keys: (0..5).map(|i| format!("item_{i}")).collect(),

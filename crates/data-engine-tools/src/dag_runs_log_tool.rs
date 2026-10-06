@@ -156,7 +156,12 @@ fn run_detail_json(run: &data_engine::dag::RunRecord) -> serde_json::Value {
         let logical_nodes: Vec<serde_json::Value> = report
             .get("logical_nodes")
             .and_then(|nodes| nodes.as_array())
-            .map(|nodes| nodes.iter().map(logical_node_detail_from_persisted).collect())
+            .map(|nodes| {
+                nodes
+                    .iter()
+                    .map(logical_node_detail_from_persisted)
+                    .collect()
+            })
             .unwrap_or_default();
         if !logical_nodes.is_empty() {
             value["logical_nodes"] = serde_json::json!(logical_nodes);

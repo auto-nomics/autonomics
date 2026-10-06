@@ -79,13 +79,15 @@ fn phylo_scogs_treeness_compiles_to_documented_contract() {
     let compiled = compile_container_spec(node, &manifest.image, &manifest.panels, &json!({}))
         .expect("default parameters must compile");
     assert_eq!(compiled.command, vec!["bash".to_string()]);
-    assert!(compiled.script.as_deref().unwrap().contains("phykit treeness"));
+    assert!(
+        compiled
+            .script
+            .as_deref()
+            .unwrap()
+            .contains("phykit treeness")
+    );
     assert!(compiled.script.as_deref().unwrap().contains("mafft --auto"));
-    assert!(compiled
-        .script
-        .as_deref()
-        .unwrap()
-        .contains("clipkit"));
+    assert!(compiled.script.as_deref().unwrap().contains("clipkit"));
     assert!(compiled.script.as_deref().unwrap().contains("iqtree -s"));
     for key in [
         "AUTONOMICS_THREADS",
@@ -93,7 +95,10 @@ fn phylo_scogs_treeness_compiles_to_documented_contract() {
         "AUTONOMICS_MIN_TAXA",
         "AUTONOMICS_SEED",
     ] {
-        assert!(compiled.env.contains_key(key), "missing env template: {key}");
+        assert!(
+            compiled.env.contains_key(key),
+            "missing env template: {key}"
+        );
     }
     assert_eq!(compiled.env["AUTONOMICS_THREADS"], "2");
     assert_eq!(compiled.env["AUTONOMICS_MODEL"], "TEST");

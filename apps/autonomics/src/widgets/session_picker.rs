@@ -414,7 +414,8 @@ impl StatefulWidget for SessionPicker {
         self.render_info_block(h_regions[1], buf, state);
 
         // ── Footer ──
-        let hint = " ↑↓ nav  Tab tabs  Ctrl+Tab focus  ⏎ select  ^N new  ^R rename  ^D close  Esc cancel";
+        let hint =
+            " ↑↓ nav  Tab tabs  Ctrl+Tab focus  ⏎ select  ^N new  ^R rename  ^D close  Esc cancel";
         let p = Paragraph::new(hint).style(
             Style::default()
                 .fg(Color::DarkGray)
@@ -428,7 +429,11 @@ impl SessionPicker {
     /// Render the left block: session list.
     fn render_list_block(&self, area: Rect, buf: &mut Buffer, state: &mut SessionPickerState) {
         let focused = state.focus == PanelFocus::Left;
-        let accent_color = if focused { self.accent } else { Color::DarkGray };
+        let accent_color = if focused {
+            self.accent
+        } else {
+            Color::DarkGray
+        };
         let block = Block::default()
             .borders(Borders::RIGHT)
             .border_style(Style::default().fg(accent_color))
@@ -490,7 +495,7 @@ impl SessionPicker {
             .constraints([
                 Constraint::Length(1), // Title row (active view)
                 Constraint::Length(1), // Tab bar
-                Constraint::Min(0),     // Body
+                Constraint::Min(0),    // Body
             ])
             .split(area);
 
@@ -1010,7 +1015,11 @@ mod tests {
 
         state.cycle_tab();
         assert_eq!(state.info_tab, InfoTab::Telemetry);
-        assert_eq!(state.focus, PanelFocus::Left, "cycle_tab must not move focus");
+        assert_eq!(
+            state.focus,
+            PanelFocus::Left,
+            "cycle_tab must not move focus"
+        );
 
         state.cycle_focus();
         assert_eq!(state.focus, PanelFocus::Right);
