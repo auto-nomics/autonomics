@@ -187,9 +187,10 @@ impl GhPublisher {
             .map(|_| true)
             .or_else(|error| {
                 let message = error.to_string();
-                if message.contains("could not resolve")
-                    || message.contains("Not Found")
-                    || message.contains("name not known")
+                let normalized = message.to_ascii_lowercase();
+                if normalized.contains("could not resolve")
+                    || normalized.contains("not found")
+                    || normalized.contains("name not known")
                 {
                     Ok(false)
                 } else {
