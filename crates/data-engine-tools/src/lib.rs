@@ -1,6 +1,3 @@
-mod add_edge_tool;
-mod add_logical_graph_tool;
-mod add_node_tool;
 mod branch_from_snapshot_tool;
 mod checkout_dag_tool;
 mod dag_export_run_tool;
@@ -16,12 +13,9 @@ mod inspect_node_tool;
 mod list_dag_refs_tool;
 mod list_node_factories_tool;
 mod new_dag_ref_tool;
-mod remove_edge_tool;
-mod remove_node_tool;
 mod run_dag_tool;
 mod show_snapshot_tool;
 mod switch_dag_ref_tool;
-mod update_node_tool;
 mod view_dag_tool;
 
 use std::sync::Arc;
@@ -78,9 +72,8 @@ impl From<ExecError> for ToolError {
 /// Build the default set of data-engine DAG tools.
 ///
 /// Each tool sends commands to the [`DataEngineClient`] actor and awaits
-/// replies via oneshot channels. All node creation is done through the
-/// generic `add_node` tool (kind + JSON spec).
-/// Logical Channel/scatter graphs use the typed `add_logical_graph` tool.
+/// replies via oneshot channels. Graph mutation is centralized in the
+/// transactional `dag_shell` tool.
 pub fn registrations(client: Arc<DataEngineClient>) -> Vec<ToolRegistration> {
     vec![
         // ── node discovery ────────────────────────────────────────────────
@@ -92,15 +85,7 @@ pub fn registrations(client: Arc<DataEngineClient>) -> Vec<ToolRegistration> {
         ToolRegistration::from(get_node_doc_tool::GetNodeDocTool::new(client.clone())),
         ToolRegistration::from(inspect_node_tool::InspectNodeTool::new(client.clone())),
         // ── DAG building ──────────────────────────────────────────────────
-        ToolRegistration::from(add_node_tool::AddNodeTool::new(client.clone())),
         ToolRegistration::from(dag_shell_tool::DagShellTool::new(client.clone())),
-        ToolRegistration::from(update_node_tool::UpdateNodeTool::new(client.clone())),
-        ToolRegistration::from(add_edge_tool::AddEdgeTool::new(client.clone())),
-        ToolRegistration::from(add_logical_graph_tool::AddLogicalGraphTool::new(
-            client.clone(),
-        )),
-        ToolRegistration::from(remove_edge_tool::RemoveEdgeTool::new(client.clone())),
-        ToolRegistration::from(remove_node_tool::RemoveNodeTool::new(client.clone())),
         // ── DAG execution & inspection ────────────────────────────────────
         ToolRegistration::from(run_dag_tool::RunDagTool::new(client.clone())),
         ToolRegistration::from(get_output_tool::GetOutputTool::new(client.clone())),
@@ -125,6 +110,7 @@ pub fn registrations(client: Arc<DataEngineClient>) -> Vec<ToolRegistration> {
 mod tests {
     use agentik_proc::tool;
     use agentik_sdk::types::ToolInput;
+    use data_engine::data_engine::DataEngine;
 
     /// Regression: a `serde_json::Value` field must NOT be advertised as a
     /// `string` in the generated tool schema. The original hand-rolled type
@@ -136,6 +122,28 @@ mod tests {
     pub struct TestValueInput {
         /// arbitrary json
         pub spec: serde_json::Value,
+    }
+
+    #[tokio::test]
+    async fn graph_mutation_tools_are_replaced_by_dag_shell() {
+        let engine = DataEngine::builder().build();
+        let (client, _handle) = data_engine::runtime::spawn_with_engine(engine);
+        let names = super::registrations(std::sync::Arc::new(client))
+            .into_iter()
+            .map(|tool| tool.definition.name)
+            .collect::<Vec<_>>();
+
+        assert!(names.iter().any(|name| name == "dag_shell"));
+        for retired in [
+            "add_node",
+            "update_node",
+            "add_edge",
+            "add_logical_graph",
+            "remove_edge",
+            "remove_node",
+        ] {
+            assert!(!names.iter().any(|name| name == retired));
+        }
     }
 
     #[test]

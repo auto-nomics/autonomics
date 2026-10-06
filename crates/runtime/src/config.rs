@@ -525,15 +525,15 @@ const PROMPT_DAG_ENGINE: &str = "\n\
   schema handling, or computation, tell the user that the operation is unsupported instead of \
   assembling an equivalent manually.\n\
 \n\
-- **Channel/dataflow control**: `add_node` is for registered typed nodes only. When a workflow \
-  needs Channel operators (`of_items`, `map`, `filter`, `flatten`, `mix`, `collect`, `combine`, \
-  `join`, `group_tuple`, `branch`) or logical strategies (`for_each`, `dynamic_for_each`, \
-  `gather`), call `add_logical_graph` with the self-contained typed logical graph. Use the \
-  returned physical job IDs to connect its compiled nodes to the rest of the DAG with `add_edge`. \
-  Do not attempt to express these operators as SQL or an unregistered node kind.\n\
+- **Channel/dataflow control**: registered typed nodes and logical graphs are both built through \
+`dag_shell`. When a workflow needs Channel operators (`of_items`, `map`, `filter`, `flatten`, \
+`mix`, `collect`, `combine`, `join`, `group_tuple`, `branch`) or logical strategies (`for_each`, \
+`dynamic_for_each`, `gather`), include `add_logical_graph` in the same transactional script. Do \
+not attempt to express these operators as SQL or an unregistered node kind.\n\
 \n\
-- **Transactional batch edits**: when adding or changing many nodes/edges, especially with loops, \
-  conditionals, reusable script functions, or mixed logical graphs, use `dag_shell`. Its Rhai \
+- **Transactional graph edits**: use `dag_shell` for every node, edge, update, removal, or logical \
+  graph edit. It is especially useful with loops, conditionals, reusable script functions, or mixed \
+  logical graphs. Its Rhai \
   sandbox only orchestrates registered graph operations and query metadata; it cannot read files, \
   access the network/environment, inspect output data, or run arbitrary processes. Every mutation \
   script must call `commit()`; failures leave the DAG unchanged. `dag_shell` does not execute the \
