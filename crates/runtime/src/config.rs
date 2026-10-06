@@ -135,7 +135,7 @@ pub const ENV_GENERATE_MEMORY: &str = "AUTONOMICS_GENERATE_MEMORY";
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PluginRsiConfig {
     /// Approved digest-pinned environments available to plugin development.
-    #[serde(default)]
+    #[serde(default = "default_plugin_environments")]
     pub environments: plugin_rsi::EnvironmentCatalog,
     /// Trusted GitHub publication and update-PR configuration.
     #[serde(default)]
@@ -165,12 +165,24 @@ fn default_plugin_distillation_interval_secs() -> u64 {
 impl Default for PluginRsiConfig {
     fn default() -> Self {
         Self {
-            environments: Default::default(),
+            environments: default_plugin_environments(),
             publisher: Default::default(),
             distillation_enabled: default_plugin_distillation_enabled(),
             distillation_interval_secs: default_plugin_distillation_interval_secs(),
         }
     }
+}
+
+fn default_plugin_environments() -> plugin_rsi::EnvironmentCatalog {
+    let mut environments = plugin_rsi::EnvironmentCatalog::default();
+    environments.insert(
+        "alpine",
+        plugin_rsi::Environment {
+            reference: "docker.io/library/alpine@sha256:ce64758a109eb420d874a118f87920e625e12d3634e03b4a5573fd9f6e5d3507".into(),
+            interpreters: vec!["sh".into()],
+        },
+    );
+    environments
 }
 
 // ---------------------------------------------------------------------------
@@ -1355,7 +1367,16 @@ mod tests {
     #[test]
     fn plugin_rsi_defaults_builder_and_backward_compatibility() {
         let config = RuntimeConfig::default();
-        assert!(config.plugin_rsi.environments.get("alpine").is_none());
+        assert_eq!(
+            config
+                .plugin_rsi
+                .environments
+                .get("alpine")
+                .map(|environment| environment.reference.as_str()),
+            Some(
+                "docker.io/library/alpine@sha256:ce64758a109eb420d874a118f87920e625e12d3634e03b4a5573fd9f6e5d3507"
+            )
+        );
         assert!(config.plugin_rsi.publisher.enabled);
         assert_eq!(config.plugin_rsi.publisher.owner, "auto-nomics");
 
@@ -1385,7 +1406,7 @@ mod tests {
         let mut legacy = serde_json::to_value(RuntimeConfig::default()).unwrap();
         legacy.as_object_mut().unwrap().remove("plugin_rsi");
         let config: RuntimeConfig = serde_json::from_value(legacy).unwrap();
-        assert!(config.plugin_rsi.environments.get("alpine").is_none());
+        assert!(config.plugin_rsi.environments.get("alpine").is_some());
         assert!(config.plugin_rsi.publisher.enabled);
     }
 
