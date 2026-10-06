@@ -10,8 +10,6 @@ use std::sync::Arc;
 use writing_base::LatexEngine;
 
 use agentik_core::tools::ToolRegistration;
-use alphafold::AlphaFoldClient;
-use bib_base::BibBase;
 use bib_base::{BibBase, LiteratureGateway};
 use chembl::ChEMBLClient;
 use data_engine::runtime::DataEngineClient;

@@ -31,7 +31,6 @@ use hdf5_sys::h5p::{H5Pget_chunk, H5Pmodify_filter};
 use hdf5_sys::h5t::H5Tget_size;
 use hdf5_sys::h5z::{H5Z_CLASS_T_VERS, H5Z_FLAG_REVERSE, H5Z_class2_t, H5Z_filter_t, H5Zregister};
 use lzf_sys::{LZF_VERSION, lzf_compress, lzf_decompress};
-use ndarray::s;
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 use tempfile::NamedTempFile;
@@ -1097,7 +1096,7 @@ fn read_obsm_column(
     macro_rules! read_embedding {
         ($ty:ty, $marker:ty) => {{
             let values = dataset
-                .read_slice_2d::<$ty, _>(s![start..end, dimension..dimension + 1])
+                .read_slice_2d::<$ty, _>((start..end, dimension..dimension + 1))
                 .map_err(hdf5_error)?;
             Arc::new(PrimitiveArray::<$marker>::from_iter(
                 values.column(0).iter().copied(),
@@ -1439,15 +1438,7 @@ mod tests {
             .create("X_umap")
             .unwrap()
             .as_writer()
-            .write_slice(
-                ndarray::Array2::from_shape_vec(
-                    (5, 2),
-                    vec![0.0_f32, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
-                )
-                .unwrap()
-                .view(),
-                s![.., ..],
-            )
+            .write_raw(&[0.0_f32, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0])
             .unwrap();
     }
 
