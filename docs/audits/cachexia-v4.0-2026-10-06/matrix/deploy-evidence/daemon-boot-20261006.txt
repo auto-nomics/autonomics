@@ -1,0 +1,44 @@
+  ok twosamplemr [twosamplemr, twosamplemr_harmonise]
+plugins: 20 families verified, 40 node kinds
+panels: 3 of 6 data bundles cached — run 'autonomics panels sync' to fetch the rest (nodes needing them fail at build time until then)
+plugins: syncing from /home/zj-normal/.autonomics/plugins.toml
+  + mrlap installed
+  ok twosamplemr [twosamplemr, twosamplemr_harmonise]
+  ok mrlap [mrlap_official]
+plugins: 21 families verified, 41 node kinds
+panels: 4 of 7 data bundles cached — run 'autonomics panels sync' to fetch the rest (nodes needing them fail at build time until then)
+# context (2026-10-06 ~17:1x restart):
+# plugins.toml: twosamplemr path -> git+rev@074900f (ZJ-2002); mrlap added git+rev@ce56172
+# deployed checkout post-restart: git -C ~/.autonomics/plugins/twosamplemr rev-parse HEAD = 074900f0604f71fa0d74f35f0579e80187ae61e5
+# registry: 21 families verified / 41 node kinds; ok mrlap [mrlap_official]; ok twosamplemr
+# panels: 4 of 7 cached (the 4th = ZJ-2002/catalog-mrlap-ldsc-eur-w-ld-hm3-no-mhc materialized by this work package)
+# pre-restart backup: ~/.autonomics/plugins.toml.bak-20261006-repin
+## 部署 registry 三边正式复现（最终，2026-10-06 18:0x）
+
+test: cargo test -p container-plugin --test mrlap_e2e -- --ignored (FINAL_EXIT=0, 296.69s)
+链路：plugins.toml git+rev → sync → loader(21 families) → LocalCatalog mounts → 真 Podman (digest 78f195b8) → artifact 发布
+字段核对：三边 × 17 字段全部 ≤1e-12 对 WOE4_mrlap_summary_seed1.tsv
+
+artifact 身份：
+- autonomics-container-command-146448-1791278246536314993 mrlap_summary.tsv sha256:b47c2e30f420b4d72489a251c52efbc9a6ef39d49e00566e5a5c41a8b849e730
+- autonomics-container-command-146448-1791278349333887512 mrlap_summary.tsv sha256:463d2108a49127be627091639751b4f0e509b892ca110ddd80e399cf8ae9ceec
+- autonomics-container-command-146448-1791278448870063125 mrlap_summary.tsv sha256:d6d933e22848fccc8e45e71f88567e2c4b1a889bad884e135bfc676c1f53cc09
+
+### 前两条记录的纠正（如实留痕）
+- "DEPLOYED-REGISTRY REPRODUCTION: 51/51 PASS"（本文件早前草稿）当时实为**单 run 假阳性**：
+  目录里只有 edge0 一份 artifact，脚本按 sorted[-3:] 拿 3 条而 glob 只命中 1 条，循环未跑满。
+- 上条 daemon-boot 记录写"DAG 复现进行中"后，两次 FAILED（pid 135790/141175）均为测试拼路
+  bug（未剥 FileRef 的 `vfs://` scheme 前缀），非插件/部署缺陷；每次均只完成 edge0 即 panic。
+  最终版（本节）三 run 全部发布并逐边核对。
+
+## 第二次重启（18:4x）：resources 产线生效
+- plugins.toml: twosamplemr rev c29cce4a4908（seed+resources）、mrlap rev f3b35ccf7ce4（8Gi）
+- 启动日志：21 families verified, 41 node kinds; ok mrlap [mrlap_official]; panels 4 of 7
+- deployed revs 实测：git rev-parse = c29cce4a / f3b35ccf；mrlap manifest [nodes.resources] memory="8Gi" 在盘
+- gateway.token 重读 32 字符
+- 实验（runner-killv2 链接产线库 d8659cdf1ebf）：
+  K1 取消传播 ok=False(read/reg success, pause/sink cancelled) -> K2 新进程 ok=True
+  K1b crash(kill -9 @20s, 无 report) -> K2c 新进程 ok=True, sink.tsv 落盘
+  F1 旧 manifest(074900f) twosamplemr 真容器 success -> F2 新 manifest(c29cce4) 全链 success,
+  finger_results/results.tsv: IVW pval 0.814965093902353、WMedian SE 0.016984327527172 与冻结/seed1 钉定值一致
+- RSS 实测（容器三边 PARITY PASS 同 run）：峰值 1915 MiB -> 8Gi 收紧依据

@@ -1,0 +1,77 @@
+{
+ "run_root": "/home/zj-normal/.cache/finger-exp-20261006",
+ "data_root": "/home/zj-normal/.autonomics/data",
+ "panel_root": "/home/zj-normal/.autonomics/panels",
+ "bundles": [
+  {
+   "ident": "wjixiang/catalog-plink-ref-1000g-eur-binary",
+   "desc": "Existing frozen PLINK panel; unused by clump=false",
+   "vpath": "/reference-panels/wjixiang/catalog-plink-ref-1000g-eur-binary@sha256:9f483fd11fbb2e73a97ab1af172e45e569c7b8ed7edec5572e35a2b3fa614b21",
+   "source": "/reference-panels/wjixiang/catalog-plink-ref-1000g-eur-binary@sha256:9f483fd11fbb2e73a97ab1af172e45e569c7b8ed7edec5572e35a2b3fa614b21",
+   "digest": "sha256:9f483fd11fbb2e73a97ab1af172e45e569c7b8ed7edec5572e35a2b3fa614b21"
+  }
+ ],
+ "report_file": "report_F1.json",
+ "incremental_first": false,
+ "nodes": [
+  {
+   "id": "fr",
+   "kind": "file_reference",
+   "spec": {
+    "path": "vfs:///prepared/x01m06.tsv",
+    "format": "tsv"
+   }
+  },
+  {
+   "id": "tsm",
+   "kind": "twosamplemr",
+   "spec": {
+    "id_exposure": "x01",
+    "exposure": "X01",
+    "id_outcome": "m06",
+    "outcome": "M06",
+    "method_list": [
+     "mr_ivw",
+     "mr_weighted_median"
+    ],
+    "clump": false
+   },
+   "plugin_manifest": "/tmp/tspm-old-0749/manifest.toml"
+  },
+  {
+   "id": "rb",
+   "kind": "file_to_dataframe",
+   "spec": {
+    "format": "tsv"
+   }
+  },
+  {
+   "id": "sink",
+   "kind": "dataframe_to_file",
+   "spec": {
+    "path": "vfs:///finger_results/results.tsv",
+    "format": "tsv"
+   }
+  }
+ ],
+ "edges": [
+  {
+   "from": "fr",
+   "to": "tsm",
+   "from_port": 0,
+   "to_port": 0
+  },
+  {
+   "from": "tsm",
+   "to": "rb",
+   "from_port": 0,
+   "to_port": 0
+  },
+  {
+   "from": "rb",
+   "to": "sink",
+   "from_port": 0,
+   "to_port": 0
+  }
+ ]
+}

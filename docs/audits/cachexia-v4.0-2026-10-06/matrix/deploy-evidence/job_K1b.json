@@ -1,0 +1,63 @@
+{
+ "run_root": "/home/zj-normal/.cache/kill-exp-20261006",
+ "data_root": "/home/zj-normal/.autonomics/data",
+ "panel_root": "/home/zj-normal/.autonomics/panels",
+ "report_file": "report_k1b.json",
+ "incremental_first": false,
+ "nodes": [
+  {
+   "id": "read",
+   "kind": "file_to_dataframe",
+   "spec": {
+    "path": "vfs:///prepared/kill_input.tsv",
+    "format": "tsv"
+   }
+  },
+  {
+   "id": "reg",
+   "kind": "linear_regression",
+   "spec": {
+    "x_columns": [
+     "condition"
+    ],
+    "y_column": "expression",
+    "intercept": true
+   }
+  },
+  {
+   "id": "pause",
+   "kind": "acceptance_pause",
+   "spec": {
+    "delay_ms": 45000
+   }
+  },
+  {
+   "id": "sink",
+   "kind": "dataframe_to_file",
+   "spec": {
+    "path": "vfs:///kill_results/sink.tsv",
+    "format": "tsv"
+   }
+  }
+ ],
+ "edges": [
+  {
+   "from": "read",
+   "to": "reg",
+   "from_port": 0,
+   "to_port": 0
+  },
+  {
+   "from": "reg",
+   "to": "pause",
+   "from_port": 0,
+   "to_port": 0
+  },
+  {
+   "from": "pause",
+   "to": "sink",
+   "from_port": 0,
+   "to_port": 0
+  }
+ ]
+}
