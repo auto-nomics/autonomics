@@ -13,6 +13,7 @@ thiserror.workspace = true
 toml.workspace = true
 schemars.workspace = true
 futures.workspace = true
+sha2.workspace = true
 
 container-runtime = { path = "../container-runtime" }
 data-catalog = { path = "../data-catalog" }
@@ -25,7 +26,6 @@ datafusion.workspace = true
 async-trait.workspace = true
 tokio = { workspace = true, features = ["rt", "macros"] }
 vfs = { path = "../vfs" }
-sha2.workspace = true
 data-catalog = { path = "../data-catalog", features = ["test-util"] }
 
 [lints]

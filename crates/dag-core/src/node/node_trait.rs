@@ -78,6 +78,20 @@ pub trait DagNode: Send + Sync {
     fn referenced_file_paths(&self) -> Vec<String> {
         Vec::new()
     }
+
+    /// The identity of the plugin implementation this node executes, when
+    /// the node's behavior is defined by a loaded plugin family (e.g.
+    /// container-plugin manifests) rather than purely by its kind + spec.
+    ///
+    /// Fed into the node's execution fingerprint (WO-R09) so that swapping a
+    /// plugin family's manifest, script, or image invalidates cached
+    /// incremental outputs. The identity is captured from the *loaded*
+    /// plugin definition — not re-read from disk at dispatch — so it always
+    /// matches what the engine would actually execute. `None` (the default)
+    /// for built-in nodes whose whole behavior is kind + spec.
+    fn plugin_identity(&self) -> Option<&crate::fingerprint::PluginIdentity> {
+        None
+    }
 }
 
 impl Clone for Box<dyn DagNode> {
