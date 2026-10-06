@@ -1094,7 +1094,7 @@ mod tests {
 
     fn mrlap_entry() -> CatalogEntry {
         CatalogEntry {
-            repo: HfRepoId::new("ZJ-2002/catalog-mrlap-ldsc-eur-w-ld-hm3-no-mhc").unwrap(),
+            repo: HfRepoId::new("owner/catalog-panel-x").unwrap(),
             version: "v1".to_string(),
             kind: "ldscore_reference".to_string(),
             digest: format!("sha256:{}", "c".repeat(64)),
@@ -1114,7 +1114,7 @@ mod tests {
         crate::remote::validate_package_index(
             &index,
             entry.repo.as_str(),
-            "ZJ-2002/catalog-mrlap-ldsc-eur-w-ld-hm3-no-mhc/index.json",
+            "owner/catalog-panel-x/index.json",
         )
         .expect("install-side package validation accepts the published form");
     }
