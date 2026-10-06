@@ -6,9 +6,64 @@ use std::sync::Arc;
 use super::common::*;
 use crate::dag::graph::{DAG, Result};
 use crate::dag::node_event::{NodeEvent, NodeEventKind};
-use crate::dag::runtime::SchedulerConfig;
-use crate::dag::{ChannelOperator, DagNode, TaskInputSource, TaskResources};
-use crate::value::NodeValue;
+use crate::dag::runtime::{RuntimeStatus, SchedulerConfig};
+use crate::dag::{ChannelOperator, DagNode, NodePorts, TaskInputSource, TaskResources};
+use crate::value::{NodeValue, PortType};
+
+#[derive(Clone)]
+struct ResumableDynamicItemNode {
+    value: String,
+    attempts: Arc<std::sync::atomic::AtomicUsize>,
+    failures: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+    ports: NodePorts,
+}
+
+#[async_trait::async_trait]
+impl DagNode for ResumableDynamicItemNode {
+    fn ports(&self) -> &NodePorts {
+        &self.ports
+    }
+
+    async fn execute(
+        &mut self,
+        _ctx: &crate::registry::NodeCtx,
+        _inputs: &[crate::dag::NodeInput],
+        _reporter: &crate::dag::node_event::NodeReporter,
+    ) -> std::result::Result<crate::dag::graph::PortOutputs, crate::dag::error::DagError> {
+        self.attempts
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if self
+            .failures
+            .lock()
+            .expect("failure set mutex")
+            .contains(&self.value)
+        {
+            return Err(crate::dag::error::DagError::Schedule(format!(
+                "intentional failure for `{}`",
+                self.value
+            )));
+        }
+
+        let mut outputs = crate::dag::graph::PortOutputs::new();
+        outputs.insert(
+            0,
+            crate::value::FileRef::new(format!("/{}.txt", self.value), Some("txt".into())),
+        );
+        Ok(outputs)
+    }
+
+    fn clone_box(&self) -> Box<dyn DagNode> {
+        Box::new(self.clone())
+    }
+
+    fn kind(&self) -> &'static str {
+        "resumable_dynamic_item"
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
 
 #[tokio::test]
 async fn dynamic_channel_fanout_supports_empty_channels() -> Result<()> {
@@ -58,6 +113,115 @@ async fn dynamic_channel_fanout_supports_empty_channels() -> Result<()> {
         0
     );
     dag.to_manifest().validate_layers()?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn incremental_dynamic_fanout_reuses_successful_items() -> Result<()> {
+    let logical = crate::dag::LogicalGraph::builder()
+        .add_node(crate::dag::LogicalNode::channel(
+            "source",
+            ChannelOperator::OfItems {
+                items: vec!["good-one".into(), "good-two".into(), "bad".into()],
+            },
+        ))
+        .add_node(crate::dag::LogicalNode::dynamic_for_each(
+            "process",
+            "resumable_dynamic_item",
+            serde_json::json!({"value": "{{item}}"}),
+            "item",
+        ))
+        .add_node(crate::dag::LogicalNode::channel(
+            "collect",
+            ChannelOperator::Collect,
+        ))
+        .add_edge("source", "process", 0, 0)
+        .add_edge("process", "collect", 0, 0)
+        .build();
+    let physical = logical
+        .compile(|_, _| unreachable!("dynamic fanout builder is deferred"))
+        .unwrap();
+
+    let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let failures = Arc::new(std::sync::Mutex::new(
+        ["bad".to_string()]
+            .into_iter()
+            .collect::<std::collections::HashSet<_>>(),
+    ));
+    let mut dag = DAG::default();
+    dag.set_dynamic_node_builder({
+        let attempts = Arc::clone(&attempts);
+        let failures = Arc::clone(&failures);
+        Arc::new(move |kind, spec| {
+            assert_eq!(kind, "resumable_dynamic_item");
+            let value = spec["value"].as_str().expect("rendered item").to_string();
+            Ok(Box::new(ResumableDynamicItemNode {
+                value,
+                attempts: Arc::clone(&attempts),
+                failures: Arc::clone(&failures),
+                ports: NodePorts::new().add_output_port_of_type(None, PortType::Any),
+            }) as Box<dyn DagNode>)
+        })
+    });
+    dag.install_compiled_graph(logical, physical)?;
+
+    let cfg = SchedulerConfig {
+        wave_size: Some(1),
+        ..incremental_cfg()
+    };
+    let first = dag.run(&cfg, &test_ctx(), None).await.unwrap();
+    assert!(!first.ok, "{first:?}");
+    assert_eq!(
+        attempts.load(std::sync::atomic::Ordering::SeqCst),
+        3,
+        "first attempt should execute every item: {first:?}"
+    );
+    let process = first
+        .logical_nodes
+        .iter()
+        .find(|summary| summary.logical_node == "process")
+        .expect("process summary");
+    assert_eq!(process.failed_item_keys, ["bad"], "{process:?}");
+    assert!(process.reused_item_keys.is_empty(), "{process:?}");
+    assert!(
+        first
+            .waves
+            .iter()
+            .any(|wave| wave.failed == 1 && wave.failed_item_keys == ["bad"]),
+        "failed item should be grouped by wave: {:?}",
+        first.waves
+    );
+
+    failures.lock().expect("failure set mutex").remove("bad");
+    let second = dag.run(&cfg, &test_ctx(), None).await.unwrap();
+    assert!(second.ok, "{second:?}");
+    assert_eq!(
+        attempts.load(std::sync::atomic::Ordering::SeqCst),
+        4,
+        "resume should execute only the failed item: {second:?}"
+    );
+    let resumed = second
+        .logical_nodes
+        .iter()
+        .find(|summary| summary.logical_node == "process")
+        .expect("process summary");
+    assert_eq!(
+        resumed.failed_item_keys,
+        Vec::<String>::new(),
+        "{resumed:?}"
+    );
+    assert_eq!(
+        resumed.reused_item_keys,
+        ["good-one", "good-two"],
+        "{resumed:?}"
+    );
+    assert!(
+        second.nodes.iter().any(|node| node.id.ends_with("bad")
+            && node.status == RuntimeStatus::Success
+            && !node.reused),
+        "failed item should execute successfully on resume: {:?}",
+        second.nodes
+    );
     Ok(())
 }
 

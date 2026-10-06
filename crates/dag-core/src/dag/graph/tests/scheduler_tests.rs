@@ -15,6 +15,50 @@ use crate::dag::{
 use crate::resource::MemoryGuardConfig;
 use crate::value::PortType;
 
+#[derive(Clone)]
+struct WaveTrackingNode {
+    id: String,
+    events: Arc<std::sync::Mutex<Vec<String>>>,
+    ports: NodePorts,
+}
+
+#[async_trait::async_trait]
+impl crate::dag::DagNode for WaveTrackingNode {
+    fn ports(&self) -> &NodePorts {
+        &self.ports
+    }
+
+    async fn execute(
+        &mut self,
+        _ctx: &crate::registry::NodeCtx,
+        _inputs: &[crate::dag::NodeInput],
+        _reporter: &crate::dag::node_event::NodeReporter,
+    ) -> Result<crate::dag::graph::PortOutputs> {
+        {
+            let mut events = self.events.lock().expect("wave event mutex");
+            events.push(format!("start:{}", self.id));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+        {
+            let mut events = self.events.lock().expect("wave event mutex");
+            events.push(format!("finish:{}", self.id));
+        }
+        Ok(crate::dag::graph::PortOutputs::new())
+    }
+
+    fn clone_box(&self) -> Box<dyn crate::dag::DagNode> {
+        Box::new(self.clone())
+    }
+
+    fn kind(&self) -> &'static str {
+        "wave_tracking_test_node"
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
 #[tokio::test]
 async fn local_executor_enforces_task_timeout() -> Result<()> {
     let workspace_root = tempfile::tempdir().unwrap();
@@ -452,4 +496,55 @@ async fn dag_can_be_rerun_without_state_leak() {
         .unwrap();
     assert!(r2.ok, "re-run should succeed (no cross-run ctx leak)");
     assert_eq!(dag.status("b"), Some(RuntimeStatus::Success));
+}
+
+#[tokio::test]
+async fn wave_size_creates_a_strict_barrier() -> Result<()> {
+    let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut dag = DAG::default();
+    for id in ["one", "two", "three", "four"] {
+        dag.add_node(
+            id.into(),
+            Box::new(WaveTrackingNode {
+                id: id.to_string(),
+                events: Arc::clone(&events),
+                ports: NodePorts::new(),
+            }),
+        )?;
+    }
+
+    let report = dag
+        .run(
+            &SchedulerConfig {
+                max_concurrency: 4,
+                wave_size: Some(2),
+                ..SchedulerConfig::default()
+            },
+            &test_ctx(),
+            None,
+        )
+        .await?;
+    assert!(report.ok, "{report:?}");
+    let events = events.lock().expect("wave event mutex").clone();
+    assert_eq!(report.waves.len(), 2, "{:?}", report.waves);
+    assert_eq!(report.waves[0].node_ids.len(), 2);
+    assert_eq!(report.waves[1].node_ids.len(), 2);
+    let index = |needle: &str| events.iter().position(|event| event == needle).unwrap();
+    let first_wave_finishes = report.waves[0]
+        .node_ids
+        .iter()
+        .map(|id| index(&format!("finish:{id}")))
+        .max()
+        .expect("first wave has finishes");
+    let second_wave_starts = report.waves[1]
+        .node_ids
+        .iter()
+        .map(|id| index(&format!("start:{id}")))
+        .min()
+        .expect("second wave has starts");
+    assert!(
+        first_wave_finishes < second_wave_starts,
+        "wave 1 must finish before wave 2 starts: {events:?}"
+    );
+    Ok(())
 }

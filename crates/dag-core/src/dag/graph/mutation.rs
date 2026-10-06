@@ -10,11 +10,11 @@ use petgraph::Direction;
 use petgraph::algo::has_path_connecting;
 use petgraph::visit::EdgeRef;
 
-use super::{DAG, EdgeLabel, Result};
+use super::{DAG, EdgeLabel, PortOutputs, Result};
 use crate::dag::error::DagError;
 use crate::dag::runtime::RuntimeStatus;
 use crate::dag::{DagNode, NodeId};
-use crate::value::NodeValue;
+use crate::value::{FileRef, NodeValue};
 
 impl DAG {
     /// Register a node under `id`. Errors if the id is already taken.
@@ -395,6 +395,37 @@ impl DAG {
     /// incremental `run`. Equivalent to the default (non-incremental) behavior.
     pub fn mark_all_dirty(&mut self) {
         self.fingerprints.clear();
+    }
+
+    /// Restore a successful file-producing node from a persisted checkpoint.
+    ///
+    /// DataFrame and Channel outputs are not reconstructible from a run
+    /// report; those nodes remain dirty and execute on the next incremental
+    /// run. File/FileSet outputs, which dominate container and assay jobs,
+    /// can be restored without rerunning their producers.
+    pub fn restore_cached_file_outputs(
+        &mut self,
+        id: &str,
+        fingerprint: &str,
+        outputs: Vec<(u8, FileRef)>,
+    ) -> Result<()> {
+        if !self.nodes.contains_key(id) {
+            return Err(DagError::UnknownNode(id.to_string()));
+        }
+        if outputs.is_empty() {
+            return Ok(());
+        }
+
+        let mut restored = PortOutputs::new();
+        for (port, file) in outputs {
+            restored.insert(port, file);
+        }
+        self.outputs.insert(id.to_string(), restored);
+        self.fingerprints
+            .insert(id.to_string(), fingerprint.to_string());
+        self.statuses.insert(id.to_string(), RuntimeStatus::Success);
+        self.errors.remove(id);
+        Ok(())
     }
 
     /// Drop the recorded fingerprints of nodes whose cached file outputs no

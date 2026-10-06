@@ -30,7 +30,11 @@ use crate::ExecError;
                   item lists — call dag_runs_log with run_id=\"latest\". \
                   A snapshot of the DAG is automatically committed to the \
                   history store — provide a descriptive commit message for \
-                  easy retrieval via dag_history_log."
+                  easy retrieval via dag_history_log. Set resume=true to reuse \
+                  successful nodes whose fingerprints and cached outputs are \
+                  unchanged; input_hashing=content additionally hashes unhashed \
+                  file-like inputs before reuse decisions; wave_size dispatches \
+                  assay jobs in fixed barrier waves and groups failures by wave."
 )]
 pub struct RunDagInput {
     /// A short, human-readable description of what this run does (e.g. \
@@ -39,6 +43,16 @@ pub struct RunDagInput {
     /// If omitted, a generic default is used.
     #[serde(default)]
     pub commit_message: Option<String>,
+    /// Reuse successful nodes when their execution fingerprint and cached
+    /// outputs are unchanged.
+    #[serde(default)]
+    pub resume: Option<bool>,
+    /// Input identity depth: `metadata` (default) or `content`.
+    #[serde(default)]
+    pub input_hashing: Option<String>,
+    /// Number of physical jobs in one fixed barrier wave.
+    #[serde(default)]
+    pub wave_size: Option<usize>,
 }
 
 pub struct RunDagTool {
@@ -147,6 +161,10 @@ fn slim_node_report(nr: &NodeReport) -> serde_json::Value {
     obj.insert("id".into(), serde_json::json!(nr.id));
     obj.insert("status".into(), serde_json::json!(nr.status));
     obj.insert("node_type".into(), serde_json::json!(nr.node_type));
+    obj.insert("reused".into(), serde_json::json!(nr.reused));
+    if let Some(wave) = nr.wave {
+        obj.insert("wave".into(), serde_json::json!(wave));
+    }
     if let Some(output_type) = &nr.output_type {
         obj.insert("output_type".into(), serde_json::json!(output_type));
     }
@@ -236,6 +254,14 @@ fn slim_logical_summary(ls: &LogicalRunSummary) -> serde_json::Value {
         serde_json::json!(ls.skipped_item_keys),
     );
     obj.insert(
+        "reused_item_keys".into(),
+        serde_json::json!(ls.reused_item_keys[..ls.reused_item_keys.len().min(SLIM_ITEM_KEYS)]),
+    );
+    obj.insert(
+        "reused_item_keys_total".into(),
+        serde_json::json!(ls.reused_item_keys.len()),
+    );
+    obj.insert(
         "summed_elapsed_ms".into(),
         serde_json::json!(ls.summed_elapsed_ms),
     );
@@ -277,13 +303,23 @@ fn build_report_json(report: RunReport) -> serde_json::Value {
 
     // Summary counts.
     let mut succeeded = 0usize;
+    let mut reused = 0usize;
     let mut failed = 0usize;
     let mut skipped = 0usize;
     let mut cancelled = 0usize;
     for node in &nodes {
         let status = node.get("status").and_then(|v| v.as_str()).unwrap_or("");
         match status {
-            "success" => succeeded += 1,
+            "success" => {
+                succeeded += 1;
+                if node
+                    .get("reused")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+                {
+                    reused += 1;
+                }
+            }
             "failed" => failed += 1,
             "skipped" => skipped += 1,
             "cancelled" => cancelled += 1,
@@ -297,6 +333,23 @@ fn build_report_json(report: RunReport) -> serde_json::Value {
         .iter()
         .map(slim_logical_summary)
         .collect();
+    let failure_manifest = build_failure_manifest(&report.logical_nodes, &report.waves);
+    let waves: Vec<serde_json::Value> = report
+        .waves
+        .iter()
+        .map(|wave| {
+            serde_json::json!({
+                "wave": wave.wave,
+                "total": wave.total,
+                "succeeded": wave.succeeded,
+                "failed": wave.failed,
+                "skipped": wave.skipped,
+                "cancelled": wave.cancelled,
+                "reused": wave.reused,
+                "failed_item_keys": wave.failed_item_keys,
+            })
+        })
+        .collect();
 
     serde_json::json!({
         "ok": report.ok,
@@ -306,12 +359,49 @@ fn build_report_json(report: RunReport) -> serde_json::Value {
         "summary": {
             "total": total,
             "succeeded": succeeded,
+            "reused": reused,
             "failed": failed,
             "skipped": skipped,
             "cancelled": cancelled,
         },
         "nodes": nodes,
         "logical_nodes": logical_nodes,
+        "waves": waves,
+        "failure_manifest": failure_manifest,
+    })
+}
+
+fn build_failure_manifest(
+    logical_nodes: &[data_engine::dag::LogicalRunSummary],
+    waves: &[data_engine::dag::WaveRunSummary],
+) -> serde_json::Value {
+    let mut failed_items = Vec::new();
+    for logical in logical_nodes {
+        for item_key in &logical.failed_item_keys {
+            failed_items.push(serde_json::json!({
+                "logical_node": logical.logical_node,
+                "item_key": item_key,
+            }));
+        }
+    }
+
+    let wave_failures = waves
+        .iter()
+        .filter(|wave| wave.failed > 0)
+        .map(|wave| {
+            serde_json::json!({
+                "wave": wave.wave,
+                "failed": wave.failed,
+                "failed_item_keys": wave.failed_item_keys,
+                "node_ids": wave.node_ids,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    serde_json::json!({
+        "failed_item_count": failed_items.len(),
+        "failed_items": failed_items,
+        "wave_failures": wave_failures,
     })
 }
 
@@ -336,6 +426,31 @@ fn to_value_without_field<T: serde::Serialize>(value: &T, field: &str) -> serde_
     v
 }
 
+fn run_options(
+    input: &RunDagInput,
+) -> Result<data_engine::runtime::types::RunDagOptions, ToolError> {
+    let input_hashing = match input.input_hashing.as_deref().map(str::trim) {
+        None | Some("") => None,
+        Some("metadata") => Some(data_engine::dag::InputHashing::Metadata),
+        Some("content") => Some(data_engine::dag::InputHashing::Content),
+        Some(other) => {
+            return Err(ToolError::ValidationFailed {
+                message: format!("input_hashing must be `metadata` or `content`, got `{other}`"),
+            });
+        }
+    };
+    if input.wave_size == Some(0) {
+        return Err(ToolError::ValidationFailed {
+            message: "wave_size must be at least 1".to_string(),
+        });
+    }
+    Ok(data_engine::runtime::types::RunDagOptions {
+        resume: input.resume,
+        input_hashing,
+        wave_size: input.wave_size,
+    })
+}
+
 #[async_trait]
 impl ToolFunction for RunDagTool {
     type Input = RunDagInput;
@@ -349,9 +464,10 @@ impl ToolFunction for RunDagTool {
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
         // Non-streaming path (used when called directly, not via the toolset).
         let trigger = Some(format!("agent:{}", self.client.session_id()));
+        let options = run_options(&input)?;
         let report = self
             .client
-            .run_dag(trigger)
+            .run_dag_with_options(trigger, options)
             .await
             .map_err(ExecError::from)?;
         let _ = input; // commit_message only used in streaming path
@@ -370,7 +486,10 @@ impl ToolFunction for RunDagTool {
         let parsed = serde_json::from_value::<Self::Input>(input)?;
 
         let trigger = Some(format!("agent:{}", self.client.session_id()));
-        let (mut event_rx, reply_rx) = self.client.run_dag_stream(parsed.commit_message, trigger);
+        let options = run_options(&parsed)?;
+        let (mut event_rx, reply_rx) =
+            self.client
+                .run_dag_stream_with_options(parsed.commit_message, trigger, options);
         // Pin the reply future so it can be polled across loop iterations.
         tokio::pin!(reply_rx);
 
@@ -409,6 +528,7 @@ mod tests {
             resource: Default::default(),
             nodes: Vec::new(),
             logical_nodes: Vec::new(),
+            waves: Vec::new(),
             statuses: Default::default(),
             errors: Default::default(),
         };
@@ -419,6 +539,102 @@ mod tests {
             "no DAG history store attached; run snapshot was not persisted"
         );
         assert!(json["snapshot_id"].is_null());
+    }
+
+    #[tokio::test]
+    async fn resume_reuses_unchanged_successful_nodes() {
+        let engine = data_engine::data_engine::DataEngine::builder().build();
+        let (client, _handle) = data_engine::runtime::spawn_with_engine(engine);
+        client
+            .add_node("stable".into(), "echo".into(), serde_json::json!({}))
+            .await
+            .unwrap();
+        let tool = RunDagTool::new(Arc::new(client));
+        let input = |resume| RunDagInput {
+            commit_message: Some("resume test".into()),
+            resume: Some(resume),
+            input_hashing: Some("metadata".into()),
+            wave_size: Some(1),
+        };
+
+        let first = tool.run(input(true)).await.unwrap();
+        let agentik_sdk::types::ToolResultContent::Json(first) = first.content else {
+            panic!("run report should be JSON");
+        };
+        assert_eq!(first["ok"], true, "{first}");
+        assert_eq!(first["nodes"][0]["reused"], false, "{first}");
+
+        let second = tool.run(input(true)).await.unwrap();
+        let agentik_sdk::types::ToolResultContent::Json(second) = second.content else {
+            panic!("run report should be JSON");
+        };
+        assert_eq!(second["ok"], true, "{second}");
+        assert_eq!(second["nodes"][0]["reused"], true, "{second}");
+        assert_eq!(second["summary"]["reused"], 1, "{second}");
+    }
+
+    #[test]
+    fn run_options_reject_invalid_recovery_controls() {
+        let input = RunDagInput {
+            commit_message: None,
+            resume: Some(true),
+            input_hashing: Some("sha256".into()),
+            wave_size: Some(1),
+        };
+        let error = run_options(&input).unwrap_err();
+        assert!(error.to_string().contains("input_hashing must be"));
+
+        let input = RunDagInput {
+            input_hashing: Some("metadata".into()),
+            wave_size: Some(0),
+            ..input
+        };
+        let error = run_options(&input).unwrap_err();
+        assert!(error.to_string().contains("wave_size must be at least 1"));
+    }
+
+    #[test]
+    fn failure_manifest_groups_failed_items_by_wave() {
+        use data_engine::dag::{LogicalRunSummary, RuntimeStatus, WaveRunSummary};
+
+        let logical = LogicalRunSummary {
+            logical_node: "assay_scan".into(),
+            execution_strategy: Some("dynamic_for_each"),
+            logical_node_type: Some("twosamplemr".into()),
+            status: RuntimeStatus::Failed,
+            physical_job_count: 2,
+            status_counts: [("success".to_string(), 1), ("failed".to_string(), 1)]
+                .into_iter()
+                .collect(),
+            scatter_axis: Some("assay".into()),
+            item_keys: vec!["ok".into(), "bad".into()],
+            failed_item_keys: vec!["bad".into()],
+            skipped_item_keys: Vec::new(),
+            reused_item_keys: Vec::new(),
+            physical_job_ids: vec!["ok-job".into(), "bad-job".into()],
+            summed_elapsed_ms: 12,
+            max_elapsed_ms: Some(10),
+            errors: Vec::new(),
+        };
+        let wave = WaveRunSummary {
+            wave: 3,
+            total: 2,
+            succeeded: 1,
+            failed: 1,
+            skipped: 0,
+            cancelled: 0,
+            reused: 1,
+            node_ids: vec!["ok-job".into(), "bad-job".into()],
+            item_keys: vec!["ok".into(), "bad".into()],
+            failed_item_keys: vec!["bad".into()],
+            reused_item_keys: vec!["ok".into()],
+        };
+
+        let manifest = build_failure_manifest(&[logical], &[wave]);
+        assert_eq!(manifest["failed_item_count"], 1);
+        assert_eq!(manifest["failed_items"][0]["item_key"], "bad");
+        assert_eq!(manifest["wave_failures"][0]["wave"], 3);
+        assert_eq!(manifest["wave_failures"][0]["failed_item_keys"][0], "bad");
     }
 
     #[test]
@@ -454,6 +670,8 @@ mod tests {
             output_rows: None,
             elapsed_ms: Some(3),
             dispatch_seq: Some(0),
+            reused: false,
+            wave: None,
             artifact_path: None,
             file_path: Some("out.csv".into()),
             error: None,
@@ -476,6 +694,7 @@ mod tests {
             resource: Default::default(),
             nodes: vec![node],
             logical_nodes: Vec::new(),
+            waves: Vec::new(),
             statuses: Default::default(),
             errors: Default::default(),
         };
@@ -526,6 +745,8 @@ mod tests {
             output_rows: Some(42),
             elapsed_ms: Some(3),
             dispatch_seq: Some(0),
+            reused: false,
+            wave: None,
             artifact_path: Some("art.png".into()),
             file_path: Some("out.csv".into()),
             error: Some(DagErrorReport {
@@ -565,6 +786,8 @@ mod tests {
             output_rows: None,
             elapsed_ms: None,
             dispatch_seq: None,
+            reused: false,
+            wave: None,
             artifact_path: None,
             file_path: None,
             error: None,
@@ -580,6 +803,7 @@ mod tests {
             resource: Default::default(),
             nodes: vec![node, skipped],
             logical_nodes: Vec::new(),
+            waves: Vec::new(),
             statuses: Default::default(),
             errors: Default::default(),
         };
@@ -643,6 +867,7 @@ mod tests {
             item_keys,
             failed_item_keys: (0..5).map(|i| format!("item_{i}")).collect(),
             skipped_item_keys: Vec::new(),
+            reused_item_keys: Vec::new(),
             physical_job_ids: (0..20).map(|i| format!("job_{i}")).collect(),
             summed_elapsed_ms: 1234,
             max_elapsed_ms: Some(300),
@@ -655,6 +880,7 @@ mod tests {
             resource: Default::default(),
             nodes: Vec::new(),
             logical_nodes: vec![summary],
+            waves: Vec::new(),
             statuses: Default::default(),
             errors: Default::default(),
         };

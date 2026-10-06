@@ -46,6 +46,6 @@ pub use physical::{
 };
 pub use runtime::{
     InputBinding, InputHashing, LogicalJobError, LogicalRunSummary, NodeRunDetails, RunReport,
-    RuntimeStatus, SchedulerConfig,
+    RuntimeStatus, SchedulerConfig, WaveRunSummary,
 };
 pub use view::{DagEdgeView, DagNodeView, DagPortView, DagTuiSnapshot};

@@ -22,7 +22,8 @@ use crate::dag::error::DagError;
 use crate::dag::logical::LogicalExecutionStrategy;
 use crate::dag::node_event::{JobResult, NodeEvent, NodeEventKind, NodeReporter};
 use crate::dag::runtime::{
-    InputHashing, ResourceRunReport, RunReport, RuntimeStatus, SchedulerConfig,
+    InputHashing, NodeReport, ResourceRunReport, RunReport, RuntimeStatus, SchedulerConfig,
+    WaveRunSummary,
 };
 use crate::dag::utils::{build_input_bindings, build_inputs, cascade_skip};
 use crate::dag::{
@@ -192,6 +193,11 @@ impl DAG {
         let engine_ctx = Arc::new(engine_ctx.clone());
 
         let incremental = cfg.incremental;
+        if let Some(wave_size) = cfg.wave_size
+            && wave_size == 0
+        {
+            return Err(DagError::Schedule("wave_size must be at least 1".into()));
+        }
 
         // Audit state is per-run in both modes: a report must express what
         // *this* run injected and what *this* run's nodes reported — clean
@@ -387,6 +393,11 @@ impl DAG {
         // execution order — `node_ids()` is a HashMap, so no array order is.
         let mut next_dispatch_seq: u64 = 0;
         let mut dispatch_order: HashMap<NodeId, u64> = HashMap::new();
+        let mut node_waves = HashMap::<NodeId, u64>::new();
+        let wave_limit = cfg.wave_size.unwrap_or(usize::MAX);
+        let mut current_wave = 0u64;
+        let mut dispatched_in_wave = 0usize;
+        let mut next_wave = VecDeque::<NodeId>::new();
 
         // Seed the ready queue with source nodes; every other node enters as
         // its predecessors complete (by execution or fingerprint reuse).
@@ -400,6 +411,7 @@ impl DAG {
         // when a cancellation must release this run's outputs. Reused nodes
         // keep their cached outputs and fingerprints.
         let mut executed_ids: Vec<NodeId> = Vec::new();
+        let mut reused_ids = BTreeSet::<NodeId>::new();
         let mut job_handles: Vec<AbortOnDropHandle> = Vec::new();
         let mut external_cancellation = false;
 
@@ -407,9 +419,23 @@ impl DAG {
             if memory_triggered.is_some() {
                 break;
             }
+            if in_flight == 0 && !next_wave.is_empty() {
+                while let Some(id) = ready.pop_front() {
+                    next_wave.push_back(id);
+                }
+                std::mem::swap(&mut ready, &mut next_wave);
+            }
+            if dispatched_in_wave >= wave_limit {
+                while let Some(id) = ready.pop_front() {
+                    next_wave.push_back(id);
+                }
+            }
 
             // Dispatch every currently-ready node.
             while let Some(id) = ready.pop_front() {
+                if dispatched_in_wave >= wave_limit {
+                    break;
+                }
                 if self
                     .specs
                     .get(&id)
@@ -436,6 +462,7 @@ impl DAG {
                 }
                 dispatch_order.insert(id.clone(), next_dispatch_seq);
                 next_dispatch_seq += 1;
+                node_waves.entry(id.clone()).or_insert(current_wave);
                 // Borrow the node payload, then clone it into an owned Box so it
                 // can be moved into the 'static future. The original stays in
                 // `self` for re-runs / iterative optimisation.
@@ -556,6 +583,8 @@ impl DAG {
                 {
                     debug!(node = %id, "fingerprint unchanged; reusing cached output");
                     self.statuses.insert(id.clone(), RuntimeStatus::Success);
+                    reused_ids.insert(id.clone());
+                    node_waves.entry(id.clone()).or_insert(current_wave);
                     for succ in &successors[&id] {
                         let left = {
                             let count = pending.entry(succ.clone()).or_insert(0);
@@ -572,6 +601,7 @@ impl DAG {
                 // Success, removed again on failure/cancellation.
                 self.fingerprints.insert(id.clone(), candidate);
                 executed_ids.push(id.clone());
+                node_waves.entry(id.clone()).or_insert(current_wave);
 
                 self.statuses.insert(id.clone(), RuntimeStatus::Running);
                 in_flight += 1;
@@ -650,6 +680,10 @@ impl DAG {
                         .await;
                 });
                 job_handles.push(AbortOnDropHandle(Some(handle)));
+                dispatched_in_wave += 1;
+                if dispatched_in_wave >= wave_limit {
+                    break;
+                }
             }
 
             let streaming_active = stream
@@ -774,6 +808,10 @@ impl DAG {
                         }
                     };
                     in_flight -= 1;
+                    if in_flight == 0 && dispatched_in_wave > 0 {
+                        dispatched_in_wave = 0;
+                        current_wave += 1;
+                    }
 
                     match res {
                         JobResult::Success {
@@ -998,10 +1036,13 @@ impl DAG {
                 &durations,
                 &skipped_because,
                 &dispatch_order,
+                &reused_ids,
+                &node_waves,
                 cfg.compute_row_counts && memory_trigger.is_none(),
             )
             .await;
         let logical_run_summaries = self.build_logical_run_summaries(&node_reports);
+        let waves = Self::build_wave_run_summaries(&node_reports);
 
         Ok(RunReport {
             ok,
@@ -1010,8 +1051,65 @@ impl DAG {
             resource,
             nodes: node_reports,
             logical_nodes: logical_run_summaries,
+            waves,
             statuses: self.statuses.clone(),
             errors: self.errors.drain().collect(),
         })
+    }
+
+    fn build_wave_run_summaries(reports: &[NodeReport]) -> Vec<WaveRunSummary> {
+        let mut waves = BTreeMap::<u64, WaveRunSummary>::new();
+        for report in reports {
+            let Some(wave) = report.wave else {
+                continue;
+            };
+            let summary = waves.entry(wave).or_insert_with(|| WaveRunSummary {
+                wave,
+                total: 0,
+                succeeded: 0,
+                failed: 0,
+                skipped: 0,
+                cancelled: 0,
+                reused: 0,
+                node_ids: Vec::new(),
+                item_keys: Vec::new(),
+                failed_item_keys: Vec::new(),
+                reused_item_keys: Vec::new(),
+            });
+            summary.total += 1;
+            match report.status {
+                RuntimeStatus::Success => summary.succeeded += 1,
+                RuntimeStatus::Failed => summary.failed += 1,
+                RuntimeStatus::Skipped => summary.skipped += 1,
+                RuntimeStatus::Cancelled => summary.cancelled += 1,
+                RuntimeStatus::Pending | RuntimeStatus::Ready | RuntimeStatus::Running => {}
+            }
+            if report.reused {
+                summary.reused += 1;
+                if let Some(item_key) = &report.item_key {
+                    summary.reused_item_keys.push(item_key.clone());
+                }
+            }
+            if report.status == RuntimeStatus::Failed
+                && let Some(item_key) = &report.item_key
+            {
+                summary.failed_item_keys.push(item_key.clone());
+            }
+            summary.node_ids.push(report.id.clone());
+            if let Some(item_key) = &report.item_key {
+                summary.item_keys.push(item_key.clone());
+            }
+        }
+
+        waves
+            .into_values()
+            .map(|mut summary| {
+                summary.node_ids.sort();
+                summary.item_keys.sort();
+                summary.failed_item_keys.sort();
+                summary.reused_item_keys.sort();
+                summary
+            })
+            .collect()
     }
 }

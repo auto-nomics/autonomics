@@ -31,7 +31,7 @@ use tokio_util::sync::CancellationToken;
 use crate::data_engine::DataEngine;
 use crate::node_registry::NodeRegistry;
 use crate::runtime::error::{ClientError, Result};
-use crate::runtime::types::{DataEngineCmd, EngineMsg};
+use crate::runtime::types::{DataEngineCmd, EngineMsg, RunDagOptions};
 
 pub mod error;
 pub mod types;
@@ -98,6 +98,7 @@ impl SessionServer {
                 event_tx,
                 commit_message,
                 trigger,
+                options,
                 reply,
                 cancel_token,
             } => {
@@ -120,6 +121,15 @@ impl SessionServer {
                         let mut engine = engine.lock().await;
                         engine.set_commit_message(commit_message);
                         engine.set_run_trigger(trigger);
+                        if let Some(resume) = options.resume {
+                            engine.set_incremental(resume);
+                        }
+                        if let Some(input_hashing) = options.input_hashing {
+                            engine.set_input_hashing(input_hashing);
+                        }
+                        if let Some(wave_size) = options.wave_size {
+                            engine.set_wave_size(wave_size)?;
+                        }
                         match event_tx {
                             Some(sink) => {
                                 engine
@@ -821,6 +831,15 @@ impl DataEngineClient {
     }
 
     pub async fn run_dag(&self, trigger: Option<String>) -> Result<crate::dag::RunReport> {
+        self.run_dag_with_options(trigger, RunDagOptions::default())
+            .await
+    }
+
+    pub async fn run_dag_with_options(
+        &self,
+        trigger: Option<String>,
+        options: RunDagOptions,
+    ) -> Result<crate::dag::RunReport> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         let cancel = CancellationToken::new();
         let wrapped = CancelOnDropReceiver {
@@ -832,6 +851,7 @@ impl DataEngineClient {
                 event_tx: None,
                 commit_message: None,
                 trigger,
+                options,
                 reply: reply_tx,
                 cancel_token: cancel,
             },
@@ -858,6 +878,18 @@ impl DataEngineClient {
         mpsc::Receiver<crate::dag::node_event::NodeEvent>,
         CancelOnDropReceiver,
     ) {
+        self.run_dag_stream_with_options(commit_message, trigger, RunDagOptions::default())
+    }
+
+    pub fn run_dag_stream_with_options(
+        &self,
+        commit_message: Option<String>,
+        trigger: Option<String>,
+        options: RunDagOptions,
+    ) -> (
+        mpsc::Receiver<crate::dag::node_event::NodeEvent>,
+        CancelOnDropReceiver,
+    ) {
         let (event_tx, event_rx) = mpsc::channel::<crate::dag::node_event::NodeEvent>(128);
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         let cancel = CancellationToken::new();
@@ -867,6 +899,7 @@ impl DataEngineClient {
                 event_tx: Some(event_tx),
                 commit_message,
                 trigger,
+                options,
                 reply: reply_tx,
                 cancel_token: cancel.clone(),
             },

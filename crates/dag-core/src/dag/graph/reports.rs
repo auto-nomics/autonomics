@@ -1,7 +1,7 @@
 //! Run-report assembly: per-node [`NodeReport`]s, logical-node aggregation
 //! ([`LogicalRunSummary`]), and the opt-in eager row counts.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use datafusion::common::HashMap;
 
@@ -24,6 +24,7 @@ struct LogicalSummaryBuilder {
     item_keys: Vec<String>,
     failed_item_keys: Vec<String>,
     skipped_item_keys: Vec<String>,
+    reused_item_keys: Vec<String>,
     physical_job_ids: Vec<String>,
     summed_elapsed_ms: u64,
     max_elapsed_ms: Option<u64>,
@@ -77,12 +78,18 @@ impl LogicalSummaryBuilder {
                 self.skipped_item_keys.push(item_key.clone());
             }
         }
+        if report.reused
+            && let Some(item_key) = &report.item_key
+        {
+            self.reused_item_keys.push(item_key.clone());
+        }
     }
 
     fn finish(mut self, logical_node: String) -> LogicalRunSummary {
         self.item_keys.sort();
         self.failed_item_keys.sort();
         self.skipped_item_keys.sort();
+        self.reused_item_keys.sort();
         self.physical_job_ids.sort();
         let status = aggregate_logical_status(&self.status_counts, self.physical_job_ids.len());
         LogicalRunSummary {
@@ -96,6 +103,7 @@ impl LogicalSummaryBuilder {
             item_keys: self.item_keys,
             failed_item_keys: self.failed_item_keys,
             skipped_item_keys: self.skipped_item_keys,
+            reused_item_keys: self.reused_item_keys,
             physical_job_ids: self.physical_job_ids,
             summed_elapsed_ms: self.summed_elapsed_ms,
             max_elapsed_ms: self.max_elapsed_ms,
@@ -228,6 +236,8 @@ impl DAG {
         durations: &HashMap<NodeId, std::time::Duration>,
         skipped_because: &HashMap<NodeId, NodeId>,
         dispatch_order: &HashMap<NodeId, u64>,
+        reused_ids: &BTreeSet<NodeId>,
+        node_waves: &HashMap<NodeId, u64>,
         compute_row_counts: bool,
     ) -> Vec<NodeReport> {
         // Only run `count()` when the caller opted in. Default is off, so a
@@ -309,6 +319,8 @@ impl DAG {
                 let output_rows = counts.get(id).copied();
                 let elapsed_ms = durations.get(id).map(|d| d.as_millis() as u64);
                 let dispatch_seq = dispatch_order.get(id).copied();
+                let reused = reused_ids.contains(id);
+                let wave = node_waves.get(id).copied();
                 let executor = dispatch_seq
                     .is_some()
                     .then(|| self.task_executor.executor.name());
@@ -360,6 +372,8 @@ impl DAG {
                     output_rows,
                     elapsed_ms,
                     dispatch_seq,
+                    reused,
+                    wave,
                     artifact_path,
                     file_path,
                     error,

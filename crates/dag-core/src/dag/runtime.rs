@@ -136,6 +136,11 @@ pub enum InputHashing {
 pub struct SchedulerConfig {
     /// Maximum number of nodes running concurrently (semaphore permits).
     pub max_concurrency: usize,
+    /// When set, ready jobs are dispatched in fixed-size barrier waves: no
+    /// job from wave N+1 starts until every dispatched job in wave N has
+    /// terminated. `max_concurrency` remains the upper bound for actually
+    /// running jobs.
+    pub wave_size: Option<usize>,
     /// When `true`, [`NodeReport::output_rows`] is populated by forcing every
     /// successful node's `DataFrame` to be collected (i.e. `SELECT COUNT(*)`
     /// over the LogicalPlan). This is an **eager** operation — for a source
@@ -181,6 +186,7 @@ impl Default for SchedulerConfig {
             .unwrap_or(1);
         Self {
             max_concurrency: cpus,
+            wave_size: None,
             compute_row_counts: false,
             incremental: false,
             input_hashing: InputHashing::Metadata,
@@ -333,12 +339,36 @@ pub struct LogicalRunSummary {
     pub item_keys: Vec<String>,
     pub failed_item_keys: Vec<String>,
     pub skipped_item_keys: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub reused_item_keys: Vec<String>,
     pub physical_job_ids: Vec<String>,
     pub summed_elapsed_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_elapsed_ms: Option<u64>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub errors: Vec<LogicalJobError>,
+}
+
+/// Per-wave aggregation over physical node reports.
+///
+/// Waves exist only when the caller sets `SchedulerConfig::wave_size`;
+/// otherwise all dispatched nodes carry `wave: None`.
+#[derive(Debug, Clone, Serialize)]
+pub struct WaveRunSummary {
+    pub wave: u64,
+    pub total: usize,
+    pub succeeded: usize,
+    pub failed: usize,
+    pub skipped: usize,
+    pub cancelled: usize,
+    pub reused: usize,
+    pub node_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub item_keys: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub failed_item_keys: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub reused_item_keys: Vec<String>,
 }
 
 /// Per-node execution summary produced by [`super::graph::DAG::run`].
@@ -387,6 +417,11 @@ pub struct NodeReport {
     /// upstream failure, cancelled while still pending).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dispatch_seq: Option<u64>,
+    /// Fixed-barrier wave index, when wave scheduling is enabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wave: Option<u64>,
+    /// Whether this success came from incremental reuse rather than execution.
+    pub reused: bool,
 
     /// For artifact-producing nodes: the path of the
     /// rendered/produced artifact (e.g. a PNG).
@@ -430,6 +465,8 @@ pub struct RunReport {
     pub nodes: Vec<NodeReport>,
     /// Aggregated status for nodes installed from logical source graphs.
     pub logical_nodes: Vec<LogicalRunSummary>,
+    /// Per-barrier-wave summaries. Empty unless wave scheduling was enabled.
+    pub waves: Vec<WaveRunSummary>,
     /// Flat status map kept for backward-compatible programmatic access.
     pub statuses: HashMap<NodeId, RuntimeStatus>,
     /// Per-node errors (only populated for `Failed` nodes).
@@ -442,13 +479,14 @@ impl Serialize for RunReport {
         serializer: S,
     ) -> std::result::Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
-        let mut st = serializer.serialize_struct("RunReport", 8)?;
+        let mut st = serializer.serialize_struct("RunReport", 9)?;
         st.serialize_field("ok", &self.ok)?;
         st.serialize_field("warnings", &self.warnings)?;
         st.serialize_field("snapshot_id", &self.snapshot_id)?;
         st.serialize_field("resource", &self.resource)?;
         st.serialize_field("nodes", &self.nodes)?;
         st.serialize_field("logical_nodes", &self.logical_nodes)?;
+        st.serialize_field("waves", &self.waves)?;
 
         // Convert hashbrown HashMaps to std HashMaps for serialization.
         let statuses: std::collections::HashMap<&str, RuntimeStatus> = self

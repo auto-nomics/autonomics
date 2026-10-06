@@ -4,7 +4,7 @@ use tokio_util::sync::CancellationToken;
 use crate::dag::graph::PortOutputs;
 use crate::dag::node_event::NodeEvent;
 use crate::dag::runtime::RuntimeStatus;
-use crate::dag::{DagTuiSnapshot, LogicalGraph, RunReport};
+use crate::dag::{DagTuiSnapshot, InputHashing, LogicalGraph, RunReport};
 use crate::dag_shell::DagShellOutcome;
 use crate::data_engine::{ClearDagOutcome, LogicalInstallReport};
 use crate::error::Result as EngineResult;
@@ -18,6 +18,20 @@ use crate::error::Result as EngineResult;
 pub struct EngineMsg {
     pub session_id: String,
     pub cmd: DataEngineCmd,
+}
+
+/// Per-call scheduler controls for `run_dag`.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RunDagOptions {
+    /// `Some(true)` enables fingerprint-based reuse of successful nodes.
+    /// `None` preserves the engine's current scheduler configuration.
+    pub resume: Option<bool>,
+    /// Override input identity depth for this and subsequent runs on this
+    /// engine. `None` preserves the current setting.
+    pub input_hashing: Option<InputHashing>,
+    /// Fixed barrier size for in-flight assay waves. `None` preserves the
+    /// scheduler's unbarriered behavior.
+    pub wave_size: Option<usize>,
 }
 
 pub enum DataEngineCmd {
@@ -61,6 +75,7 @@ pub enum DataEngineCmd {
         /// Who initiated the run (e.g. `"agent:/root/researcher"`), recorded
         /// in the run's audit trail. `None` leaves the run unattributed.
         trigger: Option<String>,
+        options: RunDagOptions,
         reply: oneshot::Sender<EngineResult<RunReport>>,
         /// Cancellation token shared with the caller. When the caller drops
         /// the reply receiver (e.g. the agent task is cancelled), this token

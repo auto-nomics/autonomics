@@ -7,6 +7,7 @@ use serde::Deserialize;
 use opendal::ErrorKind;
 
 use dag_core::dag::{DagError, graph::PortOutputs};
+use dag_core::fingerprint::file_sha256;
 use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::registry::{NodeCtx, NodeFactory};
 use dag_core::value::{FileFingerprint, FileRef, PortType};
@@ -20,20 +21,39 @@ pub struct FileReferenceNodeSpec {
     pub path: String,
     /// Optional format label passed downstream, for example `sumstats_gz`.
     pub format: Option<String>,
+    /// Read the referenced bytes once and attach a sha256 content hash to the
+    /// emitted FileRef. This strengthens provenance and incremental identity,
+    /// at the cost of one full read even when the payload is not parsed.
+    #[serde(default = "default_hash_content")]
+    pub hash_content: bool,
+}
+
+fn default_hash_content() -> bool {
+    false
 }
 
 pub struct FileReferenceNode {
     ports: NodePorts,
     path: String,
     format: Option<String>,
+    hash_content: bool,
 }
 
 impl FileReferenceNode {
     pub fn new(path: impl Into<String>, format: Option<String>) -> Self {
+        Self::with_content_hashing(path, format, false)
+    }
+
+    pub fn with_content_hashing(
+        path: impl Into<String>,
+        format: Option<String>,
+        hash_content: bool,
+    ) -> Self {
         Self {
             ports: port_layout(format.as_deref()),
             path: path.into(),
             format,
+            hash_content,
         }
     }
 
@@ -66,7 +86,22 @@ impl DagNode for FileReferenceNode {
         _inputs: &[NodeInput],
         _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
-        let file = resolve_file(ctx, &self.path, self.format.clone()).await?;
+        let mut file = resolve_file(ctx, &self.path, self.format.clone()).await?;
+        if self.hash_content {
+            let (size, hash) = file_sha256(&file.path, ctx.opendal.as_deref())
+                .await
+                .ok_or_else(|| {
+                    DagError::Schedule(format!(
+                        "file_reference cannot hash `{}` through VFS or the local host",
+                        self.path
+                    ))
+                })?;
+            let fingerprint = file
+                .fingerprint
+                .get_or_insert_with(|| dag_core::FileFingerprint::remote(0, None));
+            fingerprint.size = size;
+            fingerprint.content_hash = Some(format!("sha256:{hash}"));
+        }
         let mut outputs = PortOutputs::new();
         outputs.insert_file(0, file);
         Ok(outputs)
@@ -77,6 +112,7 @@ impl DagNode for FileReferenceNode {
             ports: self.ports.clone(),
             path: self.path.clone(),
             format: self.format.clone(),
+            hash_content: self.hash_content,
         })
     }
 
@@ -207,7 +243,8 @@ impl NodeFactory for FileReferenceNodeFactory {
     fn doc(&self) -> &'static str {
         "A file reference for binary or already-normalized inputs. It validates \
         that the configured `vfs://` or absolute path names a concrete file, \
-        attaches size/mtime metadata, and emits a FileRef. Unlike \
+        attaches size/mtime metadata, and emits a FileRef. Set `hash_content` \
+        to true to also read once and attach a sha256 content hash. Unlike \
         `file_to_dataframe`, it never reads the payload into a DataFrame. This is \
         the intended input node for file-backed dedicated container nodes such as \
         `ldsc_h2`. Set `format` whenever it is known; downstream ports \
@@ -231,7 +268,11 @@ impl NodeFactory for FileReferenceNodeFactory {
         _node_ctx: NodeCtx,
     ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let spec: FileReferenceNodeSpec = serde_json::from_value(spec)?;
-        Ok(Box::new(FileReferenceNode::new(spec.path, spec.format)))
+        Ok(Box::new(FileReferenceNode::with_content_hashing(
+            spec.path,
+            spec.format,
+            spec.hash_content,
+        )))
     }
 
     fn ports_for_spec(
@@ -249,6 +290,7 @@ mod tests {
     use dag_core::dag::DAG;
     use dag_core::dag::runtime::SchedulerConfig;
     use datafusion::prelude::SessionContext;
+    use sha2::{Digest, Sha256};
     use std::sync::Arc;
     use vfs::{
         BackendConfig, BackendDefinition, MountDefinition, MountedObjectStore, OpendalFileStorage,
@@ -293,6 +335,27 @@ mod tests {
         assert_eq!(file.format.as_deref(), Some("sumstats_gz"));
         let fingerprint = file.fingerprint.as_ref().unwrap();
         assert_eq!(fingerprint.size, b"binary-payload".len() as u64);
+    }
+
+    #[tokio::test]
+    async fn optional_content_hashing_reads_without_parsing() {
+        let input = tempfile::tempdir().unwrap();
+        std::fs::write(input.path().join("input.tsv"), b"input-provenance").unwrap();
+        let (storage, _workspace) = mounted_ctx(input.path());
+        let ctx = NodeCtx::new(SessionContext::new().runtime_env(), Some(storage));
+        let mut node =
+            FileReferenceNode::with_content_hashing("vfs:///input.tsv", Some("tsv".into()), true);
+
+        let outputs = node
+            .execute(&ctx, &[], &dag_core::dag::node_event::NodeReporter::noop())
+            .await
+            .unwrap();
+
+        let file = outputs.get(&0).unwrap().as_file().unwrap();
+        let fingerprint = file.fingerprint.as_ref().unwrap();
+        let expected = format!("sha256:{:x}", Sha256::digest(b"input-provenance"));
+        assert_eq!(fingerprint.content_hash.as_deref(), Some(expected.as_str()));
+        assert_eq!(fingerprint.size, b"input-provenance".len() as u64);
     }
 
     #[test]

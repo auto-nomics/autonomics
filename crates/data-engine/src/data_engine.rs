@@ -1,9 +1,9 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use container_runtime::ContainerExecutionInfra;
-use dag_core::BundleRegistry;
 use dag_core::resource::MemoryGuardConfig;
+use dag_core::{BundleRegistry, FileRef, NodePorts, PortType};
 use datafusion::{
     execution::{object_store::ObjectStoreUrl, runtime_env::RuntimeEnv},
     prelude::SessionContext,
@@ -12,8 +12,9 @@ use serde::Serialize;
 use vfs::{MountedObjectStore, OpendalFileStorage};
 
 use crate::dag::{
-    DAG, DagError, DagHistory, GatherNode, LogicalGraph, PhysicalInstallReport, PhysicalJobRef,
-    RunRecord, RunReport, RuntimeStatus, SchedulerConfig,
+    ChannelNode, DAG, DagError, DagHistory, GatherNode, LogicalEdge, LogicalExecutionStrategy,
+    LogicalGraph, LogicalNodeDefinition, PhysicalInstallReport, PhysicalJobRef, RunRecord,
+    RunReport, RuntimeStatus, SchedulerConfig,
 };
 use crate::dag_shell::{
     DagShellError, DagShellOutcome, DagShellSnapshot, GraphEditOp, dynamic_to_json, execute_script,
@@ -305,6 +306,7 @@ impl DataEngine {
 
     /// Compile a logical graph into physical jobs and install them in the DAG.
     pub fn add_logical_graph(&mut self, graph: LogicalGraph) -> Result<LogicalInstallReport> {
+        self.validate_logical_graph_execution(&graph)?;
         let logical_node_count = graph.nodes().len();
         let physical = graph.clone().compile(|kind, spec| {
             Self::ensure_node_kind_allowed(kind).map_err(|error| {
@@ -328,6 +330,7 @@ impl DataEngine {
         dag: &mut DAG,
         graph: LogicalGraph,
     ) -> Result<PhysicalInstallReport> {
+        self.validate_logical_graph_execution(&graph)?;
         let physical = graph.clone().compile(|kind, spec| {
             Self::ensure_node_kind_allowed(kind).map_err(|error| {
                 DagError::Schedule(format!("cannot install logical node `{kind}`: {error}"))
@@ -337,6 +340,258 @@ impl DataEngine {
                 .map_err(|error| DagError::Schedule(error.to_string()))
         })?;
         Ok(dag.install_compiled_graph(graph, physical)?)
+    }
+
+    /// Validate the parts of a logical graph that are knowable before
+    /// execution: registry availability, concrete spec buildability, and the
+    /// payload contracts hidden behind logical coordinators.
+    fn validate_logical_graph_execution(&self, graph: &LogicalGraph) -> Result<()> {
+        graph.validate().map_err(Error::Dag)?;
+
+        let mut ports = HashMap::<&str, NodePorts>::new();
+        for node in graph.nodes() {
+            let node_ports = match &node.definition {
+                LogicalNodeDefinition::Registry { kind, spec } => {
+                    Self::ensure_node_kind_allowed(kind)?;
+                    self.node_registry
+                        .build_node(kind, spec.clone())
+                        .map_err(|error| {
+                            Error::Custom(format!(
+                                "logical node `{}` cannot build registry kind `{kind}`: {error}",
+                                node.id
+                            ))
+                        })?;
+                    self.node_registry
+                        .get_node_ports_for_spec(kind, spec.clone())?
+                }
+                LogicalNodeDefinition::Channel(operator) => {
+                    ChannelNode::new(operator.clone()).ports().clone()
+                }
+                LogicalNodeDefinition::Gather => GatherNode::default().ports().clone(),
+            };
+            ports.insert(node.id.as_str(), node_ports);
+        }
+
+        let incoming = graph.edges().iter().fold(
+            HashMap::<&str, Vec<&LogicalEdge>>::new(),
+            |mut incoming, edge| {
+                incoming.entry(edge.to.as_str()).or_default().push(edge);
+                incoming
+            },
+        );
+        let mut gather_types = HashMap::<&str, PortType>::new();
+        let mut deferred = graph
+            .nodes()
+            .iter()
+            .filter(|node| matches!(node.definition, LogicalNodeDefinition::Gather))
+            .map(|node| node.id.as_str())
+            .collect::<HashSet<_>>();
+        while !deferred.is_empty() {
+            let mut next = HashSet::new();
+            let mut progressed = false;
+            for gather in &deferred {
+                let mut source_types = Vec::new();
+                let mut waiting = false;
+                for edge in &incoming[gather] {
+                    let Some(source_type) =
+                        Self::logical_output_type_opt(edge, &ports, &gather_types)
+                    else {
+                        if ports[edge.from.as_str()]
+                            .output_port(edge.from_port)
+                            .is_some()
+                            || gather_types.contains_key(edge.from.as_str())
+                        {
+                            return Err(Error::Custom(format!(
+                                "logical gather `{gather}` cannot resolve input `{}`",
+                                edge.from
+                            )));
+                        }
+                        waiting = true;
+                        break;
+                    };
+                    source_types.push(source_type);
+                }
+                if waiting {
+                    next.insert(*gather);
+                    continue;
+                }
+
+                let Some(source_type) = source_types.pop() else {
+                    return Err(Error::Custom(format!(
+                        "logical gather `{gather}` requires at least one input"
+                    )));
+                };
+                if !matches!(
+                    source_type,
+                    PortType::DataFrame | PortType::File | PortType::FileSet
+                ) || source_types.iter().any(|other| *other != source_type)
+                {
+                    let mut all_types = vec![source_type];
+                    all_types.extend(source_types);
+                    let rendered = all_types
+                        .iter()
+                        .map(|kind| kind.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    return Err(Error::Custom(format!(
+                        "logical gather `{gather}` requires homogeneous DataFrame, File, or FileSet inputs, got: {rendered}"
+                    )));
+                }
+                let output_type = if source_type == PortType::File {
+                    PortType::FileSet
+                } else {
+                    source_type
+                };
+                gather_types.insert(gather, output_type);
+                progressed = true;
+            }
+            deferred = next;
+            if !deferred.is_empty() && !progressed {
+                return Err(Error::Custom(format!(
+                    "cannot resolve logical gather input types for: {}",
+                    deferred.iter().copied().collect::<Vec<_>>().join(", ")
+                )));
+            }
+        }
+
+        for edge in graph.edges() {
+            let source_type = self.logical_output_type(edge, &ports, &gather_types)?;
+            let target = graph
+                .nodes()
+                .iter()
+                .find(|node| node.id == edge.to)
+                .expect("LogicalGraph::validate checked edge endpoints");
+
+            if matches!(
+                target.strategy,
+                LogicalExecutionStrategy::DynamicForEach { .. }
+            ) && source_type != PortType::Channel
+            {
+                return Err(Error::Custom(format!(
+                    "dynamic fanout `{}` requires a Channel input, got {source_type} on edge {} -> {}",
+                    edge.to, edge.from, edge.to
+                )));
+            }
+            if matches!(
+                target.strategy,
+                LogicalExecutionStrategy::DynamicForEach { .. }
+            ) {
+                continue;
+            }
+
+            if let LogicalNodeDefinition::Channel(operator) = &target.definition {
+                match operator {
+                    dag_core::dag::ChannelOperator::Collect => {
+                        if !matches!(
+                            source_type,
+                            PortType::Channel | PortType::File | PortType::FileSet
+                        ) {
+                            return Err(Error::Custom(format!(
+                                "channel.collect cannot serialize {} output from `{}`; use a File/FileSet producer or materialize the value before collecting",
+                                source_type, edge.from
+                            )));
+                        }
+                    }
+                    _ => {
+                        let target_port = ports[edge.to.as_str()]
+                            .input_port(edge.to_port)
+                            .ok_or_else(|| {
+                                Error::Custom(format!(
+                                    "edge {} -> {} uses undefined channel input port {}",
+                                    edge.from, edge.to, edge.to_port
+                                ))
+                            })?;
+                        if !PortType::Channel.accepts(source_type) {
+                            return Err(Error::Custom(format!(
+                                "channel operator on `{}` requires Channel input, got {source_type} on edge {} -> {}",
+                                edge.to, edge.from, edge.to
+                            )));
+                        }
+                        let source_port = ports[edge.from.as_str()]
+                            .output_port(edge.from_port)
+                            .expect("source type was resolved from this port");
+                        if !target_port.accepts_format(source_port.format.as_deref()) {
+                            return Err(Error::Custom(format!(
+                                "edge {} -> {} has incompatible channel formats: expected {}, got {}",
+                                edge.from,
+                                edge.to,
+                                target_port.format.as_deref().unwrap_or("unspecified"),
+                                source_port.format.as_deref().unwrap_or("unspecified")
+                            )));
+                        }
+                    }
+                }
+                continue;
+            }
+
+            if matches!(target.definition, LogicalNodeDefinition::Gather) {
+                continue;
+            }
+
+            let source_port = ports[edge.from.as_str()]
+                .output_port(edge.from_port)
+                .ok_or_else(|| {
+                    Error::Custom(format!(
+                        "edge {} -> {} uses undefined output port {}",
+                        edge.from, edge.to, edge.from_port
+                    ))
+                })?;
+            let target_ports = &ports[edge.to.as_str()];
+            // Variadic-input nodes (e.g. `sql`) accept any port index; the
+            // runtime scheduler skips declared-port checks when fixed_input
+            // is false (see `DAG::add_edge`). Mirror that here so logical
+            // graphs with variadic registry nodes preflight cleanly.
+            if target_ports.is_fixed_input() {
+                let target_port = target_ports.input_port(edge.to_port).ok_or_else(|| {
+                    Error::Custom(format!(
+                        "edge {} -> {} uses undefined input port {}",
+                        edge.from, edge.to, edge.to_port
+                    ))
+                })?;
+                if !target_port.data_type.accepts(source_type) {
+                    return Err(Error::Custom(format!(
+                        "edge {} -> {} carries {} but target port {} expects {}",
+                        edge.from, edge.to, source_type, edge.to_port, target_port.data_type
+                    )));
+                }
+                if !target_port.accepts_format(source_port.format.as_deref()) {
+                    return Err(Error::Custom(format!(
+                        "edge {} -> {} has incompatible formats: expected {}, got {}",
+                        edge.from,
+                        edge.to,
+                        target_port.format.as_deref().unwrap_or("unspecified"),
+                        source_port.format.as_deref().unwrap_or("unspecified")
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn logical_output_type(
+        &self,
+        edge: &LogicalEdge,
+        ports: &HashMap<&str, NodePorts>,
+        gather_types: &HashMap<&str, PortType>,
+    ) -> Result<PortType> {
+        Self::logical_output_type_opt(edge, ports, gather_types).ok_or_else(|| {
+            Error::Custom(format!(
+                "edge {} -> {} uses an unresolved output type",
+                edge.from, edge.to
+            ))
+        })
+    }
+
+    fn logical_output_type_opt(
+        edge: &LogicalEdge,
+        ports: &HashMap<&str, NodePorts>,
+        gather_types: &HashMap<&str, PortType>,
+    ) -> Option<PortType> {
+        if let Some(kind) = gather_types.get(edge.from.as_str()) {
+            return Some(*kind);
+        }
+        let port = ports[edge.from.as_str()].output_port(edge.from_port)?;
+        Some(port.data_type)
     }
 
     fn remove_node_cascade(dag: &mut DAG, id: &str) -> std::result::Result<(), DagError> {
@@ -947,7 +1202,56 @@ impl DataEngine {
             .manifest()
             .map_err(|e| Error::Custom(format!("manifest deserialization: {e}")))?;
         self.rebuild_dag_from_manifest(&manifest)?;
+        if let Some(report_json) = &head.run_report_json {
+            self.restore_checkpoint_from_report(report_json)?;
+        }
         Ok(true)
+    }
+
+    /// Rebuild reusable file outputs from the report embedded in the head
+    /// snapshot. Only successful nodes with both a fingerprint and port
+    /// assignments are restored; everything else stays dirty.
+    fn restore_checkpoint_from_report(&mut self, report_json: &str) -> Result<()> {
+        let report: serde_json::Value = serde_json::from_str(report_json).map_err(|error| {
+            Error::Custom(format!("checkpoint run report deserialization: {error}"))
+        })?;
+        let Some(nodes) = report.get("nodes").and_then(|nodes| nodes.as_array()) else {
+            return Ok(());
+        };
+
+        for node in nodes {
+            if node.get("status").and_then(|status| status.as_str()) != Some("success") {
+                continue;
+            }
+            let (Some(id), Some(fingerprint)) = (
+                node.get("id").and_then(|id| id.as_str()),
+                node.get("fingerprint").and_then(|fp| fp.as_str()),
+            ) else {
+                continue;
+            };
+            let Some(ports) = node
+                .get("port_assignments")
+                .and_then(|ports| ports.as_object())
+            else {
+                continue;
+            };
+
+            let mut outputs = Vec::new();
+            for (port, value) in ports {
+                let Ok(port) = port.parse::<u8>() else {
+                    continue;
+                };
+                let Ok(file) = serde_json::from_value::<FileRef>(value.clone()) else {
+                    continue;
+                };
+                outputs.push((port, file));
+            }
+            if !outputs.is_empty() {
+                self.dag
+                    .restore_cached_file_outputs(id, fingerprint, outputs)?;
+            }
+        }
+        Ok(())
     }
 
     /// Create a new ref diverging from an arbitrary snapshot, switch the
@@ -1106,10 +1410,12 @@ impl DataEngine {
     ///
     /// The new session starts with `history_ref = "main"`.
     pub fn new_session(&self) -> Self {
+        let mut dag = DAG::default();
+        dag.set_dynamic_node_builder(Self::dynamic_node_builder(Arc::clone(&self.node_registry)));
         Self {
             ctx: self.ctx.clone(),
             engine_ctx: self.engine_ctx.clone(),
-            dag: DAG::default(),
+            dag,
             node_registry: Arc::clone(&self.node_registry),
             container_execution: Arc::clone(&self.container_execution),
             config: self.config.clone(),
@@ -1246,13 +1552,39 @@ impl DataEngine {
                 return Err(error.into());
             }
         };
+        let mut recorded_manifest_hash = manifest_hash.clone();
         self.commit_history_snapshot(&manifest, manifest_hash.clone(), &mut report)
             .await;
+        let checkpoint_manifest = self.dag.to_manifest();
+        let checkpoint_hash = checkpoint_manifest.content_hash();
+        if checkpoint_hash != recorded_manifest_hash
+            && let Some(history) = self.history.clone()
+        {
+            match history
+                .commit(
+                    &self.history_ref,
+                    &checkpoint_manifest,
+                    Some(&report),
+                    "dynamic execution checkpoint",
+                )
+                .await
+            {
+                Ok(snapshot_id) => {
+                    report.snapshot_id = Some(snapshot_id);
+                    recorded_manifest_hash = checkpoint_hash;
+                }
+                Err(error) => {
+                    let warning = format!("DAG execution checkpoint was not persisted: {error}");
+                    tracing::warn!(ref = %self.history_ref, error = %error, "{warning}");
+                    report.warnings.push(warning);
+                }
+            }
+        }
         if let Some(warning) = self
             .persist_run_record(
                 run_id,
                 started_at,
-                manifest_hash,
+                recorded_manifest_hash,
                 message,
                 Some(&report),
                 None,
@@ -1459,6 +1791,16 @@ impl DataEngine {
     /// Nextflow-style semantics at the cost of reading those inputs.
     pub fn set_input_hashing(&mut self, hashing: crate::dag::InputHashing) {
         self.config.input_hashing = hashing;
+    }
+
+    /// Dispatch ready physical jobs in fixed-size barrier waves. For large
+    /// scans this bounds memory and gives reports stable assay-wave groups.
+    pub fn set_wave_size(&mut self, wave_size: usize) -> Result<()> {
+        if wave_size == 0 {
+            return Err(Error::Custom("wave_size must be at least 1".into()));
+        }
+        self.config.wave_size = Some(wave_size);
+        Ok(())
     }
 
     /// Query a node's runtime status. Returns `None` when the DAG has never
@@ -1762,7 +2104,10 @@ mod tests {
 
     use super::DataEngine;
     use crate::dag::graph::PortOutputs;
-    use crate::dag::{DagError, DagHistory, RuntimeStatus, SchedulerConfig};
+    use crate::dag::{
+        ChannelOperator, DagError, DagHistory, LogicalGraph, LogicalNode, RuntimeStatus,
+        SchedulerConfig,
+    };
     use crate::error::Error;
     use crate::nodes::{DagNode, NodeInput, NodePorts};
     use datafusion::execution::object_store::ObjectStoreUrl;
@@ -1849,6 +2194,106 @@ mod tests {
         // A ref with no snapshots restores nothing.
         let mut fresh = engine.new_session().with_history_ref("never-run");
         assert!(!fresh.restore_ref_head().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn dynamic_checkpoint_restores_file_jobs_for_resume() {
+        let history = DagHistory::open_in_memory().await.unwrap();
+        let input_dir = tempfile::tempdir().unwrap();
+        let first_path = input_dir.path().join("one.txt");
+        let second_path = input_dir.path().join("two.txt");
+        std::fs::write(&first_path, b"one").unwrap();
+
+        let graph = LogicalGraph::builder()
+            .add_node(LogicalNode::channel(
+                "source",
+                ChannelOperator::OfItems {
+                    items: vec![
+                        first_path.to_string_lossy().into(),
+                        second_path.to_string_lossy().into(),
+                    ],
+                },
+            ))
+            .add_node(LogicalNode::dynamic_for_each(
+                "process",
+                "file_reference",
+                serde_json::json!({"path": "{{item}}"}),
+                "item",
+            ))
+            .add_node(LogicalNode::channel("collect", ChannelOperator::Collect))
+            .add_edge("source", "process", 0, 0)
+            .add_edge("process", "collect", 0, 0)
+            .build();
+
+        let mut engine = DataEngine::builder().build().with_history(history.clone());
+        engine.add_logical_graph(graph).unwrap();
+        engine.set_incremental(true);
+        engine.set_wave_size(1).unwrap();
+        let first = engine.run().await.unwrap();
+        assert!(!first.ok, "{first:?}");
+
+        let mut actual_ids = first
+            .nodes
+            .iter()
+            .filter(|node| node.logical_node.as_deref() == Some("process"))
+            .filter(|node| node.item_key.is_some())
+            .map(|node| node.id.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(actual_ids.len(), 2, "{first:?}");
+        actual_ids.sort_unstable();
+        let successful_id = actual_ids[0].clone();
+        let failed_id = actual_ids[1].clone();
+        assert_eq!(
+            first
+                .nodes
+                .iter()
+                .find(|node| node.id == successful_id)
+                .unwrap()
+                .status,
+            RuntimeStatus::Success,
+            "{first:?}"
+        );
+        assert_eq!(
+            first
+                .nodes
+                .iter()
+                .find(|node| node.id == failed_id)
+                .unwrap()
+                .status,
+            RuntimeStatus::Failed,
+            "{first:?}"
+        );
+
+        std::fs::write(&second_path, b"two").unwrap();
+
+        let mut restored = DataEngine::builder().build().with_history(history);
+        assert!(restored.restore_ref_head().await.unwrap());
+        assert!(restored.node_exists(&successful_id));
+        assert_eq!(
+            restored.node_status(&successful_id),
+            Some(RuntimeStatus::Success)
+        );
+        assert!(!restored.is_node_dirty(&successful_id));
+        assert_eq!(restored.node_status(&failed_id), None);
+        assert!(restored.is_node_dirty(&failed_id));
+
+        restored.set_incremental(true);
+        restored.set_wave_size(1).unwrap();
+        let second = restored.run().await.unwrap();
+        assert!(second.ok, "{second:?}");
+        let successful = second
+            .nodes
+            .iter()
+            .find(|node| node.id == successful_id)
+            .unwrap_or_else(|| panic!("missing `{successful_id}` in {second:?}"));
+        assert!(successful.reused, "{second:?}");
+        let failed_then_retried = second
+            .nodes
+            .iter()
+            .find(|node| node.id == failed_id)
+            .unwrap_or_else(|| panic!("missing `{failed_id}` in {second:?}"));
+        assert_eq!(failed_then_retried.status, RuntimeStatus::Success);
+        assert!(!failed_then_retried.reused, "{second:?}");
     }
 
     #[tokio::test]
@@ -1952,8 +2397,9 @@ mod tests {
     async fn insurance_pipeline_runs() {
         let mut engine = DataEngine::builder().build();
         let csv_path = datasets_dir().join("insurance.csv");
-        let out_path = "/tmp/dag_insurance_out.csv";
-        let _ = std::fs::remove_file(out_path);
+        let out_path = std::env::temp_dir().join("dag_insurance_out.csv");
+        let out_path = out_path.to_string_lossy().into_owned();
+        let _ = std::fs::remove_file(&out_path);
 
         engine
             .add_node_from_registry(
@@ -1989,7 +2435,7 @@ mod tests {
         }
 
         // 4 regions in the insurance dataset → 4 data rows + 1 header.
-        let lines = std::fs::read_to_string(out_path).unwrap();
+        let lines = std::fs::read_to_string(&out_path).unwrap();
         assert_eq!(lines.lines().count(), 5, "expected 4 region rows + header");
     }
 
@@ -2282,6 +2728,8 @@ mod tests {
     async fn join_named_ports() {
         let mut engine = DataEngine::builder().build();
         let iris = datasets_dir().join("Iris.csv");
+        let out = std::env::temp_dir().join("dag_join_out.csv");
+        let out = out.to_string_lossy().into_owned();
 
         engine
             .add_node_from_registry(
@@ -2316,7 +2764,7 @@ mod tests {
             .add_node_from_registry(
                 "out",
                 "dataframe_to_file",
-                serde_json::json!({"path": "/tmp/dag_join_out.csv", "format": "csv"}),
+                serde_json::json!({"path": out, "format": "csv"}),
             )
             .unwrap();
         engine
@@ -2929,8 +3377,9 @@ mod tests {
     async fn registry_sink_node_file_runs() {
         let mut engine = DataEngine::builder().build();
         let csv = datasets_dir().join("insurance.csv");
-        let out = "/tmp/dag_registry_sink_test.csv";
-        let _ = std::fs::remove_file(out);
+        let out = std::env::temp_dir().join("dag_registry_sink_test.csv");
+        let out = out.to_string_lossy().into_owned();
+        let _ = std::fs::remove_file(&out);
 
         engine
             .add_node_from_registry(
@@ -2953,7 +3402,7 @@ mod tests {
         let report = engine.run().await.expect("run should succeed");
         assert!(report.ok);
         assert_eq!(report.status("out"), Some(RuntimeStatus::Success));
-        assert!(std::path::Path::new(out).exists());
+        assert!(std::path::Path::new(&out).exists());
     }
 
     /// linear_regression node: create via registry, succeeds execution.
@@ -3020,8 +3469,9 @@ mod tests {
     async fn registry_full_pipeline() {
         let mut engine = DataEngine::builder().build();
         let csv = datasets_dir().join("insurance.csv");
-        let out = "/tmp/dag_registry_full_pipeline.csv";
-        let _ = std::fs::remove_file(out);
+        let out = std::env::temp_dir().join("dag_registry_full_pipeline.csv");
+        let out = out.to_string_lossy().into_owned();
+        let _ = std::fs::remove_file(&out);
 
         engine
             .add_node_from_registry(
@@ -3069,7 +3519,7 @@ mod tests {
                 "node {n} should succeed"
             );
         }
-        assert!(std::path::Path::new(out).exists());
+        assert!(std::path::Path::new(&out).exists());
     }
 
     // ── update_node tests ────────────────────────────────────────────
@@ -3080,8 +3530,9 @@ mod tests {
     async fn update_node_changes_sql_and_runs() {
         let mut engine = DataEngine::builder().build();
         let csv = datasets_dir().join("insurance.csv");
-        let out = "/tmp/dag_update_sql_test.csv";
-        let _ = std::fs::remove_file(out);
+        let out = std::env::temp_dir().join("dag_update_sql_test.csv");
+        let out = out.to_string_lossy().into_owned();
+        let _ = std::fs::remove_file(&out);
 
         engine
             .add_node_from_registry(
@@ -3121,7 +3572,7 @@ mod tests {
 
         // Second run with updated SQL — edges preserved.
         let report2 = engine.run().await.expect("run after update should succeed");
-        assert!(report2.ok);
+        assert!(report2.ok, "{report2:?}");
         for n in ["src", "agg", "out"] {
             assert_eq!(report2.status(n), Some(RuntimeStatus::Success), "{n}");
         }

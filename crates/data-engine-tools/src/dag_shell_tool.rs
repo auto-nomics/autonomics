@@ -246,4 +246,82 @@ mod tests {
         assert_eq!(report["ok"], true, "{report}");
         assert_eq!(report["graph"]["logical_graph_count"], 1);
     }
+
+    #[tokio::test]
+    async fn logical_graph_preflight_rejects_unbuildable_dynamic_target() {
+        let engine = data_engine::data_engine::DataEngine::builder().build();
+        let (client, _handle) = data_engine::runtime::spawn_with_engine(engine);
+        let tool = DagShellTool::new(Arc::new(client));
+        let result = tool
+            .run(input(
+                r#"
+                add_logical_graph(#{
+                    nodes: [
+                        #{id: "items", definition: #{Channel: #{operator: "of_items", items: [#{id: "a"}]}}, strategy: "Once"},
+                        #{id: "jobs", definition: #{Registry: #{kind: "not_a_registered_kind", spec: #{}}}, strategy: #{DynamicForEach: #{axis: "item"}}},
+                        #{id: "collected", definition: #{Channel: #{operator: "collect"}}, strategy: "Once"}
+                    ],
+                    edges: [
+                        #{from: "items", from_port: 0, to: "jobs", to_port: 0},
+                        #{from: "jobs", from_port: 0, to: "collected", to_port: 0}
+                    ]
+                });
+                commit();
+                "#,
+                true,
+            ))
+            .await
+            .unwrap();
+        let ToolResultContent::Json(report) = result.content else {
+            panic!("dag_shell result should be JSON");
+        };
+
+        assert_eq!(report["ok"], false, "dry-run should reject: {report}");
+        assert_eq!(report["applied"], false);
+        assert_eq!(report["error"]["code"], "unknown_node_kind");
+        assert!(
+            report["error"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("not_a_registered_kind"),
+            "missing builder should name the target kind: {report}"
+        );
+    }
+
+    #[tokio::test]
+    async fn logical_graph_preflight_rejects_late_serialization_errors() {
+        let engine = data_engine::data_engine::DataEngine::builder().build();
+        let (client, _handle) = data_engine::runtime::spawn_with_engine(engine);
+        let tool = DagShellTool::new(Arc::new(client));
+        let result = tool
+            .run(input(
+                r#"
+                add_logical_graph(#{
+                    nodes: [
+                        #{id: "frame", definition: #{Registry: #{kind: "echo", spec: #{}}}, strategy: "Once"},
+                        #{id: "collected", definition: #{Channel: #{operator: "collect"}}, strategy: "Once"}
+                    ],
+                    edges: [
+                        #{from: "frame", from_port: 0, to: "collected", to_port: 0}
+                    ]
+                });
+                commit();
+                "#,
+                true,
+            ))
+            .await
+            .unwrap();
+        let ToolResultContent::Json(report) = result.content else {
+            panic!("dag_shell result should be JSON");
+        };
+
+        assert_eq!(report["ok"], false, "dry-run should reject: {report}");
+        assert!(
+            report["error"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("cannot serialize dataframe"),
+            "Collect should reject DataFrame values before execution: {report}"
+        );
+    }
 }

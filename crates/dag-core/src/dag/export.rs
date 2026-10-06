@@ -485,6 +485,11 @@ fn file_entity_attrs(entry: &FileEntry) -> Value {
     if let Some(hash) = &entry.content_hash {
         attrs["autonomics:sha256"] = json!(hash);
     }
+    attrs["autonomics:evidenceStatus"] = if entry.sha256_hex().is_some() {
+        json!("sha256_recorded")
+    } else {
+        json!("metadata_reference")
+    };
     attrs
 }
 
@@ -1102,6 +1107,11 @@ fn file_entity(entry: &FileEntry, crate_path: &str) -> Value {
     if let Some(size) = entry.size {
         entity["contentSize"] = json!(size);
     }
+    entity["autonomics:evidenceStatus"] = if entry.sha256_hex().is_some() {
+        json!("sha256_verified")
+    } else {
+        json!("packaged_without_verified_sha256")
+    };
     entity
 }
 
@@ -1114,6 +1124,11 @@ fn referenced_input_entity(entry: &FileEntry) -> Value {
     if let Some(hex) = entry.sha256_hex() {
         entity["sha256"] = json!(hex);
     }
+    entity["autonomics:evidenceStatus"] = if entry.sha256_hex().is_some() {
+        json!("sha256_reference")
+    } else {
+        json!("metadata_reference")
+    };
     entity
 }
 
