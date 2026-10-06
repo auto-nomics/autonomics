@@ -6,6 +6,7 @@ mod checkout_dag_tool;
 mod dag_export_run_tool;
 mod dag_history_log_tool;
 mod dag_runs_log_tool;
+mod dag_shell_tool;
 mod diff_snapshots_tool;
 mod get_node_doc_tool;
 mod get_node_ports_tool;
@@ -92,6 +93,7 @@ pub fn registrations(client: Arc<DataEngineClient>) -> Vec<ToolRegistration> {
         ToolRegistration::from(inspect_node_tool::InspectNodeTool::new(client.clone())),
         // ── DAG building ──────────────────────────────────────────────────
         ToolRegistration::from(add_node_tool::AddNodeTool::new(client.clone())),
+        ToolRegistration::from(dag_shell_tool::DagShellTool::new(client.clone())),
         ToolRegistration::from(update_node_tool::UpdateNodeTool::new(client.clone())),
         ToolRegistration::from(add_edge_tool::AddEdgeTool::new(client.clone())),
         ToolRegistration::from(add_logical_graph_tool::AddLogicalGraphTool::new(

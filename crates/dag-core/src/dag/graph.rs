@@ -461,6 +461,32 @@ pub struct DAG {
     pub(crate) default_task_resources: TaskResources,
 }
 
+impl Clone for DAG {
+    fn clone(&self) -> Self {
+        Self {
+            nodes: self.nodes.clone(),
+            graph: self.graph.clone(),
+            id_to_idx: self.id_to_idx.clone(),
+            statuses: self.statuses.clone(),
+            outputs: self.outputs.clone(),
+            // DataFusion errors are display-only and not cloneable. They are
+            // run-scoped, so a transaction candidate starts with no stale errors.
+            errors: HashMap::new(),
+            specs: self.specs.clone(),
+            fingerprints: self.fingerprints.clone(),
+            input_bindings: self.input_bindings.clone(),
+            node_run_details: self.node_run_details.clone(),
+            physical_jobs: self.physical_jobs.clone(),
+            logical_graphs: self.logical_graphs.clone(),
+            dynamic_node_builder: self.dynamic_node_builder.clone(),
+            task_executor: self.task_executor.clone(),
+            task_resources: self.task_resources.clone(),
+            logical_task_resources: self.logical_task_resources.clone(),
+            default_task_resources: self.default_task_resources.clone(),
+        }
+    }
+}
+
 impl DAG {
     /// Query the runtime status of a node. Returns `None` if the DAG has never
     /// been run.

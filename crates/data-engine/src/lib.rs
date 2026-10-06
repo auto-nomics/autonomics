@@ -17,6 +17,7 @@ pub use dag_core::sink;
 pub use dag_core::registry as node_registry;
 pub use dag_core::value;
 
+pub mod dag_shell;
 pub mod data_bundles;
 pub mod data_engine;
 pub mod default_registry;
