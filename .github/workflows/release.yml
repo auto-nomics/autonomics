@@ -43,6 +43,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.96
         with:
           target: ${{ matrix.target }}
+      - name: Install Rust target
+        run: rustup target add "$TARGET"
+        env:
+          TARGET: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
