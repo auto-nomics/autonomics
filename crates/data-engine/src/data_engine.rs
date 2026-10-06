@@ -12,8 +12,12 @@ use serde::Serialize;
 use vfs::{MountedObjectStore, OpendalFileStorage};
 
 use crate::dag::{
-    DAG, DagError, DagHistory, GatherNode, LogicalGraph, PhysicalJobRef, RunRecord, RunReport,
-    RuntimeStatus, SchedulerConfig,
+    DAG, DagError, DagHistory, GatherNode, LogicalGraph, PhysicalInstallReport, PhysicalJobRef,
+    RunRecord, RunReport, RuntimeStatus, SchedulerConfig,
+};
+use crate::dag_shell::{
+    DagShellError, DagShellOutcome, DagShellSnapshot, GraphEditOp, dynamic_to_json, execute_script,
+    graph_summary, normalize_timeout, operation_traces,
 };
 use crate::error::{Error, Result};
 use crate::node_registry::registry::NodeRegistry;
@@ -317,6 +321,168 @@ impl DataEngine {
             physical_edge_count: installed.edge_count,
             jobs: installed.jobs,
         })
+    }
+
+    fn install_logical_graph(
+        &self,
+        dag: &mut DAG,
+        graph: LogicalGraph,
+    ) -> Result<PhysicalInstallReport> {
+        let physical = graph.clone().compile(|kind, spec| {
+            Self::ensure_node_kind_allowed(kind).map_err(|error| {
+                DagError::Schedule(format!("cannot install logical node `{kind}`: {error}"))
+            })?;
+            self.node_registry
+                .build_node(kind, spec)
+                .map_err(|error| DagError::Schedule(error.to_string()))
+        })?;
+        Ok(dag.install_compiled_graph(graph, physical)?)
+    }
+
+    fn apply_graph_edit_ops_to_candidate(&self, operations: &[GraphEditOp]) -> Result<DAG> {
+        let mut candidate = self.dag.clone();
+        for (index, operation) in operations.iter().enumerate() {
+            let result = match operation {
+                GraphEditOp::AddNode { id, kind, spec } => Self::ensure_node_kind_allowed(kind)
+                    .and_then(|_| Ok(()))
+                    .and_then(|_| {
+                        let node = self.node_registry.build_node(kind, spec.clone())?;
+                        candidate.add_node_with_spec(
+                            id.clone(),
+                            node,
+                            kind.clone(),
+                            spec.clone(),
+                        )?;
+                        Ok(())
+                    }),
+                GraphEditOp::UpdateNode { id, spec } => {
+                    let kind = candidate
+                        .get_node(id)
+                        .map(|node| node.kind().to_string())
+                        .ok_or_else(|| Error::Dag(DagError::UnknownNode(id.clone())))?;
+                    Self::ensure_node_kind_allowed(&kind)?;
+                    let node = self.node_registry.build_node(&kind, spec.clone())?;
+                    candidate.replace_node_with_spec(id, node, kind, spec.clone())?;
+                    Ok(())
+                }
+                GraphEditOp::RemoveNode { id } => candidate.delete_node(id).map_err(Error::from),
+                GraphEditOp::AddEdge {
+                    from,
+                    from_port,
+                    to,
+                    to_port,
+                } => candidate
+                    .add_edge(from.clone(), to.clone(), *from_port, *to_port)
+                    .map(|_| ())
+                    .map_err(Error::from),
+                GraphEditOp::RemoveEdge {
+                    from,
+                    from_port,
+                    to,
+                    to_port,
+                } => candidate
+                    .delete_edge(from.clone(), to.clone(), *from_port, *to_port)
+                    .map_err(Error::from),
+                GraphEditOp::AddLogicalGraph { graph } => self
+                    .install_logical_graph(&mut candidate, graph.clone())
+                    .map(|_| ()),
+            };
+            if let Err(error) = result {
+                return Err(Error::Custom(format!(
+                    "operation {index} ({}) failed: {error}",
+                    operation.kind()
+                )));
+            }
+        }
+        candidate.validate()?;
+        Ok(candidate)
+    }
+
+    /// Validate a staged graph edit batch against a cloned candidate DAG.
+    pub fn dry_run_graph_edit_ops(
+        &self,
+        operations: Vec<GraphEditOp>,
+    ) -> Result<serde_json::Value> {
+        let candidate = self.apply_graph_edit_ops_to_candidate(&operations)?;
+        Ok(graph_summary(&candidate))
+    }
+
+    /// Atomically apply a staged graph edit batch. A failed operation or final
+    /// validation leaves the live DAG untouched.
+    pub fn apply_graph_edit_ops(
+        &mut self,
+        operations: Vec<GraphEditOp>,
+    ) -> Result<serde_json::Value> {
+        let candidate = self.apply_graph_edit_ops_to_candidate(&operations)?;
+        self.dag = candidate;
+        Ok(graph_summary(&self.dag))
+    }
+
+    pub fn dag(&self) -> &DAG {
+        &self.dag
+    }
+
+    pub fn run_dag_shell(
+        &mut self,
+        script: &str,
+        dry_run: bool,
+        timeout_ms: Option<u64>,
+    ) -> DagShellOutcome {
+        let timeout = match normalize_timeout(timeout_ms) {
+            Ok(timeout) => timeout,
+            Err(error) => return shell_failure(dry_run, error),
+        };
+        let snapshot = DagShellSnapshot::from_dag(&self.dag);
+        let execution = match execute_script(script, timeout, &snapshot, &self.node_registry) {
+            Ok(execution) => execution,
+            Err(error) => return shell_failure(dry_run, error),
+        };
+        let operations = execution.operations;
+        let traces = operation_traces(&operations);
+        let result = dynamic_to_json(&execution.result, 0)
+            .and_then(|value| serde_json::to_string(&value).ok())
+            .unwrap_or_else(|| execution.result.to_string());
+
+        if !execution.committed {
+            return DagShellOutcome {
+                ok: true,
+                applied: false,
+                dry_run,
+                committed: false,
+                result: Some(result),
+                operations: traces,
+                graph: graph_summary(&self.dag),
+                error: None,
+            };
+        }
+
+        let summary = if dry_run {
+            self.dry_run_graph_edit_ops(operations.clone())
+        } else {
+            self.apply_graph_edit_ops(operations.clone())
+        };
+        match summary {
+            Ok(graph) => DagShellOutcome {
+                ok: true,
+                applied: !dry_run,
+                dry_run,
+                committed: true,
+                result: Some(result),
+                operations: traces,
+                graph,
+                error: None,
+            },
+            Err(error) => DagShellOutcome {
+                ok: false,
+                applied: false,
+                dry_run,
+                committed: true,
+                result: None,
+                operations: traces,
+                graph: graph_summary(&self.dag),
+                error: Some(transaction_error(error)),
+            },
+        }
     }
 
     /// Query the JSON Schema of a registered node kind.
@@ -1506,6 +1672,54 @@ fn logical_manifest_entries(
             nodes.chain(edges)
         })
         .collect()
+}
+
+fn shell_failure(dry_run: bool, error: DagShellError) -> DagShellOutcome {
+    DagShellOutcome {
+        ok: false,
+        applied: false,
+        dry_run,
+        committed: false,
+        result: None,
+        operations: Vec::new(),
+        graph: serde_json::json!({}),
+        error: Some(error),
+    }
+}
+
+fn transaction_error(error: Error) -> DagShellError {
+    let message = error.to_string();
+    let operation_index = message
+        .strip_prefix("operation ")
+        .and_then(|rest| rest.split_once(' '))
+        .and_then(|(index, _)| index.parse::<usize>().ok());
+    let lower = message.to_ascii_lowercase();
+    let code = if lower.contains("duplicate node") {
+        "duplicate_node"
+    } else if lower.contains("node factory") || lower.contains("unknown node kind") {
+        "unknown_node_kind"
+    } else if lower.contains("unknown node") {
+        "unknown_node"
+    } else if lower.contains("spec") || lower.contains("deserialize") {
+        "invalid_spec"
+    } else if lower.contains("port not found") || lower.contains("overconnected") {
+        "port_not_found"
+    } else if lower.contains("input port") || lower.contains("not connected") {
+        "invalid_edge"
+    } else if lower.contains("edge") || lower.contains("cycle") {
+        "invalid_edge"
+    } else if lower.contains("disabled") {
+        "invalid_operation"
+    } else {
+        "transaction_failed"
+    };
+    DagShellError {
+        code: code.into(),
+        message,
+        operation_index,
+        line: None,
+        column: None,
+    }
 }
 
 #[cfg(test)]

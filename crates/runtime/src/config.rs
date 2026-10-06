@@ -548,6 +548,13 @@ const PROMPT_DAG_ENGINE: &str = "\n\
   returned physical job IDs to connect its compiled nodes to the rest of the DAG with `add_edge`. \
   Do not attempt to express these operators as SQL or an unregistered node kind.\n\
 \n\
+- **Transactional batch edits**: when adding or changing many nodes/edges, especially with loops, \
+  conditionals, reusable script functions, or mixed logical graphs, use `dag_shell`. Its Rhai \
+  sandbox only orchestrates registered graph operations and query metadata; it cannot read files, \
+  access the network/environment, inspect output data, or run arbitrary processes. Every mutation \
+  script must call `commit()`; failures leave the DAG unchanged. `dag_shell` does not execute the \
+  workflow — call `run_dag` after a committed graph is ready.\n\
+\n\
 - **Visualization**: the `visualization` manifest plugin is a terminal sink for \
   plot-ready data. Perform filtering, aggregation, normalization, modeling, and all \
   other computation in upstream dedicated or SQL nodes. The node rejects arbitrary \

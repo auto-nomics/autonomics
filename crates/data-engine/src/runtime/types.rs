@@ -5,6 +5,7 @@ use crate::dag::graph::PortOutputs;
 use crate::dag::node_event::NodeEvent;
 use crate::dag::runtime::RuntimeStatus;
 use crate::dag::{DagTuiSnapshot, LogicalGraph, RunReport};
+use crate::dag_shell::DagShellOutcome;
 use crate::data_engine::{ClearDagOutcome, LogicalInstallReport};
 use crate::error::Result as EngineResult;
 
@@ -20,6 +21,12 @@ pub struct EngineMsg {
 }
 
 pub enum DataEngineCmd {
+    RunDagShell {
+        script: String,
+        dry_run: bool,
+        timeout_ms: Option<u64>,
+        reply: oneshot::Sender<EngineResult<DagShellOutcome>>,
+    },
     AddNode {
         id: String,
         kind: String,
