@@ -257,8 +257,7 @@ pub fn svy_coxph(
             for pos in idx..group_end {
                 let i = order[pos];
                 for a_idx in 0..p {
-                    dbeta[i][a_idx] =
-                        exp_eta[i] * (x[a_idx][i] * cumhaz - xhaz[a_idx]);
+                    dbeta[i][a_idx] = exp_eta[i] * (x[a_idx][i] * cumhaz - xhaz[a_idx]);
                 }
             }
             // Grow the risk set with this time group.
@@ -294,8 +293,7 @@ pub fn svy_coxph(
         // End-of-stratum adjustment: everyone pays the full cumhaz / xhaz.
         for i in 0..n {
             for a_idx in 0..p {
-                dbeta[i][a_idx] +=
-                    exp_eta[i] * (xhaz[a_idx] - x[a_idx][i] * cumhaz);
+                dbeta[i][a_idx] += exp_eta[i] * (xhaz[a_idx] - x[a_idx][i] * cumhaz);
             }
         }
         // Case-weight scaling (`if (weighted) rr <- rr * weights` in

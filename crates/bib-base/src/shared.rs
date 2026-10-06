@@ -101,8 +101,8 @@ pub struct BibShared {
     /// Shared raw `reqwest::Client` used by `BiorxivSource` (and any
     /// future source that wants a bare HTTP client).
     pub http: Arc<reqwest::Client>,
-    /// Shared Europe PMC client used by the `bib_save` tool's
-    /// open-access full-text auto-fetch.
+    /// Shared Europe PMC client used by the `bib_save` DAG node's
+    /// open-access full-text auto-fetch (`fetch_fulltext: true`).
     pub europe_pmc: Arc<europepmc::EuropePmcClient>,
 
     /// Shared OpenAlex client. Loaded into the [`LiteratureGateway`] as

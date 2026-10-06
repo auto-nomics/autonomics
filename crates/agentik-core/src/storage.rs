@@ -528,14 +528,17 @@ impl AgentProfile {
                     in LaTeX document preparation, citation management, and compilation. \
                     Use the writing tools (doc_create, doc_insert_section, doc_insert_block, \
                     doc_add_citation, doc_compile) to draft, edit, and compile documents. \
-                    Use bibliography tools (lit_search, bib_save) to find and store references."
+                    For bibliography work, use the DAG evidence channel: a \
+                    `source_literature` (or `source_literature_fetch`) node followed \
+                    by a `bib_save` node imports citations into the bibliography."
                     .into(),
                 system_prompt: Some(
                     "When writing a manuscript:\n\
                     1. Use doc_create to start a new document\n\
                     2. Use doc_insert_section to build the outline (Introduction, Methods, Results, Discussion)\n\
                     3. Use doc_insert_block to add paragraphs, equations, and tables\n\
-                    4. Use lit_search + bib_save to find and store references\n\
+                    4. Use source_literature (or source_literature_fetch) DAG nodes to find references, \
+                    followed by a bib_save node to store them in the library\n\
                     5. Use doc_add_citation to insert citations\n\
                     6. Use doc_check_citations to verify all citations resolve\n\
                     7. Use doc_compile to produce the final PDF\n\

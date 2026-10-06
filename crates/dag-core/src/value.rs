@@ -11,6 +11,7 @@ pub enum NodeValue {
     DataFrame(DataFrame),
     File(FileRef),
     FileSet(Vec<FileRef>),
+    Channel(ChannelValue),
 }
 
 impl NodeValue {
@@ -19,6 +20,7 @@ impl NodeValue {
             Self::DataFrame(_) => PortType::DataFrame,
             Self::File(_) => PortType::File,
             Self::FileSet(_) => PortType::FileSet,
+            Self::Channel(_) => PortType::Channel,
         }
     }
 
@@ -51,6 +53,16 @@ impl NodeValue {
             ))),
         }
     }
+
+    pub fn as_channel(&self) -> Result<&ChannelValue, DagError> {
+        match self {
+            Self::Channel(channel) => Ok(channel),
+            other => Err(DagError::Schedule(format!(
+                "expected a Channel value, got {}",
+                other.data_type()
+            ))),
+        }
+    }
 }
 
 impl From<DataFrame> for NodeValue {
@@ -68,6 +80,51 @@ impl From<FileRef> for NodeValue {
 impl From<Vec<FileRef>> for NodeValue {
     fn from(files: Vec<FileRef>) -> Self {
         Self::FileSet(files)
+    }
+}
+
+/// A deterministic, JSON-native dataflow channel.
+///
+/// Channels are streams of serializable items. They are distinct from graph
+/// edges: an edge routes one runtime value, while a channel value carries the
+/// items used to instantiate downstream jobs or compose new channels.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ChannelValue {
+    pub items: Vec<serde_json::Value>,
+}
+
+impl ChannelValue {
+    /// Move items through a bounded asynchronous queue.
+    ///
+    /// The current scheduler still waits for a node to finish before its
+    /// downstream graph node starts; this method gives every channel operator
+    /// the bounded asynchronous transfer discipline that incremental edge
+    /// readiness will use once scheduler streaming is enabled.
+    pub async fn via_bounded_stream(self, capacity: usize) -> std::result::Result<Self, DagError> {
+        let capacity = capacity.max(1);
+        let (sender, mut receiver) = tokio::sync::mpsc::channel::<serde_json::Value>(capacity);
+        let producer = tokio::spawn(async move {
+            for item in self.items {
+                if sender.send(item).await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        let mut items = Vec::new();
+        while let Some(item) = receiver.recv().await {
+            items.push(item);
+        }
+        producer
+            .await
+            .map_err(|error| DagError::Schedule(format!("channel producer failed: {error}")))?;
+        Ok(Self { items })
+    }
+}
+
+impl From<ChannelValue> for NodeValue {
+    fn from(channel: ChannelValue) -> Self {
+        Self::Channel(channel)
     }
 }
 
@@ -205,6 +262,7 @@ pub enum PortType {
     DataFrame,
     File,
     FileSet,
+    Channel,
     Any,
 }
 
@@ -214,6 +272,7 @@ impl std::fmt::Display for PortType {
             Self::DataFrame => "dataframe",
             Self::File => "file",
             Self::FileSet => "file_set",
+            Self::Channel => "channel",
             Self::Any => "any",
         })
     }

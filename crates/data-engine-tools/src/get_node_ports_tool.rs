@@ -11,8 +11,8 @@ use crate::ExecError;
 #[tool(
     name = "get_node_ports",
     description = "Get the input/output port layout of a specific node kind. \
-                  Returns declared ports needed to wire edges via add_edge. \
-                  Call this before add_edge to know which ports are available. \
+                  Returns declared ports needed to wire edges through dag_shell. \
+                  Call it before writing edge operations to know which ports are available. \
                   For dynamic-port kinds, pass the exact \
                   `spec` you plan to add so the returned output ports match the \
                   spec's declared outputs."

@@ -12,7 +12,7 @@ use turso::{
 use crate::bib_base::BibBase;
 use crate::error::{Error, Result};
 use bib_types::{
-    AddedBy, ArticleRole, Collection, CollectionArticle, CollectionStatus, FetchStatus,
+    AddedBy, Article, ArticleRole, Collection, CollectionArticle, CollectionStatus, FetchStatus,
 };
 
 // ---------------------------------------------------------------------------
@@ -55,6 +55,22 @@ impl CollectionAddOutcome {
             } => !role_changed && !note_changed,
         }
     }
+}
+
+/// One requested collection association for atomic library ingest.
+#[derive(Debug, Clone)]
+pub struct CollectionAssignment {
+    pub article_id: String,
+    pub role: ArticleRole,
+    pub added_by: AddedBy,
+    pub note: Option<String>,
+}
+
+/// The association result for one article after an atomic ingest.
+#[derive(Debug, Clone)]
+pub struct CollectionAssignmentOutcome {
+    pub article_id: String,
+    pub outcome: CollectionAddOutcome,
 }
 
 // ---------------------------------------------------------------------------
@@ -257,6 +273,62 @@ impl BibBase {
         Ok(outcome.unwrap())
     }
 
+    /// Upsert articles and associate them with one collection atomically.
+    ///
+    /// This is the DAG `bib_save` ingest primitive: metadata writes and
+    /// collection membership changes commit together or not at all.
+    pub async fn upsert_articles_with_collection(
+        &self,
+        articles: &[Article],
+        collection_id: &str,
+        assignments: &[CollectionAssignment],
+    ) -> Result<Vec<CollectionAssignmentOutcome>> {
+        let _write = self.write_gate.lock().await;
+        let conn = self.write_conn();
+        let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
+
+        async fn run(
+            tx: &Transaction<'_>,
+            articles: &[Article],
+            collection_id: &str,
+            assignments: &[CollectionAssignment],
+        ) -> Result<Vec<CollectionAssignmentOutcome>> {
+            for article in articles {
+                BibBase::upsert_article_in_tx(tx, article).await?;
+                crate::bib_base::sync_search_index(tx, &article.id).await?;
+            }
+
+            let mut outcomes = Vec::with_capacity(assignments.len());
+            for assignment in assignments {
+                let outcome = BibBase::add_to_collection_in_tx(
+                    tx,
+                    collection_id,
+                    assignment.article_id.as_str(),
+                    assignment.role,
+                    assignment.added_by,
+                    assignment.note.as_deref(),
+                )
+                .await?;
+                outcomes.push(CollectionAssignmentOutcome {
+                    article_id: assignment.article_id.to_owned(),
+                    outcome,
+                });
+            }
+            Ok(outcomes)
+        }
+
+        match run(&tx, articles, collection_id, assignments).await {
+            Ok(outcomes) => {
+                tx.commit().await?;
+                Ok(outcomes)
+            }
+            Err(error) => {
+                let _ = tx.rollback().await;
+                Err(error)
+            }
+        }
+    }
+
     /// Remove an article from a collection.
     pub async fn remove_from_collection(
         &self,
@@ -309,7 +381,7 @@ impl BibBase {
             .await?;
         Ok(())
     }
-    async fn add_to_collection_in_tx(
+    pub(crate) async fn add_to_collection_in_tx(
         conn: &turso::Connection,
         collection_id: &str,
         article_id: &str,

@@ -185,34 +185,6 @@ impl ToolFunction for KeggConvertTool {
     }
 }
 
-#[tool(
-    name = "kegg_ddi",
-    description = "Preview KEGG drug-drug interactions for one or more drug, compound, or drug-product identifiers."
-)]
-pub struct KeggDdiInput {
-    #[desc = "One or more KEGG entries joined by '+', e.g. 'D00564' or 'D00564+D00100'."]
-    pub entries: String,
-    #[desc = "Maximum interaction rows shown (1-200, default 20)."]
-    pub limit: Option<usize>,
-}
-
-pub struct KeggDdiTool {
-    pub(crate) client: Arc<KeggClient>,
-}
-
-#[async_trait]
-impl ToolFunction for KeggDdiTool {
-    type Input = KeggDdiInput;
-
-    async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
-        let interactions = self.client.ddi(&input.entries).await.map_err(tool_error)?;
-        Ok(AgentToolResult::success(format::format_drug_interactions(
-            &interactions,
-            normalize_limit(input.limit),
-        )))
-    }
-}
-
 /// Build registrations for all KEGG agent tools.
 pub fn kegg_registrations(client: Arc<KeggClient>) -> Vec<ToolRegistration> {
     use ToolRegistration as Registration;
@@ -232,6 +204,5 @@ pub fn kegg_registrations(client: Arc<KeggClient>) -> Vec<ToolRegistration> {
         Registration::from(KeggConvertTool {
             client: client.clone(),
         }),
-        Registration::from(KeggDdiTool { client }),
     ]
 }

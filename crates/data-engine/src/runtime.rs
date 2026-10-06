@@ -171,6 +171,37 @@ impl SessionServer {
             // When a DAG is running, the mutex is held by the run task.
             // Instead of blocking, these commands fast-fail so the actor
             // loop stays responsive for other messages (and other sessions).
+            DataEngineCmd::RunDagShell {
+                script,
+                dry_run,
+                timeout_ms,
+                reply,
+            } => {
+                if self.running.load(Ordering::SeqCst) {
+                    let _ = reply.send(Ok(crate::dag_shell::DagShellOutcome {
+                        ok: false,
+                        applied: false,
+                        dry_run,
+                        committed: false,
+                        result: None,
+                        operations: Vec::new(),
+                        graph: serde_json::json!({}),
+                        error: Some(crate::dag_shell::DagShellError {
+                            code: "dag_running".into(),
+                            message: "DAG is currently running; wait for it to complete before running dag_shell".into(),
+                            operation_index: None,
+                            line: None,
+                            column: None,
+                        }),
+                    }));
+                    return;
+                }
+                let mut engine = self
+                    .engine
+                    .try_lock()
+                    .expect("uncontended: running flag is false");
+                let _ = reply.send(Ok(engine.run_dag_shell(&script, dry_run, timeout_ms)));
+            }
             DataEngineCmd::AddEdge {
                 from,
                 from_port,
@@ -237,6 +268,20 @@ impl SessionServer {
                     .try_lock()
                     .expect("uncontended: running flag is false");
                 let _ = reply.send(engine.add_node_from_registry(id, &kind, spec));
+            }
+            DataEngineCmd::AddLogicalGraph { graph, reply } => {
+                if self.running.load(Ordering::SeqCst) {
+                    let _ = reply.send(Err(crate::error::Error::Custom(
+                        "DAG is currently running; wait for it to complete before installing a logical graph"
+                            .to_string(),
+                    )));
+                    return;
+                }
+                let mut engine = self
+                    .engine
+                    .try_lock()
+                    .expect("uncontended: running flag is false");
+                let _ = reply.send(engine.add_logical_graph(graph));
             }
             DataEngineCmd::UpdateNode { id, spec, reply } => {
                 if self.running.load(Ordering::SeqCst) {
@@ -1108,6 +1153,40 @@ impl DataEngineClient {
         .await
     }
 
+    pub async fn run_dag_shell(
+        &self,
+        script: String,
+        dry_run: bool,
+        timeout_ms: Option<u64>,
+    ) -> Result<crate::dag_shell::DagShellOutcome> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.request(
+            DataEngineCmd::RunDagShell {
+                script,
+                dry_run,
+                timeout_ms,
+                reply: reply_tx,
+            },
+            reply_rx,
+        )
+        .await
+    }
+
+    pub async fn add_logical_graph(
+        &self,
+        graph: crate::dag::LogicalGraph,
+    ) -> Result<crate::data_engine::LogicalInstallReport> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.request(
+            DataEngineCmd::AddLogicalGraph {
+                graph,
+                reply: reply_tx,
+            },
+            reply_rx,
+        )
+        .await
+    }
+
     pub async fn update_node(&self, id: String, spec: serde_json::Value) -> Result<()> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         self.request(
@@ -1358,6 +1437,39 @@ mod tests {
             ),
             "unexpected error: {error}"
         );
+    }
+
+    #[tokio::test]
+    async fn dag_shell_reports_structured_running_error() {
+        let mut engine = DataEngine::builder().build();
+        let meta = NodePorts::new().add_output_port(None);
+        engine
+            .add_node("slow".to_string(), LongSleepNode(meta))
+            .unwrap();
+        let (client, _handle) = spawn_with_engine(engine);
+
+        let (_event_rx, reply_rx) = client.run_dag_stream(None, None);
+        let mut outcome = None;
+        for _ in 0..20 {
+            outcome = Some(
+                client
+                    .run_dag_shell("let observed = graph_summary();".into(), false, Some(100))
+                    .await
+                    .unwrap(),
+            );
+            if !outcome.as_ref().unwrap().ok {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+        let outcome = outcome.unwrap();
+        println!("dag_shell outcome: {outcome:?}");
+        assert_eq!(outcome.ok, false);
+        assert_eq!(outcome.applied, false);
+        assert_eq!(outcome.error.as_ref().unwrap().code, "dag_running");
+
+        drop(_event_rx);
+        drop(reply_rx);
     }
 
     /// Dropping the `CancelOnDropReceiver` must:

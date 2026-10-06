@@ -1097,7 +1097,7 @@ impl ToolFunction for DocInsertBlockTool {
     description = "Add a citation to a paragraph in the document. \
                   Automatically resolves cite keys against the local bibliography \
                   library. If the article is not yet in the library, the tool \
-                  returns a suggestion to bib_save it first. \
+                  returns a suggestion to import it via a `bib_save` DAG node first. \
                   \
                   Examples: \
                   • block_id='blk_abc', keys=['smith2024'], style='parenthetical' \
@@ -1155,7 +1155,7 @@ impl ToolFunction for DocAddCitationTool {
             return Ok(ToolResult::warning(
                 "unresolved_citations",
                 format!("Cannot find these cite keys in the library: {unresolved:?}. \
-                        Use bib_save to add them first."),
+                        Import them via a `bib_save` DAG node first."),
             ));
         }
 

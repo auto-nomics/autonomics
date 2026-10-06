@@ -13,8 +13,8 @@ use crate::format::format_drug;
     name = "opentargets_drug",
     description = "Get the annotation card for a drug / compound by ChEMBL ID. Returns \
                   name, drug type, maximum clinical stage, and description. Use \
-                  opentargets_search first to resolve a drug name into its ChEMBL ID \
-                  (CHEMBL...)."
+                  source_opentargets_search first to resolve a drug name into its \
+                  ChEMBL ID (CHEMBL...)."
 )]
 pub struct DrugInput {
     #[desc = "ChEMBL ID, e.g. 'CHEMBL25' (aspirin)."]

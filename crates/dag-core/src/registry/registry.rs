@@ -365,11 +365,7 @@ mod tests {
         fn ports(&self) -> NodePorts {
             NodePorts::new()
         }
-        fn build(
-            &self,
-            _spec: serde_json::Value,
-            _node_ctx: NodeCtx,
-        ) -> Result<Box<dyn DagNode>> {
+        fn build(&self, _spec: serde_json::Value, _node_ctx: NodeCtx) -> Result<Box<dyn DagNode>> {
             Err(Error::Unknown("fake factory cannot build".into()))
         }
     }
@@ -395,9 +391,7 @@ mod tests {
         reg.register(Box::new(FakeFactory { kind: "dup_kind" }));
         reg.register(Box::new(FakeFactory { kind: "dup_kind" }));
         assert_eq!(reg.conflicts(), ["dup_kind"]);
-        let err = reg
-            .assert_no_conflicts()
-            .expect_err("duplicate must error");
+        let err = reg.assert_no_conflicts().expect_err("duplicate must error");
         assert!(
             err.to_string().contains("dup_kind"),
             "error names the kind: {err}"

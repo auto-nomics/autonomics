@@ -1,6 +1,6 @@
 //! The DAG data structure: a payload store + a structural index.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::time::Duration;
@@ -21,10 +21,20 @@ use tracing::{debug, info_span, warn};
 
 use super::utils::{build_input_bindings, build_inputs, cascade_skip};
 
+use super::channel::{ChannelOperator, ChannelStreamState};
 use super::error::DagError;
+use super::execution::{
+    TaskExecution, TaskExecutor, TaskInputBinding, TaskInputSource, TaskOutputBinding,
+    TaskResources, TaskSpec, TaskSubmission,
+};
+use super::logical::{
+    DynamicFanoutSpec, LogicalExecutionStrategy, LogicalGraph, LogicalNode, LogicalNodeDefinition,
+    item_key, physical_id, render_spec,
+};
+use super::physical::PhysicalJobRef;
 use super::runtime::{
-    InputBinding, InputHashing, NodeReport, NodeRunDetails, RunReport, RuntimeStatus,
-    SchedulerConfig, SchemaReport,
+    InputBinding, InputHashing, LogicalJobError, LogicalRunSummary, NodeReport, NodeRunDetails,
+    RunReport, RuntimeStatus, SchedulerConfig, SchemaReport,
 };
 use super::{DagNode, NodeId};
 use crate::dag::node_event::{JobResult, NodeEvent, NodeEventKind, NodeReporter};
@@ -120,6 +130,168 @@ struct MemoryGuardState {
     error: Option<String>,
 }
 
+#[derive(Default)]
+struct StreamRuntimeState {
+    node_items: HashMap<NodeId, Vec<serde_json::Value>>,
+    node_counts: HashMap<NodeId, usize>,
+    node_outputs: HashMap<NodeId, HashMap<u8, Vec<serde_json::Value>>>,
+    node_states: HashMap<NodeId, ChannelStreamState>,
+    expected_inputs: HashMap<NodeId, BTreeSet<(NodeId, u8)>>,
+    closed_inputs: HashMap<NodeId, BTreeSet<(NodeId, u8)>>,
+    pending_closes: BTreeSet<NodeId>,
+}
+
+#[derive(Default)]
+struct LogicalSummaryBuilder {
+    execution_strategy: Option<&'static str>,
+    logical_node_type: Option<String>,
+    scatter_axis: Option<String>,
+    status_counts: BTreeMap<String, usize>,
+    item_keys: Vec<String>,
+    failed_item_keys: Vec<String>,
+    skipped_item_keys: Vec<String>,
+    physical_job_ids: Vec<String>,
+    summed_elapsed_ms: u64,
+    max_elapsed_ms: Option<u64>,
+    errors: Vec<LogicalJobError>,
+}
+
+impl LogicalSummaryBuilder {
+    fn record(&mut self, report: &NodeReport) {
+        *self
+            .status_counts
+            .entry(runtime_status_name(report.status).to_string())
+            .or_insert(0) += 1;
+        self.scatter_axis
+            .get_or_insert_with(|| report.scatter_axis.clone().unwrap_or_default());
+        if self.scatter_axis.as_deref() == Some("") {
+            self.scatter_axis = None;
+        }
+        if let Some(item_key) = &report.item_key {
+            self.item_keys.push(item_key.clone());
+        }
+        self.physical_job_ids.push(
+            report
+                .physical_job_id
+                .clone()
+                .unwrap_or_else(|| report.id.clone()),
+        );
+        if let Some(elapsed_ms) = report.elapsed_ms {
+            self.summed_elapsed_ms += elapsed_ms;
+            self.max_elapsed_ms = Some(
+                self.max_elapsed_ms
+                    .map_or(elapsed_ms, |current| current.max(elapsed_ms)),
+            );
+        }
+        if report.status == RuntimeStatus::Failed {
+            if let Some(item_key) = &report.item_key {
+                self.failed_item_keys.push(item_key.clone());
+            }
+            if let Some(error) = &report.error {
+                self.errors.push(LogicalJobError {
+                    physical_job_id: report
+                        .physical_job_id
+                        .clone()
+                        .unwrap_or_else(|| report.id.clone()),
+                    item_key: report.item_key.clone(),
+                    error: error.clone(),
+                });
+            }
+        }
+        if report.status == RuntimeStatus::Skipped {
+            if let Some(item_key) = &report.item_key {
+                self.skipped_item_keys.push(item_key.clone());
+            }
+        }
+    }
+
+    fn finish(mut self, logical_node: String) -> LogicalRunSummary {
+        self.item_keys.sort();
+        self.failed_item_keys.sort();
+        self.skipped_item_keys.sort();
+        self.physical_job_ids.sort();
+        let status = aggregate_logical_status(&self.status_counts, self.physical_job_ids.len());
+        LogicalRunSummary {
+            logical_node,
+            execution_strategy: self.execution_strategy,
+            logical_node_type: self.logical_node_type,
+            status,
+            physical_job_count: self.physical_job_ids.len(),
+            status_counts: self.status_counts,
+            scatter_axis: self.scatter_axis,
+            item_keys: self.item_keys,
+            failed_item_keys: self.failed_item_keys,
+            skipped_item_keys: self.skipped_item_keys,
+            physical_job_ids: self.physical_job_ids,
+            summed_elapsed_ms: self.summed_elapsed_ms,
+            max_elapsed_ms: self.max_elapsed_ms,
+            errors: self.errors,
+        }
+    }
+}
+
+fn logical_execution_strategy_name(strategy: &LogicalExecutionStrategy) -> &'static str {
+    match strategy {
+        LogicalExecutionStrategy::Once => "once",
+        LogicalExecutionStrategy::ForEach { .. } => "for_each",
+        LogicalExecutionStrategy::DynamicForEach { .. } => "dynamic_for_each",
+        LogicalExecutionStrategy::Gather => "gather",
+    }
+}
+
+fn logical_node_type(definition: &LogicalNodeDefinition) -> String {
+    match definition {
+        LogicalNodeDefinition::Registry { kind, .. } => kind.clone(),
+        LogicalNodeDefinition::Gather => "logical_gather".to_string(),
+        LogicalNodeDefinition::Channel(_) => "channel".to_string(),
+    }
+}
+
+fn logical_scatter_axis(strategy: &LogicalExecutionStrategy) -> Option<String> {
+    match strategy {
+        LogicalExecutionStrategy::ForEach { axis, .. } => Some(axis.clone()),
+        LogicalExecutionStrategy::DynamicForEach { axis, .. } => Some(axis.clone()),
+        LogicalExecutionStrategy::Once | LogicalExecutionStrategy::Gather => None,
+    }
+}
+
+fn runtime_status_name(status: RuntimeStatus) -> &'static str {
+    match status {
+        RuntimeStatus::Pending => "pending",
+        RuntimeStatus::Ready => "ready",
+        RuntimeStatus::Running => "running",
+        RuntimeStatus::Success => "success",
+        RuntimeStatus::Failed => "failed",
+        RuntimeStatus::Skipped => "skipped",
+        RuntimeStatus::Cancelled => "cancelled",
+    }
+}
+
+fn aggregate_logical_status(
+    status_counts: &BTreeMap<String, usize>,
+    physical_job_count: usize,
+) -> RuntimeStatus {
+    let count = |name: &str| status_counts.get(name).copied().unwrap_or(0);
+    if physical_job_count == 0 {
+        return RuntimeStatus::Pending;
+    }
+    if count("failed") > 0 {
+        RuntimeStatus::Failed
+    } else if count("cancelled") > 0 {
+        RuntimeStatus::Cancelled
+    } else if count("running") > 0 {
+        RuntimeStatus::Running
+    } else if count("ready") > 0 {
+        RuntimeStatus::Ready
+    } else if count("pending") > 0 {
+        RuntimeStatus::Pending
+    } else if count("success") > 0 {
+        RuntimeStatus::Success
+    } else {
+        RuntimeStatus::Skipped
+    }
+}
+
 impl MemoryGuardState {
     fn new(config: MemoryGuardConfig) -> Self {
         Self {
@@ -212,6 +384,23 @@ pub struct EdgeLabel {
     pub to_port: u8,
 }
 
+/// Builds a registry node after dynamic fanout discovers an item.
+pub type DynamicNodeBuilder =
+    Arc<dyn Fn(&str, serde_json::Value) -> Result<Box<dyn DagNode>> + Send + Sync>;
+
+#[derive(Clone)]
+struct TaskExecutorHandle {
+    executor: Arc<dyn TaskExecutor>,
+}
+
+impl Default for TaskExecutorHandle {
+    fn default() -> Self {
+        Self {
+            executor: super::execution::local_task_executor(),
+        }
+    }
+}
+
 /// Module-local Result alias — every fallible operation in this module fails
 /// with [`DagError`].
 pub type Result<T> = std::result::Result<T, DagError>;
@@ -257,6 +446,45 @@ pub struct DAG {
     /// (see [`NodeReporter::set_run_details`]). Same per-run lifetime as
     /// `input_bindings`.
     node_run_details: HashMap<NodeId, NodeRunDetails>,
+    /// Logical provenance for jobs installed from an expanded logical graph.
+    pub(crate) physical_jobs: HashMap<NodeId, PhysicalJobRef>,
+    /// Logical source graphs whose compiled jobs are installed in this DAG.
+    pub(crate) logical_graphs: Vec<LogicalGraph>,
+    /// Node factory used to materialize jobs discovered by dynamic fanout.
+    dynamic_node_builder: Option<DynamicNodeBuilder>,
+    /// Execution backend used for ordinary physical tasks.
+    task_executor: TaskExecutorHandle,
+    /// Physical-node resource override.
+    pub(crate) task_resources: HashMap<NodeId, TaskResources>,
+    /// Logical-process resource request inherited by every physical job.
+    pub(crate) logical_task_resources: HashMap<String, TaskResources>,
+    pub(crate) default_task_resources: TaskResources,
+}
+
+impl Clone for DAG {
+    fn clone(&self) -> Self {
+        Self {
+            nodes: self.nodes.clone(),
+            graph: self.graph.clone(),
+            id_to_idx: self.id_to_idx.clone(),
+            statuses: self.statuses.clone(),
+            outputs: self.outputs.clone(),
+            // DataFusion errors are display-only and not cloneable. They are
+            // run-scoped, so a transaction candidate starts with no stale errors.
+            errors: HashMap::new(),
+            specs: self.specs.clone(),
+            fingerprints: self.fingerprints.clone(),
+            input_bindings: self.input_bindings.clone(),
+            node_run_details: self.node_run_details.clone(),
+            physical_jobs: self.physical_jobs.clone(),
+            logical_graphs: self.logical_graphs.clone(),
+            dynamic_node_builder: self.dynamic_node_builder.clone(),
+            task_executor: self.task_executor.clone(),
+            task_resources: self.task_resources.clone(),
+            logical_task_resources: self.logical_task_resources.clone(),
+            default_task_resources: self.default_task_resources.clone(),
+        }
+    }
 }
 
 impl DAG {
@@ -275,6 +503,167 @@ impl DAG {
     /// Read-only introspection for tests, audits, and tooling.
     pub fn recorded_fingerprint(&self, id: &str) -> Option<&str> {
         self.fingerprints.get(id).map(String::as_str)
+    }
+
+    /// Install the factory used to materialize runtime-discovered jobs.
+    pub fn set_dynamic_node_builder(&mut self, builder: DynamicNodeBuilder) {
+        self.dynamic_node_builder = Some(builder);
+    }
+
+    /// Replace the backend used to execute dispatched physical tasks.
+    pub fn set_task_executor(&mut self, executor: std::sync::Arc<dyn TaskExecutor>) {
+        self.task_executor = TaskExecutorHandle { executor };
+    }
+
+    /// Set resources for one concrete physical node.
+    pub fn set_task_resources(
+        &mut self,
+        id: impl Into<NodeId>,
+        resources: TaskResources,
+    ) -> Result<()> {
+        let id = id.into();
+        if !self.nodes.contains_key(&id) {
+            return Err(DagError::UnknownNode(id));
+        }
+        resources.validate()?;
+        self.task_resources.insert(id, resources);
+        Ok(())
+    }
+
+    /// Set resources for every physical job generated by a logical process.
+    pub fn set_logical_task_resources(
+        &mut self,
+        logical_node: impl Into<String>,
+        resources: TaskResources,
+    ) -> Result<()> {
+        let logical_node = logical_node.into();
+        if logical_node.trim().is_empty() {
+            return Err(DagError::Schedule(
+                "logical task resource id cannot be empty".into(),
+            ));
+        }
+        resources.validate()?;
+        self.logical_task_resources.insert(logical_node, resources);
+        Ok(())
+    }
+
+    /// Set resources inherited by tasks without a physical or logical override.
+    pub fn set_default_task_resources(&mut self, resources: TaskResources) -> Result<()> {
+        resources.validate()?;
+        self.default_task_resources = resources;
+        Ok(())
+    }
+
+    fn input_name(&self, id: &str, port: u8) -> String {
+        self.nodes
+            .get(id)
+            .and_then(|node| node.ports().input_port(port))
+            .and_then(|port| port.label.clone())
+            .unwrap_or_else(|| format!("port_{port}"))
+    }
+
+    fn output_name(&self, id: &str, port: u8) -> String {
+        self.nodes
+            .get(id)
+            .and_then(|node| node.ports().output_port(port))
+            .and_then(|port| port.label.clone())
+            .unwrap_or_else(|| format!("port_{port}"))
+    }
+
+    fn build_task_submission(
+        &self,
+        id: &str,
+        kind: &str,
+        spec: serde_json::Value,
+        inputs: &[super::NodeInput],
+        incoming: &HashMap<NodeId, Vec<(NodeId, EdgeLabel)>>,
+    ) -> TaskSubmission {
+        let mut task_inputs = build_input_bindings(id, incoming, &self.outputs)
+            .into_iter()
+            .map(|binding| TaskInputBinding {
+                name: self.input_name(id, binding.to_port),
+                port: binding.to_port,
+                source: TaskInputSource::UpstreamPort {
+                    from: binding.from,
+                    from_port: binding.from_port,
+                },
+                payload: binding.kind,
+                path: binding.path,
+                fingerprint: binding.fingerprint,
+                staged_paths: Vec::new(),
+            })
+            .collect::<Vec<_>>();
+
+        let physical_job = self.physical_jobs.get(id);
+        if task_inputs.is_empty()
+            && let Some(job) = physical_job
+            && job.item.is_some()
+        {
+            let axis = job.axis.clone().unwrap_or_default();
+            let dynamic = self.logical_graphs.iter().any(|graph| {
+                graph.nodes().iter().any(|node| {
+                    node.id == job.logical_node
+                        && matches!(
+                            node.strategy,
+                            LogicalExecutionStrategy::DynamicForEach { .. }
+                        )
+                })
+            });
+            let source = if dynamic {
+                TaskInputSource::DynamicFanoutItem { axis }
+            } else {
+                TaskInputSource::ScatterItem { axis }
+            };
+            task_inputs.push(TaskInputBinding {
+                name: "item".into(),
+                port: 0,
+                source,
+                payload: "json".into(),
+                path: None,
+                fingerprint: None,
+                staged_paths: Vec::new(),
+            });
+        }
+
+        let physical_job = physical_job.cloned();
+        let logical_node = physical_job.as_ref().map(|job| job.logical_node.as_str());
+        let resources = self
+            .task_resources
+            .get(id)
+            .or_else(|| logical_node.and_then(|node| self.logical_task_resources.get(node)))
+            .cloned()
+            .unwrap_or_else(|| self.default_task_resources.clone());
+        let task_outputs = self
+            .nodes
+            .get(id)
+            .map(|node| {
+                node.ports()
+                    .output_ports()
+                    .iter()
+                    .map(|port| TaskOutputBinding {
+                        name: self.output_name(id, port.index),
+                        port: port.index,
+                        payload: port.data_type.to_string(),
+                        artifact_paths: Vec::new(),
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        TaskSubmission {
+            spec: TaskSpec {
+                id: id.to_string(),
+                logical_node: physical_job.as_ref().map(|job| job.logical_node.clone()),
+                kind: kind.to_string(),
+                spec,
+                axis: physical_job.as_ref().and_then(|job| job.axis.clone()),
+                item_key: physical_job.as_ref().and_then(|job| job.item_key.clone()),
+                item: physical_job.and_then(|job| job.item),
+                inputs: task_inputs,
+                outputs: task_outputs,
+            },
+            inputs: inputs.to_vec(),
+            resources,
+        }
     }
 
     // ── incremental-execution API (fingerprint reuse) ───────────────────
@@ -334,6 +723,7 @@ impl DAG {
                         }
                     }
                     NodeValue::DataFrame(_) => {}
+                    NodeValue::Channel(_) => {}
                 }
                 if changed {
                     break;
@@ -365,6 +755,8 @@ impl DAG {
         self.fingerprints.clear();
         self.input_bindings.clear();
         self.node_run_details.clear();
+        self.physical_jobs.clear();
+        self.logical_graphs.clear();
     }
 
     /// Reset all node statuses to [`RuntimeStatus::Pending`] and drop every
@@ -405,6 +797,705 @@ impl DAG {
     ) -> Result<RunReport> {
         self.run_internal(cfg, engine_ctx, event_sink, Some(external_cancel))
             .await
+    }
+
+    fn streaming_operator(&self, node_id: &str) -> Result<Option<ChannelOperator>> {
+        let Some((kind, spec)) = self.specs.get(node_id) else {
+            return Ok(None);
+        };
+        if kind != "channel" {
+            return Ok(None);
+        }
+        let operator =
+            serde_json::from_value::<ChannelOperator>(spec.clone()).map_err(|error| {
+                DagError::Schedule(format!("invalid channel operator for `{node_id}`: {error}"))
+            })?;
+        let supports_stream = self
+            .nodes
+            .get(node_id)
+            .and_then(|node| node.as_any().downcast_ref::<super::channel::ChannelNode>())
+            .is_some_and(|node| node.supports_stream_item());
+        Ok(supports_stream.then_some(operator))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn propagate_stream_item(
+        &mut self,
+        from: &str,
+        from_port: u8,
+        item: serde_json::Value,
+        incoming: &mut HashMap<NodeId, Vec<(NodeId, EdgeLabel)>>,
+        successors: &mut HashMap<NodeId, Vec<NodeId>>,
+        pending: &mut HashMap<NodeId, usize>,
+        ready: &mut VecDeque<NodeId>,
+        all_ids: &mut Vec<NodeId>,
+        streaming_expanded: &mut BTreeSet<NodeId>,
+        stream: &mut StreamRuntimeState,
+        tx: mpsc::Sender<NodeEvent>,
+    ) -> Result<()> {
+        let targets = successors.get(from).cloned().unwrap_or_default();
+        for target in targets {
+            let labels = incoming
+                .get(&target)
+                .into_iter()
+                .flatten()
+                .filter(|(producer, label)| {
+                    producer.as_str() == from && label.from_port == from_port
+                })
+                .map(|(_, label)| label.clone())
+                .collect::<Vec<_>>();
+            if labels.is_empty() {
+                continue;
+            }
+
+            if self
+                .specs
+                .get(target.as_str())
+                .is_some_and(|(kind, _)| kind == "dynamic_fanout")
+            {
+                for _label in labels {
+                    let sequence = *stream.node_counts.entry(target.clone()).or_insert(0);
+                    self.expand_dynamic_fanout_item(
+                        target.as_str(),
+                        item.clone(),
+                        sequence as usize,
+                        incoming,
+                        successors,
+                        pending,
+                        ready,
+                        all_ids,
+                        streaming_expanded,
+                    )?;
+                    *stream.node_counts.entry(target.clone()).or_insert(0) += 1;
+                }
+                continue;
+            }
+
+            let Some(operator) = self.streaming_operator(target.as_str())? else {
+                continue;
+            };
+            let _ = operator;
+            if !stream.expected_inputs.contains_key(&target) {
+                continue;
+            }
+            let input_port = labels
+                .first()
+                .map(|label| label.to_port)
+                .unwrap_or_default();
+
+            for label in labels {
+                let Some(from_idx) = self.id_to_idx.get(from) else {
+                    continue;
+                };
+                let Some(to_idx) = self.id_to_idx.get(&target) else {
+                    continue;
+                };
+                let exists = self.graph.edges_connecting(*from_idx, *to_idx).any(|edge| {
+                    edge.weight().from_port == label.from_port
+                        && edge.weight().to_port == label.to_port
+                });
+                if !exists {
+                    continue;
+                }
+                self.delete_edge(from, &target, label.from_port, label.to_port)?;
+                if let Some(count) = pending.get_mut(&target) {
+                    *count = count.saturating_sub(1);
+                }
+            }
+            self.statuses.insert(target.clone(), RuntimeStatus::Running);
+            stream
+                .node_items
+                .entry(target.clone())
+                .or_default()
+                .push(item.clone());
+            let input_count = stream
+                .node_items
+                .get(&target)
+                .map(Vec::len)
+                .unwrap_or_default();
+            stream.node_counts.insert(target.clone(), input_count);
+
+            let outputs = {
+                let Some(node) = self.nodes.get(&target) else {
+                    continue;
+                };
+                let mut node = node
+                    .clone_box()
+                    .as_any()
+                    .downcast_ref::<super::channel::ChannelNode>()
+                    .unwrap()
+                    .clone();
+                let state = stream.node_states.entry(target.clone()).or_default();
+                node.process_stream_item(state, input_port, item.clone())
+                    .await?
+            };
+            for (output_port, output_item) in outputs {
+                let sequence = stream
+                    .node_outputs
+                    .entry(target.clone())
+                    .or_default()
+                    .entry(output_port)
+                    .or_default()
+                    .len() as u64;
+                stream
+                    .node_outputs
+                    .entry(target.clone())
+                    .or_default()
+                    .entry(output_port)
+                    .or_default()
+                    .push(output_item.clone());
+                let reporter = NodeReporter::new(target.clone(), tx.clone());
+                reporter
+                    .emit_channel_item(output_port, sequence, output_item)
+                    .await;
+            }
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn close_stream_successors(
+        &mut self,
+        from: &str,
+        from_port: u8,
+        successors: &mut HashMap<NodeId, Vec<NodeId>>,
+        pending: &mut HashMap<NodeId, usize>,
+        ready: &mut VecDeque<NodeId>,
+        stream: &mut StreamRuntimeState,
+        tx: mpsc::Sender<NodeEvent>,
+    ) -> Result<()> {
+        let targets = successors.get(from).cloned().unwrap_or_default();
+        for target in targets {
+            let Some(_operator) = self.streaming_operator(target.as_str())? else {
+                continue;
+            };
+            let Some(expected) = stream.expected_inputs.get(&target).cloned() else {
+                continue;
+            };
+            if !expected.contains(&(from.to_string(), from_port)) {
+                continue;
+            }
+            stream
+                .closed_inputs
+                .entry(target.clone())
+                .or_default()
+                .insert((from.to_string(), from_port));
+            if stream.closed_inputs.get(&target) != Some(&expected) {
+                continue;
+            }
+
+            let _items = stream.node_items.remove(&target);
+            let _input_count = stream.node_counts.remove(&target).unwrap_or_default();
+            let state = stream.node_states.remove(&target).unwrap_or_default();
+            let existing_output_items = stream.node_outputs.remove(&target).unwrap_or_default();
+            let finalized = {
+                let Some(node) = self.nodes.get(&target) else {
+                    continue;
+                };
+                let node_box = node.clone_box();
+                let node = node_box
+                    .as_any()
+                    .downcast_ref::<super::channel::ChannelNode>()
+                    .unwrap();
+                let mut state = state;
+                node.finish_stream(&mut state).await?
+            };
+            let finalized_count = finalized.len();
+            stream
+                .node_outputs
+                .insert(target.clone(), existing_output_items);
+            for (output_port, output_item) in finalized {
+                let sequence = stream
+                    .node_outputs
+                    .get_mut(&target)
+                    .unwrap()
+                    .entry(output_port)
+                    .or_default()
+                    .len() as u64;
+                stream
+                    .node_outputs
+                    .get_mut(&target)
+                    .unwrap()
+                    .get_mut(&output_port)
+                    .unwrap()
+                    .push(output_item.clone());
+                let reporter = NodeReporter::new(target.clone(), tx.clone());
+                reporter
+                    .emit_channel_item(output_port, sequence, output_item)
+                    .await;
+            }
+
+            let declared_ports = self
+                .nodes
+                .get(&target)
+                .map(|node| {
+                    node.ports()
+                        .output_ports()
+                        .iter()
+                        .map(|port| port.index)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let mut outputs = PortOutputs::new();
+            for port in declared_ports {
+                let items = stream
+                    .node_outputs
+                    .get(&target)
+                    .and_then(|items| items.get(&port))
+                    .cloned()
+                    .unwrap_or_default();
+                outputs.insert(port, crate::ChannelValue { items });
+            }
+            self.outputs.insert(target.clone(), outputs);
+            self.statuses.insert(target.clone(), RuntimeStatus::Success);
+            self.fingerprints.remove(&target);
+
+            let ports = self
+                .outputs
+                .get(&target)
+                .map(|outputs| outputs.iter().map(|(port, _)| *port).collect::<Vec<_>>())
+                .unwrap_or_default();
+            for port in ports {
+                let item_count = stream
+                    .node_outputs
+                    .get(&target)
+                    .and_then(|items| items.get(&port))
+                    .map(Vec::len)
+                    .unwrap_or_default();
+                let reporter = NodeReporter::new(target.clone(), tx.clone());
+                stream.pending_closes.insert(target.clone());
+                reporter.close_channel(port, item_count as u64).await;
+            }
+
+            for successor in successors.get(&target).cloned().unwrap_or_default() {
+                let streaming_successor = stream.expected_inputs.contains_key(&successor)
+                    || self
+                        .specs
+                        .get(successor.as_str())
+                        .is_some_and(|(kind, _)| kind == "dynamic_fanout");
+                if streaming_successor && finalized_count > 0 {
+                    continue;
+                }
+                let left = {
+                    let count = pending.entry(successor.clone()).or_insert(0);
+                    count.saturating_sub(1)
+                };
+                if left == 0 && self.statuses.get(&successor) == Some(&RuntimeStatus::Pending) {
+                    ready.push_back(successor);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn expand_dynamic_fanout_item(
+        &mut self,
+        coordinator_id: &str,
+        item: serde_json::Value,
+        sequence: usize,
+        incoming: &mut HashMap<NodeId, Vec<(NodeId, EdgeLabel)>>,
+        successors: &mut HashMap<NodeId, Vec<NodeId>>,
+        pending: &mut HashMap<NodeId, usize>,
+        ready: &mut VecDeque<NodeId>,
+        all_ids: &mut Vec<NodeId>,
+        streaming_expanded: &mut BTreeSet<NodeId>,
+    ) -> Result<NodeId> {
+        let Some((coordinator_kind, coordinator_spec)) = self.specs.get(coordinator_id).cloned()
+        else {
+            return Err(DagError::Schedule(format!(
+                "dynamic fanout `{coordinator_id}` has no retained specification"
+            )));
+        };
+        if coordinator_kind != "dynamic_fanout" {
+            return Err(DagError::Schedule(format!(
+                "node `{coordinator_id}` is not a dynamic fanout coordinator"
+            )));
+        }
+        let definition = serde_json::from_value::<DynamicFanoutSpec>(coordinator_spec.clone())
+            .map_err(|error| {
+                DagError::Schedule(format!(
+                    "invalid dynamic fanout specification for `{coordinator_id}`: {error}"
+                ))
+            })?;
+        let logical_id = self
+            .physical_jobs
+            .get(coordinator_id)
+            .map(|job| job.logical_node.clone())
+            .unwrap_or_else(|| definition.axis.clone());
+        let item_key = item_key(&item, sequence)?;
+        let actual_id = physical_id(
+            &logical_id,
+            &Some(definition.axis.clone()),
+            &Some(item_key.clone()),
+        );
+
+        let builder = self.dynamic_node_builder.clone().ok_or_else(|| {
+            DagError::Schedule(format!(
+                "dynamic fanout `{coordinator_id}` has no registered node builder"
+            ))
+        })?;
+        let rendered = render_spec(&definition.spec, &item)?;
+        let existing_definition = self.specs.get(actual_id.as_str()).cloned();
+        if existing_definition != Some((definition.kind.clone(), rendered.clone())) {
+            let node = builder(&definition.kind, rendered.clone()).map_err(|error| {
+                DagError::Schedule(format!(
+                    "cannot build dynamic fanout job `{actual_id}`: {error}"
+                ))
+            })?;
+            if self.nodes.contains_key(&actual_id) {
+                self.replace_node_with_spec(
+                    actual_id.as_str(),
+                    node,
+                    definition.kind.clone(),
+                    rendered,
+                )?;
+            } else {
+                self.add_node_with_spec(
+                    actual_id.clone(),
+                    node,
+                    definition.kind.clone(),
+                    rendered,
+                )?;
+            }
+        }
+        self.physical_jobs.insert(
+            actual_id.clone(),
+            PhysicalJobRef {
+                logical_node: logical_id.clone(),
+                axis: Some(definition.axis.clone()),
+                item_key: Some(item_key),
+                item: Some(item),
+            },
+        );
+
+        let logical_edges = self
+            .logical_graphs
+            .iter()
+            .flat_map(|graph| graph.edges().iter().cloned())
+            .filter(|edge| edge.from == logical_id)
+            .map(|edge| (edge.to.clone(), edge.from_port))
+            .collect::<Vec<_>>();
+
+        // The coordinator's placeholder edge is replaced by actual-job edges
+        // once. On subsequent items only the new actual edge is appended.
+        if !self.successors(coordinator_id).is_empty() {
+            for successor in self.successors(coordinator_id) {
+                if let Some(labels) = incoming.get_mut(&successor) {
+                    labels.retain(|(from, _)| from != coordinator_id);
+                }
+                if let Some(count) = pending.get_mut(&successor) {
+                    *count = count.saturating_sub(1);
+                }
+                while let Some((_, label)) = self
+                    .incoming_edges_with_ports(&successor)
+                    .into_iter()
+                    .find(|(from, _)| from == coordinator_id)
+                {
+                    self.delete_edge(coordinator_id, &successor, label.from_port, label.to_port)?;
+                }
+            }
+        }
+
+        for (logical_target, from_port) in logical_edges {
+            let target = physical_id(&logical_target, &None, &None);
+            let mut used_ports = self
+                .incoming_edges_with_ports(&target)
+                .into_iter()
+                .map(|(_, label)| label.to_port)
+                .collect::<std::collections::BTreeSet<_>>();
+            let mut to_port = 0u8;
+            while used_ports.contains(&to_port) {
+                to_port = to_port.checked_add(1).ok_or_else(|| {
+                    DagError::Schedule(format!(
+                        "dynamic fanout target `{target}` exceeds the port range"
+                    ))
+                })?;
+            }
+            used_ports.insert(to_port);
+            self.add_edge(actual_id.clone(), target.clone(), from_port, to_port)?;
+            successors
+                .entry(actual_id.clone())
+                .or_default()
+                .push(target.clone());
+            incoming
+                .entry(target.clone())
+                .or_default()
+                .push((actual_id.clone(), EdgeLabel { from_port, to_port }));
+            let count = pending.entry(target.clone()).or_insert(0);
+            *count += 1;
+        }
+
+        if !all_ids.contains(&actual_id) {
+            all_ids.push(actual_id.clone());
+        }
+        self.statuses
+            .insert(actual_id.clone(), RuntimeStatus::Pending);
+        pending.insert(actual_id.clone(), 0);
+        ready.push_back(actual_id.clone());
+        streaming_expanded.insert(coordinator_id.to_string());
+
+        let actual_jobs = self
+            .physical_jobs
+            .iter()
+            .filter(|(id, job)| id.as_str() != coordinator_id && job.logical_node == logical_id)
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        successors.insert(coordinator_id.to_string(), actual_jobs);
+        Ok(actual_id)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn expand_dynamic_fanout(
+        &mut self,
+        coordinator_id: &str,
+        incoming: &mut HashMap<NodeId, Vec<(NodeId, EdgeLabel)>>,
+        successors: &mut HashMap<NodeId, Vec<NodeId>>,
+        pending: &mut HashMap<NodeId, usize>,
+        ready: &mut VecDeque<NodeId>,
+        streaming_expanded: &mut BTreeSet<NodeId>,
+    ) -> Result<Vec<NodeId>> {
+        let Some((coordinator_kind, coordinator_spec)) = self.specs.get(coordinator_id).cloned()
+        else {
+            return Err(DagError::Schedule(format!(
+                "dynamic fanout `{coordinator_id}` has no retained specification"
+            )));
+        };
+        if coordinator_kind != "dynamic_fanout" {
+            return Err(DagError::Schedule(format!(
+                "node `{coordinator_id}` is not a dynamic fanout coordinator"
+            )));
+        }
+        let definition = serde_json::from_value::<DynamicFanoutSpec>(coordinator_spec.clone())
+            .map_err(|error| {
+                DagError::Schedule(format!(
+                    "invalid dynamic fanout specification for `{coordinator_id}`: {error}"
+                ))
+            })?;
+        let fallback_axis = definition.axis.clone();
+        let logical_id = self
+            .physical_jobs
+            .get(coordinator_id)
+            .map(|job| job.logical_node.clone())
+            .unwrap_or_else(|| fallback_axis.clone());
+
+        let inputs = build_inputs(coordinator_id, incoming, &self.outputs);
+        let mut items = Vec::new();
+        for input in &inputs {
+            if let Ok(channel) = input.data.as_channel() {
+                items.extend(channel.items.iter().cloned());
+            }
+        }
+        if items.is_empty() {
+            for (predecessor, _) in incoming.get(coordinator_id).into_iter().flatten() {
+                if let Some(job) = self.physical_jobs.get(predecessor) {
+                    if let Some(item) = &job.item {
+                        items.push(item.clone());
+                    }
+                }
+            }
+        }
+
+        let identities = crate::fingerprint::collect_input_identities(
+            coordinator_id,
+            incoming,
+            &self.outputs,
+            &self.fingerprints,
+        );
+        let channel_fingerprint = crate::fingerprint::compute_node_fingerprint(
+            &coordinator_kind,
+            Some(&coordinator_spec),
+            crate::engine_version(),
+            &identities,
+        );
+        let channel_unchanged = self.fingerprints.get(coordinator_id) == Some(&channel_fingerprint);
+
+        let logical_edges = self
+            .logical_graphs
+            .iter()
+            .flat_map(|graph| graph.edges().iter().cloned())
+            .filter(|edge| edge.from == logical_id)
+            .map(|edge| (edge.to.clone(), edge.from_port))
+            .collect::<Vec<_>>();
+        let mut keyed_items = BTreeMap::<String, (serde_json::Value, NodeId)>::new();
+        for (index, item) in items.into_iter().enumerate() {
+            let key = item_key(&item, index)?;
+            let id = physical_id(
+                &logical_id,
+                &Some(definition.axis.clone()),
+                &Some(key.clone()),
+            );
+            keyed_items.insert(key, (item, id));
+        }
+
+        let existing_actuals = self
+            .physical_jobs
+            .iter()
+            .filter(|(id, job)| {
+                id.as_str() != coordinator_id
+                    && job.logical_node == logical_id
+                    && self
+                        .specs
+                        .get(id.as_str())
+                        .is_some_and(|(kind, _)| kind != "dynamic_fanout")
+            })
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+
+        if streaming_expanded.contains(coordinator_id) {
+            for successor in self.successors(coordinator_id) {
+                if let Some(labels) = incoming.get_mut(&successor) {
+                    labels.retain(|(from, _)| from != coordinator_id);
+                }
+                if let Some(count) = pending.get_mut(&successor) {
+                    *count = count.saturating_sub(1);
+                }
+                while let Some((_, label)) = self
+                    .incoming_edges_with_ports(&successor)
+                    .into_iter()
+                    .find(|(from, _)| from == coordinator_id)
+                {
+                    self.delete_edge(coordinator_id, &successor, label.from_port, label.to_port)?;
+                }
+            }
+            self.fingerprints
+                .insert(coordinator_id.to_string(), channel_fingerprint);
+            self.statuses
+                .insert(coordinator_id.to_string(), RuntimeStatus::Success);
+            successors.insert(coordinator_id.to_string(), existing_actuals.clone());
+            return Ok(existing_actuals);
+        }
+
+        for actual in &existing_actuals {
+            for successor in successors.get(actual).cloned().unwrap_or_default() {
+                if let Some(labels) = incoming.get_mut(&successor) {
+                    labels.retain(|(from, _)| from != actual);
+                }
+                if let Some(count) = pending.get_mut(&successor) {
+                    *count = count.saturating_sub(1);
+                }
+            }
+            successors.remove(actual);
+            if !keyed_items.values().any(|(_, id)| id == actual) {
+                self.delete_node(actual)?;
+            }
+        }
+
+        for successor in self.successors(coordinator_id) {
+            if let Some(labels) = incoming.get_mut(&successor) {
+                labels.retain(|(from, _)| from != coordinator_id);
+            }
+            if let Some(count) = pending.get_mut(&successor) {
+                *count = count.saturating_sub(1);
+            }
+            while let Some((_, label)) = self
+                .incoming_edges_with_ports(&successor)
+                .into_iter()
+                .find(|(from, _)| from == coordinator_id)
+            {
+                self.delete_edge(coordinator_id, &successor, label.from_port, label.to_port)?;
+            }
+        }
+
+        let builder = self.dynamic_node_builder.clone().ok_or_else(|| {
+            DagError::Schedule(format!(
+                "dynamic fanout `{coordinator_id}` has no registered node builder"
+            ))
+        })?;
+        let mut actual_ids = Vec::new();
+        for (key, (item, actual_id)) in keyed_items {
+            let rendered = render_spec(&definition.spec, &item)?;
+            let existing_definition = self.specs.get(actual_id.as_str()).cloned();
+            if existing_definition != Some((definition.kind.clone(), rendered.clone())) {
+                let node = builder(&definition.kind, rendered.clone()).map_err(|error| {
+                    DagError::Schedule(format!(
+                        "cannot build dynamic fanout job `{actual_id}`: {error}"
+                    ))
+                })?;
+                if self.nodes.contains_key(&actual_id) {
+                    self.replace_node_with_spec(
+                        actual_id.as_str(),
+                        node,
+                        definition.kind.clone(),
+                        rendered,
+                    )?;
+                } else {
+                    self.add_node_with_spec(
+                        actual_id.clone(),
+                        node,
+                        definition.kind.clone(),
+                        rendered,
+                    )?;
+                }
+            }
+            self.physical_jobs.insert(
+                actual_id.clone(),
+                PhysicalJobRef {
+                    logical_node: logical_id.clone(),
+                    axis: Some(definition.axis.clone()),
+                    item_key: Some(key),
+                    item: Some(item),
+                },
+            );
+            self.statuses
+                .insert(actual_id.clone(), RuntimeStatus::Pending);
+            actual_ids.push(actual_id);
+        }
+
+        for (logical_target, from_port) in logical_edges {
+            let target = physical_id(&logical_target, &None, &None);
+            let mut used_ports = incoming
+                .get(&target)
+                .into_iter()
+                .flatten()
+                .map(|(_, label)| label.to_port)
+                .collect::<std::collections::BTreeSet<_>>();
+            for actual in &actual_ids {
+                let mut to_port = 0u8;
+                while used_ports.contains(&to_port) {
+                    to_port = to_port.checked_add(1).ok_or_else(|| {
+                        DagError::Schedule(format!(
+                            "dynamic fanout target `{target}` exceeds the port range"
+                        ))
+                    })?;
+                }
+                used_ports.insert(to_port);
+                self.add_edge(actual.clone(), target.clone(), from_port, to_port)?;
+                successors
+                    .entry(actual.clone())
+                    .or_default()
+                    .push(target.clone());
+                incoming
+                    .entry(target.clone())
+                    .or_default()
+                    .push((actual.clone(), EdgeLabel { from_port, to_port }));
+                let count = pending.entry(target.clone()).or_insert(0);
+                *count += 1;
+            }
+        }
+
+        if !channel_unchanged {
+            for actual in &actual_ids {
+                self.fingerprints.remove(actual);
+            }
+        }
+        self.fingerprints
+            .insert(coordinator_id.to_string(), channel_fingerprint);
+        self.statuses
+            .insert(coordinator_id.to_string(), RuntimeStatus::Success);
+        successors.insert(coordinator_id.to_string(), actual_ids.clone());
+        for actual in &actual_ids {
+            pending.insert(actual.clone(), 1);
+            ready.push_back(actual.clone());
+        }
+        for (target, count) in pending.iter() {
+            if *count == 0
+                && self.statuses.get(target) == Some(&RuntimeStatus::Pending)
+                && !actual_ids.contains(target)
+            {
+                ready.push_back(target.clone());
+            }
+        }
+        Ok(actual_ids)
     }
 
     async fn run_internal(
@@ -454,7 +1545,31 @@ impl DAG {
         // deterministic processing order for the ready queue.
         let _topo = self.topo_order()?;
 
-        let all_ids = self.node_ids();
+        let mut dynamic_controls: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
+        for (coordinator, (coordinator_kind, _)) in &self.specs {
+            if coordinator_kind != "dynamic_fanout" {
+                continue;
+            }
+            let Some(coordinator_job) = self.physical_jobs.get(coordinator) else {
+                continue;
+            };
+            let actual_jobs = self
+                .physical_jobs
+                .iter()
+                .filter(|(actual, job)| {
+                    actual.as_str() != coordinator.as_str()
+                        && job.logical_node == coordinator_job.logical_node
+                })
+                .map(|(actual, _)| actual.clone())
+                .collect::<Vec<_>>();
+            if !actual_jobs.is_empty() {
+                dynamic_controls.insert(coordinator.clone(), actual_jobs);
+            }
+        }
+
+        let mut all_ids = self.node_ids();
+        let mut streaming_expanded = BTreeSet::<NodeId>::new();
+        let mut stream = StreamRuntimeState::default();
 
         // Precompute adjacency + per-node port assignment so the dispatch loop only
         // needs a single mutable borrow of `self`.
@@ -466,11 +1581,48 @@ impl DAG {
         // unblocks its successors.
         let mut pending: HashMap<NodeId, usize> = HashMap::new();
         for id in &all_ids {
-            successors.insert(id.clone(), self.successors(id));
+            let mut node_successors = self.successors(id);
+            let extra_pending = dynamic_controls
+                .get(id.as_str())
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            for actual in extra_pending {
+                if !node_successors.contains(actual) {
+                    node_successors.push(actual.clone());
+                }
+            }
+            successors.insert(id.clone(), node_successors);
             let preds = self.predecessors(id);
-            pending.insert(id.clone(), preds.len());
+            pending.insert(id.clone(), preds.len() + extra_pending.len());
             let inc = self.incoming_edges_with_ports(id);
             incoming.insert(id.clone(), inc);
+        }
+
+        if !incremental {
+            for id in &all_ids {
+                if self.streaming_operator(id)?.is_none() {
+                    continue;
+                }
+                let Some(inputs) = incoming.get(id) else {
+                    continue;
+                };
+                if inputs.is_empty()
+                    || !inputs.iter().all(|(from, _)| {
+                        self.specs
+                            .get(from.as_str())
+                            .is_some_and(|(kind, _)| kind == "channel")
+                    })
+                {
+                    continue;
+                }
+                stream.expected_inputs.insert(
+                    id.clone(),
+                    inputs
+                        .iter()
+                        .map(|(from, label)| (from.clone(), label.from_port))
+                        .collect::<BTreeSet<_>>(),
+                );
+            }
         }
 
         // Every node starts Pending; a reused node flips back to Success at
@@ -530,7 +1682,8 @@ impl DAG {
                 }
             }
         }
-        let (tx, mut rx) = mpsc::channel::<NodeEvent>(all_ids.len().max(1));
+        let event_capacity = all_ids.len().saturating_mul(128).max(128);
+        let (tx, mut rx) = mpsc::channel::<NodeEvent>(event_capacity);
 
         // Per-node execution duration and skip root-cause tracking.
         let mut durations: HashMap<NodeId, std::time::Duration> = HashMap::new();
@@ -564,6 +1717,26 @@ impl DAG {
 
             // Dispatch every currently-ready node.
             while let Some(id) = ready.pop_front() {
+                if self
+                    .specs
+                    .get(&id)
+                    .is_some_and(|(kind, _)| kind == "dynamic_fanout")
+                {
+                    let actual_ids = self.expand_dynamic_fanout(
+                        &id,
+                        &mut incoming,
+                        &mut successors,
+                        &mut pending,
+                        &mut ready,
+                        &mut streaming_expanded,
+                    )?;
+                    for actual_id in actual_ids {
+                        if !all_ids.contains(&actual_id) {
+                            all_ids.push(actual_id);
+                        }
+                    }
+                    continue;
+                }
                 if self.statuses[&id] != RuntimeStatus::Pending {
                     // Already skipped/finished by a cascade — don't dispatch.
                     continue;
@@ -709,6 +1882,9 @@ impl DAG {
 
                 self.statuses.insert(id.clone(), RuntimeStatus::Running);
                 in_flight += 1;
+                let submission = self.build_task_submission(&id, &kind, spec, &inputs, &incoming);
+                let task_id = submission.spec.id.clone();
+                let executor = std::sync::Arc::clone(&self.task_executor.executor);
                 let tx = tx.clone();
                 let sem = sem.clone();
                 let global_sem = engine_ctx.global_sem.clone();
@@ -741,66 +1917,34 @@ impl DAG {
                         Some(permit) => permit,
                         None => return,
                     };
-                    let mut node = node_box;
-                    let start = std::time::Instant::now();
-
-                    // Catch panics from `execute` so a crashing node is converted
-                    // to a `JobResult::Failed` instead of silently dropping the
-                    // `Done` signal — which would hang the scheduler (in_flight
-                    // never decrements, rx.recv() blocks forever).
-                    let result = tokio::select! {
-                        result = AssertUnwindSafe(node.execute(&engine_ctx, &inputs, &reporter))
-                            .catch_unwind() => result,
-                        _ = task_cancel.cancelled() => {
-                            let duration = start.elapsed();
-                            let res = JobResult::Failed {
-                                id: job_id.clone(),
-                                error: DagError::Schedule(
-                                    "node cancelled by DAG run cancellation".into(),
-                                ),
-                                duration,
-                                // The `execute` future is dropped at this
-                                // point, so partial evidence the node already
-                                // recorded is still worth harvesting.
-                                details: reporter.take_run_details(),
-                            };
-                            let _ = tx
-                                .send(NodeEvent::new(job_id, NodeEventKind::Done(res)))
-                                .await;
-                            return;
-                        }
+                    let execution = TaskExecution {
+                        submission,
+                        node: node_box,
+                        engine_ctx,
+                        reporter,
+                        cancellation: task_cancel,
                     };
-
-                    let duration = start.elapsed();
-                    let details = reporter.take_run_details();
+                    let result = AssertUnwindSafe(executor.run(execution))
+                        .catch_unwind()
+                        .await;
                     let res = match result {
-                        Ok(Ok(outs)) => JobResult::Success {
-                            id: job_id.clone(),
-                            outputs: outs,
-                            duration,
-                            details,
-                        },
-                        Ok(Err(error)) => {
-                            warn!(node = %job_id, error = %error, "node failed");
-                            JobResult::Failed {
-                                id: job_id.clone(),
-                                error,
-                                duration,
-                                details,
-                            }
-                        }
+                        Ok(result) => result,
                         Err(panic_payload) => {
-                            let msg = panic_payload
+                            let message = panic_payload
                                 .downcast_ref::<&str>()
-                                .map(|s| (*s).to_string())
+                                .map(|value| (*value).to_string())
                                 .or_else(|| panic_payload.downcast_ref::<String>().cloned())
-                                .unwrap_or_else(|| "panicked with non-string payload".to_string());
-                            warn!(node = %job_id, panic = %msg, "node panicked");
+                                .unwrap_or_else(|| {
+                                    "executor panicked with non-string payload".to_string()
+                                });
+                            warn!(node = %task_id, panic = %message, "task executor panicked");
                             JobResult::Failed {
-                                id: job_id.clone(),
-                                error: DagError::Schedule(format!("node panicked: {msg}")),
-                                duration,
-                                details,
+                                id: task_id,
+                                error: DagError::Schedule(format!(
+                                    "task executor panicked: {message}"
+                                )),
+                                duration: std::time::Duration::default(),
+                                details: None,
                             }
                         }
                     };
@@ -815,7 +1959,12 @@ impl DAG {
                 job_handles.push(AbortOnDropHandle(Some(handle)));
             }
 
-            if in_flight == 0 {
+            let streaming_active = stream
+                .node_counts
+                .keys()
+                .any(|node| self.statuses.get(node) == Some(&RuntimeStatus::Running))
+                || !stream.pending_closes.is_empty();
+            if in_flight == 0 && !streaming_active {
                 break;
             }
 
@@ -888,6 +2037,48 @@ impl DAG {
                     continue;
                 }
                 NodeEventKind::Finished { .. } => continue,
+                NodeEventKind::ChannelItem {
+                    port,
+                    sequence: _,
+                    item,
+                } => {
+                    let source = msg.node_id.clone();
+                    self.propagate_stream_item(
+                        &source,
+                        port,
+                        item,
+                        &mut incoming,
+                        &mut successors,
+                        &mut pending,
+                        &mut ready,
+                        &mut all_ids,
+                        &mut streaming_expanded,
+                        &mut stream,
+                        tx.clone(),
+                    )
+                    .await?;
+                    continue;
+                }
+                NodeEventKind::ChannelClosed { .. } => {
+                    stream.pending_closes.remove(&msg.node_id);
+                    let NodeEventKind::ChannelClosed {
+                        port: from_port, ..
+                    } = msg.kind
+                    else {
+                        unreachable!("matched ChannelClosed");
+                    };
+                    self.close_stream_successors(
+                        &msg.node_id,
+                        from_port,
+                        &mut successors,
+                        &mut pending,
+                        &mut ready,
+                        &mut stream,
+                        tx.clone(),
+                    )
+                    .await?;
+                    continue;
+                }
             };
             in_flight -= 1;
 
@@ -1117,6 +2308,7 @@ impl DAG {
                 cfg.compute_row_counts && memory_trigger.is_none(),
             )
             .await;
+        let logical_run_summaries = self.build_logical_run_summaries(&node_reports);
 
         Ok(RunReport {
             ok,
@@ -1124,9 +2316,50 @@ impl DAG {
             snapshot_id: None,
             resource,
             nodes: node_reports,
+            logical_nodes: logical_run_summaries,
             statuses: self.statuses.clone(),
             errors: self.errors.drain().collect(),
         })
+    }
+
+    /// Aggregate physical execution reports under their logical source nodes.
+    ///
+    /// Every logical node is represented even when it currently has no
+    /// physical jobs. That makes a deleted scatter sibling visible as a
+    /// zero-job logical summary instead of silently disappearing from the
+    /// logical execution view.
+    fn build_logical_run_summaries(&self, reports: &[NodeReport]) -> Vec<LogicalRunSummary> {
+        let mut builders = BTreeMap::new();
+        for graph in &self.logical_graphs {
+            for node in graph.nodes() {
+                let builder = LogicalSummaryBuilder {
+                    execution_strategy: Some(logical_execution_strategy_name(&node.strategy)),
+                    logical_node_type: Some(logical_node_type(&node.definition)),
+                    scatter_axis: logical_scatter_axis(&node.strategy),
+                    ..LogicalSummaryBuilder::default()
+                };
+                builders.entry(node.id.clone()).or_insert(builder);
+            }
+        }
+
+        for report in reports
+            .iter()
+            .filter(|report| report.logical_node.is_some())
+            .filter(|report| {
+                self.specs
+                    .get(&report.id)
+                    .map(|(kind, _)| kind != "dynamic_fanout")
+                    .unwrap_or(true)
+            })
+        {
+            let logical_node = report.logical_node.clone().unwrap();
+            builders.entry(logical_node).or_default().record(report);
+        }
+
+        builders
+            .into_iter()
+            .map(|(logical_node, builder)| builder.finish(logical_node))
+            .collect()
     }
 
     /// Build per-node [`NodeReport`] summaries from the execution state
@@ -1205,6 +2438,7 @@ impl DAG {
                                 NodeValue::File(file) => vec![file.clone()],
                                 NodeValue::FileSet(files) => files.clone(),
                                 NodeValue::DataFrame(_) => Vec::new(),
+                                NodeValue::Channel(_) => Vec::new(),
                             })
                             .collect()
                     })
@@ -1226,6 +2460,9 @@ impl DAG {
                 let output_rows = counts.get(id).copied();
                 let elapsed_ms = durations.get(id).map(|d| d.as_millis() as u64);
                 let dispatch_seq = dispatch_order.get(id).copied();
+                let executor = dispatch_seq
+                    .is_some()
+                    .then(|| self.task_executor.executor.name());
 
                 // Extract file sink path / artifact path via DagNode trait hooks.
                 let file_path = self
@@ -1246,11 +2483,27 @@ impl DAG {
                 let execution = self.node_run_details.get(id).cloned();
                 let inputs = self.input_bindings.get(id).cloned().unwrap_or_default();
                 let fingerprint = self.fingerprints.get(id).cloned();
+                let physical_job = self.physical_jobs.get(id);
+                let task_resources = self
+                    .task_resources
+                    .get(id)
+                    .or_else(|| {
+                        physical_job
+                            .and_then(|job| self.logical_task_resources.get(&job.logical_node))
+                    })
+                    .cloned()
+                    .unwrap_or_else(|| self.default_task_resources.clone());
 
                 NodeReport {
                     id: id.clone(),
                     status,
                     node_type,
+                    executor,
+                    resources: task_resources,
+                    logical_node: physical_job.map(|job| job.logical_node.clone()),
+                    physical_job_id: physical_job.map(|_| id.clone()),
+                    scatter_axis: physical_job.and_then(|job| job.axis.clone()),
+                    item_key: physical_job.and_then(|job| job.item_key.clone()),
                     output_type,
                     output_files,
                     port_assignments,
@@ -1477,6 +2730,19 @@ impl DAG {
         self.outputs.remove(id);
         self.specs.remove(id);
         self.fingerprints.remove(id);
+        if let Some(job) = self.physical_jobs.remove(id) {
+            self.logical_graphs.retain(|graph| {
+                let contains_deleted_source =
+                    graph.nodes().iter().any(|node| node.id == job.logical_node);
+                let has_remaining_job = self.physical_jobs.values().any(|remaining| {
+                    graph
+                        .nodes()
+                        .iter()
+                        .any(|node| node.id == remaining.logical_node)
+                });
+                !contains_deleted_source || has_remaining_job
+            });
+        }
         Ok(())
     }
 
@@ -2040,6 +3306,7 @@ impl DAG {
                 spec: spec.clone(),
             });
         }
+        nodes.sort_by(|left, right| left.id.cmp(&right.id));
 
         let mut edges = Vec::new();
         for edge in self.graph.edge_references() {
@@ -2054,7 +3321,36 @@ impl DAG {
             });
         }
 
-        super::history::DagManifest { nodes, edges }
+        super::history::DagManifest {
+            schema_version: super::history::MANIFEST_SCHEMA_VERSION,
+            logical: super::history::LogicalManifest {
+                compiler_version: super::history::LOGICAL_COMPILER_VERSION,
+                graphs: self.logical_graphs.clone(),
+                default_task_resources: self.default_task_resources.clone(),
+                logical_task_resources: self
+                    .logical_task_resources
+                    .iter()
+                    .map(|(id, resources)| (id.clone(), resources.clone()))
+                    .collect(),
+                physical_task_resources: self
+                    .task_resources
+                    .iter()
+                    .map(|(id, resources)| (id.clone(), resources.clone()))
+                    .collect(),
+            },
+            nodes,
+            edges,
+            physical_jobs: self
+                .physical_jobs
+                .iter()
+                .map(|(id, job)| (id.clone(), job.clone()))
+                .collect(),
+        }
+    }
+
+    /// Return the retained logical source graphs.
+    pub fn logical_graphs(&self) -> &[LogicalGraph] {
+        &self.logical_graphs
     }
 
     /// Whether a spec has been retained for `id` (i.e. the node was added via
@@ -2123,11 +3419,35 @@ fn canonical_file_path(path: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use crate::dag::{NodeInput, NodePorts};
+    use crate::dag::{
+        ChannelBranch, ChannelNode, ChannelOperator, LocalTaskExecutor, NodeInput, NodePorts,
+        TaskAttemptReceipt, TaskExecutor, TaskInputSource, TaskSubmission,
+    };
     use crate::value::{FileRef, PortType};
     use std::assert_matches;
 
     use super::*;
+
+    #[derive(Clone)]
+    struct RecordingTaskExecutor {
+        submissions: Arc<std::sync::Mutex<Vec<TaskSubmission>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl TaskExecutor for RecordingTaskExecutor {
+        fn name(&self) -> &'static str {
+            "recording"
+        }
+
+        async fn run(&self, execution: TaskExecution) -> crate::dag::node_event::JobResult {
+            self.submissions
+                .lock()
+                .unwrap()
+                .push(execution.submission.clone());
+            let local_executor = LocalTaskExecutor::default();
+            local_executor.run(execution).await
+        }
+    }
 
     /// Minimal echo node for graph tests — passes through inputs unchanged.
     #[derive(Clone)]
@@ -2195,6 +3515,202 @@ mod tests {
 
         fn kind(&self) -> &'static str {
             "echo"
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    #[derive(Clone)]
+    struct DynamicItemNode {
+        value: String,
+        ports: NodePorts,
+    }
+
+    #[derive(Clone)]
+    struct SleepingNode {
+        duration: std::time::Duration,
+        ports: NodePorts,
+    }
+
+    #[derive(Default)]
+    struct ResourceTrace {
+        active: usize,
+        max_active: usize,
+    }
+
+    #[derive(Clone)]
+    struct ResourceTrackingNode {
+        trace: Arc<std::sync::Mutex<ResourceTrace>>,
+        ports: NodePorts,
+    }
+
+    #[derive(Clone)]
+    struct FileSourceNode {
+        path: std::path::PathBuf,
+        ports: NodePorts,
+    }
+
+    #[async_trait::async_trait]
+    impl DagNode for FileSourceNode {
+        fn ports(&self) -> &NodePorts {
+            &self.ports
+        }
+
+        async fn execute(
+            &mut self,
+            _ctx: &crate::registry::NodeCtx,
+            _inputs: &[NodeInput],
+            _reporter: &crate::dag::node_event::NodeReporter,
+        ) -> std::result::Result<PortOutputs, DagError> {
+            let file = FileRef::local(&self.path, Some("text".into()))?;
+            let mut outputs = PortOutputs::new();
+            outputs.insert(0, file);
+            Ok(outputs)
+        }
+
+        fn clone_box(&self) -> Box<dyn DagNode> {
+            Box::new(self.clone())
+        }
+
+        fn kind(&self) -> &'static str {
+            "file_source_test_node"
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    #[derive(Clone)]
+    struct InputPathProbeNode {
+        paths: Arc<std::sync::Mutex<Vec<String>>>,
+        ports: NodePorts,
+    }
+
+    #[async_trait::async_trait]
+    impl DagNode for InputPathProbeNode {
+        fn ports(&self) -> &NodePorts {
+            &self.ports
+        }
+
+        async fn execute(
+            &mut self,
+            _ctx: &crate::registry::NodeCtx,
+            inputs: &[NodeInput],
+            _reporter: &crate::dag::node_event::NodeReporter,
+        ) -> std::result::Result<PortOutputs, DagError> {
+            let mut paths = self.paths.lock().unwrap();
+            for input in inputs {
+                paths.push(input.data.as_file()?.path.clone());
+            }
+            Ok(PortOutputs::new())
+        }
+
+        fn clone_box(&self) -> Box<dyn DagNode> {
+            Box::new(self.clone())
+        }
+
+        fn kind(&self) -> &'static str {
+            "input_path_probe_test_node"
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl DagNode for ResourceTrackingNode {
+        fn ports(&self) -> &NodePorts {
+            &self.ports
+        }
+
+        async fn execute(
+            &mut self,
+            _ctx: &crate::registry::NodeCtx,
+            _inputs: &[NodeInput],
+            _reporter: &crate::dag::node_event::NodeReporter,
+        ) -> std::result::Result<PortOutputs, DagError> {
+            {
+                let mut trace = self.trace.lock().unwrap();
+                trace.active += 1;
+                trace.max_active = trace.max_active.max(trace.active);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+            self.trace.lock().unwrap().active -= 1;
+            Ok(PortOutputs::new())
+        }
+
+        fn clone_box(&self) -> Box<dyn DagNode> {
+            Box::new(self.clone())
+        }
+
+        fn kind(&self) -> &'static str {
+            "resource_tracking_test_node"
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl DagNode for SleepingNode {
+        fn ports(&self) -> &NodePorts {
+            &self.ports
+        }
+
+        async fn execute(
+            &mut self,
+            _ctx: &crate::registry::NodeCtx,
+            _inputs: &[NodeInput],
+            _reporter: &crate::dag::node_event::NodeReporter,
+        ) -> std::result::Result<PortOutputs, DagError> {
+            tokio::time::sleep(self.duration).await;
+            Ok(PortOutputs::new())
+        }
+
+        fn clone_box(&self) -> Box<dyn DagNode> {
+            Box::new(self.clone())
+        }
+
+        fn kind(&self) -> &'static str {
+            "sleeping_test_node"
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl DagNode for DynamicItemNode {
+        fn ports(&self) -> &NodePorts {
+            &self.ports
+        }
+
+        async fn execute(
+            &mut self,
+            _ctx: &crate::registry::NodeCtx,
+            _inputs: &[NodeInput],
+            _reporter: &crate::dag::node_event::NodeReporter,
+        ) -> std::result::Result<PortOutputs, DagError> {
+            let mut outputs = PortOutputs::new();
+            outputs.insert(
+                0,
+                FileRef::new(format!("/{}.txt", self.value), Some("txt".into())),
+            );
+            Ok(outputs)
+        }
+
+        fn clone_box(&self) -> Box<dyn DagNode> {
+            Box::new(self.clone())
+        }
+
+        fn kind(&self) -> &'static str {
+            "dynamic_item"
         }
 
         fn as_any(&self) -> &dyn std::any::Any {
@@ -2286,6 +3802,796 @@ mod tests {
     fn test_ctx() -> crate::registry::NodeCtx {
         use datafusion::prelude::SessionContext;
         crate::registry::NodeCtx::new(SessionContext::new().runtime_env(), None)
+    }
+
+    #[tokio::test]
+    async fn local_executor_enforces_task_timeout() -> Result<()> {
+        let workspace_root = tempfile::tempdir().unwrap();
+        let mut dag = DAG::default();
+        dag.set_task_executor(std::sync::Arc::new(LocalTaskExecutor::with_workspace_root(
+            workspace_root.path(),
+        )));
+        dag.add_node_with_spec(
+            "sleep".into(),
+            Box::new(SleepingNode {
+                duration: std::time::Duration::from_secs(5),
+                ports: NodePorts::new(),
+            }),
+            "sleeping_test_node".into(),
+            serde_json::json!({"seconds": 5}),
+        )?;
+        let resources = TaskResources {
+            cpus: Some(1),
+            memory_bytes: Some(1024),
+            max_duration_ms: Some(10),
+        };
+        dag.set_task_resources("sleep", resources.clone())?;
+
+        let report = dag
+            .run(&crate::dag::SchedulerConfig::default(), &test_ctx(), None)
+            .await?;
+        assert!(!report.ok);
+        let node = report.nodes.iter().find(|node| node.id == "sleep").unwrap();
+        assert_eq!(node.resources, resources);
+        assert!(
+            node.error
+                .as_ref()
+                .unwrap()
+                .message
+                .contains("exceeded max_duration_ms"),
+            "{node:?}"
+        );
+        let execution = node.execution.as_ref().unwrap();
+        let workspace = execution.workspace.as_deref().unwrap();
+        assert!(std::path::Path::new(workspace).starts_with(workspace_root.path()));
+        let manifest = execution.task_manifest.as_ref().unwrap();
+        assert!(std::path::Path::new(&manifest.path).is_file());
+        let status = std::path::Path::new(workspace).join("status.json");
+        let status_json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(status).unwrap()).unwrap();
+        assert_eq!(status_json["status"], "timeout");
+        assert_eq!(execution.exit_code, Some(124));
+
+        let manifest = dag.to_manifest();
+        manifest.validate_layers()?;
+        assert_eq!(
+            manifest.logical.physical_task_resources.get("sleep"),
+            Some(&resources)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn local_executor_serializes_resource_requests() -> Result<()> {
+        let workspace_root = tempfile::tempdir().unwrap();
+        let mut dag = DAG::default();
+        dag.set_task_executor(std::sync::Arc::new(
+            LocalTaskExecutor::with_workspace_root_and_resource_limits(
+                workspace_root.path(),
+                Some(1),
+                Some(1024),
+            )?,
+        ));
+        let trace = Arc::new(std::sync::Mutex::new(ResourceTrace::default()));
+        for id in ["a", "b"] {
+            dag.add_node_with_spec(
+                id.into(),
+                Box::new(ResourceTrackingNode {
+                    trace: Arc::clone(&trace),
+                    ports: NodePorts::new(),
+                }),
+                "resource_tracking_test_node".into(),
+                serde_json::json!({"id": id}),
+            )?;
+            dag.set_task_resources(
+                id,
+                TaskResources {
+                    cpus: Some(1),
+                    memory_bytes: Some(1024),
+                    max_duration_ms: Some(5_000),
+                },
+            )?;
+        }
+
+        let report = dag
+            .run(
+                &crate::dag::SchedulerConfig {
+                    max_concurrency: 2,
+                    ..crate::dag::SchedulerConfig::default()
+                },
+                &test_ctx(),
+                None,
+            )
+            .await?;
+        assert!(report.ok, "{report:?}");
+        assert_eq!(trace.lock().unwrap().max_active, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn local_executor_stages_file_inputs_in_workspace() -> Result<()> {
+        let source_dir = tempfile::tempdir().unwrap();
+        let source_path = source_dir.path().join("source.txt");
+        std::fs::write(&source_path, b"staged payload").unwrap();
+        let workspace_root = tempfile::tempdir().unwrap();
+        let mut dag = DAG::default();
+        dag.set_task_executor(std::sync::Arc::new(
+            LocalTaskExecutor::with_workspace_root_resource_limits_and_input_staging(
+                workspace_root.path(),
+                Some(1),
+                Some(1024),
+            )?,
+        ));
+        dag.add_node_with_spec(
+            "source".into(),
+            Box::new(FileSourceNode {
+                path: source_path.clone(),
+                ports: NodePorts::new().add_output_port_of_type(None, PortType::File),
+            }),
+            "file_source_test_node".into(),
+            serde_json::json!({"path": source_path}),
+        )?;
+        let staged_paths = Arc::new(std::sync::Mutex::new(Vec::new()));
+        dag.add_node_with_spec(
+            "probe".into(),
+            Box::new(InputPathProbeNode {
+                paths: Arc::clone(&staged_paths),
+                ports: NodePorts::new().add_input_port_of_type(None, PortType::File),
+            }),
+            "input_path_probe_test_node".into(),
+            serde_json::json!({}),
+        )?;
+        dag.add_edge("source", "probe", 0, 0)?;
+
+        let report = dag
+            .run(&crate::dag::SchedulerConfig::default(), &test_ctx(), None)
+            .await?;
+        assert!(report.ok, "{report:?}");
+        let paths = staged_paths.lock().unwrap().clone();
+        assert_eq!(paths.len(), 1);
+        let staged_path = std::path::Path::new(&paths[0]);
+        assert!(staged_path.starts_with(workspace_root.path()));
+        assert_eq!(staged_path.parent().unwrap().file_name().unwrap(), "inputs");
+        assert_eq!(std::fs::read(staged_path).unwrap(), b"staged payload");
+
+        let probe = report.nodes.iter().find(|node| node.id == "probe").unwrap();
+        let manifest_path = probe
+            .execution
+            .as_ref()
+            .unwrap()
+            .task_manifest
+            .as_ref()
+            .unwrap()
+            .path
+            .clone();
+        let manifest: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(manifest_path).unwrap()).unwrap();
+        assert_eq!(manifest["spec"]["inputs"][0]["staged_paths"][0], paths[0]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn local_executor_stages_and_publishes_dataframe_artifacts() -> Result<()> {
+        let workspace_root = tempfile::tempdir().unwrap();
+        let mut dag = DAG::default();
+        dag.set_task_executor(std::sync::Arc::new(
+            LocalTaskExecutor::with_workspace_root_resource_limits_and_input_staging(
+                workspace_root.path(),
+                Some(1),
+                Some(1024),
+            )?,
+        ));
+        dag.add_node_with_spec(
+            "source".into(),
+            Box::new(EchoNode::default()),
+            "echo".into(),
+            serde_json::json!({}),
+        )?;
+        dag.add_node_with_spec(
+            "target".into(),
+            Box::new(EchoNode::from_ports(
+                NodePorts::new()
+                    .add_input_port_of_type(None, PortType::DataFrame)
+                    .add_output_port_of_type(None, PortType::DataFrame),
+            )),
+            "echo".into(),
+            serde_json::json!({}),
+        )?;
+        dag.add_edge("source", "target", 0, 0)?;
+
+        let report = dag
+            .run(&crate::dag::SchedulerConfig::default(), &test_ctx(), None)
+            .await?;
+        assert!(report.ok, "{report:?}");
+        let source = report
+            .nodes
+            .iter()
+            .find(|node| node.id == "source")
+            .unwrap();
+        let source_artifact = source
+            .execution
+            .as_ref()
+            .unwrap()
+            .output_artifacts
+            .first()
+            .unwrap();
+        assert!(source_artifact.path.ends_with("outputs/port-0.arrow"));
+        assert!(std::path::Path::new(&source_artifact.path).is_file());
+        let receipt: TaskAttemptReceipt = serde_json::from_str(
+            &std::fs::read_to_string(
+                std::path::Path::new(
+                    source
+                        .execution
+                        .as_ref()
+                        .unwrap()
+                        .workspace
+                        .as_deref()
+                        .unwrap(),
+                )
+                .join("attempt.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(receipt.task_id, "source");
+        assert_eq!(receipt.executor, "local");
+        assert_eq!(receipt.status, "success");
+        assert_eq!(receipt.output_artifacts.len(), 1);
+        assert_eq!(receipt.output_artifacts[0].path, source_artifact.path);
+
+        let target = report
+            .nodes
+            .iter()
+            .find(|node| node.id == "target")
+            .unwrap();
+        let target_manifest: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(
+                target
+                    .execution
+                    .as_ref()
+                    .unwrap()
+                    .task_manifest
+                    .as_ref()
+                    .unwrap()
+                    .path
+                    .clone(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let staged_path = target_manifest["spec"]["inputs"][0]["staged_paths"][0]
+            .as_str()
+            .unwrap();
+        assert!(staged_path.ends_with(".arrow"));
+        assert!(std::path::Path::new(staged_path).is_file());
+        Ok(())
+    }
+
+    #[test]
+    fn remote_dispatch_requires_staged_artifacts() {
+        let input = |staged_paths: Vec<String>| crate::dag::TaskInputBinding {
+            name: "frame".into(),
+            port: 0,
+            source: TaskInputSource::UpstreamPort {
+                from: "source".into(),
+                from_port: 0,
+            },
+            payload: "DataFrame".into(),
+            path: None,
+            fingerprint: None,
+            staged_paths,
+        };
+        let submission = |input: crate::dag::TaskInputBinding| TaskSubmission {
+            spec: crate::dag::TaskSpec {
+                id: "remote".into(),
+                logical_node: Some("process".into()),
+                kind: "test".into(),
+                spec: serde_json::json!({}),
+                axis: None,
+                item_key: None,
+                item: None,
+                inputs: vec![input],
+                outputs: Vec::new(),
+            },
+            inputs: Vec::new(),
+            resources: Default::default(),
+        };
+
+        let dispatch = submission(input(vec!["/work/input-0.arrow".into()]))
+            .into_remote_dispatch()
+            .unwrap();
+        assert_eq!(dispatch.spec.id, "remote");
+        let error = submission(input(Vec::new()))
+            .into_remote_dispatch()
+            .unwrap_err();
+        assert!(error.to_string().contains("staged artifact"));
+    }
+
+    #[test]
+    fn task_resources_reject_zero_requests() {
+        let mut dag = DAG::default();
+        dag.add_node_with_spec(
+            "node".into(),
+            Box::new(EchoNode::default()),
+            "echo".into(),
+            serde_json::json!({}),
+        )
+        .unwrap();
+        let error = dag
+            .set_task_resources(
+                "node",
+                TaskResources {
+                    cpus: Some(0),
+                    memory_bytes: None,
+                    max_duration_ms: None,
+                },
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("cpus"));
+    }
+
+    #[tokio::test]
+    async fn channel_branch_compiles_to_multiple_output_ports() -> Result<()> {
+        let logical = crate::dag::LogicalGraph::builder()
+            .add_node(crate::dag::LogicalNode::channel(
+                "source",
+                ChannelOperator::OfItems {
+                    items: vec![
+                        serde_json::json!({"kind": "high"}),
+                        serde_json::json!({"kind": "low"}),
+                        serde_json::json!({"kind": "unknown"}),
+                    ],
+                },
+            ))
+            .add_node(crate::dag::LogicalNode::channel(
+                "branch",
+                ChannelOperator::Branch {
+                    branches: vec![
+                        ChannelBranch {
+                            name: "high".into(),
+                            path: "kind".into(),
+                            equals: Some(serde_json::json!("high")),
+                            not_equals: None,
+                            exists: None,
+                            prefix: None,
+                            suffix: None,
+                            contains: None,
+                        },
+                        ChannelBranch {
+                            name: "low".into(),
+                            path: "kind".into(),
+                            equals: Some(serde_json::json!("low")),
+                            not_equals: None,
+                            exists: None,
+                            prefix: None,
+                            suffix: None,
+                            contains: None,
+                        },
+                    ],
+                },
+            ))
+            .add_node(crate::dag::LogicalNode::channel(
+                "collect_high",
+                ChannelOperator::Collect,
+            ))
+            .add_node(crate::dag::LogicalNode::channel(
+                "collect_low",
+                ChannelOperator::Collect,
+            ))
+            .add_edge("source", "branch", 0, 0)
+            .add_edge("branch", "collect_high", 0, 0)
+            .add_edge("branch", "collect_low", 1, 0)
+            .build();
+        let physical = logical
+            .compile(|_, _| unreachable!("channel nodes are built by the planner"))
+            .unwrap();
+        let mut dag = DAG::default();
+        dag.install_compiled_graph(logical, physical)?;
+        assert_eq!(
+            dag.get_node("branch#0")
+                .unwrap()
+                .ports()
+                .output_port(1)
+                .unwrap()
+                .label,
+            Some("low".into())
+        );
+
+        let report = dag
+            .run(&crate::dag::SchedulerConfig::default(), &test_ctx(), None)
+            .await?;
+        assert!(report.ok, "{report:?}");
+        let NodeValue::Channel(high) = &dag.output("collect_high#0").unwrap()[&0] else {
+            panic!("high branch should emit a channel");
+        };
+        let NodeValue::Channel(low) = &dag.output("collect_low#0").unwrap()[&0] else {
+            panic!("low branch should emit a channel");
+        };
+        assert_eq!(high.items, vec![serde_json::json!({"kind": "high"})]);
+        assert_eq!(low.items, vec![serde_json::json!({"kind": "low"})]);
+        dag.to_manifest().validate_layers()?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn dynamic_channel_fanout_supports_empty_channels() -> Result<()> {
+        let logical = crate::dag::LogicalGraph::builder()
+            .add_node(crate::dag::LogicalNode::channel(
+                "source",
+                ChannelOperator::OfItems { items: Vec::new() },
+            ))
+            .add_node(crate::dag::LogicalNode::dynamic_for_each(
+                "process",
+                "dynamic_item",
+                serde_json::json!({"value": "{{item}}"}),
+                "sample",
+            ))
+            .add_node(crate::dag::LogicalNode::channel(
+                "collect",
+                ChannelOperator::Collect,
+            ))
+            .add_edge("source", "process", 0, 0)
+            .add_edge("process", "collect", 0, 0)
+            .build();
+        let physical = logical
+            .compile(|_, _| unreachable!("dynamic and channel nodes are built by the planner"))
+            .unwrap();
+        let mut dag = DAG::default();
+        dag.set_dynamic_node_builder(Arc::new(|kind, _| {
+            panic!("builder should not be called for kind `{kind}`")
+        }));
+        dag.install_compiled_graph(logical, physical)?;
+
+        let report = dag
+            .run(&crate::dag::SchedulerConfig::default(), &test_ctx(), None)
+            .await?;
+        assert!(report.ok, "{report:?}");
+        assert!(!dag.nodes.contains_key("process#sample=item-000000"));
+        let NodeValue::Channel(channel) = &dag.output("collect#0").unwrap()[&0] else {
+            panic!("collect should emit a channel");
+        };
+        assert!(channel.items.is_empty());
+        assert_eq!(
+            report
+                .logical_nodes
+                .iter()
+                .find(|summary| summary.logical_node == "process")
+                .unwrap()
+                .physical_job_count,
+            0
+        );
+        dag.to_manifest().validate_layers()?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn dynamic_channel_fanout_expands_and_collects_jobs() -> Result<()> {
+        let logical = crate::dag::LogicalGraph::builder()
+            .add_node(crate::dag::LogicalNode::channel(
+                "source",
+                ChannelOperator::OfItems {
+                    items: vec!["a".into(), "b".into()],
+                },
+            ))
+            .add_node(crate::dag::LogicalNode::dynamic_for_each(
+                "process",
+                "dynamic_item",
+                serde_json::json!({"value": "{{item}}"}),
+                "sample",
+            ))
+            .add_node(crate::dag::LogicalNode::channel(
+                "collect",
+                ChannelOperator::Collect,
+            ))
+            .add_edge("source", "process", 0, 0)
+            .add_edge("process", "collect", 0, 0)
+            .build();
+        let physical = logical
+            .compile(|_, _| unreachable!("dynamic and channel nodes are built by the planner"))
+            .unwrap();
+        let mut dag = DAG::default();
+        let executions = Arc::new(std::sync::Mutex::new(0usize));
+        let builder_executions = Arc::clone(&executions);
+        dag.set_dynamic_node_builder(Arc::new(move |kind, spec| {
+            assert_eq!(kind, "dynamic_item");
+            *builder_executions.lock().unwrap() += 1;
+            let value = spec["value"].as_str().unwrap().to_string();
+            Ok(Box::new(DynamicItemNode {
+                value,
+                ports: NodePorts::new().add_output_port_of_type(None, PortType::Any),
+            }) as Box<dyn DagNode>)
+        }));
+        let task_submissions = Arc::new(std::sync::Mutex::new(Vec::new()));
+        dag.set_task_executor(Arc::new(RecordingTaskExecutor {
+            submissions: Arc::clone(&task_submissions),
+        }));
+        let process_resources = TaskResources {
+            cpus: Some(2),
+            memory_bytes: Some(2048),
+            max_duration_ms: Some(60_000),
+        };
+        dag.set_logical_task_resources("process", process_resources.clone())?;
+        dag.install_compiled_graph(logical, physical).unwrap();
+
+        let (_event_tx, mut event_rx) = tokio::sync::mpsc::channel::<NodeEvent>(128);
+        let report = dag
+            .run(
+                &crate::dag::SchedulerConfig::default(),
+                &test_ctx(),
+                Some(_event_tx),
+            )
+            .await
+            .unwrap();
+        assert!(report.ok, "{report:?}");
+        let mut finish_order = Vec::new();
+        while let Some(event) = event_rx.recv().await {
+            if matches!(event.kind, NodeEventKind::Finished { .. }) {
+                finish_order.push(event.node_id.clone());
+            }
+        }
+        let first_process = finish_order
+            .iter()
+            .position(|id| id.starts_with("process#sample="))
+            .expect("dynamic process should finish");
+        let source_position = finish_order
+            .iter()
+            .position(|id| id == "source#0")
+            .expect("stream source should finish");
+        assert!(
+            first_process < source_position,
+            "dynamic job should finish before its streaming source closes: {finish_order:?}"
+        );
+        assert_eq!(*executions.lock().unwrap(), 2);
+        assert!(dag.nodes.contains_key("process#sample=a"));
+        assert!(dag.nodes.contains_key("process#sample=b"));
+        let NodeValue::Channel(channel) = &dag.output("collect#0").unwrap()[&0] else {
+            panic!("collect should emit a channel");
+        };
+        assert_eq!(channel.items.len(), 2);
+        assert!(
+            channel
+                .items
+                .iter()
+                .any(|item| { item.get("path").and_then(|path| path.as_str()) == Some("/a.txt") })
+        );
+
+        let manifest = dag.to_manifest();
+        manifest.validate_layers().unwrap();
+        assert_eq!(
+            manifest
+                .physical_jobs
+                .values()
+                .filter(|job| job.logical_node == "process" && job.item_key.is_some())
+                .count(),
+            2
+        );
+        let process_summary = report
+            .logical_nodes
+            .iter()
+            .find(|summary| summary.logical_node == "process")
+            .unwrap();
+        assert_eq!(process_summary.physical_job_count, 2);
+        let task_submissions = task_submissions.lock().unwrap();
+        let process_submission = task_submissions
+            .iter()
+            .find(|submission| submission.spec.id == "process#sample=a")
+            .unwrap();
+        let process_spec = &process_submission.spec;
+        assert_eq!(process_spec.logical_node.as_deref(), Some("process"));
+        assert_eq!(process_spec.item, Some(serde_json::json!("a")));
+        assert_eq!(
+            process_spec.inputs[0].source,
+            TaskInputSource::DynamicFanoutItem {
+                axis: "sample".into()
+            }
+        );
+        assert_eq!(process_spec.outputs.len(), 1);
+        assert_eq!(process_spec.outputs[0].name, "port_0");
+        assert_eq!(process_spec.outputs[0].payload, "any");
+        assert_eq!(process_submission.resources, process_resources);
+        assert_eq!(
+            report
+                .nodes
+                .iter()
+                .find(|node| node.id == "process#sample=a")
+                .unwrap()
+                .executor,
+            Some("recording")
+        );
+        let collect_spec = task_submissions
+            .iter()
+            .find(|submission| submission.spec.id == "collect#0")
+            .map(|submission| &submission.spec)
+            .unwrap();
+        assert!(collect_spec.inputs.iter().any(|input| matches!(
+            &input.source,
+            TaskInputSource::UpstreamPort {
+                from,
+                from_port: 0,
+            } if from.starts_with("process#sample=")
+        )));
+
+        let incremental_report = dag
+            .run(
+                &crate::dag::SchedulerConfig {
+                    incremental: true,
+                    ..crate::dag::SchedulerConfig::default()
+                },
+                &test_ctx(),
+                None,
+            )
+            .await?;
+        assert!(incremental_report.ok, "{incremental_report:?}");
+        assert_eq!(*executions.lock().unwrap(), 2);
+
+        let mut restored = DAG::default();
+        restored.set_dynamic_node_builder(Arc::new(|kind, spec| {
+            assert_eq!(kind, "dynamic_item");
+            let value = spec["value"].as_str().unwrap().to_string();
+            Ok(Box::new(DynamicItemNode {
+                value,
+                ports: NodePorts::new().add_output_port_of_type(None, PortType::Any),
+            }) as Box<dyn DagNode>)
+        }));
+        for entry in &manifest.nodes {
+            let node = if entry.kind == "channel" {
+                Box::new(crate::dag::ChannelNode::from_spec(&entry.spec)?) as Box<dyn DagNode>
+            } else if entry.kind == "dynamic_fanout" {
+                Box::new(crate::dag::DynamicFanoutNode::default()) as Box<dyn DagNode>
+            } else {
+                restored.dynamic_node_builder.as_ref().unwrap()(&entry.kind, entry.spec.clone())?
+            };
+            restored.add_node_with_spec(
+                entry.id.clone(),
+                node,
+                entry.kind.clone(),
+                entry.spec.clone(),
+            )?;
+        }
+        for edge in &manifest.edges {
+            restored.add_edge(
+                edge.from.clone(),
+                edge.to.clone(),
+                edge.from_port,
+                edge.to_port,
+            )?;
+        }
+        restored.restore_layers(
+            manifest.logical.graphs.clone(),
+            manifest.physical_jobs.clone(),
+        )?;
+        let restored_report = restored
+            .run(&crate::dag::SchedulerConfig::default(), &test_ctx(), None)
+            .await
+            .unwrap();
+        assert!(restored_report.ok, "{restored_report:?}");
+        assert_eq!(
+            restored_report
+                .logical_nodes
+                .iter()
+                .find(|summary| summary.logical_node == "process")
+                .unwrap()
+                .physical_job_count,
+            2,
+            "nodes={:?}",
+            report.nodes,
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn streaming_map_drives_dynamic_fanout() -> Result<()> {
+        let logical = crate::dag::LogicalGraph::builder()
+            .add_node(crate::dag::LogicalNode::channel(
+                "source",
+                ChannelOperator::OfItems {
+                    items: vec!["one".into(), "two".into()],
+                },
+            ))
+            .add_node(crate::dag::LogicalNode::channel(
+                "mapped",
+                ChannelOperator::Map {
+                    template: serde_json::json!("{{item}}"),
+                },
+            ))
+            .add_node(crate::dag::LogicalNode::dynamic_for_each(
+                "process",
+                "dynamic_item",
+                serde_json::json!({"value": "{{item}}"}),
+                "sample",
+            ))
+            .add_node(crate::dag::LogicalNode::channel(
+                "collect",
+                ChannelOperator::Collect,
+            ))
+            .add_edge("source", "mapped", 0, 0)
+            .add_edge("mapped", "process", 0, 0)
+            .add_edge("process", "collect", 0, 0)
+            .build();
+        let physical = logical
+            .compile(|_, _| unreachable!("dynamic and channel nodes are built by the planner"))
+            .unwrap();
+        let mut dag = DAG::default();
+        dag.set_dynamic_node_builder(Arc::new(move |kind, spec| {
+            assert_eq!(kind, "dynamic_item");
+            let value = spec["value"].as_str().unwrap().to_string();
+            Ok(Box::new(DynamicItemNode {
+                value,
+                ports: NodePorts::new().add_output_port_of_type(None, PortType::Any),
+            }) as Box<dyn DagNode>)
+        }));
+        dag.install_compiled_graph(logical, physical).unwrap();
+
+        let report = dag
+            .run(&crate::dag::SchedulerConfig::default(), &test_ctx(), None)
+            .await?;
+        assert!(report.ok, "{report:?}");
+        assert_eq!(
+            report
+                .logical_nodes
+                .iter()
+                .find(|summary| summary.logical_node == "process")
+                .unwrap()
+                .physical_job_count,
+            2
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn streaming_join_waits_for_both_inputs_then_finalizes() -> Result<()> {
+        let logical = crate::dag::LogicalGraph::builder()
+            .add_node(crate::dag::LogicalNode::channel(
+                "left",
+                ChannelOperator::OfItems {
+                    items: vec![serde_json::json!({"id": "one", "value": 1})],
+                },
+            ))
+            .add_node(crate::dag::LogicalNode::channel(
+                "right",
+                ChannelOperator::OfItems {
+                    items: vec![serde_json::json!({"sample": "one", "score": 2})],
+                },
+            ))
+            .add_node(crate::dag::LogicalNode::channel(
+                "joined",
+                ChannelOperator::Join {
+                    left_key: "id".into(),
+                    right_key: "sample".into(),
+                },
+            ))
+            .add_node(crate::dag::LogicalNode::channel(
+                "output",
+                ChannelOperator::Collect,
+            ))
+            .add_edge("left", "joined", 0, 0)
+            .add_edge("right", "joined", 0, 1)
+            .add_edge("joined", "output", 0, 0)
+            .build();
+        let physical = logical
+            .compile(|_, _| unreachable!("channel nodes are built by the planner"))
+            .unwrap();
+        let mut dag = DAG::default();
+        dag.install_compiled_graph(logical, physical)?;
+
+        let report = dag
+            .run(&crate::dag::SchedulerConfig::default(), &test_ctx(), None)
+            .await?;
+        assert!(report.ok, "{report:?}");
+        assert_eq!(dag.status("left#0"), Some(RuntimeStatus::Success));
+        assert_eq!(dag.status("right#0"), Some(RuntimeStatus::Success));
+        assert_eq!(dag.status("joined#0"), Some(RuntimeStatus::Success));
+        assert_eq!(dag.status("output#0"), Some(RuntimeStatus::Success));
+
+        let NodeValue::Channel(channel) = &dag.output("output#0").unwrap()[&0] else {
+            panic!("streaming join should produce a channel");
+        };
+        assert_eq!(channel.items.len(), 1);
+        assert_eq!(channel.items[0]["left_id"], "one");
+        assert_eq!(channel.items[0]["right_sample"], "one");
+        assert_eq!(channel.items[0]["left_value"], 1);
+        assert_eq!(channel.items[0]["right_score"], 2);
+        Ok(())
     }
 
     #[test]
@@ -2968,6 +5274,8 @@ mod tests {
             _inputs: &[NodeInput],
             reporter: &crate::dag::node_event::NodeReporter,
         ) -> std::result::Result<PortOutputs, DagError> {
+            reporter.info("detailed node started");
+            reporter.error("detailed node error stream");
             reporter.set_run_details(NodeRunDetails {
                 image: Some("localhost/test@sha256:abc".into()),
                 image_digest: Some("sha256:abc".into()),
@@ -2975,6 +5283,10 @@ mod tests {
                 run_name: Some("autonomics-container-command-1-1".into()),
                 stdout_log: None,
                 stderr_log: None,
+                output_artifacts: Vec::new(),
+                output_artifacts_by_port: Default::default(),
+                workspace: None,
+                task_manifest: None,
             });
             if self.fail {
                 return Err(DagError::Schedule("intentional failure".into()));
@@ -3065,6 +5377,24 @@ mod tests {
             details.run_name.as_deref(),
             Some("autonomics-container-command-1-1")
         );
+        assert!(
+            details
+                .stdout_log
+                .as_ref()
+                .unwrap()
+                .path
+                .ends_with("stdout.log")
+        );
+        assert!(
+            details
+                .stderr_log
+                .as_ref()
+                .unwrap()
+                .path
+                .ends_with("stderr.log")
+        );
+        assert!(std::path::Path::new(&details.stdout_log.as_ref().unwrap().path).is_file());
+        assert!(std::path::Path::new(&details.stderr_log.as_ref().unwrap().path).is_file());
 
         let bad = report.nodes.iter().find(|node| node.id == "bad").unwrap();
         assert_eq!(bad.status, RuntimeStatus::Failed);

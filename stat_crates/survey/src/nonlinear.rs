@@ -249,12 +249,7 @@ pub fn svy_ivreg(
     let x2: Vec<Vec<f64>> = endo_hat.iter().chain(exogenous.iter()).cloned().collect();
     let x2_w: Vec<Vec<f64>> = x2
         .iter()
-        .map(|c| {
-            c.iter()
-                .zip(&ws)
-                .map(|(&v, wi)| v * wi.sqrt())
-                .collect()
-        })
+        .map(|c| c.iter().zip(&ws).map(|(&v, wi)| v * wi.sqrt()).collect())
         .collect();
     let x2_refs: Vec<&[f64]> = x2_w.iter().map(|v| v.as_slice()).collect();
     let y_w: Vec<f64> = y.iter().zip(&ws).map(|(&v, wi)| v * wi.sqrt()).collect();

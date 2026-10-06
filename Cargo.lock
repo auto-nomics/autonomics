@@ -234,9 +234,6 @@ checksum = "c880a97d28a3681c0267bd29cff89621202715b065127cd445fa0f0fe0aa2880"
 name = "alphafold"
 version = "0.1.0"
 dependencies = [
- "agentik-core",
- "agentik-proc",
- "agentik-sdk",
  "arrow-array",
  "arrow-schema",
  "async-trait",
@@ -713,9 +710,6 @@ dependencies = [
 name = "arxiv"
 version = "0.1.0"
 dependencies = [
- "agentik-core",
- "agentik-proc",
- "agentik-sdk",
  "async-trait",
  "bib-types",
  "quick-xml 0.39.4",
@@ -733,10 +727,6 @@ name = "ascii"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d92bec98840b8f03a5ff5413de5293bfcd8bf96467cf5452609f939ec6f5de16"
-
-[[package]]
-name = "ascii-dag"
-version = "0.11.0"
 
 [[package]]
 name = "ascii-dag-core"
@@ -825,11 +815,12 @@ dependencies = [
 
 [[package]]
 name = "atoi_simd"
-version = "0.17.0"
+version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ad17c7c205c2c28b527b9845eeb91cf1b4d008b438f98ce0e628227a822758e"
+checksum = "f3cdb3708a128e559a30fb830e8a77a5022ee6902806925c216658652b452a44"
 dependencies = [
  "debug_unsafe",
+ "rustversion",
 ]
 
 [[package]]
@@ -886,7 +877,7 @@ dependencies = [
  "agentik-types",
  "arboard",
  "arc-swap",
- "ascii-dag",
+ "ascii-dag-core",
  "base64 0.22.1",
  "bib-base",
  "chrono",
@@ -1079,6 +1070,8 @@ dependencies = [
  "agentik-core",
  "agentik-proc",
  "agentik-sdk",
+ "arrow-array",
+ "arrow-schema",
  "arxiv",
  "async-trait",
  "base64 0.22.1",
@@ -1226,9 +1219,6 @@ dependencies = [
 name = "biorxiv"
 version = "0.1.0"
 dependencies = [
- "agentik-core",
- "agentik-proc",
- "agentik-sdk",
  "async-trait",
  "bib-types",
  "chrono",
@@ -1706,9 +1696,9 @@ dependencies = [
 
 [[package]]
 name = "calamine"
-version = "0.35.0"
+version = "0.36.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8822fe6253ca47aa5ad9a3be09f6fe7cd20c6a74e41b0aa42e8f4e3d523508df"
+checksum = "5fa68281b1a76b54a62156474adb06bb380a67e07dd60656e3217152b42183f3"
 dependencies = [
  "atoi_simd",
  "byteorder",
@@ -1717,9 +1707,9 @@ dependencies = [
  "encoding_rs",
  "fast-float2",
  "log",
- "quick-xml 0.39.4",
+ "quick-xml 0.41.0",
  "serde",
- "zip 7.2.0",
+ "zip 8.6.0",
 ]
 
 [[package]]
@@ -1946,9 +1936,6 @@ checksum = "1c133bc6a41be0d194c306b5506d15e6feeea7b1d6604bd3f8310dfb2ca96486"
 name = "clinicaltrials"
 version = "0.1.0"
 dependencies = [
- "agentik-core",
- "agentik-proc",
- "agentik-sdk",
  "arrow-array",
  "arrow-schema",
  "async-trait",
@@ -2722,6 +2709,7 @@ dependencies = [
 name = "dag-core"
 version = "0.1.0"
 dependencies = [
+ "arrow",
  "arrow-array",
  "arrow-schema",
  "async-trait",
@@ -2729,6 +2717,7 @@ dependencies = [
  "chrono",
  "datafusion",
  "futures",
+ "glob",
  "opendal",
  "petgraph",
  "schemars",
@@ -2896,6 +2885,7 @@ dependencies = [
  "nodes-survival",
  "nodes-writing",
  "parquet",
+ "rhai",
  "schemars",
  "serde",
  "serde_json",
@@ -3915,9 +3905,6 @@ checksum = "252afb9ae5eaa683babdc6a068b3f5726eb19e05070c731f9b2a23a7c3e8ed34"
 name = "embase"
 version = "0.1.0"
 dependencies = [
- "agentik-core",
- "agentik-proc",
- "agentik-sdk",
  "async-trait",
  "bib-types",
  "reqwest",
@@ -4158,33 +4145,12 @@ dependencies = [
 
 [[package]]
 name = "errno"
-version = "0.2.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f639046355ee4f37944e44f60642c6f3a7efa3cf6b78c78a0d989a8ce6c396a1"
-dependencies = [
- "errno-dragonfly",
- "libc",
- "winapi",
-]
-
-[[package]]
-name = "errno"
 version = "0.3.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "errno-dragonfly"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aa68f1b12764fab894d2755d2518754e71b4fd80ecfb822714a1206c2aab39bf"
-dependencies = [
- "cc",
- "libc",
 ]
 
 [[package]]
@@ -4215,9 +4181,6 @@ dependencies = [
 name = "europepmc"
 version = "0.1.0"
 dependencies = [
- "agentik-core",
- "agentik-proc",
- "agentik-sdk",
  "async-trait",
  "bib-types",
  "reqwest",
@@ -4234,9 +4197,6 @@ dependencies = [
 name = "eutils"
 version = "0.1.0"
 dependencies = [
- "agentik-core",
- "agentik-proc",
- "agentik-sdk",
  "async-trait",
  "bib-types",
  "reqwest",
@@ -5230,13 +5190,18 @@ dependencies = [
  "agentik-core",
  "agentik-proc",
  "agentik-sdk",
+ "arrow-array",
+ "arrow-schema",
  "async-trait",
  "bib-types",
+ "dag-core",
+ "datafusion",
  "futures",
  "reqwest",
  "schemars",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "thiserror 2.0.20",
  "tokio",
  "vfs",
@@ -6030,9 +5995,6 @@ dependencies = [
 name = "interpro"
 version = "0.1.0"
 dependencies = [
- "agentik-core",
- "agentik-proc",
- "agentik-sdk",
  "arrow-array",
  "arrow-schema",
  "async-trait",
@@ -7819,10 +7781,11 @@ dependencies = [
  "datafusion",
  "encoding_rs",
  "enrichr-sdk",
- "errno 0.2.8",
+ "errno",
  "flate2",
  "futures",
  "glob",
+ "gwascatalog-sdk",
  "hdf5",
  "hdf5-sys",
  "interpro",
@@ -7830,7 +7793,7 @@ dependencies = [
  "libc",
  "liblzma",
  "lzf-sys",
- "ndarray 0.15.6",
+ "mr",
  "nhanes",
  "openalex",
  "opendal",
@@ -7857,7 +7820,7 @@ dependencies = [
  "uniprot",
  "vfs",
  "zip 8.6.0",
- "zstd 0.13.3",
+ "zstd 0.14.0",
 ]
 
 [[package]]
@@ -8408,27 +8371,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nucleo"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5262af4c94921c2646c5ac6ff7900c2af9cbb08dc26a797e18130a7019c039d4"
-dependencies = [
- "nucleo-matcher",
- "parking_lot 0.12.5",
- "rayon",
-]
-
-[[package]]
-name = "nucleo-matcher"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf33f538733d1a5a3494b836ba913207f14d9d4a1d3cd67030c5061bdd2cac85"
-dependencies = [
- "memchr",
- "unicode-segmentation",
-]
-
-[[package]]
 name = "num-bigint"
 version = "0.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8688,6 +8630,9 @@ name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
+dependencies = [
+ "portable-atomic",
+]
 
 [[package]]
 name = "once_cell_polyfill"
@@ -9583,9 +9528,6 @@ dependencies = [
 name = "protocolio"
 version = "0.1.0"
 dependencies = [
- "agentik-core",
- "agentik-proc",
- "agentik-sdk",
  "arrow-array",
  "arrow-schema",
  "async-trait",
@@ -9618,9 +9560,6 @@ dependencies = [
 name = "pubchem"
 version = "0.1.0"
 dependencies = [
- "agentik-core",
- "agentik-proc",
- "agentik-sdk",
  "arrow-array",
  "arrow-schema",
  "async-trait",
@@ -9741,7 +9680,6 @@ version = "0.39.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cdcc8dd4e2f670d309a5f0e83fe36dfdc05af317008fea29144da1a2ac858e5e"
 dependencies = [
- "encoding_rs",
  "memchr",
  "serde",
 ]
@@ -9752,6 +9690,7 @@ version = "0.41.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e660451e55124f798a69a5af3f49ccfbefbd41910eefd25caf2393e1f3473ec1"
 dependencies = [
+ "encoding_rs",
  "memchr",
  "serde",
 ]
@@ -10531,6 +10470,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "rhai"
+version = "1.26.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0334639972c0ea5a3fd366aa36116754a11431b619fec3ed559b3f73bcbcebf5"
+dependencies = [
+ "ahash",
+ "bitflags 2.13.2",
+ "num-traits",
+ "once_cell",
+ "rhai_codegen",
+ "smallvec",
+ "smartstring",
+ "thin-vec",
+ "web-time",
+]
+
+[[package]]
+name = "rhai_codegen"
+version = "3.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3cd3a7535e50bf36857e7be7bec276d334e8c2dfa469c2201226fd01638ea5ca"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "ring"
 version = "0.17.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10592,14 +10559,12 @@ dependencies = [
  "agentik-proc",
  "agentik-sdk",
  "agentik-types",
- "alphafold",
  "anyhow",
  "arc-swap",
  "async-trait",
  "bib-base",
  "chembl",
  "chrono",
- "clinicaltrials",
  "container-plugin",
  "container-runtime",
  "dag-core",
@@ -10609,15 +10574,12 @@ dependencies = [
  "datafusion",
  "futures",
  "gwascatalog-sdk",
- "interpro",
  "kegg",
  "kms",
  "kms-tools",
  "libc",
  "opengwas",
  "opentargets",
- "protocolio",
- "pubchem",
  "rcsb",
  "rusqlite",
  "schemars",
@@ -10644,7 +10606,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "23f2a97da3e3873c73cb2a2e71b35c40ff95e0b1eefa8d72d8499a6928c3b5b3"
 dependencies = [
  "bitflags 2.13.2",
- "chrono",
  "fallible-iterator",
  "fallible-streaming-iterator",
  "hashlink",
@@ -10752,7 +10713,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fdb5bc1ae2baa591800df16c9ca78619bf65c0488b41b96ccec5d11220d8c154"
 dependencies = [
  "bitflags 2.13.2",
- "errno 0.3.14",
+ "errno",
  "libc",
  "linux-raw-sys 0.4.15",
  "windows-sys 0.59.0",
@@ -10765,7 +10726,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "891efababe418670775f199f0d233d84843c227a0949a883ce15b37c78d6629d"
 dependencies = [
  "bitflags 2.13.2",
- "errno 0.3.14",
+ "errno",
  "libc",
  "linux-raw-sys 0.12.1",
  "windows-sys 0.61.2",
@@ -11339,7 +11300,7 @@ version = "1.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c4db69cba1110affc0e9f7bcd48bbf87b3f4fc7c61fc9155afd4c469eb3d6c1b"
 dependencies = [
- "errno 0.3.14",
+ "errno",
  "libc",
 ]
 
@@ -11450,6 +11411,17 @@ name = "smallvec"
 version = "1.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba467056f1b547ed52077911161fc86985becbc60e8e1857c8a144dab0def891"
+
+[[package]]
+name = "smartstring"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3fb72c633efbaa2dd666986505016c32c3044395ceaf881518399d2f4127ee29"
+dependencies = [
+ "autocfg",
+ "static_assertions",
+ "version_check",
+]
 
 [[package]]
 name = "smawk"
@@ -12160,6 +12132,12 @@ dependencies = [
  "unicode-linebreak",
  "unicode-width 0.2.2",
 ]
+
+[[package]]
+name = "thin-vec"
+version = "0.2.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4568d7e143ec86d2021c338bae2afa88699e84b8e0af523626654fe6f03a1748"
 
 [[package]]
 name = "thiserror"
@@ -14137,37 +14115,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f17a85883d4e6d00e8a97c586de764dabcc06133f7f1d55dce5cdc070ad7fe59"
 
 [[package]]
-name = "workflow-editor"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "blake3",
- "chrono",
- "clap",
- "color-eyre",
- "crossterm",
- "futures",
- "nucleo",
- "parking_lot 0.12.5",
- "petgraph",
- "ratatui",
- "rusqlite",
- "schemars",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.20",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
- "unicode-segmentation",
- "unicode-width 0.2.2",
- "uuid",
-]
-
-[[package]]
 name = "write16"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -14561,20 +14508,6 @@ dependencies = [
  "flate2",
  "indexmap",
  "memchr",
- "zopfli",
-]
-
-[[package]]
-name = "zip"
-version = "7.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c42e33efc22a0650c311c2ef19115ce232583abbe80850bc8b66509ebef02de0"
-dependencies = [
- "crc32fast",
- "flate2",
- "indexmap",
- "memchr",
- "typed-path",
  "zopfli",
 ]
 

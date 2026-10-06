@@ -8,9 +8,6 @@ description = "Async Rust SDK for the Elsevier Embase API with agent tools for s
 
 [dependencies]
 bib-types = { path = "../bib-types" }
-agentik-core = { path = "../agentik-core" }
-agentik-proc = { path = "../agentik-proc" }
-agentik-sdk = { path = "../agentik-sdk" }
 async-trait = { workspace = true }
 reqwest = { version = "0.13", features = ["json", "form"] }
 serde = { workspace = true }

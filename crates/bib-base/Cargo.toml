@@ -47,6 +47,8 @@ vfs = { path = "../vfs" }
 # DAG evidence-channel nodes (see `src/nodes/`); pulls no node-registry
 # features beyond the factory/node traits.
 dag-core = { path = "../dag-core" }
+arrow-array.workspace = true
+arrow-schema.workspace = true
 
 [lints]
 workspace = true

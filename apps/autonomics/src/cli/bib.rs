@@ -49,7 +49,8 @@ pub struct UploadArgs {
     #[arg(long, value_name = "PATH")]
     pub pdf: PathBuf,
 
-    /// Article ID in the local library (from bib_save or source_literature_fetch).
+    /// Article ID in the local library (from a `bib_save` DAG node or
+    /// `source_literature_fetch`).
     #[arg(long)]
     pub article_id: String,
 

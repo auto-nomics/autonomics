@@ -21,6 +21,7 @@ async-trait.workspace = true
 tracing.workspace = true
 futures.workspace = true
 schemars.workspace = true
+rhai.workspace = true
 turso.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 chrono.workspace = true

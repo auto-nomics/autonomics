@@ -466,7 +466,9 @@ mod tests {
             .map(|i| (((i * 7919 + 13) % 97) as f64 / 97.0 - 0.5) * 0.4)
             .collect();
         let (a0, a1, ac) = (1.0, 0.5, 0.8);
-        let m: Vec<f64> = (0..n).map(|i| a0 + a1 * x[i] + ac * c[i] + eps[i]).collect();
+        let m: Vec<f64> = (0..n)
+            .map(|i| a0 + a1 * x[i] + ac * c[i] + eps[i])
+            .collect();
         let (b1, b2, b3) = (0.3, 1.0, 0.4);
         // Outcome is exact in [1, X, M, X:M] → β̂ recovered exactly.
         let y: Vec<f64> = (0..n)

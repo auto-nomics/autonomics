@@ -22,6 +22,7 @@ use tracing_subscriber::fmt::writer::MakeWriterExt;
 
 use gateway::daemon::{DaemonOptions, run_daemon};
 use gateway::manager;
+use gateway::proto::GatewayStatus;
 
 use container_plugin::bundles;
 use container_plugin::factory::Plugin;
@@ -45,15 +46,7 @@ pub fn run_serve(args: ServeArgs) -> color_eyre::Result<()> {
         if let Some(ServeAction::Status) = args.action {
             match manager::probe().await {
                 Ok(Some(status)) => {
-                    println!(
-                        "gateway running: pid {} at {} (v{}, up {}s, {} agents, last_seq {})",
-                        status.pid,
-                        status.addr,
-                        status.version,
-                        status.uptime_secs,
-                        status.agent_count,
-                        status.last_seq
-                    );
+                    print_serve_status(&status);
                     Ok(())
                 }
                 Ok(None) => {
@@ -94,6 +87,60 @@ pub fn run_serve(args: ServeArgs) -> color_eyre::Result<()> {
     // anything still running is forcibly cancelled.
     runtime.shutdown_timeout(Duration::from_secs(5));
     Ok(())
+}
+
+/// Render the running gateway as a multi-line key/value block.
+///
+/// Two pieces of information the daemon already knows aren't surfaced on
+/// the bare `GatewayStatus`: the bib web frontend is mounted at the same
+/// root as the API, so its URL is `http://<addr>/` (a host:port string
+/// is otherwise ambiguous in the terminal — `127.0.0.1:8765` is an
+/// address, not a clickable link). The uptime is also raw seconds, which
+/// is the second thing everyone reformats by hand.
+fn print_serve_status(status: &GatewayStatus) {
+    let base_url = web_base_url(&status.addr);
+    let uptime = format_uptime(status.uptime_secs);
+
+    println!(
+        "gateway running — pid {} (v{}, up {})",
+        status.pid, status.version, uptime
+    );
+    println!("  addr        {}", status.addr);
+    println!("  bib web     {}/", base_url);
+    println!("  agents      {}", status.agent_count);
+    println!("  last seq    {}", status.last_seq);
+}
+
+/// Build the URL a human (or browser) opens to reach the bib web
+/// frontend. The daemon's bind string is bare `host:port` — `probe`
+/// reads the same env var the daemon bound to, so this can't drift.
+/// Falls back to `127.0.0.1` for the loopback case where the daemon
+/// bound to `0.0.0.0`, which is bind-only and not a valid URL host.
+fn web_base_url(addr: &str) -> String {
+    if addr.contains("://") {
+        return addr.trim_end_matches('/').to_owned();
+    }
+    let host_part = if addr.starts_with("0.0.0.0:") {
+        format!("127.0.0.1:{}", addr.trim_start_matches("0.0.0.0:"))
+    } else {
+        addr.to_owned()
+    };
+    format!("http://{}", host_part)
+}
+
+/// Render seconds as `Hh Mm Ss`, dropping zero-leading units so an
+/// uptime of 47s doesn't print as `0h 0m 47s`.
+fn format_uptime(total_secs: u64) -> String {
+    let hours = total_secs / 3600;
+    let minutes = (total_secs % 3600) / 60;
+    let seconds = total_secs % 60;
+    if hours > 0 {
+        format!("{hours}h {minutes:02}m {seconds:02}s")
+    } else if minutes > 0 {
+        format!("{minutes}m {seconds:02}s")
+    } else {
+        format!("{seconds}s")
+    }
 }
 
 async fn run_foreground_or_daemon(

@@ -13,8 +13,8 @@ use crate::format::format_disease;
     name = "opentargets_disease",
     description = "Get the annotation card for a disease / phenotype by ontology ID \
                   (EFO, MONDO, HP, Orphanet). Returns name, description, therapeutic-area \
-                  flag, and parent terms. Use opentargets_search first to resolve a \
-                  disease name into its ontology ID."
+                  flag, and parent terms. Resolve a disease name into its ontology ID \
+                  with the source_opentargets_search DAG node."
 )]
 pub struct DiseaseInput {
     #[desc = "Ontology ID, e.g. 'MONDO_0004975' (Alzheimer disease), 'EFO_0000274' (asthma)."]

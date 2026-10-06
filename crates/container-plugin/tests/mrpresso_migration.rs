@@ -111,10 +111,7 @@ fn mrpresso_plugin_compiles_to_the_legacy_wrapper_contract() {
     );
     assert_eq!(compiled.env.get("MRPRESSO_SD_EXPOSURE").unwrap(), "E1_se");
     assert_eq!(compiled.env.get("MRPRESSO_OUTLIER_TEST").unwrap(), "");
-    assert_eq!(
-        compiled.env.get("MRPRESSO_DISTORTION_TEST").unwrap(),
-        ""
-    );
+    assert_eq!(compiled.env.get("MRPRESSO_DISTORTION_TEST").unwrap(), "");
     assert_eq!(
         compiled.env.get("MRPRESSO_SIGNIF_THRESHOLD").unwrap(),
         "0.05"
@@ -214,10 +211,7 @@ fn mrpresso_plugin_renders_submitted_values_into_env() {
         "E1_se E2_se"
     );
     assert_eq!(compiled.env.get("MRPRESSO_OUTLIER_TEST").unwrap(), "true");
-    assert_eq!(
-        compiled.env.get("MRPRESSO_DISTORTION_TEST").unwrap(),
-        ""
-    );
+    assert_eq!(compiled.env.get("MRPRESSO_DISTORTION_TEST").unwrap(), "");
     assert_eq!(
         compiled.env.get("MRPRESSO_SIGNIF_THRESHOLD").unwrap(),
         "0.01"

@@ -327,7 +327,7 @@ impl BibBase {
 
     /// Insert or update one article, preserving rows that are not synchronized
     /// from `Article` metadata.
-    async fn upsert_article_in_tx(conn: &Connection, article: &Article) -> Result<()> {
+    pub(crate) async fn upsert_article_in_tx(conn: &Connection, article: &Article) -> Result<()> {
         // A real UPSERT is important here. `INSERT OR REPLACE` deletes the old
         // parent row first, which can cascade to annotations, fulltexts, and
         // collection memberships that should survive a metadata refresh.

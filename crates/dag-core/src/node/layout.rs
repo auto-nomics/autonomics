@@ -92,6 +92,18 @@ impl NodePorts {
         self
     }
 
+    /// Append a typed-value output port with a semantic label.
+    pub fn add_output_port_of_type_with_label(
+        mut self,
+        schema: Option<SchemaRef>,
+        data_type: PortType,
+        label: impl Into<String>,
+    ) -> Self {
+        self.output_ports
+            .add_port_of_type_with_label(schema, data_type, label);
+        self
+    }
+
     /// Append a typed-value output port with a label and format contract.
     pub fn add_output_port_of_type_with_label_and_format(
         mut self,

@@ -27,7 +27,10 @@ tokio-util = { version = "0.7", features = ["rt"] }
 headless = { path = "../../crates/headless" }
 kms = { path = "../../crates/kms" }
 dag-core = { path = "../../crates/dag-core" }
-ascii-dag = { path = "../../ascii-dag" }
+ascii-dag-core = { path = "../../crates/ascii-dag-core", default-features = false, features = [
+  "std",
+  "layout-horizontal",
+] }
 nodes-io = { path = "../../crates/node-bundles/nodes-io" }
 opengwas = { path = "../../crates/opengwas" }
 bib-base = { path = "../../crates/bib-base" }

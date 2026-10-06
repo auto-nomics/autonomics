@@ -30,6 +30,8 @@ interpro = { path = "../../interpro" }
 pubchem = { path = "../../pubchem" }
 protocolio = { path = "../../protocolio" }
 clinicaltrials = { path = "../../clinicaltrials" }
+gwascatalog-sdk = { path = "../../gwascatalog-sdk" }
+mr = { path = "../../../bio_crates/mr" }
 arrow-array.workspace = true
 arrow-cast.workspace = true
 arrow.workspace = true
@@ -48,19 +50,18 @@ datafusion.workspace = true
 futures.workspace = true
 hdf5 = "0.8.1"
 hdf5-sys = { version = "0.8.1", features = ["static", "zlib"] }
-errno = "0.2"
+errno = "0.3"
 lzf-sys = "0.1"
-ndarray = "0.15"
 glob = "0.3"
 flate2 = "1.1"
-zstd = "0.13"
+zstd = "0.14"
 bzip2 = "0.6"
 liblzma = "0.4"
 tar.workspace = true
 zip.workspace = true
 csv = "1.4"
 encoding_rs = "0.8"
-calamine = { version = "0.35.0", features = ["dates", "chrono"] }
+calamine = { version = "0.36.0", features = ["dates", "chrono"] }
 tempfile = "3.27.0"
 tokio = { workspace = true, features = ["process", "io-util", "time"] }
 libc = "0.2"

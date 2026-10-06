@@ -9,9 +9,6 @@ description = "Async Rust SDK for the bioRxiv/medRxiv API with agent tools for b
 [dependencies]
 bib-types = { path = "../bib-types" }
 schemars.workspace = true
-agentik-core = { path = "../agentik-core" }
-agentik-proc = { path = "../agentik-proc" }
-agentik-sdk = { path = "../agentik-sdk" }
 async-trait = { workspace = true }
 chrono = { workspace = true }
 reqwest = { version = "0.13", features = ["json", "form"] }

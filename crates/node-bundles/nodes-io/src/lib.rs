@@ -24,6 +24,9 @@ pub mod source_opentargets;
 pub mod source_semantic_scholar;
 pub mod spreadsheet;
 pub use alphafold::nodes::prediction::{AlphaFoldPredictionNode, AlphaFoldPredictionNodeFactory};
+pub use bib_base::nodes::bib_save::{
+    BibSaveCollectionSpec, BibSaveNode, BibSaveNodeFactory, BibSaveSpec,
+};
 pub use bib_base::nodes::evidence_export::{
     EvidenceExportFormat, EvidenceExportNode, EvidenceExportNodeFactory, EvidenceExportSpec,
 };
@@ -55,6 +58,18 @@ pub use enrichr_sdk::nodes::{
     EnrichrLibrariesNode, EnrichrLibrariesNodeFactory, EnrichrViewListNode,
     EnrichrViewListNodeFactory,
 };
+pub use gwascatalog_sdk::nodes::associations::{
+    AssociationsNode, AssociationsNodeFactory, StudyAssociationsNode, StudyAssociationsNodeFactory,
+};
+pub use gwascatalog_sdk::nodes::download::{DownloadNode, DownloadNodeFactory};
+pub use gwascatalog_sdk::nodes::efo_traits::{EfoTraitsNode, EfoTraitsNodeFactory};
+pub use gwascatalog_sdk::nodes::search::{SearchNode, SearchNodeFactory};
+pub use gwascatalog_sdk::nodes::snps::{SnpsNode, SnpsNodeFactory};
+pub use gwascatalog_sdk::nodes::studies::{StudiesNode, StudiesNodeFactory};
+pub use gwascatalog_sdk::nodes::summary_associations::{
+    SummaryAssociationsNode, SummaryAssociationsNodeFactory,
+};
+pub use gwascatalog_sdk::nodes::unpublished::{UnpublishedNode, UnpublishedNodeFactory};
 pub use interpro::nodes::entry::{InterProEntryNode, InterProEntryNodeFactory};
 pub use nhanes::nodes::download::{NhanesDownloadNode, NhanesDownloadNodeFactory};
 pub use nhanes::nodes::files::{NhanesFilesNode, NhanesFilesNodeFactory};
@@ -150,12 +165,21 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(
             source_opentargets::OpentargetsSearchNodeFactory {},
         ));
+        registry.register(Box::new(
+            source_opentargets::OpentargetsAssociatedDiseasesNodeFactory,
+        ));
+        registry.register(Box::new(
+            source_opentargets::OpentargetsAssociatedTargetsNodeFactory,
+        ));
         registry.register(Box::new(source_chembl::ChemblActivitiesNodeFactory));
         registry.register(Box::new(source_chembl::ChemblMoleculesNodeFactory));
+        registry.register(Box::new(source_chembl::ChemblMechanismsNodeFactory));
+        registry.register(Box::new(source_chembl::ChemblIndicationsNodeFactory));
         registry.register(Box::new(source_openalex::OpenAlexWorksNodeFactory {}));
         registry.register(Box::new(source_kegg::KeggSearchNodeFactory));
         registry.register(Box::new(source_kegg::KeggRelationsNodeFactory));
         registry.register(Box::new(source_kegg::KeggGenePathwaysNodeFactory));
+        registry.register(Box::new(source_kegg::KeggDdiNodeFactory));
         registry.register(Box::new(source_openalex::OpenAlexGroupByNodeFactory {}));
         registry.register(Box::new(
             source_semantic_scholar::S2PaperSearchNodeFactory {},
@@ -190,6 +214,7 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(ReactomeParticipantsNodeFactory {}));
         registry.register(Box::new(LiteratureSearchNodeFactory {}));
         registry.register(Box::new(LiteratureFetchNodeFactory {}));
+        registry.register(Box::new(BibSaveNodeFactory {}));
         registry.register(Box::new(LiteratureFulltextNodeFactory {}));
         registry.register(Box::new(LiteratureCitationsNodeFactory {}));
         registry.register(Box::new(S2RecommendationsNodeFactory {}));
@@ -197,6 +222,32 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(EvidenceExportNodeFactory {}));
         registry.register_plugin(&StringPlugin);
         registry.register_plugin(&EnrichrPlugin);
+        // GWAS Catalog source nodes (Solr search, REST catalog, summary
+        // statistics, full-file download) — the node half of the
+        // gwascatalog-sdk tool family.
+        registry.register(Box::new(gwascatalog_sdk::nodes::search::SearchNodeFactory));
+        registry.register(Box::new(
+            gwascatalog_sdk::nodes::studies::StudiesNodeFactory,
+        ));
+        registry.register(Box::new(
+            gwascatalog_sdk::nodes::associations::AssociationsNodeFactory,
+        ));
+        registry.register(Box::new(
+            gwascatalog_sdk::nodes::associations::StudyAssociationsNodeFactory,
+        ));
+        registry.register(Box::new(gwascatalog_sdk::nodes::snps::SnpsNodeFactory));
+        registry.register(Box::new(
+            gwascatalog_sdk::nodes::efo_traits::EfoTraitsNodeFactory,
+        ));
+        registry.register(Box::new(
+            gwascatalog_sdk::nodes::unpublished::UnpublishedNodeFactory,
+        ));
+        registry.register(Box::new(
+            gwascatalog_sdk::nodes::summary_associations::SummaryAssociationsNodeFactory,
+        ));
+        registry.register(Box::new(
+            gwascatalog_sdk::nodes::download::DownloadNodeFactory,
+        ));
     }
 }
 
@@ -332,6 +383,18 @@ mod tests {
             Some("evidence")
         );
         assert!(ft_ports.output_port(0).unwrap().data_type == dag_core::value::PortType::FileSet);
+
+        let saved = registry
+            .build_node("bib_save", serde_json::json!({}))
+            .expect("bib_save builds");
+        let saved_ports = saved.ports();
+        assert_eq!(
+            saved_ports.input_port(0).unwrap().format.as_deref(),
+            Some("evidence")
+        );
+        assert!(
+            saved_ports.output_port(0).unwrap().data_type == dag_core::value::PortType::DataFrame
+        );
 
         let citations = registry
             .build_node(

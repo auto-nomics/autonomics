@@ -35,7 +35,7 @@ async fn run_bib_upload(
     let article = db.get_article(&args.article_id).await?.ok_or_else(|| {
         color_eyre::eyre::eyre!(
             "Article '{}' not found in library. \
-                 Use bib_save to add the article first.",
+                 Run a `bib_save` DAG node to import it first.",
             args.article_id,
         )
     })?;
