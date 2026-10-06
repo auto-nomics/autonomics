@@ -34,7 +34,7 @@ jobs:
             # ring relies on the Apple Silicon target's default CPU features;
             # target-cpu=generic drops them and trips its const assertions.
             rustflags: ""
-          - os: macos-15-large
+          - os: macos-14
             target: x86_64-apple-darwin
             rustflags: -C target-cpu=generic
 
@@ -49,6 +49,20 @@ jobs:
         run: rustup target add "$TARGET"
         env:
           TARGET: ${{ matrix.target }}
+      - name: Prepare macOS x86_64 CMake cross-compilation
+        if: matrix.target == 'x86_64-apple-darwin'
+        run: |
+          set -euo pipefail
+          toolchain="$RUNNER_TEMP/x86_64-apple-darwin.cmake"
+          cat > "$toolchain" <<'EOF'
+          set(CMAKE_SYSTEM_NAME Darwin)
+          set(CMAKE_SYSTEM_PROCESSOR x86_64)
+          set(CMAKE_OSX_ARCHITECTURES x86_64)
+          set(CMAKE_C_COMPILER /usr/bin/clang)
+          set(CMAKE_CXX_COMPILER /usr/bin/clang++)
+          set(CMAKE_CROSSCOMPILING_EMULATOR "/usr/bin/arch;-x86_64")
+          EOF
+          echo "CMAKE_TOOLCHAIN_FILE=$toolchain" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
