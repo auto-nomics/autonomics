@@ -80,7 +80,10 @@ impl NodeFactory for TableFromDfFactory {
     fn doc(&self) -> &'static str {
         "Takes a DataFrame as input and produces a single-row DataFrame with a 'latex' column \
          containing the rendered LaTeX tabular environment. Uses booktabs by default \
-         (\\toprule, \\midrule, \\bottomrule). The header row comes from the DataFrame column names."
+         (\\toprule, \\midrule, \\bottomrule). The header row comes from the DataFrame column \
+         names. Renders Utf8/LargeUtf8/Utf8View, Boolean, Int8-64, UInt8-64, Float32/64, \
+         Date32/64, Time32/64 and Timestamp columns; nulls become empty cells and any other \
+         column type is rejected with an error instead of rendering blank."
     }
 
     fn spec_schema(&self) -> schemars::Schema {
@@ -184,7 +187,13 @@ impl DagNode for TableFromDfNode {
                 let mut row = Vec::with_capacity(n_cols);
                 for j in 0..n_cols {
                     let col = batch.column(j);
-                    let cell = arrow_cell_to_string(col.as_ref(), i);
+                    let cell =
+                        arrow_cell_to_string(col.as_ref(), i, &col_names[j]).map_err(|msg| {
+                            DagError::NodeError {
+                                node_type: "table_from_df".into(),
+                                msg,
+                            }
+                        })?;
                     row.push(cell);
                 }
                 rows.push(row);
@@ -231,57 +240,169 @@ impl DagNode for TableFromDfNode {
 // ---------------------------------------------------------------------------
 
 /// Extract a cell value as a string from an Arrow array at a given row index.
-fn arrow_cell_to_string(array: &dyn arrow_array::Array, row: usize) -> String {
+///
+/// Nulls render as empty cells. Unsupported column types are an explicit
+/// error — previously they fell through to a silent empty string, producing
+/// blank table columns (e.g. every unsigned integer type).
+fn arrow_cell_to_string(
+    array: &dyn arrow_array::Array,
+    row: usize,
+    column: &str,
+) -> Result<String, String> {
     use arrow_array::Array;
+    use arrow_schema::{DataType, TimeUnit};
 
-    // Try to cast to string array.
-    if let Some(str_arr) = array.as_any().downcast_ref::<StringArray>() {
-        if row < str_arr.len() {
-            return str_arr.value(row).to_string();
-        }
-        return String::new();
-    }
-
-    // Try string view array (DataFusion >= 42 uses Utf8View).
-    if let Some(str_arr) = array
-        .as_any()
-        .downcast_ref::<arrow_array::StringViewArray>()
-    {
-        if row < str_arr.len() {
-            return str_arr.value(row).to_string();
-        }
-        return String::new();
+    macro_rules! cell {
+        ($array_type:ty, $value:expr) => {{
+            let arr = array
+                .as_any()
+                .downcast_ref::<$array_type>()
+                .expect("array type was matched on data_type");
+            $value(arr.value(row))
+        }};
     }
 
-    // Try numeric types via format.
-    if let Some(int64) = array.as_any().downcast_ref::<arrow_array::Int64Array>() {
-        if row < int64.len() {
-            return int64.value(row).to_string();
-        }
+    if row >= array.len() {
+        return Err(format!(
+            "column `{column}`: row index {row} is out of bounds ({} rows)",
+            array.len()
+        ));
     }
-    if let Some(int32) = array.as_any().downcast_ref::<arrow_array::Int32Array>() {
-        if row < int32.len() {
-            return int32.value(row).to_string();
-        }
-    }
-    if let Some(float64) = array.as_any().downcast_ref::<arrow_array::Float64Array>() {
-        if row < float64.len() {
-            return format_float(float64.value(row));
-        }
-    }
-    if let Some(float32) = array.as_any().downcast_ref::<arrow_array::Float32Array>() {
-        if row < float32.len() {
-            return format_float(f64::from(float32.value(row)));
-        }
-    }
-    if let Some(bool_arr) = array.as_any().downcast_ref::<arrow_array::BooleanArray>() {
-        if row < bool_arr.len() {
-            return bool_arr.value(row).to_string();
-        }
+    if array.is_null(row) {
+        return Ok(String::new());
     }
 
-    // Fallback: empty string.
-    String::new()
+    let rendered = match array.data_type() {
+        DataType::Utf8 => cell!(StringArray, |v: &str| v.to_string()),
+        DataType::LargeUtf8 => {
+            cell!(arrow_array::LargeStringArray, |v: &str| v.to_string())
+        }
+        DataType::Utf8View => {
+            cell!(arrow_array::StringViewArray, |v: &str| v.to_string())
+        }
+        DataType::Boolean => cell!(arrow_array::BooleanArray, |v: bool| v.to_string()),
+        DataType::Int8 => cell!(arrow_array::Int8Array, |v: i8| v.to_string()),
+        DataType::Int16 => cell!(arrow_array::Int16Array, |v: i16| v.to_string()),
+        DataType::Int32 => cell!(arrow_array::Int32Array, |v: i32| v.to_string()),
+        DataType::Int64 => cell!(arrow_array::Int64Array, |v: i64| v.to_string()),
+        DataType::UInt8 => cell!(arrow_array::UInt8Array, |v: u8| v.to_string()),
+        DataType::UInt16 => cell!(arrow_array::UInt16Array, |v: u16| v.to_string()),
+        DataType::UInt32 => cell!(arrow_array::UInt32Array, |v: u32| v.to_string()),
+        DataType::UInt64 => cell!(arrow_array::UInt64Array, |v: u64| v.to_string()),
+        DataType::Float32 => {
+            cell!(arrow_array::Float32Array, |v: f32| format_float(f64::from(
+                v
+            )))
+        }
+        DataType::Float64 => cell!(arrow_array::Float64Array, |v: f64| format_float(v)),
+        DataType::Date32 => cell!(arrow_array::Date32Array, |v: i32| {
+            format_date(i64::from(v))
+        }),
+        DataType::Date64 => cell!(arrow_array::Date64Array, |v: i64| {
+            format_date(v.div_euclid(86_400_000))
+        }),
+        DataType::Time32(TimeUnit::Second) => cell!(arrow_array::Time32SecondArray, |v: i32| {
+            format_time(i64::from(v) * 1_000_000_000, 3)
+        }),
+        DataType::Time32(TimeUnit::Millisecond) => {
+            cell!(arrow_array::Time32MillisecondArray, |v: i32| format_time(
+                i64::from(v) * 1_000_000,
+                3
+            ))
+        }
+        DataType::Time64(TimeUnit::Microsecond) => {
+            cell!(arrow_array::Time64MicrosecondArray, |v: i64| format_time(
+                v * 1_000,
+                6
+            ))
+        }
+        DataType::Time64(TimeUnit::Nanosecond) => {
+            cell!(arrow_array::Time64NanosecondArray, |v: i64| format_time(
+                v, 9
+            ))
+        }
+        DataType::Timestamp(TimeUnit::Second, _) => {
+            cell!(arrow_array::TimestampSecondArray, |v: i64| {
+                format_datetime(v, 0)
+            })
+        }
+        DataType::Timestamp(TimeUnit::Millisecond, _) => {
+            cell!(arrow_array::TimestampMillisecondArray, |v: i64| {
+                format_datetime(v.div_euclid(1_000), v.rem_euclid(1_000) * 1_000_000)
+            })
+        }
+        DataType::Timestamp(TimeUnit::Microsecond, _) => {
+            cell!(arrow_array::TimestampMicrosecondArray, |v: i64| {
+                format_datetime(v.div_euclid(1_000_000), v.rem_euclid(1_000_000) * 1_000)
+            })
+        }
+        DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+            cell!(arrow_array::TimestampNanosecondArray, |v: i64| {
+                format_datetime(v.div_euclid(1_000_000_000), v.rem_euclid(1_000_000_000))
+            })
+        }
+        other => {
+            return Err(format!(
+                "column `{column}` has unsupported type {other} for LaTeX table rendering \
+                 (supported: Utf8/LargeUtf8/Utf8View, Boolean, Int8-64, UInt8-64, Float32/64, \
+                 Date32/64, Time32/64, Timestamp)",
+            ));
+        }
+    };
+    Ok(rendered)
+}
+
+/// Render days-since-1970-01-01 as `YYYY-MM-DD` (proleptic Gregorian).
+///
+/// Howard Hinnant's `civil_from_days` algorithm — valid for any i64 day
+/// count, no external date dependency.
+fn format_date(days: i64) -> String {
+    let (year, month, day) = civil_from_days(days);
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
+/// (year, month, day) from days since the Unix epoch.
+fn civil_from_days(days: i64) -> (i64, i64, i64) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097; // [0, 146096]
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    let year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let day = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
+    let month = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
+    (year + i64::from(month <= 2), month, day)
+}
+
+/// Render sub-second time-of-day: `value` in nanoseconds, `precision` in
+/// digits (3 = ms, 6 = µs, 9 = ns). Fractional digits are dropped when zero.
+fn format_time(nanos: i64, precision: usize) -> String {
+    let seconds = nanos.div_euclid(1_000_000_000);
+    let frac = nanos.rem_euclid(1_000_000_000);
+    let hh = seconds / 3_600;
+    let mm = (seconds % 3_600) / 60;
+    let ss = seconds % 60;
+    if frac == 0 {
+        format!("{hh:02}:{mm:02}:{ss:02}")
+    } else {
+        let frac_str = format!("{frac:09}");
+        let kept = &frac_str[..precision];
+        format!("{hh:02}:{mm:02}:{ss:02}.{kept}")
+    }
+}
+
+/// Render seconds-since-epoch (+ nanosecond remainder) as
+/// `YYYY-MM-DD HH:MM:SS[.frac]` (UTC, no timezone suffix).
+fn format_datetime(seconds: i64, nanos: i64) -> String {
+    let days = seconds.div_euclid(86_400);
+    let tod = seconds.rem_euclid(86_400);
+    let time = if nanos == 0 {
+        format_time(tod * 1_000_000_000, 9)
+    } else {
+        format_time(tod * 1_000_000_000 + nanos, 9)
+    };
+    format!("{} {time}", format_date(days))
 }
 
 fn format_float(v: f64) -> String {
@@ -424,5 +545,137 @@ mod tests {
         assert_eq!(escape_latex_text("100%"), "100\\%");
         assert_eq!(escape_latex_text("a_b"), "a\\_b");
         assert_eq!(escape_latex_text("x & y"), "x \\& y");
+    }
+
+    // ---- cell rendering type coverage ----
+
+    use arrow_array::{
+        ArrayRef, BinaryArray, Date32Array, Date64Array, Float64Array, Int64Array,
+        Time32SecondArray, Time64NanosecondArray, TimestampMicrosecondArray, UInt8Array,
+        UInt16Array, UInt32Array, UInt64Array,
+    };
+
+    fn cell_of(array: &ArrayRef, row: usize, column: &str) -> String {
+        arrow_cell_to_string(array.as_ref(), row, column).unwrap()
+    }
+
+    #[test]
+    fn unsigned_int_columns_render_values_and_nulls() {
+        let u8_col: ArrayRef = Arc::new(UInt8Array::from(vec![Some(7), None]));
+        let u16_col: ArrayRef = Arc::new(UInt16Array::from(vec![Some(300), Some(65535)]));
+        let u32_col: ArrayRef = Arc::new(UInt32Array::from(vec![Some(4_000_000_000), None]));
+        let u64_col: ArrayRef = Arc::new(UInt64Array::from(vec![
+            Some(18_446_744_073_709_551_615),
+            Some(0),
+        ]));
+        // Regression: every unsigned width used to fall through to "".
+        assert_eq!(cell_of(&u8_col, 0, "u8"), "7");
+        assert_eq!(cell_of(&u8_col, 1, "u8"), "");
+        assert_eq!(cell_of(&u16_col, 1, "u16"), "65535");
+        assert_eq!(cell_of(&u32_col, 0, "u32"), "4000000000");
+        assert_eq!(cell_of(&u32_col, 1, "u32"), "");
+        assert_eq!(cell_of(&u64_col, 0, "u64"), "18446744073709551615");
+        // Previously-covered types keep rendering.
+        let i64_col: ArrayRef = Arc::new(Int64Array::from(vec![Some(-5)]));
+        let f64_col: ArrayRef = Arc::new(Float64Array::from(vec![Some(1.25)]));
+        assert_eq!(cell_of(&i64_col, 0, "i64"), "-5");
+        assert_eq!(cell_of(&f64_col, 0, "f64"), "1.25");
+    }
+
+    #[test]
+    fn date_and_time_columns_render_iso_values() {
+        // Day counts verified against the proleptic Gregorian calendar:
+        // 0 = 1970-01-01, 59 = 1970-03-01, 365 = 1971-01-01 (1970 has 365
+        // days), 366 = 1971-01-02, 10957 = 2000-01-01 (30·365 + 7 leap
+        // days), 11017 = 2000-03-01.
+        for (days, expected) in [
+            (0, "1970-01-01"),
+            (59, "1970-03-01"),
+            (365, "1971-01-01"),
+            (366, "1971-01-02"),
+            (10957, "2000-01-01"),
+            (11017, "2000-03-01"),
+            (-1, "1969-12-31"),
+        ] {
+            let d32: ArrayRef = Arc::new(Date32Array::from(vec![days as i32]));
+            assert_eq!(cell_of(&d32, 0, "d"), expected);
+            let d64: ArrayRef = Arc::new(Date64Array::from(vec![days * 86_400_000 + 999_999]));
+            assert_eq!(cell_of(&d64, 0, "d"), expected);
+        }
+        let t32: ArrayRef = Arc::new(Time32SecondArray::from(vec![3661]));
+        assert_eq!(cell_of(&t32, 0, "t"), "01:01:01");
+        let t64: ArrayRef = Arc::new(Time64NanosecondArray::from(vec![12_345_678_901_234]));
+        assert_eq!(cell_of(&t64, 0, "t"), "03:25:45.678901234");
+        // 1_700_000_000 s since epoch = 2023-11-14 22:13:20 UTC.
+        let ts: ArrayRef = Arc::new(TimestampMicrosecondArray::from(vec![1_700_000_000_000_000]));
+        assert_eq!(cell_of(&ts, 0, "ts"), "2023-11-14 22:13:20");
+    }
+
+    #[test]
+    fn unsupported_column_type_errors_instead_of_rendering_blank() {
+        let binary: ArrayRef = Arc::new(BinaryArray::from_vec(vec![b"\x01\x02"]));
+        let error = arrow_cell_to_string(binary.as_ref(), 0, "blob").unwrap_err();
+        assert!(
+            error.contains("column `blob` has unsupported type Binary"),
+            "{error}"
+        );
+        // Out-of-bounds rows are caught explicitly too.
+        let col: ArrayRef = Arc::new(Int64Array::from(vec![Some(1)]));
+        let error = arrow_cell_to_string(col.as_ref(), 5, "x").unwrap_err();
+        assert!(error.contains("out of bounds"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn execute_renders_unsigned_and_date_columns_end_to_end() {
+        use dag_core::registry::NodeCtx;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("gene", arrow_schema::DataType::Utf8, false),
+            Field::new("n_snps", arrow_schema::DataType::UInt32, true),
+            Field::new("reads", arrow_schema::DataType::UInt64, true),
+            Field::new("peak", arrow_schema::DataType::Date32, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(StringArray::from(vec!["GENE1", "GENE2"])),
+                Arc::new(UInt32Array::from(vec![Some(12), None])),
+                Arc::new(UInt64Array::from(vec![Some(9_000_000_000_000), Some(3)])),
+                Arc::new(Date32Array::from(vec![10957, 11017])),
+            ],
+        )
+        .unwrap();
+        let session = datafusion::prelude::SessionContext::new();
+        let df = session.read_batch(batch).unwrap();
+
+        let mut node = TableFromDfFactory {}
+            .build(
+                serde_json::json!({}),
+                NodeCtx::new(session.runtime_env(), None),
+            )
+            .unwrap();
+        let out = node
+            .execute(
+                &NodeCtx::new(session.runtime_env(), None),
+                &[NodeInput::new_dataframe(0, df)],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap();
+
+        let batches = out.dataframe(0).unwrap().clone().collect().await.unwrap();
+        let latex = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap()
+            .value(0)
+            .to_string();
+        // Unsigned values render; the null UInt32 cell stays empty.
+        assert!(
+            latex.contains("GENE1 & 12 & 9000000000000 & 2000-01-01"),
+            "{latex}"
+        );
+        assert!(latex.contains("GENE2 &  & 3 & 2000-03-01"), "{latex}");
     }
 }

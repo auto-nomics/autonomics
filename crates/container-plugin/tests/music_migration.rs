@@ -19,11 +19,29 @@ use container_plugin::manifest::PluginManifest;
 use serde_json::json;
 
 fn plugin_root() -> Option<PathBuf> {
-    let root = std::env::var_os("NODE_PLUGINS_ROOT")
+    let explicit = std::env::var_os("NODE_PLUGINS_ROOT");
+    let root = explicit
+        .clone()
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/mnt/projects/node-plugins"));
     let manifest = root.join("music").join("manifest.toml");
-    manifest.is_file().then_some(root)
+    if manifest.is_file() {
+        return Some(root);
+    }
+    if explicit.is_some() {
+        // fix-review R04 (2026-10-05): an explicitly set NODE_PLUGINS_ROOT
+        // means migration parity was requested. A missing family must fail
+        // loudly — early-returns here used to count as *passed* tests, so a
+        // green summary claimed coverage that never ran.
+        panic!(
+            "NODE_PLUGINS_ROOT is set but the music family is not deployed \
+             under it ({}) — migration parity cannot run. Deploy the family \
+             or unset NODE_PLUGINS_ROOT to skip these tests deliberately.",
+            manifest.display()
+        );
+    }
+    eprintln!("skipping: music plugin directory not present (NODE_PLUGINS_ROOT unset)");
+    None
 }
 
 fn load_manifest(root: &PathBuf) -> PluginManifest {
@@ -149,8 +167,14 @@ fn music_deconvolution_plugin_compiles_to_the_legacy_wrapper_contract() {
         compiled.env.get("AUTONOMICS_MUSIC_CELL_TYPE_COL").unwrap(),
         "cell_type"
     );
-    assert_eq!(compiled.env.get("AUTONOMICS_MUSIC_CENTERED").unwrap(), "");
-    assert_eq!(compiled.env.get("AUTONOMICS_MUSIC_CT_COV").unwrap(), "");
+    assert_eq!(
+        compiled.env.get("AUTONOMICS_MUSIC_CENTERED").unwrap(),
+        "false"
+    );
+    assert_eq!(
+        compiled.env.get("AUTONOMICS_MUSIC_CT_COV").unwrap(),
+        "false"
+    );
     assert_eq!(
         compiled.env.get("AUTONOMICS_MUSIC_EPSILON").unwrap(),
         "0.01"
@@ -159,7 +183,10 @@ fn music_deconvolution_plugin_compiles_to_the_legacy_wrapper_contract() {
         compiled.env.get("AUTONOMICS_MUSIC_ITER_MAX").unwrap(),
         "1000"
     );
-    assert_eq!(compiled.env.get("AUTONOMICS_MUSIC_NORMALIZE").unwrap(), "");
+    assert_eq!(
+        compiled.env.get("AUTONOMICS_MUSIC_NORMALIZE").unwrap(),
+        "false"
+    );
     assert_eq!(compiled.env.get("AUTONOMICS_MUSIC_NU").unwrap(), "0.0001");
     // Legacy `spec.select_cell_types.join(",")` of the empty default: "".
     assert_eq!(
@@ -257,7 +284,10 @@ fn music_deconvolution_plugin_renders_submitted_values_into_env() {
         compiled.env.get("AUTONOMICS_MUSIC_CENTERED").unwrap(),
         "true"
     );
-    assert_eq!(compiled.env.get("AUTONOMICS_MUSIC_NORMALIZE").unwrap(), "");
+    assert_eq!(
+        compiled.env.get("AUTONOMICS_MUSIC_NORMALIZE").unwrap(),
+        "false"
+    );
     assert_eq!(compiled.env.get("AUTONOMICS_MUSIC_CT_COV").unwrap(), "true");
 }
 
