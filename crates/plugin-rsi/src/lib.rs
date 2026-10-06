@@ -45,7 +45,10 @@ pub use install::{
 };
 pub use lifecycle::{LocalActivationOutcome, PluginLifecycle, ValidationOutcome};
 pub use names::validate_plugin_name;
-pub use plugin::{GitPluginSourceFetcher, PluginOperator, PluginSourceFetcher, PluginStore};
+pub use plugin::{
+    GitPluginSourceFetcher, PLUGIN_DEVELOPMENT_VFS_ROOT, PluginOperator, PluginSourceFetcher,
+    PluginStore,
+};
 pub use profile::AgentProfile;
 pub use report::{GateResult, GateStatus, ValidationReport};
 pub use request::{RequestIntent, RequestRecord, RequestSource, RequestStatus, RequestStore};

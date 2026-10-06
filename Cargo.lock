@@ -9335,6 +9335,8 @@ dependencies = [
  "container-plugin",
  "container-runtime",
  "evolution-core",
+ "futures",
+ "opendal",
  "schemars",
  "serde",
  "serde_json",
@@ -9344,6 +9346,7 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "toml 1.1.6+spec-1.1.0",
+ "vfs",
 ]
 
 [[package]]

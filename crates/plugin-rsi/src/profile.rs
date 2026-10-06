@@ -3,17 +3,13 @@
 use agentik_core::agent_builder::AgentBuilder;
 use agentik_core::tools::ToolRegistration;
 
-use crate::{
-    Error, PluginOperator, Result, plugin_development_tool_registrations,
-    tools::PluginDevelopmentBinding,
-};
+use crate::{Error, Result, plugin_development_tool_registrations};
 
 /// Configuration for one plugin development agent.
 ///
 /// The profile connects one stable agent identity to the specialized plugin
-/// development toolset. It does not own runtime state: workspace leases
-/// remain in the process-wide registry, while the host supplies the model
-/// and lifecycle when it builds the agent.
+/// development toolset. The identity determines the VFS principal; plugins are
+/// selected per tool call by their `/plugins/dev/<name>` path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentProfile {
     agent_id: String,
@@ -24,8 +20,8 @@ pub struct AgentProfile {
 impl AgentProfile {
     /// Create the default profile for an agent identity.
     ///
-    /// `agent_id` is the binding identity used by the process-wide toolset
-    /// registry; it does not need to equal the UUID of the running agent.
+    /// `agent_id` determines the deterministic VFS principal used by this
+    /// profile's tools; it does not need to equal the running agent's UUID.
     pub fn new(agent_id: impl Into<String>) -> Result<Self> {
         let agent_id = agent_id.into();
         validate_agent_id(&agent_id)?;
@@ -36,7 +32,7 @@ impl AgentProfile {
         })
     }
 
-    /// Return the identity used to bind this profile to a plugin.
+    /// Return the identity used to derive this profile's VFS principal.
     pub fn agent_id(&self) -> &str {
         &self.agent_id
     }
@@ -78,18 +74,6 @@ impl AgentProfile {
         plugin_development_tool_registrations(self.agent_id.clone())
     }
 
-    /// Bind this agent directly to one long-lived plugin workspace.
-    ///
-    /// This is the no-copy development path; the plugin manifest's lifecycle
-    /// status gates every mutating tool call.
-    pub fn bind_direct_plugin(
-        &self,
-        operator: &mut PluginOperator<'_>,
-        run_id: &str,
-    ) -> Result<PluginDevelopmentBinding> {
-        operator.bind_agent(&self.agent_id, run_id)
-    }
-
     /// Attach the profile's prompts and specialized tools to an agent builder.
     ///
     /// The caller remains responsible for supplying the model, storage,
@@ -115,10 +99,11 @@ fn validate_agent_id(agent_id: &str) -> Result<()> {
 }
 
 fn default_system_prompt() -> String {
-    "You develop exactly one assigned plugin. Start with plugin_development_status, \
-    modify its nodes and files only through the plugin tools, and use \
-    plugin_container_run to turn failures into implementation feedback. Do not claim \
-    completion without checking the workspace in its selected environment."
+    "You develop plugins through their /plugins/dev/<plugin-name> VFS paths. \
+    Inspect the addressed workspace, modify nodes and files only through plugin \
+    tools, and use plugin_container_run to turn failures into implementation \
+    feedback. Do not claim completion without checking the workspace in its \
+    selected environment."
         .into()
 }
 
@@ -154,7 +139,7 @@ mod tests {
         assert!(
             profile
                 .system_prompt()
-                .contains("exactly one assigned plugin")
+                .contains("/plugins/dev/<plugin-name>")
         );
     }
 

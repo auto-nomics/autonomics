@@ -280,6 +280,9 @@ impl SharedInfra {
             &config.data_dir,
             vfs.clone(),
         ));
+        plugin_rsi::PluginDevelopmentToolsetRegistry::global()
+            .configure_vfs((*file_storage).clone(), rsi.store().root())
+            .map_err(|error| crate::error::Error::Other(error.to_string()))?;
         let container_execution =
             Arc::new(ContainerExecutionInfra::try_from_env().map_err(crate::error::Error::Other)?);
         tracing::info!(

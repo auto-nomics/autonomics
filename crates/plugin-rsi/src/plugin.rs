@@ -18,8 +18,7 @@ use container_runtime::ImageReference;
 
 use crate::{
     Error, GitInstalledPluginSource, GitRepo, InstalledPluginSource, LocalInstalledPluginSource,
-    PluginDevelopmentToolsetRegistry, PluginWorkspace, RequestStore, Result,
-    validate::EnvironmentCatalog,
+    PluginWorkspace, RequestStore, Result, validate::EnvironmentCatalog,
 };
 
 /// Creates and opens plugin repositories under one root.
@@ -33,6 +32,9 @@ pub struct PluginStore {
     author_name: String,
     author_email: String,
 }
+
+/// Stable virtual mount containing every long-lived plugin workspace.
+pub const PLUGIN_DEVELOPMENT_VFS_ROOT: &str = "/plugins/dev";
 
 /// Materializes an installed source into the unified plugin root.
 pub trait PluginSourceFetcher {
@@ -86,6 +88,12 @@ impl PluginStore {
     /// Return the daemon-owned plugin root.
     pub fn root(&self) -> &Path {
         &self.workspace_root
+    }
+
+    /// Return the VFS address for one development workspace.
+    pub fn development_vfs_path(&self, plugin_name: &str) -> Result<String> {
+        crate::validate_plugin_name(plugin_name)?;
+        Ok(format!("{PLUGIN_DEVELOPMENT_VFS_ROOT}/{plugin_name}"))
     }
 
     /// Return the immutable runtime materialization root.
@@ -607,6 +615,11 @@ impl PluginOperator<'_> {
         Ok(())
     }
 
+    /// Return this workspace's stable VFS address.
+    pub fn development_vfs_path(&self) -> Result<String> {
+        self.store.development_vfs_path(&self.plugin_name)
+    }
+
     pub fn plugin_name(&self) -> &str {
         &self.plugin_name
     }
@@ -706,26 +719,6 @@ impl PluginOperator<'_> {
         self.manifest.status = to;
         save_manifest(&self.workspace(), &self.manifest)?;
         Ok(to)
-    }
-
-    /// Bind one agent directly to this plugin workspace.
-    ///
-    /// Exclusive agent leasing and the manifest's editable status are the
-    /// development guards.
-    pub fn bind_agent(
-        &mut self,
-        agent_id: &str,
-        run_id: &str,
-    ) -> Result<crate::tools::PluginDevelopmentBinding> {
-        self.ensure_editable()?;
-        let environment_reference = self.manifest.image.reference.as_str();
-        PluginDevelopmentToolsetRegistry::global().bind_plugin_workspace(
-            agent_id,
-            &self.plugin_name,
-            self.store.plugin_path(&self.plugin_name),
-            &environment_reference,
-            run_id,
-        )
     }
 
     fn ensure_editable(&self) -> Result<()> {

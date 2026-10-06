@@ -1,4 +1,6 @@
 use agentik_core::tools::{ToolError, ToolRegistration, ToolResult};
+mod common;
+
 use plugin_rsi::GitRepo;
 use plugin_rsi::{
     AgentProfile, Environment, EnvironmentCatalog, InstalledPluginSource, PluginLifecycle,
@@ -73,6 +75,7 @@ async fn an_installed_reference_can_be_forked_and_locally_activated() {
     let state = tempfile::tempdir().unwrap();
     let requests = RequestStore::open(state.path());
     let store = PluginStore::open(state.path(), "main", "Autonomics RSI", "rsi@example.com");
+    common::configure_plugin_vfs(state.path());
     let first_request = requests.record(request("reference-plugin")).unwrap();
     let mut reference = store
         .create(
@@ -86,14 +89,14 @@ async fn an_installed_reference_can_be_forked_and_locally_activated() {
         .unwrap();
 
     let profile = AgentProfile::new("reference-agent").unwrap();
-    profile
-        .bind_direct_plugin(&mut reference, "reference-run")
-        .unwrap();
     let tools = profile.tool_registrations();
     execute(
         &tools,
         "plugin_node_create",
-        json!({ "node": node_json("reference_adapter", "scripts/reference.sh") }),
+        json!({
+            "plugin_path": "/plugins/dev/reference-plugin",
+            "node": node_json("reference_adapter", "scripts/reference.sh")
+        }),
     )
     .await
     .unwrap();
@@ -101,6 +104,7 @@ async fn an_installed_reference_can_be_forked_and_locally_activated() {
         &tools,
         "plugin_node_write_script",
         json!({
+            "plugin_path": "/plugins/dev/reference-plugin",
             "node_kind": "reference_adapter",
             "contents": "#!/bin/sh\nset -eu\ncp \"$AUTONOMICS_INPUT0\" \"$AUTONOMICS_OUTPUT0\"\n"
         }),
@@ -111,6 +115,7 @@ async fn an_installed_reference_can_be_forked_and_locally_activated() {
         &tools,
         "plugin_workspace_write",
         json!({
+            "plugin_path": "/plugins/dev/reference-plugin",
             "path": "README.md",
             "contents": "# reference-plugin\n\nA deterministic adapter.\n"
         }),
@@ -140,6 +145,20 @@ async fn an_installed_reference_can_be_forked_and_locally_activated() {
         forked.manifest().lifecycle.source_plugin.as_deref(),
         Some("reference-plugin")
     );
+    let fork_path = forked.development_vfs_path().unwrap();
+    assert_eq!(fork_path, "/plugins/dev/forked-plugin");
+    let first_fork_agent = AgentProfile::new("fork-agent-1").unwrap();
+    let second_fork_agent = AgentProfile::new("fork-agent-2").unwrap();
+    for profile in [first_fork_agent, second_fork_agent] {
+        let tools = profile.tool_registrations();
+        execute(
+            &tools,
+            "plugin_development_status",
+            json!({ "plugin_path": fork_path }),
+        )
+        .await
+        .unwrap();
+    }
     let repository = GitRepo::open(state.path().join("plugins/forked-plugin"));
     assert!(repository.remote_url("origin").unwrap().is_none());
 

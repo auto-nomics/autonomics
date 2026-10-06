@@ -1,4 +1,6 @@
 use agentik_core::tools::{ToolError, ToolRegistration};
+mod common;
+
 use plugin_rsi::{
     AgentProfile, Environment, EnvironmentCatalog, PluginStatus, PluginStore, RequestIntent,
     RequestRecord, RequestSource, RequestStatus, RequestStore,
@@ -72,6 +74,7 @@ async fn plugin_store_develops_one_repository_in_place() {
     let requests = RequestStore::open(state.path());
     let request = requests.record(request()).unwrap();
     let store = PluginStore::open(state.path(), "main", "Autonomics RSI", "rsi@example.com");
+    common::configure_plugin_vfs(state.path());
     let mut operator = store
         .create(
             "direct-plugin",
@@ -85,19 +88,28 @@ async fn plugin_store_develops_one_repository_in_place() {
 
     assert_eq!(operator.status(), PluginStatus::Draft);
     assert_eq!(store.list().unwrap().len(), 1);
+    assert_eq!(
+        store.development_vfs_path("direct-plugin").unwrap(),
+        "/plugins/dev/direct-plugin"
+    );
 
     let profile = AgentProfile::new("direct-plugin-agent").unwrap();
-    profile
-        .bind_direct_plugin(&mut operator, "direct-run-1")
-        .unwrap();
     let tools = profile.tool_registrations();
-    execute(&tools, "plugin_node_create", json!({ "node": node_json() }))
-        .await
-        .unwrap();
+    execute(
+        &tools,
+        "plugin_node_create",
+        json!({
+            "plugin_path": "/plugins/dev/direct-plugin",
+            "node": node_json()
+        }),
+    )
+    .await
+    .unwrap();
     execute(
         &tools,
         "plugin_node_write_script",
         json!({
+            "plugin_path": "/plugins/dev/direct-plugin",
             "node_kind": "direct_adapter",
             "contents": "#!/bin/sh\ncp \"$AUTONOMICS_INPUT0\" \"$AUTONOMICS_OUTPUT0\"\n"
         }),
@@ -110,10 +122,26 @@ async fn plugin_store_develops_one_repository_in_place() {
     assert!(operator.workspace().read_text("scripts/adapter.sh").is_ok());
 
     operator.transition(PluginStatus::Validating).unwrap();
+    assert!(
+        execute(
+            &tools,
+            "plugin_node_write_script",
+            json!({
+                "plugin_path": "/plugins/dev/direct-plugin",
+                "node_kind": "direct_adapter",
+                "contents": "#!/bin/sh\n"
+            }),
+        )
+        .await
+        .is_err()
+    );
     execute(
         &tools,
         "plugin_node_spec",
-        json!({ "node_kind": "direct_adapter" }),
+        json!({
+            "plugin_path": "/plugins/dev/direct-plugin",
+            "node_kind": "direct_adapter"
+        }),
     )
     .await
     .unwrap();
@@ -122,6 +150,7 @@ async fn plugin_store_develops_one_repository_in_place() {
             &tools,
             "plugin_workspace_write",
             json!({
+                "plugin_path": "/plugins/dev/direct-plugin",
                 "path": "README.md",
                 "contents": "# direct-plugin\n"
             }),

@@ -1,5 +1,7 @@
 use std::sync::Mutex;
 
+mod common;
+
 use agentik_core::tools::{ToolError, ToolRegistration, ToolResult};
 use agentik_sdk::types::ToolResultContent;
 use plugin_rsi::{
@@ -149,6 +151,7 @@ async fn plugin_is_developed_published_updated_and_installed_in_one_workspace() 
         ))
         .unwrap();
     let store = PluginStore::open(state.path(), "main", "Autonomics RSI", "rsi@example.com");
+    common::configure_plugin_vfs(state.path());
     let mut operator = store
         .create(
             "unified-plugin",
@@ -161,17 +164,22 @@ async fn plugin_is_developed_published_updated_and_installed_in_one_workspace() 
         .unwrap();
 
     let profile = AgentProfile::new("unified-plugin-agent").unwrap();
-    profile
-        .bind_direct_plugin(&mut operator, "unified-run-1")
-        .unwrap();
     let tools = profile.tool_registrations();
-    execute(&tools, "plugin_node_create", json!({ "node": node_json() }))
-        .await
-        .unwrap();
+    execute(
+        &tools,
+        "plugin_node_create",
+        json!({
+            "plugin_path": "/plugins/dev/unified-plugin",
+            "node": node_json()
+        }),
+    )
+    .await
+    .unwrap();
     execute(
         &tools,
         "plugin_node_write_script",
         json!({
+            "plugin_path": "/plugins/dev/unified-plugin",
             "node_kind": "unified_adapter",
             "contents": "#!/bin/sh\nset -eu\ncp \"$AUTONOMICS_INPUT0\" \"$AUTONOMICS_OUTPUT0\"\n"
         }),
@@ -182,6 +190,7 @@ async fn plugin_is_developed_published_updated_and_installed_in_one_workspace() 
         &tools,
         "plugin_workspace_write",
         json!({
+            "plugin_path": "/plugins/dev/unified-plugin",
             "path": "README.md",
             "contents": "# unified-plugin\n\nA deterministic adapter.\n"
         }),
@@ -242,14 +251,12 @@ async fn plugin_is_developed_published_updated_and_installed_in_one_workspace() 
     assert_eq!(update.status(), PluginStatus::Updating);
 
     let update_profile = AgentProfile::new("unified-plugin-update-agent").unwrap();
-    update_profile
-        .bind_direct_plugin(&mut update, "unified-run-2")
-        .unwrap();
     let update_tools = update_profile.tool_registrations();
     execute(
         &update_tools,
         "plugin_node_write_script",
         json!({
+            "plugin_path": "/plugins/dev/unified-plugin",
             "node_kind": "unified_adapter",
             "contents": "#!/bin/sh\nset -eu\ntest -s \"$AUTONOMICS_INPUT0\"\ncp \"$AUTONOMICS_INPUT0\" \"$AUTONOMICS_OUTPUT0\"\n"
         }),

@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+mod common;
+
 use agentik_core::tools::{ToolError, ToolRegistration, ToolResult};
 use plugin_rsi::{
     AgentProfile, Environment, EnvironmentCatalog, GitRepo, MergeOutcome, PluginDistiller,
@@ -120,6 +122,7 @@ async fn execute(
 #[tokio::test]
 async fn local_activation_is_distilled_to_github_without_blocking_the_agent() {
     let state = tempfile::tempdir().unwrap();
+    common::configure_plugin_vfs(state.path());
     let skills = skills::SkillManager::init(skills::SkillManager::new(state.path()));
     let publisher = Arc::new(FakePublisher);
     let infra = RsiInfra::open(
@@ -149,19 +152,24 @@ async fn local_activation_is_distilled_to_github_without_blocking_the_agent() {
             status: RequestStatus::Open,
         })
         .unwrap();
-    let mut operator = infra.create_plugin(request.clone(), "alpine").unwrap();
+    let _operator = infra.create_plugin(request.clone(), "alpine").unwrap();
     let profile = AgentProfile::new("distillation-agent").unwrap();
-    profile
-        .bind_direct_plugin(&mut operator, "distillation-run")
-        .unwrap();
     let tools = profile.tool_registrations();
-    execute(&tools, "plugin_node_create", json!({ "node": node_json() }))
-        .await
-        .unwrap();
+    execute(
+        &tools,
+        "plugin_node_create",
+        json!({
+            "plugin_path": "/plugins/dev/distilled-plugin",
+            "node": node_json()
+        }),
+    )
+    .await
+    .unwrap();
     execute(
         &tools,
         "plugin_node_write_script",
         json!({
+            "plugin_path": "/plugins/dev/distilled-plugin",
             "node_kind": "distilled_adapter",
             "contents": "#!/bin/sh\nset -eu\ncp \"$AUTONOMICS_INPUT0\" \"$AUTONOMICS_OUTPUT0\"\n"
         }),
@@ -172,6 +180,7 @@ async fn local_activation_is_distilled_to_github_without_blocking_the_agent() {
         &tools,
         "plugin_workspace_write",
         json!({
+            "plugin_path": "/plugins/dev/distilled-plugin",
             "path": "README.md",
             "contents": "# distilled-plugin\n\nA deterministic adapter.\n"
         }),

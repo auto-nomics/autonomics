@@ -1,11 +1,11 @@
-//! Agent tools for specialized plugin development.
+//! Agent tools for path-addressed plugin development.
 //!
-//! The registry is the process-wide trust boundary. The host binds one agent
-//! identity to one long-lived plugin workspace; tool instances carry only that
-//! identity and resolve everything else through the registry.
+//! Tools operate on `/plugins/dev/<plugin-name>` through the mounted VFS. No
+//! agent/plugin lease exists: an agent identity only determines the VFS
+//! principal, while the path selects the workspace.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     path::PathBuf,
     sync::{Arc, Mutex, OnceLock},
 };
@@ -15,11 +15,13 @@ use agentik_proc::tool;
 use async_trait::async_trait;
 use container_plugin::{manifest::PluginManifest, node_definition::NodeDefinition};
 use container_runtime::{
-    ContainerNetwork, ContainerRunRequest, ContainerRunResult, DEFAULT_CONTAINER_WORKDIR,
-    GpuRequest, PodmanConnection, PullPolicy, trusted_workspace_ref, unique_container_name,
+    ContainerNetwork, ContainerRunRequest, DEFAULT_CONTAINER_WORKDIR, GpuRequest, PodmanConnection,
+    PullPolicy, trusted_workspace_ref, unique_container_name,
 };
+use futures::StreamExt;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use vfs::{OpendalFileStorage, permission::VfsPrincipal};
 
 use crate::{Error, PluginWorkspace, Result as RsiResult, plugin::is_editable};
 
@@ -27,37 +29,15 @@ const MANIFEST_FILE: &str = "manifest.toml";
 pub(crate) const MAX_AGENT_ID_BYTES: usize = 256;
 const DEFAULT_TOOL_TIMEOUT_SECS: u64 = 900;
 
-/// One agent's exclusive assignment to develop a plugin workspace.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PluginDevelopmentBinding {
-    /// Immutable plugin name recorded by the workspace.
-    pub plugin_name: String,
-    /// Development session identifier.
-    pub run_id: String,
-    /// Approved environment image selected by the plugin.
-    pub environment_reference: String,
-    workspace: PathBuf,
-}
-
-impl PluginDevelopmentBinding {
-    /// Return the safe workspace owned by this assignment.
-    pub fn workspace(&self) -> PluginWorkspace {
-        PluginWorkspace::new(self.workspace.clone())
-    }
-}
-
 #[derive(Default)]
 struct RegistryState {
     runtime: Option<Arc<dyn PodmanConnection>>,
-    bindings: BTreeMap<String, PluginDevelopmentBinding>,
-    reserved: BTreeSet<String>,
+    vfs: Option<OpendalFileStorage>,
+    development_root: Option<PathBuf>,
+    manifest_locks: BTreeMap<String, Arc<tokio::sync::Mutex<()>>>,
 }
 
-/// Process-wide registry binding development agents to plugin workspaces.
-///
-/// An agent id can have at most one active binding. This is deliberately a
-/// singleton because all copies of the toolset must observe the same lease and
-/// container connection.
+/// Process-wide registry carrying trusted plugin-development infrastructure.
 #[derive(Default)]
 pub struct PluginDevelopmentToolsetRegistry {
     state: Mutex<RegistryState>,
@@ -66,12 +46,10 @@ pub struct PluginDevelopmentToolsetRegistry {
 static REGISTRY: OnceLock<Arc<PluginDevelopmentToolsetRegistry>> = OnceLock::new();
 
 impl PluginDevelopmentToolsetRegistry {
-    /// Return the process-wide registry used by plugin development tools.
     pub fn global() -> Arc<Self> {
         REGISTRY.get_or_init(|| Arc::new(Self::default())).clone()
     }
 
-    /// Configure the trusted runtime used by bound development agents.
     pub fn configure_runtime(&self, runtime: Arc<dyn PodmanConnection>) -> RsiResult<()> {
         self.lock(|state| {
             state.runtime = Some(runtime);
@@ -79,91 +57,82 @@ impl PluginDevelopmentToolsetRegistry {
         })
     }
 
-    /// Bind one agent directly to a long-lived plugin repository.
-    ///
-    /// The manifest must be in an editable daemon-owned lifecycle state.
-    pub fn bind_plugin_workspace(
+    /// Configure the mounted development namespace used by all plugin tools.
+    pub fn configure_vfs(
         &self,
-        agent_id: &str,
-        plugin_name: &str,
-        workspace_path: impl Into<PathBuf>,
-        environment_reference: &str,
-        run_id: &str,
-    ) -> RsiResult<PluginDevelopmentBinding> {
-        validate_agent_id(agent_id)?;
-        validate_run_id(run_id)?;
-        self.reserve_agent(agent_id)?;
-
-        let workspace = PluginWorkspace::new(workspace_path);
-        let binding = match load_manifest(&workspace).and_then(|manifest| {
-            if manifest.plugin_name != plugin_name {
-                return Err(Error::Validation(format!(
-                    "workspace plugin_name `{}` does not match assigned plugin `{plugin_name}`",
-                    manifest.plugin_name
-                )));
-            }
-            if manifest.image.reference.as_str() != environment_reference {
-                return Err(Error::Validation(
-                    "assigned environment does not match plugin manifest".into(),
-                ));
-            }
-            if !is_editable(manifest.status) {
-                return Err(Error::Validation(format!(
-                    "plugin `{plugin_name}` cannot be edited from status {:?}",
-                    manifest.status
-                )));
-            }
-            Ok(PluginDevelopmentBinding {
-                plugin_name: plugin_name.to_string(),
-                run_id: run_id.to_string(),
-                environment_reference: environment_reference.to_string(),
-                workspace: workspace.path().to_path_buf(),
-            })
-        }) {
-            Ok(binding) => binding,
-            Err(error) => {
-                let _ = self.release_reservation(agent_id);
-                return Err(error);
-            }
-        };
-        let binding = match self.insert_binding(agent_id, binding) {
-            Ok(binding) => binding,
-            Err(error) => {
-                let _ = self.release_reservation(agent_id);
-                return Err(error);
-            }
-        };
-        Ok(binding)
-    }
-
-    /// Return one agent's active assignment, if any.
-    pub fn binding(&self, agent_id: &str) -> RsiResult<Option<PluginDevelopmentBinding>> {
-        self.lock(|state| Ok(state.bindings.get(agent_id).cloned()))
-    }
-
-    /// Release an agent assignment without touching its plugin directory.
-    pub fn unbind_agent(&self, agent_id: &str) -> RsiResult<()> {
+        vfs: OpendalFileStorage,
+        development_root: impl Into<PathBuf>,
+    ) -> RsiResult<()> {
+        let development_root = development_root.into();
         self.lock(|state| {
-            state.bindings.remove(agent_id);
+            state.vfs = Some(vfs);
+            state.development_root = Some(development_root);
             Ok(())
         })
     }
 
-    fn resolve(
+    fn resolve_target(
         &self,
-        agent_id: &str,
-    ) -> RsiResult<(PluginDevelopmentBinding, Arc<dyn PodmanConnection>)> {
+        principal: &VfsPrincipal,
+        plugin_path: &str,
+    ) -> RsiResult<PluginTarget> {
         self.lock(|state| {
-            let binding = state.bindings.get(agent_id).cloned().ok_or_else(|| {
-                Error::Validation(format!(
-                    "agent `{agent_id}` has no plugin development binding"
-                ))
+            let base_vfs = state.vfs.clone().ok_or_else(|| {
+                Error::Validation("plugin development VFS is not configured".into())
             })?;
-            let runtime = state.runtime.clone().ok_or_else(|| {
-                Error::Validation("plugin development container runtime is not configured".into())
+            let root = state.development_root.clone().ok_or_else(|| {
+                Error::Validation("plugin development root is not configured".into())
             })?;
-            Ok((binding, runtime))
+            let normalized = OpendalFileStorage::normalize_path(plugin_path);
+            let suffix = normalized
+                .strip_prefix(crate::PLUGIN_DEVELOPMENT_VFS_ROOT)
+                .and_then(|suffix| suffix.strip_prefix('/'))
+                .unwrap_or_default();
+            let parts = suffix
+                .split('/')
+                .filter(|part| !part.is_empty())
+                .collect::<Vec<_>>();
+            if parts.len() != 1 {
+                return Err(Error::Validation(format!(
+                    "plugin path must address one workspace beneath {}",
+                    crate::PLUGIN_DEVELOPMENT_VFS_ROOT
+                )));
+            }
+            let plugin_name = parts[0];
+            crate::validate_plugin_name(plugin_name)?;
+            let virtual_path = format!("{}/{}", crate::PLUGIN_DEVELOPMENT_VFS_ROOT, plugin_name);
+            let vfs = base_vfs.with_principal(principal.clone());
+            if !vfs.is_mounted(&virtual_path) {
+                return Err(Error::Validation(format!(
+                    "plugin path `{virtual_path}` is outside the development mount"
+                )));
+            }
+            Ok(PluginTarget {
+                plugin_name: plugin_name.to_string(),
+                virtual_path,
+                vfs,
+                workspace: PluginWorkspace::new(root.join(plugin_name)),
+            })
         })
+    }
+
+    fn runtime(&self) -> RsiResult<Arc<dyn PodmanConnection>> {
+        self.lock(|state| {
+            state.runtime.clone().ok_or_else(|| {
+                Error::Validation("plugin development container runtime is not configured".into())
+            })
+        })
+    }
+
+    fn manifest_lock(&self, plugin_name: &str) -> Arc<tokio::sync::Mutex<()>> {
+        self.lock(|state| {
+            Ok(state
+                .manifest_locks
+                .entry(plugin_name.to_string())
+                .or_default()
+                .clone())
+        })
+        .expect("plugin development registry lock poisoned")
     }
 
     fn lock<T>(&self, operate: impl FnOnce(&mut RegistryState) -> RsiResult<T>) -> RsiResult<T> {
@@ -172,59 +141,29 @@ impl PluginDevelopmentToolsetRegistry {
         })?;
         operate(&mut state)
     }
-
-    fn reserve_agent(&self, agent_id: &str) -> RsiResult<()> {
-        self.lock(|state| {
-            if state.bindings.contains_key(agent_id) || state.reserved.contains(agent_id) {
-                return Err(Error::Validation(format!(
-                    "agent `{agent_id}` is already bound to a plugin development task"
-                )));
-            }
-            state.reserved.insert(agent_id.to_string());
-            Ok(())
-        })
-    }
-
-    fn release_reservation(&self, agent_id: &str) -> RsiResult<()> {
-        self.lock(|state| {
-            state.reserved.remove(agent_id);
-            Ok(())
-        })
-    }
-
-    fn insert_binding(
-        &self,
-        agent_id: &str,
-        binding: PluginDevelopmentBinding,
-    ) -> RsiResult<PluginDevelopmentBinding> {
-        self.lock(|state| {
-            if state.bindings.contains_key(agent_id) {
-                return Err(Error::Validation(format!(
-                    "agent `{agent_id}` is already bound to a plugin development task"
-                )));
-            }
-            state.bindings.insert(agent_id.to_string(), binding.clone());
-            state.reserved.remove(agent_id);
-            Ok(binding)
-        })
-    }
 }
 
 #[derive(Clone)]
 struct PluginToolState {
     registry: Arc<PluginDevelopmentToolsetRegistry>,
-    agent_id: String,
+    principal: VfsPrincipal,
 }
 
-/// Build the specialized plugin development tools for one bound agent.
-///
-/// Pass the returned registrations to `Agent::builder().with_tools(...)`. The
-/// agent remains inert until the host creates its binding in the global
-/// registry.
+#[derive(Clone)]
+struct PluginTarget {
+    plugin_name: String,
+    virtual_path: String,
+    vfs: OpendalFileStorage,
+    workspace: PluginWorkspace,
+}
+
+/// Build the specialized plugin development tools for one agent identity.
 pub fn plugin_development_tool_registrations(agent_id: impl Into<String>) -> Vec<ToolRegistration> {
+    let agent_id = agent_id.into();
+    validate_agent_id(&agent_id).expect("valid plugin development agent id");
     let state = PluginToolState {
         registry: PluginDevelopmentToolsetRegistry::global(),
-        agent_id: agent_id.into(),
+        principal: principal_for_agent(&agent_id),
     };
     vec![
         ToolRegistration::from(PluginStatusTool {
@@ -270,22 +209,14 @@ fn validate_agent_id(agent_id: &str) -> RsiResult<()> {
     Ok(())
 }
 
-fn validate_run_id(run_id: &str) -> RsiResult<()> {
-    let valid = !run_id.is_empty()
-        && run_id.len() <= 128
-        && run_id.chars().all(|character| {
-            character.is_ascii_lowercase()
-                || character.is_ascii_digit()
-                || character == '-'
-                || character == '_'
-        });
-    if valid {
-        Ok(())
-    } else {
-        Err(Error::Validation(
-            "development run id must be `[a-z0-9_-]` and at most 128 bytes".into(),
-        ))
+fn principal_for_agent(agent_id: &str) -> VfsPrincipal {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in agent_id.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
     }
+    let uid = 10_000_u32 + u32::try_from(hash % 55_536).unwrap_or_default();
+    VfsPrincipal::plugin_developer(uid)
 }
 
 fn tool_error(error: impl std::fmt::Display) -> ToolError {
@@ -294,17 +225,52 @@ fn tool_error(error: impl std::fmt::Display) -> ToolError {
     }
 }
 
-fn load_manifest(workspace: &PluginWorkspace) -> RsiResult<PluginManifest> {
-    toml::from_str(&workspace.read_text(MANIFEST_FILE)?)
-        .map_err(|error| Error::Validation(format!("invalid {MANIFEST_FILE}: {error}")))
+fn vfs_error(error: impl std::fmt::Display) -> Error {
+    Error::Validation(format!("VFS operation failed: {error}"))
 }
 
-fn editable_manifest(binding: &PluginDevelopmentBinding) -> RsiResult<PluginManifest> {
-    let manifest = load_manifest(&binding.workspace())?;
+fn manifest_path(target: &PluginTarget) -> String {
+    format!(
+        "{}/{}",
+        target.virtual_path.trim_end_matches('/'),
+        MANIFEST_FILE
+    )
+}
+
+async fn resolve_target(state: &PluginToolState, plugin_path: &str) -> RsiResult<PluginTarget> {
+    state.registry.resolve_target(&state.principal, plugin_path)
+}
+
+async fn read_virtual_text(vfs: &OpendalFileStorage, path: &str) -> RsiResult<String> {
+    let length = vfs.content_length(path).await.map_err(vfs_error)?;
+    let bytes = vfs
+        .read_range(path, 0..length)
+        .await
+        .map_err(vfs_error)?
+        .to_vec();
+    String::from_utf8(bytes)
+        .map_err(|error| Error::Validation(format!("VFS file `{path}` is not UTF-8: {error}")))
+}
+
+async fn load_manifest(target: &PluginTarget) -> RsiResult<PluginManifest> {
+    let text = read_virtual_text(&target.vfs, &manifest_path(target)).await?;
+    let manifest: PluginManifest = toml::from_str(&text)
+        .map_err(|error| Error::Validation(format!("invalid {MANIFEST_FILE}: {error}")))?;
+    if manifest.plugin_name != target.plugin_name {
+        return Err(Error::Validation(format!(
+            "workspace plugin_name `{}` does not match path plugin `{}`",
+            manifest.plugin_name, target.plugin_name
+        )));
+    }
+    Ok(manifest)
+}
+
+async fn editable_manifest(target: &PluginTarget) -> RsiResult<PluginManifest> {
+    let manifest = load_manifest(target).await?;
     if !is_editable(manifest.status) {
         return Err(Error::Validation(format!(
             "plugin `{}` cannot be edited from manifest status {:?}",
-            binding.plugin_name, manifest.status
+            target.plugin_name, manifest.status
         )));
     }
     Ok(manifest)
@@ -314,6 +280,59 @@ fn save_manifest(workspace: &PluginWorkspace, manifest: &PluginManifest) -> RsiR
     toml::to_string_pretty(manifest)
         .map_err(|error| Error::Validation(format!("cannot encode manifest: {error}")))
         .and_then(|text| workspace.write_text(MANIFEST_FILE, &text))
+}
+
+async fn write_virtual_text(vfs: &OpendalFileStorage, path: &str, contents: &str) -> RsiResult<()> {
+    vfs.write_bytes(path, contents.as_bytes().to_vec())
+        .await
+        .map_err(vfs_error)
+}
+
+async fn list_virtual_files(vfs: &OpendalFileStorage, root: &str) -> RsiResult<Vec<String>> {
+    vfs.check_listable(root).map_err(vfs_error)?;
+    let operator = vfs.resolve(root);
+    let backend_root = vfs.resolve_path(root);
+    let mut lister = operator
+        .lister_with(&backend_root)
+        .recursive(true)
+        .await
+        .map_err(vfs_error)?;
+    let mut files = Vec::new();
+    while let Some(entry) = lister.next().await {
+        let entry = entry.map_err(vfs_error)?;
+        if !entry.metadata().is_file() {
+            continue;
+        }
+        let virtual_path = vfs.remap_entry_to_virtual(root, entry.path());
+        if vfs.check_readable(&virtual_path).is_ok() {
+            files.push(virtual_path);
+        }
+    }
+    files.sort();
+    Ok(files)
+}
+
+fn safe_plugin_file(plugin_path: &str, relative: &str) -> RsiResult<String> {
+    let normalized = relative.replace('\\', "/");
+    if normalized.is_empty()
+        || normalized.contains('\0')
+        || std::path::Path::new(&normalized).is_absolute()
+        || std::path::Path::new(&normalized)
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+        || std::path::Path::new(&normalized)
+            .components()
+            .any(|component| component.as_os_str().to_str() == Some(".git"))
+    {
+        return Err(Error::UnsafePath {
+            path: relative.to_string(),
+        });
+    }
+    Ok(format!(
+        "{}/{}",
+        plugin_path.trim_end_matches('/'),
+        normalized
+    ))
 }
 
 fn selected_node(manifest: &PluginManifest, node_kind: &str) -> RsiResult<NodeDefinition> {
@@ -330,20 +349,14 @@ fn selected_node(manifest: &PluginManifest, node_kind: &str) -> RsiResult<NodeDe
         })
 }
 
-fn resolve_binding(state: &PluginToolState) -> RsiResult<PluginDevelopmentBinding> {
-    state.registry.binding(&state.agent_id)?.ok_or_else(|| {
-        Error::Validation(format!(
-            "agent `{}` has no plugin development binding",
-            state.agent_id
-        ))
-    })
-}
-
 #[tool(
     name = "plugin_development_status",
-    description = "Show the plugin nodes, run, environment, status, and files assigned to this agent."
+    description = "Show nodes, lifecycle status, environment, and visible files for one plugin VFS path."
 )]
-struct PluginStatusInput {}
+struct PluginStatusInput {
+    /// Plugin workspace path, such as `/plugins/dev/hello-world`.
+    plugin_path: String,
+}
 
 struct PluginStatusTool {
     state: PluginToolState,
@@ -353,20 +366,24 @@ struct PluginStatusTool {
 impl ToolFunction for PluginStatusTool {
     type Input = PluginStatusInput;
 
-    async fn run(&self, _input: Self::Input) -> Result<ToolResult, ToolError> {
-        let binding = resolve_binding(&self.state).map_err(tool_error)?;
-        let manifest = load_manifest(&binding.workspace()).map_err(tool_error)?;
-        let files = binding.workspace().list_files().map_err(tool_error)?;
+    async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
+        let target = resolve_target(&self.state, &input.plugin_path)
+            .await
+            .map_err(tool_error)?;
+        let manifest = load_manifest(&target).await.map_err(tool_error)?;
+        let files = list_virtual_files(&target.vfs, &target.virtual_path)
+            .await
+            .map_err(tool_error)?;
         let node_kinds = manifest
             .nodes
             .into_iter()
             .map(|node| node.kind)
             .collect::<Vec<_>>();
         Ok(ToolResult::success_json(json!({
-            "plugin_name": binding.plugin_name,
+            "plugin_name": target.plugin_name,
+            "plugin_path": target.virtual_path,
             "node_kinds": node_kinds,
-            "run_id": binding.run_id,
-            "environment_reference": binding.environment_reference,
+            "environment_reference": manifest.image.reference.as_str(),
             "status": manifest.status,
             "files": files,
         })))
@@ -375,9 +392,11 @@ impl ToolFunction for PluginStatusTool {
 
 #[tool(
     name = "plugin_node_spec",
-    description = "Read the complete definition of one node in the assigned plugin."
+    description = "Read the complete definition of one node in a plugin VFS workspace."
 )]
 struct PluginNodeSpecInput {
+    /// Plugin workspace path, such as `/plugins/dev/hello-world`.
+    plugin_path: String,
     /// Kind of the node to read.
     node_kind: String,
 }
@@ -391,8 +410,10 @@ impl ToolFunction for PluginNodeSpecTool {
     type Input = PluginNodeSpecInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        let binding = resolve_binding(&self.state).map_err(tool_error)?;
-        let manifest = load_manifest(&binding.workspace()).map_err(tool_error)?;
+        let target = resolve_target(&self.state, &input.plugin_path)
+            .await
+            .map_err(tool_error)?;
+        let manifest = load_manifest(&target).await.map_err(tool_error)?;
         let node = selected_node(&manifest, &input.node_kind).map_err(tool_error)?;
         Ok(ToolResult::success_json(
             serde_json::to_value(node).map_err(tool_error)?,
@@ -402,9 +423,11 @@ impl ToolFunction for PluginNodeSpecTool {
 
 #[tool(
     name = "plugin_node_create",
-    description = "Add one complete node definition to the assigned plugin workspace. Create the referenced script separately before review."
+    description = "Add one complete node definition to a plugin VFS workspace. Create its script separately before review."
 )]
 struct PluginNodeCreateInput {
+    /// Plugin workspace path, such as `/plugins/dev/hello-world`.
+    plugin_path: String,
     /// Complete NodeDefinition value in container-plugin JSON form.
     node: Value,
 }
@@ -428,9 +451,12 @@ impl ToolFunction for PluginNodeCreateTool {
             }
         })?;
 
-        let binding = resolve_binding(&self.state).map_err(tool_error)?;
-        let workspace = binding.workspace();
-        let mut manifest = editable_manifest(&binding).map_err(tool_error)?;
+        let target = resolve_target(&self.state, &input.plugin_path)
+            .await
+            .map_err(tool_error)?;
+        let manifest_lock = self.state.registry.manifest_lock(&target.plugin_name);
+        let _guard = manifest_lock.lock().await;
+        let mut manifest = editable_manifest(&target).await.map_err(tool_error)?;
         if manifest
             .nodes
             .iter()
@@ -441,7 +467,7 @@ impl ToolFunction for PluginNodeCreateTool {
             });
         }
         manifest.nodes.push(node);
-        save_manifest(&workspace, &manifest).map_err(tool_error)?;
+        save_manifest(&target.workspace, &manifest).map_err(tool_error)?;
         Ok(ToolResult::success("created node"))
     }
 }
@@ -451,6 +477,8 @@ impl ToolFunction for PluginNodeCreateTool {
     description = "Replace one plugin node's documentation without changing its structural spec."
 )]
 struct PluginNodeUpdateDocInput {
+    /// Plugin workspace path, such as `/plugins/dev/hello-world`.
+    plugin_path: String,
     /// Kind of the node to update.
     node_kind: String,
     /// Complete replacement documentation. Markdown formatting is allowed.
@@ -471,9 +499,12 @@ impl ToolFunction for PluginNodeUpdateDocTool {
                 message: "node documentation cannot be empty".into(),
             });
         }
-        let binding = resolve_binding(&self.state).map_err(tool_error)?;
-        let workspace = binding.workspace();
-        let mut manifest = editable_manifest(&binding).map_err(tool_error)?;
+        let target = resolve_target(&self.state, &input.plugin_path)
+            .await
+            .map_err(tool_error)?;
+        let manifest_lock = self.state.registry.manifest_lock(&target.plugin_name);
+        let _guard = manifest_lock.lock().await;
+        let mut manifest = editable_manifest(&target).await.map_err(tool_error)?;
         let mut node = selected_node(&manifest, &input.node_kind).map_err(tool_error)?;
         node.doc = input.doc;
         let index = manifest
@@ -482,16 +513,18 @@ impl ToolFunction for PluginNodeUpdateDocTool {
             .position(|existing| existing.kind == node.kind)
             .expect("selected node position");
         manifest.nodes[index] = node;
-        save_manifest(&workspace, &manifest).map_err(tool_error)?;
+        save_manifest(&target.workspace, &manifest).map_err(tool_error)?;
         Ok(ToolResult::success("updated node documentation"))
     }
 }
 
 #[tool(
     name = "plugin_node_read_script",
-    description = "Read the script file referenced by one node in the assigned plugin."
+    description = "Read the script file referenced by one node in a plugin VFS workspace."
 )]
 struct PluginNodeReadScriptInput {
+    /// Plugin workspace path, such as `/plugins/dev/hello-world`.
+    plugin_path: String,
     /// Kind of the node whose script should be read.
     node_kind: String,
 }
@@ -505,16 +538,21 @@ impl ToolFunction for PluginNodeReadScriptTool {
     type Input = PluginNodeReadScriptInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        let binding = resolve_binding(&self.state).map_err(tool_error)?;
-        let manifest = load_manifest(&binding.workspace()).map_err(tool_error)?;
+        let target = resolve_target(&self.state, &input.plugin_path)
+            .await
+            .map_err(tool_error)?;
+        let manifest = load_manifest(&target).await.map_err(tool_error)?;
         let node = selected_node(&manifest, &input.node_kind).map_err(tool_error)?;
         let script = node
             .command
             .script_file
             .ok_or_else(|| tool_error("selected node does not declare a script_file"))?;
-        let contents = binding.workspace().read_text(&script).map_err(tool_error)?;
+        let virtual_path = safe_plugin_file(&target.virtual_path, &script).map_err(tool_error)?;
+        let contents = read_virtual_text(&target.vfs, &virtual_path)
+            .await
+            .map_err(tool_error)?;
         Ok(ToolResult::success_json(json!({
-            "path": script,
+            "path": virtual_path,
             "contents": contents,
         })))
     }
@@ -522,9 +560,11 @@ impl ToolFunction for PluginNodeReadScriptTool {
 
 #[tool(
     name = "plugin_node_write_script",
-    description = "Replace the script file referenced by one node in the assigned plugin."
+    description = "Replace the script file referenced by one node in a plugin VFS workspace."
 )]
 struct PluginNodeWriteScriptInput {
+    /// Plugin workspace path, such as `/plugins/dev/hello-world`.
+    plugin_path: String,
     /// Kind of the node whose script should be replaced.
     node_kind: String,
     /// Complete replacement script contents.
@@ -540,26 +580,31 @@ impl ToolFunction for PluginNodeWriteScriptTool {
     type Input = PluginNodeWriteScriptInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        let binding = resolve_binding(&self.state).map_err(tool_error)?;
-        let manifest = load_manifest(&binding.workspace()).map_err(tool_error)?;
+        let target = resolve_target(&self.state, &input.plugin_path)
+            .await
+            .map_err(tool_error)?;
+        let manifest = editable_manifest(&target).await.map_err(tool_error)?;
         let node = selected_node(&manifest, &input.node_kind).map_err(tool_error)?;
         let script = node
             .command
             .script_file
             .ok_or_else(|| tool_error("selected node does not declare a script_file"))?;
-        binding
-            .workspace()
-            .write_text(&script, &input.contents)
+        let virtual_path = safe_plugin_file(&target.virtual_path, &script).map_err(tool_error)?;
+        write_virtual_text(&target.vfs, &virtual_path, &input.contents)
+            .await
             .map_err(tool_error)?;
-        Ok(ToolResult::success_json(json!({ "path": script })))
+        Ok(ToolResult::success_json(json!({ "path": virtual_path })))
     }
 }
 
 #[tool(
     name = "plugin_workspace_list",
-    description = "List safe text files in this agent's assigned plugin workspace."
+    description = "List VFS-visible text files beneath one plugin workspace."
 )]
-struct PluginWorkspaceListInput {}
+struct PluginWorkspaceListInput {
+    /// Plugin workspace path, such as `/plugins/dev/hello-world`.
+    plugin_path: String,
+}
 
 struct PluginWorkspaceListTool {
     state: PluginToolState,
@@ -569,9 +614,13 @@ struct PluginWorkspaceListTool {
 impl ToolFunction for PluginWorkspaceListTool {
     type Input = PluginWorkspaceListInput;
 
-    async fn run(&self, _input: Self::Input) -> Result<ToolResult, ToolError> {
-        let binding = resolve_binding(&self.state).map_err(tool_error)?;
-        let files = binding.workspace().list_files().map_err(tool_error)?;
+    async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
+        let target = resolve_target(&self.state, &input.plugin_path)
+            .await
+            .map_err(tool_error)?;
+        let files = list_virtual_files(&target.vfs, &target.virtual_path)
+            .await
+            .map_err(tool_error)?;
         Ok(ToolResult::success_json(Value::Array(
             files.into_iter().map(Value::String).collect(),
         )))
@@ -580,10 +629,12 @@ impl ToolFunction for PluginWorkspaceListTool {
 
 #[tool(
     name = "plugin_workspace_read",
-    description = "Read one safe text file from this agent's assigned plugin workspace."
+    description = "Read one safe UTF-8 file from a plugin VFS workspace."
 )]
 struct PluginWorkspaceReadInput {
-    /// Repository-relative file path.
+    /// Plugin workspace path, such as `/plugins/dev/hello-world`.
+    plugin_path: String,
+    /// Plugin-relative file path.
     path: String,
 }
 
@@ -596,10 +647,13 @@ impl ToolFunction for PluginWorkspaceReadTool {
     type Input = PluginWorkspaceReadInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        let binding = resolve_binding(&self.state).map_err(tool_error)?;
-        let contents = binding
-            .workspace()
-            .read_text(&input.path)
+        let target = resolve_target(&self.state, &input.plugin_path)
+            .await
+            .map_err(tool_error)?;
+        let virtual_path =
+            safe_plugin_file(&target.virtual_path, &input.path).map_err(tool_error)?;
+        let contents = read_virtual_text(&target.vfs, &virtual_path)
+            .await
             .map_err(tool_error)?;
         Ok(ToolResult::success(contents))
     }
@@ -607,10 +661,12 @@ impl ToolFunction for PluginWorkspaceReadTool {
 
 #[tool(
     name = "plugin_workspace_write",
-    description = "Write one safe text file in this agent's assigned plugin workspace. Structured manifest and Dockerfile changes are rejected."
+    description = "Write one safe UTF-8 file in a plugin VFS workspace. Direct manifest and Dockerfile edits are denied."
 )]
 struct PluginWorkspaceWriteInput {
-    /// Repository-relative file path.
+    /// Plugin workspace path, such as `/plugins/dev/hello-world`.
+    plugin_path: String,
+    /// Plugin-relative file path.
     path: String,
     /// Complete replacement text contents.
     contents: String,
@@ -636,21 +692,26 @@ impl ToolFunction for PluginWorkspaceWriteTool {
                         .into(),
             });
         }
-        let binding = resolve_binding(&self.state).map_err(tool_error)?;
-        editable_manifest(&binding).map_err(tool_error)?;
-        binding
-            .workspace()
-            .write_text(&input.path, &input.contents)
+        let target = resolve_target(&self.state, &input.plugin_path)
+            .await
             .map_err(tool_error)?;
-        Ok(ToolResult::success_json(json!({ "path": input.path })))
+        editable_manifest(&target).await.map_err(tool_error)?;
+        let virtual_path =
+            safe_plugin_file(&target.virtual_path, &input.path).map_err(tool_error)?;
+        write_virtual_text(&target.vfs, &virtual_path, &input.contents)
+            .await
+            .map_err(tool_error)?;
+        Ok(ToolResult::success_json(json!({ "path": virtual_path })))
     }
 }
 
 #[tool(
     name = "plugin_container_run",
-    description = "Run one argv command in the approved environment with the assigned plugin workspace mounted at /work. The container is isolated, resource-limited, and ephemeral."
+    description = "Run one argv command in the plugin environment with the addressed VFS workspace mounted at /work."
 )]
 struct PluginContainerRunInput {
+    /// Plugin workspace path, such as `/plugins/dev/hello-world`.
+    plugin_path: String,
     /// Executable and arguments. No shell string is accepted.
     argv: Vec<String>,
     /// Timeout in seconds; defaults to 120 and is capped at 600.
@@ -672,21 +733,24 @@ impl ToolFunction for PluginContainerRunTool {
             });
         }
         let timeout_secs = input.timeout_secs.unwrap_or(120).clamp(1, 600);
-        let (binding, runtime) = self
-            .state
-            .registry
-            .resolve(&self.state.agent_id)
+        let target = resolve_target(&self.state, &input.plugin_path)
+            .await
             .map_err(tool_error)?;
-        let workspace = binding.workspace();
-        let workspace_ref = trusted_workspace_ref(workspace.path(), DEFAULT_CONTAINER_WORKDIR)
-            .map_err(tool_error)?;
+        let manifest = load_manifest(&target).await.map_err(tool_error)?;
+        let runtime = self.state.registry.runtime().map_err(tool_error)?;
+        let workspace_ref =
+            trusted_workspace_ref(target.workspace.path(), DEFAULT_CONTAINER_WORKDIR)
+                .map_err(tool_error)?;
         let request = ContainerRunRequest {
-            image: binding.environment_reference.clone(),
+            image: manifest.image.reference.as_str().to_string(),
             command: input.argv,
             workspace: workspace_ref,
             env: vec![
-                ("AUTONOMICS_PLUGIN_NAME".into(), binding.plugin_name.clone()),
-                ("AUTONOMICS_DEVELOPMENT_RUN_ID".into(), binding.run_id),
+                ("AUTONOMICS_PLUGIN_NAME".into(), target.plugin_name.clone()),
+                (
+                    "AUTONOMICS_PLUGIN_VFS_PATH".into(),
+                    target.virtual_path.clone(),
+                ),
             ],
             panels: Vec::new(),
             network: ContainerNetwork::Isolated,
