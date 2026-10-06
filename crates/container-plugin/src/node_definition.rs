@@ -651,9 +651,7 @@ VERBOSE = "{{ verbose }}"
             1,
         );
         let node: NodeDefinition = toml::from_str(&int_target).unwrap();
-        assert!(validate(&node)
-            .unwrap_err()
-            .contains("not a bool or flag"));
+        assert!(validate(&node).unwrap_err().contains("not a bool or flag"));
     }
 
     #[test]

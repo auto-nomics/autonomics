@@ -1302,11 +1302,15 @@ impl DAG {
             &self.outputs,
             &self.fingerprints,
         );
+        // Built-in coordinator (`dynamic_fanout`): plugin-less by definition,
+        // hence `None` (WO-R09; plugin-backed nodes feed their identity at
+        // the execution-time call site).
         let channel_fingerprint = crate::fingerprint::compute_node_fingerprint(
             &coordinator_kind,
             Some(&coordinator_spec),
             crate::engine_version(),
             &identities,
+            None,
         );
         let channel_unchanged = self.fingerprints.get(coordinator_id) == Some(&channel_fingerprint);
 
@@ -6552,7 +6556,10 @@ mod tests {
             2,
             "a plugin-implementation change must invalidate the cache"
         );
-        assert_eq!(dag.recorded_fingerprint("p").unwrap(), feed(Some(&identity_b)));
+        assert_eq!(
+            dag.recorded_fingerprint("p").unwrap(),
+            feed(Some(&identity_b))
+        );
     }
 
     /// `mark_all_dirty` forces a full re-run even in incremental mode.

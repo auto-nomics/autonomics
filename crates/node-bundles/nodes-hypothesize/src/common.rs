@@ -204,11 +204,7 @@ pub fn extract_opt_f64_column(
             .ok_or_else(|| HypoNodeError::Column(column.to_string()))?;
         if let Some(a) = arr.as_any().downcast_ref::<Float64Array>() {
             for i in 0..a.len() {
-                values.push(if a.is_null(i) {
-                    None
-                } else {
-                    Some(a.value(i))
-                });
+                values.push(if a.is_null(i) { None } else { Some(a.value(i)) });
             }
         } else {
             return Err(HypoNodeError::Column(format!("{column} is not Float64")));

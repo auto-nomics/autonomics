@@ -127,7 +127,11 @@ fn nullable_pcol_batch(p_values: &[Option<f64>]) -> RecordBatch {
         DataType::Float64,
         true,
     )]));
-    RecordBatch::try_new(schema, vec![Arc::new(Float64Array::from(p_values.to_vec()))]).unwrap()
+    RecordBatch::try_new(
+        schema,
+        vec![Arc::new(Float64Array::from(p_values.to_vec()))],
+    )
+    .unwrap()
 }
 
 async fn run_adjust_batches(
@@ -200,8 +204,14 @@ async fn adjust_pvalues_two_batches_with_null_matches_r() {
 
     let rows: usize = out.iter().map(|b| b.num_rows()).sum();
     assert_eq!(rows, 4, "row count must be preserved");
-    let p_adj: Vec<Option<f64>> = out.iter().flat_map(|b| collect_opt_f64(b, "p_adj")).collect();
-    let reject: Vec<Option<i32>> = out.iter().flat_map(|b| collect_opt_i32(b, "reject")).collect();
+    let p_adj: Vec<Option<f64>> = out
+        .iter()
+        .flat_map(|b| collect_opt_f64(b, "p_adj"))
+        .collect();
+    let reject: Vec<Option<i32>> = out
+        .iter()
+        .flat_map(|b| collect_opt_i32(b, "reject"))
+        .collect();
     let raw: Vec<Option<f64>> = out
         .iter()
         .flat_map(|b| collect_opt_f64(b, "p_value"))
@@ -221,10 +231,7 @@ async fn adjust_pvalues_two_batches_with_null_matches_r() {
     ];
     for (got, exp) in p_adj.iter().zip(expected) {
         match (got, exp) {
-            (Some(g), Some(e)) => assert!(
-                (g - e).abs() < 1e-14,
-                "p_adj got {g}, expected {e}"
-            ),
+            (Some(g), Some(e)) => assert!((g - e).abs() < 1e-14, "p_adj got {g}, expected {e}"),
             (None, None) => {}
             other => panic!("p_adj mismatch: {other:?}"),
         }
@@ -242,7 +249,10 @@ async fn adjust_pvalues_n_total_override_matches_r() {
         vec![nullable_pcol_batch(&[Some(0.01), Some(0.02)])],
     )
     .await;
-    let p_adj: Vec<Option<f64>> = out.iter().flat_map(|b| collect_opt_f64(b, "p_adj")).collect();
+    let p_adj: Vec<Option<f64>> = out
+        .iter()
+        .flat_map(|b| collect_opt_f64(b, "p_adj"))
+        .collect();
     for (got, exp) in p_adj.iter().zip([Some(0.1), Some(0.1)]) {
         assert!((got.unwrap() - exp.unwrap()).abs() < 1e-14);
     }
@@ -252,7 +262,10 @@ async fn adjust_pvalues_n_total_override_matches_r() {
     // R: p.adjust(c(0.01, 0.02), "holm", n = 10) = c(0.1, 0.18)
     // R: p.adjust(c(0.01, 0.02), "bonferroni", n = 10) = c(0.1, 0.2)
     for (method, expected) in [
-        ("BY", vec![0.292_896_825_396_825_38, 0.292_896_825_396_825_38]),
+        (
+            "BY",
+            vec![0.292_896_825_396_825_38, 0.292_896_825_396_825_38],
+        ),
         ("holm", vec![0.1, 0.18]),
         ("bonferroni", vec![0.1, 0.2]),
     ] {
@@ -261,8 +274,10 @@ async fn adjust_pvalues_n_total_override_matches_r() {
             vec![nullable_pcol_batch(&[Some(0.01), Some(0.02)])],
         )
         .await;
-        let p_adj: Vec<Option<f64>> =
-            out.iter().flat_map(|b| collect_opt_f64(b, "p_adj")).collect();
+        let p_adj: Vec<Option<f64>> = out
+            .iter()
+            .flat_map(|b| collect_opt_f64(b, "p_adj"))
+            .collect();
         for (got, exp) in p_adj.iter().zip(expected) {
             assert!(
                 (got.unwrap() - exp).abs() < 1e-14,
@@ -282,11 +297,17 @@ async fn adjust_pvalues_null_row_counts_toward_n() {
         vec![nullable_pcol_batch(&[Some(0.01), None])],
     )
     .await;
-    let p_adj: Vec<Option<f64>> = out.iter().flat_map(|b| collect_opt_f64(b, "p_adj")).collect();
+    let p_adj: Vec<Option<f64>> = out
+        .iter()
+        .flat_map(|b| collect_opt_f64(b, "p_adj"))
+        .collect();
     assert_eq!(p_adj.len(), 2);
     assert!((p_adj[0].unwrap() - 0.02).abs() < 1e-14);
     assert_eq!(p_adj[1], None);
-    let reject: Vec<Option<i32>> = out.iter().flat_map(|b| collect_opt_i32(b, "reject")).collect();
+    let reject: Vec<Option<i32>> = out
+        .iter()
+        .flat_map(|b| collect_opt_i32(b, "reject"))
+        .collect();
     assert_eq!(reject, vec![Some(1), None]);
 }
 
@@ -298,8 +319,14 @@ async fn adjust_pvalues_all_null_family() {
         vec![nullable_pcol_batch(&[None, None])],
     )
     .await;
-    let p_adj: Vec<Option<f64>> = out.iter().flat_map(|b| collect_opt_f64(b, "p_adj")).collect();
-    let reject: Vec<Option<i32>> = out.iter().flat_map(|b| collect_opt_i32(b, "reject")).collect();
+    let p_adj: Vec<Option<f64>> = out
+        .iter()
+        .flat_map(|b| collect_opt_f64(b, "p_adj"))
+        .collect();
+    let reject: Vec<Option<i32>> = out
+        .iter()
+        .flat_map(|b| collect_opt_i32(b, "reject"))
+        .collect();
     assert_eq!(p_adj, vec![None, None]);
     assert_eq!(reject, vec![None, None]);
 }
@@ -311,10 +338,18 @@ async fn adjust_pvalues_all_null_family() {
 async fn adjust_pvalues_default_method_is_bonferroni() {
     let out = run_adjust_batches(
         serde_json::json!({}),
-        vec![nullable_pcol_batch(&[Some(0.001), Some(0.01), Some(0.02), Some(0.5)])],
+        vec![nullable_pcol_batch(&[
+            Some(0.001),
+            Some(0.01),
+            Some(0.02),
+            Some(0.5),
+        ])],
     )
     .await;
-    let p_adj: Vec<Option<f64>> = out.iter().flat_map(|b| collect_opt_f64(b, "p_adj")).collect();
+    let p_adj: Vec<Option<f64>> = out
+        .iter()
+        .flat_map(|b| collect_opt_f64(b, "p_adj"))
+        .collect();
     for (got, exp) in p_adj.iter().zip([0.004, 0.04, 0.08, 1.0]) {
         assert!((got.unwrap() - exp).abs() < 1e-14);
     }
@@ -327,7 +362,10 @@ async fn adjust_pvalues_n_total_below_estimable_errors() {
     let session = SessionContext::new();
     let node_ctx = NodeCtx::new(session.runtime_env(), None);
     let mut node = AdjustNodeFactory {}
-        .build(serde_json::json!({"method": "BH", "n_total": 1}), node_ctx.clone())
+        .build(
+            serde_json::json!({"method": "BH", "n_total": 1}),
+            node_ctx.clone(),
+        )
         .unwrap();
     let df = session
         .read_batch(nullable_pcol_batch(&[Some(0.1), Some(0.2)]))
@@ -353,5 +391,8 @@ async fn adjust_pvalues_appended_columns_nullable() {
     .await;
     let schema = out[0].schema();
     assert_eq!(schema.field_with_name("p_adj").unwrap().is_nullable(), true);
-    assert_eq!(schema.field_with_name("reject").unwrap().is_nullable(), true);
+    assert_eq!(
+        schema.field_with_name("reject").unwrap().is_nullable(),
+        true
+    );
 }

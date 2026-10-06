@@ -116,16 +116,8 @@ async fn paired_complete_case_matches_r_audit_example() {
     assert_close(opt_f64(&row, "statistic"), 1.2857142857142858, "statistic");
     assert_close(opt_f64(&row, "dof"), 1.0, "dof");
     assert_close(opt_f64(&row, "p_value"), 0.42083315167886859, "p_value");
-    assert_close(
-        opt_f64(&row, "conf_low"),
-        -39.971716576611428,
-        "conf_low",
-    );
-    assert_close(
-        opt_f64(&row, "conf_high"),
-        48.971716576611435,
-        "conf_high",
-    );
+    assert_close(opt_f64(&row, "conf_low"), -39.971716576611428, "conf_low");
+    assert_close(opt_f64(&row, "conf_high"), 48.971716576611435, "conf_high");
     assert_eq!(opt_i32(&row, "n"), Some(2));
 }
 
@@ -159,11 +151,7 @@ async fn paired_greater_one_sided_matches_r() {
     )
     .await;
     assert_close(opt_f64(&row, "p_value"), 0.21041657583943429, "p_value");
-    assert_close(
-        opt_f64(&row, "conf_low"),
-        -17.59813030136263,
-        "conf_low",
-    );
+    assert_close(opt_f64(&row, "conf_low"), -17.59813030136263, "conf_low");
     assert_eq!(opt_f64(&row, "conf_high"), None, "+Inf bound → null cell");
 }
 
@@ -179,16 +167,8 @@ async fn paired_conf_level_90_matches_r() {
         vec![audit_batch()],
     )
     .await;
-    assert_close(
-        opt_f64(&row, "conf_low"),
-        -17.59813030136263,
-        "conf_low",
-    );
-    assert_close(
-        opt_f64(&row, "conf_high"),
-        26.59813030136263,
-        "conf_high",
-    );
+    assert_close(opt_f64(&row, "conf_low"), -17.59813030136263, "conf_low");
+    assert_close(opt_f64(&row, "conf_high"), 26.59813030136263, "conf_high");
 }
 
 /// R (2026-10-05): t.test(c(1.2,NA,2.4,3.1,NA,4.7), c(2.1,3.5,NA,4.0,5.2,6.8))
@@ -209,36 +189,12 @@ async fn wide_welch_independent_na_matches_r() {
     )
     .await;
     assert_close(opt_f64(&row, "estimate"), -1.47, "estimate");
-    assert_close(
-        opt_f64(&row, "stderr"),
-        1.07961412859719,
-        "stderr",
-    );
-    assert_close(
-        opt_f64(&row, "statistic"),
-        -1.36159759404970,
-        "statistic",
-    );
-    assert_close(
-        opt_f64(&row, "dof"),
-        6.97484737539948,
-        "dof",
-    );
-    assert_close(
-        opt_f64(&row, "p_value"),
-        0.21566981730390,
-        "p_value",
-    );
-    assert_close(
-        opt_f64(&row, "conf_low"),
-        -4.02474919454316,
-        "conf_low",
-    );
-    assert_close(
-        opt_f64(&row, "conf_high"),
-        1.08474919454316,
-        "conf_high",
-    );
+    assert_close(opt_f64(&row, "stderr"), 1.07961412859719, "stderr");
+    assert_close(opt_f64(&row, "statistic"), -1.36159759404970, "statistic");
+    assert_close(opt_f64(&row, "dof"), 6.97484737539948, "dof");
+    assert_close(opt_f64(&row, "p_value"), 0.21566981730390, "p_value");
+    assert_close(opt_f64(&row, "conf_low"), -4.02474919454316, "conf_low");
+    assert_close(opt_f64(&row, "conf_high"), 1.08474919454316, "conf_high");
     assert_eq!(opt_i32(&row, "n"), Some(9));
 }
 
@@ -256,32 +212,12 @@ async fn wide_pooled_independent_na_matches_r() {
         vec![batch],
     )
     .await;
-    assert_close(
-        opt_f64(&row, "stderr"),
-        1.10628722697653,
-        "stderr",
-    );
-    assert_close(
-        opt_f64(&row, "statistic"),
-        -1.32876884425168,
-        "statistic",
-    );
+    assert_close(opt_f64(&row, "stderr"), 1.10628722697653, "stderr");
+    assert_close(opt_f64(&row, "statistic"), -1.32876884425168, "statistic");
     assert_close(opt_f64(&row, "dof"), 7.0, "dof");
-    assert_close(
-        opt_f64(&row, "p_value"),
-        0.22560080879041,
-        "p_value",
-    );
-    assert_close(
-        opt_f64(&row, "conf_low"),
-        -4.08595360613604,
-        "conf_low",
-    );
-    assert_close(
-        opt_f64(&row, "conf_high"),
-        1.14595360613604,
-        "conf_high",
-    );
+    assert_close(opt_f64(&row, "p_value"), 0.22560080879041, "p_value");
+    assert_close(opt_f64(&row, "conf_low"), -4.08595360613604, "conf_low");
+    assert_close(opt_f64(&row, "conf_high"), 1.14595360613604, "conf_high");
 }
 
 /// Fix-review R02 (2026-10-05): unpaired wide columns are independent
@@ -301,31 +237,11 @@ async fn unpaired_wide_independent_na_matches_r_review_r02() {
     )
     .await;
     assert_close(opt_f64(&row, "estimate"), 11.0 / 3.0, "estimate");
-    assert_close(
-        opt_f64(&row, "statistic"),
-        1.33394593769983,
-        "statistic",
-    );
-    assert_close(
-        opt_f64(&row, "dof"),
-        2.45305039787798,
-        "dof",
-    );
-    assert_close(
-        opt_f64(&row, "p_value"),
-        0.29254219697638,
-        "p_value",
-    );
-    assert_close(
-        opt_f64(&row, "conf_low"),
-        -6.29498360849420,
-        "conf_low",
-    );
-    assert_close(
-        opt_f64(&row, "conf_high"),
-        13.62831694182753,
-        "conf_high",
-    );
+    assert_close(opt_f64(&row, "statistic"), 1.33394593769983, "statistic");
+    assert_close(opt_f64(&row, "dof"), 2.45305039787798, "dof");
+    assert_close(opt_f64(&row, "p_value"), 0.29254219697638, "p_value");
+    assert_close(opt_f64(&row, "conf_low"), -6.29498360849420, "conf_low");
+    assert_close(opt_f64(&row, "conf_high"), 13.62831694182753, "conf_high");
 }
 
 /// Fix-review R03 (2026-10-05): mu is the null value in every mode.
@@ -358,9 +274,24 @@ async fn t_test_row_matches_schema_with_ci_columns() {
     .await;
     let expected = test_row_schema();
     assert_eq!(row.schema().as_ref(), expected.as_ref());
-    assert!(row.schema().field_with_name("stderr").unwrap().is_nullable());
-    assert!(row.schema().field_with_name("conf_low").unwrap().is_nullable());
-    assert!(row.schema().field_with_name("conf_high").unwrap().is_nullable());
+    assert!(
+        row.schema()
+            .field_with_name("stderr")
+            .unwrap()
+            .is_nullable()
+    );
+    assert!(
+        row.schema()
+            .field_with_name("conf_low")
+            .unwrap()
+            .is_nullable()
+    );
+    assert!(
+        row.schema()
+            .field_with_name("conf_high")
+            .unwrap()
+            .is_nullable()
+    );
 }
 
 /// conf_level outside (0, 1) is rejected at build time.

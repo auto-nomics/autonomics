@@ -174,10 +174,8 @@ impl DagNode for BooleanNode {
         _r: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<dag_core::dag::graph::PortOutputs, DagError> {
         let batches = collect_input(inputs).await?;
-        let pvals = extract_opt_f64_column(
-            &batches,
-            self.spec.p_column.as_deref().unwrap_or("p_value"),
-        )?;
+        let pvals =
+            extract_opt_f64_column(&batches, self.spec.p_column.as_deref().unwrap_or("p_value"))?;
         let n_tests = pvals.len();
         if n_tests == 0 {
             return Err(HypoNodeError::Insufficient("no p-values supplied".into()).into());
@@ -227,7 +225,11 @@ impl DagNode for BooleanNode {
                     )
                     .into());
                 }
-                ("Complemented Test", "complemented_test", pvals[0].map(|p| 1.0 - p))
+                (
+                    "Complemented Test",
+                    "complemented_test",
+                    pvals[0].map(|p| 1.0 - p),
+                )
             }
             other => {
                 return Err(HypoNodeError::Spec(format!("unknown boolean op '{other}'")).into());

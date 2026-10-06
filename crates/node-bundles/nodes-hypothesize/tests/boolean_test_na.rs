@@ -21,17 +21,18 @@ fn pcol_batch(p_values: &[Option<f64>]) -> RecordBatch {
         DataType::Float64,
         true,
     )]));
-    RecordBatch::try_new(schema, vec![Arc::new(Float64Array::from(p_values.to_vec()))]).unwrap()
+    RecordBatch::try_new(
+        schema,
+        vec![Arc::new(Float64Array::from(p_values.to_vec()))],
+    )
+    .unwrap()
 }
 
 async fn run_boolean(op: &str, batches: Vec<RecordBatch>) -> RecordBatch {
     let session = SessionContext::new();
     let node_ctx = NodeCtx::new(session.runtime_env(), None);
     let mut node = BooleanNodeFactory {}
-        .build(
-            serde_json::json!({"op": op}),
-            node_ctx.clone(),
-        )
+        .build(serde_json::json!({"op": op}), node_ctx.clone())
         .expect("valid spec");
     // One input dataframe carrying all batches — collect_input reads only the
     // first input port, so multi-batch coverage must come from read_batches.
@@ -72,7 +73,11 @@ fn p_of(batch: &RecordBatch) -> Option<f64> {
 async fn intersection_with_null_component_is_null() {
     // Audit counter-example: (0.001, NA) must NOT resolve to 0.001.
     let batch = run_boolean("intersection", vec![pcol_batch(&[Some(0.001), None])]).await;
-    assert!(p_of(&batch).is_none(), "expected null p, got {:?}", p_of(&batch));
+    assert!(
+        p_of(&batch).is_none(),
+        "expected null p, got {:?}",
+        p_of(&batch)
+    );
 }
 
 #[tokio::test]
@@ -122,7 +127,9 @@ async fn complement_requires_exactly_one_pvalue() {
     let mut node = BooleanNodeFactory {}
         .build(serde_json::json!({"op": "complement"}), node_ctx.clone())
         .unwrap();
-    let df = session.read_batch(pcol_batch(&[Some(0.1), Some(0.2)])).unwrap();
+    let df = session
+        .read_batch(pcol_batch(&[Some(0.1), Some(0.2)]))
+        .unwrap();
     let err = node
         .execute(
             &node_ctx,
@@ -139,7 +146,10 @@ async fn complement_requires_exactly_one_pvalue() {
 /// rows in order.
 #[tokio::test]
 async fn cross_batch_nulls_propagate_and_order_preserved() {
-    let two_batches = vec![pcol_batch(&[Some(0.001), None]), pcol_batch(&[Some(0.2), None])];
+    let two_batches = vec![
+        pcol_batch(&[Some(0.001), None]),
+        pcol_batch(&[Some(0.2), None]),
+    ];
     let batch = run_boolean("intersection", two_batches.clone()).await;
     assert!(p_of(&batch).is_none());
     let batch = run_boolean("union", two_batches).await;

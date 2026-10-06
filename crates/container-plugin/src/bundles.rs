@@ -301,8 +301,7 @@ script = "true"
 "#,
             "a".repeat(64)
         );
-        let manifest: PluginManifest = toml::from_str(&toml_text)
-            .expect("fixture manifest parses");
+        let manifest: PluginManifest = toml::from_str(&toml_text).expect("fixture manifest parses");
         let state = tempfile::tempdir().unwrap();
         let runtime: Arc<dyn container_runtime::PodmanConnection> = Arc::new(
             container_runtime::PodmanRuntime::new(container_runtime::PodmanConfig {

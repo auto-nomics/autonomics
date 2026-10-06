@@ -148,8 +148,15 @@ impl DagNode for TTestNode {
             if groups.len() < 2 {
                 return Err(HypoNodeError::Insufficient("need ≥ 2 groups".into()).into());
             }
-            h::t_test_two(&groups[0].1, &groups[1].1, self.spec.var_equal, self.spec.mu, alt, cl)
-                .map_err(|e| HypoNodeError::Test(e.to_string()))?
+            h::t_test_two(
+                &groups[0].1,
+                &groups[1].1,
+                self.spec.var_equal,
+                self.spec.mu,
+                alt,
+                cl,
+            )
+            .map_err(|e| HypoNodeError::Test(e.to_string()))?
         } else if let Some(yc) = &self.spec.y_column {
             // Wide two-sample: the two columns are independent samples (R
             // t.test(x, y)), so NA rows drop per column, not pairwise —
@@ -160,10 +167,8 @@ impl DagNode for TTestNode {
             let ys = extract_f64_column(&batches, yc)?;
             let mut r = h::t_test_two(&xs, &ys, self.spec.var_equal, self.spec.mu, alt, cl)
                 .map_err(|e| HypoNodeError::Test(e.to_string()))?;
-            r.extras
-                .insert("n_x".into(), serde_json::json!(xs.len()));
-            r.extras
-                .insert("n_y".into(), serde_json::json!(ys.len()));
+            r.extras.insert("n_x".into(), serde_json::json!(xs.len()));
+            r.extras.insert("n_y".into(), serde_json::json!(ys.len()));
             r
         } else {
             let x = extract_f64_column(&batches, &self.spec.x_column)?;

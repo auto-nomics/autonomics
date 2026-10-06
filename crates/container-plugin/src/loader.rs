@@ -304,11 +304,7 @@ script_file = "scripts/h2.sh"
 
     /// Write the GOOD_LDSC fixture with `script` content and load it,
     /// returning the loaded plugin.
-    fn load_ldsc(
-        root: &std::path::Path,
-        manifest_body: &str,
-        script_body: &str,
-    ) -> Plugin {
+    fn load_ldsc(root: &std::path::Path, manifest_body: &str, script_body: &str) -> Plugin {
         let (runtime, cache, _state) = infra();
         let dir = root.join("ldsc");
         std::fs::create_dir_all(dir.join("scripts")).unwrap();
@@ -389,9 +385,11 @@ script_file = "scripts/h2.sh"
         let new = second.plugin_identity("ldsc_h2").unwrap();
 
         assert_ne!(old.image_reference, new.image_reference);
-        assert!(new.image_reference.ends_with(
-            "@sha256:3dad70a9583f93db1dcc9a560b7d5b309af4a5151dfaf615f80d059a0925d78c"
-        ));
+        assert!(
+            new.image_reference.ends_with(
+                "@sha256:3dad70a9583f93db1dcc9a560b7d5b309af4a5151dfaf615f80d059a0925d78c"
+            )
+        );
         assert_ne!(old.manifest_sha256, new.manifest_sha256);
         // The script did not change.
         assert_eq!(old.script_sha256, new.script_sha256);

@@ -227,6 +227,7 @@ pub fn compute_node_fingerprint(
         engine_version,
         crate::source_revision(),
         identities,
+        plugin,
     )
 }
 
@@ -240,6 +241,7 @@ pub fn compute_node_fingerprint_with_revision(
     engine_version: &str,
     source_revision: &str,
     identities: &[InputIdentity],
+    plugin: Option<&PluginIdentity>,
 ) -> String {
     let mut ordered: Vec<&InputIdentity> = identities.iter().collect();
     ordered
@@ -575,10 +577,20 @@ mod tests {
             "/data/x.csv",
             Some(fp(10, 1234, Some("sha256:deadbeef"))),
         )];
-        let a =
-            compute_node_fingerprint("sql", Some(&serde_json::json!({"q": 1})), "v1", &identities, None);
-        let b =
-            compute_node_fingerprint("sql", Some(&serde_json::json!({"q": 1})), "v1", &identities, None);
+        let a = compute_node_fingerprint(
+            "sql",
+            Some(&serde_json::json!({"q": 1})),
+            "v1",
+            &identities,
+            None,
+        );
+        let b = compute_node_fingerprint(
+            "sql",
+            Some(&serde_json::json!({"q": 1})),
+            "v1",
+            &identities,
+            None,
+        );
         assert_eq!(a, b);
         assert_eq!(a.len(), 64, "blake3 hex");
     }
@@ -598,6 +610,7 @@ mod tests {
             "v1",
             "aaaaaaaaaaaa",
             &base,
+            None,
         );
         let changed_spec = compute_node_fingerprint_with_revision(
             "sql",
@@ -605,6 +618,7 @@ mod tests {
             "v1",
             "aaaaaaaaaaaa",
             &base,
+            None,
         );
         let changed_engine = compute_node_fingerprint_with_revision(
             "sql",
@@ -612,6 +626,7 @@ mod tests {
             "v2",
             "aaaaaaaaaaaa",
             &base,
+            None,
         );
         let changed_revision = compute_node_fingerprint_with_revision(
             "sql",
@@ -630,7 +645,13 @@ mod tests {
                 "/data/x.csv",
                 Some(fp(10, 1234, Some("sha256:feedface"))),
             )];
-            compute_node_fingerprint("sql", Some(&serde_json::json!({"q": 1})), "v1", &identities, None)
+            compute_node_fingerprint(
+                "sql",
+                Some(&serde_json::json!({"q": 1})),
+                "v1",
+                &identities,
+                None,
+            )
         };
         let nospec = compute_node_fingerprint("sql", None, "v1", &base, None);
 
@@ -663,6 +684,7 @@ mod tests {
             "v1",
             "aaaaaaaaaaaa",
             &identities,
+            None,
         );
         let a_again = compute_node_fingerprint_with_revision(
             "sql",
@@ -670,6 +692,7 @@ mod tests {
             "v1",
             "aaaaaaaaaaaa",
             &identities,
+            None,
         );
         let b = compute_node_fingerprint_with_revision(
             "sql",
@@ -677,6 +700,7 @@ mod tests {
             "v1",
             "bbbbbbbbbbbb",
             &identities,
+            None,
         );
         assert_eq!(a, a_again);
         assert_ne!(a, b);
@@ -865,8 +889,7 @@ mod tests {
         };
         let changed_image = {
             let mut other = plugin.clone();
-            other.image_reference =
-                "ghcr.io/auto-nomics/autonomics/ldsc@sha256:2".to_string();
+            other.image_reference = "ghcr.io/auto-nomics/autonomics/ldsc@sha256:2".to_string();
             compute_node_fingerprint("k", None, "v", &base, Some(&other))
         };
         let changed_panel_digest = {

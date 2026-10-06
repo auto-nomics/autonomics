@@ -25,13 +25,7 @@ fn validate_conf_level(conf_level: f64) -> Result<()> {
 /// (`less` → `(-Inf, est + qt(1−α)·se)`, `greater` →
 /// `(est − qt(1−α)·se, Inf)`). Non-finite bounds serialise to JSON `null`
 /// in `extras` (JSON has no ±Inf), so one-sided rows carry a null bound.
-fn conf_int_t(
-    est: f64,
-    se: f64,
-    df: f64,
-    alt: Alternative,
-    conf_level: f64,
-) -> (f64, f64) {
+fn conf_int_t(est: f64, se: f64, df: f64, alt: Alternative, conf_level: f64) -> (f64, f64) {
     let alpha = 1.0 - conf_level;
     match alt {
         Alternative::TwoSided => {
@@ -55,7 +49,12 @@ fn ci_bound_json(v: f64) -> serde_json::Value {
 /// One-sample t-test of `H₀: μ = mu0`.
 ///
 /// Mirrors `t.test(x, mu = mu0, alternative = alt, conf.level = cl)`.
-pub fn t_test_one(x: &[f64], mu0: f64, alt: Alternative, conf_level: f64) -> Result<HypothesisTest> {
+pub fn t_test_one(
+    x: &[f64],
+    mu0: f64,
+    alt: Alternative,
+    conf_level: f64,
+) -> Result<HypothesisTest> {
     validate_conf_level(conf_level)?;
     let n = x.len();
     if n < 2 {
@@ -321,9 +320,7 @@ mod tests {
     fn rejects_bad_inputs() {
         assert!(t_test_one(&[1.0], 0.0, Alternative::TwoSided, 0.95).is_err());
         assert!(t_test_one(&[], 0.0, Alternative::TwoSided, 0.95).is_err());
-        assert!(
-            t_test_two(&[1.0], &[2.0], false, 0.0, Alternative::TwoSided, 0.95).is_err()
-        );
+        assert!(t_test_two(&[1.0], &[2.0], false, 0.0, Alternative::TwoSided, 0.95).is_err());
         assert!(t_test_paired(&[1.0, 2.0], &[1.0], 0.0, Alternative::TwoSided, 0.95).is_err());
         for bad in [0.0, 1.0, -0.1, 1.1] {
             assert!(

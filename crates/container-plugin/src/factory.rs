@@ -553,7 +553,10 @@ ldsc --h2 "$AUTONOMICS_INPUT0" \
 
         fn sha256_hex_of(bytes: &[u8]) -> String {
             let digest = Sha256::digest(bytes);
-            let hex = digest.iter().map(|b| format!("{b:02x}")).collect::<String>();
+            let hex = digest
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>();
             format!("sha256:{hex}")
         }
 
