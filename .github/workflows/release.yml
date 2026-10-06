@@ -31,8 +31,10 @@ jobs:
             rustflags: -C target-cpu=generic
           - os: macos-14
             target: aarch64-apple-darwin
-            rustflags: -C target-cpu=generic
-          - os: macos-14
+            # ring relies on the Apple Silicon target's default CPU features;
+            # target-cpu=generic drops them and trips its const assertions.
+            rustflags: ""
+          - os: macos-15-large
             target: x86_64-apple-darwin
             rustflags: -C target-cpu=generic
 
