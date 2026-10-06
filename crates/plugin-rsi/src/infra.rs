@@ -13,10 +13,11 @@ use evolution_core::routing::observation_route;
 use skills::observation::ObservationInput;
 
 use crate::{
-    EnvironmentCatalog, Error, ObservationAudience, ObservationRequest, ObservationRoute,
-    ObservationRouteStatus, ObservationRouteStore, PluginLifecycle, PluginPublisher,
-    PluginPullRequestPublisher, PluginStatus, PluginStore, RequestIntent, RequestRecord,
-    RequestStatus, RequestStore, Result, ValidationOutcome,
+    EnvironmentCatalog, Error, LocalActivationOutcome, ObservationAudience, ObservationRequest,
+    ObservationRoute, ObservationRouteStatus, ObservationRouteStore, PluginLifecycle,
+    PluginPublisher, PluginPullRequestPublisher, PluginStatus, PluginStore, RequestIntent,
+    RequestRecord, RequestStatus, RequestStore, Result, ValidationOutcome,
+    distill::DistillationCandidate,
     feedback::{default_request_intent, observation_request},
 };
 
@@ -89,6 +90,11 @@ impl RsiInfra {
 
     pub fn store(&self) -> Arc<PluginStore> {
         Arc::clone(&self.store)
+    }
+
+    /// Return local-active plugins waiting for background distillation.
+    pub fn pending_distillation(&self) -> Result<Vec<DistillationCandidate>> {
+        crate::distill::PluginDistiller::new(self.clone()).pending()
     }
 
     pub fn requests(&self) -> &RequestStore {
@@ -259,6 +265,37 @@ impl RsiInfra {
             .ok_or_else(|| Error::Validation("plugin disappeared during update startup".into()))
     }
 
+    /// Fork an installed reference plugin and claim the request for development.
+    ///
+    /// This is the fast path for agents: the fork is already runnable in the
+    /// reference environment and can be activated locally after validation.
+    /// Publication and upstream merge remain background distiller work.
+    pub fn fork_plugin(
+        &self,
+        reference_plugin_name: &str,
+        request: RequestRecord,
+    ) -> Result<crate::PluginOperator<'_>> {
+        let request = self.requests.record(request)?;
+        let target_name = request
+            .plugin_name
+            .clone()
+            .ok_or_else(|| Error::InvalidRequest("fork requests must name their plugin".into()))?;
+        self.ensure_request_plugin(&request, Some(&target_name))?;
+        self.store.fork(
+            reference_plugin_name,
+            &target_name,
+            std::slice::from_ref(&request.id),
+            &request.body,
+            &self.requests,
+            &self.catalog(),
+        )?;
+        self.requests
+            .set_status(&request.id, RequestStatus::Working)?;
+        self.store
+            .develop(&target_name)?
+            .ok_or_else(|| Error::Validation("plugin fork disappeared during startup".into()))
+    }
+
     /// Validate, record evidence, submit, and propagate request state.
     pub fn validate_and_submit(&self, plugin_name: &str) -> Result<ValidationOutcome> {
         let installed_kinds = self.installed_node_kinds()?;
@@ -363,6 +400,21 @@ impl RsiInfra {
         Ok(source)
     }
 
+    /// Validate a workspace and immediately activate its immutable snapshot.
+    ///
+    /// Human review and GitHub publication are intentionally not on this path.
+    /// The manifest remains `pending_review` while local DAG use proceeds, and
+    /// the background distiller can later decide whether to publish or merge.
+    pub fn validate_and_activate_local(&self, plugin_name: &str) -> Result<LocalActivationOutcome> {
+        match self.validate_and_submit(plugin_name)? {
+            ValidationOutcome::Submitted(report) => {
+                let source = self.install_local(plugin_name)?;
+                Ok(LocalActivationOutcome::Activated(report, source))
+            }
+            ValidationOutcome::NeedsFix(report) => Ok(LocalActivationOutcome::NeedsFix(report)),
+        }
+    }
+
     /// Roll back to the previous immutable source and refresh registration.
     pub fn rollback(&self, plugin_name: &str) -> Result<crate::InstalledPluginSource> {
         let source = self.store.rollback(plugin_name)?;
@@ -383,12 +435,7 @@ impl RsiInfra {
             .store
             .list()?
             .into_iter()
-            .filter(|manifest| {
-                matches!(
-                    manifest.status,
-                    PluginStatus::Published | PluginStatus::Installed
-                )
-            })
+            .filter(|manifest| manifest.installation.is_runtime_active())
             .flat_map(|manifest| manifest.nodes.into_iter().map(|node| node.kind))
             .collect())
     }

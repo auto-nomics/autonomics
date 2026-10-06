@@ -5,6 +5,7 @@
 //! narrow host-owned API; they never receive raw git, gh, host-filesystem, or
 //! live-registry access.
 
+pub mod distill;
 pub mod error;
 pub mod feedback;
 pub mod github;
@@ -22,6 +23,7 @@ pub mod validate;
 pub mod workspace;
 
 pub use container_plugin::manifest::PluginStatus;
+pub use distill::{DistillFailure, DistillationCandidate, PluginDistillReport, PluginDistiller};
 pub use error::{Error, Result};
 pub use evolution_core::{
     ObservationAudience, ObservationRoute, ObservationRouteStatus, ObservationRouteStore,
@@ -41,7 +43,7 @@ pub use install::{
     read_git_plugin_source, read_installed_plugin_source, write_git_plugin_source,
     write_local_plugin_source,
 };
-pub use lifecycle::{PluginLifecycle, ValidationOutcome};
+pub use lifecycle::{LocalActivationOutcome, PluginLifecycle, ValidationOutcome};
 pub use names::validate_plugin_name;
 pub use plugin::{GitPluginSourceFetcher, PluginOperator, PluginSourceFetcher, PluginStore};
 pub use profile::AgentProfile;

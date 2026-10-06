@@ -132,7 +132,7 @@ pub const ENV_GENERATE_MEMORY: &str = "AUTONOMICS_GENERATE_MEMORY";
 ///
 /// The environment catalog and trusted GitHub publisher are startup
 /// dependencies of `RsiInfra`, not optional runtime patches.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PluginRsiConfig {
     /// Approved digest-pinned environments available to plugin development.
     #[serde(default)]
@@ -140,6 +140,37 @@ pub struct PluginRsiConfig {
     /// Trusted GitHub publication and update-PR configuration.
     #[serde(default)]
     pub publisher: plugin_rsi::GhPublisherConfig,
+    /// Run background publication of locally active plugins.
+    #[serde(default = "default_plugin_distillation_enabled")]
+    pub distillation_enabled: bool,
+    /// Background publication cadence in seconds.
+    #[serde(default = "default_plugin_distillation_interval_secs")]
+    pub distillation_interval_secs: u64,
+}
+
+impl PluginRsiConfig {
+    pub(crate) fn effective_distillation_interval_secs(&self) -> u64 {
+        self.distillation_interval_secs.max(60)
+    }
+}
+
+fn default_plugin_distillation_enabled() -> bool {
+    true
+}
+
+fn default_plugin_distillation_interval_secs() -> u64 {
+    5 * 60
+}
+
+impl Default for PluginRsiConfig {
+    fn default() -> Self {
+        Self {
+            environments: Default::default(),
+            publisher: Default::default(),
+            distillation_enabled: default_plugin_distillation_enabled(),
+            distillation_interval_secs: default_plugin_distillation_interval_secs(),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1344,6 +1375,7 @@ mod tests {
                     owner: "example".into(),
                     ..Default::default()
                 },
+                ..Default::default()
             })
             .build();
         assert!(config.plugin_rsi.environments.get("alpine").is_some());

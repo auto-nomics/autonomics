@@ -46,7 +46,7 @@ use vfs::{
 };
 
 use crate::catalog_tools::CatalogState;
-use crate::config::{PromptCapabilities, RuntimeConfig};
+use crate::config::{PluginRsiConfig, PromptCapabilities, RuntimeConfig};
 use crate::control::{AgentExecutionHistory, AgentStatus, DelegationSnapshot, DelegationStatus};
 use crate::error::{Error, Result};
 use crate::memory_kms::KmsMemoryGrounding;
@@ -84,6 +84,50 @@ fn spawn_container_gc(infra: &Arc<ContainerExecutionInfra>) {
                 break;
             };
             tokio::time::sleep(interval).await;
+        }
+    });
+}
+
+/// Periodically convert locally active plugin work into remote sources.
+///
+/// The first interval is skipped intentionally: startup should not turn an
+/// already usable local snapshot into a GitHub operation before the host has
+/// finished opening its registries.
+fn spawn_plugin_distiller(rsi: &Arc<plugin_rsi::RsiInfra>, config: &PluginRsiConfig) {
+    if !config.distillation_enabled {
+        tracing::info!("plugin distillation disabled");
+        return;
+    }
+    let interval_secs = config.effective_distillation_interval_secs();
+    let distiller = plugin_rsi::PluginDistiller::new((**rsi).clone());
+    tokio::spawn(async move {
+        let mut timer = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+        timer.tick().await;
+        loop {
+            timer.tick().await;
+            let worker = distiller.clone();
+            let report = match tokio::task::spawn_blocking(move || worker.run_once()).await {
+                Ok(report) => report,
+                Err(error) => {
+                    tracing::warn!(error = %error, "plugin distillation task failed");
+                    continue;
+                }
+            };
+            if report.failed == 0 {
+                tracing::info!(
+                    considered = report.considered,
+                    completed = report.completed,
+                    "plugin distillation pass"
+                );
+            } else {
+                tracing::warn!(
+                    considered = report.considered,
+                    completed = report.completed,
+                    failed = report.failed,
+                    failures = ?report.failures,
+                    "plugin distillation pass"
+                );
+            }
         }
     });
 }
@@ -308,6 +352,7 @@ impl SharedInfra {
             execution: Arc::clone(&container_execution),
             store: rsi.store(),
         }));
+        spawn_plugin_distiller(&rsi, &config.plugin_rsi);
         tracing::info!("SharedInfra::open: DataEngineManager created");
 
         // ── Agent storage ────────────────────────────────────────────

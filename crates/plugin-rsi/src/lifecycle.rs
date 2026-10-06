@@ -18,6 +18,15 @@ pub enum ValidationOutcome {
     NeedsFix(ValidationReport),
 }
 
+/// Result of the fast local-activation path.
+#[derive(Debug, Clone)]
+pub enum LocalActivationOutcome {
+    /// Validation passed and the immutable local snapshot is now runtime-active.
+    Activated(ValidationReport, crate::LocalInstalledPluginSource),
+    /// Validation failed and the development workspace remains repairable.
+    NeedsFix(ValidationReport),
+}
+
 /// Thin orchestrator over one long-lived plugin workspace.
 pub struct PluginLifecycle<'a, 'b> {
     operator: &'a mut PluginOperator<'b>,

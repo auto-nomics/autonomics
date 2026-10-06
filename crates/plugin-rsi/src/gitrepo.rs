@@ -147,6 +147,13 @@ impl GitRepo {
         self.run(&["remote", "add", name, url])
     }
 
+    pub fn remove_remote(&self, name: &str) -> Result<()> {
+        if self.remote_url(name)?.is_some() {
+            self.run(&["remote", "remove", name])?;
+        }
+        Ok(())
+    }
+
     pub fn snapshot_commit(
         &self,
         message: &str,

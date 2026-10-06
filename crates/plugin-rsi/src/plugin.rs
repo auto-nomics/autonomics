@@ -338,6 +338,84 @@ impl PluginStore {
         })
     }
 
+    /// Fork an installed reference plugin into a new development workspace.
+    ///
+    /// The fork keeps the reference's source, tests, and environment while
+    /// resetting daemon-owned lifecycle facts. This is the fast development
+    /// path: agents change the fork and can activate it locally before the
+    /// background distiller publishes it.
+    pub fn fork(
+        &self,
+        reference_plugin_name: &str,
+        plugin_name: &str,
+        request_ids: &[String],
+        rationale: &str,
+        requests: &RequestStore,
+        catalog: &EnvironmentCatalog,
+    ) -> Result<PluginOperator<'_>> {
+        crate::validate_plugin_name(reference_plugin_name)?;
+        crate::validate_plugin_name(plugin_name)?;
+        if reference_plugin_name == plugin_name {
+            return Err(Error::InvalidRequest(
+                "a plugin fork must use a new plugin name".into(),
+            ));
+        }
+        validate_requests(request_ids, requests, rationale)?;
+        let source = self.installed_source(reference_plugin_name)?;
+        let path = self.plugin_path(plugin_name);
+        if path.exists() {
+            return Err(Error::InvalidRequest(format!(
+                "plugin directory already exists: {}",
+                path.display()
+            )));
+        }
+
+        let source_commit = source.commit().to_string();
+        match &source {
+            InstalledPluginSource::Git(source) => {
+                GitRepo::clone_at(&path, &source.remote, &source.commit, "origin")?;
+            }
+            InstalledPluginSource::Local(source) => {
+                copy_plugin_tree(&source.path, &path)?;
+                GitRepo::init(&path, &self.default_branch)?;
+            }
+        }
+
+        let workspace = PluginWorkspace::new(&path);
+        let mut manifest = load_manifest(&workspace)?;
+        let environment_reference = manifest.image.reference.as_str();
+        if catalog.find_reference(&environment_reference).is_none() {
+            return Err(Error::Validation(
+                "reference environment is not approved for RSI".into(),
+            ));
+        }
+        manifest.plugin_name = plugin_name.to_string();
+        manifest.status = PluginStatus::Draft;
+        manifest.installation = Default::default();
+        manifest.lifecycle = PluginLifecycleMetadata {
+            source_plugin: Some(reference_plugin_name.to_string()),
+            source_commit: Some(source_commit),
+            request_ids: request_ids.to_vec(),
+            rationale: Some(rationale.trim().to_string()),
+            ..Default::default()
+        };
+        save_manifest(&workspace, &manifest)?;
+
+        let repository = GitRepo::open(&path);
+        repository.remove_remote("origin")?;
+        repository.switch_forced_branch(&self.default_branch)?;
+        repository.snapshot_commit(
+            "plugin: fork installed reference",
+            &self.author_name,
+            &self.author_email,
+        )?;
+        Ok(PluginOperator {
+            store: self,
+            plugin_name: plugin_name.to_string(),
+            manifest,
+        })
+    }
+
     /// Materialize an installed plugin for in-place update.
     pub fn create_update(
         &self,
@@ -499,6 +577,22 @@ impl PluginStore {
             .into_iter()
             .find(|manifest| manifest.nodes.iter().any(|node| node.kind == node_kind))
             .map(|manifest| manifest.plugin_name))
+    }
+
+    /// Return local-active plugins awaiting the background publication pass.
+    ///
+    /// A foreground agent only needs to reach this state to use its result in
+    /// the DAG. Review, upstream merge, and GitHub publication can happen later
+    /// without blocking feedback-driven development.
+    pub fn pending_distillation(&self) -> Result<Vec<PluginManifest>> {
+        Ok(self
+            .list()?
+            .into_iter()
+            .filter(|manifest| {
+                manifest.status == PluginStatus::PendingReview
+                    && manifest.installation.is_runtime_active()
+            })
+            .collect())
     }
 
     fn plugin_path(&self, plugin_name: &str) -> PathBuf {
@@ -663,6 +757,32 @@ fn save_manifest(workspace: &PluginWorkspace, manifest: &PluginManifest) -> Resu
     workspace.write_text("manifest.toml", &text)
 }
 
+fn copy_plugin_tree(source: &Path, destination: &Path) -> Result<()> {
+    let metadata = std::fs::symlink_metadata(source)?;
+    if metadata.file_type().is_symlink() {
+        return Err(Error::UnsafePath {
+            path: source.display().to_string(),
+        });
+    }
+    if metadata.is_dir() {
+        std::fs::create_dir_all(destination)?;
+        for entry in std::fs::read_dir(source)? {
+            let entry = entry?;
+            copy_plugin_tree(&entry.path(), &destination.join(entry.file_name()))?;
+        }
+        return Ok(());
+    }
+    if !metadata.is_file() {
+        return Err(Error::Validation(format!(
+            "unsupported plugin file type: {}",
+            source.display()
+        )));
+    }
+    std::fs::copy(source, destination)
+        .map(|_| ())
+        .map_err(Error::Io)
+}
+
 fn validate_requests(
     request_ids: &[String],
     requests: &RequestStore,
@@ -705,6 +825,7 @@ pub(crate) fn ensure_transition(from: PluginStatus, to: PluginStatus) -> Result<
         | (PluginStatus::NeedsFix, PluginStatus::Validating)
         | (PluginStatus::Validating, PluginStatus::NeedsFix)
         | (PluginStatus::Validating, PluginStatus::PendingReview)
+        | (PluginStatus::PendingReview, PluginStatus::Updating)
         | (PluginStatus::PendingReview, PluginStatus::Approved)
         | (PluginStatus::PendingReview, PluginStatus::Rejected)
         | (PluginStatus::Approved, PluginStatus::Publishing)

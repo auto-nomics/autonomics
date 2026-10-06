@@ -123,6 +123,12 @@ impl PluginInstallationMetadata {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PluginLifecycleMetadata {
+    /// Installed plugin used as the source of a forked development workspace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_plugin: Option<String>,
+    /// Immutable commit captured from the fork's installed source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_commit: Option<String>,
     /// Requests that motivated the current development or update.
     #[serde(default)]
     pub request_ids: Vec<String>,
