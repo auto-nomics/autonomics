@@ -12,6 +12,7 @@ agentik-sdk = { path = "../agentik-sdk" }
 async-trait.workspace = true
 container-plugin = { path = "../container-plugin" }
 container-runtime = { path = "../container-runtime" }
+evolution-core = { path = "../evolution-core" }
 skills = { path = "../skills" }
 schemars.workspace = true
 serde = { version = "1", features = ["derive"] }

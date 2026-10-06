@@ -23,10 +23,11 @@ pub mod workspace;
 
 pub use container_plugin::manifest::PluginStatus;
 pub use error::{Error, Result};
-pub use feedback::{
-    ObservationAudience, ObservationRequest, ObservationRoute, ObservationRouteStatus,
-    ObservationRouteStore, RouteDecision,
+pub use evolution_core::{
+    ObservationAudience, ObservationRoute, ObservationRouteStatus, ObservationRouteStore,
+    RouteDecision,
 };
+pub use feedback::ObservationRequest;
 pub use github::{
     GhPublisher, GhPublisherConfig, GhStatus, MergeOutcome, PluginPublisher,
     PluginPullRequestPublisher, PublishOutcome, PullRequestOutcome,

@@ -9,16 +9,15 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+use evolution_core::routing::observation_route;
 use skills::observation::ObservationInput;
 
 use crate::{
-    EnvironmentCatalog, Error, ObservationRequest, PluginLifecycle, PluginPublisher,
+    EnvironmentCatalog, Error, ObservationAudience, ObservationRequest, ObservationRoute,
+    ObservationRouteStatus, ObservationRouteStore, PluginLifecycle, PluginPublisher,
     PluginPullRequestPublisher, PluginStatus, PluginStore, RequestIntent, RequestRecord,
     RequestStatus, RequestStore, Result, ValidationOutcome,
-    feedback::{
-        ObservationAudience, ObservationRoute, ObservationRouteStatus, ObservationRouteStore,
-        default_request_intent, observation_request, observation_route,
-    },
+    feedback::{default_request_intent, observation_request},
 };
 
 /// Trusted publisher used for plugin releases and installs.
