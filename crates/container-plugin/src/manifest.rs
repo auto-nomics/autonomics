@@ -159,6 +159,13 @@ pub struct PluginLifecycleMetadata {
     /// Repository-relative latest validation report.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub latest_report: Option<String>,
+    /// Whether the current local snapshot should enter background publication.
+    ///
+    /// This is deliberately independent of `PluginStatus`: local activation is
+    /// recorded by installation metadata, while status continues to describe
+    /// the development/publication workflow.
+    #[serde(default)]
+    pub publication_pending: bool,
 }
 
 fn default_plugin_status() -> PluginStatus {

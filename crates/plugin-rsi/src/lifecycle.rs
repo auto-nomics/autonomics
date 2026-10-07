@@ -14,6 +14,8 @@ use crate::{
 pub enum ValidationOutcome {
     /// The plugin passed all gates and entered review.
     Submitted(ValidationReport),
+    /// The plugin passed all gates and remained in its local development state.
+    Passed(ValidationReport),
     /// A gate failed and the plugin returned to its repair state.
     NeedsFix(ValidationReport),
 }
@@ -54,23 +56,7 @@ impl<'a, 'b> PluginLifecycle<'a, 'b> {
     /// Validate the plugin, append evidence, snapshot passes, and enter review.
     pub fn validate_and_submit(&mut self) -> Result<ValidationOutcome> {
         self.operator.refresh()?;
-        let owned_kinds = self.operator.owned_node_kinds();
-        self.operator
-            .transition_snapshot(PluginStatus::Validating, "lifecycle: start validation")?;
-        let attempt = next_validation_attempt(&self.operator.reports_dir())?;
-        let report = validate_workspace(
-            self.operator.plugin_name(),
-            &self.operator.workspace(),
-            self.catalog,
-            self.installed_node_kinds,
-            &owned_kinds,
-            attempt,
-        );
-        report.write(&self.operator.reports_dir())?;
-        let relative = format!(".rsi/reports/attempt-{attempt}.json");
-        self.operator.mutate_manifest(|manifest| {
-            manifest.lifecycle.latest_report = Some(relative);
-        })?;
+        let report = self.validate_common()?;
 
         if !report.passed() {
             self.operator
@@ -79,11 +65,44 @@ impl<'a, 'b> PluginLifecycle<'a, 'b> {
         }
 
         self.operator
-            .snapshot(&format!("validation: attempt {attempt}"))?;
+            .snapshot(&format!("validation: {}", report.report_id))?;
         self.ensure_clean()?;
         self.operator
             .transition_snapshot(PluginStatus::PendingReview, "lifecycle: submit review")?;
         Ok(ValidationOutcome::Submitted(report))
+    }
+
+    /// Validate for local activation without entering the review workflow.
+    ///
+    /// A passing workspace returns to its normal editable development status.
+    /// Runtime activation itself is recorded separately in installation
+    /// metadata when the immutable snapshot is installed.
+    pub fn validate_local(&mut self) -> Result<ValidationOutcome> {
+        self.operator.refresh()?;
+        let development_status = self.operator.status();
+        let report = self.validate_common()?;
+
+        if !report.passed() {
+            self.operator.mutate_manifest(|manifest| {
+                manifest.status = PluginStatus::NeedsFix;
+                manifest.lifecycle.publication_pending = false;
+            })?;
+            return Ok(ValidationOutcome::NeedsFix(report));
+        }
+
+        self.operator
+            .snapshot(&format!("validation: attempt {}", report.report_id))?;
+        self.ensure_clean()?;
+        let restore = if development_status == PluginStatus::Updating {
+            PluginStatus::Updating
+        } else {
+            PluginStatus::Draft
+        };
+        self.operator.transition_snapshot(
+            restore,
+            "lifecycle: local validation passed; remain editable",
+        )?;
+        Ok(ValidationOutcome::Passed(report))
     }
 
     /// Apply human review and snapshot the decision.
@@ -272,7 +291,33 @@ impl<'a, 'b> PluginLifecycle<'a, 'b> {
         }
         self.operator
             .install_registry_source(&remote, &outcome.commit)?;
+        self.operator.mutate_manifest(|manifest| {
+            manifest.lifecycle.publication_pending = false;
+        })?;
+        self.operator
+            .snapshot("lifecycle: clear pending publication")?;
         Ok(PluginStatus::Installed)
+    }
+
+    fn validate_common(&mut self) -> Result<ValidationReport> {
+        let owned_kinds = self.operator.owned_node_kinds();
+        self.operator
+            .transition_snapshot(PluginStatus::Validating, "lifecycle: start validation")?;
+        let attempt = next_validation_attempt(&self.operator.reports_dir())?;
+        let report = validate_workspace(
+            self.operator.plugin_name(),
+            &self.operator.workspace(),
+            self.catalog,
+            self.installed_node_kinds,
+            &owned_kinds,
+            attempt,
+        );
+        report.write(&self.operator.reports_dir())?;
+        let relative = format!(".rsi/reports/attempt-{attempt}.json");
+        self.operator.mutate_manifest(|manifest| {
+            manifest.lifecycle.latest_report = Some(relative);
+        })?;
+        Ok(report)
     }
 
     fn ensure_status(&self, status: PluginStatus) -> Result<()> {

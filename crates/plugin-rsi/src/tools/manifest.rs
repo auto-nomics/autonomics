@@ -61,8 +61,9 @@ pub(super) async fn editable_manifest(target: &PluginTarget) -> RsiResult<Plugin
 
 pub(super) fn save_manifest(
     workspace: &PluginWorkspace,
-    manifest: &PluginManifest,
+    manifest: &mut PluginManifest,
 ) -> RsiResult<()> {
+    manifest.lifecycle.publication_pending = false;
     toml::to_string_pretty(manifest)
         .map_err(|error| Error::Validation(format!("cannot encode manifest: {error}")))
         .and_then(|text| workspace.write_text(MANIFEST_FILE, &text))

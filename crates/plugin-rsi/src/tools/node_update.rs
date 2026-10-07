@@ -140,7 +140,7 @@ impl ToolFunction for PluginNodeUpdateTool {
         }
         let previous_kind = manifest.nodes[index].kind.clone();
         manifest.nodes[index] = node;
-        save_manifest(&target.workspace, &manifest).map_err(tool_error)?;
+        save_manifest(&target.workspace, &mut manifest).map_err(tool_error)?;
 
         Ok(ToolResult::success_json(json!({
             "previous_kind": previous_kind,

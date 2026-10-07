@@ -347,6 +347,18 @@ impl RsiInfra {
         Ok(outcome)
     }
 
+    /// Validate a workspace while leaving it editable for local development.
+    pub fn validate_local(&self, plugin_name: &str) -> Result<ValidationOutcome> {
+        let installed_kinds = self.installed_node_kinds()?;
+        let mut operator = self
+            .store
+            .develop(plugin_name)?
+            .ok_or_else(|| Error::Validation(format!("unknown plugin `{plugin_name}`")))?;
+        let catalog = self.catalog();
+        let mut lifecycle = PluginLifecycle::new(&mut operator, &catalog, &installed_kinds);
+        lifecycle.validate_local()
+    }
+
     pub fn review(&self, plugin_name: &str, approved: bool) -> Result<PluginStatus> {
         let installed_kinds = self.installed_node_kinds()?;
         let mut operator = self
@@ -432,15 +444,32 @@ impl RsiInfra {
     /// Validate a workspace and immediately activate its immutable snapshot.
     ///
     /// Human review and GitHub publication are intentionally not on this path.
-    /// The manifest remains `pending_review` while local DAG use proceeds, and
-    /// the background distiller can later decide whether to publish or merge.
+    /// The manifest remains editable while the DAG reads an immutable local
+    /// snapshot, and the background distiller can later publish or merge it.
     pub fn validate_and_activate_local(&self, plugin_name: &str) -> Result<LocalActivationOutcome> {
-        match self.validate_and_submit(plugin_name)? {
-            ValidationOutcome::Submitted(report) => {
+        match self.validate_local(plugin_name)? {
+            ValidationOutcome::Passed(report) => {
                 let source = self.install_local(plugin_name)?;
+                let request_ids = self
+                    .store
+                    .develop(plugin_name)?
+                    .ok_or_else(|| {
+                        Error::Validation("plugin disappeared during local activation".into())
+                    })?
+                    .manifest()
+                    .lifecycle
+                    .request_ids
+                    .clone();
+                for id in request_ids {
+                    self.requests
+                        .set_status(&id, RequestStatus::ReviewPending)?;
+                }
                 Ok(LocalActivationOutcome::Activated(report, source))
             }
             ValidationOutcome::NeedsFix(report) => Ok(LocalActivationOutcome::NeedsFix(report)),
+            ValidationOutcome::Submitted(_) => Err(Error::Validation(
+                "local validation returned the review submission state".into(),
+            )),
         }
     }
 
