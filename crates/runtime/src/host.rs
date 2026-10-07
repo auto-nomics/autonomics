@@ -758,6 +758,12 @@ impl plugin_rsi::PluginRegistryControl for SharedPluginRegistryControl {
         self.manager.reload_plugin(plugin);
         Ok(())
     }
+
+    fn uninstall_plugin(&self, plugin_name: &str) -> plugin_rsi::Result<()> {
+        plugin_rsi::validate_plugin_name(plugin_name)?;
+        self.manager.remove_plugin(plugin_name);
+        Ok(())
+    }
 }
 
 /// Build the bibliography VFS without opening agent or writing-system storage.

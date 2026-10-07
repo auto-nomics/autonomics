@@ -893,8 +893,9 @@ environment images with `plugin_environment_bind`, add nodes and update node doc
 with plugin tools, replace complete node specs with `plugin_node_update`, and run\n\
 commands in the selected environment\n\
 with `plugin_container_run`. After editing, call `plugin_install` to validate and\n\
-load the local snapshot into the DAG. Treat manifest lifecycle state as host-owned:\n\
-do not attempt direct manifest writes.";
+load the local snapshot into the DAG. Call `plugin_uninstall` to remove the\n\
+active runtime source while retaining development history. Treat manifest\n\
+lifecycle state as host-owned: do not attempt direct manifest writes.";
 
 const PROMPT_SQL_CONVENTIONS: &str = "\n\
 ### SQL Conventions\n\

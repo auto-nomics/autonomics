@@ -33,6 +33,9 @@ pub trait PluginRegistryControl: Send + Sync {
 
     /// Replace the live implementation of one plugin's registered kinds.
     fn reload_plugin(&self, plugin_name: &str) -> Result<()>;
+
+    /// Remove the live factories contributed by one plugin.
+    fn uninstall_plugin(&self, plugin_name: &str) -> Result<()>;
 }
 
 /// One trusted plugin subsystem.
@@ -476,6 +479,16 @@ impl RsiInfra {
         Ok(source)
     }
 
+    /// Uninstall a plugin from the live registry and persistent runtime source.
+    ///
+    /// Development and snapshot history are retained for audit and later
+    /// reinstallation.
+    pub fn uninstall(&self, plugin_name: &str) -> Result<crate::InstalledPluginSource> {
+        let source = self.store.uninstall(plugin_name)?;
+        self.unload_plugin(plugin_name)?;
+        Ok(source)
+    }
+
     pub fn installed_node_addresses(&self) -> Result<Vec<String>> {
         if let Some(control) = self
             .registry
@@ -509,6 +522,17 @@ impl RsiInfra {
                 Error::Validation("runtime plugin registry control is not configured".into())
             })?
             .reload_plugin(plugin_name)
+    }
+
+    fn unload_plugin(&self, plugin_name: &str) -> Result<()> {
+        self.registry
+            .read()
+            .expect("registry control lock poisoned")
+            .as_ref()
+            .ok_or_else(|| {
+                Error::Validation("runtime plugin registry control is not configured".into())
+            })?
+            .uninstall_plugin(plugin_name)
     }
 
     fn catalog(&self) -> Arc<EnvironmentCatalog> {

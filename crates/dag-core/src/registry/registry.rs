@@ -314,6 +314,18 @@ impl NodeRegistry {
         *nodes = temporary.into_nodes();
     }
 
+    /// Remove every factory contributed by one plugin namespace.
+    ///
+    /// Already-built node instances remain valid for their current DAG, but
+    /// subsequent registry lookups cannot create nodes from this plugin.
+    pub fn remove_plugin(&self, plugin_name: &str) {
+        let prefix = format!("{plugin_name}/");
+        let mut nodes = self.nodes.write().expect("node registry lock poisoned");
+        nodes.retain(|address, factory| {
+            !address.starts_with(&prefix) || factory.plugin() != plugin_name
+        });
+    }
+
     /// Borrow the shared [`NodeCtx`] (handed to every factory's `build`).
     pub fn ctx(&self) -> &NodeCtx {
         &self.node_ctx
@@ -559,5 +571,23 @@ mod tests {
         assert!(error.to_string().contains("ambiguous"), "{error}");
         assert!(error.to_string().contains("alpha/same_kind"), "{error}");
         assert!(error.to_string().contains("beta/same_kind"), "{error}");
+    }
+
+    #[test]
+    fn remove_plugin_removes_only_its_namespace() {
+        let mut reg = registry();
+        reg.register(Box::new(FakeFactory {
+            plugin: "alpha",
+            kind: "same_kind",
+        }));
+        reg.register(Box::new(FakeFactory {
+            plugin: "beta",
+            kind: "same_kind",
+        }));
+
+        reg.remove_plugin("alpha");
+        assert!(reg.get_node_ports("alpha/same_kind").is_err());
+        assert!(reg.get_node_ports("beta/same_kind").is_ok());
+        assert!(!reg.list_nodes().iter().any(|node| node.plugin == "alpha"));
     }
 }

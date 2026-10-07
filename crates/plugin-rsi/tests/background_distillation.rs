@@ -74,6 +74,10 @@ impl plugin_rsi::PluginRegistryControl for NoopRegistry {
     fn reload_plugin(&self, _plugin_name: &str) -> plugin_rsi::Result<()> {
         Ok(())
     }
+
+    fn uninstall_plugin(&self, _plugin_name: &str) -> plugin_rsi::Result<()> {
+        Ok(())
+    }
 }
 
 fn catalog() -> EnvironmentCatalog {

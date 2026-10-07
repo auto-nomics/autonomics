@@ -172,6 +172,50 @@ impl PluginStore {
         crate::read_installed_plugin_source(&self.registry_path, plugin_name)
     }
 
+    /// Uninstall the active runtime source while preserving its audit history.
+    ///
+    /// The development workspace and immutable snapshots remain on disk. Only
+    /// the persistent registry declaration and its current runtime
+    /// materialization are removed.
+    pub fn uninstall(&self, plugin_name: &str) -> Result<InstalledPluginSource> {
+        crate::validate_plugin_name(plugin_name)?;
+        let source = self.installed_source(plugin_name)?;
+        let mut operator = self
+            .develop(plugin_name)?
+            .ok_or_else(|| Error::Validation(format!("unknown plugin `{plugin_name}`")))?;
+        let repository = operator.repository();
+        if !repository.is_clean()? {
+            return Err(Error::Validation(format!(
+                "plugin `{plugin_name}` has uncommitted development changes; \
+                 commit or discard them before uninstalling"
+            )));
+        }
+
+        operator.mutate_manifest(|manifest| {
+            manifest.installation = Default::default();
+            manifest.lifecycle.publication_pending = false;
+        })?;
+        operator.snapshot("plugin: uninstall runtime source")?;
+
+        let runtime_path = self.runtime_root.join(plugin_name);
+        match std::fs::symlink_metadata(&runtime_path) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                std::fs::remove_file(&runtime_path)?;
+            }
+            Ok(_) => std::fs::remove_dir_all(&runtime_path)?,
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => {}
+            Err(source) => return Err(source.into()),
+        }
+        if !crate::remove_installed_plugin_source(&self.registry_path, plugin_name)? {
+            return Err(Error::Validation(format!(
+                "plugin `{plugin_name}` disappeared from the registry during uninstall"
+            )));
+        }
+
+        self.materialize_registry()?;
+        Ok(source)
+    }
+
     /// Install the clean, validated workspace commit as a local snapshot.
     ///
     /// The development workspace remains mutable and keeps its development
