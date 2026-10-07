@@ -233,14 +233,14 @@ impl ToolFunction for DownloadSummaryStatsTool {
                 .await;
 
             match result {
-                Ok(size) => {
+                Ok(file) => {
                     ctx.emit(
                         ProgressRecord::new("finished")
                             .label(filename)
                             .status("success")
                             .message(format!(
                                 "{filename}: {} ({})",
-                                human_bytes(size),
+                                human_bytes(file.bytes),
                                 storage_path,
                             )),
                     );
@@ -248,7 +248,8 @@ impl ToolFunction for DownloadSummaryStatsTool {
                         "accession": input.accession,
                         "filename": relpath,
                         "path": storage_path,
-                        "size": size,
+                        "size": file.bytes,
+                        "sha256": format!("sha256:{}", file.sha256),
                     }));
                 }
                 Err(e) => {
@@ -349,7 +350,7 @@ impl ToolFunction for DownloadSummaryStatsTool {
         let mut downloaded = Vec::new();
         for (relpath, url) in &targets {
             let storage_path = format!("{dest_dir}/{relpath}");
-            let size = self
+            let file = self
                 .client
                 .download_stream_to_storage(url, &self.storage, &storage_path, |_, _| {})
                 .await
@@ -358,7 +359,8 @@ impl ToolFunction for DownloadSummaryStatsTool {
                 "accession": input.accession,
                 "filename": relpath,
                 "path": storage_path,
-                "size": size,
+                "size": file.bytes,
+                "sha256": format!("sha256:{}", file.sha256),
             }));
         }
 

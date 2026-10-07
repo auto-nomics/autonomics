@@ -9,7 +9,7 @@ use serde::Deserialize;
 
 use dag_core::dag::{DagError, DagNode, NodePorts, graph::PortOutputs};
 use dag_core::registry::{NodeCtx, NodeFactory};
-use dag_core::value::FileRef;
+use dag_core::value::{FileFingerprint, FileRef};
 
 use crate::nodes::util;
 use crate::tools::download::FileVariant;
@@ -233,39 +233,34 @@ impl DagNode for DownloadNode {
         let mut files: Vec<FileRef> = Vec::new();
         for (i, (relpath, url)) in targets.iter().enumerate() {
             let storage_path = format!("{dest_dir}/{relpath}");
-            let bytes = client
-                .http_client()
-                .get(url)
-                .send()
+            // Stream through the VFS (staging + atomic rename + streamed
+            // SHA256): summary-statistics files reach hundreds of MiB and
+            // must never be buffered whole.
+            let downloaded = client
+                .download_stream_to_storage(url, storage, &storage_path, |_, _| {})
                 .await
                 .map_err(|e| {
                     DagError::Schedule(format!(
-                        "source_gwascatalog_download: request for {url} failed: {e}"
+                        "source_gwascatalog_download: downloading {url} failed: {e}"
                     ))
-                })?
-                .error_for_status()
-                .map_err(|e| {
-                    DagError::Schedule(format!("source_gwascatalog_download: {url} returned {e}"))
-                })?
-                .bytes()
-                .await
-                .map_err(|e| {
-                    DagError::Schedule(format!(
-                        "source_gwascatalog_download: reading {url} failed: {e}"
-                    ))
-                })?
-                .to_vec();
-            let size = bytes.len() as u64;
-            let file_ref = util::write_through(ctx, &storage_path, bytes, "tsv").await?;
+                })?;
             reporter.warn(format!(
                 "downloaded {} ({}/{}) — {} bytes",
                 relpath,
                 i + 1,
                 targets.len(),
-                size
+                downloaded.bytes
             ));
-            let _ = storage; // validated above; writes go through write_through
-            files.push(file_ref);
+            files.push(FileRef {
+                path: storage_path,
+                format: Some("tsv".to_string()),
+                fingerprint: Some(FileFingerprint {
+                    size: downloaded.bytes,
+                    mtime_ns: 0,
+                    content_hash: Some(format!("sha256:{}", downloaded.sha256)),
+                    immutable_remote: true,
+                }),
+            });
         }
 
         let mut outputs = PortOutputs::new();

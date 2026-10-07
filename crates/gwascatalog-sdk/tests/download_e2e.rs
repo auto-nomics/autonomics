@@ -58,12 +58,13 @@ async fn download_harmonised_meta_yaml() {
         .expect("meta.yaml not found");
 
     let url = format!("{harm_url}/{meta}");
-    let size = client
+    let file = client
         .download_stream_to_storage(&url, &storage, "/GCST90000061/meta.yaml", |_, _| {})
         .await
         .unwrap();
 
-    assert!(size > 0, "downloaded file should be non-empty");
+    assert!(file.bytes > 0, "downloaded file should be non-empty");
+    assert_eq!(file.sha256.len(), 64, "sha256 must be reported");
 }
 
 #[tokio::test]

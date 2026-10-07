@@ -28,7 +28,7 @@ sha2.workspace = true
 tokio = { workspace = true, features = ["fs"] }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net"] }
 
 [lints]
 workspace = true

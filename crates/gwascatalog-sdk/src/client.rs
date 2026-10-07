@@ -56,6 +56,14 @@ pub struct GwasCatalogClient {
 /// Backward-compat alias — the original SDK exposed `GwasCatalogApi`.
 pub type GwasCatalogApi = GwasCatalogClient;
 
+/// Outcome of a streamed download: total bytes written and the SHA256 of
+/// the content (hex, no prefix), computed while streaming.
+#[derive(Debug, Clone)]
+pub struct DownloadedFile {
+    pub bytes: u64,
+    pub sha256: String,
+}
+
 impl GwasCatalogClient {
     /// Create a client pointing to the production APIs.
     pub fn new() -> Self {
@@ -203,18 +211,24 @@ impl GwasCatalogClient {
     /// Stream-download a file to [`OpendalFileStorage`], calling `on_progress`
     /// with `(bytes_downloaded, total_bytes)` on every chunk.
     ///
-    /// Peak memory ≈ chunk size (≈64 KiB), not the full file.
+    /// The body is never buffered in memory: chunks flow into an OpenDAL
+    /// writer on a `{path}.part` staging object, SHA256 is computed while
+    /// streaming, and the file is published by an atomic rename only after
+    /// the whole body arrived. Peak memory ≈ chunk size (≈64 KiB), not the
+    /// full file. `path` is a virtual path (bare `/…`); mount routing follows
+    /// [`OpendalFileStorage::resolve`].
     pub async fn download_stream_to_storage<F>(
         &self,
         url: &str,
         storage: &vfs::OpendalFileStorage,
         path: &str,
         mut on_progress: F,
-    ) -> Result<u64>
+    ) -> Result<DownloadedFile>
     where
         F: FnMut(u64, Option<u64>),
     {
         use futures::StreamExt;
+        use sha2::{Digest, Sha256};
 
         let resp = self.client.get(url).send().await?;
         let status = resp.status();
@@ -226,24 +240,43 @@ impl GwasCatalogClient {
         }
 
         let total = resp.content_length();
+        let path = path.strip_prefix("vfs://").unwrap_or(path);
+        let operator = storage.resolve(path);
+        let key = storage.resolve_path(path);
+        let staging_key = format!("{key}.part");
+
+        let mut writer = operator
+            .writer_with(&staging_key)
+            .await
+            .map_err(|e| GwasCatalogError::Storage(e.to_string()))?;
+
+        let mut hasher = Sha256::new();
         let mut stream = resp.bytes_stream();
-        let mut buf: Vec<u8> = Vec::with_capacity(total.unwrap_or(0) as usize);
         let mut downloaded: u64 = 0;
 
         while let Some(chunk) = stream.next().await {
             let bytes = chunk?;
-            buf.extend_from_slice(&bytes);
+            hasher.update(&bytes);
+            writer
+                .write(vfs::opendal::Buffer::from(bytes.to_vec()))
+                .await
+                .map_err(|e| GwasCatalogError::Storage(e.to_string()))?;
             downloaded += bytes.len() as u64;
             on_progress(downloaded, total);
         }
-
-        storage
-            .op
-            .write(path, buf)
+        writer
+            .close()
+            .await
+            .map_err(|e| GwasCatalogError::Storage(e.to_string()))?;
+        operator
+            .rename(&staging_key, &key)
             .await
             .map_err(|e| GwasCatalogError::Storage(e.to_string()))?;
 
-        Ok(downloaded)
+        Ok(DownloadedFile {
+            bytes: downloaded,
+            sha256: format!("{:x}", hasher.finalize()),
+        })
     }
 }
 
@@ -364,6 +397,62 @@ mod tests {
                 "GCST90000061_buildGRCh37.tsv",
                 "GCST90000061_buildGRCh37.tsv-meta.yaml",
             ]
+        );
+    }
+
+    /// The download must stream (staging + atomic rename), report the true
+    /// byte count, and compute SHA256 over the streamed content.
+    #[tokio::test]
+    async fn download_stream_to_storage_publishes_verified_content() {
+        use sha2::Digest;
+        use vfs::OpendalFileStorage;
+
+        let body: Vec<u8> = (0..100_000u32).map(|i| (i % 251) as u8).collect();
+        let expected_sha = format!("{:x}", sha2::Sha256::digest(&body));
+        let expected_total = body.len() as u64;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let payload = body.clone();
+        tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buffer = [0u8; 4096];
+            let _ = socket.read(&mut buffer).await;
+            let header = format!(
+                "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                payload.len()
+            );
+            socket.write_all(header.as_bytes()).await.unwrap();
+            socket.write_all(&payload).await.unwrap();
+        });
+
+        let client = GwasCatalogClient::new();
+        let storage = OpendalFileStorage::new_temp();
+        let url = format!("http://127.0.0.1:{port}/GCST90000061_buildGRCh38.tsv");
+        let path = "/GCST90000061/GCST90000061_buildGRCh38.tsv";
+        let mut progress_calls = 0u32;
+        let file = client
+            .download_stream_to_storage(&url, &storage, path, |bytes, total| {
+                assert_eq!(total, Some(expected_total));
+                assert!(bytes <= expected_total);
+                progress_calls += 1;
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(file.bytes, expected_total);
+        assert_eq!(file.sha256, expected_sha);
+        assert!(progress_calls > 0);
+
+        // Published at the final key, staging object gone.
+        let operator = storage.resolve(path);
+        let key = storage.resolve_path(path);
+        let written = operator.read(&key).await.unwrap().to_vec();
+        assert_eq!(written, body);
+        assert!(
+            operator.stat(&format!("{key}.part")).await.is_err(),
+            "staging object must be renamed away, not left behind"
         );
     }
 }
