@@ -9,6 +9,7 @@ pub mod catalog_tools;
 pub mod config;
 pub mod control;
 pub mod error;
+pub mod evolution_tools;
 pub mod host;
 pub mod host_tools;
 pub mod instance_lock;

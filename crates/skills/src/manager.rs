@@ -359,11 +359,37 @@ impl SkillManager {
         crate::proposals::Proposals::open(&self.state_dir)
     }
 
-    /// Run one deterministic distillation pass: cluster anchored
-    /// observations, write proposals for unconsumed clusters.
+    /// Run one deterministic distillation pass for skill-eligible evidence.
+    ///
+    /// Observations are shared across evolution subsystems. A route ledger
+    /// entry explicitly selects which observations reach skill distillation;
+    /// legacy un-routed observations remain skill-eligible for compatibility.
     pub fn distill(&self) -> Result<crate::distill::DistillReport, SkillError> {
-        let observations = self.observations().list();
+        let observations = self.skill_eligible_observations();
         crate::distill::distill(&observations, &self.proposals(), &self.registry())
+    }
+
+    fn skill_eligible_observations(&self) -> Vec<crate::Observation> {
+        let observations = self.observations().list();
+        let routes = evolution_core::routing::ObservationRouteStore::open(&self.state_dir).list();
+        let mut routed = std::collections::HashSet::new();
+        let mut eligible = std::collections::HashSet::new();
+        for route in routes {
+            routed.insert(route.observation_id.clone());
+            if matches!(
+                route.audience,
+                evolution_core::ObservationAudience::Skill
+                    | evolution_core::ObservationAudience::Both
+            ) {
+                eligible.insert(route.observation_id);
+            }
+        }
+        observations
+            .into_iter()
+            .filter(|observation| {
+                eligible.contains(&observation.id) || !routed.contains(&observation.id)
+            })
+            .collect()
     }
 
     /// Approve a pending proposal into the global tier. Bumps the
@@ -437,7 +463,7 @@ impl SkillManager {
         if supporting_observation_ids.is_empty() {
             return Err(SkillError::invalid_frontmatter(
                 "<skill_propose>",
-                "at least one supporting observation id is required — record the evidence with skill_observe first",
+                "at least one supporting observation id is required — record the evidence with evo_observe first",
             ));
         }
         let known: std::collections::BTreeSet<String> = self
@@ -550,9 +576,51 @@ fn unix_now() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use evolution_core::routing::{ObservationRouteStore, observation_route};
 
     fn manager_in(tmp: &std::path::Path) -> SkillManager {
         SkillManager::new(tmp.join("state"))
+    }
+
+    #[test]
+    fn distillation_respects_observation_routes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manager = manager_in(tmp.path());
+        let routes = ObservationRouteStore::open(&tmp.path().join("state"));
+
+        for index in 0..3 {
+            let observation = manager
+                .record_observation(crate::ObservationInput {
+                    kind: crate::ObservationKind::Failure,
+                    source: crate::ObservationSource::Agent,
+                    summary: format!("plugin failure {index}"),
+                    body: format!("Fix attempt {index}."),
+                    node_kind: Some("plugin_adapter".into()),
+                    error: Some("adapter rejected input".into()),
+                })
+                .unwrap();
+            let (_, route) = observation_route(&observation, Some("demo-plugin"), None);
+            routes.record(route).unwrap();
+        }
+        for index in 0..3 {
+            let observation = manager
+                .record_observation(crate::ObservationInput {
+                    kind: crate::ObservationKind::Recipe,
+                    source: crate::ObservationSource::Agent,
+                    summary: format!("generic recipe {index}"),
+                    body: format!("Useful generic procedure {index}."),
+                    node_kind: Some("generic_node".into()),
+                    error: None,
+                })
+                .unwrap();
+            let (_, route) = observation_route(&observation, None, None);
+            routes.record(route).unwrap();
+        }
+
+        manager.distill().unwrap();
+        let proposals = manager.proposals().list();
+        assert_eq!(proposals.len(), 1, "{proposals:?}");
+        assert_eq!(proposals[0].name, "generic-node-recipe");
     }
 
     fn make_skill(root: &std::path::Path, name: &str) {

@@ -15,7 +15,7 @@ Treat `skill_search` as a **mandatory first step** for every user message, not o
 
 Every failure whose fix you just found is future skill material:
 
-- Call `skill_observe` **at the moment of learning**: kind `failure` with the node kind and the exact error text (these two fields anchor how patterns cluster), a one-line summary naming the component, and the reusable fix as the body. Record the fix, never the transcript.
+- Call `evo_observe` **at the moment of learning**: kind `failure` with the node kind and the exact error text (these two fields anchor automatic routing and clustering), a one-line summary naming the component, and the reusable fix as the body. Record the fix, never the transcript.
 - Verified recipes and caveats (`recipe` / `caveat`) are equally valuable — a caveat is knowledge about where a usual approach breaks.
 - The same failure pattern recorded three times becomes a skill proposal automatically. When you can articulate the procedure better than a fix listing, draft it yourself with `skill_propose` — it must cite the observation ids that back it.
 - After recording several observations, `skill_evolve` runs one distillation cycle immediately. It is cheap, idempotent, and propose-only — a human reviews what it writes.

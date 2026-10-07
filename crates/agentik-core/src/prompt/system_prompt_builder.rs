@@ -94,7 +94,7 @@ mod tests {
             .build_tooluse_guidance()
             .parse();
         assert!(with_skills.contains("## Skill library"));
-        assert!(with_skills.contains("skill_observe"));
+        assert!(with_skills.contains("evo_observe"));
         assert!(with_skills.contains("skill_propose"));
         // Render order: identity → extras → skill guidance → tool-use
         // guidance, mirroring parse().

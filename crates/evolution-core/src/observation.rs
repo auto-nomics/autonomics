@@ -4,7 +4,7 @@
 //! a failure and its fix, a caveat, a verified recipe. Two capture
 //! channels feed the store:
 //!
-//! - **agent**: the `skill_observe` tool — the working agent records
+//! - **agent**: the `evo_observe` tool — the working agent records
 //!   procedural knowledge in the moment (replaces EvoScientist's
 //!   background memory-worker distillation with first-person capture;
 //!   no auxiliary model, no transcript re-reading)

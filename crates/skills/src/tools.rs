@@ -298,103 +298,7 @@ impl ToolFunction for SkillWorkflowsTool {
     }
 }
 
-// ────────────────────────── observation ──────────────────────────
-
-#[tool(
-    name = "skill_observe",
-    description = "Record one durable, reusable observation for the skill \
-        evolution loop: a failure and its fix, a verified recipe, or a caveat \
-        where a usual approach breaks. Anchored observations are clustered \
-        deterministically — failures by node kind and error signature, \
-        recipes and caveats per node kind; a pattern seen three or more \
-        times becomes a skill proposal for human review. Pass node_kind \
-        whenever the fact is tied to a DAG node: unanchored observations \
-        never auto-distill. Record only what future work would otherwise \
-        repeat: name the component, state the reusable fix or condition — \
-        never run transcripts or one-off facts."
-)]
-pub struct SkillObserveInput {
-    #[desc = "One line a future search would find; name the component, command, or interface."]
-    pub summary: String,
-    #[desc = "The reusable pattern, fix, or condition. Not a run transcript."]
-    pub body: String,
-    #[desc = "Observation kind: failure (a fix for an error), recipe (verified how-to), or caveat (where an approach breaks)."]
-    pub kind: Option<String>,
-    #[desc = "DAG node kind involved (e.g. file_to_dataframe). Required for auto-distillation of every kind — unanchored observations stay searchable but never cluster."]
-    pub node_kind: Option<String>,
-    #[desc = "The error text when this is a failure observation; distillation clusters failures by its signature. Unused for recipe and caveat."]
-    pub error: Option<String>,
-}
-
-pub struct SkillObserveTool {
-    pub manager: Arc<SkillManager>,
-}
-
-#[async_trait::async_trait]
-impl ToolFunction for SkillObserveTool {
-    type Input = SkillObserveInput;
-
-    async fn run(&self, input: SkillObserveInput) -> Result<ToolResult, ToolError> {
-        let summary = input.summary.trim();
-        let body = input.body.trim();
-        if summary.is_empty() || body.is_empty() {
-            return Ok(ToolResult::error(
-                "skill_observe: 'summary' and 'body' must be non-empty",
-            ));
-        }
-        let kind = match input.kind.as_deref().map(str::trim) {
-            None | Some("") | Some("failure") => crate::ObservationKind::Failure,
-            Some("recipe") => crate::ObservationKind::Recipe,
-            Some("caveat") => crate::ObservationKind::Caveat,
-            Some(other) => {
-                return Ok(ToolResult::error(format!(
-                    "skill_observe: unknown kind {other:?} \
-                     (use failure, recipe, or caveat)"
-                )));
-            }
-        };
-        let observation_input = crate::ObservationInput {
-            kind,
-            source: crate::ObservationSource::Agent,
-            summary: summary.to_string(),
-            body: body.to_string(),
-            node_kind: input
-                .node_kind
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_string),
-            error: input
-                .error
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_string),
-        };
-        match self.manager.record_observation(observation_input) {
-            Ok(observation) => {
-                // Source-level data quality: a quarter of recorded
-                // observations arrived unanchored and could never
-                // distill. Nudge at record time instead of filtering
-                // silently at distill time.
-                let anchor_nudge = if observation.node_kind.is_none() {
-                    " Note: unanchored observations never auto-distill — \
-                     pass node_kind when the fact is tied to a DAG node."
-                } else {
-                    ""
-                };
-                Ok(ToolResult::success(format!(
-                    "recorded observation {} ({}). Repeated anchored \
-                     patterns surface as skill proposals in the evolution \
-                     cycle.{anchor_nudge}",
-                    observation.id,
-                    observation.kind_label(),
-                )))
-            }
-            Err(e) => Ok(ToolResult::error(format!("skill_observe: {e}"))),
-        }
-    }
-}
+// ────────────────────────── authoring ──────────────────────────
 
 // ────────────────────────── authoring ──────────────────────────
 
@@ -402,7 +306,7 @@ impl ToolFunction for SkillObserveTool {
     name = "skill_propose",
     description = "Draft a new skill from evidence you recorded. Supply \
         structured fields (name/description/tags/body) plus the ids of at \
-        least one existing skill_observe observation that backs the claim — \
+        least one existing evo_observe observation that backs the claim — \
         proposals must trace to evidence, not invention. The proposal lands \
         in the human-review queue (autonomics-skills proposals / the TUI \
         dashboard); it is never auto-approved. Create-only: if a skill with \
@@ -418,7 +322,7 @@ pub struct SkillProposeInput {
     pub tags: Option<Vec<String>>,
     #[desc = "The SKILL.md body: operational instructions in markdown. No TODO placeholders."]
     pub body: String,
-    #[desc = "Ids of existing observations that back this skill (from skill_observe results)."]
+    #[desc = "Ids of existing observations that back this skill (from evo_observe results)."]
     pub supporting_observation_ids: Vec<String>,
     #[desc = "One line on why this deserves to be a skill."]
     pub rationale: String,
@@ -516,7 +420,7 @@ impl ToolFunction for SkillEvolveTool {
                 if report.proposals_written.is_empty() {
                     out.push_str(
                         "No new patterns. Anchored failure patterns propose at >= 3 \
-                         occurrences; record more with skill_observe.",
+                         occurrences; record more with evo_observe.",
                     );
                 } else {
                     out.push_str("\nA human reviews pending proposals through the TUI dashboard.");
@@ -558,9 +462,6 @@ pub fn skill_registrations(
             manager: manager.clone(),
         }),
         ToolRegistration::from(SkillSearchTool {
-            manager: manager.clone(),
-        }),
-        ToolRegistration::from(SkillObserveTool {
             manager: manager.clone(),
         }),
         ToolRegistration::from(SkillProposeTool {

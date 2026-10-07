@@ -1346,7 +1346,7 @@ mod tests {
         for tool in [
             "skill_search",
             "skill_get",
-            "skill_observe",
+            "evo_observe",
             "skill_propose",
             "skill_evolve",
         ] {

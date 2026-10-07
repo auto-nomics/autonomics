@@ -623,6 +623,9 @@ impl SharedInfra {
         let engine_client = self.engine_manager.client_for_session(agent_path.as_str());
 
         let mut tools: Vec<ToolRegistration> = vfs::vbash_registrations(file_storage.clone());
+        tools.push(crate::evolution_tools::evo_observe_registration(
+            (*self.rsi).clone(),
+        ));
         tools.extend(skills::skill_registrations(
             self.skills.clone(),
             self.skill_evolution.clone(),
@@ -5023,6 +5026,16 @@ mod plugin_profile_tools_tests {
             researcher_tools
                 .iter()
                 .any(|tool| tool.definition.name == "plugin_environments_list")
+        );
+        assert!(
+            researcher_tools
+                .iter()
+                .any(|tool| tool.definition.name == "evo_observe")
+        );
+        assert!(
+            !researcher_tools
+                .iter()
+                .any(|tool| tool.definition.name == "skill_observe")
         );
         assert!(
             crate::config::build_system_prompt(&researcher).contains("Plugin Self-Improvement")

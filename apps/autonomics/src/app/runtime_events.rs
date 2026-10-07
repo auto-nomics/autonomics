@@ -358,7 +358,7 @@ impl App {
                         && report.clusters_considered == 0
                         && report.skipped.is_empty();
                     let summary = if empty_run {
-                        "no observations to distill — record one with skill_observe".to_string()
+                        "no observations to distill — record one with evo_observe".to_string()
                     } else {
                         format!(
                             "{} written, {} updated, {} auto-approved, {} left pending",

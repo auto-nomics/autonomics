@@ -46,7 +46,7 @@ reusable node/edge graphs over the registered node kinds.
 ## Growing the library (observations)
 
 When you learn something a future session would otherwise rediscover
-the hard way, record it with `skill_observe`: a failure and its fix
+the hard way, record it with `evo_observe`: a failure and its fix
 (`kind: failure`, anchored with the node kind and error text), a
 verified recipe (`recipe`), or a caveat (`caveat`) — anchor each with
 the node kind; unanchored observations stay searchable but never
@@ -64,7 +64,7 @@ When you can articulate a reusable procedure better than the
 distiller's raw fix listing, draft it yourself with `skill_propose`:
 supply the name, a one-line description, tags, the markdown body, and
 the ids of observations that back the claim (evidence is mandatory —
-record it with `skill_observe` first). Your proposal lands in the
+record it with `evo_observe` first). Your proposal lands in the
 same human-review queue, marked as agent-authored; it is never
 auto-approved. Create-only: for improving an existing skill, record
 observations and let the loop propose the update.

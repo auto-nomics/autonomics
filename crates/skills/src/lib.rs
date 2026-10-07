@@ -26,8 +26,8 @@
 //! - [`proposals`] — the staging area and approve/reject lifecycle
 //!   between distillation and the live library
 //! - [`inject`] — the one-line-per-skill system-prompt index
-//! - [`tools`] — `skill_list` / `skill_get` / `skill_search` /
-//!   `skill_workflows` / `skill_observe` / `skill_evolve` agent tools
+//! - [`tools`] — skill discovery and authoring tools; the runtime layers the
+//!   unified `evo_observe` entry over this crate's shared observation store
 //! - [`workflow`] — parameterized DAG templates (`workflow/*.toml`):
 //!   parse, validate, render with checked params
 //! - [`eval`] — eval cases (`evals/*.toml`): run a workflow with fixed
