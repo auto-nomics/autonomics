@@ -38,8 +38,8 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::RwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, RwLock};
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
@@ -47,6 +47,7 @@ use tokio::sync::{broadcast, mpsc};
 use crate::error::SkillError;
 use crate::install::{self, InstallOutcome};
 use crate::registry::{SkillRegistry, SkillTier};
+use evolution_core::embedding::{HashingObservationEmbedder, ObservationEmbedder};
 
 /// What a skill was used for. Evolution cares about the difference
 /// between "listed in a prompt" (free), "read" (mild interest),
@@ -116,6 +117,8 @@ pub struct SkillManager {
     /// (not the handle) keeps the manager free of any service
     /// lifetime coupling.
     evolution_tx: RwLock<Option<mpsc::Sender<crate::evolution::SkillCommand>>>,
+    /// Optional semantic embedding provider for observation clustering.
+    embedder: RwLock<Option<Arc<dyn ObservationEmbedder>>>,
 }
 
 static GLOBAL: arc_swap::ArcSwapOption<SkillManager> = arc_swap::ArcSwapOption::const_empty();
@@ -148,6 +151,7 @@ impl SkillManager {
             changes: broadcast::channel(16).0,
             usage: RwLock::new(HashMap::new()),
             evolution_tx: RwLock::new(None),
+            embedder: RwLock::new(None),
         }
     }
 
@@ -366,7 +370,32 @@ impl SkillManager {
     /// legacy un-routed observations remain skill-eligible for compatibility.
     pub fn distill(&self) -> Result<crate::distill::DistillReport, SkillError> {
         let observations = self.skill_eligible_observations();
-        crate::distill::distill(&observations, &self.proposals(), &self.registry())
+        let embedder = self.embedder()?;
+        crate::distill::distill_with_embedder(
+            &observations,
+            &self.proposals(),
+            &self.registry(),
+            embedder.as_ref(),
+        )
+    }
+
+    /// Replace the observation embedder used by distillation. Passing
+    /// `None` restores the offline hashing embedder.
+    pub fn set_embedder(&self, embedder: Option<Arc<dyn ObservationEmbedder>>) {
+        if let Ok(mut slot) = self.embedder.write() {
+            *slot = embedder;
+        }
+    }
+
+    fn embedder(&self) -> Result<Arc<dyn ObservationEmbedder>, SkillError> {
+        self.embedder
+            .read()
+            .map_err(|_| {
+                evolution_core::Error::Embedding("embedding provider lock poisoned".into())
+            })?
+            .clone()
+            .map(Ok)
+            .unwrap_or_else(|| Ok(Arc::new(HashingObservationEmbedder::new())))
     }
 
     fn skill_eligible_observations(&self) -> Vec<crate::Observation> {
@@ -620,7 +649,7 @@ mod tests {
         manager.distill().unwrap();
         let proposals = manager.proposals().list();
         assert_eq!(proposals.len(), 1, "{proposals:?}");
-        assert_eq!(proposals[0].name, "generic-node-recipe");
+        assert_eq!(proposals[0].name, "generic-node-generic-recipe-recipe");
     }
 
     fn make_skill(root: &std::path::Path, name: &str) {

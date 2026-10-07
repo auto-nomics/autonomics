@@ -4,10 +4,14 @@
 //! canonical observation records and deterministic audience routing; each
 //! evolution subsystem maps a route into its own lifecycle.
 
+pub mod embedding;
 pub mod error;
 pub mod observation;
 pub mod routing;
 
+pub use embedding::{
+    HashingObservationEmbedder, ObservationEmbedder, VectorMapEmbedder, cosine, mean_vector,
+};
 pub use error::Error;
 pub use observation::{
     Observation, ObservationInput, ObservationKind, ObservationSource, ObservationStore,

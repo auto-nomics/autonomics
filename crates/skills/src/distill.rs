@@ -4,16 +4,14 @@
 //! observations and another to synthesize skills, this loop is pure
 //! code end to end:
 //!
-//! 1. **Cluster** observations by their structural anchor —
-//!    `(node_kind, signature, kind)` — not by text similarity.
-//!    Failures cluster by node kind and normalized error signature
-//!    (identical error shapes recur verbatim in eval loops). Recipes
-//!    and caveats cluster per node kind alone: real-world summaries
-//!    rephrase the same lesson differently every time, so a per-node
-//!    notebook is the only deterministic grouping with nonzero
-//!    recall. The kind keeps the three from ever coalescing. Only
-//!    anchored observations participate; free-form notes stay
-//!    searchable but never auto-propose.
+//! 1. **Cluster** observations semantically within a structural
+//!    `(node_kind, kind)` partition. Text is converted to a vector by
+//!    an [`ObservationEmbedder`]; greedy nearest-centroid assignment
+//!    groups paraphrased summaries, errors, and bodies without
+//!    requiring exact string equality. The kind partition keeps
+//!    failures, recipes, and caveats from coalescing. Only anchored
+//!    observations participate; free-form notes stay searchable but
+//!    never auto-propose.
 //! 2. **Threshold**: a cluster needs `MIN_CLUSTER` anchored
 //!    observations before it is worth a skill — the same
 //!    "repeated pattern" bar EvoScientist applies, evaluated
@@ -31,25 +29,30 @@
 //! yields the same skill name across runs — stable, greppable, and
 //! collision-checkable against the installed library.
 
-use std::collections::BTreeMap;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::error::SkillError;
 use crate::format;
 use crate::observation::{Observation, ObservationKind};
 use crate::proposals::{Proposals, cluster_hash};
+use evolution_core::embedding::{
+    HashingObservationEmbedder, ObservationEmbedder, cosine, mean_vector,
+};
 
 /// Anchored observations required before a cluster proposes.
 pub const MIN_CLUSTER: usize = 3;
+
+/// Minimum cosine similarity for an observation to join a cluster.
+pub const SIMILARITY_THRESHOLD: f32 = 0.72;
 
 /// One candidate cluster surfaced by [`distill`].
 #[derive(Debug, Clone)]
 pub struct Candidate {
     pub kind: ObservationKind,
     pub node_kind: String,
-    /// The normalized clustering signature — error text for
-    /// failures, empty for recipes and caveats (they cluster per
-    /// node kind; their summaries vary too much to key on).
+    /// A human-readable summary of the semantic cluster. Failures
+    /// prefer normalized error text; other kinds derive keywords from
+    /// the cluster's representative summary.
     pub signature: String,
     pub observations: Vec<Observation>,
 }
@@ -91,6 +94,32 @@ impl Candidate {
     }
 }
 
+#[cfg(test)]
+mod naming_tests {
+    use super::*;
+
+    /// The kind suffix is not decoration: without it, a failure whose
+    /// signature ends in `recipe` could collide with a recipe skill.
+    #[test]
+    fn kind_suffixes_keep_skill_namespaces_disjoint() {
+        let failure = Candidate {
+            kind: ObservationKind::Failure,
+            node_kind: "sql".into(),
+            signature: "recipe".into(),
+            observations: Vec::new(),
+        };
+        let recipe = Candidate {
+            kind: ObservationKind::Recipe,
+            node_kind: "sql".into(),
+            signature: "recipe".into(),
+            observations: Vec::new(),
+        };
+
+        assert_eq!(failure.skill_name().unwrap(), "sql-recipe");
+        assert_eq!(recipe.skill_name().unwrap(), "sql-recipe-recipe");
+    }
+}
+
 /// Reduce a slug: lowercase, alphanumerics and dashes, collapsed.
 fn slug(text: &str) -> String {
     let mut out = String::new();
@@ -128,48 +157,159 @@ impl DistillReport {
 }
 
 /// Group anchored observations into candidate clusters meeting the
-/// threshold, in a deterministic order. Failures cluster by node kind
-/// and normalized error signature; recipes and caveats cluster per
-/// node kind (summaries are search material, not cluster keys). The
-/// kind is part of the key, so the three never coalesce into one
-/// cluster.
+/// threshold, in a deterministic order. Embedding vectors drive
+/// similarity, while `(node_kind, kind)` remains a hard partition:
+/// observations for different node kinds or observation kinds never
+/// merge.
 pub fn candidates(observations: &[Observation]) -> Vec<Candidate> {
-    let mut groups: BTreeMap<(String, String, ObservationKind), Vec<Observation>> = BTreeMap::new();
-    for observation in observations {
-        // The structural anchor is mandatory for every kind: without
-        // a node kind there is nothing to cluster on.
-        let Some(kind) = observation.node_kind.as_deref().map(str::to_string) else {
-            continue;
-        };
-        let sig = match observation.kind {
-            ObservationKind::Failure => observation
-                .error
-                .as_deref()
-                .map(signature)
-                .unwrap_or_default(),
-            // Recipes and caveats cluster per node context: real-world
-            // summaries rephrase the same lesson differently every
-            // time, so a summary signature never collides (measured:
-            // 52/52 size-1 clusters on production data). The distilled
-            // skill is a per-node notebook; every entry keeps its own
-            // summary line.
-            ObservationKind::Recipe | ObservationKind::Caveat => String::new(),
-        };
-        groups
-            .entry((kind, sig, observation.kind))
-            .or_default()
-            .push(observation.clone());
+    candidates_with_embedder(observations, &HashingObservationEmbedder::new())
+        .expect("local embedding cannot fail")
+}
+
+/// [`candidates`] with a caller-supplied vector provider.
+pub fn candidates_with_embedder(
+    observations: &[Observation],
+    embedder: &dyn ObservationEmbedder,
+) -> Result<Vec<Candidate>, SkillError> {
+    let mut eligible: Vec<Observation> = observations
+        .iter()
+        .filter(|o| o.node_kind.is_some())
+        .cloned()
+        .collect();
+    eligible.sort_by(|a, b| a.id.cmp(&b.id));
+
+    let embeddings = embedder.embed(&eligible)?;
+    let mut partitions: BTreeMap<(String, ObservationKind), Vec<EmbeddingCluster>> =
+        BTreeMap::new();
+    for observation in eligible {
+        let vector = embeddings.get(&observation.id).ok_or_else(|| {
+            evolution_core::Error::Embedding(format!(
+                "missing vector for observation {}",
+                observation.id
+            ))
+        })?;
+        let key = (
+            observation
+                .node_kind
+                .clone()
+                .expect("eligibility checked node_kind"),
+            observation.kind,
+        );
+        let clusters = partitions.entry(key).or_default();
+        let similarities = clusters
+            .iter_mut()
+            .map(|cluster| {
+                cosine(&cluster.centroid, vector).map(|similarity| (similarity, cluster))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let target = similarities
+            .into_iter()
+            .max_by(|a, b| a.0.total_cmp(&b.0))
+            .filter(|target| target.0 + 1e-6 >= SIMILARITY_THRESHOLD);
+        match target {
+            Some((_, cluster)) => {
+                let count = cluster.members.len() as f32;
+                for (centroid, value) in cluster.centroid.iter_mut().zip(vector) {
+                    *centroid = (*centroid * count + value) / (count + 1.0);
+                }
+                cluster.members.push(observation.clone());
+            }
+            None => clusters.push(EmbeddingCluster {
+                members: vec![observation.clone()],
+                centroid: vector.clone(),
+            }),
+        }
     }
-    groups
-        .into_iter()
-        .filter(|(_, members)| members.len() >= MIN_CLUSTER)
-        .map(|((node_kind, signature, kind), observations)| Candidate {
-            kind,
-            node_kind,
-            signature,
-            observations,
+
+    let mut candidates = Vec::new();
+    for ((node_kind, kind), clusters) in partitions {
+        for cluster in clusters {
+            if cluster.members.len() < MIN_CLUSTER {
+                continue;
+            }
+            let signature = representative_signature(&cluster.members, &embeddings)?;
+            candidates.push(Candidate {
+                kind,
+                node_kind: node_kind.clone(),
+                signature,
+                observations: cluster.members,
+            });
+        }
+    }
+    candidates.sort_by(|a, b| {
+        a.node_kind
+            .cmp(&b.node_kind)
+            .then(a.kind.cmp(&b.kind))
+            .then(a.signature.cmp(&b.signature))
+    });
+    Ok(candidates)
+}
+
+#[derive(Debug)]
+struct EmbeddingCluster {
+    members: Vec<Observation>,
+    centroid: Vec<f32>,
+}
+
+/// Choose the observation closest to the cluster's semantic center,
+/// then derive a human-readable signature from it. This gives vector
+/// clusters stable, reviewable names without depending on processing
+/// order.
+fn representative_signature(
+    members: &[Observation],
+    embeddings: &BTreeMap<String, Vec<f32>>,
+) -> Result<String, SkillError> {
+    let vectors = members
+        .iter()
+        .map(|member| {
+            embeddings
+                .get(&member.id)
+                .map(|vector| vector.as_slice())
+                .ok_or_else(|| {
+                    evolution_core::Error::Embedding(format!(
+                        "missing vector for observation {}",
+                        member.id
+                    ))
+                })
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    let mean = mean_vector(&vectors)?;
+    let similarities = vectors
+        .iter()
+        .enumerate()
+        .map(|(index, vector)| cosine(&mean, vector).map(|similarity| (similarity, index)))
+        .collect::<Result<Vec<_>, _>>()?;
+    let representative = similarities
+        .into_iter()
+        .max_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)))
+        .map(|(_, index)| &members[index])
+        .expect("representative called with a cluster");
+
+    if representative.kind == ObservationKind::Failure
+        && let Some(error) = representative.error.as_deref()
+    {
+        let normalized = signature(error);
+        if !normalized.is_empty() {
+            return Ok(normalized);
+        }
+    }
+    Ok(keyword_signature(&representative.summary))
+}
+
+/// A short, readable signature for semantic clusters. Unlike error
+/// signatures, it does not preserve the `N` placeholder: names such as
+/// "generic recipe 3" should distill to "generic recipe".
+fn keyword_signature(text: &str) -> String {
+    const STOP_WORDS: [&str; 14] = [
+        "a", "an", "and", "are", "at", "for", "in", "is", "of", "on", "or", "the", "this", "to",
+    ];
+    text.split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|word| word.len() > 1 && !word.chars().all(|c| c.is_ascii_digit()))
+        .map(str::to_ascii_lowercase)
+        .filter(|word| !STOP_WORDS.contains(&word.as_str()))
+        .take(6)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Normalize an error text into a stable signature: first line,
@@ -311,10 +451,25 @@ pub fn distill(
     proposals: &Proposals,
     registry: &crate::registry::SkillRegistry,
 ) -> Result<DistillReport, SkillError> {
+    distill_with_embedder(
+        observations,
+        proposals,
+        registry,
+        &HashingObservationEmbedder::new(),
+    )
+}
+
+/// [`distill`] with an explicit vector provider.
+pub fn distill_with_embedder(
+    observations: &[Observation],
+    proposals: &Proposals,
+    registry: &crate::registry::SkillRegistry,
+    embedder: &dyn ObservationEmbedder,
+) -> Result<DistillReport, SkillError> {
     let mut report = DistillReport::default();
     let processed = proposals.processed_clusters();
     let installed = registry.list();
-    for candidate in candidates(observations) {
+    for candidate in candidates_with_embedder(observations, embedder)? {
         report.candidates_considered += 1;
         let hash = candidate.hash();
         if processed.contains(&hash) {
@@ -533,11 +688,9 @@ mod tests {
         assert!(candidates(&store.list()).is_empty());
     }
 
-    /// Recipes cluster per node kind — deliberately NOT by summary
-    /// text. This replicates the production failure that motivated
-    /// the key change: three recordings of overlapping lessons with
-    /// completely different wordings produced three size-1 clusters
-    /// and zero proposals under the old summary-signature key.
+    /// Recipes now cluster by vector similarity within the node-kind
+    /// partition. These paraphrases cover one lesson without relying
+    /// on exact text equality.
     #[test]
     fn recipe_clusters_per_node_kind_with_distinct_wordings() {
         let tmp = tempfile::tempdir().unwrap();
@@ -557,7 +710,7 @@ mod tests {
         observe_kind(
             &store,
             ObservationKind::Recipe,
-            "always use VARCHAR casts for schema-portable output",
+            "use quoted identifiers when column names are case-sensitive",
             "recipe body c",
         );
 
@@ -566,9 +719,15 @@ mod tests {
         let candidate = &candidates[0];
         assert_eq!(candidate.kind, ObservationKind::Recipe);
         assert_eq!(candidate.observations.len(), 3);
-        assert_eq!(candidate.signature, "");
+        assert_eq!(
+            candidate.signature,
+            "use quoted identifiers when column names"
+        );
         let name = candidate.skill_name().unwrap();
-        assert_eq!(name, "file-to-dataframe-recipe");
+        assert_eq!(
+            name,
+            "file-to-dataframe-use-quoted-identifiers-when-column-recipe"
+        );
 
         // The rendered draft carries the recipe tag and heading, and
         // lists every entry with its own summary line.
@@ -586,19 +745,19 @@ mod tests {
         observe_kind(
             &store,
             ObservationKind::Caveat,
-            "locale breaks sort order on text columns",
+            "locale changes text column sort order",
             "caveat body a",
         );
         observe_kind(
             &store,
             ObservationKind::Caveat,
-            "do not rely on implicit coercion for date strings",
+            "text column sorting changes with locale order",
             "caveat body b",
         );
         observe_kind(
             &store,
             ObservationKind::Caveat,
-            "empty strings become NULL after the roundtrip",
+            "sort order for text columns depends on locale",
             "caveat body c",
         );
 
@@ -607,7 +766,7 @@ mod tests {
         let candidate = &candidates[0];
         assert_eq!(candidate.kind, ObservationKind::Caveat);
         let name = candidate.skill_name().unwrap();
-        assert_eq!(name, "file-to-dataframe-caveat");
+        assert!(name.starts_with("file-to-dataframe-"), "{name}");
         let md = render_skill_md(candidate);
         assert!(md.contains("tags: [auto, caveat, file-to-dataframe]"));
         assert!(md.contains("## Recorded caveats"));

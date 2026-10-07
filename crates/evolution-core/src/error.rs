@@ -31,6 +31,10 @@ pub enum Error {
     #[error("invalid request: {0}")]
     InvalidRequest(String),
 
+    /// An observation embedding provider returned unusable vectors.
+    #[error("observation embedding: {0}")]
+    Embedding(String),
+
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }

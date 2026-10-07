@@ -42,6 +42,7 @@
 
 pub mod builtin;
 pub mod distill;
+pub mod embedding;
 pub mod error;
 pub mod eval;
 pub mod evolution;
