@@ -86,8 +86,11 @@ pub fn host_tools(
     description = "Spawn a new child agent and register it with the host. \
                    The child's path is automatically derived from your path \
                    (e.g. spawning 'worker' becomes /root/you/worker). \
-                   Use profile_segment='researcher' or 'developer' to select \
-                   the role; omit it to reuse your own role."
+                   Use profile_segment='researcher' for data analysis, DAG \
+                   execution, and interpretation. Use profile_segment='developer' \
+                   only to implement, validate, install, or repair a plugin/node. \
+                   Do not use developer as an execution service for research data; \
+                   omit profile_segment to reuse your own role."
 )]
 struct SpawnAgentInput {
     /// Short name for the new agent (a path segment, e.g. `worker`, `analyst`).
@@ -141,6 +144,9 @@ impl ToolFunction for SpawnAgentTool {
                    to block until the result is ready, or `view_task_results` to poll \
                    for the output. Multiple delegates can run concurrently. \
                    The target agent's COMPLETE response becomes the task's result. \
+                   For Researcher-to-Developer work, delegate capability implementation \
+                   only: provide contracts and synthetic fixtures, never a research \
+                   dataset or a request to run/interpret an analysis. \
                    You may delegate only to sibling agents or your own descendants; \
                    upward and cross-parent delegation is rejected."
 )]
@@ -148,7 +154,9 @@ struct DelegateToInput {
     /// Name of the target agent. Accepts a short name (e.g. "researcher")
     /// or full path (e.g. "/root/researcher/worker").
     agent_name: String,
-    /// The task or question to send to the target agent.
+    /// The task to send. For node/plugin development, include the requested \
+    /// interface, acceptance criteria, and synthetic fixture instead of real \
+    /// research data.
     task: String,
 }
 
@@ -300,7 +308,9 @@ impl ToolFunction for SendMessageTool {
     description = "Find the best agent for a task based on capability matching. \
                    Describe what you need done and this tool returns the recommended \
                    agent name, match reason, and all candidates with scores. \
-                   Use the returned agent name with delegate_to."
+                   Use the returned agent name with delegate_to. Researcher owns \
+                   data analysis and DAG execution; Developer owns plugin/node \
+                   implementation and focused validation."
 )]
 struct RouteTaskInput {
     /// Natural language description of the task to route.
