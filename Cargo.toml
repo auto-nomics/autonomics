@@ -119,6 +119,9 @@ opendal = { version = "0.57", features = [
   "services-fs",
   "services-s3",
   "services-oss",
+  # in-memory backend: exercises the file_download object-store claim
+  # election in tests (no runtime usage)
+  "services-memory",
 ] }
 sha2 = "0.10"
 sas_xport = "0.4.1"
