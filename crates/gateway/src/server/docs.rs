@@ -4,8 +4,8 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityRequirement
 use utoipa::{Modify, OpenApi};
 
 use super::{
-    agents, events, hydration, lifecycle, model_config, plugins, sessions, settings, skills,
-    storage,
+    agents, events, hydration, lifecycle, model_config, plugin_environments, plugins, sessions,
+    settings, skills, storage,
 };
 use crate::proto::*;
 
@@ -53,6 +53,11 @@ use crate::proto::*;
         settings::get_settings,
         settings::put_setting,
         plugins::list_plugins,
+        plugin_environments::list_environments,
+        plugin_environments::search_docker_hub,
+        plugin_environments::inspect_docker_hub_tag,
+        plugin_environments::approve_environment,
+        plugin_environments::delete_environment,
         skills::list_skill_library,
         skills::list_skill_observations,
         skills::get_skill_library_detail,
@@ -96,6 +101,12 @@ use crate::proto::*;
         PluginView,
         PluginPanelView,
         PluginSourceView,
+        PluginEnvironmentListView,
+        PluginEnvironmentView,
+        DockerHubSearchView,
+        DockerHubRepositoryView,
+        DockerHubTagView,
+        ApprovePluginEnvironmentRequest,
     )),
     tags(
         (name = "gateway", description = "Daemon lifecycle and health"),

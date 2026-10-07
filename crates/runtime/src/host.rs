@@ -252,14 +252,19 @@ impl SharedInfra {
         ));
         let plugin_publisher: plugin_rsi::SharedPluginPublisher = gh_publisher.clone();
         let pull_request_publisher: plugin_rsi::SharedPullRequestPublisher = gh_publisher;
+        let environments = plugin_rsi::EnvironmentRegistry::open(
+            config.state_dir.join("plugin-environments.toml"),
+            config.plugin_rsi.environments.clone(),
+        )
+        .map_err(|error| crate::error::Error::Other(error.to_string()))?;
         let rsi = Arc::new(
-            plugin_rsi::RsiInfra::open(
+            plugin_rsi::RsiInfra::open_with_environments(
                 &config.state_dir,
                 "main",
                 "Autonomics RSI",
                 "rsi@autonomics.example",
                 skills.clone(),
-                config.plugin_rsi.environments.clone(),
+                environments.clone(),
                 plugin_publisher,
                 pull_request_publisher,
             )
@@ -284,7 +289,7 @@ impl SharedInfra {
             vfs.clone(),
         ));
         plugin_rsi::PluginDevelopmentToolsetRegistry::global()
-            .configure_environments(config.plugin_rsi.environments.clone())
+            .configure_environments(environments)
             .map_err(|error| crate::error::Error::Other(error.to_string()))?;
         plugin_rsi::PluginDevelopmentToolsetRegistry::global()
             .configure_vfs((*file_storage).clone(), rsi.store().root())

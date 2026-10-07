@@ -13,10 +13,10 @@ use evolution_core::routing::observation_route;
 use skills::observation::ObservationInput;
 
 use crate::{
-    EnvironmentCatalog, Error, LocalActivationOutcome, ObservationAudience, ObservationRequest,
-    ObservationRoute, ObservationRouteStatus, ObservationRouteStore, PluginLifecycle,
-    PluginPublisher, PluginPullRequestPublisher, PluginStatus, PluginStore, RequestIntent,
-    RequestRecord, RequestStatus, RequestStore, Result, ValidationOutcome,
+    EnvironmentCatalog, EnvironmentRegistry, Error, LocalActivationOutcome, ObservationAudience,
+    ObservationRequest, ObservationRoute, ObservationRouteStatus, ObservationRouteStore,
+    PluginLifecycle, PluginPublisher, PluginPullRequestPublisher, PluginStatus, PluginStore,
+    RequestIntent, RequestRecord, RequestStatus, RequestStore, Result, ValidationOutcome,
     distill::DistillationCandidate,
     feedback::{default_request_intent, observation_request},
 };
@@ -42,7 +42,7 @@ pub struct RsiInfra {
     requests: RequestStore,
     skills: Arc<skills::SkillManager>,
     routes: ObservationRouteStore,
-    environments: Arc<EnvironmentCatalog>,
+    environments: EnvironmentRegistry,
     publisher: SharedPluginPublisher,
     pull_request_publisher: SharedPullRequestPublisher,
     registry: Arc<RwLock<Option<Arc<dyn PluginRegistryControl>>>>,
@@ -57,6 +57,30 @@ impl RsiInfra {
         author_email: &str,
         skills: Arc<skills::SkillManager>,
         environments: EnvironmentCatalog,
+        publisher: SharedPluginPublisher,
+        pull_request_publisher: SharedPullRequestPublisher,
+    ) -> Result<Self> {
+        Self::open_with_environments(
+            state_dir,
+            default_branch,
+            author_name,
+            author_email,
+            skills,
+            EnvironmentRegistry::ephemeral(environments),
+            publisher,
+            pull_request_publisher,
+        )
+    }
+
+    /// Open RSI with a persistent, daemon-owned environment registry.
+    #[allow(clippy::too_many_arguments)]
+    pub fn open_with_environments(
+        state_dir: &std::path::Path,
+        default_branch: &str,
+        author_name: &str,
+        author_email: &str,
+        skills: Arc<skills::SkillManager>,
+        environments: EnvironmentRegistry,
         publisher: SharedPluginPublisher,
         pull_request_publisher: SharedPullRequestPublisher,
     ) -> Result<Self> {
@@ -76,7 +100,7 @@ impl RsiInfra {
             requests: RequestStore::open(state_dir),
             skills,
             routes,
-            environments: Arc::new(environments),
+            environments,
             publisher,
             pull_request_publisher,
             registry: Arc::new(RwLock::new(None)),
@@ -90,6 +114,11 @@ impl RsiInfra {
 
     pub fn store(&self) -> Arc<PluginStore> {
         Arc::clone(&self.store)
+    }
+
+    /// Return the host-owned mutable environment allow list.
+    pub fn environment_registry(&self) -> EnvironmentRegistry {
+        self.environments.clone()
     }
 
     /// Return local-active plugins waiting for background distillation.
@@ -452,7 +481,7 @@ impl RsiInfra {
     }
 
     fn catalog(&self) -> Arc<EnvironmentCatalog> {
-        Arc::clone(&self.environments)
+        Arc::new(self.environments.snapshot())
     }
 
     fn ensure_request_plugin(

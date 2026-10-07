@@ -5,7 +5,7 @@ mod common;
 use agentik_core::tools::{ToolError, ToolRegistration, ToolResult};
 use agentik_sdk::types::ToolResultContent;
 use plugin_rsi::{
-    AgentProfile, Environment, EnvironmentCatalog, GitRepo, MergeOutcome,
+    AgentProfile, Environment, EnvironmentCatalog, EnvironmentRegistry, GitRepo, MergeOutcome,
     PluginDevelopmentToolsetRegistry, PluginDistiller, PluginPublisher, PluginPullRequestPublisher,
     PluginStatus, PublishOutcome, PullRequestOutcome, RequestIntent, RequestRecord, RequestSource,
     RequestStatus, RsiInfra,
@@ -125,8 +125,9 @@ async fn execute(
 async fn local_activation_is_distilled_to_github_without_blocking_the_agent() {
     let state = tempfile::tempdir().unwrap();
     common::configure_plugin_vfs(state.path());
+    let environment_registry = EnvironmentRegistry::ephemeral(catalog());
     PluginDevelopmentToolsetRegistry::global()
-        .configure_environments(catalog())
+        .configure_environments(environment_registry.clone())
         .unwrap();
     let skills = skills::SkillManager::init(skills::SkillManager::new(state.path()));
     let publisher = Arc::new(FakePublisher);
@@ -175,6 +176,28 @@ async fn local_activation_is_distilled_to_github_without_blocking_the_agent() {
                 "interpreters": ["sh"]
             }
         ])
+    );
+    environment_registry
+        .approve(
+            "python",
+            Environment {
+                reference: format!("docker.io/library/python@sha256:{}", "1".repeat(64)),
+                interpreters: vec!["python3".into()],
+            },
+        )
+        .unwrap();
+    let updated = execute(&tools, "plugin_environments_list", json!({}))
+        .await
+        .unwrap();
+    let ToolResultContent::Json(updated) = updated.content else {
+        panic!("plugin_environments_list must return JSON");
+    };
+    assert!(
+        updated
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|environment| environment["id"] == "python")
     );
     execute(
         &tools,

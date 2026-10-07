@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::Router;
-use axum::routing::{get, patch, post, put};
+use axum::routing::{delete, get, patch, post, put};
 use serde_json::json;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
@@ -13,8 +13,8 @@ use super::auth::bearer_auth;
 use super::docs::ApiDoc;
 use super::state::GatewayState;
 use super::{
-    agents, events, hydration, lifecycle, model_config, plugins, sessions, settings, skills,
-    storage,
+    agents, events, hydration, lifecycle, model_config, plugin_environments, plugins, sessions,
+    settings, skills, storage,
 };
 
 /// Build the gateway API router. Routes are relative and mounted by the
@@ -103,6 +103,26 @@ pub fn api_router(state: GatewayState) -> Router {
         )
         // ── plugins ──
         .route("/plugins", get(plugins::list_plugins))
+        .route(
+            "/plugins/environments",
+            get(plugin_environments::list_environments),
+        )
+        .route(
+            "/plugins/environments/dockerhub",
+            get(plugin_environments::search_docker_hub),
+        )
+        .route(
+            "/plugins/environments/dockerhub/tag",
+            get(plugin_environments::inspect_docker_hub_tag),
+        )
+        .route(
+            "/plugins/environments/approve",
+            post(plugin_environments::approve_environment),
+        )
+        .route(
+            "/plugins/environments/{id}",
+            delete(plugin_environments::delete_environment),
+        )
         // ── skills ──
         .route("/skills/library", get(skills::list_skill_library))
         .route(

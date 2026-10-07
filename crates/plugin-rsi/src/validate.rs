@@ -35,6 +35,10 @@ impl EnvironmentCatalog {
         self.environments.insert(id.into(), environment);
     }
 
+    pub fn remove(&mut self, id: &str) {
+        self.environments.remove(id);
+    }
+
     pub fn get(&self, id: &str) -> Option<&Environment> {
         self.environments.get(id)
     }

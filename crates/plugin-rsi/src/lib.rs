@@ -6,6 +6,7 @@
 //! live-registry access.
 
 pub mod distill;
+pub mod environments;
 pub mod error;
 pub mod feedback;
 pub mod github;
@@ -24,6 +25,7 @@ pub mod workspace;
 
 pub use container_plugin::manifest::PluginStatus;
 pub use distill::{DistillFailure, DistillationCandidate, PluginDistillReport, PluginDistiller};
+pub use environments::EnvironmentRegistry;
 pub use error::{Error, Result};
 pub use evolution_core::{
     ObservationAudience, ObservationRoute, ObservationRouteStatus, ObservationRouteStore,

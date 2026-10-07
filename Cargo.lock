@@ -4660,6 +4660,7 @@ dependencies = [
  "futures",
  "http-body-util",
  "percent-encoding",
+ "plugin-rsi",
  "reqwest",
  "runtime",
  "rusqlite",

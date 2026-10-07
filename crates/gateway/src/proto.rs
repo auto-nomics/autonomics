@@ -574,3 +574,66 @@ pub struct PluginSourceView {
     /// Immutable tree digest for a daemon-owned local snapshot.
     pub local_digest: Option<String>,
 }
+
+/// `GET /api/v1/plugins/environments` — the host-approved, digest-pinned
+/// base images available to plugin RSI.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct PluginEnvironmentListView {
+    pub environments: Vec<PluginEnvironmentView>,
+}
+
+/// One approved plugin environment.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct PluginEnvironmentView {
+    /// Stable environment id selected by the approving user.
+    pub id: String,
+    /// Digest-pinned image reference.
+    pub reference: String,
+    /// Interpreters the environment guarantees, such as `sh` or `Rscript`.
+    pub interpreters: Vec<String>,
+}
+
+/// Docker Hub repository search results.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct DockerHubSearchView {
+    pub repositories: Vec<DockerHubRepositoryView>,
+}
+
+/// One Docker Hub repository discovered by a read-only search.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct DockerHubRepositoryView {
+    pub repository: String,
+    pub description: String,
+    pub official: bool,
+    pub stars: i64,
+    pub pulls: i64,
+}
+
+/// A Docker Hub tag resolved to an immutable manifest digest.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct DockerHubTagView {
+    pub repository: String,
+    pub tag: String,
+    pub digest: String,
+    pub size_bytes: i64,
+    pub last_pushed: String,
+    /// Digest-pinned reference suitable for environment approval.
+    pub reference: String,
+}
+
+/// User-approved addition to the plugin environment allow list.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct ApprovePluginEnvironmentRequest {
+    pub repository: String,
+    pub tag: String,
+    pub environment_id: String,
+    pub interpreters: Vec<String>,
+    /// Frontend consent marker. The current approval stub allows every image
+    /// request; the next PR will enforce this field and persist an audit record.
+    #[serde(default = "default_true")]
+    pub approved: bool,
+}
+
+fn default_true() -> bool {
+    true
+}

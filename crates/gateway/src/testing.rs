@@ -22,6 +22,7 @@ use arc_swap::ArcSwapOption;
 use crate::client::GatewayClient;
 use crate::driver::{self, SessionCache};
 use crate::hub::EventHub;
+use crate::server::DockerHubClient;
 use crate::server::{GatewayState, router_with_bib};
 use runtime::{RuntimeConfig, RuntimeHost};
 use tokio_util::sync::CancellationToken;
@@ -253,6 +254,7 @@ pub async fn start_mock_gateway_with_model(model: Model) -> TestGateway {
         sessions: sessions.clone(),
         control: host.control(),
         infra: host.infra(),
+        dockerhub: Arc::new(DockerHubClient::default()),
         models,
         model_slot,
         profiles: Arc::new(profiles),

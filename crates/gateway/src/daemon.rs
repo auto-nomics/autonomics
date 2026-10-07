@@ -24,6 +24,7 @@ use tokio_util::sync::CancellationToken;
 use crate::driver::{self, SessionCache};
 use crate::hub::EventHub;
 use crate::model_store::ModelStore;
+use crate::server::DockerHubClient;
 use crate::server::{GatewayState, router_with_bib};
 
 pub const GATEWAY_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -148,6 +149,7 @@ pub async fn run_daemon(
         sessions: sessions.clone(),
         control: host.control(),
         infra: host.infra(),
+        dockerhub: Arc::new(DockerHubClient::default()),
         models: models.clone(),
         model_slot: model_slot.clone(),
         profiles: Arc::new(profiles),

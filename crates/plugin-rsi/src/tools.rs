@@ -23,7 +23,9 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use vfs::{OpendalFileStorage, permission::VfsPrincipal};
 
-use crate::{Error, PluginWorkspace, Result as RsiResult, plugin::is_editable};
+use crate::{
+    EnvironmentRegistry, Error, PluginWorkspace, Result as RsiResult, plugin::is_editable,
+};
 
 const MANIFEST_FILE: &str = "manifest.toml";
 pub(crate) const MAX_AGENT_ID_BYTES: usize = 256;
@@ -33,7 +35,7 @@ const DEFAULT_TOOL_TIMEOUT_SECS: u64 = 900;
 struct RegistryState {
     runtime: Option<Arc<dyn PodmanConnection>>,
     vfs: Option<OpendalFileStorage>,
-    environments: Option<crate::EnvironmentCatalog>,
+    environments: Option<EnvironmentRegistry>,
     development_root: Option<PathBuf>,
     manifest_locks: BTreeMap<String, Arc<tokio::sync::Mutex<()>>>,
 }
@@ -73,7 +75,7 @@ impl PluginDevelopmentToolsetRegistry {
     }
 
     /// Configure the read-only environment catalog exposed to plugin agents.
-    pub fn configure_environments(&self, environments: crate::EnvironmentCatalog) -> RsiResult<()> {
+    pub fn configure_environments(&self, environments: EnvironmentRegistry) -> RsiResult<()> {
         self.lock(|state| {
             state.environments = Some(environments);
             Ok(())
@@ -137,7 +139,8 @@ impl PluginDevelopmentToolsetRegistry {
         self.lock(|state| {
             state
                 .environments
-                .clone()
+                .as_ref()
+                .map(|registry| registry.snapshot())
                 .ok_or_else(|| Error::Validation("plugin environments are not configured".into()))
         })
     }

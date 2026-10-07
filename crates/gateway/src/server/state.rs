@@ -11,6 +11,7 @@ use tokio_util::sync::CancellationToken;
 use crate::driver::SessionCache;
 use crate::hub::EventHub;
 use crate::model_store::ModelStore;
+use crate::server::plugin_environments::DockerHubClient;
 
 /// Shared state for every gateway request handler. Cheap to clone —
 /// everything inside is an Arc or a channel sender.
@@ -20,6 +21,8 @@ pub struct GatewayState {
     pub sessions: SessionCache,
     pub control: HostControl,
     pub infra: SharedInfra,
+    /// Read-only Docker Hub lookup client used by the user approval flow.
+    pub dockerhub: Arc<DockerHubClient>,
     pub models: Arc<ModelStore>,
     /// The daemon-wide default model slot, shared with every agent
     /// spawned without a profile-specific override.
