@@ -246,11 +246,9 @@ impl SharedInfra {
         let skills = skills::SkillManager::init(skills::SkillManager::new(&config.state_dir));
         skills.load_usage();
         let plugin_layout = plugin_rsi::PluginStateLayout::open(&config.state_dir);
-        if plugin_layout.version() == plugin_rsi::PluginLayoutVersion::V2 {
-            plugin_layout
-                .ensure_v2_directories()
-                .map_err(|error| crate::error::Error::Other(error.to_string()))?;
-        }
+        plugin_layout
+            .ensure_v2_directories()
+            .map_err(|error| crate::error::Error::Other(error.to_string()))?;
 
         // PluginStore owns `state_dir/plugins.toml` and `state_dir/plugins`;
         // container-plugin remains the protocol and checkout tool layer.

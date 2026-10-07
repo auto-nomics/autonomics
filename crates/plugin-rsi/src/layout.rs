@@ -1,8 +1,6 @@
 //! State-directory layout for plugin development and installed plugins.
 //!
-//! Version 2 namespaces all plugin state beneath `plugins/`. Existing state
-//! directories remain on the legacy layout until the migration PR moves their
-//! contents; callers must not infer layout only from constants.
+//! Version 2 namespaces all plugin state beneath `plugins/`.
 
 use std::path::{Path, PathBuf};
 
@@ -64,9 +62,6 @@ impl PluginStateLayout {
     }
 
     /// Detect an existing state layout without moving data.
-    ///
-    /// A v2 marker is authoritative. Otherwise any legacy directory makes the
-    /// state legacy, which is essential before the migration runs.
     pub fn open(state_dir: impl Into<PathBuf>) -> Self {
         let state_dir = state_dir.into();
         if state_dir.join(V2_MARKER).is_file()
@@ -139,8 +134,7 @@ impl PluginStateLayout {
         self.state_dir.join(V2_MARKER)
     }
 
-    /// Create v2 storage directories. Legacy layout is intentionally untouched;
-    /// data movement belongs to the migration step, not layout resolution.
+    /// Create v2 storage directories.
     pub fn ensure_v2_directories(&self) -> Result<()> {
         if self.version != PluginLayoutVersion::V2 {
             return Err(Error::Validation(
