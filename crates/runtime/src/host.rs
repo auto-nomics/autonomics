@@ -337,10 +337,10 @@ impl SharedInfra {
         // startup, then on the configured interval. Failures are logged and
         // never block the host.
         spawn_container_gc(&container_execution);
-        tracing::info!(
-            mounts = ?file_storage.mount_paths(),
-            "SharedInfra::open: file storage ready (with VFS mounts)"
-        );
+        // tracing::info!(
+        //     mounts = ?file_storage.mount_paths(),
+        //     "SharedInfra::open: file storage ready (with VFS mounts)"
+        // );
 
         tracing::info!(
             mounts = ?vfs.mount_paths(),

@@ -65,7 +65,7 @@ Shared data plane:
 
 ## DAG Dispatch and Container Execution
 
-![DAG-based dispatch with ephemeral, containerized analysis nodes](docs/diagrams/fig2_mechanism.png)
+
 
 Two mechanisms make the harness trustworthy for biomedical work:
 

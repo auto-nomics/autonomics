@@ -677,11 +677,6 @@ impl SessionPicker {
             || session.total_tool_use > 0
             || session.time_consume_ms > 0
         {
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "  ── Telemetry ──",
-                label_style.add_modifier(Modifier::BOLD),
-            )));
             lines.push(Line::from(vec![
                 Span::styled("  Input    ", label_style),
                 Span::styled(
