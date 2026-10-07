@@ -63,6 +63,10 @@ pub struct DaemonOptions {
     /// absent a fresh token is generated per start and written to
     /// `<state_dir>/gateway.token`.
     pub env_token: Option<String>,
+    /// Detach stdin/stdout/stderr once the server is bound. Startup
+    /// diagnostics remain visible to the spawning frontend, while later
+    /// daemon output cannot corrupt a terminal owned by a TUI.
+    pub detach_stdio_on_ready: bool,
 }
 
 /// Resolve the bind address and token policy from the environment
@@ -94,6 +98,7 @@ pub async fn run_daemon(
         config,
         addr,
         env_token,
+        detach_stdio_on_ready,
     } = opts;
 
     // ── Model store (app DB) ─────────────────────────────────────────
@@ -175,6 +180,10 @@ pub async fn run_daemon(
             source,
         })?;
 
+    if detach_stdio_on_ready {
+        detach_stdio().map_err(|source| DaemonError::Message(format!("detach stdio: {source}")))?;
+    }
+
     // Server is up — publish the bound address to the handlers, then the
     // token + pid files. Permissions are owner-only: the token is a
     // filesystem permission gate for local processes.
@@ -224,6 +233,27 @@ pub async fn run_daemon(
 
 fn generate_token() -> String {
     uuid::Uuid::new_v4().simple().to_string()
+}
+
+#[cfg(unix)]
+fn detach_stdio() -> std::io::Result<()> {
+    use std::os::fd::AsRawFd;
+
+    let null = std::fs::File::open("/dev/null")?;
+    let null_fd = null.as_raw_fd();
+    for target in [libc::STDIN_FILENO, libc::STDOUT_FILENO, libc::STDERR_FILENO] {
+        // SAFETY: duplicating an open file descriptor over the process's
+        // standard descriptors; no borrowed Rust resources are invalidated.
+        if unsafe { libc::dup2(null_fd, target) } == -1 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn detach_stdio() -> std::io::Result<()> {
+    Ok(())
 }
 
 /// Write a file with owner-only permissions (best-effort on non-unix).

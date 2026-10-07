@@ -4659,6 +4659,7 @@ dependencies = [
  "eventsource-stream",
  "futures",
  "http-body-util",
+ "libc",
  "percent-encoding",
  "plugin-rsi",
  "reqwest",

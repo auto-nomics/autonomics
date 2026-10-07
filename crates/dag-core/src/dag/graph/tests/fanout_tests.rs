@@ -10,6 +10,73 @@ use crate::dag::runtime::{RuntimeStatus, SchedulerConfig};
 use crate::dag::{ChannelOperator, DagNode, NodePorts, TaskInputSource, TaskResources};
 use crate::value::{NodeValue, PortType};
 
+#[tokio::test]
+async fn dynamic_fanout_materializes_file_items_for_file_input_ports() -> Result<()> {
+    let file_refs = vec![
+        serde_json::json!({"path": "/tmp/a.tsv", "format": "tsv", "fingerprint": null}),
+        serde_json::json!({"path": "/tmp/b.tsv", "format": null, "fingerprint": null}),
+    ];
+    for (item, expected_path, expected_format) in [
+        (serde_json::json!("/tmp/a.tsv"), "/tmp/a.tsv", None),
+        (file_refs[0].clone(), "/tmp/a.tsv", Some("tsv")),
+    ] {
+        let logical = crate::dag::LogicalGraph::builder()
+            .add_node(crate::dag::LogicalNode::channel(
+                "source",
+                ChannelOperator::OfItems { items: vec![item] },
+            ))
+            .add_node(crate::dag::LogicalNode::dynamic_for_each(
+                "process",
+                "echo",
+                serde_json::json!({}),
+                "assay",
+            ))
+            .add_node(crate::dag::LogicalNode::channel(
+                "collect",
+                ChannelOperator::Collect,
+            ))
+            .add_edge("source", "process", 0, 0)
+            .add_edge("process", "collect", 0, 0)
+            .build();
+        let physical = logical
+            .compile(|_, _| unreachable!("dynamic and channel nodes are built by the planner"))
+            .unwrap();
+        let mut dag = DAG::default();
+        dag.set_dynamic_node_builder(Arc::new(|kind, _| {
+            assert_eq!(kind, "echo");
+            Ok(Box::new(EchoNode::from_ports(
+                NodePorts::new()
+                    .add_input_port_of_type(None, PortType::File)
+                    .add_output_port_of_type(None, PortType::File),
+            )) as Box<dyn DagNode>)
+        }));
+        dag.install_compiled_graph(logical, physical)?;
+
+        let report = dag
+            .run(&SchedulerConfig::default(), &test_ctx(), None)
+            .await?;
+        assert!(report.ok, "{report:?}");
+        let NodeValue::Channel(channel) = &dag.output("collect#0").unwrap()[&0] else {
+            panic!("collect should emit a channel");
+        };
+        assert_eq!(channel.items.len(), 1);
+        assert_eq!(channel.items[0]["path"], expected_path);
+        assert_eq!(
+            channel.items[0]["format"],
+            serde_json::json!(expected_format)
+        );
+        let binding = &report
+            .nodes
+            .iter()
+            .find(|node| node.id.starts_with("process#assay="))
+            .unwrap()
+            .inputs[0];
+        assert_eq!(binding.kind, "File");
+        assert_eq!(binding.path, Some(expected_path.into()));
+    }
+    Ok(())
+}
+
 #[derive(Clone)]
 struct ResumableDynamicItemNode {
     value: String,

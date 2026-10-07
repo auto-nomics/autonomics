@@ -22,8 +22,8 @@ use crate::dag::error::DagError;
 use crate::dag::logical::LogicalExecutionStrategy;
 use crate::dag::node_event::{JobResult, NodeEvent, NodeEventKind, NodeReporter};
 use crate::dag::runtime::{
-    InputHashing, NodeReport, ResourceRunReport, RunReport, RuntimeStatus, SchedulerConfig,
-    WaveRunSummary,
+    InputBinding, InputHashing, NodeReport, ResourceRunReport, RunReport, RuntimeStatus,
+    SchedulerConfig, WaveRunSummary,
 };
 use crate::dag::utils::{build_input_bindings, build_inputs, cascade_skip};
 use crate::dag::{
@@ -31,6 +31,27 @@ use crate::dag::{
     TaskSubmission,
 };
 use crate::resource::{MemoryObservation, MemorySample, sample_memory_usage};
+use crate::value::{FileRef, NodeValue, PortType};
+
+fn materialize_dynamic_file_item(item: &serde_json::Value) -> Option<FileRef> {
+    match item {
+        serde_json::Value::String(path)
+            if path.starts_with("vfs://")
+                || path.starts_with("file://")
+                || std::path::Path::new(path).is_absolute() =>
+        {
+            Some(FileRef::new(path.clone(), None))
+        }
+        serde_json::Value::Object(_) => {
+            let file = serde_json::from_value::<FileRef>(item.clone()).ok()?;
+            (file.path.starts_with("vfs://")
+                || file.path.starts_with("file://")
+                || std::path::Path::new(&file.path).is_absolute())
+            .then_some(file)
+        }
+        _ => None,
+    }
+}
 
 impl DAG {
     /// Execute every node of the DAG according to its dependencies.
@@ -78,6 +99,29 @@ impl DAG {
             .and_then(|node| node.ports().output_port(port))
             .and_then(|port| port.label.clone())
             .unwrap_or_else(|| format!("port_{port}"))
+    }
+
+    fn logical_item_input_port(&self, id: &str) -> u8 {
+        let Some(logical_node) = self
+            .physical_jobs
+            .get(id)
+            .map(|job| job.logical_node.as_str())
+        else {
+            return 0;
+        };
+        self.logical_graphs
+            .iter()
+            .flat_map(|graph| graph.edges().iter())
+            .find(|edge| edge.to == logical_node)
+            .map(|edge| edge.to_port)
+            .unwrap_or(0)
+    }
+
+    fn dynamic_item_axis(&self, id: &str) -> String {
+        self.physical_jobs
+            .get(id)
+            .and_then(|job| job.axis.clone())
+            .unwrap_or_else(|| "item".into())
     }
 
     fn build_task_submission(
@@ -472,6 +516,35 @@ impl DAG {
                 };
                 let inputs = build_inputs(&id, &incoming, &self.outputs);
                 let bindings = build_input_bindings(&id, &incoming, &self.outputs);
+                let mut inputs = inputs;
+                let mut bindings = bindings;
+                let dynamic_item = self.physical_jobs.get(&id).and_then(|job| job.item.clone());
+                if inputs.is_empty()
+                    && let Some(item) = dynamic_item.as_ref()
+                    && let Some(file) = materialize_dynamic_file_item(item)
+                {
+                    let input_port = self.logical_item_input_port(&id);
+                    let accepted_port = node_box
+                        .ports()
+                        .input_port(input_port)
+                        .filter(|port| port.data_type.accepts(PortType::File))
+                        .filter(|_| !inputs.iter().any(|input| input.port == input_port))
+                        .map(|port| port.index);
+                    if let Some(file_input_port) = accepted_port {
+                        bindings.push(InputBinding {
+                            from: format!("dynamic_item:{}", self.dynamic_item_axis(&id)),
+                            from_port: 0,
+                            to_port: file_input_port,
+                            kind: "File".into(),
+                            path: Some(file.path.clone()),
+                            fingerprint: file.fingerprint.clone(),
+                        });
+                        inputs.push(NodeInput {
+                            port: file_input_port,
+                            data: NodeValue::File(file),
+                        });
+                    }
+                }
                 self.input_bindings.insert(id.clone(), bindings);
                 if let Some(node) = self.nodes.get(&id) {
                     for input in &inputs {

@@ -202,6 +202,19 @@ fn sync_git(name: &str, url: &str, rev: &str, target: &Path) -> Result<EntryOutc
     // A target that exists but cannot resolve HEAD is an interrupted
     // clone (killed mid-checkout). Wipe it and re-clone rather than
     // failing forever on the broken state.
+    // A local installation may leave a symlink behind when the registry
+    // is later switched back to a Git source.
+    if target
+        .symlink_metadata()
+        .is_ok_and(|meta| meta.file_type().is_symlink())
+    {
+        std::fs::remove_file(target).map_err(|source| {
+            invalid(format!(
+                "cannot replace stale symlink `{}`: {source}",
+                target.display()
+            ))
+        })?;
+    }
     if target.join(".git").exists()
         && run_git_capture(name, target, &["rev-parse", "HEAD"]).is_err()
     {
@@ -492,6 +505,38 @@ path = "SOURCE_PATH"
         let report = sync(&config, &root).unwrap();
         assert_eq!(report.outcomes[0].1, EntryOutcome::Unchanged);
         assert!(report.summary().contains("1 plugin(s)"));
+    }
+
+    #[test]
+    fn git_sync_replaces_a_stale_local_install_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, rev) = make_plugin_repo(dir.path(), "gitplug");
+        let local = dir.path().join("local");
+        std::fs::create_dir_all(&local).unwrap();
+        std::fs::write(local.join("manifest.toml"), "# placeholder").unwrap();
+
+        let root = dir.path().join("plugins");
+        std::fs::create_dir_all(&root).unwrap();
+        symlink_dir(&local, &root.join("gitplug")).unwrap();
+
+        let config = write_config(
+            dir.path(),
+            &format!(
+                r#"
+[[plugin]]
+name = "gitplug"
+git = "{url}"
+rev = "{rev}"
+"#,
+                url = repo.to_string_lossy(),
+                rev = rev
+            ),
+        );
+        let report = sync(&config, &root).unwrap();
+
+        assert_eq!(report.outcomes[0].1, EntryOutcome::Installed);
+        assert!(root.join("gitplug/manifest.toml").is_file());
+        assert!(root.join("gitplug/.git").is_dir());
     }
 
     #[test]

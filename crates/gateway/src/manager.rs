@@ -35,9 +35,9 @@ pub fn read_token() -> Option<String> {
 /// Ensure a daemon is running, spawning one from the current executable
 /// if the probe fails. Frontends call this before connecting.
 ///
-/// The spawned process is fully detached: null stdio (never steal the
-/// spawning process's terminal — the podman.rs lesson) and its own
-/// process group, so the frontend exiting never takes the daemon down.
+/// The spawned process gets its own process group, so the frontend
+/// exiting never takes the daemon down. It inherits stdio while starting,
+/// then detaches stdio only after the gateway server is bound.
 pub async fn ensure_running() -> Result<(), String> {
     if let Some(status) = probe().await? {
         tracing::debug!(pid = status.pid, "reusing running gateway daemon");
@@ -73,8 +73,8 @@ fn spawn_detached_daemon(exe: &std::path::Path) -> std::io::Result<u32> {
     command
         .args(["serve", "--daemon"])
         .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
         .process_group(0);
     command.spawn().map(|child| child.id())
 }

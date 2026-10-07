@@ -5,8 +5,9 @@
 //! on the launcher's working directory (it outlives the terminal that
 //! spawned it), so its file log lives under the absolute state dir.
 //! Foreground mode additionally mirrors to stderr for interactive
-//! debugging; `--daemon` mode writes to the file only (its stdio is
-//! null).
+//! debugging; `--daemon` mode writes to the file only. During auto-spawn
+//! its startup diagnostics inherit the launcher's stdio, then stdio is
+//! detached as soon as the gateway server is ready.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -174,6 +175,7 @@ async fn run_foreground_or_daemon(
         config,
         addr: gateway::daemon::env_addr(),
         env_token: gateway::daemon::env_token(),
+        detach_stdio_on_ready: daemon,
     };
 
     match run_daemon(opts, shutdown).await {
