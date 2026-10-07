@@ -7773,6 +7773,7 @@ dependencies = [
  "bzip2",
  "calamine",
  "chembl",
+ "chrono",
  "clinicaltrials",
  "container-runtime",
  "crossref",
