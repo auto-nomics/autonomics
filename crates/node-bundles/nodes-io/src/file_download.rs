@@ -28,17 +28,25 @@
 //! Backends without host paths lock through the backend's atomic conditional
 //! create of a single `{key}.lock` object (`if_not_exists` / `if_none_match`),
 //! where arrival order is irrelevant; backends that offer no such primitive
-//! are refused explicitly. A stale claim naming a dead process on this host
-//! is reclaimed — through a move-aside-and-verify protocol on filesystems
-//! (a reclaimer never deletes a lock it did not verify as the exact stale
-//! bytes) and by etag compare-and-swap on object stores, with backends
-//! lacking the atomic primitive reporting the claim for manual removal
-//! instead of racing. A claim naming our own pid with a nonce this process
-//! is not executing is our own cancelled acquisition and is reclaimed
-//! race-free. The claim is released through a guard whose `Drop` also
-//! removes it (after re-verifying it is still ours), and a fencing check
-//! before the publish aborts a download whose claim was displaced
-//! mid-flight.
+//! are refused explicitly. A claim is identified by its full owner identity —
+//! hostname, pid, and a per-acquisition nonce drawn from a randomly seeded
+//! per-process counter — and guards only ever delete a lock whose bytes still
+//! name exactly their own acquisition, so per-process nonce collisions and
+//! unrecognized (torn or foreign-format) lock bytes are never mistaken for
+//! one's own claim. Stale claims (naming a dead process, or our own pid with
+//! a nonce this process is not executing) are reclaimed only through
+//! atomically verified protocols: on filesystems the claim's exclusive
+//! `flock` is the fence — a holder (any task, any process) holds `LOCK_EX`
+//! for its claim's whole life, and a reclaimer must acquire that flock
+//! non-blockingly, re-verify the exact stale bytes, and only then move the
+//! claim aside and delete it, so the lock path is only ever emptied by the
+//! one reclaimer that proved the claim holderless, and displacement of a
+//! live holder is impossible by construction; on object stores, etag
+//! compare-and-swap where the etag is observed BEFORE the bytes are read,
+//! so the swap can only replace the very version that was judged stale.
+//! Backends lacking the atomic primitive report the claim for manual
+//! removal instead of racing. A fencing check before the publish aborts a
+//! download whose claim was displaced mid-flight by a foreign writer.
 //!
 //! A sidecar manifest (`<path>.download.json`) records provenance for the
 //! run ledger: accession/release when the caller knows them, original and
@@ -50,6 +58,7 @@
 //! never old data described by a rewritten manifest, and never data whose
 //! manifest write failed blocking a retry.
 
+use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -379,9 +388,12 @@ fn staging_meta_path(staging_path: &std::path::Path) -> PathBuf {
 }
 
 /// Liveness claim recorded in `{final}.lock` while a download owns a target.
-/// `nonce` is unique per acquisition: it lets a holder recognize *its own*
-/// claim after concurrent reclaim attempts, so a displaced holder neither
-/// deletes a successor's lock on release nor publishes unprotected.
+/// The full identity — hostname, pid, and a per-acquisition `nonce` — is what
+/// a holder compares to recognize *its own* claim, so a displaced holder
+/// neither deletes a successor's lock on release nor publishes unprotected.
+/// Comparing only the nonce would be wrong: the counter is per-process, so
+/// two real processes each mint nonce 0 and a failed contender's guard would
+/// delete the incumbent's live claim (round-4 finding).
 #[derive(Clone, Serialize, Deserialize)]
 struct LockContent {
     hostname: String,
@@ -398,13 +410,49 @@ impl LockContent {
             self.pid, self.hostname, self.started_unix_s, self.nonce
         )
     }
+
+    /// The identity comparison behind every "is this lock still mine" check.
+    fn names(&self, other: &LockContent) -> bool {
+        self.hostname == other.hostname && self.pid == other.pid && self.nonce == other.nonce
+    }
 }
 
-/// Monotonic per-process acquisition counter — the nonce source.
+/// Monotonic per-process acquisition counter — the nonce source. Seeded from
+/// a random base on first use so distinct processes (and, notably, a later
+/// process that happens to reuse our pid after a crash) never mint
+/// overlapping nonces: a dead predecessor's leftover claim can then never
+/// collide with a live acquisition's identity.
 static LOCK_NONCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 fn next_nonce() -> u64 {
-    LOCK_NONCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    use std::sync::atomic::Ordering;
+    // 0 marks "not seeded yet": publish a random nonzero base once. A lost
+    // race just means the winner's base sticks — either way every nonce
+    // handed out is nonzero and strictly increasing within this process.
+    if LOCK_NONCE.load(Ordering::Relaxed) == 0 {
+        let base = random_nonce_base();
+        let _ = LOCK_NONCE.compare_exchange(0, base, Ordering::Relaxed, Ordering::Relaxed);
+    }
+    LOCK_NONCE.fetch_add(1, Ordering::Relaxed)
+}
+
+/// A random nonzero base for the nonce counter: a splitmix64 finisher over
+/// the pid, wall-clock nanoseconds, and an address. No `rand` dependency —
+/// any single live bit of entropy suffices, because the hard guarantee is
+/// the full-identity compare in [`LockContent::names`]; the random base only
+/// closes the pid-reuse corner where a leftover would otherwise be
+/// misread as an executing acquisition.
+fn random_nonce_base() -> u64 {
+    let pid = std::process::id() as u64;
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.subsec_nanos() as u64)
+        .unwrap_or(0);
+    let address = &LOCK_NONCE as *const _ as u64;
+    let mut x = pid ^ nanos.rotate_left(20) ^ address.rotate_left(41) ^ 0x9E37_79B9_7F4A_7C15;
+    x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    (x ^ (x >> 31)) | 1 // odd => nonzero
 }
 
 /// Nonces of acquisitions currently executing in THIS process. A lock naming
@@ -471,8 +519,10 @@ enum HeldClaim {
     /// where the backend allows it.
     DeadOwner,
     /// Names OUR pid with a nonce this process is not executing: a claim
-    /// leaked by a cancelled acquisition of ours. No other process can hold
-    /// our pid, so removing it is race-free.
+    /// leaked by a cancelled acquisition of ours. Stale like `DeadOwner` —
+    /// and reclaimed through the same atomically verified protocols, since
+    /// another task of this process may already have re-acquired the target
+    /// between our read and any unconditional removal.
     OwnCancelled,
     /// Bytes that are not an interpretable claim (torn or foreign format).
     Foreign,
@@ -495,15 +545,125 @@ fn classify_held(held: &[u8], owner: &LockContent) -> HeldClaim {
     HeldClaim::Live
 }
 
-/// `true` when the lock bytes still name OUR acquisition (matching nonce).
-/// Unparseable bytes count as ours: with the guard established at
-/// exclusive-create time, a torn claim can only be the remnant of a crashed
-/// process — there is no live holder to protect.
-fn content_is_ours(held: &[u8], nonce: u64) -> bool {
+/// `true` when the lock bytes still name OUR acquisition — the full identity
+/// (hostname, pid, nonce) matches the claim we minted. Unparseable bytes are
+/// never ours: our own claims are always published atomically (staged,
+/// flushed, then linked or conditionally created), so they always parse;
+/// bytes that do not parse are torn or foreign-format and are left for a
+/// human — a guard must never delete a lock it cannot positively recognize
+/// as its own (round-4 finding: nonce-only comparison let one process
+/// delete another's live claim, and parse-failure-as-ours let a failed
+/// contender delete a foreign lock outright).
+fn content_is_ours(held: &[u8], claim: &LockContent) -> bool {
     match serde_json::from_slice::<LockContent>(held) {
-        Ok(content) => content.nonce == nonce,
-        Err(_) => true,
+        Ok(content) => content.names(claim),
+        Err(_) => false,
     }
+}
+
+/// Atomically verified reclaim of a stale host lock — used for BOTH stale
+/// classes (a claim naming a dead process, and a claim naming our own pid
+/// with a nonce this process is not executing). The incumbent's exclusive
+/// `flock` is the fence: every holder — any task in any process — holds
+/// `LOCK_EX` on the claim's inode for its whole lifetime (from staging,
+/// through the link, until release), so a non-blocking acquire of that flock
+/// atomically proves no holder is executing RIGHT NOW, and holding it
+/// excludes every other protocol participant from renaming or unlinking the
+/// claim while we act. Only under the fence does the reclaimer re-verify
+/// that the bytes are still the exact claim it judged stale, then move the
+/// claim aside and delete it there: the lock path is only ever emptied by
+/// the one reclaimer that proved the claim holderless, a successor can link
+/// only after the fence is released, and displacement of a live holder is
+/// impossible by construction — no restore path is needed. The previous
+/// bare `remove_file` for our own cancelled claims was a read-then-delete
+/// race (round-4 controlled-scheduling finding), and the earlier
+/// move-aside-and-verify protocol still held a rename→restore window that
+/// could orphan a just-acquired successor's claim under three-way
+/// contention (caught by the 2048-round three-reclaimer regression).
+async fn reclaim_stale_host_lock(
+    lock_host: &std::path::Path,
+    judged_stale: &[u8],
+    nonce: u64,
+) -> Result<(), FileDownloadError> {
+    let incumbent = match std::fs::OpenOptions::new().read(true).open(lock_host) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            // The claim vanished between the caller's read and now; the
+            // caller retries.
+            return Ok(());
+        }
+        Err(error) => {
+            return Err(FileDownloadError::Write {
+                path: lock_host.display().to_string(),
+                reason: format!("cannot open the stale claim to verify it: {error}"),
+            });
+        }
+    };
+    // Non-blocking: contend only with LIVE holders, never wait for them.
+    let fenced = unsafe { libc::flock(incumbent.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if fenced != 0 {
+        let error = std::io::Error::last_os_error();
+        let current = tokio::fs::read(lock_host).await.unwrap_or_else(|_| judged_stale.to_vec());
+        return match error.raw_os_error() {
+            Some(libc::EWOULDBLOCK) => Err(FileDownloadError::TargetLocked {
+                path: lock_host.display().to_string(),
+                // Flock semantics: an open file description holds the lock
+                // until its last descriptor closes — so contention here
+                // means a holder (task or process) is executing NOW and the
+                // earlier stale judgment is obsolete.
+                holder: lock_holder(&current),
+            }),
+            Some(libc::ENOLCK | libc::EOPNOTSUPP) => Err(FileDownloadError::TargetLocked {
+                path: lock_host.display().to_string(),
+                holder: format!(
+                    "{}; the filesystem offers no lock verification — remove `{}` manually",
+                    lock_holder(&current),
+                    lock_host.display()
+                ),
+            }),
+            _ => Err(FileDownloadError::Write {
+                path: lock_host.display().to_string(),
+                reason: format!("cannot verify the stale claim holderlessly: {error}"),
+            }),
+        };
+    }
+    // We hold the fence on the incumbent's inode: no participant can move
+    // it and no successor can appear at the path until we release. Verify
+    // the bytes one last time — a foreign (non-participant) writer may have
+    // rewritten the path between the caller's read and the fence; if so,
+    // refuse to act and let the caller re-judge.
+    let held_now = match tokio::fs::read(lock_host).await {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(FileDownloadError::Write {
+                path: lock_host.display().to_string(),
+                reason: error.to_string(),
+            });
+        }
+    };
+    if held_now != judged_stale {
+        return Ok(());
+    }
+    // Verified holderless and unchanged: move the stale claim aside and
+    // delete it THERE. The path empties only under our fence; a successor's
+    // link can only land afterwards and is never touched by us.
+    let mut aside_os = lock_host.as_os_str().to_os_string();
+    aside_os.push(format!(".stale-{nonce}"));
+    let aside = PathBuf::from(aside_os);
+    match tokio::fs::rename(lock_host, &aside).await {
+        Ok(()) => {
+            let _ = tokio::fs::remove_file(&aside).await;
+            Ok(())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(FileDownloadError::Write {
+            path: lock_host.display().to_string(),
+            reason: format!("cannot move the stale lock aside under the fence: {error}"),
+        }),
+    }
+    // `incumbent` drops here: the fence releases only after the aside name
+    // is gone, so the caller's next-round link races no one.
 }
 
 /// Ownership of a successfully claimed target lock. The explicit
@@ -511,18 +671,25 @@ fn content_is_ours(held: &[u8], nonce: u64) -> bool {
 /// dropped (cancelled) before that, `Drop` removes the claim anyway — a
 /// cancelled run must not leave its own live pid holding the target and
 /// blocking every retry with `TargetLocked`. Both paths first verify the
-/// claim is still ours (nonce match), so releasing after a displacement
-/// never deletes the successor's lock. The guard also carries the
-/// registration of its nonce in the process-wide active-download set.
+/// claim still names this exact acquisition (full identity match), so
+/// releasing after a displacement never deletes the successor's lock — not
+/// even under a per-process nonce collision with another process (round-4
+/// finding). The guard also carries the registration of its nonce in the
+/// process-wide active-download set.
 struct LockGuard(Option<GuardInner>);
 
 enum GuardInner {
     /// A `{final}.lock` host file (local filesystem or fs-backed VFS), with
     /// the staging name it was published from until that name is unlinked.
+    /// `_flock` holds the exclusive fence on the claim's inode (taken BEFORE
+    /// the publish link, released when the guard drops) — `None` only for
+    /// guards assembled directly in tests, which exercise release identity
+    /// rather than the fence.
     HostFile {
         path: std::path::PathBuf,
         temp: Option<std::path::PathBuf>,
-        nonce: u64,
+        claim: LockContent,
+        _flock: Option<std::fs::File>,
         _active: ActiveDownload,
     },
     /// The `{final_key}.lock` object on a backend without host paths
@@ -531,7 +698,7 @@ enum GuardInner {
     Claim {
         op: opendal::Operator,
         key: String,
-        nonce: u64,
+        claim: LockContent,
         _active: ActiveDownload,
     },
 }
@@ -549,10 +716,10 @@ impl LockGuard {
         if let Some(inner) = self.0.take() {
             match inner {
                 GuardInner::HostFile {
-                    path, temp, nonce, ..
+                    path, temp, claim, ..
                 } => {
                     if let Ok(held) = tokio::fs::read(&path).await
-                        && content_is_ours(&held, nonce)
+                        && content_is_ours(&held, &claim)
                     {
                         let _ = tokio::fs::remove_file(&path).await;
                     }
@@ -561,10 +728,12 @@ impl LockGuard {
                     if let Some(temp) = temp {
                         let _ = tokio::fs::remove_file(&temp).await;
                     }
+                    // The `flock` File drops at the end of this arm: the
+                    // fence releases only after our own names are gone.
                 }
-                GuardInner::Claim { op, key, nonce, .. } => {
+                GuardInner::Claim { op, key, claim, .. } => {
                     if let Ok(held) = op.read(&key).await
-                        && content_is_ours(&held.to_vec(), nonce)
+                        && content_is_ours(&held.to_vec(), &claim)
                     {
                         let _ = op.delete(&key).await;
                     }
@@ -574,9 +743,10 @@ impl LockGuard {
     }
 
     /// Fencing check: does the lock still name OUR acquisition? Called at the
-    /// commit boundary (before publish) — a claim displaced mid-download
-    /// (possible only through the bounded reclaimer window) must fail the
-    /// download instead of racing the new holder.
+    /// commit boundary (before publish) — under the flock fence the protocol
+    /// itself can never displace a live holder, but a foreign (non-participant)
+    /// writer touching the path must still fail the download instead of
+    /// racing the new holder.
     async fn still_holds(&self) -> bool {
         let Some(inner) = self.0.as_ref() else {
             return false;
@@ -591,17 +761,14 @@ impl LockGuard {
                 Err(_) => return false,
             },
         };
-        // Torn bytes cannot prove ownership at the commit boundary.
-        serde_json::from_slice::<LockContent>(&held)
-            .map(|content| content.nonce == inner.nonce())
-            .unwrap_or(false)
+        content_is_ours(&held, inner.claim())
     }
 }
 
 impl GuardInner {
-    fn nonce(&self) -> u64 {
+    fn claim(&self) -> &LockContent {
         match self {
-            GuardInner::HostFile { nonce, .. } | GuardInner::Claim { nonce, .. } => *nonce,
+            GuardInner::HostFile { claim, .. } | GuardInner::Claim { claim, .. } => claim,
         }
     }
 }
@@ -613,13 +780,15 @@ impl Drop for LockGuard {
         };
         match inner {
             // Sync removal works from any context, cancellation included —
-            // but only after re-verifying the claim is still ours. The
-            // staging name is exclusively ours (pid+nonce) and always goes.
+            // but only after re-verifying the claim still names this exact
+            // acquisition. The staging name is exclusively ours (pid+nonce)
+            // and always goes. The `flock` File closes with the arm's end,
+            // releasing the fence after the names are removed.
             GuardInner::HostFile {
-                path, temp, nonce, ..
+                path, temp, claim, ..
             } => {
                 if let Ok(held) = std::fs::read(&path)
-                    && content_is_ours(&held, nonce)
+                    && content_is_ours(&held, &claim)
                 {
                     let _ = std::fs::remove_file(&path);
                 }
@@ -627,7 +796,7 @@ impl Drop for LockGuard {
                     let _ = std::fs::remove_file(&temp);
                 }
             }
-            GuardInner::Claim { op, key, nonce, .. } => {
+            GuardInner::Claim { op, key, claim, .. } => {
                 // Async verify+delete needs a runtime: spawn best-effort when
                 // one is ambient. Outside any runtime the claim leaks — it
                 // records hostname/pid/nonce, so own-cancelled or dead-owner
@@ -635,7 +804,7 @@ impl Drop for LockGuard {
                 if let Ok(handle) = tokio::runtime::Handle::try_current() {
                     handle.spawn(async move {
                         if let Ok(held) = op.read(&key).await
-                            && content_is_ours(&held.to_vec(), nonce)
+                            && content_is_ours(&held.to_vec(), &claim)
                         {
                             let _ = op.delete(&key).await;
                         }
@@ -778,17 +947,20 @@ impl Sink {
 
     /// Claim the target for one download. On filesystems (local paths and
     /// fs-backed VFS mounts, via [`Sink::host_paths`]) the claim is staged at
-    /// an exclusive `{lock}.tmp-{pid}-{nonce}` name and published by an
-    /// atomic no-clobber link — two concurrent runs can never both hold the
-    /// lock path, a torn claim can never sit on it, and the guard exists the
+    /// an exclusive `{lock}.tmp-{pid}-{nonce}` name, fenced with an exclusive
+    /// `flock` taken before publication, and published by an atomic
+    /// no-clobber link — two concurrent runs can never both hold the lock
+    /// path, a torn claim can never sit on it, and the guard exists the
     /// instant the link lands (no await between), so a cancelled acquisition
     /// cannot leak its own live-pid lock. Backends without host paths take
     /// the atomic conditional-create path (see
-    /// [`Sink::acquire_claim_lock`]). A pre-existing claim naming a dead
-    /// process on this host is reclaimed through a move-aside-and-verify
-    /// protocol that never deletes a successor's live lock; anything else
-    /// fails fast with [`FileDownloadError::TargetLocked`]. Cross-host
-    /// staleness is not guessable and is reported for manual removal.
+    /// [`Sink::acquire_claim_lock`]). A pre-existing stale claim — one naming
+    /// a dead process, or our own pid with a nonce this process is not
+    /// executing — is reclaimed only under the claim's flock fence (see
+    /// [`reclaim_stale_host_lock`]), which a live successor holds by
+    /// construction; anything else fails fast with
+    /// [`FileDownloadError::TargetLocked`]. Cross-host staleness is not
+    /// guessable and is reported for manual removal.
     async fn acquire_lock(&self, owner: &LockContent) -> Result<LockGuard, FileDownloadError> {
         if let Some((_final, _staging, lock_host)) = self.host_paths() {
             // The lock is created before any staging writer runs, so the
@@ -863,17 +1035,44 @@ impl Sink {
                         });
                     }
                 }
+                // The fence is taken on the claim's inode BEFORE the publish
+                // link: for the claim's whole life (staging → path →
+                // release) an exclusive non-blocking flock marks the
+                // executing holder, so any contender — in this process or
+                // another — can atomically test liveness by trying to
+                // acquire it (see `reclaim_stale_host_lock`).
+                let fence = match std::fs::OpenOptions::new().read(true).open(&claim_stage) {
+                    Ok(file) => file,
+                    Err(error) => {
+                        let _ = tokio::fs::remove_file(&claim_stage).await;
+                        return Err(FileDownloadError::Write {
+                            path: claim_stage.display().to_string(),
+                            reason: format!("cannot open the claim to fence it: {error}"),
+                        });
+                    }
+                };
+                let locked =
+                    unsafe { libc::flock(fence.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+                if locked != 0 {
+                    let error = std::io::Error::last_os_error();
+                    let _ = tokio::fs::remove_file(&claim_stage).await;
+                    return Err(FileDownloadError::Write {
+                        path: claim_stage.display().to_string(),
+                        reason: format!("cannot fence the claim: {error}"),
+                    });
+                }
                 // The guard exists BEFORE the link can execute. An abort
                 // parked inside the link await — after the syscall landed but
                 // before the future resumes — still finds the guard alive:
                 // its Drop removes whichever names materialized (the lock
                 // only after re-verifying it is ours, the staging name
-                // unconditionally). There is no point at which the lock path
-                // exists unowned.
+                // unconditionally) and closes the fence. There is no point
+                // at which the lock path exists unowned.
                 let mut guard = LockGuard(Some(GuardInner::HostFile {
                     path: lock_host.clone(),
                     temp: Some(claim_stage.clone()),
-                    nonce,
+                    claim: owner.clone(),
+                    _flock: Some(fence),
                     _active: ActiveDownload::register(nonce),
                 }));
                 match tokio::fs::hard_link(&claim_stage, &lock_host).await {
@@ -900,71 +1099,14 @@ impl Sink {
                                     holder: lock_holder(&held),
                                 });
                             }
-                            HeldClaim::OwnCancelled => {
-                                // A claim of OUR pid that this process is not
-                                // executing: no other process can hold our
-                                // pid, so plain removal is race-free.
-                                let _ = tokio::fs::remove_file(&lock_host).await;
-                            }
-                            HeldClaim::DeadOwner => {
-                                // Safe reclaim: atomically move the stale
-                                // claim aside and re-read it THERE. Only one
-                                // reclaimer's rename can land; if the bytes
-                                // changed since our read (a new holder took
-                                // the path in between), restore the moved —
-                                // possibly live — lock by a non-clobbering
-                                // link and retry. A reclaimer therefore never
-                                // deletes a lock it did not verify as the
-                                // exact stale bytes it judged dead.
-                                let mut aside = lock_host.clone().into_os_string();
-                                aside.push(format!(".stale-{nonce}"));
-                                let aside = PathBuf::from(aside);
-                                match tokio::fs::rename(&lock_host, &aside).await {
-                                    Ok(()) => {
-                                        let moved =
-                                            tokio::fs::read(&aside).await.unwrap_or_default();
-                                        if moved == held {
-                                            // Verified: the stale claim is
-                                            // gone; the next round's link can
-                                            // land.
-                                            let _ = tokio::fs::remove_file(&aside).await;
-                                        } else {
-                                            // Replaced meanwhile: put the
-                                            // current holder's lock back.
-                                            match tokio::fs::hard_link(&aside, &lock_host).await {
-                                                Ok(()) => {
-                                                    let _ = tokio::fs::remove_file(&aside).await;
-                                                }
-                                                Err(error)
-                                                    if error.kind()
-                                                        == std::io::ErrorKind::AlreadyExists =>
-                                                {
-                                                    // Someone already
-                                                    // re-created the lock;
-                                                    // drop our moved copy.
-                                                    let _ = tokio::fs::remove_file(&aside).await;
-                                                }
-                                                Err(_) => {
-                                                    // Leave the aside file:
-                                                    // it names the holder for
-                                                    // audit and blocks no one.
-                                                }
-                                            }
-                                        }
-                                    }
-                                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                                        // Another reclaimer won the race;
-                                        // retry the staging+link.
-                                    }
-                                    Err(error) => {
-                                        return Err(FileDownloadError::Write {
-                                            path: lock_host.display().to_string(),
-                                            reason: format!(
-                                                "cannot move the stale lock aside: {error}"
-                                            ),
-                                        });
-                                    }
-                                }
+                            // Both stale classes — dead owner and our own
+                            // cancelled claim — reclaim through the same
+                            // fence-verified protocol: the old bare
+                            // `remove_file` for our own cancelled claims was
+                            // a read-then-delete race (round-4
+                            // controlled-scheduling finding).
+                            HeldClaim::OwnCancelled | HeldClaim::DeadOwner => {
+                                reclaim_stale_host_lock(&lock_host, &held, nonce).await?;
                             }
                         }
                     }
@@ -993,14 +1135,14 @@ impl Sink {
     /// or `if_none_match("*")` where that is the advertised primitive):
     /// whoever's create lands first holds the lock, and a claim that reaches
     /// the backend late can never displace an active holder — there is no
-    /// ordering to get wrong. Dead-owner claims are taken over by
-    /// compare-and-swap (`if_match` on the observed etag) where the backend
-    /// supports it; a backend without atomic reclaim reports the claim for
-    /// manual removal instead of racing. A backend with no exclusive-create
-    /// primitive at all is refused explicitly — a stat-then-write "lock"
-    /// serializes nothing. Claims naming our own pid with a nonce this
-    /// process is not executing are our own cancelled acquisitions (no other
-    /// process can hold our pid) and are reclaimed race-free.
+    /// ordering to get wrong. Stale claims — dead owners and our own
+    /// cancelled acquisitions alike — are taken over by compare-and-swap
+    /// (`if_match` on an etag observed BEFORE the claim bytes were read, so
+    /// the swap is bound to the very version that was judged stale) where
+    /// the backend supports it; a backend without atomic reclaim reports
+    /// the claim for manual removal instead of racing. A backend with no
+    /// exclusive-create primitive at all is refused explicitly — a
+    /// stat-then-write "lock" serializes nothing.
     async fn acquire_claim_lock(
         &self,
         op: &opendal::Operator,
@@ -1033,7 +1175,7 @@ impl Sink {
             LockGuard(Some(GuardInner::Claim {
                 op: op.clone(),
                 key: lock_key.clone(),
-                nonce,
+                claim: owner.clone(),
                 _active: ActiveDownload::register(nonce),
             }))
         };
@@ -1071,6 +1213,24 @@ impl Sink {
                     });
                 }
             }
+            // Observe the etag BEFORE the bytes: the conditional swap below
+            // is then bound to a version that is exactly the one the
+            // following read serves, or older — reading the bytes first and
+            // stat'ing afterwards (the round-4 static finding) could pair a
+            // successor's etag with a stale judgment and let the swap
+            // overwrite a new live holder. With etag-first, any replacement
+            // after the stat either shows up in the bytes (classified live,
+            // no swap) or fails the `if_match` atomically.
+            let etag = match op.stat(&lock_key).await {
+                Ok(meta) => meta.etag().map(str::to_string),
+                Err(error) if error.kind() == opendal::ErrorKind::NotFound => continue,
+                Err(error) => {
+                    return Err(FileDownloadError::Write {
+                        path: lock_key.clone(),
+                        reason: error.to_string(),
+                    });
+                }
+            };
             let held = match op.read(&lock_key).await {
                 Ok(buffer) => buffer.to_vec(),
                 Err(error) if error.kind() == opendal::ErrorKind::NotFound => continue,
@@ -1088,27 +1248,24 @@ impl Sink {
                         holder: lock_holder(&held),
                     });
                 }
-                HeldClaim::OwnCancelled => {
-                    // Race-free by pid uniqueness: see the doc comment.
-                    let _ = op.delete(&lock_key).await;
-                }
-                HeldClaim::DeadOwner => {
+                // Both stale classes — dead owner and our own cancelled
+                // claim — reclaim through the same etag compare-and-swap:
+                // a bare delete raced identically for both (a concurrent
+                // acquirer can replace the object between our read and the
+                // delete, and we would remove a live successor's claim).
+                HeldClaim::OwnCancelled | HeldClaim::DeadOwner => {
                     if !compare_and_swap {
                         return Err(FileDownloadError::TargetLocked {
                             path: self.describe(),
                             holder: format!(
-                                "{}; the claim names a dead process but backend `{}` has no \
-                                 atomic reclaim — remove `{}` manually",
+                                "{}; the claim is stale but backend `{}` has no atomic \
+                                 reclaim — remove `{}` manually",
                                 lock_holder(&held),
                                 op.info().scheme(),
                                 lock_key
                             ),
                         });
                     }
-                    let etag = match op.stat(&lock_key).await {
-                        Ok(meta) => meta.etag().map(str::to_string),
-                        Err(_) => None,
-                    };
                     let Some(etag) = etag else {
                         return Err(FileDownloadError::TargetLocked {
                             path: self.describe(),
@@ -1125,8 +1282,8 @@ impl Sink {
                         .if_match(&etag)
                         .await
                     {
-                        // The object is still the dead claim we observed:
-                        // the takeover is ours.
+                        // The object is still the exact stale claim we
+                        // judged: the takeover is ours.
                         Ok(_) => return Ok(guard(op)),
                         Err(error) if error.kind() == opendal::ErrorKind::ConditionNotMatch => {
                             // Another reclaimer took it over first; retry.
@@ -1709,7 +1866,7 @@ impl FileDownloadNode {
         let mut last_error: Option<String> = None;
         let completed = loop {
             attempts += 1;
-            match self.attempt(&client, &sink, &url, idle_timeout).await {
+            match self.attempt(client, sink, url, idle_timeout).await {
                 AttemptOutcome::Done(completed) => break completed,
                 AttemptOutcome::Fatal(error) => return Err(error),
                 AttemptOutcome::Retry(reason) => {
@@ -1756,11 +1913,11 @@ impl FileDownloadNode {
             }
         }
 
-        // Fencing: the whole download ran under the target lock; if the claim
-        // was displaced while we streamed (the reclaim protocol prevents
-        // deletion of a live lock, but a moved-aside lock leaves a bounded
-        // window in which a third run may legitimately acquire), publishing
-        // now would race the new holder. Fail instead — a retry is safe.
+        // Fencing: the whole download ran under the target lock; under the
+        // flock fence the reclaim protocol can no longer displace a live
+        // holder, but a foreign (non-participant) writer touching the path
+        // must still not let us publish over a lock that stopped naming this
+        // acquisition. Fail instead — a retry is safe.
         if !guard.still_holds().await {
             return Err(FileDownloadError::TargetLocked {
                 path: path.into(),
@@ -2241,13 +2398,21 @@ impl NodeFactory for FileDownloadNodeFactory {
         the backend's atomic conditional create on object \
         stores (backends without that primitive are refused explicitly) — so \
         a second run fails fast with a TargetLocked error instead of \
-        clobbering. Stale claims are reclaimed safely: filesystem reclaimers \
-        move the stale lock aside and only delete bytes they re-verify as the \
-        exact stale claim (a new live holder is restored, never deleted); \
-        object-store reclaim uses etag compare-and-swap where available and \
-        reports for manual removal otherwise; a claim naming our own pid \
-        that this process is not executing is our own cancelled acquisition \
-        and is reclaimed race-free. A fencing check before the publish \
+        clobbering. A claim carries its full owner identity (hostname, pid, \
+        and a randomly-seeded per-acquisition nonce) and a guard only ever \
+        deletes a lock whose bytes still name its own exact acquisition — \
+        per-process nonce collisions across processes and unrecognized \
+        (torn or foreign-format) lock bytes are never mistaken for one's \
+        own claim. Stale claims — dead owners and the canceller's own \
+        leaked claims alike — are reclaimed safely: filesystem reclaimers \
+        must first acquire the claim's exclusive flock — proving no holder \
+        is executing, in this process or any other — and only then delete \
+        the re-verified stale bytes, so a new live holder is untouchable by \
+        construction; \
+        object-store reclaim uses etag compare-and-swap — with the etag \
+        observed before the bytes, so the swap is bound to the judged \
+        version — where available and reports for manual removal otherwise. \
+        A fencing check before the publish \
         aborts a download whose claim was displaced mid-flight. The \
         `overwrite=false` publish is a \
         no-clobber link, so a target that appeared mid-run is never replaced. \
@@ -2976,7 +3141,7 @@ mod tests {
     async fn host_stale_reclaim_never_removes_a_new_live_lock() {
         // Round-3 review probe: two concurrent reclaimers of one stale lock
         // must never delete each other's newly acquired live lock. The
-        // move-aside-and-verify protocol keeps exactly one holder per round
+        // fence-verified reclaim keeps exactly one holder per round
         // across all 256 rounds; a naive read-then-unlink reclaimed ~1-3%.
         let dir = tempfile::tempdir().unwrap().keep();
         let final_path = dir.join("reclaim.bin");
@@ -3209,10 +3374,10 @@ mod tests {
         // Backends without host paths lock through the backend's atomic
         // conditional create of a single `{key}.lock` object: two concurrent
         // acquires yield exactly one holder, release frees the target again,
-        // a dead-owner claim is reported for manual removal (the memory
-        // backend has no CAS to reclaim it atomically), and a claim of our
-        // own pid that this process is not executing — a cancelled
-        // acquisition of ours — is reclaimed race-free.
+        // and stale claims — dead owners and our own cancelled acquisitions
+        // alike — are reported for manual removal when the backend has no
+        // compare-and-swap to reclaim them atomically (the memory backend
+        // is exactly such a backend).
         let op = opendal::Operator::new(opendal::services::Memory::default())
             .unwrap()
             .finish();
@@ -3276,7 +3441,11 @@ mod tests {
         let _ = op.delete("/x.bin.lock").await;
 
         // A claim of our own pid whose nonce this process is NOT executing
-        // is a cancelled acquisition of ours: reclaimable race-free.
+        // is a cancelled acquisition of ours — but it is reclaimed through
+        // the same atomic protocol as a dead-owner claim now, and the memory
+        // backend offers no compare-and-swap: the acquisition must refuse
+        // and name the object for manual removal instead of racing (the old
+        // bare delete could remove a live successor's claim mid-read).
         op.write(
             "/x.bin.lock",
             serde_json::to_vec(&LockContent {
@@ -3289,7 +3458,21 @@ mod tests {
         )
         .await
         .unwrap();
-        sink.acquire_lock(&owner).await.unwrap().release().await;
+        let error = match sink.acquire_lock(&owner).await {
+            Err(error) => error,
+            Ok(guard) => {
+                guard.release().await;
+                panic!("an own-cancelled claim must not be reclaimed unsafely either");
+            }
+        };
+        assert!(
+            matches!(error, FileDownloadError::TargetLocked { .. }),
+            "{error}"
+        );
+        assert!(
+            error.to_string().contains("remove `/x.bin.lock` manually"),
+            "the refusal must name the object for manual removal: {error}"
+        );
     }
 
     #[tokio::test]
@@ -3472,5 +3655,606 @@ mod tests {
             "a refused publish must not rewrite the existing manifest"
         );
         assert!(!dir.join("shared.bin.download.json.part").exists());
+    }
+
+    #[test]
+    fn claim_identity_requires_hostname_pid_and_nonce() {
+        // Round-4 finding 1 essence: ownership is the FULL identity, so a
+        // same-nonce claim from another process is not ours, and neither is
+        // a same-pid claim with another nonce, nor another host, nor bytes
+        // that cannot be parsed at all.
+        let claim = LockContent {
+            hostname: "h".into(),
+            pid: 10,
+            started_unix_s: 1,
+            nonce: 77,
+        };
+        let bytes = serde_json::to_vec(&claim).unwrap();
+        assert!(content_is_ours(&bytes, &claim));
+        // The cross-process per-process-counter collision: same nonce,
+        // different pid — the case that deleted a live foreign lock.
+        let mut foreign_pid = claim.clone();
+        foreign_pid.pid = 11;
+        assert!(!content_is_ours(&bytes, &foreign_pid));
+        // A successor's claim after displacement: same pid, fresh nonce.
+        let mut successor = claim.clone();
+        successor.nonce = 78;
+        assert!(!content_is_ours(&bytes, &successor));
+        let mut foreign_host = claim.clone();
+        foreign_host.hostname = "elsewhere".into();
+        assert!(!content_is_ours(&bytes, &foreign_host));
+        // Round-4 finding 2: unparseable bytes are never ours.
+        assert!(!content_is_ours(b"FOREIGN-LOCK-FORMAT", &claim));
+        assert!(!content_is_ours(b"", &claim));
+        // `started_unix_s` is descriptive, not identity: claims agreeing on
+        // hostname+pid+nonce are the same acquisition.
+        let mut reserialized = claim.clone();
+        reserialized.started_unix_s = 999;
+        assert!(content_is_ours(&bytes, &reserialized));
+    }
+
+    #[test]
+    fn guard_never_deletes_a_foreign_process_lock_even_on_a_full_nonce_collision() {
+        // Deterministic core of round-4 finding 1: a guard whose claim
+        // shares the incumbent's nonce but names a different pid (the
+        // cross-process collision shape) must not delete the incumbent on
+        // drop. The old nonce-only `content_is_ours` removed it.
+        let dir = tempfile::tempdir().unwrap().keep();
+        let lock = dir.join("held.bin.lock");
+        let incumbent = serde_json::to_vec(&LockContent {
+            hostname: hostname(),
+            pid: 424_242,
+            started_unix_s: 1,
+            nonce: 777,
+        })
+        .unwrap();
+        std::fs::write(&lock, &incumbent).unwrap();
+        let guard = LockGuard(Some(GuardInner::HostFile {
+            path: lock.clone(),
+            temp: None,
+            claim: LockContent {
+                hostname: hostname(),
+                pid: std::process::id(),
+                started_unix_s: 2,
+                nonce: 777,
+            },
+            _flock: None,
+            _active: ActiveDownload::register(777),
+        }));
+        drop(guard);
+        assert_eq!(
+            std::fs::read(&lock).unwrap(),
+            incumbent,
+            "a nonce collision must not let a guard delete a foreign process's live lock"
+        );
+    }
+
+    #[tokio::test]
+    async fn unparseable_foreign_lock_survives_a_failed_acquire() {
+        // Round-4 finding 2 (reviewer probe): bytes that are not an
+        // interpretable claim used to be treated as ours, so the failed
+        // contender's guard Drop deleted them. Now the failed acquire
+        // reports the holder as-is and the bytes survive untouched.
+        let dir = tempfile::tempdir().unwrap().keep();
+        let lock = dir.join("unknown.bin.lock");
+        std::fs::write(&lock, b"FOREIGN-LOCK-FORMAT").unwrap();
+        let sink = Sink::Local {
+            final_path: dir.join("unknown.bin"),
+            staging_path: dir.join("unknown.bin.part"),
+        };
+        let owner = LockContent {
+            hostname: hostname(),
+            pid: std::process::id(),
+            started_unix_s: 42,
+            nonce: 0,
+        };
+        let acquired = sink.acquire_lock(&owner).await;
+        assert!(
+            matches!(acquired, Err(FileDownloadError::TargetLocked { .. })),
+            "an unrecognized lock must block, not be adopted"
+        );
+        assert_eq!(
+            std::fs::read(&lock).unwrap(),
+            b"FOREIGN-LOCK-FORMAT",
+            "a failed contender must never delete bytes it cannot recognize"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn own_cancelled_reclaim_is_exclusive() {
+        // Round-4 finding 3 stress (reviewer probe, 1024 rounds): two tasks
+        // racing to reclaim the same own-cancelled claim must never both
+        // hold the lock. The fence-verified reclaim replaced the old bare
+        // read-then-unlink, whose interleaving admitted a second holder
+        // while the first was still live.
+        let dir = tempfile::tempdir().unwrap().keep();
+        let lock = dir.join("cancelled.bin.lock");
+        let sink = Sink::Local {
+            final_path: dir.join("cancelled.bin"),
+            staging_path: dir.join("cancelled.bin.part"),
+        };
+        let owner = LockContent {
+            hostname: hostname(),
+            pid: std::process::id(),
+            started_unix_s: 42,
+            nonce: 0,
+        };
+        let orphan = serde_json::to_vec(&LockContent {
+            hostname: hostname(),
+            pid: std::process::id(),
+            started_unix_s: 1,
+            nonce: u64::MAX,
+        })
+        .unwrap();
+        let mut doubles = 0;
+        for _ in 0..1024 {
+            std::fs::write(&lock, &orphan).unwrap();
+            let (a, b) = tokio::join!(sink.acquire_lock(&owner), sink.acquire_lock(&owner));
+            if a.is_ok() && b.is_ok() {
+                doubles += 1;
+            }
+            if let Ok(guard) = a {
+                guard.release().await;
+            }
+            if let Ok(guard) = b {
+                guard.release().await;
+            }
+            let _ = std::fs::remove_file(&lock);
+        }
+        assert_eq!(
+            doubles, 0,
+            "own-cancelled reclaimers must never both acquire"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn three_dead_owner_reclaimers_never_double_hold() {
+        // Reviewer probe (2048 rounds, three reclaimers): the reclaim
+        // protocol must keep at most one holder even with a third contender
+        // constantly racing the other two. The earlier move-aside variant
+        // FAILED this probe intermittently (~1 double-holder per few runs):
+        // its rename→restore window admitted a fresh link while a delayed
+        // reclaimer still held the moved claim aside, and the restore's
+        // already-exists branch then destroyed the displaced claim's bytes.
+        // The flock fence closes the window by construction.
+        let dir = tempfile::tempdir().unwrap().keep();
+        let lock = dir.join("dead.bin.lock");
+        let sink = Sink::Local {
+            final_path: dir.join("dead.bin"),
+            staging_path: dir.join("dead.bin.part"),
+        };
+        assert!(!pid_alive(999_999));
+        let owner = LockContent {
+            hostname: hostname(),
+            pid: std::process::id(),
+            started_unix_s: 42,
+            nonce: 0,
+        };
+        let orphan = serde_json::to_vec(&LockContent {
+            hostname: hostname(),
+            pid: 999_999,
+            started_unix_s: 1,
+            nonce: 0,
+        })
+        .unwrap();
+        let mut doubles = 0;
+        for _ in 0..2048 {
+            std::fs::write(&lock, &orphan).unwrap();
+            let (a, b, c) = tokio::join!(
+                sink.acquire_lock(&owner),
+                sink.acquire_lock(&owner),
+                sink.acquire_lock(&owner)
+            );
+            let holders = a.is_ok() as usize + b.is_ok() as usize + c.is_ok() as usize;
+            if holders > 1 {
+                doubles += 1;
+            }
+            if let Ok(guard) = a {
+                guard.release().await;
+            }
+            if let Ok(guard) = b {
+                guard.release().await;
+            }
+            if let Ok(guard) = c {
+                guard.release().await;
+            }
+            let _ = std::fs::remove_file(&lock);
+        }
+        assert_eq!(
+            doubles, 0,
+            "reclaiming an incumbent lock must not admit a third holder"
+        );
+    }
+
+    #[tokio::test]
+    async fn delayed_stale_reclaimer_cannot_touch_a_new_live_holder() {
+        // Round-4 finding 3, deterministic form of the reviewer's
+        // controlled-scheduling probe: a reclaimer that classified the
+        // incumbent as stale BEFORE a successor acquired must fail against
+        // the successor when it finally acts — the claim's flock is held by
+        // the live successor, so the stale judgment can never rename or
+        // delete it. The old bare unlink deleted it
+        // (`first_owned_after=false, incumbent_preserved=false`); the
+        // move-aside variant needed a byte-for-byte restore dance instead.
+        let dir = tempfile::tempdir().unwrap().keep();
+        let lock = dir.join("delayed.bin.lock");
+        let sink = Sink::Local {
+            final_path: dir.join("delayed.bin"),
+            staging_path: dir.join("delayed.bin.part"),
+        };
+        let owner = LockContent {
+            hostname: hostname(),
+            pid: std::process::id(),
+            started_unix_s: 42,
+            nonce: 0,
+        };
+        let guard = sink.acquire_lock(&owner).await.unwrap();
+        let held_now = std::fs::read(&lock).unwrap();
+        // The delayed reclaimer had read the ORPHAN bytes before the
+        // successor's link landed; its reclaim now hits the successor's
+        // live claim instead — and must be refused by the fence.
+        let orphan = serde_json::to_vec(&LockContent {
+            hostname: hostname(),
+            pid: std::process::id(),
+            started_unix_s: 1,
+            nonce: u64::MAX,
+        })
+        .unwrap();
+        let result = reclaim_stale_host_lock(&lock, &orphan, 123_456).await;
+        assert!(
+            matches!(result, Err(FileDownloadError::TargetLocked { .. })),
+            "a delayed stale reclaimer must not touch the new live holder's claim, got {result:?}"
+        );
+        assert_eq!(
+            std::fs::read(&lock).unwrap(),
+            held_now,
+            "the successor's live claim must be untouched"
+        );
+        assert!(guard.still_holds().await, "the successor still fences");
+        guard.release().await;
+        assert!(!lock.exists(), "released cleanly after the refusal");
+    }
+
+    // Child half of the cross-process lock test: holds the target lock
+    // until the parent writes `stop`, then releases cleanly.
+    #[tokio::test]
+    async fn child_process_lock_holder() {
+        let Some(dir) = std::env::var_os("FILE_DOWNLOAD_CHILD_LOCK_DIR") else {
+            return;
+        };
+        let dir = PathBuf::from(dir);
+        let sink = Sink::Local {
+            final_path: dir.join("foreign.bin"),
+            staging_path: dir.join("foreign.bin.part"),
+        };
+        let owner = LockContent {
+            hostname: hostname(),
+            pid: std::process::id(),
+            started_unix_s: 1,
+            nonce: 0,
+        };
+        let guard = sink.acquire_lock(&owner).await.unwrap();
+        std::fs::write(dir.join("ready"), b"ready").unwrap();
+        while !dir.join("stop").exists() {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+        guard.release().await;
+    }
+
+    #[tokio::test]
+    async fn failed_acquire_preserves_a_foreign_live_lock_even_when_nonces_collide() {
+        // Round-4 finding 1 (reviewer probe, real child process): a live
+        // foreign process holds the lock; the contender fails with
+        // TargetLocked and the incumbent's bytes must survive. Historically
+        // both processes minted nonce 0 and the contender's guard deleted
+        // the holder's lock; identity now covers hostname+pid+nonce. With
+        // the randomly seeded nonce base the literal collision is no longer
+        // constructible across processes — the full-collision guard
+        // behavior is covered deterministically in
+        // `guard_never_deletes_a_foreign_process_lock_even_on_a_full_nonce_collision`.
+        let dir = tempfile::tempdir().unwrap().keep();
+        let lock = dir.join("foreign.bin.lock");
+        let sink = Sink::Local {
+            final_path: dir.join("foreign.bin"),
+            staging_path: dir.join("foreign.bin.part"),
+        };
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "child_process_lock_holder",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env("FILE_DOWNLOAD_CHILD_LOCK_DIR", &dir)
+            .spawn()
+            .unwrap();
+        let ready = tokio::time::timeout(Duration::from_secs(30), async {
+            while !dir.join("ready").exists() {
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            }
+        })
+        .await;
+        if ready.is_err() {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("child process did not acquire the lock");
+        }
+        let original = std::fs::read(&lock).unwrap();
+        let incumbent: LockContent = serde_json::from_slice(&original).unwrap();
+        assert_eq!(incumbent.pid, child.id(), "the live holder is the child");
+        let owner = LockContent {
+            hostname: hostname(),
+            pid: std::process::id(),
+            started_unix_s: 2,
+            nonce: 0,
+        };
+        let acquired = sink.acquire_lock(&owner).await;
+        let blocked = matches!(acquired, Err(FileDownloadError::TargetLocked { .. }));
+        if let Ok(guard) = acquired {
+            guard.release().await;
+        }
+        let preserved = std::fs::read(&lock).ok().as_deref() == Some(original.as_slice());
+        std::fs::write(dir.join("stop"), b"stop").unwrap();
+        let status = child.wait().unwrap();
+        assert!(blocked, "a live foreign process must block acquisition");
+        assert!(
+            preserved,
+            "a failed acquisition must preserve the incumbent's live lock"
+        );
+        assert!(
+            status.success(),
+            "the child holder must exit cleanly: {status:?}"
+        );
+    }
+
+    /// A versioned in-memory object backend for tests: every write bumps a
+    /// per-key version and publishes it as the etag (`"v{n}"`), and writer
+    /// `close` evaluates `if_not_exists` / `if_match` / `if_none_match`
+    /// against the version live at close — the atomic fence a real object
+    /// store provides. `interfere_after_read`, once armed for a key,
+    /// replaces the content and bumps the version right AFTER serving the
+    /// next read of that key — simulating a successor's takeover landing
+    /// between the caller's read and its subsequent conditional write.
+    #[derive(Debug, Clone)]
+    struct VersionedMemory {
+        state: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, (Vec<u8>, u64)>>>,
+        interfere_after_read: std::sync::Arc<std::sync::Mutex<Option<(String, Vec<u8>)>>>,
+        info: std::sync::Arc<opendal::raw::AccessorInfo>,
+    }
+
+    impl VersionedMemory {
+        fn new() -> Self {
+            let info = opendal::raw::AccessorInfo::default();
+            info.set_scheme("versioned-memory");
+            info.set_root("/");
+            info.set_native_capability(opendal::Capability {
+                stat: true,
+                read: true,
+                write: true,
+                write_can_empty: true,
+                write_with_if_not_exists: true,
+                write_with_if_match: true,
+                ..Default::default()
+            });
+            Self {
+                state: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+                interfere_after_read: std::sync::Arc::new(std::sync::Mutex::new(None)),
+                info: std::sync::Arc::new(info),
+            }
+        }
+
+        fn arm_interference(&self, key: &str, replacement: Vec<u8>) {
+            *self.interfere_after_read.lock().unwrap() =
+                Some((normalize_key(key).to_string(), replacement));
+        }
+    }
+
+    /// Keys are stored compared-with and looked-up-by this canonical form:
+    /// the operator layer and the caller may spell the same key with or
+    /// without a leading `/`, and the backend must not care.
+    fn normalize_key(key: &str) -> &str {
+        key.strip_prefix('/').unwrap_or(key)
+    }
+
+    impl opendal::raw::Access for VersionedMemory {
+        type Reader = opendal::Buffer;
+        type Writer = VersionedWriter;
+        type Lister = ();
+        type Deleter = ();
+        type Copier = ();
+
+        fn info(&self) -> std::sync::Arc<opendal::raw::AccessorInfo> {
+            self.info.clone()
+        }
+
+        async fn stat(
+            &self,
+            path: &str,
+            _args: opendal::raw::OpStat,
+        ) -> opendal::Result<opendal::raw::RpStat> {
+            let state = self.state.lock().unwrap();
+            match state.get(normalize_key(path)) {
+                Some((bytes, version)) => Ok(opendal::raw::RpStat::new(
+                    opendal::Metadata::new(opendal::EntryMode::FILE)
+                        .with_content_length(bytes.len() as u64)
+                        .with_etag(format!("v{version}")),
+                )),
+                None => Err(opendal::Error::new(
+                    opendal::ErrorKind::NotFound,
+                    "no such key",
+                )),
+            }
+        }
+
+        async fn read(
+            &self,
+            path: &str,
+            _args: opendal::raw::OpRead,
+        ) -> opendal::Result<(opendal::raw::RpRead, Self::Reader)> {
+            let mut interference = None;
+            {
+                let mut armed = self.interfere_after_read.lock().unwrap();
+                if let Some((key, _)) = armed.as_ref()
+                    && key == normalize_key(path)
+                {
+                    interference = armed.take();
+                }
+            }
+            let bytes = {
+                let state = self.state.lock().unwrap();
+                match state.get(normalize_key(path)) {
+                    Some((bytes, _)) => bytes.clone(),
+                    None => {
+                        return Err(opendal::Error::new(
+                            opendal::ErrorKind::NotFound,
+                            "no such key",
+                        ));
+                    }
+                }
+            };
+            if let Some((key, replacement)) = interference {
+                let mut state = self.state.lock().unwrap();
+                let next = state.get(&key).map(|(_, v)| v + 1).unwrap_or(1);
+                state.insert(key, (replacement, next));
+            }
+            let len = bytes.len() as u64;
+            Ok((
+                opendal::raw::RpRead::new(
+                    opendal::Metadata::new(opendal::EntryMode::FILE).with_content_length(len),
+                ),
+                opendal::Buffer::from(bytes),
+            ))
+        }
+
+        async fn write(
+            &self,
+            path: &str,
+            args: opendal::raw::OpWrite,
+        ) -> opendal::Result<(opendal::raw::RpWrite, Self::Writer)> {
+            Ok((
+                opendal::raw::RpWrite::new(),
+                VersionedWriter {
+                    state: self.state.clone(),
+                    key: normalize_key(path).to_string(),
+                    buffer: Vec::new(),
+                    if_match: args.if_match().map(str::to_string),
+                    if_none_match: args.if_none_match().map(str::to_string),
+                    if_not_exists: args.if_not_exists(),
+                },
+            ))
+        }
+    }
+
+    struct VersionedWriter {
+        state: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, (Vec<u8>, u64)>>>,
+        key: String,
+        buffer: Vec<u8>,
+        if_match: Option<String>,
+        if_none_match: Option<String>,
+        if_not_exists: bool,
+    }
+
+    impl opendal::raw::oio::Write for VersionedWriter {
+        async fn write(&mut self, bs: opendal::Buffer) -> opendal::Result<()> {
+            self.buffer.extend(bs.to_vec());
+            Ok(())
+        }
+
+        async fn close(&mut self) -> opendal::Result<opendal::Metadata> {
+            let mut state = self.state.lock().unwrap();
+            let current = state.get(&self.key);
+            let mismatch =
+                || opendal::Error::new(opendal::ErrorKind::ConditionNotMatch, "version moved on");
+            if self.if_not_exists && current.is_some() {
+                return Err(mismatch());
+            }
+            if let Some(expected) = &self.if_match {
+                match current {
+                    Some((_, version)) if expected == &format!("v{version}") => {}
+                    _ => return Err(mismatch()),
+                }
+            }
+            if let Some(expected) = &self.if_none_match {
+                if let Some((_, version)) = current {
+                    if expected == "*" || expected == &format!("v{version}") {
+                        return Err(mismatch());
+                    }
+                }
+            }
+            let next = current.map(|(_, v)| v + 1).unwrap_or(1);
+            let content = std::mem::take(&mut self.buffer);
+            let len = content.len() as u64;
+            state.insert(self.key.clone(), (content, next));
+            Ok(opendal::Metadata::new(opendal::EntryMode::FILE)
+                .with_content_length(len)
+                .with_etag(format!("v{next}")))
+        }
+
+        async fn abort(&mut self) -> opendal::Result<()> {
+            self.buffer = Vec::new();
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn object_store_takeover_cas_is_bound_to_the_judged_version() {
+        // Round-4 finding 4 (static finding, now runtime): the object-store
+        // reclaim must observe the etag BEFORE reading the claim bytes, so
+        // the conditional write can only replace the very version that was
+        // judged stale. The interference hook replaces the claim right
+        // after serving our read — a successor's takeover in that window.
+        // A stat-AFTER-read ordering picks up the successor's NEW etag and
+        // the conditional write overwrites the live successor; with
+        // etag-first the write fails the match and the successor survives.
+        let backend = VersionedMemory::new();
+        let op = opendal::OperatorBuilder::new(backend.clone()).finish();
+        let sink = Sink::Vfs {
+            op: op.clone(),
+            final_key: "/t.bin".into(),
+            staging_key: "/t.bin.part".into(),
+        };
+        let owner = LockContent {
+            hostname: hostname(),
+            pid: std::process::id(),
+            started_unix_s: 42,
+            nonce: 0,
+        };
+        // The stale claim names a dead process on this host.
+        let dead = serde_json::to_vec(&LockContent {
+            hostname: hostname(),
+            pid: 999_999,
+            started_unix_s: 1,
+            nonce: 7,
+        })
+        .unwrap();
+        op.write("/t.bin.lock", dead).await.unwrap();
+        // The successor that lands right after our read: our own pid with a
+        // nonce this process IS executing — a live claim by construction.
+        let executing = ActiveDownload::register(424_242);
+        let successor = serde_json::to_vec(&LockContent {
+            hostname: hostname(),
+            pid: std::process::id(),
+            started_unix_s: 2,
+            nonce: 424_242,
+        })
+        .unwrap();
+        backend.arm_interference("/t.bin.lock", successor.clone());
+        match sink.acquire_lock(&owner).await {
+            Ok(guard) => {
+                guard.release().await;
+                panic!("a takeover racing a stale reclaim must not hand out the lock");
+            }
+            Err(error) => {
+                assert!(
+                    matches!(error, FileDownloadError::TargetLocked { .. }),
+                    "{error}"
+                );
+            }
+        }
+        assert_eq!(
+            op.read("/t.bin.lock").await.unwrap().to_vec(),
+            successor,
+            "the successor's live claim must survive the failed reclaim byte-for-byte"
+        );
+        drop(executing);
     }
 }
