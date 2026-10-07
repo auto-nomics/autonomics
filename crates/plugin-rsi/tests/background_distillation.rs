@@ -158,7 +158,7 @@ async fn local_activation_is_distilled_to_github_without_blocking_the_agent() {
             status: RequestStatus::Open,
         })
         .unwrap();
-    let _operator = infra.create_plugin(request.clone(), "alpine").unwrap();
+    let mut operator = infra.create_plugin(request.clone(), "alpine").unwrap();
     let profile = AgentProfile::new("distillation-agent").unwrap();
     let tools = profile.tool_registrations();
     let environments = execute(&tools, "plugin_environments_list", json!({}))
@@ -209,28 +209,20 @@ async fn local_activation_is_distilled_to_github_without_blocking_the_agent() {
     )
     .await
     .unwrap();
-    execute(
-        &tools,
-        "plugin_node_write_script",
-        json!({
-            "plugin_path": "/plugins/dev/distilled-plugin",
-            "node_kind": "distilled_adapter",
-            "contents": "#!/bin/sh\nset -eu\ncp \"$AUTONOMICS_INPUT0\" \"$AUTONOMICS_OUTPUT0\"\n"
-        }),
-    )
-    .await
-    .unwrap();
-    execute(
-        &tools,
-        "plugin_workspace_write",
-        json!({
-            "plugin_path": "/plugins/dev/distilled-plugin",
-            "path": "README.md",
-            "contents": "# distilled-plugin\n\nA deterministic adapter.\n"
-        }),
-    )
-    .await
-    .unwrap();
+    operator
+        .workspace()
+        .write_text(
+            "scripts/adapter.sh",
+            "#!/bin/sh\nset -eu\ncp \"$AUTONOMICS_INPUT0\" \"$AUTONOMICS_OUTPUT0\"\n",
+        )
+        .unwrap();
+    operator
+        .workspace()
+        .write_text(
+            "README.md",
+            "# distilled-plugin\n\nA deterministic adapter.\n",
+        )
+        .unwrap();
 
     let distiller = PluginDistiller::new(infra.clone());
     let local = infra

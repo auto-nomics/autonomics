@@ -100,28 +100,20 @@ async fn an_installed_reference_can_be_forked_and_locally_activated() {
     )
     .await
     .unwrap();
-    execute(
-        &tools,
-        "plugin_node_write_script",
-        json!({
-            "plugin_path": "/plugins/dev/reference-plugin",
-            "node_kind": "reference_adapter",
-            "contents": "#!/bin/sh\nset -eu\ncp \"$AUTONOMICS_INPUT0\" \"$AUTONOMICS_OUTPUT0\"\n"
-        }),
-    )
-    .await
-    .unwrap();
-    execute(
-        &tools,
-        "plugin_workspace_write",
-        json!({
-            "plugin_path": "/plugins/dev/reference-plugin",
-            "path": "README.md",
-            "contents": "# reference-plugin\n\nA deterministic adapter.\n"
-        }),
-    )
-    .await
-    .unwrap();
+    reference
+        .workspace()
+        .write_text(
+            "scripts/reference.sh",
+            "#!/bin/sh\nset -eu\ncp \"$AUTONOMICS_INPUT0\" \"$AUTONOMICS_OUTPUT0\"\n",
+        )
+        .unwrap();
+    reference
+        .workspace()
+        .write_text(
+            "README.md",
+            "# reference-plugin\n\nA deterministic adapter.\n",
+        )
+        .unwrap();
     let validation_catalog = catalog();
     let mut reference_lifecycle = PluginLifecycle::new(&mut reference, &validation_catalog, &[]);
     match reference_lifecycle.validate_and_submit().unwrap() {
@@ -147,18 +139,6 @@ async fn an_installed_reference_can_be_forked_and_locally_activated() {
     );
     let fork_path = forked.development_vfs_path().unwrap();
     assert_eq!(fork_path, "/plugins/dev/forked-plugin");
-    let first_fork_agent = AgentProfile::new("fork-agent-1").unwrap();
-    let second_fork_agent = AgentProfile::new("fork-agent-2").unwrap();
-    for profile in [first_fork_agent, second_fork_agent] {
-        let tools = profile.tool_registrations();
-        execute(
-            &tools,
-            "plugin_development_status",
-            json!({ "plugin_path": fork_path }),
-        )
-        .await
-        .unwrap();
-    }
     let repository = GitRepo::open(store.root().join("forked-plugin"));
     assert!(repository.remote_url("origin").unwrap().is_none());
 

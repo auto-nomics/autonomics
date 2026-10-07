@@ -178,28 +178,20 @@ async fn plugin_is_developed_published_updated_and_installed_in_one_workspace() 
     )
     .await
     .unwrap();
-    execute(
-        &tools,
-        "plugin_node_write_script",
-        json!({
-            "plugin_path": "/plugins/dev/unified-plugin",
-            "node_kind": "unified_adapter",
-            "contents": "#!/bin/sh\nset -eu\ncp \"$AUTONOMICS_INPUT0\" \"$AUTONOMICS_OUTPUT0\"\n"
-        }),
-    )
-    .await
-    .unwrap();
-    execute(
-        &tools,
-        "plugin_workspace_write",
-        json!({
-            "plugin_path": "/plugins/dev/unified-plugin",
-            "path": "README.md",
-            "contents": "# unified-plugin\n\nA deterministic adapter.\n"
-        }),
-    )
-    .await
-    .unwrap();
+    operator
+        .workspace()
+        .write_text(
+            "scripts/adapter.sh",
+            "#!/bin/sh\nset -eu\ncp \"$AUTONOMICS_INPUT0\" \"$AUTONOMICS_OUTPUT0\"\n",
+        )
+        .unwrap();
+    operator
+        .workspace()
+        .write_text(
+            "README.md",
+            "# unified-plugin\n\nA deterministic adapter.\n",
+        )
+        .unwrap();
 
     let validation_catalog = catalog();
     let mut lifecycle = PluginLifecycle::new(&mut operator, &validation_catalog, &[]);
@@ -254,19 +246,13 @@ async fn plugin_is_developed_published_updated_and_installed_in_one_workspace() 
         .unwrap();
     assert_eq!(update.status(), PluginStatus::Updating);
 
-    let update_profile = AgentProfile::new("unified-plugin-update-agent").unwrap();
-    let update_tools = update_profile.tool_registrations();
-    execute(
-        &update_tools,
-        "plugin_node_write_script",
-        json!({
-            "plugin_path": "/plugins/dev/unified-plugin",
-            "node_kind": "unified_adapter",
-            "contents": "#!/bin/sh\nset -eu\ntest -s \"$AUTONOMICS_INPUT0\"\ncp \"$AUTONOMICS_INPUT0\" \"$AUTONOMICS_OUTPUT0\"\n"
-        }),
-    )
-    .await
-    .unwrap();
+    update
+        .workspace()
+        .write_text(
+            "scripts/adapter.sh",
+            "#!/bin/sh\nset -eu\ntest -s \"$AUTONOMICS_INPUT0\"\ncp \"$AUTONOMICS_INPUT0\" \"$AUTONOMICS_OUTPUT0\"\n",
+        )
+        .unwrap();
 
     let owned_kinds = ["unified_adapter".to_string()];
     let mut update_lifecycle = PluginLifecycle::new(&mut update, &validation_catalog, &owned_kinds);

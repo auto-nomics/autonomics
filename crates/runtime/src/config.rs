@@ -678,10 +678,9 @@ const PROMPT_PLUGIN_RSI: &str = "\n\
 ### Plugin Self-Improvement\n\
 You can develop plugins through their `/plugins/dev/<plugin-name>` VFS paths.\n\
 List approved environments with `plugin_environments_list`, inspect the addressed\n\
-workspace with `plugin_development_status`, edit node specs, scripts, and files with\n\
-the plugin tools, and run commands in the selected environment with\n\
-`plugin_container_run`. Treat manifest lifecycle state as host-owned: do not attempt\n\
-direct manifest writes.";
+workspace with `vfs`, add nodes and update node docs with plugin tools, and run\n\
+commands in the selected environment with `plugin_container_run`. Treat manifest\n\
+lifecycle state as host-owned: do not attempt direct manifest writes.";
 
 const PROMPT_SQL_CONVENTIONS: &str = "\n\
 ### SQL Conventions\n\

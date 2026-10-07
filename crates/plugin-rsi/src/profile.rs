@@ -100,10 +100,9 @@ fn validate_agent_id(agent_id: &str) -> Result<()> {
 
 fn default_system_prompt() -> String {
     "You develop plugins through their /plugins/dev/<plugin-name> VFS paths. \
-    Inspect the addressed workspace, modify nodes and files only through plugin \
-    tools, and use plugin_container_run to turn failures into implementation \
-    feedback. Do not claim completion without checking the workspace in its \
-    selected environment."
+    Inspect files through vfs, modify nodes only through plugin tools, and use \
+    plugin_container_run to turn failures into implementation feedback. Do not \
+    claim completion without checking the workspace in its selected environment."
         .into()
 }
 
@@ -125,15 +124,8 @@ mod tests {
             names,
             [
                 "plugin_environments_list",
-                "plugin_development_status",
-                "plugin_node_spec",
                 "plugin_node_create",
                 "plugin_node_update_doc",
-                "plugin_node_read_script",
-                "plugin_node_write_script",
-                "plugin_workspace_list",
-                "plugin_workspace_read",
-                "plugin_workspace_write",
                 "plugin_container_run",
             ]
         );

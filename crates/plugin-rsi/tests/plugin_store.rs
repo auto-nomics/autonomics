@@ -106,59 +106,17 @@ async fn plugin_store_develops_one_repository_in_place() {
     )
     .await
     .unwrap();
-    execute(
-        &tools,
-        "plugin_node_write_script",
-        json!({
-            "plugin_path": "/plugins/dev/direct-plugin",
-            "node_kind": "direct_adapter",
-            "contents": "#!/bin/sh\ncp \"$AUTONOMICS_INPUT0\" \"$AUTONOMICS_OUTPUT0\"\n"
-        }),
-    )
-    .await
-    .unwrap();
+    operator
+        .workspace()
+        .write_text(
+            "scripts/adapter.sh",
+            "#!/bin/sh\ncp \"$AUTONOMICS_INPUT0\" \"$AUTONOMICS_OUTPUT0\"\n",
+        )
+        .unwrap();
 
     operator.refresh().unwrap();
     assert_eq!(operator.manifest().nodes.len(), 1);
     assert!(operator.workspace().read_text("scripts/adapter.sh").is_ok());
-
-    operator.transition(PluginStatus::Validating).unwrap();
-    assert!(
-        execute(
-            &tools,
-            "plugin_node_write_script",
-            json!({
-                "plugin_path": "/plugins/dev/direct-plugin",
-                "node_kind": "direct_adapter",
-                "contents": "#!/bin/sh\n"
-            }),
-        )
-        .await
-        .is_err()
-    );
-    execute(
-        &tools,
-        "plugin_node_spec",
-        json!({
-            "plugin_path": "/plugins/dev/direct-plugin",
-            "node_kind": "direct_adapter"
-        }),
-    )
-    .await
-    .unwrap();
-    assert!(
-        execute(
-            &tools,
-            "plugin_workspace_write",
-            json!({
-                "plugin_path": "/plugins/dev/direct-plugin",
-                "path": "README.md",
-                "contents": "# direct-plugin\n"
-            }),
-        )
-        .await
-        .is_err()
-    );
 
     let commit = operator
         .snapshot("plugin: direct development snapshot")

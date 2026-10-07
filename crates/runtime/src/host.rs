@@ -952,6 +952,14 @@ fn plugin_development_permissions() -> vfs::permission::MountPermissions {
             path: "*/manifest.toml".into(),
             access: vec![VfsAccess::Write],
         },
+        VfsPathRule::Deny {
+            path: "Dockerfile".into(),
+            access: vec![VfsAccess::Write],
+        },
+        VfsPathRule::Deny {
+            path: "**/Dockerfile".into(),
+            access: vec![VfsAccess::Write],
+        },
     ])
 }
 
@@ -5032,7 +5040,17 @@ mod plugin_profile_tools_tests {
         assert!(
             researcher_tools
                 .iter()
-                .any(|tool| tool.definition.name == "plugin_development_status")
+                .any(|tool| tool.definition.name == "vfs")
+        );
+        assert!(
+            !researcher_tools
+                .iter()
+                .any(|tool| tool.definition.name == "plugin_node_read_script")
+        );
+        assert!(
+            researcher_tools
+                .iter()
+                .any(|tool| tool.definition.name == "plugin_node_create")
         );
         assert!(
             researcher_tools
@@ -5061,7 +5079,7 @@ mod plugin_profile_tools_tests {
         assert!(
             !writer_tools
                 .iter()
-                .any(|tool| tool.definition.name == "plugin_development_status")
+                .any(|tool| tool.definition.name == "plugin_node_create")
         );
     }
 }

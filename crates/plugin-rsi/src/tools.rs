@@ -18,7 +18,6 @@ use container_runtime::{
     ContainerNetwork, ContainerRunRequest, DEFAULT_CONTAINER_WORKDIR, GpuRequest, PodmanConnection,
     PullPolicy, trusted_workspace_ref, unique_container_name,
 };
-use futures::StreamExt;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use vfs::{OpendalFileStorage, permission::VfsPrincipal};
@@ -190,31 +189,10 @@ pub fn plugin_development_tool_registrations(agent_id: impl Into<String>) -> Vec
         ToolRegistration::from(PluginEnvironmentsListTool {
             state: state.clone(),
         }),
-        ToolRegistration::from(PluginStatusTool {
-            state: state.clone(),
-        }),
-        ToolRegistration::from(PluginNodeSpecTool {
-            state: state.clone(),
-        }),
         ToolRegistration::from(PluginNodeCreateTool {
             state: state.clone(),
         }),
         ToolRegistration::from(PluginNodeUpdateDocTool {
-            state: state.clone(),
-        }),
-        ToolRegistration::from(PluginNodeReadScriptTool {
-            state: state.clone(),
-        }),
-        ToolRegistration::from(PluginNodeWriteScriptTool {
-            state: state.clone(),
-        }),
-        ToolRegistration::from(PluginWorkspaceListTool {
-            state: state.clone(),
-        }),
-        ToolRegistration::from(PluginWorkspaceReadTool {
-            state: state.clone(),
-        }),
-        ToolRegistration::from(PluginWorkspaceWriteTool {
             state: state.clone(),
         }),
         ToolRegistration::from(PluginContainerRunTool { state }),
@@ -306,59 +284,6 @@ fn save_manifest(workspace: &PluginWorkspace, manifest: &PluginManifest) -> RsiR
         .and_then(|text| workspace.write_text(MANIFEST_FILE, &text))
 }
 
-async fn write_virtual_text(vfs: &OpendalFileStorage, path: &str, contents: &str) -> RsiResult<()> {
-    vfs.write_bytes(path, contents.as_bytes().to_vec())
-        .await
-        .map_err(vfs_error)
-}
-
-async fn list_virtual_files(vfs: &OpendalFileStorage, root: &str) -> RsiResult<Vec<String>> {
-    vfs.check_listable(root).map_err(vfs_error)?;
-    let operator = vfs.resolve(root);
-    let backend_root = vfs.resolve_path(root);
-    let mut lister = operator
-        .lister_with(&backend_root)
-        .recursive(true)
-        .await
-        .map_err(vfs_error)?;
-    let mut files = Vec::new();
-    while let Some(entry) = lister.next().await {
-        let entry = entry.map_err(vfs_error)?;
-        if !entry.metadata().is_file() {
-            continue;
-        }
-        let virtual_path = vfs.remap_entry_to_virtual(root, entry.path());
-        if vfs.check_readable(&virtual_path).is_ok() {
-            files.push(virtual_path);
-        }
-    }
-    files.sort();
-    Ok(files)
-}
-
-fn safe_plugin_file(plugin_path: &str, relative: &str) -> RsiResult<String> {
-    let normalized = relative.replace('\\', "/");
-    if normalized.is_empty()
-        || normalized.contains('\0')
-        || std::path::Path::new(&normalized).is_absolute()
-        || std::path::Path::new(&normalized)
-            .components()
-            .any(|component| !matches!(component, std::path::Component::Normal(_)))
-        || std::path::Path::new(&normalized)
-            .components()
-            .any(|component| component.as_os_str().to_str() == Some(".git"))
-    {
-        return Err(Error::UnsafePath {
-            path: relative.to_string(),
-        });
-    }
-    Ok(format!(
-        "{}/{}",
-        plugin_path.trim_end_matches('/'),
-        normalized
-    ))
-}
-
 fn selected_node(manifest: &PluginManifest, node_kind: &str) -> RsiResult<NodeDefinition> {
     manifest
         .nodes
@@ -401,78 +326,6 @@ impl ToolFunction for PluginEnvironmentsListTool {
             })
             .collect::<Vec<_>>();
         Ok(ToolResult::success_json(Value::Array(environments)))
-    }
-}
-
-#[tool(
-    name = "plugin_development_status",
-    description = "Show nodes, lifecycle status, environment, and visible files for one plugin VFS path."
-)]
-struct PluginStatusInput {
-    /// Plugin workspace path, such as `/plugins/dev/hello-world`.
-    plugin_path: String,
-}
-
-struct PluginStatusTool {
-    state: PluginToolState,
-}
-
-#[async_trait]
-impl ToolFunction for PluginStatusTool {
-    type Input = PluginStatusInput;
-
-    async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        let target = resolve_target(&self.state, &input.plugin_path)
-            .await
-            .map_err(tool_error)?;
-        let manifest = load_manifest(&target).await.map_err(tool_error)?;
-        let files = list_virtual_files(&target.vfs, &target.virtual_path)
-            .await
-            .map_err(tool_error)?;
-        let node_kinds = manifest
-            .nodes
-            .into_iter()
-            .map(|node| node.kind)
-            .collect::<Vec<_>>();
-        Ok(ToolResult::success_json(json!({
-            "plugin_name": target.plugin_name,
-            "plugin_path": target.virtual_path,
-            "node_kinds": node_kinds,
-            "environment_reference": manifest.image.reference.as_str(),
-            "status": manifest.status,
-            "files": files,
-        })))
-    }
-}
-
-#[tool(
-    name = "plugin_node_spec",
-    description = "Read the complete definition of one node in a plugin VFS workspace."
-)]
-struct PluginNodeSpecInput {
-    /// Plugin workspace path, such as `/plugins/dev/hello-world`.
-    plugin_path: String,
-    /// Kind of the node to read.
-    node_kind: String,
-}
-
-struct PluginNodeSpecTool {
-    state: PluginToolState,
-}
-
-#[async_trait]
-impl ToolFunction for PluginNodeSpecTool {
-    type Input = PluginNodeSpecInput;
-
-    async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        let target = resolve_target(&self.state, &input.plugin_path)
-            .await
-            .map_err(tool_error)?;
-        let manifest = load_manifest(&target).await.map_err(tool_error)?;
-        let node = selected_node(&manifest, &input.node_kind).map_err(tool_error)?;
-        Ok(ToolResult::success_json(
-            serde_json::to_value(node).map_err(tool_error)?,
-        ))
     }
 }
 
@@ -570,193 +423,6 @@ impl ToolFunction for PluginNodeUpdateDocTool {
         manifest.nodes[index] = node;
         save_manifest(&target.workspace, &manifest).map_err(tool_error)?;
         Ok(ToolResult::success("updated node documentation"))
-    }
-}
-
-#[tool(
-    name = "plugin_node_read_script",
-    description = "Read the script file referenced by one node in a plugin VFS workspace."
-)]
-struct PluginNodeReadScriptInput {
-    /// Plugin workspace path, such as `/plugins/dev/hello-world`.
-    plugin_path: String,
-    /// Kind of the node whose script should be read.
-    node_kind: String,
-}
-
-struct PluginNodeReadScriptTool {
-    state: PluginToolState,
-}
-
-#[async_trait]
-impl ToolFunction for PluginNodeReadScriptTool {
-    type Input = PluginNodeReadScriptInput;
-
-    async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        let target = resolve_target(&self.state, &input.plugin_path)
-            .await
-            .map_err(tool_error)?;
-        let manifest = load_manifest(&target).await.map_err(tool_error)?;
-        let node = selected_node(&manifest, &input.node_kind).map_err(tool_error)?;
-        let script = node
-            .command
-            .script_file
-            .ok_or_else(|| tool_error("selected node does not declare a script_file"))?;
-        let virtual_path = safe_plugin_file(&target.virtual_path, &script).map_err(tool_error)?;
-        let contents = read_virtual_text(&target.vfs, &virtual_path)
-            .await
-            .map_err(tool_error)?;
-        Ok(ToolResult::success_json(json!({
-            "path": virtual_path,
-            "contents": contents,
-        })))
-    }
-}
-
-#[tool(
-    name = "plugin_node_write_script",
-    description = "Replace the script file referenced by one node in a plugin VFS workspace."
-)]
-struct PluginNodeWriteScriptInput {
-    /// Plugin workspace path, such as `/plugins/dev/hello-world`.
-    plugin_path: String,
-    /// Kind of the node whose script should be replaced.
-    node_kind: String,
-    /// Complete replacement script contents.
-    contents: String,
-}
-
-struct PluginNodeWriteScriptTool {
-    state: PluginToolState,
-}
-
-#[async_trait]
-impl ToolFunction for PluginNodeWriteScriptTool {
-    type Input = PluginNodeWriteScriptInput;
-
-    async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        let target = resolve_target(&self.state, &input.plugin_path)
-            .await
-            .map_err(tool_error)?;
-        let manifest = editable_manifest(&target).await.map_err(tool_error)?;
-        let node = selected_node(&manifest, &input.node_kind).map_err(tool_error)?;
-        let script = node
-            .command
-            .script_file
-            .ok_or_else(|| tool_error("selected node does not declare a script_file"))?;
-        let virtual_path = safe_plugin_file(&target.virtual_path, &script).map_err(tool_error)?;
-        write_virtual_text(&target.vfs, &virtual_path, &input.contents)
-            .await
-            .map_err(tool_error)?;
-        Ok(ToolResult::success_json(json!({ "path": virtual_path })))
-    }
-}
-
-#[tool(
-    name = "plugin_workspace_list",
-    description = "List VFS-visible text files beneath one plugin workspace."
-)]
-struct PluginWorkspaceListInput {
-    /// Plugin workspace path, such as `/plugins/dev/hello-world`.
-    plugin_path: String,
-}
-
-struct PluginWorkspaceListTool {
-    state: PluginToolState,
-}
-
-#[async_trait]
-impl ToolFunction for PluginWorkspaceListTool {
-    type Input = PluginWorkspaceListInput;
-
-    async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        let target = resolve_target(&self.state, &input.plugin_path)
-            .await
-            .map_err(tool_error)?;
-        let files = list_virtual_files(&target.vfs, &target.virtual_path)
-            .await
-            .map_err(tool_error)?;
-        Ok(ToolResult::success_json(Value::Array(
-            files.into_iter().map(Value::String).collect(),
-        )))
-    }
-}
-
-#[tool(
-    name = "plugin_workspace_read",
-    description = "Read one safe UTF-8 file from a plugin VFS workspace."
-)]
-struct PluginWorkspaceReadInput {
-    /// Plugin workspace path, such as `/plugins/dev/hello-world`.
-    plugin_path: String,
-    /// Plugin-relative file path.
-    path: String,
-}
-
-struct PluginWorkspaceReadTool {
-    state: PluginToolState,
-}
-
-#[async_trait]
-impl ToolFunction for PluginWorkspaceReadTool {
-    type Input = PluginWorkspaceReadInput;
-
-    async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        let target = resolve_target(&self.state, &input.plugin_path)
-            .await
-            .map_err(tool_error)?;
-        let virtual_path =
-            safe_plugin_file(&target.virtual_path, &input.path).map_err(tool_error)?;
-        let contents = read_virtual_text(&target.vfs, &virtual_path)
-            .await
-            .map_err(tool_error)?;
-        Ok(ToolResult::success(contents))
-    }
-}
-
-#[tool(
-    name = "plugin_workspace_write",
-    description = "Write one safe UTF-8 file in a plugin VFS workspace. Direct manifest and Dockerfile edits are denied."
-)]
-struct PluginWorkspaceWriteInput {
-    /// Plugin workspace path, such as `/plugins/dev/hello-world`.
-    plugin_path: String,
-    /// Plugin-relative file path.
-    path: String,
-    /// Complete replacement text contents.
-    contents: String,
-}
-
-struct PluginWorkspaceWriteTool {
-    state: PluginToolState,
-}
-
-#[async_trait]
-impl ToolFunction for PluginWorkspaceWriteTool {
-    type Input = PluginWorkspaceWriteInput;
-
-    async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        let forbidden = input.path == MANIFEST_FILE
-            || std::path::Path::new(&input.path)
-                .file_name()
-                .is_some_and(|name| name == "Dockerfile");
-        if forbidden {
-            return Err(ToolError::ValidationFailed {
-                message:
-                    "use node-specific tools; direct manifest and environment edits are denied"
-                        .into(),
-            });
-        }
-        let target = resolve_target(&self.state, &input.plugin_path)
-            .await
-            .map_err(tool_error)?;
-        editable_manifest(&target).await.map_err(tool_error)?;
-        let virtual_path =
-            safe_plugin_file(&target.virtual_path, &input.path).map_err(tool_error)?;
-        write_virtual_text(&target.vfs, &virtual_path, &input.contents)
-            .await
-            .map_err(tool_error)?;
-        Ok(ToolResult::success_json(json!({ "path": virtual_path })))
     }
 }
 
