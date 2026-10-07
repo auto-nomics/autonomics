@@ -21,6 +21,7 @@ agentik-sdk = { path = "../../crates/agentik-sdk" }
 agentik-types = { path = "../../crates/agentik-types" }
 gateway = { path = "../../crates/gateway" }
 container-plugin = { path = "../../crates/container-plugin" }
+plugin-rsi = { path = "../../crates/plugin-rsi" }
 data-catalog = { path = "../../crates/data-catalog" }
 container-runtime = { path = "../../crates/container-runtime" }
 tokio-util = { version = "0.7", features = ["rt"] }

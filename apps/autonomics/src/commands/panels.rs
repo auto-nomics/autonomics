@@ -50,7 +50,7 @@ async fn sync_command(state_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Load every installed plugin family from `state_dir/plugins`.
+/// Load every installed plugin family from the daemon-owned runtime root.
 ///
 /// Shared by the `panels sync` command and `serve`'s preflight so both
 /// walk the same manifests. The connection and panel cache constructed
@@ -58,7 +58,7 @@ async fn sync_command(state_dir: &Path) -> Result<()> {
 pub(crate) fn load_installed_plugins(
     state_dir: &Path,
 ) -> Result<Vec<container_plugin::factory::Plugin>> {
-    let root = state_dir.join("plugins");
+    let root = plugin_rsi::PluginStateLayout::open(state_dir).runtime_root();
     let connection: std::sync::Arc<dyn container_runtime::PodmanConnection> = std::sync::Arc::new(
         container_runtime::PodmanRuntime::new(container_runtime::PodmanConfig {
             program: "podman".into(),

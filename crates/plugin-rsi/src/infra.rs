@@ -90,11 +90,7 @@ impl RsiInfra {
             author_name,
             author_email,
         ));
-        let state_root = store
-            .root()
-            .parent()
-            .ok_or_else(|| Error::Validation("plugin root has no parent state directory".into()))?;
-        let routes = ObservationRouteStore::open(state_root);
+        let routes = ObservationRouteStore::open(state_dir);
         Ok(Self {
             store: Arc::clone(&store),
             requests: RequestStore::open(state_dir),
@@ -671,6 +667,7 @@ mod tests {
             1,
             "routing must be idempotent across shared observations"
         );
+        assert!(state.path().join("feedback/routes").is_dir());
         let persisted = infra
             .observation_routes()
             .into_iter()
