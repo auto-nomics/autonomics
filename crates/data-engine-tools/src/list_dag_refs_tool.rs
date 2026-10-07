@@ -63,12 +63,8 @@ impl ToolFunction for ListDagRefsTool {
 
         let current_ref = self.client.get_dag_ref().await.map_err(ExecError::from)?;
 
-        let page: Vec<(String, String, bool)> = refs
-            .iter()
-            .skip(offset)
-            .take(limit)
-            .cloned()
-            .collect();
+        let page: Vec<(String, String, bool)> =
+            refs.iter().skip(offset).take(limit).cloned().collect();
 
         if page.is_empty() {
             return Ok(ToolResult::success(format!(
@@ -102,9 +98,9 @@ impl ToolFunction for ListDagRefsTool {
             (false, true) => out.push_str(&format!(
                 "\n* = current active ref\n{shown_end} refs shown (limit clamped to {MAX_LIMIT})"
             )),
-            (false, false) => out.push_str(&format!(
-                "\n* = current active ref\n{total} refs shown"
-            )),
+            (false, false) => {
+                out.push_str(&format!("\n* = current active ref\n{total} refs shown"))
+            }
         }
 
         Ok(ToolResult::success(out))

@@ -704,12 +704,14 @@ mod tests {
         );
         let urls = BailianProvider::known_base_urls();
         assert!(urls.iter().any(|u| u.contains("maas.aliyuncs.com")));
-        assert!(urls
-            .iter()
-            .any(|u| u.contains("coding.dashscope.aliyuncs.com")));
-        assert!(urls
-            .iter()
-            .any(|u| u.contains("coding-intl.dashscope.aliyuncs.com")));
+        assert!(
+            urls.iter()
+                .any(|u| u.contains("coding.dashscope.aliyuncs.com"))
+        );
+        assert!(
+            urls.iter()
+                .any(|u| u.contains("coding-intl.dashscope.aliyuncs.com"))
+        );
     }
 
     #[test]
