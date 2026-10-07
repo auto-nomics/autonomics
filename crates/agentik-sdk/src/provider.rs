@@ -8,6 +8,7 @@
 //! via `provider_id`. The server's `provider_registry` joins these presets with
 //! a provider instance when the user creates one.
 
+pub mod bailian;
 pub mod client;
 pub mod deepseek;
 pub mod mimo;

@@ -22,6 +22,11 @@ LLM API client with multi-provider abstraction.
   - SenseNova
   - Mimo
   - ZAI
+  - Bailian / Alibaba Cloud Model Studio (Anthropic-compatible; five
+    regional gateways plus the Coding Plan / Token Plan domains —
+    `coding.dashscope.aliyuncs.com` and `coding-intl.dashscope.aliyuncs.com`).
+    Replaces `<WORKSPACE-ID>` in the preset URL with the workspace id from
+    the Bailian console before use.
   - OpenRouter (OpenAI-compatible wire; live catalogue via
     `OpenrouterProvider::fetch_remote_catalog` against the public
     `GET /v1/models` endpoint)

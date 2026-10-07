@@ -5,9 +5,9 @@
 use crate::http::auth::AuthMethod;
 use crate::model::{ModelInfo, ProviderType};
 use crate::provider::{
-    ProviderPreset, deepseek::DeepseekProvider, mimo::MimoProvider, minimax::MinimaxProvider,
-    moonshot::MoonshotProvider, openai::OpenaiProvider, openrouter::OpenrouterProvider,
-    sensenova::SensenovaProvider, zai::ZaiProvider,
+    ProviderPreset, bailian::BailianProvider, deepseek::DeepseekProvider, mimo::MimoProvider,
+    minimax::MinimaxProvider, moonshot::MoonshotProvider, openai::OpenaiProvider,
+    openrouter::OpenrouterProvider, sensenova::SensenovaProvider, zai::ZaiProvider,
 };
 use crate::wire::WireProtocolKind;
 
@@ -16,6 +16,7 @@ use crate::wire::WireProtocolKind;
 /// catalogue).
 pub fn preset_models(provider_type: &ProviderType) -> Option<Vec<ModelInfo>> {
     match provider_type {
+        ProviderType::Bailian => Some(BailianProvider::preset_models()),
         ProviderType::Deepseek => Some(DeepseekProvider::preset_models()),
         ProviderType::Mimo => Some(MimoProvider::preset_models()),
         ProviderType::Minimax => Some(MinimaxProvider::preset_models()),
@@ -32,6 +33,7 @@ pub fn preset_models(provider_type: &ProviderType) -> Option<Vec<ModelInfo>> {
 /// [`ProviderType::Custom(_)`](ProviderType::Custom).
 pub fn default_base_url(provider_type: &ProviderType) -> Option<&'static str> {
     match provider_type {
+        ProviderType::Bailian => Some(BailianProvider::default_base_url()),
         ProviderType::Deepseek => Some(DeepseekProvider::default_base_url()),
         ProviderType::Mimo => Some(MimoProvider::default_base_url()),
         ProviderType::Minimax => Some(MinimaxProvider::default_base_url()),
@@ -48,6 +50,7 @@ pub fn default_base_url(provider_type: &ProviderType) -> Option<&'static str> {
 /// Returns an empty vec for [`ProviderType::Custom(_)`](ProviderType::Custom).
 pub fn known_base_urls(provider_type: &ProviderType) -> Vec<&'static str> {
     match provider_type {
+        ProviderType::Bailian => BailianProvider::known_base_urls(),
         ProviderType::Deepseek => DeepseekProvider::known_base_urls(),
         ProviderType::Mimo => MimoProvider::known_base_urls(),
         ProviderType::Minimax => MinimaxProvider::known_base_urls(),
@@ -64,6 +67,7 @@ pub fn known_base_urls(provider_type: &ProviderType) -> Vec<&'static str> {
 /// Falls back to [`AuthMethod::Anthropic`] for custom providers.
 pub fn default_auth_method(provider_type: &ProviderType) -> AuthMethod {
     match provider_type {
+        ProviderType::Bailian => BailianProvider::default_auth_method(),
         ProviderType::Deepseek => DeepseekProvider::default_auth_method(),
         ProviderType::Mimo => MimoProvider::default_auth_method(),
         ProviderType::Minimax => MinimaxProvider::default_auth_method(),
@@ -85,6 +89,7 @@ pub fn default_auth_method(provider_type: &ProviderType) -> AuthMethod {
 /// back to the Anthropic-compatible wire.
 pub fn wire_protocol(provider_type: &ProviderType) -> WireProtocolKind {
     match provider_type {
+        ProviderType::Bailian => BailianProvider::wire_protocol(),
         ProviderType::Deepseek => DeepseekProvider::wire_protocol(),
         ProviderType::Mimo => MimoProvider::wire_protocol(),
         ProviderType::Minimax => MinimaxProvider::wire_protocol(),
@@ -111,6 +116,7 @@ pub fn supports_remote_catalog(provider_type: &ProviderType) -> bool {
 /// Lists all built-in provider type names that have presets.
 pub fn known_provider_types() -> Vec<&'static str> {
     vec![
+        "bailian",
         "deepseek",
         "mimo",
         "minimax",

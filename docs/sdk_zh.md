@@ -22,6 +22,10 @@ LLM API 客户端与多服务商抽象层。
   - SenseNova
   - Mimo
   - ZAI
+  - Bailian / 阿里云百炼（Anthropic 兼容协议；五个地域网关 + Coding Plan /
+    Token Plan 独立域名 `coding.dashscope.aliyuncs.com` 与
+    `coding-intl.dashscope.aliyuncs.com`）。使用前请把预设 URL 中的
+    `<WORKSPACE-ID>` 替换为百炼控制台的工作空间 ID。
   - OpenRouter（OpenAI 兼容协议；通过 `OpenrouterProvider::fetch_remote_catalog`
     拉取公开 `GET /v1/models` 端点的实时模型目录）
   - OpenAI（ChatGPT 订阅 OAuth 登录——见

@@ -403,6 +403,7 @@ mod tests {
     fn all_builtin_provider_types_advertise_anthropic() {
         use crate::provider::registry::wire_protocol;
         for p in [
+            ProviderType::Bailian,
             ProviderType::Deepseek,
             ProviderType::Mimo,
             ProviderType::Minimax,
