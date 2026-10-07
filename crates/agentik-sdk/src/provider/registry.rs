@@ -7,7 +7,8 @@ use crate::model::{ModelInfo, ProviderType};
 use crate::provider::{
     ProviderPreset, bailian::BailianProvider, deepseek::DeepseekProvider, mimo::MimoProvider,
     minimax::MinimaxProvider, moonshot::MoonshotProvider, openai::OpenaiProvider,
-    openrouter::OpenrouterProvider, sensenova::SensenovaProvider, zai::ZaiProvider,
+    openrouter::OpenrouterProvider, sensenova::SensenovaProvider, stepfun::StepfunProvider,
+    zai::ZaiProvider,
 };
 use crate::wire::WireProtocolKind;
 
@@ -24,6 +25,7 @@ pub fn preset_models(provider_type: &ProviderType) -> Option<Vec<ModelInfo>> {
         ProviderType::Openai => Some(OpenaiProvider::preset_models()),
         ProviderType::Openrouter => Some(OpenrouterProvider::preset_models()),
         ProviderType::Sensenova => Some(SensenovaProvider::preset_models()),
+        ProviderType::Stepfun => Some(StepfunProvider::preset_models()),
         ProviderType::Zai => Some(ZaiProvider::preset_models()),
         ProviderType::Custom(_) => None,
     }
@@ -41,6 +43,7 @@ pub fn default_base_url(provider_type: &ProviderType) -> Option<&'static str> {
         ProviderType::Openai => Some(OpenaiProvider::default_base_url()),
         ProviderType::Openrouter => Some(OpenrouterProvider::default_base_url()),
         ProviderType::Sensenova => Some(SensenovaProvider::default_base_url()),
+        ProviderType::Stepfun => Some(StepfunProvider::default_base_url()),
         ProviderType::Zai => Some(ZaiProvider::default_base_url()),
         ProviderType::Custom(_) => None,
     }
@@ -58,6 +61,7 @@ pub fn known_base_urls(provider_type: &ProviderType) -> Vec<&'static str> {
         ProviderType::Openai => OpenaiProvider::known_base_urls(),
         ProviderType::Openrouter => OpenrouterProvider::known_base_urls(),
         ProviderType::Sensenova => SensenovaProvider::known_base_urls(),
+        ProviderType::Stepfun => StepfunProvider::known_base_urls(),
         ProviderType::Zai => ZaiProvider::known_base_urls(),
         ProviderType::Custom(_) => Vec::new(),
     }
@@ -75,6 +79,7 @@ pub fn default_auth_method(provider_type: &ProviderType) -> AuthMethod {
         ProviderType::Openai => OpenaiProvider::default_auth_method(),
         ProviderType::Openrouter => OpenrouterProvider::default_auth_method(),
         ProviderType::Sensenova => SensenovaProvider::default_auth_method(),
+        ProviderType::Stepfun => StepfunProvider::default_auth_method(),
         ProviderType::Zai => ZaiProvider::default_auth_method(),
         ProviderType::Custom(_) => AuthMethod::Anthropic,
     }
@@ -97,6 +102,7 @@ pub fn wire_protocol(provider_type: &ProviderType) -> WireProtocolKind {
         ProviderType::Openai => OpenaiProvider::wire_protocol(),
         ProviderType::Openrouter => OpenrouterProvider::wire_protocol(),
         ProviderType::Sensenova => SensenovaProvider::wire_protocol(),
+        ProviderType::Stepfun => StepfunProvider::wire_protocol(),
         ProviderType::Zai => ZaiProvider::wire_protocol(),
         ProviderType::Custom(_) => WireProtocolKind::Anthropic,
     }
@@ -124,6 +130,7 @@ pub fn known_provider_types() -> Vec<&'static str> {
         "openai",
         "openrouter",
         "sensenova",
+        "stepfun",
         "zai",
     ]
 }

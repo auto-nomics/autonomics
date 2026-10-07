@@ -18,6 +18,7 @@ pub mod openai;
 pub mod openrouter;
 pub mod registry;
 pub mod sensenova;
+pub mod stepfun;
 pub mod zai;
 
 use crate::http::auth::AuthMethod;

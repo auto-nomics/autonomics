@@ -17,7 +17,7 @@ LLM API 客户端与多服务商抽象层。
 - **Token 与成本追踪** —— `TokenCounter` 支持按模型定价、累计用量和成本估算
 - **多服务商抽象** —— `LlmProvider` trait，实现包括：
   - Anthropic（直连）
-  - DeepSeek（`deepseek-v4-pro`、`deepseek-v4-flash`）
+  - DeepSeek（`deepseek-v4-pro`、`deepseek-flash`）
   - MiniMax
   - SenseNova
   - Mimo
@@ -26,6 +26,11 @@ LLM API 客户端与多服务商抽象层。
     Token Plan 独立域名 `coding.dashscope.aliyuncs.com` 与
     `coding-intl.dashscope.aliyuncs.com`）。使用前请把预设 URL 中的
     `<WORKSPACE-ID>` 替换为百炼控制台的工作空间 ID。
+  - StepFun / 阶跃星辰（OpenAI Chat Completions 协议；Bearer 鉴权。通用
+    API 在 `api.stepfun.com/v1`，Step Plan / Token Plan 在
+    `api.stepfun.com/step_plan/v1`。目录覆盖 `step-5-preview`、
+    `step-3.7-flash` / `step-3.5-flash` / `step-3.5-flash-2603`、
+    `step-audio-2` 系列语音模型，以及 Step Plan 专属的 `step-router-v1`。）
   - OpenRouter（OpenAI 兼容协议；通过 `OpenrouterProvider::fetch_remote_catalog`
     拉取公开 `GET /v1/models` 端点的实时模型目录）
   - OpenAI（ChatGPT 订阅 OAuth 登录——见

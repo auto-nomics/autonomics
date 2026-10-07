@@ -17,7 +17,7 @@ LLM API client with multi-provider abstraction.
 - **Token & cost tracking** — `TokenCounter` with per-model pricing, accumulated usage, and cost estimation
 - **Multi-provider abstraction** — `LlmProvider` trait with implementations:
   - Anthropic (direct)
-  - DeepSeek (`deepseek-v4-pro`, `deepseek-v4-flash`)
+  - DeepSeek (`deepseek-v4-pro`, `deepseek-flash`)
   - MiniMax
   - SenseNova
   - Mimo
@@ -27,6 +27,11 @@ LLM API client with multi-provider abstraction.
     `coding.dashscope.aliyuncs.com` and `coding-intl.dashscope.aliyuncs.com`).
     Replaces `<WORKSPACE-ID>` in the preset URL with the workspace id from
     the Bailian console before use.
+  - StepFun / 阶跃星辰 (OpenAI Chat Completions wire; Bearer auth. General
+    API at `api.stepfun.com/v1` and Step Plan / Token Plan at
+    `api.stepfun.com/step_plan/v1`. Catalogue covers `step-5-preview`,
+    `step-3.7-flash` / `step-3.5-flash` / `step-3.5-flash-2603`, the
+    audio `step-audio-2` family, and the Step-Plan-only `step-router-v1`.)
   - OpenRouter (OpenAI-compatible wire; live catalogue via
     `OpenrouterProvider::fetch_remote_catalog` against the public
     `GET /v1/models` endpoint)

@@ -442,4 +442,12 @@ mod tests {
             WireProtocolKind::ChatgptResponses
         );
     }
+
+    #[test]
+    fn stepfun_uses_openai_chat_wire() {
+        assert_eq!(
+            wire_protocol_for_provider(&ProviderType::Stepfun),
+            WireProtocolKind::OpenaiChat
+        );
+    }
 }
