@@ -197,6 +197,7 @@ async fn plugin_is_developed_published_updated_and_installed_in_one_workspace() 
     let mut lifecycle = PluginLifecycle::new(&mut operator, &validation_catalog, &[]);
     match lifecycle.validate_and_submit().unwrap() {
         ValidationOutcome::Submitted(report) => assert!(report.passed(), "{report:?}"),
+        ValidationOutcome::Passed(_) => panic!("review submission unexpectedly stayed local"),
         ValidationOutcome::NeedsFix(report) => panic!("validation failed: {report:?}"),
     }
     assert_eq!(lifecycle.plugin().status, PluginStatus::PendingReview);
@@ -258,6 +259,7 @@ async fn plugin_is_developed_published_updated_and_installed_in_one_workspace() 
     let mut update_lifecycle = PluginLifecycle::new(&mut update, &validation_catalog, &owned_kinds);
     match update_lifecycle.validate_and_submit().unwrap() {
         ValidationOutcome::Submitted(report) => assert!(report.passed(), "{report:?}"),
+        ValidationOutcome::Passed(_) => panic!("review submission unexpectedly stayed local"),
         ValidationOutcome::NeedsFix(report) => panic!("update validation failed: {report:?}"),
     }
     update_lifecycle.review(true).unwrap();

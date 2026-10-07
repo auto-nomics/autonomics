@@ -129,7 +129,7 @@ impl ToolFunction for PluginNodeCreateTool {
             });
         }
         manifest.nodes.push(node);
-        save_manifest(&target.workspace, &manifest).map_err(tool_error)?;
+        save_manifest(&target.workspace, &mut manifest).map_err(tool_error)?;
         Ok(ToolResult::success("created node"))
     }
 }

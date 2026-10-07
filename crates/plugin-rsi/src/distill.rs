@@ -117,6 +117,30 @@ impl PluginDistiller {
                 })?;
             let status = operator.status();
             match status {
+                PluginStatus::Draft | PluginStatus::Updating => {
+                    if !operator.manifest().lifecycle.publication_pending {
+                        return Err((
+                            "not_queued".into(),
+                            "local-active plugin is not pending publication".into(),
+                        ));
+                    }
+                    if !operator
+                        .repository()
+                        .is_clean()
+                        .map_err(stage("check_clean"))?
+                    {
+                        return Err((
+                            "dirty_workspace".into(),
+                            "plugin changed again before background publication".into(),
+                        ));
+                    }
+                    operator
+                        .transition_snapshot(
+                            PluginStatus::PendingReview,
+                            "distiller: submit local snapshot for review",
+                        )
+                        .map_err(stage("submit_review"))?;
+                }
                 PluginStatus::PendingReview => {
                     self.infra
                         .review(plugin_name, true)
@@ -159,6 +183,7 @@ impl PluginDistiller {
                         .map_err(stage("revalidate"))?
                     {
                         ValidationOutcome::Submitted(_) => {}
+                        ValidationOutcome::Passed(_) => {}
                         ValidationOutcome::NeedsFix(report) => {
                             return Err((
                                 "revalidate".into(),
@@ -185,9 +210,12 @@ impl PluginDistiller {
 
 fn is_distillable(manifest: &PluginManifest) -> bool {
     manifest.installation.is_runtime_active()
+        && manifest.lifecycle.publication_pending
         && matches!(
             manifest.status,
-            PluginStatus::PendingReview
+            PluginStatus::Draft
+                | PluginStatus::Updating
+                | PluginStatus::PendingReview
                 | PluginStatus::Approved
                 | PluginStatus::PublishFailed
                 | PluginStatus::Published

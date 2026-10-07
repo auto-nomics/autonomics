@@ -174,6 +174,7 @@ async fn an_installed_reference_can_be_forked_and_locally_activated() {
     let mut reference_lifecycle = PluginLifecycle::new(&mut reference, &validation_catalog, &[]);
     match reference_lifecycle.validate_and_submit().unwrap() {
         ValidationOutcome::Submitted(_) => store.install_local("reference-plugin").unwrap(),
+        ValidationOutcome::Passed(_) => panic!("review submission unexpectedly stayed local"),
         ValidationOutcome::NeedsFix(report) => panic!("reference validation failed: {report:?}"),
     };
 
@@ -297,11 +298,42 @@ async fn an_installed_reference_can_be_forked_and_locally_activated() {
         panic!("plugin_install must return JSON");
     };
     assert_eq!(install_output["activated"], true);
-    assert_eq!(install_output["status"], "pending_review");
+    assert_eq!(install_output["status"], "draft");
     assert_eq!(install_output["node_kinds"], json!(["forked_adapter"]));
     assert_eq!(install_output["validation_report"]["overall"], "pass");
     assert!(install_output["local_commit"].is_string());
     assert!(install_output["local_digest"].is_string());
+    forked.refresh().unwrap();
+    assert_eq!(forked.status(), PluginStatus::Draft);
+    assert!(forked.manifest().lifecycle.publication_pending);
+
+    let mut revised_node = updated_node_json();
+    revised_node["params"]["threshold"]["default"] = json!(0.75);
+    execute(
+        &tools,
+        "plugin_node_update",
+        json!({
+            "plugin_path": "/plugins/dev/forked-plugin",
+            "node_kind": "forked_adapter",
+            "node": revised_node
+        }),
+    )
+    .await
+    .unwrap();
+    forked.refresh().unwrap();
+    assert!(!forked.manifest().lifecycle.publication_pending);
+    let reinstall_result = execute(
+        &tools,
+        "plugin_install",
+        json!({"plugin_path": "/plugins/dev/forked-plugin"}),
+    )
+    .await
+    .unwrap();
+    let ToolResultContent::Json(reinstall_output) = reinstall_result.content else {
+        panic!("second plugin_install must return JSON");
+    };
+    assert_eq!(reinstall_output["activated"], true);
+    assert_eq!(reinstall_output["status"], "draft");
     forked.refresh().unwrap();
 
     let runtime_root = plugin_rsi::PluginStateLayout::v2(state.path()).runtime_root();
@@ -315,7 +347,7 @@ async fn an_installed_reference_can_be_forked_and_locally_activated() {
         InstalledPluginSource::Local(_)
     ));
     assert!(repository.is_clean().unwrap());
-    assert_eq!(forked.status(), PluginStatus::PendingReview);
+    assert_eq!(forked.status(), PluginStatus::Draft);
 
     let update_request = requests.record(request("forked-plugin")).unwrap();
     let installed_source = store.installed_source("forked-plugin").unwrap();
@@ -344,6 +376,7 @@ async fn an_installed_reference_can_be_forked_and_locally_activated() {
         PluginLifecycle::new(&mut update, &validation_catalog, &active_kinds);
     match update_lifecycle.validate_and_submit().unwrap() {
         ValidationOutcome::Submitted(report) => assert!(report.passed(), "{report:?}"),
+        ValidationOutcome::Passed(_) => panic!("review submission unexpectedly stayed local"),
         ValidationOutcome::NeedsFix(report) => panic!("update validation failed: {report:?}"),
     };
     store.install_local("forked-plugin").unwrap();

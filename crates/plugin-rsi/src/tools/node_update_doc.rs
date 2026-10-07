@@ -49,7 +49,7 @@ impl ToolFunction for PluginNodeUpdateDocTool {
             .position(|existing| existing.kind == node.kind)
             .expect("selected node position");
         manifest.nodes[index] = node;
-        save_manifest(&target.workspace, &manifest).map_err(tool_error)?;
+        save_manifest(&target.workspace, &mut manifest).map_err(tool_error)?;
         Ok(ToolResult::success("updated node documentation"))
     }
 }

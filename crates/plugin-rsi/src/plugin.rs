@@ -177,16 +177,18 @@ impl PluginStore {
     /// The development workspace remains mutable and keeps its development
     /// status; the DAG always reads the immutable snapshot selected here.
     pub fn install_local(&self, plugin_name: &str) -> Result<LocalInstalledPluginSource> {
-        let operator = self
+        let mut operator = self
             .develop(plugin_name)?
             .ok_or_else(|| Error::Validation(format!("unknown plugin `{plugin_name}`")))?;
-        if !matches!(
-            operator.status(),
-            PluginStatus::PendingReview
-                | PluginStatus::Approved
-                | PluginStatus::Published
-                | PluginStatus::PullRequestMerged
-        ) {
+        if !(is_editable(operator.status())
+            || matches!(
+                operator.status(),
+                PluginStatus::PendingReview
+                    | PluginStatus::Approved
+                    | PluginStatus::Published
+                    | PluginStatus::PullRequestMerged
+            ))
+        {
             return Err(Error::Validation(format!(
                 "plugin `{plugin_name}` cannot be locally installed from development status {:?}",
                 operator.status()
@@ -217,6 +219,11 @@ impl PluginStore {
                 "plugin's latest validation report did not pass".into(),
             ));
         }
+
+        operator.mutate_manifest(|manifest| {
+            manifest.lifecycle.publication_pending = true;
+        })?;
+        operator.snapshot("plugin: freeze local activation")?;
 
         let commit = repository.head()?;
         let tree_digest = repository.tree_digest()?;
@@ -481,6 +488,7 @@ impl PluginStore {
             operator.mutate_manifest(|manifest| {
                 manifest.lifecycle.request_ids = request_ids.to_vec();
                 manifest.lifecycle.rationale = Some(rationale.trim().to_string());
+                manifest.lifecycle.publication_pending = false;
             })?;
             if operator.status() == PluginStatus::Updating {
                 operator.snapshot("plugin: attach update feedback")?;
@@ -615,8 +623,7 @@ impl PluginStore {
             .list()?
             .into_iter()
             .filter(|manifest| {
-                manifest.status == PluginStatus::PendingReview
-                    && manifest.installation.is_runtime_active()
+                manifest.lifecycle.publication_pending && manifest.installation.is_runtime_active()
             })
             .collect())
     }
@@ -697,6 +704,7 @@ impl PluginOperator<'_> {
             ImageReference::parse(&environment.reference).map_err(|error| {
                 Error::Validation(format!("invalid environment reference: {error}"))
             })?;
+        self.manifest.lifecycle.publication_pending = false;
         save_manifest(&self.workspace(), &self.manifest)
     }
 
@@ -831,11 +839,16 @@ pub(crate) fn is_editable(status: PluginStatus) -> bool {
 pub(crate) fn ensure_transition(from: PluginStatus, to: PluginStatus) -> Result<()> {
     let valid = match (from, to) {
         (PluginStatus::Draft, PluginStatus::Validating)
+        | (PluginStatus::Draft, PluginStatus::Updating)
         | (PluginStatus::Installed, PluginStatus::Updating)
         | (PluginStatus::Updating, PluginStatus::Validating)
         | (PluginStatus::NeedsFix, PluginStatus::Validating)
         | (PluginStatus::Validating, PluginStatus::NeedsFix)
         | (PluginStatus::Validating, PluginStatus::PendingReview)
+        | (PluginStatus::Validating, PluginStatus::Draft)
+        | (PluginStatus::Validating, PluginStatus::Updating)
+        | (PluginStatus::Draft, PluginStatus::PendingReview)
+        | (PluginStatus::Updating, PluginStatus::PendingReview)
         | (PluginStatus::PendingReview, PluginStatus::Updating)
         | (PluginStatus::PendingReview, PluginStatus::Approved)
         | (PluginStatus::PendingReview, PluginStatus::Rejected)
