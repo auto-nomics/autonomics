@@ -674,6 +674,14 @@ into **refs** (branches) — each ref is an independent lineage.\n\
   a new ref from any historical snapshot (like `git checkout -b`), letting you explore \
   an alternative direction from that point.";
 
+const PROMPT_PLUGIN_RSI: &str = "\n\
+### Plugin Self-Improvement\n\
+You can develop plugins through their `/plugins/dev/<plugin-name>` VFS paths.\n\
+Inspect the addressed workspace with `plugin_development_status`, edit node specs,\n\
+scripts, and files with the plugin tools, and run commands in the selected\n\
+environment with `plugin_container_run`. Treat manifest lifecycle state as\n\
+host-owned: do not attempt direct manifest writes.";
+
 const PROMPT_SQL_CONVENTIONS: &str = "\n\
 ### SQL Conventions\n\
 All SQL in this system runs on Apache DataFusion. The following rules apply to \
@@ -724,6 +732,9 @@ pub trait PromptCapabilities {
     fn enable_string(&self) -> bool;
     fn enable_kegg(&self) -> bool;
     fn enable_dag_history(&self) -> bool;
+    fn enable_plugin_rsi(&self) -> bool {
+        false
+    }
 }
 
 /// Build the default system prompt dynamically, including only the sections for
@@ -765,6 +776,9 @@ pub fn build_system_prompt<C: PromptCapabilities>(caps: &C) -> String {
     if caps.enable_dag_history() {
         s.push_str(PROMPT_DAG_HISTORY);
     }
+    if caps.enable_plugin_rsi() {
+        s.push_str(PROMPT_PLUGIN_RSI);
+    }
 
     s.push_str(PROMPT_SQL_CONVENTIONS);
 
@@ -804,6 +818,9 @@ pub fn default_system_prompt() -> String {
             true
         }
         fn enable_dag_history(&self) -> bool {
+            true
+        }
+        fn enable_plugin_rsi(&self) -> bool {
             true
         }
     }

@@ -269,6 +269,7 @@ pub fn profile_preview_lines(
         ("rcsb", profile.enable_rcsb),
         ("kegg", profile.enable_kegg),
         ("dag-history", profile.enable_dag_history),
+        ("plugin-rsi", profile.enable_plugin_rsi),
     ] {
         lines.push(flag_line(name, enabled));
     }

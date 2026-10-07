@@ -2209,6 +2209,9 @@ fn row_to_profile(row: &turso::Row) -> Result<AgentProfile, StorageError> {
 
     // The config_json stores everything except id/path/timestamps.
     let config: serde_json::Value = serde_json::from_str(&config_str)?;
+    // Older researcher profiles predate plugin RSI; they should receive the
+    // capability without silently enabling it for every legacy specialist.
+    let default_plugin_rsi = path == "researcher";
 
     Ok(AgentProfile {
         id: Uuid::parse_str(&id_str)
@@ -2264,6 +2267,10 @@ fn row_to_profile(row: &turso::Row) -> Result<AgentProfile, StorageError> {
             .get("enable_dag_history")
             .and_then(|v| v.as_bool())
             .unwrap_or(true),
+        enable_plugin_rsi: config
+            .get("enable_plugin_rsi")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(default_plugin_rsi),
         preferred_model: config
             .get("preferred_model")
             .and_then(|v| v.as_str())
@@ -2297,6 +2304,7 @@ fn profile_to_config_json(profile: &AgentProfile) -> serde_json::Value {
         "enable_string": profile.enable_string,
         "enable_kegg": profile.enable_kegg,
         "enable_dag_history": profile.enable_dag_history,
+        "enable_plugin_rsi": profile.enable_plugin_rsi,
         "preferred_model": profile.preferred_model,
         "runtime": profile.runtime,
     })
@@ -3163,6 +3171,7 @@ mod tests {
             enable_string: true,
             enable_kegg: true,
             enable_dag_history: false,
+            enable_plugin_rsi: false,
             preferred_model: Some("anthropic:claude-sonnet-5".into()),
             runtime: Default::default(),
             created_at: now_ms(),
@@ -3263,6 +3272,13 @@ mod tests {
         let profiles = store.list_profiles().await.unwrap();
         assert_eq!(profiles.len(), 5, "should have 5 default profiles");
         assert!(profiles.iter().any(|p| p.path == "researcher"));
+        assert!(
+            profiles
+                .iter()
+                .find(|p| p.path == "researcher")
+                .unwrap()
+                .enable_plugin_rsi
+        );
         assert!(profiles.iter().any(|p| p.path == "literature"));
         assert!(profiles.iter().any(|p| p.path == "gwas-analysis"));
 
@@ -3286,6 +3302,26 @@ mod tests {
             ..AgentProfile::new("default")
         };
         store.create_profile(legacy).await.unwrap();
+        let mut rows = store
+            .conn
+            .query(
+                "SELECT config_json FROM agent_profiles WHERE name = 'default'",
+                params_from_iter::<[Value; 0]>([]),
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let mut config: serde_json::Value =
+            serde_json::from_str(&row.get::<String>(0).unwrap()).unwrap();
+        config.as_object_mut().unwrap().remove("enable_plugin_rsi");
+        store
+            .conn
+            .execute(
+                "UPDATE agent_profiles SET config_json = ?1 WHERE name = 'default'",
+                params_from_iter([Value::Text(config.to_string())]),
+            )
+            .await
+            .unwrap();
 
         // Seed should rename default → researcher AND add missing defaults.
         let changed = store.seed_defaults_if_empty().await.unwrap();
@@ -3305,6 +3341,7 @@ mod tests {
         // The migrated researcher should preserve the legacy identity.
         let researcher = profiles.iter().find(|p| p.path == "researcher").unwrap();
         assert_eq!(researcher.agent_identity, "legacy identity");
+        assert!(researcher.enable_plugin_rsi);
     }
 
     #[tokio::test]

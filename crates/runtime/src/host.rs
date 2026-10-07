@@ -163,6 +163,9 @@ impl PromptCapabilities for agentik_core::AgentProfile {
     fn enable_dag_history(&self) -> bool {
         self.enable_dag_history
     }
+    fn enable_plugin_rsi(&self) -> bool {
+        self.enable_plugin_rsi
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -616,6 +619,11 @@ impl SharedInfra {
             self.skills.clone(),
             self.skill_evolution.clone(),
         ));
+        if profile.enable_plugin_rsi {
+            tools.extend(plugin_rsi::plugin_development_tool_registrations(
+                agent_path.as_str(),
+            ));
+        }
         if let Some(catalog) = self.catalog.clone() {
             tools.extend(crate::catalog_tools::catalog_registrations(catalog));
         }
@@ -4971,6 +4979,52 @@ impl Drop for RuntimeHost {
         for (_, entry) in self.agents.drain() {
             let _ = entry.cmd_tx.send(AgentCommand::Shutdown);
         }
+    }
+}
+
+#[cfg(test)]
+mod plugin_profile_tools_tests {
+    use super::*;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn researcher_profile_receives_path_addressed_plugin_tools() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = RuntimeConfig::default();
+        config.data_dir = dir.path().join("data");
+        config.state_dir = dir.path().join("state");
+        config.agent_db = dir.path().join("agent.db");
+        let host = RuntimeHost::open(&config).await.unwrap();
+        let agent_path = agentik_types::AgentPath::try_from("/root/researcher").unwrap();
+        let researcher = agentik_core::AgentProfile::defaults()
+            .into_iter()
+            .find(|profile| profile.path == "researcher")
+            .unwrap();
+        let writer = agentik_core::AgentProfile::new("writer");
+
+        let researcher_tools = host
+            .infra
+            .tools_from_profile(&agent_path, &researcher)
+            .await
+            .unwrap();
+        assert!(
+            researcher_tools
+                .iter()
+                .any(|tool| tool.definition.name == "plugin_development_status")
+        );
+        assert!(
+            crate::config::build_system_prompt(&researcher).contains("Plugin Self-Improvement")
+        );
+
+        let writer_tools = host
+            .infra
+            .tools_from_profile(&agent_path, &writer)
+            .await
+            .unwrap();
+        assert!(
+            !writer_tools
+                .iter()
+                .any(|tool| tool.definition.name == "plugin_development_status")
+        );
     }
 }
 

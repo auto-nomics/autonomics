@@ -209,6 +209,8 @@ pub struct ProfileOverrides {
     pub enable_string: Option<bool>,
     pub enable_kegg: Option<bool>,
     pub enable_dag_history: Option<bool>,
+    /// Enable path-addressed plugin development tools.
+    pub enable_plugin_rsi: Option<bool>,
     pub use_memory: Option<bool>,
     pub generate_memory: Option<bool>,
 }
@@ -294,6 +296,9 @@ pub struct AgentProfile {
     pub enable_string: bool,
     #[serde(default = "default_true")]
     pub enable_kegg: bool,
+    /// Enable `/plugins/dev/<plugin>` development tools.
+    #[serde(default)]
+    pub enable_plugin_rsi: bool,
     pub enable_dag_history: bool,
 
     // ── Model preference ──
@@ -343,9 +348,11 @@ impl AgentProfile {
     /// Create a new root-level profile with sensible defaults (all tools enabled).
     pub fn new(path: impl Into<String>) -> Self {
         let now = now_ms();
+        let path = path.into();
+        let enable_plugin_rsi = path == "researcher" || path.starts_with("researcher/");
         Self {
             id: Uuid::new_v4(),
-            path: path.into(),
+            path,
             description: String::new(),
             agent_identity: "You are a helpful assistant.".into(),
             system_prompt: None,
@@ -359,6 +366,7 @@ impl AgentProfile {
             enable_string: true,
             enable_kegg: true,
             enable_dag_history: true,
+            enable_plugin_rsi,
             preferred_model: None,
             runtime: AgentRuntimeOverrides::default(),
             created_at: now,
@@ -408,6 +416,9 @@ impl AgentProfile {
             enable_dag_history: overrides
                 .enable_dag_history
                 .unwrap_or(self.enable_dag_history),
+            enable_plugin_rsi: overrides
+                .enable_plugin_rsi
+                .unwrap_or(self.enable_plugin_rsi),
             preferred_model: overrides
                 .preferred_model
                 .unwrap_or_else(|| self.preferred_model.clone()),
@@ -442,6 +453,7 @@ impl AgentProfile {
                 enable_string: true,
                 enable_kegg: true,
                 enable_dag_history: true,
+                enable_plugin_rsi: true,
                 preferred_model: None,
                 runtime: AgentRuntimeOverrides::default(),
                 created_at: now,
@@ -466,6 +478,7 @@ impl AgentProfile {
                 enable_string: true,
                 enable_kegg: false,
                 enable_dag_history: false,
+                enable_plugin_rsi: false,
                 preferred_model: None,
                 runtime: AgentRuntimeOverrides::default(),
                 created_at: now,
@@ -490,6 +503,7 @@ impl AgentProfile {
                 enable_string: true,
                 enable_kegg: true,
                 enable_dag_history: true,
+                enable_plugin_rsi: false,
                 preferred_model: None,
                 runtime: AgentRuntimeOverrides::default(),
                 created_at: now,
@@ -515,6 +529,7 @@ impl AgentProfile {
                 enable_string: true,
                 enable_kegg: true,
                 enable_dag_history: true,
+                enable_plugin_rsi: false,
                 preferred_model: None,
                 runtime: AgentRuntimeOverrides::default(),
                 created_at: now,
@@ -555,6 +570,7 @@ impl AgentProfile {
                 enable_string: false,
                 enable_kegg: false,
                 enable_dag_history: false,
+                enable_plugin_rsi: false,
                 preferred_model: None,
                 runtime: AgentRuntimeOverrides::default(),
                 created_at: now,
@@ -901,6 +917,9 @@ pub trait AgentProfileRegistry: Send + Sync {
         if let Some(legacy) = existing.iter().find(|p| p.path == "default").cloned() {
             let mut renamed = legacy;
             renamed.path = "researcher".into();
+            // The old default profile predates plugin RSI; becoming the
+            // full researcher profile enables its new baseline capability.
+            renamed.enable_plugin_rsi = true;
             renamed.updated_at = now_ms();
             self.update_profile(renamed).await?;
             changed = true;
@@ -981,5 +1000,36 @@ mod profile_compat_tests {
         });
         assert_eq!(profile.runtime.use_memory, Some(false));
         assert_eq!(profile.runtime.generate_memory, Some(false));
+    }
+
+    #[test]
+    fn plugin_rsi_is_a_researcher_capability_and_is_inherited() {
+        let defaults = AgentProfile::defaults();
+        let researcher = defaults
+            .iter()
+            .find(|profile| profile.path == "researcher")
+            .unwrap();
+        let literature = defaults
+            .iter()
+            .find(|profile| profile.path == "literature")
+            .unwrap();
+        assert!(researcher.enable_plugin_rsi);
+        assert!(!literature.enable_plugin_rsi);
+
+        let child = researcher
+            .derive_child("genomics", ProfileOverrides::default())
+            .unwrap();
+        assert!(child.enable_plugin_rsi);
+
+        let restricted = researcher
+            .derive_child(
+                "writer",
+                ProfileOverrides {
+                    enable_plugin_rsi: Some(false),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(!restricted.enable_plugin_rsi);
     }
 }
