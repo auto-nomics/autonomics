@@ -1,15 +1,20 @@
+use std::sync::Arc;
+
 use agentik_core::tools::{ToolError, ToolRegistration, ToolResult};
+use agentik_sdk::types::ToolResultContent;
 mod common;
 
 use plugin_rsi::GitRepo;
 use plugin_rsi::{
-    AgentProfile, Environment, EnvironmentCatalog, InstalledPluginSource, PluginLifecycle,
-    PluginStatus, PluginStore, RequestIntent, RequestRecord, RequestSource, RequestStatus,
-    RequestStore, ValidationOutcome,
+    AgentProfile, Environment, EnvironmentCatalog, EnvironmentRegistry, GhPublisher,
+    GhPublisherConfig, InstalledPluginSource, PluginLifecycle, PluginStatus, PluginStore,
+    RequestIntent, RequestRecord, RequestSource, RequestStatus, RequestStore, RsiInfra,
+    ValidationOutcome,
 };
 use serde_json::{Value, json};
 
 const ENVIRONMENT_REFERENCE: &str = "docker.io/library/alpine@sha256:0123456789012345678901234567890123456789012345678901234567890123";
+const PYTHON_REFERENCE: &str = "docker.io/library/python@sha256:1234567890123456789012345678901234567890123456789012345678901234";
 
 fn catalog() -> EnvironmentCatalog {
     let mut catalog = EnvironmentCatalog::default();
@@ -18,6 +23,13 @@ fn catalog() -> EnvironmentCatalog {
         Environment {
             reference: ENVIRONMENT_REFERENCE.into(),
             interpreters: vec!["sh".into()],
+        },
+    );
+    catalog.insert(
+        "python",
+        Environment {
+            reference: PYTHON_REFERENCE.into(),
+            interpreters: vec!["sh".into(), "python3".into()],
         },
     );
     catalog
@@ -54,6 +66,50 @@ fn node_json(kind: &str, script_file: &str) -> Value {
             "files": {}
         }
     })
+}
+
+fn updated_node_json() -> Value {
+    json!({
+        "kind": "forked_adapter",
+        "desc": "Copy two files",
+        "doc": "Copies each input to the matching output.",
+        "ports": {
+            "inputs": [
+                { "type": "file", "label": "left" },
+                { "type": "file", "label": "right" }
+            ],
+            "outputs": [
+                { "path": "result_0.txt", "format": "txt", "label": "left_result" },
+                { "path": "result_1.txt", "format": "txt", "label": "right_result" }
+            ]
+        },
+        "params": {
+            "threshold": {
+                "type": "number",
+                "default": 0.5,
+                "doc": "Threshold recorded by the adapter."
+            }
+        },
+        "command": {
+            "interpreter": "sh",
+            "argv": [],
+            "script_file": "scripts/forked.sh",
+            "env": {},
+            "files": {}
+        }
+    })
+}
+
+struct NoopRegistry;
+
+impl plugin_rsi::PluginRegistryControl for NoopRegistry {
+    fn installed_node_kinds(&self) -> plugin_rsi::Result<Vec<String>> {
+        Ok(Vec::new())
+    }
+
+    fn reload_plugin(&self, _plugin_name: &str) -> plugin_rsi::Result<()> {
+        Ok(())
+    }
 }
 
 async fn execute(
@@ -121,17 +177,74 @@ async fn an_installed_reference_can_be_forked_and_locally_activated() {
         ValidationOutcome::NeedsFix(report) => panic!("reference validation failed: {report:?}"),
     };
 
-    let fork_request = requests.record(request("forked-plugin")).unwrap();
-    let mut forked = store
-        .fork(
-            "reference-plugin",
-            "forked-plugin",
-            &[fork_request.id],
-            "Fork the local active reference.",
-            &requests,
-            &catalog(),
-        )
+    let skills = skills::SkillManager::init(skills::SkillManager::new(state.path()));
+    let publisher = Arc::new(GhPublisher::new(GhPublisherConfig {
+        enabled: false,
+        ..Default::default()
+    }));
+    let infra = RsiInfra::open(
+        state.path(),
+        "main",
+        "Autonomics RSI",
+        "rsi@example.com",
+        skills,
+        catalog(),
+        publisher.clone(),
+        publisher,
+    )
+    .unwrap();
+    infra.configure_registry(Arc::new(NoopRegistry));
+    plugin_rsi::PluginDevelopmentToolsetRegistry::global()
+        .configure_infra(Arc::new(infra.clone()))
         .unwrap();
+    plugin_rsi::PluginDevelopmentToolsetRegistry::global()
+        .configure_environments(EnvironmentRegistry::ephemeral(catalog()))
+        .unwrap();
+    let profile = AgentProfile::new("fork-agent").unwrap();
+    let tools = profile.tool_registrations();
+    let fork_result = execute(
+        &tools,
+        "plugin_fork",
+        json!({
+            "reference_plugin_path": "/plugins/dev/reference-plugin",
+            "plugin_name": "forked-plugin",
+            "intent": "new_node",
+            "summary": "Fork the local active reference.",
+            "body": "Fork the installed adapter and give it a new node kind."
+        }),
+    )
+    .await
+    .unwrap();
+    let ToolResultContent::Json(fork_output) = fork_result.content else {
+        panic!("plugin_fork must return JSON");
+    };
+    assert_eq!(fork_output["reference_plugin"], "reference-plugin");
+    assert_eq!(fork_output["target_plugin"], "forked-plugin");
+    assert_eq!(fork_output["target_vfs_path"], "/plugins/dev/forked-plugin");
+    let request_id = fork_output["request_id"].as_str().unwrap();
+    let fork_request = infra.requests().find(request_id).unwrap().unwrap();
+    assert_eq!(fork_request.status, RequestStatus::Working);
+
+    let environment_result = execute(
+        &tools,
+        "plugin_environment_bind",
+        json!({
+            "plugin_path": "/plugins/dev/forked-plugin",
+            "environment_id": "python"
+        }),
+    )
+    .await
+    .unwrap();
+    let ToolResultContent::Json(environment_output) = environment_result.content else {
+        panic!("plugin_environment_bind must return JSON");
+    };
+    assert_eq!(environment_output["environment_id"], "python");
+    assert_eq!(
+        environment_output["environment_reference"],
+        PYTHON_REFERENCE
+    );
+
+    let mut forked = store.develop("forked-plugin").unwrap().unwrap();
     assert_eq!(forked.status(), PluginStatus::Draft);
     assert_eq!(
         forked.manifest().lifecycle.source_plugin.as_deref(),
@@ -142,29 +255,54 @@ async fn an_installed_reference_can_be_forked_and_locally_activated() {
     let repository = GitRepo::open(store.root().join("forked-plugin"));
     assert!(repository.remote_url("origin").unwrap().is_none());
 
-    let manifest_path = store.root().join("forked-plugin/manifest.toml");
-    let manifest_text = std::fs::read_to_string(&manifest_path).unwrap();
-    let manifest_text = manifest_text
-        .replace("reference_adapter", "forked_adapter")
-        .replace("scripts/reference.sh", "scripts/forked.sh");
-    std::fs::write(&manifest_path, manifest_text).unwrap();
+    let node_update_result = execute(
+        &tools,
+        "plugin_node_update",
+        json!({
+            "plugin_path": "/plugins/dev/forked-plugin",
+            "node_kind": "reference_adapter",
+            "node": updated_node_json()
+        }),
+    )
+    .await
+    .unwrap();
+    let ToolResultContent::Json(node_update_output) = node_update_result.content else {
+        panic!("plugin_node_update must return JSON");
+    };
+    assert_eq!(node_update_output["previous_kind"], "reference_adapter");
+    assert_eq!(node_update_output["kind"], "forked_adapter");
+    forked.refresh().unwrap();
+    assert_eq!(forked.owned_node_kinds(), ["forked_adapter"]);
+    let updated_node = &forked.manifest().nodes[0];
+    assert_eq!(updated_node.ports.inputs.len(), 2);
+    assert_eq!(updated_node.ports.outputs.len(), 2);
+    assert!(updated_node.params.contains_key("threshold"));
     forked
         .workspace()
         .write_text(
             "scripts/forked.sh",
-            "#!/bin/sh\nset -eu\ncp \"$AUTONOMICS_INPUT0\" \"$AUTONOMICS_OUTPUT0\"\n",
+            "#!/bin/sh\nset -eu\ncp \"$AUTONOMICS_INPUT0\" \"$AUTONOMICS_OUTPUT0\"\ncp \"$AUTONOMICS_INPUT1\" \"$AUTONOMICS_OUTPUT1\"\n",
         )
         .unwrap();
     forked.snapshot("plugin: rename forked node").unwrap();
 
-    let installed_kinds = ["reference_adapter".to_string()];
-    let mut fork_lifecycle =
-        PluginLifecycle::new(&mut forked, &validation_catalog, &installed_kinds);
-    match fork_lifecycle.validate_and_submit().unwrap() {
-        ValidationOutcome::Submitted(report) => assert!(report.passed(), "{report:?}"),
-        ValidationOutcome::NeedsFix(report) => panic!("fork validation failed: {report:?}"),
+    let install_result = execute(
+        &tools,
+        "plugin_install",
+        json!({"plugin_path": "/plugins/dev/forked-plugin"}),
+    )
+    .await
+    .unwrap();
+    let ToolResultContent::Json(install_output) = install_result.content else {
+        panic!("plugin_install must return JSON");
     };
-    store.install_local("forked-plugin").unwrap();
+    assert_eq!(install_output["activated"], true);
+    assert_eq!(install_output["status"], "pending_review");
+    assert_eq!(install_output["node_kinds"], json!(["forked_adapter"]));
+    assert_eq!(install_output["validation_report"]["overall"], "pass");
+    assert!(install_output["local_commit"].is_string());
+    assert!(install_output["local_digest"].is_string());
+    forked.refresh().unwrap();
 
     let runtime_root = plugin_rsi::PluginStateLayout::v2(state.path()).runtime_root();
     assert!(runtime_root.join("forked-plugin").is_dir());

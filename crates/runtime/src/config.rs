@@ -214,7 +214,7 @@ fn default_plugin_environments() -> plugin_rsi::EnvironmentCatalog {
         &["sh", "python3"],
     );
     add(
-        "rocker_verse",
+        "rocker-verse",
         "docker.io/rocker/verse@sha256:408c531408bb3db00dacb2e98311d1a4671ba7f128688b3649630a6a480a239e",
         &["sh", "Rscript"],
     );
@@ -255,7 +255,7 @@ fn default_plugin_environments() -> plugin_rsi::EnvironmentCatalog {
         &["sh", "hisat2"],
     );
     add(
-        "star_aligner",
+        "star-aligner",
         "quay.io/biocontainers/star@sha256:c43295cdbc28a7be7d88296775a29cc65b30296c996d8242ef90c031c8b9739b",
         &["sh", "STAR"],
     );
@@ -320,7 +320,7 @@ fn default_plugin_environments() -> plugin_rsi::EnvironmentCatalog {
         &["sh", "deepvariant"],
     );
     add(
-        "ensembl_vep",
+        "ensembl-vep",
         "quay.io/biocontainers/ensembl-vep@sha256:fde86b9f4fc1c4b816c7c124d995a664d1711c7513f83920418afdd1fc2bbffa",
         &["sh", "vep"],
     );
@@ -381,7 +381,7 @@ fn default_plugin_environments() -> plugin_rsi::EnvironmentCatalog {
         &["sh", "Orthanc"],
     );
     add(
-        "ohif_viewer",
+        "ohif-viewer",
         "docker.io/ohif/viewer@sha256:b4bfecdc7cc670101cbfd01215fcd1f77b7cc5c867c5ed1cb10142f7a806ccd9",
         &["sh", "node"],
     );
@@ -887,9 +887,13 @@ const PROMPT_PLUGIN_RSI: &str = "\n\
 ### Plugin Self-Improvement\n\
 You can develop plugins through their `/plugins/dev/<plugin-name>` VFS paths.\n\
 List approved environments with `plugin_environments_list`, inspect the addressed\n\
-workspace with `vfs`, add nodes and update node docs with plugin tools, and run\n\
-commands in the selected environment with `plugin_container_run`. Treat manifest\n\
-lifecycle state as host-owned: do not attempt direct manifest writes.";
+workspace with `vfs`, fork installed references with `plugin_fork`, bind approved\n\
+environment images with `plugin_environment_bind`, add nodes and update node docs\n\
+with plugin tools, replace complete node specs with `plugin_node_update`, and run\n\
+commands in the selected environment\n\
+with `plugin_container_run`. After editing, call `plugin_install` to validate and\n\
+load the local snapshot into the DAG. Treat manifest lifecycle state as host-owned:\n\
+do not attempt direct manifest writes.";
 
 const PROMPT_SQL_CONVENTIONS: &str = "\n\
 ### SQL Conventions\n\

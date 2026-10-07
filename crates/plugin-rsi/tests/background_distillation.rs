@@ -158,7 +158,7 @@ async fn local_activation_is_distilled_to_github_without_blocking_the_agent() {
             status: RequestStatus::Open,
         })
         .unwrap();
-    let mut operator = infra.create_plugin(request.clone(), "alpine").unwrap();
+    let operator = infra.create_plugin(request.clone(), "alpine").unwrap();
     let profile = AgentProfile::new("distillation-agent").unwrap();
     let tools = profile.tool_registrations();
     let environments = execute(&tools, "plugin_environments_list", json!({}))

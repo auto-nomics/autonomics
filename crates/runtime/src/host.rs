@@ -294,6 +294,9 @@ impl SharedInfra {
             vfs.clone(),
         ));
         plugin_rsi::PluginDevelopmentToolsetRegistry::global()
+            .configure_infra(rsi.clone())
+            .map_err(|error| crate::error::Error::Other(error.to_string()))?;
+        plugin_rsi::PluginDevelopmentToolsetRegistry::global()
             .configure_environments(environments)
             .map_err(|error| crate::error::Error::Other(error.to_string()))?;
         plugin_rsi::PluginDevelopmentToolsetRegistry::global()

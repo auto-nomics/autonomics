@@ -124,7 +124,11 @@ mod tests {
             names,
             [
                 "plugin_environments_list",
+                "plugin_environment_bind",
+                "plugin_fork",
+                "plugin_install",
                 "plugin_node_create",
+                "plugin_node_update",
                 "plugin_node_update_doc",
                 "plugin_container_run",
             ]
