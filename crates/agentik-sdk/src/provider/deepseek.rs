@@ -6,8 +6,8 @@ use crate::provider::ProviderPreset;
 // ─── Model IDs ──────────────────────────────────────────────────────────────
 // Current generation
 pub const MODEL_DEEPSEEK_V4_PRO: &str = "deepseek-v4-pro";
-pub const MODEL_DEEPSEEK_V4_FLASH: &str = "deepseek-v4-flash";
-// Deprecated aliases — still accepted, mapped server-side to v4-flash.
+pub const MODEL_DEEPSEEK_FLASH: &str = "deepseek-flash";
+// Deprecated aliases — still accepted, mapped server-side to flash.
 pub const MODEL_DEEPSEEK_CHAT: &str = "deepseek-chat";
 pub const MODEL_DEEPSEEK_REASONER: &str = "deepseek-reasoner";
 
@@ -48,7 +48,7 @@ impl DeepseekProvider {
                 .pricing(1.32, 3.96)
                 .build(),
             // V4 Flash — fast, low-cost, still supports thinking.
-            ModelInfoBuilder::new(MODEL_DEEPSEEK_V4_FLASH)
+            ModelInfoBuilder::new(MODEL_DEEPSEEK_FLASH)
                 .context(1_000_000, 32_000)
                 .capabilities(false, true, true, true)
                 .thinking_enabled(None)

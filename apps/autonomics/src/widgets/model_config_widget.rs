@@ -9,7 +9,7 @@
 //! ```text
 //! ▼ deepseek ✓                ← configured, expanded (top)
 //!   ● deepseek-v4-pro         ← model (indented)
-//!     deepseek-v4-flash
+//!     deepseek-flash
 //! ▶ mimo ✓                    ← configured, collapsed
 //! ── minimax ✗                ← unconfigured (bottom, not expandable)
 //! ```
