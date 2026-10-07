@@ -43,6 +43,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2.workspace = true
 opendal.workspace = true
+chrono.workspace = true
 sas_xport.workspace = true
 thiserror.workspace = true
 tracing.workspace = true

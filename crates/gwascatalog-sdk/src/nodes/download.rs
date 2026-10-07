@@ -258,7 +258,12 @@ impl DagNode for DownloadNode {
                     size: downloaded.bytes,
                     mtime_ns: 0,
                     content_hash: Some(format!("sha256:{}", downloaded.sha256)),
-                    immutable_remote: true,
+                    // The artifact lives in engine-local mutable storage, and
+                    // the FTP file can be revised upstream — do not claim
+                    // immutable_remote: with the recorded sha256 the freshness
+                    // check recomputes the digest and a rewritten file is
+                    // judged changed instead of being served from cache.
+                    immutable_remote: false,
                 }),
             });
         }

@@ -8,14 +8,27 @@
 //! is computed while streaming, and the artifact is published by an atomic
 //! rename only after the full body arrived and every verification passed. A
 //! staging file left behind by a cancelled or failed run is safely resumed on
-//! the next run when the server offers a strong validator (ETag or
-//! Last-Modified, sent as If-Range) — otherwise the download restarts from
-//! zero rather than append to an unverifiable prefix.
+//! the next run when the server offers a strong validator — a non-weak ETag
+//! (`W/"…"` is never strong) or a Last-Modified date at least 60s in the past
+//! (RFC 9110 §13.1.5) — sent as If-Range; otherwise the staging prefix is
+//! dropped and the download restarts from zero rather than append to an
+//! unverifiable prefix.
+//!
+//! The target is guarded by a `{path}.lock` claim for the duration of one
+//! download, so two concurrent `overwrite=false` runs cannot both publish over
+//! each other: the second fails fast with [`FileDownloadError::TargetLocked`],
+//! and the publish itself is a no-clobber link (a plain rename when
+//! `overwrite=true`). A stale lock whose owning process is demonstrably dead
+//! (same host, dead pid) is reclaimed; anything else is reported for manual
+//! removal.
 //!
 //! A sidecar manifest (`<path>.download.json`) records provenance for the
 //! run ledger: accession/release when the caller knows them, original and
 //! final URL, HTTP status, validator headers, bytes, SHA256, resume offset,
-//! attempt count, and start/completion times.
+//! attempt count, and start/completion times. It is written *before* the data
+//! publishes, so the data file's appearance is the commit point of the pair:
+//! a manifest without data is a harmless leftover the next run overwrites,
+//! and data never appears unless the ledger entry for it is already in place.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -120,6 +133,12 @@ pub enum FileDownloadError {
     AlreadyExists { path: String },
 
     #[error(
+        "another download holds the lock on `{path}` (holder: {holder}); if that run is \
+         finished, remove `{path}.lock`"
+    )]
+    TargetLocked { path: String, holder: String },
+
+    #[error(
         "download of `{url}` failed after {attempts} attempt(s): {last}; staging file kept \
          for resume"
     )]
@@ -180,8 +199,8 @@ pub struct FileDownloadSpec {
     #[serde(default = "default_idle_timeout_secs")]
     pub idle_timeout_secs: u64,
     /// Resume from a leftover `.part` staging file when the server offered a
-    /// strong validator (ETag / Last-Modified); otherwise restart from zero
-    /// (default true).
+    /// strong validator (a non-weak ETag, or a Last-Modified date ≥60s in
+    /// the past); otherwise restart from zero (default true).
     #[serde(default = "default_true")]
     pub resume: bool,
     /// Replace an existing output at `path` (default false — fail instead).
@@ -334,6 +353,71 @@ fn staging_meta_path(staging_path: &std::path::Path) -> PathBuf {
     PathBuf::from(os_string)
 }
 
+/// Liveness claim recorded in `{final}.lock` while a download owns a target.
+#[derive(Serialize, Deserialize)]
+struct LockContent {
+    hostname: String,
+    pid: u32,
+    started_unix_s: u64,
+}
+
+impl LockContent {
+    fn describe(&self) -> String {
+        format!(
+            "pid {} on {} since unix {}",
+            self.pid, self.hostname, self.started_unix_s
+        )
+    }
+}
+
+fn hostname() -> String {
+    let mut buffer = [0u8; 256];
+    let rc = unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len()) };
+    if rc != 0 {
+        return "unknown-host".to_string();
+    }
+    let end = buffer.iter().position(|&b| b == 0).unwrap_or(buffer.len());
+    String::from_utf8_lossy(&buffer[..end]).into_owned()
+}
+
+/// Human-readable holder for a TargetLocked error: the parsed claim when
+/// possible, otherwise the raw bytes (a torn or foreign lock file).
+fn lock_holder(held: &[u8]) -> String {
+    serde_json::from_slice::<LockContent>(held)
+        .map(|content| content.describe())
+        .unwrap_or_else(|_| String::from_utf8_lossy(held).into_owned())
+}
+
+/// Signal-0 liveness probe: `EPERM` means alive but owned by another user.
+fn pid_alive(pid: u32) -> bool {
+    let rc = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    if rc == 0 {
+        return true;
+    }
+    std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+}
+
+/// A strong validator per RFC 9110 §13.1.5 / §8.8.3, as an If-Range value:
+/// an entity-tag without the `W/` weak prefix, or — only when no strong
+/// entity-tag exists — a Last-Modified date at least 60 seconds in the past
+/// (a modification date within 60s of the response cannot be trusted to
+/// distinguish revisions). `None` means the staged prefix cannot be safely
+/// continued and must restart from zero.
+fn strong_validator(etag: Option<&str>, last_modified: Option<&str>) -> Option<String> {
+    if let Some(etag) = etag.map(str::trim)
+        && !etag.is_empty()
+    {
+        let weak = etag.starts_with("W/") || etag.starts_with("w/");
+        if !weak {
+            return Some(etag.to_string());
+        }
+    }
+    let date = last_modified.map(str::trim)?;
+    let modified = chrono::DateTime::parse_from_rfc2822(date).ok()?;
+    let age = chrono::Utc::now().signed_duration_since(modified.with_timezone(&chrono::Utc));
+    (age.num_seconds() >= 60).then(|| date.to_string())
+}
+
 impl Sink {
     fn describe(&self) -> String {
         match self {
@@ -391,6 +475,178 @@ impl Sink {
                 }),
             },
             Sink::Local { final_path, .. } => Ok(final_path.exists()),
+        }
+    }
+
+    /// Host-filesystem layout (final, staging, lock) when the bytes land on a
+    /// local directory — directly for [`Sink::Local`], or through the opendal
+    /// `fs` backend's root for a VFS sink. `None` for remote object-store
+    /// backends, which have neither exclusive-create nor link primitives.
+    fn host_paths(&self) -> Option<(PathBuf, PathBuf, PathBuf)> {
+        match self {
+            Sink::Local {
+                final_path,
+                staging_path,
+            } => {
+                let mut lock = final_path.as_os_str().to_os_string();
+                lock.push(".lock");
+                Some((
+                    final_path.clone(),
+                    staging_path.clone(),
+                    PathBuf::from(lock),
+                ))
+            }
+            Sink::Vfs {
+                op,
+                final_key,
+                staging_key,
+            } => {
+                let info = op.info();
+                if info.scheme() != "fs" {
+                    return None;
+                }
+                let root = PathBuf::from(info.root());
+                Some((
+                    root.join(final_key),
+                    root.join(staging_key),
+                    root.join(format!("{final_key}.lock")),
+                ))
+            }
+        }
+    }
+
+    /// Claim the target for one download. A pre-existing lock fails fast
+    /// with [`FileDownloadError::TargetLocked`] — unless it records a
+    /// process on this same host that is demonstrably dead (a crashed or
+    /// killed run), in which case it is reclaimed. Cross-host staleness is
+    /// not guessable and is reported for manual removal.
+    async fn acquire_lock(&self, owner: &LockContent) -> Result<(), FileDownloadError> {
+        let payload = serde_json::to_vec(owner).map_err(|error| FileDownloadError::Write {
+            path: "<lock>".into(),
+            reason: error.to_string(),
+        })?;
+        for _round in 0..2 {
+            // Round 1: try to take the lock; round 2 (only after reclaiming
+            // a dead-owner lock): take it for ourselves.
+            match self {
+                Sink::Local { final_path, .. } => {
+                    let mut lock = final_path.as_os_str().to_os_string();
+                    lock.push(".lock");
+                    let path = PathBuf::from(lock);
+                    match tokio::fs::OpenOptions::new()
+                        .create_new(true)
+                        .write(true)
+                        .open(&path)
+                        .await
+                    {
+                        Ok(mut file) => {
+                            use tokio::io::AsyncWriteExt;
+                            file.write_all(&payload).await.map_err(|error| {
+                                FileDownloadError::Write {
+                                    path: path.display().to_string(),
+                                    reason: error.to_string(),
+                                }
+                            })?;
+                            return Ok(());
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                            let held = tokio::fs::read(&path).await.map_err(|error| {
+                                FileDownloadError::Write {
+                                    path: path.display().to_string(),
+                                    reason: error.to_string(),
+                                }
+                            })?;
+                            if !self.reclaim_if_dead(&held, owner).await? {
+                                return Err(FileDownloadError::TargetLocked {
+                                    path: self.describe(),
+                                    holder: lock_holder(&held),
+                                });
+                            }
+                        }
+                        Err(error) => {
+                            return Err(FileDownloadError::Write {
+                                path: path.display().to_string(),
+                                reason: error.to_string(),
+                            });
+                        }
+                    }
+                }
+                Sink::Vfs { op, final_key, .. } => {
+                    let lock_key = format!("{final_key}.lock");
+                    match op.stat(&lock_key).await {
+                        Err(error) if error.kind() == opendal::ErrorKind::NotFound => {
+                            // No conditional create in the object-store API:
+                            // write-after-stat is a best-effort claim on
+                            // backends without host paths (fs-backed mounts
+                            // took the exclusive branch above).
+                            op.write(&lock_key, payload.clone())
+                                .await
+                                .map_err(|error| FileDownloadError::Write {
+                                    path: lock_key.clone(),
+                                    reason: error.to_string(),
+                                })?;
+                            return Ok(());
+                        }
+                        Ok(_) => {
+                            let held = op
+                                .read(&lock_key)
+                                .await
+                                .map_err(|error| FileDownloadError::Write {
+                                    path: lock_key.clone(),
+                                    reason: error.to_string(),
+                                })?
+                                .to_vec();
+                            if !self.reclaim_if_dead(&held, owner).await? {
+                                return Err(FileDownloadError::TargetLocked {
+                                    path: self.describe(),
+                                    holder: lock_holder(&held),
+                                });
+                            }
+                        }
+                        Err(error) => {
+                            return Err(FileDownloadError::Write {
+                                path: lock_key.clone(),
+                                reason: error.to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        Err(FileDownloadError::Write {
+            path: self.describe(),
+            reason: "lock kept being recreated while reclaiming it".into(),
+        })
+    }
+
+    /// `true` when the held lock names a dead process on this host and was
+    /// removed (caller should retry the acquire).
+    async fn reclaim_if_dead(
+        &self,
+        held: &[u8],
+        owner: &LockContent,
+    ) -> Result<bool, FileDownloadError> {
+        let Ok(content) = serde_json::from_slice::<LockContent>(held) else {
+            return Ok(false);
+        };
+        if content.hostname != owner.hostname || pid_alive(content.pid) {
+            return Ok(false);
+        }
+        self.release_lock().await;
+        Ok(true)
+    }
+
+    /// Best-effort lock drop; called on every exit path.
+    async fn release_lock(&self) {
+        match self {
+            Sink::Local { final_path, .. } => {
+                let mut lock = final_path.as_os_str().to_os_string();
+                lock.push(".lock");
+                let _ = tokio::fs::remove_file(PathBuf::from(lock)).await;
+            }
+            Sink::Vfs { op, final_key, .. } => {
+                let _ = op.delete(&format!("{final_key}.lock")).await;
+            }
         }
     }
 
@@ -629,43 +885,79 @@ impl Sink {
         }
     }
 
-    /// Atomic publish: staging -> final, then drop the staging meta.
-    async fn publish(&self) -> Result<(), FileDownloadError> {
+    /// Publish staging -> final, then drop the staging meta.
+    ///
+    /// `overwrite=false` uses a **no-clobber link**: if the target appeared
+    /// after the pre-flight existence check (a concurrent download that held
+    /// the lock first, or a foreign writer), the link fails with `EEXIST`,
+    /// the verified staging is dropped, and nothing of ours replaces what is
+    /// already there. `overwrite=true` is a plain rename. On object-store
+    /// backends without a link primitive this degrades to stat-then-rename
+    /// with the residual race accepted in the open (fs-backed mounts, the
+    /// production case, always take the link path via [`Sink::host_paths`]).
+    async fn publish(&self, overwrite: bool) -> Result<(), FileDownloadError> {
+        let describe_io_error = |error: std::io::Error| FileDownloadError::Write {
+            path: self.describe(),
+            reason: format!("publish failed: {error}"),
+        };
+        if let Some((final_host, staging_host, _lock)) = self.host_paths() {
+            if overwrite {
+                tokio::fs::rename(&staging_host, &final_host)
+                    .await
+                    .map_err(describe_io_error)?;
+            } else {
+                match tokio::fs::hard_link(&staging_host, &final_host).await {
+                    Ok(()) => {
+                        let _ = tokio::fs::remove_file(&staging_host).await;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                        // Someone published first; our staging is moot.
+                        self.delete_staging().await;
+                        return Err(FileDownloadError::AlreadyExists {
+                            path: self.describe(),
+                        });
+                    }
+                    Err(error) => return Err(describe_io_error(error)),
+                }
+            }
+            self.delete_staging_meta().await;
+            return Ok(());
+        }
+        let Sink::Vfs {
+            op,
+            final_key,
+            staging_key,
+        } = self
+        else {
+            unreachable!("Local sinks always have host paths");
+        };
+        if !overwrite && op.stat(final_key).await.is_ok() {
+            self.delete_staging().await;
+            return Err(FileDownloadError::AlreadyExists {
+                path: self.describe(),
+            });
+        }
+        op.rename(staging_key, final_key)
+            .await
+            .map_err(|error| FileDownloadError::Write {
+                path: final_key.clone(),
+                reason: format!("rename staging into place failed: {error}"),
+            })?;
+        self.delete_staging_meta().await;
+        Ok(())
+    }
+
+    /// Remove only the `{staging}.meta.json` sidecar (after a publish moved
+    /// the staging file itself).
+    async fn delete_staging_meta(&self) {
         match self {
             Sink::Vfs {
-                op,
-                final_key,
-                staging_key,
+                op, staging_key, ..
             } => {
-                op.rename(staging_key, final_key).await.map_err(|error| {
-                    FileDownloadError::Write {
-                        path: final_key.clone(),
-                        reason: format!("rename staging into place failed: {error}"),
-                    }
-                })?;
                 let _ = op.delete(&format!("{staging_key}.meta.json")).await;
-                Ok(())
             }
-            Sink::Local {
-                final_path,
-                staging_path,
-            } => {
-                if let Some(parent) = final_path.parent() {
-                    tokio::fs::create_dir_all(parent).await.map_err(|error| {
-                        FileDownloadError::Write {
-                            path: final_path.display().to_string(),
-                            reason: format!("cannot create `{}`: {error}", parent.display()),
-                        }
-                    })?;
-                }
-                tokio::fs::rename(staging_path, final_path)
-                    .await
-                    .map_err(|error| FileDownloadError::Write {
-                        path: final_path.display().to_string(),
-                        reason: format!("rename staging into place failed: {error}"),
-                    })?;
+            Sink::Local { staging_path, .. } => {
                 let _ = tokio::fs::remove_file(staging_meta_path(staging_path)).await;
-                Ok(())
             }
         }
     }
@@ -765,7 +1057,7 @@ fn validate_spec(spec: &FileDownloadSpec) -> Result<(), FileDownloadError> {
     Ok(())
 }
 
-fn data_file_ref(path: &str, size: u64, sha256: &str, immutable: bool) -> FileRef {
+fn data_file_ref(path: &str, size: u64, sha256: &str) -> FileRef {
     let format = std::path::Path::new(path)
         .extension()
         .and_then(|extension| extension.to_str())
@@ -777,7 +1069,13 @@ fn data_file_ref(path: &str, size: u64, sha256: &str, immutable: bool) -> FileRe
             size,
             mtime_ns: 0,
             content_hash: Some(format!("sha256:{sha256}")),
-            immutable_remote: immutable,
+            // The output lands in engine-local mutable storage (the VFS is a
+            // local mount, not an immutable object store), and the source URL
+            // is not guaranteed immutable either — so the fingerprint must
+            // NOT claim `immutable_remote`. With the recorded sha256 the
+            // freshness check recomputes the digest and a rewritten file is
+            // correctly judged changed instead of being served from cache.
+            immutable_remote: false,
         }),
     }
 }
@@ -846,6 +1144,46 @@ impl FileDownloadNode {
             .map_err(|source| describe_request_error(&self.spec.url, source))?;
 
         let started_unix = unix_now();
+        let lock_owner = LockContent {
+            hostname: hostname(),
+            pid: std::process::id(),
+            started_unix_s: started_unix,
+        };
+        // One downloader per target: concurrent runs fail fast instead of
+        // racing staging files and clobbering each other's publish.
+        sink.acquire_lock(&lock_owner).await?;
+        let result = self
+            .download_locked(
+                node_ctx,
+                &client,
+                &sink,
+                &url,
+                &path,
+                idle_timeout,
+                started_unix,
+            )
+            .await;
+        sink.release_lock().await;
+        result
+    }
+
+    /// Download phases after the target lock is held: attempts, verification,
+    /// ledger write, publish. The existence check repeats here because the
+    /// pre-lock check raced with any previous lock holder's publish.
+    #[allow(clippy::too_many_arguments)]
+    async fn download_locked(
+        &mut self,
+        node_ctx: &NodeCtx,
+        client: &reqwest::Client,
+        sink: &Sink,
+        url: &reqwest::Url,
+        path: &str,
+        idle_timeout: Duration,
+        started_unix: u64,
+    ) -> Result<PortOutputs, FileDownloadError> {
+        if !self.spec.overwrite && sink.output_exists().await? {
+            return Err(FileDownloadError::AlreadyExists { path: path.into() });
+        }
 
         let mut attempts = 0u32;
         let max_attempts = 1 + self.spec.retries;
@@ -877,7 +1215,7 @@ impl FileDownloadNode {
             sink.delete_staging().await;
             return Err(FileDownloadError::SizeMismatch {
                 url: self.spec.url.clone(),
-                path: path.clone(),
+                path: path.to_string(),
                 expected,
                 actual: completed.bytes,
             });
@@ -892,15 +1230,18 @@ impl FileDownloadNode {
                 sink.delete_staging().await;
                 return Err(FileDownloadError::ChecksumMismatch {
                     url: self.spec.url.clone(),
-                    path: path.clone(),
+                    path: path.to_string(),
                     expected,
                     actual: completed.sha256,
                 });
             }
         }
 
-        sink.publish().await?;
-
+        // Ledger first, data last: the data file's appearance is the commit
+        // point of the pair. A manifest write failure here leaves the target
+        // absent, so a plain retry is never blocked by a half-published
+        // output; a manifest left without data (crash before publish) is
+        // overwritten by the next run.
         let manifest_path = format!("{path}.download.json");
         let manifest = json!({
             "kind": FILE_DOWNLOAD_KIND,
@@ -928,8 +1269,9 @@ impl FileDownloadNode {
         });
         write_manifest(node_ctx, &manifest_path, &manifest).await?;
 
-        let immutable = matches!(sink, Sink::Vfs { .. });
-        let data_ref = data_file_ref(&path, completed.bytes, &completed.sha256, immutable);
+        sink.publish(self.spec.overwrite).await?;
+
+        let data_ref = data_file_ref(path, completed.bytes, &completed.sha256);
         let manifest_ref = FileRef {
             path: manifest_path,
             format: Some("json".into()),
@@ -950,8 +1292,11 @@ impl FileDownloadNode {
         idle_timeout: Duration,
     ) -> AttemptOutcome {
         // Safe resume needs a staging prefix PLUS a strong validator recorded
-        // for this exact URL; anything less restarts from zero (the writer
-        // opens in truncate mode, so a stale prefix cannot leak into the body).
+        // for this exact URL (RFC 9110 §13.1.5: a weak `W/"…"` ETag is never
+        // strong, and a Last-Modified date only when it is ≥60s in the past).
+        // A prefix without one is unusable — the server could have served a
+        // different revision — so it is dropped and the download restarts
+        // from zero rather than append to an unverifiable prefix.
         let meta = if self.spec.resume {
             sink.read_staging_meta().await
         } else {
@@ -959,24 +1304,26 @@ impl FileDownloadNode {
         };
         let staged_len = sink.staging_len().await.ok().flatten().unwrap_or(0);
         let mut resumed_from = 0u64;
-        let mut have_validator = false;
-        if let Some(meta) = meta.as_ref() {
-            let same_url = meta.url == self.spec.url;
-            let strong = meta.etag.is_some() || meta.last_modified.is_some();
-            if same_url && strong && staged_len > 0 {
-                resumed_from = staged_len;
-                have_validator = true;
+        let mut range_validator: Option<String> = None;
+        if staged_len > 0 {
+            match meta.as_ref() {
+                Some(meta) if meta.url == self.spec.url => {
+                    if let Some(validator) =
+                        strong_validator(meta.etag.as_deref(), meta.last_modified.as_deref())
+                    {
+                        resumed_from = staged_len;
+                        range_validator = Some(validator);
+                    } else {
+                        sink.delete_staging().await;
+                    }
+                }
+                // No meta at all, or meta recorded for a different URL.
+                _ => sink.delete_staging().await,
             }
         }
 
         let mut request = client.get(url.clone());
-        if have_validator {
-            let meta = meta.as_ref().expect("checked above");
-            let validator = meta
-                .etag
-                .clone()
-                .or_else(|| meta.last_modified.clone())
-                .unwrap_or_default();
+        if let Some(validator) = range_validator.as_ref() {
             request = request
                 .header(reqwest::header::IF_RANGE, validator)
                 .header(reqwest::header::RANGE, format!("bytes={resumed_from}-"));
@@ -1266,23 +1613,31 @@ impl NodeFactory for FileDownloadNodeFactory {
         "The large-file sibling of `http_fetch`: the same deny-by-default network \
         allowlist gates the initial URL and every redirect hop, but the body is \
         never buffered in memory — bytes stream to a staging object in chunks, \
-        SHA256 is computed while streaming, and the file is published by an atomic \
-        rename only after the full body arrived, the byte count matched \
-        `expected_bytes` (when given), and the SHA256 matched `expected_sha256` \
-        (when given). A cancelled or failed attempt leaves a `.part` staging file \
-        that the next run resumes when the server offers a strong validator \
-        (ETag / Last-Modified, sent as If-Range); without one the download \
-        restarts from zero rather than risk appending to a stale prefix. A \
-        `<path>.download.json` sidecar manifest records the original and final \
-        URL, HTTP status, validator headers, optional accession/release, bytes, \
-        SHA256, resume offset, attempts, and start/completion times for the run \
-        ledger. Outputs: port 0 is the downloaded File (its fingerprint carries \
-        the content hash), port 1 `manifest` is the sidecar. Network errors, \
-        5xx, 429, 408 and mid-stream resets are retried (`retries`, default 3) \
-        with backoff; a stalled stream trips `idle_timeout_secs` (default 120) — \
-        there is no total-time timeout. Disk budget is checked pre-flight when \
-        the total size is known and the target sits on a probeable local \
-        filesystem."
+        SHA256 is computed while streaming, and the file is published only after \
+        the full body arrived, the byte count matched `expected_bytes` (when \
+        given), and the SHA256 matched `expected_sha256` (when given). \
+        Concurrency: a `{path}.lock` claim serializes downloads of one target — \
+        a second run fails fast with a TargetLocked error instead of clobbering \
+        (a lock left by a dead same-host process is reclaimed) — and the \
+        `overwrite=false` publish is a no-clobber link, so a target that \
+        appeared mid-run is never replaced. Ordering: the `<path>\
+        .download.json` sidecar manifest (original and final URL, status, \
+        validator headers, accession/release, bytes, SHA256, resume offset, \
+        attempts, timestamps) is written BEFORE the data publishes, so data at \
+        the final path always has its ledger entry; a manifest without data is \
+        an unfinished run and is rewritten on retry. Resume: a cancelled \
+        attempt leaves a `.part` staging file that the next run continues only \
+        when the recorded validator is strong per RFC 9110 §13.1.5 — a \
+        non-weak ETag, or a Last-Modified at least 60s old — sent as If-Range; \
+        anything else restarts from zero. Outputs: port 0 is the downloaded \
+        File (fingerprint carries the content hash and deliberately does NOT \
+        claim immutable_remote: the target sits in mutable local storage and a \
+        rewritten file must invalidate the cache), port 1 `manifest`. Network \
+        errors, 5xx, 429, 408 and mid-stream resets retry (`retries`, default \
+        3) with backoff; a stalled stream trips `idle_timeout_secs` (default \
+        120) — there is no total-time timeout. Disk budget is checked \
+        pre-flight when the total size is known and the target sits on a \
+        probeable local filesystem."
     }
 
     fn spec_schema(&self) -> schemars::Schema {
@@ -1458,6 +1813,9 @@ mod tests {
             fingerprint.content_hash.as_deref(),
             Some(format!("sha256:{sha}").as_str())
         );
+        // Mutable local storage: the fingerprint must not short-circuit
+        // freshness checks.
+        assert!(!fingerprint.immutable_remote);
 
         let manifest = file_output_of(&outputs, 1);
         let manifest_path = dir.join("payload.tsv.download.json");
@@ -1694,6 +2052,251 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("stalled for 1s"), "{error}");
         assert!(error.to_string().contains("after 1 attempt"), "{error}");
+        assert!(!out.exists());
+    }
+
+    #[tokio::test]
+    async fn manifest_write_failure_publishes_no_data() {
+        // The ledger entry is written before the data publishes; if the
+        // manifest cannot be written, nothing lands at the final path and a
+        // plain retry is never blocked by a half-published output.
+        let (port, _server) = scripted_server(vec![
+            b"HTTP/1.1 200 OK\r\ncontent-length: 5\r\nconnection: close\r\n\r\nhello".to_vec(),
+        ])
+        .await;
+        let dir = tempfile::tempdir().unwrap().keep();
+        let out = dir.join("payload.bin");
+        // An unwritable manifest target: a directory where the file goes.
+        std::fs::create_dir(dir.join("payload.bin.download.json")).unwrap();
+        let mut node = FileDownloadNode::new(spec(
+            &format!("http://127.0.0.1:{port}/payload"),
+            &out.to_string_lossy(),
+        ));
+        let error = node
+            .execute_with_allowlist(&ctx(), Some(vec!["127.0.0.1".into()]))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("download.json"), "{error}");
+        assert!(
+            !out.exists(),
+            "a manifest write failure must not publish data to the final path"
+        );
+    }
+
+    #[tokio::test]
+    async fn rewritten_vfs_download_invalidates_cache() {
+        // The fingerprint must not claim immutable_remote: the artifact sits
+        // in mutable local storage, so a rewritten object has to be judged
+        // changed by the recorded sha256, not served from cache.
+        let (port, _server) = scripted_server(vec![
+            b"HTTP/1.1 200 OK\r\ncontent-length: 5\r\nconnection: close\r\n\r\nhello".to_vec(),
+        ])
+        .await;
+        let storage = std::sync::Arc::new(vfs::OpendalFileStorage::new_temp());
+        let context = NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            Some(storage.clone()),
+        );
+        let mut node = FileDownloadNode::new(spec(
+            &format!("http://127.0.0.1:{port}/payload"),
+            "vfs:///payload.bin",
+        ));
+        let outputs = node
+            .execute_with_allowlist(&context, Some(vec!["127.0.0.1".into()]))
+            .await
+            .unwrap();
+        let file = file_output_of(&outputs, 0);
+        assert!(!file.fingerprint.as_ref().unwrap().immutable_remote);
+        storage
+            .resolve("/payload.bin")
+            .write(&storage.resolve_path("/payload.bin"), "other".to_string())
+            .await
+            .unwrap();
+        let changed =
+            dag_core::fingerprint::cached_file_changed(file, Some(storage.as_ref())).await;
+        assert!(
+            changed,
+            "a rewritten downloaded VFS object must invalidate the cached output"
+        );
+    }
+
+    #[tokio::test]
+    async fn weak_etag_is_not_a_strong_validator() {
+        // A W/"…" ETag (or a Last-Modified newer than 60s) must never be sent
+        // as If-Range: the staged prefix is dropped and the download
+        // restarts from zero instead of appending to an unvalidatable prefix.
+        let (port, server) = scripted_server(vec![
+            b"HTTP/1.1 200 OK\r\ncontent-length: 10\r\netag: W/\"v1\"\r\nconnection: close\r\n\r\n0123456789"
+                .to_vec(),
+        ])
+        .await;
+        let dir = tempfile::tempdir().unwrap().keep();
+        let out = dir.join("resume.bin");
+        let url = format!("http://127.0.0.1:{port}/r.bin");
+        std::fs::write(dir.join("resume.bin.part"), b"01234").unwrap();
+        std::fs::write(
+            dir.join("resume.bin.part.meta.json"),
+            serde_json::to_vec(&StagingMeta {
+                url: url.clone(),
+                etag: Some("W/\"v1\"".into()),
+                last_modified: None,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        let mut node = FileDownloadNode::new(spec(&url, &out.to_string_lossy()));
+        node.execute_with_allowlist(&ctx(), Some(vec!["127.0.0.1".into()]))
+            .await
+            .unwrap();
+        let requests = server.await.unwrap();
+        let first = requests[0].to_ascii_lowercase();
+        assert!(
+            !first.contains("range:"),
+            "no Range may be sent without a strong validator: {first}"
+        );
+        assert!(
+            !first.contains("if-range:"),
+            "a weak ETag must never be sent as If-Range: {first}"
+        );
+        assert_eq!(std::fs::read(&out).unwrap(), b"0123456789");
+    }
+
+    #[test]
+    fn strong_validator_classification() {
+        // Non-weak ETags are strong; W/ (either case) is not.
+        assert_eq!(
+            strong_validator(Some("\"v1\""), None),
+            Some("\"v1\"".to_string())
+        );
+        assert_eq!(strong_validator(Some("W/\"v1\""), None), None);
+        assert_eq!(strong_validator(Some("w/\"v1\""), None), None);
+        // A Last-Modified from 1994 is strong; one from "now" is not.
+        assert!(strong_validator(None, Some("Sun, 06 Nov 1994 08:49:37 GMT")).is_some());
+        let fresh = chrono::Utc::now()
+            .format("%a, %d %b %Y %H:%M:%S GMT")
+            .to_string();
+        assert_eq!(strong_validator(None, Some(&fresh)), None);
+        // A strong ETag wins even when a weak date is also present.
+        assert!(strong_validator(Some("\"v2\""), Some(&fresh)).is_some());
+        // Unparseable dates are not validators.
+        assert_eq!(strong_validator(None, Some("yesterday")), None);
+    }
+
+    #[tokio::test]
+    async fn parallel_downloads_cannot_both_publish() {
+        // Two concurrent overwrite=false runs on one target: the lock lets
+        // exactly one finish; the other fails fast with TargetLocked and the
+        // final bytes belong to the winner alone.
+        let (port_a, server_a) = scripted_server(vec![
+            b"HTTP/1.1 200 OK\r\ncontent-length: 5\r\nconnection: close\r\n\r\nhello".to_vec(),
+        ])
+        .await;
+        let (port_b, server_b) = scripted_server(vec![
+            b"HTTP/1.1 200 OK\r\ncontent-length: 5\r\nconnection: close\r\n\r\nother".to_vec(),
+        ])
+        .await;
+        let out = tempfile::tempdir().unwrap().keep().join("shared.bin");
+        let mut a = FileDownloadNode::new(spec(
+            &format!("http://127.0.0.1:{port_a}/a"),
+            &out.to_string_lossy(),
+        ));
+        let mut b = FileDownloadNode::new(spec(
+            &format!("http://127.0.0.1:{port_b}/b"),
+            &out.to_string_lossy(),
+        ));
+        let context_a = ctx();
+        let context_b = ctx();
+        let (result_a, result_b) = tokio::join!(
+            a.execute_with_allowlist(&context_a, Some(vec!["127.0.0.1".into()])),
+            b.execute_with_allowlist(&context_b, Some(vec!["127.0.0.1".into()])),
+        );
+        let loser = match (&result_a, &result_b) {
+            (Ok(_), Err(error)) => error,
+            (Err(error), Ok(_)) => error,
+            (Err(_), Err(_)) => panic!("one of the two downloads must succeed"),
+            (Ok(_), Ok(_)) => panic!("both overwrite=false writers succeeded"),
+        };
+        assert!(
+            matches!(loser, FileDownloadError::TargetLocked { .. }),
+            "the losing run must fail on the target lock, got: {loser}"
+        );
+        let bytes = std::fs::read(&out).unwrap();
+        assert!(
+            bytes == b"hello" || bytes == b"other",
+            "final bytes must belong to the winner alone, got {bytes:?}"
+        );
+        // The lock is released on exit: a later download of a fresh target
+        // is not blocked by the leftover claim.
+        let (port_c, server_c) = scripted_server(vec![
+            b"HTTP/1.1 200 OK\r\ncontent-length: 5\r\nconnection: close\r\n\r\nthird".to_vec(),
+        ])
+        .await;
+        let out2 = tempfile::tempdir().unwrap().keep().join("next.bin");
+        let mut c = FileDownloadNode::new(spec(
+            &format!("http://127.0.0.1:{port_c}/c"),
+            &out2.to_string_lossy(),
+        ));
+        c.execute_with_allowlist(&ctx(), Some(vec!["127.0.0.1".into()]))
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(&out2).unwrap(), b"third");
+        let _ = (server_a, server_b, server_c);
+    }
+
+    #[tokio::test]
+    async fn stale_lock_from_a_dead_process_is_reclaimed() {
+        let (port, _server) = scripted_server(vec![
+            b"HTTP/1.1 200 OK\r\ncontent-length: 5\r\nconnection: close\r\n\r\nhello".to_vec(),
+        ])
+        .await;
+        let dir = tempfile::tempdir().unwrap().keep();
+        let out = dir.join("stale.bin");
+        // A lock whose owner is a dead process on this host is stale.
+        std::fs::write(
+            dir.join("stale.bin.lock"),
+            serde_json::to_vec(&LockContent {
+                hostname: hostname(),
+                pid: 999_999,
+                started_unix_s: 0,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        let mut node = FileDownloadNode::new(spec(
+            &format!("http://127.0.0.1:{port}/s"),
+            &out.to_string_lossy(),
+        ));
+        node.execute_with_allowlist(&ctx(), Some(vec!["127.0.0.1".into()]))
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(&out).unwrap(), b"hello");
+        assert!(!dir.join("stale.bin.lock").exists(), "lock released");
+    }
+
+    #[tokio::test]
+    async fn live_lock_blocks_the_download() {
+        let out = tempfile::tempdir().unwrap().keep().join("held.bin");
+        // Our own pid is definitionally alive: the lock must be honored.
+        std::fs::write(
+            out.with_file_name("held.bin.lock"),
+            serde_json::to_vec(&LockContent {
+                hostname: hostname(),
+                pid: std::process::id(),
+                started_unix_s: 0,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        let mut node =
+            FileDownloadNode::new(spec("http://127.0.0.1:9/none", &out.to_string_lossy()));
+        let error = node
+            .execute_with_allowlist(&ctx(), Some(vec!["127.0.0.1".into()]))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, FileDownloadError::TargetLocked { .. }),
+            "{error}"
+        );
         assert!(!out.exists());
     }
 }
