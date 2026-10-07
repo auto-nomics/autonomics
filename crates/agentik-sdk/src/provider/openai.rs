@@ -78,6 +78,8 @@ impl OpenaiProvider {
             // GPT-6-Sol — GPT-6 代日常 agentic 主力（effort 六档至 max，
             // 默认 medium；text+image 输入，1.05M 上下文）。
             entry("gpt-6-sol", LARGE_CONTEXT_WINDOW, ReasoningEffort::Max),
+            // GPT-6.1-Sol — gpt-6-sol 的 6.1 修订。
+            entry("gpt-6.1-sol", LARGE_CONTEXT_WINDOW, ReasoningEffort::Max),
             // GPT-5.6-Sol — 可靠的日常 agentic 主力。
             entry("gpt-5.6-sol", LARGE_CONTEXT_WINDOW, ReasoningEffort::Max),
             // GPT-5.6-Terra — 均衡的 agentic 编码模型。
@@ -225,12 +227,14 @@ mod tests {
     #[test]
     fn preset_catalogue_has_real_entries() {
         let models = OpenaiProvider::preset_models();
-        assert!(models.len() >= 7);
+        assert!(models.len() >= 8);
         assert!(models.iter().any(|m| m.model_name == MODEL_GPT_6_ASTRA));
         assert!(models.iter().any(|m| m.model_name == MODEL_GPT_6_LUNA));
+        assert!(models.iter().any(|m| m.model_name == "gpt-6.1-sol"));
         for (name, context_length) in [
             (MODEL_GPT_6_ASTRA, 1_050_000),
             ("gpt-6-sol", 1_050_000),
+            ("gpt-6.1-sol", 1_050_000),
             ("gpt-5.6-sol", 1_050_000),
             ("gpt-5.6-terra", 1_050_000),
             ("gpt-5.6-luna", 1_050_000),

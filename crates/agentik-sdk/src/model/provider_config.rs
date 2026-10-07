@@ -19,6 +19,8 @@ pub enum ProviderType {
     Openrouter,
     Zai,
     Sensenova,
+    Bailian,
+    Stepfun,
     /// A user-defined or externally-registered provider type.
     Custom(String),
 }
@@ -36,6 +38,8 @@ impl ProviderType {
             ProviderType::Openrouter => "openrouter",
             ProviderType::Zai => "zai",
             ProviderType::Sensenova => "sensenova",
+            ProviderType::Bailian => "bailian",
+            ProviderType::Stepfun => "stepfun",
             ProviderType::Custom(s) => s.as_str(),
         }
     }
@@ -58,6 +62,8 @@ impl From<&str> for ProviderType {
             "openrouter" => ProviderType::Openrouter,
             "zai" => ProviderType::Zai,
             "sensenova" => ProviderType::Sensenova,
+            "bailian" => ProviderType::Bailian,
+            "stepfun" => ProviderType::Stepfun,
             custom => ProviderType::Custom(custom.to_string()),
         }
     }

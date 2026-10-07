@@ -403,6 +403,7 @@ mod tests {
     fn all_builtin_provider_types_advertise_anthropic() {
         use crate::provider::registry::wire_protocol;
         for p in [
+            ProviderType::Bailian,
             ProviderType::Deepseek,
             ProviderType::Mimo,
             ProviderType::Minimax,
@@ -439,6 +440,14 @@ mod tests {
         assert_eq!(
             wire_protocol_for_provider(&ProviderType::Openai),
             WireProtocolKind::ChatgptResponses
+        );
+    }
+
+    #[test]
+    fn stepfun_uses_openai_chat_wire() {
+        assert_eq!(
+            wire_protocol_for_provider(&ProviderType::Stepfun),
+            WireProtocolKind::OpenaiChat
         );
     }
 }
