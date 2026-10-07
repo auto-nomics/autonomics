@@ -5,6 +5,7 @@ pub mod bundle_source;
 pub mod container_command;
 pub mod dataframe_to_file;
 pub mod file_decompress;
+pub mod file_download;
 pub mod file_reference;
 pub mod file_set_select;
 pub mod file_to_dataframe;
@@ -14,6 +15,7 @@ pub mod h5ad_obs_to_dataframe;
 pub mod http_fetch;
 pub mod image_registry;
 pub mod multiomic_concordance;
+pub mod net_policy;
 pub mod parquet_sql;
 pub mod radiomics;
 pub mod script_nodes;
@@ -126,6 +128,7 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(archive_nodes::ArchiveInspectNodeFactory));
         registry.register(Box::new(archive_nodes::ArchiveExtractNodeFactory));
         registry.register(Box::new(http_fetch::HttpFetchNodeFactory));
+        registry.register(Box::new(file_download::FileDownloadNodeFactory));
         registry.register(Box::new(
             h5ad_obs_to_dataframe::H5adObsToDataFrameNodeFactory {},
         ));

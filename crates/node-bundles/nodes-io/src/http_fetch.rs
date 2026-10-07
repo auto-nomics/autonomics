@@ -6,9 +6,10 @@
 //! allowlist lives in `state_dir/network-allowlist.toml`; the gateway daemon
 //! creates a commented template there on startup and points
 //! [`ENV_NETWORK_ALLOWLIST`] at it. An allowlist entry matches its own host
-//! and every subdomain (`ebi.ac.uk` also covers `ftp.ebi.ac.uk`).
+//! and every subdomain (`ebi.ac.uk` also covers `ftp.ebi.ac.uk`). The
+//! allowlist machinery itself is shared with `file_download` via
+//! [`crate::net_policy`].
 
-use std::collections::BTreeSet;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -25,11 +26,12 @@ use dag_core::{
     registry::{NodeCtx, NodeFactory},
 };
 
+pub use crate::net_policy::{
+    ALLOWLIST_FILE_NAME, ENV_NETWORK_ALLOWLIST, NetworkPolicyError, default_allowlist_toml,
+    host_allowed, load_allowlist_from_env, parse_allowlist, redirect_policy,
+};
+
 pub const HTTP_FETCH_KIND: &str = "http_fetch";
-/// Environment variable holding the allowlist file path. Set by the gateway
-/// daemon (`serve`) to `<state_dir>/network-allowlist.toml`.
-pub const ENV_NETWORK_ALLOWLIST: &str = "AUTONOMICS_NETWORK_ALLOWLIST";
-pub const ALLOWLIST_FILE_NAME: &str = "network-allowlist.toml";
 
 const DEFAULT_TIMEOUT_SECS: u64 = 300;
 const DEFAULT_MAX_BYTES: u64 = 256 * 1024 * 1024;
@@ -39,28 +41,8 @@ pub enum HttpFetchError {
     #[error("invalid http_fetch spec: {message}")]
     InvalidSpec { message: String },
 
-    #[error(
-        "no HTTP fetch allowlist is configured ({reason}); the gateway daemon creates \
-         `<state_dir>/{ALLOWLIST_FILE_NAME}` and points {ENV_NETWORK_ALLOWLIST} at it on startup"
-    )]
-    AllowlistUnavailable { reason: String },
-
-    #[error("cannot read HTTP fetch allowlist `{path}`: {source}")]
-    AllowlistRead {
-        path: String,
-        #[source]
-        source: std::io::Error,
-    },
-
-    #[error("invalid HTTP fetch allowlist `{path}`: {reason}")]
-    AllowlistParse { path: String, reason: String },
-
-    #[error(
-        "host `{host}` is not on the HTTP fetch allowlist; add `[[allow]]` with \
-         `host = \"{host}\"` to the file named by {ENV_NETWORK_ALLOWLIST} and restart the \
-         gateway, or remove this node from the workflow"
-    )]
-    DomainNotAllowed { host: String },
+    #[error(transparent)]
+    Policy(#[from] NetworkPolicyError),
 
     #[error("HTTP request to `{url}` failed: {source}")]
     Request {
@@ -124,81 +106,6 @@ fn port_layout() -> NodePorts {
     NodePorts::new().add_output_port_of_type(None, PortType::File)
 }
 
-// ── Allowlist parsing and matching ─────────────────────────────────────────
-
-#[derive(Debug, Default, Deserialize)]
-struct AllowlistFile {
-    #[serde(default, rename = "allow")]
-    allow: Vec<AllowEntry>,
-}
-
-#[derive(Debug, Deserialize)]
-struct AllowEntry {
-    host: String,
-}
-
-/// Commented template written to `state_dir/network-allowlist.toml` on first
-/// daemon start (deny-by-default: nothing is fetchable until a host is added).
-pub fn default_allowlist_toml() -> &'static str {
-    r#"# HTTP fetch allowlist for the `http_fetch` DAG node.
-#
-# Deny-by-default: a fetch is refused unless the URL host matches an entry
-# below. An entry matches its own host and any subdomain — `ebi.ac.uk` also
-# covers `ftp.ebi.ac.uk`. Entries are hostnames only (no scheme, no path).
-# Restart the gateway after editing.
-
-# [[allow]]
-# host = "ftp.ebi.ac.uk"
-"#
-}
-
-/// Parse the allowlist TOML into normalized host entries.
-pub fn parse_allowlist(path: &str, source: &str) -> Result<Vec<String>, HttpFetchError> {
-    let parsed: AllowlistFile =
-        toml::from_str(source).map_err(|error| HttpFetchError::AllowlistParse {
-            path: path.to_string(),
-            reason: error.to_string(),
-        })?;
-    let mut entries = BTreeSet::new();
-    for entry in parsed.allow {
-        let host = entry.host.trim().to_ascii_lowercase();
-        if host.is_empty() || host.contains("://") || host.contains('/') || host.contains(' ') {
-            return Err(HttpFetchError::AllowlistParse {
-                path: path.to_string(),
-                reason: format!("invalid allow entry host `{}`", entry.host),
-            });
-        }
-        entries.insert(host.trim_matches('.').to_string());
-    }
-    Ok(entries.into_iter().collect())
-}
-
-/// Load the allowlist from the path named by [`ENV_NETWORK_ALLOWLIST`].
-fn load_allowlist_from_env() -> Result<Vec<String>, HttpFetchError> {
-    let Some(path) = std::env::var(ENV_NETWORK_ALLOWLIST)
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-    else {
-        return Err(HttpFetchError::AllowlistUnavailable {
-            reason: format!("{ENV_NETWORK_ALLOWLIST} is not set"),
-        });
-    };
-    let source =
-        std::fs::read_to_string(&path).map_err(|source| HttpFetchError::AllowlistRead {
-            path: path.clone(),
-            source,
-        })?;
-    parse_allowlist(&path, &source)
-}
-
-/// Suffix host match: an entry covers itself and any subdomain.
-pub fn host_allowed(host: &str, entries: &[String]) -> bool {
-    let host = host.trim_matches('.').to_ascii_lowercase();
-    entries
-        .iter()
-        .any(|entry| host == *entry || host.ends_with(&format!(".{entry}")))
-}
-
 fn validate_spec(spec: &HttpFetchSpec) -> Result<(), HttpFetchError> {
     if spec.timeout_secs == 0 {
         return Err(HttpFetchError::InvalidSpec {
@@ -237,19 +144,6 @@ fn parse_url(url: &str) -> Result<reqwest::Url, HttpFetchError> {
         });
     }
     Ok(parsed)
-}
-
-/// Redirects are followed only while every hop stays on the allowlist.
-fn redirect_policy(entries: Vec<String>) -> reqwest::redirect::Policy {
-    reqwest::redirect::Policy::custom(move |attempt| {
-        if attempt.previous().len() > 5 {
-            return attempt.error("too many redirects");
-        }
-        match attempt.url().host_str() {
-            Some(host) if host_allowed(host, &entries) => attempt.follow(),
-            _ => attempt.error("redirect target host is not on the HTTP fetch allowlist"),
-        }
-    })
 }
 
 /// reqwest's own Display for redirect failures hides the policy message (it
@@ -337,10 +231,7 @@ impl HttpFetchNode {
             None => load_allowlist_from_env()?,
         };
         let url = parse_url(&self.spec.url)?;
-        let host = url.host_str().unwrap_or_default().to_string();
-        if !host_allowed(&host, &entries) {
-            return Err(HttpFetchError::DomainNotAllowed { host });
-        }
+        crate::net_policy::ensure_host_allowed(&url, &entries)?;
 
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(self.spec.timeout_secs))
@@ -481,39 +372,6 @@ mod tests {
             dag_core::value::NodeValue::File(file) => file,
             other => panic!("expected a File output, got {other:?}"),
         }
-    }
-
-    #[test]
-    fn parse_allowlist_accepts_entries_and_rejects_bad_hosts() {
-        let path = "/tmp/allowlist.toml";
-        let entries = parse_allowlist(path, "[[allow]]\nhost = \"FTP.EBI.ac.uk\"\n").unwrap();
-        assert_eq!(entries, vec!["ftp.ebi.ac.uk"]);
-        assert!(parse_allowlist(path, "").unwrap().is_empty());
-
-        let error = parse_allowlist(path, "[[allow]]\nhost = \"https://x.com/a\"\n").unwrap_err();
-        assert!(
-            error.to_string().contains("invalid allow entry host"),
-            "{error}"
-        );
-        let error = parse_allowlist(path, "allow = [oops]\n").unwrap_err();
-        assert!(
-            error.to_string().contains("invalid HTTP fetch allowlist"),
-            "{error}"
-        );
-    }
-
-    #[test]
-    fn host_matching_covers_subdomains_only() {
-        let entries = vec!["ebi.ac.uk".to_string(), "localhost".to_string()];
-        assert!(host_allowed("ebi.ac.uk", &entries));
-        assert!(host_allowed("ftp.ebi.ac.uk", &entries));
-        assert!(host_allowed("FTP.EBI.AC.UK", &entries));
-        assert!(host_allowed("localhost", &entries));
-        assert!(host_allowed("127.0.0.1", &["127.0.0.1".into()]));
-        assert!(!host_allowed("notebi.ac.uk", &entries));
-        assert!(!host_allowed("evil-ebi.ac.uk", &entries));
-        assert!(!host_allowed("ac.uk", &entries));
-        assert!(!host_allowed("example.com", &entries));
     }
 
     #[test]
