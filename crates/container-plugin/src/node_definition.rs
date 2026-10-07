@@ -11,11 +11,12 @@ use std::path::{Component, Path};
 use container_runtime::{ContainerNetwork, DEFAULT_TIMEOUT_SECS, PullPolicy};
 use dag_core::NodePorts;
 use dag_core::value::PortType;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// One node kind exposed by a plugin family manifest. One `[[nodes]]` table
 /// in the family TOML maps to one of these.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct NodeDefinition {
     /// Registry kind, unique workspace-wide (e.g. `mtag_container`).
@@ -47,7 +48,7 @@ fn default_timeout() -> u64 {
 }
 
 /// Declarative port layout as authored in the manifest.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PortLayout {
     #[serde(default)]
@@ -57,7 +58,7 @@ pub struct PortLayout {
     pub outputs: Vec<OutputSpec>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PortSpec {
     /// Closed vocabulary: container nodes are File-to-File by policy, so v0
@@ -71,13 +72,13 @@ pub struct PortSpec {
     pub accepted_formats: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum PortKind {
     File,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct OutputSpec {
     /// Safe path relative to `/work`. Must exist after a successful run or
@@ -91,7 +92,7 @@ pub struct OutputSpec {
 }
 
 /// One parameter of the node's spec DSL.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ParamSpec {
     pub r#type: ParamType,
@@ -136,7 +137,7 @@ pub struct ParamSpec {
 /// — for consumers that test `[ -n "$VAR" ]`). Flag is a rendering
 /// contract, not a new JSON shape: both accept JSON booleans and compile
 /// to the same `"type": "boolean"` schema node.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ParamType {
     Bool,
@@ -164,7 +165,7 @@ impl std::fmt::Display for ParamType {
 /// How the container is invoked. `script`/`env`/`argv` values go through
 /// the M2 template renderer with the params in scope (v0: `{{name}}`
 /// substitution only, no control flow).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CommandSpec {
     /// `command[0]`: `sh`, `Rscript`, `python`, or a runner path.
@@ -193,7 +194,7 @@ pub struct CommandSpec {
 
 /// Resource and security profile. Reuses the runtime's own enums where
 /// they exist; unknown TOML values fail at parse time.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Resources {
     /// `None` keeps the runtime default (isolated, no network devices).
