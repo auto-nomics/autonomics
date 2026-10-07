@@ -897,6 +897,40 @@ load the local snapshot into the DAG. Call `plugin_uninstall` to remove the\n\
 active runtime source while retaining development history. Treat manifest\n\
 lifecycle state as host-owned: do not attempt direct manifest writes.";
 
+const PROMPT_RESEARCHER_DEVELOPMENT_HANDOFF: &str = "\n\
+### Researcher / Developer Collaboration\n\
+You are the Researcher. You own the scientific question, analysis design, DAG\n\
+construction, execution, and interpretation. Before requesting implementation,\n\
+inspect existing capabilities with `list_node_factories`, `get_node_doc`,\n\
+`get_node_spec`, and `get_node_ports`, and address nodes as `plugin/node`.\n\
+\n\
+If no suitable node exists, do not improvise plugin development or container\n\
+debugging. Record the capability gap with `evo_observe`, then delegate the work\n\
+to a Developer through `delegate_to` or by spawning an agent with\n\
+`profile_segment=\"developer\"`. Provide the scientific objective, expected\n\
+inputs and outputs, data shape, error/edge cases, acceptance checks, and a\n\
+small representative sample when available.\n\
+\n\
+When the Developer returns, use the delivered `plugin/node` address in a DAG,\n\
+validate it incrementally with `dag_shell` and `run_dag`, and interpret the\n\
+scientific result. If the node fails, return the exact error, spec, ports, and\n\
+failing DAG context to the Developer; do not attempt to patch the plugin\n\
+yourself.";
+
+const PROMPT_DEVELOPER_HANDOFF: &str = "\n\
+### Developer Handoff\n\
+You are the Developer. You own plugin and node implementation, environment\n\
+selection, focused container validation, installation, and uninstallation.\n\
+`plugin_container_run` is for narrow plugin/test validation only; do not use it\n\
+to perform open-ended research analysis or bypass the DAG engine.\n\
+\n\
+Finish each implementation task with a concise handoff to the Researcher that\n\
+includes the plugin name, full `plugin/node` address, node documentation,\n\
+spec schema, port layout, installation status, a minimal DAG usage example,\n\
+and validation evidence. If the Researcher's requirement or acceptance data is\n\
+ambiguous, ask for the specific missing information rather than inventing a\n\
+scientific assumption.";
+
 const PROMPT_SQL_CONVENTIONS: &str = "\n\
 ### SQL Conventions\n\
 All SQL in this system runs on Apache DataFusion. The following rules apply to \
@@ -982,7 +1016,17 @@ pub fn build_system_prompt<C: PromptCapabilities>(caps: &C) -> String {
     if caps.enable_kegg() {
         s.push_str(PROMPT_KEGG);
     }
-    s.push_str(PROMPT_BIOMEDICAL_RESOURCES);
+    if caps.enable_bibliography()
+        || caps.enable_opengwas()
+        || caps.enable_opentargets()
+        || caps.enable_gwascatalog()
+        || caps.enable_chembl()
+        || caps.enable_rcsb()
+        || caps.enable_string()
+        || caps.enable_kegg()
+    {
+        s.push_str(PROMPT_BIOMEDICAL_RESOURCES);
+    }
 
     // DAG engine, SQL conventions, and general sections are always included —
     // the data-engine tools and filesystem tools are always registered.
@@ -993,6 +1037,9 @@ pub fn build_system_prompt<C: PromptCapabilities>(caps: &C) -> String {
     }
     if caps.enable_plugin_rsi() {
         s.push_str(PROMPT_PLUGIN_RSI);
+        s.push_str(PROMPT_DEVELOPER_HANDOFF);
+    } else {
+        s.push_str(PROMPT_RESEARCHER_DEVELOPMENT_HANDOFF);
     }
 
     s.push_str(PROMPT_SQL_CONVENTIONS);
@@ -1561,6 +1608,34 @@ mod tests {
         assert!(prompt.contains("Data Pipeline (DAG Engine)"));
         assert!(prompt.contains("SQL Conventions"));
         assert!(prompt.contains("## Guidelines"));
+    }
+
+    #[test]
+    fn system_prompt_separates_researcher_and_developer_handoff() {
+        let profiles = agentik_core::AgentProfile::defaults();
+        let researcher = profiles
+            .iter()
+            .find(|profile| profile.path == "researcher")
+            .unwrap();
+        let developer = profiles
+            .iter()
+            .find(|profile| profile.path == "developer")
+            .unwrap();
+
+        let researcher_prompt = build_system_prompt(researcher);
+        assert!(researcher_prompt.contains("Researcher / Developer Collaboration"));
+        assert!(researcher_prompt.contains("delegate_to"));
+        assert!(researcher_prompt.contains("profile_segment=\"developer\""));
+        assert!(researcher_prompt.contains("do not attempt to patch the plugin"));
+        assert!(!researcher_prompt.contains("Plugin Self-Improvement"));
+        assert!(!researcher_prompt.contains("Developer Handoff"));
+
+        let developer_prompt = build_system_prompt(developer);
+        assert!(developer_prompt.contains("Plugin Self-Improvement"));
+        assert!(developer_prompt.contains("Developer Handoff"));
+        assert!(developer_prompt.contains("full `plugin/node` address"));
+        assert!(developer_prompt.contains("validation evidence"));
+        assert!(!developer_prompt.contains("Researcher / Developer Collaboration"));
     }
 
     #[test]

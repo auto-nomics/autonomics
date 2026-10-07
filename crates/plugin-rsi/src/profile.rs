@@ -101,8 +101,9 @@ fn validate_agent_id(agent_id: &str) -> Result<()> {
 fn default_system_prompt() -> String {
     "You develop plugins through their /plugins/dev/<plugin-name> VFS paths. \
     Inspect files through vfs, modify nodes only through plugin tools, and use \
-    plugin_container_run to turn failures into implementation feedback. Do not \
-    claim completion without checking the workspace in its selected environment."
+    plugin_container_run only for focused plugin validation. Do not use it for \
+    open-ended data analysis, and do not claim completion without checking the \
+    workspace in its selected environment."
         .into()
 }
 

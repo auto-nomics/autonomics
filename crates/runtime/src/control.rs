@@ -356,23 +356,6 @@ impl HostControl {
         .unwrap_or(Err("host command channel closed".into()))
     }
 
-    /// Derive a specialized child profile from the caller's profile.
-    pub async fn derive_profile(
-        &self,
-        caller_profile_path: &str,
-        segment: &str,
-        overrides: agentik_core::ProfileOverrides,
-    ) -> Result<String, String> {
-        self.ask(|tx| HostCommand::DeriveProfile {
-            caller_profile_path: caller_profile_path.into(),
-            segment: segment.into(),
-            overrides: Box::new(overrides),
-            reply_tx: tx,
-        })
-        .await
-        .unwrap_or(Err("host command channel closed".into()))
-    }
-
     pub async fn get_status(&self) -> Option<HostStatus> {
         self.ask(|tx| HostCommand::GetStatus { reply_tx: tx }).await
     }
@@ -477,14 +460,6 @@ pub enum HostCommand {
 
     /// Shut down a named agent and remove from registry.
     Shutdown { name: String },
-
-    /// Derive a child profile from the caller's profile. Reply: Ok(profile_path) or Err(msg).
-    DeriveProfile {
-        caller_profile_path: String,
-        segment: String,
-        overrides: Box<agentik_core::ProfileOverrides>,
-        reply_tx: oneshot::Sender<Result<String, String>>,
-    },
 
     /// Add a topology node.
     AddNode {
