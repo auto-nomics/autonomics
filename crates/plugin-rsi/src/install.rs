@@ -130,6 +130,48 @@ pub fn read_installed_plugin_source(
     }))
 }
 
+/// Remove one plugin's durable installation declaration.
+///
+/// Returns `false` when the plugin is not declared. Immutable local snapshots
+/// and development workspaces are intentionally not removed by this function.
+pub fn remove_installed_plugin_source(config_path: &Path, plugin_name: &str) -> Result<bool> {
+    crate::validate_plugin_name(plugin_name)?;
+    let mut config = read_config(config_path)?;
+    let Some(root) = config.as_table_mut() else {
+        return Ok(false);
+    };
+    let Some(plugins) = root.get_mut("plugin").and_then(toml::Value::as_array_mut) else {
+        return Ok(false);
+    };
+
+    let mut matched = 0;
+    plugins.retain(|entry| {
+        let Some(table) = entry.as_table() else {
+            return true;
+        };
+        let matches = table.get("name").and_then(toml::Value::as_str) == Some(plugin_name);
+        matched += usize::from(matches);
+        !matches
+    });
+    match matched {
+        0 => Ok(false),
+        1 => {
+            if root
+                .get("plugin")
+                .and_then(toml::Value::as_array)
+                .is_some_and(Vec::is_empty)
+            {
+                root.remove("plugin");
+            }
+            atomic_toml(config_path, &config)?;
+            Ok(true)
+        }
+        _ => Err(Error::Validation(format!(
+            "plugin `{plugin_name}` is declared more than once"
+        ))),
+    }
+}
+
 /// Backward-compatible reader for callers that require a GitHub source.
 pub fn read_git_plugin_source(
     config_path: &Path,
@@ -297,6 +339,28 @@ mod tests {
             read_installed_plugin_source(&path, "demo-plugin").unwrap(),
             InstalledPluginSource::Git(_)
         ));
+    }
+
+    #[test]
+    fn removing_an_installed_source_is_atomic_and_idempotent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("plugins.toml");
+        write_git_plugin_source(
+            &path,
+            "demo-plugin",
+            "git@github.com:org/demo-plugin.git",
+            &"a".repeat(40),
+        )
+        .unwrap();
+
+        assert!(remove_installed_plugin_source(&path, "demo-plugin").unwrap());
+        assert!(
+            !path.exists()
+                || !std::fs::read_to_string(&path)
+                    .unwrap()
+                    .contains("demo-plugin")
+        );
+        assert!(!remove_installed_plugin_source(&path, "demo-plugin").unwrap());
     }
 
     #[test]

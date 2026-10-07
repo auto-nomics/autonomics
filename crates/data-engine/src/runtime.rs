@@ -1280,6 +1280,11 @@ impl DataEngineManager {
         self.node_registry.reload_plugin(&plugin);
     }
 
+    /// Remove factories declared by one runtime-ready manifest plugin.
+    pub fn remove_plugin(&self, plugin_name: &str) {
+        self.node_registry.remove_plugin(plugin_name);
+    }
+
     /// Get (or lazily create) a [`DataEngineClient`] for `session_id`.
     ///
     /// The first call for a given session spawns a dedicated tokio task.

@@ -67,11 +67,15 @@ impl PluginPullRequestPublisher for FakePullRequestPublisher {
 struct NoopRegistry;
 
 impl plugin_rsi::PluginRegistryControl for NoopRegistry {
-    fn installed_node_kinds(&self) -> plugin_rsi::Result<Vec<String>> {
+    fn installed_node_addresses(&self) -> plugin_rsi::Result<Vec<String>> {
         Ok(Vec::new())
     }
 
     fn reload_plugin(&self, _plugin_name: &str) -> plugin_rsi::Result<()> {
+        Ok(())
+    }
+
+    fn uninstall_plugin(&self, _plugin_name: &str) -> plugin_rsi::Result<()> {
         Ok(())
     }
 }

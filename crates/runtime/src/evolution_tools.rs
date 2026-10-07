@@ -22,7 +22,8 @@ pub struct EvoObserveInput {
     pub body: String,
     /// Observation kind: failure, recipe, or caveat.
     pub kind: Option<String>,
-    /// DAG node kind involved. This is the primary automatic routing anchor.
+    /// DAG node address (`plugin/node`) or legacy bare kind. This is the
+    /// primary automatic routing anchor.
     pub node_kind: Option<String>,
     /// Exact error text for failure observations.
     pub error: Option<String>,

@@ -14,6 +14,7 @@ mod manifest;
 mod node_create;
 mod node_update;
 mod node_update_doc;
+mod uninstall;
 
 use std::{
     collections::BTreeMap,
@@ -212,6 +213,9 @@ pub fn plugin_development_tool_registrations(agent_id: impl Into<String>) -> Vec
             state: state.clone(),
         }),
         ToolRegistration::from(install::PluginInstallTool {
+            state: state.clone(),
+        }),
+        ToolRegistration::from(uninstall::PluginUninstallTool {
             state: state.clone(),
         }),
         ToolRegistration::from(node_create::PluginNodeCreateTool {

@@ -10,7 +10,7 @@ use crate::ExecError;
 
 #[tool(
     name = "get_node_ports",
-    description = "Get the input/output port layout of a specific node kind. \
+    description = "Get the input/output port layout for a node address (`plugin/node`). \
                   Returns declared ports needed to wire edges through dag_shell. \
                   Call it before writing edge operations to know which ports are available. \
                   For dynamic-port kinds, pass the exact \
@@ -18,7 +18,7 @@ use crate::ExecError;
                   spec's declared outputs."
 )]
 pub struct GetNodePortsInput {
-    /// The node kind to query (e.g. "sql", "file_to_dataframe", "dataframe_to_file", "sldsc", "linear_regression", "echo").
+    /// Node address or legacy bare kind to query. Prefer `plugin/node` from list_node_factories.
     pub kind: String,
     /// Optional concrete node spec. Provide this for dynamic-port kinds.
     #[serde(default)]

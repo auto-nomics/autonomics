@@ -61,7 +61,7 @@ pub fn validate_workspace(
     plugin_name: &str,
     workspace: &PluginWorkspace,
     catalog: &EnvironmentCatalog,
-    installed_kinds: &[String],
+    installed_addresses: &[String],
     owned_kinds: &[String],
     attempt: u32,
 ) -> ValidationReport {
@@ -83,11 +83,17 @@ pub fn validate_workspace(
         }
     }
 
+    let owned_addresses = owned_kinds
+        .iter()
+        .map(|kind| format!("{plugin_name}/{kind}"))
+        .collect::<Vec<_>>();
     let collisions = manifest
         .nodes
         .iter()
-        .map(|node| node.kind.clone())
-        .filter(|kind| installed_kinds.contains(kind) && !owned_kinds.contains(kind))
+        .map(|node| format!("{plugin_name}/{}", node.kind))
+        .filter(|address| {
+            installed_addresses.contains(address) && !owned_addresses.contains(address)
+        })
         .collect::<Vec<_>>();
     if !collisions.is_empty() {
         gates.push(GateResult::fail(

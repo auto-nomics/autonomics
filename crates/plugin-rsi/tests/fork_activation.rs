@@ -103,11 +103,15 @@ fn updated_node_json() -> Value {
 struct NoopRegistry;
 
 impl plugin_rsi::PluginRegistryControl for NoopRegistry {
-    fn installed_node_kinds(&self) -> plugin_rsi::Result<Vec<String>> {
+    fn installed_node_addresses(&self) -> plugin_rsi::Result<Vec<String>> {
         Ok(Vec::new())
     }
 
     fn reload_plugin(&self, _plugin_name: &str) -> plugin_rsi::Result<()> {
+        Ok(())
+    }
+
+    fn uninstall_plugin(&self, _plugin_name: &str) -> plugin_rsi::Result<()> {
         Ok(())
     }
 }
@@ -300,6 +304,10 @@ async fn an_installed_reference_can_be_forked_and_locally_activated() {
     assert_eq!(install_output["activated"], true);
     assert_eq!(install_output["status"], "draft");
     assert_eq!(install_output["node_kinds"], json!(["forked_adapter"]));
+    assert_eq!(
+        install_output["node_addresses"],
+        json!(["forked-plugin/forked_adapter"])
+    );
     assert_eq!(install_output["validation_report"]["overall"], "pass");
     assert!(install_output["local_commit"].is_string());
     assert!(install_output["local_digest"].is_string());
@@ -382,6 +390,45 @@ async fn an_installed_reference_can_be_forked_and_locally_activated() {
     store.install_local("forked-plugin").unwrap();
     assert!(
         store
+            .pending_distillation()
+            .unwrap()
+            .iter()
+            .any(|manifest| manifest.plugin_name == "forked-plugin")
+    );
+
+    let uninstall_result = execute(
+        &tools,
+        "plugin_uninstall",
+        json!({"plugin_path": "/plugins/dev/forked-plugin"}),
+    )
+    .await
+    .unwrap();
+    let ToolResultContent::Json(uninstall_output) = uninstall_result.content else {
+        panic!("plugin_uninstall must return JSON");
+    };
+    assert_eq!(uninstall_output["uninstalled"], true);
+    assert_eq!(uninstall_output["source_kind"], "local_snapshot");
+    assert!(
+        plugin_rsi::read_installed_plugin_source(
+            &state.path().join("plugins.toml"),
+            "forked-plugin"
+        )
+        .is_err()
+    );
+    assert!(!runtime_root.join("forked-plugin").exists());
+    assert!(store.root().join("forked-plugin").is_dir());
+    assert!(
+        plugin_rsi::PluginStateLayout::v2(state.path())
+            .snapshot_root()
+            .join("forked-plugin")
+            .is_dir()
+    );
+    forked.refresh().unwrap();
+    assert!(!forked.manifest().installation.is_runtime_active());
+    assert!(!forked.manifest().lifecycle.publication_pending);
+    assert!(repository.is_clean().unwrap());
+    assert!(
+        !store
             .pending_distillation()
             .unwrap()
             .iter()

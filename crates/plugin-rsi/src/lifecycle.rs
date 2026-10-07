@@ -33,19 +33,19 @@ pub enum LocalActivationOutcome {
 pub struct PluginLifecycle<'a, 'b> {
     operator: &'a mut PluginOperator<'b>,
     catalog: &'a EnvironmentCatalog,
-    installed_node_kinds: &'a [String],
+    installed_node_addresses: &'a [String],
 }
 
 impl<'a, 'b> PluginLifecycle<'a, 'b> {
     pub fn new(
         operator: &'a mut PluginOperator<'b>,
         catalog: &'a EnvironmentCatalog,
-        installed_node_kinds: &'a [String],
+        installed_node_addresses: &'a [String],
     ) -> Self {
         Self {
             operator,
             catalog,
-            installed_node_kinds,
+            installed_node_addresses,
         }
     }
 
@@ -308,7 +308,7 @@ impl<'a, 'b> PluginLifecycle<'a, 'b> {
             self.operator.plugin_name(),
             &self.operator.workspace(),
             self.catalog,
-            self.installed_node_kinds,
+            self.installed_node_addresses,
             &owned_kinds,
             attempt,
         );

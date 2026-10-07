@@ -10,13 +10,13 @@ use crate::ExecError;
 
 #[tool(
     name = "get_node_doc",
-    description = "Get the documentation string for a specific node kind. \
+    description = "Get the documentation string for a node address (`plugin/node`). \
                   Returns a human-readable description of the node's purpose, \
                   semantics and usage hints. Call this when you need more detail \
                   than the short description in list_node_factories."
 )]
 pub struct GetNodeDocInput {
-    /// The node kind to query (e.g. "sql", "file_to_dataframe", "dataframe_to_file", "sldsc", "linear_regression", "echo").
+    /// Node address or legacy bare kind to query. Prefer `plugin/node` from list_node_factories.
     pub kind: String,
 }
 

@@ -43,8 +43,8 @@ pub use infra::{
 };
 pub use install::{
     GitInstalledPluginSource, InstalledPluginSource, LocalInstalledPluginSource,
-    read_git_plugin_source, read_installed_plugin_source, write_git_plugin_source,
-    write_local_plugin_source,
+    read_git_plugin_source, read_installed_plugin_source, remove_installed_plugin_source,
+    write_git_plugin_source, write_local_plugin_source,
 };
 pub use layout::{PluginLayoutVersion, PluginStateLayout};
 pub use lifecycle::{LocalActivationOutcome, PluginLifecycle, ValidationOutcome};

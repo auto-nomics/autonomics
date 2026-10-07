@@ -737,12 +737,12 @@ struct SharedPluginRegistryControl {
 }
 
 impl plugin_rsi::PluginRegistryControl for SharedPluginRegistryControl {
-    fn installed_node_kinds(&self) -> plugin_rsi::Result<Vec<String>> {
+    fn installed_node_addresses(&self) -> plugin_rsi::Result<Vec<String>> {
         Ok(self
             .manager
             .list_nodes()
             .into_iter()
-            .map(|node| node.kind)
+            .map(|node| node.address)
             .collect())
     }
 
@@ -756,6 +756,12 @@ impl plugin_rsi::PluginRegistryControl for SharedPluginRegistryControl {
         )
         .map_err(|error| plugin_rsi::Error::PluginRegistry(error.to_string()))?;
         self.manager.reload_plugin(plugin);
+        Ok(())
+    }
+
+    fn uninstall_plugin(&self, plugin_name: &str) -> plugin_rsi::Result<()> {
+        plugin_rsi::validate_plugin_name(plugin_name)?;
+        self.manager.remove_plugin(plugin_name);
         Ok(())
     }
 }

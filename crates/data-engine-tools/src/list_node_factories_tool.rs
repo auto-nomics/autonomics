@@ -10,17 +10,16 @@ use crate::ExecError;
 
 #[tool(
     name = "list_node_factories",
-    description = "List all registered node kinds (name + short description). \
+    description = "List all registered nodes (plugin/node address + short description). \
                   Returns lightweight metadata only — no JSON Schema or port layout. \
-                  To configure a node, first discover kinds here, then call \
+                  To configure a node, first discover addresses here, then call \
                   get_node_spec (for parameters), get_node_ports (for wiring), \
-                  and get_node_doc (for usage) with the chosen `kind`. Pass kind \
-                  to diagnose whether the live engine registry (including manifest \
-                  plugins loaded at engine startup) contains that exact node kind."
+                  and get_node_doc (for usage) with the chosen `plugin/node` \
+                  address. Legacy bare kinds are accepted only while unique."
 )]
 pub struct ListNodeFactoriesInput {
-    /// Exact node kind to diagnose. When omitted, every live registered kind
-    /// is returned as a list.
+    /// Node address or legacy bare kind to diagnose. When omitted, every live
+    /// registered node is returned as a list.
     pub kind: Option<String>,
 }
 
@@ -47,7 +46,9 @@ impl ToolFunction for ListNodeFactoriesTool {
             .map(str::trim)
             .filter(|kind| !kind.is_empty());
         if let Some(kind) = kind {
-            let registered = nodes.iter().find(|node| node.kind == kind);
+            let registered = nodes
+                .iter()
+                .find(|node| node.address == kind || node.kind == kind);
             let is_registered = registered.is_some();
             return Ok(ToolResult::success_json(serde_json::json!({
                 "kind": kind,
@@ -61,6 +62,10 @@ impl ToolFunction for ListNodeFactoriesTool {
                      plugins root/HOME, sync the plugin, and restart the engine."
                 },
                 "available_kinds": nodes.iter().map(|node| node.kind.clone()).collect::<Vec<_>>(),
+                "available_addresses": nodes
+                    .iter()
+                    .map(|node| node.address.clone())
+                    .collect::<Vec<_>>(),
             })));
         }
 
@@ -107,6 +112,14 @@ mod tests {
             report["available_kinds"]
                 .as_array()
                 .is_some_and(|kinds| { kinds.iter().any(|kind| kind == "echo") }),
+            "{report}"
+        );
+        assert!(
+            report["available_addresses"]
+                .as_array()
+                .is_some_and(|addresses| {
+                    addresses.iter().any(|address| address == "core/echo")
+                }),
             "{report}"
         );
     }

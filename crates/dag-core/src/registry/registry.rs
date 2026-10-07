@@ -13,6 +13,23 @@ use crate::dag::DagNode;
 use crate::node::{BundleRegistry, DataBundle, DataBundleBinding, NodePorts};
 use std::collections::HashMap as BoundDataBundles;
 
+/// Plugin namespace used by factories that are compiled into the engine and
+/// do not belong to a dynamically loaded manifest plugin.
+pub const BUILTIN_NODE_PLUGIN: &str = "core";
+
+/// Build the stable registry key for one node: `plugin/node`.
+pub fn canonical_node_address(plugin: &str, kind: &str) -> String {
+    debug_assert!(
+        !plugin.trim().is_empty() && !plugin.contains('/'),
+        "invalid node plugin namespace `{plugin}`"
+    );
+    debug_assert!(
+        !kind.trim().is_empty() && !kind.contains('/'),
+        "invalid local node kind `{kind}`"
+    );
+    format!("{plugin}/{kind}")
+}
+
 /// Build a fresh, isolated [`SessionContext`].
 ///
 /// Each call creates a **new** `CatalogList` (so `register_table("port_0", ...)`
@@ -28,6 +45,14 @@ pub fn new_isolated_ctx(runtime_env: Arc<RuntimeEnv>) -> SessionContext {
 }
 
 pub trait NodeFactory: Send + Sync {
+    /// The plugin namespace that owns this node kind.
+    ///
+    /// Built-in factories use [`BUILTIN_NODE_PLUGIN`]; manifest-backed
+    /// factories use their manifest's `plugin_name`.
+    fn plugin(&self) -> &'static str {
+        BUILTIN_NODE_PLUGIN
+    }
+
     fn kind(&self) -> &'static str;
     fn desc(&self) -> &'static str;
     fn doc(&self) -> &'static str;
@@ -173,6 +198,11 @@ impl NodeCtx {
 /// Summary of a registered node kind returned by [`NodeRegistry::list_nodes`].
 #[derive(Debug, Clone, Serialize)]
 pub struct NodeInfo {
+    /// Fully-qualified address in `plugin/node` form.
+    pub address: String,
+    /// Owning plugin namespace.
+    pub plugin: String,
+    /// Node kind, unique within the owning plugin.
     pub kind: String,
     pub desc: String,
     pub deprecated: bool,
@@ -221,7 +251,7 @@ impl NodeRegistry {
     /// backwards compatibility, but the duplicate kind is recorded and
     /// [`Self::assert_no_conflicts`] reports it.
     pub fn register(&mut self, factory: Box<dyn NodeFactory>) {
-        let kind = factory.kind().to_string();
+        let kind = canonical_node_address(factory.plugin(), factory.kind());
         let arc: Arc<dyn NodeFactory> = Arc::from(factory);
         let replaced = {
             let mut nodes = self.nodes.write().expect("node registry lock poisoned");
@@ -284,18 +314,29 @@ impl NodeRegistry {
         *nodes = temporary.into_nodes();
     }
 
+    /// Remove every factory contributed by one plugin namespace.
+    ///
+    /// Already-built node instances remain valid for their current DAG, but
+    /// subsequent registry lookups cannot create nodes from this plugin.
+    pub fn remove_plugin(&self, plugin_name: &str) {
+        let prefix = format!("{plugin_name}/");
+        let mut nodes = self.nodes.write().expect("node registry lock poisoned");
+        nodes.retain(|address, factory| {
+            !address.starts_with(&prefix) || factory.plugin() != plugin_name
+        });
+    }
+
     /// Borrow the shared [`NodeCtx`] (handed to every factory's `build`).
     pub fn ctx(&self) -> &NodeCtx {
         &self.node_ctx
     }
 
     fn get_node_factory(&self, node_kind: &str) -> Result<Arc<dyn NodeFactory>> {
+        let address = self.resolve_node_address(node_kind)?;
         self.nodes()
-            .get(node_kind)
+            .get(&address)
             .map(Arc::clone)
-            .ok_or(Error::FactoryNotFound {
-                kind: node_kind.to_string(),
-            })
+            .ok_or(Error::FactoryNotFound { kind: address })
     }
 
     pub fn build_node(&self, node_kind: &str, spec: serde_json::Value) -> Result<Box<dyn DagNode>> {
@@ -339,6 +380,42 @@ impl NodeRegistry {
         self.get_node_factory(kind)
     }
 
+    /// Resolve a node address to its canonical `plugin/node` registry key.
+    ///
+    /// Qualified addresses are canonical as written. A bare legacy kind is
+    /// accepted only while it uniquely selects one registered node.
+    pub fn resolve_node_address(&self, node_kind: &str) -> Result<String> {
+        let requested = node_kind.trim();
+        if requested.is_empty() {
+            return Err(Error::FactoryNotFound {
+                kind: requested.to_string(),
+            });
+        }
+        if requested.contains('/') {
+            return Ok(requested.to_string());
+        }
+
+        let registered: Vec<NodeInfo> = self
+            .list_nodes()
+            .into_iter()
+            .filter(|node| node.kind == requested)
+            .collect();
+        match registered.as_slice() {
+            [node] => Ok(node.address.clone()),
+            [] => Err(Error::FactoryNotFound {
+                kind: requested.to_string(),
+            }),
+            matches => Err(Error::AmbiguousNodeKind {
+                kind: requested.to_string(),
+                plugins: matches
+                    .iter()
+                    .map(|node| node.address.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            }),
+        }
+    }
+
     pub fn get_node_ports(&self, node_kind: &str) -> Result<NodePorts> {
         Ok(self.get_node_factory(node_kind)?.ports())
     }
@@ -362,8 +439,10 @@ impl NodeRegistry {
     pub fn list_nodes(&self) -> Vec<NodeInfo> {
         self.nodes()
             .iter()
-            .map(|(kind, factory)| NodeInfo {
-                kind: kind.clone(),
+            .map(|(address, factory)| NodeInfo {
+                address: address.clone(),
+                plugin: factory.plugin().to_string(),
+                kind: factory.kind().to_string(),
                 desc: factory.desc().to_string(),
                 deprecated: factory.deprecated(),
                 data_bundles: factory.data_bundles(),
@@ -389,10 +468,15 @@ mod tests {
     use super::*;
 
     struct FakeFactory {
+        plugin: &'static str,
         kind: &'static str,
     }
 
     impl NodeFactory for FakeFactory {
+        fn plugin(&self) -> &'static str {
+            self.plugin
+        }
+
         fn kind(&self) -> &'static str {
             self.kind
         }
@@ -423,17 +507,29 @@ mod tests {
     #[test]
     fn duplicate_registration_is_reported() {
         let mut reg = registry();
-        reg.register(Box::new(FakeFactory { kind: "dup_kind" }));
-        reg.register(Box::new(FakeFactory { kind: "other_kind" }));
+        reg.register(Box::new(FakeFactory {
+            plugin: "core",
+            kind: "dup_kind",
+        }));
+        reg.register(Box::new(FakeFactory {
+            plugin: "core",
+            kind: "other_kind",
+        }));
         // Distinct kinds are fine.
         assert!(reg.assert_no_conflicts().is_ok());
         assert!(reg.conflicts().is_empty());
 
         // Second registration of the same kind: last write still wins, but
         // the conflict is recorded (once, even on a third registration).
-        reg.register(Box::new(FakeFactory { kind: "dup_kind" }));
-        reg.register(Box::new(FakeFactory { kind: "dup_kind" }));
-        assert_eq!(reg.conflicts(), vec!["dup_kind".to_string()]);
+        reg.register(Box::new(FakeFactory {
+            plugin: "core",
+            kind: "dup_kind",
+        }));
+        reg.register(Box::new(FakeFactory {
+            plugin: "core",
+            kind: "dup_kind",
+        }));
+        assert_eq!(reg.conflicts(), vec!["core/dup_kind".to_string()]);
         let err = reg.assert_no_conflicts().expect_err("duplicate must error");
         assert!(
             err.to_string().contains("dup_kind"),
@@ -441,5 +537,57 @@ mod tests {
         );
         // The last registration is the one that sticks.
         assert!(reg.get_node_ports("dup_kind").is_ok());
+    }
+
+    #[test]
+    fn qualified_addresses_allow_the_same_local_kind_across_plugins() {
+        let mut reg = registry();
+        reg.register(Box::new(FakeFactory {
+            plugin: "alpha",
+            kind: "same_kind",
+        }));
+        reg.register(Box::new(FakeFactory {
+            plugin: "beta",
+            kind: "same_kind",
+        }));
+        reg.register(Box::new(FakeFactory {
+            plugin: "core",
+            kind: "echo",
+        }));
+
+        assert!(reg.assert_no_conflicts().is_ok());
+        let nodes = reg.list_nodes();
+        assert_eq!(
+            nodes
+                .iter()
+                .find(|node| node.plugin == "alpha")
+                .map(|node| node.address.as_str()),
+            Some("alpha/same_kind")
+        );
+        assert!(reg.resolve_node_address("beta/same_kind").is_ok());
+        assert_eq!(reg.resolve_node_address("echo").unwrap(), "core/echo");
+
+        let error = reg.resolve_node_address("same_kind").unwrap_err();
+        assert!(error.to_string().contains("ambiguous"), "{error}");
+        assert!(error.to_string().contains("alpha/same_kind"), "{error}");
+        assert!(error.to_string().contains("beta/same_kind"), "{error}");
+    }
+
+    #[test]
+    fn remove_plugin_removes_only_its_namespace() {
+        let mut reg = registry();
+        reg.register(Box::new(FakeFactory {
+            plugin: "alpha",
+            kind: "same_kind",
+        }));
+        reg.register(Box::new(FakeFactory {
+            plugin: "beta",
+            kind: "same_kind",
+        }));
+
+        reg.remove_plugin("alpha");
+        assert!(reg.get_node_ports("alpha/same_kind").is_err());
+        assert!(reg.get_node_ports("beta/same_kind").is_ok());
+        assert!(!reg.list_nodes().iter().any(|node| node.plugin == "alpha"));
     }
 }

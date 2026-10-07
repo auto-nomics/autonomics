@@ -52,6 +52,7 @@ pub struct ManifestNodeFactory {
     /// Loaded-family identity (WO-R09): joined into every built node's
     /// execution fingerprint so plugin edits invalidate cached outputs.
     identity: PluginIdentity,
+    plugin: &'static str,
     runtime: Arc<dyn container_runtime::PodmanConnection>,
     panel_cache: Arc<container_runtime::PanelCache>,
     kind: &'static str,
@@ -70,11 +71,14 @@ impl ManifestNodeFactory {
         image: ImageMetadata,
         panels: Vec<PanelBinding>,
         identity: PluginIdentity,
+        plugin_name: &str,
         runtime: Arc<dyn container_runtime::PodmanConnection>,
         panel_cache: Arc<container_runtime::PanelCache>,
     ) -> Self {
         let ports = compile_ports(&entry.ports);
+        let plugin: &'static str = Box::leak(plugin_name.to_string().into_boxed_str());
         Self {
+            plugin,
             kind: Box::leak(entry.kind.clone().into_boxed_str()),
             desc: Box::leak(entry.desc.clone().into_boxed_str()),
             doc: Box::leak(entry.doc.clone().into_boxed_str()),
@@ -104,6 +108,10 @@ impl ManifestNodeFactory {
 }
 
 impl NodeFactory for ManifestNodeFactory {
+    fn plugin(&self) -> &'static str {
+        self.plugin
+    }
+
     fn kind(&self) -> &'static str {
         self.kind
     }
@@ -255,6 +263,7 @@ impl Plugin {
                     manifest.image.clone(),
                     manifest.panels.clone(),
                     identity,
+                    &manifest.plugin_name,
                     runtime.clone(),
                     panel_cache.clone(),
                 )
@@ -476,8 +485,12 @@ ldsc --h2 "$AUTONOMICS_INPUT0" \
             registry
                 .list_nodes()
                 .iter()
-                .any(|node| node.kind == "ldsc_h2"),
-            "the manifest kind must appear in the registry"
+                .any(|node| node.address == "ldsc/ldsc_h2"),
+            "the qualified manifest node address must appear in the registry"
+        );
+        assert_eq!(
+            registry.resolve_node_address("ldsc_h2").unwrap(),
+            "ldsc/ldsc_h2"
         );
     }
 

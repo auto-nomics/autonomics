@@ -88,7 +88,8 @@ impl DataEngine {
     const DEFAULT_MEMORY_GUARD_INTERVAL_MS: u64 = 250;
 
     fn ensure_node_kind_allowed(kind: &str) -> Result<()> {
-        if kind == Self::DISABLED_NODE_KIND {
+        let local_kind = kind.rsplit_once('/').map_or(kind, |(_, local)| local);
+        if local_kind == Self::DISABLED_NODE_KIND {
             return Err(Error::Custom(format!(
                 "node kind '{kind}' is disabled; use a registered dedicated node instead"
             )));
@@ -298,9 +299,10 @@ impl DataEngine {
         spec: serde_json::Value,
     ) -> Result<()> {
         Self::ensure_node_kind_allowed(kind)?;
-        let node = self.node_registry.build_node(kind, spec.clone())?;
+        let address = self.node_registry.resolve_node_address(kind)?;
+        let node = self.node_registry.build_node(&address, spec.clone())?;
         self.dag
-            .add_node_with_spec(node_id.into(), node, kind.to_string(), spec)?;
+            .add_node_with_spec(node_id.into(), node, address, spec)?;
         Ok(())
     }
 
@@ -3272,6 +3274,24 @@ mod tests {
         assert!(
             msg.contains("nonexistent_kind_42"),
             "error should mention the kind; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn add_node_accepts_qualified_plugin_address() {
+        let mut engine = DataEngine::builder().build();
+        engine
+            .add_node_from_registry(
+                "qualified",
+                "core/sql",
+                serde_json::json!({"sql_query": "SELECT 1"}),
+            )
+            .unwrap();
+
+        assert_eq!(
+            engine.get_node("qualified").unwrap().0,
+            "core/sql",
+            "qualified addresses must be retained in DAG manifests"
         );
     }
 

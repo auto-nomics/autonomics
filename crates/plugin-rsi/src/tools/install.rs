@@ -32,6 +32,7 @@ struct InstallOutput {
     report: crate::ValidationReport,
     status: PluginStatus,
     node_kinds: Vec<String>,
+    node_addresses: Vec<String>,
     commit: Option<String>,
     digest: Option<String>,
 }
@@ -73,6 +74,11 @@ impl ToolFunction for PluginInstallTool {
                     activated: commit.is_some(),
                     status: operator.status(),
                     node_kinds: operator.owned_node_kinds(),
+                    node_addresses: operator
+                        .owned_node_kinds()
+                        .into_iter()
+                        .map(|kind| format!("{}/{}", operator.plugin_name(), kind))
+                        .collect(),
                     commit,
                     digest,
                     plugin_name,
@@ -95,6 +101,7 @@ impl ToolFunction for PluginInstallTool {
             "plugin_vfs_path": output.plugin_vfs_path,
             "status": output.status,
             "node_kinds": output.node_kinds,
+            "node_addresses": output.node_addresses,
             "validation_report": report,
             "local_commit": output.commit,
             "local_digest": output.digest,

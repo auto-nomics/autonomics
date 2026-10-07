@@ -172,6 +172,50 @@ impl PluginStore {
         crate::read_installed_plugin_source(&self.registry_path, plugin_name)
     }
 
+    /// Uninstall the active runtime source while preserving its audit history.
+    ///
+    /// The development workspace and immutable snapshots remain on disk. Only
+    /// the persistent registry declaration and its current runtime
+    /// materialization are removed.
+    pub fn uninstall(&self, plugin_name: &str) -> Result<InstalledPluginSource> {
+        crate::validate_plugin_name(plugin_name)?;
+        let source = self.installed_source(plugin_name)?;
+        let mut operator = self
+            .develop(plugin_name)?
+            .ok_or_else(|| Error::Validation(format!("unknown plugin `{plugin_name}`")))?;
+        let repository = operator.repository();
+        if !repository.is_clean()? {
+            return Err(Error::Validation(format!(
+                "plugin `{plugin_name}` has uncommitted development changes; \
+                 commit or discard them before uninstalling"
+            )));
+        }
+
+        operator.mutate_manifest(|manifest| {
+            manifest.installation = Default::default();
+            manifest.lifecycle.publication_pending = false;
+        })?;
+        operator.snapshot("plugin: uninstall runtime source")?;
+
+        let runtime_path = self.runtime_root.join(plugin_name);
+        match std::fs::symlink_metadata(&runtime_path) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                std::fs::remove_file(&runtime_path)?;
+            }
+            Ok(_) => std::fs::remove_dir_all(&runtime_path)?,
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => {}
+            Err(source) => return Err(source.into()),
+        }
+        if !crate::remove_installed_plugin_source(&self.registry_path, plugin_name)? {
+            return Err(Error::Validation(format!(
+                "plugin `{plugin_name}` disappeared from the registry during uninstall"
+            )));
+        }
+
+        self.materialize_registry()?;
+        Ok(source)
+    }
+
     /// Install the clean, validated workspace commit as a local snapshot.
     ///
     /// The development workspace remains mutable and keeps its development
@@ -538,7 +582,11 @@ impl PluginStore {
         Ok(operator)
     }
 
-    /// List plugins represented by a readable root manifest.
+    /// List plugins represented by a readable, correctly named root manifest.
+    ///
+    /// This inventory powers routing and background scans, so a malformed or
+    /// orphaned development workspace is skipped instead of blocking every
+    /// plugin operation. Explicit workspace operations still fail when opened.
     pub fn list(&self) -> Result<Vec<PluginManifest>> {
         let entries = match std::fs::read_dir(self.root()) {
             Ok(entries) => entries,
@@ -547,25 +595,31 @@ impl PluginStore {
         };
         let mut manifests = Vec::new();
         for entry in entries.flatten() {
+            if !entry.file_type().is_ok_and(|file_type| file_type.is_dir()) {
+                continue;
+            }
             let path = entry.path().join("manifest.toml");
             if !path.is_file() {
                 continue;
             }
-            let text = std::fs::read_to_string(&path).map_err(|source| Error::ReadFile {
-                path: path.clone(),
-                source,
-            })?;
-            let manifest: PluginManifest =
-                toml::from_str(&text).map_err(|source| Error::ParseToml {
+            let parsed = std::fs::read_to_string(&path)
+                .map_err(|source| Error::ReadFile {
                     path: path.clone(),
                     source,
-                })?;
+                })
+                .and_then(|text| {
+                    toml::from_str::<PluginManifest>(&text).map_err(|source| Error::ParseToml {
+                        path: path.clone(),
+                        source,
+                    })
+                });
+            let manifest = match parsed {
+                Ok(manifest) => manifest,
+                Err(_) => continue,
+            };
             let expected = entry.file_name().to_string_lossy().to_string();
             if manifest.plugin_name != expected {
-                return Err(Error::Validation(format!(
-                    "manifest plugin_name `{}` does not match directory `{expected}`",
-                    manifest.plugin_name
-                )));
+                continue;
             }
             manifests.push(manifest);
         }
@@ -597,6 +651,12 @@ impl PluginStore {
         }
         let workspace = PluginWorkspace::new(path);
         let manifest = load_manifest(&workspace)?;
+        if manifest.plugin_name != plugin_name {
+            return Err(Error::Validation(format!(
+                "manifest plugin_name `{}` does not match workspace `{plugin_name}`",
+                manifest.plugin_name
+            )));
+        }
         Ok(Some(PluginOperator {
             store: self,
             plugin_name: plugin_name.to_string(),
@@ -606,11 +666,18 @@ impl PluginStore {
 
     /// Return the plugin that owns a node kind, if any.
     pub fn owner_of_node_kind(&self, node_kind: &str) -> Result<Option<String>> {
-        Ok(self
+        let matches = self
             .list()?
             .into_iter()
-            .find(|manifest| manifest.nodes.iter().any(|node| node.kind == node_kind))
-            .map(|manifest| manifest.plugin_name))
+            .filter(|manifest| {
+                manifest.nodes.iter().any(|node| {
+                    node.kind == node_kind
+                        || format!("{}/{}", manifest.plugin_name, node.kind) == node_kind
+                })
+            })
+            .map(|manifest| manifest.plugin_name)
+            .collect::<Vec<_>>();
+        Ok(matches.first().cloned())
     }
 
     /// Return local-active plugins awaiting the background publication pass.
