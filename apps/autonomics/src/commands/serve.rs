@@ -195,14 +195,18 @@ async fn run_foreground_or_daemon(
     }
 }
 
-/// Plugin preflight: sync every declared family into the plugin root, then
-/// load the root to validate every manifest and report the registered kinds.
+/// Plugin preflight: sync every declared family into the v2 runtime root,
+/// then validate every manifest and report the registered kinds.
 /// Runs in the launcher process so the report is visible even in `--daemon`
 /// mode (before stdio detaches). A missing `plugins.toml` is not an error —
 /// the deployment simply starts with built-in nodes only.
 async fn plugin_preflight(config: &gateway::RuntimeConfig) -> color_eyre::Result<()> {
     let config_path = config.state_dir.join(sync::PLUGIN_CONFIG_FILE);
-    let root = config.state_dir.join("plugins");
+    let layout = plugin_rsi::PluginStateLayout::open(&config.state_dir);
+    layout
+        .ensure_v2_directories()
+        .map_err(|error| color_eyre::eyre::eyre!("invalid plugin layout: {error}"))?;
+    let root = layout.runtime_root();
 
     if !config_path.is_file() {
         println!(
