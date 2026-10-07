@@ -442,9 +442,13 @@ impl AgentProfile {
             AgentProfile {
                 id: Uuid::new_v4(),
                 path: "researcher".into(),
-                description: "Full-featured biomedical research assistant.".into(),
+                description: "Biomedical research assistant that owns DAG analysis, \
+                    data execution, and scientific interpretation."
+                    .into(),
                 agent_identity: "You are a biomedical research assistant specializing \
-                    in genomics, GWAS analysis, and literature mining."
+                    in genomics, GWAS analysis, and literature mining. You execute \
+                    analyses through DAGs and request new nodes instead of sending \
+                    research data to Developer agents."
                     .into(),
                 system_prompt: None,
                 enable_bibliography: true,

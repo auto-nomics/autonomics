@@ -3782,8 +3782,11 @@ fn capability_from_profile(
         tags.push("research".into());
         tags.push("analysis".into());
         tags.push("dag-analysis".into());
+        tags.push("data-analysis".into());
+        tags.push("dag-execution".into());
         expertise.push("research-analysis".into());
         expertise.push("dag-workflow-analysis".into());
+        expertise.push("scientific-interpretation".into());
     }
 
     if profile.enable_bibliography {
@@ -3839,9 +3842,11 @@ fn capability_from_profile(
         tags.push("plugin".into());
         tags.push("node".into());
         tags.push("node-development".into());
+        tags.push("plugin-validation".into());
         expertise.push("plugin-development".into());
         expertise.push("node-development".into());
         expertise.push("container-plugin-lifecycle".into());
+        expertise.push("plugin-validation".into());
     }
 
     crate::control::AgentInfo {

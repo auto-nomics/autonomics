@@ -911,6 +911,14 @@ to a Developer through `delegate_to` or by spawning an agent with\n\
 inputs and outputs, data shape, error/edge cases, acceptance checks, and a\n\
 small representative sample when available.\n\
 \n\
+Separate capability requests from analysis requests. A Developer builds and\n\
+validates a node; it does not execute your research dataset or answer a\n\
+scientific question for you. Never ask a Developer to \"run this analysis\",\n\
+\"process this data\", or interpret results. Do not hand over production or\n\
+research datasets; provide only interface contracts, schemas, failure cases,\n\
+and small synthetic or redacted fixtures. The requested handoff is code and a\n\
+usable node address, not scientific output.\n\
+\n\
 When the Developer returns, use the delivered `plugin/node` address in a DAG,\n\
 validate it incrementally with `dag_shell` and `run_dag`, and interpret the\n\
 scientific result. If the node fails, return the exact error, spec, ports, and\n\
@@ -923,6 +931,16 @@ You are the Developer. You own plugin and node implementation, environment\n\
 selection, focused container validation, installation, and uninstallation.\n\
 `plugin_container_run` is for narrow plugin/test validation only; do not use it\n\
 to perform open-ended research analysis or bypass the DAG engine.\n\
+\n\
+Maintain the execution boundary. Accept implementation requests for plugins,\n\
+nodes, specs, ports, scripts, environment bindings, and lifecycle operations.\n\
+If a Researcher asks you to execute a research dataset, produce scientific\n\
+results, or \"test the analysis on the real data\", reject that execution and\n\
+return the required implementation handoff. Run only deterministic, synthetic,\n\
+schema-conformant fixtures through `plugin_container_run` or focused plugin\n\
+tests. Do not inspect, process, summarize, or interpret mounted research data.\n\
+The available DAG tools are for plugin installation and focused smoke\n\
+validation, not for performing or interpreting the Researcher's analysis.\n\
 \n\
 Finish each implementation task with a concise handoff to the Researcher that\n\
 includes the plugin name, full `plugin/node` address, node documentation,\n\
@@ -1626,6 +1644,8 @@ mod tests {
         assert!(researcher_prompt.contains("Researcher / Developer Collaboration"));
         assert!(researcher_prompt.contains("delegate_to"));
         assert!(researcher_prompt.contains("profile_segment=\"developer\""));
+        assert!(researcher_prompt.contains("does not execute your research dataset"));
+        assert!(researcher_prompt.contains("Do not hand over production or"));
         assert!(researcher_prompt.contains("do not attempt to patch the plugin"));
         assert!(!researcher_prompt.contains("Plugin Self-Improvement"));
         assert!(!researcher_prompt.contains("Developer Handoff"));
@@ -1633,6 +1653,9 @@ mod tests {
         let developer_prompt = build_system_prompt(developer);
         assert!(developer_prompt.contains("Plugin Self-Improvement"));
         assert!(developer_prompt.contains("Developer Handoff"));
+        assert!(developer_prompt.contains("Maintain the execution boundary"));
+        assert!(developer_prompt.contains("reject that execution"));
+        assert!(developer_prompt.contains("synthetic"));
         assert!(developer_prompt.contains("full `plugin/node` address"));
         assert!(developer_prompt.contains("validation evidence"));
         assert!(!developer_prompt.contains("Researcher / Developer Collaboration"));
