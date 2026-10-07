@@ -16,16 +16,29 @@
 //!
 //! The target is guarded by a `{path}.lock` claim for the duration of one
 //! download. On filesystem-backed sinks (local paths and fs-mounted VFS) the
-//! claim is an exclusive `O_EXCL` create, so two concurrent `overwrite=false`
-//! runs can never both publish over each other: the second fails fast with
-//! [`FileDownloadError::TargetLocked`], and the publish itself is a no-clobber
-//! link (a plain rename when `overwrite=true`). Backends without host paths
-//! have no exclusive create, so they run a claim election under a
-//! `{key}.lock/` prefix where the smallest claim key holds the target. A
-//! stale claim naming a dead process on this host is reclaimed; anything
-//! else is reported for manual removal. The claim is released through a
-//! guard whose `Drop` also removes it, so a cancelled run cannot leave its
-//! own live pid holding the target.
+//! claim is staged under an exclusive name and published by an atomic
+//! no-clobber link, so the lock path never holds a partial claim and two
+//! concurrent `overwrite=false` runs can never both publish over each other:
+//! the second fails fast with [`FileDownloadError::TargetLocked`], and the
+//! publish itself is a no-clobber link (a plain rename when `overwrite=true`).
+//! The guard exists the instant the link lands — no await separates them — so
+//! a cancelled acquisition cannot leak its own live-pid lock: aborts either
+//! orphan only the staging name (which gates nothing) or land in the guarded
+//! region where `Drop` removes both names.
+//! Backends without host paths lock through the backend's atomic conditional
+//! create of a single `{key}.lock` object (`if_not_exists` / `if_none_match`),
+//! where arrival order is irrelevant; backends that offer no such primitive
+//! are refused explicitly. A stale claim naming a dead process on this host
+//! is reclaimed — through a move-aside-and-verify protocol on filesystems
+//! (a reclaimer never deletes a lock it did not verify as the exact stale
+//! bytes) and by etag compare-and-swap on object stores, with backends
+//! lacking the atomic primitive reporting the claim for manual removal
+//! instead of racing. A claim naming our own pid with a nonce this process
+//! is not executing is our own cancelled acquisition and is reclaimed
+//! race-free. The claim is released through a guard whose `Drop` also
+//! removes it (after re-verifying it is still ours), and a fencing check
+//! before the publish aborts a download whose claim was displaced
+//! mid-flight.
 //!
 //! A sidecar manifest (`<path>.download.json`) records provenance for the
 //! run ledger: accession/release when the caller knows them, original and
@@ -366,19 +379,58 @@ fn staging_meta_path(staging_path: &std::path::Path) -> PathBuf {
 }
 
 /// Liveness claim recorded in `{final}.lock` while a download owns a target.
-#[derive(Serialize, Deserialize)]
+/// `nonce` is unique per acquisition: it lets a holder recognize *its own*
+/// claim after concurrent reclaim attempts, so a displaced holder neither
+/// deletes a successor's lock on release nor publishes unprotected.
+#[derive(Clone, Serialize, Deserialize)]
 struct LockContent {
     hostname: String,
     pid: u32,
     started_unix_s: u64,
+    #[serde(default)]
+    nonce: u64,
 }
 
 impl LockContent {
     fn describe(&self) -> String {
         format!(
-            "pid {} on {} since unix {}",
-            self.pid, self.hostname, self.started_unix_s
+            "pid {} on {} since unix {} (claim {})",
+            self.pid, self.hostname, self.started_unix_s, self.nonce
         )
+    }
+}
+
+/// Monotonic per-process acquisition counter — the nonce source.
+static LOCK_NONCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn next_nonce() -> u64 {
+    LOCK_NONCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Nonces of acquisitions currently executing in THIS process. A lock naming
+/// our own pid whose nonce is absent here is a claim leaked by a cancelled
+/// acquisition of ours — and since no other process can share our pid,
+/// removing it is race-free. Registered for the lifetime of the lock guard.
+static ACTIVE_DOWNLOADS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<u64>>> =
+    std::sync::OnceLock::new();
+
+fn active_downloads() -> &'static std::sync::Mutex<std::collections::HashSet<u64>> {
+    ACTIVE_DOWNLOADS.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+}
+
+/// Registers an acquisition nonce until dropped (owned by the lock guard).
+struct ActiveDownload(u64);
+
+impl ActiveDownload {
+    fn register(nonce: u64) -> Self {
+        active_downloads().lock().unwrap().insert(nonce);
+        ActiveDownload(nonce)
+    }
+}
+
+impl Drop for ActiveDownload {
+    fn drop(&mut self) {
+        active_downloads().lock().unwrap().remove(&self.0);
     }
 }
 
@@ -409,41 +461,147 @@ fn pid_alive(pid: u32) -> bool {
     std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
 }
 
-/// `true` when a held lock's bytes name a process on this host that is
-/// demonstrably dead (a crashed or killed run): the claim is stale and may
-/// be reclaimed.
-fn host_lock_reclaimable(held: &[u8], owner: &LockContent) -> bool {
-    serde_json::from_slice::<LockContent>(held)
-        .map(|content| content.hostname == owner.hostname && !pid_alive(content.pid))
-        .unwrap_or(false)
+/// What a held lock's content says about its holder.
+enum HeldClaim {
+    /// An executing download holds the target: a foreign pid that is alive,
+    /// any pid on another host, or our own pid with a nonce this process is
+    /// currently executing.
+    Live,
+    /// Names a dead process on this host: stale, reclaimable — atomically
+    /// where the backend allows it.
+    DeadOwner,
+    /// Names OUR pid with a nonce this process is not executing: a claim
+    /// leaked by a cancelled acquisition of ours. No other process can hold
+    /// our pid, so removing it is race-free.
+    OwnCancelled,
+    /// Bytes that are not an interpretable claim (torn or foreign format).
+    Foreign,
+}
+
+fn classify_held(held: &[u8], owner: &LockContent) -> HeldClaim {
+    let Ok(content) = serde_json::from_slice::<LockContent>(held) else {
+        return HeldClaim::Foreign;
+    };
+    if content.hostname == owner.hostname && content.pid == owner.pid {
+        return if active_downloads().lock().unwrap().contains(&content.nonce) {
+            HeldClaim::Live
+        } else {
+            HeldClaim::OwnCancelled
+        };
+    }
+    if content.hostname == owner.hostname && !pid_alive(content.pid) {
+        return HeldClaim::DeadOwner;
+    }
+    HeldClaim::Live
+}
+
+/// `true` when the lock bytes still name OUR acquisition (matching nonce).
+/// Unparseable bytes count as ours: with the guard established at
+/// exclusive-create time, a torn claim can only be the remnant of a crashed
+/// process — there is no live holder to protect.
+fn content_is_ours(held: &[u8], nonce: u64) -> bool {
+    match serde_json::from_slice::<LockContent>(held) {
+        Ok(content) => content.nonce == nonce,
+        Err(_) => true,
+    }
 }
 
 /// Ownership of a successfully claimed target lock. The explicit
 /// [`LockGuard::release`] consumes the guard; if the download future is
 /// dropped (cancelled) before that, `Drop` removes the claim anyway — a
 /// cancelled run must not leave its own live pid holding the target and
-/// blocking every retry with `TargetLocked`.
+/// blocking every retry with `TargetLocked`. Both paths first verify the
+/// claim is still ours (nonce match), so releasing after a displacement
+/// never deletes the successor's lock. The guard also carries the
+/// registration of its nonce in the process-wide active-download set.
 struct LockGuard(Option<GuardInner>);
 
 enum GuardInner {
-    /// A `{final}.lock` host file (local filesystem or fs-backed VFS).
-    HostFile(std::path::PathBuf),
-    /// A claim object under `{final_key}.lock/` on a backend without host
-    /// paths (object stores).
-    Claim { op: opendal::Operator, key: String },
+    /// A `{final}.lock` host file (local filesystem or fs-backed VFS), with
+    /// the staging name it was published from until that name is unlinked.
+    HostFile {
+        path: std::path::PathBuf,
+        temp: Option<std::path::PathBuf>,
+        nonce: u64,
+        _active: ActiveDownload,
+    },
+    /// The `{final_key}.lock` object on a backend without host paths
+    /// (object stores), created through the backend's atomic
+    /// exclusive-create.
+    Claim {
+        op: opendal::Operator,
+        key: String,
+        nonce: u64,
+        _active: ActiveDownload,
+    },
 }
 
 impl LockGuard {
+    /// The staging name was unlinked after the claim was linked into place;
+    /// stop tracking it so release/Drop do not retry the removal.
+    fn staging_consumed(&mut self) {
+        if let Some(GuardInner::HostFile { temp, .. }) = self.0.as_mut() {
+            *temp = None;
+        }
+    }
+
     async fn release(mut self) {
         if let Some(inner) = self.0.take() {
             match inner {
-                GuardInner::HostFile(path) => {
-                    let _ = tokio::fs::remove_file(&path).await;
+                GuardInner::HostFile {
+                    path, temp, nonce, ..
+                } => {
+                    if let Ok(held) = tokio::fs::read(&path).await
+                        && content_is_ours(&held, nonce)
+                    {
+                        let _ = tokio::fs::remove_file(&path).await;
+                    }
+                    // Else: the claim at `path` belongs to a successor now —
+                    // not ours to delete.
+                    if let Some(temp) = temp {
+                        let _ = tokio::fs::remove_file(&temp).await;
+                    }
                 }
-                GuardInner::Claim { op, key } => {
-                    let _ = op.delete(&key).await;
+                GuardInner::Claim { op, key, nonce, .. } => {
+                    if let Ok(held) = op.read(&key).await
+                        && content_is_ours(&held.to_vec(), nonce)
+                    {
+                        let _ = op.delete(&key).await;
+                    }
                 }
             }
+        }
+    }
+
+    /// Fencing check: does the lock still name OUR acquisition? Called at the
+    /// commit boundary (before publish) — a claim displaced mid-download
+    /// (possible only through the bounded reclaimer window) must fail the
+    /// download instead of racing the new holder.
+    async fn still_holds(&self) -> bool {
+        let Some(inner) = self.0.as_ref() else {
+            return false;
+        };
+        let held = match inner {
+            GuardInner::HostFile { path, .. } => match tokio::fs::read(path).await {
+                Ok(bytes) => bytes,
+                Err(_) => return false,
+            },
+            GuardInner::Claim { op, key, .. } => match op.read(key).await {
+                Ok(buffer) => buffer.to_vec(),
+                Err(_) => return false,
+            },
+        };
+        // Torn bytes cannot prove ownership at the commit boundary.
+        serde_json::from_slice::<LockContent>(&held)
+            .map(|content| content.nonce == inner.nonce())
+            .unwrap_or(false)
+    }
+}
+
+impl GuardInner {
+    fn nonce(&self) -> u64 {
+        match self {
+            GuardInner::HostFile { nonce, .. } | GuardInner::Claim { nonce, .. } => *nonce,
         }
     }
 }
@@ -454,18 +612,33 @@ impl Drop for LockGuard {
             return;
         };
         match inner {
-            // Sync removal works from any context, cancellation included.
-            GuardInner::HostFile(path) => {
-                let _ = std::fs::remove_file(&path);
+            // Sync removal works from any context, cancellation included —
+            // but only after re-verifying the claim is still ours. The
+            // staging name is exclusively ours (pid+nonce) and always goes.
+            GuardInner::HostFile {
+                path, temp, nonce, ..
+            } => {
+                if let Ok(held) = std::fs::read(&path)
+                    && content_is_ours(&held, nonce)
+                {
+                    let _ = std::fs::remove_file(&path);
+                }
+                if let Some(temp) = temp {
+                    let _ = std::fs::remove_file(&temp);
+                }
             }
-            GuardInner::Claim { op, key } => {
-                // Async delete needs a runtime: spawn best-effort when one
-                // is ambient. Outside any runtime the claim leaks — it
-                // records hostname/pid, so dead-owner reclaim (or manual
-                // removal) settles it on a later run.
+            GuardInner::Claim { op, key, nonce, .. } => {
+                // Async verify+delete needs a runtime: spawn best-effort when
+                // one is ambient. Outside any runtime the claim leaks — it
+                // records hostname/pid/nonce, so own-cancelled or dead-owner
+                // reclaim (or manual removal) settles it on a later run.
                 if let Ok(handle) = tokio::runtime::Handle::try_current() {
                     handle.spawn(async move {
-                        let _ = op.delete(&key).await;
+                        if let Ok(held) = op.read(&key).await
+                            && content_is_ours(&held.to_vec(), nonce)
+                        {
+                            let _ = op.delete(&key).await;
+                        }
                     });
                 }
             }
@@ -604,14 +777,18 @@ impl Sink {
     }
 
     /// Claim the target for one download. On filesystems (local paths and
-    /// fs-backed VFS mounts, via [`Sink::host_paths`]) the claim is an
-    /// exclusive `O_EXCL` create of `{final}.lock` — two concurrent runs can
-    /// never both hold it. Backends without host paths have no exclusive
-    /// create at all, so they run a claim election (see
-    /// [`Sink::acquire_claim_lock`]). A pre-existing winner that names a
-    /// dead process on this host is reclaimed; anything else fails fast
-    /// with [`FileDownloadError::TargetLocked`]. Cross-host staleness is
-    /// not guessable and is reported for manual removal.
+    /// fs-backed VFS mounts, via [`Sink::host_paths`]) the claim is staged at
+    /// an exclusive `{lock}.tmp-{pid}-{nonce}` name and published by an
+    /// atomic no-clobber link — two concurrent runs can never both hold the
+    /// lock path, a torn claim can never sit on it, and the guard exists the
+    /// instant the link lands (no await between), so a cancelled acquisition
+    /// cannot leak its own live-pid lock. Backends without host paths take
+    /// the atomic conditional-create path (see
+    /// [`Sink::acquire_claim_lock`]). A pre-existing claim naming a dead
+    /// process on this host is reclaimed through a move-aside-and-verify
+    /// protocol that never deletes a successor's live lock; anything else
+    /// fails fast with [`FileDownloadError::TargetLocked`]. Cross-host
+    /// staleness is not guessable and is reported for manual removal.
     async fn acquire_lock(&self, owner: &LockContent) -> Result<LockGuard, FileDownloadError> {
         if let Some((_final, _staging, lock_host)) = self.host_paths() {
             // The lock is created before any staging writer runs, so the
@@ -626,42 +803,170 @@ impl Sink {
                     }
                 })?;
             }
-            let payload = serde_json::to_vec(owner).map_err(|error| FileDownloadError::Write {
+            let nonce = next_nonce();
+            let mut owner = owner.clone();
+            owner.nonce = nonce;
+            let payload = serde_json::to_vec(&owner).map_err(|error| FileDownloadError::Write {
                 path: "<lock>".into(),
                 reason: error.to_string(),
             })?;
-            for _round in 0..2 {
-                // Round 1: take the lock; round 2 (only after reclaiming a
-                // dead-owner lock): take it for ourselves.
+            // The claim is staged under an exclusive name (pid+nonce is unique
+            // per acquisition) and published by an atomic NO-CLOBBER link:
+            // the lock path never holds a partial claim — it appears exactly
+            // once, complete, or not at all. A cancellation before the link
+            // can only orphan the staging name, which gates nothing.
+            let mut claim_stage = lock_host.clone().into_os_string();
+            claim_stage.push(format!(".tmp-{}-{}", std::process::id(), nonce));
+            let claim_stage = PathBuf::from(claim_stage);
+            for _round in 0..4 {
                 match tokio::fs::OpenOptions::new()
                     .create_new(true)
                     .write(true)
-                    .open(&lock_host)
+                    .open(&claim_stage)
                     .await
                 {
                     Ok(mut file) => {
-                        file.write_all(&payload).await.map_err(|error| {
-                            FileDownloadError::Write {
-                                path: lock_host.display().to_string(),
+                        // Abort before the link can only orphan the staging
+                        // name; a write failure cleans it before returning.
+                        // The flush is load-bearing: tokio::fs::File buffers
+                        // small writes in memory, and the link must never
+                        // publish a claim whose bytes have not reached the
+                        // filesystem (a zero-length claim at the lock path
+                        // reads as unparseable — and would be treated as a
+                        // torn remnant by every concurrent observer).
+                        if let Err(error) = file.write_all(&payload).await {
+                            let _ = tokio::fs::remove_file(&claim_stage).await;
+                            return Err(FileDownloadError::Write {
+                                path: claim_stage.display().to_string(),
                                 reason: error.to_string(),
-                            }
-                        })?;
-                        return Ok(LockGuard(Some(GuardInner::HostFile(lock_host))));
+                            });
+                        }
+                        if let Err(error) = file.flush().await {
+                            let _ = tokio::fs::remove_file(&claim_stage).await;
+                            return Err(FileDownloadError::Write {
+                                path: claim_stage.display().to_string(),
+                                reason: error.to_string(),
+                            });
+                        }
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                        // A remnant of an earlier acquisition that reused this
+                        // pid (pid wraparound) — it gates nothing; drop it and
+                        // restage in the next round.
+                        let _ = tokio::fs::remove_file(&claim_stage).await;
+                        continue;
+                    }
+                    Err(error) => {
+                        return Err(FileDownloadError::Write {
+                            path: claim_stage.display().to_string(),
+                            reason: error.to_string(),
+                        });
+                    }
+                }
+                // The guard exists BEFORE the link can execute. An abort
+                // parked inside the link await — after the syscall landed but
+                // before the future resumes — still finds the guard alive:
+                // its Drop removes whichever names materialized (the lock
+                // only after re-verifying it is ours, the staging name
+                // unconditionally). There is no point at which the lock path
+                // exists unowned.
+                let mut guard = LockGuard(Some(GuardInner::HostFile {
+                    path: lock_host.clone(),
+                    temp: Some(claim_stage.clone()),
+                    nonce,
+                    _active: ActiveDownload::register(nonce),
+                }));
+                match tokio::fs::hard_link(&claim_stage, &lock_host).await {
+                    Ok(()) => {
+                        let _ = tokio::fs::remove_file(&claim_stage).await;
+                        guard.staging_consumed();
+                        return Ok(guard);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                        // Held: drop our staging name (the next round
+                        // recreates it; the round guard's Drop would too) and
+                        // inspect the incumbent claim.
+                        let _ = tokio::fs::remove_file(&claim_stage).await;
                         let held = tokio::fs::read(&lock_host).await.map_err(|error| {
                             FileDownloadError::Write {
                                 path: lock_host.display().to_string(),
                                 reason: error.to_string(),
                             }
                         })?;
-                        if !host_lock_reclaimable(&held, owner) {
-                            return Err(FileDownloadError::TargetLocked {
-                                path: self.describe(),
-                                holder: lock_holder(&held),
-                            });
+                        match classify_held(&held, &owner) {
+                            HeldClaim::Live | HeldClaim::Foreign => {
+                                return Err(FileDownloadError::TargetLocked {
+                                    path: self.describe(),
+                                    holder: lock_holder(&held),
+                                });
+                            }
+                            HeldClaim::OwnCancelled => {
+                                // A claim of OUR pid that this process is not
+                                // executing: no other process can hold our
+                                // pid, so plain removal is race-free.
+                                let _ = tokio::fs::remove_file(&lock_host).await;
+                            }
+                            HeldClaim::DeadOwner => {
+                                // Safe reclaim: atomically move the stale
+                                // claim aside and re-read it THERE. Only one
+                                // reclaimer's rename can land; if the bytes
+                                // changed since our read (a new holder took
+                                // the path in between), restore the moved —
+                                // possibly live — lock by a non-clobbering
+                                // link and retry. A reclaimer therefore never
+                                // deletes a lock it did not verify as the
+                                // exact stale bytes it judged dead.
+                                let mut aside = lock_host.clone().into_os_string();
+                                aside.push(format!(".stale-{nonce}"));
+                                let aside = PathBuf::from(aside);
+                                match tokio::fs::rename(&lock_host, &aside).await {
+                                    Ok(()) => {
+                                        let moved =
+                                            tokio::fs::read(&aside).await.unwrap_or_default();
+                                        if moved == held {
+                                            // Verified: the stale claim is
+                                            // gone; the next round's link can
+                                            // land.
+                                            let _ = tokio::fs::remove_file(&aside).await;
+                                        } else {
+                                            // Replaced meanwhile: put the
+                                            // current holder's lock back.
+                                            match tokio::fs::hard_link(&aside, &lock_host).await {
+                                                Ok(()) => {
+                                                    let _ = tokio::fs::remove_file(&aside).await;
+                                                }
+                                                Err(error)
+                                                    if error.kind()
+                                                        == std::io::ErrorKind::AlreadyExists =>
+                                                {
+                                                    // Someone already
+                                                    // re-created the lock;
+                                                    // drop our moved copy.
+                                                    let _ = tokio::fs::remove_file(&aside).await;
+                                                }
+                                                Err(_) => {
+                                                    // Leave the aside file:
+                                                    // it names the holder for
+                                                    // audit and blocks no one.
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                                        // Another reclaimer won the race;
+                                        // retry the staging+link.
+                                    }
+                                    Err(error) => {
+                                        return Err(FileDownloadError::Write {
+                                            path: lock_host.display().to_string(),
+                                            reason: format!(
+                                                "cannot move the stale lock aside: {error}"
+                                            ),
+                                        });
+                                    }
+                                }
+                            }
                         }
-                        let _ = tokio::fs::remove_file(&lock_host).await;
                     }
                     Err(error) => {
                         return Err(FileDownloadError::Write {
@@ -673,7 +978,7 @@ impl Sink {
             }
             return Err(FileDownloadError::Write {
                 path: self.describe(),
-                reason: "lock kept being recreated while reclaiming it".into(),
+                reason: "lock did not settle within 4 rounds".into(),
             });
         }
         let Sink::Vfs { op, final_key, .. } = self else {
@@ -682,97 +987,163 @@ impl Sink {
         self.acquire_claim_lock(op, final_key, owner).await
     }
 
-    /// Claim election for backends without host paths (object stores).
-    /// Every contender writes a uniquely-named claim object under
-    /// `{final_key}.lock/`; the lexicographically smallest claim key holds
-    /// the lock (a zero-padded start time makes the ordering chronological,
-    /// with hostname/pid/sequence as tie-breakers). Losers delete their own
-    /// claim and fail with `TargetLocked`. Unlike a stat-then-write "lock",
-    /// two concurrent contenders can never both observe themselves as the
-    /// holder.
+    /// Atomic conditional lock for backends without host paths (object
+    /// stores). The claim is a single `{final_key}.lock` object created
+    /// through the backend's exclusive conditional write (`if_not_exists`,
+    /// or `if_none_match("*")` where that is the advertised primitive):
+    /// whoever's create lands first holds the lock, and a claim that reaches
+    /// the backend late can never displace an active holder — there is no
+    /// ordering to get wrong. Dead-owner claims are taken over by
+    /// compare-and-swap (`if_match` on the observed etag) where the backend
+    /// supports it; a backend without atomic reclaim reports the claim for
+    /// manual removal instead of racing. A backend with no exclusive-create
+    /// primitive at all is refused explicitly — a stat-then-write "lock"
+    /// serializes nothing. Claims naming our own pid with a nonce this
+    /// process is not executing are our own cancelled acquisitions (no other
+    /// process can hold our pid) and are reclaimed race-free.
     async fn acquire_claim_lock(
         &self,
         op: &opendal::Operator,
         final_key: &str,
         owner: &LockContent,
     ) -> Result<LockGuard, FileDownloadError> {
-        static CLAIM_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let seq = CLAIM_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let host_slug: String = owner
-            .hostname
-            .chars()
-            .map(|c| {
-                if c.is_ascii_alphanumeric() || c == '-' {
-                    c
-                } else {
-                    '_'
-                }
-            })
-            .collect();
-        let claim_key = format!(
-            "{final_key}.lock/{:020}-{host_slug}-{}-{seq}",
-            owner.started_unix_s, owner.pid
-        );
-        let payload = serde_json::to_vec(owner).map_err(|error| FileDownloadError::Write {
+        let capability = op.info().full_capability();
+        let exclusive_create = capability.write_with_if_not_exists;
+        let conditional_create = capability.write_with_if_none_match;
+        let compare_and_swap = capability.write_with_if_match;
+        if !exclusive_create && !conditional_create {
+            return Err(FileDownloadError::Write {
+                path: self.describe(),
+                reason: format!(
+                    "backend `{}` has no atomic exclusive-create primitive for target locks; \
+                     refusing to download — concurrent runs could clobber each other",
+                    op.info().scheme()
+                ),
+            });
+        }
+        let lock_key = format!("{final_key}.lock");
+        let nonce = next_nonce();
+        let mut owner = owner.clone();
+        owner.nonce = nonce;
+        let payload = serde_json::to_vec(&owner).map_err(|error| FileDownloadError::Write {
             path: "<lock>".into(),
             reason: error.to_string(),
         })?;
-        op.write(&claim_key, payload)
-            .await
-            .map_err(|error| FileDownloadError::Write {
-                path: claim_key.clone(),
-                reason: error.to_string(),
-            })?;
-        let prefix = format!("{final_key}.lock/");
+        let guard = |op: &opendal::Operator| {
+            LockGuard(Some(GuardInner::Claim {
+                op: op.clone(),
+                key: lock_key.clone(),
+                nonce,
+                _active: ActiveDownload::register(nonce),
+            }))
+        };
         for _round in 0..4 {
-            let claims = op
-                .list(&prefix)
-                .await
-                .map_err(|error| FileDownloadError::Write {
-                    path: prefix.clone(),
-                    reason: format!("cannot list lock claims: {error}"),
-                })?;
-            // Backends disagree on leading slashes in listed paths; compare
-            // on the normalized form so the winner check cannot silently
-            // fail for everyone.
-            let Some(winner) = claims
-                .iter()
-                .min_by_key(|meta| meta.path().trim_start_matches('/'))
-            else {
-                // Our claim was written one step ago; an empty listing means
-                // this backend's list is not read-after-write. Retry a few
-                // rounds rather than assume exclusivity.
-                continue;
+            let create = if exclusive_create {
+                op.write_with(&lock_key, payload.clone())
+                    .if_not_exists(true)
+                    .await
+            } else {
+                op.write_with(&lock_key, payload.clone())
+                    .if_none_match("*")
+                    .await
             };
-            let winner_key = winner.path();
-            if winner_key.trim_start_matches('/') == claim_key.trim_start_matches('/') {
-                return Ok(LockGuard(Some(GuardInner::Claim {
-                    op: op.clone(),
-                    key: claim_key,
-                })));
+            match create {
+                Ok(_) => return Ok(guard(op)),
+                Err(error)
+                    if error.kind() == opendal::ErrorKind::ConditionNotMatch
+                        || error.kind() == opendal::ErrorKind::AlreadyExists =>
+                {
+                    // Held: inspect below.
+                }
+                Err(error) if error.kind() == opendal::ErrorKind::Unsupported => {
+                    return Err(FileDownloadError::Write {
+                        path: self.describe(),
+                        reason: format!(
+                            "backend `{}` refused the conditional lock create: {error}",
+                            op.info().scheme()
+                        ),
+                    });
+                }
+                Err(error) => {
+                    return Err(FileDownloadError::Write {
+                        path: lock_key.clone(),
+                        reason: error.to_string(),
+                    });
+                }
             }
-            let held = op
-                .read(winner_key)
-                .await
-                .map_err(|error| FileDownloadError::Write {
-                    path: winner_key.to_string(),
-                    reason: error.to_string(),
-                })?
-                .to_vec();
-            if !host_lock_reclaimable(&held, owner) {
-                let _ = op.delete(&claim_key).await;
-                return Err(FileDownloadError::TargetLocked {
-                    path: self.describe(),
-                    holder: lock_holder(&held),
-                });
+            let held = match op.read(&lock_key).await {
+                Ok(buffer) => buffer.to_vec(),
+                Err(error) if error.kind() == opendal::ErrorKind::NotFound => continue,
+                Err(error) => {
+                    return Err(FileDownloadError::Write {
+                        path: lock_key.clone(),
+                        reason: error.to_string(),
+                    });
+                }
+            };
+            match classify_held(&held, &owner) {
+                HeldClaim::Live | HeldClaim::Foreign => {
+                    return Err(FileDownloadError::TargetLocked {
+                        path: self.describe(),
+                        holder: lock_holder(&held),
+                    });
+                }
+                HeldClaim::OwnCancelled => {
+                    // Race-free by pid uniqueness: see the doc comment.
+                    let _ = op.delete(&lock_key).await;
+                }
+                HeldClaim::DeadOwner => {
+                    if !compare_and_swap {
+                        return Err(FileDownloadError::TargetLocked {
+                            path: self.describe(),
+                            holder: format!(
+                                "{}; the claim names a dead process but backend `{}` has no \
+                                 atomic reclaim — remove `{}` manually",
+                                lock_holder(&held),
+                                op.info().scheme(),
+                                lock_key
+                            ),
+                        });
+                    }
+                    let etag = match op.stat(&lock_key).await {
+                        Ok(meta) => meta.etag().map(str::to_string),
+                        Err(_) => None,
+                    };
+                    let Some(etag) = etag else {
+                        return Err(FileDownloadError::TargetLocked {
+                            path: self.describe(),
+                            holder: format!(
+                                "{}; no observable etag to reclaim atomically — remove `{}` \
+                                 manually",
+                                lock_holder(&held),
+                                lock_key
+                            ),
+                        });
+                    };
+                    match op
+                        .write_with(&lock_key, payload.clone())
+                        .if_match(&etag)
+                        .await
+                    {
+                        // The object is still the dead claim we observed:
+                        // the takeover is ours.
+                        Ok(_) => return Ok(guard(op)),
+                        Err(error) if error.kind() == opendal::ErrorKind::ConditionNotMatch => {
+                            // Another reclaimer took it over first; retry.
+                        }
+                        Err(error) => {
+                            return Err(FileDownloadError::Write {
+                                path: lock_key.clone(),
+                                reason: error.to_string(),
+                            });
+                        }
+                    }
+                }
             }
-            // Dead-owner claim: evict it and re-run the election.
-            let _ = op.delete(winner_key).await;
         }
-        let _ = op.delete(&claim_key).await;
         Err(FileDownloadError::Write {
             path: self.describe(),
-            reason: "lock election did not settle within 4 rounds".into(),
+            reason: "lock did not settle within 4 rounds".into(),
         })
     }
 
@@ -1289,6 +1660,8 @@ impl FileDownloadNode {
             hostname: hostname(),
             pid: std::process::id(),
             started_unix_s: started_unix,
+            // Overwritten per acquisition with the fresh nonce.
+            nonce: 0,
         };
         // One downloader per target: concurrent runs fail fast instead of
         // racing staging files and clobbering each other's publish. The
@@ -1305,6 +1678,7 @@ impl FileDownloadNode {
                 &path,
                 idle_timeout,
                 started_unix,
+                &guard,
             )
             .await;
         guard.release().await;
@@ -1324,6 +1698,7 @@ impl FileDownloadNode {
         path: &str,
         idle_timeout: Duration,
         started_unix: u64,
+        guard: &LockGuard,
     ) -> Result<PortOutputs, FileDownloadError> {
         if !self.spec.overwrite && sink.output_exists().await? {
             return Err(FileDownloadError::AlreadyExists { path: path.into() });
@@ -1379,6 +1754,18 @@ impl FileDownloadNode {
                     actual: completed.sha256,
                 });
             }
+        }
+
+        // Fencing: the whole download ran under the target lock; if the claim
+        // was displaced while we streamed (the reclaim protocol prevents
+        // deletion of a live lock, but a moved-aside lock leaves a bounded
+        // window in which a third run may legitimately acquire), publishing
+        // now would race the new holder. Fail instead — a retry is safe.
+        if !guard.still_holds().await {
+            return Err(FileDownloadError::TargetLocked {
+                path: path.into(),
+                holder: "lock displaced during the download (fencing check)".into(),
+            });
         }
 
         // Paired publish. The manifest is staged beside the data first; the
@@ -1848,11 +2235,21 @@ impl NodeFactory for FileDownloadNodeFactory {
         the full body arrived, the byte count matched `expected_bytes` (when \
         given), and the SHA256 matched `expected_sha256` (when given). \
         Concurrency: a `{path}.lock` claim serializes downloads of one target — \
-        an exclusive create on filesystem-backed sinks, a claim election on \
-        object stores — so a second run fails fast with a TargetLocked error \
-        instead of clobbering (a claim left by a dead same-host process is \
-        reclaimed, and a cancelled run drops its claim rather than leaving its \
-        live pid holding the target). The `overwrite=false` publish is a \
+        staged at an exclusive temp name and published by an atomic \
+        no-clobber link on filesystem-backed sinks (the guard exists the \
+        instant the link lands, so a cancelled acquisition leaks nothing), \
+        the backend's atomic conditional create on object \
+        stores (backends without that primitive are refused explicitly) — so \
+        a second run fails fast with a TargetLocked error instead of \
+        clobbering. Stale claims are reclaimed safely: filesystem reclaimers \
+        move the stale lock aside and only delete bytes they re-verify as the \
+        exact stale claim (a new live holder is restored, never deleted); \
+        object-store reclaim uses etag compare-and-swap where available and \
+        reports for manual removal otherwise; a claim naming our own pid \
+        that this process is not executing is our own cancelled acquisition \
+        and is reclaimed race-free. A fencing check before the publish \
+        aborts a download whose claim was displaced mid-flight. The \
+        `overwrite=false` publish is a \
         no-clobber link, so a target that appeared mid-run is never replaced. \
         Ordering: the `<path>.download.json` sidecar manifest (original and \
         final URL, status, validator headers, accession/release, bytes, SHA256, \
@@ -2527,6 +2924,7 @@ mod tests {
                 hostname: hostname(),
                 pid: 999_999,
                 started_unix_s: 0,
+                nonce: 0,
             })
             .unwrap(),
         )
@@ -2545,13 +2943,18 @@ mod tests {
     #[tokio::test]
     async fn live_lock_blocks_the_download() {
         let out = tempfile::tempdir().unwrap().keep().join("held.bin");
-        // Our own pid is definitionally alive: the lock must be honored.
+        // Our own pid with a nonce this process IS executing: a concurrent
+        // download of ours — the lock must be honored. (An unregistered
+        // own-pid nonce would be our own cancelled claim, reclaimable by
+        // design; the registration is what separates the two.)
+        let _executing = ActiveDownload::register(4242);
         std::fs::write(
             out.with_file_name("held.bin.lock"),
             serde_json::to_vec(&LockContent {
                 hostname: hostname(),
                 pid: std::process::id(),
                 started_unix_s: 0,
+                nonce: 4242,
             })
             .unwrap(),
         )
@@ -2567,6 +2970,175 @@ mod tests {
             "{error}"
         );
         assert!(!out.exists());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn host_stale_reclaim_never_removes_a_new_live_lock() {
+        // Round-3 review probe: two concurrent reclaimers of one stale lock
+        // must never delete each other's newly acquired live lock. The
+        // move-aside-and-verify protocol keeps exactly one holder per round
+        // across all 256 rounds; a naive read-then-unlink reclaimed ~1-3%.
+        let dir = tempfile::tempdir().unwrap().keep();
+        let final_path = dir.join("reclaim.bin");
+        let lock = dir.join("reclaim.bin.lock");
+        let sink = Sink::Local {
+            final_path: final_path.clone(),
+            staging_path: dir.join("reclaim.bin.part"),
+        };
+        let owner = LockContent {
+            hostname: hostname(),
+            pid: std::process::id(),
+            started_unix_s: 42,
+            nonce: 0,
+        };
+        let dead = serde_json::to_vec(&LockContent {
+            hostname: hostname(),
+            pid: 999_999,
+            started_unix_s: 1,
+            nonce: 0,
+        })
+        .unwrap();
+        let mut doubles = 0;
+        for _ in 0..256 {
+            std::fs::write(&lock, dead.clone()).unwrap();
+            let (a, b) = tokio::join!(sink.acquire_lock(&owner), sink.acquire_lock(&owner));
+            if a.is_ok() && b.is_ok() {
+                doubles += 1;
+            }
+            // While the winner holds it, the lock file must still exist and
+            // name the winner — the loser's failed reclaim must not have
+            // removed it.
+            let (winner, loser) = match (a, b) {
+                (Ok(winner), Err(loser)) | (Err(loser), Ok(winner)) => (winner, loser),
+                (Ok(_), Ok(_)) => panic!("double-held in the 256-round reclaim probe"),
+                (Err(a), Err(b)) => panic!("both reclaimers failed: {a}; {b}"),
+            };
+            let _ = loser;
+            let held = std::fs::read(&lock).unwrap();
+            let content: LockContent = serde_json::from_slice(&held).unwrap();
+            assert!(
+                active_downloads().lock().unwrap().contains(&content.nonce),
+                "the live winner's claim must be intact, got {held:?}"
+            );
+            winner.release().await;
+            let _ = std::fs::remove_file(&lock);
+        }
+        assert_eq!(doubles, 0, "two stale reclaimers must never both acquire");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancelling_lock_acquisition_leaves_no_lock() {
+        // Round-3 review probe: aborting a task mid-acquisition must never
+        // leave the lock file behind. The lock path only materializes
+        // complete via the atomic link, and the guard exists the instant the
+        // link returns — before the next await — so every abort point
+        // (staging write, the link itself, post-acquire parking) either
+        // orphans nothing but the staging name or drops a guard that removes
+        // both names. The naive create-then-write-then-guard order leaked
+        // 60/64.
+        let dir = tempfile::tempdir().unwrap().keep();
+        let owner = LockContent {
+            hostname: hostname(),
+            pid: std::process::id(),
+            started_unix_s: 42,
+            nonce: 0,
+        };
+        for i in 0..64 {
+            let final_path = dir.join(format!("acquire-{i}.bin"));
+            let lock = dir.join(format!("acquire-{i}.bin.lock"));
+            let sink = Sink::Local {
+                final_path: final_path.clone(),
+                staging_path: dir.join(format!("acquire-{i}.bin.part")),
+            };
+            let round_owner = owner.clone();
+            let task = tokio::spawn(async move {
+                let _guard = sink.acquire_lock(&round_owner).await.unwrap();
+                std::future::pending::<()>().await;
+            });
+            tokio::time::timeout(Duration::from_secs(3), async {
+                while !lock.exists() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            task.abort();
+            assert!(task.await.unwrap_err().is_cancelled());
+            tokio::time::sleep(Duration::from_millis(2)).await;
+            assert!(
+                !lock.exists(),
+                "aborting mid-acquisition must not leave a live-pid lock (round {i})"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn release_never_deletes_a_displaced_claim() {
+        // If the claim at the lock path no longer names our nonce (a
+        // successor acquired through the bounded displacement window),
+        // releasing must leave the successor's lock strictly alone.
+        let dir = tempfile::tempdir().unwrap().keep();
+        let sink = Sink::Local {
+            final_path: dir.join("d.bin"),
+            staging_path: dir.join("d.bin.part"),
+        };
+        let owner = LockContent {
+            hostname: hostname(),
+            pid: std::process::id(),
+            started_unix_s: 42,
+            nonce: 0,
+        };
+        let guard = sink.acquire_lock(&owner).await.unwrap();
+        // Simulate the displacement: a successor's claim replaces ours.
+        std::fs::write(
+            dir.join("d.bin.lock"),
+            serde_json::to_vec(&LockContent {
+                hostname: hostname(),
+                pid: std::process::id(),
+                started_unix_s: 43,
+                nonce: 987_654,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        guard.release().await;
+        let held = std::fs::read(dir.join("d.bin.lock")).unwrap();
+        let content: LockContent = serde_json::from_slice(&held).unwrap();
+        assert_eq!(content.nonce, 987_654, "the successor's claim survives");
+    }
+
+    #[tokio::test]
+    async fn own_cancelled_host_lock_is_reclaimed_by_the_next_run() {
+        // A host lock naming OUR pid with a nonce this process is not
+        // executing is the remnant of a cancelled acquisition of ours (the
+        // empty-guard window before the round-3 fix, or a torn write): no
+        // other process can hold our pid, so the next run reclaims it.
+        let (port, _server) = scripted_server(vec![
+            b"HTTP/1.1 200 OK\r\ncontent-length: 5\r\nconnection: close\r\n\r\nhello".to_vec(),
+        ])
+        .await;
+        let dir = tempfile::tempdir().unwrap().keep();
+        let out = dir.join("own.bin");
+        std::fs::write(
+            dir.join("own.bin.lock"),
+            serde_json::to_vec(&LockContent {
+                hostname: hostname(),
+                pid: std::process::id(),
+                started_unix_s: 0,
+                nonce: 555_001,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        let mut node = FileDownloadNode::new(spec(
+            &format!("http://127.0.0.1:{port}/o"),
+            &out.to_string_lossy(),
+        ));
+        node.execute_with_allowlist(&ctx(), Some(vec!["127.0.0.1".into()]))
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(&out).unwrap(), b"hello");
+        assert!(!dir.join("own.bin.lock").exists(), "reclaimed and released");
     }
 
     #[tokio::test]
@@ -2633,11 +3205,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn object_store_claim_election_excludes_concurrent_holders() {
-        // Backends without host paths elect one holder by smallest claim key:
-        // two concurrent acquires must yield exactly one holder, release must
-        // make the target free again, a dead-owner claim is reclaimed, and a
-        // live foreign pid still blocks.
+    async fn object_store_conditional_create_is_exclusive() {
+        // Backends without host paths lock through the backend's atomic
+        // conditional create of a single `{key}.lock` object: two concurrent
+        // acquires yield exactly one holder, release frees the target again,
+        // a dead-owner claim is reported for manual removal (the memory
+        // backend has no CAS to reclaim it atomically), and a claim of our
+        // own pid that this process is not executing — a cancelled
+        // acquisition of ours — is reclaimed race-free.
         let op = opendal::Operator::new(opendal::services::Memory::default())
             .unwrap()
             .finish();
@@ -2650,6 +3225,7 @@ mod tests {
             hostname: hostname(),
             pid: std::process::id(),
             started_unix_s: 42,
+            nonce: 0,
         };
         let (first, second) = tokio::join!(sink.acquire_lock(&owner), sink.acquire_lock(&owner));
         let winner = match (first, second) {
@@ -2660,45 +3236,97 @@ mod tests {
                 );
                 guard
             }
-            (Ok(_), Ok(_)) => panic!("claim election let two callers hold the lock"),
-            (Err(a), Err(b)) => panic!("election failed both callers: {a}; {b}"),
+            (Ok(_), Ok(_)) => panic!("conditional create let two callers hold the lock"),
+            (Err(a), Err(b)) => panic!("lock acquisition failed both callers: {a}; {b}"),
         };
         winner.release().await;
         // Free after release: a plain re-acquire succeeds.
         sink.acquire_lock(&owner).await.unwrap().release().await;
 
-        // A claim from a dead same-host pid sorts first and is reclaimed...
-        let dead = serde_json::to_vec(&LockContent {
-            hostname: hostname(),
-            pid: 999_999,
-            started_unix_s: 1,
-        })
+        // A claim from a dead same-host pid: the memory backend advertises no
+        // compare-and-swap, so the acquisition must refuse explicitly and
+        // name the object for manual removal instead of racing.
+        op.write(
+            "/x.bin.lock",
+            serde_json::to_vec(&LockContent {
+                hostname: hostname(),
+                pid: 999_999,
+                started_unix_s: 1,
+                nonce: 0,
+            })
+            .unwrap(),
+        )
+        .await
         .unwrap();
-        op.write("/x.bin.lock/00000000000000000001-dead-999999-0", dead)
-            .await
-            .unwrap();
-        sink.acquire_lock(&owner).await.unwrap().release().await;
-
-        // ...but a live pid holding the earliest claim blocks us.
-        let live = serde_json::to_vec(&LockContent {
-            hostname: hostname(),
-            pid: std::process::id(),
-            started_unix_s: 2,
-        })
-        .unwrap();
-        op.write("/x.bin.lock/00000000000000000002-live-1-0", live)
-            .await
-            .unwrap();
         let error = match sink.acquire_lock(&owner).await {
             Err(error) => error,
             Ok(guard) => {
                 guard.release().await;
-                panic!("a live foreign pid must block the claim election");
+                panic!("a dead-owner claim must not be reclaimed unsafely");
             }
         };
         assert!(
             matches!(error, FileDownloadError::TargetLocked { .. }),
             "{error}"
+        );
+        assert!(
+            error.to_string().contains("remove `/x.bin.lock` manually"),
+            "the refusal must name the object for manual removal: {error}"
+        );
+        let _ = op.delete("/x.bin.lock").await;
+
+        // A claim of our own pid whose nonce this process is NOT executing
+        // is a cancelled acquisition of ours: reclaimable race-free.
+        op.write(
+            "/x.bin.lock",
+            serde_json::to_vec(&LockContent {
+                hostname: hostname(),
+                pid: std::process::id(),
+                started_unix_s: 2,
+                nonce: 777_777,
+            })
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+        sink.acquire_lock(&owner).await.unwrap().release().await;
+    }
+
+    #[tokio::test]
+    async fn late_earlier_claim_cannot_displace_a_live_holder() {
+        // Round-3 review probe: an earlier-started contender reaching the
+        // object store AFTER a newer holder must not displace it. The lock is
+        // a single conditional-create object — arrival order cannot matter.
+        let op = opendal::Operator::new(opendal::services::Memory::default())
+            .unwrap()
+            .finish();
+        let sink = Sink::Vfs {
+            op: op.clone(),
+            final_key: "/review.bin".into(),
+            staging_key: "/review.bin.part".into(),
+        };
+        let newer = LockContent {
+            hostname: hostname(),
+            pid: std::process::id(),
+            started_unix_s: 42,
+            nonce: 0,
+        };
+        let delayed_earlier = LockContent {
+            hostname: hostname(),
+            pid: std::process::id(),
+            started_unix_s: 41,
+            nonce: 0,
+        };
+        let first_guard = sink.acquire_lock(&newer).await.unwrap();
+        let second = sink.acquire_lock(&delayed_earlier).await;
+        let displaced = matches!(second, Err(_));
+        if let Ok(guard) = second {
+            guard.release().await;
+        }
+        first_guard.release().await;
+        assert!(
+            displaced,
+            "an earlier claim arriving late must not displace an active holder"
         );
     }
 

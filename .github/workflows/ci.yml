@@ -74,6 +74,18 @@ jobs:
   #     # env-gated, so this stays green without external credentials.
   #     - name: Run workspace tests
   #       run: cargo test -p autonomics --locked
+  #     # Dependency unit tests do NOT run as part of `cargo test -p autonomics`
+  #     # (that flag runs only the named package's own tests). The download
+  #     # node's lock-lifecycle regressions and the GWAS Catalog SDK tests must
+  #     # be wired explicitly so they gate every PR once this job is enabled.
+  #     # `file_download` is scoped deliberately: the one other failing test in
+  #     # nodes-io (dataframe_to_file_writes_large_parquet_through_vfs) is a
+  #     # separately registered investigation and must not mask the download
+  #     # gate.
+  #     - name: Run download-node tests (lock lifecycle, validators, resume)
+  #       run: cargo test -p nodes-io file_download --locked
+  #     - name: Run GWAS Catalog SDK tests
+  #       run: cargo test -p gwascatalog-sdk --locked
   #     - name: Check runner resources after tests
   #       if: ${{ !cancelled() }}
   #       run: |
