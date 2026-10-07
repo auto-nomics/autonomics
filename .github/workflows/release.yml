@@ -11,9 +11,6 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   CARGO_TARGET_DIR: target
-  CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-  CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
-  CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++
 
 jobs:
   build:
@@ -26,9 +23,6 @@ jobs:
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             rustflags: -C target-cpu=generic -C linker-features=-lld
-          - os: ubuntu-22.04
-            target: aarch64-unknown-linux-gnu
-            rustflags: -C target-cpu=generic
           - os: macos-14
             target: aarch64-apple-darwin
             # ring relies on the Apple Silicon target's default CPU features;
@@ -66,11 +60,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
-      - name: Install Linux cross-compiler
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
       - name: Build release binary
         run: cargo build --release --locked -p autonomics --target "$TARGET"
         env:

@@ -94,9 +94,7 @@ impl App {
         // thing that shuts them down.
         let _ = restore_terminal();
 
-        eprintln!(
-            "Gateway daemon 仍在后台运行（agents 未受影响）；`autonomics serve stop` 可停止。"
-        );
+        eprintln!("Gateway daemon still running in background, `autonomics serve stop` to stop");
 
         result?;
         Ok(())
