@@ -74,6 +74,7 @@ async fn plugin_store_develops_one_repository_in_place() {
     let requests = RequestStore::open(state.path());
     let request = requests.record(request()).unwrap();
     let layout = plugin_rsi::PluginStateLayout::v2(state.path());
+    let workspace_root = layout.workspace_root();
     let store = PluginStore::open_with_layout(layout, "main", "Autonomics RSI", "rsi@example.com");
     common::configure_plugin_vfs(state.path());
     let mut operator = store
@@ -87,8 +88,41 @@ async fn plugin_store_develops_one_repository_in_place() {
         )
         .unwrap();
 
+    let valid_manifest =
+        std::fs::read_to_string(workspace_root.join("direct-plugin/manifest.toml")).unwrap();
+    std::fs::create_dir_all(workspace_root.join("orphan-name")).unwrap();
+    std::fs::write(
+        workspace_root.join("orphan-name/manifest.toml"),
+        valid_manifest.replace(
+            "plugin_name = \"direct-plugin\"",
+            "plugin_name = \"other-plugin\"",
+        ),
+    )
+    .unwrap();
+    std::fs::create_dir_all(workspace_root.join("broken-plugin")).unwrap();
+    std::fs::write(
+        workspace_root.join("broken-plugin/manifest.toml"),
+        "not valid toml",
+    )
+    .unwrap();
+
     assert_eq!(operator.status(), PluginStatus::Draft);
-    assert_eq!(store.list().unwrap().len(), 1);
+    assert_eq!(
+        store
+            .list()
+            .unwrap()
+            .into_iter()
+            .map(|manifest| manifest.plugin_name)
+            .collect::<Vec<_>>(),
+        vec!["direct-plugin".to_string()]
+    );
+    let orphan_error = store.develop("orphan-name").unwrap_err();
+    assert!(
+        orphan_error
+            .to_string()
+            .contains("does not match workspace"),
+        "{orphan_error}"
+    );
     assert_eq!(
         store.development_vfs_path("direct-plugin").unwrap(),
         "/plugins/dev/direct-plugin"

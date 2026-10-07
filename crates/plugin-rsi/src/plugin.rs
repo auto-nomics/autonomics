@@ -582,7 +582,11 @@ impl PluginStore {
         Ok(operator)
     }
 
-    /// List plugins represented by a readable root manifest.
+    /// List plugins represented by a readable, correctly named root manifest.
+    ///
+    /// This inventory powers routing and background scans, so a malformed or
+    /// orphaned development workspace is skipped instead of blocking every
+    /// plugin operation. Explicit workspace operations still fail when opened.
     pub fn list(&self) -> Result<Vec<PluginManifest>> {
         let entries = match std::fs::read_dir(self.root()) {
             Ok(entries) => entries,
@@ -591,25 +595,31 @@ impl PluginStore {
         };
         let mut manifests = Vec::new();
         for entry in entries.flatten() {
+            if !entry.file_type().is_ok_and(|file_type| file_type.is_dir()) {
+                continue;
+            }
             let path = entry.path().join("manifest.toml");
             if !path.is_file() {
                 continue;
             }
-            let text = std::fs::read_to_string(&path).map_err(|source| Error::ReadFile {
-                path: path.clone(),
-                source,
-            })?;
-            let manifest: PluginManifest =
-                toml::from_str(&text).map_err(|source| Error::ParseToml {
+            let parsed = std::fs::read_to_string(&path)
+                .map_err(|source| Error::ReadFile {
                     path: path.clone(),
                     source,
-                })?;
+                })
+                .and_then(|text| {
+                    toml::from_str::<PluginManifest>(&text).map_err(|source| Error::ParseToml {
+                        path: path.clone(),
+                        source,
+                    })
+                });
+            let manifest = match parsed {
+                Ok(manifest) => manifest,
+                Err(_) => continue,
+            };
             let expected = entry.file_name().to_string_lossy().to_string();
             if manifest.plugin_name != expected {
-                return Err(Error::Validation(format!(
-                    "manifest plugin_name `{}` does not match directory `{expected}`",
-                    manifest.plugin_name
-                )));
+                continue;
             }
             manifests.push(manifest);
         }
@@ -641,6 +651,12 @@ impl PluginStore {
         }
         let workspace = PluginWorkspace::new(path);
         let manifest = load_manifest(&workspace)?;
+        if manifest.plugin_name != plugin_name {
+            return Err(Error::Validation(format!(
+                "manifest plugin_name `{}` does not match workspace `{plugin_name}`",
+                manifest.plugin_name
+            )));
+        }
         Ok(Some(PluginOperator {
             store: self,
             plugin_name: plugin_name.to_string(),
