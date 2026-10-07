@@ -3,10 +3,12 @@ use std::sync::Arc;
 mod common;
 
 use agentik_core::tools::{ToolError, ToolRegistration, ToolResult};
+use agentik_sdk::types::ToolResultContent;
 use plugin_rsi::{
-    AgentProfile, Environment, EnvironmentCatalog, GitRepo, MergeOutcome, PluginDistiller,
-    PluginPublisher, PluginPullRequestPublisher, PluginStatus, PublishOutcome, PullRequestOutcome,
-    RequestIntent, RequestRecord, RequestSource, RequestStatus, RsiInfra,
+    AgentProfile, Environment, EnvironmentCatalog, GitRepo, MergeOutcome,
+    PluginDevelopmentToolsetRegistry, PluginDistiller, PluginPublisher, PluginPullRequestPublisher,
+    PluginStatus, PublishOutcome, PullRequestOutcome, RequestIntent, RequestRecord, RequestSource,
+    RequestStatus, RsiInfra,
 };
 use serde_json::{Value, json};
 
@@ -123,6 +125,9 @@ async fn execute(
 async fn local_activation_is_distilled_to_github_without_blocking_the_agent() {
     let state = tempfile::tempdir().unwrap();
     common::configure_plugin_vfs(state.path());
+    PluginDevelopmentToolsetRegistry::global()
+        .configure_environments(catalog())
+        .unwrap();
     let skills = skills::SkillManager::init(skills::SkillManager::new(state.path()));
     let publisher = Arc::new(FakePublisher);
     let infra = RsiInfra::open(
@@ -155,6 +160,22 @@ async fn local_activation_is_distilled_to_github_without_blocking_the_agent() {
     let _operator = infra.create_plugin(request.clone(), "alpine").unwrap();
     let profile = AgentProfile::new("distillation-agent").unwrap();
     let tools = profile.tool_registrations();
+    let environments = execute(&tools, "plugin_environments_list", json!({}))
+        .await
+        .unwrap();
+    let ToolResultContent::Json(environments) = environments.content else {
+        panic!("plugin_environments_list must return JSON");
+    };
+    assert_eq!(
+        environments,
+        json!([
+            {
+                "id": "alpine",
+                "reference": ENVIRONMENT_REFERENCE,
+                "interpreters": ["sh"]
+            }
+        ])
+    );
     execute(
         &tools,
         "plugin_node_create",

@@ -39,6 +39,11 @@ impl EnvironmentCatalog {
         self.environments.get(id)
     }
 
+    /// Return a sorted snapshot of approved runtime environments.
+    pub fn list(&self) -> BTreeMap<String, Environment> {
+        self.environments.clone()
+    }
+
     /// Return the catalog id owning one digest-pinned reference.
     pub fn find_reference(&self, reference: &str) -> Option<&str> {
         self.environments

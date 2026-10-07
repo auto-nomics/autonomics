@@ -124,6 +124,7 @@ mod tests {
         assert_eq!(
             names,
             [
+                "plugin_environments_list",
                 "plugin_development_status",
                 "plugin_node_spec",
                 "plugin_node_create",

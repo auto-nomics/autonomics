@@ -33,6 +33,7 @@ const DEFAULT_TOOL_TIMEOUT_SECS: u64 = 900;
 struct RegistryState {
     runtime: Option<Arc<dyn PodmanConnection>>,
     vfs: Option<OpendalFileStorage>,
+    environments: Option<crate::EnvironmentCatalog>,
     development_root: Option<PathBuf>,
     manifest_locks: BTreeMap<String, Arc<tokio::sync::Mutex<()>>>,
 }
@@ -67,6 +68,14 @@ impl PluginDevelopmentToolsetRegistry {
         self.lock(|state| {
             state.vfs = Some(vfs);
             state.development_root = Some(development_root);
+            Ok(())
+        })
+    }
+
+    /// Configure the read-only environment catalog exposed to plugin agents.
+    pub fn configure_environments(&self, environments: crate::EnvironmentCatalog) -> RsiResult<()> {
+        self.lock(|state| {
+            state.environments = Some(environments);
             Ok(())
         })
     }
@@ -124,6 +133,15 @@ impl PluginDevelopmentToolsetRegistry {
         })
     }
 
+    fn environments(&self) -> RsiResult<crate::EnvironmentCatalog> {
+        self.lock(|state| {
+            state
+                .environments
+                .clone()
+                .ok_or_else(|| Error::Validation("plugin environments are not configured".into()))
+        })
+    }
+
     fn manifest_lock(&self, plugin_name: &str) -> Arc<tokio::sync::Mutex<()>> {
         self.lock(|state| {
             Ok(state
@@ -166,6 +184,9 @@ pub fn plugin_development_tool_registrations(agent_id: impl Into<String>) -> Vec
         principal: principal_for_agent(&agent_id),
     };
     vec![
+        ToolRegistration::from(PluginEnvironmentsListTool {
+            state: state.clone(),
+        }),
         ToolRegistration::from(PluginStatusTool {
             state: state.clone(),
         }),
@@ -347,6 +368,37 @@ fn selected_node(manifest: &PluginManifest, node_kind: &str) -> RsiResult<NodeDe
                 node_kind
             ))
         })
+}
+
+#[tool(
+    name = "plugin_environments_list",
+    description = "List host-approved digest-pinned base images available to plugin development."
+)]
+struct PluginEnvironmentsListInput {}
+
+struct PluginEnvironmentsListTool {
+    state: PluginToolState,
+}
+
+#[async_trait]
+impl ToolFunction for PluginEnvironmentsListTool {
+    type Input = PluginEnvironmentsListInput;
+
+    async fn run(&self, _input: Self::Input) -> Result<ToolResult, ToolError> {
+        let environments = self.state.registry.environments().map_err(tool_error)?;
+        let environments = environments
+            .list()
+            .into_iter()
+            .map(|(id, environment)| {
+                json!({
+                    "id": id,
+                    "reference": environment.reference,
+                    "interpreters": environment.interpreters,
+                })
+            })
+            .collect::<Vec<_>>();
+        Ok(ToolResult::success_json(Value::Array(environments)))
+    }
 }
 
 #[tool(

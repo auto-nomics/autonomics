@@ -284,6 +284,9 @@ impl SharedInfra {
             vfs.clone(),
         ));
         plugin_rsi::PluginDevelopmentToolsetRegistry::global()
+            .configure_environments(config.plugin_rsi.environments.clone())
+            .map_err(|error| crate::error::Error::Other(error.to_string()))?;
+        plugin_rsi::PluginDevelopmentToolsetRegistry::global()
             .configure_vfs((*file_storage).clone(), rsi.store().root())
             .map_err(|error| crate::error::Error::Other(error.to_string()))?;
         let container_execution =
@@ -5010,6 +5013,11 @@ mod plugin_profile_tools_tests {
             researcher_tools
                 .iter()
                 .any(|tool| tool.definition.name == "plugin_development_status")
+        );
+        assert!(
+            researcher_tools
+                .iter()
+                .any(|tool| tool.definition.name == "plugin_environments_list")
         );
         assert!(
             crate::config::build_system_prompt(&researcher).contains("Plugin Self-Improvement")

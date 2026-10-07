@@ -677,10 +677,11 @@ into **refs** (branches) — each ref is an independent lineage.\n\
 const PROMPT_PLUGIN_RSI: &str = "\n\
 ### Plugin Self-Improvement\n\
 You can develop plugins through their `/plugins/dev/<plugin-name>` VFS paths.\n\
-Inspect the addressed workspace with `plugin_development_status`, edit node specs,\n\
-scripts, and files with the plugin tools, and run commands in the selected\n\
-environment with `plugin_container_run`. Treat manifest lifecycle state as\n\
-host-owned: do not attempt direct manifest writes.";
+List approved environments with `plugin_environments_list`, inspect the addressed\n\
+workspace with `plugin_development_status`, edit node specs, scripts, and files with\n\
+the plugin tools, and run commands in the selected environment with\n\
+`plugin_container_run`. Treat manifest lifecycle state as host-owned: do not attempt\n\
+direct manifest writes.";
 
 const PROMPT_SQL_CONVENTIONS: &str = "\n\
 ### SQL Conventions\n\
