@@ -159,10 +159,10 @@ async fn an_installed_reference_can_be_forked_and_locally_activated() {
         .await
         .unwrap();
     }
-    let repository = GitRepo::open(state.path().join("plugins/forked-plugin"));
+    let repository = GitRepo::open(store.root().join("forked-plugin"));
     assert!(repository.remote_url("origin").unwrap().is_none());
 
-    let manifest_path = state.path().join("plugins/forked-plugin/manifest.toml");
+    let manifest_path = store.root().join("forked-plugin/manifest.toml");
     let manifest_text = std::fs::read_to_string(&manifest_path).unwrap();
     let manifest_text = manifest_text
         .replace("reference_adapter", "forked_adapter")
@@ -186,7 +186,8 @@ async fn an_installed_reference_can_be_forked_and_locally_activated() {
     };
     store.install_local("forked-plugin").unwrap();
 
-    assert!(state.path().join("plugin-runtime/forked-plugin").is_dir());
+    let runtime_root = plugin_rsi::PluginStateLayout::v2(state.path()).runtime_root();
+    assert!(runtime_root.join("forked-plugin").is_dir());
     assert!(matches!(
         plugin_rsi::read_installed_plugin_source(
             &state.path().join("plugins.toml"),

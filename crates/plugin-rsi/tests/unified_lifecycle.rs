@@ -4,6 +4,7 @@ mod common;
 
 use agentik_core::tools::{ToolError, ToolRegistration, ToolResult};
 use agentik_sdk::types::ToolResultContent;
+use plugin_rsi::PluginStateLayout;
 use plugin_rsi::{
     AgentProfile, Environment, EnvironmentCatalog, GitRepo, MergeOutcome, PluginLifecycle,
     PluginPublisher, PluginPullRequestPublisher, PluginStatus, PluginStore, PublishOutcome,
@@ -150,8 +151,10 @@ async fn plugin_is_developed_published_updated_and_installed_in_one_workspace() 
             RequestIntent::NewNode,
         ))
         .unwrap();
-    let store = PluginStore::open(state.path(), "main", "Autonomics RSI", "rsi@example.com");
     common::configure_plugin_vfs(state.path());
+    let layout = PluginStateLayout::v2(state.path());
+    let store =
+        PluginStore::open_with_layout(layout.clone(), "main", "Autonomics RSI", "rsi@example.com");
     let mut operator = store
         .create(
             "unified-plugin",
@@ -212,7 +215,8 @@ async fn plugin_is_developed_published_updated_and_installed_in_one_workspace() 
     let local_install = store.install_local("unified-plugin").unwrap();
     assert!(local_install.path.join("manifest.toml").is_file());
     assert!(!local_install.path.join(".git").exists());
-    assert!(state.path().join("plugin-runtime/unified-plugin").is_dir());
+    let runtime_root = plugin_rsi::PluginStateLayout::v2(state.path()).runtime_root();
+    assert!(runtime_root.join("unified-plugin").is_dir());
     assert!(matches!(
         plugin_rsi::read_installed_plugin_source(
             &state.path().join("plugins.toml"),
@@ -286,7 +290,7 @@ async fn plugin_is_developed_published_updated_and_installed_in_one_workspace() 
             .unwrap();
     assert_ne!(source.commit, installed.commit);
     assert_eq!(source.remote, REMOTE);
-    assert!(state.path().join("plugins/unified-plugin").is_dir());
+    assert!(layout.workspace_root().join("unified-plugin").is_dir());
     let rolled_back = store.rollback("unified-plugin").unwrap();
     let plugin_rsi::InstalledPluginSource::Git(rolled_back) = rolled_back else {
         panic!("rollback must return the installed GitHub source");

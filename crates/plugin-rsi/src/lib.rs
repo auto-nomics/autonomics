@@ -13,6 +13,7 @@ pub mod github;
 pub mod gitrepo;
 pub mod infra;
 pub mod install;
+pub mod layout;
 pub mod lifecycle;
 pub mod names;
 pub mod plugin;
@@ -45,6 +46,7 @@ pub use install::{
     read_git_plugin_source, read_installed_plugin_source, write_git_plugin_source,
     write_local_plugin_source,
 };
+pub use layout::{PluginLayoutVersion, PluginStateLayout};
 pub use lifecycle::{LocalActivationOutcome, PluginLifecycle, ValidationOutcome};
 pub use names::validate_plugin_name;
 pub use plugin::{

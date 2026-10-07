@@ -36,6 +36,7 @@ use data_engine::dag::DagHistory;
 use data_engine::data_engine::DataEngine;
 use data_engine::runtime::{DataEngineClient, DataEngineManager};
 use futures::FutureExt;
+use plugin_rsi::PluginStateLayout;
 use rcsb::RcsbClient;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
@@ -244,6 +245,12 @@ impl SharedInfra {
         // requests without duplicating the evidence store.
         let skills = skills::SkillManager::init(skills::SkillManager::new(&config.state_dir));
         skills.load_usage();
+        let plugin_layout = plugin_rsi::PluginStateLayout::open(&config.state_dir);
+        if plugin_layout.version() == plugin_rsi::PluginLayoutVersion::V2 {
+            plugin_layout
+                .ensure_v2_directories()
+                .map_err(|error| crate::error::Error::Other(error.to_string()))?;
+        }
 
         // PluginStore owns `state_dir/plugins.toml` and `state_dir/plugins`;
         // container-plugin remains the protocol and checkout tool layer.
@@ -778,7 +785,8 @@ pub fn bibliography_file_storage(config: &RuntimeConfig) -> Result<Arc<vfs::Open
 fn build_vfs(config: &RuntimeConfig) -> Result<MountedObjectStore> {
     let state = load_or_create_vfs_manifest(config)?;
     let mut manifest = state.manifest;
-    ensure_plugin_mounts(&mut manifest, config)?;
+    let plugin_layout = plugin_rsi::PluginStateLayout::open(&config.state_dir);
+    ensure_plugin_mounts(&mut manifest, config, &plugin_layout)?;
     MountedObjectStore::from_manifest(&manifest).map_err(|e| Error::Other(e.to_string()))
 }
 
@@ -791,7 +799,8 @@ async fn build_vfs_with_catalog(
 )> {
     let state = load_or_create_vfs_manifest(config)?;
     let mut manifest = state.manifest;
-    ensure_plugin_mounts(&mut manifest, config)?;
+    let plugin_layout = plugin_rsi::PluginStateLayout::open(&config.state_dir);
+    ensure_plugin_mounts(&mut manifest, config, &plugin_layout)?;
 
     let mut catalog_registry = dag_core::BundleRegistry::new();
     let mut catalog = None;
@@ -857,12 +866,14 @@ async fn build_vfs_with_catalog(
         .map(|store| (store, catalog_registry, catalog))
 }
 
-fn ensure_plugin_mounts(manifest: &mut vfs::VfsManifest, config: &RuntimeConfig) -> Result<()> {
+fn ensure_plugin_mounts(
+    manifest: &mut vfs::VfsManifest,
+    _config: &RuntimeConfig,
+    plugin_layout: &plugin_rsi::PluginStateLayout,
+) -> Result<()> {
     const ACTIVE_BACKEND_ID: &str = "autonomics-plugin-runtime";
     const DEV_BACKEND_ID: &str = "autonomics-plugin-development";
-    let registry_path = config
-        .state_dir
-        .join(container_plugin::sync::PLUGIN_CONFIG_FILE);
+    let registry_path = plugin_layout.registry_path();
     let Ok(text) = std::fs::read_to_string(&registry_path) else {
         return Ok(());
     };
@@ -878,7 +889,7 @@ fn ensure_plugin_mounts(manifest: &mut vfs::VfsManifest, config: &RuntimeConfig)
         ));
     }
 
-    let development_root = config.state_dir.join("plugins");
+    let development_root = plugin_layout.workspace_root();
     std::fs::create_dir_all(&development_root)
         .map_err(|error| Error::Other(format!("create `{development_root:?}`: {error}")))?;
     manifest.backend.push(vfs::BackendDefinition {
@@ -894,7 +905,7 @@ fn ensure_plugin_mounts(manifest: &mut vfs::VfsManifest, config: &RuntimeConfig)
     });
 
     if !parsed.plugin.is_empty() {
-        let runtime_root = config.state_dir.join("plugin-runtime");
+        let runtime_root = plugin_layout.runtime_root();
         manifest.backend.push(vfs::BackendDefinition {
             id: ACTIVE_BACKEND_ID.into(),
             config: vfs::BackendConfig::local(runtime_root.to_string_lossy().into_owned()),
@@ -936,6 +947,7 @@ fn plugin_development_permissions() -> vfs::permission::MountPermissions {
         deny(".git/**"),
         deny("**/.git"),
         deny("**/.git/**"),
+        deny(".autonomics-layout.toml"),
         VfsPathRule::Deny {
             path: "*/manifest.toml".into(),
             access: vec![VfsAccess::Write],
@@ -5597,8 +5609,9 @@ mod plugin_vfs_tests {
         let mut config = RuntimeConfig::default();
         config.state_dir = state.path().to_path_buf();
         config.data_dir = data.path().to_path_buf();
+        let plugin_layout = plugin_rsi::PluginStateLayout::open(&config.state_dir);
         let mut manifest = VfsManifest::local_root(data.path().to_string_lossy().into_owned());
-        ensure_plugin_mounts(&mut manifest, &config).unwrap();
+        ensure_plugin_mounts(&mut manifest, &config, &plugin_layout).unwrap();
         let mounts = Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap());
         let storage = vfs::OpendalFileStorage::with_mounts(data.path(), mounts);
         let developer =

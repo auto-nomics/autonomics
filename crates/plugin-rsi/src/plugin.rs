@@ -18,12 +18,13 @@ use container_runtime::ImageReference;
 
 use crate::{
     Error, GitInstalledPluginSource, GitRepo, InstalledPluginSource, LocalInstalledPluginSource,
-    PluginWorkspace, RequestStore, Result, validate::EnvironmentCatalog,
+    PluginStateLayout, PluginWorkspace, RequestStore, Result, validate::EnvironmentCatalog,
 };
 
 /// Creates and opens plugin repositories under one root.
 #[derive(Debug, Clone)]
 pub struct PluginStore {
+    layout: PluginStateLayout,
     workspace_root: PathBuf,
     runtime_root: PathBuf,
     snapshot_root: PathBuf,
@@ -74,11 +75,23 @@ impl PluginStore {
         author_name: &str,
         author_email: &str,
     ) -> Self {
+        let layout = PluginStateLayout::open(state_dir);
+        Self::open_with_layout(layout, default_branch, author_name, author_email)
+    }
+
+    /// Open with an explicit resolved state layout.
+    pub fn open_with_layout(
+        layout: PluginStateLayout,
+        default_branch: &str,
+        author_name: &str,
+        author_email: &str,
+    ) -> Self {
         Self {
-            workspace_root: state_dir.join("plugins"),
-            runtime_root: state_dir.join("plugin-runtime"),
-            snapshot_root: state_dir.join("plugin-installs"),
-            registry_path: state_dir.join(container_plugin::sync::PLUGIN_CONFIG_FILE),
+            workspace_root: layout.workspace_root(),
+            runtime_root: layout.runtime_root(),
+            snapshot_root: layout.snapshot_root(),
+            registry_path: layout.registry_path(),
+            layout,
             default_branch: default_branch.to_string(),
             author_name: author_name.to_string(),
             author_email: author_email.to_string(),
@@ -104,6 +117,11 @@ impl PluginStore {
     /// Return the persistent registry that pins installed plugin sources.
     pub fn registry_path(&self) -> &Path {
         &self.registry_path
+    }
+
+    /// Return the resolved state-directory layout.
+    pub fn layout(&self) -> &PluginStateLayout {
+        &self.layout
     }
 
     /// Materialize the persistent registry into the plugin root.

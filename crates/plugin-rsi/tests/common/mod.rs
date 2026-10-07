@@ -2,7 +2,9 @@ use std::{path::Path, sync::Arc};
 
 pub fn configure_plugin_vfs(state_dir: &Path) {
     let data_root = state_dir.join("vfs-data");
-    let plugin_root = state_dir.join("plugins");
+    let layout = plugin_rsi::PluginStateLayout::v2(state_dir);
+    layout.ensure_v2_directories().unwrap();
+    let plugin_root = layout.workspace_root();
     std::fs::create_dir_all(&data_root).unwrap();
     std::fs::create_dir_all(&plugin_root).unwrap();
 
@@ -38,6 +40,14 @@ pub fn configure_plugin_vfs(state_dir: &Path) {
                 deny(".git/**"),
                 deny("**/.git"),
                 deny("**/.git/**"),
+                vfs::permission::VfsPathRule::Deny {
+                    path: ".autonomics-layout.toml".into(),
+                    access: vec![
+                        vfs::permission::VfsAccess::Read,
+                        vfs::permission::VfsAccess::Write,
+                        vfs::permission::VfsAccess::Execute,
+                    ],
+                },
                 vfs::permission::VfsPathRule::Deny {
                     path: "*/manifest.toml".into(),
                     access: vec![vfs::permission::VfsAccess::Write],

@@ -73,7 +73,8 @@ async fn plugin_store_develops_one_repository_in_place() {
     let state = tempfile::tempdir().unwrap();
     let requests = RequestStore::open(state.path());
     let request = requests.record(request()).unwrap();
-    let store = PluginStore::open(state.path(), "main", "Autonomics RSI", "rsi@example.com");
+    let layout = plugin_rsi::PluginStateLayout::v2(state.path());
+    let store = PluginStore::open_with_layout(layout, "main", "Autonomics RSI", "rsi@example.com");
     common::configure_plugin_vfs(state.path());
     let mut operator = store
         .create(
