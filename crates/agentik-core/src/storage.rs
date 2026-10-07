@@ -190,7 +190,7 @@ pub enum PersistOp {
 /// Optional delta fields when deriving a child profile from a parent.
 ///
 /// Any `None` field inherits the parent's value. Used by
-/// [`AgentProfile::derive_child`] and the `derive_profile` agent tool.
+/// [`AgentProfile::derive_child`] in storage compatibility tests.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct ProfileOverrides {
     pub description: Option<String>,
@@ -345,28 +345,32 @@ impl AgentProfile {
         self.path.matches('/').count()
     }
 
-    /// Create a new root-level profile with sensible defaults (all tools enabled).
+    /// Create a root-level profile with role-aware defaults.
     pub fn new(path: impl Into<String>) -> Self {
         let now = now_ms();
         let path = path.into();
-        let enable_plugin_rsi = path == "researcher" || path.starts_with("researcher/");
+        let is_developer = path == "developer";
         Self {
             id: Uuid::new_v4(),
             path,
             description: String::new(),
-            agent_identity: "You are a helpful assistant.".into(),
+            agent_identity: if is_developer {
+                "You are a DAG node and plugin developer.".into()
+            } else {
+                "You are a helpful assistant.".into()
+            },
             system_prompt: None,
-            enable_bibliography: true,
-            enable_writing: true,
-            enable_opengwas: true,
-            enable_opentargets: true,
-            enable_gwascatalog: true,
-            enable_chembl: true,
-            enable_rcsb: true,
-            enable_string: true,
-            enable_kegg: true,
+            enable_bibliography: !is_developer,
+            enable_writing: !is_developer,
+            enable_opengwas: !is_developer,
+            enable_opentargets: !is_developer,
+            enable_gwascatalog: !is_developer,
+            enable_chembl: !is_developer,
+            enable_rcsb: !is_developer,
+            enable_string: !is_developer,
+            enable_kegg: !is_developer,
             enable_dag_history: true,
-            enable_plugin_rsi,
+            enable_plugin_rsi: is_developer,
             preferred_model: None,
             runtime: AgentRuntimeOverrides::default(),
             created_at: now,
@@ -453,31 +457,6 @@ impl AgentProfile {
                 enable_string: true,
                 enable_kegg: true,
                 enable_dag_history: true,
-                enable_plugin_rsi: true,
-                preferred_model: None,
-                runtime: AgentRuntimeOverrides::default(),
-                created_at: now,
-                updated_at: now,
-            },
-            AgentProfile {
-                id: Uuid::new_v4(),
-                path: "literature".into(),
-                description: "Literature search and evidence synthesis expert.".into(),
-                agent_identity: "You are a literature search expert specializing in \
-                    systematic reviews, meta-analyses, and evidence synthesis. \
-                    Use PubMed, arXiv, and bioRxiv tools to find and analyze publications."
-                    .into(),
-                system_prompt: None,
-                enable_bibliography: true,
-                enable_writing: false,
-                enable_opengwas: false,
-                enable_opentargets: true,
-                enable_gwascatalog: false,
-                enable_chembl: true,
-                enable_rcsb: false,
-                enable_string: true,
-                enable_kegg: false,
-                enable_dag_history: false,
                 enable_plugin_rsi: false,
                 preferred_model: None,
                 runtime: AgentRuntimeOverrides::default(),
@@ -486,82 +465,15 @@ impl AgentProfile {
             },
             AgentProfile {
                 id: Uuid::new_v4(),
-                path: "gwas-analysis".into(),
-                description: "GWAS data analysis and statistical genetics expert.".into(),
-                agent_identity: "You are a GWAS analysis expert specializing in \
-                    statistical genetics. Use OpenGWAS, GWAS Catalog, and the \
-                    data pipeline engine to analyze genetic association data."
+                path: "developer".into(),
+                description: "Node and plugin developer for the DAG ecosystem.".into(),
+                agent_identity: "You are a DAG node and plugin developer. You build, validate, \
+                    install, and uninstall plugins through the host-owned plugin lifecycle; \
+                    you do not perform open-ended research analysis in plugin debug containers."
                     .into(),
                 system_prompt: None,
                 enable_bibliography: false,
                 enable_writing: false,
-                enable_opengwas: true,
-                enable_opentargets: true,
-                enable_gwascatalog: true,
-                enable_chembl: true,
-                enable_rcsb: false,
-                enable_string: true,
-                enable_kegg: true,
-                enable_dag_history: true,
-                enable_plugin_rsi: false,
-                preferred_model: None,
-                runtime: AgentRuntimeOverrides::default(),
-                created_at: now,
-                updated_at: now,
-            },
-            AgentProfile {
-                id: Uuid::new_v4(),
-                path: "structural-biology".into(),
-                description: "Protein structure retrieval and analysis expert.".into(),
-                agent_identity: "You are a structural biology expert specializing in \
-                    protein structures, polymer entities, and RCSB PDB data. \
-                    Use RCSB tools and DAG source nodes to inspect structures \
-                    and prepare computational inputs."
-                    .into(),
-                system_prompt: None,
-                enable_bibliography: false,
-                enable_writing: false,
-                enable_opengwas: false,
-                enable_opentargets: false,
-                enable_gwascatalog: false,
-                enable_chembl: false,
-                enable_rcsb: true,
-                enable_string: true,
-                enable_kegg: true,
-                enable_dag_history: true,
-                enable_plugin_rsi: false,
-                preferred_model: None,
-                runtime: AgentRuntimeOverrides::default(),
-                created_at: now,
-                updated_at: now,
-            },
-            AgentProfile {
-                id: Uuid::new_v4(),
-                path: "writer".into(),
-                description: "Manuscript writing, editing, and LaTeX compilation expert.".into(),
-                agent_identity: "You are a scientific manuscript writing assistant specializing \
-                    in LaTeX document preparation, citation management, and compilation. \
-                    Use the writing tools (doc_create, doc_insert_section, doc_insert_block, \
-                    doc_add_citation, doc_compile) to draft, edit, and compile documents. \
-                    For bibliography work, use the DAG evidence channel: a \
-                    `source_literature` (or `source_literature_fetch`) node followed \
-                    by a `bib_save` node imports citations into the bibliography."
-                    .into(),
-                system_prompt: Some(
-                    "When writing a manuscript:\n\
-                    1. Use doc_create to start a new document\n\
-                    2. Use doc_insert_section to build the outline (Introduction, Methods, Results, Discussion)\n\
-                    3. Use doc_insert_block to add paragraphs, equations, and tables\n\
-                    4. Use source_literature (or source_literature_fetch) DAG nodes to find references, \
-                    followed by a bib_save node to store them in the library\n\
-                    5. Use doc_add_citation to insert citations\n\
-                    6. Use doc_check_citations to verify all citations resolve\n\
-                    7. Use doc_compile to produce the final PDF\n\
-                    \n\
-                    Always run doc_check_citations before doc_compile to catch broken references.".into()
-                ),
-                enable_bibliography: true,
-                enable_writing: true,
                 enable_opengwas: false,
                 enable_opentargets: false,
                 enable_gwascatalog: false,
@@ -569,8 +481,8 @@ impl AgentProfile {
                 enable_rcsb: false,
                 enable_string: false,
                 enable_kegg: false,
-                enable_dag_history: false,
-                enable_plugin_rsi: false,
+                enable_dag_history: true,
+                enable_plugin_rsi: true,
                 preferred_model: None,
                 runtime: AgentRuntimeOverrides::default(),
                 created_at: now,
@@ -905,23 +817,63 @@ pub trait AgentProfileRegistry: Send + Sync {
     async fn update_profile(&self, profile: AgentProfile) -> Result<(), StorageError>;
     async fn delete_profile(&self, id: Uuid) -> Result<(), StorageError>;
 
-    /// Ensure every built-in default profile exists (by path), seeding any
-    /// that are missing. Also migrates legacy profile names (e.g. the old
-    /// `default` → `researcher` rename). Returns `true` if any change was
-    /// made.
+    /// Ensure exactly the Researcher and Developer profiles remain.
+    ///
+    /// Worker agents may still use hierarchical runtime paths; they no longer
+    /// require persisted child profile blueprints.
     async fn seed_defaults_if_empty(&self) -> Result<bool, StorageError> {
         let existing = self.list_profiles().await?;
         let mut changed = false;
 
-        // ── Legacy migration: rename `default` → `researcher` ──
-        if let Some(legacy) = existing.iter().find(|p| p.path == "default").cloned() {
-            let mut renamed = legacy;
-            renamed.path = "researcher".into();
-            // The old default profile predates plugin RSI; becoming the
-            // full researcher profile enables its new baseline capability.
-            renamed.enable_plugin_rsi = true;
-            renamed.updated_at = now_ms();
-            self.update_profile(renamed).await?;
+        // Legacy installations used `default` as the analysis profile.
+        let has_researcher = existing.iter().any(|profile| profile.path == "researcher");
+        for legacy in existing.iter().filter(|profile| profile.path == "default") {
+            if has_researcher {
+                self.delete_profile(legacy.id).await?;
+            } else {
+                let mut renamed = legacy.clone();
+                renamed.path = "researcher".into();
+                renamed.enable_plugin_rsi = false;
+                renamed.updated_at = now_ms();
+                self.update_profile(renamed).await?;
+            }
+            changed = true;
+        }
+
+        let current = self.list_profiles().await?;
+        let retired =
+            |profile: &AgentProfile| profile.path != "researcher" && profile.path != "developer";
+        for profile in current.iter().filter(|profile| retired(profile)) {
+            self.delete_profile(profile.id).await?;
+            changed = true;
+        }
+
+        // Enforcement point for separation between analysis and development.
+        let current = self.list_profiles().await?;
+        for profile in current
+            .iter()
+            .filter(|profile| {
+                profile.path == "researcher" || profile.path.starts_with("researcher/")
+            })
+            .filter(|profile| profile.enable_plugin_rsi)
+        {
+            let mut restricted = profile.clone();
+            restricted.enable_plugin_rsi = false;
+            restricted.updated_at = now_ms();
+            self.update_profile(restricted).await?;
+            changed = true;
+        }
+
+        let current = self.list_profiles().await?;
+        for profile in current
+            .iter()
+            .filter(|profile| profile.path == "developer")
+            .filter(|profile| !profile.enable_plugin_rsi)
+        {
+            let mut enabled = profile.clone();
+            enabled.enable_plugin_rsi = true;
+            enabled.updated_at = now_ms();
+            self.update_profile(enabled).await?;
             changed = true;
         }
 
@@ -1003,27 +955,37 @@ mod profile_compat_tests {
     }
 
     #[test]
-    fn plugin_rsi_is_a_researcher_capability_and_is_inherited() {
+    fn plugin_rsi_is_a_developer_capability_and_is_inherited() {
         let defaults = AgentProfile::defaults();
+        assert_eq!(defaults.len(), 2);
         let researcher = defaults
             .iter()
             .find(|profile| profile.path == "researcher")
             .unwrap();
-        let literature = defaults
+        let developer = defaults
             .iter()
-            .find(|profile| profile.path == "literature")
+            .find(|profile| profile.path == "developer")
             .unwrap();
-        assert!(researcher.enable_plugin_rsi);
-        assert!(!literature.enable_plugin_rsi);
+        assert!(!researcher.enable_plugin_rsi);
+        assert!(developer.enable_plugin_rsi);
+        assert!(!developer.enable_bibliography);
+        assert!(!developer.enable_writing);
+        assert!(!developer.enable_opengwas);
+        assert!(!developer.enable_opentargets);
+        assert!(!developer.enable_gwascatalog);
+        assert!(!developer.enable_chembl);
+        assert!(!developer.enable_rcsb);
+        assert!(!developer.enable_string);
+        assert!(!developer.enable_kegg);
 
-        let child = researcher
-            .derive_child("genomics", ProfileOverrides::default())
+        let child = developer
+            .derive_child("nodes", ProfileOverrides::default())
             .unwrap();
         assert!(child.enable_plugin_rsi);
 
-        let restricted = researcher
+        let restricted = developer
             .derive_child(
-                "writer",
+                "analysis",
                 ProfileOverrides {
                     enable_plugin_rsi: Some(false),
                     ..Default::default()

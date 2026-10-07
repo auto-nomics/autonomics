@@ -3270,24 +3270,69 @@ mod tests {
         assert!(seeded, "should seed on empty table");
 
         let profiles = store.list_profiles().await.unwrap();
-        assert_eq!(profiles.len(), 5, "should have 5 default profiles");
+        assert_eq!(profiles.len(), 2, "should have two default profiles");
         assert!(profiles.iter().any(|p| p.path == "researcher"));
+        assert!(profiles.iter().any(|p| p.path == "developer"));
         assert!(
-            profiles
+            !profiles
                 .iter()
                 .find(|p| p.path == "researcher")
                 .unwrap()
                 .enable_plugin_rsi
         );
-        assert!(profiles.iter().any(|p| p.path == "literature"));
-        assert!(profiles.iter().any(|p| p.path == "gwas-analysis"));
+        assert!(!profiles.iter().any(|p| p.path == "literature"));
+        assert!(!profiles.iter().any(|p| p.path == "gwas-analysis"));
 
         // Non-empty → should NOT seed again.
         let seeded_again = store.seed_defaults_if_empty().await.unwrap();
         assert!(!seeded_again, "should not seed when table has data");
 
         let profiles2 = store.list_profiles().await.unwrap();
-        assert_eq!(profiles2.len(), 5, "should still have 5 profiles");
+        assert_eq!(profiles2.len(), 2, "should still have two profiles");
+    }
+
+    #[tokio::test]
+    async fn test_seed_keeps_only_researcher_and_developer() {
+        let store = TursoAgentStorage::open_in_memory().await.unwrap();
+        let mut researcher = sample_profile("researcher");
+        researcher.enable_plugin_rsi = true;
+        store.create_profile(researcher).await.unwrap();
+
+        for path in [
+            "literature",
+            "gwas-analysis",
+            "structural-biology",
+            "writer",
+        ] {
+            store.create_profile(sample_profile(path)).await.unwrap();
+        }
+        store
+            .create_profile(sample_profile("custom"))
+            .await
+            .unwrap();
+
+        assert!(store.seed_defaults_if_empty().await.unwrap());
+        let profiles = store.list_profiles().await.unwrap();
+        let paths = profiles
+            .iter()
+            .map(|profile| profile.path.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(paths, vec!["researcher", "developer"]);
+        assert!(
+            !profiles
+                .iter()
+                .find(|profile| profile.path == "researcher")
+                .unwrap()
+                .enable_plugin_rsi
+        );
+        assert!(
+            profiles
+                .iter()
+                .find(|profile| profile.path == "developer")
+                .unwrap()
+                .enable_plugin_rsi
+        );
     }
 
     #[tokio::test]
@@ -3323,13 +3368,13 @@ mod tests {
             .await
             .unwrap();
 
-        // Seed should rename default → researcher AND add missing defaults.
+        // Seed should rename default → researcher AND add the developer.
         let changed = store.seed_defaults_if_empty().await.unwrap();
         assert!(changed, "migration should make a change");
 
         let profiles = store.list_profiles().await.unwrap();
-        // researcher + literature + gwas-analysis + structural-biology + writer.
-        assert_eq!(profiles.len(), 5);
+        // researcher + developer.
+        assert_eq!(profiles.len(), 2);
         assert!(
             profiles.iter().any(|p| p.path == "researcher"),
             "legacy 'default' should be renamed to 'researcher'"
@@ -3341,7 +3386,7 @@ mod tests {
         // The migrated researcher should preserve the legacy identity.
         let researcher = profiles.iter().find(|p| p.path == "researcher").unwrap();
         assert_eq!(researcher.agent_identity, "legacy identity");
-        assert!(researcher.enable_plugin_rsi);
+        assert!(!researcher.enable_plugin_rsi);
     }
 
     #[tokio::test]

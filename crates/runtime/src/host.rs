@@ -169,6 +169,27 @@ impl PromptCapabilities for agentik_core::AgentProfile {
     }
 }
 
+fn enforce_profile_roles(profile: &agentik_core::AgentProfile) -> agentik_core::AgentProfile {
+    let mut enforced = profile.clone();
+    if enforced.path == "developer" {
+        enforced.enable_bibliography = false;
+        enforced.enable_writing = false;
+        enforced.enable_opengwas = false;
+        enforced.enable_opentargets = false;
+        enforced.enable_gwascatalog = false;
+        enforced.enable_chembl = false;
+        enforced.enable_rcsb = false;
+        enforced.enable_string = false;
+        enforced.enable_kegg = false;
+        enforced.enable_dag_history = true;
+        enforced.enable_plugin_rsi = true;
+    } else {
+        enforced.path = "researcher".into();
+        enforced.enable_plugin_rsi = false;
+    }
+    enforced
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // SharedInfra — process-level shared resources
 // ═══════════════════════════════════════════════════════════════════════
@@ -517,6 +538,7 @@ impl SharedInfra {
         global_model: Arc<ArcSwapOption<Model>>,
         model_override: Option<Model>,
     ) -> Result<AgentHandle> {
+        let profile = enforce_profile_roles(profile);
         let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
         let cancel_token = CancellationToken::new();
 
@@ -527,9 +549,9 @@ impl SharedInfra {
             )),
         };
 
-        let tool_list = self.tools_from_profile(agent_path, profile).await?;
+        let tool_list = self.tools_from_profile(agent_path, &profile).await?;
 
-        let config_json = serde_json::to_value(profile).unwrap_or_default();
+        let config_json = serde_json::to_value(&profile).unwrap_or_default();
         let storage = self.storage.clone();
         let defaults = self.memory.runtime_config();
         let runtime_config = agentik_core::AgentRuntimeConfig::new(
@@ -555,7 +577,7 @@ impl SharedInfra {
             builder = builder.with_system_prompt_section(prompt);
         } else {
             builder =
-                builder.with_system_prompt_section(crate::config::build_system_prompt(profile));
+                builder.with_system_prompt_section(crate::config::build_system_prompt(&profile));
         }
         // Skill index: one line per visible skill; bodies load on
         // demand via skill_get. Empty library → no section at all.
@@ -638,7 +660,7 @@ impl SharedInfra {
             self.skills.clone(),
             self.skill_evolution.clone(),
         ));
-        if profile.enable_plugin_rsi {
+        if profile.enable_plugin_rsi && profile.path == "developer" {
             tools.extend(plugin_rsi::plugin_development_tool_registrations(
                 agent_path.as_str(),
             ));
@@ -1721,21 +1743,20 @@ impl RuntimeHost {
                     return;
                 }
 
-                // ── Resolve profile ──
-                // 1. None → reuse caller's profile (by caller_profile_path).
-                // 2. Contains '/' → absolute profile path.
-                // 3. Single segment → relative: try "{caller}/{segment}",
-                //    fallback to root-level "{segment}".
+                // Resolve only the two role blueprints. A worker agent can
+                // spawn another worker without inventing a child blueprint.
+                let caller_role = caller_profile_path
+                    .split('/')
+                    .next()
+                    .unwrap_or(&caller_profile_path);
                 let target_profile_path = match &profile_segment {
-                    None => caller_profile_path.clone(),
-                    Some(seg) if seg.contains('/') => seg.clone(),
-                    Some(seg) => {
-                        let relative = format!("{caller_profile_path}/{seg}");
-                        if self.profiles.iter().any(|p| p.path == relative) {
-                            relative
-                        } else {
-                            seg.clone()
-                        }
+                    None => caller_role.to_string(),
+                    Some(seg) if seg == "researcher" || seg == "developer" => seg.clone(),
+                    Some(other) => {
+                        let _ = reply_tx.send(Err(format!(
+                            "Unknown role '{other}'. Use researcher or developer."
+                        )));
+                        return;
                     }
                 };
 
@@ -1745,13 +1766,6 @@ impl RuntimeHost {
                     .find(|p| p.path == target_profile_path)
                     .cloned()
                 else {
-                    // List available child profiles under the caller's path.
-                    let available_children: Vec<_> = self
-                        .profiles
-                        .iter()
-                        .filter(|p| p.parent_path() == Some(caller_profile_path.as_str()))
-                        .map(|p| p.name().to_string())
-                        .collect();
                     let available_roots: Vec<_> = self
                         .profiles
                         .iter()
@@ -1759,14 +1773,13 @@ impl RuntimeHost {
                         .map(|p| p.name().to_string())
                         .collect();
                     let _ = reply_tx.send(Err(format!(
-                        "Profile '{target_profile_path}' not found. \
-                         Child profiles under '{caller_profile_path}': [{}]. \
+                        "Role '{target_profile_path}' not found. \
                          Root profiles: [{}].",
-                        available_children.join(", "),
                         available_roots.join(", "),
                     )));
                     return;
                 };
+                let profile = enforce_profile_roles(&profile);
 
                 // Need a model to spawn.
                 let Some(ref model) = self.model else {
@@ -1846,6 +1859,7 @@ impl RuntimeHost {
                         return;
                     }
                 };
+                let profile = enforce_profile_roles(&profile);
 
                 let infra = self.infra.clone();
                 let reg_tx = self.registration_tx.clone();
@@ -1890,74 +1904,6 @@ impl RuntimeHost {
             HostCommand::Shutdown { name } => {
                 let resolved = self.resolve_agent(&name).unwrap_or(name);
                 self.shutdown_agent(&resolved);
-            }
-            HostCommand::DeriveProfile {
-                caller_profile_path,
-                segment,
-                overrides,
-                reply_tx,
-            } => {
-                // Look up parent profile in cache.
-                let Some(parent) = self
-                    .profiles
-                    .iter()
-                    .find(|p| p.path == caller_profile_path)
-                    .cloned()
-                else {
-                    let _ = reply_tx.send(Err(format!(
-                        "Your profile '{caller_profile_path}' not found in cache"
-                    )));
-                    return;
-                };
-                // Derive the child profile.
-                let child = match parent.derive_child(&segment, *overrides) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        let _ = reply_tx.send(Err(e));
-                        return;
-                    }
-                };
-                // Reject if path already exists.
-                if self.profiles.iter().any(|p| p.path == child.path) {
-                    let _ = reply_tx.send(Err(format!("Profile '{}' already exists", child.path)));
-                    return;
-                }
-                // Persist to storage.
-                let profile_storage = self.infra.profile_storage.clone();
-                let child_for_persist = child.clone();
-                let child_path = child.path.clone();
-                self.infra.runtime_handle.spawn(async move {
-                    let result = AssertUnwindSafe(async {
-                        profile_storage.create_profile(child_for_persist).await
-                    })
-                    .catch_unwind()
-                    .await;
-                    match result {
-                        Ok(Ok(())) => {
-                            let _ = reply_tx.send(Ok(child_path));
-                        }
-                        Ok(Err(e)) => {
-                            let _ = reply_tx
-                                .send(Err(format!("Failed to persist derived profile: {e}")));
-                        }
-                        Err(panic_payload) => {
-                            let msg = panic_payload
-                                .downcast_ref::<&'static str>()
-                                .map(|s| (*s).to_string())
-                                .or_else(|| panic_payload.downcast_ref::<String>().cloned())
-                                .unwrap_or_else(|| "<panic in create_profile>".to_string());
-                            tracing::error!(
-                                target: "spawn_safe",
-                                task = "host::create_profile",
-                                panic = %msg,
-                                "create_profile task panicked"
-                            );
-                            let _ = reply_tx.send(Err(format!("internal panic: {msg}")));
-                        }
-                    }
-                });
-                // Add to in-memory cache immediately (non-async).
-                self.profiles.push(child);
             }
             HostCommand::AddNode {
                 name,
@@ -3222,6 +3168,7 @@ impl RuntimeHost {
                     }
                 }
             };
+            let profile = enforce_profile_roles(&profile);
 
             let model_override = match profile.preferred_model.as_deref() {
                 Some(spec) => match resolve_model(spec) {
@@ -3831,6 +3778,14 @@ fn capability_from_profile(
     let mut tags = Vec::new();
     let mut expertise = Vec::new();
 
+    if path == "researcher" || path.starts_with("researcher/") {
+        tags.push("research".into());
+        tags.push("analysis".into());
+        tags.push("dag-analysis".into());
+        expertise.push("research-analysis".into());
+        expertise.push("dag-workflow-analysis".into());
+    }
+
     if profile.enable_bibliography {
         tags.push("literature".into());
         tags.push("bibliography".into());
@@ -3879,6 +3834,14 @@ fn capability_from_profile(
     if profile.enable_dag_history {
         tags.push("pipeline".into());
         expertise.push("dag-execution".into());
+    }
+    if profile.enable_plugin_rsi {
+        tags.push("plugin".into());
+        tags.push("node".into());
+        tags.push("node-development".into());
+        expertise.push("plugin-development".into());
+        expertise.push("node-development".into());
+        expertise.push("container-plugin-lifecycle".into());
     }
 
     crate::control::AgentInfo {
@@ -5025,19 +4988,22 @@ mod plugin_profile_tools_tests {
     use super::*;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn researcher_profile_receives_path_addressed_plugin_tools() {
+    async fn plugin_tools_are_restricted_to_the_developer_profile() {
         let dir = tempfile::tempdir().unwrap();
         let mut config = RuntimeConfig::default();
         config.data_dir = dir.path().join("data");
         config.state_dir = dir.path().join("state");
         config.agent_db = dir.path().join("agent.db");
         let host = RuntimeHost::open(&config).await.unwrap();
-        let agent_path = agentik_types::AgentPath::try_from("/root/researcher").unwrap();
+        let agent_path = agentik_types::AgentPath::try_from("/root/developer").unwrap();
         let researcher = agentik_core::AgentProfile::defaults()
             .into_iter()
             .find(|profile| profile.path == "researcher")
             .unwrap();
-        let writer = agentik_core::AgentProfile::new("writer");
+        let developer = agentik_core::AgentProfile::defaults()
+            .into_iter()
+            .find(|profile| profile.path == "developer")
+            .unwrap();
 
         let researcher_tools = host
             .infra
@@ -5052,15 +5018,15 @@ mod plugin_profile_tools_tests {
         assert!(
             !researcher_tools
                 .iter()
-                .any(|tool| tool.definition.name == "plugin_node_read_script")
-        );
-        assert!(
-            researcher_tools
-                .iter()
                 .any(|tool| tool.definition.name == "plugin_node_create")
         );
         assert!(
-            researcher_tools
+            !researcher_tools
+                .iter()
+                .any(|tool| tool.definition.name == "plugin_container_run")
+        );
+        assert!(
+            !researcher_tools
                 .iter()
                 .any(|tool| tool.definition.name == "plugin_environments_list")
         );
@@ -5075,19 +5041,25 @@ mod plugin_profile_tools_tests {
                 .any(|tool| tool.definition.name == "skill_observe")
         );
         assert!(
-            crate::config::build_system_prompt(&researcher).contains("Plugin Self-Improvement")
+            !crate::config::build_system_prompt(&researcher).contains("Plugin Self-Improvement")
         );
 
-        let writer_tools = host
+        let developer_tools = host
             .infra
-            .tools_from_profile(&agent_path, &writer)
+            .tools_from_profile(&agent_path, &developer)
             .await
             .unwrap();
         assert!(
-            !writer_tools
+            developer_tools
                 .iter()
                 .any(|tool| tool.definition.name == "plugin_node_create")
         );
+        assert!(
+            developer_tools
+                .iter()
+                .any(|tool| tool.definition.name == "plugin_container_run")
+        );
+        assert!(crate::config::build_system_prompt(&developer).contains("Plugin Self-Improvement"));
     }
 }
 

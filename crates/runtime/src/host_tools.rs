@@ -35,10 +35,6 @@ pub fn host_tools(
             caller_path: self_path.clone(),
             caller_profile_path: caller_profile_path.into(),
         }),
-        ToolRegistration::from(DeriveProfileTool {
-            control: ctrl.clone(),
-            caller_profile_path: caller_profile_path.into(),
-        }),
         ToolRegistration::from(DelegateToTool {
             control: ctrl.clone(),
             caller_path: self_path.as_str().to_string(),
@@ -90,19 +86,15 @@ pub fn host_tools(
     description = "Spawn a new child agent and register it with the host. \
                    The child's path is automatically derived from your path \
                    (e.g. spawning 'worker' becomes /root/you/worker). \
-                   The agent will be created from a profile — either a child \
-                   of your own profile, a root-level profile, or your own \
-                   profile if no segment is specified."
+                   Use profile_segment='researcher' or 'developer' to select \
+                   the role; omit it to reuse your own role."
 )]
 struct SpawnAgentInput {
     /// Short name for the new agent (a path segment, e.g. `worker`, `analyst`).
     /// Must be lowercase `[a-z0-9_]`, 1-32 chars.
     agent_name: String,
-    /// Profile to instantiate. If omitted, reuses your own profile. \
-    /// If a single segment (e.g. `genomics`), looks up a child profile \
-    /// relative to your profile, falling back to root-level. \
-    /// If a multi-segment path (e.g. `researcher/genomics`), treated as \
-    /// an absolute profile path.
+    /// Role to instantiate: `researcher`, `developer`, or omitted to reuse \
+    /// your own role.
     profile_segment: Option<String>,
 }
 
@@ -134,94 +126,6 @@ impl ToolFunction for SpawnAgentTool {
                 "Agent at path `{path}` spawned and registered."
             ))),
             Err(e) => Ok(ToolResult::success(format!("Spawn failed: {e}"))),
-        }
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-// Derive Profile (dynamic child profile creation)
-// ═══════════════════════════════════════════════════════════════════════
-
-#[tool(
-    name = "derive_profile",
-    description = "Derive a specialized child profile from your own profile. \
-                   The child inherits all your capabilities unless explicitly \
-                   overridden. The child's path is your_profile_path/segment. \
-                   After derivation, you can spawn agents from the new profile \
-                   using spawn_agent with the segment as profile_segment."
-)]
-struct DeriveProfileInput {
-    /// Segment name for the child profile (e.g. `genomics`, `mr_analysis`).
-    /// Must be lowercase `[a-z0-9_]`, 1-32 chars.
-    segment: String,
-    /// Human-readable description of this specialized role.
-    description: Option<String>,
-    /// Override the agent identity prompt.
-    agent_identity: Option<String>,
-    /// Override tool capability flags (None = inherit parent).
-    enable_bibliography: Option<bool>,
-    enable_writing: Option<bool>,
-    enable_opengwas: Option<bool>,
-    enable_opentargets: Option<bool>,
-    enable_gwascatalog: Option<bool>,
-    enable_chembl: Option<bool>,
-    #[desc = "Enable RCSB PDB search, summaries, polymer entities, and structure previews."]
-    enable_rcsb: Option<bool>,
-    #[desc = "Enable STRING identifier resolution, interactions, enrichment, summaries, and previews."]
-    enable_string: Option<bool>,
-    #[desc = "Enable KEGG metadata, search, entry previews, biological links, ID mapping, and DDI queries."]
-    enable_kegg: Option<bool>,
-    enable_dag_history: Option<bool>,
-    #[desc = "Enable path-addressed plugin development through /plugins/dev/<plugin-name>."]
-    enable_plugin_rsi: Option<bool>,
-    /// Enable or disable memory injection, tools, and generation together.
-    use_memory: Option<bool>,
-    /// Override memory generation independently.
-    generate_memory: Option<bool>,
-}
-
-struct DeriveProfileTool {
-    control: HostControl,
-    caller_profile_path: String,
-}
-
-#[async_trait]
-impl ToolFunction for DeriveProfileTool {
-    type Input = DeriveProfileInput;
-
-    async fn run(
-        &self,
-        input: DeriveProfileInput,
-    ) -> Result<ToolResult, agentik_core::tools::ToolError> {
-        let overrides = agentik_core::ProfileOverrides {
-            description: input.description,
-            agent_identity: input.agent_identity,
-            enable_bibliography: input.enable_bibliography,
-            enable_writing: input.enable_writing,
-            enable_opengwas: input.enable_opengwas,
-            enable_opentargets: input.enable_opentargets,
-            enable_gwascatalog: input.enable_gwascatalog,
-            enable_chembl: input.enable_chembl,
-            enable_rcsb: input.enable_rcsb,
-            enable_string: input.enable_string,
-            enable_kegg: input.enable_kegg,
-            enable_dag_history: input.enable_dag_history,
-            enable_plugin_rsi: input.enable_plugin_rsi,
-            use_memory: input.use_memory,
-            generate_memory: input.generate_memory.or(input.use_memory),
-            ..Default::default()
-        };
-        match self
-            .control
-            .derive_profile(&self.caller_profile_path, &input.segment, overrides)
-            .await
-        {
-            Ok(path) => Ok(ToolResult::success(format!(
-                "Derived profile `{path}`. Use spawn_agent with \
-                 profile_segment=\"{}\" to instantiate.",
-                input.segment
-            ))),
-            Err(e) => Ok(ToolResult::success(format!("Derive failed: {e}"))),
         }
     }
 }
