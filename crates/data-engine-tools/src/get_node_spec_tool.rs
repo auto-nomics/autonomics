@@ -10,13 +10,13 @@ use crate::ExecError;
 
 #[tool(
     name = "get_node_spec",
-    description = "Get the JSON Schema for a specific node kind. \
+    description = "Get the JSON Schema for a specific node address (`plugin/node`). \
                   Returns the full parameter specification required to configure \
                   a node through dag_shell. Always call it before creating nodes to get \
-                  the exact fields and types expected by the chosen node kind."
+                  the exact fields and types expected by the chosen node."
 )]
 pub struct GetNodeSpecInput {
-    /// The node kind to query (e.g. "sql", "file_to_dataframe", "dataframe_to_file", "sldsc", "linear_regression", "echo").
+    /// Node address or legacy bare kind to query. Prefer `plugin/node` from list_node_factories.
     pub kind: String,
 }
 

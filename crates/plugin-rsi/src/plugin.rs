@@ -606,11 +606,18 @@ impl PluginStore {
 
     /// Return the plugin that owns a node kind, if any.
     pub fn owner_of_node_kind(&self, node_kind: &str) -> Result<Option<String>> {
-        Ok(self
+        let matches = self
             .list()?
             .into_iter()
-            .find(|manifest| manifest.nodes.iter().any(|node| node.kind == node_kind))
-            .map(|manifest| manifest.plugin_name))
+            .filter(|manifest| {
+                manifest.nodes.iter().any(|node| {
+                    node.kind == node_kind
+                        || format!("{}/{}", manifest.plugin_name, node.kind) == node_kind
+                })
+            })
+            .map(|manifest| manifest.plugin_name)
+            .collect::<Vec<_>>();
+        Ok(matches.first().cloned())
     }
 
     /// Return local-active plugins awaiting the background publication pass.

@@ -803,7 +803,7 @@ const PROMPT_DAG_ENGINE: &str = "\n\
   connect nodes into a DAG, run the pipeline, and retrieve output.\n\
 \n\
 - **Prefer dedicated nodes**: before adding a source, processing, analysis, or external-tool \
-  node, inspect the available node factories and choose the dedicated node kind that is most \
+  node, inspect the available node factories and choose the dedicated node address that is most \
   appropriate for the operation. If no registered node supports the required semantics, \
   schema handling, or computation, tell the user that the operation is unsupported instead of \
   assembling an equivalent manually.\n\
@@ -837,15 +837,16 @@ not attempt to express these operators as SQL or an unregistered node kind.\n\
   This feedback loop catches schema mismatches, wrong column names, and type errors \
   early — a single-shot full-DAG construction fails silently and wastes time debugging.\n\
 \n\
-- **Inspect ports before wiring**: every node kind declares typed input/output ports. \
-  `list_node_factories` returns lightweight metadata (kind + short description) only. \
+- **Inspect ports before wiring**: every node declares typed input/output ports. \
+  `list_node_factories` returns lightweight metadata (`plugin/node` address + short description) only. \
   To see the full port layout (port count, variadic flag, per-port column schema), \
-  call `get_node_ports` with the chosen `kind`. For dynamic-port kinds, pass the exact \
+  call `get_node_ports` with the chosen `plugin/node` address. For dynamic-port kinds, pass the exact \
   `spec` so declared outputs are included. Read the downstream node's input \
   port schema BEFORE writing the transform that feeds it. The downstream port's \
   required columns and types are a contract, not a suggestion. \
   Similarly, call `get_node_spec` to fetch the JSON Schema a node expects for its \
   configuration parameters, and `get_node_doc` for detailed usage documentation.\n\
+  Prefer the full `plugin/node` address; use a bare legacy kind only when it is unique.\n\
 \n\
 - **Transform to match the consuming port**: data flowing along an edge MUST conform to the \
   downstream node's input port schema. If the upstream output does not already match, insert \

@@ -737,12 +737,12 @@ struct SharedPluginRegistryControl {
 }
 
 impl plugin_rsi::PluginRegistryControl for SharedPluginRegistryControl {
-    fn installed_node_kinds(&self) -> plugin_rsi::Result<Vec<String>> {
+    fn installed_node_addresses(&self) -> plugin_rsi::Result<Vec<String>> {
         Ok(self
             .manager
             .list_nodes()
             .into_iter()
-            .map(|node| node.kind)
+            .map(|node| node.address)
             .collect())
     }
 

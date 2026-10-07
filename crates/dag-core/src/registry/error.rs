@@ -16,8 +16,16 @@ pub enum Error {
     #[error("{0}")]
     Unknown(String),
 
-    #[error("cannot found node factory for kind '{kind}'")]
+    #[error("cannot found node factory for address '{kind}'")]
     FactoryNotFound { kind: String },
+
+    /// A bare legacy kind resolved to more than one plugin. Callers must use
+    /// the fully-qualified `plugin/node` address.
+    #[error(
+        "legacy node kind `{kind}` is ambiguous; it is registered by: {plugins}. \
+         Use the fully-qualified `plugin/node` address"
+    )]
+    AmbiguousNodeKind { kind: String, plugins: String },
 
     #[error(
         "node kind '{kind}' requires data bundle '{bundle_id}' on binding '{binding}', but it is not registered"

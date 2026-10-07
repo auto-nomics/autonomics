@@ -29,7 +29,7 @@ pub type SharedPullRequestPublisher = Arc<dyn PluginPullRequestPublisher + Send 
 /// Runtime-side bridge for rebuilding or hot-swapping node registration.
 pub trait PluginRegistryControl: Send + Sync {
     /// Return node kinds currently visible to the live engine.
-    fn installed_node_kinds(&self) -> Result<Vec<String>>;
+    fn installed_node_addresses(&self) -> Result<Vec<String>>;
 
     /// Replace the live implementation of one plugin's registered kinds.
     fn reload_plugin(&self, plugin_name: &str) -> Result<()>;
@@ -323,7 +323,7 @@ impl RsiInfra {
 
     /// Validate, record evidence, submit, and propagate request state.
     pub fn validate_and_submit(&self, plugin_name: &str) -> Result<ValidationOutcome> {
-        let installed_kinds = self.installed_node_kinds()?;
+        let installed_kinds = self.installed_node_addresses()?;
         let mut operator = self
             .store
             .develop(plugin_name)?
@@ -345,7 +345,7 @@ impl RsiInfra {
 
     /// Validate a workspace while leaving it editable for local development.
     pub fn validate_local(&self, plugin_name: &str) -> Result<ValidationOutcome> {
-        let installed_kinds = self.installed_node_kinds()?;
+        let installed_kinds = self.installed_node_addresses()?;
         let mut operator = self
             .store
             .develop(plugin_name)?
@@ -356,7 +356,7 @@ impl RsiInfra {
     }
 
     pub fn review(&self, plugin_name: &str, approved: bool) -> Result<PluginStatus> {
-        let installed_kinds = self.installed_node_kinds()?;
+        let installed_kinds = self.installed_node_addresses()?;
         let mut operator = self
             .store
             .develop(plugin_name)?
@@ -379,7 +379,7 @@ impl RsiInfra {
     }
 
     pub fn publish_reviewed(&self, plugin_name: &str) -> Result<PluginStatus> {
-        let installed_kinds = self.installed_node_kinds()?;
+        let installed_kinds = self.installed_node_addresses()?;
         let mut operator = self
             .store
             .develop(plugin_name)?
@@ -390,7 +390,7 @@ impl RsiInfra {
     }
 
     pub fn open_update_pull_request(&self, plugin_name: &str) -> Result<PluginStatus> {
-        let installed_kinds = self.installed_node_kinds()?;
+        let installed_kinds = self.installed_node_addresses()?;
         let mut operator = self
             .store
             .develop(plugin_name)?
@@ -401,7 +401,7 @@ impl RsiInfra {
     }
 
     pub fn merge_update_pull_request(&self, plugin_name: &str) -> Result<PluginStatus> {
-        let installed_kinds = self.installed_node_kinds()?;
+        let installed_kinds = self.installed_node_addresses()?;
         let mut operator = self
             .store
             .develop(plugin_name)?
@@ -413,7 +413,7 @@ impl RsiInfra {
 
     /// Install the reviewed result and ask the runtime to refresh its registry.
     pub fn install(&self, plugin_name: &str) -> Result<PluginStatus> {
-        let installed_kinds = self.installed_node_kinds()?;
+        let installed_kinds = self.installed_node_addresses()?;
         let mut operator = self
             .store
             .develop(plugin_name)?
@@ -476,21 +476,27 @@ impl RsiInfra {
         Ok(source)
     }
 
-    pub fn installed_node_kinds(&self) -> Result<Vec<String>> {
+    pub fn installed_node_addresses(&self) -> Result<Vec<String>> {
         if let Some(control) = self
             .registry
             .read()
             .expect("registry control lock poisoned")
             .as_ref()
         {
-            return control.installed_node_kinds();
+            return control.installed_node_addresses();
         }
         Ok(self
             .store
             .list()?
             .into_iter()
             .filter(|manifest| manifest.installation.is_runtime_active())
-            .flat_map(|manifest| manifest.nodes.into_iter().map(|node| node.kind))
+            .flat_map(|manifest| {
+                let plugin = manifest.plugin_name;
+                manifest
+                    .nodes
+                    .into_iter()
+                    .map(move |node| format!("{plugin}/{}", node.kind))
+            })
             .collect())
     }
 

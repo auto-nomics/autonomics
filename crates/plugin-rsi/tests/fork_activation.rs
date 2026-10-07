@@ -103,7 +103,7 @@ fn updated_node_json() -> Value {
 struct NoopRegistry;
 
 impl plugin_rsi::PluginRegistryControl for NoopRegistry {
-    fn installed_node_kinds(&self) -> plugin_rsi::Result<Vec<String>> {
+    fn installed_node_addresses(&self) -> plugin_rsi::Result<Vec<String>> {
         Ok(Vec::new())
     }
 
@@ -300,6 +300,10 @@ async fn an_installed_reference_can_be_forked_and_locally_activated() {
     assert_eq!(install_output["activated"], true);
     assert_eq!(install_output["status"], "draft");
     assert_eq!(install_output["node_kinds"], json!(["forked_adapter"]));
+    assert_eq!(
+        install_output["node_addresses"],
+        json!(["forked-plugin/forked_adapter"])
+    );
     assert_eq!(install_output["validation_report"]["overall"], "pass");
     assert!(install_output["local_commit"].is_string());
     assert!(install_output["local_digest"].is_string());

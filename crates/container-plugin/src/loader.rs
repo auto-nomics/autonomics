@@ -63,7 +63,7 @@ pub enum Error {
     #[error("plugin `{plugin}`: {message}")]
     Invalid { plugin: String, message: String },
 
-    #[error("kind `{kind}` is declared by both `{first}` and `{second}`")]
+    #[error("node address `{kind}` is declared more than once by `{first}`")]
     DuplicateKind {
         kind: String,
         first: String,
@@ -86,7 +86,7 @@ pub fn load(
     })?;
 
     let mut plugins = Vec::new();
-    let mut kind_owner: BTreeMap<String, String> = BTreeMap::new();
+    let mut address_owner: BTreeMap<String, String> = BTreeMap::new();
 
     for entry in entries.flatten() {
         let dir = entry.path();
@@ -112,20 +112,19 @@ pub fn load(
             continue;
         }
         let plugin = load_one(&dir, &manifest_path, runtime.clone(), panel_cache.clone())?;
-        // Cross-family kind uniqueness within the loaded set. Kinds that
-        // collide with registry factories outside this loader surface at
-        // registration time (registry last-write-wins today); the M5
-        // migration protocol removes the nodes-io line in the same commit
-        // that adds the manifest.
+        // Within one family, node kinds must still be unique. Different
+        // families may safely reuse a local kind because the registry keys
+        // every node by its qualified `plugin/node` address.
         for kind in plugin.registered_kinds() {
-            if let Some(first) = kind_owner.get(kind) {
+            let address = format!("{}/{}", plugin.name(), kind);
+            if address_owner.contains_key(&address) {
                 return Err(Error::DuplicateKind {
                     kind: kind.to_string(),
-                    first: first.clone(),
+                    first: plugin.name().to_string(),
                     second: plugin.name().to_string(),
                 });
             }
-            kind_owner.insert(kind.to_string(), plugin.name().to_string());
+            address_owner.insert(address, plugin.name().to_string());
         }
         plugins.push(plugin);
     }
@@ -540,7 +539,7 @@ script_file = "scripts/h2.sh"
     }
 
     #[test]
-    fn duplicate_kind_across_families_is_rejected() {
+    fn duplicate_kind_across_families_is_qualified_not_rejected() {
         let (runtime, cache, state) = infra();
         let plugins_root = state.path().join("plugins");
         write_plugin(&plugins_root, "ldsc", GOOD_LDSC);
@@ -561,9 +560,10 @@ script_file = "scripts/h2.sh"
             .unwrap();
         }
 
-        let error = load(&plugins_root, runtime, cache).unwrap_err();
-        assert!(error.to_string().contains("ldsc_h2"), "{error}");
-        assert!(error.to_string().contains("ldsc-fork"), "{error}");
+        let plugins = load(&plugins_root, runtime, cache).unwrap();
+        assert_eq!(plugins.len(), 2);
+        assert!(plugins[0].registered_kinds().contains(&"ldsc_h2"));
+        assert!(plugins[1].registered_kinds().contains(&"ldsc_h2"));
     }
 
     #[test]
