@@ -11,6 +11,7 @@ pub mod error;
 pub mod execution;
 pub mod gc;
 pub mod image;
+pub mod image_build;
 pub mod panel;
 pub mod podman;
 pub mod types;
@@ -30,6 +31,10 @@ pub use gc::{WorkspaceGcPolicy, WorkspaceGcReport, sweep_workspace};
 pub use image::{
     GHCR_NAMESPACE, GHCR_REGISTRY, ImageReference, ImageRepo, ManifestDigest, RegistryHost,
     RepositoryPath, registry_image,
+};
+pub use image_build::{
+    DEFAULT_PUSH_TIMEOUT_SECS, ImageBuildConnection, ImageBuildRequest, ImageBuildResult,
+    ImagePushRequest, ImagePushResult,
 };
 pub use panel::{PanelCache, PanelFile, PanelManifest};
 pub use podman::{PodmanConfig, PodmanRuntime};

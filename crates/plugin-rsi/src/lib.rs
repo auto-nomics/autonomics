@@ -6,11 +6,17 @@
 //! live-registry access.
 
 pub mod distill;
+pub mod env_dev;
+pub mod env_distill;
+pub mod env_manifest;
+pub mod env_store;
+pub mod env_validate;
 pub mod environments;
 pub mod error;
 pub mod feedback;
 pub mod github;
 pub mod gitrepo;
+pub mod image_registry;
 pub mod infra;
 pub mod install;
 pub mod layout;
@@ -26,6 +32,22 @@ pub mod workspace;
 
 pub use container_plugin::manifest::PluginStatus;
 pub use distill::{DistillFailure, DistillationCandidate, PluginDistillReport, PluginDistiller};
+pub use env_dev::{
+    EnvironmentDevInfra, EnvironmentLocalActivationOutcome, EnvironmentValidationOutcome,
+};
+pub use env_distill::{
+    EnvironmentDistillFailure, EnvironmentDistillReport, EnvironmentDistillationCandidate,
+    EnvironmentDistiller,
+};
+pub use env_manifest::{
+    EnvironmentBase, EnvironmentLifecycleMetadata, EnvironmentManifest, EnvironmentSmokeTest,
+    EnvironmentStatus,
+};
+pub use env_store::{
+    DEFAULT_LOCAL_NAMESPACE, ENVIRONMENT_DEVELOPMENT_VFS_ROOT, EnvironmentOperator,
+    EnvironmentStore, InstalledEnvironment,
+};
+pub use env_validate::{EnvironmentValidationReport, validate_environment};
 pub use environments::EnvironmentRegistry;
 pub use error::{Error, Result};
 pub use evolution_core::{
@@ -38,6 +60,10 @@ pub use github::{
     PluginPullRequestPublisher, PublishOutcome, PullRequestOutcome,
 };
 pub use gitrepo::GitRepo;
+pub use image_registry::{
+    ImagePublisher, ImageRegistryConfig, PodmanImagePublisher, PublishedImageReference,
+    SharedImagePublisher,
+};
 pub use infra::{
     PluginRegistryControl, RsiInfra, SharedPluginPublisher, SharedPullRequestPublisher,
 };
@@ -56,6 +82,9 @@ pub use plugin::{
 pub use profile::AgentProfile;
 pub use report::{GateResult, GateStatus, ValidationReport};
 pub use request::{RequestIntent, RequestRecord, RequestSource, RequestStatus, RequestStore};
-pub use tools::{PluginDevelopmentToolsetRegistry, plugin_development_tool_registrations};
+pub use tools::{
+    PluginDevelopmentToolsetRegistry, environment_development_tool_registrations,
+    plugin_development_tool_registrations,
+};
 pub use validate::{Environment, EnvironmentCatalog, validate_workspace};
 pub use workspace::PluginWorkspace;

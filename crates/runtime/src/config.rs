@@ -147,6 +147,9 @@ pub struct PluginRsiConfig {
     /// Background publication cadence in seconds.
     #[serde(default = "default_plugin_distillation_interval_secs")]
     pub distillation_interval_secs: u64,
+    /// Environment (image) development subsystem configuration.
+    #[serde(default)]
+    pub environment_dev: EnvironmentDevConfig,
 }
 
 impl PluginRsiConfig {
@@ -163,6 +166,64 @@ fn default_plugin_distillation_interval_secs() -> u64 {
     5 * 60
 }
 
+/// Fully resolved environment (image) development configuration.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct EnvironmentDevConfig {
+    /// Register the environment development tools and background distiller.
+    #[serde(default = "default_environment_dev_enabled")]
+    pub enabled: bool,
+    /// Registry host environment images are pushed to.
+    #[serde(default = "default_environment_dev_registry")]
+    pub registry: String,
+    /// Repository namespace below the registry host.
+    #[serde(default = "default_environment_dev_namespace")]
+    pub namespace: String,
+    /// Run background publication of locally activated environments.
+    #[serde(default = "default_environment_dev_distillation_enabled")]
+    pub distillation_enabled: bool,
+    /// Background environment publication cadence in seconds.
+    #[serde(default = "default_environment_dev_distillation_interval_secs")]
+    pub distillation_interval_secs: u64,
+}
+
+impl EnvironmentDevConfig {
+    pub(crate) fn effective_distillation_interval_secs(&self) -> u64 {
+        self.distillation_interval_secs.max(60)
+    }
+}
+
+fn default_environment_dev_enabled() -> bool {
+    true
+}
+
+fn default_environment_dev_registry() -> String {
+    "ghcr.io".into()
+}
+
+fn default_environment_dev_namespace() -> String {
+    "auto-nomics/environments".into()
+}
+
+fn default_environment_dev_distillation_enabled() -> bool {
+    true
+}
+
+fn default_environment_dev_distillation_interval_secs() -> u64 {
+    15 * 60
+}
+
+impl Default for EnvironmentDevConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_environment_dev_enabled(),
+            registry: default_environment_dev_registry(),
+            namespace: default_environment_dev_namespace(),
+            distillation_enabled: default_environment_dev_distillation_enabled(),
+            distillation_interval_secs: default_environment_dev_distillation_interval_secs(),
+        }
+    }
+}
+
 impl Default for PluginRsiConfig {
     fn default() -> Self {
         Self {
@@ -170,6 +231,7 @@ impl Default for PluginRsiConfig {
             publisher: Default::default(),
             distillation_enabled: default_plugin_distillation_enabled(),
             distillation_interval_secs: default_plugin_distillation_interval_secs(),
+            environment_dev: Default::default(),
         }
     }
 }
@@ -895,7 +957,18 @@ commands in the selected environment\n\
 with `plugin_container_run`. After editing, call `plugin_install` to validate and\n\
 load the local snapshot into the DAG. Call `plugin_uninstall` to remove the\n\
 active runtime source while retaining development history. Treat manifest\n\
-lifecycle state as host-owned: do not attempt direct manifest writes.";
+lifecycle state as host-owned: do not attempt direct manifest writes.\n\
+\n\
+When no approved environment fits, develop a new one through\n\
+`/environments/dev/<environment-id>` VFS paths: `environment_create` derives a\n\
+workspace from an approved base, you author the Containerfile through the VFS,\n\
+`environment_manifest_update` changes interpreters, base, or smoke tests,\n\
+`environment_validate` runs the static gates, `environment_build` also builds\n\
+and smoke-tests the image, and `environment_install` activates the digest-pinned\n\
+local reference in the catalog so plugins can bind it. `environment_fork`,\n\
+`environment_uninstall`, and `environment_container_run` mirror their plugin\n\
+counterparts. Building, pushing, and catalog activation are host-owned: never\n\
+attempt them through shell tools.";
 
 const PROMPT_RESEARCHER_DEVELOPMENT_HANDOFF: &str = "\n\
 ### Researcher / Developer Collaboration\n\

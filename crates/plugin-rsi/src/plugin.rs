@@ -843,7 +843,7 @@ fn save_manifest(workspace: &PluginWorkspace, manifest: &PluginManifest) -> Resu
     workspace.write_text("manifest.toml", &text)
 }
 
-fn copy_plugin_tree(source: &Path, destination: &Path) -> Result<()> {
+pub(crate) fn copy_plugin_tree(source: &Path, destination: &Path) -> Result<()> {
     let metadata = std::fs::symlink_metadata(source)?;
     if metadata.file_type().is_symlink() {
         return Err(Error::UnsafePath {
@@ -869,7 +869,7 @@ fn copy_plugin_tree(source: &Path, destination: &Path) -> Result<()> {
         .map_err(Error::Io)
 }
 
-fn validate_requests(
+pub(crate) fn validate_requests(
     request_ids: &[String],
     requests: &RequestStore,
     rationale: &str,

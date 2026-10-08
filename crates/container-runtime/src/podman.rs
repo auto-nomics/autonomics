@@ -302,7 +302,7 @@ impl Drop for ContainerCleanupGuard {
     }
 }
 
-fn async_podman_command(program: &str) -> Command {
+pub(crate) fn async_podman_command(program: &str) -> Command {
     let mut command = Command::new(program);
     command.current_dir(HOST_CWD);
     command
