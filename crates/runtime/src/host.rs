@@ -24,7 +24,7 @@ use agentik_core::profile::{AgentKind, AgentProfileConfig};
 use agentik_core::storage::{
     AgentDelegationRecord, AgentLayoutSnapshot, AgentStorage, AgentTurnRecord, PersistedAgentGraph,
 };
-use agentik_network::{AgentNetwork, EdgeTrigger, NodeSpec, RoutingAction, TerminationSpec};
+use agentik_network::AgentNetwork;
 use agentik_sdk::model::Model;
 use agentik_sdk::types::{AgentEvent, ContentBlock};
 use arc_swap::ArcSwapOption;
@@ -290,7 +290,7 @@ pub struct SharedInfra {
     pub runtime_handle: tokio::runtime::Handle,
     /// Optional host control for agent tools. Set by RuntimeHost when
     /// available. When `Some`, spawned agents receive host management tools
-    /// (spawn_agent, delegate_to, send_message, etc.).
+    /// (spawn_agent, delegate_to, etc.).
     pub host_control: Option<crate::control::HostControl>,
 }
 
@@ -1985,29 +1985,39 @@ impl RuntimeHost {
                     }
                 });
             }
-            HostCommand::Shutdown { name } => {
-                let resolved = self.resolve_agent(&name).unwrap_or(name);
-                self.shutdown_agent(&resolved);
-            }
-            HostCommand::AddNode {
+            HostCommand::Shutdown {
                 name,
-                profile,
-                initial_prompt,
+                caller_path,
+                reply_tx,
             } => {
-                let _ = self.network.add_node(agentik_network::NodeSpec {
-                    name,
-                    profile,
-                    initial_prompt,
-                });
-            }
-            HostCommand::RemoveNode { name } => {
-                self.network.remove_node(&name);
-            }
-            HostCommand::Connect { from, to, trigger } => {
-                let _ = self.network.connect(&from, &to, trigger, None);
-            }
-            HostCommand::Disconnect { from, to } => {
-                self.network.disconnect(&from, &to);
+                let reply = |r: std::result::Result<(), String>| {
+                    if let Some(tx) = reply_tx {
+                        let _ = tx.send(r);
+                    }
+                };
+                match (self.resolve_agent(&name), caller_path.as_deref()) {
+                    // Operator path — unrestricted (gateway/TUI semantics).
+                    (resolved, None) => {
+                        let resolved = resolved.unwrap_or(name);
+                        self.shutdown_agent(&resolved);
+                        reply(Ok(()));
+                    }
+                    // Agent path with an unresolvable target: same message
+                    // as the not-a-child denial so callers cannot probe the
+                    // registry for the existence of foreign agents.
+                    (None, Some(_)) => {
+                        reply(Err(not_a_direct_child_message(&name)));
+                    }
+                    (Some(resolved), Some(caller)) => {
+                        match self.validate_child_control(caller, &resolved, "shut down") {
+                            Err(error) => reply(Err(error)),
+                            Ok(()) => {
+                                self.shutdown_agent(&resolved);
+                                reply(Ok(()));
+                            }
+                        }
+                    }
+                }
             }
             HostCommand::DeliverMessage {
                 name,
@@ -2021,36 +2031,6 @@ impl RuntimeHost {
                 }
                 if let Some(reply_tx) = reply_tx {
                     let _ = reply_tx.send(result);
-                }
-            }
-            // ── Phase 5: fire-and-forget inter-agent message ──
-            // Unlike Delegate, no reply_tx is recorded in tool_delegations —
-            // the sender gets immediate Ok/Err feedback but does NOT wait
-            // for the target's Done event.
-            HostCommand::SendMessage {
-                caller_path,
-                to,
-                message,
-                reply_tx,
-            } => {
-                let resolved = match self.resolve_agent(&to) {
-                    Some(path) => path,
-                    None => {
-                        let _ = reply_tx.send(Err(format!(
-                            "Agent '{to}' is not registered. \
-                             Use list_agents to see available agents, \
-                             or spawn_agent to create one first."
-                        )));
-                        return;
-                    }
-                };
-                match self.send_inter_agent_to(&caller_path, &resolved, message) {
-                    Ok(()) => {
-                        let _ = reply_tx.send(Ok(()));
-                    }
-                    Err(error) => {
-                        let _ = reply_tx.send(Err(error));
-                    }
                 }
             }
             HostCommand::Delegate {
@@ -2067,14 +2047,20 @@ impl RuntimeHost {
                     );
                     return;
                 };
-                // Resolve target: full path or short name.
-                let resolved = match self.resolve_agent(&to) {
+                // Resolve the target from the caller's viewpoint: full paths
+                // match exactly, short names prefer the caller's own child.
+                // Unresolvable and non-child targets return the SAME message
+                // so callers cannot probe the registry for foreign agents.
+                let resolved = match agentik_types::AgentPath::try_from(caller_path.as_str())
+                    .ok()
+                    .and_then(|caller| self.resolve_agent_scoped(&caller, &to))
+                {
                     Some(path) => path,
                     None => {
                         let _ = reply_tx.send(format!(
-                            "Error: agent '{to}' is not registered. \
-                             Use list_agents to see available agents, \
-                             or spawn_agent to create one first."
+                            "Error: agent '{to}' is not one of your direct children. \
+                             Delegation reaches only agents you spawned; use list_agents \
+                             to see them, or spawn_agent to create one first."
                         ));
                         return;
                     }
@@ -2223,21 +2209,12 @@ impl RuntimeHost {
                 };
                 let _ = reply_tx.send(status);
             }
-            HostCommand::SetTermination { spec } => {
-                self.network.set_termination(spec);
-            }
-            HostCommand::ResetRunState => {
-                self.network.reset_run_state();
-            }
-            HostCommand::InjectPrompts => {
-                self.inject_initial_prompts();
-            }
             HostCommand::RouteTask {
                 description,
-                exclude,
+                caller_path,
                 reply_tx,
             } => {
-                let result = self.route_task(&description, exclude.as_deref());
+                let result = self.route_task(&description, &caller_path);
                 let _ = reply_tx.send(result);
             }
             HostCommand::GetAgentInfo { name, reply_tx } => {
@@ -2255,8 +2232,37 @@ impl RuntimeHost {
             }
 
             // ── Session management (forwarded to relay) ──
-            HostCommand::CancelAgent { name } => {
-                self.send_agent_command(&name, AgentCommand::Cancel);
+            HostCommand::CancelAgent {
+                name,
+                caller_path,
+                reply_tx,
+            } => {
+                let reply = |r: std::result::Result<(), String>| {
+                    if let Some(tx) = reply_tx {
+                        let _ = tx.send(r);
+                    }
+                };
+                match (self.resolve_agent(&name), caller_path.as_deref()) {
+                    // Operator path — unrestricted (gateway/TUI semantics).
+                    (resolved, None) => {
+                        let resolved = resolved.unwrap_or(name);
+                        self.send_agent_command(&resolved, AgentCommand::Cancel);
+                        reply(Ok(()));
+                    }
+                    // Same denial as the not-a-child case: no registry probe.
+                    (None, Some(_)) => {
+                        reply(Err(not_a_direct_child_message(&name)));
+                    }
+                    (Some(resolved), Some(caller)) => {
+                        match self.validate_child_control(caller, &resolved, "interrupt") {
+                            Err(error) => reply(Err(error)),
+                            Ok(()) => {
+                                self.send_agent_command(&resolved, AgentCommand::Cancel);
+                                reply(Ok(()));
+                            }
+                        }
+                    }
+                }
             }
             HostCommand::CompactAgent { name } => {
                 self.send_agent_command(&name, AgentCommand::Compact);
@@ -2453,59 +2459,30 @@ impl RuntimeHost {
         Ok(resolved)
     }
 
-    /// Validate the hierarchy policy for fire-and-forget peer messaging.
-    fn validate_peer_message_paths(
+    /// Resolve a delegation target from the caller's viewpoint: full paths
+    /// must match exactly; short names prefer the caller's direct child
+    /// before falling back to the global scan (the delegation validator
+    /// still gates whatever comes back).
+    fn resolve_agent_scoped(
         &self,
-        caller_path: &str,
-        target_path: &str,
-    ) -> std::result::Result<(), String> {
-        let caller = self.resolve_live_agent(caller_path, "sender", caller_path)?;
-        let target = self.resolve_live_agent(target_path, "recipient", target_path)?;
-        let Ok(caller_path) = agentik_types::AgentPath::try_from(caller.as_str()) else {
-            return Err(format!("invalid sender path `{caller}`"));
-        };
-        let Ok(target_path) = agentik_types::AgentPath::try_from(target.as_str()) else {
-            return Err(format!("invalid recipient path `{target}`"));
-        };
-        if caller_path == target_path {
-            return Err("Peer messages cannot target the sending agent itself.".to_string());
+        caller: &agentik_types::AgentPath,
+        to: &str,
+    ) -> Option<String> {
+        if to.starts_with("/root") && self.agents.contains_key(to) {
+            return Some(to.to_string());
         }
-        if caller_path.parent() != target_path.parent() {
-            return Err(format!(
-                "Peer message denied: '{}' and '{}' are not sibling agents. \
-                 Cross-parent and parent-child fire-and-forget messaging is disabled.",
-                caller_path.as_str(),
-                target_path.as_str()
-            ));
+        if let Ok(child) = caller.join(to) {
+            if self.agents.contains_key(child.as_str()) {
+                return Some(child.as_str().to_string());
+            }
         }
-        let status = self
-            .agents
-            .get(target.as_str())
-            .map(|entry| entry.status.clone())
-            .unwrap_or(crate::control::AgentStatus::Idle);
-        let inbound_pending = self
-            .agents
-            .get(target.as_str())
-            .is_some_and(|entry| entry.inbound_pending.load(Ordering::Acquire));
-        if status != crate::control::AgentStatus::Idle {
-            return Err(format!(
-                "Peer message denied: '{}' is currently '{}' rather than Idle. \
-                 Busy agents no longer queue peer messages.",
-                target_path.as_str(),
-                status.tag()
-            ));
-        }
-        if inbound_pending {
-            return Err(format!(
-                "Peer message denied: '{}' is Idle but already has an inbound \
-                 message waiting to start a turn.",
-                target_path.as_str()
-            ));
-        }
-        Ok(())
+        self.resolve_agent(to)
     }
 
-    /// Validate delegation hierarchy: sibling or descendant targets only.
+    /// Validate delegation hierarchy: direct children only.
+    ///
+    /// A direct child is always delegable regardless of its live status —
+    /// messages queue on the child's relay and are processed turn by turn.
     fn validate_delegation_paths(
         &self,
         caller_path: &str,
@@ -2522,6 +2499,9 @@ impl RuntimeHost {
         if caller_path == target_path {
             return Err("Agents cannot delegate tasks to themselves.".to_string());
         }
+        if target_path.is_direct_child_of(&caller_path) {
+            return Ok(());
+        }
         if path_is_ancestor(&target_path, &caller_path) {
             return Err(format!(
                 "Delegation denied: '{}' is a superior of '{}'. \
@@ -2530,42 +2510,40 @@ impl RuntimeHost {
                 caller_path.as_str()
             ));
         }
-        if caller_path.parent() != target_path.parent()
-            && !path_is_ancestor(&caller_path, &target_path)
-        {
-            return Err(format!(
-                "Delegation denied: '{}' is not a sibling or descendant of '{}'. \
-                 Cross-parent delegation is disabled.",
-                target_path.as_str(),
-                caller_path.as_str()
-            ));
+        Err(format!(
+            "Delegation denied: '{}' is not a direct child of '{}'. \
+             Delegation is limited to your own direct children; siblings and other \
+             branches are not visible to you. Spawn the agent you need with \
+             spawn_agent, or reuse an existing child.",
+            target_path.as_str(),
+            caller_path.as_str()
+        ))
+    }
+
+    /// Validate that `caller_path` may manage (shut down / interrupt) the
+    /// agent at `target`: agents control only their own direct children.
+    fn validate_child_control(
+        &self,
+        caller_path: &str,
+        target: &str,
+        action: &str,
+    ) -> std::result::Result<(), String> {
+        let caller = self.resolve_live_agent(caller_path, "caller", caller_path)?;
+        let Ok(caller) = agentik_types::AgentPath::try_from(caller.as_str()) else {
+            return Err(format!("invalid caller path `{caller}`"));
+        };
+        let Ok(target) = agentik_types::AgentPath::try_from(target) else {
+            return Err(format!("invalid target path `{target}`"));
+        };
+        if target.is_direct_child_of(&caller) {
+            return Ok(());
         }
-        if caller_path.parent() == target_path.parent() {
-            let status = self
-                .agents
-                .get(target.as_str())
-                .map(|entry| entry.status.clone())
-                .unwrap_or(crate::control::AgentStatus::Idle);
-            let inbound_pending = self
-                .agents
-                .get(target.as_str())
-                .is_some_and(|entry| entry.inbound_pending.load(Ordering::Acquire));
-            if status != crate::control::AgentStatus::Idle {
-                return Err(format!(
-                    "Delegation denied: sibling target '{}' is currently '{}' rather than Idle.",
-                    target_path.as_str(),
-                    status.tag()
-                ));
-            }
-            if inbound_pending {
-                return Err(format!(
-                    "Delegation denied: sibling target '{}' already has an inbound \
-                     message waiting to start a turn.",
-                    target_path.as_str()
-                ));
-            }
-        }
-        Ok(())
+        Err(format!(
+            "Control denied: '{}' is not a direct child of '{}'. \
+             Agents may only {action} their own direct children.",
+            target.as_str(),
+            caller.as_str()
+        ))
     }
 
     /// Forward a command to a named agent's relay task.
@@ -2620,10 +2598,11 @@ impl RuntimeHost {
     }
 
     /// Route a task description to the best-matching agent.
-    /// Considers both running agents and the hardcoded agent kinds.
-    /// Running agents get a small bonus score since they're immediately
-    /// available for delegation.
-    fn route_task(&self, description: &str, exclude: Option<&str>) -> crate::control::RouteResult {
+    /// Considers the caller's direct children (live agents) plus the
+    /// hardcoded agent kinds as spawnable profiles. Live children get a
+    /// small bonus score since they're immediately available for
+    /// delegation.
+    fn route_task(&self, description: &str, caller_path: &str) -> crate::control::RouteResult {
         let desc_lower = description.to_lowercase();
         let desc_words: std::collections::HashSet<&str> = desc_lower
             .split_whitespace()
@@ -2661,20 +2640,26 @@ impl RuntimeHost {
             }
         };
 
-        // Score running agents (excluding the caller itself).
+        // Score live agents — only the caller's direct children are
+        // visible (and delegable), so everything else is filtered out.
+        let caller = agentik_types::AgentPath::try_from(caller_path).ok();
         let mut candidates: Vec<crate::control::RouteCandidate> = self
             .agents
             .values()
-            .filter(|e| Some(e.info.name.as_str()) != exclude)
+            .filter(|e| {
+                caller.as_ref().is_some_and(|c| {
+                    agentik_types::AgentPath::try_from(e.info.path.as_str())
+                        .is_ok_and(|p| p.is_direct_child_of(c))
+                })
+            })
             .map(|e| score_info(&e.info, true))
             .collect();
 
-        // Score the hardcoded kinds as spawnable candidates (excluding the
-        // caller itself).
+        // Score the hardcoded kinds as spawnable candidates. The caller can
+        // never be its own child, so no self-exclusion is needed.
         candidates.extend(
             AgentKind::ALL
                 .iter()
-                .filter(|k| Some(k.name()) != exclude)
                 .map(|k| score_info(&capability_from_kind(k.name(), k.name(), *k), false)),
         );
 
@@ -2719,71 +2704,13 @@ impl RuntimeHost {
         self.infra.clone()
     }
 
-    /// Returns a reference to the persistent topology network.
+    /// Returns a reference to the persistent topology network. The network
+    /// is kept for response accumulation and termination bookkeeping only
+    /// (the delegation reply path reads `accumulated_response`); its
+    /// routing actions are intentionally ignored — `delegate_to` is the
+    /// only inter-agent channel.
     pub fn network(&self) -> &AgentNetwork {
         &self.network
-    }
-
-    /// Returns a mutable reference to the topology network.
-    pub fn network_mut(&mut self) -> &mut AgentNetwork {
-        &mut self.network
-    }
-
-    // ── Topology control ───────────────────────────────────
-
-    /// Add a node to the topology.
-    pub fn add_node(&mut self, name: &str, profile: &str) -> Result<()> {
-        self.network
-            .add_node(NodeSpec {
-                name: name.into(),
-                profile: profile.into(),
-                initial_prompt: None,
-            })
-            .map_err(Error::from)
-    }
-
-    /// Add a node with an initial prompt.
-    pub fn add_node_with_prompt(
-        &mut self,
-        name: &str,
-        profile: &str,
-        prompt: impl Into<String>,
-    ) -> Result<()> {
-        self.network
-            .add_node(NodeSpec {
-                name: name.into(),
-                profile: profile.into(),
-                initial_prompt: Some(prompt.into()),
-            })
-            .map_err(Error::from)
-    }
-
-    /// Remove a node from the topology (and clean up routing state).
-    pub fn remove_node(&mut self, name: &str) {
-        self.network.remove_node(name);
-    }
-
-    /// Connect two nodes with a trigger (request-response delegation).
-    pub fn connect(&mut self, from: &str, to: &str, trigger: EdgeTrigger) -> Result<()> {
-        self.network
-            .connect(from, to, trigger, None)
-            .map_err(Error::from)
-    }
-
-    /// Remove all edges between two nodes.
-    pub fn disconnect(&mut self, from: &str, to: &str) -> usize {
-        self.network.disconnect(from, to)
-    }
-
-    /// Set the termination condition.
-    pub fn set_termination(&mut self, termination: TerminationSpec) {
-        self.network.set_termination(termination);
-    }
-
-    /// Reset routing state (buffers, counts, finished) while keeping the
-    /// topology graph intact.
-    pub fn reset_run_state(&mut self) {
-        self.network.reset_run_state();
     }
 
     // ── Agent registration + multiplexed transport ─────────
@@ -3276,24 +3203,6 @@ impl RuntimeHost {
         self.send_to_from_user(name, message, true)
     }
 
-    /// Inject a message from another runtime source. Unlike TUI input, the
-    /// target session emits MessageInjected so the externally supplied turn is
-    /// visible and persisted in that agent's own session.
-    fn send_inter_agent_to(
-        &self,
-        caller_path: &str,
-        name: &str,
-        message: String,
-    ) -> std::result::Result<(), String> {
-        self.validate_peer_message_paths(caller_path, name)?;
-        if !self.enqueue_agent_message(name, message, None, false) {
-            return Err(format!(
-                "Agent '{name}' is registered but its relay channel is closed."
-            ));
-        }
-        Ok(())
-    }
-
     fn send_to_from_user(
         &self,
         name: &str,
@@ -3360,16 +3269,6 @@ impl RuntimeHost {
                 .as_deref()
                 .map(|m| (m.model_spec(), m.model_info.context_length))
         })
-    }
-
-    /// Inject initial prompts for all nodes that have them.
-    pub fn inject_initial_prompts(&mut self) {
-        let messages = self.network.initial_messages();
-        for (node, prompt) in messages {
-            if let Err(error) = self.send_to_from_user(&node, prompt, false) {
-                tracing::warn!(agent = %node, %error, "initial prompt dropped");
-            }
-        }
     }
 
     /// Shut down a named agent and remove it from the registry.
@@ -3567,23 +3466,12 @@ impl RuntimeHost {
             _ => {}
         }
 
-        // Feed the event through the network (accumulates LlmResponse,
-        // handles topology-edge delegation routing, termination checks).
-        let actions = self.network.process_event(&name, &event);
-
-        // Execute any routing actions (topology-edge based forwarding).
-        for action in &actions {
-            if let agentik_network::RoutingAction::Send { to, message } = action {
-                if let Err(error) = self.send_inter_agent_to(&name, to, message.clone()) {
-                    tracing::warn!(
-                        from = %name,
-                        to = %to,
-                        error = %error,
-                        "topology message rejected by communication policy"
-                    );
-                }
-            }
-        }
+        // Feed the event through the network (accumulates LlmResponse for
+        // the delegation reply path and maintains termination/completion
+        // bookkeeping). RoutingActions are intentionally ignored:
+        // topology-edge message forwarding is retired — delegate_to is the
+        // only inter-agent channel.
+        let _ = self.network.process_event(&name, &event);
 
         // Phase 1: derive the agent's runtime status from the observed
         // event and notify subscribers. Done after network.process_event so
@@ -3911,6 +3799,17 @@ fn path_is_ancestor(ancestor: &agentik_types::AgentPath, path: &agentik_types::A
     false
 }
 
+/// Uniform denial for agent-initiated management of a target that is not a
+/// resolvable direct child. Deliberately identical for "unresolvable" and
+/// "exists but not your child" so callers cannot probe the registry.
+fn not_a_direct_child_message(name: &str) -> String {
+    format!(
+        "Agent '{name}' is not one of your direct children. \
+         Agents may only manage their own direct children; \
+         use list_agents to see them."
+    )
+}
+
 fn push_delegation_progress(
     progress: &Option<agentik_core::tools::ProgressBuffer>,
     kind: &str,
@@ -4174,7 +4073,7 @@ fn derive_agent_status(event: &AgentEvent) -> (AgentStatus, Option<String>) {
         | AgentEvent::ContentBlockStop { .. }
         | AgentEvent::StreamDelta { .. } => (AgentStatus::Running, None),
 
-        // ── Injected message (delegate_to, send_message) — not a status
+        // ── Injected message (delegate_to, user delivery) — not a status
         //    change by itself; the agent will start processing on its own ──
         AgentEvent::MessageInjected(_) => (AgentStatus::Idle, None),
 
@@ -4197,7 +4096,7 @@ fn derive_agent_status(event: &AgentEvent) -> (AgentStatus, Option<String>) {
 /// a fresh message flips the agent back to `Running`. From a caller's
 /// perspective, `Completed` IS terminal — the caller has the response
 /// it needed and any subsequent turn is a new request the caller must
-/// opt into via `send_message` / `delegate_to`.
+/// opt into via `delegate_to`.
 ///
 /// `Failed` is sticky until the agent is shut down: every subsequent
 /// event re-asserts the same failure.
@@ -4565,7 +4464,7 @@ mod interrupt_agent_tests {
     /// handler dispatches them to different paths:
     /// - `CancelAgent` → AgentCommand::Cancel → handle.cancel() (preserves
     ///   agent; only the current turn aborts; new token issued)
-    /// - `Shutdown { name }` → AgentCommand::Shutdown → handle.shutdown()
+    /// - `Shutdown { name, .. }` → AgentCommand::Shutdown → handle.shutdown()
     ///   → graceful exit (removes from registry)
     ///
     /// Mixing these up would silently kill long-lived worker agents on
@@ -4574,9 +4473,13 @@ mod interrupt_agent_tests {
     fn cancel_and_shutdown_are_distinct_commands() {
         let cancel = HostCommand::CancelAgent {
             name: "worker".into(),
+            caller_path: None,
+            reply_tx: None,
         };
         let shutdown = HostCommand::Shutdown {
             name: "worker".into(),
+            caller_path: None,
+            reply_tx: None,
         };
 
         // Different concrete types — pattern-match proves it.
@@ -4647,33 +4550,26 @@ mod interrupt_agent_tests {
 }
 
 #[cfg(test)]
-mod send_message_tests {
-    //! Phase 5 — `send_message` fire-and-forget inter-agent messaging.
+mod deliver_message_tests {
+    //! `DeliverMessage` — the user→agent channel (TUI/gateway). The
+    //! fire-and-forget inter-agent `SendMessage` channel was removed:
+    //! delegate_to is the only inter-agent communication path.
     //!
     //! These tests verify the command-layer invariants without spinning
-    //! up a full RuntimeHost. The key properties tested:
-    //! 1. `SendMessage` is a distinct variant from `DeliverMessage` and
-    //!    `Delegate` (they must not be confused).
-    //! 2. `SendMessage` carries a reply channel for delivery confirmation.
-    //! 3. The `SendMessageInput` schema matches what the LLM would emit.
+    //! up a full RuntimeHost: tracked delivery carries a reply channel so
+    //! a 202 means the host actually enqueued the message.
 
     use super::*;
     use crate::control::{HostCommand, HostControl};
     use tokio::sync::oneshot;
 
-    /// `SendMessage`, `DeliverMessage`, and `Delegate` MUST be distinct
-    /// variants. They dispatch to different handler paths:
+    /// `DeliverMessage` and `Delegate` MUST be distinct variants. They
+    /// dispatch to different handler paths:
     /// - `DeliverMessage` → user message (optional reply for the gateway)
-    /// - `SendMessage` → fire-and-forget inter-agent (reply: Ok/Err)
-    /// - `Delegate` → request-response (reply: full response text)
+    /// - `Delegate` → request-response inter-agent (reply: full response
+    ///    text, gated to direct children)
     #[test]
-    fn send_message_is_distinct_from_deliver_and_delegate() {
-        let send = HostCommand::SendMessage {
-            caller_path: "/root/sender".into(),
-            to: "worker".into(),
-            message: "hello".into(),
-            reply_tx: oneshot::channel().0,
-        };
+    fn deliver_message_is_distinct_from_delegate() {
         let deliver = HostCommand::DeliverMessage {
             name: "worker".into(),
             message: "hello".into(),
@@ -4689,10 +4585,6 @@ mod send_message_tests {
         };
 
         // Pattern-match proves each is a distinct variant.
-        let send_kind = match &send {
-            HostCommand::SendMessage { .. } => "send",
-            _ => "other",
-        };
         let deliver_kind = match &deliver {
             HostCommand::DeliverMessage { .. } => "deliver",
             _ => "other",
@@ -4701,126 +4593,9 @@ mod send_message_tests {
             HostCommand::Delegate { .. } => "delegate",
             _ => "other",
         };
-        assert_eq!(send_kind, "send");
         assert_eq!(deliver_kind, "deliver");
         assert_eq!(delegate_kind, "delegate");
-        assert_ne!(send_kind, deliver_kind);
-        assert_ne!(send_kind, delegate_kind);
-    }
-
-    /// `SendMessage` uses a `std::result::Result<(), String>` reply channel (unlike
-    /// `Delegate` which uses `String`). This is important: the handler
-    /// must reply `Ok(())` on success or `Err(msg)` on agent-not-found,
-    /// not a plain string.
-    #[test]
-    fn send_message_reply_channel_is_result_unit_string() {
-        let (tx, rx) = oneshot::channel::<std::result::Result<(), String>>();
-        let _cmd = HostCommand::SendMessage {
-            caller_path: "/root/sender".into(),
-            to: "worker".into(),
-            message: "hello".into(),
-            reply_tx: tx,
-        };
-        // The type system already proved the channel type by compiling.
-        // We drop rx without sending — the command was never processed.
-        drop(rx);
-    }
-
-    /// `SendMessageInput` schema: `agent_name` + `message`, both required.
-    /// No optional fields (unlike `interrupt_agent` which has optional
-    /// `reason`). The LLM must always specify a target and content.
-    #[test]
-    fn send_message_input_schema_is_name_and_message() {
-        let raw = serde_json::json!({
-            "agent_name": "researcher",
-            "message": "Please analyze the results."
-        });
-        assert_eq!(raw["agent_name"], "researcher");
-        assert_eq!(raw["message"], "Please analyze the results.");
-        // No optional fields in the schema.
-        assert!(raw.get("reason").is_none());
-        assert!(raw.get("timeout_ms").is_none());
-    }
-
-    /// `HostControl::send_message` wires up the reply channel correctly.
-    /// Verify the round-trip: send a SendMessage command through a
-    /// channel, extract it, reply, and confirm the caller receives the
-    /// result.
-    #[tokio::test]
-    async fn send_message_round_trip_delivery_success() {
-        let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<HostCommand>();
-        let (event_tx, _) = tokio::sync::broadcast::channel::<HostEvent>(1);
-        let control = HostControl::new(cmd_tx, event_tx);
-
-        // Spawn the "caller" — sends the message and awaits reply.
-        let caller = tokio::spawn(async move {
-            control
-                .send_message("/root/sender", "worker", "hello there")
-                .await
-        });
-
-        // "Host" side: receive the command and reply Ok(()).
-        let cmd = cmd_rx.recv().await.expect("command received");
-        match cmd {
-            HostCommand::SendMessage {
-                caller_path,
-                to,
-                message,
-                reply_tx,
-            } => {
-                assert_eq!(to, "worker");
-                assert_eq!(caller_path, "/root/sender");
-                assert_eq!(message, "hello there");
-                let _ = reply_tx.send(Ok(()));
-            }
-            _ => panic!("expected SendMessage variant"),
-        }
-
-        let result = caller.await.expect("caller task panicked");
-        assert_eq!(result, Some(Ok(())));
-    }
-
-    /// Round-trip with agent-not-found error.
-    #[tokio::test]
-    async fn send_message_round_trip_agent_not_found() {
-        let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<HostCommand>();
-        let (event_tx, _) = tokio::sync::broadcast::channel::<HostEvent>(1);
-        let control = HostControl::new(cmd_tx, event_tx);
-
-        let caller = tokio::spawn(async move {
-            control
-                .send_message("/root/sender", "nonexistent", "test")
-                .await
-        });
-
-        let cmd = cmd_rx.recv().await.expect("command received");
-        match cmd {
-            HostCommand::SendMessage { reply_tx, .. } => {
-                let _ = reply_tx.send(Err("agent not found".into()));
-            }
-            _ => panic!("expected SendMessage variant"),
-        }
-
-        let result = caller.await.expect("caller task panicked");
-        assert!(matches!(result, Some(Err(_))));
-    }
-
-    /// When the host command channel is closed (host dropped), `send_message`
-    /// returns `None` — not an error, not a hang. This is the same
-    /// fail-soft behavior as all other `ask()`-based methods.
-    #[tokio::test]
-    async fn send_message_returns_none_when_channel_closed() {
-        let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<HostCommand>();
-        let (event_tx, _) = tokio::sync::broadcast::channel::<HostEvent>(1);
-        let control = HostControl::new(cmd_tx, event_tx);
-
-        // Drop the receiver → channel is closed.
-        drop(cmd_rx);
-
-        let result = control
-            .send_message("/root/sender", "worker", "hello")
-            .await;
-        assert!(result.is_none(), "should return None on closed channel");
+        assert_ne!(deliver_kind, delegate_kind);
     }
 
     /// The gateway rides `DeliverMessage.reply_tx` so a 202 means the host
@@ -5098,12 +4873,17 @@ mod plugin_profile_tools_tests {
 #[cfg(test)]
 mod communication_policy_tests {
     use super::*;
+    use crate::control::HostCommand;
 
     fn config(dir: &tempfile::TempDir) -> RuntimeConfig {
         let mut config = RuntimeConfig::default();
         config.data_dir = dir.path().join("data");
         config.state_dir = dir.path().join("state");
         config.agent_db = dir.path().join("agent.db");
+        config.dag_history_db = dir.path().join("dag-history.db");
+        config.bib_db_path = dir.path().join("bib.db");
+        config.writing_db_path = dir.path().join("writing.db");
+        config.app_db_path = dir.path().join("app.db");
         config
     }
 
@@ -5167,79 +4947,144 @@ mod communication_policy_tests {
         entry.info.status = status;
     }
 
-    fn set_pending(host: &mut RuntimeHost, path: &str, pending: bool) {
-        host.agents
-            .get_mut(path)
-            .unwrap()
-            .inbound_pending
-            .store(pending, Ordering::Release);
-    }
-
+    /// Delegation reaches only the caller's direct children. Siblings,
+    /// cousins, grandparents, grandchildren, and self are all rejected;
+    /// a busy child stays delegable (messages queue on its relay).
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn inter_agent_communication_enforces_hierarchy_and_idle_targets() {
+    async fn delegation_is_restricted_to_direct_children() {
         let dir = tempfile::tempdir().unwrap();
         let mut host = RuntimeHost::open(&config(&dir)).await.unwrap();
         let model: Arc<ArcSwapOption<Model>> = Arc::new(ArcSwapOption::from_pointee(None));
-        for path in ["/root/a", "/root/b", "/root/a/child", "/root/b/child"] {
+        for path in [
+            "/root/a",
+            "/root/b",
+            "/root/a/child",
+            "/root/b/child",
+            "/root/a/child/grand",
+        ] {
             register_agent_at(&mut host, path, model.clone()).await;
         }
 
-        assert!(
-            host.validate_peer_message_paths("/root/a", "/root/b")
-                .is_ok()
-        );
-        set_status(&mut host, "/root/b", crate::control::AgentStatus::Running);
-        let busy = host
-            .validate_peer_message_paths("/root/a", "/root/b")
-            .unwrap_err();
-        assert!(busy.contains("currently 'running'"), "{busy}");
-        set_status(&mut host, "/root/b", crate::control::AgentStatus::Idle);
-        set_pending(&mut host, "/root/b", true);
-        let pending = host
-            .validate_peer_message_paths("/root/a", "/root/b")
-            .unwrap_err();
-        assert!(pending.contains("inbound"), "{pending}");
-        set_pending(&mut host, "/root/b", false);
-
-        let cross_children = host
-            .validate_peer_message_paths("/root/a/child", "/root/b/child")
-            .unwrap_err();
-        assert!(
-            cross_children.contains("not sibling agents"),
-            "{cross_children}"
-        );
-        let parent_child = host
-            .validate_peer_message_paths("/root/a", "/root/a/child")
-            .unwrap_err();
-        assert!(
-            parent_child.contains("not sibling agents"),
-            "{parent_child}"
-        );
-
+        // Parent → direct child is the one allowed direction.
         assert!(
             host.validate_delegation_paths("/root/a", "/root/a/child")
                 .is_ok()
         );
+        // Busy children remain delegable — turns queue on the relay.
+        set_status(&mut host, "/root/a/child", crate::control::AgentStatus::Running);
+        assert!(
+            host.validate_delegation_paths("/root/a", "/root/a/child")
+                .is_ok()
+        );
+        set_status(&mut host, "/root/a/child", crate::control::AgentStatus::Idle);
+
+        // Upward delegation is rejected with the superior-specific message.
         let upward = host
             .validate_delegation_paths("/root/a/child", "/root/a")
             .unwrap_err();
         assert!(upward.contains("superior"), "{upward}");
-        let cross_delegation = host
-            .validate_delegation_paths("/root/a/child", "/root/b/child")
-            .unwrap_err();
-        assert!(
-            cross_delegation.contains("Cross-parent delegation"),
-            "{cross_delegation}"
-        );
 
-        set_status(&mut host, "/root/b", crate::control::AgentStatus::Running);
-        let busy_sibling_delegation = host
+        // Siblings, cousins, and grandchildren are not direct children.
+        let sibling = host
             .validate_delegation_paths("/root/a", "/root/b")
             .unwrap_err();
-        assert!(
-            busy_sibling_delegation.contains("rather than Idle"),
-            "{busy_sibling_delegation}"
-        );
+        assert!(sibling.contains("not a direct child"), "{sibling}");
+        let cousin = host
+            .validate_delegation_paths("/root/a/child", "/root/b/child")
+            .unwrap_err();
+        assert!(cousin.contains("not a direct child"), "{cousin}");
+        let grandchild = host
+            .validate_delegation_paths("/root/a", "/root/a/child/grand")
+            .unwrap_err();
+        assert!(grandchild.contains("not a direct child"), "{grandchild}");
+
+        // Self-delegation is rejected.
+        let self_delegate = host
+            .validate_delegation_paths("/root/a", "/root/a")
+            .unwrap_err();
+        assert!(self_delegate.contains("themselves"), "{self_delegate}");
+    }
+
+    /// Agent-initiated shutdown/interrupt reach only the caller's direct
+    /// children; the operator (caller_path = None) path stays unrestricted.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn shutdown_and_interrupt_are_child_scoped_for_agents() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut host = RuntimeHost::open(&config(&dir)).await.unwrap();
+        let model: Arc<ArcSwapOption<Model>> = Arc::new(ArcSwapOption::from_pointee(None));
+        for path in ["/root/a", "/root/b", "/root/a/child"] {
+            register_agent_at(&mut host, path, model.clone()).await;
+        }
+
+        // Agent trying to shut down a non-child: denied, target survives.
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        host.process_command(HostCommand::Shutdown {
+            name: "/root/b".into(),
+            caller_path: Some("/root/a".into()),
+            reply_tx: Some(tx),
+        });
+        let denied = rx.await.unwrap();
+        let message =
+            denied.expect_err("shutdown of a non-child must be denied by an agent caller");
+        assert!(message.contains("direct child"), "{message}");
+        assert!(host.agents.contains_key("/root/b"));
+
+        // Agent interrupting a non-child: denied the same way.
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        host.process_command(HostCommand::CancelAgent {
+            name: "/root/b".into(),
+            caller_path: Some("/root/a".into()),
+            reply_tx: Some(tx),
+        });
+        let denied = rx.await.unwrap();
+        let message =
+            denied.expect_err("interrupt of a non-child must be denied by an agent caller");
+        assert!(message.contains("direct child"), "{message}");
+        assert!(host.agents.contains_key("/root/b"));
+
+        // Agent shutting down its own direct child: allowed.
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        host.process_command(HostCommand::Shutdown {
+            name: "/root/a/child".into(),
+            caller_path: Some("/root/a".into()),
+            reply_tx: Some(tx),
+        });
+        rx.await.unwrap().unwrap();
+        assert!(!host.agents.contains_key("/root/a/child"));
+
+        // Operator (None caller) shutting down any agent: unrestricted.
+        host.process_command(HostCommand::Shutdown {
+            name: "/root/b".into(),
+            caller_path: None,
+            reply_tx: None,
+        });
+        assert!(!host.agents.contains_key("/root/b"));
+    }
+
+    /// route_task considers only the caller's direct children plus the
+    /// spawnable role profiles — never foreign branches or the caller.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn route_task_only_considers_direct_children_and_profiles() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut host = RuntimeHost::open(&config(&dir)).await.unwrap();
+        let model: Arc<ArcSwapOption<Model>> = Arc::new(ArcSwapOption::from_pointee(None));
+        for path in ["/root/a", "/root/a/child", "/root/b"] {
+            register_agent_at(&mut host, path, model.clone()).await;
+        }
+
+        let result = host.route_task("analyze gwas data", "/root/a");
+        let names: Vec<&str> = result
+            .candidates
+            .iter()
+            .map(|c| c.agent.as_str())
+            .collect();
+        assert!(!names.is_empty(), "expected some candidates");
+        for name in &names {
+            assert!(
+                matches!(*name, "child" | "researcher" | "developer"),
+                "unexpected candidate '{name}' in {names:?}"
+            );
+        }
     }
 }
 
@@ -5254,6 +5099,16 @@ mod agent_persistence_tests {
         config.data_dir = dir.path().join("data");
         config.state_dir = dir.path().join("state");
         config.agent_db = dir.path().join("agent.db");
+        config.dag_history_db = dir.path().join("dag-history.db");
+        config.bib_db_path = dir.path().join("bib.db");
+        config.writing_db_path = dir.path().join("writing.db");
+        config.app_db_path = dir.path().join("app.db");
+        // The parent (/root/researcher) is a root-level agent; without this
+        // it would run the startup memory pipeline (default on) against an
+        // empty model slot in the first host and add noise to the event
+        // stream this test drives.
+        config.use_memory = false;
+        config.generate_memory = false;
         config
     }
 
@@ -5261,16 +5116,31 @@ mod agent_persistence_tests {
     async fn child_agent_inter_agent_messages_survive_restart() {
         let dir = tempfile::tempdir().unwrap();
         let mut host = RuntimeHost::open(&config(&dir)).await.unwrap();
+        // Install a mock model up front so the delegated child turn
+        // actually completes — the delegation reply only resolves on
+        // TurnCompleted. The expectation matches ANY request (no `.with`)
+        // and answers with a plain assistant text message.
+        let mut mock = agentik_sdk::provider::client::MockApiClient::new();
+        mock.expect_request_stream_with_system().times(1..).returning(|_, _, _, _| {
+            Ok(agentik_sdk::streaming::MessageStream::from_events(
+                Vec::new(),
+                agentik_core::message_ext::AgentMessageExt::assistant_text("delegated work done"),
+            ))
+        });
+        let model: Arc<ArcSwapOption<Model>> = Arc::new(ArcSwapOption::from_pointee(Some(
+            Model::with_client(
+                agentik_core::testing::dummy_model_info("child-delegation-restart"),
+                mock,
+            ),
+        )));
+        host.set_model(model);
         let path = agentik_types::AgentPath::root()
             .join("researcher")
             .unwrap()
             .join("worker")
             .unwrap();
-        let profile = AgentProfileConfig::new(AgentKind::Researcher);
-        let spawn_config = profile.clone();
+        let spawn_config = AgentProfileConfig::new(AgentKind::Researcher);
         let spawn_path = path.clone();
-        let model: Arc<ArcSwapOption<Model>> = Arc::new(ArcSwapOption::from_pointee(None));
-        host.set_model(model);
         let spawn_control = host.control();
         let spawn = tokio::spawn(async move {
             let parent = spawn_path.parent().unwrap();
@@ -5292,42 +5162,44 @@ mod agent_persistence_tests {
         let agent_id = info.agent_id.expect("registered event carries agent ID");
         assert_eq!(spawn.await.unwrap().unwrap(), path.as_str());
 
-        let sender_path = path.parent().unwrap().join("sender").unwrap();
-        let sender_config = AgentProfileConfig::new(AgentKind::Researcher);
-        let sender_handle = host
+        // Delegation needs a live caller — register the parent agent
+        // (/root/researcher) so it can delegate to its direct child.
+        let parent_path = path.parent().unwrap();
+        let parent_config = AgentProfileConfig::new(AgentKind::Researcher);
+        let parent_handle = host
             .spawn_agent(
-                &sender_path,
-                &sender_config,
+                &parent_path,
+                &parent_config,
                 Arc::new(ArcSwapOption::from_pointee(None)),
                 None,
             )
             .await
             .unwrap();
-        let sender_info = capability_from_kind(
-            sender_handle.path.name(),
-            sender_handle.path.as_str(),
-            sender_config.kind,
+        let parent_info = capability_from_kind(
+            parent_handle.path.name(),
+            parent_handle.path.as_str(),
+            parent_config.kind,
         );
-        host.register_agent(sender_handle, sender_info);
+        host.register_agent(parent_handle, parent_info);
 
         let control = host.control();
         let delivery_path = path.clone();
-        let caller_path = sender_path.as_str().to_string();
+        let caller_path = parent_path.as_str().to_string();
         let delivery = tokio::spawn(async move {
             control
-                .send_message(
-                    &caller_path,
+                .delegate_tracked(
                     delivery_path.as_str(),
                     "persist child message",
+                    Some(caller_path),
+                    uuid::Uuid::new_v4(),
+                    None,
                 )
                 .await
                 .expect("host command channel should remain open")
-                .expect("child agent should be registered");
         });
         host.recv_and_process_command().await;
-        delivery.await.unwrap();
 
-        let injected = timeout(Duration::from_secs(2), async {
+        let injected = timeout(Duration::from_secs(5), async {
             loop {
                 let Some((_, event)) = host.recv_any().await else {
                     panic!("agent event channel closed");
@@ -5341,6 +5213,33 @@ mod agent_persistence_tests {
         .expect("expected injected message event");
         assert!(
             matches!(injected, AgentEvent::MessageInjected(text) if text == "persist child message")
+        );
+
+        // Keep pumping host events until the delegated turn completes; the
+        // delegation reply resolves inside the same event-processing pass
+        // (process_tagged resolves reply_tx on TurnCompleted), so awaiting
+        // the delivery task afterwards only needs a scheduler tick.
+        timeout(Duration::from_secs(10), async {
+            loop {
+                let Some((event_path, event)) = host.recv_any().await else {
+                    panic!("agent event channel closed");
+                };
+                if event_path == path.as_str()
+                    && matches!(event, AgentEvent::TurnCompleted { .. })
+                {
+                    return;
+                }
+            }
+        })
+        .await
+        .expect("expected delegated turn to complete");
+        let delegated_response = timeout(Duration::from_secs(5), delivery)
+            .await
+            .expect("delegation reply must resolve after the child's turn completes")
+            .expect("delegation task must not panic");
+        assert!(
+            !delegated_response.is_empty(),
+            "delegation must return the child's response"
         );
 
         // The WAL write is asynchronous and is not tied to event delivery.
@@ -5380,7 +5279,7 @@ mod agent_persistence_tests {
             .unwrap();
         assert_eq!(
             restored, 2,
-            "persisted sibling layout entries must both be restored"
+            "persisted parent + child layout entries must both be restored"
         );
         assert!(host.agent_names().contains(&path.as_str()));
 

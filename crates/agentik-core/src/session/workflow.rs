@@ -903,10 +903,12 @@ impl Session {
         builder = builder.with_identity(format!(
             "{identity}\n\n\
              Your agent path is `{path}`. Your short name is **{name}**. \
-             Other agents can address you by their short name or full path. \
+             You can see and interact only with your direct children \
+             (spawned under your path) and your direct parent. \
              When spawning child agents, their path is derived from yours. \
-             Do not delegate tasks to yourself — use `list_agents` or `route_task` \
-             to find a *different* agent suited for the task.",
+             Discover visible agents with `list_agents` or `route_task`, \
+             delegate to your children with `delegate_to`, and never \
+             delegate tasks to yourself.",
             path = self.shared.path.as_str(),
             name = self.shared.name(),
         ));

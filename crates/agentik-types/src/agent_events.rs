@@ -136,7 +136,7 @@ pub enum AgentEvent {
     Error(String),
 
     /// A user message was injected into the conversation by an external source
-    /// (delegate_to, send_message, or background-task completion notice).
+    /// (delegate_to or background-task completion notice).
     MessageInjected(String),
 
     /// A user-submitted message was committed to conversation memory. The UI
