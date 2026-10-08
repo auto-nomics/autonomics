@@ -302,7 +302,10 @@ fn static_script_review(node: &NodeDefinition, script: &str) -> std::result::Res
     Ok(())
 }
 
-fn registry_compile(manifest: &PluginManifest) -> std::result::Result<(), String> {
+/// Compile every node in the manifest (schema, ports, defaults, container
+/// spec) — the deterministic "will this manifest load" check shared by the
+/// `registry_compile` gate and the manifest-editing tools.
+pub(crate) fn registry_compile(manifest: &PluginManifest) -> std::result::Result<(), String> {
     for node in &manifest.nodes {
         compile_one_node(manifest, node)?;
     }

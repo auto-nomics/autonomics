@@ -127,54 +127,11 @@ pub async fn validate_environment(
 ) -> EnvironmentValidationReport {
     let mut gates: Vec<GateResult> = Vec::new();
     let manifest = run_gate(&mut gates, "manifest", || {
-        let manifest: EnvironmentManifest = toml::from_str(
-            &workspace
-                .read_text("manifest.toml")
-                .map_err(|error| error.to_string())?,
-        )
-        .map_err(|error| format!("invalid environment manifest: {error}"))?;
-        if manifest.environment_id != environment_id {
-            return Err(format!(
-                "manifest environment_id `{}` does not match workspace `{environment_id}`",
-                manifest.environment_id
-            ));
-        }
-        if workspace.path().file_name().and_then(|name| name.to_str()) != Some(environment_id) {
-            return Err(format!(
-                "workspace directory must be named `{environment_id}`"
-            ));
-        }
-        validate_interpreters(&manifest.interpreters).map_err(|error| error.to_string())?;
-        if manifest.containerfile.is_empty() {
-            return Err("manifest must declare a containerfile".into());
-        }
-        if !is_safe_relative(&manifest.containerfile) {
-            return Err(format!(
-                "containerfile `{}` must be a workspace-relative path",
-                manifest.containerfile
-            ));
-        }
-        let files = workspace.list_files().map_err(|error| error.to_string())?;
-        if !files.iter().any(|file| file == &manifest.containerfile) {
-            return Err(format!(
-                "containerfile `{}` does not exist in the workspace",
-                manifest.containerfile
-            ));
-        }
-        if manifest.tests.is_empty() {
-            return Err("manifest must declare at least one smoke test".into());
-        }
-        for test in &manifest.tests {
-            if test.name.trim().is_empty() {
-                return Err("smoke tests must have a name".into());
-            }
-            if test.argv.is_empty() || test.argv.iter().any(|arg| arg.contains('\0')) {
-                return Err(format!(
-                    "smoke test `{}` must declare a nonempty NUL-free argv",
-                    test.name
-                ));
-            }
-        }
+        let text = workspace
+            .read_text("manifest.toml")
+            .map_err(|error| error.to_string())?;
+        let manifest = parse_manifest_text(&text)?;
+        check_manifest(&manifest, workspace, environment_id)?;
         Ok(manifest)
     });
     let Some(manifest) = manifest else {
@@ -279,7 +236,70 @@ pub async fn validate_environment(
 /// Budget for one environment image build (base pull plus layer assembly).
 pub const DEFAULT_BUILD_TIMEOUT_SECS: u64 = 3600;
 
-fn gate_base_policy(
+/// Parse manifest text into an [`EnvironmentManifest`].
+///
+/// Shared by the `manifest` gate and the `environment_manifest_update` tool
+/// so both accept exactly the same grammar (including `deny_unknown_fields`).
+pub(crate) fn parse_manifest_text(text: &str) -> std::result::Result<EnvironmentManifest, String> {
+    toml::from_str(text).map_err(|error| format!("invalid environment manifest: {error}"))
+}
+
+/// Structural checks for one parsed manifest against its workspace.
+///
+/// Everything after parsing in the `manifest` gate: identity must match the
+/// workspace, interpreters must be well-formed, the declared containerfile
+/// must exist, and smoke tests must be nonempty and executable-shaped.
+pub(crate) fn check_manifest(
+    manifest: &EnvironmentManifest,
+    workspace: &PluginWorkspace,
+    environment_id: &str,
+) -> std::result::Result<(), String> {
+    if manifest.environment_id != environment_id {
+        return Err(format!(
+            "manifest environment_id `{}` does not match workspace `{environment_id}`",
+            manifest.environment_id
+        ));
+    }
+    if workspace.path().file_name().and_then(|name| name.to_str()) != Some(environment_id) {
+        return Err(format!(
+            "workspace directory must be named `{environment_id}`"
+        ));
+    }
+    validate_interpreters(&manifest.interpreters).map_err(|error| error.to_string())?;
+    if manifest.containerfile.is_empty() {
+        return Err("manifest must declare a containerfile".into());
+    }
+    if !is_safe_relative(&manifest.containerfile) {
+        return Err(format!(
+            "containerfile `{}` must be a workspace-relative path",
+            manifest.containerfile
+        ));
+    }
+    let files = workspace.list_files().map_err(|error| error.to_string())?;
+    if !files.iter().any(|file| file == &manifest.containerfile) {
+        return Err(format!(
+            "containerfile `{}` does not exist in the workspace",
+            manifest.containerfile
+        ));
+    }
+    if manifest.tests.is_empty() {
+        return Err("manifest must declare at least one smoke test".into());
+    }
+    for test in &manifest.tests {
+        if test.name.trim().is_empty() {
+            return Err("smoke tests must have a name".into());
+        }
+        if test.argv.is_empty() || test.argv.iter().any(|arg| arg.contains('\0')) {
+            return Err(format!(
+                "smoke test `{}` must declare a nonempty NUL-free argv",
+                test.name
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn gate_base_policy(
     manifest: &crate::env_manifest::EnvironmentManifest,
 ) -> std::result::Result<(), String> {
     container_runtime::ImageReference::parse(&manifest.base.reference)

@@ -31,6 +31,10 @@ const BASE_REFERENCE: &str = "docker.io/library/alpine@sha256:012345678901234567
 const REMOTE_DIGEST: &str =
     "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
 
+/// The smoke-test block `EnvironmentStore::create` seeds into every fresh
+/// manifest.toml, exactly as `toml::to_string_pretty` renders it.
+const DEFAULT_TESTS_BLOCK: &str = "[[tests]]\nname = \"base-interpreters\"\nargv = [\"true\"]";
+
 /// The process-global toolset registry is shared state; environment tests
 /// reconfigure it per test, so the tests in this binary run sequentially.
 static SEQUENTIAL: Mutex<()> = Mutex::new(());
@@ -271,15 +275,18 @@ async fn environment_is_developed_activated_published_and_rolled_back() {
             &format!("FROM {BASE_REFERENCE}\nRUN echo building\n"),
         )
         .unwrap();
+    let manifest_text = operator.workspace().read_text("manifest.toml").unwrap();
+    assert!(
+        manifest_text.contains(DEFAULT_TESTS_BLOCK),
+        "seeded manifest must contain the default tests block:\n{manifest_text}"
+    );
     json_result(
         &tools,
         "environment_manifest_update",
         json!({
             "environment_path": environment_path,
-            "interpreters": ["sh"],
-            "tests": [
-                { "name": "shell-present", "argv": ["sh", "-eu", "-c", "command -v sh"] }
-            ]
+            "old_string": DEFAULT_TESTS_BLOCK,
+            "new_string": "[[tests]]\nname = \"shell-present\"\nargv = [\"sh\", \"-eu\", \"-c\", \"command -v sh\"]",
         }),
     )
     .await;
@@ -596,9 +603,8 @@ async fn failing_smoke_tests_repair_the_workspace() {
         "environment_manifest_update",
         json!({
             "environment_path": "/environments/dev/smoke-env",
-            "tests": [
-                { "name": "explodes", "argv": ["boom"] }
-            ]
+            "old_string": DEFAULT_TESTS_BLOCK,
+            "new_string": "[[tests]]\nname = \"explodes\"\nargv = [\"boom\"]",
         }),
     )
     .await;
@@ -624,6 +630,205 @@ async fn failing_smoke_tests_repair_the_workspace() {
             .unwrap()
             .status(),
         EnvironmentStatus::NeedsFix
+    );
+}
+
+/// A valid edit lands (and resets a pending local activation); every rejected
+/// edit — not-found, invalid TOML, host-owned field tampering, digest-unpinned
+/// base, malformed interpreters — leaves manifest.toml byte-identical.
+#[tokio::test]
+async fn manifest_update_edits_are_validated_before_they_land() {
+    let _guard = SEQUENTIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = harness(false);
+    let infra = harness.infra.clone();
+    let tools = plugin_rsi::environment_development_tool_registrations("env-manifest-agent");
+    let environment_path = "/environments/dev/manifest-env";
+    infra
+        .create_environment(
+            environment_request("manifest-env", "Create manifest environment"),
+            "alpine",
+        )
+        .unwrap();
+    let store = infra.store();
+    let operator = store.develop("manifest-env").unwrap().unwrap();
+    let read_manifest = || operator.workspace().read_text("manifest.toml").unwrap();
+
+    // Simulate a pending local activation; any successful edit must reset it.
+    let pending = read_manifest()
+        .replace("publication_pending = false", "publication_pending = true");
+    assert_ne!(pending, read_manifest());
+    operator.workspace().write_text("manifest.toml", &pending).unwrap();
+
+    // Successful edit: swap the seeded smoke test for a real one.
+    let value = json_result(
+        &tools,
+        "environment_manifest_update",
+        json!({
+            "environment_path": environment_path,
+            "old_string": DEFAULT_TESTS_BLOCK,
+            "new_string": "[[tests]]\nname = \"shell-present\"\nargv = [\"sh\", \"-eu\", \"-c\", \"command -v sh\"]",
+        }),
+    )
+    .await;
+    assert_eq!(value["test_count"], json!(1), "{value:?}");
+    let updated = read_manifest();
+    assert!(
+        updated.contains("name = \"shell-present\""),
+        "edit must land on disk:\n{updated}"
+    );
+    assert!(
+        updated.contains("publication_pending = false"),
+        "a manifest edit must invalidate pending local activation:\n{updated}"
+    );
+
+    let original = read_manifest();
+    let base_line = format!("reference = \"{BASE_REFERENCE}\"");
+    let rejects: Vec<(&str, Value)> = vec![
+        (
+            "not found",
+            json!({
+                "environment_path": environment_path,
+                "old_string": "NONSENSE-NOT-IN-FILE",
+                "new_string": "x",
+            }),
+        ),
+        (
+            "invalid toml",
+            json!({
+                "environment_path": environment_path,
+                "old_string": "argv = [\"sh\", \"-eu\", \"-c\", \"command -v sh\"]",
+                "new_string": "argv = [",
+            }),
+        ),
+        (
+            "status tamper",
+            json!({
+                "environment_path": environment_path,
+                "old_string": "status = \"draft\"",
+                "new_string": "status = \"approved\"",
+            }),
+        ),
+        (
+            "lifecycle tamper",
+            json!({
+                "environment_path": environment_path,
+                "old_string": "rationale = \"Create manifest environment\"",
+                "new_string": "rationale = \"tampered\"",
+            }),
+        ),
+        (
+            "identity tamper",
+            json!({
+                "environment_path": environment_path,
+                "old_string": "environment_id = \"manifest-env\"",
+                "new_string": "environment_id = \"other-env\"",
+            }),
+        ),
+        (
+            "unpinned base",
+            json!({
+                "environment_path": environment_path,
+                "old_string": base_line,
+                "new_string": "reference = \"docker.io/library/alpine:latest\"",
+            }),
+        ),
+        (
+            "duplicate interpreters",
+            json!({
+                "environment_path": environment_path,
+                "old_string": "interpreters = [\"sh\"]",
+                "new_string": "interpreters = [\"sh\", \"SH\"]",
+            }),
+        ),
+    ];
+    for (hint, input) in rejects {
+        let error = execute(&tools, "environment_manifest_update", input)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, ToolError::ValidationFailed { .. }),
+            "{hint} must be a validation rejection: {error:?}"
+        );
+        assert_eq!(
+            read_manifest(),
+            original,
+            "{hint} rejection must leave manifest.toml untouched"
+        );
+    }
+}
+
+/// Repeated identical blocks are ambiguous without `replace_all` and
+/// replace-everywhere with it.
+#[tokio::test]
+async fn manifest_update_requires_disambiguation_for_repeated_blocks() {
+    let _guard = SEQUENTIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let harness = harness(false);
+    let infra = harness.infra.clone();
+    let tools = plugin_rsi::environment_development_tool_registrations("env-twin-agent");
+    infra
+        .create_environment(
+            environment_request("twin-env", "Create twin environment"),
+            "alpine",
+        )
+        .unwrap();
+    let store = infra.store();
+    let operator = store.develop("twin-env").unwrap().unwrap();
+
+    const TWIN_BLOCK: &str = "[[tests]]\nname = \"twin\"\nargv = [\"true\"]";
+    let text = operator.workspace().read_text("manifest.toml").unwrap();
+    let doubled = text.replace(
+        DEFAULT_TESTS_BLOCK,
+        &format!("{TWIN_BLOCK}\n\n{TWIN_BLOCK}"),
+    );
+    assert_ne!(doubled, text, "seeded manifest must contain the default block");
+    operator.workspace().write_text("manifest.toml", &doubled).unwrap();
+
+    let error = execute(
+        &tools,
+        "environment_manifest_update",
+        json!({
+            "environment_path": "/environments/dev/twin-env",
+            "old_string": TWIN_BLOCK,
+            "new_string": "[[tests]]\nname = \"twin2\"\nargv = [\"true\"]",
+        }),
+    )
+    .await
+    .unwrap_err();
+    match error {
+        ToolError::ValidationFailed { message } => {
+            assert!(message.contains('2'), "ambiguity must report the match count: {message}");
+        }
+        other => panic!("repeated block must be ambiguous: {other:?}"),
+    }
+    assert_eq!(
+        operator.workspace().read_text("manifest.toml").unwrap(),
+        doubled,
+        "ambiguous edit must not land"
+    );
+
+    let value = json_result(
+        &tools,
+        "environment_manifest_update",
+        json!({
+            "environment_path": "/environments/dev/twin-env",
+            "old_string": TWIN_BLOCK,
+            "new_string": "[[tests]]\nname = \"twin2\"\nargv = [\"true\"]",
+            "replace_all": true,
+        }),
+    )
+    .await;
+    assert_eq!(value["test_count"], json!(2), "{value:?}");
+    // `operator` caches the manifest from develop time; re-develop to see
+    // what the tool landed on disk.
+    let operator = store.develop("twin-env").unwrap().unwrap();
+    assert!(
+        operator.manifest().tests.iter().all(|test| test.name == "twin2"),
+        "replace_all must rewrite every repeated block: {:?}",
+        operator.manifest().tests
     );
 }
 

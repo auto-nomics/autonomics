@@ -951,9 +951,12 @@ const PROMPT_PLUGIN_RSI: &str = "\n\
 You can develop plugins through their `/plugins/dev/<plugin-name>` VFS paths.\n\
 List approved environments with `plugin_environments_list`, inspect the addressed\n\
 workspace with `vfs`, fork installed references with `plugin_fork`, bind approved\n\
-environment images with `plugin_environment_bind`, add nodes and update node docs\n\
-with plugin tools, replace complete node specs with `plugin_node_update`, and run\n\
-commands in the selected environment\n\
+environment images with `plugin_environment_bind`, add nodes with\n\
+`plugin_node_create` (standalone NodeDefinition TOML), edit manifest.toml via\n\
+old_string/new_string replacement with `plugin_node_update` (read the file\n\
+through the VFS first; daemon-owned fields and the node set must not change,\n\
+and every edit is validated before it lands), update node docs with\n\
+`plugin_node_update_doc`, and run commands in the selected environment\n\
 with `plugin_container_run`. After editing, call `plugin_install` to validate and\n\
 load the local snapshot into the DAG. Call `plugin_uninstall` to remove the\n\
 active runtime source while retaining development history. Treat manifest\n\
@@ -962,13 +965,15 @@ lifecycle state as host-owned: do not attempt direct manifest writes.\n\
 When no approved environment fits, develop a new one through\n\
 `/environments/dev/<environment-id>` VFS paths: `environment_create` derives a\n\
 workspace from an approved base, you author the Containerfile through the VFS,\n\
-`environment_manifest_update` changes interpreters, base, or smoke tests,\n\
-`environment_validate` runs the static gates, `environment_build` also builds\n\
-and smoke-tests the image, and `environment_install` activates the digest-pinned\n\
-local reference in the catalog so plugins can bind it. `environment_fork`,\n\
-`environment_uninstall`, and `environment_container_run` mirror their plugin\n\
-counterparts. Building, pushing, and catalog activation are host-owned: never\n\
-attempt them through shell tools.";
+`environment_manifest_update` edits manifest.toml via old_string/new_string\n\
+replacement (read the file through the VFS first; host-owned fields such as\n\
+status and lifecycle must not change, and every edit is validated before it\n\
+lands), `environment_validate` runs the static gates, `environment_build`\n\
+also builds and smoke-tests the image, and `environment_install` activates\n\
+the digest-pinned local reference in the catalog so plugins can bind it.\n\
+`environment_fork`, `environment_uninstall`, and `environment_container_run`\n\
+mirror their plugin counterparts. Building, pushing, and catalog activation\n\
+are host-owned: never attempt them through shell tools.";
 
 const PROMPT_RESEARCHER_DEVELOPMENT_HANDOFF: &str = "\n\
 ### Researcher / Developer Collaboration\n\

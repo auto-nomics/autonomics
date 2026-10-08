@@ -70,7 +70,7 @@ pub struct EnvironmentSmokeTest {
 }
 
 /// Daemon-owned lifecycle facts, mirroring plugin lifecycle metadata.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EnvironmentLifecycleMetadata {
     /// Requests that motivated the current development or update.

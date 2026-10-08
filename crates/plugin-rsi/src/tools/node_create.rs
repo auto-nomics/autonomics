@@ -4,21 +4,25 @@ use agentik_core::tools::{ToolError, ToolFunction, ToolResult};
 use agentik_proc::tool;
 use async_trait::async_trait;
 use container_plugin::node_definition::NodeDefinition;
-use serde_json::Value;
+use serde_json::json;
 
 use super::PluginToolState;
-use super::helpers::{parse_tool_input, resolve_target, tool_error};
-use super::manifest::{editable_manifest, save_manifest};
+use super::helpers::{resolve_target, tool_error};
+use super::manifest::{editable_manifest, load_manifest, save_manifest};
 
 #[tool(
     name = "plugin_node_create",
-    description = "Add one complete node definition to a plugin VFS workspace. Create its script separately before review."
+    description = "Add one complete node definition to a plugin VFS workspace, authored as a standalone \
+                   NodeDefinition TOML document: top-level `kind`/`desc`/`doc` with `[ports]`, \
+                   `[params.<name>]`, and `[command]` tables — without the `nodes.` prefixes used inside \
+                   manifest.toml. Create its script separately before review. The node is validated and the \
+                   whole manifest compiled before it lands."
 )]
 pub(super) struct PluginNodeCreateInput {
     /// Plugin workspace path, such as `/plugins/dev/hello-world`.
     plugin_path: String,
-    /// Complete NodeDefinition value in container-plugin JSON form.
-    node: NodeDefinition,
+    /// Complete NodeDefinition as a standalone TOML document.
+    node_toml: String,
 }
 
 #[cfg(test)]
@@ -28,49 +32,44 @@ mod tests {
     use agentik_core::tools::ToolFunction as _;
     use serde_json::json;
 
-    fn complete_node(deprecated: Value) -> Value {
-        json!({
-            "kind": "demo_node",
-            "desc": "Copy a file",
-            "doc": "Copy input 0 to output 0.",
-            "deprecated": deprecated,
-            "ports": {
-                "inputs": [{ "type": "file" }],
-                "outputs": [{ "path": "result.txt" }]
-            },
-            "command": {
-                "interpreter": "sh",
-                "argv": [],
-                "script_file": "scripts/adapter.sh",
-                "env": {},
-                "files": {}
-            }
-        })
+    fn node_toml(deprecated: &str) -> String {
+        format!(
+            "kind = \"demo_node\"\n\
+             desc = \"Copy a file\"\n\
+             doc = \"Copy input 0 to output 0.\"\n\
+             deprecated = {deprecated}\n\
+             timeout_secs = 3600\n\
+             \n\
+             [ports]\n\
+             inputs = [{{ type = \"file\" }}]\n\
+             outputs = [{{ path = \"result.txt\" }}]\n\
+             \n\
+             [command]\n\
+             interpreter = \"sh\"\n\
+             argv = []\n\
+             script_file = \"scripts/adapter.sh\"\n"
+        )
     }
 
     #[test]
-    fn node_schema_exposes_nested_types_to_tool_call_models() {
+    fn create_schema_takes_flat_node_toml_text() {
         let registrations = super::super::plugin_development_tool_registrations("schema-agent");
         let registration = registrations
             .iter()
             .find(|registration| registration.definition.name == "plugin_node_create")
             .unwrap();
-        let node = &registration.definition.input_schema.properties["node"];
+        let properties = &registration.definition.input_schema.properties;
 
-        assert_eq!(node["properties"]["deprecated"]["type"], "boolean");
-        assert_eq!(
-            node["properties"]["ports"]["properties"]["inputs"]["type"],
-            "array"
+        assert!(properties.get("plugin_path").is_some());
+        assert_eq!(properties["node_toml"]["type"], "string");
+        assert!(
+            properties.get("node").is_none(),
+            "the nested node parameter must be gone"
         );
-        assert_eq!(
-            node["properties"]["ports"]["properties"]["outputs"]["type"],
-            "array"
-        );
-        assert_eq!(node["properties"]["params"]["type"], "object");
     }
 
     #[tokio::test]
-    async fn malformed_nested_node_fields_report_their_path() {
+    async fn malformed_node_toml_is_rejected_before_the_workspace_is_touched() {
         let tool = PluginNodeCreateTool {
             state: super::super::PluginToolState {
                 registry: super::super::PluginDevelopmentToolsetRegistry::global(),
@@ -80,13 +79,13 @@ mod tests {
         let error = tool
             .execute(json!({
                 "plugin_path": "/plugins/dev/demo-plugin",
-                "node": complete_node(json!("false")),
+                "node_toml": node_toml("\"false\""),
             }))
             .await
             .expect_err("string deprecated must fail");
 
         assert!(
-            error.to_string().contains("node.deprecated"),
+            error.to_string().contains("deprecated"),
             "unexpected error: {error}"
         );
     }
@@ -100,13 +99,12 @@ pub(super) struct PluginNodeCreateTool {
 impl ToolFunction for PluginNodeCreateTool {
     type Input = PluginNodeCreateInput;
 
-    async fn execute(&self, input: Value) -> Result<ToolResult, ToolError> {
-        let typed = parse_tool_input(input)?;
-        self.run(typed).await
-    }
-
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        let node = input.node;
+        let node: NodeDefinition = toml::from_str(&input.node_toml).map_err(|error| {
+            ToolError::ValidationFailed {
+                message: format!("invalid node definition TOML: {error}"),
+            }
+        })?;
         container_plugin::node_definition::validate(&node).map_err(|error| {
             ToolError::ValidationFailed {
                 message: format!("invalid node definition: {error}"),
@@ -129,7 +127,24 @@ impl ToolFunction for PluginNodeCreateTool {
             });
         }
         manifest.nodes.push(node);
+        crate::validate::registry_compile(&manifest).map_err(|error| {
+            ToolError::ValidationFailed {
+                message: format!("manifest does not compile with the new node: {error}"),
+            }
+        })?;
+        let created_kind = manifest
+            .nodes
+            .last()
+            .map(|node| node.kind.clone())
+            .unwrap_or_default();
         save_manifest(&target.workspace, &mut manifest).map_err(tool_error)?;
-        Ok(ToolResult::success("created node"))
+        // Reload from disk: what landed must parse (the write is a fresh
+        // serialization, so this also guards round-trip drift).
+        let reloaded = load_manifest(&target).await.map_err(tool_error)?;
+        Ok(ToolResult::success_json(json!({
+            "kind": created_kind,
+            "plugin_vfs_path": target.virtual_path,
+            "node_count": reloaded.nodes.len(),
+        })))
     }
 }

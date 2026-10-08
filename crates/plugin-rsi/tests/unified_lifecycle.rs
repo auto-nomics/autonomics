@@ -107,23 +107,23 @@ fn request(summary: &str, body: &str, intent: RequestIntent) -> RequestRecord {
     }
 }
 
-fn node_json() -> Value {
-    json!({
-        "kind": "unified_adapter",
-        "desc": "Copy one file",
-        "doc": "Copies input 0 to output 0.",
-        "ports": {
-            "inputs": [{ "type": "file", "label": "input" }],
-            "outputs": [{ "path": "result.txt", "format": "txt" }]
-        },
-        "command": {
-            "interpreter": "sh",
-            "argv": [],
-            "script_file": "scripts/adapter.sh",
-            "env": {},
-            "files": {}
-        }
-    })
+fn adapter_node_toml(kind: &str, script_file: &str) -> String {
+    format!(
+        "\
+kind = \"{kind}\"
+desc = \"Copy one file\"
+doc = \"Copies input 0 to output 0.\"
+
+[ports]
+inputs = [{{ type = \"file\", label = \"input\" }}]
+outputs = [{{ path = \"result.txt\", format = \"txt\" }}]
+
+[command]
+interpreter = \"sh\"
+argv = []
+script_file = \"{script_file}\"
+"
+    )
 }
 
 async fn execute(
@@ -173,7 +173,7 @@ async fn plugin_is_developed_published_updated_and_installed_in_one_workspace() 
         "plugin_node_create",
         json!({
             "plugin_path": "/plugins/dev/unified-plugin",
-            "node": node_json()
+            "node_toml": adapter_node_toml("unified_adapter", "scripts/adapter.sh")
         }),
     )
     .await

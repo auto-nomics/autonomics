@@ -49,55 +49,23 @@ fn request(plugin_name: &str) -> RequestRecord {
     }
 }
 
-fn node_json(kind: &str, script_file: &str) -> Value {
-    json!({
-        "kind": kind,
-        "desc": "Copy one file",
-        "doc": "Copies input 0 to output 0.",
-        "ports": {
-            "inputs": [{ "type": "file", "label": "input" }],
-            "outputs": [{ "path": "result.txt", "format": "txt" }]
-        },
-        "command": {
-            "interpreter": "sh",
-            "argv": [],
-            "script_file": script_file,
-            "env": {},
-            "files": {}
-        }
-    })
-}
+fn adapter_node_toml(kind: &str, script_file: &str) -> String {
+    format!(
+        "\
+kind = \"{kind}\"
+desc = \"Copy one file\"
+doc = \"Copies input 0 to output 0.\"
 
-fn updated_node_json() -> Value {
-    json!({
-        "kind": "forked_adapter",
-        "desc": "Copy two files",
-        "doc": "Copies each input to the matching output.",
-        "ports": {
-            "inputs": [
-                { "type": "file", "label": "left" },
-                { "type": "file", "label": "right" }
-            ],
-            "outputs": [
-                { "path": "result_0.txt", "format": "txt", "label": "left_result" },
-                { "path": "result_1.txt", "format": "txt", "label": "right_result" }
-            ]
-        },
-        "params": {
-            "threshold": {
-                "type": "number",
-                "default": 0.5,
-                "doc": "Threshold recorded by the adapter."
-            }
-        },
-        "command": {
-            "interpreter": "sh",
-            "argv": [],
-            "script_file": "scripts/forked.sh",
-            "env": {},
-            "files": {}
-        }
-    })
+[ports]
+inputs = [{{ type = \"file\", label = \"input\" }}]
+outputs = [{{ path = \"result.txt\", format = \"txt\" }}]
+
+[command]
+interpreter = \"sh\"
+argv = []
+script_file = \"{script_file}\"
+"
+    )
 }
 
 struct NoopRegistry;
@@ -155,7 +123,7 @@ async fn an_installed_reference_can_be_forked_and_locally_activated() {
         "plugin_node_create",
         json!({
             "plugin_path": "/plugins/dev/reference-plugin",
-            "node": node_json("reference_adapter", "scripts/reference.sh")
+            "node_toml": adapter_node_toml("reference_adapter", "scripts/reference.sh")
         }),
     )
     .await
@@ -260,13 +228,44 @@ async fn an_installed_reference_can_be_forked_and_locally_activated() {
     let repository = GitRepo::open(store.root().join("forked-plugin"));
     assert!(repository.remote_url("origin").unwrap().is_none());
 
+    // Rewrite the forked node in place via exact text replacement. With a
+    // single node the manifest block runs from `[[nodes]]` to end of file;
+    // the replacement block may freely use inline tables — both parse to the
+    // same NodeDefinition.
+    let manifest_text = forked.workspace().read_text("manifest.toml").unwrap();
+    let block_start = manifest_text
+        .find("[[nodes]]")
+        .expect("forked manifest must contain a node block");
+    let old_block = manifest_text[block_start..].trim_end();
+    assert!(
+        old_block.contains("kind = \"reference_adapter\""),
+        "unexpected node block:\n{old_block}"
+    );
+    let new_block = "\
+[[nodes]]
+kind = \"forked_adapter\"
+desc = \"Copy two files\"
+doc = \"Copies each input to the matching output.\"
+
+[nodes.ports]
+inputs = [{ type = \"file\", label = \"left\" }, { type = \"file\", label = \"right\" }]
+outputs = [{ path = \"result_0.txt\", format = \"txt\", label = \"left_result\" }, { path = \"result_1.txt\", format = \"txt\", label = \"right_result\" }]
+
+[nodes.params]
+threshold = { type = \"number\", default = 0.5, doc = \"Threshold recorded by the adapter.\" }
+
+[nodes.command]
+interpreter = \"sh\"
+argv = []
+script_file = \"scripts/forked.sh\"
+";
     let node_update_result = execute(
         &tools,
         "plugin_node_update",
         json!({
             "plugin_path": "/plugins/dev/forked-plugin",
-            "node_kind": "reference_adapter",
-            "node": updated_node_json()
+            "old_string": old_block,
+            "new_string": new_block,
         }),
     )
     .await
@@ -274,8 +273,7 @@ async fn an_installed_reference_can_be_forked_and_locally_activated() {
     let ToolResultContent::Json(node_update_output) = node_update_result.content else {
         panic!("plugin_node_update must return JSON");
     };
-    assert_eq!(node_update_output["previous_kind"], "reference_adapter");
-    assert_eq!(node_update_output["kind"], "forked_adapter");
+    assert_eq!(node_update_output["node_kinds"], json!(["forked_adapter"]));
     forked.refresh().unwrap();
     assert_eq!(forked.owned_node_kinds(), ["forked_adapter"]);
     let updated_node = &forked.manifest().nodes[0];
@@ -315,15 +313,15 @@ async fn an_installed_reference_can_be_forked_and_locally_activated() {
     assert_eq!(forked.status(), PluginStatus::Draft);
     assert!(forked.manifest().lifecycle.publication_pending);
 
-    let mut revised_node = updated_node_json();
-    revised_node["params"]["threshold"]["default"] = json!(0.75);
+    // A manifest edit invalidates pending local activation: adjust the
+    // threshold default through a one-line replacement.
     execute(
         &tools,
         "plugin_node_update",
         json!({
             "plugin_path": "/plugins/dev/forked-plugin",
-            "node_kind": "forked_adapter",
-            "node": revised_node
+            "old_string": "default = 0.5",
+            "new_string": "default = 0.75",
         }),
     )
     .await

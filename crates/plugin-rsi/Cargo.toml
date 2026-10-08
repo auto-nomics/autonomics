@@ -9,6 +9,7 @@ rust-version.workspace = true
 agentik-core = { path = "../agentik-core" }
 agentik-proc = { path = "../agentik-proc" }
 agentik-sdk = { path = "../agentik-sdk" }
+apply-patch = { path = "../apply-patch" }
 async-trait.workspace = true
 container-plugin = { path = "../container-plugin" }
 container-runtime = { path = "../container-runtime" }
@@ -19,7 +20,6 @@ skills = { path = "../skills" }
 schemars.workspace = true
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-serde_path_to_error = "0.1"
 sha2 = "0.10"
 thiserror = "2"
 tokio.workspace = true

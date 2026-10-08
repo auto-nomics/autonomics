@@ -35,10 +35,19 @@ async fn read_virtual_text(vfs: &OpendalFileStorage, path: &str) -> RsiResult<St
         .map_err(|error| Error::Validation(format!("VFS file `{path}` is not UTF-8: {error}")))
 }
 
+pub(super) async fn read_manifest_text(target: &PluginTarget) -> RsiResult<String> {
+    read_virtual_text(&target.vfs, &manifest_path(target)).await
+}
+
+/// Parse manifest text with the same grammar as [`load_manifest`]; shared by
+/// the manifest gates and the manifest-editing tools.
+pub(super) fn parse_manifest_text(text: &str) -> std::result::Result<PluginManifest, String> {
+    toml::from_str(text).map_err(|error| format!("invalid {MANIFEST_FILE}: {error}"))
+}
+
 pub(super) async fn load_manifest(target: &PluginTarget) -> RsiResult<PluginManifest> {
-    let text = read_virtual_text(&target.vfs, &manifest_path(target)).await?;
-    let manifest: PluginManifest = toml::from_str(&text)
-        .map_err(|error| Error::Validation(format!("invalid {MANIFEST_FILE}: {error}")))?;
+    let text = read_manifest_text(target).await?;
+    let manifest = parse_manifest_text(&text).map_err(Error::Validation)?;
     if manifest.plugin_name != target.plugin_name {
         return Err(Error::Validation(format!(
             "workspace plugin_name `{}` does not match path plugin `{}`",
