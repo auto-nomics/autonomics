@@ -2,60 +2,79 @@
 
 [English](README.md) | [中文](README_zh.md)
 
-Autonomics is a purpose-built harness for biomedical research. It places an LLM agent in control of a typed, auditable research surface: the agent discovers registered analysis nodes, assembles a DataFusion DAG, reads scientific data, runs pure-Rust or OCI-container methods, persists results through a virtual file system, and can carry those results into a literature-backed manuscript. Epidemiology, statistical genetics, clinical and survey analysis, machine learning, scientific databases, and reproducible execution are treated as parts of one research workflow rather than as separate applications.
+Autonomics is a complete, self-extending research system for biomedical science built around LLM agents. Two agent roles divide the work: the **Researcher** owns the scientific question — literature, evidence, typed DataFusion DAGs, execution, interpretation, and manuscript writing — while the **Developer** owns capability: when an analysis node does not exist yet, the Researcher records the gap, spawns a Developer child agent, and the Developer drafts a new container plugin (manifest, scripts, and if needed a new OCI image), passes deterministic validation gates, and installs an immutable snapshot into the live node registry. Operational know-how is captured the same way: observations from real runs are distilled into reviewable skills. Epidemiology, statistical genetics, clinical and survey analysis, machine learning, scientific databases, reproducible execution, and now supervised self-improvement are parts of one research system rather than separate applications.
 
-The root Cargo workspace contains 96 crates at the time of this README update. It is an active research codebase: APIs, node contracts, and configuration paths may still change. The `dendrite/` directory is a separate nested Rust workspace for the knowledge-management system.
+The root Cargo workspace contains 101 crates at the time of this README update. It is an active research codebase: APIs, node contracts, and configuration paths may still change. The `dendrite/` directory is a separate nested Rust workspace for the knowledge-management system.
 
-## Harness Contract
+## System Contract
 
-Here, "harness" means the load-bearing infrastructure around the model and the methods:
+The system spans five planes plus one protocol:
 
-- **Model cockpit**: provider/model configuration, streaming conversations, tool schemas, memory, lifecycle, and multi-agent orchestration.
-- **Capability registry**: JSON-schema-validated tools and typed DAG nodes expose analysis, I/O, source, sink, and writing operations to the model.
-- **Evidence plane**: biomedical APIs, literature services, full-text storage, bibliography records, citations, and knowledge-tree access share one runtime.
-- **Execution plane**: DataFusion, Arrow, VFS, immutable data packages, Podman, and reference-panel caches execute and preserve the work.
-- **Research protocol**: DAG history, snapshots, diffs, branches, provenance, immutable artifacts, and numerical cross-validation make agent work inspectable and replayable.
+- **Model cockpit**: a resident gateway daemon, streaming conversations, persistent memory, and a constrained multi-agent topology with `researcher` and `developer` agent kinds.
+- **Capability registry**: JSON-schema-validated tools and typed DAG nodes addressed as `plugin/node` (built-ins live under `core/`), ranging over analysis, I/O, source, sink, and writing operations, plus manifest plugins that can be installed while the system runs.
+- **Self-improvement substrate**: plugin RSI (recursive self-improvement), skill evolution, and environment (image) development. Agents draft; deterministic gates validate; humans approve; only then does anything reach the running system.
+- **Evidence plane**: biomedical APIs, a unified literature gateway, bibliographic citations flowing as typed data on DAG edges, full-text storage, bibliography records, and knowledge-tree access in one runtime.
+- **Execution plane**: DataFusion, Arrow, a pluggable task-executor contract (local and remote today; SLURM/Kubernetes-shaped tomorrow), VFS, immutable data packages, Podman, and reference-panel caches.
+- **Research protocol**: DAG history, snapshots, diffs, branches, provenance export (RO-Crate / W3C PROV-JSON), and numerical cross-validation make agent work inspectable, replayable, and publishable.
 
-Autonomics is not a general-purpose chat application, a notebook replacement built around free-form scripts, or a monolithic pipeline. It is the harness that connects a model to checked research capabilities and records what was actually run.
+Autonomics is not a general-purpose chat application, a notebook replacement built around free-form scripts, or a monolithic pipeline. Nor is it an autonomous mutator: agents never receive raw git, registry, host-filesystem, or live-registry access. Improvements are proposals that pass gates and review — the model may draft and test; humans and trusted infrastructure promote.
 
 ## Demo
 
 ![PubMed article retrieval](docs/pubmed.gif)
 
-## Harness Architecture
+## System Architecture
 
-![Harness architecture: client interfaces, model cockpit, capability registry, execution plane, shared data plane, research protocol](docs/diagrams/architecture.png)
+![System architecture: thin frontends, gateway daemon, researcher and developer agents, capability registry, self-improvement substrate, execution plane, shared data plane, research protocol](docs/diagrams/architecture.png)
 
-The architecture separates model orchestration from research capabilities. Each agent session gets its own `DataEngine` actor, while immutable registry and runtime infrastructure are shared across the process. DAG execution is fire-and-forget from the agent command loop, so one long run does not block other agents. When DAG history is enabled, runs create snapshot lineages that can be inspected, diffed, branched, and checked out.
+Thin frontends talk to one resident daemon. `autonomics serve` owns the `RuntimeHost` as the single writer of all state: it restores the persisted agent layout at boot, serves REST + SSE on `127.0.0.1:8765` (bearer-token guarded, with `Last-Event-ID` replay), and keeps agents running when frontends exit. The TUI auto-spawns the daemon on first use; `autonomics run` drives the same daemon headlessly.
 
 ```text
-Ratatui TUI (thin client)  ──REST/SSE──▶  gateway daemon (`autonomics serve`)
-        |                                      |
-        |                                      v
-        └──────────── events ────────── RuntimeHost
-  (agents keep running when frontends exit)
-  agents, profiles, sessions, memory, host tools
+Ratatui TUI (thin client)     ──REST/SSE──▶  gateway daemon (`autonomics serve`)
+Headless CLI (`autonomics run`)                     127.0.0.1:8765 · bearer token
+HTTP API + bibliography web          EventHub replay · agents survive frontends
+        |                                              |
+        └──────────── events ────────────── RuntimeHost (single writer)
+  agent tree rooted at /root … restored at daemon boot
         |
-        | ToolFunction calls
+        ├── Researcher agents (default kind)
+        |     science, DAG design & execution, interpretation,
+        |     literature, writing, memory
+        |     spawn_agent + delegate_to  ──────────┐
+        |                                          | contracts + synthetic
+        └── Developer agents (children)  ◀─────────┘ fixtures only — never
+              plugin/node implementation,            research datasets
+              environment selection, focused
+              container validation, install
+        |
+        | ToolFunction calls (delegation is the only
+        | inter-agent channel: parent → direct child)
         v
-Data-engine actor
-  node discovery, add/update nodes, edges, run/history
+Data-engine actor (one per session)
+  node discovery, add/update nodes (`plugin/node`), edges,
+  fire-and-forget runs, retained outputs, history
         |
         v
-Node registry + DAG scheduler
-  JSON-schema validated node specs
-  typed input and output ports
-  asynchronous execution and retained outputs
-        |
-        +--> SQL, I/O, epi, genetics, ML, DL, survey,
-        |     survival, causal, MR, RD, writing bundles
+Node registry + scheduler
+  builtin bundles under `core/` + fail-closed manifest plugins
+  typed input and output ports, JSON-schema validated specs
+  pluggable executors: local / process / remote
         |
         +--> DataFusion DataFrame and Arrow RecordBatch nodes
         |
+        +--> Evidence channel: File(evidence) edges carry
+        |    canonical citations between literature and DAG
+        |
         +--> OCI container nodes
-              ephemeral Podman runs
-              immutable panel bundles
+              ephemeral Podman runs on digest-pinned images
+              content-addressed work dirs (rerun-safe)
+              read-only mounts, immutable panel bundles
               artifact publication to VFS
+
+Self-improvement substrate (agents draft · gates validate · humans promote):
+  skills     evo_observe → deterministic distill → proposal → human approve
+  plugin RSI requests → dev workspaces → validation gates → install/publish
+  environments  /environments/dev image authoring → build → smoke → catalog
 
 Shared data plane:
   VFS (OpenDAL) -> local and optional S3/OSS mounts
@@ -63,29 +82,63 @@ Shared data plane:
   biofusion     -> VCF/BCF/FASTA/FASTQ/BED/GTF/GFF/SAM/BAM/CRAM/BigWig/BigBed readers
 ```
 
+## Researcher and Developer Agents
+
+Agents form a tree rooted at `/root`. Every agent has exactly one kind:
+
+- **Researcher** (default) — the biomedical research assistant. It owns the scientific question, analysis design, DAG construction, execution, and interpretation, with the bibliography, writing, and scientific-API capabilities. The system prompt tells it that the plugin and node ecosystem is *dynamic*: an absent or imperfect node is a normal discovery, not a dead end.
+- **Developer** — the node and plugin developer. It builds, validates, installs, and uninstalls plugins through the host-owned lifecycle, selects environments, and runs focused container validation. It explicitly rejects research or data-analysis requests: the handoff carries interface contracts, schemas, failure cases, and small synthetic fixtures — never production or research datasets.
+
+Orchestration is deliberately constrained. Communication is delegation-only and strictly parent → direct child; an agent sees only itself, its parent, and its children. Delegations are first-class records with statuses (pending/running/completed/interrupted/failed) persisted across daemon restarts. The nine host tools are `spawn_agent`, `delegate_to`, `route_task`, `get_agent_info`, `list_agents`, `list_delegations`, `get_agent_history`, `shutdown_agent`, and `interrupt_agent`.
+
+When a Developer delivers, the handoff includes the plugin name, the full `plugin/node` address, node documentation, spec schema, port layout, installation status, a minimal DAG usage example, and validation evidence. `plugin_install` activates an immutable snapshot in the live registry via `reload_plugin`, so the Researcher can use the new node in the same session.
+
+## Self-Improvement
+
+Autonomics improves itself along three supervised loops that share one safety model: agents propose, deterministic infrastructure validates, humans approve.
+
+### Skills
+
+A skill is a directory with a `SKILL.md` (YAML frontmatter + operational body), following the same contract as the Anthropic `skills` ecosystem, so third-party packs install unchanged. Skills live in three tiers — `builtin` (compiled in), `global` (`~/.autonomics/skills`), and `workspace` — and every agent's system prompt carries a one-line index of the library; bodies are fetched on demand through `skill_search` / `skill_get`. Skills may bundle parameterized DAG workflow templates and eval cases.
+
+The evolution loop has no auxiliary LLM anywhere:
+
+1. **Observe** — `evo_observe` records durable failures, recipes, and caveats as content-addressed observations (duplicates are no-ops). Eval failures are captured automatically.
+2. **Route** — each observation is routed to the skill domain, the plugin domain, both, or triage, anchored on the DAG node address.
+3. **Distill** — pure code clusters anchored observations by node kind and normalized error signature; three occurrences of the same pattern synthesize a conservative skill proposal that only ever cites recorded fixes, never invents advice.
+4. **Review** — proposals stage in `~/.autonomics/skill-proposals/` and are approved or rejected from the TUI skill-evolution dashboard or the gateway API. Auto-approval is off by default, and agent-authored proposals are never auto-approved.
+5. **Measure** — tool-usage telemetry is the fitness signal, persisted across restarts.
+
+### Plugin RSI
+
+`plugin-rsi` is the plugin-based recursive self-improvement substrate. Structured requests (from users, agents, workflow runs, eval failures, or observations) flow into content-addressed request records; Developer agents work in git-managed dev workspaces mounted at `/plugins/dev/<name>`; validation gates check the manifest, environment policy (approved digest-pinned image, allowed interpreter, no plugin-owned Dockerfile, read-only rootfs, isolated network), node-address collisions, script statics, registry compilation, and secrets — all before anything installs. `plugin_install` activates an immutable local snapshot; a background distiller later publishes reviewed work to GitHub (pull-request flow for updates) without blocking the agent. Uninstall retains the workspace and history for audit.
+
+### Environments (image development)
+
+Every plugin runs against an **environment**: a host-approved, digest-pinned base image plus its interpreters, held in a catalog seeded with 39 references — base OS images (alpine, debian, ubuntu, python, rocker-verse, bioconductor), the bioinformatics toolchain (samtools, bcftools, bwa, minimap2, fastqc, salmon, gatk4, ensembl-vep, bedtools, macs2, blast, mafft, iqtree, kraken2, …) and medical imaging (orthanc, ohif-viewer, monai). Users approve additional images through the gateway (Docker Hub search + approve). New environments are authored as git workspaces at `/environments/dev/<id>` with a `manifest.toml` and a `Containerfile`; six validation gates (four static, then build and smoke test) must pass before local activation pins the built digest into the catalog, after which a background distiller can publish it to `ghcr.io/auto-nomics/environments`. Building and pushing are host-owned — agents never touch Podman or a registry directly.
+
 ## DAG Dispatch and Container Execution
 
+Two mechanisms make the system trustworthy for biomedical work:
 
-
-Two mechanisms make the harness trustworthy for biomedical work:
-
-- **DAG-based dispatch.** A research request is parsed by the LLM agent, planned as a typed DAG of JSON-Schema-validated nodes, and assembled through one registry. The same DAG can mix fast in-process DataFusion / Arrow transforms with heavy external containers; the DAG core schedules them asynchronously and retains outputs for snapshot, diff, and branch operations.
-- **Containerized nodes.** Every external tool runs in its own ephemeral Podman container. Images are pinned by sha256 digest, reference panels are checksum-verified from `manifest.json` and mounted read-only, the rootfs is `--read-only` with `no-new-privileges` and explicit CPU / PID / shm / UID caps, and declared outputs are streamed to VFS as `FileRef = size + SHA-256` using a pending-object + atomic rename so consumers never observe partial artifacts. One `container_command` is one ephemeral run; there is no retry on container failure.
+- **DAG-based dispatch.** A research request is parsed by the Researcher, planned as a typed DAG of JSON-Schema-validated nodes, and assembled through one registry. The same DAG can mix fast in-process DataFusion / Arrow transforms with heavy external containers; the scheduler dispatches asynchronously through a pluggable executor contract (`local`, `process`, and a coordinator-side `remote` executor with an artifact store, so batch schedulers can slot in later) and retains outputs for snapshot, diff, and branch operations.
+- **Containerized nodes.** Every external tool runs in its own ephemeral Podman container. Images are pinned by sha256 digest, reference panels are checksum-verified from `manifest.json` and mounted read-only, the rootfs is `--read-only` with `no-new-privileges` and explicit CPU / PID / shm / UID caps, and declared outputs are streamed to VFS as `FileRef = size + SHA-256` using a pending-object + atomic rename so consumers never observe partial artifacts. Container work directories are content-addressed: an identical re-run reuses the previous workspace (Nextflow-style resume), inputs stage in as read-only bind mounts by default, and a background sweeper garbage-collects stale workspaces.
 
 ## Capability Map
 
 | Area | Main crates | What it provides |
 | --- | --- | --- |
-| Model orchestration | `agentik-sdk`, `agentik-types`, `agentik-proc`, `agentik-core`, `agentik-network`, `runtime` | Streaming LLM clients, tool schemas and calls, persistent memory, lifecycle, multi-agent topology, and a sync-to-async host. |
-| Analysis execution | `dag-core`, `data-engine`, `data-engine-tools`, `crates/node-bundles/*` | Node traits, plugin registry, typed ports, scheduler, JSON-schema specs, and agent tools. |
+| Model orchestration | `agentik-sdk`, `agentik-types`, `agentik-proc`, `agentik-core`, `agentik-network`, `runtime` | Streaming LLM clients, tool schemas and calls, persistent memory, agent kinds and profiles, delegation-only multi-agent topology, and a sync-to-async host. |
+| Analysis execution | `dag-core`, `data-engine`, `data-engine-tools`, `crates/node-bundles/*` | Node traits, plugin registry, typed ports, scheduler with pluggable executors, JSON-schema specs, and agent tools. |
+| Self-improvement | `plugin-rsi`, `container-plugin`, `skills`, `evolution-core` | Plugin RSI lifecycle and tooling, manifest compile/load, skill library and no-LLM evolution loop, shared observation store and routing. |
 | Data infrastructure | `vfs`, `data-catalog`, `container-runtime`, `biofusion` | OpenDAL-backed VFS, Hugging Face-hosted versioned packages, Podman execution, immutable panel caches, and biological-format DataFusion readers. |
-| Statistics and epidemiology | `statkit`, `epi`, `hypothesize`, `nodes-power`, `cmprsk`, `survey`, `mice`, `hierint` | Descriptive statistics and regression; causal inference and mediation; composable tests and p-value workflows; prospective power and sample-size design; competing risks; survey designs; imputation; hierarchical interaction models. |
+| Statistics and epidemiology | `statkit`, `epi`, `hypothesize`, `nodes-power`, `cmprsk`, `crrkit`, `survey`, `mice`, `hierint` | Descriptive statistics and regression; causal inference and mediation; composable tests and p-value workflows; prospective power and sample-size design; competing risks; survey designs; imputation; hierarchical interaction models. |
 | Machine learning and deep learning | `ml`, `dl` | Preprocessing, feature engineering, clustering, supervised models, ensembles, anomaly detection, dimensionality reduction; Burn-based MLP, DeepSurv, DeepHit, RNN, Transformer, and autoencoder workflows. Generalized random forests ship as the containerized `grf` plugin family (official R grf). |
 | Statistical genetics | `ldsc`, `mr`, `lava`, `mrlap`, `lcv`, `cpassoc`, `magma`, `coloc`, `bkmr`, `evalue`, `genomic_sem`, `lcmm` | LD score regression, Mendelian randomization, local genetic correlation, colocalization, Bayesian kernel-machine regression, E-value analysis, Genomic SEM, latent-class mixed models, and related ports. |
 | Regression discontinuity | `rdrobust`, `rdpower`, `rdmulti`, `rddensity`, `rdlocrand` | Local-polynomial RD estimation, power and sample-size calculations, multi-cutoff designs, manipulation testing, and local randomization inference. |
-| Scientific data clients | `eutils`, `opengwas`, `gwascatalog-sdk`, `opentargets`, `chembl`, `uniprot`, `string-sdk`, `enrichr-sdk`, `kegg`, `reactome`, `ensembl`, `rcsb`, `alphafold`, `interpro`, `pubchem`, `protocolio`, `clinicaltrials` | SDKs, agent tools, and selected DAG source nodes for PubMed/Entrez, OpenGWAS, GWAS Catalog, Open Targets, ChEMBL, UniProt, STRING, Enrichr, KEGG, Reactome, Ensembl, RCSB, AlphaFold, InterPro, PubChem, protocols.io, and ClinicalTrials.gov. |
-| Literature, writing, and knowledge | `arxiv`, `biorxiv`, `openalex`, `crossref`, `embase`, `europepmc`, `semantic-scholar`, `bib-types`, `bib-base`, `writing-types`, `writing-base`, `kms`, `kms-tools` | Unified literature search and full-text management, content-addressed documents, BibTeX/RIS/Markdown/CSL export, LaTeX AST operations, citation resolution, compilation, and knowledge-tree tools. |
-| Harness interface | `tui`, `api-server` | Streaming terminal chat, provider/model configuration, DAG view, bibliography CLI/API/frontend, and KMS browser. |
+| Scientific data clients | `eutils`, `opengwas`, `gwascatalog-sdk`, `opentargets`, `chembl`, `uniprot`, `string-sdk`, `enrichr-sdk`, `kegg`, `reactome`, `ensembl`, `rcsb`, `alphafold`, `interpro`, `pubchem`, `protocolio`, `clinicaltrials`, `nhanes` | SDKs, agent tools, and selected DAG source nodes for PubMed/Entrez, OpenGWAS, GWAS Catalog, Open Targets, ChEMBL, UniProt, STRING, Enrichr, KEGG, Reactome, Ensembl, RCSB, AlphaFold, InterPro, PubChem, protocols.io, ClinicalTrials.gov, and NHANES. |
+| Literature, writing, and knowledge | `arxiv`, `biorxiv`, `openalex`, `crossref`, `embase`, `europepmc`, `semantic-scholar`, `bib-types`, `bib-base`, `writing-types`, `writing-base`, `kms`, `kms-tools` | Unified literature search and full-text management, the evidence channel on DAG edges, content-addressed documents, BibTeX/RIS/Markdown/CSL export, LaTeX AST operations, citation resolution, compilation, and knowledge-tree tools. |
+| Interfaces | `apps/autonomics`, `gateway`, `headless`, `api-server`, `ascii-dag-core` | Resident gateway daemon, streaming terminal chat and DAG view, headless CLI execution, bibliography CLI/API/frontend, and the TUI DAG renderer. |
 
 The default `data-engine` build enables all node-bundle Cargo features. A library consumer can disable default features and select only needed `bundle-*` features.
 
@@ -105,7 +158,8 @@ only checks presence locally (bounded, offline-safe), so daemon readiness
 never waits on the network. Set `AUTONOMICS_PANEL_SYNC=1` to run the
 provisioning inline during `autonomics serve` for unattended deployments.
 
-28 families / 99 node kinds are currently published:
+28 curated families / 99 node kinds are currently published, addressed in the
+registry as `family/node_kind` (built-ins use the `core/` namespace):
 
 | Family | Node kinds | Tool |
 | --- | --- | --- |
@@ -138,12 +192,18 @@ provisioning inline during `autonomics serve` for unattended deployments.
 | [hyprcoloc](https://github.com/auto-nomics/hyprcoloc-plugin) | `hyprcoloc` | HyPrColoc multi-trait colocalization |
 | [grf](https://github.com/auto-nomics/grf-plugin) | 23 `grf_*` kinds: 12 forest trainers, `grf_predict_forest`, ATE / best-linear-projection / calibration / scores, forest weights / split frequencies / variable importance / get-tree / merge, `grf_generate_causal_data` | generalized random forests (official R grf 2.6.1) |
 
+The table is the curated starting point, not a ceiling: the developer loop
+described above has already produced agent-authored families such as
+`phylo-treeness`, `phylo-pis`, `donor-paired-composition`, `python-script`,
+and `h5ad-obs`, published through the same channels.
+
 ### Building plugins
 
 - [Plugin authoring overview](docs/plugins/README.md): lifecycle, core rules, and the document map.
 - [Plugin authoring guide](docs/plugins/authoring-guide.md): end-to-end tutorial using a `clusterProfiler` ORA example.
 - [Manifest reference](docs/plugins/manifest-reference.md): normative schema, template semantics, and startup validation.
 - [Testing and release checklist](docs/plugins/testing-and-release.md): test pyramid, image digest publication, Git pinning, and clean-room review.
+- [Plugin-based RSI design](docs/design/plugin-based-rsi.md): requests, proposals, validation gates, and the trusted-publication model behind the developer workflow.
 
 ### Installing plugins
 
@@ -168,41 +228,44 @@ name = "mtag"
 path = "/mnt/projects/node-plugins/mtag"
 ```
 
-## Harness Workspace Layout
+## Workspace Layout
 
 ```text
 autonomics/
 ├── apps/autonomics/                     Terminal application and CLI subcommands
 ├── crates/
 │   ├── agentik-*/                LLM SDK, types, proc macros, runtime, networking
-│   ├── dag-core/                 DAG traits, registry, and scheduler
+│   ├── dag-core/                 DAG traits, registry, scheduler, executor contracts
 │   ├── data-engine/              DataFusion engine and node-bundle wiring
 │   ├── data-engine-tools/        Agent ToolFunction adapters for DAG operations
 │   ├── node-bundles/             Feature-gated analysis-node plugins
+│   ├── plugin-rsi/               Recursive self-improvement substrate (plugins)
+│   ├── container-plugin/         Manifest compile, load, sync, factories
+│   ├── skills/, evolution-core/  Skill library and no-LLM evolution loop
 │   ├── vfs/                      OpenDAL-backed virtual file system and vbash tools
 │   ├── data-catalog/             Versioned data-package catalog
 │   ├── container-runtime/        Podman execution and immutable panel cache
+│   ├── gateway/, headless/       Resident daemon and headless CLI execution
 │   ├── biofusion*/               Biological-format DataFusion readers and cache
 │   ├── runtime/                  RuntimeHost and shared agent infrastructure
 │   ├── bib-*/writing-*/kms*      Literature, manuscript, and knowledge systems
 │   └── ...                       Scientific API SDKs and supporting crates
 ├── bio_crates/                   Genetics, causal-forest, RD, and related methods
 ├── stat_crates/                  Statistics, epidemiology, ML, imputation, and DL
-├── containers/                   OCI definitions for external analysis runtimes
 ├── fixtures/                     Representative valid and malformed test inputs
 ├── docs/                         Design documents and topic guides
 ├── infra/                        Local reference-data preparation utilities
 ├── dendrite/                     Separate nested knowledge-management workspace
-└── tests/                        Cross-language validation helpers
+└── scripts/                      Install, panel-build, and maintenance scripts
 ```
 
-The `reference/` directory contains third-party and comparison material and is not part of the root Cargo build.
+The `reference/` directory contains third-party and comparison material and is not part of the root Cargo build. Per-user state lives under `~/.autonomics`: `plugins.toml` plus the v2 plugin tree (`plugins/dev`, `plugins/snapshots`, `plugins/runtime`), the environment catalog (`plugin-environments.toml`, `environments/dev`), the skill library and its evolution stores (`skills/`, `skill-observations/`, `skill-proposals/`, `skill-usage.toml`), panel caches (`panels/`), and the SQLite databases (`agent.db`, `bib.db`, `writing.db`, `dag-history.db`).
 
 ## Getting Started
 
 ### Install a prebuilt binary
 
-After a tagged GitHub release exists, install the platform binary without rebuilding:
+Install the platform binary without rebuilding:
 
 ```bash
 curl --fail --location https://raw.githubusercontent.com/auto-nomics/autonomics/main/scripts/install.sh | bash
@@ -210,7 +273,7 @@ curl --fail --location https://raw.githubusercontent.com/auto-nomics/autonomics/
 
 The script downloads the matching Linux or macOS binary, verifies `SHA256SUMS`, and installs it to `~/.local/bin`. Override the destination with `AUTONOMICS_INSTALL_DIR`, pin a release with `AUTONOMICS_VERSION=v0.1.0`, or use `AUTONOMICS_REPO=owner/repo` for a fork.
 
-### Build and run the TUI
+### Build and run
 
 Requirements:
 
@@ -227,11 +290,16 @@ cargo run -p autonomics
 
 The first full workspace build is large. If the default target directory is unsuitable, set `CARGO_TARGET_DIR=/path/to/target`.
 
-The workspace binary is named `tui`. After installing or copying it as `autonomics`, the same CLI is available as:
+The binary is `autonomics`; the TUI is the default when no subcommand is given:
 
 ```bash
-autonomics tui
-autonomics kms
+autonomics tui                     # interactive terminal frontend (default)
+autonomics serve --daemon          # start the detached gateway daemon
+autonomics serve status | stop     # inspect / gracefully stop the daemon
+autonomics run "..." --json        # one headless prompt through the daemon
+autonomics export-run <run_id> --format crate --out <dir>   # RO-Crate / PROV-JSON provenance
+autonomics panels sync             # provision plugin panel data bundles
+autonomics kms                     # knowledge-management TUI
 autonomics cache refresh-opengwas
 autonomics bib list
 ```
@@ -239,13 +307,12 @@ autonomics bib list
 With Cargo, pass the subcommand after `--`; for example:
 
 ```bash
-cargo run -p autonomics -- cache refresh-opengwas
-cargo run -p autonomics -- bib list
+cargo run -p autonomics -- run "Summarize recent GWAS meta-analyses of BMI." --json
 ```
 
 ### Configure the runtime
 
-Model providers are configured in the TUI Config tab and stored in the application database. Built-in presets include DeepSeek, MiMo, MiniMax, Moonshot, OpenAI/ChatGPT, OpenRouter, SenseNova, and Z.ai, and custom Anthropic-compatible endpoints are supported.
+Model providers are configured in the TUI (Select model) or through the gateway's model-config API and stored in the application database. Built-in provider presets include Aliyun Bailian, DeepSeek, MiMo, MiniMax, Moonshot, OpenAI/ChatGPT, OpenRouter, SenseNova, StepFun, and Z.ai, and custom Anthropic-compatible endpoints are supported. Models are selected per agent as `provider:model`.
 
 Scientific API credentials must be present in the process environment. The repository includes a direnv wrapper that exports `.env`; otherwise, export the variables in your shell or service definition. Use [`.env.example`](.env.example) as the template, and provide only the credentials for services you use. Common examples include:
 
@@ -255,24 +322,25 @@ Scientific API credentials must be present in the process environment. The repos
 - `PROTOCOLS_IO_ACCESS_TOKEN`
 - `EMBASE_API_KEY`, `EMBASE_INSTTOKEN`, and related Embase tokens
 - `UMLS_API_KEY`
+- `MINERU_API_KEY` for PDF full-text extraction
 - `HUGGING_FACE_TOKEN` or `HF_TOKEN` for the data catalog; S3/OSS credentials are needed only for optional non-catalog VFS backends
 
 By default, state is stored under `~/.autonomics`, downloaded files under `~/.autonomics/data`, and VFS mounts are read from `$AUTONOMICS_STATE_DIR/vfs.toml`. Use `AUTONOMICS_STATE_DIR`, `AUTONOMICS_DATA_DIR`, `AUTONOMICS_BIB_DB`, and `AUTONOMICS_WRITING_DB` to relocate state.
 
 ### Use the local HTTP API
 
-When the TUI starts, it serves a local bibliography frontend and `/api/v1` API on `127.0.0.1:8765` by default. Override the address with `AUTONOMICS_HTTP_API_ADDR`. If the server is exposed beyond loopback, set `AUTONOMICS_HTTP_API_TOKEN` to require bearer authentication for API routes.
+The gateway daemon serves the bibliography frontend, a Swagger UI, and the `/api/v1` API on `127.0.0.1:8765` by default. Override the address with `AUTONOMICS_HTTP_API_ADDR`. If the server is exposed beyond loopback, set `AUTONOMICS_HTTP_API_TOKEN` to require bearer authentication for API routes.
 
 ```bash
 curl http://127.0.0.1:8765/api/health
 curl 'http://127.0.0.1:8765/api/v1/bib/articles?query=gwas&limit=10'
 ```
 
-The frontend development workflow is documented in [docs/api-server_zh.md](docs/api-server_zh.md).
+The API also exposes live agent control (`/api/v1/agents…`), the SSE event stream (`/api/v1/events`), plugin and environment management (`/api/v1/plugins…`), and the skill library and evolution status (`/api/v1/skills…`). The frontend development workflow is documented in [docs/api-server_zh.md](docs/api-server_zh.md).
 
 ## Analysis Model
 
-The harness exposes analysis through registered node `kind` values and JSON specs. Specs are validated against each factory's JSON Schema and instantiated through the plugin registry.
+The system exposes analysis through registered node addresses (`plugin/node`, or `core/node` for built-ins) and JSON specs. Specs are validated against each factory's JSON Schema and instantiated through the plugin registry.
 
 ```rust,no_run
 use data_engine::DataEngine;
@@ -313,13 +381,11 @@ Agent tools expose the same operations without direct mutable engine access:
 - view Graphviz DOT output
 - create refs, inspect history, show snapshots, diff snapshots, and branch
 
-The exact catalog is runtime-dependent because node bundles are Cargo features. In a running agent, use `list_node_factories`; in Rust, use `DataEngine::list_nodes()`.
+The exact catalog is runtime-dependent because node bundles are Cargo features and manifest plugins are installed per deployment. In a running agent, use `list_node_factories`; in Rust, use `DataEngine::list_nodes()`.
 
 ## Reproducible Data and Containers
 
-External analysis runtimes are isolated through `container-runtime` and Podman. A container run has a declared image digest or tag, argv command, inputs, output contracts, timeout, resource limits, network policy, and artifact prefix. Reference data is resolved from immutable catalog packages, checksum-verified in a panel cache, and mounted into an ephemeral workspace. Images and data packages are versioned independently.
-
-Available OCI assets include LDSC, HDL-L, LAVA, MiXeR, SuSiE-RSS, MR-PRESSO, MVMR, MTAG, FUSION TWAS, SMR, MAGMA annotation, HyPrColoc, coloc, GCTA, PLINK2, DESeq2, PyRadiomics, single-cell preprocessing and H5AD workflows, visualization, and TimesFM. See [containers/README.md](containers/README.md), [docs/container-execution-design.md](docs/container-execution-design.md), [docs/container-node-migration.md](docs/container-node-migration.md), and [docs/single-cell-h5ad-dag.md](docs/single-cell-h5ad-dag.md).
+External analysis runtimes are isolated through `container-runtime` and Podman. A container run has a declared image digest, argv command, inputs, output contracts, timeout, resource limits, network policy, and artifact prefix. Reference data is resolved from immutable catalog packages, checksum-verified in a panel cache, and mounted into an ephemeral workspace. Images and data packages are versioned independently, and every published tool image is pinned by immutable manifest digest under `ghcr.io/auto-nomics/autonomics` — see [GHCR container images](docs/ghcr-migration.md).
 
 Container execution requires a Podman runtime reachable on the same host as the VFS workspace and panel cache. The default TUI container image does not mount a Podman socket, so OCI-backed nodes are intended for a host-run TUI or an explicitly configured remote runtime.
 
@@ -332,9 +398,13 @@ cargo test --workspace --no-run
 # Focused test loops.
 cargo test -p data-engine
 cargo test -p dag-core
+cargo test -p container-plugin
+cargo test -p plugin-rsi
+cargo test -p skills
 cargo test -p biofusion
 cargo test -p agentik-core
 cargo test -p runtime
+cargo test -p gateway
 cargo test -p api-server
 cargo test -p epi
 cargo test -p statkit
@@ -347,7 +417,7 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-Some tests call live public APIs, require credentials or private images, download large panels, or invoke Podman. Many external-resource tests are marked `#[ignore]`; run them explicitly with `cargo test -- --ignored` only when the dependency is available. Cross-language numerical baselines under `tests/` require R and the packages named by the scripts.
+Some tests call live public APIs, require credentials or private images, download large panels, or invoke Podman. Many external-resource tests are marked `#[ignore]`; run them explicitly with `cargo test -- --ignored` only when the dependency is available. Plugin behavior is covered by golden migration tests in `crates/container-plugin/tests/` (one suite per family), and the environment-development lifecycle by `crates/plugin-rsi/tests/env_dev.rs`.
 
 The TUI HTTP frontend uses Bun:
 
@@ -361,17 +431,24 @@ bun run build
 
 ## Documentation
 
+Many topic guides have Chinese editions (`*_zh.md`) alongside the English originals.
+
 ### Platform and infrastructure
 
 - [SDK guide](docs/sdk.md): messages, streaming, provider adapters, tools, files, batches, and usage.
 - [Agent runtime](docs/agent-runtime.md): agent loop, context, memory, lifecycle, and orchestration.
 - [Tool authoring](docs/tool-authoring.md): typed `ToolFunction` inputs and generated schemas.
+- [Gateway architecture](docs/design/gateway-architecture.md): the resident daemon, wire protocol, and multi-frontend design (Chinese).
+- [Headless run design](docs/headless-run-design.md): `autonomics run`, the `RunEvent` contract, and exit codes (Chinese).
 - [VFS design](docs/vfs.md): mounts, concurrent writes, catalog overlays, and reference data.
 - [Data catalog](docs/data-catalog.md): package layout, publication, and panel references.
 - [Runtime bundles](docs/data-bundles.md): built-in bundle identifiers and runtime overlays.
+- [Evidence channel](docs/evidence-channel.md): citations as typed data on DAG file edges.
 - [Container execution](docs/container-execution-design.md): Podman contracts and lifecycle.
 - [Container migration workflow](docs/container-node-migration.md): image, data package, and wrapper acceptance criteria.
 - [Container plugin authoring](docs/plugins/README.md): independent plugin repositories, manifest contracts, testing, and immutable release.
+- [Plugin-based RSI design](docs/design/plugin-based-rsi.md): supervised plugin evolution from feedback to trusted publication.
+- [GHCR container images](docs/ghcr-migration.md): registry namespace and digest pinning.
 
 ### Analysis methods
 
@@ -400,9 +477,10 @@ bun run build
 - Biofusion currently implements read paths, not writers for biological formats.
 - External API behavior, rate limits, credentials, dataset availability, and service terms remain the responsibility of the caller.
 - Container-backed analyses require access to the corresponding image and data package. A missing private image or panel is an environment prerequisite, not a fallback to an unverified local installation.
+- Self-improvement is supervised by design: deterministic gates and human review stand between every proposal and the running system, and agents never hold git, registry, or host-filesystem credentials.
 - KEGG is available for academic use; nonacademic use requires an appropriate KEGG license.
 - TimesFM checkpoints have checkpoint-specific licenses. Review the container documentation before using a checkpoint in production or commercial work.
-- Numerical ports are validated against R, Python, or original implementations where practical, but this harness is research software and is not a certified clinical or regulatory decision system.
+- Numerical ports are validated against R, Python, or original implementations where practical, but this system is research software and is not a certified clinical or regulatory decision system.
 
 ## License
 

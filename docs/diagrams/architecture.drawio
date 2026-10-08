@@ -1,0 +1,106 @@
+<mxfile host="app.diagrams.net" agent="autonomics" version="30.2.4">
+  <diagram id="autonomics-architecture" name="System Architecture">
+    <mxGraphModel dx="1240" dy="1240" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1240" pageHeight="1220" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" value="Autonomics — system architecture for biomedical agent research" style="text;html=1;fontSize=18;fontStyle=1;align=center;" vertex="1" parent="1">
+          <mxGeometry x="60" y="16" width="1120" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="fe1" value="Ratatui TUI (thin client)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="80" y="64" width="330" height="54" as="geometry" />
+        </mxCell>
+        <mxCell id="fe2" value="Headless CLI&#10;autonomics run --json" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="455" y="64" width="330" height="54" as="geometry" />
+        </mxCell>
+        <mxCell id="fe3" value="HTTP API + bibliography web&#10;/api/v1 + Swagger UI" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="830" y="64" width="330" height="54" as="geometry" />
+        </mxCell>
+        <mxCell id="gw" value="Gateway daemon — autonomics serve · 127.0.0.1:8765 · REST + SSE (Last-Event-ID replay) · bearer token&#10;single writer of the RuntimeHost · agents keep running when frontends exit" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=12;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="80" y="186" width="1080" height="58" as="geometry" />
+        </mxCell>
+        <mxCell id="e_fe1_gw" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="fe1" target="gw">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_fe2_gw" value="REST / SSE" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=10;" edge="1" parent="1" source="fe2" target="gw">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_fe3_gw" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="fe3" target="gw">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_gw_rh" value="drives (single writer)" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=10;" edge="1" parent="1" source="gw" target="rh">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="rh" value="RuntimeHost — agent tree rooted at /root, restored at daemon boot · delegation-only communication (parent to direct child) · memory · skills index injected into every prompt" style="rounded=1;html=1;whiteSpace=wrap;verticalAlign=top;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=13;fontStyle=1;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="80" y="296" width="1080" height="200" as="geometry" />
+        </mxCell>
+        <mxCell id="researcher" value="Researcher agents (default kind)&#10;&#10;scientific question · analysis design · DAG construction&#10;execution · interpretation · literature · writing&#10;&#10;&quot;the plugin ecosystem is dynamic — a missing node&#10;is a normal discovery, not a dead end&quot;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="110" y="344" width="440" height="132" as="geometry" />
+        </mxCell>
+        <mxCell id="developer" value="Developer agents (children)&#10;&#10;plugin + node implementation · environment selection&#10;focused container validation · install / uninstall&#10;&#10;rejects research tasks — handoff carries contracts,&#10;schemas, and synthetic fixtures only" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="690" y="344" width="440" height="132" as="geometry" />
+        </mxCell>
+        <mxCell id="e_rd" value="spawn_agent&#10;+ delegate_to" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=9;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="researcher" target="developer">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_rh_de" value="ToolFunction calls" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=10;exitX=0.25;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="rh" target="de">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_rh_sub" value="plugin_install / reload_plugin" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=10;exitX=0.75;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="rh" target="sub">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="de" value="Data-engine actor (one per session)&#10;node discovery · add/update nodes (plugin/node) · edges · fire-and-forget runs · history" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="80" y="556" width="640" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="e_de_reg" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="de" target="reg">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="reg" value="Node registry + scheduler&#10;builtin bundles under core/ + fail-closed manifest plugins (plugin/node)&#10;JSON-schema validated specs · typed ports · pluggable executors: local / process / remote" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="80" y="656" width="640" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="n1" value="DataFusion + Arrow&#10;typed DataFrame nodes" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="80" y="768" width="200" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="n2" value="Evidence channel&#10;File(evidence) citation edges&#10;literature gateway + bib library" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="300" y="768" width="200" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="n3" value="OCI container nodes&#10;Podman · digest-pinned images&#10;content-addressed work dirs&#10;read-only mounts · VFS artifacts" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="520" y="768" width="200" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="e_reg_n1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="reg" target="n1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_reg_n2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="reg" target="n2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_reg_n3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="reg" target="n3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="sub" value="Self-improvement substrate — agents draft · gates validate · humans promote" style="rounded=1;html=1;whiteSpace=wrap;verticalAlign=top;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=13;fontStyle=1;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="770" y="556" width="390" height="282" as="geometry" />
+        </mxCell>
+        <mxCell id="s1" value="Skills&#10;evo_observe → deterministic distill → proposal&#10;→ human approve · usage telemetry" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="795" y="600" width="340" height="66" as="geometry" />
+        </mxCell>
+        <mxCell id="s2" value="Plugin RSI&#10;requests → /plugins/dev git workspaces&#10;→ validation gates → install + publish" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="795" y="680" width="340" height="66" as="geometry" />
+        </mxCell>
+        <mxCell id="s3" value="Environments (image development)&#10;/environments/dev Containerfile → build + smoke&#10;→ catalog of 39+ digest-pinned images" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="795" y="760" width="340" height="66" as="geometry" />
+        </mxCell>
+        <mxCell id="dp" value="Shared data plane — VFS (OpenDAL: local + S3/OSS) · data catalog (immutable Hugging Face packages) · panel cache · biofusion (VCF/BCF/FASTA/FASTQ/BED/GTF/GFF/SAM/BAM/CRAM/BigWig/BigBed readers)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="80" y="886" width="1080" height="54" as="geometry" />
+        </mxCell>
+        <mxCell id="e_n_dp" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="n3" target="dp">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_s_dp" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="sub" target="dp">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="proto" value="Research protocol — DAG history · snapshots · diff · branch · provenance export (RO-Crate / W3C PROV-JSON) · numerical cross-validation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="80" y="980" width="1080" height="48" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
