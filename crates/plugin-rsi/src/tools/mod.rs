@@ -27,7 +27,9 @@ use agentik_core::tools::ToolRegistration;
 use container_runtime::PodmanConnection;
 use vfs::{OpendalFileStorage, permission::VfsPrincipal};
 
-use crate::{EnvironmentDevInfra, EnvironmentRegistry, Error, PluginWorkspace, Result as RsiResult, RsiInfra};
+use crate::{
+    EnvironmentDevInfra, EnvironmentRegistry, Error, PluginWorkspace, Result as RsiResult, RsiInfra,
+};
 
 pub(crate) const MAX_AGENT_ID_BYTES: usize = 256;
 
@@ -111,14 +113,12 @@ impl PluginDevelopmentToolsetRegistry {
         plugin_path: &str,
     ) -> RsiResult<PluginTarget> {
         let (root, base_vfs) = self.lock(|state| {
-            let root = state
-                .development_root
-                .clone()
-                .ok_or_else(|| Error::Validation("plugin development root is not configured".into()))?;
-            let vfs = state
-                .vfs
-                .clone()
-                .ok_or_else(|| Error::Validation("plugin development VFS is not configured".into()))?;
+            let root = state.development_root.clone().ok_or_else(|| {
+                Error::Validation("plugin development root is not configured".into())
+            })?;
+            let vfs = state.vfs.clone().ok_or_else(|| {
+                Error::Validation("plugin development VFS is not configured".into())
+            })?;
             Ok((root, vfs))
         })?;
         let (plugin_name, virtual_path, vfs) = resolve_mounted_workspace(
@@ -142,14 +142,11 @@ impl PluginDevelopmentToolsetRegistry {
     ) -> RsiResult<crate::tools::env::EnvironmentTarget> {
         let (root, base_vfs) = self.lock(|state| {
             let infra = state.environment_dev.clone().ok_or_else(|| {
-                Error::Validation(
-                    "environment development infrastructure is not configured".into(),
-                )
+                Error::Validation("environment development infrastructure is not configured".into())
             })?;
-            let vfs = state
-                .vfs
-                .clone()
-                .ok_or_else(|| Error::Validation("plugin development VFS is not configured".into()))?;
+            let vfs = state.vfs.clone().ok_or_else(|| {
+                Error::Validation("plugin development VFS is not configured".into())
+            })?;
             Ok((infra.store().root().to_path_buf(), vfs))
         })?;
         let (environment_id, virtual_path, _vfs) = resolve_mounted_workspace(
@@ -194,9 +191,7 @@ impl PluginDevelopmentToolsetRegistry {
     fn environment_infra(&self) -> RsiResult<Arc<EnvironmentDevInfra>> {
         self.lock(|state| {
             state.environment_dev.clone().ok_or_else(|| {
-                Error::Validation(
-                    "environment development infrastructure is not configured".into(),
-                )
+                Error::Validation("environment development infrastructure is not configured".into())
             })
         })
     }

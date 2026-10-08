@@ -386,16 +386,15 @@ impl SharedInfra {
         let environment_dev = if environment_dev_config.enabled {
             let image_builder: Arc<dyn container_runtime::ImageBuildConnection> =
                 Arc::new(container_runtime::PodmanRuntime::from_env());
-            let image_publisher: plugin_rsi::SharedImagePublisher = Arc::new(
-                plugin_rsi::PodmanImagePublisher::new(
+            let image_publisher: plugin_rsi::SharedImagePublisher =
+                Arc::new(plugin_rsi::PodmanImagePublisher::new(
                     plugin_rsi::ImageRegistryConfig {
                         enabled: true,
                         registry: environment_dev_config.registry.clone(),
                         namespace: environment_dev_config.namespace.clone(),
                     },
                     Arc::clone(&image_builder),
-                ),
-            );
+                ));
             let environment_dev = Arc::new(
                 plugin_rsi::EnvironmentDevInfra::open(
                     &config.state_dir,
@@ -1096,10 +1095,7 @@ fn ensure_environment_dev_mount(
             "environment development backend is reserved for lifecycle-managed mounts".into(),
         ));
     }
-    let root = config
-        .state_dir
-        .join("environments")
-        .join("dev");
+    let root = config.state_dir.join("environments").join("dev");
     std::fs::create_dir_all(&root)
         .map_err(|error| Error::Other(format!("create `{}`: {error}", root.display())))?;
     manifest.backend.push(vfs::BackendDefinition {
@@ -2463,11 +2459,7 @@ impl RuntimeHost {
     /// must match exactly; short names prefer the caller's direct child
     /// before falling back to the global scan (the delegation validator
     /// still gates whatever comes back).
-    fn resolve_agent_scoped(
-        &self,
-        caller: &agentik_types::AgentPath,
-        to: &str,
-    ) -> Option<String> {
+    fn resolve_agent_scoped(&self, caller: &agentik_types::AgentPath, to: &str) -> Option<String> {
         if to.starts_with("/root") && self.agents.contains_key(to) {
             return Some(to.to_string());
         }
@@ -4971,12 +4963,20 @@ mod communication_policy_tests {
                 .is_ok()
         );
         // Busy children remain delegable — turns queue on the relay.
-        set_status(&mut host, "/root/a/child", crate::control::AgentStatus::Running);
+        set_status(
+            &mut host,
+            "/root/a/child",
+            crate::control::AgentStatus::Running,
+        );
         assert!(
             host.validate_delegation_paths("/root/a", "/root/a/child")
                 .is_ok()
         );
-        set_status(&mut host, "/root/a/child", crate::control::AgentStatus::Idle);
+        set_status(
+            &mut host,
+            "/root/a/child",
+            crate::control::AgentStatus::Idle,
+        );
 
         // Upward delegation is rejected with the superior-specific message.
         let upward = host
@@ -5073,11 +5073,7 @@ mod communication_policy_tests {
         }
 
         let result = host.route_task("analyze gwas data", "/root/a");
-        let names: Vec<&str> = result
-            .candidates
-            .iter()
-            .map(|c| c.agent.as_str())
-            .collect();
+        let names: Vec<&str> = result.candidates.iter().map(|c| c.agent.as_str()).collect();
         assert!(!names.is_empty(), "expected some candidates");
         for name in &names {
             assert!(
@@ -5121,18 +5117,21 @@ mod agent_persistence_tests {
         // TurnCompleted. The expectation matches ANY request (no `.with`)
         // and answers with a plain assistant text message.
         let mut mock = agentik_sdk::provider::client::MockApiClient::new();
-        mock.expect_request_stream_with_system().times(1..).returning(|_, _, _, _| {
-            Ok(agentik_sdk::streaming::MessageStream::from_events(
-                Vec::new(),
-                agentik_core::message_ext::AgentMessageExt::assistant_text("delegated work done"),
-            ))
-        });
-        let model: Arc<ArcSwapOption<Model>> = Arc::new(ArcSwapOption::from_pointee(Some(
-            Model::with_client(
+        mock.expect_request_stream_with_system()
+            .times(1..)
+            .returning(|_, _, _, _| {
+                Ok(agentik_sdk::streaming::MessageStream::from_events(
+                    Vec::new(),
+                    agentik_core::message_ext::AgentMessageExt::assistant_text(
+                        "delegated work done",
+                    ),
+                ))
+            });
+        let model: Arc<ArcSwapOption<Model>> =
+            Arc::new(ArcSwapOption::from_pointee(Some(Model::with_client(
                 agentik_core::testing::dummy_model_info("child-delegation-restart"),
                 mock,
-            ),
-        )));
+            ))));
         host.set_model(model);
         let path = agentik_types::AgentPath::root()
             .join("researcher")
@@ -5224,8 +5223,7 @@ mod agent_persistence_tests {
                 let Some((event_path, event)) = host.recv_any().await else {
                     panic!("agent event channel closed");
                 };
-                if event_path == path.as_str()
-                    && matches!(event, AgentEvent::TurnCompleted { .. })
+                if event_path == path.as_str() && matches!(event, AgentEvent::TurnCompleted { .. })
                 {
                     return;
                 }

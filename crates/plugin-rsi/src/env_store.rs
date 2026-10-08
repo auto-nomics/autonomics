@@ -13,8 +13,8 @@ use container_runtime::ImageReference;
 use crate::{
     Environment, EnvironmentRegistry, Error, GitRepo, PluginWorkspace, Result,
     env_manifest::{
-        EnvironmentBase, EnvironmentLifecycleMetadata, EnvironmentManifest, EnvironmentStatus,
-        EnvironmentSmokeTest, ensure_environment_transition, environment_is_editable,
+        EnvironmentBase, EnvironmentLifecycleMetadata, EnvironmentManifest, EnvironmentSmokeTest,
+        EnvironmentStatus, ensure_environment_transition, environment_is_editable,
     },
     lifecycle::next_validation_attempt,
     plugin::{copy_plugin_tree, validate_requests},
@@ -83,7 +83,9 @@ impl EnvironmentStore {
     /// Return the VFS address for one development workspace.
     pub fn development_vfs_path(&self, environment_id: &str) -> Result<String> {
         crate::validate_plugin_name(environment_id)?;
-        Ok(format!("{ENVIRONMENT_DEVELOPMENT_VFS_ROOT}/{environment_id}"))
+        Ok(format!(
+            "{ENVIRONMENT_DEVELOPMENT_VFS_ROOT}/{environment_id}"
+        ))
     }
 
     /// Local build tag for one validation attempt.
@@ -139,10 +141,7 @@ impl EnvironmentStore {
         let workspace = PluginWorkspace::new(&path);
         // Seed the Containerfile with the approved digest-pinned FROM so a
         // fresh workspace starts structurally valid; agents rewrite it freely.
-        workspace.write_text(
-            "Containerfile",
-            &format!("FROM {}\n", base.reference),
-        )?;
+        workspace.write_text("Containerfile", &format!("FROM {}\n", base.reference))?;
         let manifest = EnvironmentManifest {
             environment_id: environment_id.to_string(),
             status: EnvironmentStatus::Draft,
@@ -252,14 +251,12 @@ impl EnvironmentStore {
     ) -> Result<EnvironmentOperator<'_>> {
         crate::validate_plugin_name(environment_id)?;
         validate_requests(request_ids, requests, rationale)?;
-        let mut operator = self
-            .develop(environment_id)?
-            .ok_or_else(|| {
-                Error::Validation(format!(
-                    "environment `{environment_id}` has no development workspace; \
+        let mut operator = self.develop(environment_id)?.ok_or_else(|| {
+            Error::Validation(format!(
+                "environment `{environment_id}` has no development workspace; \
                      create one with environment_create or environment_fork"
-                ))
-            })?;
+            ))
+        })?;
         let active = registry.get(environment_id)?.ok_or_else(|| {
             Error::Validation(format!(
                 "environment `{environment_id}` is not active in the catalog"
@@ -363,9 +360,9 @@ impl EnvironmentStore {
         environment_id: &str,
         registry: &EnvironmentRegistry,
     ) -> Result<InstalledEnvironment> {
-        let mut operator = self.develop(environment_id)?.ok_or_else(|| {
-            Error::Validation(format!("unknown environment `{environment_id}`"))
-        })?;
+        let mut operator = self
+            .develop(environment_id)?
+            .ok_or_else(|| Error::Validation(format!("unknown environment `{environment_id}`")))?;
         if !(environment_is_editable(operator.status())
             || matches!(
                 operator.status(),
@@ -431,13 +428,11 @@ impl EnvironmentStore {
                     "environment `{environment_id}` has no rollback base"
                 ))
             })?;
-        let current = registry
-            .get(environment_id)?
-            .ok_or_else(|| {
-                Error::Validation(format!(
-                    "environment `{environment_id}` is not active in the catalog"
-                ))
-            })?;
+        let current = registry.get(environment_id)?.ok_or_else(|| {
+            Error::Validation(format!(
+                "environment `{environment_id}` is not active in the catalog"
+            ))
+        })?;
         if current.reference == base {
             return Err(Error::Validation(
                 "environment has no prior reference to roll back to".into(),
@@ -463,11 +458,15 @@ impl EnvironmentStore {
     }
 
     /// Remove the environment from the catalog while retaining its workspace.
-    pub fn uninstall(&self, environment_id: &str, registry: &EnvironmentRegistry) -> Result<Environment> {
+    pub fn uninstall(
+        &self,
+        environment_id: &str,
+        registry: &EnvironmentRegistry,
+    ) -> Result<Environment> {
         crate::validate_plugin_name(environment_id)?;
-        let mut operator = self.develop(environment_id)?.ok_or_else(|| {
-            Error::Validation(format!("unknown environment `{environment_id}`"))
-        })?;
+        let mut operator = self
+            .develop(environment_id)?
+            .ok_or_else(|| Error::Validation(format!("unknown environment `{environment_id}`")))?;
         if !operator.repository().is_clean()? {
             return Err(Error::Validation(format!(
                 "environment `{environment_id}` has uncommitted development changes; \
@@ -589,9 +588,7 @@ impl EnvironmentOperator<'_> {
     }
 }
 
-pub(crate) fn load_manifest(
-    workspace: &PluginWorkspace,
-) -> Result<EnvironmentManifest> {
+pub(crate) fn load_manifest(workspace: &PluginWorkspace) -> Result<EnvironmentManifest> {
     let path = workspace.path().join("manifest.toml");
     let text = std::fs::read_to_string(&path).map_err(|source| Error::ReadFile {
         path: path.clone(),
@@ -640,8 +637,6 @@ mod tests {
         );
         // The same kebab-case grammar as plugin names applies.
         assert!(store.local_reference("Demo_Env", &digest).is_err());
-        assert!(store
-            .local_reference("demo-env", "sha256:short")
-            .is_err());
+        assert!(store.local_reference("demo-env", "sha256:short").is_err());
     }
 }

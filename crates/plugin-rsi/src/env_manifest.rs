@@ -224,31 +224,32 @@ mod tests {
 
     #[test]
     fn transitions_follow_the_explicit_lifecycle_whitelist() {
-        assert!(ensure_environment_transition(
-            EnvironmentStatus::Draft,
-            EnvironmentStatus::Validating
-        )
-        .is_ok());
-        assert!(ensure_environment_transition(
-            EnvironmentStatus::Approved,
-            EnvironmentStatus::Publishing
-        )
-        .is_ok());
-        assert!(ensure_environment_transition(
-            EnvironmentStatus::Publishing,
-            EnvironmentStatus::PublishFailed
-        )
-        .is_ok());
-        assert!(ensure_environment_transition(
-            EnvironmentStatus::Published,
-            EnvironmentStatus::Draft
-        )
-        .is_err());
-        assert!(ensure_environment_transition(
-            EnvironmentStatus::Rejected,
-            EnvironmentStatus::Approved
-        )
-        .is_err());
+        assert!(
+            ensure_environment_transition(EnvironmentStatus::Draft, EnvironmentStatus::Validating)
+                .is_ok()
+        );
+        assert!(
+            ensure_environment_transition(
+                EnvironmentStatus::Approved,
+                EnvironmentStatus::Publishing
+            )
+            .is_ok()
+        );
+        assert!(
+            ensure_environment_transition(
+                EnvironmentStatus::Publishing,
+                EnvironmentStatus::PublishFailed
+            )
+            .is_ok()
+        );
+        assert!(
+            ensure_environment_transition(EnvironmentStatus::Published, EnvironmentStatus::Draft)
+                .is_err()
+        );
+        assert!(
+            ensure_environment_transition(EnvironmentStatus::Rejected, EnvironmentStatus::Approved)
+                .is_err()
+        );
     }
 
     #[test]

@@ -875,8 +875,8 @@ fn render_detail(area: Rect, buf: &mut Buffer, state: &ModelConfigState) {
         FlatItem::Model(pi, mi) => {
             let p = &state.providers[pi];
             let m = &p.models[mi];
-            let active = state.active_model_spec.as_deref()
-                == Some(&format!("{}:{}", p.name, m.model_name));
+            let active =
+                state.active_model_spec.as_deref() == Some(&format!("{}:{}", p.name, m.model_name));
             let label =
                 |k: &str| Span::styled(format!(" {:<14}: ", k), Style::default().fg(Color::Cyan));
             let val = |v: String| Span::styled(v, Style::default().fg(Color::White));
@@ -1508,9 +1508,9 @@ mod tests {
         let cursor = state
             .flat_items()
             .iter()
-            .position(|it| {
-                matches!(it, FlatItem::Model(pi, 0) if state.providers[*pi].name == "zai")
-            })
+            .position(
+                |it| matches!(it, FlatItem::Model(pi, 0) if state.providers[*pi].name == "zai"),
+            )
             .expect("zai's shared-model row visible");
         state.cursor = cursor;
         let ConfigCommand::SelectModel {
@@ -1522,10 +1522,7 @@ mod tests {
         };
         assert_eq!(provider_name, "zai");
         assert_eq!(model_name, "shared-model");
-        assert_eq!(
-            state.active_model_spec.as_deref(),
-            Some("zai:shared-model")
-        );
+        assert_eq!(state.active_model_spec.as_deref(), Some("zai:shared-model"));
 
         // 渲染：树里恰好一个 ●（zzz 的副本），aaa 的同名行不点亮。
         let area = Rect::new(0, 0, 80, 40);

@@ -7,7 +7,8 @@ use serde_json::json;
 
 use crate::{
     EnvironmentBase, EnvironmentManifest, EnvironmentSmokeTest,
-    env_manifest::validate_interpreters, env_store::{load_manifest, save_manifest},
+    env_manifest::validate_interpreters,
+    env_store::{load_manifest, save_manifest},
 };
 
 use super::EnvToolState;
@@ -78,11 +79,11 @@ impl ToolFunction for EnvironmentManifestUpdateTool {
                     manifest.interpreters = interpreters;
                 }
                 if let Some(base) = input.base {
-                    container_runtime::ImageReference::parse(&base.reference).map_err(
-                        |error| ToolError::ValidationFailed {
+                    container_runtime::ImageReference::parse(&base.reference).map_err(|error| {
+                        ToolError::ValidationFailed {
                             message: format!("base reference is not digest-pinned: {error}"),
-                        },
-                    )?;
+                        }
+                    })?;
                     manifest.base = EnvironmentBase {
                         reference: base.reference,
                         tag: base.tag,
@@ -97,9 +98,8 @@ impl ToolFunction for EnvironmentManifestUpdateTool {
                         });
                     }
                     for test in &tests {
-                        validate_smoke_test(test).map_err(|error| ToolError::ValidationFailed {
-                            message: error,
-                        })?;
+                        validate_smoke_test(test)
+                            .map_err(|error| ToolError::ValidationFailed { message: error })?;
                     }
                     manifest.tests = tests
                         .into_iter()

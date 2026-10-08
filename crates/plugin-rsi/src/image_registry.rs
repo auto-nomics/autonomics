@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use container_runtime::{
-    ImageBuildConnection, ImagePushRequest, RegistryHost, RepositoryPath, DEFAULT_PUSH_TIMEOUT_SECS,
+    DEFAULT_PUSH_TIMEOUT_SECS, ImageBuildConnection, ImagePushRequest, RegistryHost, RepositoryPath,
 };
 
 use crate::{Error, Result};
@@ -112,9 +112,7 @@ impl ImagePublisher for PodmanImagePublisher {
         local_reference: &str,
     ) -> Result<PublishedImageReference> {
         if !self.config.enabled {
-            return Err(Error::ImageRegistry(
-                "image publishing is disabled".into(),
-            ));
+            return Err(Error::ImageRegistry("image publishing is disabled".into()));
         }
         let remote_tagged = self.push_target(environment_id, local_reference)?;
         let pushed = self
@@ -177,11 +175,16 @@ mod tests {
             publisher
                 .push_target("demo-env", &format!("localhost/ns/demo-env@{digest}"))
                 .unwrap(),
-            format!("ghcr.io/auto-nomics/environments/demo-env:{}", "ab".repeat(6))
+            format!(
+                "ghcr.io/auto-nomics/environments/demo-env:{}",
+                "ab".repeat(6)
+            )
         );
-        assert!(publisher
-            .push_target("demo-env", "localhost/ns/demo-env:rsi-1")
-            .is_err());
+        assert!(
+            publisher
+                .push_target("demo-env", "localhost/ns/demo-env:rsi-1")
+                .is_err()
+        );
     }
 
     fn panic_free_builder() -> Arc<dyn ImageBuildConnection> {

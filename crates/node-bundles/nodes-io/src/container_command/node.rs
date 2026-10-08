@@ -189,7 +189,7 @@ impl ContainerCommandNode {
         use sha2::Digest;
 
         let mut hasher = sha2::Sha256::new();
-        let mut feed = |hasher: &mut sha2::Sha256, part: &str| {
+        let feed = |hasher: &mut sha2::Sha256, part: &str| {
             hasher.update(part.as_bytes());
             hasher.update([0x1e]);
         };

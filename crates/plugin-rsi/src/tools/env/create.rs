@@ -65,7 +65,11 @@ impl ToolFunction for EnvironmentCreateTool {
                 ),
             });
         }
-        let infra = self.state.registry.environment_infra().map_err(tool_error)?;
+        let infra = self
+            .state
+            .registry
+            .environment_infra()
+            .map_err(tool_error)?;
         let request = RequestRecord {
             id: String::new(),
             created_at: 0,
@@ -78,8 +82,8 @@ impl ToolFunction for EnvironmentCreateTool {
             status: RequestStatus::Open,
         };
         let base_environment_id = input.base_environment_id;
-        let output = tokio::task::spawn_blocking(
-            move || -> std::result::Result<CreateOutput, ToolError> {
+        let output =
+            tokio::task::spawn_blocking(move || -> std::result::Result<CreateOutput, ToolError> {
                 let operator = infra
                     .create_environment(request, &base_environment_id)
                     .map_err(tool_error)?;
@@ -96,19 +100,16 @@ impl ToolFunction for EnvironmentCreateTool {
                 Ok(CreateOutput {
                     request_id,
                     environment_id: operator.environment_id().to_string(),
-                    environment_vfs_path: operator
-                        .development_vfs_path()
-                        .map_err(tool_error)?,
+                    environment_vfs_path: operator.development_vfs_path().map_err(tool_error)?,
                     base_environment_id,
                     base_reference: manifest.base.reference.clone(),
                     interpreters: manifest.interpreters.clone(),
                 })
-            },
-        )
-        .await
-        .map_err(|join| ToolError::ExecutionFailed {
-            source: format!("environment create task failed: {join}").into(),
-        })??;
+            })
+            .await
+            .map_err(|join| ToolError::ExecutionFailed {
+                source: format!("environment create task failed: {join}").into(),
+            })??;
 
         Ok(ToolResult::success_json(json!({
             "request_id": output.request_id,
@@ -167,7 +168,11 @@ impl ToolFunction for EnvironmentForkTool {
         let source = resolve_target(&self.state, &input.source_environment_path)
             .await
             .map_err(tool_error)?;
-        let infra = self.state.registry.environment_infra().map_err(tool_error)?;
+        let infra = self
+            .state
+            .registry
+            .environment_infra()
+            .map_err(tool_error)?;
         let request = RequestRecord {
             id: String::new(),
             created_at: 0,
@@ -180,8 +185,8 @@ impl ToolFunction for EnvironmentForkTool {
             status: RequestStatus::Open,
         };
         let source_environment = source.environment_id;
-        let output = tokio::task::spawn_blocking(
-            move || -> std::result::Result<ForkOutput, ToolError> {
+        let output =
+            tokio::task::spawn_blocking(move || -> std::result::Result<ForkOutput, ToolError> {
                 let operator = infra
                     .fork_environment(&source_environment, request)
                     .map_err(tool_error)?;
@@ -199,16 +204,13 @@ impl ToolFunction for EnvironmentForkTool {
                     request_id,
                     source_environment,
                     target_environment: operator.environment_id().to_string(),
-                    target_vfs_path: operator
-                        .development_vfs_path()
-                        .map_err(tool_error)?,
+                    target_vfs_path: operator.development_vfs_path().map_err(tool_error)?,
                 })
-            },
-        )
-        .await
-        .map_err(|join| ToolError::ExecutionFailed {
-            source: format!("environment fork task failed: {join}").into(),
-        })??;
+            })
+            .await
+            .map_err(|join| ToolError::ExecutionFailed {
+                source: format!("environment fork task failed: {join}").into(),
+            })??;
 
         Ok(ToolResult::success_json(json!({
             "request_id": output.request_id,

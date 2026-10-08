@@ -17,7 +17,7 @@ use agentik_core::tools::{ToolError, ToolRegistration, ToolResult};
 use agentik_sdk::types::ToolResultContent;
 use async_trait::async_trait;
 use container_runtime::{
-    ContainerRuntimeError, ContainerRunRequest, ContainerRunResult, ImageBuildConnection,
+    ContainerRunRequest, ContainerRunResult, ContainerRuntimeError, ImageBuildConnection,
     ImageBuildRequest, ImageBuildResult, ImagePushRequest, ImagePushResult, PodmanConnection,
 };
 use plugin_rsi::{
@@ -27,9 +27,9 @@ use plugin_rsi::{
 };
 use serde_json::{Value, json};
 
-const BASE_REFERENCE: &str =
-    "docker.io/library/alpine@sha256:0123456789012345678901234567890123456789012345678901234567890123";
-const REMOTE_DIGEST: &str = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+const BASE_REFERENCE: &str = "docker.io/library/alpine@sha256:0123456789012345678901234567890123456789012345678901234567890123";
+const REMOTE_DIGEST: &str =
+    "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
 
 /// The process-global toolset registry is shared state; environment tests
 /// reconfigure it per test, so the tests in this binary run sequentially.
@@ -55,9 +55,16 @@ impl ImageBuildConnection for FakeImageBuilder {
         request: ImageBuildRequest,
     ) -> Result<ImageBuildResult, ContainerRuntimeError> {
         assert!(request.context_dir.is_absolute());
-        assert!(request.tag.starts_with("localhost/auto-nomics/environments/"));
+        assert!(
+            request
+                .tag
+                .starts_with("localhost/auto-nomics/environments/")
+        );
         self.builds.lock().unwrap().push(request);
-        let digest = format!("sha256:{:064x}", self.counter.fetch_add(1, Ordering::Relaxed) + 1);
+        let digest = format!(
+            "sha256:{:064x}",
+            self.counter.fetch_add(1, Ordering::Relaxed) + 1
+        );
         Ok(ImageBuildResult {
             image_id: digest.clone(),
             digest,
@@ -218,11 +225,7 @@ async fn execute(
         .await
 }
 
-async fn json_result(
-    tools: &[ToolRegistration],
-    name: &str,
-    input: Value,
-) -> Value {
+async fn json_result(tools: &[ToolRegistration], name: &str, input: Value) -> Value {
     let result = execute(tools, name, input).await.unwrap();
     let ToolResultContent::Json(value) = result.content else {
         panic!("tool `{name}` must return JSON");
@@ -241,7 +244,10 @@ async fn environment_is_developed_activated_published_and_rolled_back() {
     let environment_path = "/environments/dev/bioconductor-extra";
 
     let operator = infra
-        .create_environment(environment_request("bioconductor-extra", "Add extra Bioconductor packages"), "alpine")
+        .create_environment(
+            environment_request("bioconductor-extra", "Add extra Bioconductor packages"),
+            "alpine",
+        )
         .unwrap();
     assert_eq!(operator.status(), EnvironmentStatus::Draft);
     assert!(
@@ -294,7 +300,10 @@ async fn environment_is_developed_activated_published_and_rolled_back() {
     .await;
     assert_eq!(build["built"], json!(true), "{build:?}");
     let built_tag = build["local_tag"].as_str().unwrap().to_string();
-    assert_eq!(built_tag, "localhost/auto-nomics/environments/bioconductor-extra:rsi-2");
+    assert_eq!(
+        built_tag,
+        "localhost/auto-nomics/environments/bioconductor-extra:rsi-2"
+    );
 
     let install = json_result(
         &tools,
@@ -305,7 +314,8 @@ async fn environment_is_developed_activated_published_and_rolled_back() {
     assert_eq!(install["activated"], json!(true), "{install:?}");
     let local_reference = install["catalog_reference"].as_str().unwrap().to_string();
     assert!(
-        local_reference.starts_with("localhost/auto-nomics/environments/bioconductor-extra@sha256:"),
+        local_reference
+            .starts_with("localhost/auto-nomics/environments/bioconductor-extra@sha256:"),
         "{local_reference}"
     );
     // Static validate (attempt 1) builds nothing; the build tool (attempt 2)
@@ -386,7 +396,13 @@ async fn environment_is_developed_activated_published_and_rolled_back() {
     );
 
     infra.uninstall_environment("bioconductor-extra").unwrap();
-    assert!(harness.registry.get("bioconductor-extra").unwrap().is_none());
+    assert!(
+        harness
+            .registry
+            .get("bioconductor-extra")
+            .unwrap()
+            .is_none()
+    );
     assert!(
         harness
             .state
@@ -405,7 +421,10 @@ async fn static_gates_reject_unsafe_containerfiles_and_secrets() {
     let harness = harness(true);
     let infra = harness.infra.clone();
     infra
-        .create_environment(environment_request("demo-env", "Create demo environment"), "alpine")
+        .create_environment(
+            environment_request("demo-env", "Create demo environment"),
+            "alpine",
+        )
         .unwrap();
 
     let store = infra.store();
@@ -456,10 +475,7 @@ async fn static_gates_reject_unsafe_containerfiles_and_secrets() {
     // A mutable manifest base reference fails the base_policy gate.
     let operator = store.develop("demo-env").unwrap().unwrap();
     {
-        let text = operator
-            .workspace()
-            .read_text("manifest.toml")
-            .unwrap();
+        let text = operator.workspace().read_text("manifest.toml").unwrap();
         operator
             .workspace()
             .write_text(
@@ -475,17 +491,16 @@ async fn static_gates_reject_unsafe_containerfiles_and_secrets() {
             panic!("mutable base reference passed: {report:?}")
         }
     };
-    assert!(report
-        .gates
-        .iter()
-        .any(|gate| gate.name == "base_policy" && gate.status == GateStatus::Fail));
+    assert!(
+        report
+            .gates
+            .iter()
+            .any(|gate| gate.name == "base_policy" && gate.status == GateStatus::Fail)
+    );
     // Restore the pinned base for the remaining checks.
     let operator = store.develop("demo-env").unwrap().unwrap();
     {
-        let text = operator
-            .workspace()
-            .read_text("manifest.toml")
-            .unwrap();
+        let text = operator.workspace().read_text("manifest.toml").unwrap();
         operator
             .workspace()
             .write_text(
@@ -515,10 +530,12 @@ async fn static_gates_reject_unsafe_containerfiles_and_secrets() {
             panic!("secret scan passed: {report:?}")
         }
     };
-    assert!(report
-        .gates
-        .iter()
-        .any(|gate| gate.name == "secret_scan" && gate.status == GateStatus::Fail));
+    assert!(
+        report
+            .gates
+            .iter()
+            .any(|gate| gate.name == "secret_scan" && gate.status == GateStatus::Fail)
+    );
 }
 
 #[tokio::test]
@@ -529,7 +546,10 @@ async fn missing_builder_blocks_infrastructure_gates() {
     let harness = harness(false);
     let infra = harness.infra.clone();
     infra
-        .create_environment(environment_request("blocked-env", "Create blocked environment"), "alpine")
+        .create_environment(
+            environment_request("blocked-env", "Create blocked environment"),
+            "alpine",
+        )
         .unwrap();
 
     let outcome = infra.build_environment("blocked-env").await.unwrap();
@@ -566,7 +586,10 @@ async fn failing_smoke_tests_repair_the_workspace() {
     let infra = harness.infra.clone();
     let tools = plugin_rsi::environment_development_tool_registrations("env-smoke-agent");
     infra
-        .create_environment(environment_request("smoke-env", "Create smoke environment"), "alpine")
+        .create_environment(
+            environment_request("smoke-env", "Create smoke environment"),
+            "alpine",
+        )
         .unwrap();
     json_result(
         &tools,
@@ -587,10 +610,12 @@ async fn failing_smoke_tests_repair_the_workspace() {
             panic!("failing smoke test passed validation: {report:?}")
         }
     };
-    assert!(report
-        .gates
-        .iter()
-        .any(|gate| gate.name == "smoke" && gate.status == GateStatus::Fail));
+    assert!(
+        report
+            .gates
+            .iter()
+            .any(|gate| gate.name == "smoke" && gate.status == GateStatus::Fail)
+    );
     assert_eq!(
         infra
             .store()
@@ -610,7 +635,10 @@ async fn dirty_workspaces_refuse_local_activation() {
     let harness = harness(true);
     let infra = harness.infra.clone();
     infra
-        .create_environment(environment_request("dirty-env", "Create dirty environment"), "alpine")
+        .create_environment(
+            environment_request("dirty-env", "Create dirty environment"),
+            "alpine",
+        )
         .unwrap();
     let store = infra.store();
     let operator = store.develop("dirty-env").unwrap().unwrap();
@@ -650,13 +678,18 @@ async fn lifecycle_mutations_are_guarded_by_transitions() {
     let harness = harness(true);
     let infra = harness.infra.clone();
     infra
-        .create_environment(environment_request("guarded-env", "Create guarded environment"), "alpine")
+        .create_environment(
+            environment_request("guarded-env", "Create guarded environment"),
+            "alpine",
+        )
         .unwrap();
 
     // A draft environment cannot be reviewed directly.
     let error = infra.review_environment("guarded-env", true).unwrap_err();
     assert!(
-        error.to_string().contains("invalid plugin transition draft -> approved"),
+        error
+            .to_string()
+            .contains("invalid plugin transition draft -> approved"),
         "unexpected error: {error}"
     );
 

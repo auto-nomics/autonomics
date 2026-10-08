@@ -42,15 +42,11 @@ pub fn configure_environment_vfs(state_dir: &Path) {
         backend: vec![
             vfs::BackendDefinition {
                 id: "plugin-development".into(),
-                config: vfs::BackendConfig::local(
-                    plugin_root.to_string_lossy().into_owned(),
-                ),
+                config: vfs::BackendConfig::local(plugin_root.to_string_lossy().into_owned()),
             },
             vfs::BackendDefinition {
                 id: "environment-development".into(),
-                config: vfs::BackendConfig::local(
-                    environment_root.to_string_lossy().into_owned(),
-                ),
+                config: vfs::BackendConfig::local(environment_root.to_string_lossy().into_owned()),
             },
         ],
         mount: vec![

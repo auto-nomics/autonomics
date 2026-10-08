@@ -13,7 +13,7 @@ use std::{
 use container_runtime::{ImageBuildConnection, PodmanConnection};
 
 use crate::{
-    EnvironmentRegistry, Error, EnvironmentValidationReport, RequestRecord, RequestStatus,
+    EnvironmentRegistry, EnvironmentValidationReport, Error, RequestRecord, RequestStatus,
     RequestStore, Result,
     env_manifest::EnvironmentStatus,
     env_store::{EnvironmentOperator, EnvironmentStore, InstalledEnvironment},
@@ -131,12 +131,9 @@ impl EnvironmentDevInfra {
         base_environment_id: &str,
     ) -> Result<EnvironmentOperator<'_>> {
         let request = self.requests.record(request)?;
-        let environment_id = request
-            .plugin_name
-            .clone()
-            .ok_or_else(|| {
-                Error::InvalidRequest("environment requests must name their environment".into())
-            })?;
+        let environment_id = request.plugin_name.clone().ok_or_else(|| {
+            Error::InvalidRequest("environment requests must name their environment".into())
+        })?;
         self.ensure_request_environment(&request, &environment_id)?;
         self.store.create(
             &environment_id,
@@ -230,18 +227,26 @@ impl EnvironmentDevInfra {
                     .lifecycle
                     .request_ids
                     .clone();
-                let installed = self.store.install_local(environment_id, &self.environments)?;
+                let installed = self
+                    .store
+                    .install_local(environment_id, &self.environments)?;
                 for id in request_ids {
                     self.requests
                         .set_status(&id, RequestStatus::ReviewPending)?;
                 }
-                Ok(EnvironmentLocalActivationOutcome::Activated(report, installed))
+                Ok(EnvironmentLocalActivationOutcome::Activated(
+                    report, installed,
+                ))
             }
         }
     }
 
     /// Apply a review decision and propagate request state.
-    pub fn review_environment(&self, environment_id: &str, approved: bool) -> Result<EnvironmentStatus> {
+    pub fn review_environment(
+        &self,
+        environment_id: &str,
+        approved: bool,
+    ) -> Result<EnvironmentStatus> {
         let mut operator = self.develop(environment_id)?;
         let request_ids = operator.manifest().lifecycle.request_ids.clone();
         let to = if approved {
@@ -301,8 +306,7 @@ impl EnvironmentDevInfra {
                 let _ = operator.mutate_manifest(|manifest| {
                     manifest.status = EnvironmentStatus::PublishFailed;
                 });
-                operator
-                    .snapshot("environment: record publication failure")?;
+                operator.snapshot("environment: record publication failure")?;
                 return Err(error);
             }
         };
@@ -311,8 +315,9 @@ impl EnvironmentDevInfra {
             manifest.status = EnvironmentStatus::Published;
             manifest.lifecycle.published_reference = Some(published.reference.clone());
             if manifest.lifecycle.base_reference.is_none() {
-                manifest.lifecycle.base_reference =
-                    previous.as_ref().map(|environment| environment.reference.clone());
+                manifest.lifecycle.base_reference = previous
+                    .as_ref()
+                    .map(|environment| environment.reference.clone());
             }
         })?;
         self.environments.approve(
@@ -349,9 +354,9 @@ impl EnvironmentDevInfra {
     }
 
     fn develop(&self, environment_id: &str) -> Result<EnvironmentOperator<'_>> {
-        self.store.develop(environment_id)?.ok_or_else(|| {
-            Error::Validation(format!("unknown environment `{environment_id}`"))
-        })
+        self.store
+            .develop(environment_id)?
+            .ok_or_else(|| Error::Validation(format!("unknown environment `{environment_id}`")))
     }
 
     async fn validate_common(
@@ -368,17 +373,9 @@ impl EnvironmentDevInfra {
         )?;
         let (attempt, _tag) = operator.next_attempt_tag()?;
 
-        let builder = if full {
-            self.builder()
-        } else {
-            None
-        };
+        let builder = if full { self.builder() } else { None };
         let builder = builder.as_deref();
-        let runner = if full {
-            self.runner()
-        } else {
-            None
-        };
+        let runner = if full { self.runner() } else { None };
         let runner = runner.as_deref();
         let report = crate::validate_environment(
             environment_id,
@@ -402,7 +399,8 @@ impl EnvironmentDevInfra {
             None => None,
         };
         operator.mutate_manifest(|manifest| {
-            manifest.lifecycle.latest_report = Some(format!(".rsi/reports/{0}.json", report.report_id));
+            manifest.lifecycle.latest_report =
+                Some(format!(".rsi/reports/{0}.json", report.report_id));
             if let Some(reference) = &pinned_local {
                 manifest.lifecycle.local_reference = Some(reference.clone());
             }
@@ -416,8 +414,7 @@ impl EnvironmentDevInfra {
             return Ok(EnvironmentValidationOutcome::NeedsFix(report));
         }
 
-        operator
-            .snapshot(&format!("validation: {}", report.report_id))?;
+        operator.snapshot(&format!("validation: {}", report.report_id))?;
         if !operator.repository().is_clean()? {
             return Err(Error::Validation(
                 "environment workspace has uncommitted content".into(),
@@ -428,10 +425,7 @@ impl EnvironmentDevInfra {
         } else {
             EnvironmentStatus::Draft
         };
-        operator.transition_snapshot(
-            restore,
-            "environment: validation passed; remain editable",
-        )?;
+        operator.transition_snapshot(restore, "environment: validation passed; remain editable")?;
         Ok(EnvironmentValidationOutcome::Passed(report))
     }
 

@@ -30,13 +30,19 @@ impl ToolFunction for EnvironmentUninstallTool {
         let target = resolve_target(&self.state, &input.environment_path)
             .await
             .map_err(tool_error)?;
-        let infra = self.state.registry.environment_infra().map_err(tool_error)?;
+        let infra = self
+            .state
+            .registry
+            .environment_infra()
+            .map_err(tool_error)?;
         let manifest_lock = environment_manifest_lock(&self.state.registry, &target.environment_id);
         let _guard = manifest_lock.lock().await;
         let environment_id = target.environment_id.clone();
-        let removed = tokio::task::spawn_blocking(
-            move || infra.uninstall_environment(&environment_id).map_err(tool_error),
-        )
+        let removed = tokio::task::spawn_blocking(move || {
+            infra
+                .uninstall_environment(&environment_id)
+                .map_err(tool_error)
+        })
         .await
         .map_err(|join| ToolError::ExecutionFailed {
             source: format!("environment uninstall task failed: {join}").into(),

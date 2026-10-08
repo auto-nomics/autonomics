@@ -64,10 +64,7 @@ impl EnvironmentValidationReport {
     ) -> Self {
         let overall = if gates.iter().any(|gate| gate.status == GateStatus::Fail) {
             GateStatus::Fail
-        } else if gates
-            .iter()
-            .any(|gate| gate.status == GateStatus::Blocked)
-        {
+        } else if gates.iter().any(|gate| gate.status == GateStatus::Blocked) {
             GateStatus::Blocked
         } else {
             GateStatus::Pass
@@ -142,12 +139,7 @@ pub async fn validate_environment(
                 manifest.environment_id
             ));
         }
-        if workspace
-            .path()
-            .file_name()
-            .and_then(|name| name.to_str())
-            != Some(environment_id)
-        {
+        if workspace.path().file_name().and_then(|name| name.to_str()) != Some(environment_id) {
             return Err(format!(
                 "workspace directory must be named `{environment_id}`"
             ));
@@ -208,10 +200,7 @@ pub async fn validate_environment(
     let containerfile = match workspace.read_text(&manifest.containerfile) {
         Ok(text) => text,
         Err(error) => {
-            gates.push(GateResult::fail(
-                "containerfile_static",
-                error.to_string(),
-            ));
+            gates.push(GateResult::fail("containerfile_static", error.to_string()));
             return blocked_rest(environment_id, attempt, gates, "containerfile_static");
         }
     };
@@ -242,10 +231,7 @@ pub async fn validate_environment(
             "build",
             "image builder is not configured",
         ));
-        gates.push(GateResult::blocked(
-            "smoke",
-            "not run: no image was built",
-        ));
+        gates.push(GateResult::blocked("smoke", "not run: no image was built"));
         return EnvironmentValidationReport::new(environment_id, attempt, gates, None, None);
     };
     let built = builder
@@ -264,10 +250,7 @@ pub async fn validate_environment(
         }
         Err(error) => {
             gates.push(GateResult::fail("build", error.to_string()));
-            gates.push(GateResult::blocked(
-                "smoke",
-                "not run after `build` failed",
-            ));
+            gates.push(GateResult::blocked("smoke", "not run after `build` failed"));
             return EnvironmentValidationReport::new(environment_id, attempt, gates, None, None);
         }
     };
@@ -290,19 +273,15 @@ pub async fn validate_environment(
         Ok(()) => gates.push(GateResult::pass("smoke")),
         Err(error) => gates.push(GateResult::fail("smoke", error)),
     }
-    EnvironmentValidationReport::new(
-        environment_id,
-        attempt,
-        gates,
-        Some(tag),
-        Some(digest),
-    )
+    EnvironmentValidationReport::new(environment_id, attempt, gates, Some(tag), Some(digest))
 }
 
 /// Budget for one environment image build (base pull plus layer assembly).
 pub const DEFAULT_BUILD_TIMEOUT_SECS: u64 = 3600;
 
-fn gate_base_policy(manifest: &crate::env_manifest::EnvironmentManifest) -> std::result::Result<(), String> {
+fn gate_base_policy(
+    manifest: &crate::env_manifest::EnvironmentManifest,
+) -> std::result::Result<(), String> {
     container_runtime::ImageReference::parse(&manifest.base.reference)
         .map(|_| ())
         .map_err(|error| format!("base reference is not digest-pinned: {error}"))
@@ -318,20 +297,16 @@ fn gate_containerfile_static(text: &str, files: &[String]) -> std::result::Resul
     for instruction in parse_instructions(text) {
         match instruction.keyword.as_str() {
             "FROM" => {
-                let reference = from_reference(&instruction.args).ok_or(
-                    "FROM instruction does not name an image".to_string(),
-                )?;
+                let reference = from_reference(&instruction.args)
+                    .ok_or("FROM instruction does not name an image".to_string())?;
                 if reference == "scratch" {
                     return Err(
-                        "`FROM scratch` is not allowed; base images must be digest-pinned"
-                            .into(),
+                        "`FROM scratch` is not allowed; base images must be digest-pinned".into(),
                     );
                 }
                 container_runtime::ImageReference::parse(&reference)
                     .map(|_| ())
-                    .map_err(|error| {
-                        format!("FROM reference is not digest-pinned: {error}")
-                    })?;
+                    .map_err(|error| format!("FROM reference is not digest-pinned: {error}"))?;
             }
             "RUN" => {
                 if pipes_into_shell(&instruction.args) {
@@ -383,9 +358,9 @@ fn gate_containerfile_static(text: &str, files: &[String]) -> std::result::Resul
                         ));
                     }
                     let known = file_set.contains(source.as_str())
-                        || files.iter().any(|file| {
-                            file.starts_with(&format!("{source}/"))
-                        });
+                        || files
+                            .iter()
+                            .any(|file| file.starts_with(&format!("{source}/")));
                     if !known {
                         return Err(format!(
                             "line {}: COPY source `{source}` does not exist in the workspace",
@@ -405,9 +380,7 @@ async fn gate_smoke(
     manifest: &crate::env_manifest::EnvironmentManifest,
     tag: &str,
 ) -> std::result::Result<(), String> {
-    let scratch = runner
-        .workspace_root()
-        .join("environment-smoke");
+    let scratch = runner.workspace_root().join("environment-smoke");
     tokio::fs::create_dir_all(&scratch)
         .await
         .map_err(|error| format!("cannot prepare smoke scratch: {error}"))?;
@@ -472,9 +445,7 @@ async fn gate_smoke(
                 }
             }
             Err(container_runtime::ContainerRuntimeError::ExitStatus {
-                exit_code,
-                stderr,
-                ..
+                exit_code, stderr, ..
             }) => {
                 return Err(format!(
                     "smoke test `{name}` exited with status {exit_code}: {}",
@@ -489,7 +460,10 @@ async fn gate_smoke(
     Ok(())
 }
 
-fn gate_secret_scan(workspace: &PluginWorkspace, files: &[String]) -> std::result::Result<(), String> {
+fn gate_secret_scan(
+    workspace: &PluginWorkspace,
+    files: &[String],
+) -> std::result::Result<(), String> {
     for path in files {
         let text = workspace
             .read_text(path)
@@ -657,7 +631,10 @@ mod tests {
         assert_eq!(instructions.len(), 2);
         assert_eq!(instructions[0].keyword, "FROM");
         assert_eq!(instructions[0].line, 2);
-        assert_eq!(instructions[1].args, "apt-get update && apt-get install -y curl");
+        assert_eq!(
+            instructions[1].args,
+            "apt-get update && apt-get install -y curl"
+        );
     }
 
     #[test]

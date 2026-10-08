@@ -40,7 +40,11 @@ impl ToolFunction for EnvironmentValidateTool {
         let target = resolve_target(&self.state, &input.environment_path)
             .await
             .map_err(tool_error)?;
-        let infra = self.state.registry.environment_infra().map_err(tool_error)?;
+        let infra = self
+            .state
+            .registry
+            .environment_infra()
+            .map_err(tool_error)?;
         let manifest_lock = environment_manifest_lock(&self.state.registry, &target.environment_id);
         let _guard = manifest_lock.lock().await;
         let environment_id = target.environment_id.clone();
@@ -84,7 +88,11 @@ impl ToolFunction for EnvironmentBuildTool {
         let target = resolve_target(&self.state, &input.environment_path)
             .await
             .map_err(tool_error)?;
-        let infra = self.state.registry.environment_infra().map_err(tool_error)?;
+        let infra = self
+            .state
+            .registry
+            .environment_infra()
+            .map_err(tool_error)?;
         let manifest_lock = environment_manifest_lock(&self.state.registry, &target.environment_id);
         let _guard = manifest_lock.lock().await;
         let environment_id = target.environment_id.clone();
@@ -130,7 +138,11 @@ impl ToolFunction for EnvironmentInstallTool {
         let target = resolve_target(&self.state, &input.environment_path)
             .await
             .map_err(tool_error)?;
-        let infra = self.state.registry.environment_infra().map_err(tool_error)?;
+        let infra = self
+            .state
+            .registry
+            .environment_infra()
+            .map_err(tool_error)?;
         let manifest_lock = environment_manifest_lock(&self.state.registry, &target.environment_id);
         let _guard = manifest_lock.lock().await;
         let environment_id = target.environment_id.clone();

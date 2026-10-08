@@ -379,9 +379,8 @@ impl ToolFunction for ListAgentsTool {
                     .agents
                     .into_iter()
                     .filter(|a| {
-                        agentik_types::AgentPath::try_from(a.path.as_str()).is_ok_and(|p| {
-                            p != self.self_path && visible_from(&self.self_path, &p)
-                        })
+                        agentik_types::AgentPath::try_from(a.path.as_str())
+                            .is_ok_and(|p| p != self.self_path && visible_from(&self.self_path, &p))
                     })
                     .collect();
                 let mut profiles = status.profiles;
@@ -637,7 +636,10 @@ mod tests {
     use crate::host::HostEvent;
     use agentik_core::tools::{ExecutionMode, ToolFunction, ToolRegistration};
 
-    fn test_control() -> (HostControl, tokio::sync::mpsc::UnboundedReceiver<HostCommand>) {
+    fn test_control() -> (
+        HostControl,
+        tokio::sync::mpsc::UnboundedReceiver<HostCommand>,
+    ) {
         let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<HostCommand>();
         let (event_tx, _) = tokio::sync::broadcast::channel::<HostEvent>(1);
         (HostControl::new(cmd_tx, event_tx), cmd_rx)
@@ -806,11 +808,10 @@ mod tests {
 
         // Visible target (direct parent).
         let (control, mut cmd_rx) = test_control();
-        let tool = GetAgentInfoTool {
-            control,
-            self_path,
+        let tool = GetAgentInfoTool { control, self_path };
+        let input = GetAgentInfoInput {
+            agent_name: "p".into(),
         };
-        let input = GetAgentInfoInput { agent_name: "p".into() };
         let task = tokio::spawn(async move { tool.run(input).await });
         match cmd_rx.recv().await.unwrap() {
             HostCommand::GetAgentInfo { reply_tx, .. } => {

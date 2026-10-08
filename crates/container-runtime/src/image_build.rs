@@ -300,7 +300,10 @@ fn is_safe_relative_path(value: &str) -> bool {
 /// Parse `podman inspect --format '{{.Id}}\n{{.Digest}}'` output into two
 /// canonical `sha256:<hex>` values.
 pub fn parse_inspect_id_digest(output: &str) -> Result<(String, String), String> {
-    let mut lines = output.lines().map(str::trim).filter(|line| !line.is_empty());
+    let mut lines = output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty());
     let image_id = normalize_digest(lines.next().ok_or("inspect output is empty")?)?;
     let digest = normalize_digest(
         lines
