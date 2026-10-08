@@ -37,6 +37,8 @@ pub enum RequestIntent {
     FixNode,
     /// Clarify documentation or an interface contract.
     ClarifyContract,
+    /// Provide a new runtime environment (image) for capabilities to run in.
+    NewEnvironment,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

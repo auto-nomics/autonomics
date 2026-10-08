@@ -5,6 +5,7 @@
 //! principal, while the path selects the workspace.
 
 mod container_run;
+mod env;
 mod environment_bind;
 mod environments_list;
 mod fork;
@@ -26,9 +27,11 @@ use agentik_core::tools::ToolRegistration;
 use container_runtime::PodmanConnection;
 use vfs::{OpendalFileStorage, permission::VfsPrincipal};
 
-use crate::{EnvironmentRegistry, Error, PluginWorkspace, Result as RsiResult, RsiInfra};
+use crate::{EnvironmentDevInfra, EnvironmentRegistry, Error, PluginWorkspace, Result as RsiResult, RsiInfra};
 
 pub(crate) const MAX_AGENT_ID_BYTES: usize = 256;
+
+pub use env::environment_development_tool_registrations;
 
 #[derive(Default)]
 struct RegistryState {
@@ -36,6 +39,7 @@ struct RegistryState {
     vfs: Option<OpendalFileStorage>,
     environments: Option<EnvironmentRegistry>,
     infra: Option<Arc<RsiInfra>>,
+    environment_dev: Option<Arc<EnvironmentDevInfra>>,
     development_root: Option<PathBuf>,
     manifest_locks: BTreeMap<String, Arc<tokio::sync::Mutex<()>>>,
 }
@@ -90,48 +94,74 @@ impl PluginDevelopmentToolsetRegistry {
         })
     }
 
+    /// Configure trusted environment-development orchestration.
+    ///
+    /// The infra's store root doubles as the `/environments/dev` backing
+    /// directory, so environment tools resolve their VFS targets through it.
+    pub fn configure_environment_dev(&self, infra: Arc<EnvironmentDevInfra>) -> RsiResult<()> {
+        self.lock(|state| {
+            state.environment_dev = Some(infra);
+            Ok(())
+        })
+    }
+
     fn resolve_target(
         &self,
         principal: &VfsPrincipal,
         plugin_path: &str,
     ) -> RsiResult<PluginTarget> {
-        self.lock(|state| {
-            let base_vfs = state.vfs.clone().ok_or_else(|| {
-                Error::Validation("plugin development VFS is not configured".into())
+        let (root, base_vfs) = self.lock(|state| {
+            let root = state
+                .development_root
+                .clone()
+                .ok_or_else(|| Error::Validation("plugin development root is not configured".into()))?;
+            let vfs = state
+                .vfs
+                .clone()
+                .ok_or_else(|| Error::Validation("plugin development VFS is not configured".into()))?;
+            Ok((root, vfs))
+        })?;
+        let (plugin_name, virtual_path, vfs) = resolve_mounted_workspace(
+            principal,
+            plugin_path,
+            crate::PLUGIN_DEVELOPMENT_VFS_ROOT,
+            base_vfs,
+        )?;
+        Ok(PluginTarget {
+            workspace: PluginWorkspace::new(root.join(&plugin_name)),
+            plugin_name,
+            virtual_path,
+            vfs,
+        })
+    }
+
+    fn resolve_environment_target(
+        &self,
+        principal: &VfsPrincipal,
+        environment_path: &str,
+    ) -> RsiResult<crate::tools::env::EnvironmentTarget> {
+        let (root, base_vfs) = self.lock(|state| {
+            let infra = state.environment_dev.clone().ok_or_else(|| {
+                Error::Validation(
+                    "environment development infrastructure is not configured".into(),
+                )
             })?;
-            let root = state.development_root.clone().ok_or_else(|| {
-                Error::Validation("plugin development root is not configured".into())
-            })?;
-            let normalized = OpendalFileStorage::normalize_path(plugin_path);
-            let suffix = normalized
-                .strip_prefix(crate::PLUGIN_DEVELOPMENT_VFS_ROOT)
-                .and_then(|suffix| suffix.strip_prefix('/'))
-                .unwrap_or_default();
-            let parts = suffix
-                .split('/')
-                .filter(|part| !part.is_empty())
-                .collect::<Vec<_>>();
-            if parts.len() != 1 {
-                return Err(Error::Validation(format!(
-                    "plugin path must address one workspace beneath {}",
-                    crate::PLUGIN_DEVELOPMENT_VFS_ROOT
-                )));
-            }
-            let plugin_name = parts[0];
-            crate::validate_plugin_name(plugin_name)?;
-            let virtual_path = format!("{}/{}", crate::PLUGIN_DEVELOPMENT_VFS_ROOT, plugin_name);
-            let vfs = base_vfs.with_principal(principal.clone());
-            if !vfs.is_mounted(&virtual_path) {
-                return Err(Error::Validation(format!(
-                    "plugin path `{virtual_path}` is outside the development mount"
-                )));
-            }
-            Ok(PluginTarget {
-                plugin_name: plugin_name.to_string(),
-                virtual_path,
-                vfs,
-                workspace: PluginWorkspace::new(root.join(plugin_name)),
-            })
+            let vfs = state
+                .vfs
+                .clone()
+                .ok_or_else(|| Error::Validation("plugin development VFS is not configured".into()))?;
+            Ok((infra.store().root().to_path_buf(), vfs))
+        })?;
+        let (environment_id, virtual_path, _vfs) = resolve_mounted_workspace(
+            principal,
+            environment_path,
+            crate::ENVIRONMENT_DEVELOPMENT_VFS_ROOT,
+            base_vfs,
+        )?;
+        Ok(crate::tools::env::EnvironmentTarget {
+            workspace: PluginWorkspace::new(root.join(&environment_id)),
+            environment_id,
+            virtual_path,
         })
     }
 
@@ -161,11 +191,21 @@ impl PluginDevelopmentToolsetRegistry {
         })
     }
 
-    fn manifest_lock(&self, plugin_name: &str) -> Arc<tokio::sync::Mutex<()>> {
+    fn environment_infra(&self) -> RsiResult<Arc<EnvironmentDevInfra>> {
+        self.lock(|state| {
+            state.environment_dev.clone().ok_or_else(|| {
+                Error::Validation(
+                    "environment development infrastructure is not configured".into(),
+                )
+            })
+        })
+    }
+
+    fn manifest_lock(&self, workspace_key: &str) -> Arc<tokio::sync::Mutex<()>> {
         self.lock(|state| {
             Ok(state
                 .manifest_locks
-                .entry(plugin_name.to_string())
+                .entry(workspace_key.to_string())
                 .or_default()
                 .clone())
         })
@@ -178,6 +218,42 @@ impl PluginDevelopmentToolsetRegistry {
         })?;
         operate(&mut state)
     }
+}
+
+/// Resolve one `/<root>/<name>` VFS address against a mounted storage.
+///
+/// The name must be a single kebab-case segment addressing a workspace whose
+/// mount is visible to this principal.
+fn resolve_mounted_workspace(
+    principal: &VfsPrincipal,
+    path: &str,
+    vfs_root: &str,
+    base_vfs: OpendalFileStorage,
+) -> RsiResult<(String, String, OpendalFileStorage)> {
+    let normalized = OpendalFileStorage::normalize_path(path);
+    let suffix = normalized
+        .strip_prefix(vfs_root)
+        .and_then(|suffix| suffix.strip_prefix('/'))
+        .unwrap_or_default();
+    let parts = suffix
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    if parts.len() != 1 {
+        return Err(Error::Validation(format!(
+            "path must address one workspace beneath {vfs_root}"
+        )));
+    }
+    let name = parts[0];
+    crate::validate_plugin_name(name)?;
+    let virtual_path = format!("{vfs_root}/{name}");
+    let vfs = base_vfs.with_principal(principal.clone());
+    if !vfs.is_mounted(&virtual_path) {
+        return Err(Error::Validation(format!(
+            "path `{virtual_path}` is outside the development mount"
+        )));
+    }
+    Ok((name.to_string(), virtual_path, vfs))
 }
 
 #[derive(Clone)]

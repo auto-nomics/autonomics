@@ -60,6 +60,12 @@ pub enum Error {
     #[error("GitHub operation failed: {0}")]
     GitHub(String),
 
+    #[error("image build failed: {0}")]
+    ImageBuild(String),
+
+    #[error("image registry operation failed: {0}")]
+    ImageRegistry(String),
+
     #[error("plugin source `{name}` already has a conflicting declaration")]
     ConflictingPluginSource { name: String },
 

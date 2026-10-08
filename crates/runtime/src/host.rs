@@ -155,6 +155,48 @@ fn spawn_plugin_distiller(rsi: &Arc<plugin_rsi::RsiInfra>, config: &PluginRsiCon
     });
 }
 
+/// Periodically convert locally activated environment images into published
+/// registry references.
+///
+/// The first interval is skipped intentionally, matching the plugin
+/// distiller: startup must not turn an already usable local activation into
+/// a push before the host has finished opening its registries.
+fn spawn_environment_distiller(
+    environment_dev: &Arc<plugin_rsi::EnvironmentDevInfra>,
+    config: &crate::config::EnvironmentDevConfig,
+) {
+    if !config.distillation_enabled {
+        tracing::info!("environment distillation disabled");
+        return;
+    }
+    let interval_secs = config.effective_distillation_interval_secs();
+    let distiller = plugin_rsi::EnvironmentDistiller::new((**environment_dev).clone());
+    tokio::spawn(async move {
+        let mut timer = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+        timer.tick().await;
+        loop {
+            timer.tick().await;
+            let worker = distiller.clone();
+            let report = worker.run_once().await;
+            if report.failed == 0 {
+                tracing::info!(
+                    considered = report.considered,
+                    completed = report.completed,
+                    "environment distillation pass"
+                );
+            } else {
+                tracing::warn!(
+                    considered = report.considered,
+                    completed = report.completed,
+                    failed = report.failed,
+                    failures = ?report.failures,
+                    "environment distillation pass"
+                );
+            }
+        }
+    });
+}
+
 // AgentKind carries the same tool-capability flags as RuntimeConfig, so we
 // can build a dynamic system prompt that only mentions tools the kind
 // actually enables.
@@ -215,6 +257,9 @@ pub struct SharedInfra {
     pub container_execution: Arc<ContainerExecutionInfra>,
     /// Unified plugin request, development, publication, and registration.
     pub rsi: Arc<plugin_rsi::RsiInfra>,
+    /// Environment (image) development subsystem; `None` when disabled in
+    /// configuration, in which case agents receive no environment tools.
+    pub environment_dev: Option<Arc<plugin_rsi::EnvironmentDevInfra>>,
     pub storage: Arc<dyn AgentStorage>,
     /// Process-wide RCSB PDB HTTP client shared by every enabled agent.
     pub rcsb: Arc<RcsbClient>,
@@ -316,7 +361,7 @@ impl SharedInfra {
             .configure_infra(rsi.clone())
             .map_err(|error| crate::error::Error::Other(error.to_string()))?;
         plugin_rsi::PluginDevelopmentToolsetRegistry::global()
-            .configure_environments(environments)
+            .configure_environments(environments.clone())
             .map_err(|error| crate::error::Error::Other(error.to_string()))?;
         plugin_rsi::PluginDevelopmentToolsetRegistry::global()
             .configure_vfs((*file_storage).clone(), rsi.store().root())
@@ -331,6 +376,49 @@ impl SharedInfra {
         plugin_rsi::PluginDevelopmentToolsetRegistry::global()
             .configure_runtime(Arc::clone(&container_execution.runtime))
             .map_err(|error| crate::error::Error::Other(error.to_string()))?;
+
+        // Environment (image) development shares the plugin toolset registry.
+        // The builder is a second PodmanRuntime handle: the execution infra
+        // stores its runtime as `Arc<dyn PodmanConnection>`, which cannot be
+        // upcast to the separate `ImageBuildConnection` trait. Both handles
+        // resolve the same CLI from the environment and hold no mutable state.
+        let environment_dev_config = config.plugin_rsi.environment_dev.clone();
+        let environment_dev = if environment_dev_config.enabled {
+            let image_builder: Arc<dyn container_runtime::ImageBuildConnection> =
+                Arc::new(container_runtime::PodmanRuntime::from_env());
+            let image_publisher: plugin_rsi::SharedImagePublisher = Arc::new(
+                plugin_rsi::PodmanImagePublisher::new(
+                    plugin_rsi::ImageRegistryConfig {
+                        enabled: true,
+                        registry: environment_dev_config.registry.clone(),
+                        namespace: environment_dev_config.namespace.clone(),
+                    },
+                    Arc::clone(&image_builder),
+                ),
+            );
+            let environment_dev = Arc::new(
+                plugin_rsi::EnvironmentDevInfra::open(
+                    &config.state_dir,
+                    "main",
+                    "Autonomics RSI",
+                    "rsi@autonomics.example",
+                    &environment_dev_config.namespace,
+                    environments.clone(),
+                    image_publisher,
+                )
+                .map_err(|error| crate::error::Error::Other(error.to_string()))?,
+            );
+            environment_dev.configure_builder(Arc::clone(&image_builder));
+            environment_dev.configure_runner(Arc::clone(&container_execution.runtime));
+            plugin_rsi::PluginDevelopmentToolsetRegistry::global()
+                .configure_environment_dev(Arc::clone(&environment_dev))
+                .map_err(|error| crate::error::Error::Other(error.to_string()))?;
+            spawn_environment_distiller(&environment_dev, &environment_dev_config);
+            Some(environment_dev)
+        } else {
+            tracing::info!("environment development disabled");
+            None
+        };
         // Reclaim crash residue and expired scratch from previous runs once at
         // startup, then on the configured interval. Failures are logged and
         // never block the host.
@@ -507,6 +595,7 @@ impl SharedInfra {
             vfs,
             container_execution,
             rsi,
+            environment_dev,
             catalog: catalog_service,
             storage,
             rcsb,
@@ -652,6 +741,11 @@ impl SharedInfra {
             tools.extend(plugin_rsi::plugin_development_tool_registrations(
                 agent_path.as_str(),
             ));
+            if self.environment_dev.is_some() {
+                tools.extend(plugin_rsi::environment_development_tool_registrations(
+                    agent_path.as_str(),
+                ));
+            }
         }
         if let Some(catalog) = self.catalog.clone() {
             tools.extend(crate::catalog_tools::catalog_registrations(catalog));
@@ -805,6 +899,7 @@ fn build_vfs(config: &RuntimeConfig) -> Result<MountedObjectStore> {
     let plugin_layout = plugin_rsi::PluginStateLayout::open(&config.state_dir);
     ensure_plugin_mounts(&mut manifest, config, &plugin_layout)?;
     ensure_workspace_mount(&mut manifest, &PodmanConfig::from_env().workspace_root);
+    ensure_environment_dev_mount(&mut manifest, config)?;
     MountedObjectStore::from_manifest(&manifest).map_err(|e| Error::Other(e.to_string()))
 }
 
@@ -820,6 +915,7 @@ async fn build_vfs_with_catalog(
     let plugin_layout = plugin_rsi::PluginStateLayout::open(&config.state_dir);
     ensure_plugin_mounts(&mut manifest, config, &plugin_layout)?;
     ensure_workspace_mount(&mut manifest, &PodmanConfig::from_env().workspace_root);
+    ensure_environment_dev_mount(&mut manifest, config)?;
 
     let mut catalog_registry = dag_core::BundleRegistry::new();
     let mut catalog = None;
@@ -977,6 +1073,75 @@ fn plugin_development_permissions() -> vfs::permission::MountPermissions {
         },
         VfsPathRule::Deny {
             path: "**/Dockerfile".into(),
+            access: vec![VfsAccess::Write],
+        },
+    ])
+}
+
+/// Mount `<state_dir>/environments/dev` at `/environments/dev`.
+///
+/// Unlike the plugin mount this is unconditional: environment workspaces are
+/// a fresh namespace, so no pre-existing registry file gates the mount.
+fn ensure_environment_dev_mount(
+    manifest: &mut vfs::VfsManifest,
+    config: &RuntimeConfig,
+) -> Result<()> {
+    const BACKEND_ID: &str = "autonomics-environment-development";
+    if manifest
+        .backend
+        .iter()
+        .any(|backend| backend.id == BACKEND_ID)
+    {
+        return Err(Error::Other(
+            "environment development backend is reserved for lifecycle-managed mounts".into(),
+        ));
+    }
+    let root = config
+        .state_dir
+        .join("environments")
+        .join("dev");
+    std::fs::create_dir_all(&root)
+        .map_err(|error| Error::Other(format!("create `{}`: {error}", root.display())))?;
+    manifest.backend.push(vfs::BackendDefinition {
+        id: BACKEND_ID.into(),
+        config: vfs::BackendConfig::local(root.to_string_lossy().into_owned()),
+    });
+    manifest.mount.push(vfs::MountDefinition {
+        path: plugin_rsi::ENVIRONMENT_DEVELOPMENT_VFS_ROOT.into(),
+        backend: BACKEND_ID.into(),
+        source: "/".into(),
+        read_only: false,
+        permissions: environment_development_permissions(),
+    });
+    Ok(())
+}
+
+/// Permissions for environment workspaces: the plugin deny rules minus the
+/// Dockerfile/Containerfile write ban — authoring the Containerfile is the
+/// entire point of this mount.
+fn environment_development_permissions() -> vfs::permission::MountPermissions {
+    use vfs::permission::{VfsAccess, VfsMode, VfsPathRule};
+
+    let deny = |path: &str| VfsPathRule::Deny {
+        path: path.to_string(),
+        access: vec![VfsAccess::Read, VfsAccess::Write, VfsAccess::Execute],
+    };
+    vfs::permission::MountPermissions::unix(
+        vfs::permission::VfsOwnership {
+            uid: vfs::permission::VFS_ROOT_UID,
+            gid: vfs::permission::VFS_PLUGIN_DEVELOPER_GID,
+        },
+        VfsMode::from_bits(0o775),
+        VfsMode::from_bits(0o664),
+        VfsMode::from_bits(0o775),
+    )
+    .with_rules(vec![
+        deny(".git"),
+        deny(".git/**"),
+        deny("**/.git"),
+        deny("**/.git/**"),
+        VfsPathRule::Deny {
+            path: "*/manifest.toml".into(),
             access: vec![VfsAccess::Write],
         },
     ])

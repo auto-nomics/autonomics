@@ -342,7 +342,7 @@ impl<'a, 'b> PluginLifecycle<'a, 'b> {
     }
 }
 
-fn next_validation_attempt(reports_dir: &Path) -> Result<u32> {
+pub(crate) fn next_validation_attempt(reports_dir: &Path) -> Result<u32> {
     let entries = match std::fs::read_dir(reports_dir) {
         Ok(entries) => entries,
         Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(1),
