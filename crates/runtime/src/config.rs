@@ -903,13 +903,19 @@ You are the Researcher. You own the scientific question, analysis design, DAG\n\
 construction, execution, and interpretation. Before requesting implementation,\n\
 inspect existing capabilities with `list_node_factories`, `get_node_doc`,\n\
 `get_node_spec`, and `get_node_ports`, and address nodes as `plugin/node`.\n\
+The system's plugin and node ecosystem is dynamic, not fixed: new capabilities\n\
+can be implemented and installed on demand, so an absent or imperfect node is\n\
+a normal discovery, not a dead end.\n\
 \n\
-If no suitable node exists, do not improvise plugin development or container\n\
-debugging. Record the capability gap with `evo_observe`, then delegate the work\n\
-to a Developer through `delegate_to` or by spawning an agent with\n\
-`profile_segment=\"developer\"`. Provide the scientific objective, expected\n\
-inputs and outputs, data shape, error/edge cases, acceptance checks, and a\n\
-small representative sample when available.\n\
+Actively delegate capability work when existing nodes cannot solve the\n\
+analysis need well. If no suitable node exists, if composing current nodes\n\
+would be awkward or unreliable, or if a reusable operation should become a\n\
+first-class node, do not improvise plugin development or container debugging.\n\
+Promptly delegate the work to a Developer through `delegate_to` or by spawning\n\
+an agent with `profile_segment=\"developer\"`. Record the capability gap with\n\
+`evo_observe`. Provide the scientific objective, expected inputs and outputs,\n\
+data shape, error/edge cases, acceptance checks, and a small representative\n\
+sample when available.\n\
 \n\
 Separate capability requests from analysis requests. A Developer builds and\n\
 validates a node; it does not execute your research dataset or answer a\n\
@@ -927,16 +933,20 @@ yourself.";
 
 const PROMPT_DEVELOPER_HANDOFF: &str = "\n\
 ### Developer Handoff\n\
-You are the Developer. You own plugin and node implementation, environment\n\
-selection, focused container validation, installation, and uninstallation.\n\
+You are the Developer. Your exclusive scope is plugin and node implementation,\n\
+environment selection, focused container validation, installation, and\n\
+uninstallation. You do not accept research tasks, data-analysis tasks, or\n\
+requests to execute datasets.\n\
 `plugin_container_run` is for narrow plugin/test validation only; do not use it\n\
-to perform open-ended research analysis or bypass the DAG engine.\n\
+for real research analysis, data processing, interpretation, or bypassing the\n\
+DAG engine.\n\
 \n\
 Maintain the execution boundary. Accept implementation requests for plugins,\n\
 nodes, specs, ports, scripts, environment bindings, and lifecycle operations.\n\
-If a Researcher asks you to execute a research dataset, produce scientific\n\
-results, or \"test the analysis on the real data\", reject that execution and\n\
-return the required implementation handoff. Run only deterministic, synthetic,\n\
+If a Researcher asks you to execute a research dataset, perform research or\n\
+data analysis, produce scientific results, or \"test the analysis on the real\n\
+data\", explicitly reject that task and return the required implementation\n\
+handoff. Run only deterministic, synthetic,\n\
 schema-conformant fixtures through `plugin_container_run` or focused plugin\n\
 tests. Do not inspect, process, summarize, or interpret mounted research data.\n\
 The available DAG tools are for plugin installation and focused smoke\n\
@@ -987,8 +997,9 @@ const PROMPT_GENERAL: &str = "\n\
 - Report quantitative results with appropriate precision and confidence intervals when available.\n\
 - If a tool call fails, diagnose the error and retry with corrected parameters before asking the user.";
 
-/// Trait so [`build_system_prompt`] can accept either an [`AgentProfile`] or a
-/// [`RuntimeConfig`] — both carry the same boolean tool-capability flags.
+/// Trait so [`build_system_prompt`] can accept either an
+/// [`agentik_core::AgentKind`] or a [`RuntimeConfig`] — both carry the same
+/// boolean tool-capability flags.
 pub trait PromptCapabilities {
     fn enable_bibliography(&self) -> bool;
     fn enable_opengwas(&self) -> bool;
@@ -1068,8 +1079,9 @@ pub fn build_system_prompt<C: PromptCapabilities>(caps: &C) -> String {
 
 /// The full default system prompt with all sections enabled.
 ///
-/// Prefer [`build_system_prompt`] when you have an [`AgentProfile`] or
-/// [`RuntimeConfig`] — that function omits sections for disabled tool groups.
+/// Prefer [`build_system_prompt`] when you have an
+/// [`agentik_core::AgentKind`] or [`RuntimeConfig`] — that function omits
+/// sections for disabled tool groups.
 pub fn default_system_prompt() -> String {
     struct AllEnabled;
     impl PromptCapabilities for AllEnabled {
@@ -1630,17 +1642,9 @@ mod tests {
 
     #[test]
     fn system_prompt_separates_researcher_and_developer_handoff() {
-        let profiles = agentik_core::AgentProfile::defaults();
-        let researcher = profiles
-            .iter()
-            .find(|profile| profile.path == "researcher")
-            .unwrap();
-        let developer = profiles
-            .iter()
-            .find(|profile| profile.path == "developer")
-            .unwrap();
+        use agentik_core::AgentKind;
 
-        let researcher_prompt = build_system_prompt(researcher);
+        let researcher_prompt = build_system_prompt(&AgentKind::Researcher);
         assert!(researcher_prompt.contains("Researcher / Developer Collaboration"));
         assert!(researcher_prompt.contains("delegate_to"));
         assert!(researcher_prompt.contains("profile_segment=\"developer\""));
@@ -1650,11 +1654,11 @@ mod tests {
         assert!(!researcher_prompt.contains("Plugin Self-Improvement"));
         assert!(!researcher_prompt.contains("Developer Handoff"));
 
-        let developer_prompt = build_system_prompt(developer);
+        let developer_prompt = build_system_prompt(&AgentKind::Developer);
         assert!(developer_prompt.contains("Plugin Self-Improvement"));
         assert!(developer_prompt.contains("Developer Handoff"));
         assert!(developer_prompt.contains("Maintain the execution boundary"));
-        assert!(developer_prompt.contains("reject that execution"));
+        assert!(developer_prompt.contains("explicitly reject that task"));
         assert!(developer_prompt.contains("synthetic"));
         assert!(developer_prompt.contains("full `plugin/node` address"));
         assert!(developer_prompt.contains("validation evidence"));

@@ -18,7 +18,9 @@ const DEFAULT_TOOL_TIMEOUT_SECS: u64 = 900;
 
 #[tool(
     name = "plugin_container_run",
-    description = "Run one argv command in the plugin environment with the addressed VFS workspace mounted at /work."
+    description = "Run one argv command in the plugin environment for node/plugin debugging only. \
+                  Do not use this tool for real data analysis; analyze real data through the \
+                  intended plugin nodes and supported data-analysis tools."
 )]
 pub(super) struct PluginContainerRunInput {
     /// Plugin workspace path, such as `/plugins/dev/hello-world`.

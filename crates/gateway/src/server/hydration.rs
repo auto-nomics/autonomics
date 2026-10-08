@@ -30,7 +30,7 @@ pub(crate) async fn get_state(
     let snapshot = StateSnapshot {
         last_seq: 0, // filled below
         active_model_spec: catalog.active_model.clone(),
-        profiles: (*state.profiles).clone(),
+        profiles: agentik_core::AgentKind::ALL.to_vec(),
         agents: live_agents,
         sessions: state.sessions.snapshot(),
         display_settings,
@@ -45,8 +45,6 @@ pub(crate) async fn get_state(
 }
 
 #[utoipa::path(get, path = "/api/v1/profiles", tag = "hydration", responses((status = 200, body = Object)))]
-pub(crate) async fn get_profiles(
-    State(state): State<GatewayState>,
-) -> Json<Vec<agentik_core::AgentProfile>> {
-    Json((*state.profiles).clone())
+pub(crate) async fn get_profiles() -> Json<Vec<agentik_core::AgentKind>> {
+    Json(agentik_core::AgentKind::ALL.to_vec())
 }

@@ -9,7 +9,7 @@
 
 use std::time::Duration;
 
-use agentik_core::AgentProfile;
+use agentik_core::AgentRuntimeOverrides;
 use agentik_types::{AgentEvent, AgentPlan};
 use eventsource_stream::Eventsource;
 use futures::{Stream, StreamExt};
@@ -221,7 +221,7 @@ impl GatewayClient {
         self.get("/state").await
     }
 
-    pub async fn profiles(&self) -> Result<Vec<AgentProfile>> {
+    pub async fn profiles(&self) -> Result<Vec<agentik_core::AgentKind>> {
         self.get("/profiles").await
     }
 
@@ -231,12 +231,14 @@ impl GatewayClient {
         self.get("/agents").await
     }
 
-    /// Spawn an agent from a full profile. Returns the registered path.
+    /// Spawn an agent from an agent-kind name (`researcher`/`developer`).
+    /// Returns the registered path.
     pub async fn spawn_agent(
         &self,
         name: &str,
         parent_path: &str,
-        profile: &AgentProfile,
+        profile: &str,
+        runtime: Option<AgentRuntimeOverrides>,
         model_spec: Option<&str>,
     ) -> Result<String> {
         let response: SpawnAgentResponse = self
@@ -246,7 +248,8 @@ impl GatewayClient {
                 Some(&SpawnAgentRequest {
                     name: name.to_string(),
                     parent_path: parent_path.to_string(),
-                    profile: profile.clone(),
+                    profile: profile.to_string(),
+                    runtime,
                     model_spec: model_spec.map(String::from),
                 }),
             )

@@ -1,14 +1,14 @@
 //! Wire protocol types shared by the gateway server and its clients.
 //!
 //! Design rule: wherever a runtime type is already serde-complete
-//! (`AgentEvent`, `AgentInfo`, `AgentProfile`, …) it crosses the wire
+//! (`AgentEvent`, `AgentInfo`, `AgentKind`, …) it crosses the wire
 //! as-is, so frontends reuse their existing typed event handlers verbatim.
 //! Types that are *not* serde-complete get a `…View` mirror here
 //! (`HostEvent` → [`HostEventView`]).
 
 use std::collections::HashMap;
 
-use agentik_core::{AgentProfile, AgentRuntimeConfig, AgentRuntimeOverrides};
+use agentik_core::{AgentRuntimeConfig, AgentRuntimeOverrides};
 use agentik_types::SessionInfo;
 use runtime::control::{AgentInfo, AgentStatus};
 use runtime::model_bootstrap::{ModelRow, ProviderRow};
@@ -112,7 +112,7 @@ pub struct StateSnapshot {
     pub last_seq: u64,
     pub active_model_spec: Option<String>,
     #[schema(schema_with = opaque_object)]
-    pub profiles: Vec<AgentProfile>,
+    pub profiles: Vec<agentik_core::AgentKind>,
     /// Live registered agents (from `HostControl::get_status`).
     #[schema(schema_with = opaque_object)]
     pub agents: Vec<AgentInfo>,
@@ -168,17 +168,21 @@ pub struct GatewayStatus {
 
 // ── Requests / responses ──────────────────────────────────────────────
 
-/// `POST /api/v1/agents` — spawn from a full profile (covers both the
-/// profile picker and the resume-from-storage flow, which may reconstruct
-/// profiles that no longer exist in the profile store).
+/// `POST /api/v1/agents` — spawn from an agent kind (covers both the
+/// profile picker and the resume-from-storage flow).
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SpawnAgentRequest {
     /// Agent name segment (joined onto `parent_path`).
     pub name: String,
     /// Parent path as a string, e.g. `/root`.
     pub parent_path: String,
+    /// Agent kind to instantiate: `researcher` or `developer`.
+    pub profile: String,
+    /// Optional per-agent runtime overrides (used by the resume flow to
+    /// restore the persisted settings).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(schema_with = opaque_object)]
-    pub profile: AgentProfile,
+    pub runtime: Option<AgentRuntimeOverrides>,
     /// Optional `provider:model` override; unresolvable specs fall back to
     /// the daemon's default model (same semantics as the TUI today).
     pub model_spec: Option<String>,

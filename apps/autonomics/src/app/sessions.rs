@@ -55,13 +55,13 @@ impl App {
                     }
                 } else {
                     // ── Agent naming mode ──
-                    let profile = self.state.pending_profile.take();
-                    if let Some(p) = profile {
+                    let kind = self.state.pending_profile.take();
+                    if let Some(kind) = kind {
                         if name.is_empty() {
                             tracing::warn!("agent name cannot be empty");
                             return;
                         }
-                        self.spawn_agent_from_profile(&p, &name);
+                        self.spawn_agent_from_profile(kind, &name);
                     }
                 }
             }

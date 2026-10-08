@@ -114,12 +114,7 @@ pub async fn run_daemon(
         Err(e) => return Err(e.into()),
     };
 
-    // ── Profiles + default model ─────────────────────────────────────
-    let profile_storage = host.infra().profile_storage.clone();
-    let _ = profile_storage.seed_defaults_if_empty().await;
-    let profiles = profile_storage.list_profiles().await.unwrap_or_default();
-    host.set_profiles(profiles.clone());
-
+    // ── Default model ────────────────────────────────────────────────
     let model_slot: Arc<ArcSwapOption<Model>> =
         Arc::new(ArcSwapOption::from_pointee(models.active_model(&hub)));
     host.set_model(model_slot.clone());
@@ -129,7 +124,7 @@ pub async fn run_daemon(
     // A startup-storage failure is fatal; malformed individual rows are
     // logged and skipped by the restore loop itself.
     let restored_agents = host
-        .restore_persisted_agents(&profiles, model_slot.clone(), |spec| {
+        .restore_persisted_agents(model_slot.clone(), |spec| {
             models.resolve_with_refresh_callback(spec, &hub)
         })
         .await
@@ -157,7 +152,6 @@ pub async fn run_daemon(
         dockerhub: Arc::new(DockerHubClient::default()),
         models: models.clone(),
         model_slot: model_slot.clone(),
-        profiles: Arc::new(profiles),
         addr: addr_slot.clone(),
         started: std::time::Instant::now(),
         shutdown: shutdown.clone(),

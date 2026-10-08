@@ -137,8 +137,8 @@ impl CommandPaletteState {
         }
     }
 
-    /// Compatibility no-op (profiles are handled by the picker popup).
-    pub fn set_profiles(&mut self, _profiles: &[agentik_core::AgentProfile]) {}
+    /// Compatibility no-op (agent kinds are handled by the picker popup).
+    pub fn set_profiles(&mut self, _profiles: &[agentik_core::AgentKind]) {}
 
     /// Whether the palette is visible.
     pub fn is_visible(&self) -> bool {

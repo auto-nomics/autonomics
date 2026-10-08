@@ -26,8 +26,8 @@ pub struct RunArgs {
     #[arg(long, short = 'o', value_name = "FILE")]
     pub output_last_message: Option<PathBuf>,
 
-    /// Spawn from this profile path (default: first stored profile).
-    #[arg(long, value_name = "PATH")]
+    /// Agent kind to spawn: researcher or developer (default: researcher).
+    #[arg(long, value_name = "KIND")]
     pub profile: Option<String>,
 
     /// Create or restore the agent at /root/<NAME>. Concurrent live agents

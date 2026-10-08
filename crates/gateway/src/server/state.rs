@@ -25,10 +25,8 @@ pub struct GatewayState {
     pub dockerhub: Arc<DockerHubClient>,
     pub models: Arc<ModelStore>,
     /// The daemon-wide default model slot, shared with every agent
-    /// spawned without a profile-specific override.
+    /// spawned without a model-specific override.
     pub model_slot: Arc<ArcSwapOption<agentik_sdk::model::Model>>,
-    /// Startup-loaded profile cache (spawn-by-path + hydration).
-    pub profiles: Arc<Vec<agentik_core::AgentProfile>>,
     /// The bound API address, installed by the daemon after
     /// `api_server::server::start` returns — bind resolves only after
     /// the router (and this state) is built (`127.0.0.1:0` in tests

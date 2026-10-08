@@ -4,7 +4,7 @@
 //! preview pane. Keeping the chrome and row styling here prevents the two
 //! flows from drifting apart while allowing each picker to keep its own data.
 
-use agentik_core::AgentProfile;
+use agentik_core::AgentKind;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     prelude::Buffer,
@@ -221,8 +221,8 @@ pub fn render_preview_text(area: Rect, buf: &mut Buffer, text: &str) {
     );
 }
 
-pub fn profile_preview_lines(
-    profile: &AgentProfile,
+pub fn kind_preview_lines(
+    kind: agentik_core::AgentKind,
     leading_fields: Vec<(&'static str, String)>,
 ) -> Vec<Line<'static>> {
     let mut lines = leading_fields
@@ -230,59 +230,28 @@ pub fn profile_preview_lines(
         .map(|(label, value)| field_line(label, value))
         .collect::<Vec<_>>();
 
-    lines.push(field_line("Profile", profile.path.clone()));
-
-    if let Some(parent) = profile.parent_path() {
-        lines.push(field_line("Parent", parent.to_string()));
-    }
-
-    if !profile.description.is_empty() {
-        lines.push(field_line("Desc", profile.description.clone()));
-    }
-
-    lines.push(field_line("Identity", profile.agent_identity.clone()));
-    lines.push(field_line(
-        "Model",
-        profile
-            .preferred_model
-            .clone()
-            .unwrap_or_else(|| "(global default)".to_string()),
-    ));
-    lines.push(field_line(
-        "Memory",
-        override_label(profile.runtime.use_memory),
-    ));
-    lines.push(field_line(
-        "Memory gen",
-        override_label(profile.runtime.generate_memory),
-    ));
+    lines.push(field_line("Profile", kind.name().to_string()));
+    lines.push(field_line("Desc", kind.description().to_string()));
+    lines.push(field_line("Identity", kind.agent_identity().to_string()));
     lines.push(Line::from(""));
     lines.push(section_line("Capabilities"));
 
     for (name, enabled) in [
-        ("bibliography", profile.enable_bibliography),
-        ("writing", profile.enable_writing),
-        ("opengwas", profile.enable_opengwas),
-        ("opentargets", profile.enable_opentargets),
-        ("gwascatalog", profile.enable_gwascatalog),
-        ("chembl", profile.enable_chembl),
-        ("rcsb", profile.enable_rcsb),
-        ("kegg", profile.enable_kegg),
-        ("dag-history", profile.enable_dag_history),
-        ("plugin-rsi", profile.enable_plugin_rsi),
+        ("bibliography", kind.enable_bibliography()),
+        ("writing", kind.enable_writing()),
+        ("opengwas", kind.enable_opengwas()),
+        ("opentargets", kind.enable_opentargets()),
+        ("gwascatalog", kind.enable_gwascatalog()),
+        ("chembl", kind.enable_chembl()),
+        ("rcsb", kind.enable_rcsb()),
+        ("kegg", kind.enable_kegg()),
+        ("dag-history", kind.enable_dag_history()),
+        ("plugin-rsi", kind.enable_plugin_rsi()),
     ] {
         lines.push(flag_line(name, enabled));
     }
 
     lines
-}
-
-fn override_label(value: Option<bool>) -> String {
-    match value {
-        None => "inherit".to_string(),
-        Some(true) => "on".to_string(),
-        Some(false) => "off".to_string(),
-    }
 }
 
 pub fn field_line(label: &str, value: impl Into<String>) -> Line<'static> {

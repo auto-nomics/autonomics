@@ -23,7 +23,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::processor::OutputProcessor;
-use crate::{RunError, RunSummary, Terminal, TranslationState, event::*, pick_profile};
+use crate::{RunError, RunSummary, Terminal, TranslationState, event::*, resolve_kind};
 
 /// How long to wait for the daemon's `AgentRegistered` frame (carrying
 /// the restored agent id) before proceeding without it.
@@ -45,9 +45,10 @@ pub struct GatewayRunConfig {
     /// Agent name segment; the runtime path is `/root/<name>`.
     /// `None` uses the stable legacy name `headless`.
     pub agent_name: Option<String>,
-    /// Profile path to spawn from; `None` picks the first stored profile.
+    /// Agent kind to spawn (`researcher`/`developer`); `None` defaults to
+    /// researcher.
     pub profile: Option<String>,
-    /// Runtime overrides layered onto the selected profile before spawn.
+    /// Runtime overrides sent with the spawn request.
     pub agent_runtime: AgentRuntimeOverrides,
     /// Model override as `provider:model`; `None` uses the daemon's
     /// active model.
@@ -98,12 +99,7 @@ pub async fn list_sessions_via_gateway(
     let client = gateway::GatewayClient::new(&addr, token.as_deref())
         .map_err(|e| RunError::Gateway(e.to_string()))?;
 
-    let state = client
-        .state()
-        .await
-        .map_err(|e| RunError::Gateway(e.to_string()))?;
-    let _profile = pick_profile(&state.profiles, profile.as_deref())
-        .ok_or(RunError::NoProfile { requested: profile })?;
+    let _kind = resolve_kind(profile.as_deref())?;
     let agents = client
         .list_storage_agents()
         .await
@@ -128,16 +124,13 @@ pub async fn run_via_gateway_with_client<P: OutputProcessor>(
     let started = Instant::now();
     let agent_name = validated_agent_name(config.agent_name.as_deref())?;
 
-    // ── Resolve profile + model from the daemon snapshot ─────────────
+    // ── Resolve kind + model from the daemon snapshot ────────────────
     let state = client
         .state()
         .await
         .map_err(|e| RunError::Gateway(e.to_string()))?;
-    let mut profile =
-        pick_profile(&state.profiles, config.profile.as_deref()).ok_or(RunError::NoProfile {
-            requested: config.profile.clone(),
-        })?;
-    profile.apply_runtime_overrides(config.agent_runtime);
+    let kind = resolve_kind(config.profile.as_deref())?;
+    let spawn_runtime = Some(config.agent_runtime.clone());
     // Spawn override = the user's --model only. `None` means "daemon
     // default" — the daemon resolves and attaches its own callbacks;
     // echoing the daemon's active spec back as an override would force a
@@ -167,7 +160,13 @@ pub async fn run_via_gateway_with_client<P: OutputProcessor>(
 
     // ── Spawn at the named identity, with a contention fallback ─────
     let agent_path = match client
-        .spawn_agent(&agent_name, "/root", &profile, spawn_model_spec)
+        .spawn_agent(
+            &agent_name,
+            "/root",
+            kind.name(),
+            spawn_runtime.clone(),
+            spawn_model_spec,
+        )
         .await
     {
         Ok(path) => path,
@@ -190,7 +189,13 @@ pub async fn run_via_gateway_with_client<P: OutputProcessor>(
                 "another run holds the named agent; spawning with a unique identity"
             );
             client
-                .spawn_agent(&fallback, "/root", &profile, spawn_model_spec)
+                .spawn_agent(
+                    &fallback,
+                    "/root",
+                    kind.name(),
+                    spawn_runtime.clone(),
+                    spawn_model_spec,
+                )
                 .await
                 .map_err(|e| RunError::Spawn {
                     message: e.to_string(),
@@ -307,7 +312,7 @@ pub async fn run_via_gateway_with_client<P: OutputProcessor>(
         run_id: config.run_id,
         agent_id,
         session_id: Uuid::nil(),
-        profile: profile.path.clone(),
+        profile: kind.name().to_string(),
         model: model_name,
     }));
 
@@ -458,7 +463,7 @@ pub async fn run_via_gateway_with_client<P: OutputProcessor>(
 
     Ok(RunSummary {
         run_id: config.run_id,
-        profile: profile.path.clone(),
+        profile: kind.name().to_string(),
         outcome: match terminal {
             Terminal::Completed => crate::processor::Outcome::Completed,
             Terminal::Failed => crate::processor::Outcome::Failed,

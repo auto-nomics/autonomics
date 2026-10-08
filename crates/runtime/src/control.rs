@@ -318,37 +318,50 @@ impl HostControl {
         .unwrap_or(Err("host command channel closed".into()))
     }
 
+    /// Spawn and register an agent from the caller's kind (or an explicit
+    /// role segment). Used by the LLM-facing `spawn_agent` tool.
     pub async fn spawn_agent(
         &self,
         name: &str,
         caller_path: &agentik_types::AgentPath,
-        caller_profile_path: &str,
+        caller_kind: agentik_core::AgentKind,
         profile_segment: Option<&str>,
     ) -> Result<String, String> {
+        let kind = match profile_segment {
+            None => caller_kind,
+            Some(seg) => match agentik_core::AgentKind::from_name(seg) {
+                Some(kind) => kind,
+                None => {
+                    return Err(format!(
+                        "Unknown role '{seg}'. Use researcher or developer."
+                    ));
+                }
+            },
+        };
         self.ask(|tx| HostCommand::Spawn {
             name: name.into(),
             caller_path: caller_path.clone(),
-            caller_profile_path: caller_profile_path.into(),
-            profile_segment: profile_segment.map(String::from),
+            config: Box::new(agentik_core::AgentProfileConfig::new(kind)),
+            model_override: None,
             reply_tx: tx,
         })
         .await
         .unwrap_or(Err("host command channel closed".into()))
     }
 
-    /// Spawn and register an agent from a full profile + optional model
-    /// override. Used by the TUI.
-    pub async fn spawn_with_profile(
+    /// Spawn and register an agent from a full per-agent config + optional
+    /// model override. Used by the TUI, gateway, and restore flows.
+    pub async fn spawn_with_config(
         &self,
         name: &str,
         caller_path: &agentik_types::AgentPath,
-        profile: agentik_core::AgentProfile,
+        config: agentik_core::AgentProfileConfig,
         model_override: Option<Model>,
     ) -> Result<String, String> {
-        self.ask(|tx| HostCommand::SpawnWithProfile {
+        self.ask(|tx| HostCommand::Spawn {
             name: name.into(),
             caller_path: caller_path.clone(),
-            profile: Box::new(profile),
+            config: Box::new(config),
             model_override,
             reply_tx: tx,
         })
@@ -435,25 +448,12 @@ impl HostControl {
 pub enum HostCommand {
     /// Spawn and register an agent. Reply: Ok(path_string) or Err(msg).
     /// `caller_path` is the parent agent's path; the child's path is
-    /// derived as `caller_path.join(name)`.
-    /// `caller_profile_path` is the caller's profile path for child profile
-    /// lookup. `profile_segment` is None (reuse caller's profile), a relative
-    /// segment (e.g. "genomics"), or an absolute profile path.
+    /// derived as `caller_path.join(name)`. `config` carries the agent
+    /// kind plus per-agent model/runtime preferences.
     Spawn {
         name: String,
         caller_path: agentik_types::AgentPath,
-        caller_profile_path: String,
-        profile_segment: Option<String>,
-        reply_tx: oneshot::Sender<Result<String, String>>,
-    },
-
-    /// Spawn and register an agent from a full profile + optional model
-    /// override. Used by the TUI for spawn-from-profile / restore flows.
-    /// `caller_path` is the parent agent's path.
-    SpawnWithProfile {
-        name: String,
-        caller_path: agentik_types::AgentPath,
-        profile: Box<agentik_core::AgentProfile>,
+        config: Box<agentik_core::AgentProfileConfig>,
         model_override: Option<Model>,
         reply_tx: oneshot::Sender<Result<String, String>>,
     },

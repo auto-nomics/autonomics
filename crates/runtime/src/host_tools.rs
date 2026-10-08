@@ -23,7 +23,7 @@ use crate::control::HostControl;
 pub fn host_tools(
     control: Option<HostControl>,
     self_path: &agentik_types::AgentPath,
-    caller_profile_path: &str,
+    caller_kind: agentik_core::AgentKind,
 ) -> Vec<ToolRegistration> {
     let Some(ctrl) = control else {
         return vec![];
@@ -33,7 +33,7 @@ pub fn host_tools(
         ToolRegistration::from(SpawnAgentTool {
             control: ctrl.clone(),
             caller_path: self_path.clone(),
-            caller_profile_path: caller_profile_path.into(),
+            caller_kind,
         }),
         ToolRegistration::from(DelegateToTool {
             control: ctrl.clone(),
@@ -104,7 +104,7 @@ struct SpawnAgentInput {
 struct SpawnAgentTool {
     control: HostControl,
     caller_path: agentik_types::AgentPath,
-    caller_profile_path: String,
+    caller_kind: agentik_core::AgentKind,
 }
 
 #[async_trait]
@@ -120,7 +120,7 @@ impl ToolFunction for SpawnAgentTool {
             .spawn_agent(
                 &input.agent_name,
                 &self.caller_path,
-                &self.caller_profile_path,
+                self.caller_kind,
                 input.profile_segment.as_deref(),
             )
             .await

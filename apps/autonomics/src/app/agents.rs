@@ -9,11 +9,15 @@ impl App {
     /// can't call `block_on` again. Instead, we spawn the creation as a
     /// background task and send the result back via the app event channel.
     /// The `AgentSpawned` event is handled in `handle_app_event`.
-    pub(super) fn spawn_agent_from_profile(&mut self, profile: &AgentProfile, agent_name: &str) {
+    pub(super) fn spawn_agent_from_profile(
+        &mut self,
+        kind: agentik_core::AgentKind,
+        agent_name: &str,
+    ) {
         let target_path = agentik_types::AgentPath::root()
             .join(agent_name)
             .unwrap_or_else(|_| agentik_types::AgentPath::root());
-        self.spawn_agent_at_path(profile, target_path);
+        self.spawn_agent_at_path(agentik_core::AgentProfileConfig::new(kind), target_path);
     }
 
     /// Spawn an agent at its persisted hierarchical path. Tool-spawned
@@ -21,12 +25,12 @@ impl App {
     /// leaf name would create a different runtime identity.
     pub(super) fn spawn_agent_at_path(
         &mut self,
-        profile: &AgentProfile,
+        config: agentik_core::AgentProfileConfig,
         target_path: agentik_types::AgentPath,
     ) {
         let agent_name = target_path.name();
         tracing::info!(
-            profile = %profile.path,
+            kind = config.kind.name(),
             agent = %target_path,
             "spawn_agent_at_path called"
         );
@@ -45,13 +49,14 @@ impl App {
         }
 
         let client = self.client.clone();
-        let profile_clone = profile.clone();
+        let kind = config.kind;
+        let runtime = config.runtime.clone();
         let agent_name_owned = agent_name.to_string();
         let parent_path = target_path
             .parent()
             .unwrap_or_else(agentik_types::AgentPath::root);
-        let model_spec = profile.preferred_model.clone();
-        let profile_name_owned = profile.path.clone();
+        let model_spec = config.preferred_model.clone();
+        let kind_name_owned = kind.name().to_string();
         let tx = self.app_event_tx.clone();
 
         tracing::debug!(has_override = model_spec.is_some(), "model spec passed");
@@ -59,7 +64,7 @@ impl App {
             &format!("spawn_agent::{agent_name_owned}"),
             move || async move {
                 tracing::debug!(
-                    profile = %profile_clone.path,
+                    kind = kind_name_owned,
                     agent = %agent_name_owned,
                     "async spawn task started"
                 );
@@ -71,23 +76,24 @@ impl App {
                     .spawn_agent(
                         &agent_name_owned,
                         parent_path.as_str(),
-                        &profile_clone,
+                        kind.name(),
+                        Some(runtime),
                         model_spec.as_deref(),
                     )
                     .await
                     .map_err(|e| e.to_string());
                 let event = match result {
                     Ok(name) => {
-                        tracing::info!(profile = %profile_name_owned, agent = %name, "agent spawned and registered with daemon");
+                        tracing::info!(kind = %kind_name_owned, agent = %name, "agent spawned and registered with daemon");
                         crate::app_event::AppEvent::AgentSpawned {
-                            profile_name: profile_name_owned,
+                            profile_name: kind_name_owned.clone(),
                             result: Ok(name),
                         }
                     }
                     Err(e) => {
-                        tracing::error!(profile = %profile_name_owned, error = %e, "agent spawn failed");
+                        tracing::error!(kind = %kind_name_owned, error = %e, "agent spawn failed");
                         crate::app_event::AppEvent::AgentSpawned {
-                            profile_name: profile_name_owned,
+                            profile_name: kind_name_owned,
                             result: Err(e),
                         }
                     }
@@ -96,7 +102,7 @@ impl App {
             },
         );
 
-        tracing::info!(profile = %profile.path, agent = %target_path, "spawning agent...");
+        tracing::info!(kind = kind.name(), agent = %target_path, "spawning agent...");
     }
 
     /// Build the workspace tab list (one entry per running agent). Shared
@@ -297,26 +303,10 @@ impl App {
                     // `item.path` is the full persisted AgentPath. Preserve its
                     // hierarchy so child agents restore their original runtime ID.
                     self.state.agent_profile_picker.close();
-                    let short_name = item.path.name().to_string();
-                    let profile_path = item.path.as_str().trim_start_matches("/root/");
-                    // Try to reconstruct the profile from the stored config_json.
-                    // Fall back to looking up by short name in the current profiles.
-                    let profile = serde_json::from_value::<AgentProfile>(config_json)
-                        .ok()
-                        .or_else(|| {
-                            self.state
-                                .profiles
-                                .iter()
-                                .find(|p| p.path == profile_path || p.path == short_name)
-                                .cloned()
-                        });
-                    match profile {
-                        Some(p) => self.spawn_agent_at_path(&p, item.path),
-                        None => tracing::warn!(
-                            agent = %item.path,
-                            "could not reconstruct profile for agent record",
-                        ),
-                    }
+                    // Tolerant parse covers both the current per-agent config
+                    // shape and legacy full-profile rows.
+                    let config = agentik_core::AgentProfileConfig::from_json(&config_json);
+                    self.spawn_agent_at_path(config, item.path);
                 }
             }
             _ => {}
@@ -382,16 +372,15 @@ impl App {
             KeyCode::Backspace => self.state.profile_picker.pop_char(),
             KeyCode::Char(c) if !ctrl => self.state.profile_picker.push_char(c),
             KeyCode::Enter => {
-                if let Some(item) = self.state.profile_picker.selected_item() {
-                    let profile = item.profile;
+                if let Some(kind) = self.state.profile_picker.selected_item() {
                     self.state.profile_picker.close();
-                    // Stash the selected profile; the name input popup
+                    // Stash the selected kind; the name input popup
                     // will open next and prompt the user for an agent
-                    // name (pre-filled with the profile name).
-                    self.state.pending_profile = Some(profile.clone());
+                    // name (pre-filled with the kind name).
+                    self.state.pending_profile = Some(kind);
                     self.state
                         .name_input
-                        .open(format!(" New Agent ({}) ", profile.name()), profile.name());
+                        .open(format!(" New Agent ({kind}) "), kind.name());
                 }
             }
             _ => {}

@@ -900,8 +900,8 @@ pub struct AppState {
     /// displayed in the workspace and receives user input.
     pub sessions: Vec<AgentSession>,
     pub active_agent_idx: usize,
-    /// Available profiles (loaded from storage at startup).
-    pub profiles: Vec<agentik_core::AgentProfile>,
+    /// Available agent kinds (from the daemon snapshot).
+    pub profiles: Vec<agentik_core::AgentKind>,
     /// Legacy single-agent tab state — kept for backward-compat with
     /// existing code that hasn't been migrated yet. When `sessions` is
     /// non-empty, the active session's `tab_state` is used instead.
@@ -931,9 +931,9 @@ pub struct AppState {
     /// When `Some(id)`, the name input popup is collecting a **new title**
     /// for renaming an existing session.
     pub pending_session_rename_id: Option<uuid::Uuid>,
-    /// Profile selected from the picker, waiting for the user to enter a name.
-    /// When `Some`, the name input popup is shown.
-    pub pending_profile: Option<agentik_core::AgentProfile>,
+    /// Agent kind selected from the picker, waiting for the user to enter a
+    /// name. When `Some`, the name input popup is shown.
+    pub pending_profile: Option<agentik_core::AgentKind>,
     /// Model config popup visibility.
     pub model_config_visible: bool,
     /// Per-agent runtime config popup state.

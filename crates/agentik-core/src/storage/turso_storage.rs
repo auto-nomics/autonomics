@@ -77,8 +77,8 @@ use agentik_types::AgentPlan;
 
 use crate::memory::MemoryStage1Record;
 use crate::storage::{
-    AgentLayoutSnapshot, AgentProfile, AgentProfileRegistry, AgentRecord, AgentRelation,
-    AgentSnapshot, AgentStorage, PersistedAgentGraph, RelationKind, StorageError,
+    AgentLayoutSnapshot, AgentRecord, AgentRelation, AgentSnapshot, AgentStorage,
+    PersistedAgentGraph, RelationKind, StorageError,
 };
 
 /// Mutex-guarded wrapper around [`turso::Connection`].
@@ -316,15 +316,6 @@ impl TursoAgentStorage {
                 CREATE INDEX IF NOT EXISTS idx_transcript_messages_session
                     ON transcript_messages(session_id, id);
 
-                CREATE TABLE IF NOT EXISTS agent_profiles (
-                    id              TEXT PRIMARY KEY,
-                    name            TEXT NOT NULL UNIQUE,
-                    description     TEXT NOT NULL DEFAULT '',
-                    config_json     TEXT NOT NULL,
-                    created_at      INTEGER NOT NULL,
-                    updated_at      INTEGER NOT NULL
-                );
-
                 CREATE TABLE IF NOT EXISTS agent_plans (
                     agent_id   TEXT PRIMARY KEY,
                     plan_json  TEXT NOT NULL,
@@ -519,6 +510,16 @@ impl TursoAgentStorage {
                  WHERE name NOT LIKE '/root%'",
                 (),
             )
+            .await;
+
+        // ── Migration: retire the agent_profiles registry table ──
+        //
+        // Agent kinds are hardcoded (`agentik_core::AgentKind`); the
+        // persisted profile-blueprint table is no longer read. Drop it so
+        // legacy databases don't carry dead rows.
+        let _ = self
+            .conn
+            .execute("DROP TABLE IF EXISTS agent_profiles", ())
             .await;
 
         // Seed the durable transcript with any live WAL rows created before
@@ -2197,248 +2198,16 @@ where
     Ok(items)
 }
 
-// ── AgentProfileRegistry impl ───────────────────────────────────
-
-fn row_to_profile(row: &turso::Row) -> Result<AgentProfile, StorageError> {
-    let id_str = text_col(row, 0)?;
-    let path = text_col(row, 1)?;
-    let description = text_col(row, 2)?;
-    let config_str = text_col(row, 3)?;
-    let created_at = int_col(row, 4)?;
-    let updated_at = int_col(row, 5)?;
-
-    // The config_json stores everything except id/path/timestamps.
-    let config: serde_json::Value = serde_json::from_str(&config_str)?;
-    // Older researcher profiles predate plugin RSI; they should receive the
-    // capability without silently enabling it for every legacy specialist.
-    let default_plugin_rsi = path == "researcher";
-
-    Ok(AgentProfile {
-        id: Uuid::parse_str(&id_str)
-            .map_err(|e| StorageError::Other(format!("parse profile id: {e}").into()))?,
-        path,
-        description,
-        agent_identity: config
-            .get("agent_identity")
-            .and_then(|v| v.as_str())
-            .unwrap_or("You are a helpful assistant.")
-            .to_string(),
-        system_prompt: config
-            .get("system_prompt")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string()),
-        enable_bibliography: config
-            .get("enable_bibliography")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true),
-        enable_writing: config
-            .get("enable_writing")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false),
-        enable_opengwas: config
-            .get("enable_opengwas")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true),
-        enable_opentargets: config
-            .get("enable_opentargets")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true),
-        enable_gwascatalog: config
-            .get("enable_gwascatalog")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true),
-        enable_chembl: config
-            .get("enable_chembl")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true),
-        enable_rcsb: config
-            .get("enable_rcsb")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true),
-        enable_string: config
-            .get("enable_string")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true),
-        enable_kegg: config
-            .get("enable_kegg")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true),
-        enable_dag_history: config
-            .get("enable_dag_history")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true),
-        enable_plugin_rsi: config
-            .get("enable_plugin_rsi")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(default_plugin_rsi),
-        preferred_model: config
-            .get("preferred_model")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string()),
-        runtime: serde_json::from_value(
-            config
-                .get("runtime")
-                .cloned()
-                .unwrap_or(serde_json::Value::Null),
-        )
-        .unwrap_or_default(),
-        created_at,
-        updated_at,
-    })
-}
-
-/// Serialize the variable fields of a profile into a JSON value for storage
-/// in `config_json` (everything except `id`, `name`, `description`, and
-/// timestamps, which have their own columns).
-fn profile_to_config_json(profile: &AgentProfile) -> serde_json::Value {
-    serde_json::json!({
-        "agent_identity": profile.agent_identity,
-        "system_prompt": profile.system_prompt,
-        "enable_bibliography": profile.enable_bibliography,
-        "enable_writing": profile.enable_writing,
-        "enable_opengwas": profile.enable_opengwas,
-        "enable_opentargets": profile.enable_opentargets,
-        "enable_gwascatalog": profile.enable_gwascatalog,
-        "enable_chembl": profile.enable_chembl,
-        "enable_rcsb": profile.enable_rcsb,
-        "enable_string": profile.enable_string,
-        "enable_kegg": profile.enable_kegg,
-        "enable_dag_history": profile.enable_dag_history,
-        "enable_plugin_rsi": profile.enable_plugin_rsi,
-        "preferred_model": profile.preferred_model,
-        "runtime": profile.runtime,
-    })
-}
-
-#[async_trait]
-impl AgentProfileRegistry for TursoAgentStorage {
-    async fn create_profile(&self, profile: AgentProfile) -> Result<(), StorageError> {
-        let config_json = serde_json::to_string(&profile_to_config_json(&profile))?;
-        self.conn
-            .execute(
-                "INSERT INTO agent_profiles
-                    (id, name, description, config_json, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params_from_iter([
-                    Value::Text(profile.id.to_string()),
-                    Value::Text(profile.path),
-                    Value::Text(profile.description),
-                    Value::Text(config_json),
-                    Value::Integer(profile.created_at),
-                    Value::Integer(profile.updated_at),
-                ]),
-            )
-            .await?;
-        Ok(())
-    }
-
-    async fn get_profile(&self, id: Uuid) -> Result<Option<AgentProfile>, StorageError> {
-        let mut rows = self
-            .conn
-            .query(
-                "SELECT id, name, description, config_json, created_at, updated_at
-                 FROM agent_profiles WHERE id = ?1",
-                params_from_iter([Value::Text(id.to_string())]),
-            )
-            .await?;
-
-        match rows.next().await {
-            Ok(Some(row)) => Ok(Some(row_to_profile(&row)?)),
-            Ok(None) => Ok(None),
-            Err(e) => Err(e.into()),
-        }
-    }
-
-    async fn get_profile_by_path(&self, path: &str) -> Result<Option<AgentProfile>, StorageError> {
-        let mut rows = self
-            .conn
-            .query(
-                "SELECT id, name, description, config_json, created_at, updated_at
-                 FROM agent_profiles WHERE name = ?1 LIMIT 1",
-                params_from_iter([Value::Text(path.to_string())]),
-            )
-            .await?;
-
-        match rows.next().await {
-            Ok(Some(row)) => Ok(Some(row_to_profile(&row)?)),
-            Ok(None) => Ok(None),
-            Err(e) => Err(e.into()),
-        }
-    }
-
-    async fn list_profiles(&self) -> Result<Vec<AgentProfile>, StorageError> {
-        let mut rows = self
-            .conn
-            .query(
-                "SELECT id, name, description, config_json, created_at, updated_at
-                 FROM agent_profiles ORDER BY created_at ASC",
-                params_from_iter([] as [Value; 0]),
-            )
-            .await?;
-
-        collect_rows(&mut rows, row_to_profile).await
-    }
-
-    async fn list_child_profiles(
-        &self,
-        parent_path: &str,
-    ) -> Result<Vec<AgentProfile>, StorageError> {
-        let prefix = format!("{parent_path}/%");
-        let mut rows = self
-            .conn
-            .query(
-                "SELECT id, name, description, config_json, created_at, updated_at
-                 FROM agent_profiles WHERE name LIKE ?1
-                 ORDER BY created_at ASC",
-                params_from_iter([Value::Text(prefix)]),
-            )
-            .await?;
-
-        collect_rows(&mut rows, row_to_profile).await
-    }
-
-    async fn update_profile(&self, profile: AgentProfile) -> Result<(), StorageError> {
-        let config_json = serde_json::to_string(&profile_to_config_json(&profile))?;
-        self.conn
-            .execute(
-                "UPDATE agent_profiles
-                 SET name = ?2,
-                     description = ?3,
-                     config_json = ?4,
-                     updated_at = ?5
-                 WHERE id = ?1",
-                params_from_iter([
-                    Value::Text(profile.id.to_string()),
-                    Value::Text(profile.path),
-                    Value::Text(profile.description),
-                    Value::Text(config_json),
-                    Value::Integer(profile.updated_at),
-                ]),
-            )
-            .await?;
-        Ok(())
-    }
-
-    async fn delete_profile(&self, id: Uuid) -> Result<(), StorageError> {
-        self.conn
-            .execute(
-                "DELETE FROM agent_profiles WHERE id = ?1",
-                params_from_iter([Value::Text(id.to_string())]),
-            )
-            .await?;
-        Ok(())
-    }
-}
-
 // ── Tests ───────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ProfileOverrides;
     use crate::lifecycle::AgentLifecycleStatus;
     use crate::message_ext::AgentMessageExt;
+    use crate::profile::{AgentKind, AgentProfileConfig};
     use crate::session::SessionState;
+    use crate::storage::AgentRuntimeOverrides;
 
     fn now_ms() -> i64 {
         chrono::Utc::now().timestamp_millis()
@@ -3152,345 +2921,94 @@ mod tests {
         );
     }
 
-    // ── AgentProfileRegistry ─────────────────────────────────
+    // ── Agent kinds / per-agent config_json ──────────────────
 
-    fn sample_profile(path: &str) -> AgentProfile {
-        AgentProfile {
-            id: Uuid::new_v4(),
-            path: path.to_string(),
-            description: format!("Test profile: {path}"),
-            agent_identity: "You are a test agent.".into(),
-            system_prompt: Some("Custom prompt.".into()),
-            enable_bibliography: true,
-            enable_writing: true,
-            enable_opengwas: false,
-            enable_opentargets: true,
-            enable_gwascatalog: false,
-            enable_chembl: true,
-            enable_rcsb: true,
-            enable_string: true,
-            enable_kegg: true,
-            enable_dag_history: false,
-            enable_plugin_rsi: false,
+    #[tokio::test]
+    async fn test_agent_config_json_round_trip() {
+        let store = TursoAgentStorage::open_in_memory().await.unwrap();
+        let config = AgentProfileConfig {
+            kind: AgentKind::Developer,
             preferred_model: Some("anthropic:claude-sonnet-5".into()),
-            runtime: Default::default(),
-            created_at: now_ms(),
-            updated_at: now_ms(),
-        }
-    }
+            runtime: AgentRuntimeOverrides {
+                use_memory: Some(false),
+                generate_memory: Some(true),
+            },
+        };
 
-    #[tokio::test]
-    async fn test_profile_create_and_get() {
-        let store = TursoAgentStorage::open_in_memory().await.unwrap();
-        let profile = sample_profile("test-profile");
-
-        store.create_profile(profile.clone()).await.unwrap();
-
-        let fetched = store.get_profile(profile.id).await.unwrap().unwrap();
-        assert_eq!(fetched.id, profile.id);
-        assert_eq!(fetched.path, "test-profile");
-        assert_eq!(fetched.agent_identity, "You are a test agent.");
-        assert_eq!(fetched.system_prompt.as_deref(), Some("Custom prompt."));
-        assert!(fetched.enable_bibliography);
-        assert!(!fetched.enable_opengwas);
-        assert!(fetched.enable_rcsb);
-        assert_eq!(
-            fetched.preferred_model.as_deref(),
-            Some("anthropic:claude-sonnet-5")
-        );
-    }
-
-    #[tokio::test]
-    async fn test_profile_get_by_path() {
-        let store = TursoAgentStorage::open_in_memory().await.unwrap();
-        let profile = sample_profile("by-path");
-
-        store.create_profile(profile).await.unwrap();
-
-        let fetched = store.get_profile_by_path("by-path").await.unwrap().unwrap();
-        assert_eq!(fetched.path, "by-path");
-    }
-
-    #[tokio::test]
-    async fn test_profile_list_ordered() {
-        let store = TursoAgentStorage::open_in_memory().await.unwrap();
-        let p1 = sample_profile("alpha");
-        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-        let p2 = sample_profile("beta");
-
-        // Insert in reverse order.
-        store.create_profile(p2).await.unwrap();
-        store.create_profile(p1.clone()).await.unwrap();
-
-        let profiles = store.list_profiles().await.unwrap();
-        assert_eq!(profiles.len(), 2);
-        // Ordered by created_at ASC.
-        assert_eq!(profiles[0].path, "alpha");
-        assert_eq!(profiles[1].path, "beta");
-    }
-
-    #[tokio::test]
-    async fn test_profile_update() {
-        let store = TursoAgentStorage::open_in_memory().await.unwrap();
-        let mut profile = sample_profile("updatable");
-        store.create_profile(profile.clone()).await.unwrap();
-
-        // Mutate fields.
-        profile.description = "Updated description.".into();
-        profile.enable_opengwas = true;
-        profile.agent_identity = "New identity.".into();
-        profile.updated_at = now_ms();
-        store.update_profile(profile.clone()).await.unwrap();
-
-        let fetched = store.get_profile(profile.id).await.unwrap().unwrap();
-        assert_eq!(fetched.description, "Updated description.");
-        assert!(fetched.enable_opengwas, "flag should be updated");
-        assert_eq!(fetched.agent_identity, "New identity.");
-    }
-
-    #[tokio::test]
-    async fn test_profile_delete() {
-        let store = TursoAgentStorage::open_in_memory().await.unwrap();
-        let profile = sample_profile("deletable");
-        let id = profile.id;
-
-        store.create_profile(profile).await.unwrap();
-        assert!(store.get_profile(id).await.unwrap().is_some());
-
-        store.delete_profile(id).await.unwrap();
-        assert!(store.get_profile(id).await.unwrap().is_none());
-    }
-
-    #[tokio::test]
-    async fn test_seed_defaults_if_empty() {
-        let store = TursoAgentStorage::open_in_memory().await.unwrap();
-
-        // Empty → should seed.
-        let seeded = store.seed_defaults_if_empty().await.unwrap();
-        assert!(seeded, "should seed on empty table");
-
-        let profiles = store.list_profiles().await.unwrap();
-        assert_eq!(profiles.len(), 2, "should have two default profiles");
-        assert!(profiles.iter().any(|p| p.path == "researcher"));
-        assert!(profiles.iter().any(|p| p.path == "developer"));
-        assert!(
-            !profiles
-                .iter()
-                .find(|p| p.path == "researcher")
-                .unwrap()
-                .enable_plugin_rsi
-        );
-        assert!(!profiles.iter().any(|p| p.path == "literature"));
-        assert!(!profiles.iter().any(|p| p.path == "gwas-analysis"));
-
-        // Non-empty → should NOT seed again.
-        let seeded_again = store.seed_defaults_if_empty().await.unwrap();
-        assert!(!seeded_again, "should not seed when table has data");
-
-        let profiles2 = store.list_profiles().await.unwrap();
-        assert_eq!(profiles2.len(), 2, "should still have two profiles");
-    }
-
-    #[tokio::test]
-    async fn test_seed_keeps_only_researcher_and_developer() {
-        let store = TursoAgentStorage::open_in_memory().await.unwrap();
-        let mut researcher = sample_profile("researcher");
-        researcher.enable_plugin_rsi = true;
-        store.create_profile(researcher).await.unwrap();
-
-        for path in [
-            "literature",
-            "gwas-analysis",
-            "structural-biology",
-            "writer",
-        ] {
-            store.create_profile(sample_profile(path)).await.unwrap();
-        }
         store
-            .create_profile(sample_profile("custom"))
+            .upsert_agent(AgentRecord {
+                id: Uuid::new_v4(),
+                name: "/root/dev-agent".into(),
+                config_json: config.to_json(),
+                created_at: 0,
+                last_active: 0,
+            })
             .await
             .unwrap();
 
-        assert!(store.seed_defaults_if_empty().await.unwrap());
-        let profiles = store.list_profiles().await.unwrap();
-        let paths = profiles
-            .iter()
-            .map(|profile| profile.path.as_str())
-            .collect::<Vec<_>>();
-
-        assert_eq!(paths, vec!["researcher", "developer"]);
-        assert!(
-            !profiles
-                .iter()
-                .find(|profile| profile.path == "researcher")
-                .unwrap()
-                .enable_plugin_rsi
-        );
-        assert!(
-            profiles
-                .iter()
-                .find(|profile| profile.path == "developer")
-                .unwrap()
-                .enable_plugin_rsi
-        );
+        let record = store
+            .get_agent_by_name("/root/dev-agent")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(AgentProfileConfig::from_json(&record.config_json), config);
     }
 
     #[tokio::test]
-    async fn test_seed_migrates_legacy_default() {
-        let store = TursoAgentStorage::open_in_memory().await.unwrap();
+    async fn test_legacy_agent_profiles_table_is_dropped_on_open() {
+        // Std-only fresh tmpdir (same pattern as the WAL-recovery tests).
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "agentik-profile-drop-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db_path = dir.join("agent.db");
 
-        // Simulate a legacy DB: only a "default" profile exists.
-        let legacy = AgentProfile {
-            path: "default".into(),
-            description: "legacy".into(),
-            agent_identity: "legacy identity".into(),
-            ..AgentProfile::new("default")
-        };
-        store.create_profile(legacy).await.unwrap();
-        let mut rows = store
+        // Simulate a legacy database: open, re-create the retired table,
+        // then reopen — the migration must drop it.
+        {
+            let store = TursoAgentStorage::open(&db_path).await.unwrap();
+            store
+                .conn
+                .execute(
+                    "CREATE TABLE agent_profiles (
+                        id              TEXT PRIMARY KEY,
+                        name            TEXT NOT NULL UNIQUE,
+                        description     TEXT NOT NULL DEFAULT '',
+                        config_json     TEXT NOT NULL,
+                        created_at      INTEGER NOT NULL,
+                        updated_at      INTEGER NOT NULL
+                    )",
+                    (),
+                )
+                .await
+                .unwrap();
+            store
+                .conn
+                .execute(
+                    "INSERT INTO agent_profiles VALUES ('legacy-id', 'researcher', '', '{}', 0, 0)",
+                    (),
+                )
+                .await
+                .unwrap();
+        }
+
+        let reopened = TursoAgentStorage::open(&db_path).await.unwrap();
+        let mut rows = reopened
             .conn
             .query(
-                "SELECT config_json FROM agent_profiles WHERE name = 'default'",
-                params_from_iter::<[Value; 0]>([]),
+                "SELECT name FROM sqlite_master
+                 WHERE type = 'table' AND name = 'agent_profiles'",
+                params_from_iter([] as [Value; 0]),
             )
             .await
             .unwrap();
-        let row = rows.next().await.unwrap().unwrap();
-        let mut config: serde_json::Value =
-            serde_json::from_str(&row.get::<String>(0).unwrap()).unwrap();
-        config.as_object_mut().unwrap().remove("enable_plugin_rsi");
-        store
-            .conn
-            .execute(
-                "UPDATE agent_profiles SET config_json = ?1 WHERE name = 'default'",
-                params_from_iter([Value::Text(config.to_string())]),
-            )
-            .await
-            .unwrap();
-
-        // Seed should rename default → researcher AND add the developer.
-        let changed = store.seed_defaults_if_empty().await.unwrap();
-        assert!(changed, "migration should make a change");
-
-        let profiles = store.list_profiles().await.unwrap();
-        // researcher + developer.
-        assert_eq!(profiles.len(), 2);
         assert!(
-            profiles.iter().any(|p| p.path == "researcher"),
-            "legacy 'default' should be renamed to 'researcher'"
+            rows.next().await.unwrap().is_none(),
+            "agent_profiles must be dropped when reopening a legacy database"
         );
-        assert!(
-            profiles.iter().all(|p| p.path != "default"),
-            "no profile should retain the legacy 'default' path"
-        );
-        // The migrated researcher should preserve the legacy identity.
-        let researcher = profiles.iter().find(|p| p.path == "researcher").unwrap();
-        assert_eq!(researcher.agent_identity, "legacy identity");
-        assert!(!researcher.enable_plugin_rsi);
-    }
-
-    #[tokio::test]
-    async fn test_list_child_profiles() {
-        let store = TursoAgentStorage::open_in_memory().await.unwrap();
-
-        // Create a parent and two children.
-        let parent = sample_profile("researcher");
-        store.create_profile(parent.clone()).await.unwrap();
-
-        let child1 = parent
-            .derive_child("genomics", ProfileOverrides::default())
-            .unwrap();
-        store.create_profile(child1.clone()).await.unwrap();
-
-        let child2 = parent
-            .derive_child("proteomics", ProfileOverrides::default())
-            .unwrap();
-        store.create_profile(child2.clone()).await.unwrap();
-
-        // Unrelated root profile.
-        store
-            .create_profile(sample_profile("writer"))
-            .await
-            .unwrap();
-
-        let children = store.list_child_profiles("researcher").await.unwrap();
-        assert_eq!(children.len(), 2);
-        let paths: Vec<&str> = children.iter().map(|p| p.path.as_str()).collect();
-        assert!(paths.contains(&"researcher/genomics"));
-        assert!(paths.contains(&"researcher/proteomics"));
-    }
-
-    #[test]
-    fn test_profile_name_and_parent_path() {
-        let root = AgentProfile::new("researcher");
-        assert_eq!(root.name(), "researcher");
-        assert_eq!(root.parent_path(), None);
-        assert_eq!(root.depth(), 0);
-
-        let child = root
-            .derive_child("genomics", ProfileOverrides::default())
-            .unwrap();
-        assert_eq!(child.name(), "genomics");
-        assert_eq!(child.parent_path(), Some("researcher"));
-        assert_eq!(child.depth(), 1);
-
-        let grandchild = child
-            .derive_child("mr_analysis", ProfileOverrides::default())
-            .unwrap();
-        assert_eq!(grandchild.name(), "mr_analysis");
-        assert_eq!(grandchild.parent_path(), Some("researcher/genomics"));
-        assert_eq!(grandchild.depth(), 2);
-    }
-
-    #[test]
-    fn test_derive_child_inheritance_and_overrides() {
-        let parent = AgentProfile {
-            path: "researcher".into(),
-            description: "Parent desc".into(),
-            agent_identity: "Parent identity".into(),
-            system_prompt: None,
-            enable_bibliography: true,
-            enable_writing: false,
-            enable_opengwas: true,
-            enable_opentargets: true,
-            enable_gwascatalog: true,
-            enable_chembl: true,
-            enable_kegg: true,
-            enable_dag_history: true,
-            preferred_model: None,
-            ..AgentProfile::new("researcher")
-        };
-
-        // Partial override.
-        let overrides = ProfileOverrides {
-            description: Some("Genomics specialist".into()),
-            agent_identity: Some("You are a genomics expert.".into()),
-            enable_writing: Some(true),
-            enable_rcsb: Some(false),
-            enable_dag_history: Some(false),
-            ..Default::default()
-        };
-
-        let child = parent.derive_child("genomics", overrides).unwrap();
-        assert_eq!(child.path, "researcher/genomics");
-        assert_eq!(child.description, "Genomics specialist");
-        assert_eq!(child.agent_identity, "You are a genomics expert.");
-        // Inherited.
-        assert!(child.enable_bibliography);
-        assert!(child.enable_opengwas);
-        // Explicitly overridden.
-        assert!(!child.enable_rcsb);
-        assert!(child.enable_string);
-        // Overridden.
-        assert!(child.enable_writing);
-        assert!(!child.enable_dag_history);
-    }
-
-    #[test]
-    fn test_derive_child_rejects_invalid_segment() {
-        let parent = AgentProfile::new("researcher");
-        let result = parent.derive_child("Bad Name", ProfileOverrides::default());
-        assert!(result.is_err());
     }
 
     #[tokio::test]

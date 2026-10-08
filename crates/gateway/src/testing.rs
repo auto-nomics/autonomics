@@ -228,10 +228,6 @@ pub async fn start_mock_gateway_with_model(model: Model) -> TestGateway {
     config.generate_memory = false;
 
     let mut host = RuntimeHost::open(&config).await.unwrap();
-    let profile_storage = host.infra().profile_storage.clone();
-    let _ = profile_storage.seed_defaults_if_empty().await;
-    let profiles = profile_storage.list_profiles().await.unwrap_or_default();
-    host.set_profiles(profiles.clone());
     // One slot shared by the host and the gateway state — exactly like
     // the real daemon wires it.
     let model_slot: Arc<ArcSwapOption<Model>> = Arc::new(ArcSwapOption::from_pointee(Some(model)));
@@ -257,7 +253,6 @@ pub async fn start_mock_gateway_with_model(model: Model) -> TestGateway {
         dockerhub: Arc::new(DockerHubClient::default()),
         models,
         model_slot,
-        profiles: Arc::new(profiles),
         addr: addr_slot.clone(),
         started: std::time::Instant::now(),
         shutdown: shutdown.clone(),

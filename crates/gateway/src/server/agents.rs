@@ -41,6 +41,15 @@ pub(crate) async fn spawn_agent(
         .parent_path
         .parse()
         .map_err(|e| format!("invalid parent_path `{}`: {e}", req.parent_path))?;
+    let kind = agentik_core::AgentKind::from_name(&req.profile).ok_or_else(|| {
+        GatewayError::Status(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "unknown agent kind `{}`; expected researcher or developer",
+                req.profile
+            ),
+        )
+    })?;
     // Model override: unresolvable specs degrade to the daemon default,
     // matching the TUI's spawn behavior today.
     let model_override = match req.model_spec.as_deref() {
@@ -65,9 +74,14 @@ pub(crate) async fn spawn_agent(
             None
         }
     };
+    // Carry the requested spec (and any resume-flow runtime overrides) into
+    // the per-agent config so `agents.config_json` persists them for restarts.
+    let mut config = agentik_core::AgentProfileConfig::new(kind);
+    config.preferred_model = req.model_spec.clone();
+    config.runtime = req.runtime.unwrap_or_default();
     let path = state
         .control
-        .spawn_with_profile(&req.name, &parent_path, req.profile, model_override)
+        .spawn_with_config(&req.name, &parent_path, config, model_override)
         .await
         .map_err(|e| GatewayError::Status(StatusCode::CONFLICT, e))?;
     Ok(Json(SpawnAgentResponse { path }))
@@ -216,17 +230,16 @@ pub(crate) async fn get_agent_config(
         .ok_or_else(|| {
             GatewayError::Status(StatusCode::NOT_FOUND, format!("agent `{name}` not found"))
         })?;
-    let profile: agentik_core::AgentProfile =
-        serde_json::from_value(record.config_json).map_err(|e| e.to_string())?;
+    let config = agentik_core::AgentProfileConfig::from_json(&record.config_json);
     let mut effective = state.infra.memory.runtime_config();
-    if let Some(enabled) = profile.runtime.use_memory {
+    if let Some(enabled) = config.runtime.use_memory {
         effective.use_memory = enabled;
     }
-    if let Some(enabled) = profile.runtime.generate_memory {
+    if let Some(enabled) = config.runtime.generate_memory {
         effective.generate_memory = enabled;
     }
     Ok(Json(AgentRuntimeConfigView {
-        runtime: profile.runtime,
+        runtime: config.runtime,
         effective,
     }))
 }
@@ -247,10 +260,12 @@ pub(crate) async fn set_agent_config(
             GatewayError::Status(StatusCode::NOT_FOUND, format!("agent `{name}` not found"))
         })?;
     let runtime = req.runtime;
-    let mut profile: agentik_core::AgentProfile =
-        serde_json::from_value(record.config_json).map_err(|e| e.to_string())?;
-    profile.runtime = runtime.clone();
-    record.config_json = serde_json::to_value(profile).map_err(|e| e.to_string())?;
+    // Round-trip through the tolerant parse so legacy full-profile rows are
+    // canonicalized to the new shape on write; kind and preferred_model
+    // survive.
+    let mut config = agentik_core::AgentProfileConfig::from_json(&record.config_json);
+    config.runtime = runtime.clone();
+    record.config_json = config.to_json();
     record.last_active = chrono::Utc::now().timestamp_millis();
     state
         .infra

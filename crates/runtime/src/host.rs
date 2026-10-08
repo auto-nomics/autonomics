@@ -20,9 +20,9 @@ use agentik_core::Agent;
 use agentik_core::TursoAgentStorage;
 use agentik_core::agent::InternalEvent;
 use agentik_core::memory::{MemoryBackend, MemoryConfig, MemoryStore, SemanticGrounding};
+use agentik_core::profile::{AgentKind, AgentProfileConfig};
 use agentik_core::storage::{
-    AgentDelegationRecord, AgentLayoutSnapshot, AgentProfileRegistry, AgentStorage,
-    AgentTurnRecord, PersistedAgentGraph,
+    AgentDelegationRecord, AgentLayoutSnapshot, AgentStorage, AgentTurnRecord, PersistedAgentGraph,
 };
 use agentik_network::{AgentNetwork, EdgeTrigger, NodeSpec, RoutingAction, TerminationSpec};
 use agentik_sdk::model::Model;
@@ -133,61 +133,40 @@ fn spawn_plugin_distiller(rsi: &Arc<plugin_rsi::RsiInfra>, config: &PluginRsiCon
     });
 }
 
-// AgentProfile carries the same tool-capability flags as RuntimeConfig, so we
-// can build a dynamic system prompt that only mentions tools the profile
+// AgentKind carries the same tool-capability flags as RuntimeConfig, so we
+// can build a dynamic system prompt that only mentions tools the kind
 // actually enables.
-impl PromptCapabilities for agentik_core::AgentProfile {
+impl PromptCapabilities for agentik_core::AgentKind {
     fn enable_bibliography(&self) -> bool {
-        self.enable_bibliography
+        (*self).enable_bibliography()
     }
     fn enable_opengwas(&self) -> bool {
-        self.enable_opengwas
+        (*self).enable_opengwas()
     }
     fn enable_opentargets(&self) -> bool {
-        self.enable_opentargets
+        (*self).enable_opentargets()
     }
     fn enable_gwascatalog(&self) -> bool {
-        self.enable_gwascatalog
+        (*self).enable_gwascatalog()
     }
     fn enable_chembl(&self) -> bool {
-        self.enable_chembl
+        (*self).enable_chembl()
     }
     fn enable_rcsb(&self) -> bool {
-        self.enable_rcsb
+        (*self).enable_rcsb()
     }
     fn enable_string(&self) -> bool {
-        self.enable_string
+        (*self).enable_string()
     }
     fn enable_kegg(&self) -> bool {
-        self.enable_kegg
+        (*self).enable_kegg()
     }
     fn enable_dag_history(&self) -> bool {
-        self.enable_dag_history
+        (*self).enable_dag_history()
     }
     fn enable_plugin_rsi(&self) -> bool {
-        self.enable_plugin_rsi
+        (*self).enable_plugin_rsi()
     }
-}
-
-fn enforce_profile_roles(profile: &agentik_core::AgentProfile) -> agentik_core::AgentProfile {
-    let mut enforced = profile.clone();
-    if enforced.path == "developer" {
-        enforced.enable_bibliography = false;
-        enforced.enable_writing = false;
-        enforced.enable_opengwas = false;
-        enforced.enable_opentargets = false;
-        enforced.enable_gwascatalog = false;
-        enforced.enable_chembl = false;
-        enforced.enable_rcsb = false;
-        enforced.enable_string = false;
-        enforced.enable_kegg = false;
-        enforced.enable_dag_history = true;
-        enforced.enable_plugin_rsi = true;
-    } else {
-        enforced.path = "researcher".into();
-        enforced.enable_plugin_rsi = false;
-    }
-    enforced
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -215,9 +194,6 @@ pub struct SharedInfra {
     /// Unified plugin request, development, publication, and registration.
     pub rsi: Arc<plugin_rsi::RsiInfra>,
     pub storage: Arc<dyn AgentStorage>,
-    /// Profile registry (same DB connection, separate trait object).
-    /// Used by RuntimeHost for dynamic profile derivation.
-    pub profile_storage: Arc<dyn AgentProfileRegistry>,
     /// Process-wide RCSB PDB HTTP client shared by every enabled agent.
     pub rcsb: Arc<RcsbClient>,
     /// Bibliography storage + literature gateway, opened **once** per
@@ -419,8 +395,6 @@ impl SharedInfra {
             }
         });
         let storage: Arc<dyn AgentStorage> = turso_store.clone();
-        // Profile registry — clone of the same storage (shares one connection).
-        let profile_storage: Arc<dyn AgentProfileRegistry> = turso_store.clone();
         let rcsb = Arc::new(RcsbClient::new());
         // Initialize the KMS schema in agent.db unconditionally; expose tools
         // and semantic grounding only when the runtime feature is enabled.
@@ -513,7 +487,6 @@ impl SharedInfra {
             rsi,
             catalog: catalog_service,
             storage,
-            profile_storage,
             rcsb,
             bib,
             writing,
@@ -526,7 +499,7 @@ impl SharedInfra {
         })
     }
 
-    /// Spawn a new agent from an [`AgentProfile`](agentik_core::AgentProfile).
+    /// Spawn a new agent from an [`AgentProfileConfig`].
     ///
     /// This method only needs [`SharedInfra`] — it does not touch the
     /// topology network or agent registry. Callers can clone `SharedInfra`
@@ -534,11 +507,11 @@ impl SharedInfra {
     pub async fn spawn_agent(
         &self,
         agent_path: &agentik_types::AgentPath,
-        profile: &agentik_core::AgentProfile,
+        config: &AgentProfileConfig,
         global_model: Arc<ArcSwapOption<Model>>,
         model_override: Option<Model>,
     ) -> Result<AgentHandle> {
-        let profile = enforce_profile_roles(profile);
+        let kind = config.kind;
         let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
         let cancel_token = CancellationToken::new();
 
@@ -549,14 +522,14 @@ impl SharedInfra {
             )),
         };
 
-        let tool_list = self.tools_from_profile(agent_path, &profile).await?;
+        let tool_list = self.tools_from_profile(agent_path, kind).await?;
 
-        let config_json = serde_json::to_value(&profile).unwrap_or_default();
+        let config_json = config.to_json();
         let storage = self.storage.clone();
         let defaults = self.memory.runtime_config();
         let runtime_config = agentik_core::AgentRuntimeConfig::new(
-            profile.runtime.use_memory.unwrap_or(defaults.use_memory),
-            profile
+            config.runtime.use_memory.unwrap_or(defaults.use_memory),
+            config
                 .runtime
                 .generate_memory
                 .unwrap_or(defaults.generate_memory),
@@ -569,16 +542,11 @@ impl SharedInfra {
             .with_agent_event_tx(event_tx)
             .with_path(agent_path.clone())
             .with_config_json(config_json)
-            .with_system_prompt_identity(&profile.agent_identity)
+            .with_system_prompt_identity(kind.agent_identity())
             .with_storage(storage.clone());
         builder = builder.with_memory_backend(Arc::clone(&memory));
 
-        if let Some(ref prompt) = profile.system_prompt {
-            builder = builder.with_system_prompt_section(prompt);
-        } else {
-            builder =
-                builder.with_system_prompt_section(crate::config::build_system_prompt(&profile));
-        }
+        builder = builder.with_system_prompt_section(crate::config::build_system_prompt(&kind));
         // Skill index: one line per visible skill; bodies load on
         // demand via skill_get. Empty library → no section at all.
         let skill_section = skills::prompt_section(&self.skills.registry().list());
@@ -621,7 +589,7 @@ impl SharedInfra {
         Ok(AgentHandle {
             agent_id,
             path: agent_path.clone(),
-            profile_path: profile.path.clone(),
+            kind,
             internal_tx,
             event_rx,
             agent_task,
@@ -631,11 +599,11 @@ impl SharedInfra {
         })
     }
 
-    /// Assemble the tool set for a profile, respecting its feature flags.
+    /// Assemble the tool set for an agent kind, respecting its feature flags.
     async fn tools_from_profile(
         &self,
         agent_path: &agentik_types::AgentPath,
-        profile: &agentik_core::AgentProfile,
+        kind: AgentKind,
     ) -> Result<Vec<agentik_core::tools::ToolRegistration>> {
         use crate::tools::*;
         use agentik_core::tools::ToolRegistration;
@@ -645,11 +613,9 @@ impl SharedInfra {
                 .with_principal(agent_vfs_principal(agent_path.as_str())),
         );
         // Use the agent's unique hierarchical path (e.g. "/root/researcher/worker1")
-        // as the session key — NOT profile.path, which is shared by all agents
-        // spawned from the same profile blueprint. Using profile.path here was
-        // a multi-agent migration legacy bug: two agents with the same profile
-        // would silently share the same DAG graph, so add_node / add_edge /
-        // run_dag calls from one agent would mutate the other agent's DAG.
+        // as the session key. Two agents must never share a DAG graph, or
+        // add_node / add_edge / run_dag calls from one agent would mutate the
+        // other agent's DAG.
         let engine_client = self.engine_manager.client_for_session(agent_path.as_str());
 
         let mut tools: Vec<ToolRegistration> = vfs::vbash_registrations(file_storage.clone());
@@ -660,7 +626,7 @@ impl SharedInfra {
             self.skills.clone(),
             self.skill_evolution.clone(),
         ));
-        if profile.enable_plugin_rsi && profile.path == "developer" {
+        if kind.enable_plugin_rsi() {
             tools.extend(plugin_rsi::plugin_development_tool_registrations(
                 agent_path.as_str(),
             ));
@@ -669,33 +635,33 @@ impl SharedInfra {
             tools.extend(crate::catalog_tools::catalog_registrations(catalog));
         }
 
-        if profile.enable_opengwas {
+        if kind.enable_opengwas() {
             match opengwas_tools_with_token(file_storage.clone(), None) {
                 Ok(t) => tools.extend(t),
                 Err(e) => tracing::warn!(error = %e, "OpenGWAS tools disabled"),
             }
         }
 
-        if profile.enable_opentargets {
+        if kind.enable_opentargets() {
             tools.extend(opentargets_tools());
         }
 
-        if profile.enable_gwascatalog {
+        if kind.enable_gwascatalog() {
             tools.extend(gwascatalog_tools(file_storage.clone()));
         }
 
-        if profile.enable_chembl {
+        if kind.enable_chembl() {
             tools.extend(chembl_tools());
         }
 
-        if profile.enable_rcsb {
+        if kind.enable_rcsb() {
             tools.extend(rcsb_tools_with_client(self.rcsb.clone()));
         }
-        if profile.enable_string {
+        if kind.enable_string() {
             tools.extend(string_tools());
         }
 
-        if profile.enable_kegg {
+        if kind.enable_kegg() {
             tools.extend(kegg_tools());
         }
 
@@ -709,7 +675,7 @@ impl SharedInfra {
             engine_client,
         ));
 
-        if profile.enable_bibliography {
+        if kind.enable_bibliography() {
             let bib_shared = self.bib.clone();
             let bib_tools =
                 bib_base::bib_all_registrations(bib_shared.bib.clone(), file_storage.clone());
@@ -723,7 +689,7 @@ impl SharedInfra {
             // clients the nodes reach via their process-wide singletons.
         }
 
-        if profile.enable_writing {
+        if kind.enable_writing() {
             let ws = self.writing.clone();
             let writing_tools = writing_base::writing_all_registrations(
                 ws.store.clone(),
@@ -742,7 +708,7 @@ impl SharedInfra {
         tools.extend(crate::host_tools::host_tools(
             self.host_control.clone(),
             agent_path,
-            &profile.path,
+            kind,
         ));
 
         Ok(tools)
@@ -994,9 +960,8 @@ fn plugin_development_permissions() -> vfs::permission::MountPermissions {
 
 /// Map an agent path to a stable, non-root Unix identity.
 ///
-/// All agents initially receive the plugin-developer group; profile-specific
-/// group membership can replace this deterministic mapping once persisted in
-/// AgentProfile.
+/// All agents initially receive the plugin-developer group; kind-specific
+/// group membership can replace this deterministic mapping later.
 fn agent_vfs_principal(agent_path: &str) -> vfs::permission::VfsPrincipal {
     let mut hash = 0xcbf29ce484222325_u64;
     for byte in agent_path.as_bytes() {
@@ -1261,9 +1226,9 @@ fn ensure_literature_mount(manifest: &mut VfsManifest, config: &RuntimeConfig) -
 pub struct AgentHandle {
     pub agent_id: uuid::Uuid,
     pub path: agentik_types::AgentPath,
-    /// Profile path this agent was instantiated from. Used to resolve
-    /// child profile lookups when this agent spawns sub-agents.
-    pub profile_path: String,
+    /// Agent kind this agent was instantiated from. Sub-agents reuse it
+    /// unless they explicitly request the other role.
+    pub kind: AgentKind,
     internal_tx: tokio::sync::mpsc::UnboundedSender<InternalEvent>,
     event_rx: tokio::sync::mpsc::UnboundedReceiver<AgentEvent>,
     agent_task:
@@ -1471,9 +1436,6 @@ pub struct RuntimeHost {
     /// Monotonic version for layout snapshots. Persistence tasks can finish
     /// out of order, but the storage layer ignores stale revisions.
     next_layout_revision: u64,
-    /// Cached profiles (blueprints) loaded at startup. Used by GetStatus
-    /// and route_task so agents can discover what they can spawn.
-    profiles: Vec<agentik_core::AgentProfile>,
     /// Current model (for spawning agents from tools). Set by TUI at startup.
     model: Option<Arc<ArcSwapOption<Model>>>,
     /// Channel for receiving spawned agent handles from background tasks.
@@ -1577,9 +1539,9 @@ struct AgentEntry {
     /// `GetAgentInfo` / `GetStatus` (which serialize `AgentInfo`) see the
     /// same value that `update_agent_status` last set.
     info: crate::control::AgentInfo,
-    /// Profile used to instantiate this agent; needed to rebuild the layout
-    /// without depending on the mutable profile catalog.
-    profile_path: String,
+    /// Agent kind used to instantiate this agent; needed to rebuild the
+    /// layout without re-reading `agents.config_json`.
+    kind: AgentKind,
     /// Layout insertion position assigned by [`RuntimeHost`].
     layout_order: u64,
     /// First time this incarnation entered the daemon layout.
@@ -1647,7 +1609,6 @@ impl RuntimeHost {
             delegations: HashMap::new(),
             next_layout_order: 0,
             next_layout_revision,
-            profiles: Vec::new(),
             model: None,
             registration_rx,
             registration_tx,
@@ -1663,13 +1624,6 @@ impl RuntimeHost {
     /// and query system status.
     pub fn control(&self) -> crate::control::HostControl {
         self.control.clone()
-    }
-
-    /// Set cached profiles (blueprints). Called by the TUI after loading
-    /// profiles from storage at startup. Enables agents to discover
-    /// what profiles they can spawn via `list_agents` / `route_task`.
-    pub fn set_profiles(&mut self, profiles: Vec<agentik_core::AgentProfile>) {
-        self.profiles = profiles;
     }
 
     /// Set the current model (for spawning agents from tools).
@@ -1724,115 +1678,7 @@ impl RuntimeHost {
             HostCommand::Spawn {
                 name,
                 caller_path,
-                caller_profile_path,
-                profile_segment,
-                reply_tx,
-            } => {
-                // Derive child path from caller's path + the LLM-provided segment.
-                let child_path = match caller_path.join(&name) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        let _ = reply_tx.send(Err(format!("invalid agent name `{name}`: {e}")));
-                        return;
-                    }
-                };
-                // Reject duplicate paths.
-                if self.agents.contains_key(child_path.as_str()) {
-                    let _ =
-                        reply_tx.send(Err(format!("agent at path `{child_path}` already exists")));
-                    return;
-                }
-
-                // Resolve only the two role blueprints. A worker agent can
-                // spawn another worker without inventing a child blueprint.
-                let caller_role = caller_profile_path
-                    .split('/')
-                    .next()
-                    .unwrap_or(&caller_profile_path);
-                let target_profile_path = match &profile_segment {
-                    None => caller_role.to_string(),
-                    Some(seg) if seg == "researcher" || seg == "developer" => seg.clone(),
-                    Some(other) => {
-                        let _ = reply_tx.send(Err(format!(
-                            "Unknown role '{other}'. Use researcher or developer."
-                        )));
-                        return;
-                    }
-                };
-
-                let Some(profile) = self
-                    .profiles
-                    .iter()
-                    .find(|p| p.path == target_profile_path)
-                    .cloned()
-                else {
-                    let available_roots: Vec<_> = self
-                        .profiles
-                        .iter()
-                        .filter(|p| p.depth() == 0)
-                        .map(|p| p.name().to_string())
-                        .collect();
-                    let _ = reply_tx.send(Err(format!(
-                        "Role '{target_profile_path}' not found. \
-                         Root profiles: [{}].",
-                        available_roots.join(", "),
-                    )));
-                    return;
-                };
-                let profile = enforce_profile_roles(&profile);
-
-                // Need a model to spawn.
-                let Some(ref model) = self.model else {
-                    let _ = reply_tx.send(Err("No model configured on host.".into()));
-                    return;
-                };
-
-                // Spawn in background — agent creation is async.
-                let infra = self.infra.clone();
-                let model = model.clone();
-                let reg_tx = self.registration_tx.clone();
-                let info =
-                    capability_from_profile(child_path.name(), child_path.as_str(), &profile);
-                let path_for_spawn = child_path.clone();
-
-                self.infra.runtime_handle.spawn(async move {
-                    let result = AssertUnwindSafe(async {
-                        infra
-                            .spawn_agent(&path_for_spawn, &profile, model, None)
-                            .await
-                    })
-                    .catch_unwind()
-                    .await;
-                    match result {
-                        Ok(Ok(handle)) => {
-                            let registered_path = handle.path.as_str().to_string();
-                            let _ = reply_tx.send(Ok(registered_path));
-                            let _ = reg_tx.send((handle, info));
-                        }
-                        Ok(Err(e)) => {
-                            let _ = reply_tx.send(Err(e.to_string()));
-                        }
-                        Err(panic_payload) => {
-                            let msg = panic_payload
-                                .downcast_ref::<&'static str>()
-                                .map(|s| (*s).to_string())
-                                .or_else(|| panic_payload.downcast_ref::<String>().cloned())
-                                .unwrap_or_else(|| "<panic in spawn_agent>".to_string());
-                            tracing::error!(
-                                target: "spawn_safe",
-                                task = "host::spawn_agent",
-                                panic = %msg,
-                                "spawn_agent task panicked"
-                            );
-                            let _ = reply_tx.send(Err(format!("internal panic: {msg}")));
-                        }
-                    }
-                });
-            }
-            HostCommand::SpawnWithProfile {
-                name,
-                caller_path,
-                profile,
+                config,
                 model_override,
                 reply_tx,
             } => {
@@ -1859,18 +1705,18 @@ impl RuntimeHost {
                         return;
                     }
                 };
-                let profile = enforce_profile_roles(&profile);
 
                 let infra = self.infra.clone();
                 let reg_tx = self.registration_tx.clone();
                 let info =
-                    capability_from_profile(child_path.name(), child_path.as_str(), &profile);
+                    capability_from_kind(child_path.name(), child_path.as_str(), config.kind);
                 let path_for_spawn = child_path.clone();
+                let config = *config;
 
                 self.infra.runtime_handle.spawn(async move {
                     let result = AssertUnwindSafe(async {
                         infra
-                            .spawn_agent(&path_for_spawn, &profile, model, None)
+                            .spawn_agent(&path_for_spawn, &config, model, None)
                             .await
                     })
                     .catch_unwind()
@@ -1892,9 +1738,9 @@ impl RuntimeHost {
                                 .unwrap_or_else(|| "<panic in spawn_agent>".to_string());
                             tracing::error!(
                                 target: "spawn_safe",
-                                task = "host::spawn_with_profile",
+                                task = "host::spawn_agent",
                                 panic = %msg,
-                                "spawn_with_profile task panicked"
+                                "spawn_agent task panicked"
                             );
                             let _ = reply_tx.send(Err(format!("internal panic: {msg}")));
                         }
@@ -2124,10 +1970,9 @@ impl RuntimeHost {
                 let g = self.network.graph();
                 let status = HostStatus {
                     agents: self.agents.values().map(|e| e.info.clone()).collect(),
-                    profiles: self
-                        .profiles
+                    profiles: AgentKind::ALL
                         .iter()
-                        .map(|p| capability_from_profile(p.name(), &p.path, p))
+                        .map(|k| capability_from_kind(k.name(), k.name(), *k))
                         .collect(),
                     nodes: g.node_names().into_iter().map(String::from).collect(),
                     edge_count: g.edge_count(),
@@ -2159,16 +2004,14 @@ impl RuntimeHost {
             }
             HostCommand::GetAgentInfo { name, reply_tx } => {
                 // Resolve agent name, then check running agents first,
-                // fall back to profiles (by short name).
+                // fall back to the hardcoded agent kinds.
                 let resolved = self.resolve_agent(&name);
                 let info = resolved
                     .as_ref()
                     .and_then(|key| self.agents.get(key).map(|e| e.info.clone()))
                     .or_else(|| {
-                        self.profiles
-                            .iter()
-                            .find(|p| p.path == name)
-                            .map(|p| capability_from_profile(p.name(), &p.path, p))
+                        AgentKind::from_name(&name)
+                            .map(|k| capability_from_kind(k.name(), k.name(), k))
                     });
                 let _ = reply_tx.send(info);
             }
@@ -2539,7 +2382,7 @@ impl RuntimeHost {
     }
 
     /// Route a task description to the best-matching agent.
-    /// Considers both running agents and available profiles (blueprints).
+    /// Considers both running agents and the hardcoded agent kinds.
     /// Running agents get a small bonus score since they're immediately
     /// available for delegation.
     fn route_task(&self, description: &str, exclude: Option<&str>) -> crate::control::RouteResult {
@@ -2588,16 +2431,13 @@ impl RuntimeHost {
             .map(|e| score_info(&e.info, true))
             .collect();
 
-        // Score profiles (excluding those already running under the same name
-        // and the caller itself).
-        let running_names: std::collections::HashSet<&str> =
-            self.agents.keys().map(|s| s.as_str()).collect();
+        // Score the hardcoded kinds as spawnable candidates (excluding the
+        // caller itself).
         candidates.extend(
-            self.profiles
+            AgentKind::ALL
                 .iter()
-                .filter(|p| !running_names.contains(p.path.as_str()))
-                .filter(|p| Some(p.path.as_str()) != exclude)
-                .map(|p| score_info(&capability_from_profile(p.name(), &p.path, p), false)),
+                .filter(|k| Some(k.name()) != exclude)
+                .map(|k| score_info(&capability_from_kind(k.name(), k.name(), *k), false)),
         );
 
         let mut candidates: Vec<_> = candidates.into_iter().filter(|c| c.score > 0.0).collect();
@@ -2718,7 +2558,7 @@ impl RuntimeHost {
     /// after registration.
     pub fn register_agent(&mut self, handle: AgentHandle, info: crate::control::AgentInfo) {
         let path = handle.path.clone();
-        let profile_path = handle.profile_path.clone();
+        let kind = handle.kind;
         let agent_id = handle.agent_id;
         let relay_name = path.as_str().to_string();
         let model = handle.model.clone(); // Clone Arc before moving handle
@@ -2747,7 +2587,7 @@ impl RuntimeHost {
                 status: info.status.clone(),
                 last_event: info.last_event.clone(),
                 info: info.clone(),
-                profile_path: profile_path.clone(),
+                kind,
                 layout_order,
                 layout_created_at,
                 model,
@@ -2761,7 +2601,7 @@ impl RuntimeHost {
         // registry; the dashboard's persistence is a read-side projection that
         // can tolerate eventual consistency. Failure here is logged but does
         // not abort the spawn flow.
-        self.persist_upsert_agent_graph(&path, agent_id, &profile_path, &info);
+        self.persist_upsert_agent_graph(&path, agent_id, kind.name(), &info);
         self.persist_current_agent_layout();
     }
 
@@ -2785,7 +2625,7 @@ impl RuntimeHost {
                 PersistedAgentGraph {
                     path: entry.info.path.clone(),
                     parent_path,
-                    profile_path: entry.profile_path.clone(),
+                    profile_path: entry.kind.name().to_string(),
                     agent_id,
                     status_json,
                     last_event: entry.last_event.clone(),
@@ -3049,39 +2889,18 @@ impl RuntimeHost {
         );
     }
 
-    /// Spawn an agent and immediately register it with the host's
-    /// multiplexer. Returns the agent name.
-    pub async fn spawn_and_register(
-        &mut self,
-        agent_name: &str,
-        profile: &agentik_core::AgentProfile,
-        global_model: Arc<ArcSwapOption<Model>>,
-        model_override: Option<Model>,
-    ) -> Result<String> {
-        let path = agentik_types::AgentPath::root()
-            .join(agent_name)
-            .map_err(|e| Error::Other(e.to_string()))?;
-        let handle = self
-            .spawn_agent(&path, profile, global_model, model_override)
-            .await?;
-        let name = handle.path.as_str().to_string();
-        let info = capability_from_profile(handle.path.name(), handle.path.as_str(), profile);
-        self.register_agent(handle, info);
-        Ok(name)
-    }
-
     /// Restore the multi-agent layout left behind by the previous daemon.
     ///
     /// The current-layout snapshot records the exact set of agents that were
     /// open when the daemon stopped, along with their hierarchical paths and
-    /// stable IDs. The record in `agents` carries the exact serialized profile
-    /// used by that incarnation, which takes precedence over the current
-    /// profile blueprint. Individual corrupt or unresolvable entries are
-    /// skipped so one stale row cannot prevent the daemon and the remaining
-    /// agents from starting.
+    /// stable IDs. The record in `agents` carries the per-agent
+    /// configuration used by that incarnation (kind, model preference,
+    /// runtime overrides), parsed tolerantly so rows written by the old
+    /// profile registry still restore. Individual corrupt or unresolvable
+    /// entries are skipped so one stale row cannot prevent the daemon and
+    /// the remaining agents from starting.
     pub async fn restore_persisted_agents<F>(
         &mut self,
-        profiles: &[agentik_core::AgentProfile],
         global_model: Arc<ArcSwapOption<Model>>,
         mut resolve_model: F,
     ) -> Result<usize>
@@ -3145,32 +2964,9 @@ impl RuntimeHost {
                 },
             };
 
-            let profile = match serde_json::from_value::<agentik_core::AgentProfile>(
-                record.config_json.clone(),
-            ) {
-                Ok(profile) => profile,
-                Err(error) => {
-                    let fallback = profiles
-                        .iter()
-                        .find(|profile| profile.path == entry.profile_path)
-                        .cloned();
-                    match fallback {
-                        Some(profile) => profile,
-                        None => {
-                            tracing::warn!(
-                                path = %entry.path,
-                                profile = %entry.profile_path,
-                                error = %error,
-                                "skipping persisted agent with unreadable profile"
-                            );
-                            continue;
-                        }
-                    }
-                }
-            };
-            let profile = enforce_profile_roles(&profile);
+            let config = AgentProfileConfig::from_json(&record.config_json);
 
-            let model_override = match profile.preferred_model.as_deref() {
+            let model_override = match config.preferred_model.as_deref() {
                 Some(spec) => match resolve_model(spec) {
                     Ok(model) => Some(model),
                     Err(error) => {
@@ -3195,13 +2991,13 @@ impl RuntimeHost {
             }
 
             match self
-                .spawn_agent(&path, &profile, global_model.clone(), model_override)
+                .spawn_agent(&path, &config, global_model.clone(), model_override)
                 .await
             {
                 Ok(handle) => {
                     let agent_id = handle.agent_id;
                     let mut info =
-                        capability_from_profile(handle.path.name(), handle.path.as_str(), &profile);
+                        capability_from_kind(handle.path.name(), handle.path.as_str(), config.kind);
                     info.agent_id = Some(agent_id);
                     self.register_agent(handle, info.clone());
                     self.emit_host_event(HostEvent::AgentRegistered {
@@ -3722,7 +3518,7 @@ impl RuntimeHost {
         self.agents.keys().map(|s| s.as_str()).collect()
     }
 
-    /// Spawn a new agent from an [`AgentProfile`](agentik_core::AgentProfile).
+    /// Spawn a new agent from an [`AgentProfileConfig`].
     ///
     /// Delegates to [`SharedInfra::spawn_agent`] — which only needs the
     /// shared infrastructure, not the topology network or registry.
@@ -3731,12 +3527,12 @@ impl RuntimeHost {
     pub async fn spawn_agent(
         &self,
         agent_path: &agentik_types::AgentPath,
-        profile: &agentik_core::AgentProfile,
+        config: &AgentProfileConfig,
         global_model: Arc<ArcSwapOption<Model>>,
         model_override: Option<Model>,
     ) -> Result<AgentHandle> {
         self.infra
-            .spawn_agent(agent_path, profile, global_model, model_override)
+            .spawn_agent(agent_path, config, global_model, model_override)
             .await
     }
 
@@ -3768,17 +3564,13 @@ impl RuntimeHost {
 // Capability extraction
 // ═══════════════════════════════════════════════════════════════════════
 
-/// Build [`AgentInfo`] from an [`AgentProfile`], auto-extracting tags,
-/// expertise, and tool list from the profile's feature flags.
-fn capability_from_profile(
-    name: &str,
-    path: &str,
-    profile: &agentik_core::AgentProfile,
-) -> crate::control::AgentInfo {
+/// Build [`AgentInfo`] from an [`AgentKind`], auto-extracting tags,
+/// expertise, and tool list from the kind's feature flags.
+fn capability_from_kind(name: &str, path: &str, kind: AgentKind) -> crate::control::AgentInfo {
     let mut tags = Vec::new();
     let mut expertise = Vec::new();
 
-    if path == "researcher" || path.starts_with("researcher/") {
+    if kind == AgentKind::Researcher {
         tags.push("research".into());
         tags.push("analysis".into());
         tags.push("dag-analysis".into());
@@ -3789,13 +3581,13 @@ fn capability_from_profile(
         expertise.push("scientific-interpretation".into());
     }
 
-    if profile.enable_bibliography {
+    if kind.enable_bibliography() {
         tags.push("literature".into());
         tags.push("bibliography".into());
         expertise.push("literature-search".into());
         expertise.push("citation-management".into());
     }
-    if profile.enable_writing {
+    if kind.enable_writing() {
         tags.push("writing".into());
         tags.push("latex".into());
         tags.push("manuscript".into());
@@ -3803,42 +3595,42 @@ fn capability_from_profile(
         expertise.push("citation-insertion".into());
         expertise.push("latex-compilation".into());
     }
-    if profile.enable_opengwas {
+    if kind.enable_opengwas() {
         tags.push("gwas".into());
         tags.push("genetics".into());
         expertise.push("gwas-analysis".into());
     }
-    if profile.enable_opentargets {
+    if kind.enable_opentargets() {
         tags.push("drug-targets".into());
         expertise.push("target-identification".into());
     }
-    if profile.enable_gwascatalog {
+    if kind.enable_gwascatalog() {
         tags.push("gwas-catalog".into());
         expertise.push("variant-lookup".into());
     }
-    if profile.enable_chembl {
+    if kind.enable_chembl() {
         tags.push("chembl".into());
         expertise.push("bioactivity-data".into());
     }
-    if profile.enable_rcsb {
+    if kind.enable_rcsb() {
         tags.push("pdb".into());
         tags.push("structural-biology".into());
         expertise.push("protein-structure-lookup".into());
         expertise.push("structural-biology-analysis".into());
     }
-    if profile.enable_string {
+    if kind.enable_string() {
         tags.push("protein-networks".into());
         expertise.push("string-analysis".into());
     }
-    if profile.enable_kegg {
+    if kind.enable_kegg() {
         tags.push("kegg".into());
         expertise.push("pathway-analysis".into());
     }
-    if profile.enable_dag_history {
+    if kind.enable_dag_history() {
         tags.push("pipeline".into());
         expertise.push("dag-execution".into());
     }
-    if profile.enable_plugin_rsi {
+    if kind.enable_plugin_rsi() {
         tags.push("plugin".into());
         tags.push("node".into());
         tags.push("node-development".into());
@@ -3853,7 +3645,7 @@ fn capability_from_profile(
         name: name.into(),
         path: path.into(),
         agent_id: None,
-        summary: profile.description.clone(),
+        summary: kind.description().into(),
         tags,
         expertise,
         tools: Vec::new(), // populated at runtime if needed
@@ -5001,18 +4793,10 @@ mod plugin_profile_tools_tests {
         config.agent_db = dir.path().join("agent.db");
         let host = RuntimeHost::open(&config).await.unwrap();
         let agent_path = agentik_types::AgentPath::try_from("/root/developer").unwrap();
-        let researcher = agentik_core::AgentProfile::defaults()
-            .into_iter()
-            .find(|profile| profile.path == "researcher")
-            .unwrap();
-        let developer = agentik_core::AgentProfile::defaults()
-            .into_iter()
-            .find(|profile| profile.path == "developer")
-            .unwrap();
 
         let researcher_tools = host
             .infra
-            .tools_from_profile(&agent_path, &researcher)
+            .tools_from_profile(&agent_path, AgentKind::Researcher)
             .await
             .unwrap();
         assert!(
@@ -5046,12 +4830,13 @@ mod plugin_profile_tools_tests {
                 .any(|tool| tool.definition.name == "skill_observe")
         );
         assert!(
-            !crate::config::build_system_prompt(&researcher).contains("Plugin Self-Improvement")
+            !crate::config::build_system_prompt(&AgentKind::Researcher)
+                .contains("Plugin Self-Improvement")
         );
 
         let developer_tools = host
             .infra
-            .tools_from_profile(&agent_path, &developer)
+            .tools_from_profile(&agent_path, AgentKind::Developer)
             .await
             .unwrap();
         assert!(
@@ -5064,7 +4849,10 @@ mod plugin_profile_tools_tests {
                 .iter()
                 .any(|tool| tool.definition.name == "plugin_container_run")
         );
-        assert!(crate::config::build_system_prompt(&developer).contains("Plugin Self-Improvement"));
+        assert!(
+            crate::config::build_system_prompt(&AgentKind::Developer)
+                .contains("Plugin Self-Improvement")
+        );
     }
 }
 
@@ -5086,13 +4874,52 @@ mod communication_policy_tests {
         model: Arc<ArcSwapOption<Model>>,
     ) {
         let path = agentik_types::AgentPath::try_from(path).unwrap();
-        let profile = agentik_core::AgentProfile::new("researcher");
-        let handle = host
-            .spawn_agent(&path, &profile, model, None)
+        let config = AgentProfileConfig::new(AgentKind::Researcher);
+        let handle = host.spawn_agent(&path, &config, model, None).await.unwrap();
+        let info = capability_from_kind(handle.path.name(), handle.path.as_str(), config.kind);
+        host.register_agent(handle, info);
+    }
+
+    /// Guard for the spawn payload narrowing: the per-agent config handed to
+    /// `spawn_agent` — including `preferred_model` — must land in
+    /// `agents.config_json` so restarts restore the preference.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn spawn_persists_preferred_model_into_agent_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut host = RuntimeHost::open(&config(&dir)).await.unwrap();
+        let path = agentik_types::AgentPath::try_from("/root/researcher").unwrap();
+        let config = AgentProfileConfig {
+            kind: AgentKind::Researcher,
+            preferred_model: Some("mock:mock-model".into()),
+            runtime: agentik_core::AgentRuntimeOverrides {
+                use_memory: Some(false),
+                generate_memory: None,
+            },
+        };
+        let _handle = host
+            .spawn_agent(
+                &path,
+                &config,
+                Arc::new(ArcSwapOption::from_pointee(None)),
+                None,
+            )
             .await
             .unwrap();
-        let info = capability_from_profile(handle.path.name(), handle.path.as_str(), &profile);
-        host.register_agent(handle, info);
+
+        // The record is upserted asynchronously by the agent's run loop.
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let storage = host.infra().storage.clone();
+        let record = storage
+            .get_agent_by_name(path.as_str())
+            .await
+            .unwrap()
+            .expect("agent record missing after spawn");
+        let restored = AgentProfileConfig::from_json(&record.config_json);
+        assert_eq!(restored.kind, AgentKind::Researcher);
+        assert_eq!(restored.preferred_model.as_deref(), Some("mock:mock-model"));
+        assert_eq!(restored.runtime.use_memory, Some(false));
+
+        host.shutdown_all_agents_and_wait().await;
     }
 
     fn set_status(host: &mut RuntimeHost, path: &str, status: crate::control::AgentStatus) {
@@ -5200,8 +5027,8 @@ mod agent_persistence_tests {
             .unwrap()
             .join("worker")
             .unwrap();
-        let profile = agentik_core::AgentProfile::new("researcher/worker");
-        let spawn_profile = profile.clone();
+        let profile = AgentProfileConfig::new(AgentKind::Researcher);
+        let spawn_config = profile.clone();
         let spawn_path = path.clone();
         let model: Arc<ArcSwapOption<Model>> = Arc::new(ArcSwapOption::from_pointee(None));
         host.set_model(model);
@@ -5209,7 +5036,7 @@ mod agent_persistence_tests {
         let spawn = tokio::spawn(async move {
             let parent = spawn_path.parent().unwrap();
             spawn_control
-                .spawn_with_profile(spawn_path.name(), &parent, spawn_profile, None)
+                .spawn_with_config(spawn_path.name(), &parent, spawn_config, None)
                 .await
         });
         host.recv_and_process_command().await;
@@ -5227,20 +5054,20 @@ mod agent_persistence_tests {
         assert_eq!(spawn.await.unwrap().unwrap(), path.as_str());
 
         let sender_path = path.parent().unwrap().join("sender").unwrap();
-        let sender_profile = agentik_core::AgentProfile::new("researcher/sender");
+        let sender_config = AgentProfileConfig::new(AgentKind::Researcher);
         let sender_handle = host
             .spawn_agent(
                 &sender_path,
-                &sender_profile,
+                &sender_config,
                 Arc::new(ArcSwapOption::from_pointee(None)),
                 None,
             )
             .await
             .unwrap();
-        let sender_info = capability_from_profile(
+        let sender_info = capability_from_kind(
             sender_handle.path.name(),
             sender_handle.path.as_str(),
-            &sender_profile,
+            sender_config.kind,
         );
         host.register_agent(sender_handle, sender_info);
 
@@ -5305,14 +5132,11 @@ mod agent_persistence_tests {
         drop(host);
 
         let mut host = RuntimeHost::open(&config(&dir)).await.unwrap();
-        host.set_profiles(vec![profile.clone()]);
         let model: Arc<ArcSwapOption<Model>> = Arc::new(ArcSwapOption::from_pointee(Some(
             agentik_core::testing::get_mock_model("layout-restart-test"),
         )));
         let restored = host
-            .restore_persisted_agents(std::slice::from_ref(&profile), model, |spec| {
-                panic!("unexpected model preference `{spec}`")
-            })
+            .restore_persisted_agents(model, |spec| panic!("unexpected model preference `{spec}`"))
             .await
             .unwrap();
         assert_eq!(

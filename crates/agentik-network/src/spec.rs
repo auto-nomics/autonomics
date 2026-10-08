@@ -65,8 +65,8 @@ pub struct NodeSpec {
     /// references).
     pub name: String,
 
-    /// The [`AgentProfile`](agentik_core::AgentProfile) name to instantiate.
-    /// The caller must provide a matching profile when building the network.
+    /// The agent kind name (`researcher`/`developer`) to instantiate. The
+    /// caller must provide a matching kind when building the network.
     pub profile: String,
 
     /// If present, this message is injected immediately when the network

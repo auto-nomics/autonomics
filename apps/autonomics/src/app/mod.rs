@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
-use agentik_core::AgentProfile;
+use agentik_core::AgentKind;
 use agentik_sdk::types::AgentEvent;
 use agentik_sdk::types::messages::Message;
 use agentik_types::SessionInfo;

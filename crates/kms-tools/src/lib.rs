@@ -7,8 +7,8 @@
 //!
 //! These tools form a self-contained group that shares state only through
 //! a single [`kms::KmsService`] handle. They are registered separately
-//! from the main agent's tools (fs, opengwas, opentargets, …) and gated
-//! behind `AgentProfile.enable_kms`.
+//! from the main agent's tools (fs, opengwas, opentargets, …) whenever
+//! the KMS runtime feature is enabled.
 
 mod entity_tools;
 mod index_tools;

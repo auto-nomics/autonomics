@@ -38,7 +38,7 @@ pub mod processor;
 
 use std::collections::VecDeque;
 
-use agentik_core::AgentProfile;
+use agentik_core::AgentKind;
 use agentik_types::{AgentEvent, CompactEvent, TurnExecutionStatus};
 use serde_json::Value;
 use thiserror::Error;
@@ -56,7 +56,7 @@ pub struct RunSummary {
     pub run_id: Uuid,
     pub outcome: processor::Outcome,
     pub agent_path: String,
-    /// Resolved profile path the agent ran with.
+    /// Resolved agent kind name the agent ran with.
     pub profile: String,
     pub last_message: Option<String>,
     pub wall_time_secs: f64,
@@ -88,16 +88,14 @@ pub enum RunError {
     Cancelled,
 }
 
-/// Pick the profile to run: exact `path` match when requested, else the
-/// first stored profile.
-fn pick_profile(profiles: &[AgentProfile], requested: Option<&str>) -> Option<AgentProfile> {
+/// Resolve the agent kind to run: a strict kind-name match when requested,
+/// else the default (Researcher).
+fn resolve_kind(requested: Option<&str>) -> Result<AgentKind, RunError> {
     match requested {
-        Some(path) => profiles
-            .iter()
-            .find(|p| p.path == path)
-            .or_else(|| profiles.iter().find(|p| p.name() == path))
-            .cloned(),
-        None => profiles.first().cloned(),
+        None => Ok(AgentKind::Researcher),
+        Some(name) => AgentKind::from_name(name).ok_or(RunError::NoProfile {
+            requested: Some(name.to_string()),
+        }),
     }
 }
 

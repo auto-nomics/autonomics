@@ -16,7 +16,7 @@
 
 use std::collections::HashSet;
 
-use agentik_core::{AgentProfile, storage::AgentRecord};
+use agentik_core::storage::AgentRecord;
 use agentik_types::AgentPath;
 use ratatui::{
     layout::Rect,
@@ -27,9 +27,9 @@ use ratatui::{
 };
 
 use crate::widgets::tree_picker::{
-    PickerTreeRow, field_line, profile_preview_lines, render_chrome, render_footer,
-    render_preview_frame, render_preview_text, render_search, render_separator, render_tree_list,
-    section_line, split_content, truncate_preview_lines,
+    PickerTreeRow, kind_preview_lines, render_chrome, render_footer, render_preview_frame,
+    render_preview_text, render_search, render_separator, render_tree_list, split_content,
+    truncate_preview_lines,
 };
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -43,8 +43,8 @@ pub struct AgentRecordItem {
     /// Full hierarchical agent path (e.g. `/root/researcher`).
     pub path: AgentPath,
     pub last_active: i64,
-    /// Serialized `AgentProfile` stored at registration time. Used to
-    /// reconstruct the profile if the named profile no longer exists.
+    /// Serialized [`agentik_core::AgentProfileConfig`] stored at
+    /// registration time; legacy rows hold a full serialized profile.
     pub config_json: serde_json::Value,
 }
 
@@ -533,40 +533,30 @@ impl StatefulWidget for AgentProfilePicker {
             let last_active = chrono::DateTime::from_timestamp_millis(item.last_active)
                 .map(|time| time.format("%Y-%m-%d %H:%M:%S").to_string())
                 .unwrap_or_else(|| "unknown".to_string());
+            // Tolerant parse covers both the current per-agent config shape
+            // and legacy full-profile rows.
+            let config = agentik_core::AgentProfileConfig::from_json(&item.config_json);
+            let override_label = |value: Option<bool>| match value {
+                None => "inherit".to_string(),
+                Some(true) => "on".to_string(),
+                Some(false) => "off".to_string(),
+            };
             let leading_fields = vec![
                 ("Path", item.path.as_str().to_string()),
                 ("ID", item.id.to_string()),
                 ("Last", last_active),
+                (
+                    "Model",
+                    config
+                        .preferred_model
+                        .clone()
+                        .unwrap_or_else(|| "(global default)".to_string()),
+                ),
+                ("Memory", override_label(config.runtime.use_memory)),
+                ("Memory gen", override_label(config.runtime.generate_memory)),
             ];
 
-            let lines = if let Ok(profile) =
-                serde_json::from_value::<AgentProfile>(item.config_json.clone())
-            {
-                profile_preview_lines(&profile, leading_fields)
-            } else {
-                let mut lines = leading_fields
-                    .into_iter()
-                    .map(|(label, value)| field_line(label, value))
-                    .collect::<Vec<_>>();
-                lines.push(Line::from(""));
-                lines.push(section_line("Config"));
-                match &item.config_json {
-                    serde_json::Value::Object(config) => {
-                        for (key, value) in config {
-                            let value = match value {
-                                serde_json::Value::String(value) => value.clone(),
-                                serde_json::Value::Bool(value) => value.to_string(),
-                                serde_json::Value::Number(value) => value.to_string(),
-                                serde_json::Value::Null => "null".to_string(),
-                                other => other.to_string(),
-                            };
-                            lines.push(field_line(key, value));
-                        }
-                    }
-                    other => lines.push(field_line("Value", other.to_string())),
-                }
-                lines
-            };
+            let lines = kind_preview_lines(config.kind, leading_fields);
 
             Widget::render(
                 Paragraph::new(truncate_preview_lines(lines, preview_inner.height as usize)),

@@ -39,16 +39,15 @@ async fn spawn_chat_turn_and_shutdown_over_the_wire() {
     // Hydration first.
     let state = client.state().await.unwrap();
     assert!(state.agents.is_empty());
-    assert!(!state.profiles.is_empty());
+    assert_eq!(state.profiles.len(), 2);
 
     // Start the event pump.
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     EventPump::spawn(client.clone(), state.last_seq, tx);
 
-    // Spawn an agent from the first profile.
-    let profile = state.profiles.first().unwrap().clone();
+    // Spawn an agent from the first kind.
     let path = client
-        .spawn_agent("worker", "/root", &profile, None)
+        .spawn_agent("worker", "/root", "researcher", None, None)
         .await
         .unwrap();
     assert!(
@@ -595,5 +594,20 @@ async fn skill_observations_endpoint_returns_full_evidence_in_stable_order() {
         rows.windows(2)
             .all(|pair| pair[0].created_at > pair[1].created_at
                 || (pair[0].created_at == pair[1].created_at && pair[0].id < pair[1].id))
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn spawn_rejects_unknown_agent_kind() {
+    let gateway_daemon = start_mock_gateway("unused").await;
+    let client = gateway_daemon.client();
+
+    let error = client
+        .spawn_agent("worker", "/root", "wizard", None, None)
+        .await
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("unknown agent kind"),
+        "unexpected error: {error}"
     );
 }
