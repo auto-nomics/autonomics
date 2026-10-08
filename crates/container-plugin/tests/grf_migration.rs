@@ -191,8 +191,8 @@ fn every_kind_compiles_and_carries_its_op() {
 
         // Legacy artifact prefix rule: /artifacts/<kind>.
         assert_eq!(
-            compiled.artifact_prefix,
-            format!("/artifacts/{kind}"),
+            compiled.artifact_prefix.as_deref(),
+            Some(format!("/artifacts/{kind}").as_str()),
             "{kind}"
         );
 

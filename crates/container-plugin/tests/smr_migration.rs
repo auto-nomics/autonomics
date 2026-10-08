@@ -112,7 +112,10 @@ fn smr_heidi_plugin_compiles_to_the_legacy_wrapper_contract() {
     assert_eq!(compiled.timeout_secs, 3600);
     // The legacy default prefix carried the `_container` suffix; plugin
     // kinds are suffix-less, so the prefix is kind-derived.
-    assert_eq!(compiled.artifact_prefix, "/artifacts/smr_heidi");
+    assert_eq!(
+        compiled.artifact_prefix,
+        Some("/artifacts/smr_heidi".to_string())
+    );
     assert_eq!(compiled.workdir, None);
     assert!(compiled.panels.is_empty());
     let panel_ids: Vec<&str> = compiled
@@ -200,7 +203,10 @@ fn smr_heidi_eqtlgen_plugin_compiles_to_the_legacy_wrapper_contract() {
     assert_eq!(compiled.outputs[1].path, "smr.log");
     assert_eq!(compiled.outputs[1].format.as_deref(), Some("smr_log"));
     assert_eq!(compiled.timeout_secs, 3600);
-    assert_eq!(compiled.artifact_prefix, "/artifacts/smr_heidi_eqtlgen");
+    assert_eq!(
+        compiled.artifact_prefix,
+        Some("/artifacts/smr_heidi_eqtlgen".to_string())
+    );
     // Superset family panels: identical bindings on both kinds; only the
     // script decides which BESD package is read.
     let panel_ids: Vec<&str> = compiled

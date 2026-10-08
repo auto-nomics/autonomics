@@ -29,6 +29,7 @@ use agentik_sdk::model::Model;
 use agentik_sdk::types::{AgentEvent, ContentBlock};
 use arc_swap::ArcSwapOption;
 use container_runtime::ContainerExecutionInfra;
+use container_runtime::PodmanConfig;
 use container_runtime::{WorkspaceGcPolicy, sweep_workspace};
 use dag_core::{BundleRegistry, DataBundle};
 use data_catalog::{CatalogConfig, LocalCatalog, RemoteCatalog, default_panel_cache_root};
@@ -65,6 +66,13 @@ fn spawn_container_gc(infra: &Arc<ContainerExecutionInfra>) {
         min_age: container_runtime::workspace_gc_age(),
         dry_run: false,
     };
+    // Purely opt-in: work dirs are the durable store of container outputs,
+    // so the sweep only runs when an age was set explicitly.
+    let work_dir_policy =
+        container_runtime::work_dir_gc_age().map(|min_age| container_runtime::WorkDirGcPolicy {
+            min_age,
+            dry_run: false,
+        });
     let interval = container_runtime::workspace_gc_interval();
     tokio::spawn(async move {
         loop {
@@ -81,6 +89,20 @@ fn spawn_container_gc(infra: &Arc<ContainerExecutionInfra>) {
                 pending_cleared = workspace.pending_cleared,
                 "container workspace GC"
             );
+            if let Some(policy) = &work_dir_policy {
+                let work_dirs =
+                    container_runtime::sweep_work_dirs(&config.workspace_root, policy).await;
+                if !work_dirs.errors.is_empty() {
+                    tracing::warn!(errors = ?work_dirs.errors, "container work dir GC errors");
+                }
+                tracing::info!(
+                    removed = work_dirs.removed,
+                    bytes_freed = work_dirs.bytes_freed,
+                    in_use = work_dirs.retained_in_use,
+                    recent = work_dirs.retained_recent,
+                    "container work dir GC"
+                );
+            }
             let Some(interval) = interval else {
                 break;
             };
@@ -782,6 +804,7 @@ fn build_vfs(config: &RuntimeConfig) -> Result<MountedObjectStore> {
     let mut manifest = state.manifest;
     let plugin_layout = plugin_rsi::PluginStateLayout::open(&config.state_dir);
     ensure_plugin_mounts(&mut manifest, config, &plugin_layout)?;
+    ensure_workspace_mount(&mut manifest, &PodmanConfig::from_env().workspace_root);
     MountedObjectStore::from_manifest(&manifest).map_err(|e| Error::Other(e.to_string()))
 }
 
@@ -796,6 +819,7 @@ async fn build_vfs_with_catalog(
     let mut manifest = state.manifest;
     let plugin_layout = plugin_rsi::PluginStateLayout::open(&config.state_dir);
     ensure_plugin_mounts(&mut manifest, config, &plugin_layout)?;
+    ensure_workspace_mount(&mut manifest, &PodmanConfig::from_env().workspace_root);
 
     let mut catalog_registry = dag_core::BundleRegistry::new();
     let mut catalog = None;
@@ -1213,6 +1237,55 @@ fn ensure_literature_mount(manifest: &mut VfsManifest, config: &RuntimeConfig) -
         backend: backend_id,
         source: "/".into(),
         read_only: false,
+        permissions: Default::default(),
+    });
+    true
+}
+
+/// Ensure the container workspace tree is reachable through the VFS at its
+/// own host-absolute path (identity mount), so the work-dir file refs
+/// produced by container nodes resolve for every consumer — DataFusion
+/// readers, artifact hashing, and RO-Crate export included.
+///
+/// Ephemeral by design: never written back to `vfs.toml`, so a moved
+/// workspace root self-heals on the next start instead of leaving a stale
+/// persisted entry. An existing mount at the same path keeps its backend
+/// and only has its `source` retargeted when the root moved.
+fn ensure_workspace_mount(manifest: &mut VfsManifest, workspace_root: &std::path::Path) -> bool {
+    let root = workspace_root.to_string_lossy().to_string();
+    if let Some(existing) = manifest.mount.iter_mut().find(|mount| mount.path == root) {
+        if existing.source == root {
+            return false;
+        }
+        existing.source = root.clone();
+        return true;
+    }
+
+    // Reuse a local backend rooted at `/` when one exists (the default
+    // manifest's `default` backend is exactly that); otherwise append one.
+    let backend_id = manifest
+        .backend
+        .iter()
+        .find(
+            |backend| matches!(&backend.config, vfs::BackendConfig::Local { root } if root == "/"),
+        )
+        .map(|backend| backend.id.clone())
+        .unwrap_or_else(|| {
+            let mut id = "autonomics-workspace".to_owned();
+            while manifest.backend.iter().any(|backend| backend.id == id) {
+                id.push('_');
+            }
+            manifest.backend.push(BackendDefinition {
+                id: id.clone(),
+                config: vfs::BackendConfig::local("/"),
+            });
+            id
+        });
+    manifest.mount.push(MountDefinition {
+        path: root.clone(),
+        backend: backend_id,
+        source: root,
+        read_only: true,
         permissions: Default::default(),
     });
     true
@@ -5337,6 +5410,68 @@ mod literature_mount_tests {
                 permissions: Default::default(),
             }],
         }
+    }
+
+    #[test]
+    fn ensure_workspace_mount_adds_identity_mount_reusing_root_backend() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = workspace.path().to_string_lossy().to_string();
+        let mut manifest = base_manifest();
+        assert!(ensure_workspace_mount(&mut manifest, workspace.path()));
+        let mount = manifest
+            .mount
+            .iter()
+            .find(|mount| mount.path == root)
+            .expect("workspace identity mount inserted");
+        // Reuses the existing `/`-rooted local backend, no new backend added.
+        assert_eq!(mount.backend, "default");
+        assert_eq!(mount.source, root);
+        assert!(mount.read_only);
+        assert_eq!(manifest.backend.len(), 1);
+        // Idempotent on the second pass.
+        assert!(!ensure_workspace_mount(&mut manifest, workspace.path()));
+        // A moved workspace root retargets the existing mount in place.
+        let moved = tempfile::tempdir().unwrap();
+        let moved_root = moved.path().to_string_lossy().to_string();
+        assert!(ensure_workspace_mount(&mut manifest, moved.path()));
+        let mount = manifest
+            .mount
+            .iter()
+            .find(|mount| mount.path == moved_root)
+            .expect("retargeted mount");
+        assert_eq!(mount.source, moved_root);
+    }
+
+    #[tokio::test]
+    async fn workspace_mount_resolves_host_paths_and_rejects_writes() {
+        let workspace = tempfile::tempdir().unwrap();
+        let work_dir = workspace.path().join("ab/cdef");
+        std::fs::create_dir_all(&work_dir).unwrap();
+        std::fs::write(work_dir.join("result.csv"), "a,b\n1,2\n").unwrap();
+
+        let mut manifest = base_manifest();
+        ensure_workspace_mount(&mut manifest, workspace.path());
+        let data_dir = tempfile::tempdir().unwrap();
+        let mounts = Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap());
+        let storage = vfs::OpendalFileStorage::with_mounts(data_dir.path(), mounts);
+
+        // The bare host path resolves to the real file — both via the host
+        // accessor and through a full read (the DataFusion reader path).
+        let host_file = work_dir.join("result.csv");
+        assert_eq!(
+            storage.local_host_path(&host_file.to_string_lossy()),
+            Some(host_file.clone())
+        );
+        let key = storage.resolve_path(&host_file.to_string_lossy());
+        let operator = storage.resolve(&host_file.to_string_lossy());
+        let bytes = operator.read(&key).await.unwrap();
+        assert_eq!(bytes.to_vec(), b"a,b\n1,2\n");
+        // The identity mount is read-only: writes are denied.
+        assert!(
+            storage
+                .check_writable(&host_file.to_string_lossy())
+                .is_err()
+        );
     }
 
     #[test]

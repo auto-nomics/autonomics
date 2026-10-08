@@ -93,7 +93,10 @@ fn mixer_fit1_plugin_compiles_to_the_legacy_wrapper_contract() {
         container_runtime::PullPolicy::Missing
     ));
     assert_eq!(compiled.timeout_secs, 21_600);
-    assert_eq!(compiled.artifact_prefix, "/artifacts/mixer_container");
+    assert_eq!(
+        compiled.artifact_prefix,
+        Some("/artifacts/mixer_container".to_string())
+    );
     assert_eq!(compiled.workdir, None);
     assert!(compiled.panels.is_empty());
     assert_eq!(compiled.panel_bundles.len(), 1);
@@ -173,7 +176,10 @@ fn mixer_fit2_plugin_compiles_to_the_legacy_wrapper_contract() {
     assert_eq!(compiled.outputs[1].path, "mixer_fit2.log");
     assert_eq!(compiled.outputs[1].format.as_deref(), Some("mixer_log"));
     assert_eq!(compiled.timeout_secs, 21_600);
-    assert_eq!(compiled.artifact_prefix, "/artifacts/mixer_container");
+    assert_eq!(
+        compiled.artifact_prefix,
+        Some("/artifacts/mixer_container".to_string())
+    );
     assert_eq!(compiled.panel_bundles.len(), 1);
     assert_eq!(
         compiled.panel_bundles[0].panel_id,

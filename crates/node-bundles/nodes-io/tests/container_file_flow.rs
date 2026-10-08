@@ -150,18 +150,30 @@ fn sample_batch() -> RecordBatch {
 }
 
 fn workspace_vfs(workspace_root: &Path) -> (Arc<MountedObjectStore>, NodeCtx) {
+    let root = workspace_root.to_string_lossy().into_owned();
     let manifest = VfsManifest {
         backend: vec![BackendDefinition {
             id: "workspace".into(),
             config: BackendConfig::local("/"),
         }],
-        mount: vec![MountDefinition {
-            path: "/".into(),
-            backend: "workspace".into(),
-            source: workspace_root.to_string_lossy().into_owned(),
-            read_only: false,
-            permissions: Default::default(),
-        }],
+        mount: vec![
+            MountDefinition {
+                path: "/".into(),
+                backend: "workspace".into(),
+                source: root.clone(),
+                read_only: false,
+                permissions: Default::default(),
+            },
+            // Identity mount for the workspace tree, mirroring the runtime
+            // host: bare work-dir host paths resolve to the real files.
+            MountDefinition {
+                path: root,
+                backend: "workspace".into(),
+                source: workspace_root.to_string_lossy().into_owned(),
+                read_only: true,
+                permissions: Default::default(),
+            },
+        ],
     };
     let mounted = Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap());
     let storage = Arc::new(OpendalFileStorage::with_mounts(
@@ -176,7 +188,11 @@ fn workspace_vfs(workspace_root: &Path) -> (Arc<MountedObjectStore>, NodeCtx) {
     (mounted, NodeCtx::new(session.runtime_env(), Some(storage)))
 }
 
-fn container_spec(image: &str, workspace: &Path, artifact_prefix: String) -> ContainerCommandSpec {
+fn container_spec(
+    image: &str,
+    workspace: &Path,
+    artifact_prefix: Option<String>,
+) -> ContainerCommandSpec {
     ContainerCommandSpec {
         image: image.into(),
         command: vec![
@@ -193,6 +209,7 @@ fn container_spec(image: &str, workspace: &Path, artifact_prefix: String) -> Con
             format: Some("csv".into()),
         }],
         workdir: Some(workspace.to_string_lossy().into_owned()),
+        stage_in_mode: Default::default(),
         artifact_prefix,
         timeout_secs: 120,
         panels: Vec::new(),
@@ -225,14 +242,13 @@ async fn assert_container_artifact(
     output: &dag_core::value::FileRef,
     workspace_output: &Path,
 ) {
-    assert!(
-        output
-            .path
-            .starts_with("vfs:///artifacts/container-file-flow/"),
-        "container output is not a VFS artifact: {}",
-        output.path
+    // Nextflow-mode outputs are the work-dir files themselves, referenced
+    // by local (mtime) fingerprints.
+    assert_eq!(
+        Path::new(&output.path),
+        workspace_output,
+        "container output must be the work-dir file"
     );
-    assert!(output.path.ends_with("/copied.csv"));
     assert_eq!(output.format.as_deref(), Some("csv"));
 
     let expected_bytes = tokio::fs::read(workspace_output)
@@ -243,28 +259,23 @@ async fn assert_container_artifact(
         .as_ref()
         .expect("container output has a fingerprint");
     assert_eq!(fingerprint.size, expected_bytes.len() as u64);
+    assert!(fingerprint.content_hash.is_none());
+    assert!(!fingerprint.immutable_remote);
 
-    let digest = Sha256::digest(&expected_bytes);
-    assert_eq!(
-        fingerprint.content_hash.as_deref(),
-        Some(format!("sha256:{:x}", digest).as_str()),
-        "container output fingerprint must match the workspace file"
-    );
-
+    // The downstream proof: the bare work-dir host path resolves through
+    // the identity workspace mount and returns the exact bytes — the same
+    // routing FileToDataFrameNode uses.
     let storage = ctx.opendal.as_ref().expect("test VFS storage");
-    let virtual_path = output
-        .path
-        .strip_prefix("vfs://")
-        .expect("container output path is a vfs:// URI");
+    let host_path = &output.path;
     let actual_bytes = storage
-        .resolve(virtual_path)
-        .read(&storage.resolve_path(virtual_path))
+        .resolve(host_path)
+        .read(&storage.resolve_path(host_path))
         .await
-        .expect("read published container output through VFS");
+        .expect("read work-dir output through the VFS identity mount");
     assert_eq!(
         actual_bytes.to_vec(),
         expected_bytes,
-        "downstream nodes must be able to read the exact container output artifact"
+        "downstream nodes must be able to read the exact container output"
     );
 }
 
@@ -279,7 +290,7 @@ async fn dataframe_to_file_output_flows_through_container_command_in_dag() {
     let mut spec = container_spec(
         "localhost/container-file-flow-test:not-present",
         &run_root,
-        "/artifacts/container-file-flow/fake".into(),
+        None,
     );
     spec.pull_policy = PullPolicy::Never;
 

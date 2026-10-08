@@ -124,7 +124,10 @@ fn twosamplemr_plugin_compiles_to_the_legacy_wrapper_contract() {
     // twosamplemr_container"; the plugin kind drops the `_container`
     // suffix and the prefix follows the kind (the wave-wide
     // `/artifacts/{kind}` convention, same as ldsc/plink2/coloc).
-    assert_eq!(compiled.artifact_prefix, "/artifacts/twosamplemr");
+    assert_eq!(
+        compiled.artifact_prefix,
+        Some("/artifacts/twosamplemr".to_string())
+    );
     assert_eq!(compiled.workdir, None);
     assert!(compiled.panels.is_empty());
     // The plink2 clumping stage mounts the catalog panel the legacy
@@ -326,7 +329,10 @@ fn twosamplemr_harmonise_plugin_compiles_to_the_legacy_wrapper_contract() {
     ));
     assert_eq!(compiled.timeout_secs, 600);
     // Same `_container`-suffix drop as the main kind.
-    assert_eq!(compiled.artifact_prefix, "/artifacts/twosamplemr_harmonise");
+    assert_eq!(
+        compiled.artifact_prefix,
+        Some("/artifacts/twosamplemr_harmonise".to_string())
+    );
     assert_eq!(compiled.workdir, None);
     assert!(compiled.panels.is_empty());
     // Deliberate delta (not parity): the legacy harmonise wrapper

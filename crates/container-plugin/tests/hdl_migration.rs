@@ -107,7 +107,10 @@ fn hdl_l_plugin_compiles_to_the_legacy_wrapper_contract() {
         container_runtime::PullPolicy::Missing
     ));
     assert_eq!(compiled.timeout_secs, 1800);
-    assert_eq!(compiled.artifact_prefix, "/artifacts/hdl_l");
+    assert_eq!(
+        compiled.artifact_prefix,
+        Some("/artifacts/hdl_l".to_string())
+    );
     assert_eq!(compiled.workdir, None);
     assert!(compiled.panels.is_empty());
     assert_eq!(compiled.panel_bundles.len(), 1);
@@ -289,7 +292,10 @@ fn hdl_l_scan_plugin_compiles_to_the_legacy_wrapper_contract() {
     ));
     // The scan is the whole-chromosome run: the legacy timeout was one day.
     assert_eq!(compiled.timeout_secs, 86400);
-    assert_eq!(compiled.artifact_prefix, "/artifacts/hdl_l_scan");
+    assert_eq!(
+        compiled.artifact_prefix,
+        Some("/artifacts/hdl_l_scan".to_string())
+    );
     assert_eq!(compiled.panel_bundles.len(), 1);
     assert_eq!(
         compiled.panel_bundles[0].panel_id,

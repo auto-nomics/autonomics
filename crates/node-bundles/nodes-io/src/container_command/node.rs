@@ -1,11 +1,12 @@
 //! The file-to-file container command node.
 //!
-//! Inputs are materialized into a private host scratch directory, that
-//! directory is mounted at `/work`, the command runs in an ephemeral image,
-//! and only declared output files become DAG values. Construction validates
-//! the spec and resolves catalog panels; execution stages inputs,
-//! materializes panels, runs one ephemeral container, and publishes declared
-//! outputs to VFS.
+//! Each task executes in a persistent, content-addressed work directory
+//! mounted at `/work`: inputs are staged into it (symlinks to their sources
+//! by default, with source parents bind-mounted read-only), the command runs
+//! in an ephemeral image, and declared outputs are collected from the work
+//! dir as DAG values — they stay there and travel downstream by reference.
+//! An optional `artifact_prefix` additionally publishes them to VFS.
+//! Construction validates the spec and resolves catalog panels.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -21,18 +22,22 @@ use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::value::{FileRef, NodeValue, PortType};
 use dag_core::{DataBundle, NodeCtx};
 
-use container_runtime::gc::{acquire_panel_lock_shared, acquire_scratch_lock_shared};
+use container_runtime::gc::{
+    acquire_panel_lock_shared, acquire_scratch_lock_shared, acquire_workdir_lock_exclusive,
+};
 use container_runtime::{
     CachedPanel, ContainerNetwork, ContainerRunRequest, ContainerRuntimeError,
-    DEFAULT_CONTAINER_WORKDIR, GpuRequest, ImageReference, PanelCache, PanelRef, PodmanConnection,
-    PullPolicy, keep_workspace_enabled, unique_container_name, workspace_ref,
+    DEFAULT_CONTAINER_WORKDIR, GpuRequest, ImageReference, InputMount, PanelCache, PanelRef,
+    PodmanConnection, PullPolicy, unique_container_name, workspace_ref,
 };
 
 use super::ContainerCommandOutputSpec;
+use super::StageInMode;
 use super::error::ContainerCommandError;
 use super::utils::{
-    capture_declared_output_logs, capture_input_manifest, container_path, hex, input_path,
-    staged_path, unique_scratch_suffix, virtual_path, write_failure_logs, write_strictly_within,
+    capture_declared_output_logs, capture_input_manifest, container_path, contains_glob, hex,
+    input_path, literal_prefix, mount_safe_parent, resolve_output, staged_path, virtual_path,
+    write_failure_logs, write_strictly_within,
 };
 use super::{ContainerCommandSpec, ContainerPanelBundleSpec, validate};
 
@@ -46,7 +51,8 @@ pub struct ContainerCommandNode {
     env: BTreeMap<String, String>,
     outputs: Vec<ContainerCommandOutputSpec>,
     workdir: Option<String>,
-    artifact_prefix: String,
+    stage_in_mode: StageInMode,
+    artifact_prefix: Option<String>,
     timeout_secs: u64,
     panels: Vec<PanelRef>,
     panel_bundles: Vec<ResolvedPanelBundle>,
@@ -123,6 +129,7 @@ impl ContainerCommandNode {
             env: spec.env,
             outputs: spec.outputs,
             workdir: spec.workdir,
+            stage_in_mode: spec.stage_in_mode,
             artifact_prefix: spec.artifact_prefix,
             timeout_secs: spec.timeout_secs,
             panels: spec.panels,
@@ -170,16 +177,100 @@ impl ContainerCommandNode {
         self
     }
 
-    /// Resolves the host scratch directory that will be mounted at `/work`.
+    /// Content-addressed identity of this task: everything that determines
+    /// the output bytes, hashed to the stable work-dir name.
     ///
-    /// A spec-provided `workdir` is used as-is when absolute and joined onto
-    /// `workspace_root` when relative; when omitted, a unique scratch
-    /// directory keeps concurrent runs isolated. Missing directories are
-    /// created on demand, the path is canonicalized, and any candidate that
-    /// escapes `workspace_root` (an absolute path elsewhere, `..` traversal,
-    /// or a symlink pointing out) is rejected before it can be mounted into
-    /// the container.
-    fn resolve_workdir(&self, workspace_root: &Path) -> Result<PathBuf, ContainerCommandError> {
+    /// Resource knobs (`cpus`/`memory`/`timeout_secs`/`user`/...) and
+    /// `artifact_prefix` deliberately do not participate — re-tuning them
+    /// reuses the same work dir. Inputs participate through their
+    /// `FileRef` identity (path + fingerprint), in the same port order the
+    /// scheduler stages them.
+    fn work_dir_identity(&self, inputs: &[NodeInput]) -> String {
+        use sha2::Digest;
+
+        let mut hasher = sha2::Sha256::new();
+        let mut feed = |hasher: &mut sha2::Sha256, part: &str| {
+            hasher.update(part.as_bytes());
+            hasher.update([0x1e]);
+        };
+        feed(&mut hasher, self.kind);
+        feed(&mut hasher, &self.image);
+        feed(&mut hasher, &self.command.join("\x1e"));
+        feed(&mut hasher, self.script.as_deref().unwrap_or(""));
+        for (name, content) in &self.files {
+            feed(&mut hasher, name);
+            feed(&mut hasher, content);
+        }
+        for (name, value) in &self.env {
+            feed(&mut hasher, name);
+            feed(&mut hasher, value);
+        }
+        for output in &self.outputs {
+            feed(&mut hasher, &output.path);
+            feed(&mut hasher, output.format.as_deref().unwrap_or(""));
+        }
+        feed(
+            &mut hasher,
+            match self.stage_in_mode {
+                StageInMode::Symlink => "symlink",
+                StageInMode::Copy => "copy",
+            },
+        );
+        for panel in &self.panels {
+            feed(&mut hasher, &panel.id);
+            feed(&mut hasher, &panel.digest);
+            feed(&mut hasher, &panel.mount_path);
+        }
+        for panel in &self.panel_bundles {
+            feed(&mut hasher, &panel.spec.panel_id);
+            feed(&mut hasher, &panel.spec.mount_path);
+            feed(&mut hasher, panel.bundle.digest.as_deref().unwrap_or(""));
+            feed(&mut hasher, panel.bundle.source.as_deref().unwrap_or(""));
+        }
+        if let Some(identity) = &self.plugin_identity {
+            feed(&mut hasher, &identity.manifest_sha256);
+            feed(&mut hasher, identity.script_sha256.as_deref().unwrap_or(""));
+            feed(&mut hasher, &identity.image_reference);
+            for panel in &identity.panels {
+                feed(&mut hasher, &format!("{panel:?}"));
+            }
+        }
+        let mut ordered = inputs.to_vec();
+        ordered.sort_by_key(|input| input.port);
+        for input in &ordered {
+            feed(&mut hasher, &input.port.to_string());
+            match &input.data {
+                NodeValue::File(file) => feed_file(&mut hasher, file),
+                NodeValue::FileSet(files) => {
+                    for file in files {
+                        feed_file(&mut hasher, file);
+                    }
+                }
+                NodeValue::DataFrame(_) | NodeValue::Channel(_) => {
+                    feed(&mut hasher, "<unsupported>")
+                }
+            }
+        }
+        hex_digest(&hasher)
+    }
+
+    /// Resolves the host work directory that will be mounted at `/work`.
+    ///
+    /// When the spec omits `workdir`, a persistent content-addressed
+    /// directory `{hash[0..2]}/{hash[2..]}` under the workspace root is derived from
+    /// [`Self::work_dir_identity`] — identical re-runs of the same task
+    /// reuse it (Nextflow-style work dir). A spec-provided `workdir` is an
+    /// explicit override (used as-is when absolute, joined onto
+    /// `workspace_root` when relative). Missing directories are created on
+    /// demand, the path is canonicalized, and any candidate that escapes
+    /// `workspace_root` (an absolute path elsewhere, `..` traversal, or a
+    /// symlink pointing out) is rejected before it can be mounted into the
+    /// container.
+    fn resolve_workdir(
+        &self,
+        workspace_root: &Path,
+        identity: &str,
+    ) -> Result<PathBuf, ContainerCommandError> {
         let workdir = match &self.workdir {
             Some(path) => {
                 let candidate = PathBuf::from(path);
@@ -189,7 +280,7 @@ impl ContainerCommandNode {
                     workspace_root.join(candidate)
                 }
             }
-            None => workspace_root.join(unique_scratch_suffix()),
+            None => workspace_root.join(&identity[..2]).join(&identity[2..]),
         };
         std::fs::create_dir_all(workspace_root).map_err(|e| {
             ContainerCommandError::Invalid(format!(
@@ -229,6 +320,34 @@ impl ContainerCommandNode {
     }
 }
 
+fn feed_file(hasher: &mut sha2::Sha256, file: &FileRef) {
+    use sha2::Digest;
+
+    hasher.update(file.path.as_bytes());
+    hasher.update([0x1f]);
+    match &file.fingerprint {
+        Some(fingerprint) => {
+            hasher.update(fingerprint.size.to_le_bytes());
+            hasher.update(fingerprint.mtime_ns.to_le_bytes());
+            hasher.update(fingerprint.content_hash.as_deref().unwrap_or("").as_bytes());
+            hasher.update([u8::from(fingerprint.immutable_remote)]);
+        }
+        None => hasher.update([0]),
+    }
+    hasher.update([0x1f]);
+}
+
+fn hex_digest(hasher: &sha2::Sha256) -> String {
+    use sha2::Digest;
+
+    hasher
+        .clone()
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
 fn resolve_catalog_panels(
     spec: &ContainerCommandSpec,
     bundles: &[DataBundle],
@@ -258,18 +377,102 @@ fn resolve_catalog_panels(
     Ok(resolved)
 }
 
+/// Stage one input file into the work dir staging area.
+///
+/// Returns the staged path plus, when the input was staged as a symlink, the
+/// source parent directory that must be bind-mounted read-only into the
+/// container so the symlink resolves inside it.
+///
+/// Resolution order: `vfs://` objects resolve through the VFS mount table to
+/// a host file on a local backend; bare host paths are used directly (host
+/// existence wins over the VFS — the root mount would otherwise claim every
+/// absolute path into the data dir). Remote-backend objects, `copy` mode, and
+/// unsafe source locations (tmpfs and friends) fall back to byte copies.
 async fn stage_input_file(
     ctx: &NodeCtx,
     staging_dir: &Path,
     index: usize,
     file: &FileRef,
-) -> Result<PathBuf, String> {
+    mode: StageInMode,
+) -> Result<(PathBuf, Option<PathBuf>), String> {
     let destination = staged_path(staging_dir, "input", index, &file.path);
-    let virtual_source = ctx.opendal.as_ref().and_then(|_| virtual_path(&file.path));
 
-    if let (Some(storage), Some(source)) = (ctx.opendal.as_ref(), virtual_source.as_deref()) {
-        let operator = storage.resolve(source);
-        let key = storage.resolve_path(source);
+    let host_source: Option<PathBuf> =
+        if let Some(virtual_source) = file.path.strip_prefix("vfs://") {
+            ctx.opendal
+                .as_ref()
+                .and_then(|storage| storage.local_host_path(virtual_source))
+                .filter(|path| path.is_file())
+        } else {
+            let bare = file.path.strip_prefix("file://").unwrap_or(&file.path);
+            let direct = PathBuf::from(bare);
+            if direct.is_file() {
+                Some(direct)
+            } else {
+                ctx.opendal
+                    .as_ref()
+                    .and_then(|storage| storage.local_host_path(bare))
+                    .filter(|path| path.is_file())
+            }
+        };
+
+    if let Some(source) = host_source {
+        let parent = source.parent().map(Path::to_path_buf);
+        let symlink_ok =
+            mode == StageInMode::Symlink && parent.as_deref().is_some_and(mount_safe_parent);
+        if symlink_ok {
+            let staged = destination.clone();
+            let source_display = source.display().to_string();
+            let moved_source = source.clone();
+            let linked = tokio::task::spawn_blocking(move || {
+                // Replace any pre-existing link/file from a previous run in
+                // the same work dir before linking.
+                match std::fs::remove_file(&staged) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error.to_string()),
+                }
+                #[cfg(unix)]
+                {
+                    std::os::unix::fs::symlink(&moved_source, &staged).map_err(|e| e.to_string())
+                }
+                #[cfg(not(unix))]
+                {
+                    Err("symlink staging is unsupported on this platform".to_string())
+                }
+            })
+            .await
+            .map_err(|e| format!("staging task failed: {e}"))
+            .and_then(|result| result);
+            linked.map_err(|e| {
+                format!(
+                    "cannot symlink-stage input `{source_display}` -> `{}`: {e}",
+                    destination.display()
+                )
+            })?;
+            return Ok((destination, parent));
+        }
+
+        // Copy mode, or the source parent is not mount-safe.
+        let staged = destination.clone();
+        let copied = tokio::task::spawn_blocking(move || {
+            std::fs::copy(&source, &staged)
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|e| format!("staging task failed: {e}"))
+        .and_then(|result| result);
+        copied.map_err(|e| format!("cannot stage input `{}`: {e}", file.path))?;
+        return Ok((destination, None));
+    }
+
+    // No host file: remote-backend VFS object — transfer the bytes.
+    if let Some(storage) = ctx.opendal.as_ref()
+        && let Some(virtual_source) = virtual_path(&file.path)
+    {
+        let operator = storage.resolve(&virtual_source);
+        let key = storage.resolve_path(&virtual_source);
         if let Ok(bytes) = operator.read(&key).await {
             // Blocking write on the blocking pool: a multi-GB object must
             // not pin a tokio worker for the whole duration.
@@ -281,24 +484,8 @@ async fn stage_input_file(
             .map_err(|e| format!("staging task failed: {e}"))
             .and_then(|result| result);
             written.map_err(|e| format!("cannot stage input `{}`: {e}", destination.display()))?;
-            return Ok(destination);
+            return Ok((destination, None));
         }
-    }
-
-    let host_path = Path::new(&file.path);
-    if host_path.is_file() {
-        let source = host_path.to_path_buf();
-        let staged = destination.clone();
-        let copied = tokio::task::spawn_blocking(move || {
-            std::fs::copy(&source, &staged)
-                .map(|_| ())
-                .map_err(|e| e.to_string())
-        })
-        .await
-        .map_err(|e| format!("staging task failed: {e}"))
-        .and_then(|result| result);
-        copied.map_err(|e| format!("cannot stage input `{}`: {e}", host_path.display()))?;
-        return Ok(destination);
     }
 
     Err(format!(
@@ -311,7 +498,8 @@ pub(super) async fn stage_inputs(
     ctx: &NodeCtx,
     workdir: &Path,
     inputs: &[NodeInput],
-) -> Result<Vec<NodeInput>, String> {
+    mode: StageInMode,
+) -> Result<(Vec<NodeInput>, Vec<InputMount>), String> {
     let staging_dir = workdir.join(".autonomics").join("inputs");
     std::fs::create_dir_all(&staging_dir).map_err(|e| {
         format!(
@@ -327,11 +515,17 @@ pub(super) async fn stage_inputs(
     ordered_inputs.sort_by_key(|input| input.port);
     let mut staged = Vec::with_capacity(ordered_inputs.len());
     let mut index = 0usize;
+    let mut mount_dirs = std::collections::BTreeSet::new();
     for input in &ordered_inputs {
         let value = match &input.data {
             NodeValue::File(file) => {
-                let path = stage_input_file(ctx, &staging_dir, index, file).await?;
+                let (path, mount) = stage_input_file(ctx, &staging_dir, index, file, mode).await?;
                 index += 1;
+                if let Some(dir) = mount
+                    && dir != workdir
+                {
+                    mount_dirs.insert(dir);
+                }
                 NodeValue::File(FileRef::new(
                     path.to_string_lossy().into_owned(),
                     file.format.clone(),
@@ -340,8 +534,14 @@ pub(super) async fn stage_inputs(
             NodeValue::FileSet(files) => {
                 let mut staged_files = Vec::with_capacity(files.len());
                 for file in files {
-                    let path = stage_input_file(ctx, &staging_dir, index, file).await?;
+                    let (path, mount) =
+                        stage_input_file(ctx, &staging_dir, index, file, mode).await?;
                     index += 1;
+                    if let Some(dir) = mount
+                        && dir != workdir
+                    {
+                        mount_dirs.insert(dir);
+                    }
                     staged_files.push(FileRef::new(
                         path.to_string_lossy().into_owned(),
                         file.format.clone(),
@@ -358,7 +558,11 @@ pub(super) async fn stage_inputs(
             data: value,
         });
     }
-    Ok(staged)
+    let input_mounts = mount_dirs
+        .into_iter()
+        .map(|host_dir| InputMount { host_dir })
+        .collect();
+    Ok((staged, input_mounts))
 }
 
 #[async_trait]
@@ -378,6 +582,7 @@ impl DagNode for ContainerCommandNode {
             env: self.env.clone(),
             outputs: self.outputs.clone(),
             workdir: self.workdir.clone(),
+            stage_in_mode: self.stage_in_mode,
             artifact_prefix: self.artifact_prefix.clone(),
             timeout_secs: self.timeout_secs,
             panels: self.panels.clone(),
@@ -416,20 +621,39 @@ impl DagNode for ContainerCommandNode {
         reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let workspace_root = self.runtime.workspace_root().to_path_buf();
+        let identity = self.work_dir_identity(inputs);
         let workspace_path = self
-            .resolve_workdir(&workspace_root)
+            .resolve_workdir(&workspace_root, &identity)
             .map_err(|error| error.into_dag_error(self.kind))?;
-        // Hold the scratch lock for the whole run: the GC sweeper takes the
+        let is_hash_workdir = self.workdir.is_none();
+        // Hold the work-dir lock for the whole run: the GC sweep takes the
         // same lock exclusively and therefore never reclaims a live run's
-        // workspace. Released on drop, on every early return below.
-        let scratch_lock = acquire_scratch_lock_shared(&workspace_path)
-            .map_err(|error| {
+        // directory. Hash work dirs take it exclusively (concurrent identical
+        // tasks serialize) and are wiped of stale contents first; explicit
+        // user workdirs keep the shared lock and their contents.
+        let workdir_lock = if is_hash_workdir {
+            let lock = acquire_workdir_lock_exclusive(&workspace_path).map_err(|error| {
+                ContainerCommandError::Invalid(format!(
+                    "cannot lock container work dir `{}`: {error}",
+                    workspace_path.display()
+                ))
+            });
+            lock.map_err(|error| error.into_dag_error(self.kind))?
+        } else {
+            let lock = acquire_scratch_lock_shared(&workspace_path).map_err(|error| {
                 ContainerCommandError::Invalid(format!(
                     "cannot lock container workspace `{}`: {error}",
                     workspace_path.display()
                 ))
-            })
-            .map_err(|error| error.into_dag_error(self.kind))?;
+            });
+            lock.map_err(|error| error.into_dag_error(self.kind))?
+        };
+        if is_hash_workdir {
+            wipe_workdir_contents(&workspace_path)
+                .await
+                .map_err(ContainerCommandError::Invalid)
+                .map_err(|error| error.into_dag_error(self.kind))?;
+        }
         let mut panel_refs = self.panels.clone();
         panel_refs.extend(self.panel_bundles.iter().map(|panel| {
             PanelRef {
@@ -453,10 +677,11 @@ impl DagNode for ContainerCommandNode {
                 .map_err(ContainerCommandError::Invalid)
                 .map_err(|error| error.into_dag_error(self.kind))?;
 
-        let mut staged_inputs = stage_inputs(ctx, &workspace_path, inputs)
-            .await
-            .map_err(ContainerCommandError::Invalid)
-            .map_err(|error| error.into_dag_error(self.kind))?;
+        let (mut staged_inputs, input_mounts) =
+            stage_inputs(ctx, &workspace_path, inputs, self.stage_in_mode)
+                .await
+                .map_err(ContainerCommandError::Invalid)
+                .map_err(|error| error.into_dag_error(self.kind))?;
         staged_inputs.sort_by_key(|input| input.port);
         let host_input_paths = staged_inputs
             .iter()
@@ -469,32 +694,56 @@ impl DagNode for ContainerCommandNode {
             .map(|path| container_path(&workspace_path, path))
             .collect::<Vec<_>>();
 
-        let resolved_outputs = self
+        // Literal outputs resolve to concrete paths before the run; glob
+        // outputs cannot (the files do not exist yet), so they substitute
+        // their pattern relative to `/work` and only the literal directory
+        // prefix is pre-created.
+        let declared_outputs = self
             .outputs
             .iter()
-            .map(|output| (output, workspace_path.join(&output.path)))
+            .map(|output| {
+                let container_ref = if contains_glob(&output.path) {
+                    format!("{DEFAULT_CONTAINER_WORKDIR}/{}", output.path)
+                } else {
+                    container_path(
+                        &workspace_path,
+                        &workspace_path.join(&output.path).to_string_lossy(),
+                    )
+                };
+                (output, container_ref)
+            })
             .collect::<Vec<_>>();
-        for (_, path) in &resolved_outputs {
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent)
+        for (spec, _) in &declared_outputs {
+            let mkdir_target = if contains_glob(&spec.path) {
+                literal_prefix(&spec.path)
+            } else {
+                workspace_path.join(&spec.path).parent().map(|parent| {
+                    parent
+                        .strip_prefix(&workspace_path)
+                        .unwrap_or(parent)
+                        .to_string_lossy()
+                        .into_owned()
+                })
+            };
+            if let Some(relative) = mkdir_target
+                && !relative.is_empty()
+            {
+                std::fs::create_dir_all(workspace_path.join(&relative))
                     .map_err(|e| {
                         ContainerCommandError::Invalid(format!(
-                            "cannot create output directory `{}`: {e}",
-                            parent.display()
+                            "cannot create output directory `{relative}`: {e}"
                         ))
                     })
                     .map_err(|error| error.into_dag_error(self.kind))?;
             }
         }
-        let container_output_paths = resolved_outputs
+        // Glob outputs substitute their `/work`-relative pattern into
+        // `$outputN` / `AUTONOMICS_OUTPUTn` — the pattern cannot be resolved
+        // before the container runs.
+        let container_output_paths: Vec<String> = declared_outputs
             .iter()
-            .map(|(spec, path)| {
-                (
-                    spec,
-                    container_path(&workspace_path, &path.to_string_lossy()),
-                )
-            })
-            .collect::<Vec<_>>();
+            .map(|(_, reference)| reference.clone())
+            .collect();
 
         let mut command = self.command.clone();
         if let Some(script) = &self.script {
@@ -524,7 +773,7 @@ impl DagNode for ContainerCommandNode {
             if let Some(path) = container_input_paths.get(index) {
                 vars.push(("$input".to_string(), path.clone()));
             }
-            if let Some((_, path)) = container_output_paths.get(index) {
+            if let Some(path) = container_output_paths.get(index) {
                 vars.push(("$output".to_string(), path.clone()));
             }
             vars
@@ -545,7 +794,7 @@ impl DagNode for ContainerCommandNode {
         for (index, path) in container_input_paths.iter().enumerate() {
             env.push((format!("AUTONOMICS_INPUT{index}"), path.clone()));
         }
-        for (index, (_, path)) in container_output_paths.iter().enumerate() {
+        for (index, path) in container_output_paths.iter().enumerate() {
             env.push((format!("AUTONOMICS_OUTPUT{index}"), path.clone()));
         }
         env.push((
@@ -579,6 +828,7 @@ impl DagNode for ContainerCommandNode {
                 .map_err(|error| error.into_dag_error(self.kind))?,
             env,
             panels,
+            input_mounts,
             network: self.network,
             read_only_rootfs: self.read_only_rootfs,
             pull_policy: self.pull_policy,
@@ -610,25 +860,24 @@ impl DagNode for ContainerCommandNode {
                         stdout,
                     } => {
                         write_failure_logs(&workspace_path, &stdout, &stderr);
-                        // Persist the captured streams next to where the
-                        // outputs would have landed, so a failed execution is
-                        // as auditable as a successful one.
-                        let logs = publish_run_logs(
-                            ctx,
-                            &self.artifact_prefix,
-                            &request_name,
-                            &stdout,
-                            &stderr,
-                            reporter,
-                        )
-                        .await;
+                        // Persist the captured streams in the work dir so a
+                        // failed execution is as auditable as a successful
+                        // one; the persisted copies are the audit record.
+                        let logs =
+                            write_run_logs(&workspace_path, &stdout, &stderr, reporter).await;
                         reporter.set_run_details(run_details(
                             &self.image,
                             exit_code,
                             &request_name,
+                            &workspace_path,
                             logs,
                         ));
-                        let mut logs = capture_declared_output_logs(&resolved_outputs);
+                        let literal_outputs = declared_outputs
+                            .iter()
+                            .filter(|(spec, _)| !contains_glob(&spec.path))
+                            .map(|(spec, _)| (*spec, workspace_path.join(&spec.path)))
+                            .collect::<Vec<_>>();
+                        let mut logs = capture_declared_output_logs(&literal_outputs);
                         logs.extend(capture_input_manifest(&staged_inputs));
                         ContainerCommandError::ExitStatus {
                             exit_code,
@@ -643,23 +892,16 @@ impl DagNode for ContainerCommandNode {
                 return Err(error.into_dag_error(self.kind));
             }
         };
-        // Persist the captured streams beside this run's outputs before the
-        // live events below consume them — the events are best-effort and
+        // Persist the captured streams in the work dir before the live
+        // events below consume them — the events are best-effort and
         // disappear with the channel, the persisted copies are the audit
         // record.
-        let logs = publish_run_logs(
-            ctx,
-            &self.artifact_prefix,
-            &request_name,
-            &result.stdout,
-            &result.stderr,
-            reporter,
-        )
-        .await;
+        let logs = write_run_logs(&workspace_path, &result.stdout, &result.stderr, reporter).await;
         reporter.set_run_details(run_details(
             &self.image,
             result.exit_code,
             &request_name,
+            &workspace_path,
             logs,
         ));
         if !result.stdout.trim().is_empty() {
@@ -669,42 +911,38 @@ impl DagNode for ContainerCommandNode {
             reporter.warn(result.stderr);
         }
 
+        // Collect declared outputs from the work dir — literal paths keep
+        // the exactly-one-file contract, glob patterns must match exactly
+        // one file. Outputs travel downstream as work-dir `FileRef`s (mtime
+        // fingerprints, existence-checked on incremental reuse); an optional
+        // `artifact_prefix` additionally publishes them to VFS.
         let mut outputs = PortOutputs::new();
-        for (index, (spec, host_path)) in resolved_outputs.iter().enumerate() {
-            if !host_path.is_file() {
-                return Err(ContainerCommandError::MissingOutput {
-                    path: host_path.to_string_lossy().into_owned(),
-                }
-                .into_dag_error(self.kind));
+        for (index, (spec, _)) in declared_outputs.iter().enumerate() {
+            let host_path = resolve_output(&spec.path, &workspace_path)
+                .map_err(|error| error.into_dag_error(self.kind))?;
+            if let Some(prefix) = &self.artifact_prefix {
+                publish_output(ctx, prefix, &request_name, spec, &host_path)
+                    .await
+                    .map_err(ContainerCommandError::Invalid)
+                    .map_err(|error| error.into_dag_error(self.kind))?;
             }
-            let file = publish_output(ctx, &self.artifact_prefix, &request_name, spec, host_path)
-                .await
-                .map_err(ContainerCommandError::Invalid)
+            let file = FileRef::local(&host_path, spec.format.clone())
+                .map_err(|error| {
+                    ContainerCommandError::Invalid(format!(
+                        "cannot fingerprint output `{}`: {error}",
+                        host_path.display()
+                    ))
+                })
                 .map_err(|error| error.into_dag_error(self.kind))?;
             outputs.insert_file(index as u8, file);
         }
 
-        // Every declared output now lives in object storage, so a unique
-        // scratch directory has no remaining value. User-declared workdirs
-        // are persistent by contract; AUTONOMICS_KEEP_WORKSPACE=1 keeps
-        // scratch for debugging until the sweeper's age window expires.
-        // Failed runs above return early and keep their scratch the same way.
-        if self.workdir.is_none() && !keep_workspace_enabled() {
-            drop(scratch_lock);
-            drop(_panel_locks);
-            let scratch = workspace_path.clone();
-            let removed = tokio::task::spawn_blocking(move || {
-                std::fs::remove_dir_all(&scratch).map_err(|error| error.to_string())
-            })
-            .await
-            .map_err(|error| error.to_string());
-            if let Err(error) = removed.and_then(|result| result) {
-                reporter.warn(format!(
-                    "cannot remove container scratch `{}`: {error}",
-                    workspace_path.display()
-                ));
-            }
-        }
+        // The work dir is persistent by design (it is the cache of this
+        // task's outputs); nothing to clean up here. The GC sweep reclaims
+        // stale work dirs only through the opt-in age knob, and never while
+        // the lock held above is alive.
+        drop(workdir_lock);
+        drop(_panel_locks);
         Ok(outputs)
     }
 }
@@ -850,71 +1088,36 @@ async fn publish_output(
     ))
 }
 
-/// Persist a run's captured stdout/stderr at
-/// `{artifact_prefix}/{run_name}/.autonomics-logs/`, beside the run's
-/// published outputs, and return `FileRef`s (path + sha256) for the run
+/// Persist a run's captured stdout/stderr in the work dir at
+/// `.autonomics/logs/{stdout,stderr}.log` and return `FileRef`s for the run
 /// report.
 ///
-/// Best-effort by design: missing object storage or a write failure only
-/// warns — log retention must never fail an otherwise-successful execution.
-/// Blank captures are skipped, matching when the live events are emitted.
-async fn publish_run_logs(
-    ctx: &NodeCtx,
-    artifact_prefix: &str,
-    run_name: &str,
+/// Best-effort by design: a write failure only warns — log retention must
+/// never fail an otherwise-successful execution. Blank captures are skipped,
+/// matching when the live events are emitted.
+async fn write_run_logs(
+    workdir: &Path,
     stdout: &str,
     stderr: &str,
     reporter: &NodeReporter,
 ) -> (Option<FileRef>, Option<FileRef>) {
-    let Some(storage) = ctx.opendal.as_ref() else {
-        reporter.warn("no object storage registered; run stdout/stderr not persisted");
-        return (None, None);
-    };
-    let prefix = vfs::OpendalFileStorage::normalize_path(artifact_prefix.trim_end_matches('/'));
-    let base = format!("{prefix}/{run_name}/.autonomics-logs");
-
-    let stdout_ref = if stdout.trim().is_empty() {
-        Ok(None)
-    } else {
-        write_log_object(storage, &format!("{base}/stdout.log"), stdout)
-            .await
-            .map(Some)
-    };
-    let stderr_ref = if stderr.trim().is_empty() {
-        Ok(None)
-    } else {
-        write_log_object(storage, &format!("{base}/stderr.log"), stderr)
-            .await
-            .map(Some)
-    };
-    for result in [&stdout_ref, &stderr_ref] {
-        if let Err(error) = result {
-            reporter.warn(format!("cannot persist run log: {error}"));
+    let log_dir = workdir.join(".autonomics").join("logs");
+    let write = |name: &str, contents: &str| -> Option<FileRef> {
+        if contents.trim().is_empty() {
+            return None;
         }
+        std::fs::create_dir_all(&log_dir).ok()?;
+        let path = log_dir.join(name);
+        std::fs::write(&path, contents).ok()?;
+        FileRef::local(&path, Some("text/plain".into())).ok()
+    };
+    let result = (write("stdout.log", stdout), write("stderr.log", stderr));
+    if result.0.is_none() && !stdout.trim().is_empty()
+        || result.1.is_none() && !stderr.trim().is_empty()
+    {
+        reporter.warn("cannot persist run logs in the work dir");
     }
-    (stdout_ref.ok().flatten(), stderr_ref.ok().flatten())
-}
-
-/// Write one captured stream to object storage and describe it as a
-/// content-addressed [`FileRef`]. The capture is already in memory (capped by
-/// the runtime's output limit), so a single-shot digest suffices.
-async fn write_log_object(
-    storage: &vfs::OpendalFileStorage,
-    virtual_path: &str,
-    contents: &str,
-) -> Result<FileRef, String> {
-    let digest = format!("sha256:{}", hex(&Sha256::digest(contents.as_bytes())));
-    let bytes = contents.as_bytes().to_vec();
-    storage
-        .write_bytes(virtual_path, bytes)
-        .await
-        .map_err(|error| error.to_string())?;
-    Ok(FileRef::remote(
-        format!("vfs://{virtual_path}"),
-        Some("text/plain".to_string()),
-        contents.len() as u64,
-        Some(digest),
-    ))
+    result
 }
 
 /// Assemble the execution evidence a container run reports for its node.
@@ -922,6 +1125,7 @@ fn run_details(
     image: &str,
     exit_code: i32,
     run_name: &str,
+    workdir: &Path,
     logs: (Option<FileRef>, Option<FileRef>),
 ) -> NodeRunDetails {
     NodeRunDetails {
@@ -936,9 +1140,36 @@ fn run_details(
         run_name: Some(run_name.to_string()),
         stdout_log: logs.0,
         stderr_log: logs.1,
-        workspace: None,
+        workspace: Some(workdir.to_string_lossy().into_owned()),
         task_manifest: None,
         output_artifacts: Vec::new(),
         output_artifacts_by_port: Default::default(),
     }
+}
+
+/// Remove every entry in a hash work dir except the lock file, so a re-run
+/// into the same directory can never observe stale outputs from a previous
+/// (possibly crashed) attempt.
+async fn wipe_workdir_contents(workdir: &Path) -> Result<(), String> {
+    let dir = workdir.to_path_buf();
+    tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+        for entry in std::fs::read_dir(&dir)? {
+            let entry = entry?;
+            if entry.file_name() == ".autonomics-lock" {
+                continue;
+            }
+            let path = entry.path();
+            if path.is_dir() {
+                std::fs::remove_dir_all(&path)?;
+            } else {
+                std::fs::remove_file(&path)?;
+            }
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|error| format!("workdir wipe task failed: {error}"))
+    .and_then(|result| {
+        result.map_err(|error| format!("cannot wipe work dir `{}`: {error}", workdir.display()))
+    })
 }

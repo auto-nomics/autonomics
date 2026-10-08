@@ -108,7 +108,7 @@ fn visualization_plugin_compiles_to_the_legacy_wrapper_contract() {
     // `_container` suffix).
     assert_eq!(
         compiled.artifact_prefix,
-        "/artifacts/visualization_container"
+        Some("/artifacts/visualization_container".to_string())
     );
     assert_eq!(compiled.workdir, None);
     assert!(compiled.panels.is_empty());

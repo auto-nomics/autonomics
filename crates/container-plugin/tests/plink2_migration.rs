@@ -104,7 +104,10 @@ fn plink2_clump_plugin_compiles_to_the_legacy_wrapper_contract() {
     // container"; the plugin kind drops the `_container` suffix and the
     // prefix follows the kind (the wave-wide `/artifacts/{kind}` convention,
     // same as ldsc/magma/coloc/mvmr/mrpresso).
-    assert_eq!(compiled.artifact_prefix, "/artifacts/plink2_clump");
+    assert_eq!(
+        compiled.artifact_prefix,
+        Some("/artifacts/plink2_clump".to_string())
+    );
     assert_eq!(compiled.workdir, None);
     assert!(compiled.panels.is_empty());
     assert_eq!(compiled.panel_bundles.len(), 1);

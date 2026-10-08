@@ -105,7 +105,10 @@ fn pathway_gsea_plugin_compiles_to_the_legacy_wrapper_contract() {
     // "/artifacts/pathway_gsea_container"; the plugin follows the kind
     // rename (`_container` suffix dropped), the same rule the ldsc and
     // mrpresso migrations applied.
-    assert_eq!(compiled.artifact_prefix, "/artifacts/pathway_gsea");
+    assert_eq!(
+        compiled.artifact_prefix,
+        Some("/artifacts/pathway_gsea".to_string())
+    );
     assert_eq!(compiled.workdir, None);
     // The legacy wrapper bound no panels.
     assert!(compiled.panels.is_empty());

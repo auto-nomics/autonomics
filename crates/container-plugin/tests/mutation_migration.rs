@@ -110,7 +110,10 @@ fn mutation_analysis_plugin_compiles_to_the_legacy_wrapper_contract() {
     // "/artifacts/mutation_analysis_container"; the plugin follows the kind
     // rename (`_container` suffix dropped), the rule the ldsc and mrpresso
     // migrations applied.
-    assert_eq!(compiled.artifact_prefix, "/artifacts/mutation_analysis");
+    assert_eq!(
+        compiled.artifact_prefix,
+        Some("/artifacts/mutation_analysis".to_string())
+    );
     assert_eq!(compiled.workdir, None);
     // The legacy wrapper bound no panels.
     assert!(compiled.panels.is_empty());
@@ -293,8 +296,8 @@ fn mutation_analysis_clinical_kind_differs_only_in_ports() {
     assert_eq!(base_compiled.pids_limit, clinical_compiled.pids_limit);
     assert_eq!(base_compiled.shm_size, clinical_compiled.shm_size);
     assert_eq!(
-        clinical_compiled.artifact_prefix,
-        "/artifacts/mutation_analysis_clinical"
+        clinical_compiled.artifact_prefix.as_deref(),
+        Some("/artifacts/mutation_analysis_clinical")
     );
 }
 

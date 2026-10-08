@@ -108,7 +108,10 @@ fn mrpresso_plugin_compiles_to_the_legacy_wrapper_contract() {
     // Deliberate delta: the legacy default was "/artifacts/mrpresso_container";
     // the plugin follows the kind rename (`_container` suffix dropped), the
     // same rule the ldsc family migration applied to its kinds.
-    assert_eq!(compiled.artifact_prefix, "/artifacts/mrpresso");
+    assert_eq!(
+        compiled.artifact_prefix,
+        Some("/artifacts/mrpresso".to_string())
+    );
     assert_eq!(compiled.workdir, None);
     // The legacy wrapper bound no panels.
     assert!(compiled.panels.is_empty());

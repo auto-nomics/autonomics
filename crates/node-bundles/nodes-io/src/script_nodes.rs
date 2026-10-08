@@ -98,8 +98,10 @@ pub struct ScriptNodeSpec {
     /// Packages are not installed at runtime and network access is disabled.
     #[serde(default)]
     pub packages: Vec<String>,
-    #[serde(default = "default_artifact_prefix")]
-    pub artifact_prefix: String,
+    /// Optional publishDir-style VFS prefix; when omitted, outputs stay
+    /// in the persistent work dir and travel downstream by reference.
+    #[serde(default)]
+    pub artifact_prefix: Option<String>,
     #[serde(default = "default_timeout")]
     pub timeout_s: u64,
     #[serde(default)]
@@ -110,9 +112,6 @@ pub struct ScriptNodeSpec {
     pub pids_limit: Option<i64>,
 }
 
-fn default_artifact_prefix() -> String {
-    "/artifacts/script".into()
-}
 fn default_timeout() -> u64 {
     DEFAULT_TIMEOUT_SECS
 }
@@ -244,8 +243,10 @@ fn validate(spec: &ScriptNodeSpec) -> Result<(), String> {
     if spec.code.len() > MAX_SCRIPT_BYTES {
         return Err(format!("script code exceeds {MAX_SCRIPT_BYTES} bytes"));
     }
-    if !spec.artifact_prefix.starts_with('/') {
-        return Err("artifact_prefix must be an absolute VFS path".into());
+    if let Some(prefix) = &spec.artifact_prefix
+        && !prefix.starts_with('/')
+    {
+        return Err("artifact_prefix must be an absolute VFS path when set".into());
     }
     if spec.timeout_s == 0 {
         return Err("timeout_s must be greater than zero".into());
@@ -563,6 +564,7 @@ pub fn container_spec(
         env: Default::default(),
         outputs,
         workdir: None,
+        stage_in_mode: Default::default(),
         artifact_prefix: spec.artifact_prefix.clone(),
         timeout_secs: spec.timeout_s,
         panels: Vec::new(),
@@ -582,7 +584,7 @@ pub fn container_spec(
 fn temporary_input_path(spec: &ScriptNodeSpec, index: usize, format: &str) -> String {
     let mut digest = Sha256::new();
     digest.update(&spec.code);
-    digest.update(spec.artifact_prefix.as_bytes());
+    digest.update(spec.artifact_prefix.as_deref().unwrap_or("").as_bytes());
     digest.update(index.to_le_bytes());
     let suffix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -954,7 +956,7 @@ mod tests {
             inputs: Vec::new(),
             outputs: Vec::new(),
             packages: vec!["pandas".into()],
-            artifact_prefix: "/artifacts/python-script-test".into(),
+            artifact_prefix: Some("/artifacts/python-script-test".into()),
             timeout_s: 60,
             cpus: None,
             memory: None,
@@ -973,7 +975,7 @@ mod tests {
             inputs: Vec::new(),
             outputs: Vec::new(),
             packages: Vec::new(),
-            artifact_prefix: "/artifacts/r-script-test".into(),
+            artifact_prefix: Some("/artifacts/r-script-test".into()),
             timeout_s: 60,
             cpus: None,
             memory: None,
@@ -1018,7 +1020,7 @@ mod tests {
                 },
             ],
             packages: Vec::new(),
-            artifact_prefix: "/artifacts/generic-script-test".into(),
+            artifact_prefix: Some("/artifacts/generic-script-test".into()),
             timeout_s: 60,
             cpus: None,
             memory: None,
@@ -1068,7 +1070,7 @@ mod tests {
                 },
             ],
             packages: Vec::new(),
-            artifact_prefix: "/artifacts/python-script-test".into(),
+            artifact_prefix: Some("/artifacts/python-script-test".into()),
             timeout_s: 60,
             cpus: None,
             memory: None,

@@ -665,24 +665,11 @@ ldsc --h2 "$AUTONOMICS_INPUT0" \
         assert!(declared.panels.iter().all(|panel| panel.digest.is_none()));
     }
 
-    /// Restores AUTONOMICS_KEEP_WORKSPACE on drop so one test's debugging
-    /// preference cannot leak into other tests.
-    struct EnvReset(&'static str);
-    impl Drop for EnvReset {
-        fn drop(&mut self) {
-            // SAFETY: process-global env mutation, dropped at test end;
-            // no other test in this module reads this variable.
-            unsafe { std::env::remove_var(self.0) };
-        }
-    }
-
     #[tokio::test]
     async fn build_and_execute_end_to_end_through_the_fake_runtime() {
-        // Keep the scratch directory so the staged script survives the
-        // successful-run cleanup and can be inspected below.
-        let _reset = EnvReset(container_runtime::KEEP_WORKSPACE_ENV);
-        // SAFETY: guarded by `_reset`; restored on drop.
-        unsafe { std::env::set_var(container_runtime::KEEP_WORKSPACE_ENV, "1") };
+        // Work dirs are persistent by design now, so the staged script
+        // survives the successful run and can be inspected below without
+        // any env knob.
         // The M3 acceptance gate: manifest -> registry -> build_node ->
         // execute -> FakeRuntime receives a request whose argv/env/script
         // match the compiled contract, and the output publishes to VFS.

@@ -35,9 +35,25 @@ pub const CONTAINER_COMMAND_KIND: &str = "container_command";
 #[derive(Debug, Clone, JsonSchema, Deserialize)]
 pub struct ContainerCommandOutputSpec {
     /// Safe path relative to `/work`. Absolute paths and `..` are rejected.
+    /// Glob metacharacters (`*`, `?`, `[...]`) are allowed: the pattern must
+    /// match exactly one file after the run, else the node errors.
     pub path: String,
     /// Optional format label passed downstream (`bam`, `vcf`, `csv`, ...).
     pub format: Option<String>,
+}
+
+/// How inputs are materialized into the task work dir.
+///
+/// `symlink` (default) links to the source file and bind-mounts the source
+/// parent read-only into the container — zero copies for local sources.
+/// `copy` duplicates the bytes into the staging area (always used for
+/// remote-backend VFS objects and unsafe source locations such as `/tmp`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum StageInMode {
+    #[default]
+    Symlink,
+    Copy,
 }
 
 #[derive(Debug, Clone, JsonSchema, Deserialize)]
@@ -58,12 +74,20 @@ pub struct ContainerCommandSpec {
     pub env: BTreeMap<String, String>,
     /// Files that must exist after a successful container run.
     pub outputs: Vec<ContainerCommandOutputSpec>,
-    /// Optional persistent scratch directory. A unique scratch directory is
-    /// created when omitted.
+    /// Optional explicit work directory under the workspace root. When
+    /// omitted, a persistent content-addressed work dir is derived from the
+    /// node identity (image, command/script, files, env, outputs, panels,
+    /// plugin identity, and input identities) and reused across re-runs.
     pub workdir: Option<String>,
-    /// VFS prefix used to publish declared outputs as immutable artifacts.
-    #[serde(default = "default_artifact_prefix")]
-    pub artifact_prefix: String,
+    /// How inputs are materialized into the work dir. See [`StageInMode`].
+    #[serde(default)]
+    pub stage_in_mode: StageInMode,
+    /// Optional publishDir-style VFS prefix. When set, declared outputs are
+    /// additionally uploaded as immutable artifacts under
+    /// `{prefix}/{run_name}/{output-path}`. When omitted (default), outputs
+    /// stay in the work dir and are passed downstream by reference.
+    #[serde(default)]
+    pub artifact_prefix: Option<String>,
     #[serde(default = "default_timeout")]
     pub timeout_secs: u64,
     /// Immutable reference-data bundles materialized into the shared panel cache.
@@ -119,10 +143,6 @@ fn default_network() -> String {
     "isolated".into()
 }
 
-fn default_artifact_prefix() -> String {
-    "/artifacts/container-command".into()
-}
-
 fn default_true() -> bool {
     true
 }
@@ -152,7 +172,7 @@ pub(crate) fn validate(spec: &ContainerCommandSpec) -> Result<(), ContainerComma
         return Err(ContainerCommandError::Invalid(error));
     }
     for output in &spec.outputs {
-        validate_workspace_relative_path(&output.path).map_err(|e| {
+        utils::validate_workspace_relative_glob(&output.path).map_err(|e| {
             ContainerCommandError::Invalid(format!("invalid output `{}`: {e}", output.path))
         })?;
         if let Some(format) = &output.format
@@ -162,6 +182,13 @@ pub(crate) fn validate(spec: &ContainerCommandSpec) -> Result<(), ContainerComma
                 "output format `{format}` cannot contain NUL bytes"
             )));
         }
+    }
+    if let Some(prefix) = &spec.artifact_prefix
+        && !prefix.starts_with('/')
+    {
+        return Err(ContainerCommandError::Invalid(
+            "`artifact_prefix` must be an absolute VFS path when set".into(),
+        ));
     }
     if let Some(script) = &spec.script
         && script.contains('\0')
@@ -275,15 +302,23 @@ impl NodeFactory for ContainerCommandNodeFactory {
     }
 
     fn doc(&self) -> &'static str {
-        "Runs an OCI image without a shell. File inputs are staged into a private \
-        workspace directory mounted at `/work`; input paths are exposed as \
+        "Runs an OCI image without a shell. Each task executes in a persistent \
+        content-addressed work directory mounted at `/work`, derived from the \
+        node identity and input identities — identical re-runs reuse it \
+        (Nextflow-style resume: deleted outputs are simply re-produced). File \
+        inputs are staged into the work dir, by default as symlinks to their \
+        sources with the source parent directories bind-mounted read-only \
+        (`stage_in_mode: copy` forces byte copies); input paths are exposed as \
         `$input0`, `$input1`, `AUTONOMICS_INPUT0`, and so on. Outputs must be \
-        safe paths relative to `/work` and are exposed as `$output0`, \
-        `AUTONOMICS_OUTPUT0`, and so on. The container root filesystem is \
-        read-only by default, networking defaults to an isolated profile, and \
-        immutable `panels` are mounted read-only from the shared panel cache. \
-        Declared outputs are uploaded to VFS object storage with sha256 \
-        fingerprints. Production workflows should reference images by digest."
+        safe paths relative to `/work` (globs allowed when they match exactly \
+        one file) and are exposed as `$output0`, `AUTONOMICS_OUTPUT0`, and so \
+        on; glob outputs substitute their pattern relative to `/work`. The \
+        container root filesystem is read-only by default, networking defaults \
+        to an isolated profile, and immutable `panels` are mounted read-only \
+        from the shared panel cache. Declared outputs stay in the work dir and \
+        travel downstream by reference; set `artifact_prefix` to additionally \
+        publish them to VFS object storage with sha256 fingerprints. Production \
+        workflows should reference images by digest."
     }
 
     fn spec_schema(&self) -> schemars::Schema {
@@ -462,7 +497,8 @@ mod tests {
                 format: Some("txt".into()),
             }],
             workdir: None,
-            artifact_prefix: "/artifacts/test".into(),
+            stage_in_mode: StageInMode::default(),
+            artifact_prefix: Some("/artifacts/test".into()),
             timeout_secs: 10,
             panels: Vec::new(),
             panel_bundles: Vec::new(),
@@ -518,7 +554,10 @@ mod tests {
     #[tokio::test]
     async fn stage_inputs_assigns_input_ranges_by_declared_port() {
         let env = test_env();
-        let source = tempfile::tempdir().unwrap();
+        // Sources must live outside `/tmp` (tmpfs): production symlink staging
+        // bind-mounts source parents, which is unsafe under /tmp and falls
+        // back to copies. The crate dir is on real disk.
+        let source = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
         let image_one = source.path().join("image1.nii.gz");
         let image_two = source.path().join("image2.nii.gz");
         let mask_one = source.path().join("mask1.nii.gz");
@@ -540,10 +579,11 @@ mod tests {
             data: NodeValue::FileSet(vec![image_file(&mask_one)]),
         };
 
-        let staged = stage_inputs(
+        let (staged, mounts) = stage_inputs(
             &env.ctx,
             env.workspace.path(),
             &[manifest_input, image_input, mask_input],
+            StageInMode::default(),
         )
         .await
         .unwrap();
@@ -574,6 +614,91 @@ mod tests {
                 .and_then(|name| name.to_str()),
             Some("input-3.csv")
         );
+        // Default staging symlinks local sources and mounts their parents.
+        for staged_path in [
+            Path::new(&images[0].path),
+            Path::new(&masks[0].path),
+            Path::new(&staged_manifest.path),
+        ] {
+            assert!(
+                staged_path
+                    .symlink_metadata()
+                    .is_ok_and(|meta| meta.file_type().is_symlink()),
+                "local sources must be staged as symlinks, got {staged_path:?}"
+            );
+        }
+        let mounted: Vec<_> = mounts.iter().map(|mount| mount.host_dir.clone()).collect();
+        assert_eq!(
+            mounted,
+            vec![image_one.parent().unwrap().to_path_buf()],
+            "all sources share one parent, mounted exactly once (deduped)"
+        );
+    }
+
+    #[tokio::test]
+    async fn copy_mode_stages_real_files_without_mounts() {
+        let env = test_env();
+        let source = env.workspace.path().join("data");
+        std::fs::create_dir_all(&source).unwrap();
+        let file = source.join("input.txt");
+        std::fs::write(&file, "copy-me").unwrap();
+
+        let (staged, mounts) = stage_inputs(
+            &env.ctx,
+            env.workspace.path(),
+            &[NodeInput::file(
+                0,
+                FileRef::local(&file, Some("txt".into())).unwrap(),
+            )],
+            StageInMode::Copy,
+        )
+        .await
+        .unwrap();
+
+        let staged_file = staged[0].data.as_file().unwrap();
+        let staged_path = Path::new(&staged_file.path);
+        assert!(staged_path.is_file());
+        assert!(
+            !staged_path
+                .symlink_metadata()
+                .is_ok_and(|meta| meta.file_type().is_symlink()),
+            "copy mode must materialize a real file"
+        );
+        assert_eq!(std::fs::read(staged_path).unwrap(), b"copy-me");
+        assert!(mounts.is_empty(), "copy mode mounts nothing");
+    }
+
+    #[tokio::test]
+    async fn tmp_parent_sources_fall_back_to_copy() {
+        let env = test_env();
+        // tempfile::tempdir lives under /tmp (tmpfs) — exactly the unsafe
+        // parent the script nodes produce — so symlink mode must copy.
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let tmp_file = tmp_dir.path().join("script-input.py");
+        std::fs::write(&tmp_file, "print('hi')").unwrap();
+
+        let (staged, mounts) = stage_inputs(
+            &env.ctx,
+            env.workspace.path(),
+            &[NodeInput::file(
+                0,
+                FileRef::local(&tmp_file, Some("py".into())).unwrap(),
+            )],
+            StageInMode::default(),
+        )
+        .await
+        .unwrap();
+
+        let staged_file = staged[0].data.as_file().unwrap();
+        let staged_path = Path::new(&staged_file.path);
+        assert!(
+            staged_path.is_file()
+                && !staged_path
+                    .symlink_metadata()
+                    .is_ok_and(|meta| meta.file_type().is_symlink()),
+            "unsafe parents must fall back to copy"
+        );
+        assert!(mounts.is_empty());
     }
 
     #[tokio::test]
@@ -634,33 +759,23 @@ mod tests {
 
         let output = dir.join("result.txt");
         assert_eq!(std::fs::read_to_string(&output).unwrap(), "hello-container");
+        // The node output is the work-dir file itself, referenced by a local
+        // (mtime) fingerprint — not an uploaded VFS artifact.
         let file = outputs.get(&0).unwrap().as_file().unwrap();
-        assert!(file.path.starts_with("vfs:///artifacts/test/"));
+        assert_eq!(Path::new(&file.path), output);
         let fingerprint = file.fingerprint.as_ref().unwrap();
         assert_eq!(fingerprint.size, "hello-container".len() as u64);
-        assert!(
-            fingerprint
-                .content_hash
-                .as_deref()
-                .unwrap()
-                .starts_with("sha256:")
-        );
-        let object = env
-            .ctx
-            .opendal
-            .as_ref()
-            .unwrap()
-            .resolve(file.path.strip_prefix("vfs://").unwrap())
-            .read(
-                &env.ctx
-                    .opendal
-                    .as_ref()
-                    .unwrap()
-                    .resolve_path(file.path.strip_prefix("vfs://").unwrap()),
-            )
-            .await
-            .unwrap();
-        assert_eq!(object.to_vec(), b"hello-container");
+        assert!(fingerprint.content_hash.is_none());
+        assert!(!fingerprint.immutable_remote);
+        // The declared `artifact_prefix` additionally publishes the same
+        // bytes to VFS under {prefix}/{run_name}/.
+        let run_name = request.name.clone();
+        let published = format!("vfs:///artifacts/test/{run_name}/result.txt");
+        let storage = env.ctx.opendal.as_ref().unwrap();
+        let virtual_path = published.strip_prefix("vfs://").unwrap();
+        let length = storage.content_length(virtual_path).await.unwrap();
+        let stored = storage.read_range(virtual_path, 0..length).await.unwrap();
+        assert_eq!(stored.to_vec(), b"hello-container");
     }
 
     #[tokio::test]
@@ -705,30 +820,15 @@ mod tests {
         );
     }
 
-    /// Serializes tests that mutate `AUTONOMICS_KEEP_WORKSPACE`, so a parallel
-    /// run cannot observe the transient value and skip its own cleanup.
-    /// Async-aware because the guarded section spans an `.await`.
-    static GC_ENV_LOCK: std::sync::LazyLock<tokio::sync::Mutex<()>> =
-        std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
-
-    struct EnvReset(&'static str);
-    impl Drop for EnvReset {
-        fn drop(&mut self) {
-            // SAFETY: process-global env mutation in a single-threaded test
-            // section guarded by `GC_ENV_LOCK`.
-            unsafe { std::env::remove_var(self.0) };
-        }
-    }
-
     #[tokio::test]
-    async fn successful_unique_scratch_run_removes_workspace() {
-        let _guard = GC_ENV_LOCK.lock().await;
+    async fn hash_work_dir_persists_after_success_and_wipes_on_rerun() {
         let env = test_env();
         let runtime = Arc::new(FakeRuntime::new(env.workspace.path()));
+        let node_spec = spec("quay.io/example/tool", vec!["tool".into()], "out.txt");
         let mut node = ContainerCommandNode::new(
             "container_command",
-            spec("quay.io/example/tool", vec!["tool".into()], "out.txt"),
-            runtime,
+            node_spec,
+            runtime.clone(),
             Arc::new(PanelCache::new(env.workspace.path().join("cache"))),
         )
         .unwrap();
@@ -741,24 +841,32 @@ mod tests {
         .await
         .unwrap();
 
-        let leftovers: Vec<_> = std::fs::read_dir(env.workspace.path())
-            .unwrap()
-            .map(|entry| entry.unwrap().file_name())
-            .collect();
-        assert!(
-            leftovers.is_empty(),
-            "unique scratch must be removed after success, found {leftovers:?}"
-        );
-    }
+        // The work dir is content-addressed ({2-hex}/{62-hex} directly
+        // under the workspace root) and persists after success — it is the
+        // durable store of the outputs.
+        let shard: PathBuf = {
+            let mut shards = std::fs::read_dir(env.workspace.path())
+                .unwrap()
+                .filter_map(|entry| {
+                    let path = entry.unwrap().path();
+                    let name = path.file_name()?.to_string_lossy().into_owned();
+                    (name.len() == 2).then_some(path)
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(shards.len(), 1, "exactly one shard expected");
+            shards.pop().unwrap()
+        };
+        let hash_dir: PathBuf = {
+            let mut dirs = std::fs::read_dir(&shard).unwrap();
+            dirs.next().unwrap().unwrap().path()
+        };
+        let name = hash_dir.file_name().unwrap().to_string_lossy().into_owned();
+        assert_eq!(name.len(), 62, "hash remainder expected, got {name}");
+        assert!(hash_dir.join("out.txt").is_file());
 
-    #[tokio::test]
-    async fn keep_workspace_env_retains_scratch_for_debugging() {
-        let _guard = GC_ENV_LOCK.lock().await;
-        let _reset = EnvReset(container_runtime::KEEP_WORKSPACE_ENV);
-        // SAFETY: guarded by `GC_ENV_LOCK`; restored on drop.
-        unsafe { std::env::set_var(container_runtime::KEEP_WORKSPACE_ENV, "1") };
-        let env = test_env();
-        let runtime = Arc::new(FakeRuntime::new(env.workspace.path()));
+        // A stale file from a crashed attempt must not survive a re-run
+        // into the same hash dir.
+        std::fs::write(hash_dir.join("stale.bin"), "stale").unwrap();
         let mut node = ContainerCommandNode::new(
             "container_command",
             spec("quay.io/example/tool", vec!["tool".into()], "out.txt"),
@@ -766,7 +874,6 @@ mod tests {
             Arc::new(PanelCache::new(env.workspace.path().join("cache"))),
         )
         .unwrap();
-
         node.execute(
             &env.ctx,
             &[],
@@ -774,13 +881,41 @@ mod tests {
         )
         .await
         .unwrap();
+        assert!(!hash_dir.join("stale.bin").exists());
+        assert!(hash_dir.join("out.txt").is_file());
+    }
 
-        let scratch: Vec<_> = std::fs::read_dir(env.workspace.path())
-            .unwrap()
-            .map(|entry| entry.unwrap().path())
-            .collect();
-        assert_eq!(scratch.len(), 1, "exactly one scratch directory expected");
-        assert!(scratch[0].join("out.txt").is_file());
+    #[tokio::test]
+    async fn no_artifact_prefix_keeps_outputs_only_in_work_dir() {
+        let env = test_env();
+        let dir = env.workspace.path().join("unpublished");
+        std::fs::create_dir_all(&dir).unwrap();
+        let runtime = Arc::new(FakeRuntime::new(env.workspace.path()));
+        let mut node_spec = spec("tool", vec!["tool".into()], "result.txt");
+        node_spec.workdir = Some(dir.to_string_lossy().into_owned());
+        node_spec.artifact_prefix = None;
+        let mut node = ContainerCommandNode::new(
+            "container_command",
+            node_spec,
+            runtime,
+            Arc::new(PanelCache::new(env.workspace.path().join("cache"))),
+        )
+        .unwrap();
+
+        let outputs = node
+            .execute(
+                &env.ctx,
+                &[],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap();
+
+        let file = outputs.get(&0).unwrap().as_file().unwrap();
+        assert_eq!(Path::new(&file.path), dir.join("result.txt"));
+        // Nothing was published: the object store root stays empty.
+        let object_count = std::fs::read_dir(env.objects.path()).unwrap().count();
+        assert_eq!(object_count, 0, "artifact_prefix=None must not publish");
     }
 
     #[test]
@@ -1105,27 +1240,24 @@ mod tests {
         // FakeRuntime emits stdout and a blank stderr → exactly one log file.
         let stdout_log = details.stdout_log.expect("stdout persisted");
         assert!(
-            stdout_log
-                .path
-                .ends_with(&format!("{run_name}/.autonomics-logs/stdout.log")),
+            stdout_log.path.ends_with(".autonomics/logs/stdout.log"),
             "unexpected log path {}",
             stdout_log.path
         );
         assert!(details.stderr_log.is_none(), "blank stderr must be skipped");
 
-        // The persisted object is readable through the same VFS path and its
-        // recorded fingerprint matches the content.
-        let virtual_path = stdout_log.path.strip_prefix("vfs://").unwrap();
-        let storage = env.ctx.opendal.as_ref().unwrap();
-        let length = storage.content_length(virtual_path).await.unwrap();
-        let stored = storage.read_range(virtual_path, 0..length).await.unwrap();
-        assert_eq!(stored.to_vec(), b"container stdout");
+        // The log is a work-dir file: readable on the host, referenced by a
+        // local fingerprint, and the run details carry the work dir.
+        assert_eq!(
+            std::fs::read_to_string(&stdout_log.path).unwrap(),
+            "container stdout"
+        );
+        assert_eq!(
+            details.workspace.as_deref(),
+            Some(dir.to_string_lossy().as_ref())
+        );
         let fingerprint = stdout_log.fingerprint.as_ref().unwrap();
         assert_eq!(fingerprint.size, "container stdout".len() as u64);
-        assert_eq!(
-            fingerprint.content_hash.as_deref(),
-            Some(format!("sha256:{}", hex(&Sha256::digest(b"container stdout"))).as_str())
-        );
     }
 
     #[tokio::test]
@@ -1171,35 +1303,19 @@ mod tests {
         assert!(error.to_string().contains("42"));
 
         // A failed execution is as auditable as a successful one: exit code,
-        // both captured streams persisted, and the scratch failure-logs still
-        // written for the diagnostic message.
+        // both captured streams persisted in the work dir, and the
+        // failure-logs still written for the diagnostic message.
         let details = reporter
             .take_run_details()
             .expect("failed run records details");
         assert_eq!(details.exit_code, Some(42));
         let stdout_log = details.stdout_log.expect("stdout persisted on failure");
         let stderr_log = details.stderr_log.expect("stderr persisted on failure");
-        let storage = env.ctx.opendal.as_ref().unwrap();
-        let stdout_path = stdout_log.path.strip_prefix("vfs://").unwrap();
-        let stderr_path = stderr_log.path.strip_prefix("vfs://").unwrap();
-        let stdout_len = storage.content_length(stdout_path).await.unwrap();
-        let stderr_len = storage.content_length(stderr_path).await.unwrap();
         assert_eq!(
-            storage
-                .read_range(stdout_path, 0..stdout_len)
-                .await
-                .unwrap()
-                .to_vec(),
-            b"partial output"
+            std::fs::read_to_string(&stdout_log.path).unwrap(),
+            "partial output"
         );
-        assert_eq!(
-            storage
-                .read_range(stderr_path, 0..stderr_len)
-                .await
-                .unwrap()
-                .to_vec(),
-            b"boom"
-        );
+        assert_eq!(std::fs::read_to_string(&stderr_log.path).unwrap(), "boom");
         assert!(
             dir.join(".autonomics")
                 .join("failure-logs")

@@ -110,6 +110,125 @@ pub(crate) fn validate_workspace_relative_path(path: &str) -> Result<(), String>
     Ok(())
 }
 
+// Like [`validate_workspace_relative_path`], but glob metacharacters
+// (`*`, `?`, `[`, `]`) are accepted in any component so an output can be
+// declared as a pattern. `..` and absolute paths stay rejected.
+pub(crate) fn validate_workspace_relative_glob(path: &str) -> Result<(), String> {
+    if path.is_empty() || path.contains('\0') {
+        return Err("output path cannot be empty".into());
+    }
+    let candidate = Path::new(path);
+    if candidate.is_absolute()
+        || !candidate.components().all(|component| {
+            matches!(component, Component::Normal(_))
+                || component
+                    .as_os_str()
+                    .to_str()
+                    .is_some_and(|segment| !segment.is_empty() && segment != "..")
+        })
+    {
+        return Err(format!("output path `{path}` must be a safe relative path"));
+    }
+    if !path.split('/').all(|segment| segment != "..") {
+        return Err(format!("output path `{path}` must not traverse upward"));
+    }
+    Ok(())
+}
+
+/// Whether a symlink source's parent directory may be bind-mounted into the
+/// container. Tmpfs and kernel/runtime virtual filesystems must never be
+/// mount sources (podman mounts tmpfs at `/tmp` itself), and mounting the
+/// filesystem root would expose the whole host.
+pub(crate) fn mount_safe_parent(parent: &Path) -> bool {
+    const UNSAFE: [&str; 5] = ["/tmp", "/dev", "/proc", "/sys", "/run"];
+    parent != Path::new("/") && !UNSAFE.iter().any(|root| parent.starts_with(root))
+}
+
+/// Whether a declared output path carries glob metacharacters.
+pub(crate) fn contains_glob(path: &str) -> bool {
+    path.contains('*') || path.contains('?') || path.contains('[')
+}
+
+/// The literal directory prefix of a declared output path: every component
+/// before the first one carrying glob metacharacters. Used to pre-create
+/// output directories for patterns the same way literal paths do.
+pub(crate) fn literal_prefix(path: &str) -> Option<String> {
+    let mut literal = Vec::new();
+    for segment in path.split('/') {
+        if contains_glob(segment) {
+            break;
+        }
+        literal.push(segment);
+    }
+    (!literal.is_empty()).then(|| literal.join("/"))
+}
+
+/// Resolve one declared output inside the work dir after the container ran.
+///
+/// Literal paths keep the exactly-one-file contract. Glob patterns collect
+/// sorted matches (skipping the `.autonomics` control directory) and must
+/// match exactly one file — Nextflow single-`path` strictness.
+pub(crate) fn resolve_output(
+    pattern: &str,
+    workdir: &Path,
+) -> Result<PathBuf, super::error::ContainerCommandError> {
+    if !contains_glob(pattern) {
+        let path = workdir.join(pattern);
+        if path.is_file() {
+            return Ok(path);
+        }
+        return Err(super::error::ContainerCommandError::MissingOutput {
+            path: pattern.to_string(),
+        });
+    }
+
+    let full = workdir.join(pattern);
+    let pattern_str = full.to_string_lossy().into_owned();
+    let matches = glob::glob(&pattern_str)
+        .map_err(|error| {
+            super::error::ContainerCommandError::Invalid(format!(
+                "invalid output pattern `{pattern}`: {error}"
+            ))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|error| {
+            super::error::ContainerCommandError::Invalid(format!(
+                "cannot enumerate output pattern `{pattern}`: {error}"
+            ))
+        })?;
+    let mut files: Vec<PathBuf> = matches
+        .into_iter()
+        .filter(|path| {
+            path.is_file()
+                && !path
+                    .components()
+                    .any(|component| component.as_os_str() == ".autonomics")
+        })
+        .collect();
+    files.sort();
+    match files.len() {
+        0 => Err(super::error::ContainerCommandError::MissingOutput {
+            path: pattern.to_string(),
+        }),
+        1 => Ok(files.remove(0)),
+        _ => {
+            let matches = files
+                .iter()
+                .map(|path| {
+                    path.strip_prefix(workdir)
+                        .unwrap_or(path)
+                        .to_string_lossy()
+                        .into_owned()
+                })
+                .collect();
+            Err(super::error::ContainerCommandError::AmbiguousOutput {
+                pattern: pattern.to_string(),
+                matches,
+            })
+        }
+    }
+}
+
 // Materialize `relative` under `base` after validation. Used for inline
 // scripts and the `files` map under `/work/.autonomics`.
 pub(crate) fn write_strictly_within(
@@ -201,17 +320,6 @@ pub(crate) fn container_path(workspace_path: &Path, host_path: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(",")
-}
-
-pub(crate) fn unique_scratch_suffix() -> String {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or_default();
-    format!(
-        "autonomics-container-command-{}-{nanos}",
-        std::process::id()
-    )
 }
 
 // Lower-case hex dump. Used by `publish_output` to record the artifact

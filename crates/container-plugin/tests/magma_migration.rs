@@ -104,7 +104,10 @@ fn magma_annotate_plugin_compiles_to_the_legacy_wrapper_contract() {
     // container"; the plugin kind drops the `_container` suffix and the
     // prefix follows the kind (this is also the DSL-derived
     // `/artifacts/{kind}` default, asserted explicitly for honesty).
-    assert_eq!(compiled.artifact_prefix, "/artifacts/magma_annotate");
+    assert_eq!(
+        compiled.artifact_prefix,
+        Some("/artifacts/magma_annotate".to_string())
+    );
     assert_eq!(compiled.timeout_secs, 300);
     assert_eq!(compiled.workdir, None);
     assert!(compiled.panels.is_empty());

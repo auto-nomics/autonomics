@@ -123,10 +123,8 @@ pub fn compile_container_spec(
         env,
         outputs,
         workdir: None,
-        artifact_prefix: node
-            .artifact_prefix
-            .clone()
-            .unwrap_or_else(|| format!("/artifacts/{}", node.kind)),
+        stage_in_mode: Default::default(),
+        artifact_prefix: node.artifact_prefix.clone(),
         timeout_secs: node.timeout_secs,
         // Plugin-derived specs never populate `panels` (the legacy
         // direct-mount field with embedded digest + source); the manifest

@@ -130,7 +130,10 @@ fn deseq2_de_plugin_compiles_to_the_legacy_wrapper_contract() {
     // Deliberate delta: the legacy default was "/artifacts/deseq2_de_container";
     // the plugin drops the `_container` suffix together with the kind rename
     // (the same rule the ldsc/mrpresso/mvmr migrations applied).
-    assert_eq!(compiled.artifact_prefix, "/artifacts/deseq2_de");
+    assert_eq!(
+        compiled.artifact_prefix,
+        Some("/artifacts/deseq2_de".to_string())
+    );
     assert_eq!(compiled.workdir, None);
     // The legacy wrapper bound no panels and no panel bundles.
     assert!(compiled.panels.is_empty());

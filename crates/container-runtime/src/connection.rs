@@ -102,6 +102,62 @@ pub(crate) fn validate_run_request(
             .file_name()
             .ok_or_else(|| ContainerRuntimeError::Invalid("invalid panel cache path".into()))?;
     }
+    validate_input_mounts(request)?;
+    Ok(())
+}
+
+/// Host locations that must never be bind-mounted for input staging. `/tmp`
+/// is podman-managed tmpfs (`--tmpfs /tmp`), the rest are kernel or runtime
+/// virtual filesystems.
+const UNSAFE_INPUT_MOUNT_ROOTS: [&str; 6] = ["/tmp", "/dev", "/proc", "/sys", "/run", "/"];
+
+fn validate_input_mounts(request: &ContainerRunRequest) -> Result<(), ContainerRuntimeError> {
+    let workspace_mount = Path::new(&request.workspace.container_workdir);
+    let mut seen = std::collections::BTreeSet::new();
+    for mount in &request.input_mounts {
+        let dir = &mount.host_dir;
+        if UNSAFE_INPUT_MOUNT_ROOTS
+            .iter()
+            .any(|root| dir.starts_with(root))
+        {
+            return Err(ContainerRuntimeError::Invalid(format!(
+                "input mount `{}` is below an unsafe host location",
+                dir.display()
+            )));
+        }
+        if !dir.is_absolute() || !dir.is_dir() {
+            return Err(ContainerRuntimeError::Invalid(format!(
+                "input mount `{}` must be an existing absolute directory",
+                dir.display()
+            )));
+        }
+        if !seen.insert(dir.clone()) {
+            return Err(ContainerRuntimeError::Invalid(format!(
+                "duplicate input mount `{}`",
+                dir.display()
+            )));
+        }
+        // Identity mapping: the container destination equals the host path,
+        // so it must not overlap the workspace or any panel mount either way.
+        if dir.starts_with(workspace_mount) || workspace_mount.starts_with(dir) {
+            return Err(ContainerRuntimeError::Invalid(format!(
+                "input mount `{}` overlaps the container workdir `{}`",
+                dir.display(),
+                workspace_mount.display()
+            )));
+        }
+        for panel in &request.panels {
+            let panel_mount = Path::new(&panel.mount_path);
+            if dir.starts_with(panel_mount) || panel_mount.starts_with(dir) {
+                return Err(ContainerRuntimeError::Invalid(format!(
+                    "input mount `{}` overlaps panel `{}` mount path `{}`",
+                    dir.display(),
+                    panel.id,
+                    panel.mount_path
+                )));
+            }
+        }
+    }
     Ok(())
 }
 

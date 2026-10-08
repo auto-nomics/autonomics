@@ -105,7 +105,7 @@ fn single_cell_preprocessor_plugin_compiles_to_the_legacy_wrapper_contract() {
     // The legacy wrapper defaulted to the suffixed spelling; kept verbatim.
     assert_eq!(
         compiled.artifact_prefix,
-        "/artifacts/single_cell_preprocessor_container"
+        Some("/artifacts/single_cell_preprocessor_container".to_string())
     );
     assert_eq!(compiled.workdir, None);
     assert!(compiled.panels.is_empty());
@@ -503,7 +503,8 @@ fn single_cell_h5ad_family_compiles_to_the_legacy_wrapper_contracts() {
             expected.kind
         );
         assert_eq!(
-            compiled.artifact_prefix, expected.artifact_prefix,
+            compiled.artifact_prefix.as_deref(),
+            Some(expected.artifact_prefix),
             "{}",
             expected.kind
         );

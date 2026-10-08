@@ -109,7 +109,10 @@ fn coloc_abf_plugin_compiles_to_the_legacy_wrapper_contract() {
     // drops the `_container` suffix along with the kind, per the
     // migration convention.
     assert_eq!(compiled.timeout_secs, 600);
-    assert_eq!(compiled.artifact_prefix, "/artifacts/coloc_abf");
+    assert_eq!(
+        compiled.artifact_prefix,
+        Some("/artifacts/coloc_abf".to_string())
+    );
     assert_eq!(compiled.workdir, None);
     // coloc.abf needs no reference panel: the legacy wrapper attached
     // neither direct panels nor catalog bundles, and neither does the

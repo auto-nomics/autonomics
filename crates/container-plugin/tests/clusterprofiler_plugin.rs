@@ -120,7 +120,10 @@ fn clusterprofiler_ora_compiles_to_documented_contract() {
     assert_eq!(compiled.pids_limit, Some(512));
     assert_eq!(compiled.shm_size.as_deref(), Some("1Gi"));
     assert_eq!(compiled.timeout_secs, 3600);
-    assert_eq!(compiled.artifact_prefix, "/artifacts/clusterprofiler_ora");
+    assert_eq!(
+        compiled.artifact_prefix,
+        Some("/artifacts/clusterprofiler_ora".to_string())
+    );
 }
 
 #[test]
@@ -193,5 +196,8 @@ fn clusterprofiler_gsea_compiles_to_documented_contract() {
     assert_eq!(compiled.pids_limit, Some(512));
     assert_eq!(compiled.shm_size.as_deref(), Some("1Gi"));
     assert_eq!(compiled.timeout_secs, 3600);
-    assert_eq!(compiled.artifact_prefix, "/artifacts/clusterprofiler_gsea");
+    assert_eq!(
+        compiled.artifact_prefix,
+        Some("/artifacts/clusterprofiler_gsea".to_string())
+    );
 }

@@ -27,6 +27,17 @@ pub struct WorkspaceRef {
     pub container_workdir: String,
 }
 
+/// One host directory bind-mounted read-only at its own absolute path so
+/// symlink-staged inputs resolve inside the container.
+///
+/// The container destination is always the identity of `host_dir`: staged
+/// symlinks carry host-absolute targets, so mounting the source parent at
+/// the same path makes them resolve unchanged.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InputMount {
+    pub host_dir: PathBuf,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, JsonSchema, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PullPolicy {
@@ -141,6 +152,7 @@ pub struct ContainerRunRequest {
     pub workspace: WorkspaceRef,
     pub env: Vec<(String, String)>,
     pub panels: Vec<CachedPanel>,
+    pub input_mounts: Vec<InputMount>,
     pub network: ContainerNetwork,
     pub read_only_rootfs: bool,
     pub pull_policy: PullPolicy,

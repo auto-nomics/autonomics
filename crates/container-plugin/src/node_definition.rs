@@ -30,7 +30,8 @@ pub struct NodeDefinition {
     pub deprecated: bool,
     #[serde(default = "default_timeout")]
     pub timeout_secs: u64,
-    /// Derived as `/artifacts/{kind}` when omitted.
+    /// Optional publishDir-style VFS prefix; when omitted, outputs stay in
+    /// the persistent work dir and travel downstream by reference.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artifact_prefix: Option<String>,
     pub ports: PortLayout,
@@ -323,7 +324,7 @@ pub fn validate(node: &NodeDefinition) -> Result<(), String> {
         ));
     }
     for output in &node.ports.outputs {
-        validate_workspace_relative_path(&output.path)
+        validate_workspace_relative_glob(&output.path)
             .map_err(|error| format!("node `{}` output `{}`: {error}", node.kind, output.path))?;
     }
     for (name, spec) in &node.params {
@@ -382,15 +383,18 @@ pub fn validate(node: &NodeDefinition) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_workspace_relative_path(path: &str) -> Result<(), String> {
+/// Like a plain safe-relative-path check, but glob metacharacters
+/// (`*`, `?`, `[`, `]`) are accepted so an output can be declared as a
+/// pattern. Absolute paths and `..` stay rejected.
+fn validate_workspace_relative_glob(path: &str) -> Result<(), String> {
     if path.is_empty() || path.contains('\0') {
         return Err("path cannot be empty".into());
     }
     let candidate = Path::new(path);
     if candidate.is_absolute()
-        || !candidate
-            .components()
-            .all(|component| matches!(component, Component::Normal(_)))
+        || !path
+            .split('/')
+            .all(|segment| !segment.is_empty() && segment != "..")
     {
         return Err(format!("path `{path}` must be a safe relative path"));
     }

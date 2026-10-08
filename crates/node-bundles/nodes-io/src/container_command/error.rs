@@ -33,6 +33,15 @@ pub enum ContainerCommandError {
     },
     #[error("declared output `{path}` was not produced")]
     MissingOutput { path: String },
+    #[error(
+        "declared output pattern `{pattern}` matched {} files; exactly one is required: {}",
+        matches.len(),
+        matches.join(", ")
+    )]
+    AmbiguousOutput {
+        pattern: String,
+        matches: Vec<String>,
+    },
 }
 
 impl ContainerCommandError {

@@ -66,6 +66,7 @@ impl ToolFunction for PluginContainerRunTool {
                 ),
             ],
             panels: Vec::new(),
+            input_mounts: Vec::new(),
             network: ContainerNetwork::Isolated,
             read_only_rootfs: true,
             pull_policy: PullPolicy::Missing,

@@ -111,7 +111,10 @@ fn phylo_scogs_treeness_compiles_to_documented_contract() {
     assert_eq!(compiled.pids_limit, Some(512));
     assert_eq!(compiled.shm_size.as_deref(), Some("1Gi"));
     assert_eq!(compiled.timeout_secs, 14400);
-    assert_eq!(compiled.artifact_prefix, "/artifacts/phylo_scogs_treeness");
+    assert_eq!(
+        compiled.artifact_prefix,
+        Some("/artifacts/phylo_scogs_treeness".to_string())
+    );
 
     // Explicit parameter values render into the env template.
     let explicit = compile_container_spec(

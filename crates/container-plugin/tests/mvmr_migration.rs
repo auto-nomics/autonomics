@@ -106,7 +106,10 @@ fn mvmr_plugin_compiles_to_the_legacy_wrapper_contract() {
     // Legacy DEFAULT_ARTIFACT_PREFIX was "/artifacts/mvmr_container"; the
     // plugin drops the `_container` suffix together with the kind rename
     // (same convention the ldsc family followed for its kinds).
-    assert_eq!(compiled.artifact_prefix, "/artifacts/mvmr");
+    assert_eq!(
+        compiled.artifact_prefix,
+        Some("/artifacts/mvmr".to_string())
+    );
     assert_eq!(compiled.workdir, None);
     // Panel-free family: the legacy wrapper declared no panels and no
     // panel bundles, and the manifest declares no [[panels]].

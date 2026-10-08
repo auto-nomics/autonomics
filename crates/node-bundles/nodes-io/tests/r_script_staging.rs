@@ -90,24 +90,37 @@ impl PodmanConnection for CopyCsvRuntime {
 #[tokio::test]
 async fn legacy_r_script_stages_a_one_row_dataframe() {
     let root = tempfile::tempdir().unwrap();
+    // Mirror the production layout: the VFS data dir and the container
+    // workspace root are disjoint trees, so the read-only identity mount
+    // never overlaps the writable data namespace.
+    let data_dir = root.path().join("vfs-data");
+    std::fs::create_dir_all(&data_dir).unwrap();
     let manifest = VfsManifest {
         backend: vec![BackendDefinition {
             id: "r-script-staging".into(),
             config: BackendConfig::local("/"),
         }],
-        mount: vec![MountDefinition {
-            path: "/".into(),
-            backend: "r-script-staging".into(),
-            source: root.path().to_string_lossy().into_owned(),
-            read_only: false,
-            permissions: Default::default(),
-        }],
+        mount: vec![
+            MountDefinition {
+                path: "/".into(),
+                backend: "r-script-staging".into(),
+                source: data_dir.to_string_lossy().into_owned(),
+                read_only: false,
+                permissions: Default::default(),
+            },
+            // Identity mount for the workspace tree, mirroring the runtime
+            // host: work-dir host paths resolve to the real files.
+            MountDefinition {
+                path: root.path().to_string_lossy().into_owned(),
+                backend: "r-script-staging".into(),
+                source: root.path().to_string_lossy().into_owned(),
+                read_only: true,
+                permissions: Default::default(),
+            },
+        ],
     };
     let mounted = Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap());
-    let storage = Arc::new(OpendalFileStorage::with_mounts(
-        root.path(),
-        mounted.clone(),
-    ));
+    let storage = Arc::new(OpendalFileStorage::with_mounts(&data_dir, mounted.clone()));
     let session = SessionContext::new();
     session
         .runtime_env()

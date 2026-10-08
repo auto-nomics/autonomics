@@ -57,6 +57,11 @@ pub const KEEP_WORKSPACE_ENV: &str = "AUTONOMICS_KEEP_WORKSPACE";
 pub const WORKSPACE_GC_AGE_ENV: &str = "AUTONOMICS_WORKSPACE_GC_AGE_SECS";
 /// Delay between background sweeps (seconds); `0` disables the periodic task.
 pub const WORKSPACE_GC_INTERVAL_ENV: &str = "AUTONOMICS_WORKSPACE_GC_INTERVAL_SECS";
+/// Minimum age before the work-dir sweep may reclaim a persistent,
+/// content-addressed container work directory (seconds). Unset, `0`, or
+/// invalid means work dirs are never reclaimed — they are the durable
+/// store of container outputs.
+pub const WORK_DIR_GC_AGE_ENV: &str = "AUTONOMICS_WORK_DIR_GC_AGE_SECS";
 
 /// Whether successful runs must keep their scratch directory.
 pub fn keep_workspace_enabled() -> bool {
@@ -77,6 +82,14 @@ pub fn workspace_gc_interval() -> Option<Duration> {
         std::env::var_os(WORKSPACE_GC_INTERVAL_ENV).as_deref(),
         DEFAULT_WORKSPACE_GC_INTERVAL_SECS,
     );
+    (secs.as_secs() > 0).then_some(secs)
+}
+
+/// Retention window for persistent work dirs; `None` disables the work-dir
+/// sweep entirely (the default — work dirs hold container outputs).
+pub fn work_dir_gc_age() -> Option<Duration> {
+    let raw = std::env::var_os(WORK_DIR_GC_AGE_ENV)?;
+    let secs = parse_env_secs(Some(raw.as_os_str()), 0);
     (secs.as_secs() > 0).then_some(secs)
 }
 

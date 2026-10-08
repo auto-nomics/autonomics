@@ -114,7 +114,10 @@ fn limma_voom_plugin_compiles_to_the_legacy_wrapper_contract() {
     // Deliberate delta: the legacy default was "/artifacts/limma_voom_container";
     // the plugin drops the `_container` suffix together with the kind rename
     // (the same rule the ldsc/deseq2 migrations applied).
-    assert_eq!(compiled.artifact_prefix, "/artifacts/limma_voom");
+    assert_eq!(
+        compiled.artifact_prefix,
+        Some("/artifacts/limma_voom".to_string())
+    );
     assert_eq!(compiled.workdir, None);
     // The legacy wrapper bound no panels and no panel bundles.
     assert!(compiled.panels.is_empty());
@@ -273,7 +276,10 @@ fn wgcna_plugin_compiles_to_the_legacy_wrapper_contract() {
         container_runtime::PullPolicy::Missing
     ));
     assert_eq!(compiled.timeout_secs, 7200);
-    assert_eq!(compiled.artifact_prefix, "/artifacts/wgcna");
+    assert_eq!(
+        compiled.artifact_prefix,
+        Some("/artifacts/wgcna".to_string())
+    );
     assert!(compiled.panels.is_empty());
     assert!(compiled.panel_bundles.is_empty());
     // Legacy DEFAULT_CPUS/MEMORY/PIDS_LIMIT/SHM_SIZE.

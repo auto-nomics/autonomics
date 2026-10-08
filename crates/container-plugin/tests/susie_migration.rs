@@ -102,7 +102,10 @@ fn susie_rss_plugin_compiles_to_the_legacy_wrapper_contract() {
     // The legacy DEFAULT_ARTIFACT_PREFIX is kept verbatim; the manifest-level
     // default would have derived `/artifacts/susie_rss` (kind minus the
     // `_container` suffix).
-    assert_eq!(compiled.artifact_prefix, "/artifacts/susie_rss_container");
+    assert_eq!(
+        compiled.artifact_prefix,
+        Some("/artifacts/susie_rss_container".to_string())
+    );
     assert_eq!(compiled.workdir, None);
     assert!(compiled.panels.is_empty());
     // The signed-LD panel binding: the legacy wrapper mounted

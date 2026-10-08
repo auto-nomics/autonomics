@@ -59,7 +59,7 @@ impl PodmanConfig {
         let root = podman_state_root();
         Self {
             program: env_value("AUTONOMICS_PODMAN_PROGRAM", "podman"),
-            workspace_root: env_path("AUTONOMICS_PODMAN_WORKSPACE_ROOT", root.join("workspace")),
+            workspace_root: env_path("AUTONOMICS_PODMAN_WORKSPACE_ROOT", root.join("work")),
             panel_cache_root: env_path("AUTONOMICS_PANEL_CACHE_ROOT", default_panel_cache_root()),
         }
     }
@@ -384,6 +384,13 @@ pub(crate) fn build_create_args(
             escape_mount_field(&panel.mount_path)
         ));
     }
+    for mount in &request.input_mounts {
+        let field = escape_mount_field(&mount.host_dir.to_string_lossy());
+        args.push("--mount".into());
+        args.push(format!(
+            "type=bind,source={field},destination={field},readonly"
+        ));
+    }
     args.push("--workdir".into());
     args.push(request.workspace.container_workdir.clone());
     args.push("--entrypoint".into());
@@ -468,6 +475,22 @@ fn validate_podman_request(request: &ContainerRunRequest) -> Result<(), Containe
             )));
         }
     }
+    for input_mount in &request.input_mounts {
+        let mount = input_mount.host_dir.as_path();
+        let overlapping = !mounts.insert(mount.to_string_lossy().into_owned())
+            || mount.starts_with(workspace_mount)
+            || workspace_mount.starts_with(mount)
+            || request.panels.iter().any(|panel| {
+                let panel_mount = Path::new(&panel.mount_path);
+                mount.starts_with(panel_mount) || panel_mount.starts_with(mount)
+            });
+        if overlapping {
+            return Err(ContainerRuntimeError::Invalid(format!(
+                "duplicate or overlapping input mount `{}`",
+                mount.display()
+            )));
+        }
+    }
     Ok(())
 }
 
@@ -510,7 +533,7 @@ fn user_value(request: &ContainerRunRequest) -> String {
 mod tests {
     use super::*;
     use crate::connection::unique_container_name;
-    use crate::types::{CachedPanel, WorkspaceRef};
+    use crate::types::{CachedPanel, InputMount, WorkspaceRef};
     use std::path::PathBuf;
 
     fn request(network: ContainerNetwork) -> ContainerRunRequest {
@@ -530,6 +553,7 @@ mod tests {
             },
             env: vec![("EXAMPLE".into(), "value".into())],
             panels: Vec::new(),
+            input_mounts: Vec::new(),
             network,
             read_only_rootfs: true,
             pull_policy: PullPolicy::Never,
@@ -770,6 +794,7 @@ mod tests {
             },
             env: Vec::new(),
             panels: Vec::new(),
+            input_mounts: Vec::new(),
             network: ContainerNetwork::Isolated,
             read_only_rootfs: true,
             pull_policy: PullPolicy::Missing,
@@ -796,5 +821,90 @@ mod tests {
         let mut permissions = std::fs::metadata(path).unwrap().permissions();
         permissions.set_mode(0o755);
         std::fs::set_permissions(path, permissions).unwrap();
+    }
+
+    #[test]
+    fn create_args_emit_identity_readonly_input_mounts() {
+        let root = tempfile::tempdir().unwrap();
+        let source_dir = root.path().join("sources");
+        std::fs::create_dir_all(&source_dir).unwrap();
+        let mut req = request(ContainerNetwork::Isolated);
+        req.input_mounts = vec![InputMount {
+            host_dir: source_dir.clone(),
+        }];
+        let args = build_create_args(&req).unwrap();
+        let expected = format!(
+            "type=bind,source={},destination={},readonly",
+            source_dir.display(),
+            source_dir.display()
+        );
+        assert!(args.contains(&expected));
+    }
+
+    #[test]
+    fn input_mounts_overlap_workspace_or_panels_are_rejected() {
+        let root = tempfile::tempdir().unwrap();
+        let source_dir = root.path().join("sources");
+        std::fs::create_dir_all(&source_dir).unwrap();
+
+        // Destination overlaps the container workdir `/work`.
+        let mut req = request(ContainerNetwork::Isolated);
+        req.input_mounts = vec![InputMount {
+            host_dir: PathBuf::from("/work"),
+        }];
+        assert!(build_create_args(&req).is_err());
+
+        // Overlaps a panel mount path.
+        let panel_dir = root.path().join("panel");
+        std::fs::create_dir_all(&panel_dir).unwrap();
+        let mut req = request(ContainerNetwork::Isolated);
+        req.panels = vec![CachedPanel {
+            id: "p".into(),
+            digest: "sha256:x".into(),
+            host_path: panel_dir.clone(),
+            mount_path: "/data/panel".into(),
+        }];
+        req.input_mounts = vec![InputMount {
+            host_dir: PathBuf::from("/data"),
+        }];
+        assert!(build_create_args(&req).is_err());
+
+        // Duplicate mounts are rejected.
+        let mut req = request(ContainerNetwork::Isolated);
+        req.input_mounts = vec![
+            InputMount {
+                host_dir: source_dir.clone(),
+            },
+            InputMount {
+                host_dir: source_dir.clone(),
+            },
+        ];
+        assert!(build_create_args(&req).is_err());
+    }
+
+    #[test]
+    fn validate_run_request_rejects_unsafe_input_mount_roots() {
+        let mut req = request(ContainerNetwork::Isolated);
+        for unsafe_dir in [
+            "/tmp", "/tmp/sub", "/dev", "/dev/shm", "/proc", "/sys", "/run", "/",
+        ] {
+            req.input_mounts = vec![InputMount {
+                host_dir: PathBuf::from(unsafe_dir),
+            }];
+            let error = crate::connection::validate_run_request(&req)
+                .expect_err(unsafe_dir)
+                .to_string();
+            assert!(error.contains("unsafe"), "{unsafe_dir}: {error}");
+        }
+
+        // A relative or nonexistent path is rejected too.
+        req.input_mounts = vec![InputMount {
+            host_dir: PathBuf::from("relative/dir"),
+        }];
+        assert!(crate::connection::validate_run_request(&req).is_err());
+        req.input_mounts = vec![InputMount {
+            host_dir: PathBuf::from("/nonexistent/absolute/dir"),
+        }];
+        assert!(crate::connection::validate_run_request(&req).is_err());
     }
 }

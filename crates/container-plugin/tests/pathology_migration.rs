@@ -227,7 +227,8 @@ fn pathology_nodes_compile_to_the_legacy_wrapper_contract() {
         );
         assert_eq!(compiled.timeout_secs, case.timeout_secs, "{}", case.kind);
         assert_eq!(
-            compiled.artifact_prefix, case.artifact_prefix,
+            compiled.artifact_prefix.as_deref(),
+            Some(case.artifact_prefix),
             "{}",
             case.kind
         );

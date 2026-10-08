@@ -144,7 +144,10 @@ fn hyprcoloc_plugin_compiles_to_the_legacy_wrapper_contract() {
     // Deliberate delta: the legacy default was "/artifacts/hyprcoloc_container";
     // the plugin drops the `_container` suffix together with the kind rename
     // (the same rule the ldsc/deseq2 migrations applied).
-    assert_eq!(compiled.artifact_prefix, "/artifacts/hyprcoloc");
+    assert_eq!(
+        compiled.artifact_prefix,
+        Some("/artifacts/hyprcoloc".to_string())
+    );
     assert_eq!(compiled.workdir, None);
     // The legacy wrapper bound no panels and left every resource knob unset.
     assert!(compiled.panels.is_empty());

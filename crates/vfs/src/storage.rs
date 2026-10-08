@@ -304,6 +304,25 @@ impl OpendalFileStorage {
         }
     }
 
+    /// If `path` (virtual, with or without a `vfs://` scheme) resolves to an
+    /// object on a local-filesystem backend, return its host path.
+    ///
+    /// Uses the raw mount operator, never the permission-scoped view from
+    /// [`Self::resolve`], so callers can locate the physical file for
+    /// zero-copy staging. Returns `None` for remote backends (the caller
+    /// should transfer the bytes instead) and for unparseable paths.
+    pub fn local_host_path(&self, path: &str) -> Option<std::path::PathBuf> {
+        let stripped = path.strip_prefix("vfs://").unwrap_or(path);
+        let v = Self::normalize_path(stripped);
+        let p = Path::parse(&v).ok()?;
+        if let Some(mounts) = &self.mounts
+            && let Some(handle) = mounts.handle_for(&p)
+        {
+            return local_fs_host_path(&handle.backend_op, &mount_key(&handle, &p));
+        }
+        local_fs_host_path(&self.op, p.as_ref())
+    }
+
     /// Authorize a read for the storage's attached principal.
     pub fn check_readable(&self, path: &str) -> Result<(), opendal::Error> {
         self.check_access(path, VfsAccess::Read, false)
@@ -1417,6 +1436,19 @@ fn staging_key(path: &str) -> String {
 /// DataFusion path) so callers that dispatch to `handle.backend_op`
 /// (the agent-facing vfs ops) and callers that go through the
 /// `ObjectStore` trait see identical locations.
+/// Map a backend key to a host filesystem path when the operator is a local
+/// `fs` backend rooted somewhere on disk. Remote schemes return `None`.
+fn local_fs_host_path(op: &Operator, key: &str) -> Option<std::path::PathBuf> {
+    let info = op.info();
+    if info.scheme() != "fs" {
+        return None;
+    }
+    let root = info.root();
+    let root = root.trim_end_matches('/');
+    let base = if root.is_empty() { "/" } else { root };
+    Some(std::path::PathBuf::from(base).join(key.trim_start_matches('/')))
+}
+
 fn mount_key(handle: &MountHandle, path: &Path) -> String {
     let vp = Path::parse(&handle.definition.path).unwrap_or(Path::ROOT);
     let mut remote = String::new();
@@ -2147,6 +2179,89 @@ mod tests {
             storage.remap_entry_to_virtual("/", "ws/sub/nested.txt"),
             "/sub/nested.txt"
         );
+    }
+
+    #[test]
+    fn local_host_path_maps_local_mounts_and_falls_back_to_default() {
+        let manifest = VfsManifest::from_toml(
+            r#"
+            [[backend]]
+            id = "default"
+            type = "local"
+            root = "/"
+
+            [[mount]]
+            path = "/"
+            backend = "default"
+            source = "/mnt/disk3/data"
+            read_only = false
+
+            [[mount]]
+            path = "/literature"
+            backend = "default"
+            source = "/mnt/disk3/literature"
+            read_only = true
+            "#,
+        )
+        .unwrap();
+        let vfs = Arc::new(crate::MountedObjectStore::from_manifest(&manifest).unwrap());
+        let data_dir = tempfile::tempdir().unwrap();
+        let storage = OpendalFileStorage::with_mounts(data_dir.path(), vfs);
+
+        // Root-mount path → source-joined host path.
+        assert_eq!(
+            storage.local_host_path("/a/b.csv"),
+            Some(std::path::PathBuf::from("/mnt/disk3/data/a/b.csv"))
+        );
+        // Nested mount wins by longest prefix.
+        assert_eq!(
+            storage.local_host_path("/literature/x.pdf"),
+            Some(std::path::PathBuf::from("/mnt/disk3/literature/x.pdf"))
+        );
+        // `vfs://` scheme is accepted and normalized away.
+        assert_eq!(
+            storage.local_host_path("vfs:///literature/x.pdf"),
+            Some(std::path::PathBuf::from("/mnt/disk3/literature/x.pdf"))
+        );
+    }
+
+    #[test]
+    fn local_host_path_without_mount_table_uses_default_operator_root() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let storage = OpendalFileStorage::new(data_dir.path());
+        assert_eq!(
+            storage.local_host_path("/sub/f.txt"),
+            Some(data_dir.path().join("sub/f.txt"))
+        );
+        assert_eq!(
+            storage.local_host_path("vfs:///sub/f.txt"),
+            Some(data_dir.path().join("sub/f.txt"))
+        );
+    }
+
+    #[test]
+    fn local_host_path_returns_none_for_remote_backend_mount() {
+        let manifest = VfsManifest::from_toml(
+            r#"
+            [[backend]]
+            id = "cloud"
+            type = "s3"
+            bucket = "some-bucket"
+            region = "us-east-1"
+            access_key_id = "dummy"
+            secret_access_key = "dummy"
+
+            [[mount]]
+            path = "/remote"
+            backend = "cloud"
+            source = "/"
+            read_only = true
+            "#,
+        )
+        .unwrap();
+        let vfs = Arc::new(crate::MountedObjectStore::from_manifest(&manifest).unwrap());
+        let storage = OpendalFileStorage::with_mounts(tempfile::tempdir().unwrap().path(), vfs);
+        assert_eq!(storage.local_host_path("/remote/x.bin"), None);
     }
 
     #[tokio::test]

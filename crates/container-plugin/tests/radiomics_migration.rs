@@ -474,7 +474,8 @@ fn every_kind_compiles_to_the_legacy_wrapper_contract() {
         assert_eq!(compiled.image, IMAGE_REFERENCE, "{}", contract.kind);
         assert_eq!(compiled.timeout_secs, TIMEOUT_SECS, "{}", contract.kind);
         assert_eq!(
-            compiled.artifact_prefix, contract.artifact_prefix,
+            compiled.artifact_prefix.as_deref(),
+            Some(contract.artifact_prefix),
             "{}",
             contract.kind
         );

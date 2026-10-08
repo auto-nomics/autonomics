@@ -110,7 +110,10 @@ fn twas_fusion_plugin_compiles_to_the_legacy_wrapper_contract() {
     // "/artifacts/twas_fusion_container"; the plugin follows the kind
     // rename (`_container` suffix dropped), the same rule the ldsc and
     // mrpresso family migrations applied.
-    assert_eq!(compiled.artifact_prefix, "/artifacts/twas_fusion");
+    assert_eq!(
+        compiled.artifact_prefix,
+        Some("/artifacts/twas_fusion".to_string())
+    );
     assert_eq!(compiled.workdir, None);
     assert!(compiled.panels.is_empty());
 

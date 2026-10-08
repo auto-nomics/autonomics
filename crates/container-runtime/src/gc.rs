@@ -93,6 +93,29 @@ pub fn acquire_scratch_lock_shared(scratch: &Path) -> io::Result<File> {
     Ok(file)
 }
 
+/// Take the exclusive lock a container run holds on its persistent,
+/// content-addressed work directory. Blocking: concurrent executions of the
+/// same task identity serialize here for their whole duration. The returned
+/// [`File`] must stay alive until the run is done; dropping it releases the
+/// lock. A work-dir GC sweep skips any directory whose lock is held.
+pub fn acquire_workdir_lock_exclusive(workdir: &Path) -> io::Result<File> {
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(workdir.join(SCRATCH_LOCK_FILE))?;
+    flock(file.as_raw_fd(), libc::LOCK_EX)
+        .map(|_| ())
+        .map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!("cannot lock work dir `{}`: {error}", workdir.display()),
+            )
+        })?;
+    Ok(file)
+}
+
 /// Lock file for one panel cache entry. Locks live in a side directory so the
 /// mounted panel itself only ever contains its data and completion marker.
 pub fn panel_lock_path(panel_root: &Path, entry_name: &str) -> PathBuf {
@@ -139,6 +162,18 @@ fn try_lock_exclusive(path: &Path) -> LockOutcome {
         .open(path)?;
     let fd = file.as_raw_fd();
     flock(fd, libc::LOCK_EX | libc::LOCK_NB)
+}
+
+/// Like [`try_lock_exclusive`] but never creates the lock file: an absent
+/// lock reads as free (`Ok(true)`). `Ok(false)` means the lock is held by a
+/// live run. Creating a lock here would touch the directory mtime and reset
+/// the age the work-dir sweep measures.
+fn try_lock_existing_exclusive(path: &Path) -> Result<bool, io::Error> {
+    if !path.exists() {
+        return Ok(true);
+    }
+    let file = OpenOptions::new().read(true).write(true).open(path)?;
+    flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB)
 }
 
 // ───────────────────────── owner liveness ──────────────────────────
@@ -384,6 +419,173 @@ fn dir_size(path: &Path) -> u64 {
     total
 }
 
+/// Policy for one sweep of the persistent, content-addressed work dirs.
+///
+/// Unlike the legacy scratch sweeper this is purely opt-in: work dirs are
+/// the durable store of container outputs (Nextflow-style work dir), so by
+/// default nothing is ever reclaimed.
+#[derive(Debug, Clone)]
+pub struct WorkDirGcPolicy {
+    /// Only remove work dirs whose mtime is at least this old.
+    pub min_age: Duration,
+    /// Report what would happen without deleting anything.
+    pub dry_run: bool,
+}
+
+/// Outcome of one work-dir sweep.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct WorkDirGcReport {
+    /// Work directories considered under `work/`.
+    pub scanned: usize,
+    /// Directories removed (or that would be, under `dry_run`).
+    pub removed: usize,
+    /// Bytes reclaimed.
+    pub bytes_freed: u64,
+    /// Younger than `min_age`.
+    pub retained_recent: usize,
+    /// A container run currently holds the exclusive lock.
+    pub retained_in_use: usize,
+    /// Best-effort failures encountered during the sweep.
+    pub errors: Vec<String>,
+}
+
+/// Sweep `workspace_root/work/{shard}/{hash}` directories by age.
+///
+/// A directory whose `.autonomics-lock` is currently held (a live run took
+/// the exclusive lock) is always retained. Deletion renames within the
+/// shard directory first so it stays on one filesystem.
+pub async fn sweep_work_dirs(workspace_root: &Path, policy: &WorkDirGcPolicy) -> WorkDirGcReport {
+    let root = workspace_root.to_path_buf();
+    let policy = policy.clone();
+    tokio::task::spawn_blocking(move || sweep_work_dirs_blocking(&root, &policy))
+        .await
+        .unwrap_or_else(|join_error| {
+            let mut report = WorkDirGcReport::default();
+            report
+                .errors
+                .push(format!("work dir sweep task failed: {join_error}"));
+            report
+        })
+}
+
+fn sweep_work_dirs_blocking(root: &Path, policy: &WorkDirGcPolicy) -> WorkDirGcReport {
+    let mut report = WorkDirGcReport::default();
+    let entries = match fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return report,
+        Err(error) => {
+            report
+                .errors
+                .push(format!("cannot read `{}`: {error}", root.display()));
+            return report;
+        }
+    };
+
+    let now = SystemTime::now();
+    for shard in entries.flatten() {
+        // The container work-dir tree is sharded `work/{hash[0..2]}/{hash[2..]}`
+        // directly under the workspace root. Only two-hex shard directories
+        // are considered — legacy scratch and explicit user workdirs never
+        // match the shape.
+        if !shard.file_type().map(|kind| kind.is_dir()).unwrap_or(false)
+            || !is_shard_name(&shard.file_name().to_string_lossy())
+        {
+            continue;
+        }
+        let hash_dirs = match fs::read_dir(shard.path()) {
+            Ok(entries) => entries,
+            Err(error) => {
+                report
+                    .errors
+                    .push(format!("cannot read `{}`: {error}", shard.path().display()));
+                continue;
+            }
+        };
+        let mut remaining = 0usize;
+        for hash_dir in hash_dirs.flatten() {
+            if !hash_dir
+                .file_type()
+                .map(|kind| kind.is_dir())
+                .unwrap_or(false)
+                || !is_work_dir_name(&hash_dir.file_name().to_string_lossy())
+            {
+                continue;
+            }
+            report.scanned += 1;
+            let path = hash_dir.path();
+            match try_lock_existing_exclusive(&path.join(SCRATCH_LOCK_FILE)) {
+                Err(error) => {
+                    report
+                        .errors
+                        .push(format!("cannot lock `{}`: {error}", path.display()));
+                    continue;
+                }
+                // Lock currently held by a live run.
+                Ok(false) => {
+                    report.retained_in_use += 1;
+                    remaining += 1;
+                    continue;
+                }
+                Ok(true) => {}
+            }
+            let age = fs::metadata(&path)
+                .and_then(|metadata| metadata.modified())
+                .ok()
+                .and_then(|modified| now.duration_since(modified).ok())
+                .unwrap_or_default();
+            if age < policy.min_age {
+                report.retained_recent += 1;
+                remaining += 1;
+                continue;
+            }
+            if policy.dry_run {
+                report.removed += 1;
+                report.bytes_freed += dir_size(&path);
+                remaining += 1;
+                continue;
+            }
+            match remove_dir_atomically(&shard.path(), &path) {
+                Ok(bytes) => {
+                    report.removed += 1;
+                    report.bytes_freed += bytes;
+                }
+                Err(error) => {
+                    report
+                        .errors
+                        .push(format!("cannot remove `{}`: {error}", path.display()));
+                    remaining += 1;
+                }
+            }
+        }
+        // Prune shard directories that no longer hold any work dir.
+        if remaining == 0
+            && !policy.dry_run
+            && fs::read_dir(shard.path())
+                .map(|mut entries| entries.next().is_none())
+                .unwrap_or(false)
+        {
+            let _ = fs::remove_dir(shard.path());
+        }
+    }
+    report
+}
+
+/// Two lowercase hex characters — the shard component of the work-dir tree.
+fn is_shard_name(name: &str) -> bool {
+    name.len() == 2
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// The 62-character hash remainder of a content-addressed work dir.
+fn is_work_dir_name(name: &str) -> bool {
+    name.len() == 62
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
 /// Touch a directory's mtime so panel LRU ordering reflects *use*, not
 /// download time. Called on every cache hit.
 pub fn touch_dir_mtime(path: &Path) {
@@ -552,5 +754,67 @@ mod tests {
         touch_dir_mtime(dir.path());
         let after = fs::metadata(dir.path()).unwrap().modified().unwrap();
         assert!(after > before, "mtime must move forward");
+    }
+
+    fn make_work_dir(root: &Path, hash_seed: &str, old: bool) -> PathBuf {
+        // Full-shape names: 2-hex shard + 62-hex remainder, exactly what the
+        // sweep's name filter accepts.
+        let hash = format!("{hash_seed}{}", "0".repeat(64 - hash_seed.len()));
+        let dir = root.join(&hash[..2]).join(&hash[2..]);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("result.txt"), "output").unwrap();
+        if old {
+            set_old_mtime(&dir);
+        }
+        dir
+    }
+
+    #[tokio::test]
+    async fn work_dir_sweep_removes_old_and_retains_young_and_locked() {
+        let root = tempfile::tempdir().unwrap();
+        let old = make_work_dir(root.path(), "aa1111", true);
+        let young = make_work_dir(root.path(), "bb2222", false);
+        let locked = make_work_dir(root.path(), "cc3333", true);
+        let _guard = acquire_workdir_lock_exclusive(&locked).unwrap();
+
+        let policy = WorkDirGcPolicy {
+            min_age: Duration::from_secs(3600),
+            dry_run: false,
+        };
+        let report = sweep_work_dirs(root.path(), &policy).await;
+
+        assert_eq!(report.scanned, 3);
+        assert_eq!(report.removed, 1);
+        assert!(!old.exists(), "old work dir must be removed");
+        assert!(young.exists(), "young work dir must be retained");
+        assert!(locked.exists(), "locked work dir must be retained");
+        assert_eq!(report.retained_recent, 1);
+        assert_eq!(report.retained_in_use, 1);
+        assert!(report.bytes_freed > 0);
+        // The emptied shard directory is pruned.
+        assert!(!root.path().join("aa").exists());
+    }
+
+    #[tokio::test]
+    async fn work_dir_sweep_without_work_directory_reports_nothing() {
+        let root = tempfile::tempdir().unwrap();
+        let report = sweep_work_dirs(
+            root.path(),
+            &WorkDirGcPolicy {
+                min_age: Duration::from_secs(1),
+                dry_run: false,
+            },
+        )
+        .await;
+        assert_eq!(report.scanned, 0);
+        assert!(report.errors.is_empty());
+    }
+
+    #[test]
+    fn work_dir_gc_age_env_parses() {
+        // The parsing helper is env-driven; test the pure interpretation by
+        // covering the disabled default through `parse_env_secs` semantics:
+        // unset/0/invalid mean never (None).
+        assert_eq!(crate::config::work_dir_gc_age(), None);
     }
 }

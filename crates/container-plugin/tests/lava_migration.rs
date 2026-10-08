@@ -115,7 +115,7 @@ fn lava_plugin_compiles_to_the_legacy_wrapper_contract() {
     ));
     assert_eq!(compiled.timeout_secs, 1800);
     // Kind suffix dropped with the wrapper name (ldsc precedent).
-    assert_eq!(compiled.artifact_prefix, "/artifacts/lava");
+    assert_eq!(compiled.artifact_prefix, None);
     assert_eq!(compiled.workdir, None);
     assert!(compiled.panels.is_empty());
     // Exactly the legacy panel_bundles entry for the default panel:
@@ -270,7 +270,7 @@ fn lava_scan_plugin_compiles_to_the_legacy_wrapper_contract() {
     assert_eq!(compiled.network, "isolated");
     assert!(compiled.read_only_rootfs);
     assert_eq!(compiled.timeout_secs, 86_400);
-    assert_eq!(compiled.artifact_prefix, "/artifacts/lava_scan");
+    assert_eq!(compiled.artifact_prefix, None);
     assert_eq!(compiled.panel_bundles.len(), 1);
     assert_eq!(
         compiled.panel_bundles[0].panel_id,

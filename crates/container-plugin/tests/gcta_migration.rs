@@ -118,7 +118,10 @@ fn gcta_cojo_select_plugin_compiles_to_the_legacy_wrapper_contract() {
     assert_eq!(compiled.timeout_secs, 3600);
     // The legacy default_prefix() was family-shared; the manifest pins the
     // same value per node instead of the DSL's /artifacts/{kind} default.
-    assert_eq!(compiled.artifact_prefix, "/artifacts/gcta_container");
+    assert_eq!(
+        compiled.artifact_prefix,
+        Some("/artifacts/gcta_container".to_string())
+    );
     assert_eq!(compiled.workdir, None);
     assert!(compiled.panels.is_empty());
     // Family-wide panels (documented superset of the legacy single panel).
@@ -230,7 +233,10 @@ fn gcta_sblup_plugin_compiles_to_the_legacy_wrapper_contract() {
     assert_eq!(compiled.outputs[1].path, "gcta_sblup.log");
     assert_eq!(compiled.outputs[1].format.as_deref(), Some("gcta_log"));
     assert_eq!(compiled.timeout_secs, 3600);
-    assert_eq!(compiled.artifact_prefix, "/artifacts/gcta_container");
+    assert_eq!(
+        compiled.artifact_prefix,
+        Some("/artifacts/gcta_container".to_string())
+    );
     // Family-wide panels (documented superset of the legacy single panel).
     assert_eq!(compiled.panel_bundles.len(), 2);
 
@@ -274,7 +280,10 @@ fn gcta_fastbat_plugin_compiles_to_the_legacy_wrapper_contract() {
     assert_eq!(compiled.outputs[1].path, "gcta_fastbat.log");
     assert_eq!(compiled.outputs[1].format.as_deref(), Some("gcta_log"));
     assert_eq!(compiled.timeout_secs, 3600);
-    assert_eq!(compiled.artifact_prefix, "/artifacts/gcta_container");
+    assert_eq!(
+        compiled.artifact_prefix,
+        Some("/artifacts/gcta_container".to_string())
+    );
     // fastbat is the one variant whose legacy contract wired both panels;
     // the family-wide plugin binding is byte-identical here.
     let panel_ids: Vec<&str> = compiled
@@ -318,7 +327,10 @@ fn gcta_acat_plugin_compiles_to_the_legacy_wrapper_contract() {
     assert_eq!(compiled.outputs[1].path, "gcta_acat.log");
     assert_eq!(compiled.outputs[1].format.as_deref(), Some("gcta_log"));
     assert_eq!(compiled.timeout_secs, 3600);
-    assert_eq!(compiled.artifact_prefix, "/artifacts/gcta_container");
+    assert_eq!(
+        compiled.artifact_prefix,
+        Some("/artifacts/gcta_container".to_string())
+    );
     // Family-wide panels (documented superset of the legacy gene-list-only
     // binding; ACAT never reads plink_ref).
     let panel_ids: Vec<&str> = compiled

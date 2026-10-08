@@ -88,7 +88,10 @@ fn ldsc_h2_plugin_compiles_to_the_legacy_wrapper_contract() {
         container_runtime::PullPolicy::Missing
     ));
     assert_eq!(compiled.timeout_secs, 900);
-    assert_eq!(compiled.artifact_prefix, "/artifacts/ldsc_h2");
+    assert_eq!(
+        compiled.artifact_prefix,
+        Some("/artifacts/ldsc_h2".to_string())
+    );
     assert_eq!(compiled.workdir, None);
     assert!(compiled.panels.is_empty());
     let panel_ids: Vec<&str> = compiled

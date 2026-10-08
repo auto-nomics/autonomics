@@ -124,7 +124,10 @@ fn music_deconvolution_plugin_compiles_to_the_legacy_wrapper_contract() {
     // "/artifacts/music_deconvolution_container"; the plugin drops the
     // `_container` suffix together with the kind rename (the same rule the
     // ldsc/mrpresso/deseq2 migrations applied).
-    assert_eq!(compiled.artifact_prefix, "/artifacts/music_deconvolution");
+    assert_eq!(
+        compiled.artifact_prefix,
+        Some("/artifacts/music_deconvolution".to_string())
+    );
     assert_eq!(compiled.workdir, None);
     // The legacy wrapper bound no panels and no panel bundles.
     assert!(compiled.panels.is_empty());
