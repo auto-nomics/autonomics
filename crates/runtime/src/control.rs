@@ -10,7 +10,6 @@
 
 use agentik_core::tools::ProgressBuffer;
 use agentik_core::{AgentRuntimeConfig, AgentRuntimeOverrides};
-use agentik_network::{EdgeTrigger, TerminationSpec};
 use agentik_sdk::model::Model;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::UnboundedSender;
@@ -164,33 +163,38 @@ impl HostControl {
         .await
     }
 
-    /// Fire-and-forget inter-agent message (Phase 5). Delivers `message`
-    /// to agent `to` without waiting for a response. Returns:
-    /// - `Some(Ok(()))` — agent found, message enqueued
-    /// - `Some(Err(msg))` — agent not found or host resolved the name but
-    ///   the agent was unregistered concurrently
-    /// - `None` — host command channel closed (host shutting down)
-    ///
-    /// Unlike [`Self::delegate`], the caller continues immediately. If the
-    /// target agent is mid-turn, the message is queued and processed on
-    /// the next turn (same semantics as TUI's `deliver_message`).
-    pub async fn send_message(
-        &self,
-        caller_path: &str,
-        to: &str,
-        message: impl Into<String>,
-    ) -> Option<Result<(), String>> {
-        self.ask(|tx| HostCommand::SendMessage {
-            caller_path: caller_path.into(),
-            to: to.into(),
-            message: message.into(),
-            reply_tx: tx,
-        })
-        .await
+    /// Shut down a named agent (operator path — unrestricted). Use
+    /// [`Self::shutdown_child_agent`] for agent-initiated shutdowns, which
+    /// the host restricts to the caller's direct children.
+    pub fn shutdown_agent(&self, name: &str) {
+        self.fire(HostCommand::Shutdown {
+            name: name.into(),
+            caller_path: None,
+            reply_tx: None,
+        });
     }
 
-    pub fn shutdown_agent(&self, name: &str) {
-        self.fire(HostCommand::Shutdown { name: name.into() });
+    /// Shut down one of the caller's direct child agents. Returns:
+    /// - `Some(Ok(()))` — the child was shut down and unregistered
+    /// - `Some(Err(msg))` — target is not a direct child of the caller
+    /// - `None` — host loop unreachable or silent for
+    ///   [`DELIVERY_CONFIRM_TIMEOUT`]
+    pub async fn shutdown_child_agent(
+        &self,
+        caller_path: &str,
+        name: &str,
+    ) -> Option<Result<(), String>> {
+        tokio::time::timeout(
+            DELIVERY_CONFIRM_TIMEOUT,
+            self.ask(|tx| HostCommand::Shutdown {
+                name: name.into(),
+                caller_path: Some(caller_path.into()),
+                reply_tx: Some(tx),
+            }),
+        )
+        .await
+        .ok()
+        .flatten()
     }
 
     /// Trigger manual compaction on a named agent's active session.
@@ -198,57 +202,42 @@ impl HostControl {
         self.fire(HostCommand::CompactAgent { name: name.into() });
     }
 
-    pub fn add_node(&self, name: &str, profile: &str) {
-        self.fire(HostCommand::AddNode {
-            name: name.into(),
-            profile: profile.into(),
-            initial_prompt: None,
-        });
-    }
-
-    pub fn add_node_with_prompt(&self, name: &str, profile: &str, prompt: impl Into<String>) {
-        self.fire(HostCommand::AddNode {
-            name: name.into(),
-            profile: profile.into(),
-            initial_prompt: Some(prompt.into()),
-        });
-    }
-
-    pub fn remove_node(&self, name: &str) {
-        self.fire(HostCommand::RemoveNode { name: name.into() });
-    }
-
-    pub fn connect(&self, from: &str, to: &str, trigger: EdgeTrigger) {
-        self.fire(HostCommand::Connect {
-            from: from.into(),
-            to: to.into(),
-            trigger,
-        });
-    }
-
-    pub fn disconnect(&self, from: &str, to: &str) {
-        self.fire(HostCommand::Disconnect {
-            from: from.into(),
-            to: to.into(),
-        });
-    }
-
-    pub fn set_termination(&self, spec: TerminationSpec) {
-        self.fire(HostCommand::SetTermination { spec });
-    }
-
-    pub fn reset_run_state(&self) {
-        self.fire(HostCommand::ResetRunState);
-    }
-
-    pub fn inject_prompts(&self) {
-        self.fire(HostCommand::InjectPrompts);
-    }
-
     // ── Session management ──
 
+    /// Cancel the current turn of a named agent (operator path —
+    /// unrestricted). Use [`Self::interrupt_child_agent`] for
+    /// agent-initiated interrupts, which the host restricts to the
+    /// caller's direct children.
     pub fn cancel_agent(&self, name: &str) {
-        self.fire(HostCommand::CancelAgent { name: name.into() });
+        self.fire(HostCommand::CancelAgent {
+            name: name.into(),
+            caller_path: None,
+            reply_tx: None,
+        });
+    }
+
+    /// Interrupt the current turn of one of the caller's direct child
+    /// agents. Returns:
+    /// - `Some(Ok(()))` — the cancel command was forwarded to the child
+    /// - `Some(Err(msg))` — target is not a direct child of the caller
+    /// - `None` — host loop unreachable or silent for
+    ///   [`DELIVERY_CONFIRM_TIMEOUT`]
+    pub async fn interrupt_child_agent(
+        &self,
+        caller_path: &str,
+        name: &str,
+    ) -> Option<Result<(), String>> {
+        tokio::time::timeout(
+            DELIVERY_CONFIRM_TIMEOUT,
+            self.ask(|tx| HostCommand::CancelAgent {
+                name: name.into(),
+                caller_path: Some(caller_path.into()),
+                reply_tx: Some(tx),
+            }),
+        )
+        .await
+        .ok()
+        .flatten()
     }
 
     pub fn list_sessions(&self, name: &str) {
@@ -373,16 +362,13 @@ impl HostControl {
         self.ask(|tx| HostCommand::GetStatus { reply_tx: tx }).await
     }
 
-    /// Route a task to the best-matching agent.
-    /// `exclude` is the caller's own name to prevent self-routing.
-    pub async fn route_task(
-        &self,
-        description: &str,
-        exclude: Option<&str>,
-    ) -> Option<RouteResult> {
+    /// Route a task to the best-matching agent. Live-agent candidates are
+    /// restricted to `caller_path`'s direct children; the spawnable agent
+    /// kinds are always considered.
+    pub async fn route_task(&self, description: &str, caller_path: &str) -> Option<RouteResult> {
         self.ask(|tx| HostCommand::RouteTask {
             description: description.into(),
-            exclude: exclude.map(String::from),
+            caller_path: caller_path.into(),
             reply_tx: tx,
         })
         .await
@@ -459,27 +445,15 @@ pub enum HostCommand {
     },
 
     /// Shut down a named agent and remove from registry.
-    Shutdown { name: String },
-
-    /// Add a topology node.
-    AddNode {
+    /// `caller_path` is `None` for operator callers (unrestricted) and
+    /// `Some(agent path)` for agent callers, in which case the host only
+    /// allows the agent's direct children. `reply_tx` is `Some` for
+    /// agent-facing calls so denials are surfaced.
+    Shutdown {
         name: String,
-        profile: String,
-        initial_prompt: Option<String>,
+        caller_path: Option<String>,
+        reply_tx: Option<oneshot::Sender<std::result::Result<(), String>>>,
     },
-
-    /// Remove a topology node.
-    RemoveNode { name: String },
-
-    /// Connect two nodes with a trigger.
-    Connect {
-        from: String,
-        to: String,
-        trigger: EdgeTrigger,
-    },
-
-    /// Disconnect two nodes.
-    Disconnect { from: String, to: String },
 
     /// Deliver a user message to a named agent (TUI → agent).
     /// Not inter-agent communication — use Delegate for that.
@@ -493,17 +467,6 @@ pub enum HostCommand {
         name: String,
         message: String,
         reply_tx: Option<oneshot::Sender<Result<(), String>>>,
-    },
-
-    /// Fire-and-forget inter-agent message (Phase 5). Unlike Delegate,
-    /// the sender does NOT wait for the target's Done response — the
-    /// message is enqueued and the caller continues immediately.
-    /// Reply: Ok(()) on successful delivery, Err(msg) if agent not found.
-    SendMessage {
-        caller_path: String,
-        to: String,
-        message: String,
-        reply_tx: oneshot::Sender<Result<(), String>>,
     },
 
     /// Delegate a task to an agent and wait for its Done response.
@@ -537,21 +500,13 @@ pub enum HostCommand {
         reply_tx: oneshot::Sender<HostStatus>,
     },
 
-    /// Set termination condition.
-    SetTermination { spec: TerminationSpec },
-
-    /// Reset routing state (keep topology).
-    ResetRunState,
-
-    /// Inject initial prompts for all nodes that have them.
-    InjectPrompts,
-
     /// Route a task description to the best-matching agent.
     /// Reply: routing recommendation with candidates.
-    /// `exclude` is the caller's own name (to prevent self-routing).
+    /// Live-agent candidates are restricted to the direct children of
+    /// `caller_path`.
     RouteTask {
         description: String,
-        exclude: Option<String>,
+        caller_path: String,
         reply_tx: oneshot::Sender<RouteResult>,
     },
 
@@ -573,8 +528,16 @@ pub enum HostCommand {
     },
 
     // ── Session management ──
-    /// Cancel the current turn of a named agent.
-    CancelAgent { name: String },
+    /// Cancel the current turn of a named agent. `caller_path` is `None`
+    /// for operator callers (unrestricted) and `Some(agent path)` for
+    /// agent callers, in which case the host only allows the agent's
+    /// direct children. `reply_tx` is `Some` for agent-facing calls so
+    /// denials are surfaced.
+    CancelAgent {
+        name: String,
+        caller_path: Option<String>,
+        reply_tx: Option<oneshot::Sender<std::result::Result<(), String>>>,
+    },
 
     /// Trigger manual compaction on a named agent's active session.
     CompactAgent { name: String },

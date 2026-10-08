@@ -231,8 +231,10 @@ agentik-core storage 已按 agent name 自动恢复并做 WAL replay
   per-run VFS mounts,已在 2026-09 随进程内路径移除,见 §3.1。)
 - **P2(评测)**:`--output-schema`(依赖 agentik-sdk 结构化输出能力,见 §10.3);多 turn stdin 脚本(每行一条 user 消息的 JSONL)。
 - **P3(编排)**:多 agent 网络运行——`NetworkSpec`(nodes/edges/termination)
-  以 JSON 文件输入,run 至 `TerminationSpec` 满足;复用
-  `host.add_node`/`connect`/`set_termination`/`inject_initial_prompts` 现有 API。
+  以 JSON 文件输入,run 至 `TerminationSpec` 满足。(注:2026-10 起 agent 间通讯
+  收敛为仅 `delegate_to` 父→直接子委派,拓扑边转发与 `add_node`/`connect`/
+  `set_termination`/`inject_initial_prompts` 宿主 API 已移除;此 P3 需按
+  委派树模型重新设计。)
 
 ## 10. 开放问题
 

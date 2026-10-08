@@ -93,6 +93,31 @@ impl AgentPath {
         self.0.split('/').filter(|s| !s.is_empty()).collect()
     }
 
+    /// Returns `true` if `self` is a direct child of `other` (exactly one hop).
+    ///
+    /// ```
+    /// # use agentik_types::AgentPath;
+    /// let parent = AgentPath::try_from("/root/researcher").unwrap();
+    /// let child = AgentPath::try_from("/root/researcher/worker").unwrap();
+    /// assert!(child.is_direct_child_of(&parent));
+    /// assert!(!parent.is_direct_child_of(&child));
+    /// ```
+    pub fn is_direct_child_of(&self, other: &AgentPath) -> bool {
+        self.parent().as_ref() == Some(other)
+    }
+
+    /// Returns `true` if `self` is the direct parent of `other`.
+    ///
+    /// ```
+    /// # use agentik_types::AgentPath;
+    /// let parent = AgentPath::try_from("/root/researcher").unwrap();
+    /// let child = AgentPath::try_from("/root/researcher/worker").unwrap();
+    /// assert!(parent.is_parent_of(&child));
+    /// ```
+    pub fn is_parent_of(&self, other: &AgentPath) -> bool {
+        other.parent().as_ref() == Some(self)
+    }
+
     /// Append a validated segment to this path.
     ///
     /// ```
@@ -425,6 +450,49 @@ mod tests {
     fn parent_of_direct_child() {
         let child = AgentPath::try_from("/root/researcher").unwrap();
         assert_eq!(child.parent().unwrap(), AgentPath::root());
+    }
+
+    // ── Direct parent/child predicates ──
+
+    #[test]
+    fn direct_child_predicate_true() {
+        let parent = AgentPath::try_from("/root/a").unwrap();
+        let child = AgentPath::try_from("/root/a/b").unwrap();
+        assert!(child.is_direct_child_of(&parent));
+        assert!(parent.is_parent_of(&child));
+    }
+
+    #[test]
+    fn direct_child_predicate_false_for_grandchild() {
+        let ancestor = AgentPath::try_from("/root/a").unwrap();
+        let grandchild = AgentPath::try_from("/root/a/b/c").unwrap();
+        assert!(!grandchild.is_direct_child_of(&ancestor));
+        assert!(!ancestor.is_parent_of(&grandchild));
+    }
+
+    #[test]
+    fn direct_child_predicate_false_for_sibling() {
+        let a = AgentPath::try_from("/root/a/b").unwrap();
+        let sibling = AgentPath::try_from("/root/a/x").unwrap();
+        assert!(!a.is_direct_child_of(&sibling));
+        assert!(!sibling.is_direct_child_of(&a));
+    }
+
+    #[test]
+    fn direct_child_predicate_false_for_self() {
+        let path = AgentPath::try_from("/root/a").unwrap();
+        assert!(!path.is_direct_child_of(&path));
+        assert!(!path.is_parent_of(&path));
+    }
+
+    #[test]
+    fn root_has_no_parent_but_can_be_parent() {
+        let root = AgentPath::root();
+        let child = AgentPath::try_from("/root/a").unwrap();
+        assert!(!root.is_direct_child_of(&child));
+        assert!(!root.is_direct_child_of(&root));
+        assert!(root.is_parent_of(&child));
+        assert!(child.is_direct_child_of(&root));
     }
 
     // ── Display / serde ──

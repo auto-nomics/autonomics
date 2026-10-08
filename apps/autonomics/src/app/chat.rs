@@ -181,7 +181,7 @@ impl App {
             }
         }
 
-        // Dispatch send_message outside the `ts` borrow.
+        // Dispatch deliver_message outside the `ts` borrow.
         if let Some(text) = send_text {
             let name = self.state.sessions.get(active_idx).map(|s| s.name.clone());
             if let Some(name) = name {

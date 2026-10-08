@@ -1,23 +1,31 @@
 //! Agent tools for controlling the multi-agent host.
 //!
 //! Each tool wraps a [`HostControl`] command and exposes it to the LLM as
-//! a callable function. Agents use these tools to spawn peers, manage
-//! topology, send messages, and query system status.
+//! a callable function. Agents use these tools to spawn their own child
+//! agents, delegate tasks to them, and manage/query the agents visible to
+//! them. Inter-agent communication is delegation-only and strictly
+//! parent→direct-child; every tool below enforces that one-hop scope.
 
 use agentik_core::tools::{ToolContext, ToolFunction, ToolRegistration};
-use agentik_network::TerminationSpec;
 use agentik_proc::tool;
 use agentik_sdk::types::ToolResult;
 use async_trait::async_trait;
 
 use crate::control::HostControl;
 
+/// One-hop visibility: an agent sees itself, its direct parent, and its
+/// direct children — nothing else.
+fn visible_from(caller: &agentik_types::AgentPath, other: &agentik_types::AgentPath) -> bool {
+    *other == *caller || other.is_direct_child_of(caller) || caller.is_direct_child_of(other)
+}
+
 /// Build the full set of host control tools for an agent.
 /// Returns an empty vec if `control` is `None`.
 ///
 /// `self_path` is the calling agent's own hierarchical path. It is used to:
-/// - Exclude the agent from its own `list_agents` / `route_task` results
-///   (preventing self-delegation).
+/// - Scope `list_agents` / `get_agent_info` / `get_agent_history` /
+///   `route_task` results to the agents visible to the caller (self,
+///   direct parent, direct children).
 /// - Derive child paths when the agent spawns sub-agents
 ///   (`self_path.join("worker")` → `/root/agent/worker`).
 pub fn host_tools(
@@ -39,16 +47,13 @@ pub fn host_tools(
             control: ctrl.clone(),
             caller_path: self_path.as_str().to_string(),
         }),
-        ToolRegistration::from(SendMessageTool {
-            control: ctrl.clone(),
-            self_path: self_path.as_str().to_string(),
-        }),
         ToolRegistration::from(RouteTaskTool {
             control: ctrl.clone(),
             self_path: self_path.clone(),
         }),
         ToolRegistration::from(GetAgentInfoTool {
             control: ctrl.clone(),
+            self_path: self_path.clone(),
         }),
         ToolRegistration::from(ListAgentsTool {
             control: ctrl.clone(),
@@ -60,20 +65,16 @@ pub fn host_tools(
         }),
         ToolRegistration::from(GetAgentHistoryTool {
             control: ctrl.clone(),
-        }),
-        ToolRegistration::from(SetTerminationTool {
-            control: ctrl.clone(),
-        }),
-        ToolRegistration::from(GetNetworkStatusTool {
-            control: ctrl.clone(),
+            self_path: self_path.clone(),
         }),
         ToolRegistration::from(ShutdownAgentTool {
             control: ctrl.clone(),
+            self_path: self_path.clone(),
         }),
         ToolRegistration::from(InterruptAgentTool {
             control: ctrl.clone(),
+            self_path: self_path.clone(),
         }),
-        ToolRegistration::from(InjectPromptsTool { control: ctrl }),
     ]
 }
 
@@ -139,20 +140,23 @@ impl ToolFunction for SpawnAgentTool {
 
 #[tool(
     name = "delegate_to",
-    description = "Delegate a task to another agent. Runs in the background and returns \
-                   a task number (#N) immediately. Use `wait_task` with the task number \
-                   to block until the result is ready, or `view_task_results` to poll \
-                   for the output. Multiple delegates can run concurrently. \
-                   The target agent's COMPLETE response becomes the task's result. \
-                   For Researcher-to-Developer work, delegate capability implementation \
-                   only: provide contracts and synthetic fixtures, never a research \
-                   dataset or a request to run/interpret an analysis. \
-                   You may delegate only to sibling agents or your own descendants; \
-                   upward and cross-parent delegation is rejected."
+    description = "Delegate a task to one of your direct child agents. Runs in the \
+                   background and returns a task number (#N) immediately. Use \
+                   `wait_task` with the task number to block until the result is \
+                   ready, or `view_task_results` to poll for the output. Multiple \
+                   delegates can run concurrently. The target agent's COMPLETE \
+                   response becomes the task's result. For \
+                   Researcher-to-Developer work, delegate capability \
+                   implementation only: provide contracts and synthetic \
+                   fixtures, never a research dataset or a request to \
+                   run/interpret an analysis. You may delegate only to your \
+                   own direct child agents (spawned via spawn_agent). Sibling, \
+                   parent, and cross-branch delegation is rejected — spawn the \
+                   agent you need first."
 )]
 struct DelegateToInput {
-    /// Name of the target agent. Accepts a short name (e.g. "researcher")
-    /// or full path (e.g. "/root/researcher/worker").
+    /// Name of the target agent: a direct child's short name (e.g. \
+    /// "worker") or full path (e.g. "/root/you/worker").
     agent_name: String,
     /// The task to send. For node/plugin development, include the requested \
     /// interface, acceptance criteria, and synthetic fixture instead of real \
@@ -237,69 +241,6 @@ impl ToolFunction for DelegateToTool {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// Send Message — inter-agent notification without response injection (Phase 5)
-// ═══════════════════════════════════════════════════════════════════════
-
-#[tool(
-    name = "send_message",
-    description = "Send a message to another agent WITHOUT receiving its response. \
-                   Unlike delegate_to, the target agent's output is NOT injected back \
-                   into your context — you only get a delivery confirmation. Use this when:\n\
-                   - You want to notify another agent without needing its reply.\n\
-                   - You want to kick off work and check results later via list_agents.\n\
-                   - You need to broadcast to multiple agents without consuming each response.\n\
-                   Peer messaging is restricted to sibling agents sharing your parent. \
-                   The target must be Idle; busy targets reject the message instead of \
-                   queueing it."
-)]
-struct SendMessageInput {
-    /// Name of the target agent. Accepts a short name (e.g. "researcher") \
-    /// or full path (e.g. "/root/researcher/worker").
-    agent_name: String,
-    /// The message content to deliver.
-    message: String,
-}
-
-struct SendMessageTool {
-    control: HostControl,
-    self_path: String,
-}
-
-#[async_trait]
-impl ToolFunction for SendMessageTool {
-    type Input = SendMessageInput;
-
-    /// Synchronous fast-return — the tool completes as soon as the host
-    /// confirms delivery (name resolution + channel send). The key
-    /// Sync (default) — delivery confirmation returned immediately.
-    /// 1-hour hard cap. Delivery is near-instant; the cap only matters
-    /// if the host command channel is jammed.
-    fn timeout_seconds(&self) -> u64 {
-        3600
-    }
-
-    async fn run(
-        &self,
-        input: SendMessageInput,
-    ) -> Result<ToolResult, agentik_core::tools::ToolError> {
-        match self
-            .control
-            .send_message(&self.self_path, &input.agent_name, input.message)
-            .await
-        {
-            Some(Ok(())) => Ok(ToolResult::success(format!(
-                "Message delivered to '{}'.",
-                input.agent_name
-            ))),
-            Some(Err(e)) => Ok(ToolResult::success(format!("send_message failed: {e}"))),
-            None => Ok(ToolResult::success(
-                "send_message: host command channel closed (runtime shut down)",
-            )),
-        }
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════════════
 // Route Task — find the best agent for a task
 // ═══════════════════════════════════════════════════════════════════════
 
@@ -308,9 +249,11 @@ impl ToolFunction for SendMessageTool {
     description = "Find the best agent for a task based on capability matching. \
                    Describe what you need done and this tool returns the recommended \
                    agent name, match reason, and all candidates with scores. \
-                   Use the returned agent name with delegate_to. Researcher owns \
-                   data analysis and DAG execution; Developer owns plugin/node \
-                   implementation and focused validation."
+                   Candidates are your direct children plus the spawnable \
+                   researcher/developer profiles. Use the returned agent name with \
+                   delegate_to (an existing child) or spawn_agent (a role profile). \
+                   Researcher owns data analysis and DAG execution; Developer owns \
+                   plugin/node implementation and focused validation."
 )]
 struct RouteTaskInput {
     /// Natural language description of the task to route.
@@ -332,7 +275,7 @@ impl ToolFunction for RouteTaskTool {
     ) -> Result<ToolResult, agentik_core::tools::ToolError> {
         match self
             .control
-            .route_task(&input.description, Some(self.self_path.as_str()))
+            .route_task(&input.description, self.self_path.as_str())
             .await
         {
             Some(result) => Ok(ToolResult::success_json(
@@ -349,8 +292,11 @@ impl ToolFunction for RouteTaskTool {
 
 #[tool(
     name = "get_agent_info",
-    description = "Get detailed capability info for a specific agent: summary, tags, \
-                   expertise areas, and available tools."
+    description = "Get detailed capability info for a visible agent (yourself, your \
+                   direct parent, or one of your direct children): summary, tags, \
+                   expertise areas, and available tools. Also answers for role \
+                   profiles (e.g. 'researcher') to inspect what a spawned child \
+                   of that kind can do."
 )]
 struct GetAgentInfoInput {
     /// Name of the agent to query.
@@ -359,6 +305,7 @@ struct GetAgentInfoInput {
 
 struct GetAgentInfoTool {
     control: HostControl,
+    self_path: agentik_types::AgentPath,
 }
 
 #[async_trait]
@@ -370,9 +317,24 @@ impl ToolFunction for GetAgentInfoTool {
         input: GetAgentInfoInput,
     ) -> Result<ToolResult, agentik_core::tools::ToolError> {
         match self.control.get_agent_info(&input.agent_name).await {
-            Some(info) => Ok(ToolResult::success_json(
-                serde_json::to_value(&info).unwrap_or_default(),
-            )),
+            Some(info) => {
+                // Visibility gate: only parent/children (and self) are
+                // answerable. Non-`/root` paths are the static role-profile
+                // fallback and are always allowed. Invisible agents get the
+                // same message as not-found so callers cannot probe the
+                // registry.
+                if let Ok(path) = agentik_types::AgentPath::try_from(info.path.as_str()) {
+                    if !visible_from(&self.self_path, &path) {
+                        return Ok(ToolResult::success(format!(
+                            "Agent '{}' not found.",
+                            input.agent_name
+                        )));
+                    }
+                }
+                Ok(ToolResult::success_json(
+                    serde_json::to_value(&info).unwrap_or_default(),
+                ))
+            }
             None => Ok(ToolResult::success(format!(
                 "Agent '{}' not found.",
                 input.agent_name
@@ -387,10 +349,11 @@ impl ToolFunction for GetAgentInfoTool {
 
 #[tool(
     name = "list_agents",
-    description = "List all registered agents (excluding yourself) and current \
-                   network topology status as JSON. Each agent entry includes \
-                   both `name` (short name) and `path` (full hierarchical path). \
-                   Use the path with `delegate_to` when names are ambiguous."
+    description = "List the agents visible to you — your direct parent (if any) and \
+                   your direct children — plus the spawnable role profiles, as JSON. \
+                   Each agent entry includes both `name` (short name) and `path` \
+                   (full hierarchical path). Use the path with `delegate_to` when \
+                   names are ambiguous."
 )]
 struct ListAgentsInput {}
 
@@ -408,13 +371,25 @@ impl ToolFunction for ListAgentsTool {
         _input: ListAgentsInput,
     ) -> Result<ToolResult, agentik_core::tools::ToolError> {
         match self.control.get_status().await {
-            Some(mut status) => {
-                // Exclude self from the agent list to prevent self-delegation.
-                status.agents.retain(|a| a.path != self.self_path.as_str());
-                status.profiles.retain(|p| p.name != self.self_path.name());
-                Ok(ToolResult::success_json(
-                    serde_json::to_value(&status).unwrap_or_default(),
-                ))
+            Some(status) => {
+                // One-hop visibility: parent + direct children (self
+                // excluded). Siblings and other branches are invisible, and
+                // the host's global topology fields are never exposed.
+                let visible: Vec<_> = status
+                    .agents
+                    .into_iter()
+                    .filter(|a| {
+                        agentik_types::AgentPath::try_from(a.path.as_str()).is_ok_and(|p| {
+                            p != self.self_path && visible_from(&self.self_path, &p)
+                        })
+                    })
+                    .collect();
+                let mut profiles = status.profiles;
+                profiles.retain(|p| p.name != self.self_path.name());
+                Ok(ToolResult::success_json(serde_json::json!({
+                    "agents": visible,
+                    "profiles": profiles,
+                })))
             }
             None => Ok(ToolResult::success("Failed to get host status.")),
         }
@@ -469,8 +444,9 @@ impl ToolFunction for ListDelegationsTool {
 
 #[tool(
     name = "get_agent_history",
-    description = "Read an agent's persisted conversation history. Returns \
-                   the most recent messages for the agent, which can be used \
+    description = "Read the persisted conversation history of a visible agent \
+                   (yourself, your direct parent, or one of your direct children). \
+                   Returns the most recent messages for the agent, which can be used \
                    to inspect what a delegated task actually did."
 )]
 struct GetAgentHistoryInput {
@@ -483,6 +459,7 @@ struct GetAgentHistoryInput {
 
 struct GetAgentHistoryTool {
     control: HostControl,
+    self_path: agentik_types::AgentPath,
 }
 
 #[async_trait]
@@ -495,114 +472,24 @@ impl ToolFunction for GetAgentHistoryTool {
     ) -> Result<ToolResult, agentik_core::tools::ToolError> {
         let limit = input.limit.unwrap_or(20).clamp(1, 100);
         match self.control.agent_history(&input.agent_name, limit).await {
-            Some(history) => Ok(ToolResult::success_json(
-                serde_json::to_value(history).unwrap_or_default(),
-            )),
+            Some(history) => {
+                // Visibility gate on the resolved target path. A history
+                // whose path cannot be parsed is treated as invisible.
+                let visible = agentik_types::AgentPath::try_from(history.agent_path.as_str())
+                    .is_ok_and(|p| visible_from(&self.self_path, &p));
+                if !visible {
+                    return Ok(ToolResult::success(format!(
+                        "Agent '{}' not found or not visible to you.",
+                        input.agent_name
+                    )));
+                }
+                Ok(ToolResult::success_json(
+                    serde_json::to_value(history).unwrap_or_default(),
+                ))
+            }
             None => Ok(ToolResult::success(
                 "Failed to read agent history — host unavailable.",
             )),
-        }
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-// Set Termination
-// ═══════════════════════════════════════════════════════════════════════
-
-#[tool(
-    name = "set_termination",
-    description = "Set the termination condition for the agent network. \
-                   Format: 'max_rounds:N' (stop after N node completions), \
-                   'condition:node:pattern' (stop when node response contains pattern), \
-                   'any_node_done:node1,node2' (stop when any listed node completes)."
-)]
-struct SetTerminationInput {
-    /// Termination spec string, e.g. "max_rounds:10" or "condition:reviewer:ACCEPT".
-    spec: String,
-}
-
-struct SetTerminationTool {
-    control: HostControl,
-}
-
-#[async_trait]
-impl ToolFunction for SetTerminationTool {
-    type Input = SetTerminationInput;
-
-    async fn run(
-        &self,
-        input: SetTerminationInput,
-    ) -> Result<ToolResult, agentik_core::tools::ToolError> {
-        let spec = match parse_termination(&input.spec) {
-            Ok(s) => s,
-            Err(e) => return Ok(ToolResult::success(format!("Invalid spec: {e}"))),
-        };
-        self.control.set_termination(spec);
-        Ok(ToolResult::success(format!(
-            "Termination set to: {}",
-            input.spec
-        )))
-    }
-}
-
-fn parse_termination(s: &str) -> crate::error::Result<agentik_network::TerminationSpec> {
-    let (kind, rest) = s
-        .split_once(':')
-        .ok_or_else(|| crate::error::Error::Other(format!("expected 'kind:args', got '{s}'")))?;
-    match kind {
-        "max_rounds" => {
-            let max: usize = rest
-                .parse()
-                .map_err(|_| crate::error::Error::Other("max_rounds needs a number".into()))?;
-            Ok(TerminationSpec::MaxRounds { max })
-        }
-        "condition" => {
-            let (node, pattern) = rest.split_once(':').ok_or_else(|| {
-                crate::error::Error::Other("condition needs 'node:pattern'".into())
-            })?;
-            Ok(TerminationSpec::Condition {
-                node: node.into(),
-                pattern: pattern.into(),
-            })
-        }
-        "any_node_done" => {
-            let nodes: Vec<String> = rest.split(',').map(|s| s.trim().to_string()).collect();
-            Ok(TerminationSpec::AnyNodeDone { nodes })
-        }
-        other => Err(crate::error::Error::Other(format!(
-            "unknown termination kind: '{other}'"
-        ))),
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-// Get Network Status (detailed JSON)
-// ═══════════════════════════════════════════════════════════════════════
-
-#[tool(
-    name = "get_network_status",
-    description = "Get detailed network topology status as JSON: agents, nodes, \
-                   edges, cycles, roots, leaves, rounds, termination state."
-)]
-struct GetNetworkStatusInput {}
-
-struct GetNetworkStatusTool {
-    control: HostControl,
-}
-
-#[async_trait]
-impl ToolFunction for GetNetworkStatusTool {
-    type Input = GetNetworkStatusInput;
-
-    async fn run(
-        &self,
-        _input: GetNetworkStatusInput,
-    ) -> Result<ToolResult, agentik_core::tools::ToolError> {
-        match self.control.get_status().await {
-            Some(status) => Ok(ToolResult::success_json(
-                serde_json::to_value(&status).unwrap_or_default(),
-            )),
-            None => Ok(ToolResult::success("Host unavailable.")),
         }
     }
 }
@@ -613,19 +500,22 @@ impl ToolFunction for GetNetworkStatusTool {
 
 #[tool(
     name = "shutdown_agent",
-    description = "Shut down a named agent and remove it from the registry. \
-                   The agent's process is terminated — it cannot receive \
-                   any more messages. Use this when the agent is no longer \
-                   needed (e.g. long-lived analysis session is complete). \
-                   For a softer cancellation that lets the agent accept a \
+    description = "Shut down one of your direct child agents and remove it from \
+                   the registry. The child's process is terminated — it cannot \
+                   receive any more messages. Use this when a child is no longer \
+                   needed (e.g. its delegated analysis session is complete). \
+                   For a softer cancellation that lets the child accept a \
                    new message afterwards, use interrupt_agent instead."
 )]
 struct ShutdownAgentInput {
+    /// Name of the child agent to shut down. Accepts a short name (e.g. \
+    /// "worker") or full path (e.g. "/root/you/worker").
     agent_name: String,
 }
 
 struct ShutdownAgentTool {
     control: HostControl,
+    self_path: agentik_types::AgentPath,
 }
 
 #[async_trait]
@@ -636,11 +526,20 @@ impl ToolFunction for ShutdownAgentTool {
         &self,
         input: ShutdownAgentInput,
     ) -> Result<ToolResult, agentik_core::tools::ToolError> {
-        self.control.shutdown_agent(&input.agent_name);
-        Ok(ToolResult::success(format!(
-            "Agent '{}' shutdown requested.",
-            input.agent_name
-        )))
+        match self
+            .control
+            .shutdown_child_agent(self.self_path.as_str(), &input.agent_name)
+            .await
+        {
+            Some(Ok(())) => Ok(ToolResult::success(format!(
+                "Agent '{}' shutdown requested.",
+                input.agent_name
+            ))),
+            Some(Err(e)) => Ok(ToolResult::success(format!("Shutdown failed: {e}"))),
+            None => Ok(ToolResult::success(
+                "Shutdown failed: host unavailable (runtime shut down or unresponsive).",
+            )),
+        }
     }
 }
 
@@ -650,21 +549,21 @@ impl ToolFunction for ShutdownAgentTool {
 
 #[tool(
     name = "interrupt_agent",
-    description = "Interrupt the named agent's CURRENT turn without shutting it down. \
-                   The agent emits LifecycleChanged(Cancelled), aborts any in-flight \
-                   tool calls, and remains registered — a follow-up message via \
-                   delegate_to / send_message will start a fresh turn on the same \
+    description = "Interrupt one of your direct child agents' CURRENT turn without \
+                   shutting it down. The child emits LifecycleChanged(Cancelled), \
+                   aborts any in-flight tool calls, and remains registered — a \
+                   follow-up delegate_to will start a fresh turn on the same \
                    session. Use this when:\n\
                    - You delegated a long task and want to cancel it (e.g. wrong \
                      agent selected, task is taking too long, etc.)\n\
-                   - The agent is stuck in a retry loop and you want to break out.\n\
-                   - You want to redirect the agent's work mid-turn.\n\
+                   - The child is stuck in a retry loop and you want to break out.\n\
+                   - You want to redirect the child's work mid-turn.\n\
                    For full agent shutdown (removes from registry), use \
                    shutdown_agent instead."
 )]
 struct InterruptAgentInput {
-    /// Name of the agent to interrupt. Accepts a short name (e.g. \
-    /// "researcher") or full path.
+    /// Name of the child agent to interrupt. Accepts a short name (e.g. \
+    /// "worker") or full path.
     agent_name: String,
     /// Optional human-readable reason logged alongside the cancel \
     /// event. Useful when debugging why an agent got interrupted.
@@ -674,19 +573,21 @@ struct InterruptAgentInput {
 
 struct InterruptAgentTool {
     control: HostControl,
+    self_path: agentik_types::AgentPath,
 }
 
 #[async_trait]
 impl ToolFunction for InterruptAgentTool {
     type Input = InterruptAgentInput;
 
-    /// Synchronous — interrupt is a fast fire-and-forget operation.
-    /// The agent's cancel_token is cancelled, which propagates
-    /// immediately to any in-flight LLM request or tool execution.
-    /// The agent then emits `LifecycleChanged(Cancelled)` through the
-    /// event stream; if you're tracking the result, follow up with
-    /// `view_task_results` to see the Cancelled status.
-    /// Sync (default) — fast fire-and-forget, returns near-instantly.
+    /// Synchronous — interrupt is a fast operation. The child's
+    /// cancel_token is cancelled, which propagates immediately to any
+    /// in-flight LLM request or tool execution. The child then emits
+    /// `LifecycleChanged(Cancelled)` through the event stream; if you're
+    /// tracking the result, follow up with `view_task_results` to see the
+    /// Cancelled status.
+    /// Sync (default) — returns as soon as the host confirms the cancel
+    /// command (or denies a non-child target).
     /// 1 hour cap — interrupt itself should be near-instant; the cap
     /// only matters if the host command channel is jammed.
     fn timeout_seconds(&self) -> u64 {
@@ -706,97 +607,225 @@ impl ToolFunction for InterruptAgentTool {
             reason = %reason,
             "interrupt_agent: cancelling current turn"
         );
-        self.control.cancel_agent(&input.agent_name);
-        Ok(ToolResult::success(format!(
-            "Interrupt requested for agent '{}'. \
-             The current turn will be cancelled; the agent remains \
-             available for new messages. Reason: {}",
-            input.agent_name, reason
-        )))
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-// Inject Prompts
-// ═══════════════════════════════════════════════════════════════════════
-
-#[tool(
-    name = "inject_prompts",
-    description = "Inject initial prompts for all topology nodes that have them. \
-                   Call this after building the topology to kick-start the network."
-)]
-struct InjectPromptsInput {}
-
-struct InjectPromptsTool {
-    control: HostControl,
-}
-
-#[async_trait]
-impl ToolFunction for InjectPromptsTool {
-    type Input = InjectPromptsInput;
-
-    async fn run(
-        &self,
-        _input: InjectPromptsInput,
-    ) -> Result<ToolResult, agentik_core::tools::ToolError> {
-        self.control.inject_prompts();
-        Ok(ToolResult::success("Initial prompts injected."))
+        match self
+            .control
+            .interrupt_child_agent(self.self_path.as_str(), &input.agent_name)
+            .await
+        {
+            Some(Ok(())) => Ok(ToolResult::success(format!(
+                "Interrupt requested for agent '{}'. \
+                 The current turn will be cancelled; the agent remains \
+                 available for new messages. Reason: {}",
+                input.agent_name, reason
+            ))),
+            Some(Err(e)) => Ok(ToolResult::success(format!("Interrupt failed: {e}"))),
+            None => Ok(ToolResult::success(
+                "Interrupt failed: host unavailable (runtime shut down or unresponsive).",
+            )),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    //! Phase 5 — `SendMessageTool` struct-level tests that require access
-    //! to the private tool struct (not accessible from `host.rs`).
+    //! Struct-level tests that require access to the private tool structs
+    //! (not accessible from `host.rs`), plus policy guards over the tool
+    //! registry and the visibility filtering of the read tools.
 
     use super::*;
     use crate::control::HostCommand;
     use crate::host::HostEvent;
-    use agentik_core::tools::{ExecutionMode, ToolFunction};
+    use agentik_core::tools::{ExecutionMode, ToolFunction, ToolRegistration};
 
-    /// The `SendMessageTool` should be Sync — the calling agent gets
-    /// immediate delivery confirmation.
-    #[test]
-    fn send_message_tool_is_sync() {
-        let (cmd_tx, _cmd_rx) = tokio::sync::mpsc::unbounded_channel::<HostCommand>();
+    fn test_control() -> (HostControl, tokio::sync::mpsc::UnboundedReceiver<HostCommand>) {
+        let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<HostCommand>();
         let (event_tx, _) = tokio::sync::broadcast::channel::<HostEvent>(1);
-        let control = HostControl::new(cmd_tx, event_tx);
-        let tool = SendMessageTool {
-            control,
-            self_path: "/root/caller".into(),
-        };
-
-        assert_eq!(tool.execution_mode(), ExecutionMode::Sync);
-        assert_eq!(tool.timeout_seconds(), 3600);
+        (HostControl::new(cmd_tx, event_tx), cmd_rx)
     }
 
-    /// `DelegateToTool` is Async (result pulled on demand after notification).
-    /// `SendMessageTool` is Sync (no response injection). This is the
-    /// key semantic distinction.
+    /// `DelegateToTool` is Async with a 24h cap — the result is pulled on
+    /// demand after the target child finishes its turn.
     #[test]
-    fn send_message_sync_vs_delegate_async() {
-        let (cmd_tx, _cmd_rx) = tokio::sync::mpsc::unbounded_channel::<HostCommand>();
-        let (event_tx, _) = tokio::sync::broadcast::channel::<HostEvent>(1);
-        let control = HostControl::new(cmd_tx, event_tx);
-
-        let delegate = DelegateToTool {
-            control: control.clone(),
+    fn delegate_tool_is_async_with_day_timeout() {
+        let (control, _rx) = test_control();
+        let tool = DelegateToTool {
+            control,
             caller_path: "/root/caller".into(),
         };
-        let sender = SendMessageTool {
+
+        assert_eq!(tool.execution_mode(), ExecutionMode::Async);
+        assert_eq!(tool.timeout_seconds(), 86400);
+    }
+
+    /// The tool registry must expose exactly the delegate-only, one-hop
+    /// visibility tool set. Guards against accidental re-exposure of the
+    /// removed communication channels (send_message, set_termination,
+    /// get_network_status, inject_prompts).
+    #[test]
+    fn host_tool_registry_matches_policy() {
+        let (control, _rx) = test_control();
+        let path = agentik_types::AgentPath::try_from("/root/caller").unwrap();
+        let registrations: Vec<ToolRegistration> =
+            host_tools(Some(control), &path, agentik_core::AgentKind::Researcher);
+        let mut names: Vec<String> = registrations
+            .iter()
+            .map(|r| r.definition.name.clone())
+            .collect();
+        names.sort();
+
+        assert_eq!(
+            names,
+            vec![
+                "delegate_to",
+                "get_agent_history",
+                "get_agent_info",
+                "interrupt_agent",
+                "list_agents",
+                "list_delegations",
+                "route_task",
+                "shutdown_agent",
+                "spawn_agent",
+            ]
+        );
+    }
+
+    fn agent_info(path: &str) -> crate::control::AgentInfo {
+        crate::control::AgentInfo {
+            name: path.rsplit('/').next().unwrap_or(path).to_string(),
+            path: path.to_string(),
+            agent_id: None,
+            summary: String::new(),
+            tags: vec![],
+            expertise: vec![],
+            tools: vec![],
+            status: crate::control::AgentStatus::Idle,
+            last_event: None,
+        }
+    }
+
+    fn synthetic_status() -> crate::control::HostStatus {
+        crate::control::HostStatus {
+            agents: vec![
+                agent_info("/root/p"),
+                agent_info("/root/p/c1"),
+                agent_info("/root/p/c1/gc"),
+                agent_info("/root/p/c1/kid"),
+                agent_info("/root/other"),
+            ],
+            profiles: vec![agent_info("researcher"), agent_info("developer")],
+            nodes: vec!["a".into(), "b".into()],
+            edge_count: 3,
+            is_cyclic: false,
+            roots: vec!["a".into()],
+            leaves: vec!["b".into()],
+            rounds: 7,
+            is_finished: false,
+            termination: "MaxRounds { max: 99 }".into(),
+        }
+    }
+
+    /// `list_agents` answers with exactly the caller's one-hop neighborhood
+    /// (direct parent + direct children, self excluded) and never leaks the
+    /// host's global topology fields.
+    #[tokio::test]
+    async fn list_agents_returns_only_visible_agents_and_no_topology() {
+        let (control, mut cmd_rx) = test_control();
+        let tool = ListAgentsTool {
             control,
-            self_path: "/root/caller".into(),
+            self_path: agentik_types::AgentPath::try_from("/root/p/c1").unwrap(),
         };
 
-        assert_eq!(delegate.execution_mode(), ExecutionMode::Async);
-        assert_eq!(sender.execution_mode(), ExecutionMode::Sync);
+        let task = tokio::spawn(async move { tool.run(ListAgentsInput {}).await });
+        match cmd_rx.recv().await.unwrap() {
+            HostCommand::GetStatus { reply_tx } => {
+                let _ = reply_tx.send(synthetic_status());
+            }
+            _ => panic!("expected GetStatus, got a different command variant"),
+        }
+        let result = task.await.unwrap().unwrap();
+        let payload = match result.content {
+            agentik_sdk::types::ToolResultContent::Json(value) => value,
+            other => panic!("expected JSON content, got {other:?}"),
+        };
+
+        let paths: Vec<&str> = payload["agents"]
+            .as_array()
+            .expect("agents array")
+            .iter()
+            .map(|a| a["path"].as_str().expect("path"))
+            .collect();
+        // From /root/p/c1: parent /root/p + children /root/p/c1/gc and
+        // /root/p/c1/kid. Self, the sibling branch /root/other, and the
+        // grandchild /root/p/c1/gc/deeper would be excluded.
+        assert_eq!(
+            paths,
+            vec!["/root/p", "/root/p/c1/gc", "/root/p/c1/kid"],
+            "{payload}"
+        );
+        // Global topology fields must not be exposed to agents.
+        for key in ["nodes", "edge_count", "rounds", "termination", "is_cyclic"] {
+            assert!(payload.get(key).is_none(), "leaked `{key}`: {payload}");
+        }
+        assert!(payload["profiles"].is_array(), "{payload}");
+    }
+
+    /// Textual view of a `ToolResult`'s content for assertion purposes.
+    fn text_content(result: &agentik_sdk::types::ToolResult) -> String {
+        match &result.content {
+            agentik_sdk::types::ToolResultContent::Text(text) => text.clone(),
+            agentik_sdk::types::ToolResultContent::Json(value) => value.to_string(),
+            agentik_sdk::types::ToolResultContent::Blocks(blocks) => format!("{blocks:?}"),
+        }
+    }
+
+    /// `get_agent_info` answers for visible agents and returns the
+    /// not-found message for invisible ones (no existence leak).
+    #[tokio::test]
+    async fn get_agent_info_denies_invisible_agents() {
+        let self_path = agentik_types::AgentPath::try_from("/root/p/c1").unwrap();
+
+        // Invisible target.
+        let (control, mut cmd_rx) = test_control();
+        let tool = GetAgentInfoTool {
+            control,
+            self_path: self_path.clone(),
+        };
+        let input = GetAgentInfoInput {
+            agent_name: "other".into(),
+        };
+        let task = tokio::spawn(async move { tool.run(input).await });
+        match cmd_rx.recv().await.unwrap() {
+            HostCommand::GetAgentInfo { reply_tx, .. } => {
+                let _ = reply_tx.send(Some(agent_info("/root/other")));
+            }
+            _ => panic!("expected GetAgentInfo command"),
+        }
+        let result = task.await.unwrap().unwrap();
+        let text = text_content(&result);
+        assert!(text.contains("not found"), "{text}");
+
+        // Visible target (direct parent).
+        let (control, mut cmd_rx) = test_control();
+        let tool = GetAgentInfoTool {
+            control,
+            self_path,
+        };
+        let input = GetAgentInfoInput { agent_name: "p".into() };
+        let task = tokio::spawn(async move { tool.run(input).await });
+        match cmd_rx.recv().await.unwrap() {
+            HostCommand::GetAgentInfo { reply_tx, .. } => {
+                let _ = reply_tx.send(Some(agent_info("/root/p")));
+            }
+            _ => panic!("expected GetAgentInfo command"),
+        }
+        let result = task.await.unwrap().unwrap();
+        let text = text_content(&result);
+        assert!(!text.contains("not found"), "{text}");
     }
 
     #[tokio::test]
     async fn concurrent_delegation_commands_have_distinct_ids() {
-        let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::unbounded_channel::<HostCommand>();
-        let (event_tx, _) = tokio::sync::broadcast::channel::<HostEvent>(1);
-        let control = HostControl::new(cmd_tx, event_tx);
+        let (control, mut cmd_rx) = test_control();
         let first_control = control.clone();
         let first = tokio::spawn(async move {
             first_control

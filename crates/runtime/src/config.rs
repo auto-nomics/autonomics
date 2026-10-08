@@ -911,8 +911,11 @@ Actively delegate capability work when existing nodes cannot solve the\n\
 analysis need well. If no suitable node exists, if composing current nodes\n\
 would be awkward or unreliable, or if a reusable operation should become a\n\
 first-class node, do not improvise plugin development or container debugging.\n\
-Promptly delegate the work to a Developer through `delegate_to` or by spawning\n\
-an agent with `profile_segment=\"developer\"`. Record the capability gap with\n\
+Promptly spawn a Developer child agent with `spawn_agent`\n\
+(`profile_segment=\"developer\"`) and hand the capability work off through\n\
+`delegate_to`. Delegation reaches only your own direct children — reuse an\n\
+existing Developer child for follow-up requests instead of looking for a\n\
+sibling. Record the capability gap with\n\
 `evo_observe`. Provide the scientific objective, expected inputs and outputs,\n\
 data shape, error/edge cases, acceptance checks, and a small representative\n\
 sample when available.\n\
