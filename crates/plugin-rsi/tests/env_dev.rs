@@ -656,10 +656,13 @@ async fn manifest_update_edits_are_validated_before_they_land() {
     let read_manifest = || operator.workspace().read_text("manifest.toml").unwrap();
 
     // Simulate a pending local activation; any successful edit must reset it.
-    let pending = read_manifest()
-        .replace("publication_pending = false", "publication_pending = true");
+    let pending =
+        read_manifest().replace("publication_pending = false", "publication_pending = true");
     assert_ne!(pending, read_manifest());
-    operator.workspace().write_text("manifest.toml", &pending).unwrap();
+    operator
+        .workspace()
+        .write_text("manifest.toml", &pending)
+        .unwrap();
 
     // Successful edit: swap the seeded smoke test for a real one.
     let value = json_result(
@@ -784,8 +787,14 @@ async fn manifest_update_requires_disambiguation_for_repeated_blocks() {
         DEFAULT_TESTS_BLOCK,
         &format!("{TWIN_BLOCK}\n\n{TWIN_BLOCK}"),
     );
-    assert_ne!(doubled, text, "seeded manifest must contain the default block");
-    operator.workspace().write_text("manifest.toml", &doubled).unwrap();
+    assert_ne!(
+        doubled, text,
+        "seeded manifest must contain the default block"
+    );
+    operator
+        .workspace()
+        .write_text("manifest.toml", &doubled)
+        .unwrap();
 
     let error = execute(
         &tools,
@@ -800,7 +809,10 @@ async fn manifest_update_requires_disambiguation_for_repeated_blocks() {
     .unwrap_err();
     match error {
         ToolError::ValidationFailed { message } => {
-            assert!(message.contains('2'), "ambiguity must report the match count: {message}");
+            assert!(
+                message.contains('2'),
+                "ambiguity must report the match count: {message}"
+            );
         }
         other => panic!("repeated block must be ambiguous: {other:?}"),
     }
@@ -826,7 +838,11 @@ async fn manifest_update_requires_disambiguation_for_repeated_blocks() {
     // what the tool landed on disk.
     let operator = store.develop("twin-env").unwrap().unwrap();
     assert!(
-        operator.manifest().tests.iter().all(|test| test.name == "twin2"),
+        operator
+            .manifest()
+            .tests
+            .iter()
+            .all(|test| test.name == "twin2"),
         "replace_all must rewrite every repeated block: {:?}",
         operator.manifest().tests
     );

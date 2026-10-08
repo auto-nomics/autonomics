@@ -94,7 +94,11 @@ impl ToolFunction for PluginNodeUpdateTool {
         // Reload from disk: what landed must parse (the write is a fresh
         // serialization, so this also guards round-trip drift).
         let reloaded = load_manifest(&target).await.map_err(tool_error)?;
-        let node_kinds: Vec<String> = reloaded.nodes.iter().map(|node| node.kind.clone()).collect();
+        let node_kinds: Vec<String> = reloaded
+            .nodes
+            .iter()
+            .map(|node| node.kind.clone())
+            .collect();
         Ok(ToolResult::success_json(json!({
             "plugin_name": reloaded.plugin_name,
             "plugin_vfs_path": target.virtual_path,
@@ -116,9 +120,10 @@ fn guard_host_owned(
         let text = toml::to_string(manifest).map_err(|error| ToolError::ExecutionFailed {
             source: format!("cannot encode manifest for the host-owned guard: {error}").into(),
         })?;
-        let mut value: TomlValue = toml::from_str(&text).map_err(|error| ToolError::ExecutionFailed {
-            source: format!("cannot decode manifest for the host-owned guard: {error}").into(),
-        })?;
+        let mut value: TomlValue =
+            toml::from_str(&text).map_err(|error| ToolError::ExecutionFailed {
+                source: format!("cannot decode manifest for the host-owned guard: {error}").into(),
+            })?;
         value["nodes"] = TomlValue::Array(Vec::new());
         Ok(value)
     };
@@ -147,7 +152,11 @@ fn guard_node_set(
             candidate.nodes.len()
         )));
     }
-    let mut kinds: Vec<&str> = candidate.nodes.iter().map(|node| node.kind.as_str()).collect();
+    let mut kinds: Vec<&str> = candidate
+        .nodes
+        .iter()
+        .map(|node| node.kind.as_str())
+        .collect();
     kinds.sort_unstable();
     if let Some(duplicated) = kinds.windows(2).find(|pair| pair[0] == pair[1]) {
         return Err(validation(format!(

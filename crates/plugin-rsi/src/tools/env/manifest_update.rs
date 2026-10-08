@@ -108,7 +108,8 @@ impl ToolFunction for EnvironmentManifestUpdateTool {
                     ));
                 }
 
-                check_manifest(&candidate, workspace, &target.environment_id).map_err(validation)?;
+                check_manifest(&candidate, workspace, &target.environment_id)
+                    .map_err(validation)?;
                 gate_base_policy(&candidate).map_err(validation)?;
 
                 let mut manifest = candidate;

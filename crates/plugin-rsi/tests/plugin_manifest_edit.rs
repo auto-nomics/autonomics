@@ -126,8 +126,7 @@ async fn manifest_edits_are_validated_before_they_land() {
         .unwrap();
     common::configure_plugin_vfs(state.path());
     let layout = PluginStateLayout::v2(state.path());
-    let store =
-        PluginStore::open_with_layout(layout, "main", "Autonomics RSI", "rsi@example.com");
+    let store = PluginStore::open_with_layout(layout, "main", "Autonomics RSI", "rsi@example.com");
     let mut operator = store
         .create(
             "manifest-plugin",
@@ -156,7 +155,12 @@ async fn manifest_edits_are_validated_before_they_land() {
     .await;
     operator.refresh().unwrap();
     assert_eq!(
-        operator.manifest().nodes.iter().map(|node| node.kind.as_str()).collect::<Vec<_>>(),
+        operator
+            .manifest()
+            .nodes
+            .iter()
+            .map(|node| node.kind.as_str())
+            .collect::<Vec<_>>(),
         ["sample_adapter", "other_adapter"]
     );
 
@@ -183,11 +187,18 @@ async fn manifest_edits_are_validated_before_they_land() {
     .unwrap_err();
     match ambiguous {
         ToolError::ValidationFailed { message } => {
-            assert!(message.contains('2'), "must report the match count: {message}");
+            assert!(
+                message.contains('2'),
+                "must report the match count: {message}"
+            );
         }
         other => panic!("repeated pattern must be ambiguous: {other:?}"),
     }
-    assert_eq!(read_manifest(&operator), pending, "ambiguous edit must not land");
+    assert_eq!(
+        read_manifest(&operator),
+        pending,
+        "ambiguous edit must not land"
+    );
 
     // ...and replace_all rewrites every match.
     let value = json_result(
@@ -202,7 +213,10 @@ async fn manifest_edits_are_validated_before_they_land() {
     )
     .await;
     assert_eq!(value["node_count"], json!(2), "{value:?}");
-    assert_eq!(read_manifest(&operator).matches("Reviewed note.").count(), 2);
+    assert_eq!(
+        read_manifest(&operator).matches("Reviewed note.").count(),
+        2
+    );
     operator.refresh().unwrap();
     assert!(
         !operator.manifest().lifecycle.publication_pending,

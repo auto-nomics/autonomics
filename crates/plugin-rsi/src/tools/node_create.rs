@@ -100,11 +100,10 @@ impl ToolFunction for PluginNodeCreateTool {
     type Input = PluginNodeCreateInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        let node: NodeDefinition = toml::from_str(&input.node_toml).map_err(|error| {
-            ToolError::ValidationFailed {
+        let node: NodeDefinition =
+            toml::from_str(&input.node_toml).map_err(|error| ToolError::ValidationFailed {
                 message: format!("invalid node definition TOML: {error}"),
-            }
-        })?;
+            })?;
         container_plugin::node_definition::validate(&node).map_err(|error| {
             ToolError::ValidationFailed {
                 message: format!("invalid node definition: {error}"),
