@@ -4259,6 +4259,7 @@ dependencies = [
  "serde",
  "sha2 0.10.9",
  "tempfile",
+ "text-embedding",
  "thiserror 2.0.20",
  "toml 1.1.6+spec-1.1.0",
  "tracing",
@@ -12155,6 +12156,14 @@ dependencies = [
  "wezterm-dynamic",
  "wezterm-input-types",
  "winapi",
+]
+
+[[package]]
+name = "text-embedding"
+version = "0.1.0"
+dependencies = [
+ "sha2 0.10.9",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
