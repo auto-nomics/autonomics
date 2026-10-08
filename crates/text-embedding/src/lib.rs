@@ -20,11 +20,13 @@
 //! - [`hashing`] — the offline deterministic default
 //! - [`vector_map`] — precomputed-vector wrapper for substitution
 //! - [`vector`] — dimension-checked vector math used by clustering
-//! - [`input`] / [`error`] — the input record and the error type
+//! - [`input`] / [`output`] / [`error`] — the input record, the
+//!   model-stamped output record, and the error type
 
 pub mod error;
 pub mod hashing;
 pub mod input;
+pub mod output;
 pub mod provider;
 pub mod vector;
 pub mod vector_map;
@@ -32,6 +34,7 @@ pub mod vector_map;
 pub use error::{EmbeddingError, Result};
 pub use hashing::{HashingTextEmbedder, DEFAULT_EMBEDDING_DIM};
 pub use input::EmbeddingInput;
+pub use output::EmbeddingOutput;
 pub use provider::TextEmbedder;
 pub use vector::{cosine, mean_vector};
 pub use vector_map::VectorMapTextEmbedder;

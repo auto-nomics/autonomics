@@ -5,13 +5,14 @@
 //! yields the same vector on every machine and every run, which is
 //! what downstream cluster hashes rely on.
 
-use std::collections::BTreeMap;
-
 use sha2::{Digest, Sha256};
 
 use crate::error::Result;
 use crate::input::EmbeddingInput;
+use crate::output::EmbeddingOutput;
 use crate::provider::TextEmbedder;
+
+use std::collections::BTreeMap;
 
 /// Default width of [`HashingTextEmbedder`] vectors.
 pub const DEFAULT_EMBEDDING_DIM: usize = 256;
@@ -30,6 +31,13 @@ impl HashingTextEmbedder {
     pub fn with_dim(dim: usize) -> Self {
         Self { dim: dim.max(1) }
     }
+
+    /// The model signature stamped on every vector this embedder
+    /// produces. Width is part of the identity: different widths
+    /// yield incomparable vectors.
+    pub fn signature(&self) -> String {
+        format!("hashing-{}", self.dim)
+    }
 }
 
 impl Default for HashingTextEmbedder {
@@ -39,21 +47,20 @@ impl Default for HashingTextEmbedder {
 }
 
 impl TextEmbedder for HashingTextEmbedder {
-    fn embed(&self, inputs: &[EmbeddingInput]) -> Result<BTreeMap<String, Vec<f32>>> {
-        let mut out = BTreeMap::new();
-        for input in inputs {
-            let mut vector = vec![0.0_f32; self.dim];
-            for token in tokens(&input.text) {
-                add_feature(&mut vector, &token, 1.0);
-                for ngram in char_ngrams(&token, 3) {
-                    add_feature(&mut vector, &ngram, 0.25);
-                }
+    fn embed(&self, input: &EmbeddingInput) -> Result<EmbeddingOutput> {
+        let mut vector = vec![0.0_f32; self.dim];
+        for token in tokens(&input.text) {
+            add_feature(&mut vector, &token, 1.0);
+            for ngram in char_ngrams(&token, 3) {
+                add_feature(&mut vector, &ngram, 0.25);
             }
-            normalize(&mut vector);
-            out.insert(input.id.clone(), vector);
         }
-        Ok(out)
+        normalize(&mut vector);
+        Ok(EmbeddingOutput::new(self.signature(), vector))
     }
+
+    // batch_embed: the default loop is exact for a stateless local
+    // function — there is no batch API whose cost to amortize.
 }
 
 fn add_feature(vector: &mut [f32], feature: &str, weight: f32) {
@@ -100,12 +107,13 @@ mod tests {
     fn hashing_embedder_is_deterministic_and_normalized() {
         let embedder = HashingTextEmbedder::new();
         let text = "restart the daemon after config change";
-        let first = embedder.embed(&[EmbeddingInput::new("a", text)]).unwrap();
+        let first = embedder.embed(&EmbeddingInput::new("a", text)).unwrap();
         // Same text under a different id, fresh embedder instance —
         // the vector must not move.
-        let second = embedder.embed(&[EmbeddingInput::new("b", text)]).unwrap();
-        assert_eq!(first["a"], second["b"]);
-        let norm = first["a"].iter().map(|v| v * v).sum::<f32>().sqrt();
+        let second = embedder.embed(&EmbeddingInput::new("b", text)).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(first.model_signature, "hashing-256");
+        let norm = first.vector.iter().map(|v| v * v).sum::<f32>().sqrt();
         assert!((norm - 1.0).abs() < 1e-4);
     }
 
@@ -113,18 +121,51 @@ mod tests {
     fn different_texts_embed_differently() {
         let embedder = HashingTextEmbedder::new();
         let out = embedder
-            .embed(&[
-                EmbeddingInput::new("a", "restart the daemon"),
-                EmbeddingInput::new("b", "quote mixed-case column names"),
-            ])
+            .embed(&EmbeddingInput::new("a", "restart the daemon"))
             .unwrap();
-        assert_ne!(out["a"], out["b"]);
+        let other = embedder
+            .embed(&EmbeddingInput::new(
+                "b",
+                "quote mixed-case column names",
+            ))
+            .unwrap();
+        assert_ne!(out.vector, other.vector);
+    }
+
+    /// The batch entry must agree with the single entry — clustering
+    /// mixes both (bridge passes batches, remote providers may embed
+    /// one at a time through the default loop).
+    #[test]
+    fn batch_embed_matches_single_embeds() {
+        let embedder = HashingTextEmbedder::new();
+        let inputs = [
+            EmbeddingInput::new("a", "restart the daemon"),
+            EmbeddingInput::new("b", "bump the timeout"),
+        ];
+        let batch = embedder.batch_embed(&inputs).unwrap();
+        assert_eq!(batch.len(), 2);
+        assert_eq!(batch["a"], embedder.embed(&inputs[0]).unwrap());
+        assert_eq!(batch["b"], embedder.embed(&inputs[1]).unwrap());
     }
 
     #[test]
     fn with_dim_clamps_to_at_least_one_slot() {
         let embedder = HashingTextEmbedder::with_dim(0);
-        let out = embedder.embed(&[EmbeddingInput::new("a", "text")]).unwrap();
-        assert_eq!(out["a"].len(), 1);
+        let out = embedder.embed(&EmbeddingInput::new("a", "text")).unwrap();
+        assert_eq!(out.vector.len(), 1);
+    }
+
+    /// The width is part of the model identity — vectors of different
+    /// widths cannot be compared, so the signature must say which.
+    #[test]
+    fn signature_includes_the_width() {
+        assert_eq!(
+            HashingTextEmbedder::with_dim(64).signature(),
+            "hashing-64"
+        );
+        let out = HashingTextEmbedder::with_dim(64)
+            .embed(&EmbeddingInput::new("a", "text"))
+            .unwrap();
+        assert_eq!(out.model_signature, "hashing-64");
     }
 }

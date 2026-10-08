@@ -9,6 +9,10 @@ pub enum EmbeddingError {
     #[error("cannot average no vectors")]
     NoVectors,
 
+    /// No vector exists for the requested id.
+    #[error("no vector for id {id:?}")]
+    MissingVector { id: String },
+
     /// A provider returned unusable vectors for the given inputs.
     #[error("embedding provider: {0}")]
     Provider(String),

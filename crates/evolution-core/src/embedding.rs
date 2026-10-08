@@ -65,7 +65,15 @@ impl ObservationEmbedder for HashingObservationEmbedder {
                 text: observation_text(observation),
             })
             .collect::<Vec<_>>();
-        into_core(self.inner.embed(&inputs))
+        // The observation-level contract carries bare vectors: one
+        // distillation pass runs exactly one embedder, so the model
+        // signature cannot mix within a run — it stays a text-layer
+        // concern.
+        let outputs = into_core(self.inner.batch_embed(&inputs))?;
+        Ok(outputs
+            .into_iter()
+            .map(|(id, output)| (id, output.vector))
+            .collect())
     }
 }
 
