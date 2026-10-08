@@ -2111,7 +2111,7 @@ impl RuntimeHost {
                         e.model
                             .load_full()
                             .as_deref()
-                            .map(|m| (m.model_info.model_name.clone(), m.model_info.context_length))
+                            .map(|m| (m.model_spec(), m.model_info.context_length))
                     });
                 let _ = reply_tx.send(info);
             }
@@ -3114,12 +3114,13 @@ impl RuntimeHost {
     }
 
     /// Query the model info for a named agent (for TUI rendering).
+    /// The string is the provider-precise `provider:model` spec.
     pub fn agent_model_info(&self, name: &str) -> Option<(String, u64)> {
         self.agents.get(name).and_then(|e| {
             e.model
                 .load_full()
                 .as_deref()
-                .map(|m| (m.model_info.model_name.clone(), m.model_info.context_length))
+                .map(|m| (m.model_spec(), m.model_info.context_length))
         })
     }
 

@@ -151,8 +151,10 @@ pub struct ModelConfigState {
     pub providers: Vec<CatalogProvider>,
     /// Cursor position in the flattened visible list.
     pub cursor: usize,
-    /// The `model_name` of the model the agent is currently using, if any.
-    pub active_model_name: Option<String>,
+    /// The active model as a full `"provider:model"` spec — both parts must
+    /// match for a tree row to light up, so same-named models under
+    /// different providers never share the active marker.
+    pub active_model_spec: Option<String>,
     pub provider_panel_state: ProviderPanelState,
     /// Quick-filter search query. When non-empty, the tree auto-expands to
     /// show only providers/models whose names match (case-insensitive
@@ -174,7 +176,7 @@ impl Default for ModelConfigState {
         Self {
             providers: Vec::new(),
             cursor: 0,
-            active_model_name: None,
+            active_model_spec: None,
             provider_panel_state: Default::default(),
             query: String::new(),
             search_textarea,
@@ -507,7 +509,8 @@ impl ModelConfigState {
                         return consumed(ConfigCommand::None);
                     }
                     let model = &provider.models[mi];
-                    self.active_model_name = Some(model.model_name.clone());
+                    self.active_model_spec =
+                        Some(format!("{}:{}", provider.name, model.model_name));
                     consumed(ConfigCommand::SelectModel {
                         provider_name: provider.name.clone(),
                         model_name: model.model_name.clone(),
@@ -751,7 +754,8 @@ fn render_tree(area: Rect, buf: &mut Buffer, state: &ModelConfigState) {
             FlatItem::Model(pi, mi) => {
                 let p = &state.providers[pi];
                 let m = &p.models[mi];
-                let active = state.active_model_name.as_deref() == Some(m.model_name.as_str());
+                let active = state.active_model_spec.as_deref()
+                    == Some(&format!("{}:{}", p.name, m.model_name));
                 let icon = if active { "●" } else { " " };
                 let icon_color = if active {
                     Color::Green
@@ -871,7 +875,8 @@ fn render_detail(area: Rect, buf: &mut Buffer, state: &ModelConfigState) {
         FlatItem::Model(pi, mi) => {
             let p = &state.providers[pi];
             let m = &p.models[mi];
-            let active = state.active_model_name.as_deref() == Some(m.model_name.as_str());
+            let active = state.active_model_spec.as_deref()
+                == Some(&format!("{}:{}", p.name, m.model_name));
             let label =
                 |k: &str| Span::styled(format!(" {:<14}: ", k), Style::default().fg(Color::Cyan));
             let val = |v: String| Span::styled(v, Style::default().fg(Color::White));
@@ -1472,5 +1477,67 @@ mod tests {
         let p = state.providers.iter().find(|p| p.name == "openai").unwrap();
         assert!(p.configured);
         assert!(p.chatgpt.is_none());
+    }
+
+    /// 两个 provider 都带同名模型：选中其中一个只能点亮那一个副本，
+    /// SelectModel 命令必须携带被选中的 provider（回归：曾按纯模型名
+    /// 匹配导致两行同时显示 ● ）。
+    #[test]
+    fn same_named_model_activates_only_the_selected_provider() {
+        let mut state = build_catalog(&[], &[]);
+        // bailian / zai 的预设本身就共享一批 GLM 模型名；再注入一个合成的
+        // "shared-model" 保证测试不依赖具体预设清单。
+        for name in ["bailian", "zai"] {
+            let p = state
+                .providers
+                .iter_mut()
+                .find(|p| p.name == name)
+                .unwrap_or_else(|| panic!("provider {name} in catalog"));
+            p.configured = true;
+            p.expanded = true;
+            p.models.insert(
+                0,
+                ModelInfo {
+                    model_name: "shared-model".to_string(),
+                    ..Default::default()
+                },
+            );
+        }
+
+        // 光标移到 zai 的 shared-model 行，回车选中。
+        let cursor = state
+            .flat_items()
+            .iter()
+            .position(|it| {
+                matches!(it, FlatItem::Model(pi, 0) if state.providers[*pi].name == "zai")
+            })
+            .expect("zai's shared-model row visible");
+        state.cursor = cursor;
+        let ConfigCommand::SelectModel {
+            provider_name,
+            model_name,
+        } = state.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        else {
+            panic!("Enter on a model row should emit SelectModel");
+        };
+        assert_eq!(provider_name, "zai");
+        assert_eq!(model_name, "shared-model");
+        assert_eq!(
+            state.active_model_spec.as_deref(),
+            Some("zai:shared-model")
+        );
+
+        // 渲染：树里恰好一个 ●（zzz 的副本），aaa 的同名行不点亮。
+        let area = Rect::new(0, 0, 80, 40);
+        let mut buf = Buffer::empty(area);
+        ModelConfigWidget.render_ref(area, &mut buf, &mut state);
+        let tree_right_edge = area.width / 2;
+        let active_rows = buf
+            .content()
+            .iter()
+            .enumerate()
+            .filter(|(i, c)| c.symbol() == "●" && (*i as u16 % area.width) < tree_right_edge)
+            .count();
+        assert_eq!(active_rows, 1, "exactly one tree row may show ●");
     }
 }

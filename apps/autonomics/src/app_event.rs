@@ -93,11 +93,14 @@ pub(crate) enum AppEvent {
         result: std::result::Result<String, String>,
     },
     /// Per-agent model info arrived (render-path cache fill; render itself
-    /// must never issue HTTP).
+    /// must never issue HTTP). The string is the `provider:model` spec.
     ModelInfoLoaded {
         agent: String,
         info: Option<(String, u64)>,
     },
+    /// 模型热切换被 daemon 拒绝（spec 不可解析、网络错误等）。乐观点亮
+    /// 的标记没有失败提示无法自证，必须以 toast 告知用户。
+    ModelSwapFailed { agent: String, error: String },
     /// A provider row save finished (PUT /model-config/provider).
     ProviderSaved {
         provider_name: String,

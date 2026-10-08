@@ -17,6 +17,11 @@ use agentik_types::tools::ToolDefinition;
 #[derive(Clone)]
 pub struct Model {
     pub model_info: ModelInfo,
+    /// Owning provider's name (e.g. `"zai"`) — kept from the
+    /// [`ProviderConfig`] so callers can report a provider-precise
+    /// `provider:model` spec. Empty for test-constructed models
+    /// ([`Self::with_client`] and friends).
+    provider_name: String,
     client: Arc<dyn ApiClient>,
     /// ChatGPT 订阅 OAuth 运行时（仅 openai provider；其余 provider 为
     /// `None`，401 自愈逻辑整体跳过）。
@@ -59,6 +64,7 @@ impl Model {
         let api_client = AnthropicApiClient::new(anthropic);
         Ok(Self {
             model_info,
+            provider_name: provider.name.clone(),
             client: Arc::new(api_client),
             oauth,
         })
@@ -68,6 +74,7 @@ impl Model {
     pub fn with_client(model_info: ModelInfo, client: impl ApiClient + 'static) -> Self {
         Self {
             model_info,
+            provider_name: String::new(),
             client: Arc::new(client),
             oauth: None,
         }
@@ -82,8 +89,24 @@ impl Model {
     ) -> Self {
         Self {
             model_info,
+            provider_name: String::new(),
             client: Arc::new(client),
             oauth: Some(oauth),
+        }
+    }
+
+    /// The owning provider's name (empty for test-constructed models).
+    pub fn provider_name(&self) -> &str {
+        &self.provider_name
+    }
+
+    /// Provider-precise identity: `"provider:model"` when the provider
+    /// name is known, else the bare model name (test/mock models).
+    pub fn model_spec(&self) -> String {
+        if self.provider_name.is_empty() {
+            self.model_info.model_name.clone()
+        } else {
+            format!("{}:{}", self.provider_name, self.model_info.model_name)
         }
     }
 
@@ -288,5 +311,32 @@ mod tests {
         info.provider_id = uuid::Uuid::nil();
         let model = Model::new(info, &provider).expect("non-oauth builds");
         assert!(!model.is_chatgpt());
+    }
+
+    #[test]
+    fn model_spec_carries_provider_when_known() {
+        let provider = ProviderConfig {
+            id: uuid::Uuid::nil(),
+            name: "bailian".to_string(),
+            provider_type: ProviderType::from("bailian"),
+            base_url: "https://dashscope.aliyuncs.com".to_string(),
+            api_key: "sk-x".to_string(),
+            auth_method: AuthMethod::Bearer,
+        };
+        let mut info = model_info();
+        info.model_name = "glm-5.3".into();
+        info.provider_id = uuid::Uuid::nil();
+        let model = Model::new(info, &provider).expect("builds");
+        assert_eq!(model.provider_name(), "bailian");
+        assert_eq!(model.model_spec(), "bailian:glm-5.3");
+    }
+
+    #[test]
+    fn model_spec_falls_back_to_bare_name_for_test_models() {
+        let mut info = model_info();
+        info.model_name = "mock-model".into();
+        let model = Model::with_client(info, crate::provider::client::MockApiClient::new());
+        assert_eq!(model.provider_name(), "");
+        assert_eq!(model.model_spec(), "mock-model");
     }
 }

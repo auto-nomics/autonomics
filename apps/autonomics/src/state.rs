@@ -957,7 +957,7 @@ pub struct AppState {
     /// Active default model as `provider:model`. Resolved and built by the
     /// gateway daemon — the thin-client TUI never constructs `Model`s.
     pub active_model_spec: Option<String>,
-    /// Status-bar fallback when no agent is active: (model_name,
+    /// Status-bar fallback when no agent is active: (provider:model spec,
     /// context_length) of the active default model.
     pub active_model_display: Option<(String, u64)>,
     /// When `true`, the delete-active-agent confirmation popup is shown.

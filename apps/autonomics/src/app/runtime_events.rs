@@ -220,7 +220,7 @@ impl App {
                             .models
                             .iter()
                             .find(|m| m.provider_name == provider && m.model_name == name)
-                            .map(|m| (m.model_name.clone(), m.context_length));
+                            .map(|m| (spec, m.context_length));
                     }
                 }
             }
@@ -306,7 +306,15 @@ impl App {
                 if let Some(info) = info {
                     self.agent_model_cache.insert(agent, info);
                     self.dirty = true;
+                    // 缓存值已是 provider 精确的 spec：面板开着时让 ● 标记
+                    // 自愈到 agent 的真实模型。
+                    self.sync_model_config_marker();
                 }
+            }
+            crate::app_event::AppEvent::ModelSwapFailed { agent, error } => {
+                self.state
+                    .toasts
+                    .error("模型切换失败", Some(format!("[{agent}] {error}")));
             }
             crate::app_event::AppEvent::SkillEvolutionLoaded {
                 status,

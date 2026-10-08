@@ -294,6 +294,8 @@ impl HostControl {
         });
     }
 
+    /// The agent's current model as a provider-precise `provider:model`
+    /// spec, plus its context length.
     pub async fn agent_model_info(&self, name: &str) -> Option<(String, u64)> {
         self.ask(|tx| HostCommand::GetAgentModel {
             name: name.into(),

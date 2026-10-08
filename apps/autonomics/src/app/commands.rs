@@ -111,6 +111,8 @@ impl App {
             }
             CommandAction::ModelConfig => {
                 self.state.model_config_visible = true;
+                // ● 标记对齐当前 agent 的真实模型（provider 精确）。
+                self.sync_model_config_marker();
             }
             CommandAction::AgentConfig => {
                 self.open_agent_config();

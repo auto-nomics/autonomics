@@ -29,10 +29,27 @@ impl App {
             .collect();
         *state = crate::widgets::model_config_widget::build_catalog(&db_tuples, &catalog.models);
 
-        if let Some(spec) = catalog.active_model.as_deref() {
-            if let Some((_, model_name)) = spec.split_once(':') {
-                state.active_model_name = Some(model_name.to_string());
-            }
+        // 完整 "provider:model" spec：树标记按 (provider, model) 双匹配，
+        // 截掉 provider 会让同名模型在所有 provider 下同时点亮。
+        state.active_model_spec = catalog.active_model.clone();
+    }
+
+    /// Sync the config panel's ● marker to the **active agent's real
+    /// model** (`agent_model_cache` now carries the provider-precise spec).
+    /// Falls through to the global default (already filled by
+    /// [`Self::load_model_config`]) when no agent is active or its info
+    /// hasn't arrived yet — Enter hot-swaps only the current agent, so the
+    /// default alone can point at a different provider than what is
+    /// actually running.
+    pub(super) fn sync_model_config_marker(&mut self) {
+        let spec = self
+            .state
+            .sessions
+            .get(self.state.active_agent_idx)
+            .and_then(|s| self.agent_model_cache.get(&s.name))
+            .map(|(spec, _)| spec.clone());
+        if let Some(spec) = spec {
+            self.state.model_config_state.active_model_spec = Some(spec);
         }
     }
 
@@ -89,6 +106,12 @@ impl App {
                     self.spawn_client_task("set_agent_model", move || async move {
                         if let Err(e) = client.set_agent_model(&an_for_log, &spec_for_task).await {
                             tracing::error!(agent = %an_for_log, model = %spec_for_task, error = %e, "model hot-swap failed");
+                            // 失败必须可见：乐观标记照常点亮，无提示时用户
+                            // 无法区分成功与失败。
+                            tx.send(crate::app_event::AppEvent::ModelSwapFailed {
+                                agent: an_for_log.clone(),
+                                error: e.to_string(),
+                            });
                         }
                         // The PUT returns before the host applies the model
                         // change. Query only after that request completes so
@@ -146,9 +169,9 @@ impl App {
             }
         });
         // Optimistic UI update; the notice-driven reload overwrites it.
-        self.state.active_model_spec = Some(spec);
+        self.state.active_model_spec = Some(spec.clone());
         self.state.active_model_display = None;
-        self.state.model_config_state.active_model_name = Some(model_name.to_string());
+        self.state.model_config_state.active_model_spec = Some(spec);
         self.state.toasts.success(
             "Default model set",
             Some(format!("{provider_name}:{model_name}")),

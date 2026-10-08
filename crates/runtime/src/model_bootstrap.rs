@@ -364,4 +364,43 @@ mod tests {
         .unwrap();
         assert!(resolve_model_spec(&conn, "Custom:db-only-model").is_none());
     }
+
+    /// 两个 provider 的 preset 含同名模型（zai / bailian 都有 glm-5.3）：
+    /// spec 里的 provider 必须决定解析结果，绝不许"先注册的 provider 赢"。
+    #[test]
+    fn resolve_model_spec_is_provider_precise_for_same_named_models() {
+        let conn = conn();
+        for (name, url) in [("zai", "https://api.z.ai"), ("bailian", "https://b.test")] {
+            conn.execute(
+                "INSERT INTO providers (name, provider_type, base_url, api_key, auth_method)
+                 VALUES (?1, ?1, ?2, 'key', 'Bearer')",
+                rusqlite::params![name, url],
+            )
+            .unwrap();
+        }
+        // 两家 preset 确实共享该模型名，测试才有意义。
+        let shared = registry_preset_names("zai")
+            .intersection(&registry_preset_names("bailian"))
+            .next()
+            .expect("zai and bailian share a preset model name")
+            .clone();
+
+        let model = resolve_model_spec(&conn, &format!("bailian:{shared}"))
+            .expect("second provider resolves");
+        assert_eq!(model.provider_name(), "bailian");
+        assert_eq!(model.model_spec(), format!("bailian:{shared}"));
+
+        let model = resolve_model_spec(&conn, &format!("zai:{shared}")).expect("first resolves");
+        assert_eq!(model.provider_name(), "zai");
+    }
+
+    /// Preset model names of a registry-known provider type.
+    fn registry_preset_names(provider: &str) -> std::collections::HashSet<String> {
+        let provider_type = agentik_sdk::model::ProviderType::from(provider);
+        agentik_sdk::provider::registry::preset_models(&provider_type)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|m| m.model_name)
+            .collect()
+    }
 }

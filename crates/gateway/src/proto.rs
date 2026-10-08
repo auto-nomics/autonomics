@@ -205,6 +205,7 @@ pub struct SetAgentModelRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct AgentModelInfoView {
+    /// The agent's current model as a `provider:model` spec.
     pub model: String,
     pub context_length: u64,
 }

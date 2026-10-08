@@ -114,8 +114,8 @@ impl App {
             ..Default::default()
         };
 
-        // Active default model: spec + display tuple (name, context) from
-        // the catalog rows.
+        // Active default model: spec + display tuple (provider:model spec,
+        // context) from the catalog rows.
         state.active_model_spec = snapshot.active_model_spec.clone();
         state.active_model_display = snapshot.active_model_spec.as_deref().and_then(|spec| {
             let (provider, name) = spec.split_once(':')?;
@@ -124,7 +124,7 @@ impl App {
                 .models
                 .iter()
                 .find(|m| m.provider_name == provider && m.model_name == name)
-                .map(|m| (m.model_name.clone(), m.context_length))
+                .map(|m| (spec.to_string(), m.context_length))
         });
 
         // Display settings from the daemon-owned settings table.
