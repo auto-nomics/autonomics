@@ -581,6 +581,28 @@ pub fn container_spec(
     })
 }
 
+/// Create the staging parent for a temporary input path. `/tmp` always
+/// existed; the persistent staging area is created on demand.
+fn ensure_staging_parent(path: &str) -> Result<(), DagError> {
+    if let Some(parent) = std::path::Path::new(path).parent() {
+        std::fs::create_dir_all(parent).map_err(|error| {
+            DagError::Schedule(format!(
+                "cannot create script input staging dir `{}`: {error}",
+                parent.display()
+            ))
+        })?;
+    }
+    Ok(())
+}
+
+/// Temporary host path for one materialized DataFrame input.
+///
+/// Lives under the persistent dag-tasks root (`script-inputs/` staging
+/// area), not `/tmp`: the path must be on a mount-safe location so the
+/// container staging can symlink it instead of copying, and it must not
+/// churn the tmpfs quota. Deleted by the caller after the inner container
+/// execution; the dag-task GC sweep only ever counts the `script-inputs`
+/// directory as foreign.
 fn temporary_input_path(spec: &ScriptNodeSpec, index: usize, format: &str) -> String {
     let mut digest = Sha256::new();
     digest.update(&spec.code);
@@ -590,13 +612,17 @@ fn temporary_input_path(spec: &ScriptNodeSpec, index: usize, format: &str) -> St
         .duration_since(UNIX_EPOCH)
         .map(|value| value.as_nanos())
         .unwrap_or_default();
-    format!(
-        "/tmp/autonomics-script-input-{:x}-{}-{}.{}",
-        digest.finalize(),
-        std::process::id(),
-        suffix,
-        format
-    )
+    dag_core::dag_tasks_root()
+        .join("script-inputs")
+        .join(format!(
+            "autonomics-script-input-{:x}-{}-{}.{}",
+            digest.finalize(),
+            std::process::id(),
+            suffix,
+            format
+        ))
+        .to_string_lossy()
+        .into_owned()
 }
 
 fn script_file_format(format: &str) -> FileFormat {
@@ -633,6 +659,7 @@ impl ScriptNode {
                 }
                 ScriptValueKind::Dataframe => {
                     let path = temporary_input_path(&self.spec, index, &input_spec.format);
+                    ensure_staging_parent(&path)?;
                     let frame = input.dataframe()?.clone();
                     let write_result = match input_spec.format.as_str() {
                         "parquet" => {
@@ -769,6 +796,7 @@ impl DagNode for ScriptNode {
             .ok_or_else(|| DagError::Schedule("script node requires a DataFrame input".into()))?;
         let frame = data_input.dataframe()?.clone();
         let path = temporary_input_path(&self.spec, 0, "csv");
+        ensure_staging_parent(&path)?;
         frame
             .write_csv(
                 &path,

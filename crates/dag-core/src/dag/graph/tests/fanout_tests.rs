@@ -327,9 +327,9 @@ async fn dynamic_channel_fanout_expands_and_collects_jobs() -> Result<()> {
         Ok(Box::new(DynamicItemNode::new(value)) as Box<dyn DagNode>)
     }));
     let task_submissions = Arc::new(std::sync::Mutex::new(Vec::new()));
-    dag.set_task_executor(Arc::new(RecordingTaskExecutor {
-        submissions: Arc::clone(&task_submissions),
-    }));
+    dag.set_task_executor(Arc::new(RecordingTaskExecutor::with_submissions(
+        Arc::clone(&task_submissions),
+    )));
     let process_resources = TaskResources {
         cpus: Some(2),
         memory_bytes: Some(2048),

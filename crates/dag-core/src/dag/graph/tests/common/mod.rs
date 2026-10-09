@@ -15,6 +15,24 @@ use crate::value::{FileRef, PortType};
 
 pub(super) struct RecordingTaskExecutor {
     pub(super) submissions: Arc<std::sync::Mutex<Vec<TaskSubmission>>>,
+    /// Ephemeral receipt root for this test — task workspaces are cleaned
+    /// with the TempDir instead of landing in the persistent dag-tasks tree.
+    _receipt_root: std::sync::Arc<tempfile::TempDir>,
+    local: LocalTaskExecutor,
+}
+
+impl RecordingTaskExecutor {
+    pub(super) fn with_submissions(
+        submissions: Arc<std::sync::Mutex<Vec<TaskSubmission>>>,
+    ) -> Self {
+        let root = tempfile::tempdir().expect("test receipt root");
+        let local = LocalTaskExecutor::with_workspace_root(root.path());
+        Self {
+            submissions,
+            _receipt_root: std::sync::Arc::new(root),
+            local,
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -28,8 +46,7 @@ impl TaskExecutor for RecordingTaskExecutor {
             .lock()
             .unwrap()
             .push(execution.submission.clone());
-        let local_executor = LocalTaskExecutor::default();
-        local_executor.run(execution).await
+        self.local.run(execution).await
     }
 }
 

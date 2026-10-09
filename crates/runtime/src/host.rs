@@ -111,6 +111,44 @@ fn spawn_container_gc(infra: &Arc<ContainerExecutionInfra>) {
     });
 }
 
+/// Periodically reclaim expired `LocalTaskExecutor` receipt directories from
+/// the persistent dag-tasks tree (`AUTONOMICS_DAG_TASKS_GC_AGE_SECS`,
+/// default 7 days; `AUTONOMICS_DAG_TASKS_GC_INTERVAL_SECS`, default 6h,
+/// `0` sweeps once at startup and stops).
+///
+/// Receipt directories hold run evidence only — manifests, statuses, logs,
+/// and materialized DataFrame artifacts that are never read back as data —
+/// so age-based deletion is always safe. Directories owned by a live
+/// process are retained regardless of age.
+fn spawn_dag_task_gc() {
+    let root = dag_core::dag_tasks_root();
+    let policy = dag_core::DagTaskGcPolicy {
+        min_age: dag_core::dag_task_gc_age(),
+        dry_run: false,
+    };
+    let interval = dag_core::dag_task_gc_interval();
+    tokio::spawn(async move {
+        loop {
+            let report = dag_core::sweep_dag_tasks(&root, &policy).await;
+            if !report.errors.is_empty() {
+                tracing::warn!(errors = ?report.errors, "dag task GC errors");
+            }
+            tracing::info!(
+                removed = report.removed,
+                bytes_freed = report.bytes_freed,
+                live_owner = report.retained_live_owner,
+                recent = report.retained_recent,
+                foreign = report.foreign_entries,
+                "dag task GC"
+            );
+            let Some(interval) = interval else {
+                break;
+            };
+            tokio::time::sleep(interval).await;
+        }
+    });
+}
+
 /// Periodically convert locally active plugin work into remote sources.
 ///
 /// The first interval is skipped intentionally: startup should not turn an
@@ -422,6 +460,7 @@ impl SharedInfra {
         // startup, then on the configured interval. Failures are logged and
         // never block the host.
         spawn_container_gc(&container_execution);
+        spawn_dag_task_gc();
         // tracing::info!(
         //     mounts = ?file_storage.mount_paths(),
         //     "SharedInfra::open: file storage ready (with VFS mounts)"

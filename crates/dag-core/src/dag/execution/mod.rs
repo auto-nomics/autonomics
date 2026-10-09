@@ -15,8 +15,10 @@
 //! - `local` — the default in-process executor
 //! - `process` — the OS-process transport behind `process` tasks
 //! - `remote` — coordinator-side remote executor + artifact store
+//! - `gc` — retention sweep for the persistent dag-tasks receipt tree
 
 mod contract;
+mod gc;
 mod local;
 mod process;
 mod remote;
@@ -27,6 +29,10 @@ mod workspace;
 pub use contract::{
     TaskAttemptReceipt, TaskDispatch, TaskExecution, TaskInputBinding, TaskInputSource,
     TaskOutputBinding, TaskResources, TaskSpec, TaskSubmission, task_timeout,
+};
+pub use gc::{
+    DagTaskGcPolicy, DagTaskGcReport, dag_task_gc_age, dag_task_gc_interval, dag_tasks_root,
+    sweep_dag_tasks,
 };
 pub use local::{LocalTaskExecutor, local_task_executor};
 pub use process::{ProcessTaskOutput, ProcessTaskSpec, ProcessTaskTransport};
