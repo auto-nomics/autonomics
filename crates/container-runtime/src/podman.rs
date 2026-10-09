@@ -907,4 +907,31 @@ mod tests {
         }];
         assert!(crate::connection::validate_run_request(&req).is_err());
     }
+
+    #[test]
+    fn ordinary_absolute_input_mounts_pass_run_request_validation() {
+        // Regression: `Path::starts_with("/")` matches every absolute path,
+        // so a `/` entry in the unsafe-prefix list rejected ALL input mounts
+        // in production (agent workspace dirs included) — FakeRuntime tests
+        // never exercised validate_run_request. Ordinary data locations on
+        // real disks must be accepted.
+        let source_dir = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let mut req = request(ContainerNetwork::Isolated);
+        req.input_mounts = vec![InputMount {
+            host_dir: source_dir.path().to_path_buf(),
+        }];
+        crate::connection::validate_run_request(&req)
+            .expect("ordinary absolute input mount must be accepted");
+
+        // The filesystem root itself stays rejected (it would expose the
+        // whole host read-only into the container).
+        let mut req = request(ContainerNetwork::Isolated);
+        req.input_mounts = vec![InputMount {
+            host_dir: PathBuf::from("/"),
+        }];
+        let error = crate::connection::validate_run_request(&req)
+            .expect_err("filesystem root must be rejected")
+            .to_string();
+        assert!(error.contains("filesystem root"), "{error}");
+    }
 }

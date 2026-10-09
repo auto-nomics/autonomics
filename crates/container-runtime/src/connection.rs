@@ -108,20 +108,23 @@ pub(crate) fn validate_run_request(
 
 /// Host locations that must never be bind-mounted for input staging. `/tmp`
 /// is podman-managed tmpfs (`--tmpfs /tmp`), the rest are kernel or runtime
-/// virtual filesystems.
-const UNSAFE_INPUT_MOUNT_ROOTS: [&str; 6] = ["/tmp", "/dev", "/proc", "/sys", "/run", "/"];
+/// virtual filesystems. The filesystem root itself is rejected separately:
+/// `Path::starts_with("/")` matches every absolute path, so it must not be
+/// part of this prefix list.
+const UNSAFE_INPUT_MOUNT_ROOTS: [&str; 5] = ["/tmp", "/dev", "/proc", "/sys", "/run"];
 
 fn validate_input_mounts(request: &ContainerRunRequest) -> Result<(), ContainerRuntimeError> {
     let workspace_mount = Path::new(&request.workspace.container_workdir);
     let mut seen = std::collections::BTreeSet::new();
     for mount in &request.input_mounts {
         let dir = &mount.host_dir;
-        if UNSAFE_INPUT_MOUNT_ROOTS
-            .iter()
-            .any(|root| dir.starts_with(root))
+        if dir == Path::new("/")
+            || UNSAFE_INPUT_MOUNT_ROOTS
+                .iter()
+                .any(|root| dir.starts_with(root))
         {
             return Err(ContainerRuntimeError::Invalid(format!(
-                "input mount `{}` is below an unsafe host location",
+                "input mount `{}` is the filesystem root or below an unsafe host location",
                 dir.display()
             )));
         }
