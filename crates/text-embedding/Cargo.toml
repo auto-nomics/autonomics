@@ -8,6 +8,20 @@ rust-version.workspace = true
 [dependencies]
 sha2 = "0.10"
 thiserror = "2"
+ort = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+tokenizers = { workspace = true, optional = true }
+
+[features]
+# Local ONNX embedding models (Gemma-style exports with external data).
+# Off by default: pulls the ONNX Runtime native library, the HF
+# tokenizers engine, and serde into every downstream build.
+onnx = ["dep:ort", "dep:serde", "dep:serde_json", "dep:tokenizers"]
+
+[[example]]
+name = "onnx_probe"
+required-features = ["onnx"]
 
 [lints]
 workspace = true

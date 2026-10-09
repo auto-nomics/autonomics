@@ -147,6 +147,10 @@ rhai = "1.19.0"
 arc-swap = "1.9.2"
 unicode-width = "0.2"
 
+# Local embedding-model inference (text-embedding `onnx` feature).
+ort = "2.0.0-rc.13"
+tokenizers = "0.21"
+
 arrow = { version = "58.3.0", features = ["prettyprint"] }
 arrow-array = "58.3.0"
 arrow-buffer = "58.3.0"

@@ -1,5 +1,6 @@
 //! The provider contract every embedder implements.
 
+#[cfg(feature = "onnx")]
 mod onnx;
 
 use std::collections::BTreeMap;
@@ -7,6 +8,9 @@ use std::collections::BTreeMap;
 use crate::error::Result;
 use crate::input::EmbeddingInput;
 use crate::output::EmbeddingOutput;
+
+#[cfg(feature = "onnx")]
+pub use onnx::OnnxTextEmbedder;
 
 /// Provider contract for turning texts into dense vectors.
 ///

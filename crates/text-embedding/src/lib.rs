@@ -35,6 +35,8 @@ pub use error::{EmbeddingError, Result};
 pub use hashing::{HashingTextEmbedder, DEFAULT_EMBEDDING_DIM};
 pub use input::EmbeddingInput;
 pub use output::EmbeddingOutput;
+#[cfg(feature = "onnx")]
+pub use provider::OnnxTextEmbedder;
 pub use provider::TextEmbedder;
 pub use vector::{cosine, mean_vector};
 pub use vector_map::VectorMapTextEmbedder;

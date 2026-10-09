@@ -11,6 +11,7 @@ use crate::error::Result;
 use crate::input::EmbeddingInput;
 use crate::output::EmbeddingOutput;
 use crate::provider::TextEmbedder;
+use crate::vector::normalize;
 
 use std::collections::BTreeMap;
 
@@ -70,15 +71,6 @@ fn add_feature(vector: &mut [f32], feature: &str, weight: f32) {
     let slot =
         u64::from_be_bytes(digest[..8].try_into().expect("sha256 prefix")) as usize % vector.len();
     vector[slot] += weight;
-}
-
-fn normalize(vector: &mut [f32]) {
-    let norm = vector.iter().map(|v| v * v).sum::<f32>().sqrt();
-    if norm > f32::EPSILON {
-        for value in vector {
-            *value /= norm;
-        }
-    }
 }
 
 fn tokens(text: &str) -> impl Iterator<Item = String> {

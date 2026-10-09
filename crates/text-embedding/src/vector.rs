@@ -2,6 +2,17 @@
 
 use crate::error::{EmbeddingError, Result};
 
+/// L2-normalize in place. Zero vectors are left as zeros — cosine and
+/// distance code guard on the zero norm instead of dividing by it.
+pub(crate) fn normalize(vector: &mut [f32]) {
+    let norm = vector.iter().map(|v| v * v).sum::<f32>().sqrt();
+    if norm > f32::EPSILON {
+        for value in vector {
+            *value /= norm;
+        }
+    }
+}
+
 /// Cosine similarity for two equal-length vectors.
 pub fn cosine(left: &[f32], right: &[f32]) -> Result<f32> {
     if left.len() != right.len() {
