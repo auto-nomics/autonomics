@@ -21,6 +21,8 @@ use agentik_types::AgentPlan;
 /// frozen into `Arc`, and cloned into every [`Session`](super::Session).
 /// Fields that need runtime mutation use interior mutability (`ArcSwap`,
 /// etc.).
+///
+/// Note that `AgentShared` is per-agent entity, each agent has its own `AgentShared` object.
 pub(crate) struct AgentShared {
     pub id: Uuid,
     pub path: agentik_types::AgentPath,

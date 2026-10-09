@@ -28,10 +28,12 @@ pub use crate::node::{DagNode, NodeId, NodeInput, NodePorts};
 pub use channel::{ChannelBranch, ChannelNode, ChannelOperator};
 pub use error::{DagError, NodeError};
 pub use execution::{
-    LocalDirectoryArtifactStore, LocalTaskExecutor, ProcessTaskOutput, ProcessTaskSpec,
-    ProcessTaskTransport, RemoteTaskExecutor, TaskArtifactStore, TaskAttemptReceipt, TaskDispatch,
-    TaskExecution, TaskExecutor, TaskInputBinding, TaskInputSource, TaskLease, TaskOutputBinding,
-    TaskResources, TaskSpec, TaskSubmission, TaskTransport, local_task_executor,
+    DagTaskGcPolicy, DagTaskGcReport, LocalDirectoryArtifactStore, LocalTaskExecutor,
+    ProcessTaskOutput, ProcessTaskSpec, ProcessTaskTransport, RemoteTaskExecutor,
+    TaskArtifactStore, TaskAttemptReceipt, TaskDispatch, TaskExecution, TaskExecutor,
+    TaskInputBinding, TaskInputSource, TaskLease, TaskOutputBinding, TaskResources, TaskSpec,
+    TaskSubmission, TaskTransport, dag_task_gc_age, dag_task_gc_interval, dag_tasks_root,
+    local_task_executor, sweep_dag_tasks,
 };
 pub use export::{ExportFile, ExportFormat, ExportSummary, SkippedFile};
 pub use graph::{DAG, DynamicNodeBuilder};

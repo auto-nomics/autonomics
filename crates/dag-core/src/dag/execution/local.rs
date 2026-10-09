@@ -30,7 +30,7 @@ pub struct LocalTaskExecutor {
 impl Default for LocalTaskExecutor {
     fn default() -> Self {
         Self {
-            workspace_root: std::env::temp_dir().join("autonomics-dag-tasks"),
+            workspace_root: super::gc::dag_tasks_root(),
             resource_budget: Self::discover_resource_budget(),
             stage_inputs: false,
         }

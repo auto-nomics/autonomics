@@ -33,6 +33,9 @@ impl Session {
     // ── Turn lifecycle ─────────────────────────────────────
 
     /// Open a turn, reusing an open turn after a background-task wait.
+    ///
+    /// # Auguments
+    /// * `delegation_id` - ID of parent agent if existed.
     pub(crate) fn begin_turn(&mut self, delegation_id: Option<Uuid>) {
         if self.active_turn_id.is_none() {
             self.active_turn_id = Some(Uuid::new_v4());

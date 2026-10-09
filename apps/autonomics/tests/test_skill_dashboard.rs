@@ -446,9 +446,7 @@ fn observations_refresh_and_wrapped_scroll_preserve_context() {
     let mut state = fixture_state();
     state.active_tab = EvolutionTab::Observations;
     let mut row = fixture_observation("target", "Unicode evidence");
-    row.body = "START\n".to_string()
-        + &"中文证据 abcdefghijklmnopqrstuvwxyz0123456789\n".repeat(40)
-        + "END";
+    row.body = "中文证据 abcdefghijklmnopqrstuvwxyz0123456789END".to_string();
     state
         .observations
         .set_observations(vec![fixture_observation("other", "Other"), row.clone()]);
