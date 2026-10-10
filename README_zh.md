@@ -238,7 +238,7 @@ autonomics/
 └── scripts/                      安装、面板构建与维护脚本
 ```
 
-`reference/` 目录存放第三方与对比材料，不属于根 Cargo 构建。每用户状态位于 `~/.autonomics` 之下：`plugins.toml` 与 v2 插件树（`plugins/dev`、`plugins/snapshots`、`plugins/runtime`）、运行环境目录（`plugin-environments.toml`、`environments/dev`）、skill 库及其进化存储（`skills/`、`skill-observations/`、`skill-proposals/`、`skill-usage.toml`）、面板缓存（`panels/`）以及 SQLite 数据库（`agent.db`、`bib.db`、`writing.db`、`dag-history.db`）。
+`reference/` 目录存放第三方与对比材料，不属于根 Cargo 构建。每用户状态位于 `~/.autonomics` 之下：`plugins.toml` 与 v2 插件树（`plugins/dev`、`plugins/snapshots`、`plugins/runtime`）、运行环境目录（`plugin-environments.toml`、`environments/dev`）、skill 库及其进化存储（`skills/`、`skill-observations/`、`skill-proposals/`、`skill-usage.toml`）、面板缓存（`panels/`）以及 SQLite 数据库（`agent.db`、`knowledge.db`、`bib.db`、`writing.db`、`dag-history.db`）。
 
 ## 快速开始
 
@@ -304,7 +304,7 @@ cargo run -p autonomics -- run "总结最近关于 BMI 的 GWAS meta 分析。" 
 - `MINERU_API_KEY`（PDF 全文抽取）
 - 数据目录用 `HUGGING_FACE_TOKEN` 或 `HF_TOKEN`；S3/OSS 凭据仅可选的非目录 VFS 后端需要
 
-默认状态存于 `~/.autonomics`，下载文件存于 `~/.autonomics/data`，VFS 挂载从 `$AUTONOMICS_STATE_DIR/vfs.toml` 读取。用 `AUTONOMICS_STATE_DIR`、`AUTONOMICS_DATA_DIR`、`AUTONOMICS_BIB_DB`、`AUTONOMICS_WRITING_DB` 重定位状态。
+默认状态存于 `~/.autonomics`，下载文件存于 `~/.autonomics/data`，VFS 挂载从 `$AUTONOMICS_STATE_DIR/vfs.toml` 读取。用 `AUTONOMICS_STATE_DIR`、`AUTONOMICS_DATA_DIR`、`AUTONOMICS_BIB_DB`、`AUTONOMICS_WRITING_DB`、`AUTONOMICS_KMS_DB` 重定位状态。
 
 ### 使用本地 HTTP API
 

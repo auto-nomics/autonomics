@@ -13,9 +13,11 @@ tokio.workspace = true
 async-trait.workspace = true
 uuid = { version = "1", features = ["v4", "serde"] }
 regex = "1"
+tracing.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "test-util"] }
+tempfile = "3"
 
 [lints]
 workspace = true

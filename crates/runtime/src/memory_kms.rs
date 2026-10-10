@@ -452,7 +452,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn kms_tables_are_initialized_in_shared_agent_database() {
+    async fn kms_schema_can_be_initialized_on_a_shared_connection_for_seeding() {
+        // Production KMS storage lives in its own knowledge.db; this path
+        // remains for tests and for seeding a legacy agent.db (see the
+        // host-level migration test).
         let agent_storage = TursoAgentStorage::open_in_memory().await.unwrap();
         let storage = kms::Storage::from_shared_connection(agent_storage.shared_connection())
             .await
@@ -466,7 +469,7 @@ mod tests {
                     full: "Shared DB Entity".to_string(),
                     abbr: None,
                 }],
-                "Entity stored in agent.db",
+                "Entity stored via shared connection for seeding",
             )
             .await
             .unwrap();

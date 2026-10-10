@@ -24,7 +24,7 @@ bibliography library, all from a single `ratatui`-based binary.
 - **OpenGWAS cache** — `cache` subcommand: refresh or clear the on-disk SQLite
   snapshot of the OpenGWAS `gwasinfo` catalogue.
 - **KMS tree browser** — `kms` subcommand: dedicated ratatui workspace for the
-  Turso-backed knowledge tree in `agent.db`, with tree navigation,
+  Turso-backed knowledge tree in `knowledge.db`, with tree navigation,
   knowledge/entity inspection, and live diagnostics.
 
 ## Build & run
@@ -85,11 +85,13 @@ protocol and design: `docs/design/gateway-architecture.md`.
 ## KMS TUI
 
 Launch the dedicated knowledge-tree browser using the runtime's default
-`agent.db`:
+`knowledge.db` (`AUTONOMICS_KMS_DB` or `~/.autonomics/knowledge.db`). Legacy
+KMS rows are migrated out of `agent.db` once on open; `--agent-db` points at
+that legacy source:
 
 ```bash
 autonomics kms
-autonomics kms --agent-db /path/to/agent.db
+autonomics kms --db /path/to/knowledge.db --agent-db /path/to/agent.db
 ```
 
 Layout:

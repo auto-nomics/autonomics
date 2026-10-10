@@ -35,8 +35,11 @@
 subject/object 会成为实体，关系会成为 Knowledge，并挂载到
 `/Semantic Memory/<subject>` 下。只有当写入没有引入新的 KMS Error 诊断时才提交；
 否则会回滚生成的实体、知识和索引挂载，并把 observation 标记为 rejected
-且保留原因。KMS 表存放在同一个 `agent.db` Turso 数据库中，并与 AgentStorage
-共享同一个连接锁。
+且保留原因。KMS 表存放在独立的 `knowledge.db` Turso 数据库中（默认
+`~/.autonomics/knowledge.db`，可用 `AUTONOMICS_KMS_DB` 覆盖），以
+multiprocess-WAL 模式打开，daemon 与 `autonomics kms` TUI 可同时持有。
+启动时会把旧 `agent.db` 中的 KMS 数据一次性迁移到新库 —— 旧表原样保留，
+确认迁移无误后可手工 DROP。
 
 KMS 工具权限遵循同一边界：任务智能体只会获得
 `kms_readonly_registrations`；`kms_write_registrations` 保留给记忆 / KMS

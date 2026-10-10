@@ -25,6 +25,7 @@ pub use service::{
 };
 pub use storage::Storage;
 pub use storage::error::StorageError;
+pub use storage::migration::MigrationOutcome;
 pub use storage::types::{Entity, Index, Knowledge, KnowledgeType, Nomenclature, TargetType};
 pub use view::{IndexView, LocalView, SUBTREE_TITLES_LIMIT, SubtreeSummary};
 
