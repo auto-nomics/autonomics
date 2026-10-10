@@ -63,6 +63,11 @@ const DEFAULT_DAG_HISTORY_DB: &str = "dag-history.db";
 /// Default agent persistence database filename (relative to `state_dir`).
 const DEFAULT_AGENT_DB: &str = "agent.db";
 
+/// Default KMS knowledge database filename (relative to `state_dir`).
+///
+/// Override via builder `.kms_db_path(…)` or env `AUTONOMICS_KMS_DB`.
+const DEFAULT_KMS_DB: &str = "knowledge.db";
+
 /// Default bibliography database path.
 ///
 /// Override via builder `.bib_db_path(…)` or env `AUTONOMICS_BIB_DB`.
@@ -94,6 +99,9 @@ pub const ENV_STATE_DIR: &str = "AUTONOMICS_STATE_DIR";
 
 /// Env var overriding the bibliography DB path.
 pub const ENV_BIB_DB: &str = "AUTONOMICS_BIB_DB";
+
+/// Env var overriding the KMS knowledge DB path.
+pub const ENV_KMS_DB: &str = "AUTONOMICS_KMS_DB";
 
 /// Env var overriding the writing-system DB path.
 pub const ENV_WRITING_DB: &str = "AUTONOMICS_WRITING_DB";
@@ -495,6 +503,11 @@ pub struct RuntimeConfig {
     /// registry, session logs (WAL), and memory snapshots for cross-process
     /// recovery.
     pub agent_db: PathBuf,
+
+    /// Path to the KMS knowledge database (Turso/SQLite). Legacy rows are
+    /// migrated out of `agent.db` into this file once on startup.
+    #[serde(default = "default_kms_db_path")]
+    pub kms_db_path: PathBuf,
     // ── External service credentials ──────────────────────────────────
     /// OpenGWAS API token. If `None`, the runtime attempts to read it from
     /// the [`ENV_OPENGWAS_TOKEN`] env var at construction time.
@@ -601,6 +614,21 @@ fn default_true() -> bool {
     true
 }
 
+/// Serde default for [`RuntimeConfig::kms_db_path`]. Defensive only —
+/// whole-`RuntimeConfig` deserialization does not occur in production
+/// (agent persistence stores `AgentProfileConfig`). A serde default fn
+/// cannot see sibling fields, so a legacy value would resolve against
+/// `$HOME` instead of a custom `state_dir`.
+fn default_kms_db_path() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(|h| {
+            PathBuf::from(h)
+                .join(DEFAULT_STATE_DIR)
+                .join(DEFAULT_KMS_DB)
+        })
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_KMS_DB))
+}
+
 /// Six hours: frequent enough that overnight accumulation is dealt
 /// with, rare enough that the sweep is noise on any metric.
 const DEFAULT_SKILL_EVOLUTION_INTERVAL_SECS: u64 = 6 * 60 * 60;
@@ -662,6 +690,11 @@ impl RuntimeConfig {
         let agent_db = base
             .and_then(|b| b.agent_db.clone())
             .unwrap_or_else(|| state_dir.join(DEFAULT_AGENT_DB));
+
+        let kms_db_path = base
+            .and_then(|b| b.kms_db_path.clone())
+            .or_else(|| env_path(ENV_KMS_DB))
+            .unwrap_or_else(|| state_dir.join(DEFAULT_KMS_DB));
         let name = base
             .and_then(|b| b.name.clone())
             .unwrap_or_else(|| "default".to_string());
@@ -705,6 +738,7 @@ impl RuntimeConfig {
             writing_db_path,
             app_db_path,
             agent_db,
+            kms_db_path,
             opengwas_token,
             opengwas_cache_dir,
             agent_identity,
@@ -1242,7 +1276,7 @@ impl RuntimeConfig {
     pub fn summary(&self) -> String {
         format!(
             "RuntimeConfig {{ name: {:?}, data_dir: {}, state_dir: {}, \
-             dag_history_db: {}, bib_db: {}, app_db: {}, \
+             dag_history_db: {}, bib_db: {}, app_db: {}, kms_db: {}, \
              dag_history: {}, bib: {}, opengwas: {}, \
              opentargets: {}, gwascatalog: {}, chembl: {}, rcsb: {}, string: {}, kegg: {}, \
              rsi_publisher: {} }}",
@@ -1252,6 +1286,7 @@ impl RuntimeConfig {
             self.dag_history_db.display(),
             self.bib_db_path.display(),
             self.app_db_path.display(),
+            self.kms_db_path.display(),
             self.enable_dag_history,
             self.enable_bibliography,
             self.enable_opengwas,
@@ -1285,6 +1320,7 @@ pub struct RuntimeConfigBuilder {
     pub(crate) writing_db_path: Option<PathBuf>,
     pub(crate) app_db_path: Option<PathBuf>,
     pub(crate) agent_db: Option<PathBuf>,
+    pub(crate) kms_db_path: Option<PathBuf>,
     pub(crate) opengwas_token: Option<String>,
     pub(crate) opengwas_cache_dir: Option<PathBuf>,
     pub(crate) agent_identity: Option<String>,
@@ -1363,6 +1399,12 @@ impl RuntimeConfigBuilder {
     /// Path to the agent persistence database (Turso/SQLite).
     pub fn agent_db(mut self, path: impl Into<PathBuf>) -> Self {
         self.agent_db = Some(path.into());
+        self
+    }
+
+    /// Path to the KMS knowledge database (Turso/SQLite).
+    pub fn kms_db_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.kms_db_path = Some(path.into());
         self
     }
 
@@ -1591,6 +1633,7 @@ mod tests {
         );
         assert_eq!(cfg.bib_db_path, expected_state_dir.join(DEFAULT_BIB_DB));
         assert_eq!(cfg.app_db_path, expected_state_dir.join(DEFAULT_APP_DB));
+        assert_eq!(cfg.kms_db_path, expected_state_dir.join(DEFAULT_KMS_DB));
         assert!(cfg.enable_dag_history);
         assert!(cfg.enable_bibliography);
         assert!(cfg.enable_opengwas);
@@ -1624,6 +1667,7 @@ mod tests {
             .dag_history_db("/tmp/custom-history.db")
             .bib_db_path("/tmp/custom-bib.db")
             .app_db_path("/tmp/custom-app.db")
+            .kms_db_path("/tmp/custom-kms.db")
             .opengwas_token("secret-token")
             .agent_identity("Custom agent")
             .system_prompt(Some("Custom prompt".to_string()))
@@ -1641,6 +1685,7 @@ mod tests {
         assert_eq!(cfg.dag_history_db, PathBuf::from("/tmp/custom-history.db"));
         assert_eq!(cfg.bib_db_path, PathBuf::from("/tmp/custom-bib.db"));
         assert_eq!(cfg.app_db_path, PathBuf::from("/tmp/custom-app.db"));
+        assert_eq!(cfg.kms_db_path, PathBuf::from("/tmp/custom-kms.db"));
         assert_eq!(cfg.opengwas_token.as_deref(), Some("secret-token"));
         assert_eq!(cfg.agent_identity, "Custom agent");
         assert_eq!(cfg.system_prompt.as_deref(), Some("Custom prompt"));
@@ -1828,6 +1873,30 @@ mod tests {
         let config: RuntimeConfig = serde_json::from_value(legacy).unwrap();
         assert!(config.plugin_rsi.environments.get("alpine").is_some());
         assert!(config.plugin_rsi.publisher.enabled);
+    }
+
+    #[test]
+    fn serde_tolerates_missing_kms_db_path() {
+        // A serialized config from before the dedicated knowledge database
+        // must still deserialize (the field falls back to its default).
+        let mut legacy = serde_json::to_value(RuntimeConfig::default()).unwrap();
+        legacy.as_object_mut().unwrap().remove("kms_db_path");
+        let config: RuntimeConfig = serde_json::from_value(legacy).unwrap();
+        assert_eq!(config.kms_db_path, default_kms_db_path());
+    }
+
+    #[test]
+    fn env_kms_db_override() {
+        let _guard = DATA_DIR_ENV_LOCK.lock().unwrap();
+        // SAFETY: guarded by DATA_DIR_ENV_LOCK for tests that assert defaults.
+        unsafe {
+            std::env::set_var(ENV_KMS_DB, "/tmp/env-kms.db");
+        }
+        let cfg = RuntimeConfig::default();
+        assert_eq!(cfg.kms_db_path, PathBuf::from("/tmp/env-kms.db"));
+        unsafe {
+            std::env::remove_var(ENV_KMS_DB);
+        }
     }
 
     #[test]

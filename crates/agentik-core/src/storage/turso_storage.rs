@@ -244,8 +244,9 @@ impl TursoAgentStorage {
 
     /// Return the shared, mutex-guarded Turso connection.
     ///
-    /// This lets another storage facade (notably KMS) use the same physical
-    /// `agent.db` connection and coordinate with agent-storage queries.
+    /// This lets callers coordinate with agent-storage queries on the same
+    /// physical `agent.db` connection (e.g. the one-time migration that
+    /// copies legacy KMS rows out into the dedicated knowledge database).
     pub fn shared_connection(&self) -> Arc<tokio::sync::Mutex<turso::Connection>> {
         Arc::clone(&self.conn.0)
     }

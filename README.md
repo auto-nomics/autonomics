@@ -259,7 +259,7 @@ autonomics/
 └── scripts/                      Install, panel-build, and maintenance scripts
 ```
 
-The `reference/` directory contains third-party and comparison material and is not part of the root Cargo build. Per-user state lives under `~/.autonomics`: `plugins.toml` plus the v2 plugin tree (`plugins/dev`, `plugins/snapshots`, `plugins/runtime`), the environment catalog (`plugin-environments.toml`, `environments/dev`), the skill library and its evolution stores (`skills/`, `skill-observations/`, `skill-proposals/`, `skill-usage.toml`), panel caches (`panels/`), and the SQLite databases (`agent.db`, `bib.db`, `writing.db`, `dag-history.db`).
+The `reference/` directory contains third-party and comparison material and is not part of the root Cargo build. Per-user state lives under `~/.autonomics`: `plugins.toml` plus the v2 plugin tree (`plugins/dev`, `plugins/snapshots`, `plugins/runtime`), the environment catalog (`plugin-environments.toml`, `environments/dev`), the skill library and its evolution stores (`skills/`, `skill-observations/`, `skill-proposals/`, `skill-usage.toml`), panel caches (`panels/`), and the SQLite databases (`agent.db`, `knowledge.db`, `bib.db`, `writing.db`, `dag-history.db`).
 
 ## Getting Started
 
@@ -325,7 +325,7 @@ Scientific API credentials must be present in the process environment. The repos
 - `MINERU_API_KEY` for PDF full-text extraction
 - `HUGGING_FACE_TOKEN` or `HF_TOKEN` for the data catalog; S3/OSS credentials are needed only for optional non-catalog VFS backends
 
-By default, state is stored under `~/.autonomics`, downloaded files under `~/.autonomics/data`, and VFS mounts are read from `$AUTONOMICS_STATE_DIR/vfs.toml`. Use `AUTONOMICS_STATE_DIR`, `AUTONOMICS_DATA_DIR`, `AUTONOMICS_BIB_DB`, and `AUTONOMICS_WRITING_DB` to relocate state.
+By default, state is stored under `~/.autonomics`, downloaded files under `~/.autonomics/data`, and VFS mounts are read from `$AUTONOMICS_STATE_DIR/vfs.toml`. Use `AUTONOMICS_STATE_DIR`, `AUTONOMICS_DATA_DIR`, `AUTONOMICS_BIB_DB`, `AUTONOMICS_WRITING_DB`, and `AUTONOMICS_KMS_DB` to relocate state.
 
 ### Use the local HTTP API
 

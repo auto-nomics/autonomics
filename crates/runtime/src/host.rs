@@ -544,13 +544,53 @@ impl SharedInfra {
         });
         let storage: Arc<dyn AgentStorage> = turso_store.clone();
         let rcsb = Arc::new(RcsbClient::new());
-        // Initialize the KMS schema in agent.db unconditionally; expose tools
-        // and semantic grounding only when the runtime feature is enabled.
-        let kms_storage =
-            match kms::Storage::from_shared_connection(turso_store.shared_connection()).await {
-                Ok(storage) => storage,
-                Err(error) => return Err(Error::Other(format!("initialize KMS: {error}"))),
-            };
+        // Initialize the KMS schema in its own knowledge.db unconditionally;
+        // expose tools and semantic grounding only when the runtime feature
+        // is enabled.
+        let kms_db = config.kms_db_path.clone();
+        tracing::info!(
+            path = %kms_db.display(),
+            "SharedInfra::open: opening KMS knowledge db"
+        );
+        let kms_storage = match kms::Storage::new(&kms_db.to_string_lossy()).await {
+            Ok(storage) => storage,
+            Err(error) => return Err(Error::Other(format!("open KMS storage: {error}"))),
+        };
+        // One-time migration of legacy KMS rows out of agent.db. This must
+        // run — and must succeed — BEFORE `KmsService::from_storage`: the
+        // service seeds a root index row, which would make a fresh target
+        // look "non-empty without a marker" and permanently block the
+        // migration. A failed migration therefore fails the open instead of
+        // leaving the knowledge base silently split across two databases.
+        match kms::storage::migration::migrate_from_legacy_agent_db(
+            &kms_storage,
+            turso_store.shared_connection(),
+        )
+        .await
+        {
+            Ok(kms::MigrationOutcome::Migrated {
+                entities,
+                nomenclatures,
+                knowledges,
+                indexes,
+            }) => tracing::info!(
+                entities,
+                nomenclatures,
+                knowledges,
+                indexes,
+                "migrated legacy KMS rows from agent.db into knowledge.db"
+            ),
+            Ok(kms::MigrationOutcome::SkippedTargetNonEmpty) => tracing::warn!(
+                "knowledge.db already holds KMS data without a migration marker; \
+                 leaving legacy rows in agent.db"
+            ),
+            Ok(other) => {
+                tracing::debug!(?other, "KMS legacy migration checked");
+            }
+            Err(error) => {
+                return Err(Error::Other(format!("migrate legacy KMS rows: {error}")));
+            }
+        }
         let kms = if config.enable_kms {
             match kms::KmsService::from_storage(kms_storage).await {
                 Ok(service) => Some(Arc::new(service)),
@@ -4836,6 +4876,7 @@ mod plugin_profile_tools_tests {
         config.data_dir = dir.path().join("data");
         config.state_dir = dir.path().join("state");
         config.agent_db = dir.path().join("agent.db");
+        config.kms_db_path = dir.path().join("knowledge.db");
         let host = RuntimeHost::open(&config).await.unwrap();
         let agent_path = agentik_types::AgentPath::try_from("/root/developer").unwrap();
 
@@ -4915,6 +4956,7 @@ mod communication_policy_tests {
         config.bib_db_path = dir.path().join("bib.db");
         config.writing_db_path = dir.path().join("writing.db");
         config.app_db_path = dir.path().join("app.db");
+        config.kms_db_path = dir.path().join("knowledge.db");
         config
     }
 
@@ -5138,6 +5180,7 @@ mod agent_persistence_tests {
         config.bib_db_path = dir.path().join("bib.db");
         config.writing_db_path = dir.path().join("writing.db");
         config.app_db_path = dir.path().join("app.db");
+        config.kms_db_path = dir.path().join("knowledge.db");
         // The parent (/root/researcher) is a root-level agent; without this
         // it would run the startup memory pipeline (default on) against an
         // empty model slot in the first host and add noise to the event
@@ -5585,6 +5628,7 @@ mod literature_mount_tests {
             .agent_db(directory.path().join("agent.db"))
             .writing_db_path(directory.path().join("writing.db"))
             .app_db_path(directory.path().join("app.db"))
+            .kms_db_path(directory.path().join("knowledge.db"))
             .dag_history_db(directory.path().join("dag.db"))
             .build();
         let mut manifest = base_manifest();
@@ -5625,6 +5669,7 @@ mod literature_mount_tests {
             .agent_db(directory.path().join("agent.db"))
             .writing_db_path(directory.path().join("writing.db"))
             .app_db_path(directory.path().join("app.db"))
+            .kms_db_path(directory.path().join("knowledge.db"))
             .dag_history_db(directory.path().join("dag.db"))
             .build();
         let mut manifest = base_manifest();
@@ -5722,5 +5767,123 @@ mod plugin_vfs_tests {
                 .await
                 .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod kms_migration_tests {
+    use super::*;
+    use agentik_core::TursoAgentStorage;
+
+    /// End-to-end: a legacy agent.db holding KMS rows is migrated into the
+    /// dedicated knowledge.db when the host opens, the legacy tables stay
+    /// in agent.db, and a second open is a no-op.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn legacy_kms_rows_in_agent_db_are_migrated_to_knowledge_db() {
+        let dir = tempfile::tempdir().unwrap();
+        let agent_db = dir.path().join("agent.db");
+        let knowledge_db = dir.path().join("knowledge.db");
+
+        // Seed a legacy agent.db exactly the way the old runtime did: KMS
+        // schema initialized on the agent storage's own connection.
+        let store = TursoAgentStorage::open(&agent_db).await.unwrap();
+        let legacy = kms::KmsService::from_storage(
+            kms::Storage::from_shared_connection(store.shared_connection())
+                .await
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        let (entity, _) = legacy
+            .create_entity(
+                vec![kms::Nomenclature {
+                    id: uuid::Uuid::new_v4(),
+                    lang: kms::Language::ZH,
+                    full: "迁移实体".to_string(),
+                    abbr: None,
+                }],
+                "Entity stored in the legacy agent.db",
+            )
+            .await
+            .unwrap();
+        let knowledge = legacy
+            .create_knowledge(
+                "Legacy knowledge",
+                kms::KnowledgeType::Aspect,
+                vec![entity.id],
+                Some("legacy body".to_string()),
+            )
+            .await
+            .unwrap();
+        let root = legacy.find_root().await.unwrap();
+        legacy
+            .create_index(
+                root.id,
+                Some("Legacy knowledge".to_string()),
+                Some(knowledge.id),
+                Some(kms::TargetType::Knowledge),
+            )
+            .await
+            .unwrap();
+        drop(legacy);
+        drop(store);
+
+        let mut config = RuntimeConfig::default();
+        config.data_dir = dir.path().join("data");
+        config.state_dir = dir.path().join("state");
+        config.agent_db = agent_db.clone();
+        config.kms_db_path = knowledge_db.clone();
+        config.dag_history_db = dir.path().join("dag-history.db");
+        config.bib_db_path = dir.path().join("bib.db");
+        config.writing_db_path = dir.path().join("writing.db");
+        config.app_db_path = dir.path().join("app.db");
+        config.enable_kms = true;
+        // Keep the memory pipeline out of this test's way.
+        config.use_memory = false;
+        config.generate_memory = false;
+
+        {
+            let host = RuntimeHost::open(&config).await.unwrap();
+            let kms_service = host
+                .infra
+                .kms
+                .as_ref()
+                .expect("KMS service constructed when enable_kms");
+            let entities = kms_service
+                .list_entities(kms::EntityFilter::All)
+                .await
+                .unwrap();
+            assert_eq!(entities.len(), 1);
+            assert_eq!(
+                entities[0].definition,
+                "Entity stored in the legacy agent.db"
+            );
+            // The legacy root came across — the service found it instead of
+            // seeding a fresh one, so the subtree still yields the migrated
+            // knowledge link.
+            let root = kms_service.find_root().await.unwrap();
+            let knowledges = kms_service.get_subtree_knowledge(root.id).await.unwrap();
+            assert_eq!(knowledges.len(), 1);
+            assert_eq!(knowledges[0].title, "Legacy knowledge");
+        }
+
+        // The dedicated file exists and carries the rows.
+        assert!(knowledge_db.is_file());
+
+        // Reopening the host is a no-op migration: still one entity, still
+        // no duplicated rows.
+        {
+            let host = RuntimeHost::open(&config).await.unwrap();
+            let kms_service = host
+                .infra
+                .kms
+                .as_ref()
+                .expect("KMS service constructed when enable_kms");
+            let entities = kms_service
+                .list_entities(kms::EntityFilter::All)
+                .await
+                .unwrap();
+            assert_eq!(entities.len(), 1);
+        }
     }
 }
