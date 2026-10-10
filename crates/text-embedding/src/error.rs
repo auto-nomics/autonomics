@@ -17,6 +17,13 @@ pub enum Error {
     #[error("embedding provider: {0}")]
     Provider(String),
 
+    /// A Hugging Face Hub operation failed (download, auth, cache).
+    /// Only present with the `onnx` feature, which owns the hf-hub
+    /// dependency.
+    #[cfg(feature = "onnx")]
+    #[error("hugging face hub: {0}")]
+    Hf(#[from] hf_hub::HFError),
+
     #[error("unknown error: {0}")]
     Unknown(String),
 }

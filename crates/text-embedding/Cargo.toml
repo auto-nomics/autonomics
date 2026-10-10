@@ -30,5 +30,9 @@ onnx = [
 name = "onnx_probe"
 required-features = ["onnx"]
 
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true }
+
 [lints]
 workspace = true

@@ -33,6 +33,7 @@ libc = "0.2"
 datafusion.workspace = true
 vfs = { path = "../vfs" }
 evolution-core = { path = "../evolution-core" }
+text-embedding = { path = "../text-embedding", optional = true }
 skills = { path = "../skills" }
 bib-base = { path = "../bib-base" }
 writing-base = { path = "../writing-base" }
@@ -51,6 +52,12 @@ futures = { workspace = true }
 turso.workspace = true
 
 schemars.workspace = true
+
+[features]
+# Local ONNX embedding models for observation distillation. Off by
+# default: pulls the ONNX Runtime native library and the HF stack.
+onnx-embedding = ["dep:text-embedding", "text-embedding/onnx"]
+
 [lints]
 workspace = true
 

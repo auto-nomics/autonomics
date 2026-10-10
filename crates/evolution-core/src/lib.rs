@@ -11,7 +11,8 @@ pub mod observation;
 pub mod routing;
 
 pub use embedding::{
-    HashingObservationEmbedder, ObservationEmbedder, VectorMapEmbedder, cosine, mean_vector,
+    HashingObservationEmbedder, ObservationEmbedder, SharedObservationEmbedder, VectorMapEmbedder,
+    cosine, mean_vector,
 };
 pub use error::Error;
 pub use hub::ObservationHub;

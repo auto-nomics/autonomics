@@ -573,6 +573,17 @@ pub struct RuntimeConfig {
     /// Expose KMS entity/knowledge/index tools backed by Turso.
     #[serde(default)]
     pub enable_kms: bool,
+    /// Serve observation embeddings from a local ONNX model (the
+    /// `onnx-embedding` build feature). When enabled, SharedInfra
+    /// installs the model on first use and feeds distillation with
+    /// real vectors instead of the offline hashing embedder. A load
+    /// failure downgrades to hashing — the daemon still starts.
+    #[serde(default)]
+    pub enable_local_embedding: bool,
+    /// Model directory for the local embedding service. `None` uses
+    /// the service default (`~/.autonomics/model/embedding_model`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embedding_model_dir: Option<std::path::PathBuf>,
     /// Run the skill-evolution service: background worker that
     /// distills observations into skill proposals (and revises
     /// installed auto-skills) on observation events and a periodic
@@ -761,6 +772,10 @@ impl RuntimeConfig {
             )
             .unwrap_or(true),
             enable_kms: resolve_flag(base, |b| b.enable_kms, false),
+            enable_local_embedding: resolve_flag(base, |b| b.enable_local_embedding, false),
+            embedding_model_dir: base
+                .and_then(|b| b.embedding_model_dir.clone())
+                .flatten(),
             enable_skill_evolution: resolve_flag(base, |b| b.enable_skill_evolution, true),
             skill_evolution_auto_approve: resolve_flag(
                 base,
@@ -1341,6 +1356,8 @@ pub struct RuntimeConfigBuilder {
     pub(crate) use_memory: Option<bool>,
     pub(crate) generate_memory: Option<bool>,
     pub(crate) enable_kms: Option<bool>,
+    pub(crate) enable_local_embedding: Option<bool>,
+    pub(crate) embedding_model_dir: Option<Option<std::path::PathBuf>>,
     pub(crate) enable_skill_evolution: Option<bool>,
     pub(crate) skill_evolution_auto_approve: Option<bool>,
     pub(crate) skill_evolution_interval_secs: Option<u64>,
@@ -1507,6 +1524,16 @@ impl RuntimeConfigBuilder {
     /// Enable KMS knowledge-graph tools.
     pub fn enable_kms(mut self, enabled: bool) -> Self {
         self.enable_kms = Some(enabled);
+        self
+    }
+
+    pub fn enable_local_embedding(mut self, enabled: bool) -> Self {
+        self.enable_local_embedding = Some(enabled);
+        self
+    }
+
+    pub fn embedding_model_dir(mut self, dir: impl Into<std::path::PathBuf>) -> Self {
+        self.embedding_model_dir = Some(Some(dir.into()));
         self
     }
 

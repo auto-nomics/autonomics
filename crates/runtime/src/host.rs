@@ -318,6 +318,14 @@ pub struct SharedInfra {
     /// eval auto-capture, gateway handlers — shares one notification
     /// invariant.
     pub skills: Arc<skills::SkillManager>,
+    /// Local ONNX embedding service, when the `onnx-embedding`
+    /// feature is compiled in AND `enable_local_embedding` is set and
+    /// the model loaded. Its provider is also injected into the skill
+    /// manager's embedder slot, so distillation clusters with real
+    /// vectors; `None` (or a non-`onnx-embedding` build) keeps the
+    /// offline hashing embedder.
+    #[cfg(feature = "onnx-embedding")]
+    pub embedding: Option<Arc<text_embedding::LocalEmbeddingService>>,
     /// The unified skill control handle, when the service is
     /// enabled. `None` means the loop is disabled at the daemon
     /// level — every gateway mutation request then returns HTTP
@@ -352,6 +360,35 @@ impl SharedInfra {
             ));
         let skills = skills::SkillManager::init(skills::SkillManager::new(&config.state_dir));
         skills.load_usage();
+
+        // ── Local embedding model (optional, degradation-safe) ─────
+        // Installed BEFORE the evolution service starts: distillation
+        // resolves its embedder through the manager's slot on every
+        // pass, so the injection lands before the first cycle. A load
+        // failure only downgrades to the offline hashing embedder —
+        // the daemon must still start (first run may be offline).
+        #[cfg(feature = "onnx-embedding")]
+        let embedding = if config.enable_local_embedding {
+            match embed_local_model(config.embedding_model_dir.as_deref()).await {
+                Ok(service) => {
+                    if let Some(provider) = service.text_embedder() {
+                        skills.set_embedder(Some(Arc::new(
+                            evolution_core::SharedObservationEmbedder::new(provider),
+                        ) as Arc<dyn evolution_core::ObservationEmbedder>));
+                    }
+                    Some(Arc::new(service))
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        "local embedding model unavailable; distillation stays on the hashing embedder"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
         let plugin_layout = plugin_rsi::PluginStateLayout::open(&config.state_dir);
         plugin_layout
             .ensure_v2_directories()
@@ -689,6 +726,8 @@ impl SharedInfra {
             memory,
             kms,
             skills,
+            #[cfg(feature = "onnx-embedding")]
+            embedding,
             skill_evolution,
             runtime_handle: tokio::runtime::Handle::current(),
             host_control: None,
@@ -913,6 +952,19 @@ impl SharedInfra {
         ));
 
         Ok(tools)
+    }
+}
+
+/// Open (and if missing, install) the local embedding model, honoring
+/// a configured directory override. SharedInfra owns this so every
+/// consumer shares one loaded model per process.
+#[cfg(feature = "onnx-embedding")]
+async fn embed_local_model(
+    model_dir: Option<&std::path::Path>,
+) -> std::result::Result<text_embedding::LocalEmbeddingService, text_embedding::Error> {
+    match model_dir {
+        Some(dir) => text_embedding::LocalEmbeddingService::init_at(dir).await,
+        None => text_embedding::LocalEmbeddingService::init().await,
     }
 }
 
@@ -4869,6 +4921,48 @@ impl Drop for RuntimeHost {
         for (_, entry) in self.agents.drain() {
             let _ = entry.cmd_tx.send(AgentCommand::Shutdown);
         }
+    }
+}
+
+#[cfg(test)]
+#[cfg(feature = "onnx-embedding")]
+mod local_embedding_tests {
+    use super::*;
+
+    fn config(dir: &tempfile::TempDir, model_dir: &str) -> RuntimeConfig {
+        let mut config = RuntimeConfig::default();
+        config.data_dir = dir.path().join("data");
+        config.state_dir = dir.path().join("state");
+        config.agent_db = dir.path().join("agent.db");
+        config.dag_history_db = dir.path().join("dag-history.db");
+        config.bib_db_path = dir.path().join("bib.db");
+        config.writing_db_path = dir.path().join("writing.db");
+        config.app_db_path = dir.path().join("app.db");
+        config.kms_db_path = dir.path().join("knowledge.db");
+        config.use_memory = false;
+        config.generate_memory = false;
+        config.enable_local_embedding = true;
+        config.embedding_model_dir = Some(std::path::PathBuf::from(model_dir));
+        config
+    }
+
+    /// End-to-end assembly: the service lands in SharedInfra and its
+    /// provider is live. Requires a prepared model directory (the
+    /// first use would otherwise download ~363 MB), so point
+    /// `TEXT_EMBEDDING_TEST_MODEL_DIR` at any Gemma-style ONNX export;
+    /// the test is a no-op when the variable is unset.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn local_embedding_service_installs_into_shared_infra() {
+        let Ok(model_dir) = std::env::var("TEXT_EMBEDDING_TEST_MODEL_DIR") else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let mut host = RuntimeHost::open(&config(&dir, &model_dir)).await.unwrap();
+        let infra = host.infra();
+        let service = infra.embedding.as_ref().expect("embedding service installed");
+        let signature = service.provider().expect("provider opened").signature().to_string();
+        assert!(signature.contains("harrier"), "{signature}");
+        host.shutdown_all_agents_and_wait().await;
     }
 }
 

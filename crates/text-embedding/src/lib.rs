@@ -28,6 +28,7 @@ pub mod hashing;
 pub mod input;
 pub mod output;
 pub mod provider;
+#[cfg(feature = "onnx")]
 pub mod service;
 pub mod vector;
 pub mod vector_map;
@@ -39,5 +40,7 @@ pub use output::EmbeddingOutput;
 #[cfg(feature = "onnx")]
 pub use provider::OnnxTextEmbedder;
 pub use provider::TextEmbedder;
+#[cfg(feature = "onnx")]
+pub use service::LocalEmbeddingService;
 pub use vector::{cosine, mean_vector};
 pub use vector_map::VectorMapTextEmbedder;

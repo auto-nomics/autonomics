@@ -12,6 +12,7 @@
 //! text-embedding model later.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use text_embedding::{EmbeddingInput, HashingTextEmbedder, TextEmbedder};
 
@@ -100,6 +101,43 @@ impl ObservationEmbedder for VectorMapEmbedder {
             .filter(|(id, _)| observations.iter().any(|o| &o.id == *id))
             .map(|(id, vector)| Ok((id.clone(), vector.clone())))
             .collect()
+    }
+}
+
+/// Wrap any shared text-level embedder behind the observation-level
+/// contract, so a host-installed model (local ONNX, remote API)
+/// drops into distillation without touching consumer code.
+#[derive(Clone)]
+pub struct SharedObservationEmbedder {
+    inner: Arc<dyn TextEmbedder>,
+}
+
+impl std::fmt::Debug for SharedObservationEmbedder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SharedObservationEmbedder").finish_non_exhaustive()
+    }
+}
+
+impl SharedObservationEmbedder {
+    pub fn new(inner: Arc<dyn TextEmbedder>) -> Self {
+        Self { inner }
+    }
+}
+
+impl ObservationEmbedder for SharedObservationEmbedder {
+    fn embed(&self, observations: &[Observation]) -> Result<BTreeMap<String, Vec<f32>>> {
+        let inputs = observations
+            .iter()
+            .map(|observation| EmbeddingInput {
+                id: observation.id.clone(),
+                text: observation_text(observation),
+            })
+            .collect::<Vec<_>>();
+        let outputs = into_core(self.inner.batch_embed(&inputs))?;
+        Ok(outputs
+            .into_iter()
+            .map(|(id, output)| (id, output.vector))
+            .collect())
     }
 }
 
@@ -200,5 +238,24 @@ mod tests {
     #[test]
     fn mean_vector_requires_equal_dimensions() {
         assert!(mean_vector(&[&[1.0], &[1.0, 0.0]]).is_err());
+    }
+
+    /// The shared bridge works with any text-level provider — proven
+    /// here with a precomputed vector map, no model required.
+    #[test]
+    fn shared_bridge_keys_vectors_by_observation_id() {
+        use std::collections::BTreeMap as Map;
+        let vectors = Map::from([
+            ("o1".to_string(), vec![1.0, 0.0]),
+            ("o2".to_string(), vec![0.0, 1.0]),
+        ]);
+        let embedder = SharedObservationEmbedder::new(Arc::new(
+            text_embedding::VectorMapTextEmbedder::new("test-model", vectors),
+        ));
+        let out = embedder
+            .embed(&[observation("o1", "a"), observation("o2", "b")])
+            .unwrap();
+        assert_eq!(out["o1"], vec![1.0, 0.0]);
+        assert_eq!(out["o2"], vec![0.0, 1.0]);
     }
 }
