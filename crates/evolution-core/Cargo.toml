@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+arc-swap = { workspace = true }
 serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"
 text-embedding = { path = "../text-embedding" }

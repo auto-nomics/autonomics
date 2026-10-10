@@ -6,6 +6,7 @@
 
 pub mod embedding;
 pub mod error;
+pub mod hub;
 pub mod observation;
 pub mod routing;
 
@@ -13,6 +14,7 @@ pub use embedding::{
     HashingObservationEmbedder, ObservationEmbedder, VectorMapEmbedder, cosine, mean_vector,
 };
 pub use error::Error;
+pub use hub::ObservationHub;
 pub use observation::{
     Observation, ObservationInput, ObservationKind, ObservationSource, ObservationStore,
 };
@@ -20,5 +22,3 @@ pub use routing::{
     ObservationAudience, ObservationRoute, ObservationRouteStatus, ObservationRouteStore,
     RouteDecision, classify_observation,
 };
-
-pub type Result<T> = std::result::Result<T, Error>;

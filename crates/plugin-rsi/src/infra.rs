@@ -43,7 +43,10 @@ pub trait PluginRegistryControl: Send + Sync {
 pub struct RsiInfra {
     store: Arc<PluginStore>,
     requests: RequestStore,
-    skills: Arc<skills::SkillManager>,
+    /// Shared observation evidence, resolved through the process-wide
+    /// hub — upstream of both plugins and skills. Plugin RSI never
+    /// touches the skill manager for evidence.
+    observations: Arc<evolution_core::ObservationHub>,
     routes: ObservationRouteStore,
     environments: EnvironmentRegistry,
     publisher: SharedPluginPublisher,
@@ -58,7 +61,7 @@ impl RsiInfra {
         default_branch: &str,
         author_name: &str,
         author_email: &str,
-        skills: Arc<skills::SkillManager>,
+        observations: Arc<evolution_core::ObservationHub>,
         environments: EnvironmentCatalog,
         publisher: SharedPluginPublisher,
         pull_request_publisher: SharedPullRequestPublisher,
@@ -68,7 +71,7 @@ impl RsiInfra {
             default_branch,
             author_name,
             author_email,
-            skills,
+            observations,
             EnvironmentRegistry::ephemeral(environments),
             publisher,
             pull_request_publisher,
@@ -82,7 +85,7 @@ impl RsiInfra {
         default_branch: &str,
         author_name: &str,
         author_email: &str,
-        skills: Arc<skills::SkillManager>,
+        observations: Arc<evolution_core::ObservationHub>,
         environments: EnvironmentRegistry,
         publisher: SharedPluginPublisher,
         pull_request_publisher: SharedPullRequestPublisher,
@@ -97,7 +100,7 @@ impl RsiInfra {
         Ok(Self {
             store: Arc::clone(&store),
             requests: RequestStore::open(state_dir),
-            skills,
+            observations,
             routes,
             environments,
             publisher,
@@ -133,9 +136,9 @@ impl RsiInfra {
     pub fn record_observation(
         &self,
         input: ObservationInput,
-    ) -> Result<skills::observation::Observation> {
-        self.skills
-            .record_observation(input)
+    ) -> Result<evolution_core::Observation> {
+        self.observations
+            .record(input)
             .map_err(|error| Error::Validation(format!("cannot record observation: {error}")))
     }
 
@@ -151,7 +154,7 @@ impl RsiInfra {
     ) -> Result<ObservationRequest> {
         observation_request(
             &self.requests,
-            &self.skills.observations(),
+            &self.observations.observations(),
             observation_id,
             intent,
             plugin_name,
@@ -188,7 +191,7 @@ impl RsiInfra {
         intent: Option<RequestIntent>,
     ) -> Result<ObservationRouting> {
         let observation = self
-            .skills
+            .observations
             .observations()
             .list()
             .into_iter()
@@ -219,7 +222,7 @@ impl RsiInfra {
             })?;
             let promoted = observation_request(
                 &self.requests,
-                &self.skills.observations(),
+                &self.observations.observations(),
                 &route.observation_id,
                 intent.unwrap_or_else(|| default_request_intent(observation.kind)),
                 Some(target),
@@ -558,8 +561,8 @@ impl RsiInfra {
 /// The result of routing one shared observation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ObservationRouting {
-    /// The canonical observation retained for skill evolution.
-    pub observation: skills::observation::Observation,
+    /// The canonical observation retained in the shared hub.
+    pub observation: evolution_core::Observation,
     /// Why the router selected the audience.
     pub decision_reason: String,
     /// The durable route record.
@@ -577,7 +580,9 @@ mod tests {
     #[test]
     fn creating_plugin_claims_request_through_the_unified_facade() {
         let state = tempfile::tempdir().unwrap();
-        let skills = skills::SkillManager::init(skills::SkillManager::new(state.path()));
+        let observations = evolution_core::ObservationHub::init(evolution_core::ObservationHub::new(
+            state.path(),
+        ));
         let mut catalog = EnvironmentCatalog::default();
         catalog.insert(
             "alpine",
@@ -595,7 +600,7 @@ mod tests {
             "main",
             "Test",
             "test@example.com",
-            skills,
+            observations,
             catalog,
             publisher.clone(),
             publisher,
@@ -626,7 +631,9 @@ mod tests {
     #[test]
     fn observations_feed_both_skill_and_plugin_feedback_systems() {
         let state = tempfile::tempdir().unwrap();
-        let skills = skills::SkillManager::init(skills::SkillManager::new(state.path()));
+        let observations = evolution_core::ObservationHub::init(evolution_core::ObservationHub::new(
+            state.path(),
+        ));
         let catalog = EnvironmentCatalog::default();
         let publisher = Arc::new(crate::GhPublisher::new(crate::GhPublisherConfig {
             enabled: false,
@@ -637,7 +644,7 @@ mod tests {
             "main",
             "Test",
             "test@example.com",
-            skills.clone(),
+            observations.clone(),
             catalog,
             publisher.clone(),
             publisher,
@@ -666,7 +673,7 @@ mod tests {
         assert_eq!(feedback.request.source, RequestSource::Eval);
         assert_eq!(feedback.request.plugin_name.as_deref(), Some("demo-plugin"));
         assert!(
-            skills
+            observations
                 .observations()
                 .list()
                 .iter()

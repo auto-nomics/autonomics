@@ -150,7 +150,9 @@ async fn an_installed_reference_can_be_forked_and_locally_activated() {
         ValidationOutcome::NeedsFix(report) => panic!("reference validation failed: {report:?}"),
     };
 
-    let skills = skills::SkillManager::init(skills::SkillManager::new(state.path()));
+    let observations = evolution_core::ObservationHub::init(evolution_core::ObservationHub::new(
+        state.path(),
+    ));
     let publisher = Arc::new(GhPublisher::new(GhPublisherConfig {
         enabled: false,
         ..Default::default()
@@ -160,7 +162,7 @@ async fn an_installed_reference_can_be_forked_and_locally_activated() {
         "main",
         "Autonomics RSI",
         "rsi@example.com",
-        skills,
+        observations,
         catalog(),
         publisher.clone(),
         publisher,

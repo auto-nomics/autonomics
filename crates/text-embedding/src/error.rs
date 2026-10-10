@@ -2,7 +2,7 @@
 
 /// Something went wrong turning text into vectors.
 #[derive(Debug, thiserror::Error)]
-pub enum EmbeddingError {
+pub enum Error {
     #[error("embedding dimension mismatch: {expected} != {actual}")]
     DimensionMismatch { expected: usize, actual: usize },
 
@@ -16,6 +16,15 @@ pub enum EmbeddingError {
     /// A provider returned unusable vectors for the given inputs.
     #[error("embedding provider: {0}")]
     Provider(String),
+
+    #[error("unknown error: {0}")]
+    Unknown(String),
 }
 
-pub type Result<T> = std::result::Result<T, EmbeddingError>;
+impl From<&str> for Error {
+    fn from(value: &str) -> Self {
+        Self::Unknown(value.to_string())
+    }
+}
+
+pub type Result<T> = std::result::Result<T, Error>;

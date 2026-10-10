@@ -342,9 +342,14 @@ impl SharedInfra {
     pub async fn open(config: &RuntimeConfig) -> Result<Self> {
         tracing::info!("SharedInfra::open: starting");
 
-        // Skill and plugin evolution share one state dir. Install the skill
-        // manager first so RSI can promote its observations into plugin
-        // requests without duplicating the evidence store.
+        // Skill and plugin evolution share one state dir. The
+        // observation hub is installed FIRST — evidence is upstream of
+        // both — then the skill manager re-installs the same directory
+        // (idempotent) and keeps its own reference.
+        let observations =
+            evolution_core::ObservationHub::init(evolution_core::ObservationHub::new(
+                &config.state_dir,
+            ));
         let skills = skills::SkillManager::init(skills::SkillManager::new(&config.state_dir));
         skills.load_usage();
         let plugin_layout = plugin_rsi::PluginStateLayout::open(&config.state_dir);
@@ -370,7 +375,9 @@ impl SharedInfra {
                 "main",
                 "Autonomics RSI",
                 "rsi@autonomics.example",
-                skills.clone(),
+                // The hub installed above — plugins and skills read the
+                // same evidence ledger, neither owns it.
+                observations,
                 environments.clone(),
                 plugin_publisher,
                 pull_request_publisher,

@@ -117,6 +117,11 @@ pub struct SkillManager {
     /// (not the handle) keeps the manager free of any service
     /// lifetime coupling.
     evolution_tx: RwLock<Option<mpsc::Sender<crate::evolution::SkillCommand>>>,
+    /// The upstream observation hub this manager reads evidence from.
+    /// Held by reference, not resolved through the global on every
+    /// call: parallel tests replace the global singleton, and an
+    /// instance must keep seeing the state dir it was built with.
+    hub: Arc<evolution_core::ObservationHub>,
     /// Optional semantic embedding provider for observation clustering.
     embedder: RwLock<Option<Arc<dyn ObservationEmbedder>>>,
 }
@@ -142,15 +147,25 @@ impl SkillManager {
         Self::init(Self::from_env())
     }
     /// Standard layout: global tier at `<state_dir>/skills`.
+    ///
+    /// Also installs the process-wide [`ObservationHub`] over the same
+    /// state dir: observations are upstream of skills, and the manager
+    /// must never read them from a different directory than the hub
+    /// hands to every other consumer.
     #[must_use]
     pub fn new(state_dir: impl Into<PathBuf>) -> Self {
+        let state_dir = state_dir.into();
+        let hub = evolution_core::ObservationHub::init(evolution_core::ObservationHub::new(
+            state_dir.clone(),
+        ));
         Self {
-            state_dir: state_dir.into(),
+            state_dir,
             workspace_roots: Vec::new(),
             generation: AtomicU64::new(1),
             changes: broadcast::channel(16).0,
             usage: RwLock::new(HashMap::new()),
             evolution_tx: RwLock::new(None),
+            hub,
             embedder: RwLock::new(None),
         }
     }
@@ -323,9 +338,17 @@ impl SkillManager {
 
     // ── evolution loop: observations, distillation, proposals ──
 
-    /// The observation store under this manager's state dir.
+    /// The observation store, resolved through this manager's hub.
+    ///
+    /// Observations are upstream of skills: the hub owns the ledger
+    /// and this accessor only hands its view to skill-side callers.
     pub fn observations(&self) -> crate::observation::ObservationStore {
-        crate::observation::ObservationStore::open(&self.state_dir)
+        self.hub.observations()
+    }
+
+    /// The hub this manager reads evidence from.
+    pub fn observation_hub(&self) -> Arc<evolution_core::ObservationHub> {
+        Arc::clone(&self.hub)
     }
 
     /// Record one observation (idempotent on content). This is the
@@ -345,7 +368,13 @@ impl SkillManager {
         &self,
         input: crate::observation::ObservationInput,
     ) -> Result<crate::observation::Observation, SkillError> {
-        let observation = self.observations().record(input)?;
+        // The hub is the canonical ledger; this wrapper only adds the
+        // skill-side notification so a fresh observation can trigger
+        // an immediate evolution cycle.
+        let observation = self
+            .hub
+            .record(input)
+            .map_err(SkillError::Evolution)?;
         if let Ok(slot) = self.evolution_tx.read()
             && let Some(tx) = slot.as_ref()
         {
@@ -399,8 +428,8 @@ impl SkillManager {
     }
 
     fn skill_eligible_observations(&self) -> Vec<crate::Observation> {
-        let observations = self.observations().list();
-        let routes = evolution_core::routing::ObservationRouteStore::open(&self.state_dir).list();
+        let observations = self.hub.observations().list();
+        let routes = self.hub.routes().list();
         let mut routed = std::collections::HashSet::new();
         let mut eligible = std::collections::HashSet::new();
         for route in routes {

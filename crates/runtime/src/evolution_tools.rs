@@ -131,6 +131,9 @@ mod tests {
     }
 
     fn infra_with_skills(state: &std::path::Path) -> (RsiInfra, Arc<skills::SkillManager>) {
+        let observations = evolution_core::ObservationHub::init(evolution_core::ObservationHub::new(
+            state,
+        ));
         let skills = skills::SkillManager::init(skills::SkillManager::new(state));
         let environments = catalog();
         let publisher = Arc::new(GhPublisher::new(GhPublisherConfig {
@@ -142,7 +145,7 @@ mod tests {
             "main",
             "Test",
             "test@example.com",
-            skills.clone(),
+            observations,
             environments,
             publisher.clone(),
             publisher,

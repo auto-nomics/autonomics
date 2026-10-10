@@ -695,7 +695,7 @@ mod tests {
         let ok = format!("FROM {pinned}\nCOPY assets/notes.txt /usr/share/notes.txt\n");
         assert!(gate_containerfile_static(&ok, &files).is_ok(), "{ok}");
 
-        let unpinned = format!("FROM docker.io/library/alpine:latest\n");
+        let unpinned = "FROM docker.io/library/alpine:latest\n".to_string();
         assert!(gate_containerfile_static(&unpinned, &files).is_err());
 
         let scratch = "FROM scratch\n".to_string();

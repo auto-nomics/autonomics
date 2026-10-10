@@ -23,13 +23,13 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use ort::session::builder::GraphOptimizationLevel;
 use ort::session::Session;
+use ort::session::builder::GraphOptimizationLevel;
 use ort::value::Tensor;
 use serde::Deserialize;
 use tokenizers::{Encoding, Tokenizer, TruncationParams};
 
-use crate::error::{EmbeddingError, Result};
+use crate::error::{Error, Result};
 use crate::input::EmbeddingInput;
 use crate::output::EmbeddingOutput;
 use crate::provider::TextEmbedder;
@@ -91,14 +91,14 @@ impl OnnxTextEmbedder {
         let onnx_path = resolve_onnx(model_dir)?;
         let tokenizer_path = model_dir.join("tokenizer.json");
         if !tokenizer_path.is_file() {
-            return Err(EmbeddingError::Provider(format!(
+            return Err(Error::Provider(format!(
                 "no tokenizer.json under {}",
                 model_dir.display()
             )));
         }
 
         let mut tokenizer = Tokenizer::from_file(&tokenizer_path).map_err(|e| {
-            EmbeddingError::Provider(format!(
+            Error::Provider(format!(
                 "cannot load tokenizer from {}: {e}",
                 tokenizer_path.display()
             ))
@@ -108,10 +108,10 @@ impl OnnxTextEmbedder {
                 max_length: options.max_length,
                 ..TruncationParams::default()
             }))
-            .map_err(|e| EmbeddingError::Provider(format!("cannot set truncation: {e}")))?;
-        let pad_token_id = tokenizer.token_to_id("<pad>").ok_or_else(|| {
-            EmbeddingError::Provider("tokenizer has no <pad> token".into())
-        })?;
+            .map_err(|e| Error::Provider(format!("cannot set truncation: {e}")))?;
+        let pad_token_id = tokenizer
+            .token_to_id("<pad>")
+            .ok_or_else(|| Error::Provider("tokenizer has no <pad> token".into()))?;
         let hidden_size = read_hidden_size(model_dir)?;
 
         let builder = Session::builder().map_err(onnx_error("cannot create session builder"))?;
@@ -136,7 +136,7 @@ impl OnnxTextEmbedder {
             .outputs()
             .first()
             .map(|output| output.name().to_string())
-            .ok_or_else(|| EmbeddingError::Provider("model has no outputs".into()))?;
+            .ok_or_else(|| Error::Provider("model has no outputs".into()))?;
 
         // Model identity: directory + artifact + width. The artifact
         // stem distinguishes the quantized export from the
@@ -195,7 +195,7 @@ impl OnnxTextEmbedder {
         let mut session = self
             .session
             .lock()
-            .map_err(|_| EmbeddingError::Provider("onnx session lock poisoned".into()))?;
+            .map_err(|_| Error::Provider("onnx session lock poisoned".into()))?;
         let mask_input = mask.clone();
         let outputs = if self.uses_token_type_ids {
             let type_ids = vec![0_i64; batch * seq_len];
@@ -224,9 +224,9 @@ impl OnnxTextEmbedder {
             [b, seq, hidden] if *b == batch => pool_rows(data, &mask, *seq, *hidden),
             [b, hidden] if *b == batch => direct_rows(data, *hidden),
             other => {
-                return Err(EmbeddingError::Provider(format!(
+                return Err(Error::Provider(format!(
                     "unexpected output shape {other:?} for batch {batch}"
-                )))
+                )));
             }
         };
         for vector in &mut vectors {
@@ -241,17 +241,14 @@ impl TextEmbedder for OnnxTextEmbedder {
         let encoding = self
             .tokenizer
             .encode(input.text.as_str(), true)
-            .map_err(|e| EmbeddingError::Provider(format!("cannot tokenize input: {e}")))?;
+            .map_err(|e| Error::Provider(format!("cannot tokenize input: {e}")))?;
         let vector = self.run_batch(std::slice::from_ref(&encoding))?.remove(0);
         Ok(EmbeddingOutput::new(&self.signature, vector))
     }
 
     /// A single batched forward pass for the whole input set — the
     /// reason a local model overrides the looping default.
-    fn batch_embed(
-        &self,
-        inputs: &[EmbeddingInput],
-    ) -> Result<BTreeMap<String, EmbeddingOutput>> {
+    fn batch_embed(&self, inputs: &[EmbeddingInput]) -> Result<BTreeMap<String, EmbeddingOutput>> {
         if inputs.is_empty() {
             return Ok(BTreeMap::new());
         }
@@ -259,7 +256,7 @@ impl TextEmbedder for OnnxTextEmbedder {
         let encodings = self
             .tokenizer
             .encode_batch(texts, true)
-            .map_err(|e| EmbeddingError::Provider(format!("cannot tokenize batch: {e}")))?;
+            .map_err(|e| Error::Provider(format!("cannot tokenize batch: {e}")))?;
         let vectors = self.run_batch(&encodings)?;
         Ok(inputs
             .iter()
@@ -295,36 +292,25 @@ fn resolve_onnx(model_dir: &Path) -> Result<PathBuf> {
     candidates
         .into_iter()
         .find(|path| path.is_file())
-        .ok_or_else(|| {
-            EmbeddingError::Provider(format!(
-                "no .onnx graph under {}",
-                model_dir.display()
-            ))
-        })
+        .ok_or_else(|| Error::Provider(format!("no .onnx graph under {}", model_dir.display())))
 }
 
 fn read_hidden_size(model_dir: &Path) -> Result<Option<usize>> {
     let path = model_dir.join("config.json");
-    let text = std::fs::read_to_string(&path).map_err(|e| {
-        EmbeddingError::Provider(format!("cannot read {}: {e}", path.display()))
-    })?;
-    let config: ModelConfig = serde_json::from_str(&text).map_err(|e| {
-        EmbeddingError::Provider(format!("cannot parse {}: {e}", path.display()))
-    })?;
+    let text = std::fs::read_to_string(&path)
+        .map_err(|e| Error::Provider(format!("cannot read {}: {e}", path.display())))?;
+    let config: ModelConfig = serde_json::from_str(&text)
+        .map_err(|e| Error::Provider(format!("cannot parse {}: {e}", path.display())))?;
     Ok(config.hidden_size)
 }
 
-fn onnx_error<E: std::fmt::Display>(context: &'static str) -> impl Fn(E) -> EmbeddingError {
-    move |e| EmbeddingError::Provider(format!("{context}: {e}"))
+fn onnx_error<E: std::fmt::Display>(context: &'static str) -> impl Fn(E) -> Error {
+    move |e| Error::Provider(format!("{context}: {e}"))
 }
 
 /// Right-pad every row to `seq_len`: ids with the pad token, mask with
 /// 0 so pooling skips the filler.
-fn pad_batch(
-    rows: &[(&[u32], &[u32])],
-    pad_token_id: u32,
-    seq_len: usize,
-) -> (Vec<i64>, Vec<i64>) {
+fn pad_batch(rows: &[(&[u32], &[u32])], pad_token_id: u32, seq_len: usize) -> (Vec<i64>, Vec<i64>) {
     let mut ids = Vec::with_capacity(rows.len() * seq_len);
     let mut mask = Vec::with_capacity(rows.len() * seq_len);
     for (row_ids, row_mask) in rows {
@@ -475,14 +461,8 @@ mod real_model_tests {
         // masked out of pooling, so only float noise may differ).
         let batch = embedder
             .batch_embed(&[
-                EmbeddingInput::new(
-                    "a",
-                    "restart the daemon after editing config",
-                ),
-                EmbeddingInput::new(
-                    "b",
-                    "restart the daemon once the config changed",
-                ),
+                EmbeddingInput::new("a", "restart the daemon after editing config"),
+                EmbeddingInput::new("b", "restart the daemon once the config changed"),
             ])
             .unwrap();
         let batch_vs_single = crate::cosine(&batch["a"].vector, &a.vector).unwrap();

@@ -28,11 +28,12 @@ pub mod hashing;
 pub mod input;
 pub mod output;
 pub mod provider;
+pub mod service;
 pub mod vector;
 pub mod vector_map;
 
-pub use error::{EmbeddingError, Result};
-pub use hashing::{HashingTextEmbedder, DEFAULT_EMBEDDING_DIM};
+pub use error::{Error, Result};
+pub use hashing::{DEFAULT_EMBEDDING_DIM, HashingTextEmbedder};
 pub use input::EmbeddingInput;
 pub use output::EmbeddingOutput;
 #[cfg(feature = "onnx")]

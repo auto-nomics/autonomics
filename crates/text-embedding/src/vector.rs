@@ -1,6 +1,6 @@
 //! Dimension-checked vector math for clustering.
 
-use crate::error::{EmbeddingError, Result};
+use crate::error::{Error, Result};
 
 /// L2-normalize in place. Zero vectors are left as zeros — cosine and
 /// distance code guard on the zero norm instead of dividing by it.
@@ -16,7 +16,7 @@ pub(crate) fn normalize(vector: &mut [f32]) {
 /// Cosine similarity for two equal-length vectors.
 pub fn cosine(left: &[f32], right: &[f32]) -> Result<f32> {
     if left.len() != right.len() {
-        return Err(EmbeddingError::DimensionMismatch {
+        return Err(Error::DimensionMismatch {
             expected: left.len(),
             actual: right.len(),
         });
@@ -31,12 +31,12 @@ pub fn cosine(left: &[f32], right: &[f32]) -> Result<f32> {
 /// and for choosing a stable representative.
 pub fn mean_vector(vectors: &[&[f32]]) -> Result<Vec<f32>> {
     let Some((first, rest)) = vectors.split_first() else {
-        return Err(EmbeddingError::NoVectors);
+        return Err(Error::NoVectors);
     };
     let mut mean = first.to_vec();
     for vector in rest.iter().copied() {
         if vector.len() != mean.len() {
-            return Err(EmbeddingError::DimensionMismatch {
+            return Err(Error::DimensionMismatch {
                 expected: mean.len(),
                 actual: vector.len(),
             });
@@ -60,7 +60,7 @@ mod tests {
     fn cosine_detects_dimension_mismatch() {
         assert!(matches!(
             cosine(&[1.0], &[1.0, 0.0]),
-            Err(EmbeddingError::DimensionMismatch { .. })
+            Err(Error::DimensionMismatch { .. })
         ));
     }
 
@@ -82,7 +82,7 @@ mod tests {
 
     #[test]
     fn mean_vector_rejects_an_empty_batch() {
-        assert!(matches!(mean_vector(&[]), Err(EmbeddingError::NoVectors)));
+        assert!(matches!(mean_vector(&[]), Err(Error::NoVectors)));
     }
 
     #[test]

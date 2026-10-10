@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::error::{EmbeddingError, Result};
+use crate::error::{Error, Result};
 use crate::input::EmbeddingInput;
 use crate::output::EmbeddingOutput;
 use crate::provider::TextEmbedder;
@@ -43,7 +43,7 @@ impl TextEmbedder for VectorMapTextEmbedder {
             .get(&input.id)
             .cloned()
             .map(|vector| EmbeddingOutput::new(&self.model_signature, vector))
-            .ok_or_else(|| EmbeddingError::MissingVector {
+            .ok_or_else(|| Error::MissingVector {
                 id: input.id.clone(),
             })
     }
@@ -98,7 +98,7 @@ mod tests {
     fn single_lookup_is_strict_on_unknown_ids() {
         assert!(matches!(
             embedder().embed(&EmbeddingInput::new("missing", "text")),
-            Err(EmbeddingError::MissingVector { id }) if id == "missing"
+            Err(Error::MissingVector { id }) if id == "missing"
         ));
     }
 
@@ -112,6 +112,10 @@ mod tests {
         let batch = embedder
             .batch_embed(&[EmbeddingInput::new("a", "x"), EmbeddingInput::new("b", "y")])
             .unwrap();
-        assert!(batch.values().all(|o| o.model_signature == "precomputed-v1"));
+        assert!(
+            batch
+                .values()
+                .all(|o| o.model_signature == "precomputed-v1")
+        );
     }
 }

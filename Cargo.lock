@@ -4348,6 +4348,7 @@ dependencies = [
 name = "evolution-core"
 version = "0.1.0"
 dependencies = [
+ "arc-swap",
  "serde",
  "sha2 0.10.9",
  "tempfile",
@@ -10928,6 +10929,7 @@ dependencies = [
  "data-engine",
  "data-engine-tools",
  "datafusion",
+ "evolution-core",
  "futures",
  "gwascatalog-sdk",
  "kegg",
@@ -12496,6 +12498,7 @@ dependencies = [
 name = "text-embedding"
 version = "0.1.0"
 dependencies = [
+ "hf-hub",
  "ort",
  "serde",
  "serde_json",
