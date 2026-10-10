@@ -149,21 +149,38 @@ pub type ProgressBuffer = Arc<Mutex<ProgressLog>>;
 /// Mutable, per-task metadata shared by the executing tool and observers.
 pub type TaskMetadata = Arc<Mutex<Value>>;
 
+/// Session-scoped state handed to tools via [`ToolContext::session`].
+///
+/// Wired by the session's `Toolset`; carries the backend session id and the
+/// session's plan handle. The `Arc<ArcSwap>` identity is stable for the
+/// session's lifetime — `Session::set_plan` stores in place — so a handle
+/// captured here always observes the session's current plan.
+#[derive(Clone)]
+pub struct SessionToolCtx {
+    pub session_id: uuid::Uuid,
+    pub plan: std::sync::Arc<arc_swap::ArcSwap<agentik_types::AgentPlan>>,
+}
+
 /// Per-invocation context handed to a tool's [`ToolFunction::execute_with_context`].
 ///
 /// Carries optional handles a tool may use to interact with its surrounding
-/// task infrastructure while it runs. Today the only field is `output`: a
-/// shared append-only [`ProgressBuffer`] mirroring the background-task entry's
-/// live-output channel, so a long-running tool can push structured progress
-/// that `view_task_status` surfaces. Tools that don't care about progress
-/// simply ignore the context (the default `execute_with_context` does so and
-/// delegates to [`ToolFunction::execute`]).
+/// task infrastructure while it runs. `output` is a shared append-only
+/// [`ProgressBuffer`] mirroring the background-task entry's live-output
+/// channel, so a long-running tool can push structured progress that
+/// `view_task_status` surfaces. `session` carries session-scoped state (the
+/// session id and its plan handle) so session-aware tools like `update_plan`
+/// resolve the right conversation. Tools that don't care simply ignore the
+/// context (the default `execute_with_context` does so and delegates to
+/// [`ToolFunction::execute`]).
 #[derive(Clone)]
 pub struct ToolContext {
     /// Live-output buffer. `None` when the toolset did not wire one (e.g. in
     /// tests); the tool must treat it as optional.
     pub output: Option<ProgressBuffer>,
     pub metadata: TaskMetadata,
+    /// Session-scoped state. `None` when the invocation is not bound to a
+    /// session (e.g. direct test calls); the tool must treat it as optional.
+    pub session: Option<SessionToolCtx>,
 }
 
 impl Default for ToolContext {
@@ -171,6 +188,7 @@ impl Default for ToolContext {
         Self {
             output: None,
             metadata: Arc::new(Mutex::new(Value::Null)),
+            session: None,
         }
     }
 }

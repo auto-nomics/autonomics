@@ -13,7 +13,6 @@ use crate::context::ContextProvider;
 use crate::storage::{AgentStorage, PersistOp};
 use crate::tools::ToolRegistry;
 use crate::tools::task_runtime::TaskStore;
-use agentik_types::AgentPlan;
 
 /// Stable resources shared across all sessions of one agent.
 ///
@@ -48,10 +47,6 @@ pub(crate) struct AgentShared {
     /// Sessions created after bootstrap read this to wire their
     /// `persist_tx`.
     pub persist_tx: std::sync::OnceLock<UnboundedSender<PersistOp>>,
-    /// The agent's persistent task plan — a first-class citizen that lives
-    /// as long as the agent does. Updated via the `update_plan` tool.
-    /// Uses `Arc<ArcSwap>` for lock-free reads and sharing with the tool.
-    pub plan: Arc<ArcSwap<AgentPlan>>,
 }
 
 impl AgentShared {
@@ -99,16 +94,6 @@ impl AgentShared {
             )),
             event_tx: ArcSwapOption::empty(),
             persist_tx: std::sync::OnceLock::new(),
-            plan: Arc::new(ArcSwap::new(std::sync::Arc::new(
-                agentik_types::AgentPlan::new(),
-            ))),
         })
-    }
-
-    // ── Plan (first-class persistent task plan) ───────────
-
-    /// Load a snapshot of the current plan.
-    pub fn plan_snapshot(&self) -> AgentPlan {
-        AgentPlan::clone(&self.plan.load())
     }
 }

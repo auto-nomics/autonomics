@@ -18,8 +18,9 @@ pub mod types;
 
 pub use config::{
     KEEP_WORKSPACE_ENV, REMOVED_BACKEND_ENV, WORK_DIR_GC_AGE_ENV, WORKSPACE_GC_AGE_ENV,
-    WORKSPACE_GC_INTERVAL_ENV, ensure_backend_env_removed, keep_workspace_enabled,
-    parse_removed_backend_env, work_dir_gc_age, workspace_gc_age, workspace_gc_interval,
+    WORKSPACE_GC_INTERVAL_ENV, canonicalize_workspace_root, ensure_backend_env_removed,
+    keep_workspace_enabled, parse_removed_backend_env, work_dir_gc_age, workspace_gc_age,
+    workspace_gc_interval,
 };
 pub use connection::{
     DEFAULT_CONTAINER_WORKDIR, DEFAULT_TIMEOUT_SECS, MAX_CAPTURED_OUTPUT_BYTES, PodmanConnection,

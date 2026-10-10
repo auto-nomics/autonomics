@@ -324,6 +324,15 @@ impl TursoAgentStorage {
                     updated_at INTEGER NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS session_plans (
+                    agent_id   TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    plan_json  TEXT NOT NULL,
+                    revision   INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    PRIMARY KEY (agent_id, session_id)
+                );
+
                 CREATE TABLE IF NOT EXISTS agent_graph (
                     path         TEXT PRIMARY KEY,
                     parent_path  TEXT,
@@ -1273,6 +1282,13 @@ impl AgentStorage for TursoAgentStorage {
                 params_from_iter([Value::Text(sid.clone())]),
             )
             .await?;
+        // Delete the session's plan row.
+        self.conn
+            .execute(
+                "DELETE FROM session_plans WHERE session_id = ?1",
+                params_from_iter([Value::Text(sid.clone())]),
+            )
+            .await?;
         // Delete the session row itself.
         self.conn
             .execute(
@@ -2142,19 +2158,25 @@ impl AgentStorage for TursoAgentStorage {
         }
     }
 
-    async fn save_plan(&self, agent_id: Uuid, plan: &AgentPlan) -> Result<(), StorageError> {
+    async fn save_plan(
+        &self,
+        agent_id: Uuid,
+        session_id: Uuid,
+        plan: &AgentPlan,
+    ) -> Result<(), StorageError> {
         let json = serde_json::to_string(plan)?;
         let now = chrono::Utc::now().timestamp_millis();
         self.conn
             .execute(
-                "INSERT INTO agent_plans (agent_id, plan_json, revision, updated_at)
-                 VALUES (?1, ?2, ?3, ?4)
-                 ON CONFLICT(agent_id) DO UPDATE SET
+                "INSERT INTO session_plans (agent_id, session_id, plan_json, revision, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(agent_id, session_id) DO UPDATE SET
                      plan_json = excluded.plan_json,
                      revision   = excluded.revision,
                      updated_at = excluded.updated_at",
                 params_from_iter([
                     Value::Text(agent_id.to_string()),
+                    Value::Text(session_id.to_string()),
                     Value::Text(json),
                     Value::Integer(plan.revision as i64),
                     Value::Integer(now),
@@ -2164,12 +2186,19 @@ impl AgentStorage for TursoAgentStorage {
         Ok(())
     }
 
-    async fn load_plan(&self, agent_id: Uuid) -> Result<Option<AgentPlan>, StorageError> {
+    async fn load_plan(
+        &self,
+        agent_id: Uuid,
+        session_id: Uuid,
+    ) -> Result<Option<AgentPlan>, StorageError> {
         let mut rows = self
             .conn
             .query(
-                "SELECT plan_json FROM agent_plans WHERE agent_id = ?1",
-                params_from_iter([Value::Text(agent_id.to_string())]),
+                "SELECT plan_json FROM session_plans WHERE agent_id = ?1 AND session_id = ?2",
+                params_from_iter([
+                    Value::Text(agent_id.to_string()),
+                    Value::Text(session_id.to_string()),
+                ]),
             )
             .await?;
         match rows.next().await {
@@ -3016,11 +3045,26 @@ mod tests {
     async fn test_plan_save_and_load() {
         let store = TursoAgentStorage::open_in_memory().await.unwrap();
         let agent_id = Uuid::new_v4();
+        let session_a = Uuid::new_v4();
+        let session_b = Uuid::new_v4();
 
-        // No plan yet.
-        assert!(store.load_plan(agent_id).await.unwrap().is_none());
+        // No plan yet for either session.
+        assert!(
+            store
+                .load_plan(agent_id, session_a)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            store
+                .load_plan(agent_id, session_b)
+                .await
+                .unwrap()
+                .is_none()
+        );
 
-        // Save a plan.
+        // Save a plan for session A.
         let mut plan = AgentPlan::new();
         plan.replace(agentik_types::PlanUpdate {
             explanation: Some("test plan".into()),
@@ -3035,15 +3079,23 @@ mod tests {
                 },
             ],
         });
-        store.save_plan(agent_id, &plan).await.unwrap();
+        store.save_plan(agent_id, session_a, &plan).await.unwrap();
 
-        // Load it back.
-        let loaded = store.load_plan(agent_id).await.unwrap().unwrap();
+        // Session A loads it back; session B stays independent.
+        let loaded = store.load_plan(agent_id, session_a).await.unwrap().unwrap();
         assert_eq!(loaded, plan);
         assert_eq!(loaded.update.plan.len(), 2);
         assert_eq!(loaded.update.completed_count(), 1);
+        assert!(
+            store
+                .load_plan(agent_id, session_b)
+                .await
+                .unwrap()
+                .is_none()
+        );
 
-        // Overwrite with a new plan (upsert).
+        // Overwrite session A with a new plan (upsert); save a different
+        // plan to session B; both load independently.
         let mut plan2 = AgentPlan::new();
         plan2.replace(agentik_types::PlanUpdate {
             explanation: None,
@@ -3052,10 +3104,54 @@ mod tests {
                 status: agentik_types::StepStatus::Pending,
             }],
         });
-        store.save_plan(agent_id, &plan2).await.unwrap();
-        let loaded2 = store.load_plan(agent_id).await.unwrap().unwrap();
+        store.save_plan(agent_id, session_a, &plan2).await.unwrap();
+        let loaded2 = store.load_plan(agent_id, session_a).await.unwrap().unwrap();
         assert_eq!(loaded2.update.plan.len(), 1);
         assert_eq!(loaded2.revision, 1);
+
+        let mut plan_b = AgentPlan::new();
+        plan_b.replace(agentik_types::PlanUpdate {
+            explanation: Some("session b".into()),
+            plan: vec![],
+        });
+        store.save_plan(agent_id, session_b, &plan_b).await.unwrap();
+        let loaded_b = store.load_plan(agent_id, session_b).await.unwrap().unwrap();
+        assert_eq!(loaded_b, plan_b);
+        assert_ne!(loaded_b, loaded2);
+    }
+
+    #[tokio::test]
+    async fn test_delete_session_removes_plan() {
+        let store = TursoAgentStorage::open_in_memory().await.unwrap();
+        let agent_id = Uuid::new_v4();
+        let session_id = Uuid::new_v4();
+        store.start_session(agent_id, session_id).await.unwrap();
+
+        let mut plan = AgentPlan::new();
+        plan.replace(agentik_types::PlanUpdate {
+            explanation: None,
+            plan: vec![agentik_types::PlanStep {
+                step: "Only".into(),
+                status: agentik_types::StepStatus::Pending,
+            }],
+        });
+        store.save_plan(agent_id, session_id, &plan).await.unwrap();
+        assert!(
+            store
+                .load_plan(agent_id, session_id)
+                .await
+                .unwrap()
+                .is_some()
+        );
+
+        store.delete_session(session_id).await.unwrap();
+        assert!(
+            store
+                .load_plan(agent_id, session_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     // ── Phase 4: agent graph persistence tests ──

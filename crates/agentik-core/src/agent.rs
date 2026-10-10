@@ -274,17 +274,6 @@ impl Agent {
 
             let (persist_tx, persist_rx) = tokio::sync::mpsc::unbounded_channel::<PersistOp>();
 
-            // ── Restore the agent's persistent plan ──────────
-            if let Ok(Some(plan)) = storage.as_ref().load_plan(self.shared.id).await {
-                if !plan.is_empty() {
-                    self.shared.plan.store(Arc::new(plan));
-                    tracing::debug!(
-                        agent_id = %self.shared.id,
-                        "restored agent plan from storage"
-                    );
-                }
-            }
-
             // Store in shared so sessions created later can also access it.
             let _ = self.shared.persist_tx.set(persist_tx);
             // Wire into existing sessions.
@@ -357,6 +346,24 @@ impl Agent {
                                 tracing::warn!(
                                     error = %e,
                                     "failed to restore session state for {}", rec.session_id
+                                );
+                            }
+                        }
+
+                        // Restore this session's persisted plan. `set_plan`
+                        // stores in place, so the Toolset's captured handle
+                        // sees the restored plan immediately.
+                        match storage
+                            .as_ref()
+                            .load_plan(self.shared.id, rec.session_id)
+                            .await
+                        {
+                            Ok(Some(plan)) if !plan.is_empty() => s.set_plan(plan),
+                            Ok(_) => {}
+                            Err(e) => {
+                                tracing::warn!(
+                                    error = %e,
+                                    "failed to restore plan for session {}", rec.session_id
                                 );
                             }
                         }

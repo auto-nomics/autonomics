@@ -142,6 +142,13 @@ pub struct Session {
     /// Kept separate from `messages` so the sanitizer never sees it
     /// and tool_use/tool_result indices are not shifted by coalescing.
     pub(crate) pending_system_prompt: Option<String>,
+    /// The session's persistent task plan — a first-class citizen that lives
+    /// as long as this conversation does. Updated via the `update_plan` tool
+    /// (which reaches this same `ArcSwap` through its `ToolContext`) and
+    /// injected into the message stream by `inject_state_notices`.
+    /// The `ArcSwap` identity is stable for the session's lifetime; use
+    /// [`set_plan`](Self::set_plan) to replace contents in place.
+    pub(crate) plan: Arc<arc_swap::ArcSwap<agentik_types::AgentPlan>>,
     /// Identity of the currently open conversation turn. A turn remains open
     /// across a `Waiting` pause (for example `wait_task`) and closes only on
     /// completion, interruption, or failure.
@@ -165,11 +172,18 @@ impl Session {
 
     /// Create a new empty session.
     pub(crate) fn new(id: Uuid, shared: Arc<AgentShared>) -> Self {
-        let toolset = Toolset::from_registry_with_tasks(
+        let plan = Arc::new(arc_swap::ArcSwap::new(Arc::new(
+            agentik_types::AgentPlan::new(),
+        )));
+        let mut toolset = Toolset::from_registry_with_tasks(
             shared.tool_registry.clone(),
             shared.tasks.clone(),
             shared.event_tx(),
         );
+        // The same Arc must back both the Toolset context and the Session
+        // field, or `update_plan` writes and `set_plan` restores would
+        // diverge from what `inject_state_notices` reads.
+        toolset.set_session_plan(id, Arc::clone(&plan));
         let now = chrono::Utc::now().timestamp_millis();
         let persist_tx = shared.persist_tx.get().cloned();
         Self {
@@ -188,6 +202,7 @@ impl Session {
             cancel_token: CancellationToken::new(),
             active_wait_watchers: HashMap::new(),
             pending_system_prompt: None,
+            plan,
             active_turn_id: None,
             active_delegation_id: None,
             turn_baseline: None,
@@ -203,11 +218,15 @@ impl Session {
         state: SessionState,
         cancel_token: CancellationToken,
     ) -> Self {
-        let toolset = Toolset::from_registry_with_tasks(
+        let plan = Arc::new(arc_swap::ArcSwap::new(Arc::new(
+            agentik_types::AgentPlan::new(),
+        )));
+        let mut toolset = Toolset::from_registry_with_tasks(
             shared.tool_registry.clone(),
             shared.tasks.clone(),
             shared.event_tx(),
         );
+        toolset.set_session_plan(id, Arc::clone(&plan));
         let now = chrono::Utc::now().timestamp_millis();
         let persist_tx = shared.persist_tx.get().cloned();
         Self {
@@ -226,6 +245,7 @@ impl Session {
             cancel_token,
             active_wait_watchers: HashMap::new(),
             pending_system_prompt: None,
+            plan,
             active_turn_id: None,
             active_delegation_id: None,
             turn_baseline: None,
@@ -236,11 +256,17 @@ impl Session {
 
     /// Fork a new session from an existing one, deep-cloning its state.
     pub(crate) fn fork_from(parent: &Session, new_id: Uuid, shared: Arc<AgentShared>) -> Self {
-        let toolset = Toolset::from_registry_with_tasks(
+        // The fork inherits a snapshot of the parent's plan (revision
+        // included); the two diverge independently from here on.
+        let plan = Arc::new(arc_swap::ArcSwap::new(Arc::new(
+            agentik_types::AgentPlan::clone(&parent.plan.load()),
+        )));
+        let mut toolset = Toolset::from_registry_with_tasks(
             shared.tool_registry.clone(),
             shared.tasks.clone(),
             shared.event_tx(),
         );
+        toolset.set_session_plan(new_id, Arc::clone(&plan));
         let now = chrono::Utc::now().timestamp_millis();
         let persist_tx = shared.persist_tx.get().cloned();
         Self {
@@ -262,6 +288,7 @@ impl Session {
             cancel_token: CancellationToken::new(),
             active_wait_watchers: HashMap::new(),
             pending_system_prompt: None,
+            plan,
             active_turn_id: None,
             active_delegation_id: None,
             turn_baseline: None,
@@ -290,6 +317,21 @@ impl Session {
 
     pub fn set_cancel_token(&mut self, token: CancellationToken) {
         self.cancel_token = token;
+    }
+
+    // ── Plan ──────────────────────────────────────────────
+
+    /// Replace the plan contents in place (keeps the `ArcSwap` identity the
+    /// Toolset context captured, so the `update_plan` tool observes this
+    /// immediately). Used by the restore path when a session rehydrates its
+    /// persisted plan.
+    pub(crate) fn set_plan(&mut self, plan: agentik_types::AgentPlan) {
+        self.plan.store(Arc::new(plan));
+    }
+
+    /// Load a snapshot of the session's current plan.
+    pub(crate) fn plan_snapshot(&self) -> agentik_types::AgentPlan {
+        agentik_types::AgentPlan::clone(&self.plan.load())
     }
 
     // ── Telemetry ─────────────────────────────────────────
@@ -395,4 +437,61 @@ impl From<&Session> for SessionInfo {
 pub(crate) fn make_test_session() -> Session {
     let shared = AgentShared::new_for_tests();
     Session::new_for_tests(shared, agentik_types::AgentPath::root())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A fork inherits a snapshot of the parent's plan (revision included)
+    /// and diverges independently afterwards.
+    #[test]
+    fn fork_clones_parent_plan_and_diverges() {
+        let shared = AgentShared::new_for_tests();
+        let mut parent =
+            Session::new_for_tests(Arc::clone(&shared), agentik_types::AgentPath::root());
+
+        let plan = agentik_types::AgentPlan {
+            revision: 3,
+            update: agentik_types::PlanUpdate {
+                explanation: None,
+                plan: vec![agentik_types::PlanStep {
+                    step: "only step".into(),
+                    status: agentik_types::StepStatus::Completed,
+                }],
+            },
+        };
+        parent.set_plan(plan.clone());
+        assert_eq!(parent.plan_snapshot(), plan);
+
+        let mut child = Session::fork_from(&parent, Uuid::new_v4(), Arc::clone(&shared));
+        assert_eq!(
+            child.plan_snapshot(),
+            parent.plan_snapshot(),
+            "fork must inherit the parent's plan snapshot including revision"
+        );
+
+        // The child's handle is its own: mutating it must not leak back.
+        child.set_plan(agentik_types::AgentPlan::new());
+        assert_eq!(parent.plan_snapshot().revision, 3);
+        assert!(child.plan_snapshot().is_empty());
+    }
+
+    /// Two sessions over one shared must never observe each other's plans.
+    #[test]
+    fn independent_sessions_have_independent_plans() {
+        let shared = AgentShared::new_for_tests();
+        let mut a = Session::new_for_tests(Arc::clone(&shared), agentik_types::AgentPath::root());
+        let b = Session::new_for_tests(shared, agentik_types::AgentPath::root());
+
+        a.set_plan(agentik_types::AgentPlan {
+            revision: 1,
+            update: agentik_types::PlanUpdate::default(),
+        });
+        assert_eq!(a.plan_snapshot().revision, 1);
+        assert!(
+            b.plan_snapshot().is_empty(),
+            "session B must not see session A's plan"
+        );
+    }
 }

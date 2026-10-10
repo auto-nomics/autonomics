@@ -76,7 +76,10 @@ pub fn api_router(state: GatewayState) -> Router {
             "/agents/{agent_id}/sessions/{session_id}/history",
             get(storage::get_history),
         )
-        .route("/agents/{agent_id}/plan", get(storage::get_plan))
+        .route(
+            "/agents/{agent_id}/sessions/{session_id}/plan",
+            get(storage::get_plan),
+        )
         // ── model config ──
         .route("/model-config", get(model_config::get_model_config))
         .route("/model-config/provider", put(model_config::put_provider))

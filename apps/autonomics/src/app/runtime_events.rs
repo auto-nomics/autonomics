@@ -108,12 +108,37 @@ impl App {
                 | AgentEvent::SessionClosed { .. }
                 | AgentEvent::SessionList { .. }
         ) {
+            // The backend restore emits no PlanUpdate for the activated
+            // session's plan, so fetch it here (guarded by plan_requested).
+            let activated = match &event {
+                AgentEvent::SessionActivated { id, .. } => Some(*id),
+                _ => None,
+            };
             state::apply_session_event(&mut self.state, event, target_idx);
+            if let Some(session_id) = activated {
+                self.spawn_plan_load_for(target_idx, session_id);
+            }
         } else {
+            // Plans are per-session: route a PlanUpdate to the sub-session
+            // tab it names. Frames without a session_id (legacy builds) and
+            // ids for not-yet-known sub-sessions (ordering race with
+            // SessionList) fall back to the active tab — never dropped.
+            let sub_override = match &event {
+                AgentEvent::PlanUpdate {
+                    session_id: Some(sid),
+                    ..
+                } => self
+                    .state
+                    .sessions
+                    .get(target_idx)
+                    .and_then(|s| s.sub_sessions.iter().position(|sub| sub.id == *sid)),
+                _ => None,
+            };
             // Route to the correct tab's tab_state.
             let tab_state = self.state.sessions.get_mut(target_idx).map(|s| {
-                if s.active_sub_session_idx < s.sub_sessions.len() {
-                    &mut s.sub_sessions[s.active_sub_session_idx].tab_state
+                let idx = sub_override.unwrap_or(s.active_sub_session_idx);
+                if idx < s.sub_sessions.len() {
+                    &mut s.sub_sessions[idx].tab_state
                 } else {
                     &mut s.pending_tab_state
                 }
@@ -158,8 +183,12 @@ impl App {
             } => {
                 self.replay_history(agent_id, session_id, &messages);
             }
-            crate::app_event::AppEvent::PlanLoaded { agent_id, plan } => {
-                // Only route to the agent's active tab_state. Guard against
+            crate::app_event::AppEvent::PlanLoaded {
+                agent_id,
+                session_id,
+                plan,
+            } => {
+                // Route to the named sub-session's tab_state. Guard against
                 // stale overlay: the loaded revision is only applied if it's
                 // newer than what the TUI already has (e.g. the model already
                 // called update_plan since resume).
@@ -172,12 +201,28 @@ impl App {
                     tracing::warn!(%agent_id, "plan loaded for unknown agent");
                     return;
                 };
-                let ts = if session_idx == self.state.active_agent_idx {
-                    self.state.active_tab_state_mut()
-                } else {
-                    // Route to the session's pending_tab_state so it shows up
-                    // when the user switches to that agent.
-                    &mut self.state.sessions[session_idx].pending_tab_state
+                let is_active_agent = session_idx == self.state.active_agent_idx;
+                let agent_session = &mut self.state.sessions[session_idx];
+                let ts = match agent_session
+                    .sub_sessions
+                    .iter_mut()
+                    .find(|sub| sub.id == session_id)
+                {
+                    Some(sub) => &mut sub.tab_state,
+                    None => {
+                        // Sub-session not known yet (ordering race with
+                        // SessionList) — fall back to the active tab of an
+                        // active agent, else the pending state.
+                        if is_active_agent
+                            && agent_session.active_sub_session_idx
+                                < agent_session.sub_sessions.len()
+                        {
+                            &mut agent_session.sub_sessions[agent_session.active_sub_session_idx]
+                                .tab_state
+                        } else {
+                            &mut agent_session.pending_tab_state
+                        }
+                    }
                 };
                 if plan.revision > ts.plan.revision {
                     ts.plan = state::PlanState {
@@ -187,8 +232,9 @@ impl App {
                     self.dirty = true;
                     tracing::info!(
                         %agent_id,
+                        %session_id,
                         revision = plan.revision,
-                        "restored agent plan to TUI from storage"
+                        "restored session plan to TUI from storage"
                     );
                 }
             }
@@ -646,7 +692,7 @@ impl App {
     }
 
     /// Spawn background history loads for all sessions of the agent at
-    /// `agent_idx` that have empty `tab_state.messages` (plus its plan).
+    /// `agent_idx` that have empty `tab_state.messages` (plus their plans).
     pub(super) fn spawn_history_loads_for(&mut self, agent_idx: usize) {
         let Some(agent_session) = self.state.sessions.get(agent_idx) else {
             return;
@@ -657,6 +703,14 @@ impl App {
             .sub_sessions
             .iter()
             .filter(|s| s.tab_state.messages.is_empty())
+            .map(|s| s.id)
+            .collect();
+
+        // ── Restore each session's persistent plan ──
+        let plans_to_load: Vec<uuid::Uuid> = agent_session
+            .sub_sessions
+            .iter()
+            .filter(|s| !s.plan_requested)
             .map(|s| s.id)
             .collect();
 
@@ -684,17 +738,50 @@ impl App {
             );
         }
 
-        // ── Restore the agent's persistent plan ──
-        // The backend `Agent::run()` bootstrap loads the plan from storage
-        // but does NOT emit an `AgentEvent::PlanUpdate`, so the TUI's
-        // `PlanState` would stay empty. We fetch it here and push a
-        // `PlanLoaded` event to surface the restored checklist.
+        for session_id in plans_to_load {
+            self.spawn_plan_load_for(agent_idx, session_id);
+        }
+    }
+
+    /// Spawn a per-session plan fetch for the sub-session `session_id` of
+    /// the agent at `agent_idx`.
+    ///
+    /// The backend session restore loads the plan from storage but does NOT
+    /// emit an `AgentEvent::PlanUpdate`, so the tab's `PlanState` would stay
+    /// empty. The sub-session is marked `plan_requested` up front so repeat
+    /// hydrations (every `SessionList`) don't re-fetch.
+    pub(super) fn spawn_plan_load_for(&mut self, agent_idx: usize, session_id: uuid::Uuid) {
+        let Some(agent_session) = self.state.sessions.get(agent_idx) else {
+            return;
+        };
+        let agent_id = agent_session.agent_id;
+        let already_requested = agent_session
+            .sub_sessions
+            .iter()
+            .find(|s| s.id == session_id)
+            .is_none_or(|s| s.plan_requested);
+        if already_requested {
+            return;
+        }
+        if let Some(agent_session) = self.state.sessions.get_mut(agent_idx) {
+            if let Some(sub) = agent_session
+                .sub_sessions
+                .iter_mut()
+                .find(|s| s.id == session_id)
+            {
+                sub.plan_requested = true;
+            }
+        }
         let client = self.client.clone();
         let tx = self.app_event_tx.clone();
-        self.spawn_client_task("restore_plan", move || async move {
-            if let Ok(Some(plan)) = client.load_plan(agent_id).await {
+        self.spawn_client_task(&format!("restore_plan::{session_id}"), move || async move {
+            if let Ok(Some(plan)) = client.load_plan(agent_id, session_id).await {
                 if !plan.is_empty() {
-                    tx.send(crate::app_event::AppEvent::PlanLoaded { agent_id, plan });
+                    tx.send(crate::app_event::AppEvent::PlanLoaded {
+                        agent_id,
+                        session_id,
+                        plan,
+                    });
                 }
             }
         });

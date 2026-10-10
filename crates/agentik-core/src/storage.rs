@@ -466,13 +466,22 @@ pub trait AgentStorage: Send + Sync {
         error: &str,
     ) -> Result<(), StorageError>;
 
-    // ── Agent plan (first-class persistent task plan) ──────
+    // ── Session plan (per-conversation persistent task plan) ──
 
-    /// Persist the agent's current plan (full-snapshot upsert).
-    async fn save_plan(&self, agent_id: Uuid, plan: &AgentPlan) -> Result<(), StorageError>;
+    /// Persist a session's current plan (full-snapshot upsert).
+    async fn save_plan(
+        &self,
+        agent_id: Uuid,
+        session_id: Uuid,
+        plan: &AgentPlan,
+    ) -> Result<(), StorageError>;
 
-    /// Load the agent's plan. Returns `None` if no plan has been stored.
-    async fn load_plan(&self, agent_id: Uuid) -> Result<Option<AgentPlan>, StorageError>;
+    /// Load a session's plan. Returns `None` if no plan has been stored.
+    async fn load_plan(
+        &self,
+        agent_id: Uuid,
+        session_id: Uuid,
+    ) -> Result<Option<AgentPlan>, StorageError>;
 }
 
 /// Persisted metadata about one session, used to rebuild the session list on

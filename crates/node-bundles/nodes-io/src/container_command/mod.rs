@@ -821,6 +821,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn symlinked_state_directory_still_passes_containment() {
+        // Production regression: after moving the state tree to another disk
+        // behind a symlink (`~/.autonomics/state -> /mnt/data/state`), the
+        // canonicalized workdir lives under the target while the runtime's
+        // workspace root stayed the literal symlink path — every container
+        // node failed with "workdir ... is outside container workspace
+        // root" before the container ever started.
+        let real = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let home = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        // Mirror the production layout: the whole state directory is a
+        // symlink; the workspace root hangs one level below it.
+        let alias = home.path().join("state");
+        std::os::unix::fs::symlink(real.path(), &alias).unwrap();
+
+        let env = test_env();
+        let runtime = Arc::new(FakeRuntime::new(&alias.join("work")));
+        let mut node = ContainerCommandNode::new(
+            "container_command",
+            spec("quay.io/example/tool", vec!["tool".into()], "out.txt"),
+            runtime.clone(),
+            Arc::new(PanelCache::new(env.workspace.path().join("cache"))),
+        )
+        .unwrap();
+        node.execute(
+            &env.ctx,
+            &[],
+            &dag_core::dag::node_event::NodeReporter::noop(),
+        )
+        .await
+        .unwrap();
+
+        let request = runtime.requests.lock().unwrap().last().unwrap().clone();
+        assert!(
+            request
+                .workspace
+                .host_path
+                .starts_with(real.path().join("work")),
+            "canonical host path expected, got {}",
+            request.workspace.host_path.display()
+        );
+    }
+
+    #[tokio::test]
     async fn hash_work_dir_persists_after_success_and_wipes_on_rerun() {
         let env = test_env();
         let runtime = Arc::new(FakeRuntime::new(env.workspace.path()));

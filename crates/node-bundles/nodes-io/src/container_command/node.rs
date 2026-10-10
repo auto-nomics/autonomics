@@ -620,7 +620,14 @@ impl DagNode for ContainerCommandNode {
         inputs: &[NodeInput],
         reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
-        let workspace_root = self.runtime.workspace_root().to_path_buf();
+        // Canonicalize the root before any use: workdirs are canonicalized
+        // (create + resolve symlinks), so containment checks, workspace_ref
+        // mapping, and the VFS identity mount must all share the canonical
+        // root — a symlinked state directory otherwise makes every workdir
+        // look like it escapes the root.
+        let workspace_root = container_runtime::canonicalize_workspace_root(
+            self.runtime.workspace_root().to_path_buf(),
+        );
         let identity = self.work_dir_identity(inputs);
         let workspace_path = self
             .resolve_workdir(&workspace_root, &identity)

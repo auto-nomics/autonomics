@@ -193,14 +193,10 @@ impl AgentBuilder {
         );
 
         let agent_id = self.id.unwrap_or_else(Uuid::new_v4);
-        let plan_state = Arc::new(arc_swap::ArcSwap::new(std::sync::Arc::new(
-            agentik_types::AgentPlan::new(),
-        )));
 
         let event_tx = ArcSwapOption::new(self.agent_event_tx.clone().map(Arc::new));
 
         let plan_handle = crate::tools::builtins::PlanHandle::new(
-            Arc::clone(&plan_state),
             agent_id,
             self.storage.clone(),
             self.agent_event_tx.clone(),
@@ -232,7 +228,6 @@ impl AgentBuilder {
             tasks,
             event_tx,
             persist_tx: std::sync::OnceLock::new(),
-            plan: plan_state,
         });
 
         // ── No default session at build time ────────────────

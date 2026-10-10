@@ -46,6 +46,20 @@ pub fn default_panel_cache_root() -> PathBuf {
     std::env::temp_dir().join("autonomics").join("panels")
 }
 
+/// Resolve a workspace root to its canonical path.
+///
+/// Storage migrations commonly leave the state directory as a symlink to a
+/// larger disk (e.g. `~/.autonomics/state -> /mnt/data/state`). Every
+/// canonicalized workdir then lives under the *target*, so the root must be
+/// canonicalized too — otherwise containment checks and the VFS identity
+/// mount compare against a prefix that canonical paths can never match.
+/// The root is created on demand first; when canonicalization still fails
+/// (permission edge cases), the literal path is used as-is.
+pub fn canonicalize_workspace_root(path: PathBuf) -> PathBuf {
+    let _ = std::fs::create_dir_all(&path);
+    path.canonicalize().unwrap_or(path)
+}
+
 // ─────────────────────────── garbage collection ────────────────────
 
 /// When set to a truthy value, successful container runs keep their scratch

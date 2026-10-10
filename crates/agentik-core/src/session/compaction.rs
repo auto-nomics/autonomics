@@ -780,9 +780,6 @@ mod tests {
             )),
             event_tx: arc_swap::ArcSwapOption::from_pointee(Some(tx)),
             persist_tx: std::sync::OnceLock::new(),
-            plan: Arc::new(arc_swap::ArcSwap::new(std::sync::Arc::new(
-                agentik_types::AgentPlan::new(),
-            ))),
         })
     }
 

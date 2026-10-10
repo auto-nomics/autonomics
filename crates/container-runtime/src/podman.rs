@@ -59,7 +59,10 @@ impl PodmanConfig {
         let root = podman_state_root();
         Self {
             program: env_value("AUTONOMICS_PODMAN_PROGRAM", "podman"),
-            workspace_root: env_path("AUTONOMICS_PODMAN_WORKSPACE_ROOT", root.join("work")),
+            workspace_root: crate::config::canonicalize_workspace_root(env_path(
+                "AUTONOMICS_PODMAN_WORKSPACE_ROOT",
+                root.join("work"),
+            )),
             panel_cache_root: env_path("AUTONOMICS_PANEL_CACHE_ROOT", default_panel_cache_root()),
         }
     }
@@ -821,6 +824,23 @@ mod tests {
         let mut permissions = std::fs::metadata(path).unwrap().permissions();
         permissions.set_mode(0o755);
         std::fs::set_permissions(path, permissions).unwrap();
+    }
+
+    #[test]
+    fn canonicalize_root_resolves_state_directory_symlink() {
+        // Storage-migration layout: a symlinked state dir must yield the
+        // canonical target so containment checks and identity mounts agree
+        // with canonicalized workdirs.
+        let real = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let home = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let alias = home.path().join("state");
+        std::os::unix::fs::symlink(real.path(), &alias).unwrap();
+        let canonical = crate::config::canonicalize_workspace_root(alias.join("work"));
+        assert_eq!(canonical, real.path().join("work"));
+        // Nonexistent deep paths are created on demand and canonicalized.
+        let nested = crate::config::canonicalize_workspace_root(alias.join("a/b/c"));
+        assert_eq!(nested, real.path().join("a/b/c"));
+        assert!(nested.is_dir());
     }
 
     #[test]

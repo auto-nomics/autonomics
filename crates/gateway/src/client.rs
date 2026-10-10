@@ -438,8 +438,9 @@ impl GatewayClient {
             .await
     }
 
-    pub async fn load_plan(&self, agent_id: Uuid) -> Result<Option<AgentPlan>> {
-        self.get(&format!("/agents/{agent_id}/plan")).await
+    pub async fn load_plan(&self, agent_id: Uuid, session_id: Uuid) -> Result<Option<AgentPlan>> {
+        self.get(&format!("/agents/{agent_id}/sessions/{session_id}/plan"))
+            .await
     }
 
     // ── model config ──

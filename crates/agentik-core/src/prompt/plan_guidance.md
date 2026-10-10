@@ -1,6 +1,6 @@
 ## Task planning
 
-You have access to an `update_plan` tool which tracks steps and progress. The plan is **persistent** — it survives across turns and sessions, so you can always pick up where you left off. The plan is displayed to the user in a sidebar, so using it helps the user follow your approach and see progress at a glance.
+You have access to an `update_plan` tool which tracks steps and progress. The plan is **persistent within this conversation** — it survives across turns, so you can always pick up where you left off. The plan is displayed to the user in a sidebar, so using it helps the user follow your approach and see progress at a glance.
 
 A good plan breaks the task into meaningful, logically ordered steps that are easy to verify as you go.
 

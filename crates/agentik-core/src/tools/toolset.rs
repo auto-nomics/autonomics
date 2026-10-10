@@ -129,6 +129,9 @@ pub struct Toolset {
     /// each spawned tool task gets a child token so that cancelling the
     /// session immediately interrupts running tools.
     session_cancel: Option<CancellationToken>,
+    /// Session-scoped state (session id + plan handle) surfaced to tools
+    /// through each invocation's [`ToolContext`](super::ToolContext).
+    session: Option<super::SessionToolCtx>,
 }
 
 impl Toolset {
@@ -163,6 +166,7 @@ impl Toolset {
             tasks,
             agent_event_tx,
             session_cancel: None,
+            session: None,
         }
     }
 
@@ -186,6 +190,17 @@ impl Toolset {
     /// immediately interrupts running tools.
     pub fn set_cancel_token(&mut self, token: CancellationToken) {
         self.session_cancel = Some(token);
+    }
+
+    /// Set the session-scoped plan state. Each tool invocation's
+    /// [`ToolContext`](super::ToolContext) will carry it so session-aware
+    /// tools (e.g. `update_plan`) resolve the right conversation.
+    pub fn set_session_plan(
+        &mut self,
+        session_id: uuid::Uuid,
+        plan: std::sync::Arc<arc_swap::ArcSwap<agentik_types::AgentPlan>>,
+    ) {
+        self.session = Some(super::SessionToolCtx { session_id, plan });
     }
 
     /// Access the shared tool registry.
@@ -273,6 +288,7 @@ impl Toolset {
             let ctx = ToolContext {
                 output: Some(output.clone()),
                 metadata: metadata.clone(),
+                session: self.session.clone(),
             };
 
             let task_handle = tokio::spawn(async move {

@@ -223,7 +223,7 @@ async fn swagger_docs_expose_the_gateway_api() {
         "/api/v1/agents/{name}/sessions/{id}/close",
         "/api/v1/agents/{name}/sessions/{id}/title",
         "/api/v1/agents/{agent_id}/sessions/{session_id}/history",
-        "/api/v1/agents/{agent_id}/plan",
+        "/api/v1/agents/{agent_id}/sessions/{session_id}/plan",
         "/api/v1/storage/agents",
         "/api/v1/storage/agents/{id}",
         "/api/v1/storage/agents/{id}/sessions",
