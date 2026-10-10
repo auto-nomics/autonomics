@@ -1,17 +1,19 @@
-//! The `update_plan` tool — the agent's first-class persistent task plan.
+//! The `update_plan` tool — a session's first-class persistent task plan.
 //!
-//! `update_plan` is a free-form, agent-level todo list that the model itself
-//! creates and maintains.
+//! `update_plan` is a free-form, per-conversation todo list that the model
+//! itself creates and maintains.
 //!
 //! ## How it works
 //!
 //! 1. The model calls `update_plan` with a full plan snapshot (a list of
 //!    steps, each with a status).
-//! 2. The tool atomically replaces the agent's [`AgentPlan`] via the shared
-//!    [`PlanHandle`].
-//! 3. The tool persists the new plan to storage (fire-and-forget).
-//! 4. The tool emits an [`AgentEvent::PlanUpdate`] event so the TUI can render
-//!    the updated checklist.
+//! 2. The tool resolves the calling session's [`AgentPlan`] handle from the
+//!    per-invocation [`ToolContext`](crate::tools::ToolContext) and atomically
+//!    replaces the plan.
+//! 3. The tool persists the new plan to storage keyed by
+//!    `(agent_id, session_id)` (fire-and-forget).
+//! 4. The tool emits an [`AgentEvent::PlanUpdate`] event carrying the session
+//!    id so the TUI can render the updated checklist on the right tab.
 //! 5. The tool returns "Plan updated" to the model.
 //!
 use std::sync::Arc;
@@ -19,37 +21,35 @@ use std::sync::Arc;
 use agentik_proc::tool;
 use agentik_sdk::types::tools::{ToolResult, ToolResultContent};
 use agentik_types::{AgentEvent, AgentPlan, PlanUpdate};
-use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::storage::AgentStorage;
-use crate::tools::{ToolError, ToolFunction};
+use crate::tools::{ToolContext, ToolError, ToolFunction};
 
-/// Shared handle to the agent's plan state, held by [`UpdatePlanTool`].
+/// Persistence/identity/event wiring for [`UpdatePlanTool`], held per agent.
 ///
-/// This is a lightweight cloneable handle that wraps the `ArcSwap<AgentPlan>`
-/// from `AgentShared`, plus the agent id and storage for persistence, and an
-/// event sender for UI notification. It decouples the tool from the full
-/// `AgentShared` struct (which is `pub(crate)`).
+/// The plan state itself is per session: it arrives through each invocation's
+/// [`ToolContext::session`](crate::tools::ToolContext), so the same registered
+/// tool serves every session of the agent without cross-talk. The handle
+/// carries the agent id and storage for persistence plus an event sender for
+/// UI notification. It decouples the tool from the full `AgentShared` struct
+/// (which is `pub(crate)`).
 #[derive(Clone)]
 pub struct PlanHandle {
-    pub plan: Arc<ArcSwap<AgentPlan>>,
     pub agent_id: uuid::Uuid,
     pub storage: Option<Arc<dyn AgentStorage>>,
     pub event_tx: Option<UnboundedSender<AgentEvent>>,
 }
 
 impl PlanHandle {
-    /// Create a new handle wrapping the given plan state.
+    /// Create a new handle with persistence and event wiring.
     pub fn new(
-        plan: Arc<ArcSwap<AgentPlan>>,
         agent_id: uuid::Uuid,
         storage: Option<Arc<dyn AgentStorage>>,
         event_tx: Option<UnboundedSender<AgentEvent>>,
     ) -> Self {
         Self {
-            plan,
             agent_id,
             storage,
             event_tx,
@@ -60,7 +60,7 @@ impl PlanHandle {
 /// Input for [`UpdatePlanTool`].
 #[tool(
     name = "update_plan",
-    description = "Update the agent's task plan (TODO list). \
+    description = "Update this conversation's task plan (TODO list). \
                    Provide a full list of plan items — each with a short step description \
                    (ideally 5-7 words) and a status — to replace the current plan. \
                    At most one step should be `in_progress` at a time. \
@@ -108,7 +108,21 @@ impl UpdatePlanTool {
 impl ToolFunction for UpdatePlanTool {
     type Input = UpdatePlanInput;
 
-    async fn run(&self, input: UpdatePlanInput) -> Result<ToolResult, ToolError> {
+    async fn execute_with_context(
+        &self,
+        input: serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<ToolResult, ToolError> {
+        let input: UpdatePlanInput = serde_json::from_value(input)?;
+        // The plan is per-session state — resolve it from the invocation
+        // context. There is deliberately no agent-level fallback: a second
+        // source of truth would let sessions cross-talk.
+        let Some(sess) = ctx.session.as_ref() else {
+            return Err(ToolError::ExecutionFailed {
+                source: "update_plan requires a session context".into(),
+            });
+        };
+
         // Convert input steps to typed plan steps.
         let mut steps = Vec::with_capacity(input.plan.len());
         for item in input.plan {
@@ -124,26 +138,27 @@ impl ToolFunction for UpdatePlanTool {
         };
 
         // Atomically replace the plan and get the new revision.
-        let mut new_plan = AgentPlan::clone(&self.handle.plan.load());
+        let mut new_plan = AgentPlan::clone(&sess.plan.load());
         new_plan.replace(update);
         let revision = new_plan.revision;
         let update_clone = new_plan.update.clone();
-        self.handle.plan.store(Arc::new(new_plan));
+        let plan_clone = new_plan.clone();
+        sess.plan.store(Arc::new(new_plan));
 
         // Persist (fire-and-forget — don't block the agent loop on storage).
         if let Some(storage) = &self.handle.storage {
-            let snapshot = self.handle.plan.load();
             let storage = Arc::clone(storage);
             let agent_id = self.handle.agent_id;
-            let plan_clone = AgentPlan::clone(&snapshot);
+            let session_id = sess.session_id;
             crate::supervise::spawn_safe_drop("plan::save_plan", async move {
-                let _ = storage.save_plan(agent_id, &plan_clone).await;
+                let _ = storage.save_plan(agent_id, session_id, &plan_clone).await;
             });
         }
 
         // Emit event for UI.
         if let Some(tx) = &self.handle.event_tx {
             let _ = tx.send(AgentEvent::PlanUpdate {
+                session_id: Some(sess.session_id),
                 revision,
                 update: update_clone,
             });
@@ -160,21 +175,35 @@ impl ToolFunction for UpdatePlanTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tools::SessionToolCtx;
     use agentik_types::StepStatus;
+    use arc_swap::ArcSwap;
 
     fn test_handle() -> PlanHandle {
-        PlanHandle::new(
-            Arc::new(ArcSwap::new(Arc::new(AgentPlan::new()))),
-            uuid::Uuid::new_v4(),
-            None,
-            None,
-        )
+        PlanHandle::new(uuid::Uuid::new_v4(), None, None)
+    }
+
+    /// A session-scoped context backed by a fresh plan state.
+    fn test_ctx() -> (std::sync::Arc<ArcSwap<AgentPlan>>, ToolContext) {
+        let plan = Arc::new(ArcSwap::new(Arc::new(AgentPlan::new())));
+        let ctx = ToolContext {
+            session: Some(SessionToolCtx {
+                session_id: uuid::Uuid::new_v4(),
+                plan: Arc::clone(&plan),
+            }),
+            ..Default::default()
+        };
+        (plan, ctx)
+    }
+
+    fn input_json(input: UpdatePlanInput) -> serde_json::Value {
+        serde_json::to_value(input).unwrap()
     }
 
     #[tokio::test]
     async fn update_plan_replaces_state() {
-        let handle = test_handle();
-        let tool = UpdatePlanTool::new(handle.clone());
+        let tool = UpdatePlanTool::new(test_handle());
+        let (plan_state, ctx) = test_ctx();
 
         let input = UpdatePlanInput {
             explanation: Some("starting work".into()),
@@ -190,11 +219,14 @@ mod tests {
             ],
         };
 
-        let result = tool.run(input).await.unwrap();
+        let result = tool
+            .execute_with_context(input_json(input), &ctx)
+            .await
+            .unwrap();
         assert!(!result.is_error.unwrap_or(false));
 
         // Verify the plan state was updated.
-        let plan = handle.plan.load();
+        let plan = plan_state.load();
         assert_eq!(plan.revision, 1);
         assert_eq!(plan.update.plan.len(), 2);
         assert_eq!(plan.update.plan[0].status, StepStatus::InProgress);
@@ -203,8 +235,8 @@ mod tests {
 
     #[tokio::test]
     async fn update_plan_rejects_bad_status() {
-        let handle = test_handle();
-        let tool = UpdatePlanTool::new(handle.clone());
+        let tool = UpdatePlanTool::new(test_handle());
+        let (_, ctx) = test_ctx();
 
         let input = UpdatePlanInput {
             explanation: None,
@@ -214,68 +246,104 @@ mod tests {
             }],
         };
 
-        let err = tool.run(input).await.unwrap_err();
+        let err = tool
+            .execute_with_context(input_json(input), &ctx)
+            .await
+            .unwrap_err();
         assert!(matches!(err, ToolError::ValidationFailed { .. }));
     }
 
     #[tokio::test]
     async fn update_plan_increments_revision() {
-        let handle = test_handle();
-        let tool = UpdatePlanTool::new(handle.clone());
+        let tool = UpdatePlanTool::new(test_handle());
+        let (plan_state, ctx) = test_ctx();
 
         // First update.
-        tool.run(UpdatePlanInput {
-            explanation: None,
-            plan: vec![PlanStepInput {
-                step: "A".into(),
-                status: "pending".into(),
-            }],
-        })
+        tool.execute_with_context(
+            input_json(UpdatePlanInput {
+                explanation: None,
+                plan: vec![PlanStepInput {
+                    step: "A".into(),
+                    status: "pending".into(),
+                }],
+            }),
+            &ctx,
+        )
         .await
         .unwrap();
-        assert_eq!(handle.plan.load().revision, 1);
+        assert_eq!(plan_state.load().revision, 1);
 
         // Second update.
-        tool.run(UpdatePlanInput {
-            explanation: None,
-            plan: vec![PlanStepInput {
-                step: "A".into(),
-                status: "completed".into(),
-            }],
-        })
+        tool.execute_with_context(
+            input_json(UpdatePlanInput {
+                explanation: None,
+                plan: vec![PlanStepInput {
+                    step: "A".into(),
+                    status: "completed".into(),
+                }],
+            }),
+            &ctx,
+        )
         .await
         .unwrap();
-        assert_eq!(handle.plan.load().revision, 2);
+        assert_eq!(plan_state.load().revision, 2);
     }
 
     #[tokio::test]
     async fn update_plan_emits_event() {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
-        let handle = PlanHandle::new(
-            Arc::new(ArcSwap::new(Arc::new(AgentPlan::new()))),
-            uuid::Uuid::new_v4(),
-            None,
-            Some(tx),
-        );
+        let handle = PlanHandle::new(uuid::Uuid::new_v4(), None, Some(tx));
         let tool = UpdatePlanTool::new(handle);
+        let session_id = uuid::Uuid::new_v4();
+        let plan = Arc::new(ArcSwap::new(Arc::new(AgentPlan::new())));
+        let ctx = ToolContext {
+            session: Some(SessionToolCtx { session_id, plan }),
+            ..Default::default()
+        };
 
-        tool.run(UpdatePlanInput {
-            explanation: None,
-            plan: vec![PlanStepInput {
-                step: "test".into(),
-                status: "in_progress".into(),
-            }],
-        })
+        tool.execute_with_context(
+            input_json(UpdatePlanInput {
+                explanation: None,
+                plan: vec![PlanStepInput {
+                    step: "test".into(),
+                    status: "in_progress".into(),
+                }],
+            }),
+            &ctx,
+        )
         .await
         .unwrap();
 
         let event = rx.recv().await.unwrap();
         match event {
-            AgentEvent::PlanUpdate { revision, update } => {
+            AgentEvent::PlanUpdate {
+                session_id: sid,
+                revision,
+                update,
+            } => {
+                assert_eq!(sid, Some(session_id));
                 assert_eq!(revision, 1);
                 assert_eq!(update.plan.len(), 1);
             }
             other => panic!("expected PlanUpdate, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn update_plan_without_session_ctx_fails() {
+        let tool = UpdatePlanTool::new(test_handle());
+        let ctx = ToolContext::default();
+
+        let err = tool
+            .execute_with_context(
+                input_json(UpdatePlanInput {
+                    explanation: None,
+                    plan: vec![],
+                }),
+                &ctx,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ToolError::ExecutionFailed { .. }));
     }
 }

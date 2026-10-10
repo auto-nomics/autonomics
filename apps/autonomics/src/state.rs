@@ -681,7 +681,13 @@ pub fn apply_event(state: &mut AgentTabState, event: AgentEvent) {
         | AgentEvent::SessionPaused { .. }
         | AgentEvent::SessionClosed { .. }
         | AgentEvent::SessionList { .. } => {}
-        AgentEvent::PlanUpdate { revision, update } => {
+        AgentEvent::PlanUpdate {
+            session_id: _,
+            revision,
+            update,
+        } => {
+            // Which sub-session's tab this lands on is decided by the
+            // router in `runtime_events`; here we just apply the payload.
             state.plan = PlanState {
                 steps: update.plan,
                 revision,
@@ -851,6 +857,10 @@ pub struct SubSession {
     /// Owned per-session so each session has its own memory of what
     /// happened in it.
     pub tab_state: AgentTabState,
+    /// Set once a per-session plan fetch has been spawned for this
+    /// sub-session, so repeated `SessionList` hydrations don't re-fetch.
+    /// The plan itself lives in `tab_state.plan`.
+    pub plan_requested: bool,
 }
 
 impl SubSession {
@@ -862,6 +872,7 @@ impl SubSession {
             created_at: chrono::Utc::now().timestamp_millis(),
             telemetry: Default::default(),
             tab_state: AgentTabState::default(),
+            plan_requested: false,
         }
     }
 }

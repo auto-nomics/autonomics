@@ -104,9 +104,13 @@ pub enum AgentEvent {
     /// Also emits `LifecycleChanged(Compacting)` / `LifecycleChanged(Requesting)`.
     Compact { event: CompactEvent },
 
-    /// The agent's persistent task plan was updated via `update_plan`.
+    /// A session's persistent task plan was updated via `update_plan`.
     /// Carries the full new plan snapshot and the revision number.
     PlanUpdate {
+        /// Session the plan belongs to. `None` only in payloads emitted by
+        /// older builds (serde default); current emitters always set it.
+        #[serde(default)]
+        session_id: Option<Uuid>,
         revision: u64,
         update: crate::plan::PlanUpdate,
     },
@@ -449,6 +453,56 @@ mod compact_event_tests {
                 _ => false,
             };
             assert!(same, "round-trip mismatch: {event:?} vs {back:?}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod plan_event_tests {
+    use super::*;
+
+    /// `PlanUpdate` frames emitted by older builds (no `session_id`) must
+    /// still deserialize — persisted logs and in-flight SSE payloads
+    /// outlive the binary that emitted them.
+    #[test]
+    fn plan_update_deserializes_from_legacy_payload() {
+        let event: AgentEvent =
+            serde_json::from_str("{\"PlanUpdate\":{\"revision\":3,\"update\":{\"plan\":[]}}}")
+                .unwrap();
+        match event {
+            AgentEvent::PlanUpdate {
+                session_id,
+                revision,
+                ..
+            } => {
+                assert_eq!(session_id, None);
+                assert_eq!(revision, 3);
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+    }
+
+    /// A current-build frame keeps its `session_id` through a round trip.
+    #[test]
+    fn plan_update_round_trips_with_session_id() {
+        let sid = Uuid::nil();
+        let event = AgentEvent::PlanUpdate {
+            session_id: Some(sid),
+            revision: 7,
+            update: crate::plan::PlanUpdate::default(),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let back: AgentEvent = serde_json::from_str(&json).unwrap();
+        match back {
+            AgentEvent::PlanUpdate {
+                session_id,
+                revision,
+                ..
+            } => {
+                assert_eq!(session_id, Some(sid));
+                assert_eq!(revision, 7);
+            }
+            other => panic!("wrong variant: {other:?}"),
         }
     }
 }

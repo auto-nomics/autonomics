@@ -1,8 +1,9 @@
-//! Agent-level task plan types.
+//! Per-session task plan types.
 //!
-//! The plan is a first-class citizen of an [`Agent`](crate) — it lives as long
-//! as the agent does, is persisted alongside agent state, and is surfaced to
-//! the model via the `update_plan` tool.
+//! The plan is a first-class citizen of a conversation (`Session`) — it lives
+//! as long as that session does, is persisted per `(agent_id, session_id)` in
+//! the `session_plans` table, is copied into forks, and is surfaced to the
+//! model via the `update_plan` tool.
 //!
 //! ## Design (ported from Codex's `update_plan`)
 //!
@@ -11,8 +12,7 @@
 //! This keeps the tool handler stateless and makes updates idempotent.
 //!
 //! Unlike Codex (which stores nothing server-side), the plan here is
-//! **persisted as agent-level state** so it survives session restarts and is
-//! shared across sessions of the same agent.
+//! **persisted as per-session state** so it survives restarts of its session.
 
 use serde::{Deserialize, Serialize};
 
@@ -74,7 +74,7 @@ impl PlanUpdate {
     }
 }
 
-/// The persistent agent plan stored in `AgentShared` and the storage layer.
+/// The persistent session plan stored on each `Session` and in the storage layer.
 ///
 /// This wraps a [`PlanUpdate`] with a revision counter so observers can detect
 /// changes efficiently. An empty `plan` vector means no plan is active.

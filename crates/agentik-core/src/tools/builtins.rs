@@ -14,9 +14,9 @@ pub use task_tools::{
 
 /// Create the `update_plan` tool registration from a [`PlanHandle`].
 ///
-/// Called by [`AgentBuilder`](crate::agent_builder::AgentBuilder) after
-/// `AgentShared` is constructed, since the handle needs the shared plan
-/// `ArcSwap`, agent id, storage, and event channel.
+/// Called by [`AgentBuilder`](crate::agent_builder::AgentBuilder); the handle
+/// needs the agent id, storage, and event channel only — the per-session plan
+/// state reaches the tool through each invocation's `ToolContext`.
 pub fn plan_registrations(handle: PlanHandle) -> Vec<crate::tools::ToolRegistration> {
     vec![crate::tools::ToolRegistration::from(UpdatePlanTool::new(
         handle,

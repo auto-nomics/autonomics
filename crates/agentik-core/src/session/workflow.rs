@@ -956,7 +956,7 @@ impl Session {
     /// 找不到匹配通知,即按当前状态重发(自愈)。
     async fn inject_state_notices(&mut self) {
         // plan
-        let plan = self.shared.plan_snapshot();
+        let plan = self.plan_snapshot();
         let plan_section = (!plan.is_empty()).then(|| render_plan_prompt_section(&plan));
         if !notice_matches(&self.messages, PLAN_NOTICE_PREFIX, plan_section.as_deref()) {
             let _ = self.remember(Message::user(notice_text(
@@ -976,7 +976,7 @@ fn render_plan_prompt_section(plan: &AgentPlan) -> String {
     use agentik_types::StepStatus;
 
     let mut s = String::from("## Current plan status\n");
-    s.push_str("Your persistent plan (survives across turns). ");
+    s.push_str("Your task plan for this conversation (persists across turns). ");
     s.push_str("Continue from the `in_progress` step.\n\n");
 
     for (i, step) in plan.update.plan.iter().enumerate() {
@@ -1093,20 +1093,13 @@ mod tests {
         }
         let model = Model::with_client(dummy_model_info("sys-hash"), mock);
 
-        // 与 AgentBuilder 相同的方式注册 update_plan(PlanHandle 指向
-        // shared.plan 的同一个 ArcSwap)。
-        let plan_state = Arc::new(arc_swap::ArcSwap::new(std::sync::Arc::new(
-            agentik_types::AgentPlan::new(),
-        )));
+        // 与 AgentBuilder 相同的方式注册 update_plan。plan 状态是
+        // per-session 的:Session::new_for_tests 内部创建并接线到
+        // Toolset 的 session ctx,这里只需要注册工具本身。
         let mut registry = crate::tools::ToolRegistry::new();
         registry
             .register_all(crate::tools::plan_registrations(
-                crate::tools::builtins::PlanHandle::new(
-                    Arc::clone(&plan_state),
-                    Uuid::new_v4(),
-                    None,
-                    None,
-                ),
+                crate::tools::builtins::PlanHandle::new(Uuid::new_v4(), None, None),
             ))
             .unwrap();
         let shared = Arc::new(AgentShared {
@@ -1126,7 +1119,6 @@ mod tests {
             )),
             event_tx: arc_swap::ArcSwapOption::empty(),
             persist_tx: std::sync::OnceLock::new(),
-            plan: plan_state,
         });
 
         let (internal_tx, _internal_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -1202,6 +1194,98 @@ mod tests {
         );
     }
 
+    /// 迁移核心行为:plan 是 per-session 状态。同一个 AgentShared(即同
+    /// 一个 ToolRegistry / 同一个注册的 update_plan 工具)上跑两个
+    /// Session,A 里模型调用 update_plan 只改 A 的 plan;B 保持为空。
+    /// 这条链路端到端覆盖 ToolContext 的 session 管道(Toolset 注入 →
+    /// 工具解析)。
+    #[tokio::test]
+    async fn update_plan_through_workflow_only_touches_its_own_session() {
+        use crate::testing::dummy_model_info;
+        use agentik_sdk::model::Model;
+        use agentik_sdk::provider::client::MockApiClient;
+        use agentik_sdk::streaming::MessageStream;
+
+        let responses = [
+            Message::assistant_tool_use(
+                "call_a_1",
+                "update_plan",
+                serde_json::json!({
+                    "plan": [
+                        {"step": "Session A step", "status": "in_progress"}
+                    ]
+                }),
+            ),
+            Message::assistant_text("done"),
+            Message::assistant_text("hi"),
+        ];
+        let mut mock = MockApiClient::new();
+        for resp in responses {
+            mock.expect_request_stream_with_system()
+                .times(1)
+                .returning(move |_, _, _, _| {
+                    Ok(MessageStream::from_events(Vec::new(), resp.clone()))
+                });
+        }
+        let model = Model::with_client(dummy_model_info("indep-plans"), mock);
+
+        let mut registry = crate::tools::ToolRegistry::new();
+        registry
+            .register_all(crate::tools::plan_registrations(
+                crate::tools::builtins::PlanHandle::new(Uuid::new_v4(), None, None),
+            ))
+            .unwrap();
+        let shared = Arc::new(AgentShared {
+            id: Uuid::new_v4(),
+            path: agentik_types::AgentPath::root(),
+            config_json: serde_json::json!({}),
+            model: Arc::new(arc_swap::ArcSwapOption::from_pointee(Some(model))),
+            config: AgentConfig::default(),
+            storage: None,
+            context_provider: None,
+            system_prompt_section: None,
+            system_prompt_identity: None,
+            memory: None,
+            tool_registry: Arc::new(registry),
+            tasks: Arc::new(tokio::sync::RwLock::new(
+                crate::tools::task_runtime::TaskStore::new(),
+            )),
+            event_tx: arc_swap::ArcSwapOption::empty(),
+            persist_tx: std::sync::OnceLock::new(),
+        });
+
+        let (internal_tx, _internal_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut session_a =
+            Session::new_for_tests(Arc::clone(&shared), agentik_types::AgentPath::root());
+        let mut session_b = Session::new_for_tests(shared, agentik_types::AgentPath::root());
+
+        session_a.remember(Message::user("make a plan")).unwrap();
+        session_a.agent_workflow(&internal_tx, None).await.unwrap();
+        // Consume the post-tool continuation (plain text ends the turn).
+        session_a.agent_workflow(&internal_tx, None).await.unwrap();
+
+        let plan_a = session_a.plan_snapshot();
+        assert_eq!(plan_a.revision, 1, "session A's update_plan must apply");
+        assert_eq!(plan_a.update.plan.len(), 1);
+        assert!(
+            session_b.plan_snapshot().is_empty(),
+            "session B must not observe session A's plan"
+        );
+
+        // B 的注入也必须看不到 A 的 plan:给 B 喂一条消息跑一轮,
+        // 消息流中不得出现 plan-status 通知。
+        session_b.remember(Message::user("hello")).unwrap();
+        session_b.agent_workflow(&internal_tx, None).await.unwrap();
+        assert!(
+            !session_b
+                .messages
+                .iter()
+                .flat_map(|m| m.text())
+                .any(|t| t.starts_with(PLAN_NOTICE_PREFIX)),
+            "session B must not receive a plan notice for session A's plan"
+        );
+    }
+
     /// Regression: the memory summary section must *supplement* the agent's
     /// configured `system_prompt_section`, not replace it. The builder's
     /// `with_extra_section` used to overwrite, so any agent with a memory
@@ -1263,9 +1347,6 @@ mod tests {
             )),
             event_tx: arc_swap::ArcSwapOption::empty(),
             persist_tx: std::sync::OnceLock::new(),
-            plan: Arc::new(arc_swap::ArcSwap::new(std::sync::Arc::new(
-                agentik_types::AgentPlan::new(),
-            ))),
         });
 
         let (internal_tx, _internal_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -1317,9 +1398,6 @@ mod tests {
         }
         let model = Model::with_client(dummy_model_info("skill-guide"), mock);
 
-        let plan_state = Arc::new(arc_swap::ArcSwap::new(std::sync::Arc::new(
-            agentik_types::AgentPlan::new(),
-        )));
         let registry = crate::tools::ToolRegistry::new();
         let shared = Arc::new(AgentShared {
             id: Uuid::new_v4(),
@@ -1338,7 +1416,6 @@ mod tests {
             )),
             event_tx: arc_swap::ArcSwapOption::empty(),
             persist_tx: std::sync::OnceLock::new(),
-            plan: plan_state,
         });
 
         let (internal_tx, _internal_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -1385,9 +1462,6 @@ mod tests {
         }
         let model = Model::with_client(dummy_model_info("all-tools"), mock);
 
-        let plan_state = Arc::new(arc_swap::ArcSwap::new(std::sync::Arc::new(
-            agentik_types::AgentPlan::new(),
-        )));
         let tasks = Arc::new(tokio::sync::RwLock::new(
             crate::tools::task_runtime::TaskStore::new(),
         ));
@@ -1397,12 +1471,7 @@ mod tests {
             .unwrap();
         registry
             .register_all(crate::tools::plan_registrations(
-                crate::tools::builtins::PlanHandle::new(
-                    Arc::clone(&plan_state),
-                    Uuid::new_v4(),
-                    None,
-                    None,
-                ),
+                crate::tools::builtins::PlanHandle::new(Uuid::new_v4(), None, None),
             ))
             .unwrap();
 
@@ -1421,7 +1490,6 @@ mod tests {
             tasks,
             event_tx: arc_swap::ArcSwapOption::empty(),
             persist_tx: std::sync::OnceLock::new(),
-            plan: plan_state,
         });
 
         let (internal_tx, _internal_rx) = tokio::sync::mpsc::unbounded_channel();

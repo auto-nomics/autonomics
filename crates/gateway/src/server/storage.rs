@@ -136,15 +136,15 @@ pub(crate) async fn get_history(
     Json(transcript)
 }
 
-#[utoipa::path(get, path = "/api/v1/agents/{agent_id}/plan", tag = "storage", responses((status = 200, body = Object)))]
+#[utoipa::path(get, path = "/api/v1/agents/{agent_id}/sessions/{session_id}/plan", tag = "storage", responses((status = 200, body = Object)))]
 pub(crate) async fn get_plan(
     State(state): State<GatewayState>,
-    Path(agent_id): Path<Uuid>,
+    Path((agent_id, session_id)): Path<(Uuid, Uuid)>,
 ) -> Json<Option<AgentPlan>> {
     let plan = state
         .infra
         .storage
-        .load_plan(agent_id)
+        .load_plan(agent_id, session_id)
         .await
         .unwrap_or(None);
     Json(plan)
