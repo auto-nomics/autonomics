@@ -323,14 +323,16 @@ async fn skill_evolution_status_trigger_approve_reject_roundtrip() {
     // Seed one anchor with three distinct fixes.
     for body in ["cast the column", "pass format=csv", "validate header"] {
         manager
-            .record_observation(evolution_core::ObservationInput {
+            .observation_hub()
+            .record(evolution_core::ObservationInput {
                 kind: evolution_core::ObservationKind::Failure,
                 source: evolution_core::ObservationSource::Agent,
                 summary: "sql boom".into(),
                 body: body.into(),
                 node_kind: Some("sql".into()),
                 error: Some("syntax error near 42".into()),
-            }).await
+            })
+            .await
             .unwrap();
     }
 
@@ -382,26 +384,30 @@ async fn skill_evolution_status_trigger_approve_reject_roundtrip() {
     // says it approved, then exercise reject on a third.
     for body in ["io a", "io b", "io c"] {
         manager
-            .record_observation(evolution_core::ObservationInput {
+            .observation_hub()
+            .record(evolution_core::ObservationInput {
                 kind: evolution_core::ObservationKind::Failure,
                 source: evolution_core::ObservationSource::Agent,
                 summary: "io crash".into(),
                 body: body.into(),
                 node_kind: Some("file_to_dataframe".into()),
                 error: Some("bad schema at 7".into()),
-            }).await
+            })
+            .await
             .unwrap();
     }
     for body in ["x a", "x b", "x c"] {
         manager
-            .record_observation(evolution_core::ObservationInput {
+            .observation_hub()
+            .record(evolution_core::ObservationInput {
                 kind: evolution_core::ObservationKind::Failure,
                 source: evolution_core::ObservationSource::Agent,
                 summary: "third anchor".into(),
                 body: body.into(),
                 node_kind: Some("echo".into()),
                 error: Some("echo fail 9".into()),
-            }).await
+            })
+            .await
             .unwrap();
     }
     eventually(|| {
@@ -438,14 +444,16 @@ async fn agent_authored_proposals_survive_auto_approve_over_the_wire() {
 
     // One observation as evidence, then an agent-authored proposal.
     let id = manager
-        .record_observation(evolution_core::ObservationInput {
+        .observation_hub()
+        .record(evolution_core::ObservationInput {
             kind: evolution_core::ObservationKind::Failure,
             source: evolution_core::ObservationSource::Agent,
             summary: "evidence".into(),
             body: "the fix".into(),
             node_kind: Some("sql".into()),
             error: Some("boom 1".into()),
-        }).await
+        })
+        .await
         .unwrap()
         .id;
     manager
@@ -456,7 +464,8 @@ async fn agent_authored_proposals_survive_auto_approve_over_the_wire() {
             "# Body\n\nOperational steps.\n",
             std::slice::from_ref(&id),
             "recurring pattern",
-        ).await
+        )
+        .await
         .unwrap();
 
     // The wire listing marks the author.
@@ -503,14 +512,16 @@ async fn skill_library_lists_installed_and_proposed_with_detail() {
     // Seed a pending proposal through the channel (worker trigger).
     for body in ["fix a", "fix b", "fix c"] {
         manager
-            .record_observation(evolution_core::ObservationInput {
+            .observation_hub()
+            .record(evolution_core::ObservationInput {
                 kind: evolution_core::ObservationKind::Failure,
                 source: evolution_core::ObservationSource::Agent,
                 summary: "lib boom".into(),
                 body: body.into(),
                 node_kind: Some("sql".into()),
                 error: Some("lib error 7".into()),
-            }).await
+            })
+            .await
             .unwrap();
     }
     let _ = client.trigger_skill_evolution(None).await.unwrap();
@@ -562,25 +573,29 @@ async fn skill_observations_endpoint_returns_full_evidence_in_stable_order() {
     let observation = gw
         .infra
         .skills
-        .record_observation(evolution_core::ObservationInput {
+        .observation_hub()
+        .record(evolution_core::ObservationInput {
             kind: evolution_core::ObservationKind::Caveat,
             source: evolution_core::ObservationSource::WorkflowRun,
             summary: "Header must match".into(),
             body: "Validate all column names.\nKeep evidence intact.".into(),
             node_kind: Some("sql".into()),
             error: Some("missing column".into()),
-        }).await
+        })
+        .await
         .unwrap();
     gw.infra
         .skills
-        .record_observation(evolution_core::ObservationInput {
+        .observation_hub()
+        .record(evolution_core::ObservationInput {
             kind: evolution_core::ObservationKind::Recipe,
             source: evolution_core::ObservationSource::Cli,
             summary: "Second fact".into(),
             body: "Second body".into(),
             node_kind: None,
             error: None,
-        }).await
+        })
+        .await
         .unwrap();
     let rows = client.skill_observations().await.unwrap();
     assert_eq!(rows.len(), 2);

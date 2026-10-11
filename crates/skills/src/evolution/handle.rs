@@ -63,13 +63,6 @@ impl SkillControlHandle {
         self.reports.subscribe()
     }
 
-    /// The raw command sender, for the manager's observation
-    /// forwarder. Internal-use: callers should go through
-    /// [`SkillControlHandle::trigger`].
-    pub(crate) fn sender_for_manager(&self) -> mpsc::Sender<SkillCommand> {
-        self.tx.clone()
-    }
-
     /// The policy this service runs with (an auto-approve cap of 0
     /// alongside `auto_approve: true` would approve nothing, so the
     /// pair is kept together for display).

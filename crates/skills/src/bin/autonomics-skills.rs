@@ -390,7 +390,7 @@ fn observe_cmd(
     let observation = tokio::runtime::Builder::new_current_thread()
         .build()
         .map_err(|e| e.to_string())?
-        .block_on(manager.record_observation(ObservationInput {
+        .block_on(manager.observation_hub().record(ObservationInput {
             kind,
             source: ObservationSource::Cli,
             summary: summary.into(),

@@ -33,7 +33,6 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use crate::error::SkillError;
 use crate::format::{self, SkillMeta};
@@ -93,20 +92,9 @@ pub struct Proposal {
     pub approved_path: Option<String>,
 }
 
-/// Stable hash of a cluster's observation ids — the idempotency key.
-pub fn cluster_hash(observation_ids: &BTreeSet<String>) -> String {
-    let mut hasher = Sha256::new();
-    for id in observation_ids {
-        hasher.update(id.as_bytes());
-        hasher.update(b"\0");
-    }
-    let digest = hex(&hasher.finalize());
-    format!("c-{}", &digest[..16])
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
+/// Stable hash of a cluster's observation ids — the idempotency key
+/// proposals are keyed and consumed by. Owned by evolution-core.
+pub use evolution_core::cluster::cluster_hash;
 
 fn default_authored_by() -> String {
     "distiller".to_string()

@@ -1,19 +1,14 @@
 //! The storage contract observation consumers depend on, plus the
-//! Turso-backed production implementation.
+//! Turso-backed implementation.
 //!
-//! Historically observations lived as one TOML file per record under
-//! `<state_dir>/skill-observations/`. That layout served the offline
-//! era well — content-hashed ids made writes idempotent and any
-//! process could read the ledger — but it recomputed embeddings on
-//! every distillation pass and could not grow retrieval. The Turso
-//! implementation below keeps the same semantics (idempotent
-//! content-addressed records, stable id ordering) in
-//! `<state_dir>/evolution.db`, adds a vector side-table keyed by
-//! model signature, and imports the TOML ledger once on first open.
-//! The file store remains as the compatibility and test backend.
+//! Observations live in `<state_dir>/evolution.db`: idempotent
+//! content-addressed records, stable id ordering, and a vector
+//! side-table keyed by model signature. (The pre-database layout —
+//! one TOML file per record under `<state_dir>/skill-observations/`
+//! — is retired; its one-shot import path was removed with it.)
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -22,9 +17,6 @@ use turso::Value;
 
 use crate::error::{Error, Result};
 use crate::observation::{NODE_KIND_RENAMES, Observation, ObservationInput};
-
-/// Directory under the state dir holding legacy observation files.
-pub const OBSERVATIONS_DIR: &str = "skill-observations";
 
 /// Database file name under the state dir.
 pub const EVOLUTION_DB: &str = "evolution.db";
@@ -54,149 +46,6 @@ pub trait ObservationStorage: Send + Sync {
     async fn save_embedding(&self, id: &str, signature: &str, vector: &[f32]) -> Result<()>;
 }
 
-/// File-backed storage: the legacy TOML ledger plus a vector sidecar
-/// for cached embeddings. Test compatibility backend and the migration
-/// source the Turso store imports from on first open.
-#[derive(Debug, Clone)]
-pub struct FileObservationStorage {
-    root: PathBuf,
-    vectors_root: PathBuf,
-}
-
-impl FileObservationStorage {
-    pub fn new(state_dir: &Path) -> Self {
-        Self {
-            root: state_dir.join(OBSERVATIONS_DIR),
-            vectors_root: state_dir.join("skill-observation-embeddings"),
-        }
-    }
-
-    fn observation_path(&self, id: &str) -> PathBuf {
-        self.root.join(format!("{id}.toml"))
-    }
-
-    fn vector_path(&self, id: &str, signature: &str) -> PathBuf {
-        self.vectors_root.join(signature).join(format!("{id}.f32"))
-    }
-}
-
-#[async_trait]
-impl ObservationStorage for FileObservationStorage {
-    async fn record(&self, input: ObservationInput) -> Result<Observation> {
-        let observation = Observation::from_input(input, crate::observation::unix_now());
-        let path = self.observation_path(&observation.id);
-        if path.exists() {
-            return Ok(observation);
-        }
-        std::fs::create_dir_all(&self.root).map_err(|e| {
-            Error::Storage(format!(
-                "create observation directory {}: {e}",
-                self.root.display()
-            ))
-        })?;
-        let text = toml::to_string_pretty(&observation).map_err(|source| Error::Serialize {
-            path: path.clone(),
-            source,
-        })?;
-        std::fs::write(&path, text).map_err(|source| Error::Write {
-            path: path.clone(),
-            source,
-        })?;
-        Ok(observation)
-    }
-
-    async fn list(&self) -> Vec<Observation> {
-        let Ok(read_dir) = std::fs::read_dir(&self.root) else {
-            return Vec::new();
-        };
-        let mut out = Vec::new();
-        for entry in read_dir.flatten() {
-            let path = entry.path();
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if !name.ends_with(".toml") || name.starts_with('.') {
-                continue;
-            }
-            let text = match std::fs::read_to_string(&path) {
-                Ok(t) => t,
-                Err(e) => {
-                    tracing::warn!(
-                        path = %path.display(),
-                        error = %e,
-                        "skipping unreadable observation"
-                    );
-                    continue;
-                }
-            };
-            let mut observation: Observation = match toml::from_str(&text) {
-                Ok(o) => o,
-                Err(e) => {
-                    tracing::warn!(
-                        path = %path.display(),
-                        error = %e,
-                        "skipping malformed observation"
-                    );
-                    continue;
-                }
-            };
-            // On-load node_kind migration: rewrite stale anchors in the
-            // data, then re-emit the file so the rename sticks.
-            if let Some((from, to)) = crate::observation::rewrite_node_kind(&mut observation) {
-                tracing::warn!(
-                    id = %observation.id,
-                    old = %from,
-                    new = %to,
-                    "rewrote skill observation node_kind to current DAG kind"
-                );
-                if let Err(error) = atomic_write_toml(&path, &observation) {
-                    tracing::warn!(
-                        path = %path.display(),
-                        error = %error,
-                        "failed to persist rewritten node_kind; in-memory value still applied"
-                    );
-                }
-            }
-            out.push(observation);
-        }
-        out.sort_by(|a, b| a.id.cmp(&b.id));
-        out
-    }
-
-    async fn load_embedding(&self, id: &str, signature: &str) -> Result<Option<Vec<f32>>> {
-        let path = self.vector_path(id, signature);
-        let bytes = match std::fs::read(&path) {
-            Ok(bytes) => bytes,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(e) => {
-                return Err(Error::Storage(format!("read {}: {e}", path.display())));
-            }
-        };
-        if bytes.len() % 4 != 0 {
-            return Err(Error::Storage(format!(
-                "corrupt embedding file {}: length {} not a multiple of 4",
-                path.display(),
-                bytes.len()
-            )));
-        }
-        Ok(Some(
-            bytes
-                .chunks_exact(4)
-                .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-                .collect(),
-        ))
-    }
-
-    async fn save_embedding(&self, id: &str, signature: &str, vector: &[f32]) -> Result<()> {
-        let path = self.vector_path(id, signature);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| Error::Storage(format!("create {}: {e}", parent.display())))?;
-        }
-        let bytes: Vec<u8> = vector.iter().flat_map(|v| v.to_le_bytes()).collect();
-        std::fs::write(&path, bytes)
-            .map_err(|e| Error::Storage(format!("write {}: {e}", path.display())))
-    }
-}
-
 /// Turso-backed production storage over `<state_dir>/evolution.db`.
 ///
 /// Construction is synchronous — the database is built lazily on
@@ -204,23 +53,19 @@ impl ObservationStorage for FileObservationStorage {
 /// construct stores on synchronous paths (manager constructors).
 pub struct TursoObservationStorage {
     db_path: PathBuf,
-    state_dir: PathBuf,
     conn: OnceCell<Arc<Mutex<turso::Connection>>>,
 }
 
 impl TursoObservationStorage {
     /// Storage over `<state_dir>/evolution.db`. No I/O happens here.
     pub fn new(state_dir: impl Into<PathBuf>) -> Self {
-        let state_dir = state_dir.into();
         Self {
-            db_path: state_dir.join(EVOLUTION_DB),
-            state_dir,
+            db_path: state_dir.into().join(EVOLUTION_DB),
             conn: OnceCell::new(),
         }
     }
 
-    /// Build the database (once), create the schema, and import the
-    /// legacy TOML ledger when the table is still empty.
+    /// Build the database (once) and create the schema.
     async fn ensure(&self) -> Result<Arc<Mutex<turso::Connection>>> {
         self.conn
             .get_or_try_init(|| async {
@@ -239,7 +84,6 @@ impl TursoObservationStorage {
                     .map_err(|e| Error::Storage(format!("connect evolution db: {e}")))?;
                 let conn = Arc::new(Mutex::new(conn));
                 Self::init_schema(&conn).await?;
-                Self::import_toml_ledger(&conn, &self.state_dir).await?;
                 Ok(conn)
             })
             .await
@@ -272,67 +116,9 @@ impl TursoObservationStorage {
             .map_err(|e| Error::Storage(format!("init evolution schema: {e}")))
     }
 
-    /// One-time import of the file ledger into an empty table. The
-    /// TOML files stay on disk untouched — they are harmless and
-    /// remain readable by [`FileObservationStorage`].
-    async fn import_toml_ledger(
-        conn: &Arc<Mutex<turso::Connection>>,
-        state_dir: &Path,
-    ) -> Result<()> {
-        let root = state_dir.join(OBSERVATIONS_DIR);
-        let Ok(read_dir) = std::fs::read_dir(&root) else {
-            return Ok(());
-        };
-        let mut observations = Vec::new();
-        for entry in read_dir.flatten() {
-            let path = entry.path();
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if !name.ends_with(".toml") || name.starts_with('.') {
-                continue;
-            }
-            let text = match std::fs::read_to_string(&path) {
-                Ok(t) => t,
-                Err(e) => {
-                    tracing::warn!(
-                        path = %path.display(),
-                        error = %e,
-                        "skipping unreadable observation during TOML import"
-                    );
-                    continue;
-                }
-            };
-            match toml::from_str::<Observation>(&text) {
-                Ok(observation) => observations.push(observation),
-                Err(e) => {
-                    tracing::warn!(
-                        path = %path.display(),
-                        error = %e,
-                        "skipping malformed observation during TOML import"
-                    );
-                }
-            }
-        }
-        if observations.is_empty() {
-            return Ok(());
-        }
-        let mut guard = conn.lock().await;
-        for observation in &observations {
-            if insert_observation(&mut guard, observation)
-                .await
-                .map_err(|e| Error::Storage(format!("import observation: {e}")))?
-            {
-                tracing::info!(id = %observation.id, "imported observation from the TOML ledger");
-            }
-        }
-        tracing::info!(
-            count = observations.len(),
-            "TOML observation ledger import checked"
-        );
-        Ok(())
-    }
-
-    /// Apply [`NODE_KIND_RENAMES`] in place — the DB path of the
-    /// on-load rename the file store performs.
+    /// Apply [`NODE_KIND_RENAMES`] in place and persist the rewrite,
+    /// so observations anchored on retired node kinds rejoin
+    /// distillation on read.
     async fn rewrite_node_kind(&self, observation: &mut Observation, conn: &mut turso::Connection) {
         for (from, to) in NODE_KIND_RENAMES {
             if observation.node_kind.as_deref() == Some(*from) {
@@ -579,32 +365,6 @@ pub async fn load_embedding_map(
     Ok(out)
 }
 
-/// Atomically re-emit the observation TOML: write to a sibling temp
-/// file in the same directory and rename over the original. Used by the
-/// file backend's on-load node-kind migration.
-fn atomic_write_toml(path: &Path, observation: &Observation) -> std::io::Result<()> {
-    let parent = path.parent().ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "observation path has no parent",
-        )
-    })?;
-    let tmp = parent.join(format!(
-        ".{}.tmp",
-        path.file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("observation")
-    ));
-    let text = toml::to_string_pretty(observation).map_err(|error| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("toml encode: {error}"),
-        )
-    })?;
-    std::fs::write(&tmp, text)?;
-    std::fs::rename(&tmp, path)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -695,25 +455,5 @@ mod tests {
                 .unwrap(),
             vec![1.0]
         );
-    }
-
-    /// The legacy TOML ledger imports once, on first open of an empty
-    /// database; the seeded row is visible through the DB handle.
-    #[tokio::test]
-    async fn tom_ledger_imports_once() {
-        let dir = tempfile::tempdir().unwrap();
-        // Seed the legacy file layout.
-        let files = FileObservationStorage::new(dir.path());
-        files.record(input("legacy row")).await.unwrap();
-
-        let storage = TursoObservationStorage::new(dir.path());
-        let listed = storage.list().await;
-        assert_eq!(listed.len(), 1);
-        assert_eq!(listed[0].summary, "legacy row");
-
-        // Recording the same content through the DB is a no-op — the
-        // imported row keeps its original created_at.
-        let again = storage.record(input("legacy row")).await.unwrap();
-        assert_eq!(again.created_at, listed[0].created_at);
     }
 }

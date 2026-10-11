@@ -7,7 +7,6 @@ use std::time::Duration;
 mod workflow_tests {
     use super::*;
     use evolution_core::observation::{ObservationInput, ObservationKind, ObservationSource};
-    use evolution_core::storage::{FileObservationStorage, ObservationStorage};
 
     fn manager_in(tmp: &std::path::Path) -> Arc<SkillManager> {
         Arc::new(SkillManager::new(tmp.join("state")))
@@ -16,7 +15,8 @@ mod workflow_tests {
     async fn observe_three(manager: &SkillManager, error: &str) {
         for body in ["fix a", "fix b", "fix c"] {
             manager
-                .record_observation(ObservationInput {
+                .observation_hub()
+                .record(ObservationInput {
                     kind: ObservationKind::Failure,
                     source: ObservationSource::Agent,
                     summary: format!("fix for {error}"),
@@ -122,36 +122,6 @@ mod workflow_tests {
     }
 
     #[tokio::test]
-    async fn observation_recording_fires_the_trigger_path() {
-        let tmp = tempfile::tempdir().unwrap();
-        let manager = manager_in(tmp.path());
-        let options = EvolutionOptions {
-            quiet_window: Duration::from_millis(50),
-            timer: None,
-            policy: EvolutionPolicy::default(),
-        };
-        let handle = start(manager.clone(), options.clone());
-        let mut reports = handle.subscribe_reports();
-        // Drain the startup report.
-        let _ = tokio::time::timeout(Duration::from_secs(2), reports.recv()).await;
-
-        // The manager must be attached to the service to forward
-        // observation events.
-        manager.attach_evolution(&handle);
-        observe_three(&manager, "hooked N").await;
-        let report = tokio::time::timeout(Duration::from_secs(2), reports.recv())
-            .await
-            .expect("event-driven report")
-            .expect("channel open");
-        assert!(
-            report.triggers.contains(&"observation"),
-            "{:?}",
-            report.triggers
-        );
-        assert_eq!(report.proposals_written.len(), 1);
-    }
-
-    #[tokio::test]
     async fn observation_store_roundtrip_under_manager() {
         // Guards the store path used by the cycle against accidental
         // regressions in manager wiring.
@@ -179,7 +149,8 @@ mod timer_tests {
         let manager = Arc::new(SkillManager::new(tmp.path().join("state")));
         for body in ["fix a", "fix b", "fix c"] {
             manager
-                .record_observation(ObservationInput {
+                .observation_hub()
+                .record(ObservationInput {
                     kind: ObservationKind::Failure,
                     source: ObservationSource::Agent,
                     summary: "fix for boom N".into(),
@@ -222,7 +193,8 @@ mod authoring_tests {
         let tmp = tempfile::tempdir().unwrap();
         let manager = Arc::new(SkillManager::new(tmp.path().join("state")));
         let id = manager
-            .record_observation(ObservationInput {
+            .observation_hub()
+            .record(ObservationInput {
                 kind: ObservationKind::Failure,
                 source: ObservationSource::Agent,
                 summary: "evidence".into(),
@@ -297,7 +269,8 @@ mod channel_funnel {
     async fn seed_pending_proposal(manager: &SkillManager, handle: &SkillControlHandle) -> String {
         for body in ["fix a", "fix b", "fix c"] {
             manager
-                .record_observation(ObservationInput {
+                .observation_hub()
+                .record(ObservationInput {
                     kind: evolution_core::observation::ObservationKind::Failure,
                     source: evolution_core::observation::ObservationSource::Agent,
                     summary: "fix for boom".into(),
@@ -382,35 +355,6 @@ mod channel_funnel {
         assert_eq!(name, "sql-boom");
     }
 
-    /// After the channel closes (every handle dropped, worker
-    /// exited), the manager's `record_observation` forwarder still
-    /// succeeds — the dropped-triggers contract means the
-    /// observation is recorded but no evolution trigger fires.
-    /// This pins the no-block guarantee on the observation hot
-    /// path.
-    #[tokio::test]
-    async fn channel_funnel_observation_forwarder_does_not_block_after_drop() {
-        let tmp = tempfile::tempdir().unwrap();
-        let (manager, handle) = start_service(&tmp.path().join("state"));
-        drop(handle);
-        // Let the worker observe the closed channel and exit.
-        tokio::time::sleep(Duration::from_millis(30)).await;
-        let probe = manager
-            .record_observation(ObservationInput {
-                kind: evolution_core::observation::ObservationKind::Failure,
-                source: evolution_core::observation::ObservationSource::Agent,
-                summary: "probe".into(),
-                body: "x".into(),
-                node_kind: Some("sql".into()),
-                error: Some("boom".into()),
-            })
-            .await;
-        assert!(
-            probe.is_ok(),
-            "observation must succeed even with worker gone"
-        );
-    }
-
     /// Dropped-command observability: the counter is reachable
     /// through the handle and starts at zero; a successful trigger
     /// does not bump it (the channel has capacity).
@@ -489,7 +433,8 @@ mod channel_funnel {
         // distill; otherwise the worker short-circuits the cycle
         // body and `cycles_completed` stays at 0.
         manager
-            .record_observation(evolution_core::observation::ObservationInput {
+            .observation_hub()
+            .record(evolution_core::observation::ObservationInput {
                 kind: evolution_core::observation::ObservationKind::Failure,
                 source: evolution_core::observation::ObservationSource::Agent,
                 summary: "fix for boom N".into(),

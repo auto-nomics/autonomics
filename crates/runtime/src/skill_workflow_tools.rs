@@ -392,7 +392,7 @@ impl SkillEvalTool {
             node_kind: anchor_kind,
             error: Some(first.reason.clone()),
         };
-        if let Err(e) = self.manager.record_observation(input).await {
+        if let Err(e) = self.manager.observation_hub().record(input).await {
             tracing::warn!(skill = skill, error = %e, "cannot record eval-failure observation");
         }
     }
@@ -684,7 +684,8 @@ spec = {}
         );
         for body in ["variant b", "variant c"] {
             manager
-                .record_observation(evolution_core::ObservationInput {
+                .observation_hub()
+                .record(evolution_core::ObservationInput {
                     kind: evolution_core::ObservationKind::Failure,
                     source: evolution_core::ObservationSource::Agent,
                     summary: "eval always fails".into(),

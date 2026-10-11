@@ -495,7 +495,6 @@ impl SharedInfra {
                     )),
                 },
             );
-            skills.attach_evolution(&handle);
             tracing::info!(
                 auto_approve = config.skill_evolution_auto_approve,
                 interval_secs = config.skill_evolution_interval_secs,

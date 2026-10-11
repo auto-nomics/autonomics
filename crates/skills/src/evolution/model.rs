@@ -4,9 +4,6 @@
 pub enum EvolutionTrigger {
     /// Explicit request (CLI, agent tool, future host control).
     Manual { by: String },
-    /// An observation was recorded (covers agent `evo_observe`,
-    /// automatic eval-failure capture, CLI `observe`).
-    ObservationRecorded { id: String },
     /// Service start: sweep once so overnight accumulation is dealt
     /// with before anyone asks.
     Startup,
@@ -18,7 +15,6 @@ impl EvolutionTrigger {
     pub fn label(&self) -> &'static str {
         match self {
             EvolutionTrigger::Manual { .. } => "manual",
-            EvolutionTrigger::ObservationRecorded { .. } => "observation",
             EvolutionTrigger::Startup => "startup",
             EvolutionTrigger::Timer => "timer",
         }

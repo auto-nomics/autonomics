@@ -42,7 +42,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
 use serde::{Deserialize, Serialize};
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::broadcast;
 
 use crate::error::SkillError;
 use crate::install::{self, InstallOutcome};
@@ -111,11 +111,6 @@ pub struct SkillManager {
     generation: AtomicU64,
     changes: broadcast::Sender<u64>,
     usage: RwLock<HashMap<String, UsageRecord>>,
-    /// Optional forwarder to the skill control service — set by
-    /// [`SkillManager::attach_evolution`]. Storing just the sender
-    /// (not the handle) keeps the manager free of any service
-    /// lifetime coupling.
-    evolution_tx: RwLock<Option<mpsc::Sender<crate::evolution::SkillCommand>>>,
     /// The upstream observation hub this manager reads evidence from.
     /// Held by reference, not resolved through the global on every
     /// call: parallel tests replace the global singleton, and an
@@ -159,7 +154,6 @@ impl SkillManager {
             generation: AtomicU64::new(1),
             changes: broadcast::channel(16).0,
             usage: RwLock::new(HashMap::new()),
-            evolution_tx: RwLock::new(None),
             hub,
         }
     }
@@ -344,43 +338,6 @@ impl SkillManager {
     /// The hub this manager reads evidence from.
     pub fn observation_hub(&self) -> Arc<evolution_core::ObservationHub> {
         Arc::clone(&self.hub)
-    }
-
-    /// Record one observation (idempotent on content). This is the
-    /// feedstock call for the whole evolution loop — agent tool,
-    /// automatic failure capture, and CLI all land here.
-    /// Forward observation events to the skill control service, when
-    /// one is attached. Never blocks: a full or absent channel only
-    /// means this observation rides the next timer/startup sweep
-    /// instead.
-    pub fn attach_evolution(&self, handle: &crate::evolution::SkillControlHandle) {
-        if let Ok(mut slot) = self.evolution_tx.write() {
-            *slot = Some(handle.sender_for_manager());
-        }
-    }
-
-    pub async fn record_observation(
-        &self,
-        input: evolution_core::observation::ObservationInput,
-    ) -> Result<evolution_core::observation::Observation, SkillError> {
-        // The hub is the canonical ledger; this wrapper only adds the
-        // skill-side notification so a fresh observation can trigger
-        // an immediate evolution cycle.
-        let observation = self
-            .hub
-            .record(input)
-            .await
-            .map_err(SkillError::Evolution)?;
-        if let Ok(slot) = self.evolution_tx.read()
-            && let Some(tx) = slot.as_ref()
-        {
-            let _ = tx.try_send(crate::evolution::SkillCommand::Evolution(
-                crate::evolution::EvolutionTrigger::ObservationRecorded {
-                    id: observation.id.clone(),
-                },
-            ));
-        }
-        Ok(observation)
     }
 
     /// The proposal area under this manager's state dir.
@@ -633,7 +590,8 @@ mod tests {
 
         for index in 0..3 {
             let observation = manager
-                .record_observation(evolution_core::ObservationInput {
+                .observation_hub()
+                .record(evolution_core::ObservationInput {
                     kind: evolution_core::ObservationKind::Failure,
                     source: evolution_core::ObservationSource::Agent,
                     summary: format!("plugin failure {index}"),
@@ -648,7 +606,8 @@ mod tests {
         }
         for index in 0..3 {
             let observation = manager
-                .record_observation(evolution_core::ObservationInput {
+                .observation_hub()
+                .record(evolution_core::ObservationInput {
                     kind: evolution_core::ObservationKind::Recipe,
                     source: evolution_core::ObservationSource::Agent,
                     summary: format!("generic recipe {index}"),
@@ -826,7 +785,8 @@ mod propose_tests {
 
     async fn observe_once(manager: &SkillManager, body: &str) -> String {
         manager
-            .record_observation(evolution_core::ObservationInput {
+            .observation_hub()
+            .record(evolution_core::ObservationInput {
                 kind: evolution_core::ObservationKind::Failure,
                 source: evolution_core::ObservationSource::Agent,
                 summary: "evidence".into(),

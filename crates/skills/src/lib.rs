@@ -54,13 +54,16 @@ pub mod registry;
 pub mod tools;
 pub mod workflow;
 
-pub use distill::{Candidate, DistillReport, distill};
+pub use distill::{DistillReport, distill};
 pub use error::SkillError;
+// The cluster type proposals are distilled from — owned by
+// evolution-core, re-exported for the crate's public surface.
 pub use eval::{Check, EvalCase, EvalReport};
 pub use evolution::{
     CyclePhase, CycleStatus, EvolutionOptions, EvolutionPolicy, EvolutionReport, EvolutionTrigger,
     SkillCommand, SkillCommandOutcome, SkillControlHandle, start,
 };
+pub use evolution_core::cluster::Candidate;
 pub use format::SkillMeta;
 pub use inject::prompt_section;
 pub use manager::{SkillManager, UsageKind, UsageRecord};

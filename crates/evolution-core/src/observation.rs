@@ -12,13 +12,9 @@
 //!   run failures as `failure` observations anchored on the failing
 //!   node kind and error text
 //!
-//! Schema only lives here. The TOML file backend is in
-//! [`crate::storage::FileObservationStorage`]; the production
-//! Turso database backend and the shared handle are
-//! [`crate::storage::TursoObservationStorage`] and
-//! [`crate::hub::ObservationHub`]. Legacy TOML files on disk remain
-//! readable by the file backend and serve as a one-shot migration
-//! source when the database backend opens an empty table on first use.
+//! Schema only lives here. The Turso database backend and the shared
+//! handle are [`crate::storage::TursoObservationStorage`] and
+//! [`crate::hub::ObservationHub`].
 //!
 //! Deliberately absent: EvoScientist's LLM-built observation graph
 //! (complements/contradicts/supersedes links). Clustering in
@@ -33,8 +29,8 @@ use std::path::Path;
 
 /// Node-kind renames applied on load. When a stored observation carries
 /// `node_kind` matching a tuple's left side, the in-memory value is
-/// rewritten to the right side and the on-disk TOML is re-emitted
-/// (atomically, via temp + rename) so subsequent reads see the new name.
+/// rewritten to the right side and the row updated, so subsequent reads
+/// see the new name.
 ///
 /// Rationale: distillation clusters on `(node_kind, signature, kind)` —
 /// an observation anchored on a removed node kind contributes to
@@ -157,22 +153,6 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// The observation store: a directory of `<id>.toml` files.
-
-/// If `observation.node_kind` matches a stale entry in
-/// [`NODE_KIND_RENAMES`], mutate it to the current DAG kind and return
-/// the (old, new) pair so the caller can log. Returns `None` when no
-/// rewrite was needed. Storage backends call this on load to migrate
-/// legacy data.
-pub(crate) fn rewrite_node_kind(
-    observation: &mut Observation,
-) -> Option<(&'static str, &'static str)> {
-    let old = observation.node_kind.as_deref()?;
-    let (from, to) = NODE_KIND_RENAMES.iter().find(|(o, _)| *o == old)?;
-    observation.node_kind = Some((*to).to_string());
-    Some((*from, *to))
-}
-
 pub(crate) fn unix_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -184,13 +164,12 @@ pub(crate) fn unix_now() -> i64 {
 mod tests {
     use super::*;
     use crate::observation::ObservationInput;
-    use crate::storage::{FileObservationStorage, ObservationStorage};
+    use crate::storage::{ObservationStorage, TursoObservationStorage};
 
     #[tokio::test]
     async fn content_hashing_is_stable_across_input_padding() {
-        use crate::storage::FileObservationStorage;
         let tmp = tempfile::tempdir().unwrap();
-        let storage = FileObservationStorage::new(tmp.path());
+        let storage = TursoObservationStorage::new(tmp.path());
         let first = storage
             .record(ObservationInput {
                 kind: ObservationKind::Failure,
@@ -220,9 +199,8 @@ mod tests {
 
     #[tokio::test]
     async fn different_content_gets_different_ids() {
-        use crate::storage::FileObservationStorage;
         let tmp = tempfile::tempdir().unwrap();
-        let storage = FileObservationStorage::new(tmp.path());
+        let storage = TursoObservationStorage::new(tmp.path());
         for body in ["b1", "b2"] {
             storage
                 .record(ObservationInput {
@@ -239,42 +217,16 @@ mod tests {
         assert_eq!(storage.list().await.len(), 2);
     }
 
-    #[tokio::test]
-    async fn malformed_files_are_skipped() {
-        use crate::storage::FileObservationStorage;
-        let tmp = tempfile::tempdir().unwrap();
-        let storage = FileObservationStorage::new(tmp.path());
-        storage
-            .record(crate::observation::ObservationInput {
-                kind: ObservationKind::Failure,
-                source: ObservationSource::Agent,
-                summary: "s".into(),
-                body: "b".into(),
-                node_kind: Some("file_to_dataframe".into()),
-                error: Some("schema mismatch".into()),
-            })
-            .await
-            .unwrap();
-        std::fs::write(
-            tmp.path()
-                .join(crate::storage::OBSERVATIONS_DIR)
-                .join("O-bad.toml"),
-            "not = toml",
-        )
-        .unwrap();
-        let listed = storage.list().await;
-        assert_eq!(listed.len(), 1);
-    }
-
     /// Pre-rename observations (e.g. anchored on the now-retired
     /// `literature_search` kind) get rewritten to the current DAG kind
-    /// on first read; the on-disk TOML is also re-emitted so the
-    /// rename is sticky across subsequent loads. The id is unaffected.
+    /// on first read, and the row is updated so the rename sticks
+    /// across loads. The id is unaffected.
     #[tokio::test]
     async fn renames_literature_search_to_source_literature_on_load() {
-        use crate::storage::FileObservationStorage;
         let tmp = tempfile::tempdir().unwrap();
-        let storage = FileObservationStorage::new(tmp.path());
+        let storage = TursoObservationStorage::new(tmp.path());
+        // Record directly with the stale anchor — the store accepts any
+        // node kind, standing in for a row written before the rename.
         let recorded = storage
             .record(ObservationInput {
                 kind: ObservationKind::Recipe,
@@ -286,46 +238,16 @@ mod tests {
             })
             .await
             .unwrap();
-        // Manually rewrite the persisted TOML back to the stale name to
-        // simulate an observation recorded before the migration.
-        let path = tmp
-            .path()
-            .join(crate::storage::OBSERVATIONS_DIR)
-            .join(format!("{}.toml", recorded.id));
-        std::fs::write(
-            &path,
-            format!(
-                "id = '{}'\ncreated_at = 0\nkind = 'recipe'\nsource = 'agent'\nsummary = 'lit audit'\nbody = 'audit body'\nnode_kind = 'literature_search'\n",
-                recorded.id
-            ),
-        )
-        .unwrap();
 
-        // First list() returns the rewritten kind and persists the change.
+        // First list() returns the rewritten kind and persists it.
         let first = storage.list().await;
         assert_eq!(first.len(), 1);
         assert_eq!(first[0].id, recorded.id);
         assert_eq!(first[0].node_kind.as_deref(), Some("source_literature"));
-        // The TOML on disk now carries the new kind.
-        let on_disk = std::fs::read_to_string(&path).unwrap();
-        assert!(
-            on_disk.contains("node_kind = \"source_literature\""),
-            "TOML was not rewritten: {on_disk}"
-        );
-        assert!(!on_disk.contains("literature_search\""));
 
-        // Subsequent list() observes the same rewritten value with no
-        // further migration; no temp files are left in the dir.
-        let second = storage.list().await;
+        // A fresh handle over the same database sees the rewritten row.
+        let reopened = TursoObservationStorage::new(tmp.path());
+        let second = reopened.list().await;
         assert_eq!(second[0].node_kind.as_deref(), Some("source_literature"));
-        let entries: Vec<_> = std::fs::read_dir(tmp.path().join(crate::storage::OBSERVATIONS_DIR))
-            .unwrap()
-            .flatten()
-            .map(|e| e.file_name().to_string_lossy().into_owned())
-            .collect();
-        assert!(
-            entries.iter().all(|n| !n.ends_with(".tmp")),
-            "leftover tmp: {entries:?}"
-        );
     }
 }

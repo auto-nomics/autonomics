@@ -9,9 +9,8 @@
 //! CLI and a daemon pointed at the same directory observe the same
 //! ledger without any in-process singleton.
 //!
-//! Since the Turso migration the hub is backed by
-//! `<state_dir>/evolution.db` (records plus cached vectors); the file
-//! backend remains available for tests via [`ObservationHub::with_storage`].
+//! The hub is backed by `<state_dir>/evolution.db` (records plus
+//! cached vectors) via [`TursoObservationStorage`].
 //!
 //! Embedding happens HERE, at the moment an observation is created:
 //! [`ObservationHub::record`] renders the observation to text, embeds
@@ -30,9 +29,7 @@ use std::sync::Arc;
 
 use text_embedding::{EmbeddingInput, HashingTextEmbedder, TextEmbedder};
 
-use super::storage::{
-    FileObservationStorage, ObservationStorage, TursoObservationStorage, load_embedding_map,
-};
+use super::storage::{ObservationStorage, TursoObservationStorage, load_embedding_map};
 use crate::error::Result;
 use crate::observation::{Observation, ObservationInput};
 use crate::routing::ObservationRouteStore;
@@ -49,10 +46,10 @@ pub struct ObservationHub {
 }
 
 impl ObservationHub {
-    /// Production hub over `<state_dir>/evolution.db`. No I/O happens
-    /// here — the database is built lazily on first use — and the
-    /// embedder starts as the offline hashing default until the host
-    /// installs a model with [`ObservationHub::set_embedder`].
+    /// Hub over `<state_dir>/evolution.db`. No I/O happens here — the
+    /// database is built lazily on first use — and the embedder
+    /// starts as the offline hashing default until the host installs
+    /// a model with [`ObservationHub::set_embedder`].
     #[must_use]
     pub fn new(state_dir: impl Into<PathBuf>) -> Self {
         let state_dir = state_dir.into();
@@ -62,31 +59,6 @@ impl ObservationHub {
             storage,
             embedder: default_embedder(),
         }
-    }
-
-    /// Hub over a caller-supplied storage backend (tests inject the
-    /// file backend here; the database backend is the default).
-    #[must_use]
-    pub fn with_storage(
-        state_dir: impl Into<PathBuf>,
-        storage: Arc<dyn ObservationStorage>,
-    ) -> Self {
-        Self {
-            state_dir: state_dir.into(),
-            storage,
-            embedder: default_embedder(),
-        }
-    }
-
-    /// Hub over the legacy file backend, files only — no database is
-    /// created or consulted.
-    #[must_use]
-    pub fn file_backed(state_dir: impl Into<PathBuf>) -> Self {
-        let state_dir = state_dir.into();
-        Self::with_storage(
-            state_dir.clone(),
-            Arc::new(FileObservationStorage::new(&state_dir)),
-        )
     }
 
     /// The state directory every store below is rooted at.
@@ -265,7 +237,7 @@ mod tests {
     #[tokio::test]
     async fn record_is_visible_through_the_shared_storage() {
         let tmp = tempfile::tempdir().unwrap();
-        let hub = ObservationHub::file_backed(tmp.path());
+        let hub = ObservationHub::new(tmp.path());
         let observation = hub.record(input("summary")).await.unwrap();
         let listed = hub.storage().list().await;
         assert!(listed.iter().any(|o| o.id == observation.id));
@@ -288,7 +260,7 @@ mod tests {
     #[tokio::test]
     async fn record_embeds_and_load_embeddings_round_trips() {
         let tmp = tempfile::tempdir().unwrap();
-        let hub = ObservationHub::file_backed(tmp.path());
+        let hub = ObservationHub::new(tmp.path());
         let observation = hub.record(input("restart the daemon")).await.unwrap();
 
         let embeddings = hub
@@ -303,8 +275,8 @@ mod tests {
     /// across instances, so clustering hashes stay stable across runs.
     #[tokio::test]
     async fn same_text_embeds_identically_across_hubs() {
-        let first = ObservationHub::file_backed(tempfile::tempdir().unwrap().path());
-        let second = ObservationHub::file_backed(tempfile::tempdir().unwrap().path());
+        let first = ObservationHub::new(tempfile::tempdir().unwrap().path());
+        let second = ObservationHub::new(tempfile::tempdir().unwrap().path());
         let a = first.record(input("identical text")).await.unwrap();
         let b = second.record(input("identical text")).await.unwrap();
         let va = first.load_embeddings(&[a.id]).await.unwrap();
@@ -319,7 +291,7 @@ mod tests {
     #[tokio::test]
     async fn set_embedder_backfills_vectors_for_prior_observations() {
         let tmp = tempfile::tempdir().unwrap();
-        let hub = ObservationHub::file_backed(tmp.path());
+        let hub = ObservationHub::new(tmp.path());
         let first = hub.record(input("one")).await.unwrap();
         let second = hub.record(input("two")).await.unwrap();
 

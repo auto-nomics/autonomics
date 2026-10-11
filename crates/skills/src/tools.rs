@@ -567,7 +567,8 @@ mod propose_tool_tests {
         let tmp = tempfile::tempdir().unwrap().keep();
         let manager = Arc::new(SkillManager::new(tmp));
         let observation = manager
-            .record_observation(evolution_core::ObservationInput {
+            .observation_hub()
+            .record(evolution_core::ObservationInput {
                 kind: evolution_core::ObservationKind::Failure,
                 source: evolution_core::ObservationSource::Agent,
                 summary: "evidence".into(),
