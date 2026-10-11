@@ -6,9 +6,7 @@ use std::time::Duration;
 
 mod workflow_tests {
     use super::*;
-    use evolution_core::observation::{
-        ObservationInput, ObservationKind, ObservationSource,
-    };
+    use evolution_core::observation::{ObservationInput, ObservationKind, ObservationSource};
     use evolution_core::storage::{FileObservationStorage, ObservationStorage};
 
     fn manager_in(tmp: &std::path::Path) -> Arc<SkillManager> {
@@ -25,7 +23,8 @@ mod workflow_tests {
                     body: body.into(),
                     node_kind: Some("sql".into()),
                     error: Some(error.into()),
-                }).await
+                })
+                .await
                 .unwrap();
         }
     }
@@ -35,7 +34,9 @@ mod workflow_tests {
         let tmp = tempfile::tempdir().unwrap();
         let manager = manager_in(tmp.path());
         observe_three(&manager, "boom N").await;
-        let report = run_evolution_cycle(&manager, &EvolutionPolicy::default()).await.unwrap();
+        let report = run_evolution_cycle(&manager, &EvolutionPolicy::default())
+            .await
+            .unwrap();
         assert_eq!(report.proposals_written.len(), 1);
         assert!(report.auto_approved.is_empty());
         assert_eq!(report.left_pending, 1);
@@ -63,9 +64,13 @@ mod workflow_tests {
     async fn cycle_without_new_observations_is_a_noop() {
         let tmp = tempfile::tempdir().unwrap();
         let manager = manager_in(tmp.path());
-        let first = run_evolution_cycle(&manager, &EvolutionPolicy::default()).await.unwrap();
+        let first = run_evolution_cycle(&manager, &EvolutionPolicy::default())
+            .await
+            .unwrap();
         assert!(!first.acted());
-        let second = run_evolution_cycle(&manager, &EvolutionPolicy::default()).await.unwrap();
+        let second = run_evolution_cycle(&manager, &EvolutionPolicy::default())
+            .await
+            .unwrap();
         assert!(!second.acted());
     }
 
@@ -181,7 +186,8 @@ mod timer_tests {
                     body: body.into(),
                     node_kind: Some("sql".into()),
                     error: Some("boom at step N".into()),
-                }).await
+                })
+                .await
                 .unwrap();
         }
         let options = EvolutionOptions {
@@ -223,7 +229,8 @@ mod authoring_tests {
                 body: "fix".into(),
                 node_kind: Some("sql".into()),
                 error: Some("boom".into()),
-            }).await
+            })
+            .await
             .unwrap()
             .id;
         manager
@@ -234,7 +241,8 @@ mod authoring_tests {
                 "# Body\n\nSteps.\n",
                 std::slice::from_ref(&id),
                 "pattern",
-            ).await
+            )
+            .await
             .unwrap();
 
         let policy = EvolutionPolicy {
@@ -262,8 +270,8 @@ mod authoring_tests {
 #[cfg(test)]
 mod channel_funnel {
     use super::*;
-    use evolution_core::observation::ObservationInput;
     use crate::proposals::ProposalStatus;
+    use evolution_core::observation::ObservationInput;
 
     fn start_service(state_dir: &std::path::Path) -> (Arc<SkillManager>, SkillControlHandle) {
         let manager = Arc::new(SkillManager::new(state_dir));
@@ -296,7 +304,8 @@ mod channel_funnel {
                     body: body.into(),
                     node_kind: Some("sql".into()),
                     error: Some("boom".into()),
-                }).await
+                })
+                .await
                 .unwrap();
         }
         let outcome = handle.call_run_cycle(EvolutionPolicy::default()).await;
@@ -386,14 +395,16 @@ mod channel_funnel {
         drop(handle);
         // Let the worker observe the closed channel and exit.
         tokio::time::sleep(Duration::from_millis(30)).await;
-        let probe = manager.record_observation(ObservationInput {
-            kind: evolution_core::observation::ObservationKind::Failure,
-            source: evolution_core::observation::ObservationSource::Agent,
-            summary: "probe".into(),
-            body: "x".into(),
-            node_kind: Some("sql".into()),
-            error: Some("boom".into()),
-        }).await;
+        let probe = manager
+            .record_observation(ObservationInput {
+                kind: evolution_core::observation::ObservationKind::Failure,
+                source: evolution_core::observation::ObservationSource::Agent,
+                summary: "probe".into(),
+                body: "x".into(),
+                node_kind: Some("sql".into()),
+                error: Some("boom".into()),
+            })
+            .await;
         assert!(
             probe.is_ok(),
             "observation must succeed even with worker gone"
@@ -485,7 +496,8 @@ mod channel_funnel {
                 body: "fix a".into(),
                 node_kind: Some("sql".into()),
                 error: Some("boom at step N".into()),
-            }).await
+            })
+            .await
             .unwrap();
         let handle = start(
             manager.clone(),

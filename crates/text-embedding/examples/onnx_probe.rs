@@ -10,7 +10,7 @@
 
 use std::time::Instant;
 
-use text_embedding::{cosine, EmbeddingInput, OnnxTextEmbedder, TextEmbedder};
+use text_embedding::{EmbeddingInput, OnnxTextEmbedder, TextEmbedder, cosine};
 
 fn main() {
     let model_dir = std::env::args()
@@ -28,8 +28,14 @@ fn main() {
 
     let inputs = [
         ("daemon-restart", "restart the daemon after editing config"),
-        ("daemon-restart-2", "restart the daemon once the config changed"),
-        ("sql-quoting", "quote mixed-case column names in sql queries"),
+        (
+            "daemon-restart-2",
+            "restart the daemon once the config changed",
+        ),
+        (
+            "sql-quoting",
+            "quote mixed-case column names in sql queries",
+        ),
     ];
     let inputs: Vec<EmbeddingInput> = inputs
         .iter()
@@ -46,7 +52,10 @@ fn main() {
 
     let get = |id: &str| outputs[id].vector.as_slice();
     println!("dim = {}", outputs["daemon-restart"].vector.len());
-    for (a, b) in [("daemon-restart", "daemon-restart-2"), ("daemon-restart", "sql-quoting")] {
+    for (a, b) in [
+        ("daemon-restart", "daemon-restart-2"),
+        ("daemon-restart", "sql-quoting"),
+    ] {
         println!("cosine({a}, {b}) = {:.4}", cosine(get(a), get(b)).unwrap());
     }
 }

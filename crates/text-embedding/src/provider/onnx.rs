@@ -29,10 +29,10 @@ use ort::value::Tensor;
 use serde::Deserialize;
 use tokenizers::{Encoding, Tokenizer, TruncationParams};
 
-use crate::error::{Error, Result};
 use crate::input::EmbeddingInput;
 use crate::output::EmbeddingOutput;
 use crate::provider::TextEmbedder;
+use crate::provider::error::{Error, Result};
 use crate::vector::normalize;
 
 /// Default truncation length, in tokens.

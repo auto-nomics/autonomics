@@ -112,10 +112,11 @@ pub struct SharedInfra {
     pub skills: Arc<skills::SkillManager>,
     /// Local ONNX embedding service, when the `onnx-embedding`
     /// feature is compiled in AND `enable_local_embedding` is set and
-    /// the model loaded. Its provider is also injected into the skill
-    /// manager's embedder slot, so distillation clusters with real
-    /// vectors; `None` (or a non-`onnx-embedding` build) keeps the
-    /// offline hashing embedder.
+    /// the model loaded. Its provider is installed into the
+    /// observation hub, so every recorded observation is vectorized
+    /// with the real model at creation; `None` (or a
+    /// non-`onnx-embedding` build) keeps the hub's offline hashing
+    /// default.
     #[cfg(feature = "onnx-embedding")]
     pub embedding: Option<Arc<text_embedding::LocalEmbeddingService>>,
     /// The unified skill control handle, when the service is
@@ -155,27 +156,32 @@ impl SharedInfra {
         skills.load_usage();
 
         // ── Local embedding model (optional, degradation-safe) ─────
-        // Installed BEFORE the evolution service starts: distillation
-        // resolves its embedder through the manager's slot on every
-        // pass, so the injection lands before the first cycle. A load
-        // failure only downgrades to the offline hashing embedder —
-        // the daemon must still start (first run may be offline).
+        // Installed BEFORE the evolution service starts: the hub
+        // embeds every observation at record time, so the model must
+        // be in place before the first observation lands. The swap
+        // also backfills vectors recorded under the offline hashing
+        // default. A load failure only leaves the hub on that default
+        // — the daemon must still start (first run may be offline).
         #[cfg(feature = "onnx-embedding")]
         let embedding = if config.enable_local_embedding {
             match embed_local_model(config.embedding_model_dir.as_deref()).await {
                 Ok(service) => {
                     if let Some(provider) = service.text_embedder() {
-                        skills.set_embedder(Some(Arc::new(
-                            evolution_core::SharedObservationEmbedder::new(provider),
-                        )
-                            as Arc<dyn evolution_core::ObservationEmbedder>));
+                        if let Err(error) = observations.set_embedder(provider).await {
+                            tracing::warn!(
+                                %error,
+                                "embedding backfill after model install failed; \
+                                 the hub keeps the previous embedder"
+                            );
+                        }
                     }
                     Some(Arc::new(service))
                 }
                 Err(error) => {
                     tracing::warn!(
                         %error,
-                        "local embedding model unavailable; distillation stays on the hashing embedder"
+                        "local embedding model unavailable; observations embed \
+                         with the offline hashing default"
                     );
                     None
                 }
@@ -757,6 +763,7 @@ async fn embed_local_model(
         Some(dir) => text_embedding::LocalEmbeddingService::init_at(dir).await,
         None => text_embedding::LocalEmbeddingService::init().await,
     }
+    .map_err(text_embedding::Error::from)
 }
 
 /// Runtime adapter that lets PluginStore refresh node factories without

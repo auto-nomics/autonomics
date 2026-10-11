@@ -2,10 +2,10 @@
 
 use std::collections::BTreeMap;
 
-use crate::error::{Error, Result};
 use crate::input::EmbeddingInput;
 use crate::output::EmbeddingOutput;
 use crate::provider::TextEmbedder;
+use crate::provider::error::{Error, Result};
 
 /// Wrap precomputed vectors so callers can substitute a remote model.
 ///

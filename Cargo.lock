@@ -139,7 +139,7 @@ dependencies = [
  "futures",
  "getrandom 0.3.4",
  "mime",
- "mockall",
+ "mockall 0.14.0",
  "pin-project",
  "reqwest",
  "serde",
@@ -7503,7 +7503,21 @@ dependencies = [
  "cfg-if 1.0.5",
  "downcast",
  "fragile",
- "mockall_derive",
+ "mockall_derive 0.14.0",
+ "predicates",
+ "predicates-tree",
+]
+
+[[package]]
+name = "mockall"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1a6ceddfe3ce334925e96bf420fdb2dcee5bed6c632a168ece622676dadeaf8a"
+dependencies = [
+ "cfg-if 1.0.5",
+ "downcast",
+ "fragile",
+ "mockall_derive 0.15.0",
  "predicates",
  "predicates-tree",
 ]
@@ -7513,6 +7527,18 @@ name = "mockall_derive"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ca41ce716dda6a9be188b385aa78ee5260fc25cd3802cb2a8afdc6afbe6b6dbf"
+dependencies = [
+ "cfg-if 1.0.5",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "mockall_derive"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9cfe16fbe8a314aeec0b861ac24e60b1e123e97634bab045475b9d6a18416fd8"
 dependencies = [
  "cfg-if 1.0.5",
  "proc-macro2",
@@ -11750,6 +11776,7 @@ dependencies = [
  "serde_yaml",
  "sha2 0.10.9",
  "tempfile",
+ "text-embedding",
  "thiserror 2.0.20",
  "tokio",
  "toml 1.1.6+spec-1.1.0",
@@ -12504,6 +12531,7 @@ name = "text-embedding"
 version = "0.1.0"
 dependencies = [
  "hf-hub",
+ "mockall 0.15.0",
  "ort",
  "serde",
  "serde_json",

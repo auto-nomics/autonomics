@@ -188,8 +188,9 @@ impl Worker {
                         let labels = vec!["manual"];
                         self.monitor.distilling(&labels);
                         let started = std::time::Instant::now();
-                        let outcome = run_evolution_cycle_labeled(&self.manager, &policy, labels.clone())
-                            .await;
+                        let outcome =
+                            run_evolution_cycle_labeled(&self.manager, &policy, labels.clone())
+                                .await;
                         self.monitor.cycle_finished(
                             &labels,
                             started.elapsed(),
@@ -227,8 +228,7 @@ impl Worker {
                     self.monitor.distilling(&labels);
                     let started = std::time::Instant::now();
                     let outcome =
-                        run_evolution_cycle_labeled(&self.manager, &policy, labels.clone())
-                            .await;
+                        run_evolution_cycle_labeled(&self.manager, &policy, labels.clone()).await;
                     self.monitor.cycle_finished(
                         &labels,
                         started.elapsed(),

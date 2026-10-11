@@ -41,6 +41,6 @@ pub use output::EmbeddingOutput;
 pub use provider::OnnxTextEmbedder;
 pub use provider::TextEmbedder;
 #[cfg(feature = "onnx")]
-pub use service::LocalEmbeddingService;
+pub use service::local_embedding_service::LocalEmbeddingService;
 pub use vector::{cosine, mean_vector};
 pub use vector_map::VectorMapTextEmbedder;

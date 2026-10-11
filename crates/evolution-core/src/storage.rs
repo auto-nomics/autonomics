@@ -21,7 +21,7 @@ use tokio::sync::{Mutex, OnceCell};
 use turso::Value;
 
 use crate::error::{Error, Result};
-use crate::observation::{Observation, ObservationInput, NODE_KIND_RENAMES};
+use crate::observation::{NODE_KIND_RENAMES, Observation, ObservationInput};
 
 /// Directory under the state dir holding legacy observation files.
 pub const OBSERVATIONS_DIR: &str = "skill-observations";
@@ -94,11 +94,9 @@ impl ObservationStorage for FileObservationStorage {
                 self.root.display()
             ))
         })?;
-        let text = toml::to_string_pretty(&observation).map_err(|source| {
-            Error::Serialize {
-                path: path.clone(),
-                source,
-            }
+        let text = toml::to_string_pretty(&observation).map_err(|source| Error::Serialize {
+            path: path.clone(),
+            source,
         })?;
         std::fs::write(&path, text).map_err(|source| Error::Write {
             path: path.clone(),
@@ -169,10 +167,7 @@ impl ObservationStorage for FileObservationStorage {
             Ok(bytes) => bytes,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(e) => {
-                return Err(Error::Storage(format!(
-                    "read {}: {e}",
-                    path.display()
-                )));
+                return Err(Error::Storage(format!("read {}: {e}", path.display())));
             }
         };
         if bytes.len() % 4 != 0 {
@@ -193,9 +188,8 @@ impl ObservationStorage for FileObservationStorage {
     async fn save_embedding(&self, id: &str, signature: &str, vector: &[f32]) -> Result<()> {
         let path = self.vector_path(id, signature);
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                Error::Storage(format!("create {}: {e}", parent.display()))
-            })?;
+            std::fs::create_dir_all(parent)
+                .map_err(|e| Error::Storage(format!("create {}: {e}", parent.display())))?;
         }
         let bytes: Vec<u8> = vector.iter().flat_map(|v| v.to_le_bytes()).collect();
         std::fs::write(&path, bytes)
@@ -330,7 +324,10 @@ impl TursoObservationStorage {
                 tracing::info!(id = %observation.id, "imported observation from the TOML ledger");
             }
         }
-        tracing::info!(count = observations.len(), "TOML observation ledger import checked");
+        tracing::info!(
+            count = observations.len(),
+            "TOML observation ledger import checked"
+        );
         Ok(())
     }
 
@@ -556,9 +553,7 @@ fn parse_kind(label: &str) -> std::result::Result<crate::observation::Observatio
     }
 }
 
-fn parse_source(
-    label: &str,
-) -> std::result::Result<crate::observation::ObservationSource, String> {
+fn parse_source(label: &str) -> std::result::Result<crate::observation::ObservationSource, String> {
     match label {
         "agent" => Ok(crate::observation::ObservationSource::Agent),
         "eval" => Ok(crate::observation::ObservationSource::Eval),

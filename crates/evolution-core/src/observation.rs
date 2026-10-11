@@ -318,13 +318,11 @@ mod tests {
         // further migration; no temp files are left in the dir.
         let second = storage.list().await;
         assert_eq!(second[0].node_kind.as_deref(), Some("source_literature"));
-        let entries: Vec<_> = std::fs::read_dir(
-            tmp.path().join(crate::storage::OBSERVATIONS_DIR),
-        )
-        .unwrap()
-        .flatten()
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .collect();
+        let entries: Vec<_> = std::fs::read_dir(tmp.path().join(crate::storage::OBSERVATIONS_DIR))
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
         assert!(
             entries.iter().all(|n| !n.ends_with(".tmp")),
             "leftover tmp: {entries:?}"

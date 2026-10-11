@@ -7,7 +7,7 @@ rust-version.workspace = true
 
 [dependencies]
 sha2 = "0.10"
-thiserror = "2"
+thiserror.workspace = true
 ort = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
@@ -31,6 +31,7 @@ name = "onnx_probe"
 required-features = ["onnx"]
 
 [dev-dependencies]
+mockall.workspace = true
 tempfile = "3"
 tokio = { workspace = true }
 

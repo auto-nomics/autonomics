@@ -7,10 +7,10 @@
 
 use sha2::{Digest, Sha256};
 
-use crate::error::Result;
 use crate::input::EmbeddingInput;
 use crate::output::EmbeddingOutput;
 use crate::provider::TextEmbedder;
+use crate::provider::error::Result;
 use crate::vector::normalize;
 
 use std::collections::BTreeMap;
@@ -120,10 +120,7 @@ mod tests {
             .embed(&EmbeddingInput::new("a", "restart the daemon"))
             .unwrap();
         let other = embedder
-            .embed(&EmbeddingInput::new(
-                "b",
-                "quote mixed-case column names",
-            ))
+            .embed(&EmbeddingInput::new("b", "quote mixed-case column names"))
             .unwrap();
         assert_ne!(out.vector, other.vector);
     }
@@ -155,10 +152,7 @@ mod tests {
     /// widths cannot be compared, so the signature must say which.
     #[test]
     fn signature_includes_the_width() {
-        assert_eq!(
-            HashingTextEmbedder::with_dim(64).signature(),
-            "hashing-64"
-        );
+        assert_eq!(HashingTextEmbedder::with_dim(64).signature(), "hashing-64");
         let out = HashingTextEmbedder::with_dim(64)
             .embed(&EmbeddingInput::new("a", "text"))
             .unwrap();

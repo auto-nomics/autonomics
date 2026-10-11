@@ -347,7 +347,8 @@ impl ToolFunction for SkillProposeTool {
                 input.body.trim(),
                 &input.supporting_observation_ids,
                 input.rationale.trim(),
-            ).await
+            )
+            .await
         {
             Ok(proposal) => Ok(ToolResult::success(format!(
                 "proposal {} submitted (pending human review). It is marked \

@@ -773,9 +773,7 @@ impl RuntimeConfig {
             .unwrap_or(true),
             enable_kms: resolve_flag(base, |b| b.enable_kms, false),
             enable_local_embedding: resolve_flag(base, |b| b.enable_local_embedding, false),
-            embedding_model_dir: base
-                .and_then(|b| b.embedding_model_dir.clone())
-                .flatten(),
+            embedding_model_dir: base.and_then(|b| b.embedding_model_dir.clone()).flatten(),
             enable_skill_evolution: resolve_flag(base, |b| b.enable_skill_evolution, true),
             skill_evolution_auto_approve: resolve_flag(
                 base,

@@ -1,28 +1,20 @@
 //! Errors returned by text embedding providers and vector helpers.
 
+#[cfg(feature = "onnx")]
+use crate::service;
+
 /// Something went wrong turning text into vectors.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("embedding dimension mismatch: {expected} != {actual}")]
-    DimensionMismatch { expected: usize, actual: usize },
-
-    #[error("cannot average no vectors")]
-    NoVectors,
-
-    /// No vector exists for the requested id.
-    #[error("no vector for id {id:?}")]
-    MissingVector { id: String },
-
     /// A provider returned unusable vectors for the given inputs.
     #[error("embedding provider: {0}")]
     Provider(String),
 
-    /// A Hugging Face Hub operation failed (download, auth, cache).
-    /// Only present with the `onnx` feature, which owns the hf-hub
-    /// dependency.
+    /// The local model service (install/open) failed. Only present
+    /// with the `onnx` feature, which owns the service module.
     #[cfg(feature = "onnx")]
-    #[error("hugging face hub: {0}")]
-    Hf(#[from] hf_hub::HFError),
+    #[error("embedding service error: {0}")]
+    Service(#[from] service::error::Error),
 
     #[error("unknown error: {0}")]
     Unknown(String),

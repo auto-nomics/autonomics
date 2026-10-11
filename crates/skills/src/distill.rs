@@ -5,13 +5,14 @@
 //! code end to end:
 //!
 //! 1. **Cluster** observations semantically within a structural
-//!    `(node_kind, kind)` partition. Text is converted to a vector by
-//!    an [`ObservationEmbedder`]; greedy nearest-centroid assignment
-//!    groups paraphrased summaries, errors, and bodies without
-//!    requiring exact string equality. The kind partition keeps
-//!    failures, recipes, and caveats from coalescing. Only anchored
-//!    observations participate; free-form notes stay searchable but
-//!    never auto-propose.
+//!    `(node_kind, kind)` partition. Similarity runs on the vectors
+//!    the observation hub persists at record time (passed in by the
+//!    caller — this loop never invokes a model); greedy
+//!    nearest-centroid assignment groups paraphrased summaries,
+//!    errors, and bodies without requiring exact string equality. The
+//!    kind partition keeps failures, recipes, and caveats from
+//!    coalescing. Only anchored observations participate; free-form
+//!    notes stay searchable but never auto-propose.
 //! 2. **Threshold**: a cluster needs `MIN_CLUSTER` anchored
 //!    observations before it is worth a skill — the same
 //!    "repeated pattern" bar EvoScientist applies, evaluated
@@ -29,15 +30,13 @@
 //! yields the same skill name across runs — stable, greppable, and
 //! collision-checkable against the installed library.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::error::SkillError;
 use crate::format;
-use evolution_core::observation::{Observation, ObservationKind};
 use crate::proposals::{Proposals, cluster_hash};
-use evolution_core::embedding::{
-    ObservationEmbedder, SharedObservationEmbedder, cosine, mean_vector,
-};
+use evolution_core::observation::{Observation, ObservationKind};
+use text_embedding::{cosine, mean_vector};
 
 /// Anchored observations required before a cluster proposes.
 pub const MIN_CLUSTER: usize = 3;
@@ -157,37 +156,35 @@ impl DistillReport {
 }
 
 /// Group anchored observations into candidate clusters meeting the
-/// threshold, in a deterministic order. Embedding vectors drive
-/// similarity, while `(node_kind, kind)` remains a hard partition:
-/// observations for different node kinds or observation kinds never
-/// merge.
-pub fn candidates(observations: &[Observation]) -> Vec<Candidate> {
-    candidates_with_embedder(observations, &SharedObservationEmbedder::hashing())
-        .expect("local embedding cannot fail")
+/// threshold, in a deterministic order. The vectors the hub persisted
+/// at record time drive similarity, while `(node_kind, kind)` remains
+/// a hard partition: observations for different node kinds or
+/// observation kinds never merge. Observations without a vector under
+/// the current embedder signature are skipped, not failed — they sit
+/// out this pass and rejoin once backfilled.
+pub fn candidates(
+    observations: &[Observation],
+    embeddings: &HashMap<String, Vec<f32>>,
+) -> Vec<Candidate> {
+    candidates_result(observations, embeddings).expect("clustering over loaded vectors")
 }
 
-/// [`candidates`] with a caller-supplied vector provider.
-pub fn candidates_with_embedder(
+/// [`candidates`] with the error surfaced for callers that report it.
+pub fn candidates_result(
     observations: &[Observation],
-    embedder: &dyn ObservationEmbedder,
+    embeddings: &HashMap<String, Vec<f32>>,
 ) -> Result<Vec<Candidate>, SkillError> {
     let mut eligible: Vec<Observation> = observations
         .iter()
-        .filter(|o| o.node_kind.is_some())
+        .filter(|o| o.node_kind.is_some() && embeddings.contains_key(&o.id))
         .cloned()
         .collect();
     eligible.sort_by(|a, b| a.id.cmp(&b.id));
 
-    let embeddings = embedder.embed(&eligible)?;
     let mut partitions: BTreeMap<(String, ObservationKind), Vec<EmbeddingCluster>> =
         BTreeMap::new();
     for observation in eligible {
-        let vector = embeddings.get(&observation.id).ok_or_else(|| {
-            evolution_core::Error::Embedding(format!(
-                "missing vector for observation {}",
-                observation.id
-            ))
-        })?;
+        let vector = &embeddings[&observation.id];
         let key = (
             observation
                 .node_kind
@@ -199,7 +196,9 @@ pub fn candidates_with_embedder(
         let similarities = clusters
             .iter_mut()
             .map(|cluster| {
-                cosine(&cluster.centroid, vector).map(|similarity| (similarity, cluster))
+                cosine(&cluster.centroid, vector)
+                    .map(|similarity| (similarity, cluster))
+                    .map_err(vector_math_error)
             })
             .collect::<Result<Vec<_>, _>>()?;
         let target = similarities
@@ -251,13 +250,19 @@ struct EmbeddingCluster {
     centroid: Vec<f32>,
 }
 
+/// Lift a vector-math failure (dimension mismatch — a corrupted or
+/// mixed-signature vector store) into the skill error type.
+fn vector_math_error(error: impl std::fmt::Display) -> SkillError {
+    SkillError::Evolution(evolution_core::Error::Embedding(error.to_string()))
+}
+
 /// Choose the observation closest to the cluster's semantic center,
 /// then derive a human-readable signature from it. This gives vector
 /// clusters stable, reviewable names without depending on processing
 /// order.
 fn representative_signature(
     members: &[Observation],
-    embeddings: &BTreeMap<String, Vec<f32>>,
+    embeddings: &HashMap<String, Vec<f32>>,
 ) -> Result<String, SkillError> {
     let vectors = members
         .iter()
@@ -265,19 +270,18 @@ fn representative_signature(
             embeddings
                 .get(&member.id)
                 .map(|vector| vector.as_slice())
-                .ok_or_else(|| {
-                    evolution_core::Error::Embedding(format!(
-                        "missing vector for observation {}",
-                        member.id
-                    ))
-                })
+                .expect("cluster members passed the vector filter")
         })
-        .collect::<Result<Vec<_>, _>>()?;
-    let mean = mean_vector(&vectors)?;
+        .collect::<Vec<_>>();
+    let mean = mean_vector(&vectors).map_err(vector_math_error)?;
     let similarities = vectors
         .iter()
         .enumerate()
-        .map(|(index, vector)| cosine(&mean, vector).map(|similarity| (similarity, index)))
+        .map(|(index, vector)| {
+            cosine(&mean, vector)
+                .map(|similarity| (similarity, index))
+                .map_err(vector_math_error)
+        })
         .collect::<Result<Vec<_>, _>>()?;
     let representative = similarities
         .into_iter()
@@ -444,32 +448,18 @@ pub fn render_update_md(current: &str, fresh: &[&Observation]) -> String {
 
 /// One full distillation pass: cluster → filter consumed → write
 /// proposals (create or update). Pure with respect to the stores —
-/// callers pass the observation list, the proposal area, and a
-/// registry view for existing-skill resolution.
+/// callers pass the observation list, the record-time vectors, the
+/// proposal area, and a registry view for existing-skill resolution.
 pub fn distill(
     observations: &[Observation],
+    embeddings: &HashMap<String, Vec<f32>>,
     proposals: &Proposals,
     registry: &crate::registry::SkillRegistry,
-) -> Result<DistillReport, SkillError> {
-    distill_with_embedder(
-        observations,
-        proposals,
-        registry,
-        &SharedObservationEmbedder::hashing(),
-    )
-}
-
-/// [`distill`] with an explicit vector provider.
-pub fn distill_with_embedder(
-    observations: &[Observation],
-    proposals: &Proposals,
-    registry: &crate::registry::SkillRegistry,
-    embedder: &dyn ObservationEmbedder,
 ) -> Result<DistillReport, SkillError> {
     let mut report = DistillReport::default();
     let processed = proposals.processed_clusters();
     let installed = registry.list();
-    for candidate in candidates_with_embedder(observations, embedder)? {
+    for candidate in candidates_result(observations, embeddings)? {
         report.candidates_considered += 1;
         let hash = candidate.hash();
         if processed.contains(&hash) {
@@ -607,55 +597,90 @@ pub fn distill_with_embedder(
 }
 
 #[cfg(test)]
-mod tests {
+mod testing {
+    //! Shared plumbing: every distillation test records through a real
+    //! hub so observations carry the vectors the clustering reads.
     use super::*;
-    use evolution_core::observation::{
-        ObservationInput, ObservationKind, ObservationSource,
-    };
-    use evolution_core::storage::{FileObservationStorage, ObservationStorage};
+    use evolution_core::ObservationHub;
+    use evolution_core::storage::ObservationStorage;
 
-    async fn observe(store: &FileObservationStorage, error: &str, body: &str) {
-        store
-            .record(ObservationInput {
-                kind: ObservationKind::Failure,
-                source: ObservationSource::Agent,
-                summary: format!("fix for {error}"),
-                body: body.into(),
-                node_kind: Some("file_to_dataframe".into()),
-                error: Some(error.into()),
-            })
-            .await
-            .unwrap();
+    /// The record-time vectors for these observations.
+    pub(crate) async fn embeddings(
+        hub: &ObservationHub,
+        observations: &[Observation],
+    ) -> HashMap<String, Vec<f32>> {
+        let ids = observations
+            .iter()
+            .map(|o| o.id.clone())
+            .collect::<Vec<_>>();
+        hub.load_embeddings(&ids).await.unwrap()
     }
 
-    async fn observe_kind(store: &FileObservationStorage, kind: ObservationKind, summary: &str, body: &str) {
-        store
-            .record(ObservationInput {
-                kind,
-                source: ObservationSource::Agent,
-                summary: summary.into(),
-                body: body.into(),
-                node_kind: Some("file_to_dataframe".into()),
-                error: None,
-            })
-            .await
-            .unwrap();
+    /// List, embed, and cluster everything the hub holds.
+    pub(crate) async fn clustered(hub: &ObservationHub) -> Vec<Candidate> {
+        let observations = hub.storage().list().await;
+        let embeddings = embeddings(hub, &observations).await;
+        candidates(&observations, &embeddings)
+    }
+
+    /// One full distillation pass over everything the hub holds.
+    pub(crate) async fn distill_all(
+        hub: &ObservationHub,
+        proposals: &Proposals,
+        registry: &crate::registry::SkillRegistry,
+    ) -> DistillReport {
+        let observations = hub.storage().list().await;
+        let embeddings = embeddings(hub, &observations).await;
+        distill(&observations, &embeddings, proposals, registry).unwrap()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::distill::testing::{clustered, distill_all};
+    use evolution_core::ObservationHub;
+    use evolution_core::observation::{ObservationInput, ObservationKind, ObservationSource};
+
+    async fn observe(hub: &ObservationHub, error: &str, body: &str) {
+        hub.record(ObservationInput {
+            kind: ObservationKind::Failure,
+            source: ObservationSource::Agent,
+            summary: format!("fix for {error}"),
+            body: body.into(),
+            node_kind: Some("file_to_dataframe".into()),
+            error: Some(error.into()),
+        })
+        .await
+        .unwrap();
+    }
+
+    async fn observe_kind(hub: &ObservationHub, kind: ObservationKind, summary: &str, body: &str) {
+        hub.record(ObservationInput {
+            kind,
+            source: ObservationSource::Agent,
+            summary: summary.into(),
+            body: body.into(),
+            node_kind: Some("file_to_dataframe".into()),
+            error: None,
+        })
+        .await
+        .unwrap();
     }
 
     #[tokio::test]
     async fn clusters_by_anchor_with_numeric_generalization() {
         let tmp = tempfile::tempdir().unwrap();
-        let store = evolution_core::storage::FileObservationStorage::new(tmp.path());
-        observe(&store, "column 3 has bad type", "cast to f64").await;
+        let hub = ObservationHub::file_backed(tmp.path());
+        observe(&hub, "column 3 has bad type", "cast to f64").await;
 
-        observe(&store, "column 7 has bad type", "cast to f64").await;
+        observe(&hub, "column 7 has bad type", "cast to f64").await;
 
-        observe(&store, "column 9 has bad type", "cast to f64 or i64").await;
+        observe(&hub, "column 9 has bad type", "cast to f64 or i64").await;
 
-        observe(&store, "unrelated error text", "other fix").await;
+        observe(&hub, "unrelated error text", "other fix").await;
 
-
-        let candidates = candidates(&store.list().await);
+        let candidates = clustered(&hub).await;
         assert_eq!(candidates.len(), 1);
         let candidate = &candidates[0];
         assert_eq!(candidate.node_kind, "file_to_dataframe");
@@ -667,12 +692,12 @@ mod tests {
     #[tokio::test]
     async fn below_threshold_never_proposes() {
         let tmp = tempfile::tempdir().unwrap();
-        let store = evolution_core::storage::FileObservationStorage::new(tmp.path());
-        observe(&store, "e1", "f1").await;
+        let hub = ObservationHub::file_backed(tmp.path());
+        observe(&hub, "e1", "f1").await;
 
-        observe(&store, "e1", "f2").await;
+        observe(&hub, "e1", "f2").await;
 
-        assert!(candidates(&store.list().await).is_empty());
+        assert!(clustered(&hub).await.is_empty());
     }
 
     #[tokio::test]
@@ -681,21 +706,20 @@ mod tests {
         // now only proves the anchor rule itself: no node kind, no
         // cluster — regardless of kind.
         let tmp = tempfile::tempdir().unwrap();
-        let store = evolution_core::storage::FileObservationStorage::new(tmp.path());
+        let hub = ObservationHub::file_backed(tmp.path());
         for i in 0..5 {
-            store
-                .record(ObservationInput {
-                    kind: ObservationKind::Recipe,
-                    source: ObservationSource::Agent,
-                    summary: format!("note {i}"),
-                    body: "no anchor".into(),
-                    node_kind: None,
-                    error: None,
-                })
-                .await
-                .unwrap();
+            hub.record(ObservationInput {
+                kind: ObservationKind::Recipe,
+                source: ObservationSource::Agent,
+                summary: format!("note {i}"),
+                body: "no anchor".into(),
+                node_kind: None,
+                error: None,
+            })
+            .await
+            .unwrap();
         }
-        assert!(candidates(&store.list().await).is_empty());
+        assert!(clustered(&hub).await.is_empty());
     }
 
     /// Recipes now cluster by vector similarity within the node-kind
@@ -704,27 +728,30 @@ mod tests {
     #[tokio::test]
     async fn recipe_clusters_per_node_kind_with_distinct_wordings() {
         let tmp = tempfile::tempdir().unwrap();
-        let store = evolution_core::storage::FileObservationStorage::new(tmp.path());
+        let hub = ObservationHub::file_backed(tmp.path());
         observe_kind(
-            &store,
+            &hub,
             ObservationKind::Recipe,
             "quote mixed-case column names in queries",
             "recipe body a",
-        ).await;
+        )
+        .await;
         observe_kind(
-            &store,
+            &hub,
             ObservationKind::Recipe,
             "identifiers are case-sensitive; wrap them in double quotes",
             "recipe body b",
-        ).await;
+        )
+        .await;
         observe_kind(
-            &store,
+            &hub,
             ObservationKind::Recipe,
             "use quoted identifiers when column names are case-sensitive",
             "recipe body c",
-        ).await;
+        )
+        .await;
 
-        let candidates = candidates(&store.list().await);
+        let candidates = clustered(&hub).await;
         assert_eq!(candidates.len(), 1);
         let candidate = &candidates[0];
         assert_eq!(candidate.kind, ObservationKind::Recipe);
@@ -751,27 +778,30 @@ mod tests {
     #[tokio::test]
     async fn caveat_clusters_per_node_kind() {
         let tmp = tempfile::tempdir().unwrap();
-        let store = evolution_core::storage::FileObservationStorage::new(tmp.path());
+        let hub = ObservationHub::file_backed(tmp.path());
         observe_kind(
-            &store,
+            &hub,
             ObservationKind::Caveat,
             "locale changes text column sort order",
             "caveat body a",
-        ).await;
+        )
+        .await;
         observe_kind(
-            &store,
+            &hub,
             ObservationKind::Caveat,
             "text column sorting changes with locale order",
             "caveat body b",
-        ).await;
+        )
+        .await;
         observe_kind(
-            &store,
+            &hub,
             ObservationKind::Caveat,
             "sort order for text columns depends on locale",
             "caveat body c",
-        ).await;
+        )
+        .await;
 
-        let candidates = candidates(&store.list().await);
+        let candidates = clustered(&hub).await;
         assert_eq!(candidates.len(), 1);
         let candidate = &candidates[0];
         assert_eq!(candidate.kind, ObservationKind::Caveat);
@@ -785,42 +815,44 @@ mod tests {
     #[tokio::test]
     async fn kinds_never_coalesce_into_one_cluster() {
         let tmp = tempfile::tempdir().unwrap();
-        let store = evolution_core::storage::FileObservationStorage::new(tmp.path());
+        let hub = ObservationHub::file_backed(tmp.path());
         // Same node kind and the same normalized signature text, but
         // only two of each kind — the kind is part of the key, so the
         // per-node recipe and caveat buckets stay separate from each
         // other and from the failure bucket, and none reaches three.
-        observe(&store, "column 3 has bad type", "failure fix").await;
+        observe(&hub, "column 3 has bad type", "failure fix").await;
 
-        observe(&store, "column 7 has bad type", "another failure fix").await;
+        observe(&hub, "column 7 has bad type", "another failure fix").await;
 
         observe_kind(
-            &store,
+            &hub,
             ObservationKind::Recipe,
             "column 3 has bad type",
             "recipe a",
-        ).await;
+        )
+        .await;
         observe_kind(
-            &store,
+            &hub,
             ObservationKind::Recipe,
             "column 7 has bad type",
             "recipe b",
-        ).await;
+        )
+        .await;
         observe_kind(
-            &store,
+            &hub,
             ObservationKind::Caveat,
             "column 3 has bad type",
             "caveat a",
-        ).await;
+        )
+        .await;
         observe_kind(
-            &store,
+            &hub,
             ObservationKind::Caveat,
             "column 7 has bad type",
             "caveat b",
-        ).await;
-        let observations = store.list().await;
-        let candidates = candidates(&observations);
-        assert!(candidates.is_empty());
+        )
+        .await;
+        assert!(clustered(&hub).await.is_empty());
     }
 
     #[tokio::test]
@@ -830,10 +862,10 @@ mod tests {
         // generated SKILL.md frontmatter. (Recipes and caveats no
         // longer embed a signature at all — they cluster per node.)
         let tmp = tempfile::tempdir().unwrap();
-        let store = evolution_core::storage::FileObservationStorage::new(tmp.path());
+        let hub = ObservationHub::file_backed(tmp.path());
         for i in 1..=3 {
             observe(
-                &store,
+                &hub,
                 &format!("note: cast check #{i} failed for port 0"),
                 &format!("body {i}"),
             )
@@ -844,7 +876,7 @@ mod tests {
             crate::registry::SkillTier::Global,
             tmp.path().join("skills"),
         );
-        let report = distill(&store.list().await, &proposals, &registry).unwrap();
+        let report = distill_all(&hub, &proposals, &registry).await;
         assert_eq!(report.proposals_written.len(), 1);
         let name = &report.proposals_written[0];
         assert!(proposals.validate_dir(name).is_empty());
@@ -853,12 +885,12 @@ mod tests {
     #[tokio::test]
     async fn distill_writes_then_consumes_idempotently() {
         let tmp = tempfile::tempdir().unwrap();
-        let store = evolution_core::storage::FileObservationStorage::new(tmp.path());
-        observe(&store, "boom at step N", "restart with clean state").await;
+        let hub = ObservationHub::file_backed(tmp.path());
+        observe(&hub, "boom at step N", "restart with clean state").await;
 
-        observe(&store, "boom at step N", "restart and bump timeout").await;
+        observe(&hub, "boom at step N", "restart and bump timeout").await;
 
-        observe(&store, "boom at step N", "restart, bump timeout, verify").await;
+        observe(&hub, "boom at step N", "restart, bump timeout, verify").await;
 
         let proposals = Proposals::open(tmp.path());
 
@@ -866,7 +898,7 @@ mod tests {
             crate::registry::SkillTier::Global,
             tmp.path().join("skills"),
         );
-        let report = distill(&store.list().await, &proposals, &registry).unwrap();
+        let report = distill_all(&hub, &proposals, &registry).await;
         assert_eq!(report.proposals_written.len(), 1);
         let name = &report.proposals_written[0];
         assert!(proposals.root().join(name).join("SKILL.md").is_file());
@@ -876,7 +908,7 @@ mod tests {
 
         // Second pass: nothing new — the pending proposal blocks its
         // own cluster (listed as a proposal with that name).
-        let again = distill(&store.list().await, &proposals, &registry).unwrap();
+        let again = distill_all(&hub, &proposals, &registry).await;
         assert!(again.proposals_written.is_empty());
         assert_eq!(again.skipped.len(), 1);
     }
@@ -885,38 +917,35 @@ mod tests {
 #[cfg(test)]
 mod update_tests {
     use super::*;
-    use evolution_core::observation::{
-        ObservationInput, ObservationKind, ObservationSource,
-    };
-    use evolution_core::storage::{FileObservationStorage, ObservationStorage};
+    use crate::distill::testing::distill_all;
     use crate::registry::{SkillRegistry, SkillTier};
+    use evolution_core::ObservationHub;
+    use evolution_core::observation::{ObservationInput, ObservationKind, ObservationSource};
 
-    async fn observe(store: &FileObservationStorage, error: &str, body: &str) {
-        store
-            .record(ObservationInput {
-                kind: ObservationKind::Failure,
-                source: ObservationSource::Agent,
-                summary: format!("fix for {error}"),
-                body: body.into(),
-                node_kind: Some("sql".into()),
-                error: Some(error.into()),
-            })
-            .await
-            .unwrap();
+    async fn observe(hub: &ObservationHub, error: &str, body: &str) {
+        hub.record(ObservationInput {
+            kind: ObservationKind::Failure,
+            source: ObservationSource::Agent,
+            summary: format!("fix for {error}"),
+            body: body.into(),
+            node_kind: Some("sql".into()),
+            error: Some(error.into()),
+        })
+        .await
+        .unwrap();
     }
 
-    async fn observe_recipe(store: &FileObservationStorage, summary: &str, body: &str) {
-        store
-            .record(ObservationInput {
-                kind: ObservationKind::Recipe,
-                source: ObservationSource::Agent,
-                summary: summary.into(),
-                body: body.into(),
-                node_kind: Some("sql".into()),
-                error: None,
-            })
-            .await
-            .unwrap();
+    async fn observe_recipe(hub: &ObservationHub, summary: &str, body: &str) {
+        hub.record(ObservationInput {
+            kind: ObservationKind::Recipe,
+            source: ObservationSource::Agent,
+            summary: summary.into(),
+            body: body.into(),
+            node_kind: Some("sql".into()),
+            error: None,
+        })
+        .await
+        .unwrap();
     }
 
     /// The same evolution arc as [`create_then_update_full_arc`], on
@@ -925,19 +954,19 @@ mod update_tests {
     #[tokio::test]
     async fn recipe_create_then_update_full_arc() {
         let tmp = tempfile::tempdir().unwrap();
-        let store = evolution_core::storage::FileObservationStorage::new(tmp.path());
+        let hub = ObservationHub::file_backed(tmp.path());
         let proposals = Proposals::open(tmp.path());
         let registry =
             SkillRegistry::empty().with_root(SkillTier::Global, tmp.path().join("skills"));
         let global = tmp.path().join("skills");
 
-        observe_recipe(&store, "use CTE for join 1", "recipe one").await;
+        observe_recipe(&hub, "use CTE for join 1", "recipe one").await;
 
-        observe_recipe(&store, "use CTE for join 2", "recipe two").await;
+        observe_recipe(&hub, "use CTE for join 2", "recipe two").await;
 
-        observe_recipe(&store, "use CTE for join 3", "recipe three").await;
+        observe_recipe(&hub, "use CTE for join 3", "recipe three").await;
 
-        let report = distill(&store.list().await, &proposals, &registry).unwrap();
+        let report = distill_all(&hub, &proposals, &registry).await;
         assert_eq!(report.proposals_written.len(), 1);
         let name = report.proposals_written[0].clone();
         assert!(name.ends_with("-recipe"), "{name}");
@@ -950,13 +979,13 @@ mod update_tests {
 
         // Three NEW recordings on the same summary signature → an
         // update proposal measured against the approved manifest.
-        observe_recipe(&store, "use CTE for join 4", "recipe four").await;
+        observe_recipe(&hub, "use CTE for join 4", "recipe four").await;
 
-        observe_recipe(&store, "use CTE for join 5", "recipe five").await;
+        observe_recipe(&hub, "use CTE for join 5", "recipe five").await;
 
-        observe_recipe(&store, "use CTE for join 6", "recipe six").await;
+        observe_recipe(&hub, "use CTE for join 6", "recipe six").await;
 
-        let updated = distill(&store.list().await, &proposals, &registry).unwrap();
+        let updated = distill_all(&hub, &proposals, &registry).await;
         assert_eq!(updated.updated_existing, vec![name.clone()]);
         let proposal = proposals.find(&name).unwrap();
         assert!(proposal.update);
@@ -969,20 +998,20 @@ mod update_tests {
     #[tokio::test]
     async fn create_then_update_full_arc() {
         let tmp = tempfile::tempdir().unwrap();
-        let store = evolution_core::storage::FileObservationStorage::new(tmp.path());
+        let hub = ObservationHub::file_backed(tmp.path());
         let proposals = Proposals::open(tmp.path());
         let registry =
             SkillRegistry::empty().with_root(SkillTier::Global, tmp.path().join("skills"));
         let global = tmp.path().join("skills");
 
         // Round 1: three observations → create proposal → approve.
-        observe(&store, "syntax error near N", "fix one").await;
+        observe(&hub, "syntax error near N", "fix one").await;
 
-        observe(&store, "syntax error near N", "fix two").await;
+        observe(&hub, "syntax error near N", "fix two").await;
 
-        observe(&store, "syntax error near N", "fix three").await;
+        observe(&hub, "syntax error near N", "fix three").await;
 
-        let report = distill(&store.list().await, &proposals, &registry).unwrap();
+        let report = distill_all(&hub, &proposals, &registry).await;
         assert_eq!(report.proposals_written.len(), 1);
         let name = report.proposals_written[0].clone();
 
@@ -994,13 +1023,13 @@ mod update_tests {
 
         // Round 2: three NEW observations on the same anchor → an
         // update proposal whose body appends only the new evidence.
-        observe(&store, "syntax error near N", "fix four").await;
+        observe(&hub, "syntax error near N", "fix four").await;
 
-        observe(&store, "syntax error near N", "fix five").await;
+        observe(&hub, "syntax error near N", "fix five").await;
 
-        observe(&store, "syntax error near N", "fix six").await;
+        observe(&hub, "syntax error near N", "fix six").await;
 
-        let updated = distill(&store.list().await, &proposals, &registry).unwrap();
+        let updated = distill_all(&hub, &proposals, &registry).await;
         assert_eq!(updated.updated_existing, vec![name.clone()]);
         assert!(updated.proposals_written.contains(&name));
 
@@ -1019,11 +1048,11 @@ mod update_tests {
 
         // Round 3: only two new observations — below the delta
         // threshold, no proposal.
-        observe(&store, "syntax error near N", "fix seven").await;
+        observe(&hub, "syntax error near N", "fix seven").await;
 
-        observe(&store, "syntax error near N", "fix eight").await;
+        observe(&hub, "syntax error near N", "fix eight").await;
 
-        let quiet = distill(&store.list().await, &proposals, &registry).unwrap();
+        let quiet = distill_all(&hub, &proposals, &registry).await;
         assert!(quiet.proposals_written.is_empty());
     }
 
@@ -1041,15 +1070,14 @@ mod update_tests {
         )
         .unwrap();
 
-        let store = evolution_core::storage::FileObservationStorage::new(tmp.path());
+        let hub = ObservationHub::file_backed(tmp.path());
         for i in 0..4 {
-            observe(&store, "syntax error near N", &format!("fix {i}")).await;
-
+            observe(&hub, "syntax error near N", &format!("fix {i}")).await;
         }
         let proposals = Proposals::open(tmp.path());
         let registry = SkillRegistry::empty().with_root(SkillTier::Global, global.clone());
 
-        let report = distill(&store.list().await, &proposals, &registry).unwrap();
+        let report = distill_all(&hub, &proposals, &registry).await;
         assert!(report.proposals_written.is_empty());
         assert!(
             report
@@ -1059,7 +1087,7 @@ mod update_tests {
         );
         // Consumed: a second pass considers the cluster but skips it
         // as already consumed — no proposal, no noise.
-        let again = distill(&store.list().await, &proposals, &registry).unwrap();
+        let again = distill_all(&hub, &proposals, &registry).await;
         assert!(again.proposals_written.is_empty());
         assert!(
             again

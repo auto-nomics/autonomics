@@ -1,6 +1,6 @@
 //! Dimension-checked vector math for clustering.
 
-use crate::error::{Error, Result};
+use crate::provider::error::{Error, Result};
 
 /// L2-normalize in place. Zero vectors are left as zeros — cosine and
 /// distance code guard on the zero norm instead of dividing by it.

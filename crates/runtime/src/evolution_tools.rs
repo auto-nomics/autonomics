@@ -3,9 +3,9 @@
 use agentik_core::tools::{ToolError, ToolFunction, ToolRegistration, ToolResult};
 use agentik_proc::tool;
 use async_trait::async_trait;
+use evolution_core::{ObservationInput, ObservationKind, ObservationSource};
 use plugin_rsi::RsiInfra;
 use serde_json::json;
-use evolution_core::{ObservationInput, ObservationKind, ObservationSource};
 
 /// Record one durable evolution observation and let the host route it.
 #[tool(
@@ -75,7 +75,8 @@ impl ToolFunction for EvoObserveTool {
         };
         let routing = self
             .infra
-            .record_and_route_observation(observation, None, None).await
+            .record_and_route_observation(observation, None, None)
+            .await
             .map_err(|error| ToolError::ExecutionFailed {
                 source: Box::new(std::io::Error::other(error.to_string())),
             })?;

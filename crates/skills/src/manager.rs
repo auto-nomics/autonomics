@@ -47,7 +47,6 @@ use tokio::sync::{broadcast, mpsc};
 use crate::error::SkillError;
 use crate::install::{self, InstallOutcome};
 use crate::registry::{SkillRegistry, SkillTier};
-use evolution_core::embedding::{ObservationEmbedder, SharedObservationEmbedder};
 
 /// What a skill was used for. Evolution cares about the difference
 /// between "listed in a prompt" (free), "read" (mild interest),
@@ -122,8 +121,6 @@ pub struct SkillManager {
     /// call: parallel tests replace the global singleton, and an
     /// instance must keep seeing the state dir it was built with.
     hub: Arc<evolution_core::ObservationHub>,
-    /// Optional semantic embedding provider for observation clustering.
-    embedder: RwLock<Option<Arc<dyn ObservationEmbedder>>>,
 }
 
 static GLOBAL: arc_swap::ArcSwapOption<SkillManager> = arc_swap::ArcSwapOption::const_empty();
@@ -164,7 +161,6 @@ impl SkillManager {
             usage: RwLock::new(HashMap::new()),
             evolution_tx: RwLock::new(None),
             hub,
-            embedder: RwLock::new(None),
         }
     }
 
@@ -397,58 +393,23 @@ impl SkillManager {
     /// Observations are shared across evolution subsystems. A route ledger
     /// entry explicitly selects which observations reach skill distillation;
     /// legacy un-routed observations remain skill-eligible for compatibility.
+    ///
+    /// No model runs here: the hub embedded every observation at record
+    /// time and this pass only reads those vectors back.
     pub async fn distill(&self) -> Result<crate::distill::DistillReport, SkillError> {
         let observations = self.skill_eligible_observations().await;
-        let embedder = self.embedder()?;
-        // Warm the vector cache for this embedder's signature; only
-        // cache misses reach the model, and freshly computed vectors
-        // are persisted afterwards so the next pass is all hits.
-        let signature = embedder.signature();
         let ids: Vec<String> = observations.iter().map(|o| o.id.clone()).collect();
-        let cache = evolution_core::load_embedding_map(
-            self.hub.storage().as_ref(),
-            &ids,
-            &signature,
-        )
-        .await
-        .map_err(SkillError::Evolution)?;
-        let cached = evolution_core::CachedObservationEmbedder::new(
-            embedder,
-            cache.into_iter().collect(),
-        );
-        let report = crate::distill::distill_with_embedder(
+        let embeddings = self
+            .hub
+            .load_embeddings(&ids)
+            .await
+            .map_err(SkillError::Evolution)?;
+        crate::distill::distill(
             &observations,
+            &embeddings,
             &self.proposals(),
             &self.registry(),
-            &cached,
-        )?;
-        let storage = self.hub.storage();
-        for (id, vector) in cached.take_computed() {
-            storage
-                .save_embedding(&id, &signature, &vector)
-                .await
-                .map_err(SkillError::Evolution)?;
-        }
-        Ok(report)
-    }
-
-    /// Replace the observation embedder used by distillation. Passing
-    /// `None` restores the offline hashing embedder.
-    pub fn set_embedder(&self, embedder: Option<Arc<dyn ObservationEmbedder>>) {
-        if let Ok(mut slot) = self.embedder.write() {
-            *slot = embedder;
-        }
-    }
-
-    fn embedder(&self) -> Result<Arc<dyn ObservationEmbedder>, SkillError> {
-        self.embedder
-            .read()
-            .map_err(|_| {
-                evolution_core::Error::Embedding("embedding provider lock poisoned".into())
-            })?
-            .clone()
-            .map(Ok)
-            .unwrap_or_else(|| Ok(Arc::new(SharedObservationEmbedder::hashing())))
+        )
     }
 
     async fn skill_eligible_observations(&self) -> Vec<evolution_core::Observation> {
@@ -548,8 +509,12 @@ impl SkillManager {
                 "at least one supporting observation id is required — record the evidence with evo_observe first",
             ));
         }
-        let known: std::collections::BTreeSet<String> =
-            self.observations().await.into_iter().map(|o| o.id).collect();
+        let known: std::collections::BTreeSet<String> = self
+            .observations()
+            .await
+            .into_iter()
+            .map(|o| o.id)
+            .collect();
         let unknown: Vec<&String> = supporting_observation_ids
             .iter()
             .filter(|id| !known.contains(*id))
@@ -675,7 +640,8 @@ mod tests {
                     body: format!("Fix attempt {index}."),
                     node_kind: Some("plugin_adapter".into()),
                     error: Some("adapter rejected input".into()),
-                }).await
+                })
+                .await
                 .unwrap();
             let (_, route) = observation_route(&observation, Some("demo-plugin"), None);
             routes.record(route).unwrap();
@@ -689,7 +655,8 @@ mod tests {
                     body: format!("Useful generic procedure {index}."),
                     node_kind: Some("generic_node".into()),
                     error: None,
-                }).await
+                })
+                .await
                 .unwrap();
             let (_, route) = observation_route(&observation, None, None);
             routes.record(route).unwrap();
@@ -866,7 +833,8 @@ mod propose_tests {
                 body: body.into(),
                 node_kind: Some("sql".into()),
                 error: Some("boom".into()),
-            }).await
+            })
+            .await
             .unwrap()
             .id
     }
@@ -885,7 +853,8 @@ mod propose_tests {
                 "# Recipes\n\nStep one.\n",
                 std::slice::from_ref(&id),
                 "recurring pattern",
-            ).await
+            )
+            .await
             .unwrap();
         assert_eq!(proposal.authored_by, "agent");
         assert_eq!(proposal.status, crate::proposals::ProposalStatus::Pending);
@@ -916,7 +885,8 @@ mod propose_tests {
         let tmp = tempfile::tempdir().unwrap();
         let manager = manager_in(tmp.path());
         let err = manager
-            .propose_skill("x", "d", &[], "b", &["O-doesnotexist".to_string()], "r").await
+            .propose_skill("x", "d", &[], "b", &["O-doesnotexist".to_string()], "r")
+            .await
             .unwrap_err();
         assert!(err.to_string().contains("unknown observation id"), "{err}");
     }
@@ -926,7 +896,8 @@ mod propose_tests {
         let tmp = tempfile::tempdir().unwrap();
         let manager = manager_in(tmp.path());
         let err = manager
-            .propose_skill("x", "d", &[], "b", &[], "r").await
+            .propose_skill("x", "d", &[], "b", &[], "r")
+            .await
             .unwrap_err();
         assert!(err.to_string().contains("supporting observation"));
     }
@@ -945,7 +916,8 @@ mod propose_tests {
         )
         .unwrap();
         let err = manager
-            .propose_skill("taken-name", "d", &[], "b", std::slice::from_ref(&id), "r").await
+            .propose_skill("taken-name", "d", &[], "b", std::slice::from_ref(&id), "r")
+            .await
             .unwrap_err();
         assert!(err.to_string().contains("already installed"), "{err}");
     }
@@ -966,7 +938,8 @@ mod propose_tests {
                 "# Body\n\nTODO: fill this in\n",
                 std::slice::from_ref(&id),
                 "r",
-            ).await
+            )
+            .await
             .unwrap_err();
         assert!(err.to_string().contains("TODO"), "{err}");
         assert!(
@@ -991,7 +964,8 @@ mod propose_tests {
                 "# First\n\nOriginal body.\n",
                 std::slice::from_ref(&id),
                 "r",
-            ).await
+            )
+            .await
             .unwrap();
         let err = manager
             .propose_skill(
@@ -1001,7 +975,8 @@ mod propose_tests {
                 "# Second\n\nOverwrite attempt.\n",
                 std::slice::from_ref(&id),
                 "r2",
-            ).await
+            )
+            .await
             .unwrap_err();
         assert!(err.to_string().contains("already exists"), "{err}");
         let content = std::fs::read_to_string(

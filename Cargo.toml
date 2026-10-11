@@ -99,7 +99,11 @@ members = [
   "bio_crates/rdlocrand",
   "crates/node-bundles/nodes-rd",
   "stat_crates/dl",
-  "crates/node-bundles/nodes-dl", "crates/container-plugin", "crates/evolution-core", "crates/skills", "crates/plugin-rsi",
+  "crates/node-bundles/nodes-dl",
+  "crates/container-plugin",
+  "crates/evolution-core",
+  "crates/skills",
+  "crates/plugin-rsi",
   "crates/text-embedding",
 ]
 resolver = "3"
@@ -135,7 +139,12 @@ zip = { version = "8.6.0", default-features = false, features = [
 ] }
 toml = "1"
 uuid = "1.24"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "process"] }
+tokio = { version = "1", features = [
+  "rt-multi-thread",
+  "macros",
+  "sync",
+  "process",
+] }
 chrono = { version = "0.4", features = ["serde"] }
 tracing = "0.1"
 async-trait = "0.1"
@@ -166,6 +175,8 @@ oxbow = { git = "https://github.com/wjixiang/oxbow.git" }
 
 faer = "0.24.4"
 hf-hub = "1.0.0"
+
+mockall = "0.15.0"
 
 # Suppress unused-warnings for the public-API workspace.dependencies that
 # the umbrella doesn't directly import. Keep this list as a hint for
