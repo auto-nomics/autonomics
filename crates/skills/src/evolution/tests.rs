@@ -7,8 +7,9 @@ use std::time::Duration;
 mod workflow_tests {
     use super::*;
     use evolution_core::observation::{
-        ObservationInput, ObservationKind, ObservationSource, ObservationStore,
+        ObservationInput, ObservationKind, ObservationSource,
     };
+    use evolution_core::storage::{FileObservationStorage, ObservationStorage};
 
     fn manager_in(tmp: &std::path::Path) -> Arc<SkillManager> {
         Arc::new(SkillManager::new(tmp.join("state")))

@@ -21,7 +21,10 @@ use tokio::sync::{Mutex, OnceCell};
 use turso::Value;
 
 use crate::error::{Error, Result};
-use crate::observation::{Observation, ObservationInput, ObservationStore, NODE_KIND_RENAMES};
+use crate::observation::{Observation, ObservationInput, NODE_KIND_RENAMES};
+
+/// Directory under the state dir holding legacy observation files.
+pub const OBSERVATIONS_DIR: &str = "skill-observations";
 
 /// Database file name under the state dir.
 pub const EVOLUTION_DB: &str = "evolution.db";
@@ -51,21 +54,25 @@ pub trait ObservationStorage: Send + Sync {
     async fn save_embedding(&self, id: &str, signature: &str, vector: &[f32]) -> Result<()>;
 }
 
-/// File-backed storage: the legacy TOML ledger plus vector sidecar
-/// files. Test compatibility backend; also the migration source the
-/// Turso store imports from.
+/// File-backed storage: the legacy TOML ledger plus a vector sidecar
+/// for cached embeddings. Test compatibility backend and the migration
+/// source the Turso store imports from on first open.
 #[derive(Debug, Clone)]
 pub struct FileObservationStorage {
-    store: ObservationStore,
+    root: PathBuf,
     vectors_root: PathBuf,
 }
 
 impl FileObservationStorage {
     pub fn new(state_dir: &Path) -> Self {
         Self {
-            store: ObservationStore::open(state_dir),
+            root: state_dir.join(OBSERVATIONS_DIR),
             vectors_root: state_dir.join("skill-observation-embeddings"),
         }
+    }
+
+    fn observation_path(&self, id: &str) -> PathBuf {
+        self.root.join(format!("{id}.toml"))
     }
 
     fn vector_path(&self, id: &str, signature: &str) -> PathBuf {
@@ -76,11 +83,84 @@ impl FileObservationStorage {
 #[async_trait]
 impl ObservationStorage for FileObservationStorage {
     async fn record(&self, input: ObservationInput) -> Result<Observation> {
-        self.store.record(input)
+        let observation = Observation::from_input(input, crate::observation::unix_now());
+        let path = self.observation_path(&observation.id);
+        if path.exists() {
+            return Ok(observation);
+        }
+        std::fs::create_dir_all(&self.root).map_err(|e| {
+            Error::Storage(format!(
+                "create observation directory {}: {e}",
+                self.root.display()
+            ))
+        })?;
+        let text = toml::to_string_pretty(&observation).map_err(|source| {
+            Error::Serialize {
+                path: path.clone(),
+                source,
+            }
+        })?;
+        std::fs::write(&path, text).map_err(|source| Error::Write {
+            path: path.clone(),
+            source,
+        })?;
+        Ok(observation)
     }
 
     async fn list(&self) -> Vec<Observation> {
-        self.store.list()
+        let Ok(read_dir) = std::fs::read_dir(&self.root) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for entry in read_dir.flatten() {
+            let path = entry.path();
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if !name.ends_with(".toml") || name.starts_with('.') {
+                continue;
+            }
+            let text = match std::fs::read_to_string(&path) {
+                Ok(t) => t,
+                Err(e) => {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %e,
+                        "skipping unreadable observation"
+                    );
+                    continue;
+                }
+            };
+            let mut observation: Observation = match toml::from_str(&text) {
+                Ok(o) => o,
+                Err(e) => {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %e,
+                        "skipping malformed observation"
+                    );
+                    continue;
+                }
+            };
+            // On-load node_kind migration: rewrite stale anchors in the
+            // data, then re-emit the file so the rename sticks.
+            if let Some((from, to)) = crate::observation::rewrite_node_kind(&mut observation) {
+                tracing::warn!(
+                    id = %observation.id,
+                    old = %from,
+                    new = %to,
+                    "rewrote skill observation node_kind to current DAG kind"
+                );
+                if let Err(error) = atomic_write_toml(&path, &observation) {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %error,
+                        "failed to persist rewritten node_kind; in-memory value still applied"
+                    );
+                }
+            }
+            out.push(observation);
+        }
+        out.sort_by(|a, b| a.id.cmp(&b.id));
+        out
     }
 
     async fn load_embedding(&self, id: &str, signature: &str) -> Result<Option<Vec<f32>>> {
@@ -89,7 +169,10 @@ impl ObservationStorage for FileObservationStorage {
             Ok(bytes) => bytes,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(e) => {
-                return Err(Error::Storage(format!("read {}: {e}", path.display())));
+                return Err(Error::Storage(format!(
+                    "read {}: {e}",
+                    path.display()
+                )));
             }
         };
         if bytes.len() % 4 != 0 {
@@ -110,8 +193,9 @@ impl ObservationStorage for FileObservationStorage {
     async fn save_embedding(&self, id: &str, signature: &str, vector: &[f32]) -> Result<()> {
         let path = self.vector_path(id, signature);
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| Error::Storage(format!("create {}: {e}", parent.display())))?;
+            std::fs::create_dir_all(parent).map_err(|e| {
+                Error::Storage(format!("create {}: {e}", parent.display()))
+            })?;
         }
         let bytes: Vec<u8> = vector.iter().flat_map(|v| v.to_le_bytes()).collect();
         std::fs::write(&path, bytes)
@@ -196,13 +280,44 @@ impl TursoObservationStorage {
 
     /// One-time import of the file ledger into an empty table. The
     /// TOML files stay on disk untouched — they are harmless and
-    /// remain readable by [`ObservationStore`].
+    /// remain readable by [`FileObservationStorage`].
     async fn import_toml_ledger(
         conn: &Arc<Mutex<turso::Connection>>,
         state_dir: &Path,
     ) -> Result<()> {
-        let file_store = ObservationStore::open(state_dir);
-        let observations = file_store.list();
+        let root = state_dir.join(OBSERVATIONS_DIR);
+        let Ok(read_dir) = std::fs::read_dir(&root) else {
+            return Ok(());
+        };
+        let mut observations = Vec::new();
+        for entry in read_dir.flatten() {
+            let path = entry.path();
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if !name.ends_with(".toml") || name.starts_with('.') {
+                continue;
+            }
+            let text = match std::fs::read_to_string(&path) {
+                Ok(t) => t,
+                Err(e) => {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %e,
+                        "skipping unreadable observation during TOML import"
+                    );
+                    continue;
+                }
+            };
+            match toml::from_str::<Observation>(&text) {
+                Ok(observation) => observations.push(observation),
+                Err(e) => {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %e,
+                        "skipping malformed observation during TOML import"
+                    );
+                }
+            }
+        }
         if observations.is_empty() {
             return Ok(());
         }
@@ -467,6 +582,32 @@ pub async fn load_embedding_map(
         }
     }
     Ok(out)
+}
+
+/// Atomically re-emit the observation TOML: write to a sibling temp
+/// file in the same directory and rename over the original. Used by the
+/// file backend's on-load node-kind migration.
+fn atomic_write_toml(path: &Path, observation: &Observation) -> std::io::Result<()> {
+    let parent = path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "observation path has no parent",
+        )
+    })?;
+    let tmp = parent.join(format!(
+        ".{}.tmp",
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("observation")
+    ));
+    let text = toml::to_string_pretty(observation).map_err(|error| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("toml encode: {error}"),
+        )
+    })?;
+    std::fs::write(&tmp, text)?;
+    std::fs::rename(&tmp, path)
 }
 
 #[cfg(test)]

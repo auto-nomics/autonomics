@@ -12,13 +12,13 @@ pub mod routing;
 pub mod storage;
 
 pub use embedding::{
-    CachedObservationEmbedder, ObservationEmbedder, SharedObservationEmbedder,
-    DEFAULT_EMBEDDING_DIM, cosine, mean_vector,
+    CachedObservationEmbedder, DEFAULT_EMBEDDING_DIM, ObservationEmbedder,
+    SharedObservationEmbedder, cosine, mean_vector,
 };
 pub use error::Error;
 pub use hub::ObservationHub;
 pub use observation::{
-    Observation, ObservationInput, ObservationKind, ObservationSource, ObservationStore,
+    Observation, ObservationInput, ObservationKind, ObservationSource,
 };
 pub use routing::{
     ObservationAudience, ObservationRoute, ObservationRouteStatus, ObservationRouteStore,

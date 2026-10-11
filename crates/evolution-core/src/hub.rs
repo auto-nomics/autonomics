@@ -16,10 +16,10 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use super::storage::{FileObservationStorage, ObservationStorage, TursoObservationStorage};
 use crate::error::Result;
 use crate::observation::{Observation, ObservationInput};
 use crate::routing::ObservationRouteStore;
-use crate::storage::{FileObservationStorage, ObservationStorage, TursoObservationStorage};
 
 /// The shared handle for observation evidence and its storage.
 #[derive(Clone)]
@@ -121,11 +121,7 @@ mod tests {
     async fn default_backend_is_the_database() {
         let tmp = tempfile::tempdir().unwrap();
         let hub = ObservationHub::new(tmp.path());
-        hub.storage()
-            .list()
-            .await
-            .iter()
-            .for_each(drop);
+        hub.storage().list().await.iter().for_each(drop);
         assert!(tmp.path().join(crate::EVOLUTION_DB).is_file());
     }
 }
