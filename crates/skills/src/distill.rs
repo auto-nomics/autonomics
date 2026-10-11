@@ -33,10 +33,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::error::SkillError;
 use crate::format;
-use crate::observation::{Observation, ObservationKind};
+use evolution_core::observation::{Observation, ObservationKind};
 use crate::proposals::{Proposals, cluster_hash};
 use evolution_core::embedding::{
-    HashingObservationEmbedder, ObservationEmbedder, cosine, mean_vector,
+    ObservationEmbedder, SharedObservationEmbedder, cosine, mean_vector,
 };
 
 /// Anchored observations required before a cluster proposes.
@@ -162,7 +162,7 @@ impl DistillReport {
 /// observations for different node kinds or observation kinds never
 /// merge.
 pub fn candidates(observations: &[Observation]) -> Vec<Candidate> {
-    candidates_with_embedder(observations, &HashingObservationEmbedder::new())
+    candidates_with_embedder(observations, &SharedObservationEmbedder::hashing())
         .expect("local embedding cannot fail")
 }
 
@@ -455,7 +455,7 @@ pub fn distill(
         observations,
         proposals,
         registry,
-        &HashingObservationEmbedder::new(),
+        &SharedObservationEmbedder::hashing(),
     )
 }
 
@@ -609,7 +609,7 @@ pub fn distill_with_embedder(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::observation::{
+    use evolution_core::observation::{
         ObservationInput, ObservationKind, ObservationSource, ObservationStore,
     };
 
@@ -867,7 +867,7 @@ mod tests {
 #[cfg(test)]
 mod update_tests {
     use super::*;
-    use crate::observation::{
+    use evolution_core::observation::{
         ObservationInput, ObservationKind, ObservationSource, ObservationStore,
     };
     use crate::registry::{SkillRegistry, SkillTier};

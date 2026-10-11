@@ -35,6 +35,10 @@ pub enum Error {
     #[error("observation embedding: {0}")]
     Embedding(String),
 
+    /// Durable observation storage (database) failed.
+    #[error("observation storage: {0}")]
+    Storage(String),
+
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }

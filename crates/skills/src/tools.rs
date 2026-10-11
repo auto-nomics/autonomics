@@ -338,14 +338,17 @@ impl ToolFunction for SkillProposeTool {
 
     async fn run(&self, input: SkillProposeInput) -> Result<ToolResult, ToolError> {
         let tags = input.tags.unwrap_or_default();
-        match self.manager.propose_skill(
-            input.name.trim(),
-            input.description.trim(),
-            &tags,
-            input.body.trim(),
-            &input.supporting_observation_ids,
-            input.rationale.trim(),
-        ) {
+        match self
+            .manager
+            .propose_skill(
+                input.name.trim(),
+                input.description.trim(),
+                &tags,
+                input.body.trim(),
+                &input.supporting_observation_ids,
+                input.rationale.trim(),
+            ).await
+        {
             Ok(proposal) => Ok(ToolResult::success(format!(
                 "proposal {} submitted (pending human review). It is marked \
                  agent-authored and never auto-approved; a human reviews it \
@@ -563,14 +566,15 @@ mod propose_tool_tests {
         let tmp = tempfile::tempdir().unwrap().keep();
         let manager = Arc::new(SkillManager::new(tmp));
         let observation = manager
-            .record_observation(crate::ObservationInput {
-                kind: crate::ObservationKind::Failure,
-                source: crate::ObservationSource::Agent,
+            .record_observation(evolution_core::ObservationInput {
+                kind: evolution_core::ObservationKind::Failure,
+                source: evolution_core::ObservationSource::Agent,
                 summary: "evidence".into(),
                 body: "fix".into(),
                 node_kind: Some("sql".into()),
                 error: Some("boom".into()),
             })
+            .await
             .unwrap();
 
         let tool = SkillProposeTool {

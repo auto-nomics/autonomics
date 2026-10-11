@@ -4349,13 +4349,16 @@ name = "evolution-core"
 version = "0.1.0"
 dependencies = [
  "arc-swap",
+ "async-trait",
  "serde",
  "sha2 0.10.9",
  "tempfile",
  "text-embedding",
  "thiserror 2.0.20",
+ "tokio",
  "toml 1.1.6+spec-1.1.0",
  "tracing",
+ "turso",
 ]
 
 [[package]]
@@ -4767,6 +4770,7 @@ dependencies = [
  "container-plugin",
  "dag-core",
  "eventsource-stream",
+ "evolution-core",
  "futures",
  "http-body-util",
  "libc",

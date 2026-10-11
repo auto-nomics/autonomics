@@ -150,9 +150,7 @@ async fn an_installed_reference_can_be_forked_and_locally_activated() {
         ValidationOutcome::NeedsFix(report) => panic!("reference validation failed: {report:?}"),
     };
 
-    let observations = evolution_core::ObservationHub::init(evolution_core::ObservationHub::new(
-        state.path(),
-    ));
+    let observations = std::sync::Arc::new(evolution_core::ObservationHub::new(state.path()));
     let publisher = Arc::new(GhPublisher::new(GhPublisherConfig {
         enabled: false,
         ..Default::default()

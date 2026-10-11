@@ -312,6 +312,10 @@ pub struct SharedInfra {
     pub memory: Arc<MemoryBackend>,
     /// Optional Turso-backed KMS knowledge service.
     pub kms: Option<Arc<kms::KmsService>>,
+    /// The process-wide observation hub — the upstream evidence
+    /// ledger shared by skills, plugins, and gateway handlers. Neither
+    /// downstream owns it; both resolve the same instance.
+    pub observations: Arc<evolution_core::ObservationHub>,
     /// Central skill manager (tiered registry + generation counter +
     /// change broadcast + usage telemetry). Initialized as the
     /// process-wide singleton so every mutation path — agent tools,
@@ -354,11 +358,11 @@ impl SharedInfra {
         // observation hub is installed FIRST — evidence is upstream of
         // both — then the skill manager re-installs the same directory
         // (idempotent) and keeps its own reference.
-        let observations =
-            evolution_core::ObservationHub::init(evolution_core::ObservationHub::new(
-                &config.state_dir,
-            ));
         let skills = skills::SkillManager::init(skills::SkillManager::new(&config.state_dir));
+        // One hub instance shared by the manager, RSI, and every
+        // SharedInfra consumer — the manager built it over the same
+        // state dir; hand out its reference instead of a second one.
+        let observations = skills.observation_hub();
         skills.load_usage();
 
         // ── Local embedding model (optional, degradation-safe) ─────
@@ -414,7 +418,7 @@ impl SharedInfra {
                 "rsi@autonomics.example",
                 // The hub installed above — plugins and skills read the
                 // same evidence ledger, neither owns it.
-                observations,
+                Arc::clone(&observations),
                 environments.clone(),
                 plugin_publisher,
                 pull_request_publisher,
@@ -725,6 +729,7 @@ impl SharedInfra {
             writing,
             memory,
             kms,
+            observations,
             skills,
             #[cfg(feature = "onnx-embedding")]
             embedding,

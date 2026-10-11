@@ -1,19 +1,19 @@
 #[cfg_attr(not(test), allow(dead_code))]
-pub(crate) fn run_evolution_cycle(
+pub(crate) async fn run_evolution_cycle(
     manager: &SkillManager,
     policy: &EvolutionPolicy,
 ) -> Result<EvolutionReport, SkillError> {
-    run_evolution_cycle_labeled(manager, policy, Vec::new())
+    run_evolution_cycle_labeled(manager, policy, Vec::new()).await
 }
 
 /// [`run_evolution_cycle`] with the trigger labels that caused it,
 /// used by the worker so reports say why they ran.
-pub(crate) fn run_evolution_cycle_labeled(
+pub(crate) async fn run_evolution_cycle_labeled(
     manager: &SkillManager,
     policy: &EvolutionPolicy,
     triggers: Vec<&'static str>,
 ) -> Result<EvolutionReport, SkillError> {
-    let distill_report = manager.distill()?;
+    let distill_report = manager.distill().await?;
     let mut report = EvolutionReport {
         triggers,
         clusters_considered: distill_report.candidates_considered,

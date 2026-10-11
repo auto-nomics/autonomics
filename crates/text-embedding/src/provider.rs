@@ -22,6 +22,11 @@ pub use onnx::OnnxTextEmbedder;
 /// produced it: embeddings are tightly bound to their model, and
 /// vectors from different signatures must never be mixed or compared.
 pub trait TextEmbedder: Send + Sync {
+    /// The identity of the model this embedder serves. Vectors from
+    /// different signatures are not comparable; caches and stores
+    /// key on it to detect mixing.
+    fn signature(&self) -> String;
+
     /// Embed one text and return its vector stamped with the model
     /// signature.
     ///
@@ -52,6 +57,10 @@ mod tests {
     struct SingleOnly;
 
     impl TextEmbedder for SingleOnly {
+        fn signature(&self) -> String {
+            "single-only".into()
+        }
+
         fn embed(&self, input: &EmbeddingInput) -> Result<EmbeddingOutput> {
             Ok(EmbeddingOutput::new(
                 "single-only",

@@ -237,6 +237,10 @@ impl OnnxTextEmbedder {
 }
 
 impl TextEmbedder for OnnxTextEmbedder {
+    fn signature(&self) -> String {
+        self.signature.clone()
+    }
+
     fn embed(&self, input: &EmbeddingInput) -> Result<EmbeddingOutput> {
         let encoding = self
             .tokenizer

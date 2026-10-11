@@ -19,7 +19,7 @@ use text_embedding::{EmbeddingInput, HashingTextEmbedder, TextEmbedder};
 use crate::error::{Error, Result};
 use crate::observation::Observation;
 
-/// Default width of [`HashingObservationEmbedder`] vectors.
+/// Default width of the hashing embedder's vectors.
 pub use text_embedding::DEFAULT_EMBEDDING_DIM;
 
 /// Provider contract for turning observations into dense vectors.
@@ -28,36 +28,53 @@ pub use text_embedding::DEFAULT_EMBEDDING_DIM;
 /// short batch operation. A remote provider can precompute and cache
 /// vectors behind this trait without changing consumer-side clustering.
 pub trait ObservationEmbedder: Send + Sync {
+    /// The identity of the model this embedder serves. Vector caches
+    /// key on it: a signature change invalidates every cached vector.
+    fn signature(&self) -> String;
+
     /// Return one vector per input observation, keyed by observation id.
     fn embed(&self, observations: &[Observation]) -> Result<BTreeMap<String, Vec<f32>>>;
 }
 
-/// A deterministic feature-hashing embedder, over the shared
-/// text-level implementation.
-#[derive(Debug, Clone)]
-pub struct HashingObservationEmbedder {
-    inner: HashingTextEmbedder,
+/// Wrap any shared text-level embedder behind the observation-level
+/// contract, so a host-installed model (local ONNX, remote API)
+/// drops into distillation without touching consumer code. This is
+/// the ONE bridge: concrete embedders are `TextEmbedder`
+/// implementations in `text-embedding`; everything
+/// observation-specific (rendering, keying, error lifting) lives
+/// here exactly once.
+#[derive(Clone)]
+pub struct SharedObservationEmbedder {
+    inner: Arc<dyn TextEmbedder>,
 }
 
-impl HashingObservationEmbedder {
-    pub fn new() -> Self {
-        Self::with_dim(DEFAULT_EMBEDDING_DIM)
-    }
-
-    pub fn with_dim(dim: usize) -> Self {
-        Self {
-            inner: HashingTextEmbedder::with_dim(dim),
-        }
-    }
-}
-
-impl Default for HashingObservationEmbedder {
-    fn default() -> Self {
-        Self::new()
+impl std::fmt::Debug for SharedObservationEmbedder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SharedObservationEmbedder")
+            .finish_non_exhaustive()
     }
 }
 
-impl ObservationEmbedder for HashingObservationEmbedder {
+impl SharedObservationEmbedder {
+    pub fn new(inner: Arc<dyn TextEmbedder>) -> Self {
+        Self { inner }
+    }
+
+    /// The offline deterministic default: the feature-hashing text
+    /// embedder behind the shared bridge. Distillation falls back to
+    /// this when no model is installed. Same vectors as the retired
+    /// dedicated hashing embedder — one bridge means one bridging
+    /// implementation, not two that can drift.
+    pub fn hashing() -> Self {
+        Self::new(Arc::new(HashingTextEmbedder::new()))
+    }
+}
+
+impl ObservationEmbedder for SharedObservationEmbedder {
+    fn signature(&self) -> String {
+        self.inner.signature()
+    }
+
     fn embed(&self, observations: &[Observation]) -> Result<BTreeMap<String, Vec<f32>>> {
         let inputs = observations
             .iter()
@@ -70,69 +87,6 @@ impl ObservationEmbedder for HashingObservationEmbedder {
         // distillation pass runs exactly one embedder, so the model
         // signature cannot mix within a run — it stays a text-layer
         // concern.
-        let outputs = into_core(self.inner.batch_embed(&inputs))?;
-        Ok(outputs
-            .into_iter()
-            .map(|(id, output)| (id, output.vector))
-            .collect())
-    }
-}
-
-/// Wrap precomputed vectors so callers can substitute a remote model.
-///
-/// This is pure plumbing — ids in, vectors out — so it lives here
-/// rather than in `text-embedding`, where it would pretend to look at
-/// text it never reads.
-#[derive(Debug, Clone)]
-pub struct VectorMapEmbedder {
-    vectors: BTreeMap<String, Vec<f32>>,
-}
-
-impl VectorMapEmbedder {
-    pub fn new(vectors: BTreeMap<String, Vec<f32>>) -> Self {
-        Self { vectors }
-    }
-}
-
-impl ObservationEmbedder for VectorMapEmbedder {
-    fn embed(&self, observations: &[Observation]) -> Result<BTreeMap<String, Vec<f32>>> {
-        self.vectors
-            .iter()
-            .filter(|(id, _)| observations.iter().any(|o| &o.id == *id))
-            .map(|(id, vector)| Ok((id.clone(), vector.clone())))
-            .collect()
-    }
-}
-
-/// Wrap any shared text-level embedder behind the observation-level
-/// contract, so a host-installed model (local ONNX, remote API)
-/// drops into distillation without touching consumer code.
-#[derive(Clone)]
-pub struct SharedObservationEmbedder {
-    inner: Arc<dyn TextEmbedder>,
-}
-
-impl std::fmt::Debug for SharedObservationEmbedder {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SharedObservationEmbedder").finish_non_exhaustive()
-    }
-}
-
-impl SharedObservationEmbedder {
-    pub fn new(inner: Arc<dyn TextEmbedder>) -> Self {
-        Self { inner }
-    }
-}
-
-impl ObservationEmbedder for SharedObservationEmbedder {
-    fn embed(&self, observations: &[Observation]) -> Result<BTreeMap<String, Vec<f32>>> {
-        let inputs = observations
-            .iter()
-            .map(|observation| EmbeddingInput {
-                id: observation.id.clone(),
-                text: observation_text(observation),
-            })
-            .collect::<Vec<_>>();
         let outputs = into_core(self.inner.batch_embed(&inputs))?;
         Ok(outputs
             .into_iter()
@@ -172,6 +126,72 @@ pub fn mean_vector(vectors: &[&[f32]]) -> Result<Vec<f32>> {
     into_core(text_embedding::mean_vector(vectors))
 }
 
+/// An embedder with a warm cache in front of it.
+///
+/// Distillation hydrates this from
+/// [`ObservationStorage::load_embedding`](crate::ObservationStorage)
+/// before clustering: cache hits skip the model entirely, misses go
+/// to the inner embedder once and are remembered in `computed` so the
+/// caller can persist them afterwards. The cache view itself is
+/// synchronous and pure — all database I/O stays at the hydration and
+/// writeback edges, in the async caller.
+pub struct CachedObservationEmbedder {
+    inner: Arc<dyn ObservationEmbedder>,
+    cache: BTreeMap<String, Vec<f32>>,
+    computed: std::sync::Mutex<BTreeMap<String, Vec<f32>>>,
+}
+
+impl CachedObservationEmbedder {
+    /// Wrap `inner` with preloaded vectors, keyed by observation id.
+    pub fn new(inner: Arc<dyn ObservationEmbedder>, cache: BTreeMap<String, Vec<f32>>) -> Self {
+        Self {
+            inner,
+            cache,
+            computed: std::sync::Mutex::new(BTreeMap::new()),
+        }
+    }
+
+    /// Drain the vectors computed since construction — the writeback
+    /// set for [`ObservationStorage::save_embedding`].
+    pub fn take_computed(&self) -> BTreeMap<String, Vec<f32>> {
+        std::mem::take(&mut self.computed.lock().expect("computed lock poisoned"))
+    }
+}
+
+impl ObservationEmbedder for CachedObservationEmbedder {
+    fn signature(&self) -> String {
+        self.inner.signature()
+    }
+
+    fn embed(&self, observations: &[Observation]) -> Result<BTreeMap<String, Vec<f32>>> {
+        let missing: Vec<&Observation> = observations
+            .iter()
+            .filter(|observation| !self.cache.contains_key(&observation.id))
+            .collect();
+        let missing_refs: Vec<Observation> =
+            missing.iter().map(|observation| (*observation).clone()).collect();
+        let fresh = if missing_refs.is_empty() {
+            BTreeMap::new()
+        } else {
+            self.inner.embed(&missing_refs)?
+        };
+        if let Ok(mut computed) = self.computed.lock() {
+            computed.extend(fresh.iter().map(|(id, vector)| (id.clone(), vector.clone())));
+        }
+        let mut out = BTreeMap::new();
+        for observation in observations {
+            if let Some(vector) = self
+                .cache
+                .get(&observation.id)
+                .or_else(|| fresh.get(&observation.id))
+            {
+                out.insert(observation.id.clone(), vector.clone());
+            }
+        }
+        Ok(out)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,7 +216,7 @@ mod tests {
             observation("o1", "restart the daemon"),
             observation("o2", "bump the timeout"),
         ];
-        let vectors = HashingObservationEmbedder::new()
+        let vectors = SharedObservationEmbedder::hashing()
             .embed(&observations)
             .unwrap();
         assert_eq!(vectors.len(), 2);
@@ -209,25 +229,13 @@ mod tests {
     /// this determinism across runs.
     #[test]
     fn same_text_embeds_identically_across_instances() {
-        let first = HashingObservationEmbedder::new()
+        let first = SharedObservationEmbedder::hashing()
             .embed(&[observation("x", "identical text")])
             .unwrap();
-        let second = HashingObservationEmbedder::new()
+        let second = SharedObservationEmbedder::hashing()
             .embed(&[observation("y", "identical text")])
             .unwrap();
         assert_eq!(first["x"], second["y"]);
-    }
-
-    #[test]
-    fn vector_map_filters_by_observation_id() {
-        let embedder = VectorMapEmbedder::new(BTreeMap::from([(
-            "o1".to_string(),
-            vec![1.0, 0.0],
-        )]));
-        let out = embedder
-            .embed(&[observation("o1", "a"), observation("o2", "b")])
-            .unwrap();
-        assert_eq!(out.keys().collect::<Vec<_>>(), ["o1"]);
     }
 
     #[test]

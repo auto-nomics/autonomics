@@ -47,7 +47,7 @@ pub const OBSERVATIONS_DIR: &str = "skill-observations";
 ///
 /// One entry per historical rename. Add new entries here when retiring
 /// a node kind rather than expecting callers to migrate.
-const NODE_KIND_RENAMES: &[(&str, &str)] = &[
+pub(crate) const NODE_KIND_RENAMES: &[(&str, &str)] = &[
     // `literature_search` (the original tool-style name) was retired when
     // literature retrieval was migrated into DAG evidence nodes; the
     // canonical kind is now `source_literature`.
@@ -296,7 +296,7 @@ fn atomic_write_toml(path: &Path, observation: &Observation) -> std::io::Result<
     std::fs::rename(&tmp, path)
 }
 
-fn unix_now() -> i64 {
+pub(crate) fn unix_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)

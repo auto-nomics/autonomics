@@ -38,6 +38,10 @@ impl VectorMapTextEmbedder {
 }
 
 impl TextEmbedder for VectorMapTextEmbedder {
+    fn signature(&self) -> String {
+        self.model_signature.clone()
+    }
+
     fn embed(&self, input: &EmbeddingInput) -> Result<EmbeddingOutput> {
         self.vectors
             .get(&input.id)

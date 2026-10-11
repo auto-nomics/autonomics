@@ -5,7 +5,7 @@ use agentik_proc::tool;
 use async_trait::async_trait;
 use plugin_rsi::RsiInfra;
 use serde_json::json;
-use skills::{ObservationInput, ObservationKind, ObservationSource};
+use evolution_core::{ObservationInput, ObservationKind, ObservationSource};
 
 /// Record one durable evolution observation and let the host route it.
 #[tool(
@@ -75,7 +75,7 @@ impl ToolFunction for EvoObserveTool {
         };
         let routing = self
             .infra
-            .record_and_route_observation(observation, None, None)
+            .record_and_route_observation(observation, None, None).await
             .map_err(|error| ToolError::ExecutionFailed {
                 source: Box::new(std::io::Error::other(error.to_string())),
             })?;
@@ -131,10 +131,8 @@ mod tests {
     }
 
     fn infra_with_skills(state: &std::path::Path) -> (RsiInfra, Arc<skills::SkillManager>) {
-        let observations = evolution_core::ObservationHub::init(evolution_core::ObservationHub::new(
-            state,
-        ));
         let skills = skills::SkillManager::init(skills::SkillManager::new(state));
+        let observations = skills.observation_hub();
         let environments = catalog();
         let publisher = Arc::new(GhPublisher::new(GhPublisherConfig {
             enabled: false,
@@ -288,7 +286,7 @@ mod tests {
             assert!(value["plugin_request_id"].as_str().is_some(), "{value}");
             assert_eq!(value["skill_distillation"], false, "{value}");
         }
-        skills.distill().unwrap();
+        skills.distill().await.unwrap();
         assert!(skills.proposals().list().is_empty());
 
         for index in 0..3 {
@@ -302,7 +300,7 @@ mod tests {
             .await
             .unwrap();
         }
-        skills.distill().unwrap();
+        skills.distill().await.unwrap();
         let proposals = skills.proposals().list();
         assert_eq!(proposals.len(), 1, "{proposals:?}");
         assert_eq!(proposals[0].name, "generic-node-recipe");

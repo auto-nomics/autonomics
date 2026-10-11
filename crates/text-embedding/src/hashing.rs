@@ -48,6 +48,10 @@ impl Default for HashingTextEmbedder {
 }
 
 impl TextEmbedder for HashingTextEmbedder {
+    fn signature(&self) -> String {
+        format!("hashing-{}", self.dim)
+    }
+
     fn embed(&self, input: &EmbeddingInput) -> Result<EmbeddingOutput> {
         let mut vector = vec![0.0_f32; self.dim];
         for token in tokens(&input.text) {

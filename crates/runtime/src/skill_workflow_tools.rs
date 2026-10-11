@@ -233,7 +233,7 @@ impl ToolFunction for SkillEvalTool {
         // them — the anchor is the first failed check's node kind.
         for (index, case) in report.cases.iter().enumerate() {
             if !case.passed {
-                self.record_eval_failure(skill, case, &kinds[index]);
+                self.record_eval_failure(skill, case, &kinds[index]).await;
             }
         }
         let mut out = format!(
@@ -361,7 +361,7 @@ impl SkillEvalTool {
     /// checks, and the anchor is the first failed check's node kind
     /// plus its failure reason. Repeated eval failures therefore
     /// cluster in distillation exactly like manual observations.
-    fn record_eval_failure(
+    async fn record_eval_failure(
         &self,
         skill: &str,
         case: &skills::eval::CaseResult,
@@ -384,15 +384,15 @@ impl SkillEvalTool {
             "Inspect the eval inputs and the workflow template; a fix here \
              should update the template or its fixtures.",
         );
-        let input = skills::ObservationInput {
-            kind: skills::ObservationKind::Failure,
-            source: skills::ObservationSource::Eval,
+        let input = evolution_core::ObservationInput {
+            kind: evolution_core::ObservationKind::Failure,
+            source: evolution_core::ObservationSource::Eval,
             summary: format!("eval case {} fails for skill {skill}", case.name),
             body,
             node_kind: anchor_kind,
             error: Some(first.reason.clone()),
         };
-        if let Err(e) = self.manager.record_observation(input) {
+        if let Err(e) = self.manager.record_observation(input).await {
             tracing::warn!(skill = skill, error = %e, "cannot record eval-failure observation");
         }
     }
@@ -677,22 +677,26 @@ spec = {}
         // Three identical failures → one content-hashed observation
         // (idempotent), so the cluster threshold needs a hand: record
         // two more variants of the same anchor.
-        let observations = manager.observations();
-        assert_eq!(observations.list().len(), 1, "identical failures dedupe");
+        assert_eq!(
+            manager.observations().await.len(),
+            1,
+            "identical failures dedupe"
+        );
         for body in ["variant b", "variant c"] {
             manager
-                .record_observation(skills::ObservationInput {
-                    kind: skills::ObservationKind::Failure,
-                    source: skills::ObservationSource::Agent,
+                .record_observation(evolution_core::ObservationInput {
+                    kind: evolution_core::ObservationKind::Failure,
+                    source: evolution_core::ObservationSource::Agent,
                     summary: "eval always fails".into(),
                     body: body.into(),
                     node_kind: Some("echo".into()),
                     error: Some("output_rows is None, expected >= 99".into()),
                 })
+                .await
                 .unwrap();
         }
 
-        let report = manager.distill().unwrap();
+        let report = manager.distill().await.unwrap();
         assert_eq!(report.proposals_written.len(), 1, "{report:?}");
         let name = &report.proposals_written[0];
         let proposals = manager.proposals();
@@ -714,7 +718,7 @@ spec = {}
         assert!(names.contains(name));
 
         // And a second distill pass is a no-op.
-        let again = manager.distill().unwrap();
+        let again = manager.distill().await.unwrap();
         assert!(again.proposals_written.is_empty());
     }
 }

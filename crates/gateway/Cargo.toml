@@ -12,6 +12,7 @@ agentik-sdk = { path = "../agentik-sdk" }
 agentik-types = { path = "../agentik-types", features = ["schema"] }
 runtime = { path = "../runtime" }
 plugin-rsi = { path = "../plugin-rsi" }
+evolution-core = { path = "../evolution-core" }
 skills = { path = "../skills" }
 api-server = { path = "../api-server" }
 bib-base = { path = "../bib-base" }

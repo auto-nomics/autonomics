@@ -1,73 +1,65 @@
-//! The process-wide observation hub: the single upstream owner of
-//! observation records and routes.
+//! The observation hub: the handle every consumer shares for
+//! observation evidence.
 //!
 //! Observations are shared evidence — skills and plugins are both
 //! downstream consumers. Neither owns the ledger; this hub does. It
-//! is installed once per process (see [`ObservationHub::init`]) and
-//! every subsystem — the skill manager, plugin RSI, agent tools,
-//! gateway handlers — resolves the same state directory through it,
-//! so evidence recorded anywhere is visible everywhere.
+//! is constructed once per process by the host assembly and passed by
+//! reference (the skill manager and plugin RSI each keep their own
+//! `Arc`); the state directory remains the cross-process truth, so a
+//! CLI and a daemon pointed at the same directory observe the same
+//! ledger without any in-process singleton.
 //!
-//! Like the store it wraps, the hub is a thin, stateless view: the
-//! state directory on disk is the real shared store, keyed by
-//! content-hashed ids so concurrent processes never corrupt each
-//! other. The singleton exists to make "which directory" a
-//! process-level decision instead of a per-caller guess.
+//! Since the Turso migration the hub is backed by
+//! `<state_dir>/evolution.db` (records plus cached vectors); the file
+//! backend remains available for tests via [`ObservationHub::with_storage`].
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use arc_swap::ArcSwapOption;
-
 use crate::error::Result;
-use crate::observation::{Observation, ObservationInput, ObservationStore};
+use crate::observation::{Observation, ObservationInput};
 use crate::routing::ObservationRouteStore;
+use crate::storage::{FileObservationStorage, ObservationStorage, TursoObservationStorage};
 
-/// Process-wide observation hub instance. Replaced only by an
-/// explicit re-`init` (tests swap in isolated state dirs this way).
-static GLOBAL: ArcSwapOption<ObservationHub> = ArcSwapOption::const_empty();
-
-/// The process-wide owner of observation records and routes.
-#[derive(Debug, Clone)]
+/// The shared handle for observation evidence and its storage.
+#[derive(Clone)]
 pub struct ObservationHub {
     state_dir: PathBuf,
+    storage: Arc<dyn ObservationStorage>,
 }
 
 impl ObservationHub {
-    /// Install the process-wide hub. Returns the installed `Arc`.
-    /// Calling again replaces the instance — the same re-init
-    /// contract the skill manager follows, so isolated tests can
-    /// point both at one temp state dir.
-    pub fn init(hub: ObservationHub) -> Arc<Self> {
-        let arc = Arc::new(hub);
-        GLOBAL.store(Some(Arc::clone(&arc)));
-        arc
-    }
-
-    /// The process-wide hub, lazily constructed from the environment
-    /// (`$AUTONOMICS_STATE_DIR` or `~/.autonomics`) when [`init`]
-    /// was never called.
-    pub fn global() -> Arc<Self> {
-        if let Some(existing) = GLOBAL.load().as_ref() {
-            return Arc::clone(existing);
-        }
-        Self::init(Self::from_env())
-    }
-
-    /// A hub over an explicit state directory. Does NOT install the
-    /// global instance — use [`init`] for that.
+    /// Production hub over `<state_dir>/evolution.db`. No I/O happens
+    /// here — the database is built lazily on first use.
     #[must_use]
     pub fn new(state_dir: impl Into<PathBuf>) -> Self {
+        let state_dir = state_dir.into();
+        let storage = Arc::new(TursoObservationStorage::new(state_dir.clone()));
+        Self { state_dir, storage }
+    }
+
+    /// Hub over a caller-supplied storage backend (tests inject the
+    /// file backend here; the database backend is the default).
+    #[must_use]
+    pub fn with_storage(
+        state_dir: impl Into<PathBuf>,
+        storage: Arc<dyn ObservationStorage>,
+    ) -> Self {
         Self {
             state_dir: state_dir.into(),
+            storage,
         }
     }
 
-    /// Default from the environment (see [`global`]). Mirrors the
-    /// skill manager's resolution so both land on the same directory.
+    /// Hub over the legacy file backend, files only — no database is
+    /// created or consulted.
     #[must_use]
-    pub fn from_env() -> Self {
-        Self::new(default_state_dir())
+    pub fn file_backed(state_dir: impl Into<PathBuf>) -> Self {
+        let state_dir = state_dir.into();
+        Self::with_storage(
+            state_dir.clone(),
+            Arc::new(FileObservationStorage::new(&state_dir)),
+        )
     }
 
     /// The state directory every store below is rooted at.
@@ -75,12 +67,14 @@ impl ObservationHub {
         &self.state_dir
     }
 
-    /// The observation store view under this hub's state dir.
-    pub fn observations(&self) -> ObservationStore {
-        ObservationStore::open(&self.state_dir)
+    /// The durable storage behind this hub.
+    pub fn storage(&self) -> &Arc<dyn ObservationStorage> {
+        &self.storage
     }
 
-    /// The route ledger view under this hub's state dir.
+    /// The route ledger under this hub's state dir. Routing decisions
+    /// are still file-backed; see the storage module for the database
+    /// migration of observation records.
     pub fn routes(&self) -> ObservationRouteStore {
         ObservationRouteStore::open(&self.state_dir)
     }
@@ -91,27 +85,9 @@ impl ObservationHub {
     ///
     /// Downstream notification is the caller's concern: the hub is a
     /// pure ledger and knows nothing about its consumers.
-    pub fn record(&self, input: ObservationInput) -> Result<Observation> {
-        self.observations().record(input)
+    pub async fn record(&self, input: ObservationInput) -> Result<Observation> {
+        self.storage.record(input).await
     }
-}
-
-/// `$AUTONOMICS_STATE_DIR`, else `~/.autonomics`. Kept in sync with
-/// the skill manager's resolution on purpose: a mismatch would split
-/// the evidence ledger in two.
-fn default_state_dir() -> PathBuf {
-    if let Ok(dir) = std::env::var("AUTONOMICS_STATE_DIR")
-        && !dir.trim().is_empty()
-    {
-        return PathBuf::from(dir);
-    }
-    home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".autonomics")
-}
-
-fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
 }
 
 #[cfg(test)]
@@ -119,8 +95,8 @@ mod tests {
     use super::*;
     use crate::observation::{ObservationKind, ObservationSource};
 
-    #[test]
-    fn record_is_visible_through_a_freshly_opened_view() {
+    #[tokio::test]
+    async fn record_is_visible_through_the_shared_storage() {
         let tmp = tempfile::tempdir().unwrap();
         let hub = ObservationHub::new(tmp.path());
         let observation = hub
@@ -132,25 +108,24 @@ mod tests {
                 node_kind: None,
                 error: None,
             })
+            .await
             .unwrap();
-        // A brand-new store view over the same directory sees it —
-        // the directory is the store, the hub only names it.
-        assert!(
-            ObservationStore::open(tmp.path())
-                .list()
-                .iter()
-                .any(|o| o.id == observation.id)
-        );
+        let listed = hub.storage().list().await;
+        assert!(listed.iter().any(|o| o.id == observation.id));
     }
 
-    #[test]
-    fn init_replaces_the_global_instance() {
-        let first = tempfile::tempdir().unwrap();
-        let second = tempfile::tempdir().unwrap();
-        let hub = ObservationHub::init(ObservationHub::new(first.path()));
-        assert_eq!(hub.state_dir(), first.path());
-        let hub = ObservationHub::init(ObservationHub::new(second.path()));
-        assert_eq!(ObservationHub::global().state_dir(), second.path());
-        assert_eq!(hub.state_dir(), second.path());
+    /// The DB-backed hub materializes evolution.db under the state
+    /// dir on first use — the state directory remains the portable
+    /// unit of deployment.
+    #[tokio::test]
+    async fn default_backend_is_the_database() {
+        let tmp = tempfile::tempdir().unwrap();
+        let hub = ObservationHub::new(tmp.path());
+        hub.storage()
+            .list()
+            .await
+            .iter()
+            .for_each(drop);
+        assert!(tmp.path().join(crate::EVOLUTION_DB).is_file());
     }
 }

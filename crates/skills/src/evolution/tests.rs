@@ -6,7 +6,7 @@ use std::time::Duration;
 
 mod workflow_tests {
     use super::*;
-    use crate::observation::{
+    use evolution_core::observation::{
         ObservationInput, ObservationKind, ObservationSource, ObservationStore,
     };
 
@@ -14,7 +14,7 @@ mod workflow_tests {
         Arc::new(SkillManager::new(tmp.join("state")))
     }
 
-    fn observe_three(manager: &SkillManager, error: &str) {
+    async fn observe_three(manager: &SkillManager, error: &str) {
         for body in ["fix a", "fix b", "fix c"] {
             manager
                 .record_observation(ObservationInput {
@@ -24,47 +24,47 @@ mod workflow_tests {
                     body: body.into(),
                     node_kind: Some("sql".into()),
                     error: Some(error.into()),
-                })
+                }).await
                 .unwrap();
         }
     }
 
-    #[test]
-    fn default_policy_leaves_proposals_pending() {
+    #[tokio::test]
+    async fn default_policy_leaves_proposals_pending() {
         let tmp = tempfile::tempdir().unwrap();
         let manager = manager_in(tmp.path());
-        observe_three(&manager, "boom N");
-        let report = run_evolution_cycle(&manager, &EvolutionPolicy::default()).unwrap();
+        observe_three(&manager, "boom N").await;
+        let report = run_evolution_cycle(&manager, &EvolutionPolicy::default()).await.unwrap();
         assert_eq!(report.proposals_written.len(), 1);
         assert!(report.auto_approved.is_empty());
         assert_eq!(report.left_pending, 1);
     }
 
-    #[test]
-    fn auto_approve_respects_cap_and_bumps_generation() {
+    #[tokio::test]
+    async fn auto_approve_respects_cap_and_bumps_generation() {
         let tmp = tempfile::tempdir().unwrap();
         let manager = manager_in(tmp.path());
         // Two distinct anchors → two pending proposals.
-        observe_three(&manager, "boom one");
-        observe_three(&manager, "crash two");
+        observe_three(&manager, "boom one").await;
+        observe_three(&manager, "crash two").await;
         let policy = EvolutionPolicy {
             auto_approve: true,
             max_approvals_per_cycle: 1,
         };
         let generation = manager.generation();
-        let report = run_evolution_cycle(&manager, &policy).unwrap();
+        let report = run_evolution_cycle(&manager, &policy).await.unwrap();
         assert_eq!(report.auto_approved.len(), 1, "cap enforced");
         assert_eq!(report.left_pending, 1);
         assert_eq!(manager.generation(), generation + 1);
     }
 
-    #[test]
-    fn cycle_without_new_observations_is_a_noop() {
+    #[tokio::test]
+    async fn cycle_without_new_observations_is_a_noop() {
         let tmp = tempfile::tempdir().unwrap();
         let manager = manager_in(tmp.path());
-        let first = run_evolution_cycle(&manager, &EvolutionPolicy::default()).unwrap();
+        let first = run_evolution_cycle(&manager, &EvolutionPolicy::default()).await.unwrap();
         assert!(!first.acted());
-        let second = run_evolution_cycle(&manager, &EvolutionPolicy::default()).unwrap();
+        let second = run_evolution_cycle(&manager, &EvolutionPolicy::default()).await.unwrap();
         assert!(!second.acted());
     }
 
@@ -72,7 +72,7 @@ mod workflow_tests {
     async fn service_coalesces_bursts_into_one_cycle() {
         let tmp = tempfile::tempdir().unwrap();
         let manager = manager_in(tmp.path());
-        observe_three(&manager, "storm N");
+        observe_three(&manager, "storm N").await;
 
         let options = EvolutionOptions {
             quiet_window: Duration::from_millis(150),
@@ -132,7 +132,7 @@ mod workflow_tests {
         // The manager must be attached to the service to forward
         // observation events.
         manager.attach_evolution(&handle);
-        observe_three(&manager, "hooked N");
+        observe_three(&manager, "hooked N").await;
         let report = tokio::time::timeout(Duration::from_secs(2), reports.recv())
             .await
             .expect("event-driven report")
@@ -145,22 +145,22 @@ mod workflow_tests {
         assert_eq!(report.proposals_written.len(), 1);
     }
 
-    #[test]
-    fn observation_store_roundtrip_under_manager() {
+    #[tokio::test]
+    async fn observation_store_roundtrip_under_manager() {
         // Guards the store path used by the cycle against accidental
         // regressions in manager wiring.
         let tmp = tempfile::tempdir().unwrap();
         let manager = manager_in(tmp.path());
-        assert_eq!(manager.observations().list().len(), 0);
-        observe_three(&manager, "x");
-        assert_eq!(manager.observations().list().len(), 3);
+        assert_eq!(manager.observations().await.len(), 0);
+        observe_three(&manager, "x").await;
+        assert_eq!(manager.observations().await.len(), 3);
     }
 }
 
 #[cfg(test)]
 mod timer_tests {
     use super::*;
-    use crate::observation::{ObservationInput, ObservationKind, ObservationSource};
+    use evolution_core::observation::{ObservationInput, ObservationKind, ObservationSource};
 
     /// The timer trigger path: with no events arriving, the periodic
     /// sweep alone produces cycles.
@@ -180,7 +180,7 @@ mod timer_tests {
                     body: body.into(),
                     node_kind: Some("sql".into()),
                     error: Some("boom at step N".into()),
-                })
+                }).await
                 .unwrap();
         }
         let options = EvolutionOptions {
@@ -208,10 +208,10 @@ mod timer_tests {
 #[cfg(test)]
 mod authoring_tests {
     use super::*;
-    use crate::observation::{ObservationInput, ObservationKind, ObservationSource};
+    use evolution_core::observation::{ObservationInput, ObservationKind, ObservationSource};
 
-    #[test]
-    fn auto_approve_never_promotes_agent_authored_proposals() {
+    #[tokio::test]
+    async fn auto_approve_never_promotes_agent_authored_proposals() {
         let tmp = tempfile::tempdir().unwrap();
         let manager = Arc::new(SkillManager::new(tmp.path().join("state")));
         let id = manager
@@ -222,7 +222,7 @@ mod authoring_tests {
                 body: "fix".into(),
                 node_kind: Some("sql".into()),
                 error: Some("boom".into()),
-            })
+            }).await
             .unwrap()
             .id;
         manager
@@ -233,7 +233,7 @@ mod authoring_tests {
                 "# Body\n\nSteps.\n",
                 std::slice::from_ref(&id),
                 "pattern",
-            )
+            ).await
             .unwrap();
 
         let policy = EvolutionPolicy {
@@ -241,7 +241,7 @@ mod authoring_tests {
             max_approvals_per_cycle: 5,
         };
         let generation = manager.generation();
-        let report = run_evolution_cycle(&manager, &policy).unwrap();
+        let report = run_evolution_cycle(&manager, &policy).await.unwrap();
         // Refused: still pending, human-review-only, generation unmoved.
         assert!(report.auto_approved.is_empty());
         assert_eq!(report.left_pending, 1);
@@ -261,7 +261,7 @@ mod authoring_tests {
 #[cfg(test)]
 mod channel_funnel {
     use super::*;
-    use crate::observation::ObservationInput;
+    use evolution_core::observation::ObservationInput;
     use crate::proposals::ProposalStatus;
 
     fn start_service(state_dir: &std::path::Path) -> (Arc<SkillManager>, SkillControlHandle) {
@@ -289,13 +289,13 @@ mod channel_funnel {
         for body in ["fix a", "fix b", "fix c"] {
             manager
                 .record_observation(ObservationInput {
-                    kind: crate::observation::ObservationKind::Failure,
-                    source: crate::observation::ObservationSource::Agent,
+                    kind: evolution_core::observation::ObservationKind::Failure,
+                    source: evolution_core::observation::ObservationSource::Agent,
                     summary: "fix for boom".into(),
                     body: body.into(),
                     node_kind: Some("sql".into()),
                     error: Some("boom".into()),
-                })
+                }).await
                 .unwrap();
         }
         let outcome = handle.call_run_cycle(EvolutionPolicy::default()).await;
@@ -386,13 +386,13 @@ mod channel_funnel {
         // Let the worker observe the closed channel and exit.
         tokio::time::sleep(Duration::from_millis(30)).await;
         let probe = manager.record_observation(ObservationInput {
-            kind: crate::observation::ObservationKind::Failure,
-            source: crate::observation::ObservationSource::Agent,
+            kind: evolution_core::observation::ObservationKind::Failure,
+            source: evolution_core::observation::ObservationSource::Agent,
             summary: "probe".into(),
             body: "x".into(),
             node_kind: Some("sql".into()),
             error: Some("boom".into()),
-        });
+        }).await;
         assert!(
             probe.is_ok(),
             "observation must succeed even with worker gone"
@@ -477,14 +477,14 @@ mod channel_funnel {
         // distill; otherwise the worker short-circuits the cycle
         // body and `cycles_completed` stays at 0.
         manager
-            .record_observation(crate::observation::ObservationInput {
-                kind: crate::observation::ObservationKind::Failure,
-                source: crate::observation::ObservationSource::Agent,
+            .record_observation(evolution_core::observation::ObservationInput {
+                kind: evolution_core::observation::ObservationKind::Failure,
+                source: evolution_core::observation::ObservationSource::Agent,
                 summary: "fix for boom N".into(),
                 body: "fix a".into(),
                 node_kind: Some("sql".into()),
                 error: Some("boom at step N".into()),
-            })
+            }).await
             .unwrap();
         let handle = start(
             manager.clone(),

@@ -9,10 +9,11 @@ pub mod error;
 pub mod hub;
 pub mod observation;
 pub mod routing;
+pub mod storage;
 
 pub use embedding::{
-    HashingObservationEmbedder, ObservationEmbedder, SharedObservationEmbedder, VectorMapEmbedder,
-    cosine, mean_vector,
+    CachedObservationEmbedder, ObservationEmbedder, SharedObservationEmbedder,
+    DEFAULT_EMBEDDING_DIM, cosine, mean_vector,
 };
 pub use error::Error;
 pub use hub::ObservationHub;
@@ -22,4 +23,8 @@ pub use observation::{
 pub use routing::{
     ObservationAudience, ObservationRoute, ObservationRouteStatus, ObservationRouteStore,
     RouteDecision, classify_observation,
+};
+pub use storage::{
+    EVOLUTION_DB, FileObservationStorage, ObservationStorage, TursoObservationStorage,
+    load_embedding_map,
 };

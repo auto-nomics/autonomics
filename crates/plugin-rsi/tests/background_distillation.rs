@@ -133,9 +133,7 @@ async fn local_activation_is_distilled_to_github_without_blocking_the_agent() {
     PluginDevelopmentToolsetRegistry::global()
         .configure_environments(environment_registry.clone())
         .unwrap();
-    let observations = evolution_core::ObservationHub::init(evolution_core::ObservationHub::new(
-        state.path(),
-    ));
+    let observations = std::sync::Arc::new(evolution_core::ObservationHub::new(state.path()));
     let publisher = Arc::new(FakePublisher);
     let infra = RsiInfra::open(
         state.path(),

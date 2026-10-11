@@ -42,7 +42,6 @@
 
 pub mod builtin;
 pub mod distill;
-pub mod embedding;
 pub mod error;
 pub mod eval;
 pub mod evolution;
@@ -50,7 +49,6 @@ pub mod format;
 pub mod inject;
 pub mod install;
 pub mod manager;
-pub mod observation;
 pub mod proposals;
 pub mod registry;
 pub mod tools;
@@ -66,9 +64,6 @@ pub use evolution::{
 pub use format::SkillMeta;
 pub use inject::prompt_section;
 pub use manager::{SkillManager, UsageKind, UsageRecord};
-pub use observation::{
-    Observation, ObservationInput, ObservationKind, ObservationSource, ObservationStore,
-};
 pub use proposals::{ApproveOutcome, Proposal, ProposalStatus, Proposals};
 pub use registry::{SkillDocument, SkillEntry, SkillRegistry, SkillTier};
 pub use tools::skill_registrations;

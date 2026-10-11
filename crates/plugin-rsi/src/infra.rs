@@ -10,7 +10,7 @@ use std::{
 };
 
 use evolution_core::routing::observation_route;
-use skills::observation::ObservationInput;
+use evolution_core::observation::ObservationInput;
 
 use crate::{
     EnvironmentCatalog, EnvironmentRegistry, Error, LocalActivationOutcome, ObservationAudience,
@@ -133,12 +133,13 @@ impl RsiInfra {
     }
 
     /// Record shared observation evidence without creating plugin demand.
-    pub fn record_observation(
+    pub async fn record_observation(
         &self,
         input: ObservationInput,
     ) -> Result<evolution_core::Observation> {
         self.observations
             .record(input)
+            .await
             .map_err(|error| Error::Validation(format!("cannot record observation: {error}")))
     }
 
@@ -146,7 +147,7 @@ impl RsiInfra {
     ///
     /// The observation id becomes the request's first evidence id, so later
     /// skill distillation and plugin review reference the same evidence.
-    pub fn create_plugin_request_from_observation(
+    pub async fn create_plugin_request_from_observation(
         &self,
         observation_id: &str,
         intent: RequestIntent,
@@ -154,37 +155,40 @@ impl RsiInfra {
     ) -> Result<ObservationRequest> {
         observation_request(
             &self.requests,
-            &self.observations.observations(),
+            self.observations.storage().as_ref(),
             observation_id,
             intent,
             plugin_name,
         )
+        .await
     }
 
     /// Record one observation and immediately promote it to plugin demand.
-    pub fn record_plugin_observation(
+    pub async fn record_plugin_observation(
         &self,
         input: ObservationInput,
         intent: RequestIntent,
         plugin_name: &str,
     ) -> Result<ObservationRequest> {
-        let observation = self.record_observation(input)?;
+        let observation = self.record_observation(input).await?;
         self.create_plugin_request_from_observation(&observation.id, intent, Some(plugin_name))
+            .await
     }
 
     /// Record shared evidence, classify it, and create plugin demand when owned.
-    pub fn record_and_route_observation(
+    pub async fn record_and_route_observation(
         &self,
         input: ObservationInput,
         plugin_name: Option<&str>,
         intent: Option<RequestIntent>,
     ) -> Result<ObservationRouting> {
-        let observation = self.record_observation(input)?;
+        let observation = self.record_observation(input).await?;
         self.route_existing_observation(&observation.id, plugin_name, intent)
+            .await
     }
 
     /// Route an observation that already exists in the shared store.
-    pub fn route_existing_observation(
+    pub async fn route_existing_observation(
         &self,
         observation_id: &str,
         plugin_name: Option<&str>,
@@ -192,8 +196,9 @@ impl RsiInfra {
     ) -> Result<ObservationRouting> {
         let observation = self
             .observations
-            .observations()
+            .storage()
             .list()
+            .await
             .into_iter()
             .find(|observation| observation.id == observation_id)
             .ok_or_else(|| {
@@ -222,11 +227,12 @@ impl RsiInfra {
             })?;
             let promoted = observation_request(
                 &self.requests,
-                &self.observations.observations(),
+                self.observations.storage().as_ref(),
                 &route.observation_id,
                 intent.unwrap_or_else(|| default_request_intent(observation.kind)),
                 Some(target),
-            )?;
+            )
+            .await?;
             self.routes.consume(&route.id, &promoted.request.id)?;
             route.request_id = Some(promoted.request.id.clone());
             route.status = ObservationRouteStatus::Consumed;
@@ -575,14 +581,12 @@ pub struct ObservationRouting {
 mod tests {
     use super::*;
     use crate::{Environment, RequestIntent, RequestSource};
-    use skills::observation::{ObservationKind, ObservationSource as SkillObservationSource};
+    use evolution_core::observation::{ObservationKind, ObservationSource as SkillObservationSource};
 
     #[test]
     fn creating_plugin_claims_request_through_the_unified_facade() {
         let state = tempfile::tempdir().unwrap();
-        let observations = evolution_core::ObservationHub::init(evolution_core::ObservationHub::new(
-            state.path(),
-        ));
+        let observations = std::sync::Arc::new(evolution_core::ObservationHub::new(state.path()));
         let mut catalog = EnvironmentCatalog::default();
         catalog.insert(
             "alpine",
@@ -628,12 +632,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn observations_feed_both_skill_and_plugin_feedback_systems() {
+    #[tokio::test]
+    async fn observations_feed_both_skill_and_plugin_feedback_systems() {
         let state = tempfile::tempdir().unwrap();
-        let observations = evolution_core::ObservationHub::init(evolution_core::ObservationHub::new(
-            state.path(),
-        ));
+        let observations = std::sync::Arc::new(evolution_core::ObservationHub::new(state.path()));
         let catalog = EnvironmentCatalog::default();
         let publisher = Arc::new(crate::GhPublisher::new(crate::GhPublisherConfig {
             enabled: false,
@@ -664,6 +666,7 @@ mod tests {
                 RequestIntent::FixNode,
                 "demo-plugin",
             )
+            .await
             .unwrap();
 
         assert_eq!(
@@ -674,8 +677,9 @@ mod tests {
         assert_eq!(feedback.request.plugin_name.as_deref(), Some("demo-plugin"));
         assert!(
             observations
-                .observations()
+                .storage()
                 .list()
+                .await
                 .iter()
                 .any(|observation| observation.id == feedback.observation.id)
         );
@@ -692,6 +696,7 @@ mod tests {
                 Some("demo-plugin"),
                 Some(RequestIntent::FixNode),
             )
+            .await
             .unwrap();
 
         assert_eq!(routing.route.audience, ObservationAudience::Plugin);

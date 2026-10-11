@@ -140,7 +140,7 @@ impl Worker {
                         // body to run, no report to broadcast. Explicit
                         // RunCycle commands still go through the body
                         // below — the operator asked for it.
-                        if run_cycle.is_none() && self.manager.observations().list().is_empty() {
+                        if run_cycle.is_none() && self.manager.observations().await.is_empty() {
                             tracing::debug!(
                                 triggers = %summary,
                                 "evolution cycle skipped: empty observation pool"
@@ -154,7 +154,8 @@ impl Worker {
                             &self.manager,
                             &self.options.policy,
                             labels.clone(),
-                        );
+                        )
+                        .await;
                         self.monitor.cycle_finished(
                             &labels,
                             started.elapsed(),
@@ -187,8 +188,8 @@ impl Worker {
                         let labels = vec!["manual"];
                         self.monitor.distilling(&labels);
                         let started = std::time::Instant::now();
-                        let outcome =
-                            run_evolution_cycle_labeled(&self.manager, &policy, labels.clone());
+                        let outcome = run_evolution_cycle_labeled(&self.manager, &policy, labels.clone())
+                            .await;
                         self.monitor.cycle_finished(
                             &labels,
                             started.elapsed(),
@@ -226,7 +227,8 @@ impl Worker {
                     self.monitor.distilling(&labels);
                     let started = std::time::Instant::now();
                     let outcome =
-                        run_evolution_cycle_labeled(&self.manager, &policy, labels.clone());
+                        run_evolution_cycle_labeled(&self.manager, &policy, labels.clone())
+                            .await;
                     self.monitor.cycle_finished(
                         &labels,
                         started.elapsed(),
