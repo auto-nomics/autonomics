@@ -579,50 +579,20 @@ impl GatewayClient {
         self.get("/skills/evolution/observations").await
     }
 
-    /// Run one evolution cycle now. `auto_approve` overrides the
-    /// daemon's review gate for this call only (`Some(true)` is the
-    /// TUI equivalent of `autonomics-skills distill --auto`).
-    pub async fn trigger_skill_evolution(
-        &self,
-        auto_approve: Option<bool>,
-    ) -> Result<SkillEvolutionReport> {
+    /// Run one evolution cycle now. The cycle installs what it
+    /// writes — there is no review gate.
+    pub async fn trigger_skill_evolution(&self) -> Result<SkillEvolutionReport> {
         self.send(
             reqwest::Method::POST,
             "/skills/evolution/trigger",
-            Some(&TriggerEvolutionRequest { auto_approve }),
+            None::<&serde_json::Value>,
         )
         .await
     }
 
-    /// Proposal listing, pending first.
+    /// Proposal listing, past-cap overflow first.
     pub async fn skill_proposals(&self) -> Result<Vec<SkillProposalView>> {
         self.get("/skills/evolution/proposals").await
-    }
-
-    /// Approve a pending proposal into the live library.
-    pub async fn approve_skill_proposal(&self, name: &str) -> Result<SkillApproveOutcome> {
-        self.send(
-            reqwest::Method::POST,
-            &format!(
-                "/skills/evolution/proposals/{}/approve",
-                encode_segment(name)
-            ),
-            None::<&serde_json::Value>,
-        )
-        .await
-    }
-
-    /// Reject a pending proposal; its pattern will not re-propose.
-    pub async fn reject_skill_proposal(&self, name: &str) -> Result<SkillProposalView> {
-        self.send(
-            reqwest::Method::POST,
-            &format!(
-                "/skills/evolution/proposals/{}/reject",
-                encode_segment(name)
-            ),
-            None::<&serde_json::Value>,
-        )
-        .await
     }
 }
 

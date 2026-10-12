@@ -356,10 +356,8 @@ pub struct SkillEvolutionStatus {
     pub service_enabled: bool,
     /// Library generation; advances on every mutation.
     pub generation: u64,
-    /// Whether cycles may auto-approve (daemon configuration).
-    pub auto_approve: bool,
-    /// Auto-approve cap per cycle.
-    pub max_approvals_per_cycle: usize,
+    /// Install cap per cycle; overflow applies on the next cycle.
+    pub max_installs_per_cycle: usize,
     /// Periodic sweep cadence in seconds, when armed.
     pub sweep_interval_secs: Option<u64>,
     /// Recorded observations feeding distillation.
@@ -370,10 +368,10 @@ pub struct SkillEvolutionStatus {
     pub skills_builtin: usize,
     /// Skills carrying the loop's `auto` tag.
     pub skills_auto: usize,
-    /// Proposals by status.
+    /// Change records by status: `pending` means written but past
+    /// the per-cycle install cap (transient), `applied` means live.
     pub proposals_pending: usize,
-    pub proposals_approved: usize,
-    pub proposals_rejected: usize,
+    pub proposals_applied: usize,
     /// ── Live cycle monitor (flat mirror of skills::CycleStatus) ──
     /// Current worker phase: `idle` | `coalescing` | `distilling`.
     pub phase: String,
@@ -411,23 +409,15 @@ pub struct SkillEvolutionStatus {
 pub struct SkillProposalView {
     pub name: String,
     pub status: String,
-    /// `distiller` (deterministic loop) or `agent` (LLM-authored via
-    /// skill_propose; review-gated even under auto-approve).
+    /// `distiller` (the deterministic loop) — the only author; legacy
+    /// `agent` manifests from the removed skill_propose channel may
+    /// appear in old state dirs.
     pub authored_by: String,
     pub update: bool,
     pub rationale: String,
     pub cluster_hash: String,
     pub observation_count: usize,
     pub created_at: i64,
-}
-
-/// `POST /api/v1/skills/evolution/trigger` request.
-#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
-pub struct TriggerEvolutionRequest {
-    /// Explicit per-call override of the review gate. `None` follows
-    /// the daemon configuration; `Some(true)` is the TUI equivalent
-    /// of `autonomics-skills distill --auto`.
-    pub auto_approve: Option<bool>,
 }
 
 /// `POST /api/v1/skills/evolution/trigger` response — the cycle's
@@ -439,8 +429,11 @@ pub struct SkillEvolutionReport {
     pub clusters_considered: usize,
     pub proposals_written: Vec<String>,
     pub updated_existing: Vec<String>,
-    pub auto_approved: Vec<String>,
-    pub left_pending: usize,
+    /// Names installed into the live library this cycle.
+    pub installed: Vec<String>,
+    /// Changes deferred past the install cap; the next cycle applies
+    /// them.
+    pub deferred: usize,
     pub skipped: Vec<SkippedCluster>,
 }
 
@@ -449,13 +442,6 @@ pub struct SkillEvolutionReport {
 pub struct SkippedCluster {
     pub cluster_hash: String,
     pub reason: String,
-}
-
-/// `POST /api/v1/skills/evolution/proposals/{name}/approve` response.
-#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
-pub struct SkillApproveOutcome {
-    pub name: String,
-    pub destination: String,
 }
 
 /// `GET /api/v1/skills/library` row — one skill from the unified
@@ -472,7 +458,7 @@ pub struct SkillLibraryView {
     /// False only for rows that exist solely as a pending proposal.
     pub installed: bool,
     /// Latest proposal status for this name, when the pipeline ever
-    /// touched it (pending | approved | rejected).
+    /// touched it (pending | applied | rejected-legacy).
     pub proposal_status: Option<String>,
     /// The proposal revises an already-installed skill.
     pub proposal_update: bool,

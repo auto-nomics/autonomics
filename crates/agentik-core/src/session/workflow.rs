@@ -1425,13 +1425,7 @@ mod tests {
 
         let system = captured.lock().unwrap().clone().expect("system captured");
         assert!(system.contains("## Skill library"), "{system}");
-        for tool in [
-            "skill_search",
-            "skill_get",
-            "evo_observe",
-            "skill_propose",
-            "skill_evolve",
-        ] {
+        for tool in ["skill_search", "skill_get", "evo_observe", "skill_evolve"] {
             assert!(system.contains(tool), "missing {tool} in guidance");
         }
     }

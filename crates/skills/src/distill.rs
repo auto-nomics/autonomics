@@ -545,7 +545,7 @@ mod update_tests {
         let name = report.proposals_written[0].clone();
         assert!(name.ends_with("-recipe"), "{name}");
 
-        proposals.approve(&name, &global).unwrap();
+        proposals.apply(&name, &global).unwrap();
         let skill_md = global.join(&name).join("SKILL.md");
         let content = std::fs::read_to_string(&skill_md).unwrap();
         assert!(content.contains("## Recorded recipes"));
@@ -589,7 +589,7 @@ mod update_tests {
         assert_eq!(report.proposals_written.len(), 1);
         let name = report.proposals_written[0].clone();
 
-        proposals.approve(&name, &global).unwrap();
+        proposals.apply(&name, &global).unwrap();
         let skill_md = global.join(&name).join("SKILL.md");
         let content = std::fs::read_to_string(&skill_md).unwrap();
         assert!(content.contains("fix one"));
@@ -612,7 +612,7 @@ mod update_tests {
         assert_eq!(proposal.status, crate::ProposalStatus::Pending);
 
         // Approve the update: overlay lands, previous version archived.
-        proposals.approve(&name, &global).unwrap();
+        proposals.apply(&name, &global).unwrap();
         let content = std::fs::read_to_string(&skill_md).unwrap();
         assert!(content.contains("fix one"));
         assert!(content.contains("fix six"));

@@ -485,10 +485,7 @@ impl SharedInfra {
             let handle = skills::evolution::start(
                 skills.clone(),
                 skills::evolution::EvolutionOptions {
-                    policy: skills::evolution::EvolutionPolicy {
-                        auto_approve: config.skill_evolution_auto_approve,
-                        ..Default::default()
-                    },
+                    policy: skills::evolution::EvolutionPolicy::default(),
                     quiet_window: std::time::Duration::from_millis(500),
                     timer: Some(std::time::Duration::from_secs(
                         config.skill_evolution_interval_secs.max(60),
@@ -496,7 +493,6 @@ impl SharedInfra {
                 },
             );
             tracing::info!(
-                auto_approve = config.skill_evolution_auto_approve,
                 interval_secs = config.skill_evolution_interval_secs,
                 "SharedInfra::open: skill evolution service started"
             );

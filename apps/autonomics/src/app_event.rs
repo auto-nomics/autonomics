@@ -88,11 +88,6 @@ pub(crate) enum AppEvent {
     SkillEvolutionStatusPolled {
         status: std::result::Result<gateway::proto::SkillEvolutionStatus, String>,
     },
-    /// An approve/reject action on a proposal finished.
-    SkillProposalActioned {
-        action: &'static str,
-        result: std::result::Result<String, String>,
-    },
     /// Per-agent model info arrived (render-path cache fill; render itself
     /// must never issue HTTP). The string is the `provider:model` spec.
     ModelInfoLoaded {

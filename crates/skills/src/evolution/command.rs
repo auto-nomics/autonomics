@@ -25,22 +25,9 @@ impl<T> SkillCommandOutcome<T> {
 /// command (or `WorkerGone` if it shut down first).
 pub enum SkillCommand {
     /// Coalesced with other `Evolution` variants in the quiet window
-    /// before one cycle. The four sub-variants come straight from
+    /// before one cycle. The sub-variants come straight from
     /// [`EvolutionTrigger`].
     Evolution(EvolutionTrigger),
-    /// Process a pending proposal approval inline (between batch
-    /// collection and cycle run). The worker replies with
-    /// `ApproveOutcome` on success.
-    ApproveProposal {
-        name: String,
-        reply: oneshot::Sender<SkillCommandOutcome<ApproveOutcome>>,
-    },
-    /// Process a pending proposal rejection inline. Replies with
-    /// the updated [`Proposal`].
-    RejectProposal {
-        name: String,
-        reply: oneshot::Sender<SkillCommandOutcome<Proposal>>,
-    },
     /// Run a full cycle now (no coalescing) with the supplied
     /// policy. Used by the gateway `POST /skills/evolution/trigger`
     /// handler and the agent `skill_evolve` tool. Replies with the
@@ -61,6 +48,5 @@ pub enum SkillCommand {
 use tokio::sync::oneshot;
 
 use crate::error::SkillError;
-use crate::proposals::{ApproveOutcome, Proposal};
 
 use super::model::{EvolutionPolicy, EvolutionReport, EvolutionTrigger};

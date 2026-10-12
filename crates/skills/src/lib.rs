@@ -14,7 +14,7 @@
 //!   counter, change broadcast on every mutation, usage telemetry
 //!   (the evolution fitness signal)
 //! - [`evolution`] — the unified control loop: every skill mutation
-//!   (evolution triggers, proposal approve/reject, explicit cycle)
+//!   (evolution triggers, explicit cycles)
 //!   travels through one `mpsc::Sender<SkillCommand>` into a single
 //!   worker task; the worker coalesces trigger bursts in a quiet
 //!   window and replies to inline mutations via oneshot. The cycle
@@ -23,7 +23,7 @@
 //!   content-hashed records of failures/fixes/recipes
 //! - [`distill`] — deterministic clustering and proposal synthesis
 //!   (the RSI loop's no-LLM core)
-//! - [`proposals`] — the staging area and approve/reject lifecycle
+//! - [`proposals`] — the change records the loop writes and applies
 //!   between distillation and the live library
 //! - [`inject`] — the one-line-per-skill system-prompt index
 //! - [`tools`] — skill discovery and authoring tools; the runtime layers the
@@ -67,7 +67,7 @@ pub use evolution_core::cluster::Candidate;
 pub use format::SkillMeta;
 pub use inject::prompt_section;
 pub use manager::{SkillManager, UsageKind, UsageRecord};
-pub use proposals::{ApproveOutcome, Proposal, ProposalStatus, Proposals};
+pub use proposals::{ApplyOutcome, Proposal, ProposalStatus, Proposals};
 pub use registry::{SkillDocument, SkillEntry, SkillRegistry, SkillTier};
 pub use tools::skill_registrations;
 pub use workflow::{RenderedWorkflow, WorkflowTemplate};

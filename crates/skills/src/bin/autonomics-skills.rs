@@ -78,8 +78,7 @@ enum Command {
         error: Option<String>,
     },
     /// List proposals, optionally filtered by status. Read-only —
-    /// approve/reject/distill are TUI-only operations (see
-    /// `skill_evolution_status_trigger_approve_reject_roundtrip` in
+    /// cycles run automatically in the daemon (see
     /// the gateway integration tests for the unified channel path).
     Proposals { status: Option<String> },
 }
@@ -434,8 +433,9 @@ fn proposals_cmd(manager: &SkillManager, status: Option<&str>) -> Result<(), Str
         );
     }
     println!(
-        "\nApprove/reject/distill are TUI-only operations. Start the daemon \
-         and open the skill evolution dashboard to control the loop."
+        "\nThe evolution cycle installs proposals automatically; `pending` \
+         entries are past the per-cycle install cap and land on the next \
+         cycle. Trigger one from the daemon's skill evolution dashboard."
     );
     Ok(())
 }

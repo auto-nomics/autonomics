@@ -298,80 +298,16 @@ impl ToolFunction for SkillWorkflowsTool {
     }
 }
 
-// ────────────────────────── authoring ──────────────────────────
-
-// ────────────────────────── authoring ──────────────────────────
-
-#[tool(
-    name = "skill_propose",
-    description = "Draft a new skill from evidence you recorded. Supply \
-        structured fields (name/description/tags/body) plus the ids of at \
-        least one existing evo_observe observation that backs the claim — \
-        proposals must trace to evidence, not invention. The proposal lands \
-        in the human-review queue (autonomics-skills proposals / the TUI \
-        dashboard); it is never auto-approved. Create-only: if a skill with \
-        the name exists, record observations instead and let the loop \
-        propose the update."
-)]
-pub struct SkillProposeInput {
-    #[desc = "Lowercase kebab-case skill name (becomes the proposal id)."]
-    pub name: String,
-    #[desc = "One line on when to use the skill (<= 1024 chars, no angle brackets)."]
-    pub description: String,
-    #[desc = "Optional tags, e.g. [gwas, workflow]."]
-    pub tags: Option<Vec<String>>,
-    #[desc = "The SKILL.md body: operational instructions in markdown. No TODO placeholders."]
-    pub body: String,
-    #[desc = "Ids of existing observations that back this skill (from evo_observe results)."]
-    pub supporting_observation_ids: Vec<String>,
-    #[desc = "One line on why this deserves to be a skill."]
-    pub rationale: String,
-}
-
-pub struct SkillProposeTool {
-    pub manager: Arc<SkillManager>,
-}
-
-#[async_trait::async_trait]
-impl ToolFunction for SkillProposeTool {
-    type Input = SkillProposeInput;
-
-    async fn run(&self, input: SkillProposeInput) -> Result<ToolResult, ToolError> {
-        let tags = input.tags.unwrap_or_default();
-        match self
-            .manager
-            .propose_skill(
-                input.name.trim(),
-                input.description.trim(),
-                &tags,
-                input.body.trim(),
-                &input.supporting_observation_ids,
-                input.rationale.trim(),
-            )
-            .await
-        {
-            Ok(proposal) => Ok(ToolResult::success(format!(
-                "proposal {} submitted (pending human review). It is marked \
-                 agent-authored and never auto-approved; a human reviews it \
-                 via the evolution dashboard or `autonomics-skills proposals`.",
-                proposal.name
-            ))),
-            Err(e) => Ok(ToolResult::error(format!("skill_propose: {e}"))),
-        }
-    }
-}
-
 // ────────────────────────── evolution ──────────────────────────
 
 #[tool(
     name = "skill_evolve",
     description = "Run one skill-evolution cycle now: cluster anchored \
-        observations, write skill proposals for repeated patterns, and \
-        revise installed auto-skills with new evidence. Deliberately \
-        propose-only — the cycle never auto-approves; a human reviews \
-        pending proposals. Use after recording several observations, or \
-        to check whether accumulated failures have distilled into \
-        something reusable."
+        observations, and install or revise skills for repeated patterns \
+        with the new evidence. Changes apply automatically and are \
+        reversible (each revision archives the previous version). Use \
+        after recording several observations, or to check whether \
+        accumulated failures have distilled into something reusable."
 )]
 pub struct SkillEvolveInput {
     #[desc = "Unused placeholder — the cycle takes no parameters. Kept as a \
@@ -392,11 +328,9 @@ impl ToolFunction for SkillEvolveTool {
     type Input = SkillEvolveInput;
 
     async fn run(&self, _input: SkillEvolveInput) -> Result<ToolResult, ToolError> {
-        // Propose-only by construction: an agent may trigger the
-        // workflow but never lift the review gate — auto-approval is
-        // a daemon-level configuration, not a model decision.
         // Route through the unified channel so the tool cannot
-        // bypass the worker's coalescing/ordering.
+        // bypass the worker's coalescing/ordering; the cycle installs
+        // what it writes, bounded by the per-cycle install cap.
         let Some(handle) = self.control.as_ref() else {
             return Ok(ToolResult::error(
                 "skill evolution service is disabled in this daemon; control \
@@ -411,23 +345,27 @@ impl ToolFunction for SkillEvolveTool {
                     "Evolution cycle: {} cluster(s) considered.\n",
                     report.clusters_considered
                 );
-                for name in &report.proposals_written {
+                for name in &report.installed {
                     if report.updated_existing.contains(name) {
-                        out.push_str(&format!("- updated proposal for {name}\n"));
+                        out.push_str(&format!("- updated skill {name}\n"));
                     } else {
-                        out.push_str(&format!("- new proposal {name} (pending review)\n"));
+                        out.push_str(&format!("- installed skill {name}\n"));
                     }
                 }
                 for (hash, reason) in &report.skipped {
                     out.push_str(&format!("- skipped {hash}: {reason}\n"));
                 }
-                if report.proposals_written.is_empty() {
+                if report.installed.is_empty() {
                     out.push_str(
-                        "No new patterns. Anchored failure patterns propose at >= 3 \
+                        "No new patterns. Anchored failure patterns distill at >= 3 \
                          occurrences; record more with evo_observe.",
                     );
-                } else {
-                    out.push_str("\nA human reviews pending proposals through the TUI dashboard.");
+                } else if report.deferred > 0 {
+                    out.push_str(&format!(
+                        "\n{} additional change(s) deferred past the per-cycle \
+                         install cap; the next cycle applies them.",
+                        report.deferred
+                    ));
                 }
                 Ok(ToolResult::success(out))
             }
@@ -466,9 +404,6 @@ pub fn skill_registrations(
             manager: manager.clone(),
         }),
         ToolRegistration::from(SkillSearchTool {
-            manager: manager.clone(),
-        }),
-        ToolRegistration::from(SkillProposeTool {
             manager: manager.clone(),
         }),
         ToolRegistration::from(SkillEvolveTool { control }),
@@ -554,69 +489,5 @@ mod tests {
             .await
             .unwrap();
         assert!(out.text_content().contains("mr-eve"));
-    }
-}
-
-#[cfg(test)]
-mod propose_tool_tests {
-    use super::*;
-    use agentik_core::tools::ToolFunction as _;
-
-    #[tokio::test]
-    async fn propose_tool_submits_and_reports_review_gate() {
-        let tmp = tempfile::tempdir().unwrap().keep();
-        let manager = Arc::new(SkillManager::new(tmp));
-        let observation = manager
-            .observation_hub()
-            .record(evolution_core::ObservationInput {
-                kind: evolution_core::ObservationKind::Failure,
-                source: evolution_core::ObservationSource::Agent,
-                summary: "evidence".into(),
-                body: "fix".into(),
-                node_kind: Some("sql".into()),
-                error: Some("boom".into()),
-            })
-            .await
-            .unwrap();
-
-        let tool = SkillProposeTool {
-            manager: manager.clone(),
-        };
-        let out = tool
-            .run(SkillProposeInput {
-                name: "handy-recipe".into(),
-                description: "When to reach for it.".into(),
-                tags: Some(vec!["recipe".into()]),
-                body: "# Handy\n\nDo the thing.".into(),
-                supporting_observation_ids: vec![observation.id.clone()],
-                rationale: "recurring".into(),
-            })
-            .await
-            .unwrap();
-        assert!(out.text_content().contains("pending human review"));
-        let proposal = manager.proposals().find("handy-recipe").unwrap();
-        assert_eq!(proposal.authored_by, "agent");
-    }
-
-    #[tokio::test]
-    async fn propose_tool_rejects_unbacked_submissions() {
-        let tmp = tempfile::tempdir().unwrap().keep();
-        let manager = Arc::new(SkillManager::new(tmp));
-        let tool = SkillProposeTool {
-            manager: manager.clone(),
-        };
-        let out = tool
-            .run(SkillProposeInput {
-                name: "ghost".into(),
-                description: "d".into(),
-                tags: None,
-                body: "b".into(),
-                supporting_observation_ids: vec!["O-none".into()],
-                rationale: "r".into(),
-            })
-            .await
-            .unwrap();
-        assert!(out.is_error.unwrap_or(false));
-        assert!(manager.proposals().find("ghost").is_none());
     }
 }

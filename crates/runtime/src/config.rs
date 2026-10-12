@@ -585,17 +585,11 @@ pub struct RuntimeConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub embedding_model_dir: Option<std::path::PathBuf>,
     /// Run the skill-evolution service: background worker that
-    /// distills observations into skill proposals (and revises
-    /// installed auto-skills) on observation events and a periodic
-    /// sweep. The approval gate still applies per
-    /// `skill_evolution_auto_approve`.
+    /// distills observations into skill changes (creating or revising
+    /// auto-skills) on observation events and a periodic sweep.
+    /// Changes apply automatically, bounded per cycle.
     #[serde(default = "default_true")]
     pub enable_skill_evolution: bool,
-    /// Let the evolution service auto-approve eligible proposals.
-    /// Default false — human review stays in the loop; automation
-    /// only writes pending proposals.
-    #[serde(default)]
-    pub skill_evolution_auto_approve: bool,
     /// Periodic evolution sweep cadence in seconds (default 6h). The
     /// event-driven path (observation recorded) runs independently of
     /// this timer.
@@ -775,11 +769,6 @@ impl RuntimeConfig {
             enable_local_embedding: resolve_flag(base, |b| b.enable_local_embedding, false),
             embedding_model_dir: base.and_then(|b| b.embedding_model_dir.clone()).flatten(),
             enable_skill_evolution: resolve_flag(base, |b| b.enable_skill_evolution, true),
-            skill_evolution_auto_approve: resolve_flag(
-                base,
-                |b| b.skill_evolution_auto_approve,
-                false,
-            ),
             skill_evolution_interval_secs: base
                 .and_then(|b| b.skill_evolution_interval_secs)
                 .unwrap_or(DEFAULT_SKILL_EVOLUTION_INTERVAL_SECS),
@@ -1357,7 +1346,6 @@ pub struct RuntimeConfigBuilder {
     pub(crate) enable_local_embedding: Option<bool>,
     pub(crate) embedding_model_dir: Option<Option<std::path::PathBuf>>,
     pub(crate) enable_skill_evolution: Option<bool>,
-    pub(crate) skill_evolution_auto_approve: Option<bool>,
     pub(crate) skill_evolution_interval_secs: Option<u64>,
     pub(crate) bib_http: Option<BibHttpOptions>,
     pub(crate) plugin_rsi: Option<PluginRsiConfig>,
@@ -1537,11 +1525,6 @@ impl RuntimeConfigBuilder {
 
     pub fn enable_skill_evolution(mut self, enabled: bool) -> Self {
         self.enable_skill_evolution = Some(enabled);
-        self
-    }
-
-    pub fn skill_evolution_auto_approve(mut self, enabled: bool) -> Self {
-        self.skill_evolution_auto_approve = Some(enabled);
         self
     }
 
@@ -1832,20 +1815,17 @@ mod tests {
 
     #[test]
     fn skill_evolution_defaults_and_overrides() {
-        // Defaults: service on, review gate on (propose-only), 6h sweep.
+        // Defaults: service on, automatic installs, 6h sweep.
         let cfg = RuntimeConfig::default();
         assert!(cfg.enable_skill_evolution);
-        assert!(!cfg.skill_evolution_auto_approve);
         assert_eq!(cfg.skill_evolution_interval_secs, 6 * 60 * 60);
 
         // Builder overrides flow through resolve.
         let cfg = RuntimeConfig::builder()
             .enable_skill_evolution(false)
-            .skill_evolution_auto_approve(true)
             .skill_evolution_interval_secs(600)
             .build();
         assert!(!cfg.enable_skill_evolution);
-        assert!(cfg.skill_evolution_auto_approve);
         assert_eq!(cfg.skill_evolution_interval_secs, 600);
     }
 

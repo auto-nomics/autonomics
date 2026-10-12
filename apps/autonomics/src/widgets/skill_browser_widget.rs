@@ -103,8 +103,7 @@ impl SkillBrowserState {
     }
 
     /// Move the selection across all rows — the two-column layout is
-    /// a browser: every skill is inspectable. Actions stay gated to
-    /// rows with a pending proposal via [`Self::selected_pending`].
+    /// a browser: every skill is inspectable.
     pub fn select_next(&mut self) {
         if self.library.is_empty() {
             return;
@@ -128,14 +127,6 @@ impl SkillBrowserState {
     /// The skill under the selection, if any.
     pub fn selected_skill(&self) -> Option<&SkillLibraryView> {
         self.library.get(self.selected)
-    }
-
-    /// The selected skill **when its proposal attribute is pending** —
-    /// the only rows approve/reject act on.
-    pub fn selected_pending(&self) -> Option<&SkillLibraryView> {
-        self.library
-            .get(self.selected)
-            .filter(|s| s.proposal_status.as_deref() == Some("pending"))
     }
 
     /// The detail document for the selected row, when the fetched
@@ -448,7 +439,7 @@ fn detail_document(detail: &SkillLibraryDetail) -> Vec<Line<'static>> {
                 ""
             };
             let status_note = match proposal.status.as_str() {
-                "pending" => " — awaiting review",
+                "pending" => " — past install cap, next cycle applies it",
                 "approved" => " — promoted to the library",
                 _ => " — cluster consumed, will not re-propose",
             };

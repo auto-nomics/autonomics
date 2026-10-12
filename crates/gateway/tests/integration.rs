@@ -205,7 +205,7 @@ async fn swagger_docs_expose_the_gateway_api() {
         .await
         .unwrap();
     assert_eq!(openapi["info"]["title"], "Autonomics Gateway API");
-    assert_eq!(openapi["paths"].as_object().unwrap().len(), 43);
+    assert_eq!(openapi["paths"].as_object().unwrap().len(), 41);
     let expected_paths = [
         "/api/v1/gateway/status",
         "/api/v1/gateway/shutdown",
@@ -247,8 +247,6 @@ async fn swagger_docs_expose_the_gateway_api() {
         "/api/v1/skills/evolution/observations",
         "/api/v1/skills/evolution/trigger",
         "/api/v1/skills/evolution/proposals",
-        "/api/v1/skills/evolution/proposals/{name}/approve",
-        "/api/v1/skills/evolution/proposals/{name}/reject",
     ];
     for path in expected_paths {
         assert!(
@@ -309,16 +307,16 @@ where
 }
 
 #[tokio::test]
-async fn skill_evolution_status_trigger_approve_reject_roundtrip() {
+async fn skill_evolution_status_trigger_installs_automatically() {
     let gw = start_mock_gateway("ok").await;
     let client = gw.client();
     let manager = gw.infra.skills.clone();
 
-    // Baseline: fresh isolated state, service armed, gate closed.
+    // Baseline: fresh isolated state, service armed.
     let status = client.skill_evolution_status().await.unwrap();
     assert!(status.service_enabled);
-    assert!(!status.auto_approve);
     assert_eq!(status.proposals_pending, 0);
+    assert_eq!(status.proposals_applied, 0);
 
     // Seed one anchor with three distinct fixes.
     for body in ["cast the column", "pass format=csv", "validate header"] {
@@ -336,33 +334,13 @@ async fn skill_evolution_status_trigger_approve_reject_roundtrip() {
             .unwrap();
     }
 
-    // Either the event-driven worker or our explicit trigger writes
-    // the proposal; both paths produce one pending row.
-    let _ = client.trigger_skill_evolution(None).await.unwrap();
-    eventually(|| {
-        let client = client.clone();
-        async move {
-            client
-                .skill_proposals()
-                .await
-                .map(|p| p.iter().any(|x| x.status == "pending"))
-                .unwrap_or(false)
-        }
-    })
-    .await;
-
-    // Approve over the wire; generation advances, library grows.
-    let generation_before = client.skill_evolution_status().await.unwrap().generation;
-    let pending_name = client
-        .skill_proposals()
-        .await
-        .unwrap()
-        .into_iter()
-        .find(|p| p.status == "pending")
-        .unwrap()
-        .name;
-    let outcome = client.approve_skill_proposal(&pending_name).await.unwrap();
-    assert!(outcome.destination.contains(&pending_name));
+    // Either the event-driven worker or our explicit trigger runs the
+    // cycle; both paths write AND install — no review step exists.
+    let generation_before = status.generation;
+    // Tolerate the startup-sweep race: if the boot drain outlived the
+    // seeding, the startup cycle already installed and this trigger
+    // reports the cluster as consumed — either way the evidence lands.
+    let _ = client.trigger_skill_evolution().await.unwrap();
     eventually(|| {
         let client = client.clone();
         let before = generation_before;
@@ -370,18 +348,20 @@ async fn skill_evolution_status_trigger_approve_reject_roundtrip() {
             client
                 .skill_evolution_status()
                 .await
-                .map(|s| s.generation > before)
+                .map(|s| s.proposals_applied >= 1 && s.generation > before && s.skills_auto >= 1)
                 .unwrap_or(false)
         }
     })
     .await;
+
+    // Nothing waits for a human: no pending rows remain.
     let status = client.skill_evolution_status().await.unwrap();
     assert_eq!(status.proposals_pending, 0);
-    assert_eq!(status.proposals_approved, 1);
+    assert!(status.proposals_applied >= 1);
     assert!(status.skills_auto >= 1);
 
-    // Second anchor: trigger with the auto gate, verify the report
-    // says it approved, then exercise reject on a third.
+    // A second anchor installs the same way once a cycle runs (in the
+    // daemon the timer sweep provides one; here we nudge explicitly).
     for body in ["io a", "io b", "io c"] {
         manager
             .observation_hub()
@@ -396,103 +376,18 @@ async fn skill_evolution_status_trigger_approve_reject_roundtrip() {
             .await
             .unwrap();
     }
-    for body in ["x a", "x b", "x c"] {
-        manager
-            .observation_hub()
-            .record(evolution_core::ObservationInput {
-                kind: evolution_core::ObservationKind::Failure,
-                source: evolution_core::ObservationSource::Agent,
-                summary: "third anchor".into(),
-                body: body.into(),
-                node_kind: Some("echo".into()),
-                error: Some("echo fail 9".into()),
-            })
-            .await
-            .unwrap();
-    }
+    let _ = client.trigger_skill_evolution().await.unwrap();
     eventually(|| {
         let client = client.clone();
         async move {
             client
-                .skill_proposals()
+                .skill_evolution_status()
                 .await
-                .map(|p| p.iter().filter(|x| x.status == "pending").count() >= 2)
+                .map(|s| s.proposals_applied >= 2)
                 .unwrap_or(false)
         }
     })
     .await;
-
-    let proposals = client.skill_proposals().await.unwrap();
-    let to_reject = proposals
-        .iter()
-        .find(|p| p.status == "pending" && p.name != pending_name)
-        .unwrap()
-        .name
-        .clone();
-    let rejected = client.reject_skill_proposal(&to_reject).await.unwrap();
-    assert_eq!(rejected.status, "rejected");
-
-    let status = client.skill_evolution_status().await.unwrap();
-    assert_eq!(status.proposals_rejected, 1);
-}
-
-#[tokio::test]
-async fn agent_authored_proposals_survive_auto_approve_over_the_wire() {
-    let gw = start_mock_gateway("ok").await;
-    let client = gw.client();
-    let manager = gw.infra.skills.clone();
-
-    // One observation as evidence, then an agent-authored proposal.
-    let id = manager
-        .observation_hub()
-        .record(evolution_core::ObservationInput {
-            kind: evolution_core::ObservationKind::Failure,
-            source: evolution_core::ObservationSource::Agent,
-            summary: "evidence".into(),
-            body: "the fix".into(),
-            node_kind: Some("sql".into()),
-            error: Some("boom 1".into()),
-        })
-        .await
-        .unwrap()
-        .id;
-    manager
-        .propose_skill(
-            "agent-authored-skill",
-            "Drafted by the agent from real work.",
-            &["agent".to_string()],
-            "# Body\n\nOperational steps.\n",
-            std::slice::from_ref(&id),
-            "recurring pattern",
-        )
-        .await
-        .unwrap();
-
-    // The wire listing marks the author.
-    eventually(|| {
-        let client = client.clone();
-        async move {
-            client
-                .skill_proposals()
-                .await
-                .map(|p| {
-                    p.iter()
-                        .any(|x| x.name == "agent-authored-skill" && x.authored_by == "agent")
-                })
-                .unwrap_or(false)
-        }
-    })
-    .await;
-
-    // An auto-gated cycle over HTTP must leave it pending.
-    let report = client.trigger_skill_evolution(Some(true)).await.unwrap();
-    assert!(report.auto_approved.is_empty());
-    let proposals = client.skill_proposals().await.unwrap();
-    let target = proposals
-        .iter()
-        .find(|p| p.name == "agent-authored-skill")
-        .unwrap();
-    assert_eq!(target.status, "pending");
 }
 
 #[tokio::test]
@@ -509,7 +404,8 @@ async fn skill_library_lists_installed_and_proposed_with_detail() {
     );
     assert!(library.iter().any(|s| s.tier == "builtin"));
 
-    // Seed a pending proposal through the channel (worker trigger).
+    // Seed a distillation cycle through the channel; the skill lands
+    // installed, with the applied change record attached.
     for body in ["fix a", "fix b", "fix c"] {
         manager
             .observation_hub()
@@ -524,7 +420,7 @@ async fn skill_library_lists_installed_and_proposed_with_detail() {
             .await
             .unwrap();
     }
-    let _ = client.trigger_skill_evolution(None).await.unwrap();
+    let _ = client.trigger_skill_evolution().await.unwrap();
     eventually(|| {
         let client = client.clone();
         async move {
@@ -533,7 +429,7 @@ async fn skill_library_lists_installed_and_proposed_with_detail() {
                 .await
                 .map(|l| {
                     l.iter().any(|s| {
-                        s.tier == "proposed" && s.proposal_status.as_deref() == Some("pending")
+                        s.tier == "global" && s.proposal_status.as_deref() == Some("applied")
                     })
                 })
                 .unwrap_or(false)
@@ -541,22 +437,24 @@ async fn skill_library_lists_installed_and_proposed_with_detail() {
     })
     .await;
 
-    // Detail of the proposed row: body + proposal with evidence, not
-    // installed, no workflows.
+    // Detail of the installed row: body + the applied change record
+    // with its evidence chain.
     let name = client
         .skill_library()
         .await
         .unwrap()
         .into_iter()
-        .find(|s| s.tier == "proposed")
+        .find(|s| s.tier == "global" && s.proposal_status.as_deref() == Some("applied"))
         .unwrap()
         .name;
     let detail = client.skill_library_detail(&name).await.unwrap();
-    assert!(!detail.installed);
-    assert_eq!(detail.tier, "proposed");
-    assert!(detail.body.contains("lib boom") || !detail.body.is_empty());
-    let proposal = detail.proposal.expect("proposed row carries its proposal");
-    assert_eq!(proposal.status, "pending");
+    assert!(detail.installed);
+    assert_eq!(detail.tier, "global");
+    assert!(!detail.body.is_empty());
+    let proposal = detail
+        .proposal
+        .expect("installed row carries its change record");
+    assert_eq!(proposal.status, "applied");
     assert_eq!(proposal.observation_count, 3, "evidence chain size");
     assert_eq!(detail.evidence_count, 3);
 

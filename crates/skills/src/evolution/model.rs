@@ -21,23 +21,20 @@ impl EvolutionTrigger {
     }
 }
 
-/// What one cycle may do beyond writing pending proposals.
+/// How one cycle advances the library. There is no review gate:
+/// everything the cycle writes it also installs, bounded by the cap.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvolutionPolicy {
-    /// Approve eligible pending proposals without human review.
-    /// Distillation itself always runs; this only lifts the review
-    /// gate, with the cap below still enforced.
-    pub auto_approve: bool,
-    /// Upper bound on approvals per cycle — automation advances the
-    /// library in bounded steps even after a long accumulation.
-    pub max_approvals_per_cycle: usize,
+    /// Upper bound on installs per cycle — the library advances in
+    /// bounded steps even after a long accumulation; overflow applies
+    /// on the next cycle.
+    pub max_installs_per_cycle: usize,
 }
 
 impl Default for EvolutionPolicy {
     fn default() -> Self {
         Self {
-            auto_approve: false,
-            max_approvals_per_cycle: 5,
+            max_installs_per_cycle: 5,
         }
     }
 }
@@ -52,20 +49,18 @@ pub struct EvolutionReport {
     pub proposals_written: Vec<String>,
     /// Subset of `proposals_written` that revise installed skills.
     pub updated_existing: Vec<String>,
-    /// Names auto-approved under the policy.
-    pub auto_approved: Vec<String>,
-    /// Pending proposals left for human review.
-    pub left_pending: usize,
-    /// Pending proposals that are agent-authored — review-gated even
-    /// under auto-approve.
-    pub human_review_only: usize,
+    /// Names installed into the live library this cycle.
+    pub installed: Vec<String>,
+    /// Proposals deferred past the install cap — the next cycle
+    /// applies them.
+    pub deferred: usize,
     /// (cluster hash, reason) — skipped clusters.
     pub skipped: Vec<(String, String)>,
 }
 
 impl EvolutionReport {
     pub fn acted(&self) -> bool {
-        !self.proposals_written.is_empty() || !self.auto_approved.is_empty()
+        !self.proposals_written.is_empty() || !self.installed.is_empty()
     }
 }
 

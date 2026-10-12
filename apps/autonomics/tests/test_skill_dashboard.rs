@@ -17,7 +17,7 @@
 //!
 //! **Interactive preview** (ignored by default) — runs the widget
 //! live in your terminal against synthetic data, no gateway daemon
-//! needed. Tab/1/2 switch tabs, j/k navigate/scroll, a/r approve/reject,
+//! needed. Tab/1/2 switch tabs, j/k navigate/scroll,
 //! t runs a fake cycle, e toggles
 //! the error path:
 //!
@@ -54,8 +54,7 @@ fn fixture_status() -> SkillEvolutionStatus {
     SkillEvolutionStatus {
         service_enabled: true,
         generation: 7,
-        auto_approve: false,
-        max_approvals_per_cycle: 5,
+        max_installs_per_cycle: 5,
         sweep_interval_secs: Some(21600),
         observations: 12,
         skills_workspace: 0,
@@ -63,8 +62,7 @@ fn fixture_status() -> SkillEvolutionStatus {
         skills_builtin: 1,
         skills_auto: 1,
         proposals_pending: 3,
-        proposals_approved: 1,
-        proposals_rejected: 1,
+        proposals_applied: 1,
         phase: "idle".into(),
         phase_queued: 0,
         phase_triggers: Vec::new(),
@@ -104,11 +102,11 @@ fn fixture_skill(name: &str, tier: &str, proposal_status: Option<&str>) -> Skill
 fn fixture_library() -> Vec<SkillLibraryView> {
     vec![
         fixture_skill("skill-system", "builtin", None),
-        fixture_skill("hot-pathlib-glob", "global", Some("approved")),
+        fixture_skill("hot-pathlib-glob", "global", Some("applied")),
         fixture_skill("sql-syntax", "proposed", Some("pending")),
         fixture_skill("agent-r-cache", "proposed", Some("pending")),
         fixture_skill("update-ggplot-axis", "global", Some("pending")),
-        fixture_skill("agent-logfmt", "global", Some("rejected")),
+        fixture_skill("agent-logfmt", "global", Some("rejected")), // legacy review-era row
     ]
 }
 
@@ -171,7 +169,7 @@ fn fixture_state() -> SkillEvolutionState {
         .unwrap_or(0);
     let selected = &state.skills.library[state.skills.selected];
     state.skills.detail = Some((selected.name.clone(), fixture_detail(selected)));
-    state.last_report = Some("1 written, 0 auto-approved, 1 left pending".to_string());
+    state.last_report = Some("1 written, 1 installed, 0 deferred".to_string());
     state
         .observations
         .set_observations(vec![fixture_observation("obs-1", "SQL header mismatch")]);
@@ -252,7 +250,7 @@ fn snapshot_loaded() {
     let text = render_dashboard(&mut state, 100, 32);
     show("loaded · 100×32", &text);
     assert!(text.contains("generation 7"), "{text}");
-    assert!(text.contains("propose-only"), "{text}");
+    assert!(text.contains("auto-install"), "{text}");
     assert!(text.contains("observations 12"), "{text}");
     // Left list: every tier, statuses inline. The update-ggplot-axis
     // row carries proposal_update=true — it must render distinctly
@@ -267,7 +265,7 @@ fn snapshot_loaded() {
     // Right pane: the selected skill's detail document.
     assert!(text.contains("Tier"), "{text}");
     assert!(text.contains("not installed yet"), "proposed row note");
-    assert!(text.contains("awaiting review"), "{text}");
+    assert!(text.contains("past install cap"), "{text}");
     assert!(text.contains("Body — SKILL.md"), "{text}");
 }
 
@@ -365,10 +363,6 @@ fn snapshot_marker_follows_selection_and_actions_stay_gated() {
     let text = render_dashboard(&mut state, 100, 24);
     show("selection on history row · 100×24", &text);
     assert!(text.contains('▶'), "browser selection is visible: {text}");
-    assert!(
-        state.selected_pending().is_none(),
-        "history row is not an action target"
-    );
     assert_eq!(state.skills.selected_skill().unwrap().name, selected_name);
 }
 
@@ -393,10 +387,6 @@ fn snapshot_observations_tab() {
         assert!(text.contains(expected), "missing {expected}: {text}");
     }
     assert!(!text.contains("Body — SKILL.md"), "{text}");
-    assert!(
-        state.selected_pending().is_none(),
-        "review actions are disabled on observations"
-    );
 }
 
 #[test]
@@ -562,7 +552,7 @@ fn run_interactive_loop(
                 .popup_height((frame.area().height * 3 / 4).max(12))
                 .render(frame.area(), frame.buffer_mut(), &mut state);
 
-            let hint = "harness: Tab tabs · j/k move/scroll · ←/→ focus · a approve · r reject · t fake cycle · e toggle error · Esc quit";
+            let hint = "harness: Tab tabs · j/k move/scroll · ←/→ focus · t fake cycle · e toggle error · Esc quit";
             let bottom = Rect::new(
                 frame.area().x,
                 frame.area().bottom().saturating_sub(1),
@@ -600,8 +590,7 @@ fn run_interactive_loop(
             }
             KeyCode::Left | KeyCode::Char('h') => state.focus_list(),
             KeyCode::Right | KeyCode::Char('l') => state.focus_detail(),
-            KeyCode::Char('a') => fake_action(&mut state, "approved"),
-            KeyCode::Char('r') => fake_action(&mut state, "rejected"),
+            KeyCode::Char('a') | KeyCode::Char('r') => {}
             KeyCode::Char('e') => {
                 state.error = match state.error {
                     Some(_) => None,
@@ -611,58 +600,21 @@ fn run_interactive_loop(
             KeyCode::Char('t') | KeyCode::Char('T') => {
                 let name = CANNED_SKILLS[next_canned % CANNED_SKILLS.len()];
                 next_canned += 1;
-                let auto = key.code == KeyCode::Char('T');
-                let status = if auto { "approved" } else { "pending" };
-                let view = fixture_skill(name, "proposed", Some(status));
+                // Simulate a cycle that writes AND installs.
+                let mut view = fixture_skill(name, "global", Some("applied"));
+                view.installed = true;
                 state.skills.library.insert(2, view);
                 if let Some(status) = state.status.as_mut() {
                     status.generation += 1;
-                    status.proposals_pending += usize::from(!auto);
-                    status.proposals_approved += usize::from(auto);
+                    status.proposals_applied += 1;
                 }
-                state.last_report = Some(format!(
-                    "{name} written{}, 1 considered",
-                    if auto { " + auto-approved" } else { "" }
-                ));
+                state.last_report = Some(format!("{name} written + installed, 1 considered"));
             }
             // g refresh: the harness state never goes stale, so this
             // is a no-op kept for muscle-memory parity with the app.
             KeyCode::Char('g') => {}
             _ => {}
         }
-    }
-}
-
-/// Apply a fake proposal action and refresh the library while preserving
-/// the selection, matching the app's refresh after the daemon acts.
-fn fake_action(state: &mut SkillEvolutionState, new_status: &str) {
-    let Some(index) = state.selected_pending().map(|_| state.skills.selected) else {
-        return;
-    };
-    state.skills.library[index].proposal_status = Some(new_status.into());
-    if new_status == "approved" {
-        state.skills.library[index].installed = true;
-        state.skills.library[index].tier = "global".into();
-    }
-    if let Some(status) = state.status.as_mut() {
-        status.proposals_pending -= 1;
-        if new_status == "approved" {
-            status.proposals_approved += 1;
-        } else {
-            status.proposals_rejected += 1;
-        }
-    }
-    let library = state
-        .skills
-        .library
-        .iter()
-        .filter(|row| row.installed || row.proposal_status.as_deref() == Some("pending"))
-        .cloned()
-        .collect();
-    state.skills.set_library(library);
-    if let Some(view) = state.skills.selected_skill() {
-        let detail = fixture_detail(view);
-        state.skills.detail = Some((view.name.clone(), detail));
     }
 }
 

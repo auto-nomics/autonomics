@@ -1,7 +1,7 @@
 //! Skill-evolution dashboard: open/refresh, key handling, and the
-//! client actions (trigger / approve / reject). All HTTP runs on
-//! spawned client tasks; results land as [`AppEvent`]s so the render
-//! path stays free of network calls.
+//! client actions (trigger / refresh). All HTTP runs on spawned
+//! client tasks; results land as [`AppEvent`]s so the render path
+//! stays free of network calls.
 
 use super::*;
 
@@ -80,50 +80,16 @@ impl App {
         });
     }
 
-    /// Trigger one evolution cycle. `auto` overrides the review gate
-    /// for this call (the TUI equivalent of `distill --auto`).
-    pub(super) fn trigger_skill_evolution(&mut self, auto: bool) {
+    /// Trigger one evolution cycle. The cycle installs what it
+    /// writes; the report lands as an event.
+    pub(super) fn trigger_skill_evolution(&mut self) {
         let client = self.client.clone();
         let event_tx = self.app_event_tx.clone();
         self.spawn_client_task("skill_evolution_trigger", move || async move {
-            let result = client
-                .trigger_skill_evolution(if auto { Some(true) } else { None })
-                .await;
+            let result = client.trigger_skill_evolution().await;
             event_tx.send(crate::app_event::AppEvent::SkillEvolutionTriggered(
                 result.map_err(|e| e.to_string()),
             ));
-        });
-    }
-
-    fn approve_skill_proposal(&mut self, name: String) {
-        let client = self.client.clone();
-        let event_tx = self.app_event_tx.clone();
-        self.spawn_client_task("skill_proposal_approve", move || async move {
-            let result = client
-                .approve_skill_proposal(&name)
-                .await
-                .map(|outcome| outcome.destination)
-                .map_err(|e| e.to_string());
-            event_tx.send(crate::app_event::AppEvent::SkillProposalActioned {
-                action: "approved",
-                result,
-            });
-        });
-    }
-
-    fn reject_skill_proposal(&mut self, name: String) {
-        let client = self.client.clone();
-        let event_tx = self.app_event_tx.clone();
-        self.spawn_client_task("skill_proposal_reject", move || async move {
-            let result = client
-                .reject_skill_proposal(&name)
-                .await
-                .map(|_| "cluster consumed".to_string())
-                .map_err(|e| e.to_string());
-            event_tx.send(crate::app_event::AppEvent::SkillProposalActioned {
-                action: "rejected",
-                result,
-            });
         });
     }
 
@@ -139,11 +105,8 @@ impl App {
             KeyCode::Tab | KeyCode::BackTab => dashboard.switch_tab(),
             KeyCode::Char('1') => dashboard.active_tab = EvolutionTab::Skills,
             KeyCode::Char('2') => dashboard.active_tab = EvolutionTab::Observations,
-            KeyCode::Char('t') if key.modifiers.is_empty() => {
-                self.trigger_skill_evolution(false);
-            }
-            KeyCode::Char('T') | KeyCode::Char('t') if key.modifiers == KeyModifiers::SHIFT => {
-                self.trigger_skill_evolution(true);
+            KeyCode::Char('t') | KeyCode::Char('T') => {
+                self.trigger_skill_evolution();
             }
             // ←/→ (h/l) switch the pane that owns the vertical keys.
             KeyCode::Left | KeyCode::Char('h') if key.modifiers.is_empty() => {
@@ -163,18 +126,6 @@ impl App {
             KeyCode::Up | KeyCode::Char('k') => {
                 if dashboard.navigate(false) {
                     self.fetch_skill_detail();
-                }
-            }
-            // Actions act on the selected skill's pending proposal —
-            // the row's `proposal_status` attribute is the gate.
-            KeyCode::Char('a') | KeyCode::Char('A') => {
-                if let Some(name) = dashboard.selected_pending().map(|s| s.name.clone()) {
-                    self.approve_skill_proposal(name);
-                }
-            }
-            KeyCode::Char('r') | KeyCode::Char('R') => {
-                if let Some(name) = dashboard.selected_pending().map(|s| s.name.clone()) {
-                    self.reject_skill_proposal(name);
                 }
             }
             _ => {}

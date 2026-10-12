@@ -704,10 +704,10 @@ spec = {}
         assert_eq!(proposals.list()[0].status, skills::ProposalStatus::Pending);
         assert!(proposals.validate_dir(name).is_empty());
 
-        // Approve: the skill lands in the global tier and the
+        // Apply: the skill lands in the global tier and the
         // generation advances — the loop closed.
         let generation = manager.generation();
-        let outcome = manager.approve_proposal(name).unwrap();
+        let outcome = manager.apply_proposal(name).unwrap();
         assert!(outcome.destination.ends_with(name.as_str()));
         assert_eq!(manager.generation(), generation + 1);
         let names: Vec<String> = manager
