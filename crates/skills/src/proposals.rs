@@ -33,7 +33,6 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use crate::error::SkillError;
 use crate::format::{self, SkillMeta};
@@ -49,8 +48,16 @@ pub const MANIFEST_FILE: &str = "proposal.toml";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProposalStatus {
+    /// Written by distillation, not yet installed — transient: the
+    /// same cycle (or the next, past the install cap) applies it.
     Pending,
-    Approved,
+    /// Installed into the live library. Reads legacy `"approved"`
+    /// manifests written before the review gate was removed.
+    #[serde(alias = "approved")]
+    Applied,
+    /// Legacy only: a human rejection from the review era. Kept so
+    /// old state dirs keep consuming their clusters; nothing new
+    /// lands here.
     Rejected,
 }
 
@@ -58,7 +65,7 @@ impl ProposalStatus {
     pub fn as_str(self) -> &'static str {
         match self {
             ProposalStatus::Pending => "pending",
-            ProposalStatus::Approved => "approved",
+            ProposalStatus::Applied => "applied",
             ProposalStatus::Rejected => "rejected",
         }
     }
@@ -82,31 +89,19 @@ pub struct Proposal {
     /// manifest is exactly the new evidence.
     #[serde(default)]
     pub update: bool,
-    /// Who drafted the proposal: `distiller` (the deterministic loop)
-    /// or `agent` (an LLM-authored submission via the `skill_propose`
-    /// tool). Agent-authored proposals are human-review-only — the
-    /// auto-approval path refuses them unconditionally.
+    /// Who drafted the proposal. Only the distiller writes new ones;
+    /// legacy manifests may carry `agent` (the removed `skill_propose`
+    /// channel) — those are consumed, never installed.
     #[serde(default = "default_authored_by")]
     pub authored_by: String,
-    /// Set on approval: where the skill landed.
+    /// Set on application: where the skill landed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approved_path: Option<String>,
 }
 
-/// Stable hash of a cluster's observation ids — the idempotency key.
-pub fn cluster_hash(observation_ids: &BTreeSet<String>) -> String {
-    let mut hasher = Sha256::new();
-    for id in observation_ids {
-        hasher.update(id.as_bytes());
-        hasher.update(b"\0");
-    }
-    let digest = hex(&hasher.finalize());
-    format!("c-{}", &digest[..16])
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
+/// Stable hash of a cluster's observation ids — the idempotency key
+/// proposals are keyed and consumed by. Owned by evolution-core.
+pub use evolution_core::cluster::cluster_hash;
 
 fn default_authored_by() -> String {
     "distiller".to_string()
@@ -136,9 +131,9 @@ pub struct Proposals {
     processed_root: PathBuf,
 }
 
-/// Outcome of approving one proposal.
+/// Outcome of applying one proposal.
 #[derive(Debug)]
-pub struct ApproveOutcome {
+pub struct ApplyOutcome {
     pub name: String,
     /// Where the skill was installed (the global tier).
     pub destination: PathBuf,
@@ -157,16 +152,16 @@ impl Proposals {
         &self.root
     }
 
-    /// Register a proposal directory written by a distiller: validate
-    /// strictly, then write the manifest.
+    /// Register a proposal directory written by the distiller:
+    /// validate strictly, then write the manifest.
     ///
-    /// Lifecycle (the EvoScientist contract, kept and tightened):
+    /// Lifecycle:
     /// - no existing proposal → register as pending
-    /// - existing **approved** proposal → only an `update` proposal may
-    ///   re-register; the skill's status resets to pending for
-    ///   re-review (the continuing-evolution channel)
-    /// - existing **pending** or **rejected** → refused (no duplicate
-    ///   review, rejected patterns never revive)
+    /// - existing **applied** proposal → only an `update` proposal may
+    ///   re-register (the continuing-evolution channel); its status
+    ///   resets to pending until the cycle applies it
+    /// - existing **pending** or **rejected** → refused (no duplicates,
+    ///   rejected patterns never revive)
     pub fn submit(
         &self,
         name: &str,
@@ -174,28 +169,6 @@ impl Proposals {
         rationale: &str,
         source_observation_ids: Vec<String>,
         update: bool,
-    ) -> Result<Proposal, SkillError> {
-        self.submit_as(
-            name,
-            cluster_hash_value,
-            rationale,
-            source_observation_ids,
-            update,
-            default_authored_by(),
-        )
-    }
-
-    /// [`Proposals::submit`] with an explicit author. The agent path
-    /// (`skill_propose`) uses this; everything else submits as the
-    /// distiller.
-    pub fn submit_as(
-        &self,
-        name: &str,
-        cluster_hash_value: &str,
-        rationale: &str,
-        source_observation_ids: Vec<String>,
-        update: bool,
-        authored_by: String,
     ) -> Result<Proposal, SkillError> {
         let errors = self.validate_dir(name);
         if !errors.is_empty() {
@@ -205,13 +178,13 @@ impl Proposals {
             ));
         }
         if let Some(existing) = self.load(name)? {
-            let allowed = existing.status == ProposalStatus::Approved && update;
+            let allowed = existing.status == ProposalStatus::Applied && update;
             if !allowed {
                 return Err(SkillError::invalid_frontmatter(
                     self.root.join(name),
                     format!(
                         "a proposal named {name:?} already exists with status {} \
-                         (only update proposals may follow an approved one)",
+                         (only update proposals may follow an applied one)",
                         existing.status.as_str()
                     ),
                 ));
@@ -227,7 +200,7 @@ impl Proposals {
             updated_at: now,
             source_observation_ids,
             update,
-            authored_by,
+            authored_by: default_authored_by(),
             approved_path: None,
         };
         self.save(&proposal)?;
@@ -350,21 +323,20 @@ impl Proposals {
         Ok(())
     }
 
-    /// Approve a pending proposal into `dest_root`, flip the status,
+    /// Apply a pending proposal into `dest_root`, flip the status,
     /// consume the cluster. Bumps nothing itself — the caller (the
     /// manager) owns the generation.
     ///
-    /// Two promotion shapes, by manifest:
+    /// Two installation shapes, by manifest:
     ///
     /// - **create** — refuses when the destination already exists, then
     ///   replaces-installs the proposal directory (minus the manifest).
     /// - **update** — requires the destination to exist, archives the
     ///   current `SKILL.md` to `<skill>/.history/<ts>.md`, then
     ///   overlays: same-relative-path files replace, omitted files are
-    ///   preserved. Where EvoScientist loses the previous version on a
-    ///   workspace-tier update, every update here is reversible by
-    ///   restoring the archive.
-    pub fn approve(&self, name: &str, dest_root: &Path) -> Result<ApproveOutcome, SkillError> {
+    ///   preserved. Every update is reversible by restoring the
+    ///   archive.
+    pub fn apply(&self, name: &str, dest_root: &Path) -> Result<ApplyOutcome, SkillError> {
         let Some(mut proposal) = self
             .load(name)?
             .filter(|p| p.status == ProposalStatus::Pending)
@@ -404,33 +376,15 @@ impl Proposals {
             ));
         }
         install::install_overlay(&source, &destination, &[MANIFEST_FILE])?;
-        proposal.status = ProposalStatus::Approved;
+        proposal.status = ProposalStatus::Applied;
         proposal.updated_at = unix_now();
         proposal.approved_path = Some(destination.display().to_string());
         self.save(&proposal)?;
         self.mark_processed(&proposal.cluster_hash)?;
-        Ok(ApproveOutcome {
+        Ok(ApplyOutcome {
             name: name.to_string(),
             destination,
         })
-    }
-
-    /// Reject a pending proposal and consume its cluster.
-    pub fn reject(&self, name: &str) -> Result<Proposal, SkillError> {
-        let Some(mut proposal) = self
-            .load(name)?
-            .filter(|p| p.status == ProposalStatus::Pending)
-        else {
-            return Err(SkillError::invalid_frontmatter(
-                self.root.join(name),
-                format!("no pending proposal named {name:?}"),
-            ));
-        };
-        proposal.status = ProposalStatus::Rejected;
-        proposal.updated_at = unix_now();
-        self.save(&proposal)?;
-        self.mark_processed(&proposal.cluster_hash)?;
-        Ok(proposal)
     }
 
     fn load(&self, name: &str) -> Result<Option<Proposal>, SkillError> {
@@ -538,7 +492,7 @@ mod tests {
     }
 
     #[test]
-    fn approve_copies_validates_and_consumes_cluster() {
+    fn apply_copies_validates_and_consumes_cluster() {
         let tmp = tempfile::tempdir().unwrap();
         let area = area(tmp.path());
         let global = tmp.path().join("skills");
@@ -546,13 +500,13 @@ mod tests {
         area.submit("good-fix", "c-good", "r", vec!["O-a".into()], false)
             .unwrap();
 
-        let outcome = area.approve("good-fix", &global).unwrap();
+        let outcome = area.apply("good-fix", &global).unwrap();
         assert!(outcome.destination.ends_with("good-fix"));
         assert!(global.join("good-fix").join("SKILL.md").is_file());
 
-        // Status terminal; re-approve refused; cluster consumed.
-        assert_eq!(area.list()[0].status, ProposalStatus::Approved);
-        assert!(area.approve("good-fix", &global).is_err());
+        // Status terminal; re-apply refused; cluster consumed.
+        assert_eq!(area.list()[0].status, ProposalStatus::Applied);
+        assert!(area.apply("good-fix", &global).is_err());
         assert!(area.processed_clusters().contains("c-good"));
 
         // A new pending proposal with the same cluster is refused via
@@ -560,16 +514,22 @@ mod tests {
         // processed_clusters anyway.
     }
 
+    /// A legacy `"approved"` manifest (written before the review gate
+    /// was removed) reads back as Applied — old state dirs keep
+    /// consuming their clusters.
     #[test]
-    fn reject_consumes_cluster() {
+    fn legacy_approved_manifest_reads_as_applied() {
         let tmp = tempfile::tempdir().unwrap();
         let area = area(tmp.path());
-        write_proposal(&area, "bad-fix", "");
-        area.submit("bad-fix", "c-bad", "r", vec![], false).unwrap();
-        let rejected = area.reject("bad-fix").unwrap();
-        assert_eq!(rejected.status, ProposalStatus::Rejected);
-        assert!(area.processed_clusters().contains("c-bad"));
-        assert!(area.reject("bad-fix").is_err());
+        write_proposal(&area, "old-one", "");
+        let dir = area.root.join("old-one");
+        std::fs::write(
+            dir.join("proposal.toml"),
+            "name = 'old-one'\nstatus = 'approved'\ncluster_hash = 'c-old'\ncreated_at = 1\nupdated_at = 1\n",
+        )
+        .unwrap();
+        assert_eq!(area.list()[0].status, ProposalStatus::Applied);
+        assert!(area.processed_clusters().contains("c-old"));
     }
 
     #[test]
@@ -585,7 +545,7 @@ mod tests {
         .unwrap();
         write_proposal(&area, "clash", "");
         area.submit("clash", "c-clash", "r", vec![], false).unwrap();
-        assert!(area.approve("clash", &global).is_err());
+        assert!(area.apply("clash", &global).is_err());
     }
 
     #[test]
@@ -602,6 +562,6 @@ mod tests {
             "---\nname: editable\ndescription: d\n---\nTODO: fill this in\n",
         )
         .unwrap();
-        assert!(area.approve("editable", &global).is_err());
+        assert!(area.apply("editable", &global).is_err());
     }
 }

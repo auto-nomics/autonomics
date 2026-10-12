@@ -1,19 +1,19 @@
 #[cfg_attr(not(test), allow(dead_code))]
-pub(crate) fn run_evolution_cycle(
+pub(crate) async fn run_evolution_cycle(
     manager: &SkillManager,
     policy: &EvolutionPolicy,
 ) -> Result<EvolutionReport, SkillError> {
-    run_evolution_cycle_labeled(manager, policy, Vec::new())
+    run_evolution_cycle_labeled(manager, policy, Vec::new()).await
 }
 
 /// [`run_evolution_cycle`] with the trigger labels that caused it,
 /// used by the worker so reports say why they ran.
-pub(crate) fn run_evolution_cycle_labeled(
+pub(crate) async fn run_evolution_cycle_labeled(
     manager: &SkillManager,
     policy: &EvolutionPolicy,
     triggers: Vec<&'static str>,
 ) -> Result<EvolutionReport, SkillError> {
-    let distill_report = manager.distill()?;
+    let distill_report = manager.distill().await?;
     let mut report = EvolutionReport {
         triggers,
         clusters_considered: distill_report.candidates_considered,
@@ -24,46 +24,47 @@ pub(crate) fn run_evolution_cycle_labeled(
     };
 
     let all_pending = manager.proposals().list();
-    let pending: Vec<String> = all_pending
-        .iter()
-        .filter(|p| p.status == ProposalStatus::Pending)
-        .map(|p| p.name.clone())
-        .collect();
-    // Agent-authored proposals are human-review-only: the model may
-    // draft, never promote its own draft.
-    let agent_authored_pending = all_pending
-        .iter()
-        .filter(|p| p.status == ProposalStatus::Pending && p.authored_by == "agent")
-        .count();
-
-    if policy.auto_approve {
-        // Filter before the cap so agent entries consume no approval
-        // slots.
-        let eligible: Vec<String> = all_pending
-            .iter()
-            .filter(|p| p.status == ProposalStatus::Pending && p.authored_by != "agent")
-            .map(|p| p.name.clone())
-            .collect();
-        for name in eligible.iter().take(policy.max_approvals_per_cycle) {
-            match manager.approve_proposal(name) {
-                Ok(outcome) => {
-                    tracing::info!(
-                        skill = %outcome.name,
-                        destination = %outcome.destination.display(),
-                        "evolution cycle auto-approved a proposal"
-                    );
-                    report.auto_approved.push(name.clone());
-                }
-                Err(e) => {
-                    // Validation refused it — that is the gate doing
-                    // its job; surface and continue with the rest.
-                    tracing::warn!(proposal = name, error = %e, "auto-approve refused");
-                }
+    // Legacy manifests from the removed `skill_propose` channel are
+    // consumed, never installed — the model never wrote the library,
+    // and it does not start now.
+    let mut installable = Vec::new();
+    for proposal in &all_pending {
+        if proposal.status != ProposalStatus::Pending {
+            continue;
+        }
+        if proposal.authored_by != "distiller" {
+            tracing::info!(
+                proposal = %proposal.name,
+                "consuming legacy agent-authored proposal without installing it"
+            );
+            if let Err(e) = manager.proposals().mark_processed(&proposal.cluster_hash) {
+                tracing::warn!(proposal = %proposal.name, error = %e, "cannot consume legacy proposal");
+            }
+            continue;
+        }
+        installable.push(proposal.name.clone());
+    }
+    let deferred = installable
+        .len()
+        .saturating_sub(policy.max_installs_per_cycle);
+    for name in installable.iter().take(policy.max_installs_per_cycle) {
+        match manager.apply_proposal(name) {
+            Ok(outcome) => {
+                tracing::info!(
+                    skill = %outcome.name,
+                    destination = %outcome.destination.display(),
+                    "evolution cycle installed a proposal"
+                );
+                report.installed.push(name.clone());
+            }
+            Err(e) => {
+                // Validation refused it — the strict contract doing
+                // its job; surface and continue with the rest.
+                tracing::warn!(proposal = name, error = %e, "install refused");
             }
         }
     }
-    report.left_pending = pending.len() - report.auto_approved.len();
-    report.human_review_only = agent_authored_pending;
+    report.deferred = deferred;
     // Persist the fitness signal as part of every cycle — the
     // natural checkpoint cadence, and the restart boundary for
     // usage data.

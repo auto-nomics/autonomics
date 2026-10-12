@@ -22,7 +22,7 @@ use crate::proto::*;
 pub(crate) async fn list_skill_observations(
     State(state): State<GatewayState>,
 ) -> Json<Vec<SkillObservationView>> {
-    let mut observations = state.infra.skills.observations().list();
+    let mut observations = state.infra.skills.observations().await;
     observations.sort_by(|a, b| b.created_at.cmp(&a.created_at).then(a.id.cmp(&b.id)));
     Json(
         observations
@@ -30,10 +30,10 @@ pub(crate) async fn list_skill_observations(
             .map(|observation| SkillObservationView {
                 kind: observation.kind_label().to_string(),
                 source: match observation.source {
-                    skills::ObservationSource::Agent => "agent",
-                    skills::ObservationSource::Eval => "eval",
-                    skills::ObservationSource::WorkflowRun => "workflow_run",
-                    skills::ObservationSource::Cli => "cli",
+                    evolution_core::ObservationSource::Agent => "agent",
+                    evolution_core::ObservationSource::Eval => "eval",
+                    evolution_core::ObservationSource::WorkflowRun => "workflow_run",
+                    evolution_core::ObservationSource::Cli => "cli",
                 }
                 .to_string(),
                 id: observation.id,
@@ -249,24 +249,21 @@ pub(crate) async fn get_skill_library_detail(
 pub(crate) async fn get_skill_evolution_status(
     State(state): State<GatewayState>,
 ) -> Json<SkillEvolutionStatus> {
-    Json(skill_evolution_status(&state.infra))
+    Json(skill_evolution_status(&state.infra).await)
 }
 
-fn skill_evolution_status(infra: &SharedInfra) -> SkillEvolutionStatus {
+async fn skill_evolution_status(infra: &SharedInfra) -> SkillEvolutionStatus {
     let manager = &infra.skills;
-    let (auto_approve, max_approvals_per_cycle, sweep_interval_secs, cycle) =
-        match &infra.skill_evolution {
-            Some(handle) => (
-                handle.policy().auto_approve,
-                handle.policy().max_approvals_per_cycle,
-                handle.timer().map(|d| d.as_secs()),
-                handle.cycle_status(),
-            ),
-            // Service off: the loop still runs on demand (CLI,
-            // skill_evolve tool); display the daemon's configured
-            // gate from the manager's defaults and a zeroed monitor.
-            None => (false, 5, None, skills::CycleStatus::default()),
-        };
+    let (max_installs_per_cycle, sweep_interval_secs, cycle) = match &infra.skill_evolution {
+        Some(handle) => (
+            handle.policy().max_installs_per_cycle,
+            handle.timer().map(|d| d.as_secs()),
+            handle.cycle_status(),
+        ),
+        // Service off: the loop still runs on demand (CLI,
+        // skill_evolve tool); a zeroed monitor reflects that.
+        None => (5, None, skills::CycleStatus::default()),
+    };
     // Flatten the typed phase into DTO-friendly fields.
     let (phase, phase_queued, phase_triggers) = match &cycle.phase {
         skills::CyclePhase::Idle => ("idle".to_string(), 0, Vec::new()),
@@ -292,29 +289,27 @@ fn skill_evolution_status(infra: &SharedInfra) -> SkillEvolutionStatus {
         }
     }
     let mut proposals_pending = 0;
-    let mut proposals_approved = 0;
-    let mut proposals_rejected = 0;
+    let mut proposals_applied = 0;
     for proposal in manager.proposals().list() {
         match proposal.status {
             skills::ProposalStatus::Pending => proposals_pending += 1,
-            skills::ProposalStatus::Approved => proposals_approved += 1,
-            skills::ProposalStatus::Rejected => proposals_rejected += 1,
+            skills::ProposalStatus::Applied => proposals_applied += 1,
+            // Legacy review-era rejections: consumed, not counted.
+            skills::ProposalStatus::Rejected => {}
         }
     }
     SkillEvolutionStatus {
         service_enabled: infra.skill_evolution.is_some(),
         generation: manager.generation(),
-        auto_approve,
-        max_approvals_per_cycle,
+        max_installs_per_cycle,
         sweep_interval_secs,
-        observations: manager.observations().list().len(),
+        observations: manager.observations().await.len(),
         skills_workspace,
         skills_global,
         skills_builtin,
         skills_auto,
         proposals_pending,
-        proposals_approved,
-        proposals_rejected,
+        proposals_applied,
         phase,
         phase_queued,
         phase_triggers,
@@ -334,7 +329,6 @@ fn skill_evolution_status(infra: &SharedInfra) -> SkillEvolutionStatus {
     post,
     path = "/api/v1/skills/evolution/trigger",
     tag = "skills",
-    request_body = TriggerEvolutionRequest,
     responses(
         (status = 200, body = SkillEvolutionReport),
         (status = 503, description = "Skill evolution service is disabled")
@@ -342,24 +336,20 @@ fn skill_evolution_status(infra: &SharedInfra) -> SkillEvolutionStatus {
 )]
 pub(crate) async fn trigger_skill_evolution(
     State(state): State<GatewayState>,
-    Json(request): Json<TriggerEvolutionRequest>,
 ) -> GatewayResult<Json<SkillEvolutionReport>> {
-    // Channel-only path: the worker is the sole executor. We
-    // send a `RunCycle` command with the requested policy override
-    // and await the oneshot reply (10 s timeout for the whole
-    // distillation pass; the worker runs the cycle synchronously
-    // on its task so this is generous headroom, not a stall
-    // budget).
+    // Channel-only path: the worker is the sole executor. We send a
+    // `RunCycle` command with the daemon's policy and await the
+    // oneshot reply (10 s timeout for the whole cycle; the worker
+    // runs it synchronously on its task so this is generous
+    // headroom, not a stall budget). The cycle installs what it
+    // writes — there is no review gate to lift.
     let handle = state.infra.skill_evolution.as_ref().ok_or_else(|| {
         GatewayError::Status(
             StatusCode::SERVICE_UNAVAILABLE,
             "skill evolution service is disabled".to_string(),
         )
     })?;
-    let mut policy = handle.policy().clone();
-    if let Some(auto) = request.auto_approve {
-        policy.auto_approve = auto;
-    }
+    let policy = handle.policy().clone();
     let outcome = tokio::time::timeout(Duration::from_secs(10), handle.call_run_cycle(policy))
         .await
         .map_err(|_| {
@@ -384,8 +374,8 @@ pub(crate) async fn trigger_skill_evolution(
         clusters_considered: report.clusters_considered,
         proposals_written: report.proposals_written,
         updated_existing: report.updated_existing,
-        auto_approved: report.auto_approved,
-        left_pending: report.left_pending,
+        installed: report.installed,
+        deferred: report.deferred,
         skipped: report
             .skipped
             .into_iter()
@@ -431,93 +421,4 @@ pub(crate) async fn list_skill_proposals(
             .then(a.name.cmp(&b.name))
     });
     Json(rows)
-}
-
-#[utoipa::path(
-    post,
-    path = "/api/v1/skills/evolution/proposals/{name}/approve",
-    tag = "skills",
-    responses(
-        (status = 200, body = SkillApproveOutcome),
-        (status = 404, description = "No pending proposal with that name"),
-        (status = 400, description = "Validation refused the promotion"),
-        (status = 503, description = "Skill evolution service is disabled")
-    )
-)]
-pub(crate) async fn approve_skill_proposal(
-    State(state): State<GatewayState>,
-    Path(name): Path<String>,
-) -> GatewayResult<Json<SkillApproveOutcome>> {
-    // Channel-only path: approve flows through the worker so an
-    // in-flight cycle (coalesced batch) cannot strand the HTTP
-    // caller. The worker drains inline approve commands BEFORE the
-    // batch runs.
-    let handle = state.infra.skill_evolution.as_ref().ok_or_else(|| {
-        GatewayError::Status(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "skill evolution service is disabled".to_string(),
-        )
-    })?;
-    let outcome = tokio::time::timeout(Duration::from_secs(5), handle.call_approve(name))
-        .await
-        .map_err(|_| GatewayError::Message("approve timed out after 5 s".to_string()))?;
-    let outcome = match outcome {
-        skills::SkillCommandOutcome::Ok(o) => o,
-        skills::SkillCommandOutcome::Err(e) => return Err(GatewayError::Message(e.to_string())),
-        skills::SkillCommandOutcome::WorkerGone => {
-            return Err(GatewayError::Status(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "skill evolution worker is gone".to_string(),
-            ));
-        }
-    };
-    Ok(Json(SkillApproveOutcome {
-        name: outcome.name,
-        destination: outcome.destination.display().to_string(),
-    }))
-}
-
-#[utoipa::path(
-    post,
-    path = "/api/v1/skills/evolution/proposals/{name}/reject",
-    tag = "skills",
-    responses(
-        (status = 200, description = "Rejected; cluster consumed"),
-        (status = 404, description = "No pending proposal with that name"),
-        (status = 503, description = "Skill evolution service is disabled")
-    )
-)]
-pub(crate) async fn reject_skill_proposal(
-    State(state): State<GatewayState>,
-    Path(name): Path<String>,
-) -> GatewayResult<Json<SkillProposalView>> {
-    let handle = state.infra.skill_evolution.as_ref().ok_or_else(|| {
-        GatewayError::Status(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "skill evolution service is disabled".to_string(),
-        )
-    })?;
-    let outcome = tokio::time::timeout(Duration::from_secs(5), handle.call_reject(name))
-        .await
-        .map_err(|_| GatewayError::Message("reject timed out after 5 s".to_string()))?;
-    let proposal = match outcome {
-        skills::SkillCommandOutcome::Ok(p) => p,
-        skills::SkillCommandOutcome::Err(e) => return Err(GatewayError::Message(e.to_string())),
-        skills::SkillCommandOutcome::WorkerGone => {
-            return Err(GatewayError::Status(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "skill evolution worker is gone".to_string(),
-            ));
-        }
-    };
-    Ok(Json(SkillProposalView {
-        name: proposal.name,
-        status: proposal.status.as_str().to_string(),
-        authored_by: proposal.authored_by,
-        update: proposal.update,
-        rationale: proposal.rationale,
-        cluster_hash: proposal.cluster_hash,
-        observation_count: proposal.source_observation_ids.len(),
-        created_at: proposal.updated_at,
-    }))
 }

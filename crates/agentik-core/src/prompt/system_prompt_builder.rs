@@ -95,7 +95,6 @@ mod tests {
             .parse();
         assert!(with_skills.contains("## Skill library"));
         assert!(with_skills.contains("evo_observe"));
-        assert!(with_skills.contains("skill_propose"));
         // Render order: identity → extras → skill guidance → tool-use
         // guidance, mirroring parse().
         let skill_at = with_skills.find("## Skill library").unwrap();

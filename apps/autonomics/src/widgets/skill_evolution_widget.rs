@@ -87,11 +87,6 @@ impl SkillEvolutionState {
             }
         }
     }
-    pub fn selected_pending(&self) -> Option<&gateway::proto::SkillLibraryView> {
-        (self.active_tab == EvolutionTab::Skills)
-            .then(|| self.skills.selected_pending())
-            .flatten()
-    }
 }
 
 /// The dashboard as a centered popup: header (configuration +
@@ -221,8 +216,8 @@ impl StatefulWidget for SkillEvolutionWidget {
             Paragraph::new(vec![
                 Line::raw("Tab/1/2 tabs · ←→ panel · ↑↓ move/scroll · Esc close"),
                 Line::raw(match state.active_tab {
-                    EvolutionTab::Skills => "a approve · r reject · t/T trigger · g refresh",
-                    EvolutionTab::Observations => "t/T trigger · g refresh",
+                    EvolutionTab::Skills => "t trigger · g refresh",
+                    EvolutionTab::Observations => "t trigger · g refresh",
                 }),
             ])
             .style(Style::new().fg(Color::DarkGray)),
@@ -240,11 +235,6 @@ fn config_line(status: &SkillEvolutionStatus) -> Line<'static> {
     } else {
         Span::styled("off".to_string(), Style::new().fg(Color::Yellow))
     };
-    let gate = if status.auto_approve {
-        Span::styled("auto-approve".to_string(), Style::new().fg(Color::Yellow))
-    } else {
-        Span::styled("propose-only".to_string(), Style::new().fg(Color::Cyan))
-    };
     let sweep = status
         .sweep_interval_secs
         .map(|s| format!("sweep {}s", s))
@@ -252,9 +242,8 @@ fn config_line(status: &SkillEvolutionStatus) -> Line<'static> {
     Line::from(vec![
         Span::styled("service ", dim),
         service,
-        Span::styled("  ·  gate ", dim),
-        gate,
-        Span::styled(format!(" (cap {})", status.max_approvals_per_cycle), dim),
+        Span::styled("  ·  auto-install", dim),
+        Span::styled(format!(" (cap {})", status.max_installs_per_cycle), dim),
         Span::styled("  ·  ", dim),
         Span::styled(sweep, Style::new()),
         Span::styled(
@@ -282,11 +271,11 @@ fn counters_line(status: &SkillEvolutionStatus) -> Line<'static> {
             ),
             normal,
         ),
-        Span::styled("   proposals ", dim),
+        Span::styled("   changes ", dim),
         Span::styled(
             format!(
-                "{} pending · {} approved · {} rejected",
-                status.proposals_pending, status.proposals_approved, status.proposals_rejected
+                "{} applied · {} deferred",
+                status.proposals_applied, status.proposals_pending
             ),
             normal,
         ),
@@ -495,29 +484,11 @@ mod tests {
         // Actions stay gated to pending rows regardless of where the
         // browser selection sits.
         state.skills.selected = 1;
-        assert!(
-            state.skills.selected_pending().is_none(),
-            "approved row is not an action target"
-        );
         assert_eq!(
             state.skills.selected_skill().map(|s| s.name.clone()),
             Some("b-approved".into()),
-            "but the detail pane still shows it"
+            "history rows still show their detail document"
         );
-    }
-
-    #[test]
-    fn no_pending_rows_means_no_selection_action() {
-        let mut state = SkillEvolutionState {
-            skills: SkillBrowserState {
-                library: vec![skill("only-history", "builtin", None)],
-                selected: 0,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        state.skills.select_next();
-        assert!(state.skills.selected_pending().is_none());
     }
 
     #[test]
@@ -527,8 +498,7 @@ mod tests {
             status: Some(SkillEvolutionStatus {
                 service_enabled: true,
                 generation: 7,
-                auto_approve: false,
-                max_approvals_per_cycle: 5,
+                max_installs_per_cycle: 5,
                 sweep_interval_secs: Some(21600),
                 observations: 12,
                 skills_workspace: 0,
@@ -536,8 +506,7 @@ mod tests {
                 skills_builtin: 1,
                 skills_auto: 1,
                 proposals_pending: 1,
-                proposals_approved: 0,
-                proposals_rejected: 0,
+                proposals_applied: 2,
                 phase: "idle".into(),
                 phase_queued: 0,
                 phase_triggers: Vec::new(),
@@ -589,7 +558,7 @@ mod tests {
             text.contains("never used"),
             "zero telemetry reads as unused"
         );
-        assert!(text.contains("awaiting review"));
+        assert!(text.contains("past install cap"));
         // The rationale may word-wrap mid-phrase, so assert on a
         // fragment that fits one rendered row.
         assert!(text.contains("obs evidence"));
@@ -638,8 +607,7 @@ mod tests {
         SkillEvolutionStatus {
             service_enabled: true,
             generation: 1,
-            auto_approve: false,
-            max_approvals_per_cycle: 5,
+            max_installs_per_cycle: 5,
             sweep_interval_secs: None,
             observations: 0,
             skills_workspace: 0,
@@ -647,8 +615,7 @@ mod tests {
             skills_builtin: 0,
             skills_auto: 0,
             proposals_pending: 0,
-            proposals_approved: 0,
-            proposals_rejected: 0,
+            proposals_applied: 0,
             phase: "idle".into(),
             phase_queued: 0,
             phase_triggers: Vec::new(),

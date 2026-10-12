@@ -63,16 +63,7 @@ impl SkillControlHandle {
         self.reports.subscribe()
     }
 
-    /// The raw command sender, for the manager's observation
-    /// forwarder. Internal-use: callers should go through
-    /// [`SkillControlHandle::trigger`].
-    pub(crate) fn sender_for_manager(&self) -> mpsc::Sender<SkillCommand> {
-        self.tx.clone()
-    }
-
-    /// The policy this service runs with (an auto-approve cap of 0
-    /// alongside `auto_approve: true` would approve nothing, so the
-    /// pair is kept together for display).
+    /// The policy this service runs with (the per-cycle install cap).
     pub fn policy(&self) -> &EvolutionPolicy {
         &self.policy
     }
@@ -80,41 +71,6 @@ impl SkillControlHandle {
     /// The periodic sweep cadence, when the timer trigger is armed.
     pub fn timer(&self) -> Option<Duration> {
         self.timer
-    }
-
-    /// Approve a pending proposal now. Returns `WorkerGone` if the
-    /// channel closed before the worker replied.
-    pub async fn call_approve(&self, name: String) -> SkillCommandOutcome<ApproveOutcome> {
-        let (tx, rx) = oneshot::channel();
-        if self
-            .tx
-            .send(SkillCommand::ApproveProposal { name, reply: tx })
-            .await
-            .is_err()
-        {
-            return SkillCommandOutcome::WorkerGone;
-        }
-        match rx.await {
-            Ok(outcome) => outcome,
-            Err(_) => SkillCommandOutcome::WorkerGone,
-        }
-    }
-
-    /// Reject a pending proposal now.
-    pub async fn call_reject(&self, name: String) -> SkillCommandOutcome<Proposal> {
-        let (tx, rx) = oneshot::channel();
-        if self
-            .tx
-            .send(SkillCommand::RejectProposal { name, reply: tx })
-            .await
-            .is_err()
-        {
-            return SkillCommandOutcome::WorkerGone;
-        }
-        match rx.await {
-            Ok(outcome) => outcome,
-            Err(_) => SkillCommandOutcome::WorkerGone,
-        }
     }
 
     /// Run one evolution cycle now with the supplied policy (no
@@ -154,8 +110,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use tokio::sync::{broadcast, mpsc, oneshot};
-
-use crate::proposals::{ApproveOutcome, Proposal};
 
 use super::command::{SkillCommand, SkillCommandOutcome};
 use super::model::{EvolutionPolicy, EvolutionReport, EvolutionTrigger};

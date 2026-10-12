@@ -38,11 +38,11 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::RwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, RwLock};
 
 use serde::{Deserialize, Serialize};
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::broadcast;
 
 use crate::error::SkillError;
 use crate::install::{self, InstallOutcome};
@@ -111,11 +111,11 @@ pub struct SkillManager {
     generation: AtomicU64,
     changes: broadcast::Sender<u64>,
     usage: RwLock<HashMap<String, UsageRecord>>,
-    /// Optional forwarder to the skill control service — set by
-    /// [`SkillManager::attach_evolution`]. Storing just the sender
-    /// (not the handle) keeps the manager free of any service
-    /// lifetime coupling.
-    evolution_tx: RwLock<Option<mpsc::Sender<crate::evolution::SkillCommand>>>,
+    /// The upstream observation hub this manager reads evidence from.
+    /// Held by reference, not resolved through the global on every
+    /// call: parallel tests replace the global singleton, and an
+    /// instance must keep seeing the state dir it was built with.
+    hub: Arc<evolution_core::ObservationHub>,
 }
 
 static GLOBAL: arc_swap::ArcSwapOption<SkillManager> = arc_swap::ArcSwapOption::const_empty();
@@ -139,15 +139,22 @@ impl SkillManager {
         Self::init(Self::from_env())
     }
     /// Standard layout: global tier at `<state_dir>/skills`.
+    ///
+    /// Also installs the process-wide [`ObservationHub`] over the same
+    /// state dir: observations are upstream of skills, and the manager
+    /// must never read them from a different directory than the hub
+    /// hands to every other consumer.
     #[must_use]
     pub fn new(state_dir: impl Into<PathBuf>) -> Self {
+        let state_dir = state_dir.into();
+        let hub = Arc::new(evolution_core::ObservationHub::new(state_dir.clone()));
         Self {
-            state_dir: state_dir.into(),
+            state_dir,
             workspace_roots: Vec::new(),
             generation: AtomicU64::new(1),
             changes: broadcast::channel(16).0,
             usage: RwLock::new(HashMap::new()),
-            evolution_tx: RwLock::new(None),
+            hub,
         }
     }
 
@@ -319,39 +326,18 @@ impl SkillManager {
 
     // ── evolution loop: observations, distillation, proposals ──
 
-    /// The observation store under this manager's state dir.
-    pub fn observations(&self) -> crate::observation::ObservationStore {
-        crate::observation::ObservationStore::open(&self.state_dir)
+    /// Every recorded observation, resolved through this manager's
+    /// hub storage.
+    ///
+    /// Observations are upstream of skills: the hub owns the ledger
+    /// and this accessor only hands its view to skill-side callers.
+    pub async fn observations(&self) -> Vec<evolution_core::observation::Observation> {
+        self.hub.storage().list().await
     }
 
-    /// Record one observation (idempotent on content). This is the
-    /// feedstock call for the whole evolution loop — agent tool,
-    /// automatic failure capture, and CLI all land here.
-    /// Forward observation events to the skill control service, when
-    /// one is attached. Never blocks: a full or absent channel only
-    /// means this observation rides the next timer/startup sweep
-    /// instead.
-    pub fn attach_evolution(&self, handle: &crate::evolution::SkillControlHandle) {
-        if let Ok(mut slot) = self.evolution_tx.write() {
-            *slot = Some(handle.sender_for_manager());
-        }
-    }
-
-    pub fn record_observation(
-        &self,
-        input: crate::observation::ObservationInput,
-    ) -> Result<crate::observation::Observation, SkillError> {
-        let observation = self.observations().record(input)?;
-        if let Ok(slot) = self.evolution_tx.read()
-            && let Some(tx) = slot.as_ref()
-        {
-            let _ = tx.try_send(crate::evolution::SkillCommand::Evolution(
-                crate::evolution::EvolutionTrigger::ObservationRecorded {
-                    id: observation.id.clone(),
-                },
-            ));
-        }
-        Ok(observation)
+    /// The hub this manager reads evidence from.
+    pub fn observation_hub(&self) -> Arc<evolution_core::ObservationHub> {
+        Arc::clone(&self.hub)
     }
 
     /// The proposal area under this manager's state dir.
@@ -364,14 +350,40 @@ impl SkillManager {
     /// Observations are shared across evolution subsystems. A route ledger
     /// entry explicitly selects which observations reach skill distillation;
     /// legacy un-routed observations remain skill-eligible for compatibility.
-    pub fn distill(&self) -> Result<crate::distill::DistillReport, SkillError> {
-        let observations = self.skill_eligible_observations();
-        crate::distill::distill(&observations, &self.proposals(), &self.registry())
+    ///
+    /// No model runs here: the hub embedded every observation at record
+    /// time and this pass only reads those vectors back.
+    pub async fn distill(&self) -> Result<crate::distill::DistillReport, SkillError> {
+        // Clustering is incremental and shared across consumers: it
+        // runs over every anchored observation, once, in storage.
+        let processor = evolution_core::cluster::ClusterProcessor::new(std::sync::Arc::clone(
+            self.hub.storage(),
+        ));
+        let report = processor
+            .execute_cluster(&self.hub.embedding_signature())
+            .await
+            .map_err(SkillError::Evolution)?;
+        // The skill subsystem hydrates only its own audience: routing
+        // decides which members reach skill distillation.
+        let observations = self.skill_eligible_observations().await;
+        let ids: Vec<String> = observations.iter().map(|o| o.id.clone()).collect();
+        let embeddings = self
+            .hub
+            .load_embeddings(&ids)
+            .await
+            .map_err(SkillError::Evolution)?;
+        crate::distill::distill(
+            &report.surfaced,
+            &observations,
+            &embeddings,
+            &self.proposals(),
+            &self.registry(),
+        )
     }
 
-    fn skill_eligible_observations(&self) -> Vec<crate::Observation> {
-        let observations = self.observations().list();
-        let routes = evolution_core::routing::ObservationRouteStore::open(&self.state_dir).list();
+    async fn skill_eligible_observations(&self) -> Vec<evolution_core::Observation> {
+        let observations = self.hub.storage().list().await;
+        let routes = self.hub.routes().list();
         let mut routed = std::collections::HashSet::new();
         let mut eligible = std::collections::HashSet::new();
         for route in routes {
@@ -392,17 +404,12 @@ impl SkillManager {
             .collect()
     }
 
-    /// Approve a pending proposal into the global tier. Bumps the
-    /// generation — the approved skill is live for the next agent
-    /// build and every cached view invalidates.
-    /// Approve a pending proposal. Creates land in the global tier;
-    /// updates overlay the tier where the existing skill lives (its
-    /// previous SKILL.md archived first). Either way the generation
-    /// advances — the change is live for the next agent build.
-    pub fn approve_proposal(
-        &self,
-        name: &str,
-    ) -> Result<crate::proposals::ApproveOutcome, SkillError> {
+    /// Apply a pending proposal into the live library. Creates land
+    /// in the global tier; updates overlay the tier where the existing
+    /// skill lives (its previous SKILL.md archived first). Either way
+    /// the generation advances — the change is live for the next
+    /// agent build and every cached view invalidates.
+    pub fn apply_proposal(&self, name: &str) -> Result<crate::proposals::ApplyOutcome, SkillError> {
         let proposals = self.proposals();
         // Route by manifest: an update targets the installed skill's
         // own tier so the overlay lands where the skill actually
@@ -425,144 +432,9 @@ impl SkillManager {
             }
             _ => self.state_dir.join("skills"),
         };
-        let outcome = proposals.approve(name, &dest_root)?;
+        let outcome = proposals.apply(name, &dest_root)?;
         self.notify();
         Ok(outcome)
-    }
-
-    /// Agent-authored skill proposal: the `skill_propose` tool path.
-    ///
-    /// The agent supplies structured fields — name, description,
-    /// tags, body — and this side assembles the frontmatter, so the
-    /// model never writes raw YAML (the injection surface stays the
-    /// validated fields, not arbitrary frontmatter). Guard rails:
-    ///
-    /// - at least one **existing** observation must back the claim
-    ///   (`supporting_observation_ids` are checked against the store
-    ///   — proposals must trace to evidence, not invention)
-    /// - the name must not collide with an installed skill (updates
-    ///   belong to the deterministic distiller; an agent wanting an
-    ///   update records observations and lets the loop propose it)
-    /// - the name must not collide with an existing proposal either —
-    ///   one draft per name, checked **before** anything is written so
-    ///   a retry can never overwrite a queued (or rejected) draft
-    /// - the full strict contract applies (kebab-case, description
-    ///   rules, no TODO placeholders)
-    /// - the manifest is marked `authored_by = "agent"`, which the
-    ///   auto-approval path refuses unconditionally — human review
-    ///   only
-    pub fn propose_skill(
-        &self,
-        name: &str,
-        description: &str,
-        tags: &[String],
-        body: &str,
-        supporting_observation_ids: &[String],
-        rationale: &str,
-    ) -> Result<crate::proposals::Proposal, SkillError> {
-        if supporting_observation_ids.is_empty() {
-            return Err(SkillError::invalid_frontmatter(
-                "<skill_propose>",
-                "at least one supporting observation id is required — record the evidence with evo_observe first",
-            ));
-        }
-        let known: std::collections::BTreeSet<String> = self
-            .observations()
-            .list()
-            .into_iter()
-            .map(|o| o.id)
-            .collect();
-        let unknown: Vec<&String> = supporting_observation_ids
-            .iter()
-            .filter(|id| !known.contains(*id))
-            .collect();
-        if !unknown.is_empty() {
-            return Err(SkillError::invalid_frontmatter(
-                "<skill_propose>",
-                format!(
-                    "unknown observation id(s): {} — every supporting id must \
-                     exist in the observation store",
-                    unknown
-                        .iter()
-                        .map(|s| s.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-            ));
-        }
-        if self.registry().list().iter().any(|e| e.meta.name == name) {
-            return Err(SkillError::invalid_frontmatter(
-                "<skill_propose>",
-                format!(
-                    "a skill named {name:?} is already installed; agent proposals \
-                     are create-only — record observations and let the loop \
-                     propose the update"
-                ),
-            ));
-        }
-
-        // Assemble the document from validated fields only.
-        let tags_line = if tags.is_empty() {
-            String::new()
-        } else {
-            format!("tags: [{}]", tags.join(", "))
-        };
-        let content =
-            format!("---\nname: {name}\ndescription: {description}\n{tags_line}\n---\n\n{body}\n");
-        let proposals = self.proposals();
-        // Refuse a name collision before writing: submit_as would
-        // refuse it too, but only after this side had already
-        // overwritten the queued draft's SKILL.md.
-        if let Some(existing) = proposals.find(name) {
-            return Err(SkillError::invalid_frontmatter(
-                "<skill_propose>",
-                format!(
-                    "a proposal named {name:?} already exists with status {} — \
-                     one draft per name, and a rejected name never revives",
-                    existing.status.as_str()
-                ),
-            ));
-        }
-        let dir = proposals.root().join(name);
-
-        // The cluster hash for an authored proposal is the hash of
-        // its supporting evidence — stable per evidence set, and
-        // distinct from distiller hashes by construction.
-        let ids: std::collections::BTreeSet<String> =
-            supporting_observation_ids.iter().cloned().collect();
-        let submitted = (|| {
-            std::fs::create_dir_all(&dir)?;
-            std::fs::write(dir.join("SKILL.md"), &content)?;
-            proposals.submit_as(
-                name,
-                &crate::proposals::cluster_hash(&ids),
-                rationale,
-                supporting_observation_ids.to_vec(),
-                false,
-                "agent".to_string(),
-            )
-        })();
-
-        submitted.inspect_err(|_| {
-            // A refused submission must not leave an orphan draft
-            // behind — remove what we just wrote so a retry starts
-            // clean and listings stay honest.
-            if let Err(cleanup) = std::fs::remove_dir_all(&dir) {
-                tracing::warn!(
-                    path = %dir.display(),
-                    error = %cleanup,
-                    "cannot remove refused proposal draft"
-                );
-            }
-        })
-    }
-
-    /// Reject a pending proposal; its cluster is consumed and will
-    /// not re-propose.
-    pub fn reject_proposal(&self, name: &str) -> Result<crate::proposals::Proposal, SkillError> {
-        let proposal = self.proposals().reject(name)?;
-        self.notify();
-        Ok(proposal)
     }
 }
 
@@ -582,45 +454,49 @@ mod tests {
         SkillManager::new(tmp.join("state"))
     }
 
-    #[test]
-    fn distillation_respects_observation_routes() {
+    #[tokio::test]
+    async fn distillation_respects_observation_routes() {
         let tmp = tempfile::tempdir().unwrap();
         let manager = manager_in(tmp.path());
         let routes = ObservationRouteStore::open(&tmp.path().join("state"));
 
         for index in 0..3 {
             let observation = manager
-                .record_observation(crate::ObservationInput {
-                    kind: crate::ObservationKind::Failure,
-                    source: crate::ObservationSource::Agent,
+                .observation_hub()
+                .record(evolution_core::ObservationInput {
+                    kind: evolution_core::ObservationKind::Failure,
+                    source: evolution_core::ObservationSource::Agent,
                     summary: format!("plugin failure {index}"),
                     body: format!("Fix attempt {index}."),
                     node_kind: Some("plugin_adapter".into()),
                     error: Some("adapter rejected input".into()),
                 })
+                .await
                 .unwrap();
             let (_, route) = observation_route(&observation, Some("demo-plugin"), None);
             routes.record(route).unwrap();
         }
         for index in 0..3 {
             let observation = manager
-                .record_observation(crate::ObservationInput {
-                    kind: crate::ObservationKind::Recipe,
-                    source: crate::ObservationSource::Agent,
+                .observation_hub()
+                .record(evolution_core::ObservationInput {
+                    kind: evolution_core::ObservationKind::Recipe,
+                    source: evolution_core::ObservationSource::Agent,
                     summary: format!("generic recipe {index}"),
                     body: format!("Useful generic procedure {index}."),
                     node_kind: Some("generic_node".into()),
                     error: None,
                 })
+                .await
                 .unwrap();
             let (_, route) = observation_route(&observation, None, None);
             routes.record(route).unwrap();
         }
 
-        manager.distill().unwrap();
+        manager.distill().await.unwrap();
         let proposals = manager.proposals().list();
         assert_eq!(proposals.len(), 1, "{proposals:?}");
-        assert_eq!(proposals[0].name, "generic-node-recipe");
+        assert_eq!(proposals[0].name, "generic-node-generic-recipe-recipe");
     }
 
     fn make_skill(root: &std::path::Path, name: &str) {
@@ -633,8 +509,8 @@ mod tests {
         .unwrap();
     }
 
-    #[test]
-    fn install_uninstall_bump_generation_and_broadcast() {
+    #[tokio::test]
+    async fn install_uninstall_bump_generation_and_broadcast() {
         let tmp = tempfile::tempdir().unwrap();
         let manager = manager_in(tmp.path());
         let mut rx = manager.subscribe();
@@ -660,8 +536,8 @@ mod tests {
         assert_eq!(rx.try_recv().unwrap(), 3);
     }
 
-    #[test]
-    fn failed_install_does_not_bump() {
+    #[tokio::test]
+    async fn failed_install_does_not_bump() {
         let tmp = tempfile::tempdir().unwrap();
         let manager = manager_in(tmp.path());
         // Empty dir: a hard error (no skill found). Neither a hard
@@ -680,8 +556,8 @@ mod tests {
         assert_eq!(manager.generation(), 2);
     }
 
-    #[test]
-    fn absent_subscribers_cannot_break_mutation() {
+    #[tokio::test]
+    async fn absent_subscribers_cannot_break_mutation() {
         let tmp = tempfile::tempdir().unwrap();
         let manager = manager_in(tmp.path());
         // No subscriber at all; install still succeeds.
@@ -689,8 +565,8 @@ mod tests {
         assert!(manager.install_local(&tmp.path().join("beta")).is_ok());
     }
 
-    #[test]
-    fn usage_accumulates_and_ranks() {
+    #[tokio::test]
+    async fn usage_accumulates_and_ranks() {
         let manager = SkillManager::new("/nonexistent");
         manager.record_usage("popular", UsageKind::Run);
         manager.record_usage("popular", UsageKind::Get);
@@ -703,8 +579,8 @@ mod tests {
         assert_eq!(snapshot[1].0, "quiet");
     }
 
-    #[test]
-    fn singleton_init_and_lazy_global() {
+    #[tokio::test]
+    async fn singleton_init_and_lazy_global() {
         let tmp = tempfile::tempdir().unwrap();
         let arc = SkillManager::init(manager_in(tmp.path()));
         let fetched = SkillManager::global();
@@ -716,8 +592,8 @@ mod tests {
         assert!(!std::sync::Arc::ptr_eq(&arc, &arc2));
     }
 
-    #[test]
-    fn tier_roots_order_workspace_above_global() {
+    #[tokio::test]
+    async fn tier_roots_order_workspace_above_global() {
         let manager = SkillManager::new("/state").with_workspace_root("/ws");
         assert_eq!(
             manager.tier_roots(),
@@ -732,8 +608,8 @@ mod tests {
 mod usage_persistence_tests {
     use super::*;
 
-    #[test]
-    fn usage_survives_restart_by_field_maxima() {
+    #[tokio::test]
+    async fn usage_survives_restart_by_field_maxima() {
         let tmp = tempfile::tempdir().unwrap();
         let first = SkillManager::new(tmp.path());
         first.record_usage("skill-a", UsageKind::Run);
@@ -761,177 +637,12 @@ mod usage_persistence_tests {
         assert_eq!(record.gets, 1);
     }
 
-    #[test]
-    fn corrupt_usage_table_reads_as_empty() {
+    #[tokio::test]
+    async fn corrupt_usage_table_reads_as_empty() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("skill-usage.toml"), "not [ valid").unwrap();
         let manager = SkillManager::new(tmp.path());
         manager.load_usage();
         assert!(manager.usage_snapshot().is_empty());
-    }
-}
-
-#[cfg(test)]
-mod propose_tests {
-    use super::*;
-
-    fn manager_in(tmp: &std::path::Path) -> SkillManager {
-        SkillManager::new(tmp.join("state"))
-    }
-
-    fn observe_once(manager: &SkillManager, body: &str) -> String {
-        manager
-            .record_observation(crate::ObservationInput {
-                kind: crate::ObservationKind::Failure,
-                source: crate::ObservationSource::Agent,
-                summary: "evidence".into(),
-                body: body.into(),
-                node_kind: Some("sql".into()),
-                error: Some("boom".into()),
-            })
-            .unwrap()
-            .id
-    }
-
-    #[test]
-    fn agent_proposal_lands_pending_and_marked() {
-        let tmp = tempfile::tempdir().unwrap();
-        let manager = manager_in(tmp.path());
-        let id = observe_once(&manager, "the fix");
-
-        let proposal = manager
-            .propose_skill(
-                "agent-crafted-recipes",
-                "Recipes distilled by the agent from real work.",
-                &["agent".to_string()],
-                "# Recipes\n\nStep one.\n",
-                std::slice::from_ref(&id),
-                "recurring pattern",
-            )
-            .unwrap();
-        assert_eq!(proposal.authored_by, "agent");
-        assert_eq!(proposal.status, crate::proposals::ProposalStatus::Pending);
-        assert!(
-            tmp.path()
-                .join("state/skill-proposals/agent-crafted-recipes/SKILL.md")
-                .is_file()
-        );
-        // The written document passes the strict contract.
-        assert!(
-            manager
-                .proposals()
-                .validate_dir("agent-crafted-recipes")
-                .is_empty()
-        );
-        // Frontmatter was assembled from the validated fields.
-        let content = std::fs::read_to_string(
-            tmp.path()
-                .join("state/skill-proposals/agent-crafted-recipes/SKILL.md"),
-        )
-        .unwrap();
-        assert!(content.contains("name: agent-crafted-recipes"));
-        assert!(content.contains("tags: [agent]"));
-    }
-
-    #[test]
-    fn evidence_must_exist() {
-        let tmp = tempfile::tempdir().unwrap();
-        let manager = manager_in(tmp.path());
-        let err = manager
-            .propose_skill("x", "d", &[], "b", &["O-doesnotexist".to_string()], "r")
-            .unwrap_err();
-        assert!(err.to_string().contains("unknown observation id"), "{err}");
-    }
-
-    #[test]
-    fn evidence_is_mandatory() {
-        let tmp = tempfile::tempdir().unwrap();
-        let manager = manager_in(tmp.path());
-        let err = manager
-            .propose_skill("x", "d", &[], "b", &[], "r")
-            .unwrap_err();
-        assert!(err.to_string().contains("supporting observation"));
-    }
-
-    #[test]
-    fn create_only_no_collisions_with_installed_skills() {
-        let tmp = tempfile::tempdir().unwrap();
-        let manager = manager_in(tmp.path());
-        let id = observe_once(&manager, "e");
-        // Install a skill with the target name first.
-        let dir = tmp.path().join("state/skills/taken-name");
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(
-            dir.join("SKILL.md"),
-            "---\nname: taken-name\ndescription: d\n---\nb\n",
-        )
-        .unwrap();
-        let err = manager
-            .propose_skill("taken-name", "d", &[], "b", std::slice::from_ref(&id), "r")
-            .unwrap_err();
-        assert!(err.to_string().contains("already installed"), "{err}");
-    }
-
-    #[test]
-    fn refused_submission_leaves_no_orphan_directory() {
-        let tmp = tempfile::tempdir().unwrap();
-        let manager = manager_in(tmp.path());
-        let id = observe_once(&manager, "e");
-        // A TODO placeholder fails the strict contract at submit time,
-        // after the draft was written — the directory must go with the
-        // refusal.
-        let err = manager
-            .propose_skill(
-                "orphan-draft",
-                "d",
-                &[],
-                "# Body\n\nTODO: fill this in\n",
-                std::slice::from_ref(&id),
-                "r",
-            )
-            .unwrap_err();
-        assert!(err.to_string().contains("TODO"), "{err}");
-        assert!(
-            !tmp.path()
-                .join("state/skill-proposals/orphan-draft")
-                .exists(),
-            "refused draft must not linger in the proposal area"
-        );
-        assert!(manager.proposals().list().is_empty());
-    }
-
-    #[test]
-    fn same_name_retry_never_overwrites_a_queued_draft() {
-        let tmp = tempfile::tempdir().unwrap();
-        let manager = manager_in(tmp.path());
-        let id = observe_once(&manager, "e");
-        manager
-            .propose_skill(
-                "one-draft-per-name",
-                "First.",
-                &[],
-                "# First\n\nOriginal body.\n",
-                std::slice::from_ref(&id),
-                "r",
-            )
-            .unwrap();
-        let err = manager
-            .propose_skill(
-                "one-draft-per-name",
-                "Second.",
-                &[],
-                "# Second\n\nOverwrite attempt.\n",
-                std::slice::from_ref(&id),
-                "r2",
-            )
-            .unwrap_err();
-        assert!(err.to_string().contains("already exists"), "{err}");
-        let content = std::fs::read_to_string(
-            tmp.path()
-                .join("state/skill-proposals/one-draft-per-name/SKILL.md"),
-        )
-        .unwrap();
-        assert!(content.contains("Original body."));
-        assert!(!content.contains("Overwrite attempt."));
     }
 }

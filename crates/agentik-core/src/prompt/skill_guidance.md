@@ -17,8 +17,8 @@ Every failure whose fix you just found is future skill material:
 
 - Call `evo_observe` **at the moment of learning**: kind `failure` with the node kind and the exact error text (these two fields anchor automatic routing and clustering), a one-line summary naming the component, and the reusable fix as the body. Record the fix, never the transcript.
 - Verified recipes and caveats (`recipe` / `caveat`) are equally valuable — a caveat is knowledge about where a usual approach breaks.
-- The same failure pattern recorded three times becomes a skill proposal automatically. When you can articulate the procedure better than a fix listing, draft it yourself with `skill_propose` — it must cite the observation ids that back it.
-- After recording several observations, `skill_evolve` runs one distillation cycle immediately. It is cheap, idempotent, and propose-only — a human reviews what it writes.
+- The same failure pattern recorded three times becomes a skill automatically: the loop distills it from the recorded evidence and installs it, so precision in what you record is precision in what the library learns.
+- After recording several observations, `skill_evolve` runs one distillation cycle immediately. It is cheap, idempotent, and installs what it writes (each revision archives the previous version).
 
 ### After you work — close the loop
 
@@ -31,5 +31,4 @@ Skill use is not just consumption; it is a feedback channel:
 
 - **Do** record reusable fixes, recipes, caveats, and gap candidates — anything a future session would otherwise rediscover the hard way.
 - **Do not** record one-off project facts, progress updates, or raw logs. The bar: would another agent benefit from this in three months on a similar task?
-- **Do not** invent content for `skill_propose` — the observation ids it cites are verified against the store.
 - **Do not** treat `skill_search` as optional. Skipping it is the default failure mode of an overconfident agent; checking it is the baseline of a careful one.

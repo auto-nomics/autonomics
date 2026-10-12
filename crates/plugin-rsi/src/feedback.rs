@@ -24,15 +24,16 @@ fn request_source(source: ObservationSource) -> RequestSource {
     }
 }
 
-pub(crate) fn observation_request(
+pub(crate) async fn observation_request(
     requests: &crate::RequestStore,
-    observations: &evolution_core::ObservationStore,
+    observations: &dyn evolution_core::ObservationStorage,
     observation_id: &str,
     intent: RequestIntent,
     plugin_name: Option<&str>,
 ) -> Result<ObservationRequest> {
     let observation = observations
         .list()
+        .await
         .into_iter()
         .find(|observation| observation.id == observation_id)
         .ok_or_else(|| Error::InvalidRequest(format!("unknown observation {observation_id:?}")))?;

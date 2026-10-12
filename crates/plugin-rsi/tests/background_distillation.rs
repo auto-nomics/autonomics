@@ -133,14 +133,14 @@ async fn local_activation_is_distilled_to_github_without_blocking_the_agent() {
     PluginDevelopmentToolsetRegistry::global()
         .configure_environments(environment_registry.clone())
         .unwrap();
-    let skills = skills::SkillManager::init(skills::SkillManager::new(state.path()));
+    let observations = std::sync::Arc::new(evolution_core::ObservationHub::new(state.path()));
     let publisher = Arc::new(FakePublisher);
     let infra = RsiInfra::open(
         state.path(),
         "main",
         "Autonomics RSI",
         "rsi@example.com",
-        skills,
+        observations,
         catalog(),
         publisher.clone(),
         Arc::new(FakePullRequestPublisher),

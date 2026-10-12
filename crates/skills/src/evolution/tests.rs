@@ -6,18 +6,17 @@ use std::time::Duration;
 
 mod workflow_tests {
     use super::*;
-    use crate::observation::{
-        ObservationInput, ObservationKind, ObservationSource, ObservationStore,
-    };
+    use evolution_core::observation::{ObservationInput, ObservationKind, ObservationSource};
 
     fn manager_in(tmp: &std::path::Path) -> Arc<SkillManager> {
         Arc::new(SkillManager::new(tmp.join("state")))
     }
 
-    fn observe_three(manager: &SkillManager, error: &str) {
+    async fn observe_three(manager: &SkillManager, error: &str) {
         for body in ["fix a", "fix b", "fix c"] {
             manager
-                .record_observation(ObservationInput {
+                .observation_hub()
+                .record(ObservationInput {
                     kind: ObservationKind::Failure,
                     source: ObservationSource::Agent,
                     summary: format!("fix for {error}"),
@@ -25,46 +24,71 @@ mod workflow_tests {
                     node_kind: Some("sql".into()),
                     error: Some(error.into()),
                 })
+                .await
                 .unwrap();
         }
     }
 
-    #[test]
-    fn default_policy_leaves_proposals_pending() {
+    #[tokio::test]
+    async fn cycle_installs_what_it_writes() {
         let tmp = tempfile::tempdir().unwrap();
         let manager = manager_in(tmp.path());
-        observe_three(&manager, "boom N");
-        let report = run_evolution_cycle(&manager, &EvolutionPolicy::default()).unwrap();
+        observe_three(&manager, "boom N").await;
+        let report = run_evolution_cycle(&manager, &EvolutionPolicy::default())
+            .await
+            .unwrap();
         assert_eq!(report.proposals_written.len(), 1);
-        assert!(report.auto_approved.is_empty());
-        assert_eq!(report.left_pending, 1);
+        assert_eq!(
+            report.installed.len(),
+            1,
+            "no review gate: applied in-cycle"
+        );
+        assert_eq!(report.deferred, 0);
+        let name = &report.installed[0];
+        assert!(
+            tmp.path()
+                .join("state/skills")
+                .join(name)
+                .join("SKILL.md")
+                .is_file(),
+            "skill must be live in the global tier"
+        );
     }
 
-    #[test]
-    fn auto_approve_respects_cap_and_bumps_generation() {
+    #[tokio::test]
+    async fn install_cap_defers_overflow_and_bumps_generation() {
         let tmp = tempfile::tempdir().unwrap();
         let manager = manager_in(tmp.path());
-        // Two distinct anchors → two pending proposals.
-        observe_three(&manager, "boom one");
-        observe_three(&manager, "crash two");
+        // Two distinct anchors → two installs wanted.
+        observe_three(&manager, "boom one").await;
+        observe_three(&manager, "crash two").await;
         let policy = EvolutionPolicy {
-            auto_approve: true,
-            max_approvals_per_cycle: 1,
+            max_installs_per_cycle: 1,
         };
         let generation = manager.generation();
-        let report = run_evolution_cycle(&manager, &policy).unwrap();
-        assert_eq!(report.auto_approved.len(), 1, "cap enforced");
-        assert_eq!(report.left_pending, 1);
+        let report = run_evolution_cycle(&manager, &policy).await.unwrap();
+        assert_eq!(report.installed.len(), 1, "cap enforced");
+        assert_eq!(report.deferred, 1);
         assert_eq!(manager.generation(), generation + 1);
+
+        // The next cycle applies the deferred proposal.
+        let followup = run_evolution_cycle(&manager, &EvolutionPolicy::default())
+            .await
+            .unwrap();
+        assert_eq!(followup.installed.len(), 1, "deferred overflow lands");
     }
 
-    #[test]
-    fn cycle_without_new_observations_is_a_noop() {
+    #[tokio::test]
+    async fn cycle_without_new_observations_is_a_noop() {
         let tmp = tempfile::tempdir().unwrap();
         let manager = manager_in(tmp.path());
-        let first = run_evolution_cycle(&manager, &EvolutionPolicy::default()).unwrap();
+        let first = run_evolution_cycle(&manager, &EvolutionPolicy::default())
+            .await
+            .unwrap();
         assert!(!first.acted());
-        let second = run_evolution_cycle(&manager, &EvolutionPolicy::default()).unwrap();
+        let second = run_evolution_cycle(&manager, &EvolutionPolicy::default())
+            .await
+            .unwrap();
         assert!(!second.acted());
     }
 
@@ -72,7 +96,7 @@ mod workflow_tests {
     async fn service_coalesces_bursts_into_one_cycle() {
         let tmp = tempfile::tempdir().unwrap();
         let manager = manager_in(tmp.path());
-        observe_three(&manager, "storm N");
+        observe_three(&manager, "storm N").await;
 
         let options = EvolutionOptions {
             quiet_window: Duration::from_millis(150),
@@ -116,51 +140,21 @@ mod workflow_tests {
     }
 
     #[tokio::test]
-    async fn observation_recording_fires_the_trigger_path() {
-        let tmp = tempfile::tempdir().unwrap();
-        let manager = manager_in(tmp.path());
-        let options = EvolutionOptions {
-            quiet_window: Duration::from_millis(50),
-            timer: None,
-            policy: EvolutionPolicy::default(),
-        };
-        let handle = start(manager.clone(), options.clone());
-        let mut reports = handle.subscribe_reports();
-        // Drain the startup report.
-        let _ = tokio::time::timeout(Duration::from_secs(2), reports.recv()).await;
-
-        // The manager must be attached to the service to forward
-        // observation events.
-        manager.attach_evolution(&handle);
-        observe_three(&manager, "hooked N");
-        let report = tokio::time::timeout(Duration::from_secs(2), reports.recv())
-            .await
-            .expect("event-driven report")
-            .expect("channel open");
-        assert!(
-            report.triggers.contains(&"observation"),
-            "{:?}",
-            report.triggers
-        );
-        assert_eq!(report.proposals_written.len(), 1);
-    }
-
-    #[test]
-    fn observation_store_roundtrip_under_manager() {
+    async fn observation_store_roundtrip_under_manager() {
         // Guards the store path used by the cycle against accidental
         // regressions in manager wiring.
         let tmp = tempfile::tempdir().unwrap();
         let manager = manager_in(tmp.path());
-        assert_eq!(manager.observations().list().len(), 0);
-        observe_three(&manager, "x");
-        assert_eq!(manager.observations().list().len(), 3);
+        assert_eq!(manager.observations().await.len(), 0);
+        observe_three(&manager, "x").await;
+        assert_eq!(manager.observations().await.len(), 3);
     }
 }
 
 #[cfg(test)]
 mod timer_tests {
     use super::*;
-    use crate::observation::{ObservationInput, ObservationKind, ObservationSource};
+    use evolution_core::observation::{ObservationInput, ObservationKind, ObservationSource};
 
     /// The timer trigger path: with no events arriving, the periodic
     /// sweep alone produces cycles.
@@ -173,7 +167,8 @@ mod timer_tests {
         let manager = Arc::new(SkillManager::new(tmp.path().join("state")));
         for body in ["fix a", "fix b", "fix c"] {
             manager
-                .record_observation(ObservationInput {
+                .observation_hub()
+                .record(ObservationInput {
                     kind: ObservationKind::Failure,
                     source: ObservationSource::Agent,
                     summary: "fix for boom N".into(),
@@ -181,6 +176,7 @@ mod timer_tests {
                     node_kind: Some("sql".into()),
                     error: Some("boom at step N".into()),
                 })
+                .await
                 .unwrap();
         }
         let options = EvolutionOptions {
@@ -208,61 +204,56 @@ mod timer_tests {
 #[cfg(test)]
 mod authoring_tests {
     use super::*;
-    use crate::observation::{ObservationInput, ObservationKind, ObservationSource};
+    use evolution_core::observation::{ObservationInput, ObservationKind, ObservationSource};
 
-    #[test]
-    fn auto_approve_never_promotes_agent_authored_proposals() {
+    /// A legacy pending proposal authored by the removed
+    /// `skill_propose` channel is consumed without installing — the
+    /// model never wrote the library, and it does not start now.
+    #[tokio::test]
+    async fn legacy_agent_proposals_are_consumed_not_installed() {
         let tmp = tempfile::tempdir().unwrap();
-        let manager = Arc::new(SkillManager::new(tmp.path().join("state")));
-        let id = manager
-            .record_observation(ObservationInput {
-                kind: ObservationKind::Failure,
-                source: ObservationSource::Agent,
-                summary: "evidence".into(),
-                body: "fix".into(),
-                node_kind: Some("sql".into()),
-                error: Some("boom".into()),
-            })
-            .unwrap()
-            .id;
-        manager
-            .propose_skill(
-                "agent-made",
-                "Agent-drafted skill.",
-                &[],
-                "# Body\n\nSteps.\n",
-                std::slice::from_ref(&id),
-                "pattern",
-            )
-            .unwrap();
+        let state = tmp.path().join("state");
+        let manager = Arc::new(SkillManager::new(state.clone()));
+        // Hand-write a legacy agent-authored manifest; no code path
+        // creates these anymore.
+        let dir = state.join("skill-proposals/agent-made");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("SKILL.md"),
+            "---\nname: agent-made\ndescription: Agent-drafted skill.\n---\n# Body\n\nSteps.\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("proposal.toml"),
+            "name = 'agent-made'\nstatus = 'pending'\ncluster_hash = 'c-agent'\ncreated_at = 1\nupdated_at = 1\nauthored_by = 'agent'\n",
+        )
+        .unwrap();
 
-        let policy = EvolutionPolicy {
-            auto_approve: true,
-            max_approvals_per_cycle: 5,
-        };
         let generation = manager.generation();
-        let report = run_evolution_cycle(&manager, &policy).unwrap();
-        // Refused: still pending, human-review-only, generation unmoved.
-        assert!(report.auto_approved.is_empty());
-        assert_eq!(report.left_pending, 1);
-        assert_eq!(report.human_review_only, 1);
+        let report = run_evolution_cycle(&manager, &EvolutionPolicy::default())
+            .await
+            .unwrap();
+        assert!(report.installed.is_empty());
         assert_eq!(manager.generation(), generation);
-        assert_eq!(
-            manager.proposals().find("agent-made").unwrap().status,
-            crate::proposals::ProposalStatus::Pending
+        assert!(
+            !state.join("skills/agent-made").exists(),
+            "agent draft must not land in the library"
         );
+        // Consumed: the cluster never re-proposes, and the manifest is
+        // marked processed by hash.
+        assert!(manager.proposals().processed_clusters().contains("c-agent"));
     }
 }
 
-/// Coverage for the unified channel: every skill mutation
-/// (evolution triggers, proposal approve/reject, explicit cycle)
-/// travels through one `mpsc::Sender<SkillCommand>` into the worker
-/// task. These tests pin the funnel invariants the design relies on.
+/// Coverage for the unified channel: every skill command
+/// (evolution triggers, explicit cycles) travels through one
+/// `mpsc::Sender<SkillCommand>` into the worker task. These tests
+/// pin the funnel invariants the design relies on.
 #[cfg(test)]
 mod channel_funnel {
     use super::*;
-    use crate::observation::ObservationInput;
     use crate::proposals::ProposalStatus;
+    use evolution_core::observation::ObservationInput;
 
     fn start_service(state_dir: &std::path::Path) -> (Arc<SkillManager>, SkillControlHandle) {
         let manager = Arc::new(SkillManager::new(state_dir));
@@ -278,24 +269,26 @@ mod channel_funnel {
     }
 
     /// Three anchored failures on `(node_kind=sql, error=boom)` plus
-    /// a `RunCycle` produces one pending proposal. Returns the
-    /// proposal name (deterministic slug from `distill`).
+    /// a `RunCycle` produces one installed skill. Returns its name
+    /// (deterministic slug from `distill`).
     ///
     /// Caller is responsible for draining the Startup sweep
     /// broadcast BEFORE calling this — the Startup trigger's
     /// quiet-window drain would otherwise capture the RunCycle
     /// and create the proposal out from under us.
-    async fn seed_pending_proposal(manager: &SkillManager, handle: &SkillControlHandle) -> String {
+    async fn seed_installed_skill(manager: &SkillManager, handle: &SkillControlHandle) -> String {
         for body in ["fix a", "fix b", "fix c"] {
             manager
-                .record_observation(ObservationInput {
-                    kind: crate::observation::ObservationKind::Failure,
-                    source: crate::observation::ObservationSource::Agent,
+                .observation_hub()
+                .record(ObservationInput {
+                    kind: evolution_core::observation::ObservationKind::Failure,
+                    source: evolution_core::observation::ObservationSource::Agent,
                     summary: "fix for boom".into(),
                     body: body.into(),
                     node_kind: Some("sql".into()),
                     error: Some("boom".into()),
                 })
+                .await
                 .unwrap();
         }
         let outcome = handle.call_run_cycle(EvolutionPolicy::default()).await;
@@ -303,57 +296,8 @@ mod channel_funnel {
             SkillCommandOutcome::Ok(r) => r,
             other => panic!("seed cycle failed: {other:?}"),
         };
-        assert_eq!(report.proposals_written.len(), 1);
-        report.proposals_written[0].clone()
-    }
-
-    /// Happy path: `call_approve` returns `SkillCommandOutcome::Ok`
-    /// and bumps the manager's generation (the channel worker
-    /// called `manager.approve_proposal` directly).
-    #[tokio::test]
-    async fn channel_funnel_call_approve_returns_outcome() {
-        let tmp = tempfile::tempdir().unwrap();
-        let (manager, handle) = start_service(&tmp.path().join("state"));
-        let mut reports = handle.subscribe_reports();
-        // Drain the Startup sweep broadcast BEFORE recording
-        // observations; otherwise the Startup trigger's quiet-window
-        // drain captures our RunCycle and creates the proposal
-        // before we can control the cycle order.
-        let _ = tokio::time::timeout(Duration::from_secs(2), reports.recv()).await;
-        let name = seed_pending_proposal(&manager, &handle).await;
-        let _ = tokio::time::timeout(Duration::from_secs(2), reports.recv()).await;
-        let generation_before = manager.generation();
-        let outcome = handle.call_approve(name.clone()).await;
-        match outcome {
-            SkillCommandOutcome::Ok(o) => assert_eq!(o.name, name),
-            other => panic!("expected Ok, got {other:?}"),
-        }
-        assert_eq!(
-            manager.generation(),
-            generation_before + 1,
-            "approve bumps the generation"
-        );
-    }
-
-    /// Happy path: `call_reject` returns the updated proposal with
-    /// `Rejected` status.
-    #[tokio::test]
-    async fn channel_funnel_call_reject_returns_outcome() {
-        let tmp = tempfile::tempdir().unwrap();
-        let (manager, handle) = start_service(&tmp.path().join("state"));
-        let mut reports = handle.subscribe_reports();
-        let _ = tokio::time::timeout(Duration::from_secs(2), reports.recv()).await;
-        let name = seed_pending_proposal(&manager, &handle).await;
-        let _ = tokio::time::timeout(Duration::from_secs(2), reports.recv()).await;
-
-        let outcome = handle.call_reject(name.clone()).await;
-        match outcome {
-            SkillCommandOutcome::Ok(proposal) => {
-                assert_eq!(proposal.name, name);
-                assert_eq!(proposal.status, ProposalStatus::Rejected);
-            }
-            other => panic!("expected Ok, got {other:?}"),
-        }
+        assert_eq!(report.installed.len(), 1);
+        report.installed[0].clone()
     }
 
     /// `call_run_cycle` runs a cycle and replies with the report;
@@ -366,37 +310,10 @@ mod channel_funnel {
         let mut reports = handle.subscribe_reports();
         // Drain startup report first.
         let _ = tokio::time::timeout(Duration::from_secs(2), reports.recv()).await;
-        let name = seed_pending_proposal(&manager, &handle).await;
+        let name = seed_installed_skill(&manager, &handle).await;
         // Drain the seed cycle broadcast.
         let _ = tokio::time::timeout(Duration::from_secs(2), reports.recv()).await;
         assert_eq!(name, "sql-boom");
-    }
-
-    /// After the channel closes (every handle dropped, worker
-    /// exited), the manager's `record_observation` forwarder still
-    /// succeeds — the dropped-triggers contract means the
-    /// observation is recorded but no evolution trigger fires.
-    /// This pins the no-block guarantee on the observation hot
-    /// path.
-    #[tokio::test]
-    async fn channel_funnel_observation_forwarder_does_not_block_after_drop() {
-        let tmp = tempfile::tempdir().unwrap();
-        let (manager, handle) = start_service(&tmp.path().join("state"));
-        drop(handle);
-        // Let the worker observe the closed channel and exit.
-        tokio::time::sleep(Duration::from_millis(30)).await;
-        let probe = manager.record_observation(ObservationInput {
-            kind: crate::observation::ObservationKind::Failure,
-            source: crate::observation::ObservationSource::Agent,
-            summary: "probe".into(),
-            body: "x".into(),
-            node_kind: Some("sql".into()),
-            error: Some("boom".into()),
-        });
-        assert!(
-            probe.is_ok(),
-            "observation must succeed even with worker gone"
-        );
     }
 
     /// Dropped-command observability: the counter is reachable
@@ -412,61 +329,6 @@ mod channel_funnel {
         assert_eq!(handle.dropped_commands(), baseline);
     }
 
-    /// The critical UX invariant: a TUI approve click must NOT
-    /// wait behind a possibly-slow coalesced evolution cycle. The
-    /// worker drains the quiet window first; inline approve/reject
-    /// commands are processed BEFORE the cycle runs, so the HTTP
-    /// caller never sees the cycle's file I/O.
-    ///
-    /// We exercise this by setting a 300 ms quiet window, firing
-    /// a manual trigger, then queueing an ApproveProposal
-    /// mid-drain. With the design, both the approve reply and the
-    /// cycle broadcast must arrive within a generous window; the
-    /// cycle broadcast's `triggers` field confirms the manual
-    /// trigger was coalesced (proves the cycle ran the manual
-    /// trigger's batch, not just a no-op).
-    #[tokio::test]
-    async fn channel_funnel_inline_approve_does_not_block_cycle() {
-        let tmp = tempfile::tempdir().unwrap();
-        let manager = Arc::new(SkillManager::new(tmp.path().join("state")));
-        let handle = start(
-            manager.clone(),
-            EvolutionOptions {
-                quiet_window: Duration::from_millis(300),
-                timer: None,
-                policy: EvolutionPolicy::default(),
-            },
-        );
-        let mut reports = handle.subscribe_reports();
-        let _ = tokio::time::timeout(Duration::from_secs(2), reports.recv()).await;
-        let name = seed_pending_proposal(&manager, &handle).await;
-        let _ = tokio::time::timeout(Duration::from_secs(2), reports.recv()).await;
-
-        // Open a fresh quiet-window drain with a manual trigger.
-        handle.trigger(EvolutionTrigger::Manual { by: "t0".into() });
-        tokio::time::sleep(Duration::from_millis(20)).await;
-        let outcome = handle.call_approve(name.clone()).await;
-        match outcome {
-            SkillCommandOutcome::Ok(_) => {}
-            other => panic!("expected Ok, got {other:?}"),
-        }
-        // The cycle broadcast should arrive within the drain
-        // window plus a cycle's worth of file I/O. Generous
-        // bound keeps the test stable on busy CI.
-        let cycle_broadcast = tokio::time::timeout(Duration::from_secs(2), reports.recv())
-            .await
-            .expect("cycle broadcast")
-            .expect("channel open");
-        // The coalesced cycle should have the manual trigger in
-        // its triggers list (the worker coalesced the manual
-        // trigger into the next cycle, not a fresh cycle).
-        assert!(
-            cycle_broadcast.triggers.contains(&"manual"),
-            "cycle report missing manual trigger: {:?}",
-            cycle_broadcast.triggers
-        );
-    }
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn monitor_reflects_coalesce_distill_idle_phases() {
         // The monitor must transition idle → coalescing → distilling →
@@ -477,14 +339,16 @@ mod channel_funnel {
         // distill; otherwise the worker short-circuits the cycle
         // body and `cycles_completed` stays at 0.
         manager
-            .record_observation(crate::observation::ObservationInput {
-                kind: crate::observation::ObservationKind::Failure,
-                source: crate::observation::ObservationSource::Agent,
+            .observation_hub()
+            .record(evolution_core::observation::ObservationInput {
+                kind: evolution_core::observation::ObservationKind::Failure,
+                source: evolution_core::observation::ObservationSource::Agent,
                 summary: "fix for boom N".into(),
                 body: "fix a".into(),
                 node_kind: Some("sql".into()),
                 error: Some("boom at step N".into()),
             })
+            .await
             .unwrap();
         let handle = start(
             manager.clone(),

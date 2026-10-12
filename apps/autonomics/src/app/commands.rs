@@ -124,9 +124,8 @@ impl App {
                 self.open_skill_evolution();
             }
             CommandAction::SkillEvolve => {
-                // Follow the daemon's configured review gate; the
-                // explicit auto path is a dashboard keypress (T).
-                self.trigger_skill_evolution(false);
+                // The cycle installs what it writes; no gate to pick.
+                self.trigger_skill_evolution();
             }
             CommandAction::OpenSessions => {
                 self.open_session_picker();

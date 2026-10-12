@@ -14,7 +14,7 @@
 //!   counter, change broadcast on every mutation, usage telemetry
 //!   (the evolution fitness signal)
 //! - [`evolution`] — the unified control loop: every skill mutation
-//!   (evolution triggers, proposal approve/reject, explicit cycle)
+//!   (evolution triggers, explicit cycles)
 //!   travels through one `mpsc::Sender<SkillCommand>` into a single
 //!   worker task; the worker coalesces trigger bursts in a quiet
 //!   window and replies to inline mutations via oneshot. The cycle
@@ -23,7 +23,7 @@
 //!   content-hashed records of failures/fixes/recipes
 //! - [`distill`] — deterministic clustering and proposal synthesis
 //!   (the RSI loop's no-LLM core)
-//! - [`proposals`] — the staging area and approve/reject lifecycle
+//! - [`proposals`] — the change records the loop writes and applies
 //!   between distillation and the live library
 //! - [`inject`] — the one-line-per-skill system-prompt index
 //! - [`tools`] — skill discovery and authoring tools; the runtime layers the
@@ -49,26 +49,25 @@ pub mod format;
 pub mod inject;
 pub mod install;
 pub mod manager;
-pub mod observation;
 pub mod proposals;
 pub mod registry;
 pub mod tools;
 pub mod workflow;
 
-pub use distill::{Candidate, DistillReport, distill};
+pub use distill::{DistillReport, distill};
 pub use error::SkillError;
+// The cluster type proposals are distilled from — owned by
+// evolution-core, re-exported for the crate's public surface.
 pub use eval::{Check, EvalCase, EvalReport};
 pub use evolution::{
     CyclePhase, CycleStatus, EvolutionOptions, EvolutionPolicy, EvolutionReport, EvolutionTrigger,
     SkillCommand, SkillCommandOutcome, SkillControlHandle, start,
 };
+pub use evolution_core::cluster::Cluster;
 pub use format::SkillMeta;
 pub use inject::prompt_section;
 pub use manager::{SkillManager, UsageKind, UsageRecord};
-pub use observation::{
-    Observation, ObservationInput, ObservationKind, ObservationSource, ObservationStore,
-};
-pub use proposals::{ApproveOutcome, Proposal, ProposalStatus, Proposals};
+pub use proposals::{ApplyOutcome, Proposal, ProposalStatus, Proposals};
 pub use registry::{SkillDocument, SkillEntry, SkillRegistry, SkillTier};
 pub use tools::skill_registrations;
 pub use workflow::{RenderedWorkflow, WorkflowTemplate};

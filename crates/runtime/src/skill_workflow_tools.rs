@@ -158,6 +158,10 @@ impl ToolFunction for SkillRunWorkflowTool {
 pub struct SkillEvalTool {
     pub manager: Arc<SkillManager>,
     pub client: Arc<DataEngineClient>,
+    /// The skill-evolution control handle, when the service runs:
+    /// captured eval-failure observations nudge the worker so the
+    /// evidence distills promptly instead of waiting for the sweep.
+    pub control: Option<skills::evolution::SkillControlHandle>,
 }
 
 #[async_trait]
@@ -233,7 +237,7 @@ impl ToolFunction for SkillEvalTool {
         // them — the anchor is the first failed check's node kind.
         for (index, case) in report.cases.iter().enumerate() {
             if !case.passed {
-                self.record_eval_failure(skill, case, &kinds[index]);
+                self.record_eval_failure(skill, case, &kinds[index]).await;
             }
         }
         let mut out = format!(
@@ -361,7 +365,7 @@ impl SkillEvalTool {
     /// checks, and the anchor is the first failed check's node kind
     /// plus its failure reason. Repeated eval failures therefore
     /// cluster in distillation exactly like manual observations.
-    fn record_eval_failure(
+    async fn record_eval_failure(
         &self,
         skill: &str,
         case: &skills::eval::CaseResult,
@@ -384,16 +388,28 @@ impl SkillEvalTool {
             "Inspect the eval inputs and the workflow template; a fix here \
              should update the template or its fixtures.",
         );
-        let input = skills::ObservationInput {
-            kind: skills::ObservationKind::Failure,
-            source: skills::ObservationSource::Eval,
+        let input = evolution_core::ObservationInput {
+            kind: evolution_core::ObservationKind::Failure,
+            source: evolution_core::ObservationSource::Eval,
             summary: format!("eval case {} fails for skill {skill}", case.name),
             body,
             node_kind: anchor_kind,
             error: Some(first.reason.clone()),
         };
-        if let Err(e) = self.manager.record_observation(input) {
+        if let Err(e) = self.manager.observation_hub().record(input).await {
             tracing::warn!(skill = skill, error = %e, "cannot record eval-failure observation");
+            return;
+        }
+        // Event-driven evolution: the failure just landed in the
+        // skill-eligible pool (un-routed observations are eligible by
+        // compatibility), so nudge the worker. Best-effort by
+        // contract — see EvolutionTrigger.
+        if let Some(handle) = self.control.as_ref()
+            && !handle.trigger(skills::evolution::EvolutionTrigger::Observation)
+        {
+            tracing::debug!(
+                "skill_eval: evolution channel full or worker gone; the timer sweep will catch up"
+            );
         }
     }
 }
@@ -428,17 +444,24 @@ async fn build_dag(
     Ok(())
 }
 
-/// Build the engine-bound skill tool registrations.
+/// Build the engine-bound skill tool registrations. `control` is the
+/// skill-evolution handle, when the service runs — captured eval
+/// failures nudge the worker through it.
 pub fn skill_workflow_registrations(
     manager: Arc<SkillManager>,
     client: Arc<DataEngineClient>,
+    control: Option<skills::evolution::SkillControlHandle>,
 ) -> Vec<ToolRegistration> {
     vec![
         ToolRegistration::from(SkillRunWorkflowTool {
             manager: manager.clone(),
             client: client.clone(),
         }),
-        ToolRegistration::from(SkillEvalTool { manager, client }),
+        ToolRegistration::from(SkillEvalTool {
+            manager,
+            client,
+            control,
+        }),
     ]
 }
 
@@ -558,6 +581,7 @@ node = "b"
         let tool = SkillEvalTool {
             manager: Arc::new(skills::SkillManager::new(tmp.path())),
             client: client.clone(),
+            control: None,
         };
         let out = tool
             .run(SkillEvalInput {
@@ -662,6 +686,7 @@ spec = {}
         let tool = SkillEvalTool {
             manager: manager.clone(),
             client: make_client(),
+            control: None,
         };
         for _ in 0..3 {
             let out = tool
@@ -677,32 +702,37 @@ spec = {}
         // Three identical failures → one content-hashed observation
         // (idempotent), so the cluster threshold needs a hand: record
         // two more variants of the same anchor.
-        let observations = manager.observations();
-        assert_eq!(observations.list().len(), 1, "identical failures dedupe");
+        assert_eq!(
+            manager.observations().await.len(),
+            1,
+            "identical failures dedupe"
+        );
         for body in ["variant b", "variant c"] {
             manager
-                .record_observation(skills::ObservationInput {
-                    kind: skills::ObservationKind::Failure,
-                    source: skills::ObservationSource::Agent,
+                .observation_hub()
+                .record(evolution_core::ObservationInput {
+                    kind: evolution_core::ObservationKind::Failure,
+                    source: evolution_core::ObservationSource::Agent,
                     summary: "eval always fails".into(),
                     body: body.into(),
                     node_kind: Some("echo".into()),
                     error: Some("output_rows is None, expected >= 99".into()),
                 })
+                .await
                 .unwrap();
         }
 
-        let report = manager.distill().unwrap();
+        let report = manager.distill().await.unwrap();
         assert_eq!(report.proposals_written.len(), 1, "{report:?}");
         let name = &report.proposals_written[0];
         let proposals = manager.proposals();
         assert_eq!(proposals.list()[0].status, skills::ProposalStatus::Pending);
         assert!(proposals.validate_dir(name).is_empty());
 
-        // Approve: the skill lands in the global tier and the
+        // Apply: the skill lands in the global tier and the
         // generation advances — the loop closed.
         let generation = manager.generation();
-        let outcome = manager.approve_proposal(name).unwrap();
+        let outcome = manager.apply_proposal(name).unwrap();
         assert!(outcome.destination.ends_with(name.as_str()));
         assert_eq!(manager.generation(), generation + 1);
         let names: Vec<String> = manager
@@ -714,7 +744,7 @@ spec = {}
         assert!(names.contains(name));
 
         // And a second distill pass is a no-op.
-        let again = manager.distill().unwrap();
+        let again = manager.distill().await.unwrap();
         assert!(again.proposals_written.is_empty());
     }
 }

@@ -415,11 +415,11 @@ impl App {
                         "no observations to distill — record one with evo_observe".to_string()
                     } else {
                         format!(
-                            "{} written, {} updated, {} auto-approved, {} left pending",
+                            "{} written, {} updated, {} installed, {} deferred",
                             report.proposals_written.len(),
                             report.updated_existing.len(),
-                            report.auto_approved.len(),
-                            report.left_pending,
+                            report.installed.len(),
+                            report.deferred,
                         )
                     };
                     self.state.skill_evolution.last_report = Some(summary.clone());
@@ -451,26 +451,6 @@ impl App {
                 dashboard.status = Some(status);
                 if advanced && dashboard.visible {
                     self.refresh_skill_evolution();
-                }
-            }
-            crate::app_event::AppEvent::SkillProposalActioned { action, result } => {
-                match result {
-                    Ok(detail) => {
-                        self.state
-                            .toasts
-                            .success(format!("Proposal {action}"), Some(detail));
-                        // The action may have been issued from the palette
-                        // with the dashboard closed — refresh either way is
-                        // cheap and keeps the next open current.
-                        if self.state.skill_evolution.visible {
-                            self.refresh_skill_evolution();
-                        }
-                    }
-                    Err(e) => {
-                        self.state
-                            .toasts
-                            .error(format!("Proposal {action}"), Some(e));
-                    }
                 }
             }
             crate::app_event::AppEvent::ProviderSaved {

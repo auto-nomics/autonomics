@@ -1,7 +1,7 @@
 pub fn start(manager: Arc<SkillManager>, options: EvolutionOptions) -> SkillControlHandle {
-    // Capacity bumped from 64 → 128: inline approve/reject commands
-    // now share the channel, and a burst of TUI clicks during a slow
-    // cycle must not push approvals out the back door.
+    // Capacity 128: a burst of triggers and explicit RunCycle
+    // requests during a slow cycle must not push commands out the
+    // back door.
     let (tx, rx) = mpsc::channel::<SkillCommand>(128);
     let (report_tx, _) = broadcast::channel::<Arc<EvolutionReport>>(16);
     let dropped = Arc::new(AtomicU64::new(0));
@@ -61,21 +61,11 @@ impl Worker {
             match first {
                 SkillCommand::Evolution(trigger) => {
                     // Quiet-window drain: collect triggers into the
-                    // batch; process inline mutations as they arrive
-                    // (HTTP callers must not wait behind a possibly
-                    // slow cycle); remember the first `RunCycle` we
-                    // see so it can run *after* the inline replies
-                    // but still skip coalescing.
+                    // batch; remember the first `RunCycle` we see so
+                    // it runs after the coalesced cycle, still
+                    // skipping coalescing itself.
                     let mut triggers = vec![trigger];
                     self.monitor.coalescing(triggers.len());
-                    let mut inline_approves: Vec<(
-                        String,
-                        oneshot::Sender<SkillCommandOutcome<ApproveOutcome>>,
-                    )> = Vec::new();
-                    let mut inline_rejects: Vec<(
-                        String,
-                        oneshot::Sender<SkillCommandOutcome<Proposal>>,
-                    )> = Vec::new();
                     let mut run_cycle: Option<(
                         EvolutionPolicy,
                         oneshot::Sender<SkillCommandOutcome<EvolutionReport>>,
@@ -92,12 +82,6 @@ impl Worker {
                                 triggers.push(t);
                                 self.monitor.coalescing(triggers.len());
                             }
-                            Ok(Some(SkillCommand::ApproveProposal { name, reply })) => {
-                                inline_approves.push((name, reply));
-                            }
-                            Ok(Some(SkillCommand::RejectProposal { name, reply })) => {
-                                inline_rejects.push((name, reply));
-                            }
                             Ok(Some(cmd @ SkillCommand::RunCycle { .. })) => {
                                 // First explicit cycle wins; subsequent
                                 // RunCycle commands wait for the next
@@ -113,24 +97,7 @@ impl Worker {
                         }
                     }
 
-                    // 1) Inline approve/reject FIRST — these are user
-                    //    clicks and must not wait behind a cycle.
-                    for (name, reply) in inline_approves {
-                        let outcome = match self.manager.approve_proposal(&name) {
-                            Ok(o) => SkillCommandOutcome::Ok(o),
-                            Err(e) => SkillCommandOutcome::Err(e),
-                        };
-                        let _ = reply.send(outcome);
-                    }
-                    for (name, reply) in inline_rejects {
-                        let outcome = match self.manager.reject_proposal(&name) {
-                            Ok(p) => SkillCommandOutcome::Ok(p),
-                            Err(e) => SkillCommandOutcome::Err(e),
-                        };
-                        let _ = reply.send(outcome);
-                    }
-
-                    // 2) Coalesced cycle if any triggers accumulated.
+                    // 1) Coalesced cycle if any triggers accumulated.
                     if !triggers.is_empty() {
                         let labels: Vec<&'static str> =
                             triggers.iter().map(EvolutionTrigger::label).collect();
@@ -140,7 +107,7 @@ impl Worker {
                         // body to run, no report to broadcast. Explicit
                         // RunCycle commands still go through the body
                         // below — the operator asked for it.
-                        if run_cycle.is_none() && self.manager.observations().list().is_empty() {
+                        if run_cycle.is_none() && self.manager.observations().await.is_empty() {
                             tracing::debug!(
                                 triggers = %summary,
                                 "evolution cycle skipped: empty observation pool"
@@ -154,7 +121,8 @@ impl Worker {
                             &self.manager,
                             &self.options.policy,
                             labels.clone(),
-                        );
+                        )
+                        .await;
                         self.monitor.cycle_finished(
                             &labels,
                             started.elapsed(),
@@ -169,8 +137,8 @@ impl Worker {
                                     tracing::info!(
                                         triggers = %summary,
                                         written = report.proposals_written.len(),
-                                        auto_approved = report.auto_approved.len(),
-                                        left_pending = report.left_pending,
+                                        installed = report.installed.len(),
+                                        deferred = report.deferred,
                                         "evolution cycle"
                                     );
                                 }
@@ -182,13 +150,14 @@ impl Worker {
                         }
                     }
 
-                    // 3) Explicit RunCycle (skip coalescing).
+                    // 2) Explicit RunCycle (skip coalescing).
                     if let Some((policy, reply)) = run_cycle {
                         let labels = vec!["manual"];
                         self.monitor.distilling(&labels);
                         let started = std::time::Instant::now();
                         let outcome =
-                            run_evolution_cycle_labeled(&self.manager, &policy, labels.clone());
+                            run_evolution_cycle_labeled(&self.manager, &policy, labels.clone())
+                                .await;
                         self.monitor.cycle_finished(
                             &labels,
                             started.elapsed(),
@@ -207,26 +176,12 @@ impl Worker {
                         let _ = reply.send(outcome);
                     }
                 }
-                SkillCommand::ApproveProposal { name, reply } => {
-                    let outcome = match self.manager.approve_proposal(&name) {
-                        Ok(o) => SkillCommandOutcome::Ok(o),
-                        Err(e) => SkillCommandOutcome::Err(e),
-                    };
-                    let _ = reply.send(outcome);
-                }
-                SkillCommand::RejectProposal { name, reply } => {
-                    let outcome = match self.manager.reject_proposal(&name) {
-                        Ok(p) => SkillCommandOutcome::Ok(p),
-                        Err(e) => SkillCommandOutcome::Err(e),
-                    };
-                    let _ = reply.send(outcome);
-                }
                 SkillCommand::RunCycle { policy, reply } => {
                     let labels = vec!["manual"];
                     self.monitor.distilling(&labels);
                     let started = std::time::Instant::now();
                     let outcome =
-                        run_evolution_cycle_labeled(&self.manager, &policy, labels.clone());
+                        run_evolution_cycle_labeled(&self.manager, &policy, labels.clone()).await;
                     self.monitor.cycle_finished(
                         &labels,
                         started.elapsed(),
@@ -254,7 +209,6 @@ use std::sync::atomic::AtomicU64;
 use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::manager::SkillManager;
-use crate::proposals::{ApproveOutcome, Proposal};
 
 use super::command::{SkillCommand, SkillCommandOutcome};
 use super::handle::SkillControlHandle;

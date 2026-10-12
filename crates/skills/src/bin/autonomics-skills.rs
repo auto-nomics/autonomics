@@ -9,6 +9,9 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
+use evolution_core::ObservationInput;
+use evolution_core::ObservationKind;
+use evolution_core::ObservationSource;
 use skills::SkillManager;
 
 #[derive(Parser)]
@@ -75,8 +78,7 @@ enum Command {
         error: Option<String>,
     },
     /// List proposals, optionally filtered by status. Read-only —
-    /// approve/reject/distill are TUI-only operations (see
-    /// `skill_evolution_status_trigger_approve_reject_roundtrip` in
+    /// cycles run automatically in the daemon (see
     /// the gateway integration tests for the unified channel path).
     Proposals { status: Option<String> },
 }
@@ -378,21 +380,23 @@ fn observe_cmd(
     error: Option<String>,
 ) -> Result<(), String> {
     let kind = match kind.as_deref() {
-        None => skills::ObservationKind::Failure,
-        Some("failure") => skills::ObservationKind::Failure,
-        Some("recipe") => skills::ObservationKind::Recipe,
-        Some("caveat") => skills::ObservationKind::Caveat,
+        None => ObservationKind::Failure,
+        Some("failure") => ObservationKind::Failure,
+        Some("recipe") => ObservationKind::Recipe,
+        Some("caveat") => ObservationKind::Caveat,
         Some(other) => return Err(format!("unknown kind {other:?} (failure|recipe|caveat)")),
     };
-    let observation = manager
-        .record_observation(skills::ObservationInput {
+    let observation = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .map_err(|e| e.to_string())?
+        .block_on(manager.observation_hub().record(ObservationInput {
             kind,
-            source: skills::ObservationSource::Cli,
+            source: ObservationSource::Cli,
             summary: summary.into(),
             body: body.into(),
             node_kind,
             error,
-        })
+        }))
         .map_err(|e| e.to_string())?;
     println!("recorded {}", observation.id);
     Ok(())
@@ -429,8 +433,9 @@ fn proposals_cmd(manager: &SkillManager, status: Option<&str>) -> Result<(), Str
         );
     }
     println!(
-        "\nApprove/reject/distill are TUI-only operations. Start the daemon \
-         and open the skill evolution dashboard to control the loop."
+        "\nThe evolution cycle installs proposals automatically; `pending` \
+         entries are past the per-cycle install cap and land on the next \
+         cycle. Trigger one from the daemon's skill evolution dashboard."
     );
     Ok(())
 }

@@ -145,14 +145,6 @@ pub fn api_router(state: GatewayState) -> Router {
             "/skills/evolution/proposals",
             get(skills::list_skill_proposals),
         )
-        .route(
-            "/skills/evolution/proposals/{name}/approve",
-            post(skills::approve_skill_proposal),
-        )
-        .route(
-            "/skills/evolution/proposals/{name}/reject",
-            post(skills::reject_skill_proposal),
-        )
         .with_state(state)
 }
 

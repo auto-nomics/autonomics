@@ -31,6 +31,20 @@ pub enum Error {
     #[error("invalid request: {0}")]
     InvalidRequest(String),
 
+    /// An observation embedding provider returned unusable vectors.
+    #[error("observation embedding: {0}")]
+    Embedding(String),
+
+    /// Durable observation storage (database) failed.
+    #[error("observation storage: {0}")]
+    Storage(String),
+
+    /// A clustering candidate lost its structural anchor between the
+    /// eligibility filter and the assignment loop — an invariant
+    /// violation, not bad input.
+    #[error("clustering candidate {0:?} is unanchored")]
+    UnanchoredCandidate(String),
+
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }

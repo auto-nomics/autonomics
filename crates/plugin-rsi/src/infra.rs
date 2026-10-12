@@ -9,8 +9,8 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+use evolution_core::observation::ObservationInput;
 use evolution_core::routing::observation_route;
-use skills::observation::ObservationInput;
 
 use crate::{
     EnvironmentCatalog, EnvironmentRegistry, Error, LocalActivationOutcome, ObservationAudience,
@@ -43,7 +43,10 @@ pub trait PluginRegistryControl: Send + Sync {
 pub struct RsiInfra {
     store: Arc<PluginStore>,
     requests: RequestStore,
-    skills: Arc<skills::SkillManager>,
+    /// Shared observation evidence, resolved through the process-wide
+    /// hub — upstream of both plugins and skills. Plugin RSI never
+    /// touches the skill manager for evidence.
+    observations: Arc<evolution_core::ObservationHub>,
     routes: ObservationRouteStore,
     environments: EnvironmentRegistry,
     publisher: SharedPluginPublisher,
@@ -58,7 +61,7 @@ impl RsiInfra {
         default_branch: &str,
         author_name: &str,
         author_email: &str,
-        skills: Arc<skills::SkillManager>,
+        observations: Arc<evolution_core::ObservationHub>,
         environments: EnvironmentCatalog,
         publisher: SharedPluginPublisher,
         pull_request_publisher: SharedPullRequestPublisher,
@@ -68,7 +71,7 @@ impl RsiInfra {
             default_branch,
             author_name,
             author_email,
-            skills,
+            observations,
             EnvironmentRegistry::ephemeral(environments),
             publisher,
             pull_request_publisher,
@@ -82,7 +85,7 @@ impl RsiInfra {
         default_branch: &str,
         author_name: &str,
         author_email: &str,
-        skills: Arc<skills::SkillManager>,
+        observations: Arc<evolution_core::ObservationHub>,
         environments: EnvironmentRegistry,
         publisher: SharedPluginPublisher,
         pull_request_publisher: SharedPullRequestPublisher,
@@ -97,7 +100,7 @@ impl RsiInfra {
         Ok(Self {
             store: Arc::clone(&store),
             requests: RequestStore::open(state_dir),
-            skills,
+            observations,
             routes,
             environments,
             publisher,
@@ -130,12 +133,13 @@ impl RsiInfra {
     }
 
     /// Record shared observation evidence without creating plugin demand.
-    pub fn record_observation(
+    pub async fn record_observation(
         &self,
         input: ObservationInput,
-    ) -> Result<skills::observation::Observation> {
-        self.skills
-            .record_observation(input)
+    ) -> Result<evolution_core::Observation> {
+        self.observations
+            .record(input)
+            .await
             .map_err(|error| Error::Validation(format!("cannot record observation: {error}")))
     }
 
@@ -143,7 +147,7 @@ impl RsiInfra {
     ///
     /// The observation id becomes the request's first evidence id, so later
     /// skill distillation and plugin review reference the same evidence.
-    pub fn create_plugin_request_from_observation(
+    pub async fn create_plugin_request_from_observation(
         &self,
         observation_id: &str,
         intent: RequestIntent,
@@ -151,46 +155,50 @@ impl RsiInfra {
     ) -> Result<ObservationRequest> {
         observation_request(
             &self.requests,
-            &self.skills.observations(),
+            self.observations.storage().as_ref(),
             observation_id,
             intent,
             plugin_name,
         )
+        .await
     }
 
     /// Record one observation and immediately promote it to plugin demand.
-    pub fn record_plugin_observation(
+    pub async fn record_plugin_observation(
         &self,
         input: ObservationInput,
         intent: RequestIntent,
         plugin_name: &str,
     ) -> Result<ObservationRequest> {
-        let observation = self.record_observation(input)?;
+        let observation = self.record_observation(input).await?;
         self.create_plugin_request_from_observation(&observation.id, intent, Some(plugin_name))
+            .await
     }
 
     /// Record shared evidence, classify it, and create plugin demand when owned.
-    pub fn record_and_route_observation(
+    pub async fn record_and_route_observation(
         &self,
         input: ObservationInput,
         plugin_name: Option<&str>,
         intent: Option<RequestIntent>,
     ) -> Result<ObservationRouting> {
-        let observation = self.record_observation(input)?;
+        let observation = self.record_observation(input).await?;
         self.route_existing_observation(&observation.id, plugin_name, intent)
+            .await
     }
 
     /// Route an observation that already exists in the shared store.
-    pub fn route_existing_observation(
+    pub async fn route_existing_observation(
         &self,
         observation_id: &str,
         plugin_name: Option<&str>,
         intent: Option<RequestIntent>,
     ) -> Result<ObservationRouting> {
         let observation = self
-            .skills
-            .observations()
+            .observations
+            .storage()
             .list()
+            .await
             .into_iter()
             .find(|observation| observation.id == observation_id)
             .ok_or_else(|| {
@@ -219,11 +227,12 @@ impl RsiInfra {
             })?;
             let promoted = observation_request(
                 &self.requests,
-                &self.skills.observations(),
+                self.observations.storage().as_ref(),
                 &route.observation_id,
                 intent.unwrap_or_else(|| default_request_intent(observation.kind)),
                 Some(target),
-            )?;
+            )
+            .await?;
             self.routes.consume(&route.id, &promoted.request.id)?;
             route.request_id = Some(promoted.request.id.clone());
             route.status = ObservationRouteStatus::Consumed;
@@ -558,8 +567,8 @@ impl RsiInfra {
 /// The result of routing one shared observation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ObservationRouting {
-    /// The canonical observation retained for skill evolution.
-    pub observation: skills::observation::Observation,
+    /// The canonical observation retained in the shared hub.
+    pub observation: evolution_core::Observation,
     /// Why the router selected the audience.
     pub decision_reason: String,
     /// The durable route record.
@@ -572,12 +581,14 @@ pub struct ObservationRouting {
 mod tests {
     use super::*;
     use crate::{Environment, RequestIntent, RequestSource};
-    use skills::observation::{ObservationKind, ObservationSource as SkillObservationSource};
+    use evolution_core::observation::{
+        ObservationKind, ObservationSource as SkillObservationSource,
+    };
 
     #[test]
     fn creating_plugin_claims_request_through_the_unified_facade() {
         let state = tempfile::tempdir().unwrap();
-        let skills = skills::SkillManager::init(skills::SkillManager::new(state.path()));
+        let observations = std::sync::Arc::new(evolution_core::ObservationHub::new(state.path()));
         let mut catalog = EnvironmentCatalog::default();
         catalog.insert(
             "alpine",
@@ -595,7 +606,7 @@ mod tests {
             "main",
             "Test",
             "test@example.com",
-            skills,
+            observations,
             catalog,
             publisher.clone(),
             publisher,
@@ -623,10 +634,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn observations_feed_both_skill_and_plugin_feedback_systems() {
+    #[tokio::test]
+    async fn observations_feed_both_skill_and_plugin_feedback_systems() {
         let state = tempfile::tempdir().unwrap();
-        let skills = skills::SkillManager::init(skills::SkillManager::new(state.path()));
+        let observations = std::sync::Arc::new(evolution_core::ObservationHub::new(state.path()));
         let catalog = EnvironmentCatalog::default();
         let publisher = Arc::new(crate::GhPublisher::new(crate::GhPublisherConfig {
             enabled: false,
@@ -637,7 +648,7 @@ mod tests {
             "main",
             "Test",
             "test@example.com",
-            skills.clone(),
+            observations.clone(),
             catalog,
             publisher.clone(),
             publisher,
@@ -657,6 +668,7 @@ mod tests {
                 RequestIntent::FixNode,
                 "demo-plugin",
             )
+            .await
             .unwrap();
 
         assert_eq!(
@@ -666,9 +678,10 @@ mod tests {
         assert_eq!(feedback.request.source, RequestSource::Eval);
         assert_eq!(feedback.request.plugin_name.as_deref(), Some("demo-plugin"));
         assert!(
-            skills
-                .observations()
+            observations
+                .storage()
                 .list()
+                .await
                 .iter()
                 .any(|observation| observation.id == feedback.observation.id)
         );
@@ -685,6 +698,7 @@ mod tests {
                 Some("demo-plugin"),
                 Some(RequestIntent::FixNode),
             )
+            .await
             .unwrap();
 
         assert_eq!(routing.route.audience, ObservationAudience::Plugin);
