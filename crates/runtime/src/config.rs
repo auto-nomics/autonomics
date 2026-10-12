@@ -573,12 +573,13 @@ pub struct RuntimeConfig {
     /// Expose KMS entity/knowledge/index tools backed by Turso.
     #[serde(default)]
     pub enable_kms: bool,
-    /// Serve observation embeddings from a local ONNX model (the
-    /// `onnx-embedding` build feature). When enabled, SharedInfra
-    /// installs the model on first use and feeds distillation with
+    /// Serve observation embeddings from a local ONNX model. On by
+    /// default: SharedInfra installs the model (~363 MB download from
+    /// the Hugging Face Hub) on first use and feeds distillation with
     /// real vectors instead of the offline hashing embedder. A load
-    /// failure downgrades to hashing — the daemon still starts.
-    #[serde(default)]
+    /// failure downgrades to hashing — the daemon still starts. Set
+    /// `false` to keep the daemon on the offline hashing embedder.
+    #[serde(default = "default_true")]
     pub enable_local_embedding: bool,
     /// Model directory for the local embedding service. `None` uses
     /// the service default (`~/.autonomics/model/embedding_model`).
@@ -766,7 +767,7 @@ impl RuntimeConfig {
             )
             .unwrap_or(true),
             enable_kms: resolve_flag(base, |b| b.enable_kms, false),
-            enable_local_embedding: resolve_flag(base, |b| b.enable_local_embedding, false),
+            enable_local_embedding: resolve_flag(base, |b| b.enable_local_embedding, true),
             embedding_model_dir: base.and_then(|b| b.embedding_model_dir.clone()).flatten(),
             enable_skill_evolution: resolve_flag(base, |b| b.enable_skill_evolution, true),
             skill_evolution_interval_secs: base
@@ -1653,6 +1654,9 @@ mod tests {
         assert!(cfg.use_memory);
         assert!(cfg.generate_memory);
         assert!(!cfg.enable_kms);
+        // The local embedding model is on by default; the config
+        // field is the explicit opt-out.
+        assert!(cfg.enable_local_embedding);
 
         // Restore env vars.
         // SAFETY: single-threaded within this test fn.

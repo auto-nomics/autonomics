@@ -464,6 +464,9 @@ mod agent_persistence_tests {
         // stream this test drives.
         config.use_memory = false;
         config.generate_memory = false;
+        // Keep the embedding model (network install + ONNX session)
+        // out of these tests.
+        config.enable_local_embedding = false;
         config
     }
 

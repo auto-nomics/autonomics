@@ -18,6 +18,8 @@
 //!   implements; a new provider (remote API, local ONNX) is a new
 //!   module implementing it
 //! - [`hashing`] — the offline deterministic default
+//! - [`service`] — install the default ONNX model from the Hub and
+//!   serve it as a [`LocalEmbeddingService`]
 //! - [`vector_map`] — precomputed-vector wrapper for substitution
 //! - [`vector`] — dimension-checked vector math used by clustering
 //! - [`input`] / [`output`] / [`error`] — the input record, the
@@ -28,7 +30,6 @@ pub mod hashing;
 pub mod input;
 pub mod output;
 pub mod provider;
-#[cfg(feature = "onnx")]
 pub mod service;
 pub mod vector;
 pub mod vector_map;
@@ -37,10 +38,8 @@ pub use error::{Error, Result};
 pub use hashing::{DEFAULT_EMBEDDING_DIM, HashingTextEmbedder};
 pub use input::EmbeddingInput;
 pub use output::EmbeddingOutput;
-#[cfg(feature = "onnx")]
 pub use provider::OnnxTextEmbedder;
 pub use provider::TextEmbedder;
-#[cfg(feature = "onnx")]
-pub use service::local_embedding_service::LocalEmbeddingService;
+pub use service::local_embedding_service::{LocalEmbeddingService, default_model_dir};
 pub use vector::{cosine, mean_vector};
 pub use vector_map::VectorMapTextEmbedder;

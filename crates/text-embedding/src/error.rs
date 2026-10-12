@@ -1,6 +1,5 @@
 //! Errors returned by text embedding providers and vector helpers.
 
-#[cfg(feature = "onnx")]
 use crate::service;
 
 /// Something went wrong turning text into vectors.
@@ -10,9 +9,7 @@ pub enum Error {
     #[error("embedding provider: {0}")]
     Provider(String),
 
-    /// The local model service (install/open) failed. Only present
-    /// with the `onnx` feature, which owns the service module.
-    #[cfg(feature = "onnx")]
+    /// The local model service (install/open) failed.
     #[error("embedding service error: {0}")]
     Service(#[from] service::error::Error),
 

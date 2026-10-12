@@ -46,6 +46,15 @@ impl LocalEmbeddingService {
         Self::init_at(&default_model_dir()?).await
     }
 
+    /// Whether `model_dir` already holds a complete install — every
+    /// file [`init_at`](Self::init_at) opens — so opening it
+    /// downloads nothing. Callers that must not block on the ~363 MB
+    /// first-run download use this to decide between opening inline
+    /// and installing in the background.
+    pub fn model_installed(model_dir: &Path) -> bool {
+        is_installed(model_dir)
+    }
+
     /// Bootstrap over an explicit model directory (host configuration
     /// and tests point this at their own layouts).
     pub async fn init_at(model_dir: &Path) -> Result<Self> {
@@ -123,7 +132,7 @@ mod tests {
 
     /// End-to-end install + open + embed against the real Hub repo.
     /// Network-bound (~363 MB on first run); run explicitly with:
-    /// `cargo test -p text-embedding --features onnx -- --ignored`
+    /// `cargo test -p text-embedding -- --ignored`
     #[tokio::test]
     #[ignore = "downloads ~363 MB from the Hugging Face Hub"]
     async fn installs_and_serves_the_default_model() {
@@ -149,5 +158,28 @@ mod tests {
     fn default_dir_points_under_home() {
         let dir = default_model_dir().unwrap();
         assert!(dir.ends_with("model/embedding_model"), "{dir:?}");
+    }
+
+    /// `model_installed` must mirror `init_at`'s install decision:
+    /// false for an empty directory, true exactly when every file in
+    /// the install manifest is present.
+    #[test]
+    fn model_installed_mirrors_the_init_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!LocalEmbeddingService::model_installed(dir.path()));
+
+        for file in DEFAULT_MODEL_FILES {
+            let path = dir.path().join(file);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, b"placeholder").unwrap();
+            let complete = DEFAULT_MODEL_FILES
+                .iter()
+                .all(|f| dir.path().join(f).is_file());
+            assert_eq!(
+                LocalEmbeddingService::model_installed(dir.path()),
+                complete,
+                "after writing {file}"
+            );
+        }
     }
 }

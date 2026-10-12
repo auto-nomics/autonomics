@@ -1268,6 +1268,9 @@ mod communication_policy_tests {
         config.writing_db_path = dir.path().join("writing.db");
         config.app_db_path = dir.path().join("app.db");
         config.kms_db_path = dir.path().join("knowledge.db");
+        // Keep the embedding model (network install + ONNX session)
+        // out of these tests.
+        config.enable_local_embedding = false;
         config
     }
 
