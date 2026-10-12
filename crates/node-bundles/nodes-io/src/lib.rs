@@ -91,6 +91,7 @@ pub use reactome::nodes::participants::{
     ReactomeParticipantsNode, ReactomeParticipantsNodeFactory,
 };
 pub use reactome::nodes::pathways::{ReactomePathwaysNode, ReactomePathwaysNodeFactory};
+pub use script_nodes::builtin_script_images;
 pub use string_sdk::nodes::{Plugin as StringPlugin, StringIdMapNode, StringIdMapNodeFactory};
 pub use string_sdk::nodes::{
     StringEnrichmentNode, StringEnrichmentNodeFactory, StringNetworkNode, StringNetworkNodeFactory,
