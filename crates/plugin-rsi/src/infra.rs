@@ -9,8 +9,8 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use evolution_core::routing::observation_route;
 use evolution_core::observation::ObservationInput;
+use evolution_core::routing::observation_route;
 
 use crate::{
     EnvironmentCatalog, EnvironmentRegistry, Error, LocalActivationOutcome, ObservationAudience,
@@ -581,7 +581,9 @@ pub struct ObservationRouting {
 mod tests {
     use super::*;
     use crate::{Environment, RequestIntent, RequestSource};
-    use evolution_core::observation::{ObservationKind, ObservationSource as SkillObservationSource};
+    use evolution_core::observation::{
+        ObservationKind, ObservationSource as SkillObservationSource,
+    };
 
     #[test]
     fn creating_plugin_claims_request_through_the_unified_facade() {

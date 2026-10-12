@@ -5,11 +5,11 @@ pub trait Dimension {
     /// Extract value of current dimension from observation; None = Unanchored。
     /// 必须是"已存储字段的纯函数"——rebuild 靠重放它恢复分区。
     fn extract(&self, observation: &Observation) -> Option<String>;
-} 
+}
 
 pub struct ObservationKindDimension;
 
-impl Dimension for ObservationKindDimension  {
+impl Dimension for ObservationKindDimension {
     fn name(&self) -> &'static str {
         "observation_kind"
     }

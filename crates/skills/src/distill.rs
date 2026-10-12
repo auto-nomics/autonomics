@@ -54,10 +54,8 @@ impl Pattern {
         observations: &[Observation],
         embeddings: &HashMap<String, Vec<f32>>,
     ) -> Result<Option<Pattern>, SkillError> {
-        let by_id: HashMap<&str, &Observation> = observations
-            .iter()
-            .map(|o| (o.id.as_str(), o))
-            .collect();
+        let by_id: HashMap<&str, &Observation> =
+            observations.iter().map(|o| (o.id.as_str(), o)).collect();
         let mut members: Vec<&Observation> = cluster
             .members
             .iter()

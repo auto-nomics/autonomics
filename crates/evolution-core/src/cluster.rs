@@ -187,21 +187,14 @@ impl ClusterProcessor {
                         .map_err(|e| Error::Embedding(e.to_string()))
                 })
                 .collect::<Result<Vec<_>>>()?;
-            let nearest = similarities
-                .into_iter()
-                .max_by(|a, b| a.0.total_cmp(&b.0));
-            let live_in_partition = clusters
-                .iter()
-                .filter(|c| c.partition_key == key)
-                .count();
+            let nearest = similarities.into_iter().max_by(|a, b| a.0.total_cmp(&b.0));
+            let live_in_partition = clusters.iter().filter(|c| c.partition_key == key).count();
             // Online k-means assignment: join the nearest centroid
             // when similar enough; otherwise found a new one — unless
             // the partition is at its cap, in which case the nearest
             // centroid takes it anyway (bounded K).
             let target = match nearest {
-                Some((similarity, id)) if similarity + 1e-6 >= SIMILARITY_THRESHOLD => {
-                    Some(id)
-                }
+                Some((similarity, id)) if similarity + 1e-6 >= SIMILARITY_THRESHOLD => Some(id),
                 Some((_, id)) if live_in_partition >= MAX_CLUSTERS_PER_PARTITION => Some(id),
                 _ => None,
             };
@@ -282,9 +275,8 @@ fn merge_close_clusters(clusters: &mut Vec<Cluster>) -> Result<MergeOutcome> {
                 if clusters[i].partition_key != clusters[j].partition_key {
                     continue;
                 }
-                let similarity =
-                    cosine(&clusters[i].vector, &clusters[j].vector)
-                        .map_err(|e| Error::Embedding(e.to_string()))?;
+                let similarity = cosine(&clusters[i].vector, &clusters[j].vector)
+                    .map_err(|e| Error::Embedding(e.to_string()))?;
                 if similarity + 1e-6 >= MERGE_THRESHOLD {
                     pair = Some((i, j));
                     break 'scan;
@@ -294,8 +286,11 @@ fn merge_close_clusters(clusters: &mut Vec<Cluster>) -> Result<MergeOutcome> {
         let Some((i, j)) = pair else { break };
         // The larger cluster keeps its id — likelier to be the one
         // downstream already knows.
-        let (survivor, dropped) =
-            if clusters[i].members.len() >= clusters[j].members.len() { (i, j) } else { (j, i) };
+        let (survivor, dropped) = if clusters[i].members.len() >= clusters[j].members.len() {
+            (i, j)
+        } else {
+            (j, i)
+        };
         let (lo, hi) = (survivor.min(dropped), survivor.max(dropped));
         let (first, second) = clusters.split_at_mut(hi);
         let (big, small) = if survivor == lo {
@@ -557,12 +552,7 @@ mod tests {
             .list()
             .await
             .iter()
-            .map(|o| {
-                (
-                    o.id.clone(),
-                    vec![1.0, 0.0, 0.0],
-                )
-            })
+            .map(|o| (o.id.clone(), vec![1.0, 0.0, 0.0]))
             .collect::<std::collections::BTreeMap<_, _>>();
         hub.set_embedder(Arc::new(text_embedding::VectorMapTextEmbedder::new(
             "other-model",
@@ -606,7 +596,11 @@ mod tests {
             assert!((mean - want).abs() < 1e-6, "{} vs {want}", mean);
         }
         assert!(clusters.iter().any(|c| c.id == "far"));
-        assert!(clusters.iter().any(|c| c.id == "other" && c.members.len() == 1));
+        assert!(
+            clusters
+                .iter()
+                .any(|c| c.id == "other" && c.members.len() == 1)
+        );
     }
 
     /// The survivor may sit at the LATER index (the pair's second
@@ -634,7 +628,11 @@ mod tests {
         assert_eq!(outcome.changed, vec!["big".to_string()]);
         let big = clusters.iter().find(|c| c.id == "big").unwrap();
         assert_eq!(big.members.len(), 4);
-        assert!(clusters.iter().any(|c| c.id == "far" && c.members.len() == 1));
+        assert!(
+            clusters
+                .iter()
+                .any(|c| c.id == "far" && c.members.len() == 1)
+        );
     }
 
     /// Past the per-partition cap, a dissimilar observation is
@@ -689,10 +687,7 @@ mod tests {
         assert_eq!(report.merged, 0);
         let stored = hub.storage().load_clusters().await.unwrap();
         assert_eq!(stored.len(), MAX_CLUSTERS_PER_PARTITION);
-        assert_eq!(
-            stored.iter().map(|c| c.members.len()).sum::<usize>(),
-            count
-        );
+        assert_eq!(stored.iter().map(|c| c.members.len()).sum::<usize>(), count);
     }
 
     /// The idempotency key is order-insensitive over members.

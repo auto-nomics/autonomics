@@ -323,8 +323,17 @@ impl ObservationStorage for TursoObservationStorage {
 
     async fn update_cluster(&self, cluster: Cluster) -> Result<()> {
         let conn = self.ensure().await?;
-        let bytes: Vec<u8> = cluster.vector.iter().flat_map(|v| v.to_le_bytes()).collect();
-        let members = cluster.members.iter().cloned().collect::<Vec<_>>().join("\0");
+        let bytes: Vec<u8> = cluster
+            .vector
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
+        let members = cluster
+            .members
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\0");
         conn.lock()
             .await
             .execute(

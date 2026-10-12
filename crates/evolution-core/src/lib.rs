@@ -6,12 +6,12 @@
 //! into its own lifecycle.
 
 pub mod cluster;
+pub mod dimension;
 pub mod error;
 pub mod hub;
 pub mod observation;
 pub mod routing;
 pub mod storage;
-pub mod dimension;
 
 pub use error::Error;
 pub use hub::ObservationHub;

@@ -356,10 +356,9 @@ impl SkillManager {
     pub async fn distill(&self) -> Result<crate::distill::DistillReport, SkillError> {
         // Clustering is incremental and shared across consumers: it
         // runs over every anchored observation, once, in storage.
-        let processor =
-            evolution_core::cluster::ClusterProcessor::new(std::sync::Arc::clone(
-                self.hub.storage(),
-            ));
+        let processor = evolution_core::cluster::ClusterProcessor::new(std::sync::Arc::clone(
+            self.hub.storage(),
+        ));
         let report = processor
             .execute_cluster(&self.hub.embedding_signature())
             .await

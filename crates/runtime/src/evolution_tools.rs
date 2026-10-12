@@ -270,7 +270,10 @@ mod tests {
         let state = tempfile::tempdir().unwrap();
         create_plugin_with_node(state.path());
         let (infra, skills) = infra_with_skills(state.path());
-        let tool = EvoObserveTool { infra, control: None };
+        let tool = EvoObserveTool {
+            infra,
+            control: None,
+        };
 
         let both = tool
             .run(EvoObserveInput {
