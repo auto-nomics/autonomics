@@ -7,7 +7,7 @@
 //! one TOML file per record under `<state_dir>/skill-observations/`
 //! — is retired; its one-shot import path was removed with it.)
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -15,6 +15,7 @@ use async_trait::async_trait;
 use tokio::sync::{Mutex, OnceCell};
 use turso::Value;
 
+use crate::cluster::Cluster;
 use crate::error::{Error, Result};
 use crate::observation::{NODE_KIND_RENAMES, Observation, ObservationInput};
 
@@ -44,6 +45,19 @@ pub trait ObservationStorage: Send + Sync {
     /// previously stored for that observation (one embedding slot per
     /// record — the active embedder owns it).
     async fn save_embedding(&self, id: &str, signature: &str, vector: &[f32]) -> Result<()>;
+
+    async fn load_clusters(&self) -> Result<Vec<Cluster>>;
+
+    async fn update_cluster(&self, cluster: Cluster) -> Result<()>;
+
+    /// Remove one persisted cluster — the consolidation step drops
+    /// clusters merged into a sibling.
+    async fn delete_cluster(&self, id: &str) -> Result<()>;
+
+    /// Drop every persisted cluster. Called when the stored
+    /// clusters' model signature no longer matches the active
+    /// embedder — the set is rebuilt from scratch on the next pass.
+    async fn clear_clusters(&self) -> Result<()>;
 }
 
 /// Turso-backed production storage over `<state_dir>/evolution.db`.
@@ -110,7 +124,16 @@ impl TursoObservationStorage {
                     model_signature TEXT NOT NULL,
                     dim INTEGER NOT NULL,
                     vector BLOB NOT NULL
-                );",
+                );
+                CREATE TABLE IF NOT EXISTS cluster_centroids (
+                    id TEXT PRIMARY KEY,
+                    model_signature TEXT NOT NULL,
+                    partition_key TEXT NOT NULL,
+                    dim INTEGER NOT NULL,
+                    vector BLOB NOT NULL,
+                    members TEXT NOT NULL
+                )
+                ",
             )
             .await
             .map_err(|e| Error::Storage(format!("init evolution schema: {e}")))
@@ -239,6 +262,115 @@ impl ObservationStorage for TursoObservationStorage {
             )
             .await
             .map_err(|e| Error::Storage(format!("save embedding: {e}")))?;
+        Ok(())
+    }
+
+    async fn load_clusters(&self) -> Result<Vec<Cluster>> {
+        let conn = self.ensure().await?;
+        let guard = conn.lock().await;
+        let mut rows = guard
+            .query(
+                "SELECT id, model_signature, partition_key, dim, vector, members
+                 FROM cluster_centroids",
+                (),
+            )
+            .await
+            .map_err(|e| Error::Storage(format!("load clusters: {e}")))?;
+        let mut out = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| Error::Storage(format!("load clusters: {e}")))?
+        {
+            let text = |idx: usize| -> Result<String> {
+                match row.get_value(idx) {
+                    Ok(Value::Text(value)) => Ok(value),
+                    _ => Err(Error::Storage("malformed cluster row".into())),
+                }
+            };
+            let dim = match row.get_value(3) {
+                Ok(Value::Integer(dim)) => dim as usize,
+                _ => return Err(Error::Storage("malformed cluster row".into())),
+            };
+            let blob = match row.get_value(4) {
+                Ok(Value::Blob(blob)) => blob,
+                _ => return Err(Error::Storage("malformed cluster row".into())),
+            };
+            if blob.len() != dim * 4 {
+                return Err(Error::Storage(format!(
+                    "corrupt cluster vector: {} bytes for dim {dim}",
+                    blob.len()
+                )));
+            }
+            let members = text(5)?
+                .split('\0')
+                .filter(|id| !id.is_empty())
+                .map(str::to_string)
+                .collect::<BTreeSet<_>>();
+            out.push(Cluster {
+                id: text(0)?,
+                model_signature: text(1)?,
+                partition_key: text(2)?,
+                vector: blob
+                    .chunks_exact(4)
+                    .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                    .collect(),
+                members,
+            });
+        }
+        Ok(out)
+    }
+
+    async fn update_cluster(&self, cluster: Cluster) -> Result<()> {
+        let conn = self.ensure().await?;
+        let bytes: Vec<u8> = cluster.vector.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let members = cluster.members.iter().cloned().collect::<Vec<_>>().join("\0");
+        conn.lock()
+            .await
+            .execute(
+                "INSERT INTO cluster_centroids
+                    (id, model_signature, partition_key, dim, vector, members)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(id) DO UPDATE SET
+                    model_signature = excluded.model_signature,
+                    partition_key = excluded.partition_key,
+                    dim = excluded.dim,
+                    vector = excluded.vector,
+                    members = excluded.members",
+                turso::params![
+                    cluster.id,
+                    cluster.model_signature,
+                    cluster.partition_key,
+                    cluster.vector.len() as i64,
+                    bytes,
+                    members,
+                ],
+            )
+            .await
+            .map_err(|e| Error::Storage(format!("save cluster: {e}")))?;
+        Ok(())
+    }
+
+    async fn delete_cluster(&self, id: &str) -> Result<()> {
+        let conn = self.ensure().await?;
+        conn.lock()
+            .await
+            .execute(
+                "DELETE FROM cluster_centroids WHERE id = ?1",
+                turso::params![id],
+            )
+            .await
+            .map_err(|e| Error::Storage(format!("delete cluster: {e}")))?;
+        Ok(())
+    }
+
+    async fn clear_clusters(&self) -> Result<()> {
+        let conn = self.ensure().await?;
+        conn.lock()
+            .await
+            .execute("DELETE FROM cluster_centroids", ())
+            .await
+            .map_err(|e| Error::Storage(format!("clear clusters: {e}")))?;
         Ok(())
     }
 }

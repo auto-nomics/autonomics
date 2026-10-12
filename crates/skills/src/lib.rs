@@ -63,7 +63,7 @@ pub use evolution::{
     CyclePhase, CycleStatus, EvolutionOptions, EvolutionPolicy, EvolutionReport, EvolutionTrigger,
     SkillCommand, SkillCommandOutcome, SkillControlHandle, start,
 };
-pub use evolution_core::cluster::Candidate;
+pub use evolution_core::cluster::Cluster;
 pub use format::SkillMeta;
 pub use inject::prompt_section;
 pub use manager::{SkillManager, UsageKind, UsageRecord};

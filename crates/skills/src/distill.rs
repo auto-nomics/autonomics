@@ -2,8 +2,8 @@
 //!
 //! Where EvoScientist spends an auxiliary LLM per turn to distill
 //! observations and another to synthesize skills, this loop is pure
-//! code end to end. The observation-domain half — semantic
-//! clustering over record-time vectors — lives in
+//! code end to end. The observation-domain half — incremental
+//! semantic clustering over record-time vectors — lives in
 //! [`evolution_core::cluster`]; this module owns only the skill
 //! half:
 //!
@@ -16,36 +16,87 @@
 //!    LLM pass may rewrite it; the proposal format and the approval
 //!    gate do not care who wrote the draft.
 //!
-//! The generated name derives from the anchor, so the same pattern
-//! yields the same skill name across runs — stable, greppable, and
+//! Naming material (kind, node kind, human-readable signature) is
+//! derived HERE, on the consuming side: the cluster module groups,
+//! the skill domain names. The generated name derives from the
+//! cluster's semantic center, so the same pattern yields the same
+//! skill name across runs — stable, greppable, and
 //! collision-checkable against the installed library.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::error::SkillError;
 use crate::format;
 use crate::proposals::Proposals;
-use evolution_core::cluster::{Candidate, MIN_CLUSTER, candidates};
+use evolution_core::cluster::{Cluster, ClusterProcessor, MIN_CLUSTER, cluster_hash};
 use evolution_core::observation::{Observation, ObservationKind};
 
-/// The skill name a cluster distills to. Failure names keep the bare
+/// The skill-side view of one surfaced cluster: the naming material
+/// this domain derives (kind, node kind, signature) plus the
+/// hydrated member records. Consumers that only group observations
+/// should not have to carry naming concerns — and this module should
+/// not have to carry clustering state.
+pub struct Pattern {
+    pub kind: ObservationKind,
+    pub node_kind: String,
+    pub signature: String,
+    pub observations: Vec<Observation>,
+}
+
+impl Pattern {
+    /// Hydrate a cluster's members and derive its signature. Members
+    /// the caller filtered out (e.g. routed to another audience)
+    /// sit this pass out; a cluster with no hydrated members is not
+    /// this subsystem's business and yields `None`.
+    pub fn of(
+        cluster: &Cluster,
+        observations: &[Observation],
+        embeddings: &HashMap<String, Vec<f32>>,
+    ) -> Result<Option<Pattern>, SkillError> {
+        let by_id: HashMap<&str, &Observation> = observations
+            .iter()
+            .map(|o| (o.id.as_str(), o))
+            .collect();
+        let mut members: Vec<&Observation> = cluster
+            .members
+            .iter()
+            .filter_map(|id| by_id.get(id.as_str()).copied())
+            .collect();
+        members.sort_by(|a, b| a.id.cmp(&b.id));
+        let Some(anchor) = members.first() else {
+            return Ok(None);
+        };
+        // All members share one partition, so any one of them
+        // carries the (kind, node_kind) the partition encoded.
+        let signature = representative_signature(&members, embeddings)?;
+        Ok(Some(Pattern {
+            kind: anchor.kind,
+            node_kind: anchor.node_kind.clone().unwrap_or_default(),
+            signature,
+            observations: members.into_iter().cloned().collect(),
+        }))
+    }
+}
+
+/// The skill name a pattern distills to. Failure names keep the bare
 /// `<node>-<signature>` form; recipe and caveat names carry a kind
 /// suffix so the three namespaces never collide.
-pub fn skill_name(candidate: &Candidate) -> Option<String> {
-    let sig_slug = slug(&candidate.signature);
-    let kind_slug = slug(&candidate.node_kind);
+pub fn skill_name(pattern: &Pattern) -> Option<String> {
+    let sig_slug = slug(&pattern.signature);
+    let kind_slug = slug(&pattern.node_kind);
     if kind_slug.is_empty() {
         return None;
     }
     let stem = if sig_slug.is_empty() {
-        match candidate.kind {
+        match pattern.kind {
             ObservationKind::Failure => format!("{kind_slug}-fixes"),
             ObservationKind::Recipe | ObservationKind::Caveat => kind_slug.clone(),
         }
     } else {
         format!("{kind_slug}-{sig_slug}")
     };
-    let capped = match candidate.kind {
+    let capped = match pattern.kind {
         ObservationKind::Failure => stem[..stem.len().min(60)].to_string(),
         // Truncate the stem BEFORE appending the kind suffix so
         // the suffix always survives the 64-char name cap — that
@@ -63,15 +114,15 @@ mod naming_tests {
 
     /// The kind suffix is not decoration: without it, a failure whose
     /// signature ends in `recipe` could collide with a recipe skill.
-    #[tokio::test]
-    async fn kind_suffixes_keep_skill_namespaces_disjoint() {
-        let failure = Candidate {
+    #[test]
+    fn kind_suffixes_keep_skill_namespaces_disjoint() {
+        let failure = Pattern {
             kind: ObservationKind::Failure,
             node_kind: "sql".into(),
             signature: "recipe".into(),
             observations: Vec::new(),
         };
-        let recipe = Candidate {
+        let recipe = Pattern {
             kind: ObservationKind::Recipe,
             node_kind: "sql".into(),
             signature: "recipe".into(),
@@ -126,16 +177,16 @@ fn yaml_safe(text: &str) -> String {
     text.replace(": ", ":").replace(" #", "#")
 }
 
-/// Render the skeleton SKILL.md for a candidate.
+/// Render the skeleton SKILL.md for a pattern.
 ///
 /// Conservative by design: it presents what was observed, not advice
 /// the loop has no basis for. The approval gate (a human, for now)
 /// decides whether the pattern deserves promotion.
-pub fn render_skill_md(candidate: &Candidate) -> String {
+pub fn render_skill_md(pattern: &Pattern) -> String {
     // Per-kind profile: capitalized noun for the description, plain
     // noun for the entries heading, how the signature is introduced,
     // the description tail, and the kind tag after `auto`.
-    let (cap_noun, noun, sig_prefix, tail, kind_tag) = match candidate.kind {
+    let (cap_noun, noun, sig_prefix, tail, kind_tag) = match pattern.kind {
         ObservationKind::Failure => (
             "Fixes",
             "fixes",
@@ -158,35 +209,35 @@ pub fn render_skill_md(candidate: &Candidate) -> String {
             ", caveat",
         ),
     };
-    let sig_line = if candidate.signature.is_empty() {
+    let sig_line = if pattern.signature.is_empty() {
         String::new()
     } else {
-        format!("{sig_prefix} `{}`", candidate.signature)
+        format!("{sig_prefix} `{}`", pattern.signature)
     };
     let mut out = String::new();
     out.push_str(&format!(
         "---\nname: {}\ndescription: {} recorded for the `{}` node kind{}. \
          {}\ntags: [auto{}, {}]\n---\n\n",
-        skill_name(candidate).unwrap_or_default(),
+        skill_name(pattern).unwrap_or_default(),
         cap_noun,
-        candidate.node_kind,
+        pattern.node_kind,
         yaml_safe(&sig_line),
         tail,
         kind_tag,
-        slug(&candidate.node_kind),
+        slug(&pattern.node_kind),
     ));
     out.push_str(&format!(
         "# Auto-distilled: `{}`{}\n\n",
-        candidate.node_kind, sig_line
+        pattern.node_kind, sig_line
     ));
     out.push_str(&format!(
         "Distilled from {} recorded {} observation(s). Each entry below was \
          learned during real work; none of it is invented.\n\n",
-        candidate.observations.len(),
+        pattern.observations.len(),
         noun,
     ));
     out.push_str(&format!("## Recorded {noun}\n\n"));
-    for observation in &candidate.observations {
+    for observation in &pattern.observations {
         out.push_str(&format!("### {}\n\n", observation.summary));
         let body = observation.body.trim();
         out.push_str(body);
@@ -227,11 +278,14 @@ pub fn render_update_md(current: &str, fresh: &[&Observation]) -> String {
     out
 }
 
-/// One full distillation pass: cluster → filter consumed → write
-/// proposals (create or update). Pure with respect to the stores —
-/// callers pass the observation list, the record-time vectors, the
-/// proposal area, and a registry view for existing-skill resolution.
+/// One full distillation pass over surfaced clusters: filter
+/// consumed → write proposals (create or update). Pure with respect
+/// to the stores — callers pass the clustering pass's surfaced
+/// clusters, the observations those clusters' members hydrate to,
+/// the record-time vectors, the proposal area, and a registry view
+/// for existing-skill resolution.
 pub fn distill(
+    clusters: &[Cluster],
     observations: &[Observation],
     embeddings: &HashMap<String, Vec<f32>>,
     proposals: &Proposals,
@@ -240,16 +294,28 @@ pub fn distill(
     let mut report = DistillReport::default();
     let processed = proposals.processed_clusters();
     let installed = registry.list();
-    for candidate in candidates(observations, embeddings)? {
+    // Deterministic proposal order independent of storage order.
+    let mut patterns = Vec::new();
+    for cluster in clusters {
+        if let Some(pattern) = Pattern::of(cluster, observations, embeddings)? {
+            patterns.push((cluster_hash(&cluster.members), pattern));
+        }
+    }
+    patterns.sort_by(|a, b| {
+        a.1.node_kind
+            .cmp(&b.1.node_kind)
+            .then(a.1.kind.cmp(&b.1.kind))
+            .then(a.1.signature.cmp(&b.1.signature))
+    });
+    for (hash, pattern) in patterns {
         report.candidates_considered += 1;
-        let hash = candidate.hash();
         if processed.contains(&hash) {
             report
                 .skipped
                 .push((hash, "cluster already consumed".into()));
             continue;
         }
-        let Some(name) = skill_name(&candidate) else {
+        let Some(name) = skill_name(&pattern) else {
             proposals.mark_processed(&hash)?;
             report
                 .skipped
@@ -282,7 +348,7 @@ pub fn distill(
             // same MIN_CLUSTER bar applies to the delta as to a fresh
             // skill.
             let covered = proposals.covered_observation_ids(&name);
-            let fresh: Vec<&Observation> = candidate
+            let fresh: Vec<&Observation> = pattern
                 .observations
                 .iter()
                 .filter(|o| !covered.contains(&o.id))
@@ -312,12 +378,12 @@ pub fn distill(
             let rationale = format!(
                 "update: {} new {} observation(s) on `{}`{}",
                 fresh.len(),
-                candidate.kind.label(),
-                candidate.node_kind,
-                if candidate.signature.is_empty() {
+                pattern.kind.label(),
+                pattern.node_kind,
+                if pattern.signature.is_empty() {
                     String::new()
                 } else {
-                    format!(" / `{}`", candidate.signature)
+                    format!(" / `{}`", pattern.signature)
                 }
             );
             proposals.submit(
@@ -326,11 +392,7 @@ pub fn distill(
                 &rationale,
                 // The manifest records the FULL cluster membership so
                 // the next delta is measured against this update.
-                candidate
-                    .observations
-                    .iter()
-                    .map(|o| o.id.clone())
-                    .collect(),
+                pattern.observations.iter().map(|o| o.id.clone()).collect(),
                 true,
             )?;
             report.proposals_written.push(name.clone());
@@ -349,32 +411,119 @@ pub fn distill(
         }
         let dir = proposals.root().join(&name);
         std::fs::create_dir_all(&dir)?;
-        std::fs::write(dir.join("SKILL.md"), render_skill_md(&candidate))?;
+        std::fs::write(dir.join("SKILL.md"), render_skill_md(&pattern))?;
         let rationale = format!(
             "{} anchored {} observation(s) on `{}`{}",
-            candidate.observations.len(),
-            candidate.kind.label(),
-            candidate.node_kind,
-            if candidate.signature.is_empty() {
+            pattern.observations.len(),
+            pattern.kind.label(),
+            pattern.node_kind,
+            if pattern.signature.is_empty() {
                 String::new()
             } else {
-                format!(" / `{}`", candidate.signature)
+                format!(" / `{}`", pattern.signature)
             }
         );
         proposals.submit(
             &name,
             &hash,
             &rationale,
-            candidate
-                .observations
-                .iter()
-                .map(|o| o.id.clone())
-                .collect(),
+            pattern.observations.iter().map(|o| o.id.clone()).collect(),
             false,
         )?;
         report.proposals_written.push(name);
     }
     Ok(report)
+}
+
+/// Choose the observation closest to the cluster's semantic center,
+/// then derive a human-readable signature from it. This gives vector
+/// clusters stable, reviewable names without depending on processing
+/// order.
+fn representative_signature(
+    members: &[&Observation],
+    embeddings: &HashMap<String, Vec<f32>>,
+) -> Result<String, SkillError> {
+    let vectors = members
+        .iter()
+        .filter_map(|member| embeddings.get(&member.id).map(|v| v.as_slice()))
+        .collect::<Vec<_>>();
+    // No vectors under the current signature: fall back to the first
+    // member's text rather than failing the whole pass.
+    let Some(mean) = text_embedding::mean_vector(&vectors)
+        .map_err(|e| SkillError::Evolution(evolution_core::Error::Embedding(e.to_string())))
+        .ok()
+        .or_else(|| vectors.first().map(|v| v.to_vec()))
+    else {
+        return Ok(String::new());
+    };
+    let similarities = vectors
+        .iter()
+        .enumerate()
+        .filter(|(_, v)| v.len() == mean.len())
+        .map(|(index, vector)| {
+            text_embedding::cosine(&mean, vector)
+                .map(|similarity| (similarity, index))
+                .map_err(|e| SkillError::Evolution(evolution_core::Error::Embedding(e.to_string())))
+        })
+        .collect::<Result<Vec<_>, SkillError>>()?;
+    // Reindex against the vector subset's source members.
+    let with_vector = members
+        .iter()
+        .filter(|m| embeddings.contains_key(&m.id))
+        .collect::<Vec<_>>();
+    let representative = similarities
+        .into_iter()
+        .max_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)))
+        .map(|(_, index)| with_vector[index])
+        .unwrap_or(&members[0]);
+
+    if representative.kind == ObservationKind::Failure
+        && let Some(error) = representative.error.as_deref()
+    {
+        let normalized = signature(error);
+        if !normalized.is_empty() {
+            return Ok(normalized);
+        }
+    }
+    Ok(keyword_signature(&representative.summary))
+}
+
+/// A short, readable signature for semantic clusters. Unlike error
+/// signatures, it does not preserve the `N` placeholder: names such as
+/// "generic recipe 3" should cluster to "generic recipe".
+fn keyword_signature(text: &str) -> String {
+    const STOP_WORDS: [&str; 14] = [
+        "a", "an", "and", "are", "at", "for", "in", "is", "of", "on", "or", "the", "this", "to",
+    ];
+    text.split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|word| word.len() > 1 && !word.chars().all(|c| c.is_ascii_digit()))
+        .map(str::to_ascii_lowercase)
+        .filter(|word| !STOP_WORDS.contains(&word.as_str()))
+        .take(6)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Normalize an error text into a stable signature: first line,
+/// whitespace-collapsed, numbers generalized so "column 3" and
+/// "column 7" cluster together.
+fn signature(error: &str) -> String {
+    let first_line = error.lines().next().unwrap_or("");
+    let collapsed: String = first_line.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut out = String::with_capacity(collapsed.len());
+    let mut in_number = false;
+    for ch in collapsed.chars() {
+        if ch.is_ascii_digit() {
+            if !in_number {
+                out.push('N');
+                in_number = true;
+            }
+        } else {
+            in_number = false;
+            out.push(ch);
+        }
+    }
+    out.trim().to_string()
 }
 
 #[cfg(test)]
@@ -385,27 +534,31 @@ mod testing {
     use evolution_core::ObservationHub;
     use evolution_core::storage::ObservationStorage;
 
-    /// The record-time vectors for these observations.
-    pub(crate) async fn embeddings(
-        hub: &ObservationHub,
-        observations: &[Observation],
-    ) -> HashMap<String, Vec<f32>> {
-        let ids = observations
-            .iter()
-            .map(|o| o.id.clone())
-            .collect::<Vec<_>>();
-        hub.load_embeddings(&ids).await.unwrap()
-    }
-
     /// One full distillation pass over everything the hub holds.
     pub(crate) async fn distill_all(
         hub: &ObservationHub,
         proposals: &Proposals,
         registry: &crate::registry::SkillRegistry,
     ) -> DistillReport {
+        let processor = ClusterProcessor::new(Arc::clone(hub.storage()));
+        let report = processor
+            .execute_cluster(&hub.embedding_signature())
+            .await
+            .unwrap();
         let observations = hub.storage().list().await;
-        let embeddings = embeddings(hub, &observations).await;
-        distill(&observations, &embeddings, proposals, registry).unwrap()
+        let ids = observations
+            .iter()
+            .map(|o| o.id.clone())
+            .collect::<Vec<_>>();
+        let embeddings = hub.load_embeddings(&ids).await.unwrap();
+        distill(
+            &report.surfaced,
+            &observations,
+            &embeddings,
+            proposals,
+            registry,
+        )
+        .unwrap()
     }
 }
 
@@ -568,7 +721,7 @@ mod update_tests {
 
     /// The full evolution arc of one pattern: three observations
     /// create the skill, three more revise it, and the revision is
-    /// an overlay with the previous version archived.");
+    /// an overlay with the previous version archived.
     #[tokio::test]
     async fn create_then_update_full_arc() {
         let tmp = tempfile::tempdir().unwrap();
@@ -631,7 +784,7 @@ mod update_tests {
     }
 
     /// A human-installed skill without the `auto` tag is never
-    /// touched by the loop, and its cluster is consumed so it does not resurface every pass.");
+    /// touched by the loop, and its cluster is consumed so it does not resurface every pass.
     #[tokio::test]
     async fn human_owned_names_are_protected() {
         let tmp = tempfile::tempdir().unwrap();

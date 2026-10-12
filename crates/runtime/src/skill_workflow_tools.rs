@@ -158,6 +158,10 @@ impl ToolFunction for SkillRunWorkflowTool {
 pub struct SkillEvalTool {
     pub manager: Arc<SkillManager>,
     pub client: Arc<DataEngineClient>,
+    /// The skill-evolution control handle, when the service runs:
+    /// captured eval-failure observations nudge the worker so the
+    /// evidence distills promptly instead of waiting for the sweep.
+    pub control: Option<skills::evolution::SkillControlHandle>,
 }
 
 #[async_trait]
@@ -394,6 +398,18 @@ impl SkillEvalTool {
         };
         if let Err(e) = self.manager.observation_hub().record(input).await {
             tracing::warn!(skill = skill, error = %e, "cannot record eval-failure observation");
+            return;
+        }
+        // Event-driven evolution: the failure just landed in the
+        // skill-eligible pool (un-routed observations are eligible by
+        // compatibility), so nudge the worker. Best-effort by
+        // contract — see EvolutionTrigger.
+        if let Some(handle) = self.control.as_ref()
+            && !handle.trigger(skills::evolution::EvolutionTrigger::Observation)
+        {
+            tracing::debug!(
+                "skill_eval: evolution channel full or worker gone; the timer sweep will catch up"
+            );
         }
     }
 }
@@ -428,17 +444,24 @@ async fn build_dag(
     Ok(())
 }
 
-/// Build the engine-bound skill tool registrations.
+/// Build the engine-bound skill tool registrations. `control` is the
+/// skill-evolution handle, when the service runs — captured eval
+/// failures nudge the worker through it.
 pub fn skill_workflow_registrations(
     manager: Arc<SkillManager>,
     client: Arc<DataEngineClient>,
+    control: Option<skills::evolution::SkillControlHandle>,
 ) -> Vec<ToolRegistration> {
     vec![
         ToolRegistration::from(SkillRunWorkflowTool {
             manager: manager.clone(),
             client: client.clone(),
         }),
-        ToolRegistration::from(SkillEvalTool { manager, client }),
+        ToolRegistration::from(SkillEvalTool {
+            manager,
+            client,
+            control,
+        }),
     ]
 }
 
@@ -558,6 +581,7 @@ node = "b"
         let tool = SkillEvalTool {
             manager: Arc::new(skills::SkillManager::new(tmp.path())),
             client: client.clone(),
+            control: None,
         };
         let out = tool
             .run(SkillEvalInput {
@@ -662,6 +686,7 @@ spec = {}
         let tool = SkillEvalTool {
             manager: manager.clone(),
             client: make_client(),
+            control: None,
         };
         for _ in 0..3 {
             let out = tool

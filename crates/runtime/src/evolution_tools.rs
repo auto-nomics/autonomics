@@ -31,6 +31,12 @@ pub struct EvoObserveInput {
 
 pub struct EvoObserveTool {
     infra: RsiInfra,
+    /// The skill-evolution control handle, when the service runs.
+    /// Recording a skill-eligible observation nudges the worker so
+    /// the evidence distills within the quiet window instead of
+    /// waiting for the periodic sweep. `None` records without the
+    /// nudge — the timer still catches up.
+    control: Option<skills::evolution::SkillControlHandle>,
 }
 
 #[async_trait]
@@ -84,6 +90,21 @@ impl ToolFunction for EvoObserveTool {
             .request
             .as_ref()
             .map(|request| request.request.id.clone());
+        let skill_distillation = matches!(
+            routing.route.audience,
+            plugin_rsi::ObservationAudience::Skill | plugin_rsi::ObservationAudience::Both
+        );
+        // Event-driven evolution: only a skill-audience observation
+        // changes what the skill loop sees, so only that nudge is
+        // sent. Best-effort by contract — see EvolutionTrigger.
+        if skill_distillation
+            && let Some(handle) = self.control.as_ref()
+            && !handle.trigger(skills::evolution::EvolutionTrigger::Observation)
+        {
+            tracing::debug!(
+                "evo_observe: evolution channel full or worker gone; the timer sweep will catch up"
+            );
+        }
         Ok(ToolResult::success_json(json!({
             "observation_id": routing.observation.id,
             "kind": routing.observation.kind_label(),
@@ -92,18 +113,17 @@ impl ToolFunction for EvoObserveTool {
             "route_reason": routing.decision_reason,
             "plugin_name": routing.route.plugin_name,
             "plugin_request_id": request_id,
-            "skill_distillation": matches!(
-                routing.route.audience,
-                plugin_rsi::ObservationAudience::Skill
-                    | plugin_rsi::ObservationAudience::Both
-            ),
+            "skill_distillation": skill_distillation,
         })))
     }
 }
 
 /// Build the host-owned unified observation tool.
-pub fn evo_observe_registration(infra: RsiInfra) -> ToolRegistration {
-    ToolRegistration::from(EvoObserveTool { infra })
+pub fn evo_observe_registration(
+    infra: RsiInfra,
+    control: Option<skills::evolution::SkillControlHandle>,
+) -> ToolRegistration {
+    ToolRegistration::from(EvoObserveTool { infra, control })
 }
 
 #[cfg(test)]
@@ -217,6 +237,7 @@ mod tests {
         let state = tempfile::tempdir().unwrap();
         let tool = EvoObserveTool {
             infra: infra(state.path()),
+            control: None,
         };
 
         let recipe = tool
@@ -249,7 +270,7 @@ mod tests {
         let state = tempfile::tempdir().unwrap();
         create_plugin_with_node(state.path());
         let (infra, skills) = infra_with_skills(state.path());
-        let tool = EvoObserveTool { infra };
+        let tool = EvoObserveTool { infra, control: None };
 
         let both = tool
             .run(EvoObserveInput {
@@ -304,6 +325,65 @@ mod tests {
         skills.distill().await.unwrap();
         let proposals = skills.proposals().list();
         assert_eq!(proposals.len(), 1, "{proposals:?}");
-        assert_eq!(proposals[0].name, "generic-node-recipe");
+        // `{node_kind}-{signature}-recipe` with the signature derived
+        // from the summary keywords ("generic node recipe") — the
+        // kind slug and the keyword slug overlap by design here.
+        assert_eq!(proposals[0].name, "generic-node-generic-node-recipe-recipe");
+    }
+
+    /// Recording a skill-eligible observation through the tool nudges
+    /// a real evolution worker: a cycle runs with the observation
+    /// trigger among its labels, without waiting for the timer.
+    #[tokio::test]
+    async fn skill_routed_observations_trigger_evolution_cycles() {
+        let state = tempfile::tempdir().unwrap();
+        let (infra, skills) = infra_with_skills(state.path());
+        // Real service: tiny quiet window, no timer — after the boot
+        // sweep the observation trigger is the only wake source.
+        let control = skills::evolution::start(
+            skills.clone(),
+            skills::evolution::EvolutionOptions {
+                quiet_window: std::time::Duration::from_millis(50),
+                timer: None,
+                ..Default::default()
+            },
+        );
+        let mut reports = control.subscribe_reports();
+        let tool = EvoObserveTool {
+            infra,
+            control: Some(control),
+        };
+
+        for index in 0..3 {
+            tool.run(EvoObserveInput {
+                summary: format!("generic recipe {index}"),
+                body: format!("generic procedure {index}"),
+                kind: Some("recipe".into()),
+                node_kind: Some("generic_node".into()),
+                error: None,
+            })
+            .await
+            .unwrap();
+        }
+
+        // Coalescing may fold the three records into one cycle; what
+        // must hold is that some report carries the observation label.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut saw_observation_trigger = false;
+        while std::time::Instant::now() < deadline {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            match tokio::time::timeout(remaining, reports.recv()).await {
+                Ok(Ok(report)) if report.triggers.contains(&"observation") => {
+                    saw_observation_trigger = true;
+                    break;
+                }
+                Ok(_) => continue,
+                Err(_) => break,
+            }
+        }
+        assert!(
+            saw_observation_trigger,
+            "no evolution cycle carried the observation trigger"
+        );
     }
 }

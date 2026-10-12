@@ -39,6 +39,12 @@ pub enum Error {
     #[error("observation storage: {0}")]
     Storage(String),
 
+    /// A clustering candidate lost its structural anchor between the
+    /// eligibility filter and the assignment loop — an invariant
+    /// violation, not bad input.
+    #[error("clustering candidate {0:?} is unanchored")]
+    UnanchoredCandidate(String),
+
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }

@@ -123,7 +123,9 @@ pub struct SharedInfra {
     /// enabled. `None` means the loop is disabled at the daemon
     /// level — every gateway mutation request then returns HTTP
     /// 503 (the dashboard, the agent `skill_evolve` tool, and the
-    /// observation forwarder all funnel through this handle).
+    /// observation-recording tools all funnel through this handle;
+    /// with the service off they record without the nudge and the
+    /// on-demand paths still run cycles directly).
     pub skill_evolution: Option<skills::SkillControlHandle>,
     /// The tokio runtime handle (for spawning agent tasks).
     pub runtime_handle: tokio::runtime::Handle,
@@ -648,6 +650,7 @@ impl SharedInfra {
         let mut tools: Vec<ToolRegistration> = vfs::vbash_registrations(file_storage.clone());
         tools.push(crate::evolution_tools::evo_observe_registration(
             (*self.rsi).clone(),
+            self.skill_evolution.clone(),
         ));
         tools.extend(skills::skill_registrations(
             self.skills.clone(),
@@ -705,6 +708,7 @@ impl SharedInfra {
         tools.extend(crate::skill_workflow_tools::skill_workflow_registrations(
             self.skills.clone(),
             engine_client,
+            self.skill_evolution.clone(),
         ));
 
         if kind.enable_bibliography() {

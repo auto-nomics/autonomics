@@ -9,6 +9,13 @@ pub enum EvolutionTrigger {
     Startup,
     /// Periodic sweep.
     Timer,
+    /// A skill-eligible observation was just recorded. Fired
+    /// best-effort by the recording tools (agent `evo_observe`, eval
+    /// auto-capture); a full channel or a dead worker drops the event
+    /// and counts it — the next timer sweep still picks the evidence
+    /// up, so the trigger is an optimization, not a correctness
+    /// dependency.
+    Observation,
 }
 
 impl EvolutionTrigger {
@@ -17,6 +24,7 @@ impl EvolutionTrigger {
             EvolutionTrigger::Manual { .. } => "manual",
             EvolutionTrigger::Startup => "startup",
             EvolutionTrigger::Timer => "timer",
+            EvolutionTrigger::Observation => "observation",
         }
     }
 }

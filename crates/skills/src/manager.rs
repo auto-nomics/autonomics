@@ -354,6 +354,18 @@ impl SkillManager {
     /// No model runs here: the hub embedded every observation at record
     /// time and this pass only reads those vectors back.
     pub async fn distill(&self) -> Result<crate::distill::DistillReport, SkillError> {
+        // Clustering is incremental and shared across consumers: it
+        // runs over every anchored observation, once, in storage.
+        let processor =
+            evolution_core::cluster::ClusterProcessor::new(std::sync::Arc::clone(
+                self.hub.storage(),
+            ));
+        let report = processor
+            .execute_cluster(&self.hub.embedding_signature())
+            .await
+            .map_err(SkillError::Evolution)?;
+        // The skill subsystem hydrates only its own audience: routing
+        // decides which members reach skill distillation.
         let observations = self.skill_eligible_observations().await;
         let ids: Vec<String> = observations.iter().map(|o| o.id.clone()).collect();
         let embeddings = self
@@ -362,6 +374,7 @@ impl SkillManager {
             .await
             .map_err(SkillError::Evolution)?;
         crate::distill::distill(
+            &report.surfaced,
             &observations,
             &embeddings,
             &self.proposals(),
