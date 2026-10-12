@@ -1,6 +1,9 @@
-//! The provider contract every embedder implements.
+//! The provider contract every embedder implements, plus the
+//! providers that ship with it: the offline deterministic
+//! [`HashingTextEmbedder`] and the local ONNX model.
 
 pub mod error;
+mod hashing;
 mod onnx;
 
 use std::collections::BTreeMap;
@@ -9,6 +12,7 @@ use crate::input::EmbeddingInput;
 use crate::output::EmbeddingOutput;
 use crate::provider::error::Result;
 
+pub use hashing::{DEFAULT_EMBEDDING_DIM, HashingTextEmbedder};
 pub use onnx::OnnxTextEmbedder;
 
 /// Provider contract for turning texts into dense vectors.

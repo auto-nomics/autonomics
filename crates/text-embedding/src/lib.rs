@@ -15,9 +15,10 @@
 //! Layout:
 //!
 //! - [`provider`] — the [`TextEmbedder`] contract every embedder
-//!   implements; a new provider (remote API, local ONNX) is a new
-//!   module implementing it
-//! - [`hashing`] — the offline deterministic default
+//!   implements, plus the providers under it as modules:
+//!   [`HashingTextEmbedder`] (the offline deterministic default) and
+//!   [`OnnxTextEmbedder`] (the local ONNX model). A new provider
+//!   (remote API) is a new module under it implementing the contract
 //! - [`service`] — install the default ONNX model from the Hub and
 //!   serve it as a [`LocalEmbeddingService`]
 //! - [`vector_map`] — precomputed-vector wrapper for substitution
@@ -26,7 +27,6 @@
 //!   model-stamped output record, and the error type
 
 pub mod error;
-pub mod hashing;
 pub mod input;
 pub mod output;
 pub mod provider;
@@ -35,11 +35,9 @@ pub mod vector;
 pub mod vector_map;
 
 pub use error::{Error, Result};
-pub use hashing::{DEFAULT_EMBEDDING_DIM, HashingTextEmbedder};
 pub use input::EmbeddingInput;
 pub use output::EmbeddingOutput;
-pub use provider::OnnxTextEmbedder;
-pub use provider::TextEmbedder;
+pub use provider::{DEFAULT_EMBEDDING_DIM, HashingTextEmbedder, OnnxTextEmbedder, TextEmbedder};
 pub use service::local_embedding_service::{LocalEmbeddingService, default_model_dir};
 pub use vector::{cosine, mean_vector};
 pub use vector_map::VectorMapTextEmbedder;
