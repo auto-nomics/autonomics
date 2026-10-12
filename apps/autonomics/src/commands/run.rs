@@ -1,8 +1,8 @@
 //! Headless run subcommand — thin CLI shell over the gateway runner.
 //!
 //! The prompt is submitted to the resident gateway daemon
-//! (`headless::gateway_runner::run_via_gateway`, auto-started when
-//! absent).
+//! (`headless::gateway_runner::run_via_gateway`, which must already be
+//! running — `autonomics serve`).
 //!
 //! Responsibilities are deliberately narrow: prompt assembly (args +
 //! stdin), processor selection (`--json` vs human), the `-o`
@@ -143,9 +143,9 @@ async fn run_on_gateway(
         result
     };
 
-    // Manifest hint: --model's name part, else the daemon's active model
-    // (the daemon is guaranteed up after a run attempt, even a failed
-    // one — `run_via_gateway` starts it before anything else).
+    // Manifest hint: --model's name part, else the daemon's active
+    // model. The daemon is up whenever execution reached this far;
+    // `daemon_active_model_name` handles the not-running case itself.
     let model_used = match args.model.as_deref() {
         Some(spec) => Some(
             spec.split_once(':')
