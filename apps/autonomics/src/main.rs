@@ -17,6 +17,7 @@ mod app_event_sender;
 mod cli;
 mod clipboard_copy;
 mod commands;
+mod diagnostics;
 mod kms_tui;
 mod state;
 mod widgets;
@@ -136,6 +137,7 @@ fn main() -> color_eyre::Result<()> {
     })) {
         Command::Tui(args) => commands::tui::run_tui(args),
         Command::Kms(args) => commands::kms::run_kms(args),
+        Command::Prepare(args) => commands::prepare::run_prepare(args),
         Command::Cache(cache) => match cache.action {
             CacheAction::RefreshOpengwas(args) => commands::cache::run_refresh_opengwas(args),
             CacheAction::ClearOpengwas(args) => commands::cache::run_clear_opengwas(args),

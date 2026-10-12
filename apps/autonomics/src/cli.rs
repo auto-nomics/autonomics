@@ -16,6 +16,7 @@ mod cache;
 mod export;
 mod kms;
 mod panels;
+mod prepare;
 mod run;
 mod serve;
 mod tui;
@@ -29,6 +30,7 @@ pub use cache::{CacheAction, CacheArgs, ClearOpengwasArgs, RefreshOpengwasArgs};
 pub use export::ExportRunArgs;
 pub use kms::KmsArgs;
 pub use panels::{PanelsAction, PanelsArgs};
+pub use prepare::PrepareArgs;
 pub use run::RunArgs;
 pub use serve::{ServeAction, ServeArgs};
 pub use tui::TuiArgs;
@@ -52,6 +54,12 @@ pub enum Command {
 
     /// Provision plugin panel data bundles (see `sync`).
     Panels(PanelsArgs),
+
+    /// Provision everything the daemon needs before it starts: plugin
+    /// checkouts, the local embedding model, container images, panel
+    /// data bundles. Idempotent and re-runnable; `--check` verifies
+    /// only.
+    Prepare(PrepareArgs),
 
     /// Bibliography management — upload full-text PDFs, list pending requests.
     Bib(BibArgs),
