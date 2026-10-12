@@ -2,9 +2,8 @@
 //!
 //! - `autonomics serve` — run in the foreground (logs to stderr + state-dir file;
 //!   Ctrl+C stops it gracefully);
-//! - `autonomics serve --daemon` — detached mode, spawned by
-//!   `gateway::manager::ensure_running` (null stdio, own process group,
-//!   logs to the state-dir file only);
+//! - `autonomics serve --daemon` — detached mode (logs to the
+//!   state-dir file only; stdio detaches once the server is bound);
 //! - `autonomics serve status` / `autonomics serve stop` — inspect / gracefully stop a
 //!   running daemon.
 
@@ -12,7 +11,8 @@ use clap::Subcommand;
 
 #[derive(Debug, clap::Args)]
 pub struct ServeArgs {
-    /// Run detached from the terminal (used by the auto-spawn path).
+    /// Run detached from the terminal; logs go to the state-dir
+    /// gateway log only.
     #[arg(long)]
     pub daemon: bool,
 
@@ -24,8 +24,6 @@ pub struct ServeArgs {
 pub enum ServeAction {
     /// Print the running daemon's status (pid, uptime, agent count).
     Status,
-    /// Start a daemon
-    Start,
     /// Ask a running daemon to shut down gracefully.
     Stop,
 }
