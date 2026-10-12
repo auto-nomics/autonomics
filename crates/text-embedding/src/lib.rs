@@ -40,6 +40,9 @@ pub use error::{Error, Result};
 pub use input::EmbeddingInput;
 pub use output::EmbeddingOutput;
 pub use provider::{Bm25TextEmbedder, DEFAULT_EMBEDDING_DIM, OnnxTextEmbedder, TextEmbedder};
-pub use service::local_embedding_service::{LocalEmbeddingService, default_model_dir};
+pub use service::local_embedding_service::{
+    DEFAULT_MODEL_FILES, InstallAction, LocalEmbeddingService, MODEL_COMPLETE_MARKER,
+    ModelCompleteMarker, ModelVerification, default_model_dir, ensure_installed, verify_install,
+};
 pub use vector::{cosine, mean_vector};
 pub use vector_map::VectorMapTextEmbedder;

@@ -72,7 +72,12 @@ impl Bm25TextEmbedder {
     /// vector for the same text on every machine and every run.
     #[must_use]
     pub fn unfitted() -> Self {
-        Self::build(DEFAULT_EMBEDDING_DIM, DEFAULT_K1, DEFAULT_B, Stats::default())
+        Self::build(
+            DEFAULT_EMBEDDING_DIM,
+            DEFAULT_K1,
+            DEFAULT_B,
+            Stats::default(),
+        )
     }
 
     /// The boot default at an explicit width; different widths are
@@ -120,10 +125,7 @@ impl Bm25TextEmbedder {
 
     fn build(dim: usize, k1: f32, b: f32, stats: Stats) -> Self {
         let dim = dim.max(1);
-        let signature = format!(
-            "bm25-d{dim}-k{k1:.2}-b{b:.2}-{}",
-            snapshot_id(&stats)
-        );
+        let signature = format!("bm25-d{dim}-k{k1:.2}-b{b:.2}-{}", snapshot_id(&stats));
         Self {
             dim,
             k1,
@@ -307,9 +309,11 @@ mod tests {
     /// signature must say which.
     #[test]
     fn signature_names_the_width_and_parameters() {
-        assert!(Bm25TextEmbedder::unfitted_with_dim(64)
-            .signature_str()
-            .starts_with("bm25-d64-"));
+        assert!(
+            Bm25TextEmbedder::unfitted_with_dim(64)
+                .signature_str()
+                .starts_with("bm25-d64-")
+        );
         let out = Bm25TextEmbedder::unfitted_with_dim(64)
             .embed(&EmbeddingInput::new("a", "text"))
             .unwrap();
@@ -326,9 +330,15 @@ mod tests {
         let a1 = Bm25TextEmbedder::fit(corpus_a);
         let a2 = Bm25TextEmbedder::fit(corpus_a);
         assert_eq!(a1.signature_str(), a2.signature_str());
-        assert_ne!(a1.signature_str(), Bm25TextEmbedder::fit(corpus_b).signature_str());
+        assert_ne!(
+            a1.signature_str(),
+            Bm25TextEmbedder::fit(corpus_b).signature_str()
+        );
         // An empty corpus is exactly the unfitted default.
-        assert_eq!(Bm25TextEmbedder::fit(Vec::<String>::new()).signature_str(), Bm25TextEmbedder::unfitted().signature_str());
+        assert_eq!(
+            Bm25TextEmbedder::fit(Vec::<String>::new()).signature_str(),
+            Bm25TextEmbedder::unfitted().signature_str()
+        );
     }
 
     /// The point of fitting: a term in every document stops pulling

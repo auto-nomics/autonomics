@@ -2,8 +2,8 @@
 //! providers that ship with it: the offline deterministic
 //! [`Bm25TextEmbedder`] and the local ONNX model.
 
-pub mod error;
 mod bm25;
+pub mod error;
 mod onnx;
 
 use std::collections::BTreeMap;
@@ -12,7 +12,7 @@ use crate::input::EmbeddingInput;
 use crate::output::EmbeddingOutput;
 use crate::provider::error::Result;
 
-pub use bm25::{DEFAULT_EMBEDDING_DIM, Bm25TextEmbedder};
+pub use bm25::{Bm25TextEmbedder, DEFAULT_EMBEDDING_DIM};
 pub use onnx::OnnxTextEmbedder;
 
 /// Provider contract for turning texts into dense vectors.
