@@ -122,7 +122,6 @@ impl NodeRegistry {
 | **nodes-ldsc** | ldsc_sldsc, liability, lcv | ldsc, lcv | 3,900 |
 | **nodes-genetics** | cpassoc, magma_kegg_align | cpassoc | ~1,700 |
 | **nodes-mr** | mrlap | mrlap | 4,000 |
-| **nodes-coloc** | —(coloc_abf 走插件;bkmr 已移除) | coloc(仅 reference code) | ~640 |
 | **nodes-epi** | epi_rcs, epi_roc, epi_lasso, epi_wqs, evalue | epi, evalue | 1,900 |
 | **nodes-lcmm** | hlme, hlme_predict, hlme_compare | lcmm | 2,100 |
 | **nodes-survey** | survey_* (30 nodes) | survey | 6,000 |
@@ -204,7 +203,7 @@ default = ["all-bundles"]
 # 元 feature
 all-bundles = [
     "bundle-regression", "bundle-causal", "bundle-survival",
-    "bundle-ldsc", "bundle-genetics", "bundle-mr", "bundle-coloc",
+    "bundle-ldsc", "bundle-genetics", "bundle-mr",
     "bundle-epi", "bundle-lcmm", "bundle-survey",
     "bundle-hypothesize", "bundle-ml",
 ]
@@ -219,7 +218,6 @@ bundle-survival    = ["dep:nodes-survival"]
 bundle-ldsc        = ["dep:nodes-ldsc"]
 bundle-genetics    = ["dep:nodes-genetics"]
 bundle-mr          = ["dep:nodes-mr"]
-bundle-coloc       = ["dep:nodes-coloc"]
 bundle-epi         = ["dep:nodes-epi"]
 bundle-lcmm        = ["dep:nodes-lcmm"]
 bundle-survey      = ["dep:nodes-survey"]
@@ -243,7 +241,7 @@ data-engine = { path = "...", default-features = false, features = ["bundle-mr"]
 # 除了 ML 和 survey 之外全部启用
 data-engine = { path = "...", default-features = false, features = [
     "bundle-regression", "bundle-causal", "bundle-survival",
-    "bundle-ldsc", "bundle-genetics", "bundle-mr", "bundle-coloc",
+    "bundle-ldsc", "bundle-genetics", "bundle-mr",
     "bundle-epi", "bundle-lcmm", "bundle-hypothesize",
 ]}
 ```
@@ -319,7 +317,6 @@ pub fn assert_all_factories_build(registry: &NodeRegistry) {
 | 2a | nodes-sql | 无算法依赖 (700 LOC) |
 | 2b | nodes-regression | 只依赖 statkit (1400 LOC) |
 | 2c | nodes-survival | 只依赖 cmprsk (1400 LOC) |
-| 2d | nodes-coloc | coloc(bkmr 原生实现已移除) |
 | 2e | nodes-epi | epi + evalue (1900 LOC) |
 
 每批: 创建 crate → 搬代码 → `Plugin` impl → data-engine feature gate → test
@@ -395,7 +392,6 @@ crates/
 │   ├── nodes-ldsc/
 │   ├── nodes-genetics/
 │   ├── nodes-mr/
-│   ├── nodes-coloc/
 │   ├── nodes-epi/
 │   ├── nodes-lcmm/
 │   ├── nodes-survey/

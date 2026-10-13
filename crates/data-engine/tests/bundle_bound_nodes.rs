@@ -249,6 +249,18 @@ fn native_lava_nodes_are_removed() {
 }
 
 #[test]
+fn native_coloc_abf_registration_is_removed() {
+    let registry = registry();
+    let kinds = registry.list_nodes();
+
+    // The native coloc.abf reference implementation (bio_crates/coloc and
+    // the nodes-coloc bundle) was removed. `coloc_abf` registers only
+    // through the coloc manifest plugin when a plugins root is present;
+    // this plugin-free registry must not carry it.
+    assert!(!kinds.iter().any(|node| node.kind == "coloc_abf"));
+}
+
+#[test]
 fn donor_composition_node_is_registered() {
     let registry = registry();
 

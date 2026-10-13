@@ -2009,15 +2009,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "coloc"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror 2.0.20",
-]
-
-[[package]]
 name = "color-eyre"
 version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2892,7 +2883,6 @@ dependencies = [
  "evalue",
  "futures",
  "nodes-causal",
- "nodes-coloc",
  "nodes-dl",
  "nodes-epi",
  "nodes-genetics",
@@ -7823,23 +7813,6 @@ dependencies = [
  "serde",
  "serde_json",
  "statkit",
- "thiserror 2.0.20",
- "tokio",
-]
-
-[[package]]
-name = "nodes-coloc"
-version = "0.1.0"
-dependencies = [
- "arrow-array",
- "arrow-schema",
- "async-trait",
- "coloc",
- "dag-core",
- "datafusion",
- "schemars",
- "serde",
- "serde_json",
  "thiserror 2.0.20",
  "tokio",
 ]

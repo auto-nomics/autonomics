@@ -80,13 +80,11 @@ pub fn build_default_registry_with_container_execution(
     #[cfg(feature = "bundle-survey")]
     registry.register_plugin(&nodes_survey::Plugin);
 
-    // ── Phase 2: regression, survival, coloc, epi, sql bundles ────────
+    // ── Phase 2: regression, survival, epi, sql bundles ───────────────
     #[cfg(feature = "bundle-regression")]
     registry.register_plugin(&nodes_regression::Plugin);
     #[cfg(feature = "bundle-survival")]
     registry.register_plugin(&nodes_survival::Plugin);
-    #[cfg(feature = "bundle-coloc")]
-    registry.register_plugin(&nodes_coloc::Plugin);
     #[cfg(feature = "bundle-epi")]
     registry.register_plugin(&nodes_epi::Plugin);
     #[cfg(feature = "bundle-sql")]

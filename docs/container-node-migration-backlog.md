@@ -29,7 +29,7 @@ the official replacement passes a reproducible end-to-end baseline.
 | BKMR | native Rust implementation removed (2026-10; `bkmr` node + `bio_crates/bkmr`); no replacement runtime deployed | official R `bkmr` package | — | decide whether the capability returns via a container wrap |
 
 | Visualization | `visualization_container` is the registered runtime; the legacy host-R DataFrame `visualization` node is removed | pinned R 4.5.3 runtime with Arrow 23.0.1.2 and ggplot2 4.0.3 | no reference panel | none for the local File-to-File PNG baseline |
-| COLOC `coloc.abf` | `coloc_abf_container` implemented; unit tests passing; wrapper unit tests build the official contract | official R `coloc` 5.2.3 (CRAN Archive) | no reference panel | pin image digest by promoting the local tag to an internal registry and re-running the Podman e2e baseline |
+| COLOC `coloc.abf` | `coloc_abf_container` implemented; unit tests passing; wrapper unit tests build the official contract; the native Rust reference implementation (`bio_crates/coloc`, nodes-coloc bundle) is removed | official R `coloc` 5.2.3 (CRAN Archive) | no reference panel | pin image digest by promoting the local tag to an internal registry and re-running the Podman e2e baseline |
 | Single-cell MatrixMarket preprocessing | `single_cell_preprocessor_container` implemented, GHCR-pinned, and covered by real Podman inspect/ingest plus production-scale MatrixMarket baselines | official Scanpy 1.11.3 with a locked wheel closure | no reference panel | none |
 
 ### Verified local provenance
