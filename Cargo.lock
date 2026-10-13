@@ -2301,19 +2301,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cpassoc"
-version = "0.1.0"
-dependencies = [
- "faer",
- "rand 0.9.5",
- "rand_chacha 0.9.0",
- "rand_distr 0.5.1",
- "serde_json",
- "statrs",
- "thiserror 2.0.20",
-]
-
-[[package]]
 name = "cpufeatures"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2881,7 +2868,6 @@ dependencies = [
  "nodes-lcmm",
  "nodes-mice",
  "nodes-ml",
- "nodes-mr",
  "nodes-opengwas",
  "nodes-power",
  "nodes-rd",
@@ -7485,20 +7471,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mrlap"
-version = "0.1.0"
-dependencies = [
- "faer",
- "rand 0.9.5",
- "rand_chacha 0.9.0",
- "rand_distr 0.5.1",
- "serde_json",
- "statrs",
- "thiserror 2.0.20",
- "tracing",
-]
-
-[[package]]
 name = "multer"
 version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7822,10 +7794,8 @@ dependencies = [
  "arrow-array",
  "arrow-schema",
  "async-trait",
- "cpassoc",
  "dag-core",
  "datafusion",
- "faer",
  "schemars",
  "serde",
  "serde_json",
@@ -7977,26 +7947,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
-]
-
-[[package]]
-name = "nodes-mr"
-version = "0.1.0"
-dependencies = [
- "arrow-array",
- "arrow-schema",
- "async-trait",
- "dag-core",
- "datafusion",
- "faer",
- "mrlap",
- "schemars",
- "serde",
- "serde_json",
- "thiserror 2.0.20",
- "tokio",
- "tracing",
- "vfs",
 ]
 
 [[package]]

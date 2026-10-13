@@ -53,7 +53,7 @@
      ┌─────────▼─────────┐          ┌──────────▼──────────┐
      │    dag-core       │          │   node bundles      │
      │ (trait+registry+  │◄──────── │  nodes-io           │
-     │  dag)     │  depend  │  nodes-mr           │
+     │  dag)     │  depend  │                     │
      └───────────────────┘          │  nodes-ml           │
                                     │  nodes-survey       │
                                     │  ... (14 bundles)   │
@@ -118,8 +118,7 @@ impl NodeRegistry {
 | **nodes-regression** | linear_regression, binary_logistic_regression, ordinal_logistic_regression, cox_regression, chi_square | statkit | 1,400 |
 | **nodes-causal** | mediation, causal, cmest (6 variants) | statkit, epi | 2,200 |
 | **nodes-survival** | survival, fine_gray, cuminc | cmprsk | 1,400 |
-| **nodes-genetics** | cpassoc, magma_kegg_align | cpassoc | ~1,700 |
-| **nodes-mr** | mrlap | mrlap | 4,000 |
+| **nodes-genetics** | magma_kegg_align | — | ~600 |
 | **nodes-epi** | epi_rcs, epi_roc, epi_lasso, epi_wqs, evalue | epi, evalue | 1,900 |
 | **nodes-lcmm** | hlme, hlme_predict, hlme_compare | lcmm | 2,100 |
 | **nodes-survey** | survey_* (30 nodes) | survey | 6,000 |
@@ -130,11 +129,11 @@ impl NodeRegistry {
 
 每个 bundle crate 结构:
 ```
-crates/node-bundles/nodes-mr/
-├── Cargo.toml          # depends on dag-core + mrlap
+crates/node-bundles/nodes-genetics/
+├── Cargo.toml          # depends on dag-core (+vfs)
 ├── src/
 │   ├── lib.rs          # pub struct Plugin; impl NodePlugin for Plugin
-│   └── mrlap.rs
+│   └── magma_kegg.rs
 └── tests/
 ```
 
@@ -144,21 +143,19 @@ crates/node-bundles/nodes-mr/
 
 每个 bundle crate 导出:
 ```rust
-// nodes-mr/src/lib.rs
+// nodes-genetics/src/lib.rs
 use dag_core::{NodePlugin, NodeRegistry};
 
 pub struct Plugin;
 impl NodePlugin for Plugin {
-    fn name(&self) -> &'static str { "mr" }
+    fn name(&self) -> &'static str { "genetics" }
     fn register(&self, registry: &mut NodeRegistry) {
-        registry.register(Box::new(MrlapNodeFactory));
-        registry.register(Box::new(MrpressoNodeFactory));
-        registry.register(Box::new(MvmrNodeFactory));
+        registry.register(Box::new(MagmaKeggAlignNodeFactory {}));
     }
 }
 
 // 公开供 data-engine 导入的工厂类型
-pub use mrlap::{MrlapNode, MrlapNodeFactory, MrlapSpec};
+pub use magma_kegg::{MagmaKeggAlignNode, MagmaKeggAlignNodeFactory};
 // ...
 ```
 
@@ -176,8 +173,6 @@ pub fn new(...) -> Self {
     nodes_regression::Plugin.register(&mut registry);
     #[cfg(feature = "bundle-causal")]
     nodes_causal::Plugin.register(&mut registry);
-    #[cfg(feature = "bundle-mr")]
-    nodes_mr::Plugin.register(&mut registry);
     // ... 每个 bundle 一个 cfg gate
 
     registry
@@ -199,7 +194,7 @@ default = ["all-bundles"]
 # 元 feature
 all-bundles = [
     "bundle-regression", "bundle-causal", "bundle-survival",
-    "bundle-genetics", "bundle-mr",
+    "bundle-genetics",
     "bundle-epi", "bundle-lcmm", "bundle-survey",
     "bundle-hypothesize", "bundle-ml",
 ]
@@ -212,7 +207,6 @@ bundle-regression  = ["dep:nodes-regression"]
 bundle-causal      = ["dep:nodes-causal"]
 bundle-survival    = ["dep:nodes-survival"]
 bundle-genetics    = ["dep:nodes-genetics"]
-bundle-mr          = ["dep:nodes-mr"]
 bundle-epi         = ["dep:nodes-epi"]
 bundle-lcmm        = ["dep:nodes-lcmm"]
 bundle-survey      = ["dep:nodes-survey"]
@@ -231,12 +225,12 @@ nodes-regression = { path = "node-bundles/nodes-regression", optional = true }
 下游使用:
 ```toml
 # 只需要 MR 分析 — 最小化依赖
-data-engine = { path = "...", default-features = false, features = ["bundle-mr"] }
+data-engine = { path = "...", default-features = false, features = ["bundle-genetics"] }
 
 # 除了 ML 和 survey 之外全部启用
 data-engine = { path = "...", default-features = false, features = [
     "bundle-regression", "bundle-causal", "bundle-survival",
-    "bundle-genetics", "bundle-mr",
+    "bundle-genetics",
     "bundle-epi", "bundle-lcmm", "bundle-hypothesize",
 ]}
 ```
@@ -323,14 +317,13 @@ pub fn assert_all_factories_build(registry: &NodeRegistry) {
 | 3a | nodes-io | 3 | 提取 `normalize_path` 到共享位置 |
 | 3b | nodes-causal | 8 | cmest 6 变体 |
 | 3c | nodes-lcmm | 3 | hlme 3 节点 |
-| 3d | nodes-mr | 2 | mr + mrlap |
 | 3e | nodes-survey | 30 | survey_common 大量共享代码 |
 
 ### Phase 4: 迁移高复杂度 bundle (2 个)
 
 | 批次 | bundle | 节点数 | 特殊注意 |
 |------|--------|--------|----------|
-| 4b | nodes-genetics | 2 | cpassoc/magma_kegg_align 迁移(magma 原生分析已移除) |
+| 4b | nodes-genetics | 1 | magma_kegg_align 迁移(cpassoc 原生实现已移除) |
 
 ### Phase 5: 清理收尾
 
@@ -375,7 +368,7 @@ crates/
 │   │   └── runtime/
 │   │       ├── types.rs
 │   │       └── error.rs
-│   └── Cargo.toml                 # features: bundle-mr, bundle-ml, ...
+│   └── Cargo.toml                 # features: bundle-genetics, bundle-ml, ...
 │
 ├── node-bundles/
 │   ├── nodes-io/
@@ -384,7 +377,6 @@ crates/
 │   ├── nodes-causal/
 │   ├── nodes-survival/
 │   ├── nodes-genetics/
-│   ├── nodes-mr/
 │   ├── nodes-epi/
 │   ├── nodes-lcmm/
 │   ├── nodes-survey/
@@ -436,8 +428,8 @@ pub use dag_core::{
 #[cfg(feature = "bundle-sql")]
 pub use nodes_sql::{SqlNode, SqlNodeFactory, SqlNodeSpec};
 
-#[cfg(feature = "bundle-mr")]
-pub use nodes_mr::{MrlapNode, MrlapNodeFactory, MrlapSpec};
+#[cfg(feature = "bundle-genetics")]
+pub use nodes_genetics::{MagmaKeggAlignNode, MagmaKeggAlignNodeFactory};
 // ...
 ```
 

@@ -7,7 +7,7 @@
 #   Rscript tests/extract_data.R
 #
 # Restoring from aliyun:autonomics-data/lcmm/test-data/ via rclone:
-#   rclone copy aliyun:autonomics-data/lcmm/test-data/ bio_crates/lcmm/tests/
+#   rclone copy aliyun:autonomics-data/lcmm/test-data/ stat_crates/lcmm/tests/
 
 suppressMessages({
   library(lcmm)

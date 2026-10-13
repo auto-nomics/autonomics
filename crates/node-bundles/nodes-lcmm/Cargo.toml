@@ -8,7 +8,7 @@ description = "Latent class mixed model DAG node bundle (hlme)."
 
 [dependencies]
 dag-core = { path = "../../dag-core" }
-lcmm = { path = "../../../bio_crates/lcmm" }
+lcmm = { path = "../../../stat_crates/lcmm" }
 arrow-array.workspace = true
 arrow-schema.workspace = true
 async-trait.workspace = true

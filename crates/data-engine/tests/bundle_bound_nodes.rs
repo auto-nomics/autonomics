@@ -13,27 +13,6 @@ fn bundle(id: &str, vpath: &str) -> DataBundle {
 fn catalog() -> BundleRegistry {
     BundleRegistry::from_bundles([
         bundle(
-            nodes_mr::ldsc_common::BUNDLE_LDSCORE_1000G_EUR,
-            "/bundles/ldsc/1000g.parquet",
-        ),
-        bundle(
-            nodes_mr::ldsc_common::BUNDLE_LDSCORE_1000G_EUR_M,
-            "/bundles/ldsc/1000g_m.parquet",
-        ),
-        bundle(
-            nodes_mr::ldsc_common::BUNDLE_LDSCORE_BASELINELD_V2_2_EUR,
-            "/bundles/ldsc/baseline.parquet",
-        ),
-        bundle(
-            nodes_mr::ldsc_common::BUNDLE_LDSCORE_BASELINELD_V2_2_EUR_M,
-            "/bundles/ldsc/baseline_m.parquet",
-        ),
-        bundle(
-            nodes_mr::ldsc_common::BUNDLE_LDSCORE_UKBB_EUR,
-            "/bundles/ldsc/ukbb.parquet",
-        ),
-        bundle("ldmatrix-1000g-eur", "/bundles/ldmatrix/chr{N}"),
-        bundle(
             nodes_genetics::magma_kegg::GENE_LOC_BUNDLE,
             "/bundles/magma/gene_loc.parquet",
         ),
@@ -89,10 +68,6 @@ fn all_bundle_bound_node_kinds_build_from_runtime_catalog() {
             }),
         ),
         (
-            "mrlap",
-            serde_json::json!({"exposure_name": "exposure", "outcome_name": "outcome"}),
-        ),
-        (
             "magma_kegg_align",
             serde_json::json!({"min_set_size": 1, "max_set_size": 10}),
         ),
@@ -137,19 +112,13 @@ fn global_builtin_bundles_build_without_a_runtime_catalog() {
 
     registry
         .build_node(
-            "mrlap",
-            serde_json::json!({"exposure_name": "exposure", "outcome_name": "outcome"}),
-        )
-        .unwrap_or_else(|error| panic!("build `mrlap` from built-in catalog: {error}"));
-    registry
-        .build_node(
             "bundle_source",
             serde_json::json!({
                 "bundle_id": "als_cns.cell_markers",
                 "format": "tsv"
             }),
         )
-        .unwrap_or_else(|error| panic!("build marker bundle source: {error}"));
+        .unwrap_or_else(|error| panic!("build marker bundle source from built-in catalog: {error}"));
 }
 
 #[test]
@@ -158,9 +127,9 @@ fn default_data_engine_uses_builtin_bundle_catalog() {
 
     engine
         .add_node_from_registry(
-            "mrlap",
-            "mrlap",
-            serde_json::json!({"exposure_name": "exposure", "outcome_name": "outcome"}),
+            "bundle_source",
+            "bundle_source",
+            serde_json::json!({"bundle_id": "als_cns.cell_markers", "format": "tsv"}),
         )
         .unwrap();
 }
@@ -210,8 +179,7 @@ fn native_two_sample_mr_node_is_removed() {
 
     // The native Rust TwoSampleMR port (`two_sample_mr`) and its
     // `bio_crates/mr` estimator library were removed; TwoSampleMR runs
-    // through the `twosamplemr` manifest plugin. MRlap keeps its own
-    // self-contained estimator in bio_crates/mrlap.
+    // through the `twosamplemr` manifest plugin.
     assert!(!kinds.iter().any(|node| node.kind == "two_sample_mr"));
 }
 
@@ -264,10 +232,33 @@ fn native_ldsc_bundle_nodes_are_removed() {
     // The nodes-ldsc bundle (sldsc / liability / lcv nodes + ldsc_common)
     // and the bio_crates/ldsc + bio_crates/lcv crates were removed; the
     // official LDSC runs through the `ldsc_h2` / `ldsc_munge` / `ldsc_rg`
-    // manifest plugin. mrlap keeps its vendored regression engine.
+    // manifest plugin.
     for kind in ["sldsc", "liability", "lcv"] {
         assert!(!kinds.iter().any(|node| node.kind == kind), "{kind} still registered");
     }
+}
+
+#[test]
+fn native_mrlap_node_is_removed() {
+    let registry = registry();
+    let kinds = registry.list_nodes();
+
+    // The native MRlap port (`mrlap` node + `bio_crates/mrlap` with its
+    // vendored LDSC/MR estimators) was removed; no replacement runtime
+    // exists (the wrap was blocked on Wave 2 reference data).
+    assert!(!kinds.iter().any(|node| node.kind == "mrlap"));
+}
+
+#[test]
+fn native_cpassoc_node_is_removed() {
+    let registry = registry();
+    let kinds = registry.list_nodes();
+
+    // The native CPASSOC port (`cpassoc` node + `bio_crates/cpassoc`) was
+    // removed; no replacement runtime exists (the wrap was blocked on
+    // Wave 2). nodes-genetics keeps only magma_kegg_align.
+    assert!(!kinds.iter().any(|node| node.kind == "cpassoc"));
+    assert!(kinds.iter().any(|node| node.kind == "magma_kegg_align"));
 }
 
 #[test]

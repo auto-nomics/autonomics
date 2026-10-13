@@ -7,7 +7,7 @@
 //! Rscript tests/extract_data.R tests/fixtures
 //! ```
 //!
-//! Test archive: `rclone copy aliyun:autonomics-data/lcmm/test-data/ bio_crates/lcmm/tests/`
+//! Test archive: `rclone copy aliyun:autonomics-data/lcmm/test-data/ stat_crates/lcmm/tests/`
 
 use lcmm::{
     HlmeControl, HlmeLikelihood, LongData, ModelSpec, ParamLayout, compute_posterior, hlme,

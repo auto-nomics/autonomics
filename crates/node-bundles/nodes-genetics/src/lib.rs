@@ -1,6 +1,9 @@
 //! Statistical genetics DAG node bundle.
+//!
+//! The native CPASSOC port (`cpassoc` node + `bio_crates/cpassoc`) was
+//! removed; the bundle now carries only the KEGG-side data-prep node that
+//! feeds MAGMA gene-set analysis.
 
-pub mod cpassoc;
 pub mod magma_kegg;
 
 use dag_core::{NodePlugin, NodeRegistry};
@@ -11,7 +14,6 @@ impl NodePlugin for Plugin {
         "genetics"
     }
     fn register(&self, registry: &mut NodeRegistry) {
-        registry.register(Box::new(cpassoc::CpassocNodeFactory {}));
         registry.register(Box::new(magma_kegg::MagmaKeggAlignNodeFactory {}));
     }
 }

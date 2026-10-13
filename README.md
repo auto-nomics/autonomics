@@ -134,7 +134,7 @@ Two mechanisms make the system trustworthy for biomedical work:
 | Data infrastructure | `vfs`, `data-catalog`, `container-runtime`, `biofusion` | OpenDAL-backed VFS, Hugging Face-hosted versioned packages, Podman execution, immutable panel caches, and biological-format DataFusion readers. |
 | Statistics and epidemiology | `statkit`, `epi`, `hypothesize`, `nodes-power`, `cmprsk`, `crrkit`, `survey`, `mice`, `hierint` | Descriptive statistics and regression; causal inference and mediation; composable tests and p-value workflows; prospective power and sample-size design; competing risks; survey designs; imputation; hierarchical interaction models. |
 | Machine learning and deep learning | `ml`, `dl` | Preprocessing, feature engineering, clustering, supervised models, ensembles, anomaly detection, dimensionality reduction; Burn-based MLP, DeepSurv, DeepHit, RNN, Transformer, and autoencoder workflows. Generalized random forests ship as the containerized `grf` plugin family (official R grf). |
-| Statistical genetics | `mrlap`, `cpassoc`, `evalue`, `lcmm` | LD score regression, Mendelian randomization, E-value analysis, latent-class mixed models, and related ports. |
+| Statistical genetics | `evalue`, `lcmm` | Mendelian randomization, E-value analysis, latent-class mixed models, and related ports. |
 | Regression discontinuity | `rdrobust`, `rdpower`, `rdmulti`, `rddensity`, `rdlocrand` | Local-polynomial RD estimation, power and sample-size calculations, multi-cutoff designs, manipulation testing, and local randomization inference. |
 | Scientific data clients | `eutils`, `opengwas`, `gwascatalog-sdk`, `opentargets`, `chembl`, `uniprot`, `string-sdk`, `enrichr-sdk`, `kegg`, `reactome`, `ensembl`, `rcsb`, `alphafold`, `interpro`, `pubchem`, `protocolio`, `clinicaltrials`, `nhanes` | SDKs, agent tools, and selected DAG source nodes for PubMed/Entrez, OpenGWAS, GWAS Catalog, Open Targets, ChEMBL, UniProt, STRING, Enrichr, KEGG, Reactome, Ensembl, RCSB, AlphaFold, InterPro, PubChem, protocols.io, ClinicalTrials.gov, and NHANES. |
 | Literature, writing, and knowledge | `arxiv`, `biorxiv`, `openalex`, `crossref`, `embase`, `europepmc`, `semantic-scholar`, `bib-types`, `bib-base`, `writing-types`, `writing-base`, `kms`, `kms-tools` | Unified literature search and full-text management, the evidence channel on DAG edges, content-addressed documents, BibTeX/RIS/Markdown/CSL export, LaTeX AST operations, citation resolution, compilation, and knowledge-tree tools. |
@@ -251,8 +251,7 @@ autonomics/
 │   ├── runtime/                  RuntimeHost and shared agent infrastructure
 │   ├── bib-*/writing-*/kms*      Literature, manuscript, and knowledge systems
 │   └── ...                       Scientific API SDKs and supporting crates
-├── bio_crates/                   Genetics, causal-forest, RD, and related methods
-├── stat_crates/                  Statistics, epidemiology, ML, imputation, and DL
+├── stat_crates/                  Statistics, econometrics (RD), epidemiology, ML, imputation, and DL
 ├── fixtures/                     Representative valid and malformed test inputs
 ├── docs/                         Design documents and topic guides
 ├── infra/                        Local reference-data preparation utilities

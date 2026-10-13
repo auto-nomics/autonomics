@@ -73,8 +73,6 @@ pub fn build_default_registry_with_container_execution(
     registry.register_plugin(&nodes_causal::Plugin);
     #[cfg(feature = "bundle-lcmm")]
     registry.register_plugin(&nodes_lcmm::Plugin);
-    #[cfg(feature = "bundle-mr")]
-    registry.register_plugin(&nodes_mr::Plugin);
     #[cfg(feature = "bundle-survey")]
     registry.register_plugin(&nodes_survey::Plugin);
 

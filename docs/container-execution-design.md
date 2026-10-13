@@ -165,6 +165,8 @@ MVMR R package; its native factory is likewise unregistered.
 The GenomicSEM, MAGMA gene/set/meta, and TwoSampleMR native implementations
 have since been removed pending their official-binary wraps; the native LAVA
 port is gone entirely, with the official `lava` containers as the registered
-runtimes. Other MiXeR, HDL, MTAG, CPASSOC, and MRlap nodes remain transitional
-native implementations until their official image, provenance, reference
-package, and end-to-end baseline are complete.
+runtimes; the native MRlap port has been removed outright (its wrap was
+blocked on Wave 2 reference data); the native CPASSOC port has been removed
+outright as well. Other MiXeR, HDL, and MTAG nodes remain transitional native
+implementations until their official image, provenance, reference package,
+and end-to-end baseline are complete.
