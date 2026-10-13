@@ -1,13 +1,13 @@
 //! Node execution fingerprints and content-level cache invalidation.
 //!
 //! A fingerprint is a blake3 digest over *everything that determines a node's
-//! output*: its kind, canonical spec, engine version, the identity of every
-//! input value it consumes, and — for plugin-backed nodes — the identity of
-//! the plugin implementation that executes (see [`PluginIdentity`]).
-//! Following the Nextflow task-hash model, one digest simultaneously serves
-//! as provenance evidence ("this output came from exactly these inputs"), a
-//! cache key (equal fingerprint ⇒ equal result), and an invalidation check
-//! (see [`cached_file_changed`]).
+//! output*: its kind, canonical spec, engine version, source revision, the
+//! identity of every input value it consumes, and — for plugin-backed
+//! nodes — the identity of the plugin implementation that executes (see
+//! [`PluginIdentity`]). Following the Nextflow task-hash model, one digest
+//! simultaneously serves as provenance evidence ("this output came from
+//! exactly these inputs"), a cache key (equal fingerprint ⇒ equal result),
+//! and an invalidation check (see [`cached_file_changed`]).
 //!
 //! Input identity is value-shaped:
 //! - file-like values contribute their path plus a content hash when one is
@@ -32,17 +32,17 @@ use crate::dag::graph::{EdgeLabel, PortOutputs};
 use crate::value::{FileFingerprint, FileRef, NodeValue};
 
 /// Domain separator for the fingerprint hash, so digests from different
-/// schemes or versions can never collide. v2 adds the source revision to
-/// the digest (F15); v1 digests are not compatible by design.
+/// schemes or versions can never collide.
 ///
-/// v2 adds the plugin-identity constituent (WO-R09): v1 digests covered only
-/// kind + spec + engine version + input identities, so swapping a plugin
-/// family's scripts, manifest, or image under an unchanged kind/spec kept the
-/// fingerprint — and its cache — stale. Every node's fingerprint changes once
-/// when an engine built with v2 first recomputes it, plugin-backed or not
-/// (the absent-plugin marker is itself a constituent).
-pub const FINGERPRINT_DOMAIN: &str = "autonomics-node-fingerprint-v2";
-
+/// v3 (F15 ⊕ WO-R09 merge) adds **both** the source revision and the
+/// plugin-identity constituent: v1 covered only kind + spec + engine
+/// version + input identities, so an implementation change with an
+/// unchanged spec — engine rebuild or plugin family script/manifest/image
+/// swap — kept the fingerprint, and its cache, stale. Every node's
+/// fingerprint changes once when an engine built with v3 first recomputes
+/// it, plugin-backed or not (the absent-plugin marker is itself a
+/// constituent). v1/v2 digests are not compatible by design.
+pub const FINGERPRINT_DOMAIN: &str = "autonomics-node-fingerprint-v3";
 /// Marker written into the digest when a node has no retained spec (raw
 /// `add_node` path, tests only) — auditable degradation, never silent.
 pub const NOSPEC_TAG: &str = "nospec";
@@ -196,7 +196,7 @@ pub struct PanelIdentity {
 /// [`crate::source_revision()`] into the digest.
 ///
 /// ```text
-/// blake3( FINGERPRINT_DOMAIN ‖ engine_version ‖ kind ‖ spec ‖ plugin ‖ Σ sorted identities )
+/// blake3( FINGERPRINT_DOMAIN ‖ engine_version ‖ rev ‖ kind ‖ spec ‖ plugin ‖ Σ sorted identities )
 /// ```
 ///
 /// * `spec = None` marks the node as spec-less (see [`NOSPEC_TAG`]).
@@ -601,9 +601,14 @@ mod tests {
             "/data/x.csv",
             Some(fp(10, 1234, Some("sha256:deadbeef"))),
         )];
-        let reference =
-            compute_node_fingerprint("sql", Some(&serde_json::json!({"q": 1})), "v1", &base, None);
-
+        let reference = compute_node_fingerprint_with_revision(
+            "sql",
+            Some(&serde_json::json!({"q": 1})),
+            "v1",
+            "aaaaaaaaaaaa",
+            &base,
+            None,
+        );
         let changed_kind = compute_node_fingerprint_with_revision(
             "other_kind",
             Some(&serde_json::json!({"q": 1})),
@@ -636,25 +641,22 @@ mod tests {
             &base,
             None,
         );
-        let changed_spec =
-            compute_node_fingerprint("sql", Some(&serde_json::json!({"q": 2})), "v1", &base, None);
-        let changed_engine =
-            compute_node_fingerprint("sql", Some(&serde_json::json!({"q": 1})), "v2", &base, None);
         let changed_hash = {
             let identities = vec![file_identity(
                 "/data/x.csv",
                 Some(fp(10, 1234, Some("sha256:feedface"))),
             )];
-            compute_node_fingerprint(
+            compute_node_fingerprint_with_revision(
                 "sql",
                 Some(&serde_json::json!({"q": 1})),
                 "v1",
+                "aaaaaaaaaaaa",
                 &identities,
                 None,
             )
         };
-        let nospec = compute_node_fingerprint("sql", None, "v1", &base, None);
-
+        let nospec =
+            compute_node_fingerprint_with_revision("sql", None, "v1", "aaaaaaaaaaaa", &base, None);
         for candidate in [
             changed_kind,
             changed_spec,

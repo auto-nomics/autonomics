@@ -20,6 +20,12 @@ pub struct PublishArgs {
     /// Create missing Hugging Face repositories.
     #[arg(long)]
     pub create_repo: bool,
+    /// Open the central-index registration as a pull request instead of
+    /// committing to the registry branch. Required when the registry
+    /// repository belongs to someone else (direct writes answer
+    /// `Forbidden`); the package payload commits are unaffected.
+    #[arg(long)]
+    pub create_pr: bool,
     /// Hugging Face token; defaults to $HUGGING_FACE_TOKEN, then $HF_TOKEN.
     #[arg(long, value_name = "TOKEN")]
     pub token: Option<String>,
@@ -48,5 +54,6 @@ fn resolve_hf_target(args: &PublishArgs) -> Result<HfPublishTarget> {
         revision,
         token: resolve_hf_token(args.token.clone()),
         create_repository: args.create_repo,
+        create_pr: args.create_pr,
     })
 }
