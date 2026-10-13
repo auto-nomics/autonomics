@@ -15,7 +15,7 @@ use crate::error::ContainerRuntimeError;
 use crate::types::{ContainerRunRequest, ContainerRunResult, WorkspaceRef};
 
 pub const DEFAULT_CONTAINER_WORKDIR: &str = "/work";
-pub const DEFAULT_TIMEOUT_SECS: u64 = 3600;
+pub const DEFAULT_TIMEOUT_SECS: u64 = 3600 * 24;
 pub const MAX_CAPTURED_OUTPUT_BYTES: usize = 64 * 1024;
 
 /// One connection to a Podman runtime on the local host.

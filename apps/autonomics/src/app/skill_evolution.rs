@@ -118,15 +118,11 @@ impl App {
             // Vertical keys act on the focused pane: move the list
             // selection (fetching the newly selected row's detail), or
             // scroll the detail document.
-            KeyCode::Down | KeyCode::Char('j') => {
-                if dashboard.navigate(true) {
-                    self.fetch_skill_detail();
-                }
+            KeyCode::Down | KeyCode::Char('j') if dashboard.navigate(true) => {
+                self.fetch_skill_detail();
             }
-            KeyCode::Up | KeyCode::Char('k') => {
-                if dashboard.navigate(false) {
-                    self.fetch_skill_detail();
-                }
+            KeyCode::Up | KeyCode::Char('k') if dashboard.navigate(false) => {
+                self.fetch_skill_detail();
             }
             _ => {}
         }

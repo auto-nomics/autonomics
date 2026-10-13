@@ -226,7 +226,9 @@ fn observation_text(observation: &Observation) -> String {
 
 /// The offline deterministic default every hub starts with.
 fn default_embedder() -> Arc<std::sync::RwLock<Arc<dyn TextEmbedder>>> {
-    Arc::new(std::sync::RwLock::new(Arc::new(Bm25TextEmbedder::unfitted())))
+    Arc::new(std::sync::RwLock::new(Arc::new(
+        Bm25TextEmbedder::unfitted(),
+    )))
 }
 
 #[cfg(test)]
