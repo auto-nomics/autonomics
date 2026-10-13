@@ -7560,26 +7560,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "mr"
-version = "0.1.0"
-dependencies = [
- "faer",
- "rand 0.9.5",
- "rand_chacha 0.9.0",
- "rand_distr 0.5.1",
- "schemars",
- "serde",
- "statrs",
- "thiserror 2.0.20",
-]
-
-[[package]]
 name = "mrlap"
 version = "0.1.0"
 dependencies = [
  "faer",
  "ldsc",
- "mr",
  "rand 0.9.5",
  "rand_chacha 0.9.0",
  "rand_distr 0.5.1",
@@ -8003,7 +7988,6 @@ dependencies = [
  "libc",
  "liblzma",
  "lzf-sys",
- "mr",
  "nhanes",
  "openalex",
  "opendal",

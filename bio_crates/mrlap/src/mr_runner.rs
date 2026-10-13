@@ -1,15 +1,13 @@
 //! IVW-MR + MR-Egger — Rust port of `MRlap/R/run_MR.R` (lines 163-184).
 //!
-//! Delegates the regression to the already-validated `mr` crate
-//! ([`mr::methods::ivw::mr_ivw`] and [`mr::methods::egger::mr_egger_regression`]),
+//! Delegates the regression to the estimators vendored in
+//! [`crate::mr_estimators`] (formerly the `bio_crates/mr` TwoSampleMR port),
 //! which faithfully reproduce TwoSampleMR's implementations. Instrument
 //! selection (thresholding + pruning + reverse filtering) lives in
 //! [`crate::pruning`].
 
+use crate::mr_estimators::{mr_egger_regression, mr_ivw};
 use crate::pruning::Instrument;
-use mr::Parameters;
-use mr::methods::egger::mr_egger_regression;
-use mr::methods::ivw::mr_ivw;
 
 /// Result of the MR stage — matches the values MRlap reports.
 #[derive(Clone, Debug)]
@@ -33,9 +31,8 @@ pub fn run_mr(ivs: &[Instrument]) -> MrResult {
     let se_exp: Vec<f64> = ivs.iter().map(|i| i.std_se_exp).collect();
     let se_out: Vec<f64> = ivs.iter().map(|i| i.std_se_out).collect();
 
-    let params = Parameters::default();
-    let ivw = mr_ivw(&b_exp, &b_out, &se_exp, &se_out, &params);
-    let egger = mr_egger_regression(&b_exp, &b_out, &se_exp, &se_out, &params);
+    let ivw = mr_ivw(&b_exp, &b_out, &se_exp, &se_out);
+    let egger = mr_egger_regression(&b_exp, &b_out, &se_exp, &se_out);
 
     let n_exp = mean(ivs.iter().map(|i| i.n_exp));
     let n_out = mean(ivs.iter().map(|i| i.n_out));

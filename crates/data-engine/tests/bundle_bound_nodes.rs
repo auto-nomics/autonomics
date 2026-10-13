@@ -208,6 +208,18 @@ fn native_magma_analysis_nodes_are_removed() {
 }
 
 #[test]
+fn native_two_sample_mr_node_is_removed() {
+    let registry = registry();
+    let kinds = registry.list_nodes();
+
+    // The native Rust TwoSampleMR port (`two_sample_mr`) and its
+    // `bio_crates/mr` estimator library were removed; TwoSampleMR runs
+    // through the `twosamplemr` manifest plugin. MRlap keeps its own
+    // self-contained estimator in bio_crates/mrlap.
+    assert!(!kinds.iter().any(|node| node.kind == "two_sample_mr"));
+}
+
+#[test]
 fn donor_composition_node_is_registered() {
     let registry = registry();
 
