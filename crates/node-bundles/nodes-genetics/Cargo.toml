@@ -4,27 +4,22 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Statistical genetics DAG node bundle (CPASSOC, MAGMA)."
+description = "Statistical genetics DAG node bundle (CPASSOC, KEGG alignment for MAGMA gene sets)."
 
 [dependencies]
 dag-core = { path = "../../dag-core" }
 vfs = { path = "../../vfs" }
 cpassoc = { path = "../../../bio_crates/cpassoc" }
-magma = { path = "../../../bio_crates/magma" }
-libloading = "0.8"
 arrow-array.workspace = true
 arrow-schema.workspace = true
 async-trait.workspace = true
 schemars.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-sha2 = "0.10"
 thiserror.workspace = true
 datafusion.workspace = true
 faer.workspace = true
 tracing.workspace = true
-futures.workspace = true
-nanoid = "0.5.0"
 tempfile = "3.27.0"
 tokio = { workspace = true }
 

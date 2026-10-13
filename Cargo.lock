@@ -7210,17 +7210,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc04a4c58212d57930a24bf47d3fa87485264a3a054e9c10e042eb373573ad3c"
 
 [[package]]
-name = "magma"
-version = "0.1.0"
-dependencies = [
- "faer",
- "rand 0.9.5",
- "serde_json",
- "statrs",
- "thiserror 2.0.20",
-]
-
-[[package]]
 name = "malloc_buf"
 version = "0.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7731,15 +7720,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nanoid"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8628de41fe064cc3f0cf07f3d299ee3e73521adaff72278731d5c8cae3797873"
-dependencies = [
- "rand 0.9.5",
-]
-
-[[package]]
 name = "native-tls"
 version = "0.2.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7955,14 +7935,9 @@ dependencies = [
  "dag-core",
  "datafusion",
  "faer",
- "futures",
- "libloading 0.8.9",
- "magma",
- "nanoid",
  "schemars",
  "serde",
  "serde_json",
- "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",

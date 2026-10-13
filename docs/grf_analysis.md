@@ -283,7 +283,6 @@ impl DagNode for CausalForestNode {
 |---|---|---|
 | `ldsc-sys` (`build.rs` + Eigen, 静态库 + bindgen) | ✅ grf 也是 Eigen+CMake | 复用同一套 build 脚手架 |
 | `mtag` 节点 (VFS 表 + DAG 端口 + serialized model blob) | ✅ forest 本身就是个 blob | DAG 节点间以 `ForestBlob` 传递训练结果 |
-| `magma` (`test_data` 在 aliyun) | ✅ grf 也需要 fixture | `aliyun://autonomics-data/grf/test-data/` 归档 |
 | `coloc` (R 交叉验证 golden tests) | ✅ grf 全部 12 个 forest 都需要 | `grf_xxx` 节点对每种 forest 跑 R grf 同输入 → bit-equal |
 
 ### 3.5 与 R 端交叉验证策略

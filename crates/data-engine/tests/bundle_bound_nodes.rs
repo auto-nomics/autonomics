@@ -33,7 +33,6 @@ fn catalog() -> BundleRegistry {
             "/bundles/ldsc/ukbb.parquet",
         ),
         bundle("ldmatrix-1000g-eur", "/bundles/ldmatrix/chr{N}"),
-        bundle("g1000-eur", "/bundles/magma/g1000_eur"),
         bundle(
             nodes_genetics::magma_kegg::GENE_LOC_BUNDLE,
             "/bundles/magma/gene_loc.parquet",
@@ -104,7 +103,6 @@ fn all_bundle_bound_node_kinds_build_from_runtime_catalog() {
             "mrlap",
             serde_json::json!({"exposure_name": "exposure", "outcome_name": "outcome"}),
         ),
-        ("magma_gene", serde_json::json!({"population": "EUR"})),
         (
             "magma_kegg_align",
             serde_json::json!({"min_set_size": 1, "max_set_size": 10}),
@@ -191,6 +189,22 @@ fn native_gsem_nodes_are_removed() {
     // gsem_usermodel / gsem_commonfactor / gsem_rgmodel) was removed from
     // nodes-genetics; no gsem node registers in a plugin-free default build.
     assert!(!kinds.iter().any(|node| node.kind.starts_with("gsem_")));
+}
+
+#[test]
+fn native_magma_analysis_nodes_are_removed() {
+    let registry = registry();
+    let kinds = registry.list_nodes();
+
+    // The native Rust MAGMA re-implementation (magma_gene / magma_set /
+    // magma_meta) was removed from nodes-genetics; annotation already runs
+    // through the `magma_annotate` manifest plugin and the official-binary
+    // gene/set/meta wrap is tracked in docs/container-node-migration-backlog.md.
+    // `magma_kegg_align` is pure KEGG-side data prep and stays registered.
+    for kind in ["magma_gene", "magma_set", "magma_meta"] {
+        assert!(!kinds.iter().any(|node| node.kind == kind), "{kind} still registered");
+    }
+    assert!(kinds.iter().any(|node| node.kind == "magma_kegg_align"));
 }
 
 #[test]

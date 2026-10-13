@@ -52,7 +52,6 @@ members = [
   "bio_crates/mrlap",
 
   "bio_crates/cpassoc",
-  "bio_crates/magma",
 
   "stat_crates/statkit",
   "stat_crates/epi",

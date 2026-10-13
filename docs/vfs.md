@@ -168,7 +168,7 @@ source = "/data/mixer/resources"
 read_only = true
 ```
 
-MAGMA nodes address their inputs through that virtual namespace. The reference
+MAGMA tooling addresses its inputs through that virtual namespace. The reference
 root contains prebuilt 1000 Genomes bundles for AFR, AMR, EAS, EUR, and SAS:
 
 ```text
@@ -180,7 +180,7 @@ The second path is a PLINK prefix; `.bed`, `.bim`, and `.fam` are resolved and
 read through the same VFS mount. `<population>` accepts `AFR`, `AMR`, `EAS`,
 `EUR`, and `SAS`.
 
-`magma_gene` consumes reference panels as versioned panel bundles. A bundle
+Each reference panel is a versioned panel bundle. A bundle
 directory contains `bundle.json`, the PLINK prefix, and a precomputed gene
 annotation generated from that exact panel:
 
@@ -189,11 +189,6 @@ vfs:///data/magma/references/g1000_eas/bundle.json
 vfs:///data/magma/references/g1000_eas/annotations/g1000_eas.NCBI37.3.window35.genes.annot
 ```
 
-The node derives `g1000_<population>` automatically (`EAS` remains the default),
-or uses an explicit `reference` ID for a custom panel bundle. It checks
-genome-build/population metadata, verifies the required annotation checksum,
-and reads both the PLINK files and annotation from that same bundle. For
-example, `{"population":"EUR"}` selects the deployed `g1000_eur` bundle.
 New bundles can be prepared with:
 
 ```bash
