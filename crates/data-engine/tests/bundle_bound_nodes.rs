@@ -118,7 +118,9 @@ fn global_builtin_bundles_build_without_a_runtime_catalog() {
                 "format": "tsv"
             }),
         )
-        .unwrap_or_else(|error| panic!("build marker bundle source from built-in catalog: {error}"));
+        .unwrap_or_else(|error| {
+            panic!("build marker bundle source from built-in catalog: {error}")
+        });
 }
 
 #[test]
@@ -167,7 +169,10 @@ fn native_magma_analysis_nodes_are_removed() {
     // gene/set/meta wrap is tracked in docs/container-node-migration-backlog.md.
     // `magma_kegg_align` is pure KEGG-side data prep and stays registered.
     for kind in ["magma_gene", "magma_set", "magma_meta"] {
-        assert!(!kinds.iter().any(|node| node.kind == kind), "{kind} still registered");
+        assert!(
+            !kinds.iter().any(|node| node.kind == kind),
+            "{kind} still registered"
+        );
     }
     assert!(kinds.iter().any(|node| node.kind == "magma_kegg_align"));
 }
@@ -208,7 +213,10 @@ fn native_lava_nodes_are_removed() {
         "lava_pcor",
         "lava_multireg",
     ] {
-        assert!(!kinds.iter().any(|node| node.kind == kind), "{kind} still registered");
+        assert!(
+            !kinds.iter().any(|node| node.kind == kind),
+            "{kind} still registered"
+        );
     }
 }
 
@@ -234,7 +242,10 @@ fn native_ldsc_bundle_nodes_are_removed() {
     // official LDSC runs through the `ldsc_h2` / `ldsc_munge` / `ldsc_rg`
     // manifest plugin.
     for kind in ["sldsc", "liability", "lcv"] {
-        assert!(!kinds.iter().any(|node| node.kind == kind), "{kind} still registered");
+        assert!(
+            !kinds.iter().any(|node| node.kind == kind),
+            "{kind} still registered"
+        );
     }
 }
 
