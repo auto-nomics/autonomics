@@ -104,7 +104,6 @@ fn all_bundle_bound_node_kinds_build_from_runtime_catalog() {
             "mrlap",
             serde_json::json!({"exposure_name": "exposure", "outcome_name": "outcome"}),
         ),
-        ("gsem_ldsc", serde_json::json!({"n_traits": 2})),
         ("magma_gene", serde_json::json!({"population": "EUR"})),
         (
             "magma_kegg_align",
@@ -181,6 +180,17 @@ fn native_hdl_l_nodes_are_removed() {
     // hdl_l_container / hdl_l_scan moved to the manifest plugin
     // (/mnt/projects/node-plugins/hdl); they no longer register in a
     // plugin-free default build.
+}
+
+#[test]
+fn native_gsem_nodes_are_removed() {
+    let registry = registry();
+    let kinds = registry.list_nodes();
+
+    // The native Rust GenomicSEM port (gsem_munge / gsem_ldsc /
+    // gsem_usermodel / gsem_commonfactor / gsem_rgmodel) was removed from
+    // nodes-genetics; no gsem node registers in a plugin-free default build.
+    assert!(!kinds.iter().any(|node| node.kind.starts_with("gsem_")));
 }
 
 #[test]

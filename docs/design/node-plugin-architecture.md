@@ -120,7 +120,7 @@ impl NodeRegistry {
 | **nodes-causal** | mediation, causal, cmest (6 variants) | statkit, epi | 2,200 |
 | **nodes-survival** | survival, fine_gray, cuminc | cmprsk | 1,400 |
 | **nodes-ldsc** | ldsc_sldsc, liability, lcv | ldsc, lcv | 3,900 |
-| **nodes-genetics** | cpassoc, magma (4) | cpassoc, magma, genomic_sem | 3,900 |
+| **nodes-genetics** | cpassoc, magma (4) | cpassoc, magma | 3,900 |
 | **nodes-mr** | mrlap | mrlap | 4,000 |
 | **nodes-coloc** | coloc, bkmr | coloc, bkmr | 1,300 |
 | **nodes-epi** | epi_rcs, epi_roc, epi_lasso, epi_wqs, evalue | epi, evalue | 1,900 |
@@ -339,7 +339,7 @@ pub fn assert_all_factories_build(registry: &NodeRegistry) {
 | 批次 | bundle | 节点数 | 特殊注意 |
 |------|--------|--------|----------|
 | 4a | nodes-ldsc | 5 | ldsc_common 共享; liability 节点 |
-| 4b | nodes-genetics | 6 | cpassoc/magma/genomic-sem 迁移 |
+| 4b | nodes-genetics | 5 | cpassoc/magma 迁移 |
 
 ### Phase 5: 清理收尾
 

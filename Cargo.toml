@@ -91,7 +91,6 @@ members = [
   "crates/enrichr-sdk",
   "crates/kegg",
   "crates/nhanes",
-  "bio_crates/genomic_sem",
   "bio_crates/rdrobust",
   "bio_crates/rdpower",
   "bio_crates/rdmulti",

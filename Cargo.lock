@@ -5089,21 +5089,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "genomic_sem"
-version = "0.1.0"
-dependencies = [
- "faer",
- "rand 0.9.5",
- "rand_chacha 0.9.0",
- "rand_distr 0.5.1",
- "rayon",
- "serde",
- "serde_json",
- "statrs",
- "thiserror 2.0.20",
-]
-
-[[package]]
 name = "gethostname"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7971,16 +7956,13 @@ dependencies = [
  "datafusion",
  "faer",
  "futures",
- "genomic_sem",
  "libloading 0.8.9",
  "magma",
  "nanoid",
- "nodes-ldsc",
  "schemars",
  "serde",
  "serde_json",
  "sha2 0.10.9",
- "statrs",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
