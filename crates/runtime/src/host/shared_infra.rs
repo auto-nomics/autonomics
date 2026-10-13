@@ -110,14 +110,13 @@ pub struct SharedInfra {
     /// eval auto-capture, gateway handlers — shares one notification
     /// invariant.
     pub skills: Arc<skills::SkillManager>,
-    /// Local ONNX embedding service slot, filled when the model has
-    /// opened. Empty while disabled, failed, or still installing —
-    /// the first run downloads the model in the background, and the
-    /// daemon starts on the offline hashing embedder meanwhile. Once
-    /// filled, the service's provider is installed into the
-    /// observation hub, so every recorded observation is vectorized
-    /// with the real model at creation.
-    pub embedding: Arc<ArcSwapOption<text_embedding::LocalEmbeddingService>>,
+    /// Local ONNX embedding service, opened inline during startup
+    /// when `enable_local_embedding` is set (the default). `None`
+    /// when the feature is off — the observation hub then serves
+    /// corpus-fitted BM25 vectors. A missing or unopenable model is a
+    /// hard startup error (`autonomics prepare` installs it), never a
+    /// silent downgrade.
+    pub embedding: Option<Arc<text_embedding::LocalEmbeddingService>>,
     /// The unified skill control handle, when the service is
     /// enabled. `None` means the loop is disabled at the daemon
     /// level — every gateway mutation request then returns HTTP
@@ -156,73 +155,45 @@ impl SharedInfra {
         let observations = skills.observation_hub();
         skills.load_usage();
 
-        // ── Local embedding model (default on, degradation-safe) ───
-        // The hub embeds every observation at record time, so an
-        // already-installed model is opened inline — BEFORE the
-        // evolution service starts — and the swap backfills vectors
-        // recorded under the offline hashing default.
-        //
-        // First run is different: installing means a ~363 MB Hub
-        // download, and frontends time out waiting for the gateway to
-        // bind (manager::STARTUP_TIMEOUT), so the install must not sit
-        // on the startup critical path. A detached task downloads and
-        // opens the model, then swaps the hub embedder in — backfilling
-        // the hashed observations recorded meanwhile. A load failure
-        // only leaves the hub on that default — the daemon must still
-        // start (first run may be offline).
-        let embedding: Arc<ArcSwapOption<text_embedding::LocalEmbeddingService>> =
-            Arc::new(ArcSwapOption::default());
-        if config.enable_local_embedding {
-            match embedding_model_dir(config.embedding_model_dir.as_deref()) {
-                Ok(dir) if text_embedding::LocalEmbeddingService::model_installed(&dir) => {
-                    match text_embedding::LocalEmbeddingService::init_at(&dir).await {
-                        Ok(service) => {
-                            swap_embedder(&observations, &service).await;
-                            embedding.store(Some(Arc::new(service)));
-                        }
-                        Err(error) => tracing::warn!(
-                            %error,
-                            "local embedding model unavailable; observations embed \
-                             with the offline hashing default"
-                        ),
-                    }
-                }
-                Ok(dir) => {
-                    tracing::info!(
-                        dir = %dir.display(),
-                        "local embedding model not installed yet; installing in the \
-                         background while the daemon starts on the hashing embedder"
-                    );
-                    let hub = observations.clone();
-                    let slot = embedding.clone();
-                    agentik_core::supervise::spawn_safe_drop(
-                        "local-embedding-install",
-                        async move {
-                            match text_embedding::LocalEmbeddingService::init_at(&dir).await {
-                                Ok(service) => {
-                                    swap_embedder(&hub, &service).await;
-                                    slot.store(Some(Arc::new(service)));
-                                    tracing::info!(
-                                        "local embedding model installed; observations \
-                                         now embed with the real model"
-                                    );
-                                }
-                                Err(error) => tracing::warn!(
-                                    %error,
-                                    "local embedding model install failed; observations \
-                                     keep the offline hashing default"
-                                ),
-                            }
-                        },
-                    );
-                }
-                Err(error) => tracing::warn!(
-                    %error,
-                    "cannot resolve the embedding model directory; observations embed \
-                     with the offline hashing default"
-                ),
-            }
-        }
+        // ── Local embedding model (fail-fast) ──────────────────────
+        // The hub embeds every observation at record time, so the
+        // model is opened inline — BEFORE the evolution service
+        // starts — and the swap backfills vectors recorded under
+        // whatever embedder served before. With `enable_local_embedding`
+        // (the default) a missing or unopenable model is a hard
+        // startup error: `autonomics prepare` installs it, and a
+        // daemon that silently served lexical vectors while the config
+        // asks for the real model would only defer the confusion.
+        // With the feature off, BM25 statistics are fitted over the
+        // observation corpus instead (pure local I/O, no session):
+        // clustering keeps working on weighted lexical vectors, and
+        // only a fit failure leaves the hub on the unfitted default.
+        let embedding = if config.enable_local_embedding {
+            let dir =
+                embedding_model_dir(config.embedding_model_dir.as_deref()).map_err(|error| {
+                    crate::error::Error::Other(format!(
+                        "cannot resolve the embedding model directory: {error} \
+                         — run `autonomics prepare`"
+                    ))
+                })?;
+            let service = text_embedding::LocalEmbeddingService::init_at(&dir)
+                .await
+                .map_err(|error| {
+                    crate::error::Error::Other(format!(
+                        "local embedding model unavailable at {}: {error} \
+                         — run `autonomics prepare`",
+                        dir.display()
+                    ))
+                })?;
+            swap_embedder(&observations, &service).await;
+            Some(Arc::new(service))
+        } else {
+            // No model requested (config off): keep network and the
+            // ONNX session out, but clustering still gets weighted
+            // lexical vectors from the local corpus.
+            install_bm25_fallback(&observations).await;
+            None
+        };
         let plugin_layout = plugin_rsi::PluginStateLayout::open(&config.state_dir);
         plugin_layout
             .ensure_v2_directories()
@@ -794,7 +765,7 @@ fn embedding_model_dir(
 }
 
 /// Swap the service's provider into the observation hub. The swap
-/// backfills vectors recorded under the previous (hashing) embedder.
+/// backfills vectors recorded under the previous embedder.
 async fn swap_embedder(
     observations: &Arc<evolution_core::ObservationHub>,
     service: &text_embedding::LocalEmbeddingService,
@@ -807,6 +778,22 @@ async fn swap_embedder(
                  the hub keeps the previous embedder"
             );
         }
+    }
+}
+
+/// Fit BM25 statistics over the observations already in the ledger
+/// and install the frozen snapshot as the hub's embedder. The swap
+/// backfills vectors recorded under the previous embedder — a later
+/// model swap backfills these in turn. An install failure leaves the
+/// hub on its unfitted default.
+async fn install_bm25_fallback(observations: &Arc<evolution_core::ObservationHub>) {
+    let texts = observations.embedding_texts().await;
+    let embedder = text_embedding::Bm25TextEmbedder::fit(texts);
+    if let Err(error) = observations.set_embedder(Arc::new(embedder)).await {
+        tracing::warn!(
+            %error,
+            "BM25 fallback install failed; the hub keeps its unfitted default"
+        );
     }
 }
 
@@ -875,10 +862,10 @@ mod local_embedding_tests {
     /// End-to-end assembly: the service lands in SharedInfra and its
     /// provider is live. Requires a prepared model directory holding
     /// the complete default file layout (`onnx/model_quantized.onnx`
-    /// etc.) — an incomplete directory would trigger the background
-    /// install instead of the inline open this test asserts on — so
-    /// point `TEXT_EMBEDDING_TEST_MODEL_DIR` at a full default-layout
-    /// export; the test is a no-op when the variable is unset.
+    /// etc.) — an incomplete directory fails the inline open this
+    /// test asserts on — so point `TEXT_EMBEDDING_TEST_MODEL_DIR` at
+    /// a full default-layout export; the test is a no-op when the
+    /// variable is unset.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn local_embedding_service_installs_into_shared_infra() {
         let Ok(model_dir) = std::env::var("TEXT_EMBEDDING_TEST_MODEL_DIR") else {
@@ -887,10 +874,7 @@ mod local_embedding_tests {
         let dir = tempfile::tempdir().unwrap();
         let mut host = RuntimeHost::open(&config(&dir, &model_dir)).await.unwrap();
         let infra = host.infra();
-        let service = infra
-            .embedding
-            .load_full()
-            .expect("embedding service installed");
+        let service = infra.embedding.as_ref().expect("embedding service opened");
         let signature = service
             .provider()
             .expect("provider opened")
@@ -898,6 +882,21 @@ mod local_embedding_tests {
             .to_string();
         assert!(signature.contains("harrier"), "{signature}");
         host.shutdown_all_agents_and_wait().await;
+    }
+
+    /// With the feature on, a missing model is a hard startup error
+    /// naming `prepare` — the daemon never downloads and never
+    /// silently downgrades to a lexical embedder.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn local_embedding_missing_model_fails_fast() {
+        let empty = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let error = match RuntimeHost::open(&config(&dir, empty.path().to_str().unwrap())).await {
+            Ok(_) => panic!("a missing model must abort host open"),
+            Err(error) => error,
+        };
+        let message = error.to_string();
+        assert!(message.contains("autonomics prepare"), "{message}");
     }
 }
 

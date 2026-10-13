@@ -701,22 +701,35 @@ spec = {}
 
         // Three identical failures → one content-hashed observation
         // (idempotent), so the cluster threshold needs a hand: record
-        // two more variants of the same anchor.
+        // two more variants of the same anchor. The texts mirror the
+        // anchor's shape (same summary, same boilerplate body, a
+        // slightly different reason) the way real repeated eval
+        // failures look — under BM25 weighting, shorthand
+        // near-duplicates that share only the error line fall below
+        // SIMILARITY_THRESHOLD and legitimately stay apart.
         assert_eq!(
             manager.observations().await.len(),
             1,
             "identical failures dedupe"
         );
-        for body in ["variant b", "variant c"] {
+        for reason in [
+            "output_rows is 1, expected >= 99",
+            "output_rows is missing from the result, expected >= 99",
+        ] {
+            let body = format!(
+                "Eval case always of skill \"broken-flow\" failed:\n- a: {reason}\n\
+                 Inspect the eval inputs and the workflow template; a fix here \
+                 should update the template or its fixtures."
+            );
             manager
                 .observation_hub()
                 .record(evolution_core::ObservationInput {
                     kind: evolution_core::ObservationKind::Failure,
-                    source: evolution_core::ObservationSource::Agent,
-                    summary: "eval always fails".into(),
-                    body: body.into(),
+                    source: evolution_core::ObservationSource::Eval,
+                    summary: "eval case always fails for skill broken-flow".into(),
+                    body,
                     node_kind: Some("echo".into()),
-                    error: Some("output_rows is None, expected >= 99".into()),
+                    error: Some(reason.into()),
                 })
                 .await
                 .unwrap();

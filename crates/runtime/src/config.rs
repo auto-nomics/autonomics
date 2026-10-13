@@ -574,11 +574,11 @@ pub struct RuntimeConfig {
     #[serde(default)]
     pub enable_kms: bool,
     /// Serve observation embeddings from a local ONNX model. On by
-    /// default: SharedInfra installs the model (~363 MB download from
-    /// the Hugging Face Hub) on first use and feeds distillation with
-    /// real vectors instead of the offline hashing embedder. A load
-    /// failure downgrades to hashing — the daemon still starts. Set
-    /// `false` to keep the daemon on the offline hashing embedder.
+    /// default: the model must already be installed (`autonomics
+    /// prepare` downloads the ~363 MB snapshot from the Hugging Face
+    /// Hub); a missing or unopenable model aborts daemon startup.
+    /// Set `false` to skip the model (network download, ONNX session)
+    /// and run on BM25 fitted over the observation corpus instead.
     #[serde(default = "default_true")]
     pub enable_local_embedding: bool,
     /// Model directory for the local embedding service. `None` uses
