@@ -163,7 +163,8 @@ native result object and printed log; its native factory is also unregistered.
 `mvmr_container` follows the same file-to-file pattern for the pinned official
 MVMR R package; its native factory is likewise unregistered.
 The GenomicSEM, MAGMA gene/set/meta, and TwoSampleMR native implementations
-have since been removed pending their official-binary wraps. Other MiXeR, HDL,
-MTAG, CPASSOC, LAVA, and MRlap nodes remain transitional native implementations
-until their official image, provenance, reference package, and end-to-end
-baseline are complete.
+have since been removed pending their official-binary wraps; the native LAVA
+port is gone entirely, with the official `lava` containers as the registered
+runtimes. Other MiXeR, HDL, MTAG, CPASSOC, and MRlap nodes remain transitional
+native implementations until their official image, provenance, reference
+package, and end-to-end baseline are complete.

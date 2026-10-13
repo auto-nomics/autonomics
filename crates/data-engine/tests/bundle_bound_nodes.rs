@@ -230,6 +230,25 @@ fn native_bkmr_node_is_removed() {
 }
 
 #[test]
+fn native_lava_nodes_are_removed() {
+    let registry = registry();
+    let kinds = registry.list_nodes();
+
+    // The native Rust LAVA port (bio_crates/lava and the lava_locus /
+    // lava_univ / lava_bivar / lava_pcor / lava_multireg node kinds) was
+    // removed; LAVA runs through the `lava` / `lava_scan` manifest plugin.
+    for kind in [
+        "lava_locus",
+        "lava_univ",
+        "lava_bivar",
+        "lava_pcor",
+        "lava_multireg",
+    ] {
+        assert!(!kinds.iter().any(|node| node.kind == kind), "{kind} still registered");
+    }
+}
+
+#[test]
 fn donor_composition_node_is_registered() {
     let registry = registry();
 
