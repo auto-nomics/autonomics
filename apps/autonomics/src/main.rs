@@ -1,5 +1,5 @@
 use clap::Parser;
-use cli::{CacheAction, Cli, Command, TuiArgs};
+use cli::{CacheAction, Cli, Command};
 use time::macros::format_description;
 use tracing::Level;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
@@ -131,29 +131,27 @@ fn main() -> color_eyre::Result<()> {
 
     init_logging(nocapture)?;
 
-    match cli.command.unwrap_or(Command::Tui(TuiArgs {
-        config: None,
-        nocapture: false,
-    })) {
-        Command::Tui(args) => commands::tui::run_tui(args),
-        Command::Kms(args) => commands::kms::run_kms(args),
-        Command::Prepare(args) => commands::prepare::run_prepare(args),
-        Command::Cache(cache) => match cache.action {
+    match cli.command {
+        None => commands::guide::run_guide(),
+        Some(Command::Tui(args)) => commands::tui::run_tui(args),
+        Some(Command::Kms(args)) => commands::kms::run_kms(args),
+        Some(Command::Prepare(args)) => commands::prepare::run_prepare(args),
+        Some(Command::Cache(cache)) => match cache.action {
             CacheAction::RefreshOpengwas(args) => commands::cache::run_refresh_opengwas(args),
             CacheAction::ClearOpengwas(args) => commands::cache::run_clear_opengwas(args),
         },
-        Command::Panels(args) => commands::panels::run_panels(args),
-        Command::Bib(bib) => {
+        Some(Command::Panels(args)) => commands::panels::run_panels(args),
+        Some(Command::Bib(bib)) => {
             let runtime = tokio::runtime::Runtime::new()
                 .map_err(|e| color_eyre::eyre::eyre!("failed to build tokio runtime: {e}"))?;
             runtime.block_on(commands::bib::run_bib(bib))
         }
-        Command::Run(args) => commands::run::run_headless(args),
-        Command::ExportRun(args) => {
+        Some(Command::Run(args)) => commands::run::run_headless(args),
+        Some(Command::ExportRun(args)) => {
             let runtime = tokio::runtime::Runtime::new()
                 .map_err(|e| color_eyre::eyre::eyre!("failed to build tokio runtime: {e}"))?;
             runtime.block_on(commands::export::run_export_run(args))
         }
-        Command::Serve(_) => unreachable!("dispatched before init_logging"),
+        Some(Command::Serve(_)) => unreachable!("dispatched before init_logging"),
     }
 }

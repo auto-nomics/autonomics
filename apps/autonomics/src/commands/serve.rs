@@ -84,7 +84,7 @@ pub fn run_serve(args: ServeArgs) -> color_eyre::Result<()> {
 /// is otherwise ambiguous in the terminal — `127.0.0.1:8765` is an
 /// address, not a clickable link). The uptime is also raw seconds, which
 /// is the second thing everyone reformats by hand.
-fn print_serve_status(status: &GatewayStatus) {
+pub(crate) fn print_serve_status(status: &GatewayStatus) {
     let base_url = web_base_url(&status.addr);
     let uptime = format_uptime(status.uptime_secs);
 

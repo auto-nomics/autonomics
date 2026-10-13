@@ -43,7 +43,8 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Launch the interactive TUI (default when no subcommand is given).
+    /// Launch the interactive TUI (requires a running daemon — see
+    /// `autonomics serve`).
     Tui(TuiArgs),
 
     /// Launch the dedicated KMS tree TUI.
@@ -75,3 +76,7 @@ pub enum Command {
     /// after frontends disconnect). See `status` / `stop` actions.
     Serve(ServeArgs),
 }
+
+#[cfg(test)]
+#[path = "cli_tests.rs"]
+mod cli_tests;
