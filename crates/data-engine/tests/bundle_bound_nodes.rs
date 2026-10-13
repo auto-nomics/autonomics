@@ -220,6 +220,16 @@ fn native_two_sample_mr_node_is_removed() {
 }
 
 #[test]
+fn native_bkmr_node_is_removed() {
+    let registry = registry();
+    let kinds = registry.list_nodes();
+
+    // The native Rust BKMR port (`bkmr` node + `bio_crates/bkmr`) was
+    // removed from nodes-coloc; no replacement runtime exists yet.
+    assert!(!kinds.iter().any(|node| node.kind == "bkmr"));
+}
+
+#[test]
 fn donor_composition_node_is_registered() {
     let registry = registry();
 

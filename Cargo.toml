@@ -69,7 +69,6 @@ members = [
   "crates/semantic-scholar",
   "bio_crates/evalue",
   "bio_crates/coloc",
-  "bio_crates/bkmr",
   "crates/kms",
   "crates/kms-tools",
   "crates/agentik-network",
