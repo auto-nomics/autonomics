@@ -29,7 +29,7 @@ use crate::server::{GatewayState, router_with_bib};
 
 pub const GATEWAY_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Where `ensure_running` looks for the daemon's bearer token.
+/// Where `manager::read_token` looks for the daemon's bearer token.
 pub const TOKEN_FILE: &str = "gateway.token";
 /// Where the daemon's pid is recorded for diagnostics.
 pub const PID_FILE: &str = "gateway.pid";

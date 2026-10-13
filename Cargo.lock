@@ -906,6 +906,7 @@ dependencies = [
  "ratatui-core",
  "serde_json",
  "syntect",
+ "text-embedding",
  "textwrap",
  "time",
  "tokio",

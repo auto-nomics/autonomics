@@ -15,6 +15,12 @@
 //! instead of embedding a client). After syncing, the loader scans the
 //! root as usual.
 //!
+//! [`check`] is sync's offline counterpart: it verifies every declared
+//! entry against what is already installed (no network, no mutation) so
+//! the startup diagnostic can decide between starting the daemon and
+//! asking for `autonomics prepare`. Both share the entry validation, so
+//! a config one rejects the other rejects too.
+//!
 //! Pin discipline: `rev` must be a commit SHA. Tags and branches move;
 //! images are digest-pinned, data bundles are digest-pinned, and plugin
 //! code is rev-pinned — the same immutability rule one layer up.
@@ -92,6 +98,42 @@ pub enum EntryOutcome {
     Unchanged,
 }
 
+/// Verified state of one declared plugin source, from [`check`].
+#[derive(Debug, PartialEq, Eq)]
+pub enum CheckOutcome {
+    /// Installed and matching the pin (or owned by an in-place
+    /// development update).
+    Ok,
+    /// Nothing installed under the plugin root yet.
+    Missing,
+    /// Installed but not matching the pin: stale, interrupted, or the
+    /// pinned rev is not available offline.
+    Inconsistent,
+}
+
+/// One `[[plugin]]` entry as [`check`] saw it.
+#[derive(Debug)]
+pub struct CheckedEntry {
+    pub name: String,
+    pub outcome: CheckOutcome,
+    /// Human-readable reason for a non-`Ok` outcome (empty for `Ok`).
+    pub detail: String,
+}
+
+#[derive(Debug, Default)]
+pub struct CheckReport {
+    pub entries: Vec<CheckedEntry>,
+}
+
+impl CheckReport {
+    /// Whether every declared entry is installed at its pin.
+    pub fn is_ok(&self) -> bool {
+        self.entries
+            .iter()
+            .all(|entry| entry.outcome == CheckOutcome::Ok)
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct SyncReport {
     pub outcomes: Vec<(String, EntryOutcome)>,
@@ -160,7 +202,138 @@ pub fn sync(config_path: &Path, root: &Path) -> Result<SyncReport> {
     Ok(report)
 }
 
-fn sync_entry(entry: &PluginSource, root: &Path) -> Result<EntryOutcome> {
+/// Offline counterpart of [`sync`]: verify every declared entry against
+/// what is already installed under `root` — no network, no mutation, no
+/// process-wide root pin. A missing config file is a no-op (empty
+/// report), mirroring `sync`. The daemon's startup gate runs this and
+/// refuses to start on any non-`Ok` entry; `prepare` runs [`sync`] to
+/// converge the state `check` reports on.
+pub fn check(config_path: &Path, root: &Path) -> Result<CheckReport> {
+    let text = match std::fs::read_to_string(config_path) {
+        Ok(text) => text,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(CheckReport::default());
+        }
+        Err(source) => {
+            return Err(SyncError::ReadConfig {
+                path: config_path.to_path_buf(),
+                source,
+            });
+        }
+    };
+    let config: PluginsConfig = toml::from_str(&text).map_err(|error| SyncError::ParseConfig {
+        path: config_path.to_path_buf(),
+        detail: error.to_string(),
+    })?;
+
+    let mut report = CheckReport::default();
+    for entry in &config.plugin {
+        report.entries.push(check_entry(entry, root)?);
+    }
+    Ok(report)
+}
+
+fn check_entry(entry: &PluginSource, root: &Path) -> Result<CheckedEntry> {
+    let target = root.join(&entry.name);
+    let (outcome, detail) = match validate_entry(entry)? {
+        ValidSource::Git { rev, .. } => check_git(&entry.name, rev, &target)?,
+        ValidSource::Path { source } => check_symlink(source, &target),
+    };
+    Ok(CheckedEntry {
+        name: entry.name.clone(),
+        outcome,
+        detail,
+    })
+}
+
+/// Classify one git-sourced checkout without touching the network.
+/// Spawn failures (git missing) are environment errors (`Err`); broken
+/// checkouts are plugin gaps (`Inconsistent`).
+fn check_git(name: &str, rev: &str, target: &Path) -> Result<(CheckOutcome, String)> {
+    // A leftover local-install symlink is what `sync` would replace.
+    if target
+        .symlink_metadata()
+        .is_ok_and(|meta| meta.file_type().is_symlink())
+    {
+        return Ok((
+            CheckOutcome::Inconsistent,
+            "stale local-install symlink left behind".into(),
+        ));
+    }
+    if !target.join(".git").exists() {
+        return Ok((CheckOutcome::Missing, "not installed".into()));
+    }
+    let Some(head) = git_capture_opt(name, target, &["rev-parse", "HEAD"])? else {
+        return Ok((
+            CheckOutcome::Inconsistent,
+            "interrupted clone (no resolvable HEAD)".into(),
+        ));
+    };
+    if development_in_progress(target)? {
+        return Ok((CheckOutcome::Ok, "development in progress".into()));
+    }
+    let head = head.trim();
+    if head == rev {
+        return Ok((CheckOutcome::Ok, String::new()));
+    }
+    if git_succeeds(name, target, &["cat-file", "-e", rev])? {
+        Ok((
+            CheckOutcome::Inconsistent,
+            format!("HEAD {head} differs from pinned {rev} — checkout pending"),
+        ))
+    } else {
+        Ok((
+            CheckOutcome::Inconsistent,
+            "pinned rev not in the local clone (fetch required)".into(),
+        ))
+    }
+}
+
+/// Classify one path-sourced symlink installation.
+fn check_symlink(source: &Path, target: &Path) -> (CheckOutcome, String) {
+    match std::fs::symlink_metadata(target) {
+        Err(_) => (CheckOutcome::Missing, "not installed".into()),
+        Ok(meta) if !meta.file_type().is_symlink() => (
+            CheckOutcome::Inconsistent,
+            format!(
+                "`{}` exists but is not a symlink to `{}`",
+                target.display(),
+                source.display()
+            ),
+        ),
+        Ok(_) => match std::fs::read_link(target) {
+            Ok(existing) if existing == source => {
+                if source.is_dir() {
+                    (CheckOutcome::Ok, String::new())
+                } else {
+                    (
+                        CheckOutcome::Inconsistent,
+                        format!("source directory `{}` is gone", source.display()),
+                    )
+                }
+            }
+            Ok(other) => (
+                CheckOutcome::Inconsistent,
+                format!(
+                    "symlink points at `{}`, expected `{}`",
+                    other.display(),
+                    source.display()
+                ),
+            ),
+            Err(_) => (CheckOutcome::Inconsistent, "dangling symlink".into()),
+        },
+    }
+}
+
+/// A `[[plugin]]` entry reduced to its validated source kind — the
+/// shared validation core of [`sync`] and [`check`]: both reject exactly
+/// the same configs.
+enum ValidSource<'a> {
+    Git { url: &'a str, rev: &'a str },
+    Path { source: &'a Path },
+}
+
+fn validate_entry(entry: &PluginSource) -> Result<ValidSource<'_>> {
     let invalid = |message: String| SyncError::Invalid {
         name: entry.name.clone(),
         message,
@@ -176,15 +349,29 @@ fn sync_entry(entry: &PluginSource, root: &Path) -> Result<EntryOutcome> {
             "name must be non-empty lowercase `[a-z0-9_-]`".into(),
         ));
     }
-    let target = root.join(&entry.name);
 
     match (&entry.git, &entry.rev, &entry.path) {
-        (Some(url), Some(rev), None) => sync_git(&entry.name, url, rev, &target),
+        (Some(url), Some(rev), None) => {
+            if !rev.starts_with("sha256:") && !is_commit_sha(rev) {
+                return Err(invalid(
+                    "`rev` must be a 40-hex commit SHA (tags and branches move)".into(),
+                ));
+            }
+            Ok(ValidSource::Git { url, rev })
+        }
         (Some(_), None, None) => Err(invalid("`git` sources require a pinned `rev`".into())),
         (Some(_), _, Some(_)) => Err(invalid("`git` and `path` are mutually exclusive".into())),
-        (None, _, Some(source)) => sync_symlink(&entry.name, source, &target),
+        (None, _, Some(source)) => Ok(ValidSource::Path { source }),
         (None, Some(_), None) => Err(invalid("`rev` requires a `git` source".into())),
         (None, None, None) => Err(invalid("one of `git` or `path` is required".into())),
+    }
+}
+
+fn sync_entry(entry: &PluginSource, root: &Path) -> Result<EntryOutcome> {
+    let target = root.join(&entry.name);
+    match validate_entry(entry)? {
+        ValidSource::Git { url, rev } => sync_git(&entry.name, url, rev, &target),
+        ValidSource::Path { source } => sync_symlink(&entry.name, source, &target),
     }
 }
 
@@ -193,11 +380,6 @@ fn sync_git(name: &str, url: &str, rev: &str, target: &Path) -> Result<EntryOutc
         name: name.to_string(),
         message,
     };
-    if !rev.starts_with("sha256:") && !is_commit_sha(rev) {
-        return Err(invalid(
-            "`rev` must be a 40-hex commit SHA (tags and branches move)".into(),
-        ));
-    }
 
     // A target that exists but cannot resolve HEAD is an interrupted
     // clone (killed mid-checkout). Wipe it and re-clone rather than
@@ -395,6 +577,31 @@ fn run_git_capture(name: &str, dir: &Path, args: &[&str]) -> Result<String> {
         });
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Run a git command, distinguishing a spawn failure (`Err` — git
+/// missing is an environment error) from a non-zero exit (`Ok(None)` —
+/// a broken or unresolvable state). The check path treats the latter as
+/// a plugin gap, not a failure of the check itself.
+fn git_capture_opt(name: &str, dir: &Path, args: &[&str]) -> Result<Option<String>> {
+    let output = Command::new("git")
+        .current_dir(dir)
+        .args(args)
+        .output()
+        .map_err(|source| SyncError::Git {
+            name: name.to_string(),
+            command: args.first().copied().unwrap_or("git").to_string(),
+            stderr: format!("cannot spawn git: {source}"),
+        })?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    Ok(Some(String::from_utf8_lossy(&output.stdout).into_owned()))
+}
+
+/// Whether a git command exits zero (spawn failure is `Err`).
+fn git_succeeds(name: &str, dir: &Path, args: &[&str]) -> Result<bool> {
+    Ok(git_capture_opt(name, dir, args)?.is_some())
 }
 
 #[cfg(unix)]
@@ -667,5 +874,259 @@ path = "/tmp"
         );
         let error = sync(&config, &dir.path().join("plugins")).unwrap_err();
         assert!(error.to_string().contains("mutually exclusive"), "{error}");
+    }
+
+    // ── check: the offline counterpart ─────────────────────────────
+
+    fn git_config(dir: &Path, name: &str, repo: &Path, rev: &str) -> PathBuf {
+        write_config(
+            dir,
+            &format!(
+                r#"
+[[plugin]]
+name = "{name}"
+git = "{url}"
+rev = "{rev}"
+"#,
+                url = repo.to_string_lossy(),
+                rev = rev
+            ),
+        )
+    }
+
+    #[test]
+    fn check_missing_config_is_a_noop() {
+        let dir = tempfile::tempdir().unwrap();
+        let report = check(
+            &dir.path().join("plugins.toml"),
+            &dir.path().join("plugins"),
+        )
+        .unwrap();
+        assert!(report.entries.is_empty());
+        assert!(report.is_ok());
+    }
+
+    #[test]
+    fn check_reports_missing_before_install_and_creates_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, rev) = make_plugin_repo(dir.path(), "gitplug");
+        let source = dir.path().join("my-plugin");
+        std::fs::create_dir_all(&source).unwrap();
+
+        let config = write_config(
+            dir.path(),
+            &format!(
+                r#"
+[[plugin]]
+name = "gitplug"
+git = "{url}"
+rev = "{rev}"
+
+[[plugin]]
+name = "my-plugin"
+path = "{path}"
+"#,
+                url = repo.to_string_lossy(),
+                rev = rev,
+                path = source.to_string_lossy()
+            ),
+        );
+        let root = dir.path().join("plugins");
+        let report = check(&config, &root).unwrap();
+
+        assert_eq!(report.entries.len(), 2);
+        assert_eq!(report.entries[0].outcome, CheckOutcome::Missing);
+        assert_eq!(report.entries[1].outcome, CheckOutcome::Missing);
+        assert!(!report.is_ok());
+        // The check is read-only: it never materializes the root.
+        assert!(!root.exists());
+    }
+
+    #[test]
+    fn check_ok_after_sync() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, rev) = make_plugin_repo(dir.path(), "gitplug");
+        let source = dir.path().join("my-plugin");
+        std::fs::create_dir_all(&source).unwrap();
+
+        let config = write_config(
+            dir.path(),
+            &format!(
+                r#"
+[[plugin]]
+name = "gitplug"
+git = "{url}"
+rev = "{rev}"
+
+[[plugin]]
+name = "my-plugin"
+path = "{path}"
+"#,
+                url = repo.to_string_lossy(),
+                rev = rev,
+                path = source.to_string_lossy()
+            ),
+        );
+        let root = dir.path().join("plugins");
+        sync(&config, &root).unwrap();
+
+        let report = check(&config, &root).unwrap();
+        assert!(report.is_ok(), "{report:?}");
+        assert!(report.entries.iter().all(|e| e.detail.is_empty()));
+    }
+
+    #[test]
+    fn check_inconsistent_when_head_differs_but_rev_is_local() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, rev_a) = make_plugin_repo(dir.path(), "moving");
+        // A second commit in the source repo: two revs to pin against.
+        std::fs::write(repo.join("second.txt"), "2").unwrap();
+        run_git("moving", &repo, &["add", "."]).unwrap();
+        run_git(
+            "moving",
+            &repo,
+            &[
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "user.name=t",
+                "commit",
+                "-m",
+                "second",
+            ],
+        )
+        .unwrap();
+        let rev_b = run_git_capture("moving", &repo, &["rev-parse", "HEAD"])
+            .unwrap()
+            .trim()
+            .to_string();
+
+        let root = dir.path().join("plugins");
+        // Install at the newer rev; the clone carries both revs.
+        sync(&git_config(dir.path(), "moving", &repo, &rev_b), &root).unwrap();
+
+        // Pin back to the older rev: local rev, but HEAD differs — an
+        // offline checkout is pending, no fetch would be needed.
+        let report = check(&git_config(dir.path(), "moving", &repo, &rev_a), &root).unwrap();
+        assert_eq!(report.entries[0].outcome, CheckOutcome::Inconsistent);
+        assert!(
+            report.entries[0].detail.contains("checkout pending"),
+            "{:?}",
+            report.entries[0].detail
+        );
+    }
+
+    #[test]
+    fn check_inconsistent_when_rev_is_not_local() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, rev) = make_plugin_repo(dir.path(), "gitplug");
+        let root = dir.path().join("plugins");
+        sync(&git_config(dir.path(), "gitplug", &repo, &rev), &root).unwrap();
+
+        // A syntactically valid SHA that never existed in the clone.
+        let alien = "0123456789abcdef0123456789abcdef01234567".to_owned();
+        let report = check(&git_config(dir.path(), "gitplug", &repo, &alien), &root).unwrap();
+        assert_eq!(report.entries[0].outcome, CheckOutcome::Inconsistent);
+        assert!(
+            report.entries[0].detail.contains("fetch required"),
+            "{:?}",
+            report.entries[0].detail
+        );
+    }
+
+    #[test]
+    fn check_inconsistent_on_interrupted_clone() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, rev) = make_plugin_repo(dir.path(), "gitplug");
+        let root = dir.path().join("plugins");
+        // A `.git` stub that no git command can resolve: the state a
+        // killed clone leaves behind.
+        std::fs::create_dir_all(root.join("gitplug/.git")).unwrap();
+
+        let report = check(&git_config(dir.path(), "gitplug", &repo, &rev), &root).unwrap();
+        assert_eq!(report.entries[0].outcome, CheckOutcome::Inconsistent);
+        assert!(
+            report.entries[0].detail.contains("interrupted clone"),
+            "{:?}",
+            report.entries[0].detail
+        );
+    }
+
+    #[test]
+    fn check_inconsistent_on_stale_local_install_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, rev) = make_plugin_repo(dir.path(), "gitplug");
+        let local = dir.path().join("local");
+        std::fs::create_dir_all(&local).unwrap();
+        let root = dir.path().join("plugins");
+        std::fs::create_dir_all(&root).unwrap();
+        symlink_dir(&local, &root.join("gitplug")).unwrap();
+
+        let report = check(&git_config(dir.path(), "gitplug", &repo, &rev), &root).unwrap();
+        assert_eq!(report.entries[0].outcome, CheckOutcome::Inconsistent);
+        assert!(
+            report.entries[0]
+                .detail
+                .contains("stale local-install symlink"),
+            "{:?}",
+            report.entries[0].detail
+        );
+    }
+
+    #[test]
+    fn check_symlink_gaps() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("my-plugin");
+        std::fs::create_dir_all(&source).unwrap();
+        let root = dir.path().join("plugins");
+
+        // Foreign directory where the symlink belongs.
+        std::fs::create_dir_all(root.join("my-plugin")).unwrap();
+        let config = write_config(
+            dir.path(),
+            &format!(
+                r#"
+[[plugin]]
+name = "my-plugin"
+path = "{}"
+"#,
+                source.to_string_lossy()
+            ),
+        );
+        let report = check(&config, &root).unwrap();
+        assert_eq!(report.entries[0].outcome, CheckOutcome::Inconsistent);
+        assert!(
+            report.entries[0].detail.contains("not a symlink"),
+            "{:?}",
+            report.entries[0].detail
+        );
+
+        // Installed, then the source directory disappears.
+        std::fs::remove_dir_all(root.join("my-plugin")).unwrap();
+        sync(&config, &root).unwrap();
+        std::fs::remove_dir_all(&source).unwrap();
+        let report = check(&config, &root).unwrap();
+        assert_eq!(report.entries[0].outcome, CheckOutcome::Inconsistent);
+        assert!(
+            report.entries[0].detail.contains("is gone"),
+            "{:?}",
+            report.entries[0].detail
+        );
+    }
+
+    #[test]
+    fn check_rejects_invalid_configs_like_sync() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = write_config(
+            dir.path(),
+            r#"
+[[plugin]]
+name = "bad"
+git = "https://example.com/x.git"
+rev = "v1.0"
+"#,
+        );
+        let error = check(&config, &dir.path().join("plugins")).unwrap_err();
+        assert!(error.to_string().contains("40-hex"), "{error}");
     }
 }

@@ -18,16 +18,16 @@
 //! next to the record. Consumers never invoke a model — they read
 //! vectors back through [`ObservationHub::load_embeddings`]. The
 //! default embedder is the offline deterministic
-//! [`HashingTextEmbedder`]; the host swaps in a local model via
-//! [`ObservationHub::set_embedder`], which also backfills vectors for
-//! observations recorded under a previous signature so a model change
-//! never blinds downstream clustering.
+//! [`Bm25TextEmbedder`]; the host swaps in a local model — or a
+//! corpus-fitted BM25 — via [`ObservationHub::set_embedder`], which
+//! also backfills vectors for observations recorded under a previous
+//! signature so a model change never blinds downstream clustering.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use text_embedding::{EmbeddingInput, HashingTextEmbedder, TextEmbedder};
+use text_embedding::{Bm25TextEmbedder, EmbeddingInput, TextEmbedder};
 
 use super::storage::{ObservationStorage, TursoObservationStorage, load_embedding_map};
 use crate::error::Result;
@@ -48,7 +48,7 @@ pub struct ObservationHub {
 impl ObservationHub {
     /// Hub over `<state_dir>/evolution.db`. No I/O happens here — the
     /// database is built lazily on first use — and the embedder
-    /// starts as the offline hashing default until the host installs
+    /// starts as the unfitted BM25 default until the host installs
     /// a model with [`ObservationHub::set_embedder`].
     #[must_use]
     pub fn new(state_dir: impl Into<PathBuf>) -> Self {
@@ -86,6 +86,18 @@ impl ObservationHub {
             .read()
             .expect("embedder lock poisoned")
             .signature()
+    }
+
+    /// The observation texts a corpus-fitted fallback embedder sees —
+    /// the same rendering [`ObservationHub::record`] embeds. The host
+    /// fits BM25 statistics over these when no model is available.
+    pub async fn embedding_texts(&self) -> Vec<String> {
+        self.storage
+            .list()
+            .await
+            .iter()
+            .map(observation_text)
+            .collect()
     }
 
     /// Replace the embedder used at record time, then backfill: every
@@ -214,7 +226,9 @@ fn observation_text(observation: &Observation) -> String {
 
 /// The offline deterministic default every hub starts with.
 fn default_embedder() -> Arc<std::sync::RwLock<Arc<dyn TextEmbedder>>> {
-    Arc::new(std::sync::RwLock::new(Arc::new(HashingTextEmbedder::new())))
+    Arc::new(std::sync::RwLock::new(Arc::new(
+        Bm25TextEmbedder::unfitted(),
+    )))
 }
 
 #[cfg(test)]
@@ -271,8 +285,9 @@ mod tests {
         assert_eq!(vector.len(), text_embedding::DEFAULT_EMBEDDING_DIM);
     }
 
-    /// Same text, fresh hubs: the hashing default is deterministic
-    /// across instances, so clustering hashes stay stable across runs.
+    /// Same text, fresh hubs: the unfitted BM25 default is
+    /// deterministic across instances, so clustering hashes stay
+    /// stable across runs.
     #[tokio::test]
     async fn same_text_embeds_identically_across_hubs() {
         let first = ObservationHub::new(tempfile::tempdir().unwrap().path());

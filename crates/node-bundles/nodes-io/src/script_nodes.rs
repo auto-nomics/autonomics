@@ -41,6 +41,26 @@ use dag_core::value::{FileRef, PortType};
 
 pub const PYTHON_SCRIPT_KIND: &str = "python_script";
 pub const R_SCRIPT_KIND: &str = "r_script";
+
+/// The digest-pinned images the built-in script nodes render onto
+/// (same GHCR images the migrated manifest families use). The
+/// readiness check enumerates these alongside the environment catalog
+/// and plugin-manifest images so `prepare` can pre-pull everything the
+/// daemon path would otherwise pull lazily at node execution.
+pub fn builtin_script_images() -> Vec<String> {
+    [
+        (
+            SINGLE_CELL_WORKFLOW_IMAGE_REPOSITORY,
+            SINGLE_CELL_WORKFLOW_IMAGE_DIGEST,
+        ),
+        (VISUALIZATION_IMAGE_REPOSITORY, VISUALIZATION_IMAGE_DIGEST),
+    ]
+    .into_iter()
+    .map(|(repo, digest)| {
+        registry_image(repo, digest).expect("hard-coded script image pins must validate")
+    })
+    .collect()
+}
 const MAX_SCRIPT_BYTES: usize = 1024 * 1024;
 const DEFAULT_TIMEOUT_SECS: u64 = 900;
 const DEFAULT_CPUS: f64 = 2.0;
@@ -941,6 +961,28 @@ impl NodeFactory for ScriptNodeFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn builtin_script_images_are_valid_distinct_digest_pins() {
+        let images = builtin_script_images();
+        assert_eq!(images.len(), 2, "one per built-in script runtime");
+        for image in &images {
+            assert!(
+                image.starts_with("ghcr.io/auto-nomics/autonomics/"),
+                "{image}"
+            );
+            assert!(image.contains("@sha256:"), "{image}");
+        }
+        assert_ne!(images[0], images[1]);
+        assert_eq!(
+            images[0],
+            registry_image(
+                SINGLE_CELL_WORKFLOW_IMAGE_REPOSITORY,
+                SINGLE_CELL_WORKFLOW_IMAGE_DIGEST
+            )
+            .unwrap()
+        );
+    }
 
     struct NoopConnection;
 

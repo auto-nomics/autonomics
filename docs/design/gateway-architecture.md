@@ -53,7 +53,7 @@ RPC 层。gateway 分支兑现该升级,核心动机:
 ```
 crates/gateway   proto(wire 类型)/ hub(EventHub)/ driver(宿主泵)/ server(axum)/
                  daemon(run_daemon 启动序)/ client(GatewayClient+EventPump)/
-                 manager(probe/ensure_running/stop)/ model_store(app DB)
+                 manager(probe/stop;前台从不拉起 daemon)/ model_store(app DB)
 依赖方向:apps/tui → gateway → runtime → agentik-*;gateway → api-server(仅 bib router)
 apps/tui 不再直接依赖 runtime/api-server(gateway 重导出所需的少数类型)
 ```
@@ -133,12 +133,15 @@ driver 维护 session 缓存(`SessionList/SessionClosed` 事件折叠,纯函数�
 - **启动序**:model store(app DB)→ `RuntimeHost::open`(持 flock,冲突→
   `InstanceLockHeld` 友好报错退出)→ profile seed + 默认模型槽 → ChatGPT
   ensure-fresh → axum bind(成功后才写 token/pid 文件,探活即用)→ driver 循环。
-- **`autonomics serve`**:前台(stderr+文件日志,Ctrl+C=优雅停);`--daemon`:stdio 全
-  null + 独立进程组(自动拉起方 `ensure_running` spawn);`status` / `stop` 子命令。
+- **`autonomics serve`**:启动前先跑离线诊断门(`prepare --check` 同款检查:
+  插件 rev 就位、嵌入模型就绪、镜像在本地;致命缺口即 exit 1 提示 `prepare`);
+  前台(stderr+文件日志,Ctrl+C=优雅停);`--daemon`:stdio 绑定就绪后脱离;
+  `status` / `stop` 子命令。
 - **优雅停机**(POST /gateway/shutdown):断 SSE → `shutdown_all_agents_and_wait`
   (30s 宽限)→ 退出。
-- **自动拉起**(`gateway::manager::ensure_running`):探活(1s 超时)→ 失败则
-  spawn 当前 exe `serve --daemon` → 轮询就绪(15s 上限,冷启动 SharedInfra 需数秒)。
+- **无自动拉起**(2026-10 起):前端只 `manager::probe` 探活,daemon 必须由操作者
+  显式启动(`autonomics prepare` 预置 → `autonomics serve`);裸 `autonomics`
+  打印引导(TUI/headless 未探到 daemon 即报错退出并给出命令提示)。
 - kms/bib/cache 子命令不受影响(今天已多进程共读;flock 只围 `RuntimeHost::open`)。
 
 ## 6. TUI 瘦客户端迁移要点
@@ -198,4 +201,4 @@ driver 维护 session 缓存(`SessionList/SessionClosed` 事件折叠,纯函数�
 |---|---|---|
 | ~~P3 headless~~(已完成) | `autonomics run` 走 gateway | `--name` 映射为 `/root/<name>`(daemon 按 path 恢复同一 agent_id,`--session` 语义保持;并发撞路径回退唯一后缀);SSE 从 `state.last_seq` 订阅过滤 agent 帧 → `TranslationState::translate` → RunEvent 契约不变(JSONL 契约锁定测试钉死事件序列);`--session` 等 SessionActivated;超时→cancel+合成 turn.failed;退出码 0/1/2/3 不变(缺模型=exit 3 启动错误)。2026-09 后进程内路径移除,gateway 为唯一路径 |
 | P4 web | `apps/web`(Vite+React19+TS+pnpm) | thread≡agent session;threads/chat SSE(delta/tool/done/ping/error 帧,fetch 流解析——EventSource 带不了 Authorization);409 agent_busy;dist 由 gateway 内嵌托管,同源 token 注入;活动抽屉(agents/delegations 只读) |
-| P5 desktop | Tauri 2 纯壳 | ensure_running + 读 token + webview 指 `127.0.0.1:8765/#token=…`(hash 传 token);不自开 RuntimeHost,无第二写者;可选 UDS listener 加固 |
+| P5 desktop | Tauri 2 纯壳 | probe(不拉起)+ 读 token + webview 指 `127.0.0.1:8765/#token=…`(hash 传 token);不自开 RuntimeHost,无第二写者;可选 UDS listener 加固 |

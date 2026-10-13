@@ -155,7 +155,7 @@ pub struct OpenaiTokenState {
     pub expired: bool,
 }
 
-/// `GET /api/v1/gateway/status` — liveness probe for `ensure_running`.
+/// `GET /api/v1/gateway/status` — liveness probe for `manager::probe`.
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct GatewayStatus {
     pub pid: u32,

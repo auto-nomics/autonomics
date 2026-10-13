@@ -4,7 +4,7 @@
 //! Usage:
 //!
 //! ```sh
-//! cargo run -p text-embedding --features onnx --example onnx_probe -- \
+//! cargo run -p text-embedding --example onnx_probe -- \
 //!     /mnt/base/models/harrier-oss-v1-270m
 //! ```
 

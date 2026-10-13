@@ -206,6 +206,7 @@ impl NodeFactory for ManifestNodeFactory {
 /// [`ManifestNodeFactory`] per `[[nodes]]` entry.
 pub struct Plugin {
     name: &'static str,
+    image_reference: String,
     panels: Vec<PanelBinding>,
     factories: Vec<ManifestNodeFactory>,
 }
@@ -271,6 +272,7 @@ impl Plugin {
             .collect();
         Self {
             name,
+            image_reference,
             panels,
             factories,
         }
@@ -297,6 +299,13 @@ impl Plugin {
             .iter()
             .map(|factory| factory.kind())
             .collect()
+    }
+
+    /// The family's digest-pinned image reference (`[image] reference`
+    /// in the manifest) — every node of the family runs in it. The
+    /// readiness check enumerates these so `prepare` can pre-pull them.
+    pub fn image_reference(&self) -> &str {
+        &self.image_reference
     }
 
     /// The loaded-family identity that nodes of `kind` carry into their
@@ -475,6 +484,11 @@ ldsc --h2 "$AUTONOMICS_INPUT0" \
             panel_cache,
         );
         assert_eq!(plugin.name(), "ldsc", "family name comes from the manifest");
+        assert_eq!(
+            plugin.image_reference(),
+            "ghcr.io/auto-nomics/autonomics/ldsc@sha256:2dad70a9583f93db1dcc9a560b7d5b309af4a5151dfaf615f80d059a0925d78c",
+            "image accessor surfaces the manifest's [image] reference"
+        );
 
         let mut registry = NodeRegistry::new(NodeCtx::new(
             datafusion::prelude::SessionContext::new().runtime_env(),

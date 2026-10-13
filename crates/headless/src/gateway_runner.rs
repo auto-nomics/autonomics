@@ -2,7 +2,8 @@
 //!
 //! The contract: one prompt, the stable [`RunEvent`] JSONL schema,
 //! exit-code semantics 0/1/2/3. The prompt is submitted to the resident
-//! gateway daemon (auto-spawned when absent); the run loop here only
+//! gateway daemon (which must already be running — the runner probes
+//! and explains instead of spawning); the run loop here only
 //! orchestrates spawn → prompt → event translation → cleanup.
 //!
 //! Identity: the caller names the agent, which maps to `/root/<name>`;
@@ -71,15 +72,34 @@ pub async fn run_via_gateway<P: OutputProcessor>(
     if config.cancel.is_cancelled() {
         return Err(RunError::Cancelled);
     }
-    // ── Connect (auto-starting the daemon) ───────────────────────────
-    gateway::manager::ensure_running()
-        .await
-        .map_err(RunError::Gateway)?;
+    // ── Connect (the daemon must already be running) ─────────────────
+    let client = connect_or_hint().await?;
+    run_via_gateway_with_client(client, config, processor).await
+}
+
+/// Probe the daemon and build a client, refusing to spawn anything:
+/// the daemon is started explicitly (`autonomics serve`) after
+/// provisioning (`autonomics prepare`), never by a frontend.
+async fn connect_or_hint() -> Result<gateway::GatewayClient, RunError> {
+    match gateway::manager::probe().await {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            return Err(RunError::Gateway(
+                "the gateway daemon is not running — start it with `autonomics serve` \
+                 before running headless prompts"
+                    .into(),
+            ));
+        }
+        Err(e) => {
+            return Err(RunError::Gateway(format!(
+                "cannot reach the gateway daemon: {e} (check `autonomics serve status`)"
+            )));
+        }
+    }
     let token = gateway::manager::read_token();
     let addr = gateway::daemon::env_addr();
-    let client = gateway::GatewayClient::new(&addr, token.as_deref())
-        .map_err(|e| RunError::Gateway(e.to_string()))?;
-    run_via_gateway_with_client(client, config, processor).await
+    gateway::GatewayClient::new(&addr, token.as_deref())
+        .map_err(|e| RunError::Gateway(e.to_string()))
 }
 
 /// List persisted sessions for a named headless agent identity.
@@ -91,13 +111,7 @@ pub async fn list_sessions_via_gateway(
     agent_name: Option<String>,
 ) -> Result<Vec<StoredSession>, RunError> {
     let agent_path = named_agent_path(agent_name.as_deref())?;
-    gateway::manager::ensure_running()
-        .await
-        .map_err(RunError::Gateway)?;
-    let token = gateway::manager::read_token();
-    let addr = gateway::daemon::env_addr();
-    let client = gateway::GatewayClient::new(&addr, token.as_deref())
-        .map_err(|e| RunError::Gateway(e.to_string()))?;
+    let client = connect_or_hint().await?;
 
     let _kind = resolve_kind(profile.as_deref())?;
     let agents = client

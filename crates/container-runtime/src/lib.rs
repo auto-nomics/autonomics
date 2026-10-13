@@ -12,6 +12,7 @@ pub mod execution;
 pub mod gc;
 pub mod image;
 pub mod image_build;
+pub mod images;
 pub mod panel;
 pub mod podman;
 pub mod types;

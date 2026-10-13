@@ -80,16 +80,29 @@ impl App {
     pub fn new() -> color_eyre::Result<Self> {
         let runtime = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
 
-        // ── Connect to (or start) the gateway daemon, then hydrate ────
-        // Snapshot first, pump after: the pump starts from
+        // ── Connect to the gateway daemon, then hydrate ────────────────
+        // The daemon must already be running — the TUI never spawns
+        // one. Snapshot first, pump after: the pump starts from
         // `snapshot.last_seq` so frames published between the two calls
         // are neither missed nor double-applied (ring replay covers the
         // gap; a lag frame triggers re-hydration).
         let (client, gateway_rx, snapshot) = runtime
             .block_on(async {
-                gateway::manager::ensure_running()
-                    .await
-                    .map_err(|e| color_eyre::eyre::eyre!("gateway daemon: {e}"))?;
+                match gateway::manager::probe().await {
+                    Ok(Some(_)) => {}
+                    Ok(None) => {
+                        return Err(color_eyre::eyre::eyre!(
+                            "the gateway daemon is not running — start it with \
+                             `autonomics serve` (or run `autonomics` for guidance)"
+                        ));
+                    }
+                    Err(e) => {
+                        return Err(color_eyre::eyre::eyre!(
+                            "cannot reach the gateway daemon: {e} \
+                             (check `autonomics serve status`)"
+                        ));
+                    }
+                }
                 let token = gateway::manager::read_token();
                 let addr = gateway::daemon::env_addr();
                 let client = gateway::GatewayClient::new(&addr, token.as_deref())
@@ -102,12 +115,7 @@ impl App {
                 gateway::client::EventPump::spawn(client.clone(), snapshot.last_seq, tx);
                 color_eyre::eyre::Ok((client, rx, snapshot))
             })
-            .map_err(|e| {
-                color_eyre::eyre::eyre!(
-                    "failed to connect to the gateway daemon: {e} \
-                     (try `autonomics serve` to inspect daemon startup)"
-                )
-            })?;
+            .map_err(|e| color_eyre::eyre::eyre!("failed to connect to the gateway daemon: {e}"))?;
 
         let mut state = AppState {
             profiles: snapshot.profiles.clone(),
@@ -178,11 +186,5 @@ impl App {
         }
         app.spawn_all_history_loads();
         Ok(app)
-    }
-}
-
-impl Default for App {
-    fn default() -> Self {
-        Self::new().expect("gateway daemon must be reachable for the TUI")
     }
 }

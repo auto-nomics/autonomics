@@ -9,7 +9,7 @@
 //! - [`server`]: the axum API surface;
 //! - [`daemon`]: `autonomics serve` bootstrap + graceful shutdown;
 //! - [`client`]: the Rust frontend SDK (REST + SSE pump);
-//! - [`manager`]: probe / auto-spawn / stop for frontends;
+//! - [`manager`]: probe / stop for frontends (they never spawn the daemon);
 //! - [`model_store`]: the daemon-owned app DB (model catalogue,
 //!   credentials, ChatGPT OAuth).
 

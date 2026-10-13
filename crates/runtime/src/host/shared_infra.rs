@@ -110,14 +110,12 @@ pub struct SharedInfra {
     /// eval auto-capture, gateway handlers — shares one notification
     /// invariant.
     pub skills: Arc<skills::SkillManager>,
-    /// Local ONNX embedding service, when the `onnx-embedding`
-    /// feature is compiled in AND `enable_local_embedding` is set and
-    /// the model loaded. Its provider is installed into the
-    /// observation hub, so every recorded observation is vectorized
-    /// with the real model at creation; `None` (or a
-    /// non-`onnx-embedding` build) keeps the hub's offline hashing
-    /// default.
-    #[cfg(feature = "onnx-embedding")]
+    /// Local ONNX embedding service, opened inline during startup
+    /// when `enable_local_embedding` is set (the default). `None`
+    /// when the feature is off — the observation hub then serves
+    /// corpus-fitted BM25 vectors. A missing or unopenable model is a
+    /// hard startup error (`autonomics prepare` installs it), never a
+    /// silent downgrade.
     pub embedding: Option<Arc<text_embedding::LocalEmbeddingService>>,
     /// The unified skill control handle, when the service is
     /// enabled. `None` means the loop is disabled at the daemon
@@ -157,38 +155,43 @@ impl SharedInfra {
         let observations = skills.observation_hub();
         skills.load_usage();
 
-        // ── Local embedding model (optional, degradation-safe) ─────
-        // Installed BEFORE the evolution service starts: the hub
-        // embeds every observation at record time, so the model must
-        // be in place before the first observation lands. The swap
-        // also backfills vectors recorded under the offline hashing
-        // default. A load failure only leaves the hub on that default
-        // — the daemon must still start (first run may be offline).
-        #[cfg(feature = "onnx-embedding")]
+        // ── Local embedding model (fail-fast) ──────────────────────
+        // The hub embeds every observation at record time, so the
+        // model is opened inline — BEFORE the evolution service
+        // starts — and the swap backfills vectors recorded under
+        // whatever embedder served before. With `enable_local_embedding`
+        // (the default) a missing or unopenable model is a hard
+        // startup error: `autonomics prepare` installs it, and a
+        // daemon that silently served lexical vectors while the config
+        // asks for the real model would only defer the confusion.
+        // With the feature off, BM25 statistics are fitted over the
+        // observation corpus instead (pure local I/O, no session):
+        // clustering keeps working on weighted lexical vectors, and
+        // only a fit failure leaves the hub on the unfitted default.
         let embedding = if config.enable_local_embedding {
-            match embed_local_model(config.embedding_model_dir.as_deref()).await {
-                Ok(service) => {
-                    if let Some(provider) = service.text_embedder() {
-                        if let Err(error) = observations.set_embedder(provider).await {
-                            tracing::warn!(
-                                %error,
-                                "embedding backfill after model install failed; \
-                                 the hub keeps the previous embedder"
-                            );
-                        }
-                    }
-                    Some(Arc::new(service))
-                }
-                Err(error) => {
-                    tracing::warn!(
-                        %error,
-                        "local embedding model unavailable; observations embed \
-                         with the offline hashing default"
-                    );
-                    None
-                }
-            }
+            let dir =
+                embedding_model_dir(config.embedding_model_dir.as_deref()).map_err(|error| {
+                    crate::error::Error::Other(format!(
+                        "cannot resolve the embedding model directory: {error} \
+                         — run `autonomics prepare`"
+                    ))
+                })?;
+            let service = text_embedding::LocalEmbeddingService::init_at(&dir)
+                .await
+                .map_err(|error| {
+                    crate::error::Error::Other(format!(
+                        "local embedding model unavailable at {}: {error} \
+                         — run `autonomics prepare`",
+                        dir.display()
+                    ))
+                })?;
+            swap_embedder(&observations, &service).await;
+            Some(Arc::new(service))
         } else {
+            // No model requested (config off): keep network and the
+            // ONNX session out, but clustering still gets weighted
+            // lexical vectors from the local corpus.
+            install_bm25_fallback(&observations).await;
             None
         };
         let plugin_layout = plugin_rsi::PluginStateLayout::open(&config.state_dir);
@@ -520,7 +523,6 @@ impl SharedInfra {
             kms,
             observations,
             skills,
-            #[cfg(feature = "onnx-embedding")]
             embedding,
             skill_evolution,
             runtime_handle: tokio::runtime::Handle::current(),
@@ -751,18 +753,48 @@ impl SharedInfra {
     }
 }
 
-/// Open (and if missing, install) the local embedding model, honoring
-/// a configured directory override. SharedInfra owns this so every
-/// consumer shares one loaded model per process.
-#[cfg(feature = "onnx-embedding")]
-async fn embed_local_model(
+/// Resolve the model directory the config points at: an explicit
+/// override, or the service default (`~/.autonomics/model/embedding_model`).
+fn embedding_model_dir(
     model_dir: Option<&std::path::Path>,
-) -> std::result::Result<text_embedding::LocalEmbeddingService, text_embedding::Error> {
+) -> std::result::Result<std::path::PathBuf, text_embedding::Error> {
     match model_dir {
-        Some(dir) => text_embedding::LocalEmbeddingService::init_at(dir).await,
-        None => text_embedding::LocalEmbeddingService::init().await,
+        Some(dir) => Ok(dir.to_path_buf()),
+        None => text_embedding::default_model_dir().map_err(text_embedding::Error::from),
     }
-    .map_err(text_embedding::Error::from)
+}
+
+/// Swap the service's provider into the observation hub. The swap
+/// backfills vectors recorded under the previous embedder.
+async fn swap_embedder(
+    observations: &Arc<evolution_core::ObservationHub>,
+    service: &text_embedding::LocalEmbeddingService,
+) {
+    if let Some(provider) = service.text_embedder() {
+        if let Err(error) = observations.set_embedder(provider).await {
+            tracing::warn!(
+                %error,
+                "embedding backfill after model install failed; \
+                 the hub keeps the previous embedder"
+            );
+        }
+    }
+}
+
+/// Fit BM25 statistics over the observations already in the ledger
+/// and install the frozen snapshot as the hub's embedder. The swap
+/// backfills vectors recorded under the previous embedder — a later
+/// model swap backfills these in turn. An install failure leaves the
+/// hub on its unfitted default.
+async fn install_bm25_fallback(observations: &Arc<evolution_core::ObservationHub>) {
+    let texts = observations.embedding_texts().await;
+    let embedder = text_embedding::Bm25TextEmbedder::fit(texts);
+    if let Err(error) = observations.set_embedder(Arc::new(embedder)).await {
+        tracing::warn!(
+            %error,
+            "BM25 fallback install failed; the hub keeps its unfitted default"
+        );
+    }
 }
 
 /// Runtime adapter that lets PluginStore refresh node factories without
@@ -805,7 +837,6 @@ impl plugin_rsi::PluginRegistryControl for SharedPluginRegistryControl {
 }
 
 #[cfg(test)]
-#[cfg(feature = "onnx-embedding")]
 mod local_embedding_tests {
     use super::super::RuntimeHost;
     use super::*;
@@ -829,10 +860,12 @@ mod local_embedding_tests {
     }
 
     /// End-to-end assembly: the service lands in SharedInfra and its
-    /// provider is live. Requires a prepared model directory (the
-    /// first use would otherwise download ~363 MB), so point
-    /// `TEXT_EMBEDDING_TEST_MODEL_DIR` at any Gemma-style ONNX export;
-    /// the test is a no-op when the variable is unset.
+    /// provider is live. Requires a prepared model directory holding
+    /// the complete default file layout (`onnx/model_quantized.onnx`
+    /// etc.) — an incomplete directory fails the inline open this
+    /// test asserts on — so point `TEXT_EMBEDDING_TEST_MODEL_DIR` at
+    /// a full default-layout export; the test is a no-op when the
+    /// variable is unset.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn local_embedding_service_installs_into_shared_infra() {
         let Ok(model_dir) = std::env::var("TEXT_EMBEDDING_TEST_MODEL_DIR") else {
@@ -841,10 +874,7 @@ mod local_embedding_tests {
         let dir = tempfile::tempdir().unwrap();
         let mut host = RuntimeHost::open(&config(&dir, &model_dir)).await.unwrap();
         let infra = host.infra();
-        let service = infra
-            .embedding
-            .as_ref()
-            .expect("embedding service installed");
+        let service = infra.embedding.as_ref().expect("embedding service opened");
         let signature = service
             .provider()
             .expect("provider opened")
@@ -852,6 +882,21 @@ mod local_embedding_tests {
             .to_string();
         assert!(signature.contains("harrier"), "{signature}");
         host.shutdown_all_agents_and_wait().await;
+    }
+
+    /// With the feature on, a missing model is a hard startup error
+    /// naming `prepare` — the daemon never downloads and never
+    /// silently downgrades to a lexical embedder.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn local_embedding_missing_model_fails_fast() {
+        let empty = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let error = match RuntimeHost::open(&config(&dir, empty.path().to_str().unwrap())).await {
+            Ok(_) => panic!("a missing model must abort host open"),
+            Err(error) => error,
+        };
+        let message = error.to_string();
+        assert!(message.contains("autonomics prepare"), "{message}");
     }
 }
 
@@ -869,6 +914,9 @@ mod plugin_profile_tools_tests {
         config.state_dir = dir.path().join("state");
         config.agent_db = dir.path().join("agent.db");
         config.kms_db_path = dir.path().join("knowledge.db");
+        // Keep the embedding model (network install + ONNX session)
+        // out of this test.
+        config.enable_local_embedding = false;
         let host = RuntimeHost::open(&config).await.unwrap();
         let agent_path = agentik_types::AgentPath::try_from("/root/developer").unwrap();
 
@@ -1007,6 +1055,9 @@ mod kms_migration_tests {
         // Keep the memory pipeline out of this test's way.
         config.use_memory = false;
         config.generate_memory = false;
+        // Keep the embedding model (network install + ONNX session)
+        // out of this test.
+        config.enable_local_embedding = false;
 
         {
             let host = RuntimeHost::open(&config).await.unwrap();

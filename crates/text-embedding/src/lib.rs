@@ -6,41 +6,43 @@
 //! their records into [`EmbeddingInput`] pairs and cluster the
 //! returned vectors themselves.
 //!
-//! The default [`HashingTextEmbedder`] is deliberately local and
-//! deterministic: it maps words and character n-grams into a
-//! fixed-width feature vector. That keeps consumers usable offline
-//! while the [`TextEmbedder`] contract preserves the provider
-//! boundary needed for a remote text-embedding model later.
+//! The default [`Bm25TextEmbedder`] is deliberately local and
+//! deterministic: unfitted it maps words and character n-grams into
+//! a fixed-width feature histogram, and a host that has a corpus
+//! can freeze BM25 statistics into it for weighted vectors. That
+//! keeps consumers usable offline while the [`TextEmbedder`]
+//! contract preserves the provider boundary needed for a remote
+//! text-embedding model later.
 //!
 //! Layout:
 //!
 //! - [`provider`] — the [`TextEmbedder`] contract every embedder
-//!   implements; a new provider (remote API, local ONNX) is a new
-//!   module implementing it
-//! - [`hashing`] — the offline deterministic default
+//!   implements, plus the providers under it as modules:
+//!   [`Bm25TextEmbedder`] (the offline deterministic default) and
+//!   [`OnnxTextEmbedder`] (the local ONNX model). A new provider
+//!   (remote API) is a new module under it implementing the contract
+//! - [`service`] — install the default ONNX model from the Hub and
+//!   serve it as a [`LocalEmbeddingService`]
 //! - [`vector_map`] — precomputed-vector wrapper for substitution
 //! - [`vector`] — dimension-checked vector math used by clustering
 //! - [`input`] / [`output`] / [`error`] — the input record, the
 //!   model-stamped output record, and the error type
 
 pub mod error;
-pub mod hashing;
 pub mod input;
 pub mod output;
 pub mod provider;
-#[cfg(feature = "onnx")]
 pub mod service;
 pub mod vector;
 pub mod vector_map;
 
 pub use error::{Error, Result};
-pub use hashing::{DEFAULT_EMBEDDING_DIM, HashingTextEmbedder};
 pub use input::EmbeddingInput;
 pub use output::EmbeddingOutput;
-#[cfg(feature = "onnx")]
-pub use provider::OnnxTextEmbedder;
-pub use provider::TextEmbedder;
-#[cfg(feature = "onnx")]
-pub use service::local_embedding_service::LocalEmbeddingService;
+pub use provider::{Bm25TextEmbedder, DEFAULT_EMBEDDING_DIM, OnnxTextEmbedder, TextEmbedder};
+pub use service::local_embedding_service::{
+    DEFAULT_MODEL_FILES, InstallAction, LocalEmbeddingService, MODEL_COMPLETE_MARKER,
+    ModelCompleteMarker, ModelVerification, default_model_dir, ensure_installed, verify_install,
+};
 pub use vector::{cosine, mean_vector};
 pub use vector_map::VectorMapTextEmbedder;
