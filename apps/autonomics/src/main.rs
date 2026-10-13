@@ -23,7 +23,9 @@ mod state;
 mod widgets;
 mod xai_textarea;
 
-fn init_logging(nocapture: bool) -> color_eyre::Result<()> {
+/// Logging for frontend / one-shot commands (everything except the
+/// daemon `serve` path, which runs `init_gateway_logging` instead).
+fn init_frontend_logging(nocapture: bool) -> color_eyre::Result<()> {
     color_eyre::install()?;
 
     // Absolute and CWD-independent: under the state dir (`~/.autonomics`
@@ -66,7 +68,7 @@ fn init_logging(nocapture: bool) -> color_eyre::Result<()> {
         // Directly write to stderr + flush so the panic is visible even if
         // the tracing subscriber's buffer is not flushed before exit.
         eprintln!();
-        eprintln!("=== PANIC (init_logging hook) ===");
+        eprintln!("=== PANIC (init_frontend_logging hook) ===");
         eprintln!("{info}");
         eprintln!("{bt}");
         let _ = std::io::Write::flush(&mut std::io::stderr());
@@ -109,8 +111,16 @@ fn init_logging(nocapture: bool) -> color_eyre::Result<()> {
 }
 
 fn main() -> color_eyre::Result<()> {
-    // Parse CLI first so we can read --nocapture before init_logging.
+    // Parse CLI first so we can read --nocapture before logging init.
     let cli = Cli::parse();
+
+    // Daemon process: `serve` (launcher or detached child) runs its own
+    // logging (`init_gateway_logging`) and must be dispatched BEFORE the
+    // frontend logging below — the global tracing subscriber and
+    // color_eyre are singletons, and both sides install their own.
+    if let Some(Command::Serve(args)) = cli.command {
+        return commands::serve::run_serve(args);
+    }
 
     // Determine nocapture: true if any subcommand (or the default Tui) has it.
     let nocapture = match &cli.command {
@@ -118,18 +128,7 @@ fn main() -> color_eyre::Result<()> {
         _ => false,
     };
 
-    // `serve` initializes its own logging rather than going through
-    // `init_logging`: gateway-targeted filters, the daemon's own log file
-    // (`autonomics-gateway.log`), and stderr mirroring driven by daemon
-    // vs foreground mode.
-    if matches!(&cli.command, Some(Command::Serve(_))) {
-        return commands::serve::run_serve(match cli.command {
-            Some(Command::Serve(args)) => args,
-            _ => unreachable!(),
-        });
-    }
-
-    init_logging(nocapture)?;
+    init_frontend_logging(nocapture)?;
 
     match cli.command {
         None => commands::guide::run_guide(),
@@ -152,6 +151,7 @@ fn main() -> color_eyre::Result<()> {
                 .map_err(|e| color_eyre::eyre::eyre!("failed to build tokio runtime: {e}"))?;
             runtime.block_on(commands::export::run_export_run(args))
         }
-        Some(Command::Serve(_)) => unreachable!("dispatched before init_logging"),
+        // Serve was taken above (`if let Some(Command::Serve(..))`).
+        Some(Command::Serve(_)) => unreachable!("dispatched before init_frontend_logging"),
     }
 }

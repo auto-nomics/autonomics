@@ -56,7 +56,6 @@ async fn guide() -> Result<()> {
         println!("  `autonomics serve stop` when you are done");
     } else {
         println!("  1. `autonomics serve`       # readiness is clean — start the daemon");
-        println!("     (`autonomics serve --daemon` to run it detached)");
         println!("  2. `autonomics tui`         # then launch the TUI");
     }
     Ok(())

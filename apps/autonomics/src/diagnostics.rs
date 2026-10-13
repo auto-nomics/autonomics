@@ -97,21 +97,30 @@ impl ReadinessReport {
     /// Shared human rendering: one line per category, `  ! …` lines
     /// for findings, the prepare hint on every fatal one.
     pub fn print(&self) {
-        print_category("plugins", &self.plugins, true);
-        print_category("model", &self.model, true);
-        print_category("images", &self.images, true);
-        print_category("panels", &self.panels, false);
+        print!("{}", self.render());
+    }
+
+    /// The same rendering as [`Self::print`], as a string — the daemon
+    /// child logs it to the file log (its stdout is closed).
+    pub fn render(&self) -> String {
+        let mut out = String::new();
+        out.push_str(&render_category("plugins", &self.plugins, true));
+        out.push_str(&render_category("model", &self.model, true));
+        out.push_str(&render_category("images", &self.images, true));
+        out.push_str(&render_category("panels", &self.panels, false));
+        out
     }
 }
 
-fn print_category(name: &str, category: &Category, fatal: bool) {
+fn render_category(name: &str, category: &Category, fatal: bool) -> String {
+    let mut out = String::new();
     match category {
-        Category::Ok(summary) => println!("{name:<8} ok   {summary}"),
-        Category::Skipped(why) => println!("{name:<8} skip {why}"),
+        Category::Ok(summary) => out.push_str(&format!("{name:<8} ok   {summary}\n")),
+        Category::Skipped(why) => out.push_str(&format!("{name:<8} skip {why}\n")),
         Category::Failed(error) => {
-            println!("{name:<8} FAIL {error}");
+            out.push_str(&format!("{name:<8} FAIL {error}\n"));
             if fatal {
-                println!("         run `autonomics prepare`");
+                out.push_str("         run `autonomics prepare`\n");
             }
         }
         Category::Gap(gaps) => {
@@ -120,16 +129,20 @@ fn print_category(name: &str, category: &Category, fatal: bool) {
             } else {
                 " — run `autonomics prepare` to fetch the rest (nodes needing them fail at build time until then)"
             };
-            println!("{name:<8} {} gap{}", gaps.len(), hint);
+            out.push_str(&format!("{name:<8} {} gap{}\n", gaps.len(), hint));
             for gap in gaps {
                 let kind = match gap.kind {
                     GapKind::Missing => "missing",
                     GapKind::Inconsistent => "inconsistent",
                 };
-                println!("         ! {} [{kind}] {}", gap.subject, gap.detail);
+                out.push_str(&format!(
+                    "         ! {} [{kind}] {}\n",
+                    gap.subject, gap.detail
+                ));
             }
         }
     }
+    out
 }
 
 /// Run every readiness category against `config`. Zero network.

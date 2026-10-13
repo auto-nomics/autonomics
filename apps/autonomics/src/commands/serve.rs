@@ -1,12 +1,12 @@
 //! `autonomics serve` implementation — thin CLI shell over
 //! `gateway::run_daemon` / `gateway::manager`.
 //!
-//! Logging differs from the interactive TUI: the daemon must not depend
-//! on the launcher's working directory (it outlives the terminal that
-//! spawned it), so its file log lives under the absolute state dir.
-//! Foreground mode additionally mirrors to stderr for interactive
-//! debugging; `--daemon` mode writes to the file only; the gateway
-//! server detaches stdio as soon as it is ready.
+//! The daemon always runs detached: the CLI re-executes itself as a
+//! child (own process group, closed stdio), waits until the child's
+//! gateway is bound, prints its status, and exits — the daemon outlives
+//! the terminal that spawned it. Its file log lives under the absolute
+//! state dir; the gateway server additionally detaches stdio as soon as
+//! it is ready.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -26,7 +26,22 @@ use gateway::proto::GatewayStatus;
 
 use crate::cli::{ServeAction, ServeArgs};
 
+/// Set on the detached daemon child so it recognizes itself and does
+/// not re-spawn another launcher.
+const DAEMON_CHILD_ENV: &str = "AUTONOMICS_DAEMON_CHILD";
+
+/// How long the launcher waits for the detached daemon to become ready
+/// before giving up. Cold starts are dominated by `SharedInfra`
+/// (embedding model etc.) and can take tens of seconds.
+const DAEMON_READY_TIMEOUT: Duration = Duration::from_secs(90);
+
 pub fn run_serve(args: ServeArgs) -> color_eyre::Result<()> {
+    // The daemon child (re-exec'd below) runs the real daemon in this
+    // process; the launcher spawn-waits and returns.
+    if args.action.is_none() && std::env::var_os(DAEMON_CHILD_ENV).is_none() {
+        return spawn_detached_and_wait();
+    }
+
     let runtime = tokio::runtime::Runtime::new()
         .map_err(|e| color_eyre::eyre::eyre!("failed to build tokio runtime: {e}"))?;
     runtime.block_on(async move {
@@ -57,11 +72,11 @@ pub fn run_serve(args: ServeArgs) -> color_eyre::Result<()> {
                 }
             }
         } else {
-            // No action (or the plain start path): build the daemon
-            // config and run it.
+            // Daemon child (DAEMON_CHILD_ENV set): build the config and
+            // run the daemon until shutdown.
             let mut config = gateway::RuntimeConfig::default();
             stabilize_daemon_cwd(&mut config)?;
-            run_foreground_or_daemon(config, args.daemon).await
+            run_daemon_child(config).await
         }
     })?;
     // Bound the time the runtime waits for background tasks once the
@@ -130,11 +145,75 @@ fn format_uptime(total_secs: u64) -> String {
     }
 }
 
-async fn run_foreground_or_daemon(
-    config: gateway::RuntimeConfig,
-    daemon: bool,
-) -> color_eyre::Result<()> {
-    init_gateway_logging(&config.state_dir, daemon)?;
+/// Re-execute this binary as a detached daemon child and wait until its
+/// gateway is ready, then return so the CLI exits and the terminal is
+/// freed. The child runs in its own process group with closed stdio —
+/// it survives the launcher, the terminal, and Ctrl+C; only
+/// `autonomics serve stop` (POST /gateway-shutdown) stops it.
+fn spawn_detached_and_wait() -> color_eyre::Result<()> {
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+
+    let exe = std::env::current_exe()
+        .map_err(|e| color_eyre::eyre::eyre!("cannot resolve current executable: {e}"))?;
+
+    let mut child = Command::new(exe)
+        .arg("serve")
+        .env(DAEMON_CHILD_ENV, "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .map_err(|e| color_eyre::eyre::eyre!("cannot spawn daemon child: {e}"))?;
+    let child_pid = child.id();
+
+    // The appender rotates daily (`autonomics-gateway.YYYY-MM-DD`), so
+    // point at the directory rather than a dated filename.
+    let log_hint = || gateway::RuntimeConfig::default().state_dir.join("logs");
+
+    let runtime = tokio::runtime::Runtime::new()
+        .map_err(|e| color_eyre::eyre::eyre!("failed to build tokio runtime: {e}"))?;
+    runtime.block_on(async {
+        let deadline = tokio::time::Instant::now() + DAEMON_READY_TIMEOUT;
+        loop {
+            // A dead child loses the race against any probe result:
+            // check it first so a startup failure is never masked by a
+            // stale daemon's status response.
+            if let Some(status) = child.try_wait().ok().flatten() {
+                return Err(color_eyre::eyre::eyre!(
+                    "daemon exited during startup (code {})\n  see logs: {}",
+                    status
+                        .code()
+                        .map_or_else(|| "signal".to_owned(), |c| c.to_string()),
+                    log_hint().display()
+                ));
+            }
+            if let Ok(Some(status)) = manager::probe().await {
+                // Require the status to belong to *our* child: a token
+                // file left by a previous run could answer for a stale
+                // daemon otherwise.
+                if status.pid == child_pid {
+                    print_serve_status(&status);
+                    println!("  logs        {}", log_hint().display());
+                    return Ok(());
+                }
+            }
+            if tokio::time::Instant::now() >= deadline {
+                let _ = child.kill();
+                return Err(color_eyre::eyre::eyre!(
+                    "daemon did not become ready within {}s\n  see logs: {}",
+                    DAEMON_READY_TIMEOUT.as_secs(),
+                    log_hint().display()
+                ));
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    })
+}
+
+async fn run_daemon_child(config: gateway::RuntimeConfig) -> color_eyre::Result<()> {
+    init_gateway_logging(&config.state_dir)?;
 
     // Startup diagnostic gate — the exact same offline checks as
     // `autonomics prepare --check`. Zero network; a fatal gap (plugins,
@@ -143,46 +222,42 @@ async fn run_foreground_or_daemon(
     // Provisioning is `prepare`'s job; the daemon-internal plugin sync
     // (`SharedInfra::open` → materialize_registry) stays as an
     // idempotent, network-free no-op backstop once the gate passed.
+    // The child's stdio is closed, so the report goes to the file log;
+    // the launcher surfaces the log path if startup fails.
     let report = crate::diagnostics::check_readiness(&config).await;
-    report.print();
+    tracing::info!("startup readiness report:\n{}", report.render());
     if report.has_fatal_gaps() {
-        eprintln!("daemon not started — run `autonomics prepare` to provision the gaps above");
+        tracing::error!("daemon not started — run `autonomics prepare` to provision the gaps");
         std::process::exit(1);
     }
 
+    // No Ctrl+C handler: the daemon child runs in its own process group
+    // with no controlling terminal — only `autonomics serve stop` (the
+    // shutdown token via the HTTP endpoint) stops it.
     let shutdown = CancellationToken::new();
-    if !daemon {
-        // Foreground: Ctrl+C is a graceful stop (same as POST
-        // /gateway/shutdown). Daemon mode has no terminal — only the
-        // HTTP endpoint stops it.
-        let ctrl_shutdown = shutdown.clone();
-        tokio::spawn(async move {
-            if tokio::signal::ctrl_c().await.is_ok() {
-                tracing::info!("ctrl-c received; shutting down gateway");
-                ctrl_shutdown.cancel();
-            }
-        });
-    }
 
     let opts = DaemonOptions {
         config,
         addr: gateway::daemon::env_addr(),
         env_token: gateway::daemon::env_token(),
-        detach_stdio_on_ready: daemon,
+        detach_stdio_on_ready: true,
     };
 
+    // The child's stdio is closed, so startup failures are logged to
+    // the file (the launcher's timeout message points there); the CLI
+    // process exits nonzero either way.
     match run_daemon(opts, shutdown).await {
         Ok(()) => Ok(()),
         Err(gateway::DaemonError::InstanceLockHeld { path }) => {
-            eprintln!(
-                "another gateway already owns the state directory ({})\n\
-                 it is probably running — check `autonomics serve status`, or stop it with `autonomics serve stop`",
+            tracing::error!(
+                "another gateway already owns the state directory ({}) — \
+                 check `autonomics serve status`, or stop it with `autonomics serve stop`",
                 path.display()
             );
             std::process::exit(1);
         }
         Err(error) => {
-            eprintln!("error: {error}");
+            tracing::error!("daemon error: {error}");
             std::process::exit(1);
         }
     }
@@ -259,9 +334,12 @@ fn setup_network_allowlist(state_dir: &std::path::Path) -> color_eyre::Result<()
 }
 
 /// File log under the absolute state dir (independent of the launcher's
-/// cwd); foreground also mirrors to stderr.
-fn init_gateway_logging(state_dir: &std::path::Path, foreground: bool) -> color_eyre::Result<()> {
-    color_eyre::install()?;
+/// cwd). The daemon child's stdio is closed, so the file is the only
+/// log sink.
+fn init_gateway_logging(state_dir: &std::path::Path) -> color_eyre::Result<()> {
+    // Tolerate a prior `color_eyre::install()` — only the first install
+    // wins, which is all we need.
+    let _ = color_eyre::install();
 
     let log_dir: PathBuf = state_dir.join("logs");
     std::fs::create_dir_all(&log_dir)?;
@@ -287,23 +365,17 @@ fn init_gateway_logging(state_dir: &std::path::Path, foreground: bool) -> color_
 
     let subscriber = tracing_subscriber::fmt()
         .with_env_filter(env_filter)
-        .with_ansi(foreground)
+        .with_ansi(false)
         .with_target(false)
         .with_file(true)
         .with_line_number(true)
         .with_span_events(FmtSpan::NONE)
         .with_timer(timer);
 
-    if foreground {
-        subscriber
-            .with_writer(file_writer.and(std::io::stderr))
-            .init();
-    } else {
-        subscriber.with_writer(file_writer).init();
-    }
+    subscriber.with_writer(file_writer).init();
 
     tracing::info!(
-        "gateway logging initialized — logs directory: {} (foreground: {foreground})",
+        "gateway logging initialized — logs directory: {}",
         log_dir.display()
     );
     Ok(())

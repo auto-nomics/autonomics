@@ -53,7 +53,7 @@ fn set_panic_hook() {
         });
 
         // Always print a readable panic message to stderr — the logging
-        // hook (installed by `init_logging`) writes to the log file only
+        // hook (installed by `init_frontend_logging`) writes to the log file only
         // in normal mode, so without this the crash would be completely
         // silent to the user.
         eprintln!();

@@ -39,18 +39,26 @@ fn tui_parses_its_flags() {
 }
 
 #[test]
-fn serve_parses_daemon_flag_and_actions() {
-    let Command::Serve(args) = parse(&["serve", "--daemon"]).unwrap().command.unwrap() else {
+fn serve_parses_bare_and_actions() {
+    let Command::Serve(args) = parse(&["serve"]).unwrap().command.unwrap() else {
         panic!("serve subcommand");
     };
-    assert!(args.daemon);
     assert!(args.action.is_none());
 
     let Command::Serve(args) = parse(&["serve", "status"]).unwrap().command.unwrap() else {
         panic!("serve status subcommand");
     };
-    assert!(!args.daemon);
     assert!(matches!(args.action, Some(crate::cli::ServeAction::Status)));
+}
+
+#[test]
+fn serve_daemon_flag_is_gone() {
+    // Daemon mode is the only mode now — the flag was removed.
+    let error = parse(&["serve", "--daemon"]).unwrap_err();
+    assert!(
+        error.to_string().to_lowercase().contains("unexpected"),
+        "{error}"
+    );
 }
 
 #[test]
