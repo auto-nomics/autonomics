@@ -974,7 +974,7 @@ pub struct AppState {
     /// Interactive DAG view visibility.
     pub dag_view_visible: bool,
     /// Skill-evolution dashboard state (visibility + data snapshots).
-    pub skill_evolution: crate::widgets::skill_evolution_widget::SkillEvolutionState,
+    pub skill_evolution: crate::widgets::evolution_widget::SkillEvolutionState,
     /// Wall-clock of the last dashboard status poll — the render
     /// tick uses this to throttle the status-only fetch while the
     /// dashboard is visible.

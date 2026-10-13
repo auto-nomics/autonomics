@@ -95,7 +95,7 @@ impl App {
 
     /// Key handling while the dashboard is open.
     pub(super) fn handle_skill_evolution_key(&mut self, key: &KeyEvent) {
-        use crate::widgets::skill_evolution_widget::EvolutionTab;
+        use crate::widgets::evolution_widget::EvolutionTab;
 
         let dashboard = &mut self.state.skill_evolution;
         match key.code {

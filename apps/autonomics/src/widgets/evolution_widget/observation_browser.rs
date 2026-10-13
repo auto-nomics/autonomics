@@ -9,7 +9,7 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, StatefulWidget, Widget, Wrap},
 };
 
-use super::skill_browser_widget::{PanelFocus, format_created, truncate};
+use super::skill_browser::{PanelFocus, format_created, truncate};
 
 #[derive(Debug, Clone, Default)]
 pub struct ObservationBrowserState {

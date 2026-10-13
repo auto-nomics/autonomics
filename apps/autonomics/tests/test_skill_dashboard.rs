@@ -41,7 +41,7 @@ use ratatui::{
     text::Line,
     widgets::{Paragraph, StatefulWidget as _, Widget as _},
 };
-use widgets::skill_evolution_widget::{
+use widgets::evolution_widget::{
     EvolutionTab, PanelFocus, SkillEvolutionState, SkillEvolutionWidget,
 };
 
@@ -522,7 +522,7 @@ fn run_interactive_loop(
     use crossterm::event::{self, Event, KeyCode, KeyEventKind};
     use std::time::Duration;
 
-    use widgets::skill_evolution_widget::EvolutionTab;
+    use widgets::evolution_widget::EvolutionTab;
 
     let mut state = fixture_state();
     let mut next_canned = 0;

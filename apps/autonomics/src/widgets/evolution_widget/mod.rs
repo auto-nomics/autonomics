@@ -1,11 +1,12 @@
 //! Skill evolution dashboard: service status plus Skills and Observations tabs.
 
-pub use crate::widgets::skill_browser_widget::PanelFocus;
-use crate::widgets::{
-    observation_browser_widget::{ObservationBrowserState, ObservationBrowserWidget},
-    popup::{Popup, PopupControls},
-    skill_browser_widget::{SkillBrowserState, SkillBrowserWidget},
-};
+pub mod observation_browser;
+pub mod skill_browser;
+
+pub use self::skill_browser::PanelFocus;
+use self::observation_browser::{ObservationBrowserState, ObservationBrowserWidget};
+use self::skill_browser::{SkillBrowserState, SkillBrowserWidget};
+use crate::widgets::popup::{Popup, PopupControls};
 use gateway::proto::SkillEvolutionStatus;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
