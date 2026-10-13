@@ -19,10 +19,11 @@ statrs = "0.18"
 rand = "0.9"
 rand_distr = "0.5"
 rand_chacha = "0.9"
-# LDSC (cross-trait rg / gencov / h²) stage reuses the already-validated
-# `ldsc` crate; the IVW-MR / Egger stage uses the estimators vendored in
-# src/mr_estimators.rs (formerly the removed `mr` crate).
-ldsc = { path = "../ldsc" }
+tracing.workspace = true
+# The LDSC (cross-trait rg / gencov / h²) stage runs on the engine vendored in
+# src/ldsc_regress/ (formerly the removed `ldsc` crate); the IVW-MR / Egger
+# stage uses the estimators vendored in src/mr_estimators.rs (formerly the
+# removed `mr` crate).
 
 [dev-dependencies]
 serde_json.workspace = true

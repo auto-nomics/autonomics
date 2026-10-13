@@ -8,17 +8,17 @@
 //! are the **whole-data** estimates (`jknife.est`); standard errors come from
 //! the block-jackknife pseudovalues.
 //!
-//! This module is the comprehensive port; the DataFrame-based
-//! [`crate::hsq::estimate_h2`] is numerically equivalent for the non-twostep
-//! Hsq case and remains the high-level entry point for that path.
+//! Vendored from the removed `bio_crates/ldsc` crate (see [`super`] for the
+//! provenance note); MRlap consumes [`RG`] for its cross-trait stage, and
+//! [`Hsq`] / [`Gencov`] come along as RG's internal building blocks.
 
 use faer::Mat;
 
-use crate::irwls::{gencov_weights, hsq_weights, irwls_jackknife};
-use crate::jackknife::{JackknifeResult, jackknife_fast, ratio_jackknife};
-use crate::linalg::build_mat_col_major;
-use crate::stats::{chi2_sf_1, norm_isf, norm_pdf};
-use crate::{LdscError, Result};
+use super::irwls::{gencov_weights, hsq_weights, irwls_jackknife};
+use super::jackknife::{JackknifeResult, jackknife_fast, ratio_jackknife};
+use super::linalg::build_mat_col_major;
+use super::stats::{chi2_sf_1, norm_isf, norm_pdf};
+use super::{LdscError, Result};
 
 // ---------------------------------------------------------------------------
 // Small helpers porting regressions.py utilities
@@ -298,9 +298,9 @@ where
         let value = m_tot * coef[0] / nbar;
         weight_fn(value, step1_int)
     };
-    let seps1 = crate::jackknife::separators(n1, n_blocks);
+    let seps1 = super::jackknife::separators(n1, n_blocks);
     let seps_unmasked = update_separators(&seps1, ii);
-    let step2 = crate::irwls::irwls_jackknife_with_separators(
+    let step2 = super::irwls::irwls_jackknife_with_separators(
         &x2,
         &yp2,
         initial_w,
@@ -898,7 +898,7 @@ impl RG {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::linalg::build_mat_row_major;
+    use crate::ldsc_regress::linalg::build_mat_row_major;
 
     fn approx(a: f64, b: f64, rtol: f64) -> bool {
         (a - b).abs() <= rtol * b.abs().max(1.0)

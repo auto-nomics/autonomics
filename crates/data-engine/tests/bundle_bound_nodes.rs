@@ -13,23 +13,23 @@ fn bundle(id: &str, vpath: &str) -> DataBundle {
 fn catalog() -> BundleRegistry {
     BundleRegistry::from_bundles([
         bundle(
-            nodes_ldsc::ldsc_common::BUNDLE_LDSCORE_1000G_EUR,
+            nodes_mr::ldsc_common::BUNDLE_LDSCORE_1000G_EUR,
             "/bundles/ldsc/1000g.parquet",
         ),
         bundle(
-            nodes_ldsc::ldsc_common::BUNDLE_LDSCORE_1000G_EUR_M,
+            nodes_mr::ldsc_common::BUNDLE_LDSCORE_1000G_EUR_M,
             "/bundles/ldsc/1000g_m.parquet",
         ),
         bundle(
-            nodes_ldsc::ldsc_common::BUNDLE_LDSCORE_BASELINELD_V2_2_EUR,
+            nodes_mr::ldsc_common::BUNDLE_LDSCORE_BASELINELD_V2_2_EUR,
             "/bundles/ldsc/baseline.parquet",
         ),
         bundle(
-            nodes_ldsc::ldsc_common::BUNDLE_LDSCORE_BASELINELD_V2_2_EUR_M,
+            nodes_mr::ldsc_common::BUNDLE_LDSCORE_BASELINELD_V2_2_EUR_M,
             "/bundles/ldsc/baseline_m.parquet",
         ),
         bundle(
-            nodes_ldsc::ldsc_common::BUNDLE_LDSCORE_UKBB_EUR,
+            nodes_mr::ldsc_common::BUNDLE_LDSCORE_UKBB_EUR,
             "/bundles/ldsc/ukbb.parquet",
         ),
         bundle("ldmatrix-1000g-eur", "/bundles/ldmatrix/chr{N}"),
@@ -88,17 +88,6 @@ fn all_bundle_bound_node_kinds_build_from_runtime_catalog() {
                 "format": "sumstats_gz"
             }),
         ),
-        ("sldsc", serde_json::json!({})),
-        (
-            "lcv",
-            serde_json::json!({
-                "no_blocks": 5,
-                "ldsc_intercept": true,
-                "crosstrait_intercept": true,
-                "sig_threshold": null,
-                "intercept12": 0.0
-            }),
-        ),
         (
             "mrlap",
             serde_json::json!({"exposure_name": "exposure", "outcome_name": "outcome"}),
@@ -147,8 +136,11 @@ fn global_builtin_bundles_build_without_a_runtime_catalog() {
     );
 
     registry
-        .build_node("sldsc", serde_json::json!({}))
-        .unwrap_or_else(|error| panic!("build `sldsc` from built-in catalog: {error}"));
+        .build_node(
+            "mrlap",
+            serde_json::json!({"exposure_name": "exposure", "outcome_name": "outcome"}),
+        )
+        .unwrap_or_else(|error| panic!("build `mrlap` from built-in catalog: {error}"));
     registry
         .build_node(
             "bundle_source",
@@ -165,7 +157,11 @@ fn default_data_engine_uses_builtin_bundle_catalog() {
     let mut engine = DataEngine::builder().build();
 
     engine
-        .add_node_from_registry("sldsc", "sldsc", serde_json::json!({}))
+        .add_node_from_registry(
+            "mrlap",
+            "mrlap",
+            serde_json::json!({"exposure_name": "exposure", "outcome_name": "outcome"}),
+        )
         .unwrap();
 }
 
@@ -258,6 +254,20 @@ fn native_coloc_abf_registration_is_removed() {
     // through the coloc manifest plugin when a plugins root is present;
     // this plugin-free registry must not carry it.
     assert!(!kinds.iter().any(|node| node.kind == "coloc_abf"));
+}
+
+#[test]
+fn native_ldsc_bundle_nodes_are_removed() {
+    let registry = registry();
+    let kinds = registry.list_nodes();
+
+    // The nodes-ldsc bundle (sldsc / liability / lcv nodes + ldsc_common)
+    // and the bio_crates/ldsc + bio_crates/lcv crates were removed; the
+    // official LDSC runs through the `ldsc_h2` / `ldsc_munge` / `ldsc_rg`
+    // manifest plugin. mrlap keeps its vendored regression engine.
+    for kind in ["sldsc", "liability", "lcv"] {
+        assert!(!kinds.iter().any(|node| node.kind == kind), "{kind} still registered");
+    }
 }
 
 #[test]

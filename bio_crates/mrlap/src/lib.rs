@@ -18,10 +18,11 @@
 //! 5. **Correct** ([`correction`]) — de-biased effect + bootstrap SE.
 //!
 //! The correction maths (the novel part) is a faithful, line-by-line port of
-//! `get_correction.R`; the LDSC stage reuses the already-validated [`ldsc`]
-//! crate and the MR stage the estimators vendored in [`mr_estimators`] (the
-//! removed `bio_crates/mr` TwoSampleMR port). All RNG (parametric bootstrap)
-//! uses a seeded ChaCha8 so runs are reproducible.
+//! `get_correction.R`; the LDSC stage runs on the engine vendored in
+//! [`ldsc_regress`] (the removed `bio_crates/ldsc` crate) and the MR stage on
+//! the estimators vendored in [`mr_estimators`] (the removed `bio_crates/mr`
+//! TwoSampleMR port). All RNG (parametric bootstrap) uses a seeded ChaCha8 so
+//! runs are reproducible.
 
 #![allow(clippy::doc_lazy_continuation)]
 
@@ -29,6 +30,7 @@ pub mod correction;
 pub mod error;
 pub mod harmonise;
 pub mod input;
+pub mod ldsc_regress;
 pub mod ldsc_runner;
 pub mod mr_estimators;
 pub mod mr_runner;

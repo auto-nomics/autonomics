@@ -1689,16 +1689,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bzip2-rs"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "beeb59e7e4c811ab37cc73680c798c7a5da77fc9989c62b09138e31ee740f735"
-dependencies = [
- "crc32fast",
- "tinyvec",
-]
-
-[[package]]
 name = "calamine"
 version = "0.36.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2889,7 +2879,6 @@ dependencies = [
  "nodes-hypothesize",
  "nodes-io",
  "nodes-lcmm",
- "nodes-ldsc",
  "nodes-mice",
  "nodes-ml",
  "nodes-mr",
@@ -6479,36 +6468,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lcv"
-version = "0.1.0"
-dependencies = [
- "faer",
- "rand 0.9.5",
- "rand_chacha 0.9.0",
- "rand_distr 0.5.1",
- "serde_json",
- "statrs",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "ldsc"
-version = "0.1.0"
-dependencies = [
- "arrow",
- "arrow-array",
- "arrow-csv",
- "arrow-schema",
- "bzip2-rs",
- "datafusion",
- "faer",
- "flate2",
- "thiserror 2.0.20",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "levenshtein_automata"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7530,13 +7489,13 @@ name = "mrlap"
 version = "0.1.0"
 dependencies = [
  "faer",
- "ldsc",
  "rand 0.9.5",
  "rand_chacha 0.9.0",
  "rand_distr 0.5.1",
  "serde_json",
  "statrs",
  "thiserror 2.0.20",
+ "tracing",
 ]
 
 [[package]]
@@ -7982,27 +7941,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nodes-ldsc"
-version = "0.1.0"
-dependencies = [
- "arrow-array",
- "arrow-schema",
- "async-trait",
- "dag-core",
- "datafusion",
- "faer",
- "lcv",
- "ldsc",
- "schemars",
- "serde",
- "serde_json",
- "thiserror 2.0.20",
- "tokio",
- "tracing",
- "vfs",
-]
-
-[[package]]
 name = "nodes-mice"
 version = "0.1.0"
 dependencies = [
@@ -8052,11 +7990,12 @@ dependencies = [
  "datafusion",
  "faer",
  "mrlap",
- "nodes-ldsc",
  "schemars",
  "serde",
  "serde_json",
+ "thiserror 2.0.20",
  "tokio",
+ "tracing",
  "vfs",
 ]
 

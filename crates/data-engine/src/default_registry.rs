@@ -48,9 +48,7 @@ pub fn build_default_registry_with_container_execution(
             .with_bundle_registry(bundle_registry),
     );
 
-    // ── Phase 4: LDSC + genetics bundles ──────────────────────────────
-    #[cfg(feature = "bundle-ldsc")]
-    registry.register_plugin(&nodes_ldsc::Plugin);
+    // ── Phase 4: genetics bundle ──────────────────────────────────────
     #[cfg(feature = "bundle-genetics")]
     registry.register_plugin(&nodes_genetics::Plugin);
 

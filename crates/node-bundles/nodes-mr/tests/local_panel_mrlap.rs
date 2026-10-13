@@ -6,7 +6,7 @@ use dag_core::node::{DataBundle, NodeInput};
 use dag_core::registry::NodeCtx;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::prelude::{DataFrame, SessionContext};
-use nodes_ldsc::ldsc_common::{self, BUNDLE_LDSCORE_1000G_EUR};
+use nodes_mr::ldsc_common::{self, BUNDLE_LDSCORE_1000G_EUR};
 use nodes_mr::mrlap::{MrlapNode, MrlapSpec};
 use vfs::{BackendConfig, BackendDefinition, MountDefinition, MountedObjectStore, VfsManifest};
 

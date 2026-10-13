@@ -14,17 +14,17 @@
 //! factor is a positive constant multiplying every effective weight equally,
 //! so the resulting β is identical to standard weighted least squares with
 //! weights `w`. We therefore implement the per-iteration solve with
-//! [`crate::linalg::wls`] (which solves `(Xᵀ W X) β = Xᵀ W y`) and only apply
+//! [`super::linalg::wls`] (which solves `(Xᵀ W X) β = Xᵀ W y`) and only apply
 //! the row-scaling once, for the final jackknife input — that scaling, too, is
 //! globally constant and cancels in every jackknife quantity (coef, pseudovalues,
 //! covariance), so its omission changes nothing numerically.
 
 use faer::Mat;
 
-use crate::jackknife::{JackknifeResult, jackknife_fast};
-use crate::{LdscError, Result};
+use super::jackknife::{JackknifeResult, jackknife_fast};
+use super::{LdscError, Result};
 
-use crate::linalg::wls;
+use super::linalg::wls;
 
 /// Per-SNP Hsq regression weights — the reciprocal of the conditional variance
 /// function. Port of `Hsq.weights` (regressions.py:497-535).
@@ -53,7 +53,7 @@ pub fn hsq_weights(
 }
 
 /// Output of [`irwls`]: the weighted design matrix and response ready to hand
-/// to [`crate::jackknife::jackknife_fast`].
+/// to [`super::jackknife::jackknife_fast`].
 pub struct IrwlsOutput {
     /// Row-scaled design matrix (`n × p`).
     pub x: Mat<f64>,
@@ -165,7 +165,7 @@ pub fn irwls(
 /// weight vector for the current least-squares coefficients, then hands the
 /// `√w`-scaled design/response to [`jackknife_fast`].
 ///
-/// This is the engine behind [`crate::regress`]'s Hsq/Gencov regressions.
+/// This is the engine behind [`super::regress`]'s Hsq/Gencov regressions.
 pub fn irwls_jackknife<F>(
     x: &Mat<f64>,
     y: &[f64],
@@ -227,13 +227,13 @@ where
     let p = x.ncols();
     let xw = Mat::from_fn(n, p, |i, j| x[(i, j)] * sqrtw[i]);
     let yw: Vec<f64> = (0..n).map(|i| y[i] * sqrtw[i]).collect();
-    crate::jackknife::jackknife_fast_with_separators(&xw, &yw, separators)
+    super::jackknife::jackknife_fast_with_separators(&xw, &yw, separators)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::linalg::build_mat_row_major;
+    use crate::ldsc_regress::linalg::build_mat_row_major;
 
     fn approx(a: f64, b: f64, tol: f64) -> bool {
         (a - b).abs() <= tol * b.abs().max(1.0)

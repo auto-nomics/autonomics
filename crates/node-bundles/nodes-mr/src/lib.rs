@@ -1,5 +1,6 @@
 //! Mendelian randomisation DAG node bundle.
 
+pub mod ldsc_common;
 pub mod mrlap;
 
 use dag_core::{NodePlugin, NodeRegistry};

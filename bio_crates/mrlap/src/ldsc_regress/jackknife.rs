@@ -9,9 +9,9 @@
 
 use faer::Mat;
 
-use crate::{LdscError, Result};
+use super::{LdscError, Result};
 
-use crate::linalg::{build_mat_col_major, solve_spd};
+use super::linalg::{build_mat_col_major, solve_spd};
 
 /// Jackknife output. Matches LDSC's `LstsqJackknifeFast` attributes.
 pub struct JackknifeResult {
@@ -262,7 +262,7 @@ pub fn ratio_jackknife(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::linalg::build_mat_row_major;
+    use crate::ldsc_regress::linalg::build_mat_row_major;
 
     fn approx(a: f64, b: f64, tol: f64) -> bool {
         (a - b).abs() <= tol * b.abs().max(1.0)

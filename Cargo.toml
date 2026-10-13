@@ -21,7 +21,6 @@ members = [
   "crates/node-bundles/nodes-lcmm",
   "crates/node-bundles/nodes-mr",
   "crates/node-bundles/nodes-survey",
-  "crates/node-bundles/nodes-ldsc",
   "crates/node-bundles/nodes-genetics",
   "crates/node-bundles/nodes-mice",
   "apps/autonomics",
@@ -44,8 +43,6 @@ members = [
   "crates/data-engine-tools",
   "crates/apply-patch",
 
-  "bio_crates/ldsc",
-  "bio_crates/lcv",
   "bio_crates/mrlap",
 
   "bio_crates/cpassoc",

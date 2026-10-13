@@ -37,6 +37,8 @@ use faer::Mat;
 use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 
+use crate::ldsc_common;
+
 use dag_core::dag::runtime::RuntimeStatus;
 use dag_core::dag::{DagError, graph::PortOutputs};
 use dag_core::node::{DagNode, DataBundle, DataBundleBinding, NodeInput, NodePorts};
@@ -177,7 +179,7 @@ impl NodeFactory for MrlapNodeFactory {
     fn data_bundles(&self) -> Vec<DataBundleBinding> {
         vec![DataBundleBinding::new(
             "ld_panel",
-            nodes_ldsc::ldsc_common::BUNDLE_LDSCORE_1000G_EUR,
+            ldsc_common::BUNDLE_LDSCORE_1000G_EUR,
         )]
     }
     fn ports(&self) -> NodePorts {
@@ -499,7 +501,7 @@ async fn ldsc_join_columns(
            INNER JOIN {tbl} AS l
              ON CAST(h."rsid" AS VARCHAR) = CAST(l.rsid AS VARCHAR)
            ORDER BY l.locus.position"#,
-        tbl = nodes_ldsc::ldsc_common::quote_table(panel_table),
+        tbl = ldsc_common::quote_table(panel_table),
     );
     let joined = ctx
         .sql(&sql)
@@ -664,10 +666,10 @@ impl DagNode for MrlapNode {
         // inputs reach LDSC through the tidy derivation instead of requiring a
         // raw `z` column.
         let ctx = node_ctx.session();
-        nodes_ldsc::ldsc_common::register_listing_table(
+        ldsc_common::register_listing_table(
             &ctx,
             "ld_panel",
-            &nodes_ldsc::ldsc_common::storage_url(&self.ld_panel),
+            &ldsc_common::storage_url(&self.ld_panel),
         )
         .await
         .map_err(|e| err(format!("register ld panel: {e}")))?;
@@ -821,7 +823,7 @@ async fn count_panel_snp(
 ) -> Result<usize, DagError> {
     let sql = format!(
         "SELECT COUNT(*) AS n FROM {}",
-        nodes_ldsc::ldsc_common::quote_table(ld_table_sql)
+        ldsc_common::quote_table(ld_table_sql)
     );
     let df = ctx
         .sql(&sql)
@@ -1137,7 +1139,7 @@ mod tests {
             }))
             .unwrap(),
             DataBundle::new(
-                nodes_ldsc::ldsc_common::BUNDLE_LDSCORE_1000G_EUR,
+                ldsc_common::BUNDLE_LDSCORE_1000G_EUR,
                 "1000G LD Scores",
                 "/bundles/ldsc/1000g.parquet",
             ),

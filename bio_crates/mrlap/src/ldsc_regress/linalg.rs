@@ -9,7 +9,7 @@
 use faer::linalg::solvers::{DenseSolveCore, Llt, Solve};
 use faer::{Mat, MatRef, Side};
 
-use crate::{LdscError, Result};
+use super::{LdscError, Result};
 
 /// Build an owned `Mat<f64>` from row-major `rows` (`rows.len() == nrows`,
 /// each row of length `ncols`).

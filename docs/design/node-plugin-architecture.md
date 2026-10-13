@@ -54,7 +54,6 @@
      │    dag-core       │          │   node bundles      │
      │ (trait+registry+  │◄──────── │  nodes-io           │
      │  dag)     │  depend  │  nodes-mr           │
-     │                   │   on     │  nodes-ldsc         │
      └───────────────────┘          │  nodes-ml           │
                                     │  nodes-survey       │
                                     │  ... (14 bundles)   │
@@ -119,7 +118,6 @@ impl NodeRegistry {
 | **nodes-regression** | linear_regression, binary_logistic_regression, ordinal_logistic_regression, cox_regression, chi_square | statkit | 1,400 |
 | **nodes-causal** | mediation, causal, cmest (6 variants) | statkit, epi | 2,200 |
 | **nodes-survival** | survival, fine_gray, cuminc | cmprsk | 1,400 |
-| **nodes-ldsc** | ldsc_sldsc, liability, lcv | ldsc, lcv | 3,900 |
 | **nodes-genetics** | cpassoc, magma_kegg_align | cpassoc | ~1,700 |
 | **nodes-mr** | mrlap | mrlap | 4,000 |
 | **nodes-epi** | epi_rcs, epi_roc, epi_lasso, epi_wqs, evalue | epi, evalue | 1,900 |
@@ -178,8 +176,6 @@ pub fn new(...) -> Self {
     nodes_regression::Plugin.register(&mut registry);
     #[cfg(feature = "bundle-causal")]
     nodes_causal::Plugin.register(&mut registry);
-    #[cfg(feature = "bundle-ldsc")]
-    nodes_ldsc::Plugin.register(&mut registry);
     #[cfg(feature = "bundle-mr")]
     nodes_mr::Plugin.register(&mut registry);
     // ... 每个 bundle 一个 cfg gate
@@ -203,7 +199,7 @@ default = ["all-bundles"]
 # 元 feature
 all-bundles = [
     "bundle-regression", "bundle-causal", "bundle-survival",
-    "bundle-ldsc", "bundle-genetics", "bundle-mr",
+    "bundle-genetics", "bundle-mr",
     "bundle-epi", "bundle-lcmm", "bundle-survey",
     "bundle-hypothesize", "bundle-ml",
 ]
@@ -215,7 +211,6 @@ all-bundles = [
 bundle-regression  = ["dep:nodes-regression"]
 bundle-causal      = ["dep:nodes-causal"]
 bundle-survival    = ["dep:nodes-survival"]
-bundle-ldsc        = ["dep:nodes-ldsc"]
 bundle-genetics    = ["dep:nodes-genetics"]
 bundle-mr          = ["dep:nodes-mr"]
 bundle-epi         = ["dep:nodes-epi"]
@@ -241,7 +236,7 @@ data-engine = { path = "...", default-features = false, features = ["bundle-mr"]
 # 除了 ML 和 survey 之外全部启用
 data-engine = { path = "...", default-features = false, features = [
     "bundle-regression", "bundle-causal", "bundle-survival",
-    "bundle-ldsc", "bundle-genetics", "bundle-mr",
+    "bundle-genetics", "bundle-mr",
     "bundle-epi", "bundle-lcmm", "bundle-hypothesize",
 ]}
 ```
@@ -335,7 +330,6 @@ pub fn assert_all_factories_build(registry: &NodeRegistry) {
 
 | 批次 | bundle | 节点数 | 特殊注意 |
 |------|--------|--------|----------|
-| 4a | nodes-ldsc | 5 | ldsc_common 共享; liability 节点 |
 | 4b | nodes-genetics | 2 | cpassoc/magma_kegg_align 迁移(magma 原生分析已移除) |
 
 ### Phase 5: 清理收尾
@@ -389,7 +383,6 @@ crates/
 │   ├── nodes-regression/
 │   ├── nodes-causal/
 │   ├── nodes-survival/
-│   ├── nodes-ldsc/
 │   ├── nodes-genetics/
 │   ├── nodes-mr/
 │   ├── nodes-epi/

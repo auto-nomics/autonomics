@@ -16,7 +16,7 @@ pub enum MrlapError {
     Numerical(String),
     /// The underlying LD Score regression failed.
     #[error("LDSC: {0}")]
-    Ldsc(#[from] ldsc::LdscError),
+    Ldsc(#[from] crate::ldsc_regress::LdscError),
 }
 
 impl MrlapError {

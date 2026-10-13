@@ -2,12 +2,13 @@
 //!
 //! MRlap delegates its LD-score-regression stage to GenomicSEM::ldsc (which is
 //! itself a wrapper around the Python LDSC suite). We instead call the
-//! already-validated Rust [`ldsc`] crate's [`ldsc::regress::RG`], which is a
-//! faithful port of the same Python `RG` class. This produces every quantity
-//! the correction stage needs: exposure/outcome h² + SEs, the cross-trait
-//! intercept (λ) + SE, gencov, and rg.
+//! engine vendored in [`crate::ldsc_regress`] — [`RG`], a faithful port of
+//! the same Python `RG` class (formerly the `bio_crates/ldsc` crate). This
+//! produces every quantity the correction stage needs: exposure/outcome h² +
+//! SEs, the cross-trait intercept (λ) + SE, gencov, and rg.
 
 use crate::error::Result;
+use crate::ldsc_regress::regress::RG;
 use faer::Mat;
 
 /// Inputs aligned per-SNP (all same length `n_snp`):
@@ -66,7 +67,7 @@ pub fn run_ldsc(input: &LdscInput<'_>) -> Result<LdscResult> {
     let x = Mat::from_fn(n, 1, |i, _| input.ref_ld[i]);
     let m = vec![input.m];
 
-    let rg = ldsc::regress::RG::new(
+    let rg = RG::new(
         input.z1,
         input.z2,
         &x,
