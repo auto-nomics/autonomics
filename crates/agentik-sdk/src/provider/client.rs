@@ -255,9 +255,7 @@ fn inject_thinking(builder: MessageCreateBuilder, model_info: &ModelInfo) -> Mes
     let effort = if model_info.thinking_required && !model_info.thinking_enabled {
         agentik_types::ReasoningEffort::Low
     } else {
-        model_info
-            .max_reasoning_effort
-            .unwrap_or(agentik_types::ReasoningEffort::Max)
+        model_info.max_reasoning_effort.unwrap_or_default()
     };
     // GLM-5.3 accepts the enabled thinking type but does not document a token
     // budget. Preserve output capacity and send only the supported fields.

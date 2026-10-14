@@ -452,47 +452,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn kms_schema_can_be_initialized_on_a_shared_connection_for_seeding() {
-        // Production KMS storage lives in its own knowledge.db; this path
-        // remains for tests and for seeding a legacy agent.db (see the
-        // host-level migration test).
-        let agent_storage = TursoAgentStorage::open_in_memory().await.unwrap();
-        let storage = kms::Storage::from_shared_connection(agent_storage.shared_connection())
-            .await
-            .unwrap();
-        let service = KmsService::from_storage(storage).await.unwrap();
-        service
-            .create_entity(
-                vec![Nomenclature {
-                    id: Uuid::new_v4(),
-                    lang: Language::ZH,
-                    full: "Shared DB Entity".to_string(),
-                    abbr: None,
-                }],
-                "Entity stored via shared connection for seeding",
-            )
-            .await
-            .unwrap();
-
-        let conn = agent_storage.shared_connection();
-        let conn = conn.lock().await;
-        let mut rows = conn
-            .query(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN
-                    ('entities', 'nomenclatures', 'knowledges', 'indexes')",
-                turso::params_from_iter([] as [turso::Value; 0]),
-            )
-            .await
-            .unwrap();
-        let row = rows.next().await.unwrap().unwrap();
-        let count = match row.get_value(0).unwrap() {
-            turso::Value::Integer(count) => count,
-            other => panic!("expected integer table count, got {other:?}"),
-        };
-        assert_eq!(count, 4);
-    }
-
-    #[tokio::test]
     async fn operation_failure_rolls_back_created_knowledge() {
         let service = Arc::new(
             KmsService::from_storage(kms::Storage::open_in_memory().await.unwrap())

@@ -203,12 +203,11 @@ autonomics cache clear-opengwas [-y]
 ## `kms` 子命令
 
 启动 KMS 专用树浏览器，默认读取 runtime 的 `knowledge.db`
-（`AUTONOMICS_KMS_DB` 或 `~/.autonomics/knowledge.db`）。打开时会一次性把旧
-`agent.db` 中的 KMS 数据迁移过来；`--agent-db` 用于指定该迁移源：
+（`AUTONOMICS_KMS_DB` 或 `~/.autonomics/knowledge.db`）：
 
 ```bash
 autonomics kms
-autonomics kms --db /path/to/knowledge.db --agent-db /path/to/agent.db
+autonomics kms --db /path/to/knowledge.db
 ```
 
 布局：
