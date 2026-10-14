@@ -9,9 +9,10 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{delete, get, post, put},
 };
+use bib_base::extraction::read_full;
 use bib_base::{
-    BibShared, figure_object_path, sanitize_figure_name, scan_image_refs, spawn_extraction,
-    stored_fulltext, try_fetch_fulltext_with, vfs_virtual_path,
+    BibShared, extracted_object_path, figure_object_path, sanitize_figure_name, scan_image_refs,
+    spawn_extraction, stored_fulltext, try_fetch_fulltext_with, vfs_virtual_path,
 };
 use bib_types::{
     AddedBy, AnnotationKind, Article, ArticleRole, ArticleSource, Author, Collection,
@@ -1388,24 +1389,52 @@ async fn delete_stored_file(
     Ok(())
 }
 
-/// Best-effort removal of every figure a markdown full text references.
+/// Best-effort removal of every markdown-derived artifact of an article:
+/// the extracted-text object (`extracted/fulltext.{md|txt}`) and the
+/// figure images its markdown references.
 ///
 /// Called wherever the markdown that justifies those objects goes away:
-/// upload-replace, delete, and re-extract (a fresh run rewrites the figure
-/// set it needs; MinerU's content-derived names make that an overwrite, so
-/// clearing first never loses anything a successful re-run would reuse).
-/// Entirely advisory — a failed delete only leaves an orphan behind.
+/// upload-replace, delete, and re-extract (a fresh run rewrites the
+/// figure set it needs; MinerU's content-derived names make that an
+/// overwrite, so clearing first never loses anything a successful re-run
+/// would reuse). Entirely advisory — a failed delete only leaves an
+/// orphan behind.
 async fn delete_article_figures(shared: &BibShared, fulltext: &FullText) {
-    if fulltext.text_format != Some(TextFormat::Markdown) {
-        return;
-    }
-    let Some(markdown) = fulltext.text_content.as_deref() else {
-        return;
-    };
     let Some(storage) = shared.file_storage.as_ref() else {
         return;
     };
-    for name in scan_image_refs(markdown) {
+
+    // The canonical extracted-text object goes away with its markdown,
+    // whatever produced the row.
+    if let Some(format) = fulltext.text_format {
+        let extracted = extracted_object_path(&fulltext.article_id, format);
+        if let Some(path) = vfs_virtual_path(&extracted) {
+            if let Err(failure) = storage.delete_object(&path).await {
+                tracing::warn!(path = %path, error = %failure, "failed to remove extracted text object");
+            }
+        }
+    }
+
+    if fulltext.text_format != Some(TextFormat::Markdown) {
+        return;
+    }
+    // Scan the markdown for figure references: the canonical file is the
+    // source of truth, with the row's inline copy as the fallback for
+    // legacy rows the startup backfill has not materialized yet.
+    let markdown = match vfs_virtual_path(&extracted_object_path(
+        &fulltext.article_id,
+        TextFormat::Markdown,
+    )) {
+        Some(path) => match read_full(storage, &path).await {
+            Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+            Err(_) => fulltext.text_content.clone().unwrap_or_default(),
+        },
+        None => fulltext.text_content.clone().unwrap_or_default(),
+    };
+    if markdown.is_empty() {
+        return;
+    }
+    for name in scan_image_refs(&markdown) {
         let Some(path) = vfs_virtual_path(&figure_object_path(&fulltext.article_id, &name)) else {
             continue;
         };

@@ -40,8 +40,8 @@ pub use extract::{
     is_expected_panic,
 };
 pub use extraction::{
-    FallbackChainExtractor, default_extractor, run_extraction, run_extraction_parts,
-    spawn_extraction, sweep_pending,
+    FallbackChainExtractor, backfill_extracted_objects, default_extractor, read_full,
+    run_extraction, run_extraction_parts, spawn_extraction, sweep_pending,
 };
 pub use fulltext::{FullTextPage, PendingExtraction};
 pub use http_options::BibHttpOptions;
@@ -56,8 +56,8 @@ pub use query::{
 };
 pub use shared::BibShared;
 pub use stored_files::{
-    StoredFulltext, VFS_PREFIX, figure_object_path, sanitize_figure_name, scan_image_refs,
-    stored_fulltext, vfs_virtual_path,
+    StoredFulltext, VFS_PREFIX, extracted_object_path, figure_object_path, sanitize_figure_name,
+    scan_image_refs, stored_extracted_text, stored_fulltext, vfs_virtual_path,
 };
 
 /// Convenience: a [`LiteratureGateway`] pre-loaded with PubMed + arXiv + bioRxiv.

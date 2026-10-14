@@ -30,7 +30,7 @@ use dag_core::value::{FileFingerprint, FileRef, PortType};
 use crate::nodes::{read_file_bytes, shared_bib};
 use crate::oa_fetch::fetch_fulltext_stored;
 use crate::shared::BibShared;
-use crate::stored_files::{stored_fulltext, vfs_virtual_path};
+use crate::stored_files::{stored_extracted_text, vfs_virtual_path};
 
 /// Spec for [`LiteratureFulltextNode`].
 #[derive(Debug, Clone, JsonSchema, Deserialize)]
@@ -211,9 +211,9 @@ impl LiteratureFulltextNode {
                 fulltext.article_id
             )));
         }
-        let stored = stored_fulltext(
+        let stored = stored_extracted_text(
             &fulltext.article_id,
-            &format!("oa-{}.txt", fulltext.article_id),
+            bib_types::TextFormat::Plain,
             text.as_bytes(),
         );
         let virtual_path = vfs_virtual_path(&stored.path)
@@ -424,6 +424,7 @@ impl NodeFactory for LiteratureFulltextNodeFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::stored_fulltext;
     use bib_types::evidence::EvidenceRecord;
     use bib_types::types::{Article, Identifier};
     use dag_core::dag::node_event::NodeReporter;

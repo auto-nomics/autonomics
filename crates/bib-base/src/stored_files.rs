@@ -46,6 +46,42 @@ pub fn figure_object_path(article_id: &str, name: &str) -> String {
     )
 }
 
+/// Canonical VFS location for an article's **extracted text** — the
+/// markdown / plain-text product of the extraction chain, as opposed to
+/// the uploaded original addressed by [`stored_fulltext`].
+///
+/// Fixed name, no content-hash prefix: extracted text is a derived
+/// artifact that re-extraction simply overwrites, mirroring
+/// [`figure_object_path`]'s overwrite semantics. The extension follows
+/// the extraction format (`md` for layout-aware markdown, `txt` for
+/// plain text). Every consumer derives this path by convention — there
+/// is no DB column pointing at it.
+pub fn extracted_object_path(article_id: &str, format: bib_types::TextFormat) -> String {
+    let extension = match format {
+        bib_types::TextFormat::Markdown => "md",
+        bib_types::TextFormat::Plain => "txt",
+    };
+    format!(
+        "{VFS_PREFIX}/literature/{}/extracted/fulltext.{extension}",
+        encode_component(article_id)
+    )
+}
+
+/// A fixed-path extracted-text object with its content hash — the
+/// write-side companion to [`extracted_object_path`]: same canonical
+/// path (no hash prefix, overwritten on re-extraction), plus the sha256
+/// the DB row records.
+pub fn stored_extracted_text(
+    article_id: &str,
+    format: bib_types::TextFormat,
+    content: &[u8],
+) -> StoredFulltext {
+    StoredFulltext {
+        path: extracted_object_path(article_id, format),
+        file_hash: hex(&Sha256::digest(content)),
+    }
+}
+
 /// Normalize a figure reference from markdown or a URL segment.
 ///
 /// Accepts a bare name or an `images/`-prefixed path and returns the
@@ -140,6 +176,18 @@ mod tests {
         assert_eq!(
             figure_object_path("doi:10.1000/x", "abc.jpg"),
             "vfs:///literature/doi%3A10.1000%2Fx/images/abc.jpg"
+        );
+    }
+
+    #[test]
+    fn builds_canonical_extracted_paths() {
+        assert_eq!(
+            extracted_object_path("doi:10.1000/x", bib_types::TextFormat::Markdown),
+            "vfs:///literature/doi%3A10.1000%2Fx/extracted/fulltext.md"
+        );
+        assert_eq!(
+            extracted_object_path("a b", bib_types::TextFormat::Plain),
+            "vfs:///literature/a%20b/extracted/fulltext.txt"
         );
     }
 
