@@ -14,16 +14,19 @@ use crate::proto::*;
 pub(crate) async fn get_state(
     State(state): State<GatewayState>,
 ) -> GatewayResult<Json<StateSnapshot>> {
-    let models = state.models.clone();
-    let catalog = tokio::task::block_in_place(|| models.catalog())
+    let catalog = state
+        .models
+        .catalog()
+        .await
         .map_err(|e| GatewayError::Status(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let catalog: crate::proto::ModelCatalog = catalog.into();
     let live_agents = state
         .control
         .get_status()
         .await
         .map(|s| s.agents)
         .unwrap_or_default();
-    let display_settings = tokio::task::block_in_place(|| state.models.display_settings());
+    let display_settings = state.models.display_settings().await.into();
     // Serialize the snapshot body first, then read `last_seq` — the
     // hydration protocol (connect → snapshot → apply live frames with
     // seq > last_seq) tolerates extra frames but never gaps.

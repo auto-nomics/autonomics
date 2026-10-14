@@ -10,7 +10,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::driver::SessionCache;
 use crate::hub::EventHub;
-use crate::model_store::ModelStore;
+use runtime::model_actor::ModelHandle;
 use crate::server::plugin_environments::DockerHubClient;
 
 /// Shared state for every gateway request handler. Cheap to clone —
@@ -23,7 +23,9 @@ pub struct GatewayState {
     pub infra: SharedInfra,
     /// Read-only Docker Hub lookup client used by the user approval flow.
     pub dockerhub: Arc<DockerHubClient>,
-    pub models: Arc<ModelStore>,
+    /// Handle to the model actor (owns the app DB, the default model
+    /// slot, and the ChatGPT OAuth flows).
+    pub models: ModelHandle,
     /// The daemon-wide default model slot, shared with every agent
     /// spawned without a model-specific override.
     pub model_slot: Arc<ArcSwapOption<agentik_sdk::model::Model>>,

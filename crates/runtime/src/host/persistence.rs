@@ -315,7 +315,7 @@ impl RuntimeHost {
         mut resolve_model: F,
     ) -> Result<usize>
     where
-        F: FnMut(&str) -> std::result::Result<Model, String>,
+        F: AsyncFnMut(&str) -> std::result::Result<Model, String>,
     {
         let entries = self
             .infra
@@ -377,7 +377,7 @@ impl RuntimeHost {
             let config = AgentProfileConfig::from_json(&record.config_json);
 
             let model_override = match config.preferred_model.as_deref() {
-                Some(spec) => match resolve_model(spec) {
+                Some(spec) => match resolve_model(spec).await {
                     Ok(model) => Some(model),
                     Err(error) => {
                         tracing::warn!(
@@ -634,7 +634,9 @@ mod agent_persistence_tests {
             agentik_core::testing::get_mock_model("layout-restart-test"),
         )));
         let restored = host
-            .restore_persisted_agents(model, |spec| panic!("unexpected model preference `{spec}`"))
+            .restore_persisted_agents(model, async |spec| {
+                panic!("unexpected model preference `{spec}`")
+            })
             .await
             .unwrap();
         assert_eq!(

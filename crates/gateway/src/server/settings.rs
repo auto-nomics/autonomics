@@ -14,7 +14,7 @@ use crate::proto::*;
 
 #[utoipa::path(get, path = "/api/v1/settings", tag = "settings", responses((status = 200, body = SettingsMap)))]
 pub(crate) async fn get_settings(State(state): State<GatewayState>) -> Json<SettingsMap> {
-    let display = tokio::task::block_in_place(|| state.models.display_settings());
+    let display: crate::proto::DisplaySettings = state.models.display_settings().await.into();
     let settings = HashMap::from([
         (
             "collapse_thinking".to_string(),
@@ -47,8 +47,10 @@ pub(crate) async fn put_setting(
     State(state): State<GatewayState>,
     Json(req): Json<PutSettingRequest>,
 ) -> GatewayResult<StatusCode> {
-    let models = state.models.clone();
-    tokio::task::block_in_place(|| models.put_setting(&req.key, &req.value))
+    state
+        .models
+        .put_setting(&req.key, &req.value)
+        .await
         .map_err(|e| GatewayError::Status(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(StatusCode::NO_CONTENT)
 }

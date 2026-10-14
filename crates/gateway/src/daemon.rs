@@ -3,8 +3,8 @@
 //! Startup order (each step before the next):
 //!
 //! 1. resolve config + bind address + token policy;
-//! 2. open the model store (app DB — single writer via the instance
-//!    lock taken inside `RuntimeHost::open`);
+//! 2. open the model storage (app DB — single writer via the instance
+//!    lock taken inside `RuntimeHost::open`) and spawn the model actor;
 //! 3. open the RuntimeHost, seed/load profiles, install the default
 //!    model slot;
 //! 4. build the EventHub + session cache + shared gateway state;
@@ -16,14 +16,15 @@
 
 use std::sync::Arc;
 
-use agentik_sdk::model::Model;
 use arc_swap::ArcSwapOption;
+use runtime::model_bootstrap::{ModelStorageError, SqliteModelStorage};
 use runtime::{RuntimeConfig, RuntimeHost};
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::driver::{self, SessionCache};
 use crate::hub::EventHub;
-use crate::model_store::ModelStore;
+use crate::hub::spawn_model_event_bridge;
 use crate::server::DockerHubClient;
 use crate::server::{GatewayState, router_with_bib};
 
@@ -44,7 +45,7 @@ pub enum DaemonError {
     #[error("failed to open runtime host: {0}")]
     HostOpen(#[from] runtime::Error),
     #[error("model store error: {0}")]
-    ModelStore(#[from] crate::model_store::ModelStoreError),
+    ModelStore(#[from] ModelStorageError),
     #[error("failed to bind HTTP server on {addr}: {source}")]
     Bind {
         addr: String,
@@ -101,8 +102,10 @@ pub async fn run_daemon(
         detach_stdio_on_ready,
     } = opts;
 
-    // ── Model store (app DB) ─────────────────────────────────────────
-    let models = Arc::new(ModelStore::open(&config.app_db_path)?);
+    // ── Model worker + default model ─────────────────────────────────
+    // The worker lives in the runtime crate; this is only the wiring:
+    // storage in, model events bridged onto the hub.
+    let models_storage = Arc::new(SqliteModelStorage::open(&config.app_db_path)?);
     let hub = EventHub::new();
 
     // ── RuntimeHost (takes the instance lock) ────────────────────────
@@ -114,18 +117,22 @@ pub async fn run_daemon(
         Err(e) => return Err(e.into()),
     };
 
-    // ── Default model ────────────────────────────────────────────────
-    let model_slot: Arc<ArcSwapOption<Model>> =
-        Arc::new(ArcSwapOption::from_pointee(models.active_model(&hub)));
+    let (model_events, model_event_rx) = mpsc::unbounded_channel();
+    let models = runtime::model_actor::start(models_storage, model_events);
+    spawn_model_event_bridge(model_event_rx, hub.clone());
+    let model_slot = models.model_slot();
     host.set_model(model_slot.clone());
+    // Install the startup default before restoring agents — the restore
+    // loop skips preference-less agents while the slot is empty.
+    models.activate_default().await;
 
     // Rehydrate the daemon-owned multi-agent layout before HTTP state is
     // built, so the first frontend snapshot already sees the restored agents.
     // A startup-storage failure is fatal; malformed individual rows are
     // logged and skipped by the restore loop itself.
     let restored_agents = host
-        .restore_persisted_agents(model_slot.clone(), |spec| {
-            models.resolve_with_refresh_callback(spec, &hub)
+        .restore_persisted_agents(model_slot.clone(), async |spec: &str| {
+            models.resolve(spec).await
         })
         .await
         .map_err(|e| DaemonError::Message(format!("restore agent layout: {e}")))?;
@@ -135,7 +142,7 @@ pub async fn run_daemon(
     );
 
     // Startup proactive ChatGPT token refresh (8-day/24h rule).
-    models.spawn_ensure_fresh(hub.clone());
+    let _ = models.ensure_fresh();
 
     // ── Gateway state + server ───────────────────────────────────────
     let sessions = SessionCache::new();
