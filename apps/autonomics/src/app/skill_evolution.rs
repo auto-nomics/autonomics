@@ -25,7 +25,7 @@ impl App {
             let (status, library, observations) = tokio::join!(
                 client.skill_evolution_status(),
                 client.skill_library(),
-                client.skill_observations(),
+                client.observations(),
             );
             event_tx.send(crate::app_event::AppEvent::SkillEvolutionLoaded {
                 status: status.map_err(|e| e.to_string()),

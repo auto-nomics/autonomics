@@ -123,6 +123,7 @@ pub struct ClusterReport {
 /// Incremental clustering executor: loads persisted clusters,
 /// assigns only the not-yet-clustered observations, persists the
 /// deltas.
+#[derive(Clone)]
 pub struct ClusterProcessor {
     storage: Arc<dyn ObservationStorage>,
 }

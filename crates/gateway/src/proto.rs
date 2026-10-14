@@ -441,10 +441,10 @@ mod tests {
 
 // ── Skill evolution ───────────────────────────────────────────────────
 
-/// `GET /api/v1/skills/evolution/observations` — recorded evidence,
+/// `GET /api/v1/evolution/observations` — recorded evidence,
 /// newest first. Includes the full reusable body for the TUI browser.
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
-pub struct SkillObservationView {
+pub struct ObservationView {
     pub id: String,
     pub created_at: i64,
     pub kind: String,

@@ -69,6 +69,17 @@ pub enum ObservationSource {
     Cli,
 }
 
+impl ObservationSource {
+    pub fn into_str(&self) -> &str {
+        match self {
+            ObservationSource::Agent => "agent",
+            ObservationSource::Eval => "eval",
+            ObservationSource::WorkflowRun => "workflow_run",
+            ObservationSource::Cli => "cli",
+        }
+    }
+}
+
 /// Input for recording an observation; the store derives the id.
 #[derive(Debug, Clone)]
 pub struct ObservationInput {

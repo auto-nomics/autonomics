@@ -3,8 +3,8 @@
 pub mod observation_browser;
 pub mod skill_browser;
 
-pub use self::skill_browser::PanelFocus;
 use self::observation_browser::{ObservationBrowserState, ObservationBrowserWidget};
+pub use self::skill_browser::PanelFocus;
 use self::skill_browser::{SkillBrowserState, SkillBrowserWidget};
 use crate::widgets::popup::{Popup, PopupControls};
 use gateway::proto::SkillEvolutionStatus;

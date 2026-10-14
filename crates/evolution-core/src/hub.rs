@@ -30,6 +30,7 @@ use std::sync::Arc;
 use text_embedding::{Bm25TextEmbedder, EmbeddingInput, TextEmbedder};
 
 use super::storage::{ObservationStorage, TursoObservationStorage, load_embedding_map};
+use crate::cluster::ClusterProcessor;
 use crate::error::Result;
 use crate::observation::{Observation, ObservationInput};
 use crate::routing::ObservationRouteStore;
@@ -43,6 +44,7 @@ pub struct ObservationHub {
     /// by the host when a local model comes up; readers take the arc
     /// for the length of one embed call.
     embedder: Arc<std::sync::RwLock<Arc<dyn TextEmbedder>>>,
+    clusterer: ClusterProcessor,
 }
 
 impl ObservationHub {
@@ -56,8 +58,9 @@ impl ObservationHub {
         let storage = Arc::new(TursoObservationStorage::new(state_dir.clone()));
         Self {
             state_dir,
-            storage,
+            storage: storage.clone(),
             embedder: default_embedder(),
+            clusterer: ClusterProcessor::new(storage.clone()),
         }
     }
 
@@ -69,6 +72,10 @@ impl ObservationHub {
     /// The durable storage behind this hub.
     pub fn storage(&self) -> &Arc<dyn ObservationStorage> {
         &self.storage
+    }
+
+    pub fn clusterer(&self) -> &ClusterProcessor {
+        &self.clusterer
     }
 
     /// The route ledger under this hub's state dir. Routing decisions
@@ -238,6 +245,7 @@ fn default_embedder() -> Arc<std::sync::RwLock<Arc<dyn TextEmbedder>>> {
 mod tests {
     use super::*;
     use crate::observation::{ObservationKind, ObservationSource};
+    use core::slice;
     use std::collections::BTreeMap;
 
     fn input(summary: &str) -> ObservationInput {

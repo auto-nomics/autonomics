@@ -1,6 +1,6 @@
 //! Two-column browser for the evidence recorded by skill evolution.
 
-use gateway::proto::SkillObservationView;
+use gateway::proto::ObservationView;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     prelude::Buffer,
@@ -13,7 +13,7 @@ use super::skill_browser::{PanelFocus, format_created, truncate};
 
 #[derive(Debug, Clone, Default)]
 pub struct ObservationBrowserState {
-    pub observations: Vec<SkillObservationView>,
+    pub observations: Vec<ObservationView>,
     pub loaded: bool,
     pub error: Option<String>,
     pub selected: usize,
@@ -23,7 +23,7 @@ pub struct ObservationBrowserState {
 }
 
 impl ObservationBrowserState {
-    pub fn set_observations(&mut self, observations: Vec<SkillObservationView>) {
+    pub fn set_observations(&mut self, observations: Vec<ObservationView>) {
         let selected_id = self.selected_observation().map(|row| row.id.clone());
         self.selected = selected_id
             .as_ref()
@@ -37,7 +37,7 @@ impl ObservationBrowserState {
         self.error = None;
     }
 
-    pub fn selected_observation(&self) -> Option<&SkillObservationView> {
+    pub fn selected_observation(&self) -> Option<&ObservationView> {
         self.observations.get(self.selected)
     }
 

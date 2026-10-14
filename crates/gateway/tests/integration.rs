@@ -246,8 +246,8 @@ async fn swagger_docs_expose_the_gateway_api() {
         "/api/v1/events",
         "/api/v1/skills/library",
         "/api/v1/skills/library/{name}",
+        "/api/v1/evolution/observations",
         "/api/v1/skills/evolution",
-        "/api/v1/skills/evolution/observations",
         "/api/v1/skills/evolution/trigger",
         "/api/v1/skills/evolution/proposals",
     ];
@@ -467,10 +467,10 @@ async fn skill_library_lists_installed_and_proposed_with_detail() {
 }
 
 #[tokio::test]
-async fn skill_observations_endpoint_returns_full_evidence_in_stable_order() {
+async fn observations_endpoint_returns_full_evidence_in_stable_order() {
     let gw = start_mock_gateway("ok").await;
     let client = gw.client();
-    assert!(client.skill_observations().await.unwrap().is_empty());
+    assert!(client.observations().await.unwrap().is_empty());
     let observation = gw
         .infra
         .skills
@@ -498,7 +498,7 @@ async fn skill_observations_endpoint_returns_full_evidence_in_stable_order() {
         })
         .await
         .unwrap();
-    let rows = client.skill_observations().await.unwrap();
+    let rows = client.observations().await.unwrap();
     assert_eq!(rows.len(), 2);
     let row = rows.iter().find(|row| row.id == observation.id).unwrap();
     assert_eq!(row.kind, "caveat");

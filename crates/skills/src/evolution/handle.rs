@@ -59,6 +59,14 @@ impl SkillControlHandle {
 
     /// Subscribe to per-cycle reports (fire-and-forget broadcast;
     /// lagging receivers simply miss reports).
+    ///
+    /// No production surface consumes this yet: the gateway and the
+    /// TUI dashboard read [`Self::cycle_status`] snapshots over HTTP
+    /// polling, and the TUI's "last report" comes from the trigger
+    /// response body, not this channel. The worker keeps publishing
+    /// every cycle so the report-push/SSE surface this channel is
+    /// meant to back can be wired without touching the worker; until
+    /// then its only subscribers are tests.
     pub fn subscribe_reports(&self) -> broadcast::Receiver<Arc<EvolutionReport>> {
         self.reports.subscribe()
     }
@@ -75,8 +83,8 @@ impl SkillControlHandle {
 
     /// Run one evolution cycle now with the supplied policy (no
     /// coalescing delay). The cycle report is also broadcast on
-    /// [`SkillControlHandle::subscribe_reports`] so dashboard
-    /// listeners pick it up.
+    /// [`SkillControlHandle::subscribe_reports`] for async listeners
+    /// (tests today — see there for the consumption picture).
     pub async fn call_run_cycle(
         &self,
         policy: EvolutionPolicy,

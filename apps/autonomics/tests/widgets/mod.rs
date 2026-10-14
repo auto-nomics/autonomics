@@ -9,7 +9,7 @@
 // directory both in the src tree and under this `#[path]` inclusion,
 // so only popup needs an explicit shim here.
 
-#[path = "../../src/widgets/popup.rs"]
-pub mod popup;
 #[path = "../../src/widgets/evolution_widget/mod.rs"]
 pub mod evolution_widget;
+#[path = "../../src/widgets/popup.rs"]
+pub mod popup;

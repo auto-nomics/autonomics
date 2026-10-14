@@ -29,8 +29,7 @@
 mod widgets;
 
 use gateway::proto::{
-    SkillEvolutionStatus, SkillLibraryDetail, SkillLibraryView, SkillObservationView,
-    SkillProposalView,
+    ObservationView, SkillEvolutionStatus, SkillLibraryDetail, SkillLibraryView, SkillProposalView,
 };
 use ratatui::{
     backend::TestBackend,
@@ -176,8 +175,8 @@ fn fixture_state() -> SkillEvolutionState {
     state
 }
 
-fn fixture_observation(id: &str, summary: &str) -> SkillObservationView {
-    SkillObservationView {
+fn fixture_observation(id: &str, summary: &str) -> ObservationView {
+    ObservationView {
         id: id.into(),
         created_at: 1,
         kind: "failure".into(),

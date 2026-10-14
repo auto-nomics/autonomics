@@ -76,7 +76,7 @@ pub(crate) enum AppEvent {
     SkillEvolutionLoaded {
         status: std::result::Result<gateway::proto::SkillEvolutionStatus, String>,
         library: std::result::Result<Vec<gateway::proto::SkillLibraryView>, String>,
-        observations: std::result::Result<Vec<gateway::proto::SkillObservationView>, String>,
+        observations: std::result::Result<Vec<gateway::proto::ObservationView>, String>,
     },
     /// One skill's detail document arrived (fetched on selection
     /// move; rendered only while it matches the selected row).

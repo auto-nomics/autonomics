@@ -8,10 +8,12 @@
 pub mod cluster;
 pub mod dimension;
 pub mod error;
+pub mod handle;
 pub mod hub;
 pub mod observation;
 pub mod routing;
 pub mod storage;
+pub mod worker;
 
 pub use error::Error;
 pub use hub::ObservationHub;
