@@ -1305,7 +1305,10 @@ mod tests {
         let ProviderPanelState::Config { provider_name, .. } = &state.provider_panel_state else {
             panic!("Ctrl+E should open the provider credential editor");
         };
-        assert_eq!(*provider_name, state.providers[state.cursor].name);
+        let Some(FlatItem::Provider(pi)) = state.flat_items().get(state.cursor).copied() else {
+            panic!("the filtered cursor should be on a provider row");
+        };
+        assert_eq!(*provider_name, state.providers[pi].name);
         assert_eq!(state.query, "e");
     }
 
