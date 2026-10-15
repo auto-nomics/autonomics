@@ -220,7 +220,7 @@ impl StatefulWidget for SkillEvolutionWidget {
                 Line::raw("Tab/1/2 tabs · ←→ panel · ↑↓ move/scroll · Esc close"),
                 Line::raw(match state.active_tab {
                     EvolutionTab::Skills => "t trigger · g refresh",
-                    EvolutionTab::Observations => "t trigger · g refresh",
+                    EvolutionTab::Observations => "t trigger · g refresh · c clusters",
                 }),
             ])
             .style(Style::new().fg(Color::DarkGray)),

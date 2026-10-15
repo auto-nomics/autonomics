@@ -139,6 +139,7 @@ pub fn api_router(state: GatewayState) -> Router {
             "/evolution/observations",
             get(observations::list_observations),
         )
+        .route("/evolution/clusters", get(observations::list_clusters))
         // ── skills ──
         .route("/skills/library", get(skills::list_skill_library))
         .route(

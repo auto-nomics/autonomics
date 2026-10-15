@@ -622,6 +622,12 @@ impl GatewayClient {
         self.get("/evolution/observations").await
     }
 
+    /// Surfaced observation clusters (recurring patterns), largest
+    /// first, with hydrated member summaries.
+    pub async fn clusters(&self) -> Result<Vec<ClusterView>> {
+        self.get("/evolution/clusters").await
+    }
+
     /// Run one evolution cycle now. The cycle installs what it
     /// writes — there is no review gate.
     pub async fn trigger_skill_evolution(&self) -> Result<SkillEvolutionReport> {

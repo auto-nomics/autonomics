@@ -90,6 +90,8 @@ use crate::proto::*;
         SaveEmbeddingConfigRequest,
         SkillEvolutionStatus,
         ObservationView,
+        ClusterView,
+        ClusterMemberView,
         SkillProposalView,
         SkillLibraryView,
         SkillLibraryDetail,

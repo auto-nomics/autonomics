@@ -530,6 +530,7 @@ mod testing {
     //! hub so observations carry the vectors the clustering reads.
     use super::*;
     use evolution_core::ObservationHub;
+    use evolution_core::cluster::DEFAULT_TRIGGER_THRESHOLD;
     use evolution_core::storage::ObservationStorage;
 
     /// One full distillation pass over everything the hub holds.
@@ -540,7 +541,7 @@ mod testing {
     ) -> DistillReport {
         let processor = ClusterProcessor::new(Arc::clone(hub.storage()));
         let report = processor
-            .execute_cluster(&hub.embedding_signature())
+            .clustering(&hub.embedding_signature(), DEFAULT_TRIGGER_THRESHOLD)
             .await
             .unwrap();
         let observations = hub.storage().list().await;
@@ -565,6 +566,7 @@ mod tests {
     use super::*;
     use crate::distill::testing::distill_all;
     use evolution_core::ObservationHub;
+    use evolution_core::cluster::DEFAULT_TRIGGER_THRESHOLD;
     use evolution_core::observation::{ObservationInput, ObservationKind, ObservationSource};
 
     async fn observe(hub: &ObservationHub, error: &str, body: &str) {
@@ -645,6 +647,7 @@ mod update_tests {
     use crate::distill::testing::distill_all;
     use crate::registry::{SkillRegistry, SkillTier};
     use evolution_core::ObservationHub;
+    use evolution_core::cluster::DEFAULT_TRIGGER_THRESHOLD;
     use evolution_core::observation::{ObservationInput, ObservationKind, ObservationSource};
 
     async fn observe(hub: &ObservationHub, error: &str, body: &str) {

@@ -61,6 +61,11 @@ pub const MAX_CLUSTERS_PER_PARTITION: usize = 32;
 /// pattern", not merely "similar".
 pub const MERGE_THRESHOLD: f32 = 0.90;
 
+/// Default trigger threshold for callers that have not wired a
+/// configured value yet: every pass runs, matching the pre-threshold
+/// behavior.
+pub const DEFAULT_TRIGGER_THRESHOLD: usize = 1;
+
 /// One recurring pattern: the member observation ids, their mean
 /// vector, and the partition the pattern recruits from. This is the
 /// unit downstream consumers (distillation) receive — they hydrate
@@ -133,21 +138,31 @@ impl ClusterProcessor {
         Self { storage }
     }
 
-    async fn get_pending_observations(
-        &self,
-        signature: &str,
-        assigned_ids: &HashSet<String>,
-    ) -> Result<Vec<(Observation, Vec<f32>)>> {
-        // Candidates: anchored observations with a vector under the
-        // current signature that no persisted cluster holds yet.
-        // `list()` is ordered by id, so assignment order — and
-        // therefore cluster ids — stay stable across replays.
-        let mut pending = Vec::new();
-        for observation in self.storage.list().await {
+    /// Step 1 of pending retrieval: anchored observations that no
+    /// persisted cluster holds yet — metadata only, no vector IO.
+    /// `list()` is ordered by id, so assignment order — and
+    /// therefore cluster ids — stay stable across replays.
+    async fn get_pending_observations(&self, assigned_ids: &HashSet<String>) -> Vec<Observation> {
+        self.storage
+            .list()
+            .await
+            .into_iter()
             // Skip observations that already have been clustered
-            if partition_key(&observation).is_none() || assigned_ids.contains(&observation.id) {
-                continue;
-            }
+            .filter(|observation| {
+                partition_key(observation).is_some() && !assigned_ids.contains(&observation.id)
+            })
+            .collect()
+    }
+
+    /// Step 2: attach each pending observation's vector under
+    /// `signature`; observations without one are dropped here.
+    async fn load_pending_vectors(
+        &self,
+        pending: Vec<Observation>,
+        signature: &str,
+    ) -> Result<Vec<(Observation, Vec<f32>)>> {
+        let mut with_vectors = Vec::with_capacity(pending.len());
+        for observation in pending {
             let Some(vector) = self
                 .storage
                 .load_embedding(&observation.id, signature)
@@ -155,16 +170,28 @@ impl ClusterProcessor {
             else {
                 continue;
             };
-            pending.push((observation, vector));
+            with_vectors.push((observation, vector));
         }
-        Ok(pending)
+        Ok(with_vectors)
     }
 
     /// One incremental pass under `signature` (the current
     /// embedder's identity, from the hub). Clusters persisted under
     /// a different signature are discarded and rebuilt from the
     /// full observation set.
-    pub async fn execute_cluster(&self, signature: &str) -> Result<ClusterReport> {
+    ///
+    /// # Arguments
+    ///
+    /// * `signature` — identity of the embedding model the current
+    ///   vectors carry (from
+    ///   [`ObservationHub::embedding_signature`](crate::ObservationHub::embedding_signature)).
+    ///   Observations without a stored vector under this signature
+    ///   are skipped; persisted clusters whose
+    ///   [`Cluster::model_signature`] differs are cleared and
+    ///   rebuilt from the full observation set.
+    ///
+    /// * `threshold` - accumulated number of observations when trigger clustering
+    pub async fn clustering(&self, signature: &str, threshold: usize) -> Result<ClusterReport> {
         let mut clusters = self.storage.load_clusters().await?;
         if clusters.iter().any(|c| c.model_signature != signature) {
             self.storage.clear_clusters().await?;
@@ -178,9 +205,21 @@ impl ClusterProcessor {
 
         let mut dirty: HashSet<String> = HashSet::new();
         let mut assigned = 0;
-        let pending = self
-            .get_pending_observations(signature, &assigned_ids)
-            .await?;
+        // Two-step retrieval: the observation scan is cheap metadata
+        // IO; embeddings are only loaded once the trigger threshold
+        // is met, so a below-threshold pass costs one `list()`.
+        let pending = self.get_pending_observations(&assigned_ids).await;
+        if pending.len() < threshold {
+            return Ok(ClusterReport {
+                surfaced: clusters
+                    .into_iter()
+                    .filter(|c| c.members.len() >= MIN_CLUSTER)
+                    .collect(),
+                assigned,
+                merged: 0,
+            });
+        }
+        let pending = self.load_pending_vectors(pending, signature).await?;
         for (observation, vector) in pending {
             assigned += 1;
             // Anchored by the eligibility filter above; if that
@@ -344,7 +383,7 @@ mod tests {
     async fn clustered(hub: &ObservationHub) -> Vec<Cluster> {
         let processor = ClusterProcessor::new(Arc::clone(hub.storage()));
         processor
-            .execute_cluster(&hub.embedding_signature())
+            .clustering(&hub.embedding_signature(), DEFAULT_TRIGGER_THRESHOLD)
             .await
             .unwrap()
             .surfaced
@@ -537,7 +576,7 @@ mod tests {
         assert_eq!(first.len(), 1);
         let processor = ClusterProcessor::new(Arc::clone(hub.storage()));
         let report = processor
-            .execute_cluster(&hub.embedding_signature())
+            .clustering(&hub.embedding_signature(), DEFAULT_TRIGGER_THRESHOLD)
             .await
             .unwrap();
         assert_eq!(report.assigned, 0);
@@ -688,7 +727,7 @@ mod tests {
 
         let processor = ClusterProcessor::new(Arc::clone(hub.storage()));
         let report = processor
-            .execute_cluster(&hub.embedding_signature())
+            .clustering(&hub.embedding_signature(), DEFAULT_TRIGGER_THRESHOLD)
             .await
             .unwrap();
         assert_eq!(report.assigned, count);

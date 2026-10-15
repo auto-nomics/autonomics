@@ -22,15 +22,17 @@ impl App {
         let client = self.client.clone();
         let event_tx = self.app_event_tx.clone();
         self.spawn_client_task("skill_evolution_refresh", move || async move {
-            let (status, library, observations) = tokio::join!(
+            let (status, library, observations, clusters) = tokio::join!(
                 client.skill_evolution_status(),
                 client.skill_library(),
                 client.observations(),
+                client.clusters(),
             );
             event_tx.send(crate::app_event::AppEvent::SkillEvolutionLoaded {
                 status: status.map_err(|e| e.to_string()),
                 library: library.map_err(|e| e.to_string()),
                 observations: observations.map_err(|e| e.to_string()),
+                clusters: clusters.map_err(|e| e.to_string()),
             });
         });
     }
@@ -107,6 +109,12 @@ impl App {
             KeyCode::Char('2') => dashboard.active_tab = EvolutionTab::Observations,
             KeyCode::Char('t') | KeyCode::Char('T') => {
                 self.trigger_skill_evolution();
+            }
+            // Observations tab: toggle flat list ↔ clustered view.
+            KeyCode::Char('c') | KeyCode::Char('C')
+                if dashboard.active_tab == EvolutionTab::Observations =>
+            {
+                dashboard.observations.toggle_clustered();
             }
             // ←/→ (h/l) switch the pane that owns the vertical keys.
             KeyCode::Left | KeyCode::Char('h') if key.modifiers.is_empty() => {

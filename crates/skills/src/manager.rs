@@ -335,6 +335,13 @@ impl SkillManager {
         self.hub.storage().list().await
     }
 
+    /// Persisted clusters under the current embedder signature, as
+    /// the clustering pass wrote them (member ids only — callers
+    /// hydrate readable fields through [`Self::observations`]).
+    pub async fn clusters(&self) -> Vec<evolution_core::cluster::Cluster> {
+        self.hub.storage().load_clusters().await.unwrap_or_default()
+    }
+
     /// The hub this manager reads evidence from.
     pub fn observation_hub(&self) -> Arc<evolution_core::ObservationHub> {
         Arc::clone(&self.hub)
@@ -356,7 +363,10 @@ impl SkillManager {
             self.hub.storage(),
         ));
         let report = processor
-            .execute_cluster(&self.hub.embedding_signature())
+            .clustering(
+                &self.hub.embedding_signature(),
+                evolution_core::cluster::DEFAULT_TRIGGER_THRESHOLD,
+            )
             .await
             .map_err(SkillError::Evolution)?;
         let observations = self.hub.storage().list().await;
