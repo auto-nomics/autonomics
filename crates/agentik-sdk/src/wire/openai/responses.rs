@@ -483,16 +483,16 @@ impl WireProtocol for OpenAiResponsesWire {
                     .get("item_index")
                     .and_then(|v| v.as_u64())
                     .unwrap_or(0) as u32;
-                if let Some(slot) = state.tool_calls.get_mut(&idx_key) {
-                    if slot.arguments.is_empty() {
-                        slot.arguments.push_str(final_args);
-                        return Ok(Some(MessageStreamEvent::ContentBlockDelta {
-                            delta: ContentBlockDelta::InputJsonDelta {
-                                partial_json: final_args.to_string(),
-                            },
-                            index: slot.block_index,
-                        }));
-                    }
+                if let Some(slot) = state.tool_calls.get_mut(&idx_key)
+                    && slot.arguments.is_empty()
+                {
+                    slot.arguments.push_str(final_args);
+                    return Ok(Some(MessageStreamEvent::ContentBlockDelta {
+                        delta: ContentBlockDelta::InputJsonDelta {
+                            partial_json: final_args.to_string(),
+                        },
+                        index: slot.block_index,
+                    }));
                 }
                 Ok(None)
             }
