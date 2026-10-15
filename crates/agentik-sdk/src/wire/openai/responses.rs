@@ -461,6 +461,42 @@ impl WireProtocol for OpenAiResponsesWire {
                 }))
             }
 
+            "response.function_call_arguments.done" => {
+                // Codex 后端（chatgpt.com OAuth）不发
+                // function_call_arguments.delta，参数完整地出现在这个
+                // done 事件里。只在尚未积累到任何 delta 时补发——常规
+                // Responses 流在 delta 之后也会发 done（携带全文），重复
+                // 追加会把参数拼两遍。
+                let value: Value = serde_json::from_str(data).map_err(|e| {
+                    AnthropicError::StreamError(format!(
+                        "failed to parse response.function_call_arguments.done: {e}"
+                    ))
+                })?;
+                let final_args = value
+                    .get("arguments")
+                    .and_then(|d| d.as_str())
+                    .unwrap_or("");
+                if final_args.is_empty() {
+                    return Ok(None);
+                }
+                let idx_key = value
+                    .get("item_index")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as u32;
+                if let Some(slot) = state.tool_calls.get_mut(&idx_key) {
+                    if slot.arguments.is_empty() {
+                        slot.arguments.push_str(final_args);
+                        return Ok(Some(MessageStreamEvent::ContentBlockDelta {
+                            delta: ContentBlockDelta::InputJsonDelta {
+                                partial_json: final_args.to_string(),
+                            },
+                            index: slot.block_index,
+                        }));
+                    }
+                }
+                Ok(None)
+            }
+
             "response.output_item.done" => {
                 // 工具项参数流结束：发 ContentBlockStop——装配器只在此刻
                 // 把累积的参数字符串解析回对象（见 streaming.rs 的终结
@@ -471,9 +507,28 @@ impl WireProtocol for OpenAiResponsesWire {
                     if item.get("type").and_then(|t| t.as_str()) == Some("function_call") {
                         let idx_key =
                             item.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                        if let Some(slot) = state.tool_calls.get(&idx_key) {
+                        if let Some(slot) = state.tool_calls.get_mut(&idx_key) {
+                            // 兜底：个别后端既不发 delta 也不发
+                            // function_call_arguments.done，参数直接挂在
+                            // output_item.done 的 item.arguments 上。此刻
+                            // slot.arguments 仍为空就把全文补进流里，否则
+                            // tool_use.input 恒为 {}。
+                            let item_args =
+                                item.get("arguments").and_then(|v| v.as_str()).unwrap_or("");
+                            if slot.arguments.is_empty() && !item_args.is_empty() {
+                                slot.arguments.push_str(item_args);
+                                state.pending_events.push_back(
+                                    MessageStreamEvent::ContentBlockDelta {
+                                        delta: ContentBlockDelta::InputJsonDelta {
+                                            partial_json: item_args.to_string(),
+                                        },
+                                        index: slot.block_index,
+                                    },
+                                );
+                            }
+                            let block_index = slot.block_index;
                             return Ok(Some(MessageStreamEvent::ContentBlockStop {
-                                index: slot.block_index,
+                                index: block_index,
                             }));
                         }
                     }
@@ -869,6 +924,119 @@ mod tests {
             wire.adapt_sse_event("response.output_item.done", msg_done, &mut state)
                 .unwrap()
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn responses_stream_codex_args_only_in_done_events() {
+        // 回归：Codex OAuth 后端不发 function_call_arguments.delta，参数
+        // 完整地出现在 function_call_arguments.done / output_item.done 里。
+        // 只认 delta 的话 slot.arguments 恒空，tool_use.input 变成 {}。
+        let wire = OpenAiResponsesWire;
+        let mut state = StreamState::default();
+
+        let created =
+            r#"{"type":"response.created","response":{"id":"resp_x","model":"gpt-5-codex"}}"#;
+        wire.adapt_sse_event("response.created", created, &mut state)
+            .unwrap();
+        let added = r#"{"type":"response.output_item.added","item":{"type":"function_call","index":0,"call_id":"call_1","name":"lit_search"}}"#;
+        wire.adapt_sse_event("response.output_item.added", added, &mut state)
+            .unwrap();
+
+        // 无任何 delta；function_call_arguments.done 携带完整参数。
+        let args_done = r#"{"type":"response.function_call_arguments.done","item_index":0,"arguments":"{\"limit\":20}"}"#;
+        let ev = wire
+            .adapt_sse_event(
+                "response.function_call_arguments.done",
+                args_done,
+                &mut state,
+            )
+            .unwrap()
+            .expect("args-only-in-done must emit the full arguments");
+        assert_eq!(
+            ev,
+            MessageStreamEvent::ContentBlockDelta {
+                index: 0,
+                delta: ContentBlockDelta::InputJsonDelta {
+                    partial_json: "{\"limit\":20}".to_string(),
+                },
+            }
+        );
+
+        // output_item.done 只收尾，不再重复补参数。
+        let done = r#"{"type":"response.output_item.done","item":{"type":"function_call","index":0,"call_id":"call_1","name":"lit_search","arguments":"{\"limit\":20}"}}"#;
+        let ev = wire
+            .adapt_sse_event("response.output_item.done", done, &mut state)
+            .unwrap()
+            .expect("done must emit an event");
+        assert_eq!(ev, MessageStreamEvent::ContentBlockStop { index: 0 });
+        assert!(
+            state.pending_events.is_empty(),
+            "arguments already delivered; done must not duplicate them"
+        );
+    }
+
+    #[test]
+    fn responses_stream_item_done_carries_arguments_fallback() {
+        // 兜底：既无 delta 也无 function_call_arguments.done，参数直接
+        // 挂在 output_item.done 的 item.arguments 上——补一条
+        // InputJsonDelta 进 pending_events（泵会先于 Stop 发出）。
+        let wire = OpenAiResponsesWire;
+        let mut state = StreamState::default();
+
+        let created =
+            r#"{"type":"response.created","response":{"id":"resp_x","model":"gpt-5-codex"}}"#;
+        wire.adapt_sse_event("response.created", created, &mut state)
+            .unwrap();
+        let added = r#"{"type":"response.output_item.added","item":{"type":"function_call","index":0,"call_id":"call_2","name":"run_query"}}"#;
+        wire.adapt_sse_event("response.output_item.added", added, &mut state)
+            .unwrap();
+
+        let done = r#"{"type":"response.output_item.done","item":{"type":"function_call","index":0,"call_id":"call_2","name":"run_query","arguments":"{\"q\":\"hi\"}"}}"#;
+        let ev = wire
+            .adapt_sse_event("response.output_item.done", done, &mut state)
+            .unwrap()
+            .expect("done must emit an event");
+        assert_eq!(ev, MessageStreamEvent::ContentBlockStop { index: 0 });
+        assert_eq!(state.pending_events.len(), 1);
+        assert_eq!(
+            state.pending_events.pop_front().unwrap(),
+            MessageStreamEvent::ContentBlockDelta {
+                index: 0,
+                delta: ContentBlockDelta::InputJsonDelta {
+                    partial_json: "{\"q\":\"hi\"}".to_string(),
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn responses_stream_args_done_does_not_duplicate_after_deltas() {
+        // 常规 Responses 流在 delta 之后也发 function_call_arguments.done
+        // （携带全文）——此时不得再次追加，否则参数被拼两遍。
+        let wire = OpenAiResponsesWire;
+        let mut state = StreamState::default();
+
+        let created = r#"{"type":"response.created","response":{"id":"resp_x","model":"gpt-4o"}}"#;
+        wire.adapt_sse_event("response.created", created, &mut state)
+            .unwrap();
+        let added = r#"{"type":"response.output_item.added","item":{"type":"function_call","index":0,"call_id":"call_3","name":"lit_search"}}"#;
+        wire.adapt_sse_event("response.output_item.added", added, &mut state)
+            .unwrap();
+        let delta = r#"{"type":"response.function_call_arguments.delta","item_index":0,"delta":"{\"limit\":20}"}"#;
+        wire.adapt_sse_event("response.function_call_arguments.delta", delta, &mut state)
+            .unwrap();
+
+        let args_done = r#"{"type":"response.function_call_arguments.done","item_index":0,"arguments":"{\"limit\":20}"}"#;
+        assert!(
+            wire.adapt_sse_event(
+                "response.function_call_arguments.done",
+                args_done,
+                &mut state
+            )
+            .unwrap()
+            .is_none(),
+            "done after deltas must not re-emit the full arguments"
         );
     }
 

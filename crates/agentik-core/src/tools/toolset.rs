@@ -100,8 +100,19 @@ impl ToolRegistry {
         self.tools.get(name)
     }
 
+    /// Tool definitions in a deterministic (name-sorted) order.
+    ///
+    /// `tools` is a `HashMap`, whose iteration order is seeded per instance —
+    /// two registries built identically (fresh session, daemon restart) emit
+    /// different orders. The order flows straight into the request `tools`
+    /// array, and OpenAI-style prefix caches match the request verbatim: any
+    /// reshuffle invalidates every cached prefix. Sorting by name pins the
+    /// wire order across processes.
     pub fn definitions(&self) -> Vec<ToolDefinition> {
-        self.tools.values().map(|r| r.definition.clone()).collect()
+        let mut defs: Vec<ToolDefinition> =
+            self.tools.values().map(|r| r.definition.clone()).collect();
+        defs.sort_by(|a, b| a.name.cmp(&b.name));
+        defs
     }
 
     pub fn len(&self) -> usize {
@@ -566,6 +577,43 @@ mod tests {
         let mut registry = ToolRegistry::new();
         registry.register_all(tools).unwrap();
         Arc::new(registry)
+    }
+
+    #[test]
+    fn definitions_are_name_sorted_regardless_of_hash_order() {
+        // 回归：definitions() 直接吐 HashMap.values() 的顺序，每个
+        // registry 实例的 RandomState 不同，跨会话/重启工具数组重排，
+        // OpenAI 前缀缓存全 miss。必须按名称排序钉死 wire 顺序。
+        let mut names: Vec<String> = (0..32).map(|i| format!("tool_{i:02}")).collect();
+        names.push("aaa_first".to_string());
+        names.push("zzz_last".to_string());
+        // Reverse registration order — and HashMap order differs anyway.
+        let regs: Vec<crate::tools::ToolRegistration> = names
+            .iter()
+            .rev()
+            .map(|n| {
+                let mut reg: crate::tools::ToolRegistration = MockTool::new("x").into();
+                reg.definition.name = n.clone();
+                reg
+            })
+            .collect();
+        let registry = build_registry(regs);
+
+        let defs = registry.definitions();
+        let mut emitted: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
+        let mut expected = names.clone();
+        expected.sort();
+        assert_eq!(
+            emitted,
+            expected.iter().map(String::as_str).collect::<Vec<_>>()
+        );
+        // 两个独立构建的 registry 必须产出完全相同的序列。
+        emitted.sort_unstable();
+        assert_eq!(
+            emitted,
+            expected.iter().map(String::as_str).collect::<Vec<_>>(),
+            "sorted output must be stable across registry instances"
+        );
     }
 
     #[tokio::test]
