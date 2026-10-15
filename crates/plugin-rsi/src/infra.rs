@@ -12,13 +12,10 @@ use std::{
 use evolution_core::observation::ObservationInput;
 
 use crate::{
-    EnvironmentCatalog, EnvironmentRegistry, Error, LocalActivationOutcome, ObservationAudience,
-    ObservationRequest, ObservationRoute, ObservationRouteStatus, ObservationRouteStore,
+    EnvironmentCatalog, EnvironmentRegistry, Error, LocalActivationOutcome, ObservationRequest,
     PluginCacheReport, PluginLifecycle, PluginPublisher, PluginPullRequestPublisher, PluginStatus,
     PluginStore, RequestIntent, RequestRecord, RequestStatus, RequestStore, Result,
-    ValidationOutcome,
-    distill::DistillationCandidate,
-    feedback::{default_request_intent, observation_request},
+    ValidationOutcome, distill::DistillationCandidate, feedback::observation_request,
 };
 
 /// Trusted publisher used for plugin releases and installs.

@@ -23,7 +23,6 @@ pub mod layout;
 pub mod lifecycle;
 pub mod names;
 pub mod plugin;
-pub mod profile;
 pub mod report;
 pub mod request;
 pub mod tools;
@@ -75,7 +74,6 @@ pub use plugin::{
     GitPluginSourceFetcher, PLUGIN_DEVELOPMENT_VFS_ROOT, PluginCacheActiveSource,
     PluginCacheReport, PluginOperator, PluginScriptCache, PluginSourceFetcher, PluginStore,
 };
-pub use profile::AgentProfile;
 pub use report::{GateResult, GateStatus, ValidationReport};
 pub use request::{RequestIntent, RequestRecord, RequestSource, RequestStatus, RequestStore};
 pub use tools::{

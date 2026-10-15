@@ -82,6 +82,7 @@ impl EvolutionWorker {
                             assigned = report.assigned,
                             surfaced = report.surfaced.len(),
                             merged = report.merged,
+                            changed = report.changes.len(),
                             "clustering pass finished"
                         ),
                         Err(error) => tracing::warn!(%error, "clustering pass failed"),

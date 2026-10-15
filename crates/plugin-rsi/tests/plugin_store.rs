@@ -2,8 +2,8 @@ use agentik_core::tools::{ToolError, ToolRegistration};
 mod common;
 
 use plugin_rsi::{
-    AgentProfile, Environment, EnvironmentCatalog, PluginStatus, PluginStore, RequestIntent,
-    RequestRecord, RequestSource, RequestStatus, RequestStore,
+    Environment, EnvironmentCatalog, PluginStatus, PluginStore, RequestIntent, RequestRecord,
+    RequestSource, RequestStatus, RequestStore,
 };
 use serde_json::{Value, json};
 
@@ -128,8 +128,7 @@ async fn plugin_store_develops_one_repository_in_place() {
         "/plugins/dev/direct-plugin"
     );
 
-    let profile = AgentProfile::new("direct-plugin-agent").unwrap();
-    let tools = profile.tool_registrations();
+    let tools = plugin_rsi::plugin_development_tool_registrations("direct-plugin-agent");
     execute(
         &tools,
         "plugin_node_create",
