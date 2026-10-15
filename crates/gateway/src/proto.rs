@@ -233,6 +233,11 @@ pub struct AgentModelInfoView {
     /// The agent's current model as a `provider:model` spec.
     pub model: String,
     pub context_length: u64,
+    /// The reasoning effort this agent's next request would send
+    /// (`low | medium | high | …`), absent when the model has no
+    /// thinking support.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
 }
 
 /// Effective per-agent runtime settings plus the persisted override layer.

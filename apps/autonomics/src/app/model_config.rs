@@ -47,7 +47,7 @@ impl App {
             .sessions
             .get(self.state.active_agent_idx)
             .and_then(|s| self.agent_model_cache.get(&s.name))
-            .map(|(spec, _)| spec.clone());
+            .map(|display| display.spec.clone());
         if let Some(spec) = spec {
             self.state.model_config_state.active_model_spec = Some(spec);
         }
@@ -121,7 +121,11 @@ impl App {
                             .agent_model_info(&an_for_info)
                             .await
                             .ok()
-                            .map(|view| (view.model, view.context_length));
+                            .map(|view| crate::state::ModelDisplay {
+                                spec: view.model,
+                                context_length: view.context_length,
+                                reasoning_effort: view.reasoning_effort,
+                            });
                         tx.send(crate::app_event::AppEvent::ModelInfoLoaded {
                             agent: an_for_info,
                             info,

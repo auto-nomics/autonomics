@@ -86,6 +86,8 @@ fn collect_visible_lines(
 pub struct AgentLeaf<'a> {
     pub active_model: Option<&'a str>,
     pub context_window: Option<u64>,
+    /// The reasoning effort the active agent's next request would send.
+    pub reasoning_effort: Option<&'a str>,
     pub sessions: &'a [SessionSummary],
     pub display: &'a DisplaySettings,
 }
@@ -140,6 +142,7 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
             context_used: ts.latest_turn_context_used,
             context_window: self.context_window,
             model_name: self.active_model,
+            reasoning_effort: self.reasoning_effort,
             compact: Some(&ts.compact_state),
             frame: ts.frame,
         };

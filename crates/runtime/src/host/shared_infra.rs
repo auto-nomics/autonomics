@@ -946,4 +946,3 @@ mod plugin_profile_tools_tests {
         );
     }
 }
-

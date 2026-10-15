@@ -92,7 +92,7 @@ pub(crate) enum AppEvent {
     /// must never issue HTTP). The string is the `provider:model` spec.
     ModelInfoLoaded {
         agent: String,
-        info: Option<(String, u64)>,
+        info: Option<crate::state::ModelDisplay>,
     },
     /// 模型热切换被 daemon 拒绝（spec 不可解析、网络错误等）。乐观点亮
     /// 的标记没有失败提示无法自证，必须以 toast 告知用户。

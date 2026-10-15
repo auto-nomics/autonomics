@@ -159,10 +159,11 @@ pub(crate) async fn get_agent_model(
     let info = state.control.agent_model_info(&name).await.ok_or_else(|| {
         GatewayError::Status(StatusCode::NOT_FOUND, format!("agent `{name}` not found"))
     })?;
-    let (model, context_length) = info;
+    let (model, context_length, reasoning_effort) = info;
     Ok(Json(AgentModelInfoView {
         model,
         context_length,
+        reasoning_effort: reasoning_effort.map(|e| e.as_str().to_string()),
     }))
 }
 

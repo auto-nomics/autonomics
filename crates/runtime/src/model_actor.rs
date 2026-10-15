@@ -31,8 +31,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use agentik_sdk::model::{Model, ModelInfo, ProviderType};
-use agentik_sdk::provider::openai::oauth::{self, TokenBlob};
 use agentik_sdk::provider::openai::OpenaiProvider;
+use agentik_sdk::provider::openai::oauth::{self, TokenBlob};
 use agentik_sdk::provider::openrouter::OpenrouterProvider;
 use arc_swap::ArcSwapOption;
 use tokio::sync::{mpsc, oneshot};
@@ -240,7 +240,9 @@ impl ModelHandle {
     /// model"). No event is published — this runs before the HTTP
     /// server exists.
     pub async fn activate_default(&self) -> Option<Model> {
-        self.call(|reply| ModelCommand::ActivateDefault { reply }).await.flatten()
+        self.call(|reply| ModelCommand::ActivateDefault { reply })
+            .await
+            .flatten()
     }
 
     /// Insert or update a provider row (credentials + base URL).
@@ -300,16 +302,10 @@ impl ModelHandle {
     /// `CatalogFetched` event. Returns false when the command was
     /// dropped.
     pub fn fetch_remote_catalog(&self, provider: String, base_url: String) -> bool {
-        self.fire(ModelCommand::FetchRemoteCatalog {
-            provider,
-            base_url,
-        })
+        self.fire(ModelCommand::FetchRemoteCatalog { provider, base_url })
     }
 
-    async fn call<R>(
-        &self,
-        build: impl FnOnce(oneshot::Sender<R>) -> ModelCommand,
-    ) -> Option<R> {
+    async fn call<R>(&self, build: impl FnOnce(oneshot::Sender<R>) -> ModelCommand) -> Option<R> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.tx.send(build(reply_tx)).await.ok()?;
         reply_rx.await.ok()

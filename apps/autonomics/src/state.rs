@@ -904,6 +904,16 @@ impl DisplaySettings {
     }
 }
 
+/// Model info shown in the status bar: spec, context window, and the
+/// reasoning effort this agent's next request would send (absent for
+/// non-thinking models).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModelDisplay {
+    pub spec: String,
+    pub context_length: u64,
+    pub reasoning_effort: Option<String>,
+}
+
 /// State container for the TUI.
 #[derive(Default)]
 pub struct AppState {
@@ -968,9 +978,9 @@ pub struct AppState {
     /// Active default model as `provider:model`. Resolved and built by the
     /// gateway daemon — the thin-client TUI never constructs `Model`s.
     pub active_model_spec: Option<String>,
-    /// Status-bar fallback when no agent is active: (provider:model spec,
-    /// context_length) of the active default model.
-    pub active_model_display: Option<(String, u64)>,
+    /// Status-bar fallback when no agent is active: the active default
+    /// model's display info.
+    pub active_model_display: Option<ModelDisplay>,
     /// When `true`, the delete-active-agent confirmation popup is shown.
     /// The user must press 'y' or Enter to confirm, 'n' or Esc to cancel.
     pub delete_agent_confirm: bool,

@@ -266,7 +266,11 @@ impl App {
                             .models
                             .iter()
                             .find(|m| m.provider_name == provider && m.model_name == name)
-                            .map(|m| (spec, m.context_length));
+                            .map(|m| state::ModelDisplay {
+                                spec,
+                                context_length: m.context_length,
+                                reasoning_effort: None,
+                            });
                     }
                 }
             }
@@ -486,8 +490,13 @@ impl App {
                             self.state.agent_config.saved(view);
                             self.state.toasts.success(
                                 "Agent config saved",
-                                Some(format!("{agent}: memory settings updated")),
+                                Some(format!("{agent}: runtime settings updated")),
                             );
+                            // The reasoning-effort override changes what
+                            // the status bar shows — refetch the agent's
+                            // model info so it reflects the new setting.
+                            self.agent_model_cache.remove(&agent);
+                            self.refresh_agent_model_info(&agent);
                         }
                         Err(error) => {
                             self.state.agent_config.failed();
@@ -839,7 +848,11 @@ impl App {
                 .agent_model_info(&agent)
                 .await
                 .ok()
-                .map(|view| (view.model, view.context_length));
+                .map(|view| state::ModelDisplay {
+                    spec: view.model,
+                    context_length: view.context_length,
+                    reasoning_effort: view.reasoning_effort,
+                });
             tx.send(crate::app_event::AppEvent::ModelInfoLoaded { agent, info });
         });
     }

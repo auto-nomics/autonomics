@@ -40,6 +40,8 @@ pub struct AgentWorkspace<'a> {
     pub active_model: Option<&'a str>,
     /// Context window size of the active model (tokens), when known.
     pub context_window: Option<u64>,
+    /// The reasoning effort the active agent's next request would send.
+    pub reasoning_effort: Option<&'a str>,
     /// Sub-sessions for sidebar rendering.
     pub sessions: &'a [crate::widgets::session_list::SessionSummary],
     /// Global display settings (collapse toggles).
@@ -79,6 +81,7 @@ impl AgentWorkspace<'_> {
         let leaf = AgentLeaf {
             active_model: self.active_model,
             context_window: self.context_window,
+            reasoning_effort: self.reasoning_effort,
             sessions: self.sessions,
             display: self.display,
         };

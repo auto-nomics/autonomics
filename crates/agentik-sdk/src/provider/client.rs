@@ -249,14 +249,18 @@ fn inject_thinking(builder: MessageCreateBuilder, model_info: &ModelInfo) -> Mes
     }
     // Set both forms: Anthropic wires read `thinking`, OpenAI wires read
     // `reasoning`. Each wire picks the one it understands and ignores the
-    // other. Use the strongest effort level available unless a required-thinking
-    // model was explicitly configured as disabled, in which case low is the
+    // other. An explicit per-requester override (`reasoning_effort`, set
+    // by the per-agent setting at call time) wins; otherwise use the
+    // strongest effort level available, unless a required-thinking model
+    // was explicitly configured as disabled, in which case low is the
     // closest supported lightweight mode.
-    let effort = if model_info.thinking_required && !model_info.thinking_enabled {
-        agentik_types::ReasoningEffort::Low
-    } else {
-        model_info.max_reasoning_effort.unwrap_or_default()
-    };
+    let effort = model_info.reasoning_effort.unwrap_or_else(|| {
+        if model_info.thinking_required && !model_info.thinking_enabled {
+            agentik_types::ReasoningEffort::Low
+        } else {
+            model_info.max_reasoning_effort.unwrap_or_default()
+        }
+    });
     // GLM-5.3 accepts the enabled thinking type but does not document a token
     // budget. Preserve output capacity and send only the supported fields.
     let thinking = if model_info.thinking_required {
@@ -338,6 +342,23 @@ mod tests {
             params.reasoning,
             Some(ReasoningConfig::Effort(agentik_types::ReasoningEffort::Max))
         ));
+    }
+
+    #[test]
+    fn explicit_reasoning_effort_override_wins_over_model_derived_effort() {
+        let mut model = glm_5_3_model();
+        // GLM's own derivation would send `max`; the per-agent override
+        // (stamped onto a cloned ModelInfo at request time) must win.
+        model.reasoning_effort = Some(agentik_types::ReasoningEffort::Low);
+        let params = inject_thinking(
+            MessageCreateBuilder::new(model.model_name.clone(), 1024),
+            &model,
+        )
+        .build();
+        assert!(
+            matches!(params.reasoning, Some(ReasoningConfig::Effort(effort)) if effort == agentik_types::ReasoningEffort::Low),
+            "per-requester override must take priority"
+        );
     }
 
     #[test]

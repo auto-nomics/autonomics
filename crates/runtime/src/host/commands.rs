@@ -471,6 +471,9 @@ impl RuntimeHost {
                         if let Some(enabled) = overrides.generate_memory {
                             config.generate_memory = enabled;
                         }
+                        if let Some(effort) = overrides.reasoning_effort {
+                            config.reasoning_effort = Some(effort);
+                        }
                         entry.memory.set_runtime_config(config);
                         if !previous.generate_memory
                             && config.generate_memory
@@ -506,13 +509,17 @@ impl RuntimeHost {
                     .as_ref()
                     .and_then(|key| self.agents.get(key))
                     .and_then(|e| {
-                        e.model
-                            .load_full()
-                            .as_deref()
-                            .map(|m| (m.model_spec(), m.model_info.context_length))
+                        e.model.load_full().as_deref().map(|m| {
+                            (
+                                m.model_spec(),
+                                m.model_info.context_length,
+                                effective_reasoning_effort(e, m),
+                            )
+                        })
                     });
                 let _ = reply_tx.send(info);
             }
+
             // ── Phase 4: query persisted agent graph ──
             // Synchronous read of the `agent_graph` table — the storage
             // backend is a local SQLite DB so the query is cheap. Returns an
@@ -809,6 +816,33 @@ impl RuntimeHost {
 // ═══════════════════════════════════════════════════════════════════════
 // Capability extraction
 // ═══════════════════════════════════════════════════════════════════════
+
+/// The effort a request from this agent would actually send — mirrors the
+/// request layer's `inject_thinking` derivation: per-agent override first
+/// (when the model supports thinking at all), else the model-derived
+/// default. `None` when the model has no thinking support.
+fn effective_reasoning_effort(
+    entry: &super::relay::AgentEntry,
+    model: &agentik_sdk::model::Model,
+) -> Option<agentik_types::ReasoningEffort> {
+    let info = &model.model_info;
+    if !info.supports_thinking {
+        return None;
+    }
+    Some(
+        entry
+            .memory
+            .runtime_config()
+            .reasoning_effort
+            .unwrap_or_else(|| {
+                if info.thinking_required && !info.thinking_enabled {
+                    agentik_types::ReasoningEffort::Low
+                } else {
+                    info.max_reasoning_effort.unwrap_or_default()
+                }
+            }),
+    )
+}
 
 /// Build [`AgentInfo`](crate::control::AgentInfo) from an [`AgentKind`],
 /// auto-extracting tags, expertise, and tool list from the kind's feature
@@ -1300,6 +1334,7 @@ mod communication_policy_tests {
             runtime: agentik_core::AgentRuntimeOverrides {
                 use_memory: Some(false),
                 generate_memory: None,
+                reasoning_effort: None,
             },
         };
         let _handle = host

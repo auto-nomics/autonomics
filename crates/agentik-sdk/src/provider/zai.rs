@@ -85,6 +85,7 @@ impl ZaiProvider {
                 .context(1_000_000, 131_072)
                 .capabilities(false, true, true, true)
                 .thinking_required()
+                .max_reasoning_effort(agentik_types::ReasoningEffort::Max)
                 .pricing(1.40, 4.40)
                 .build(),
             // ── Native multimodal coding: GLM-5.3-Flash ────────────────

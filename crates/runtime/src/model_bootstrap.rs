@@ -257,13 +257,10 @@ fn provider_auth(conn: &Connection, name: &str) -> Option<ProviderAuth> {
 /// Insert or update a provider row (credentials + base URL). The stored
 /// `auth_method` is derived from the provider type's default — the column
 /// is not user-editable.
-pub fn save_provider(
-    conn: &Connection,
-    params: &SaveProviderParams,
-) -> rusqlite::Result<()> {
-    let auth_method = agentik_sdk::provider::registry::default_auth_method(
-        &ProviderType::from(params.provider_type.as_str()),
-    )
+pub fn save_provider(conn: &Connection, params: &SaveProviderParams) -> rusqlite::Result<()> {
+    let auth_method = agentik_sdk::provider::registry::default_auth_method(&ProviderType::from(
+        params.provider_type.as_str(),
+    ))
     .storage_tag()
     .to_string();
     let existing: Option<i64> = conn
@@ -390,11 +387,9 @@ pub fn active_model_spec(conn: &Connection) -> Option<String> {
 /// Read one `settings` row. Missing key → `None`; a real DB error also
 /// degrades to `None` (settings are best-effort display state).
 pub fn get_setting(conn: &Connection, key: &str) -> Option<String> {
-    conn.query_row(
-        "SELECT value FROM settings WHERE key = ?1",
-        [key],
-        |row| row.get::<_, String>(0),
-    )
+    conn.query_row("SELECT value FROM settings WHERE key = ?1", [key], |row| {
+        row.get::<_, String>(0)
+    })
     .ok()
 }
 
@@ -460,8 +455,9 @@ pub struct SqliteModelStorage {
 impl SqliteModelStorage {
     pub fn open(path: &std::path::Path) -> StorageResult<Self> {
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| ModelStorageError::Message(format!("create {}: {e}", parent.display())))?;
+            std::fs::create_dir_all(parent).map_err(|e| {
+                ModelStorageError::Message(format!("create {}: {e}", parent.display()))
+            })?;
         }
         let conn = Connection::open(path)?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
@@ -471,10 +467,7 @@ impl SqliteModelStorage {
         })
     }
 
-    fn with_conn<T>(
-        &self,
-        f: impl FnOnce(&Connection) -> rusqlite::Result<T>,
-    ) -> StorageResult<T> {
+    fn with_conn<T>(&self, f: impl FnOnce(&Connection) -> rusqlite::Result<T>) -> StorageResult<T> {
         let conn = self.conn.lock().expect("model store mutex poisoned");
         f(&conn).map_err(ModelStorageError::Db)
     }
@@ -520,8 +513,7 @@ impl ModelStorage for SqliteModelStorage {
         models: &[ModelInfo],
     ) -> StorageResult<usize> {
         let mut conn = self.conn.lock().expect("model store mutex poisoned");
-        replace_provider_models(&mut conn, provider_name, models)
-            .map_err(ModelStorageError::Db)
+        replace_provider_models(&mut conn, provider_name, models).map_err(ModelStorageError::Db)
     }
 
     async fn chatgpt_blob_json(&self) -> StorageResult<Option<String>> {
@@ -749,13 +741,20 @@ mod tests {
         assert_eq!(auth.base_url, "http://localhost:9");
         assert!(storage.provider_auth("missing").await.unwrap().is_none());
 
-        storage.put_setting("active_model", "Custom:db-only-model").await.unwrap();
+        storage
+            .put_setting("active_model", "Custom:db-only-model")
+            .await
+            .unwrap();
         assert_eq!(
             storage.active_model_spec().await.unwrap().as_deref(),
             Some("Custom:db-only-model")
         );
         assert_eq!(
-            storage.get_setting("active_model").await.unwrap().as_deref(),
+            storage
+                .get_setting("active_model")
+                .await
+                .unwrap()
+                .as_deref(),
             Some("Custom:db-only-model")
         );
         assert_eq!(storage.get_setting("missing").await.unwrap(), None);
@@ -789,16 +788,21 @@ mod tests {
             storage.chatgpt_blob_json().await.unwrap().as_deref(),
             Some("{\"access_token\":\"t\"}")
         );
-        storage.set_active_model("Custom:db-only-model").await.unwrap();
+        storage
+            .set_active_model("Custom:db-only-model")
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
     async fn replace_provider_models_is_atomic_on_unknown_provider() {
         let dir = tempfile::tempdir().unwrap();
         let storage = SqliteModelStorage::open(&dir.path().join("app.db")).unwrap();
-        assert!(storage
-            .replace_provider_models("ghost", &[agentik_sdk::model::ModelInfo::default()])
-            .await
-            .is_err());
+        assert!(
+            storage
+                .replace_provider_models("ghost", &[agentik_sdk::model::ModelInfo::default()])
+                .await
+                .is_err()
+        );
     }
 }

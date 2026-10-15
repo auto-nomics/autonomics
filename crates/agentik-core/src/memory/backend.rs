@@ -40,13 +40,18 @@ impl MemoryBackend {
     #[must_use]
     pub fn runtime_config(&self) -> AgentRuntimeConfig {
         let config = self.config.load();
-        AgentRuntimeConfig::new(config.use_memory, config.generate_memory)
+        AgentRuntimeConfig {
+            use_memory: config.use_memory,
+            generate_memory: config.generate_memory,
+            reasoning_effort: config.reasoning_effort,
+        }
     }
 
     pub fn set_runtime_config(&self, config: AgentRuntimeConfig) {
         let mut next = MemoryConfig::clone(&self.config.load());
         next.use_memory = config.use_memory;
         next.generate_memory = config.generate_memory;
+        next.reasoning_effort = config.reasoning_effort;
         self.config.store(std::sync::Arc::new(next));
     }
 

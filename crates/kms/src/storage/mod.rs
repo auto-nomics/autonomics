@@ -82,9 +82,7 @@ impl Storage {
 
     /// Initialize the KMS schema on an already-open Turso connection.
     /// Internal: [`Storage::new`] finishes opening the database file here.
-    async fn from_shared_connection(
-        conn: Arc<Mutex<turso::Connection>>,
-    ) -> Result<Self, String> {
+    async fn from_shared_connection(conn: Arc<Mutex<turso::Connection>>) -> Result<Self, String> {
         let storage = Self { conn };
         storage.init_schema().await.map_err(|e| e.to_string())?;
         Ok(storage)

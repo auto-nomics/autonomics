@@ -73,7 +73,7 @@ impl AgentConfigState {
                 AgentConfigCommand::None
             }
             KeyCode::Down => {
-                self.cursor = (self.cursor + 1).min(1);
+                self.cursor = (self.cursor + 1).min(2);
                 AgentConfigCommand::None
             }
             KeyCode::Left => {
@@ -106,23 +106,46 @@ impl AgentConfigState {
         if self.loading || self.saving {
             return;
         }
-        let current = match self.cursor {
-            0 => self.runtime.use_memory,
-            _ => self.runtime.generate_memory,
-        };
-        let next = match (current, direction.is_positive()) {
-            (None, true) => Some(true),
-            (Some(true), true) => Some(false),
-            (Some(false), true) => None,
-            (None, false) => Some(false),
-            (Some(false), false) => Some(true),
-            (Some(true), false) => None,
-        };
         match self.cursor {
-            0 => self.runtime.use_memory = next,
-            _ => self.runtime.generate_memory = next,
+            0 => cycle_bool(&mut self.runtime.use_memory, direction),
+            1 => cycle_bool(&mut self.runtime.generate_memory, direction),
+            _ => cycle_effort(&mut self.runtime.reasoning_effort, direction),
         }
     }
+}
+
+/// Cycle a tri-state bool override: inherit → on → off → inherit.
+fn cycle_bool(slot: &mut Option<bool>, direction: i32) {
+    let next = match (*slot, direction.is_positive()) {
+        (None, true) => Some(true),
+        (Some(true), true) => Some(false),
+        (Some(false), true) => None,
+        (None, false) => Some(false),
+        (Some(false), false) => Some(true),
+        (Some(true), false) => None,
+    };
+    *slot = next;
+}
+
+/// Cycle the reasoning-effort override: inherit → none → … → ultra →
+/// inherit (weakest to strongest, then wrap).
+fn cycle_effort(slot: &mut Option<agentik_types::ReasoningEffort>, direction: i32) {
+    use agentik_types::ReasoningEffort;
+    const STOPS: [Option<ReasoningEffort>; 9] = [
+        None,
+        Some(ReasoningEffort::None),
+        Some(ReasoningEffort::Minimal),
+        Some(ReasoningEffort::Low),
+        Some(ReasoningEffort::Medium),
+        Some(ReasoningEffort::High),
+        Some(ReasoningEffort::Xhigh),
+        Some(ReasoningEffort::Max),
+        Some(ReasoningEffort::Ultra),
+    ];
+    let idx = STOPS.iter().position(|stop| *stop == *slot).unwrap_or(0);
+    let len = STOPS.len() as i32;
+    let next = (idx as i32 + direction.signum() * direction.abs().min(1) + len) % len;
+    *slot = STOPS[next as usize];
 }
 
 pub fn render_agent_config(frame_area: Rect, buf: &mut Buffer, state: &mut AgentConfigState) {
@@ -132,7 +155,7 @@ pub fn render_agent_config(frame_area: Rect, buf: &mut Buffer, state: &mut Agent
 
     let popup = Popup::new(" Agent Config ", PopupControls::default())
         .width(64.min(frame_area.width))
-        .height(13.min(frame_area.height))
+        .height(15.min(frame_area.height))
         .vertically_centered(true)
         .accent(Color::Cyan);
     let inner = popup.render(frame_area, buf);
@@ -168,6 +191,11 @@ pub fn render_agent_config(frame_area: Rect, buf: &mut Buffer, state: &mut Agent
             state.runtime.generate_memory,
             state.effective.map(|config| config.generate_memory),
             state.cursor == 1,
+        ));
+        lines.push(effort_line(
+            state.runtime.reasoning_effort,
+            state.effective.and_then(|config| config.reasoning_effort),
+            state.cursor == 2,
         ));
     }
 
@@ -229,6 +257,45 @@ fn setting_line(
     ])
 }
 
+fn effort_line(
+    value: Option<agentik_types::ReasoningEffort>,
+    effective: Option<agentik_types::ReasoningEffort>,
+    selected: bool,
+) -> Line<'static> {
+    let override_text = value
+        .map(|effort| effort.as_str().to_string())
+        .unwrap_or_else(|| "inherit".to_string());
+    let effective_text = match effective {
+        Some(effort) => format!("effective {}", effort.as_str()),
+        None => "effective model default".to_string(),
+    };
+    let marker = if selected { ">" } else { " " };
+    let value_color = match value {
+        Some(agentik_types::ReasoningEffort::None)
+        | Some(agentik_types::ReasoningEffort::Minimal) => Color::DarkGray,
+        Some(_) => Color::Green,
+        None => Color::Cyan,
+    };
+
+    Line::from(vec![
+        Span::styled(marker, Style::default().fg(Color::Cyan)),
+        Span::raw(" "),
+        Span::styled(
+            "Reasoning effort".to_string(),
+            Style::default().fg(if selected { Color::White } else { Color::Gray }),
+        ),
+        Span::raw("  "),
+        Span::styled(
+            override_text,
+            Style::default()
+                .fg(value_color)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled(effective_text, Style::default().fg(Color::DarkGray)),
+    ])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -250,6 +317,32 @@ mod tests {
         assert_eq!(state.runtime.use_memory, Some(false));
         state.handle_key(key(KeyCode::Char(' ')));
         assert_eq!(state.runtime.use_memory, None);
+    }
+
+    #[test]
+    fn effort_row_cycles_inherit_none_low_medium_then_wraps_to_inherit() {
+        use agentik_types::ReasoningEffort;
+        let mut state = AgentConfigState::default();
+        state.visible = true;
+        state.loading = false;
+        state.cursor = 2;
+
+        state.handle_key(key(KeyCode::Char(' ')));
+        assert_eq!(state.runtime.reasoning_effort, Some(ReasoningEffort::None));
+        state.handle_key(key(KeyCode::Char(' ')));
+        assert_eq!(
+            state.runtime.reasoning_effort,
+            Some(ReasoningEffort::Minimal)
+        );
+        state.handle_key(key(KeyCode::Char(' ')));
+        assert_eq!(state.runtime.reasoning_effort, Some(ReasoningEffort::Low));
+        // … cycle to the end, then wrap back to inherit.
+        for _ in 0..6 {
+            state.handle_key(key(KeyCode::Char(' ')));
+        }
+        assert_eq!(state.runtime.reasoning_effort, None);
+        state.handle_key(key(KeyCode::Left));
+        assert_eq!(state.runtime.reasoning_effort, Some(ReasoningEffort::Ultra));
     }
 
     #[test]

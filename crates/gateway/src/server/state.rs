@@ -10,8 +10,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::driver::SessionCache;
 use crate::hub::EventHub;
-use runtime::model_actor::ModelHandle;
 use crate::server::plugin_environments::DockerHubClient;
+use runtime::model_actor::ModelHandle;
 
 /// Shared state for every gateway request handler. Cheap to clone —
 /// everything inside is an Arc or a channel sender.
