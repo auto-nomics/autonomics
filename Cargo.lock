@@ -1326,17 +1326,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bkmr"
-version = "0.1.0"
-dependencies = [
- "faer",
- "serde",
- "serde_json",
- "statrs",
- "thiserror 2.0.20",
-]
-
-[[package]]
 name = "blake2"
 version = "0.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1700,16 +1689,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bzip2-rs"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "beeb59e7e4c811ab37cc73680c798c7a5da77fc9989c62b09138e31ee740f735"
-dependencies = [
- "crc32fast",
- "tinyvec",
-]
-
-[[package]]
 name = "calamine"
 version = "0.36.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2020,15 +1999,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "coloc"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror 2.0.20",
-]
-
-[[package]]
 name = "color-eyre"
 version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2328,19 +2298,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b9702aee5d1d744c01d82f6915644f950f898e014903385464c773b96fefdecb"
 dependencies = [
  "futures-io",
-]
-
-[[package]]
-name = "cpassoc"
-version = "0.1.0"
-dependencies = [
- "faer",
- "rand 0.9.5",
- "rand_chacha 0.9.0",
- "rand_distr 0.5.1",
- "serde_json",
- "statrs",
- "thiserror 2.0.20",
 ]
 
 [[package]]
@@ -2903,17 +2860,14 @@ dependencies = [
  "evalue",
  "futures",
  "nodes-causal",
- "nodes-coloc",
  "nodes-dl",
  "nodes-epi",
  "nodes-genetics",
  "nodes-hypothesize",
  "nodes-io",
  "nodes-lcmm",
- "nodes-ldsc",
  "nodes-mice",
  "nodes-ml",
- "nodes-mr",
  "nodes-opengwas",
  "nodes-power",
  "nodes-rd",
@@ -5088,21 +5042,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "genomic_sem"
-version = "0.1.0"
-dependencies = [
- "faer",
- "rand 0.9.5",
- "rand_chacha 0.9.0",
- "rand_distr 0.5.1",
- "rayon",
- "serde",
- "serde_json",
- "statrs",
- "thiserror 2.0.20",
-]
-
-[[package]]
 name = "gethostname"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6493,19 +6432,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf36173d4167ed999940f804952e6b08197cae5ad5d572eb4db150ce8ad5d58f"
 
 [[package]]
-name = "lava"
-version = "0.1.0"
-dependencies = [
- "faer",
- "rand 0.9.5",
- "rand_chacha 0.9.0",
- "rand_distr 0.5.1",
- "serde_json",
- "statrs",
- "thiserror 2.0.20",
-]
-
-[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6524,36 +6450,6 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.20",
-]
-
-[[package]]
-name = "lcv"
-version = "0.1.0"
-dependencies = [
- "faer",
- "rand 0.9.5",
- "rand_chacha 0.9.0",
- "rand_distr 0.5.1",
- "serde_json",
- "statrs",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "ldsc"
-version = "0.1.0"
-dependencies = [
- "arrow",
- "arrow-array",
- "arrow-csv",
- "arrow-schema",
- "bzip2-rs",
- "datafusion",
- "faer",
- "flate2",
- "thiserror 2.0.20",
- "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -7224,17 +7120,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc04a4c58212d57930a24bf47d3fa87485264a3a054e9c10e042eb373573ad3c"
 
 [[package]]
-name = "magma"
-version = "0.1.0"
-dependencies = [
- "faer",
- "rand 0.9.5",
- "serde_json",
- "statrs",
- "thiserror 2.0.20",
-]
-
-[[package]]
 name = "malloc_buf"
 version = "0.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7585,35 +7470,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mr"
-version = "0.1.0"
-dependencies = [
- "faer",
- "rand 0.9.5",
- "rand_chacha 0.9.0",
- "rand_distr 0.5.1",
- "schemars",
- "serde",
- "statrs",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "mrlap"
-version = "0.1.0"
-dependencies = [
- "faer",
- "ldsc",
- "mr",
- "rand 0.9.5",
- "rand_chacha 0.9.0",
- "rand_distr 0.5.1",
- "serde_json",
- "statrs",
- "thiserror 2.0.20",
-]
-
-[[package]]
 name = "multer"
 version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7742,15 +7598,6 @@ checksum = "b9a513473dce7dc00c7e7c318481ca4494034e76997218d8dad51bd9f007a815"
 dependencies = [
  "nano-gemm-codegen",
  "nano-gemm-core",
-]
-
-[[package]]
-name = "nanoid"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8628de41fe064cc3f0cf07f3d299ee3e73521adaff72278731d5c8cae3797873"
-dependencies = [
- "rand 0.9.5",
 ]
 
 [[package]]
@@ -7901,25 +7748,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nodes-coloc"
-version = "0.1.0"
-dependencies = [
- "arrow-array",
- "arrow-schema",
- "async-trait",
- "bkmr",
- "coloc",
- "dag-core",
- "datafusion",
- "faer",
- "schemars",
- "serde",
- "serde_json",
- "thiserror 2.0.20",
- "tokio",
-]
-
-[[package]]
 name = "nodes-dl"
 version = "0.1.0"
 dependencies = [
@@ -7965,21 +7793,11 @@ dependencies = [
  "arrow-array",
  "arrow-schema",
  "async-trait",
- "cpassoc",
  "dag-core",
  "datafusion",
- "faer",
- "futures",
- "genomic_sem",
- "libloading 0.8.9",
- "magma",
- "nanoid",
- "nodes-ldsc",
  "schemars",
  "serde",
  "serde_json",
- "sha2 0.10.9",
- "statrs",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
@@ -8045,7 +7863,6 @@ dependencies = [
  "libc",
  "liblzma",
  "lzf-sys",
- "mr",
  "nhanes",
  "openalex",
  "opendal",
@@ -8093,27 +7910,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nodes-ldsc"
-version = "0.1.0"
-dependencies = [
- "arrow-array",
- "arrow-schema",
- "async-trait",
- "dag-core",
- "datafusion",
- "faer",
- "lcv",
- "ldsc",
- "schemars",
- "serde",
- "serde_json",
- "thiserror 2.0.20",
- "tokio",
- "tracing",
- "vfs",
-]
-
-[[package]]
 name = "nodes-mice"
 version = "0.1.0"
 dependencies = [
@@ -8150,25 +7946,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
-]
-
-[[package]]
-name = "nodes-mr"
-version = "0.1.0"
-dependencies = [
- "arrow-array",
- "arrow-schema",
- "async-trait",
- "dag-core",
- "datafusion",
- "faer",
- "mrlap",
- "nodes-ldsc",
- "schemars",
- "serde",
- "serde_json",
- "tokio",
- "vfs",
 ]
 
 [[package]]

@@ -162,6 +162,11 @@ binds `wjixiang/catalog-magma-gene-loc-ncbi37-3`; its native factory is unregist
 native result object and printed log; its native factory is also unregistered.
 `mvmr_container` follows the same file-to-file pattern for the pinned official
 MVMR R package; its native factory is likewise unregistered.
-Other MAGMA, MiXeR, HDL, MTAG, CPASSOC, LAVA, GenomicSEM, and MR nodes remain
-transitional native implementations until their official image, provenance,
-reference package, and end-to-end baseline are complete.
+The GenomicSEM, MAGMA gene/set/meta, and TwoSampleMR native implementations
+have since been removed pending their official-binary wraps; the native LAVA
+port is gone entirely, with the official `lava` containers as the registered
+runtimes; the native MRlap port has been removed outright (its wrap was
+blocked on Wave 2 reference data); the native CPASSOC port has been removed
+outright as well. Other MiXeR, HDL, and MTAG nodes remain transitional native
+implementations until their official image, provenance, reference package,
+and end-to-end baseline are complete.

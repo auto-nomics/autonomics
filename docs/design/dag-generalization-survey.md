@@ -45,7 +45,7 @@
 ### 2.4 已知缺口与遗留(并入盘点)
 
 - **stat 侧节点缺口**:`competing_risk`、`multistate`、`gbtm`、`lca`、`ensemble`、`shap`、`sem` 有算法无节点封装(`docs/sta_epi_nodes_zh.md:319`)。
-- **容器侧遗留**(`docs/container-node-migration-backlog.md`,注意该文档未回写插件化代际差):MAGMA gene/set/meta 未包装;sLDSC、GenomicSEM(Wave 1);MRlap、LCV、CPASSOC(Wave 2 阻塞);coloc、HyPrColoc 未钉 digest;TwoSampleMR 原生 Rust fallback 未删;LAVA 生产级 UKB scan 基线;GCTA 队列级功能各自独立迁移。
+- **容器侧遗留**(`docs/container-node-migration-backlog.md`,注意该文档未回写插件化代际差):MAGMA gene/set/meta 未包装;sLDSC、GenomicSEM 包装仍缺(原生实现均已移除);MRlap、LCV 原生实现已移除;CPASSOC 原生已移除、包装 Wave 2 阻塞;coloc、HyPrColoc 未钉 digest;LAVA 生产级 UKB scan 基线;GCTA 队列级功能各自独立迁移。
 - **值模型**:仅 DataFrame/File/FileSet(`dag-core/src/value.rs:10-14`)——标量、N×N 矩阵输出无家(OpenGWAS 先例因此把 `gwasinfo_count`/`ld_matrix` 留在工具面)。
 - **live-data 语义**:source 节点零输入 → 指纹=kind+spec 恒定;一旦启用 incremental,API 数据更新不会失效缓存。**需在调查中定案**(见 Q3/T4)。
 

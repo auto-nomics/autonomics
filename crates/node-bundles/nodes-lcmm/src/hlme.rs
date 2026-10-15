@@ -1654,8 +1654,8 @@ mod tests {
 // Cross-validation against R lcmm golden fixtures
 // =====================================================================
 //
-// Golden fixtures: `bio_crates/lcmm/tests/fixtures/{data_hlme.csv, hlme_golden.json}`
-// Restore: `rclone copy aliyun:autonomics-data/lcmm/test-data/ bio_crates/lcmm/tests/`
+// Golden fixtures: `stat_crates/lcmm/tests/fixtures/{data_hlme.csv, hlme_golden.json}`
+// Restore: `rclone copy aliyun:autonomics-data/lcmm/test-data/ stat_crates/lcmm/tests/`
 
 #[cfg(test)]
 mod cross_validation {
@@ -1670,7 +1670,7 @@ mod cross_validation {
 
     fn fixtures_dir() -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../bio_crates/lcmm/tests/fixtures")
+            .join("../../../stat_crates/lcmm/tests/fixtures")
     }
 
     // ---- CSV → RecordBatch ---------------------------------------------
@@ -1679,7 +1679,7 @@ mod cross_validation {
         let path = fixtures_dir().join("data_hlme.csv");
         let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
             panic!(
-                "Failed to read {}: {}. Restore: rclone copy aliyun:autonomics-data/lcmm/test-data/ bio_crates/lcmm/tests/",
+                "Failed to read {}: {}. Restore: rclone copy aliyun:autonomics-data/lcmm/test-data/ stat_crates/lcmm/tests/",
                 path.display(), e
             )
         });
@@ -1736,7 +1736,7 @@ mod cross_validation {
         let path = fixtures_dir().join("hlme_golden.json");
         let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
             panic!(
-                "Failed to read {}: {}. Restore: rclone copy aliyun:autonomics-data/lcmm/test-data/ bio_crates/lcmm/tests/",
+                "Failed to read {}: {}. Restore: rclone copy aliyun:autonomics-data/lcmm/test-data/ stat_crates/lcmm/tests/",
                 path.display(), e
             )
         });
@@ -2574,7 +2574,7 @@ mod cross_validation {
         let path = fixtures_dir().join("data_hlme.csv");
         let text = std::fs::read_to_string(&path).unwrap_or_else(|_e| {
             panic!(
-                "Failed to read {}: Restore: rclone copy aliyun:autonomics-data/lcmm/test-data/ bio_crates/lcmm/tests/",
+                "Failed to read {}: Restore: rclone copy aliyun:autonomics-data/lcmm/test-data/ stat_crates/lcmm/tests/",
                 path.display()
             )
         });

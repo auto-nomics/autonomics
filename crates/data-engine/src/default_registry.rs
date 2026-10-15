@@ -48,9 +48,7 @@ pub fn build_default_registry_with_container_execution(
             .with_bundle_registry(bundle_registry),
     );
 
-    // ── Phase 4: LDSC + genetics bundles ──────────────────────────────
-    #[cfg(feature = "bundle-ldsc")]
-    registry.register_plugin(&nodes_ldsc::Plugin);
+    // ── Phase 4: genetics bundle ──────────────────────────────────────
     #[cfg(feature = "bundle-genetics")]
     registry.register_plugin(&nodes_genetics::Plugin);
 
@@ -75,18 +73,14 @@ pub fn build_default_registry_with_container_execution(
     registry.register_plugin(&nodes_causal::Plugin);
     #[cfg(feature = "bundle-lcmm")]
     registry.register_plugin(&nodes_lcmm::Plugin);
-    #[cfg(feature = "bundle-mr")]
-    registry.register_plugin(&nodes_mr::Plugin);
     #[cfg(feature = "bundle-survey")]
     registry.register_plugin(&nodes_survey::Plugin);
 
-    // ── Phase 2: regression, survival, coloc, epi, sql bundles ────────
+    // ── Phase 2: regression, survival, epi, sql bundles ───────────────
     #[cfg(feature = "bundle-regression")]
     registry.register_plugin(&nodes_regression::Plugin);
     #[cfg(feature = "bundle-survival")]
     registry.register_plugin(&nodes_survival::Plugin);
-    #[cfg(feature = "bundle-coloc")]
-    registry.register_plugin(&nodes_coloc::Plugin);
     #[cfg(feature = "bundle-epi")]
     registry.register_plugin(&nodes_epi::Plugin);
     #[cfg(feature = "bundle-sql")]

@@ -80,7 +80,7 @@ fn init_frontend_logging(nocapture: bool) -> color_eyre::Result<()> {
     let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         EnvFilter::new(
             "autonomics=debug,agentik_core=debug,agentik_sdk=debug,runtime=debug,\
-             data_engine=info,nodes_ldsc=debug,ldsc=debug",
+             data_engine=info",
         )
     });
 
