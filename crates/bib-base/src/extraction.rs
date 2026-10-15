@@ -25,7 +25,7 @@ use crate::error::{Error, Result};
 use crate::extract::{ExtractedText, OcrFallbackExtractor, TextExtractor};
 use crate::mineru::MineruExtractor;
 use crate::shared::BibShared;
-use crate::stored_files::{figure_object_path, vfs_virtual_path};
+use crate::stored_files::{extracted_object_path, figure_object_path, vfs_virtual_path};
 use bib_types::FileFormat;
 
 /// How many extractions may run concurrently.
@@ -189,6 +189,23 @@ pub async fn run_extraction_parts(
             // delete entry points in api-server instead.
             store_figures(storage, article_id, &mut extracted).await;
 
+            // The extracted text is the primary product: write it to its
+            // canonical VFS object (`extracted/fulltext.{md|txt}`) before
+            // recording success. Unlike figures this is fail-closed — a
+            // row marked `done` without a readable file would silently
+            // break the agent's `fulltext_path`.
+            let extracted_path = extracted_object_path(article_id, extracted.format);
+            let extracted_virtual =
+                vfs_virtual_path(&extracted_path).expect("canonical extracted path is VFS");
+            if let Err(error) = storage
+                .write_bytes(&extracted_virtual, extracted.text.clone().into_bytes())
+                .await
+            {
+                let message = format!("failed to store extracted text object: {error}");
+                record_failure(bib, article_id, &message).await;
+                return Err(message);
+            }
+
             bib.record_extraction_success(
                 article_id,
                 &extracted.text,
@@ -289,13 +306,15 @@ pub fn spawn_extraction(shared: BibShared, article_id: String) -> tokio::task::J
     })
 }
 
-/// Startup recovery: return orphaned `running` rows to `pending` and
-/// spawn tasks for everything still unfinished (`pending` + `failed` with
-/// a VFS-stored original).
+/// Startup recovery: return orphaned `running` rows to `pending`, spawn
+/// tasks for everything still unfinished (`pending` + `failed` with a
+/// VFS-stored original), and materialize extracted-text objects for any
+/// `done` rows written before the canonical `extracted/` path existed.
 pub async fn sweep_pending(shared: &BibShared) {
     if let Err(error) = shared.bib.reset_stale_running().await {
         tracing::warn!(error = %error, "failed to reset stale running extractions");
     }
+    backfill_extracted_objects(shared).await;
     let pending = match shared.bib.list_articles_needing_extraction().await {
         Ok(pending) => pending,
         Err(error) => {
@@ -311,6 +330,44 @@ pub async fn sweep_pending(shared: &BibShared) {
     }
     for item in pending {
         spawn_extraction(shared.clone(), item.article_id);
+    }
+}
+
+/// One-time-per-startup migration: write the canonical extracted-text
+/// object for `done` rows that predate file-backed extraction.
+///
+/// The row's inline `text_content` is materialized to
+/// `extracted/fulltext.{md|txt}` when that object does not exist yet.
+/// Idempotent — existing objects are left untouched (re-extraction
+/// overwrites them in place) — and best-effort: a write failure warns
+/// and skips, the row stays valid for the DB-backed read paths.
+pub async fn backfill_extracted_objects(shared: &BibShared) {
+    let Some(storage) = shared.file_storage.as_ref() else {
+        return;
+    };
+    let rows = match shared.bib.list_extracted_for_backfill().await {
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::warn!(error = %error, "failed to list extracted texts for backfill");
+            return;
+        }
+    };
+    for (article_id, text, format) in rows {
+        let path = extracted_object_path(&article_id, format);
+        let Some(virtual_path) = vfs_virtual_path(&path) else {
+            continue;
+        };
+        if storage.content_length(&virtual_path).await.is_ok() {
+            continue; // already file-backed
+        }
+        if let Err(error) = storage.write_bytes(&virtual_path, text.into_bytes()).await {
+            tracing::warn!(
+                article_id,
+                path = %path,
+                error = %error,
+                "failed to backfill extracted text object"
+            );
+        }
     }
 }
 
@@ -408,6 +465,57 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+
+        // The canonical extracted-text object exists and carries the text.
+        let path =
+            vfs_virtual_path(&extracted_object_path(article_id, BibTextFormat::Plain)).unwrap();
+        let bytes = read_full(shared.file_storage.as_ref().unwrap(), &path)
+            .await
+            .unwrap();
+        assert_eq!(bytes, b"hello extraction");
+    }
+
+    #[tokio::test]
+    async fn backfill_materializes_canonical_object_for_legacy_done_row() {
+        let shared = shared_with_temp_storage().await;
+        let article_id = "doi:10.1/legacy-md";
+        // A pre-file-backed row: done + markdown, inline only, no object.
+        shared
+            .bib
+            .upsert_article(&bib_types::Article::new(article_id, "Legacy"))
+            .await
+            .unwrap();
+        shared
+            .bib
+            .upsert_fulltext(&FullText {
+                article_id: article_id.to_owned(),
+                file_path: format!("vfs:///literature/{article_id}/deadbeef-paper.pdf"),
+                file_format: bib_types::FileFormat::Pdf,
+                text_content: Some("# Title\n\nlegacy body ![](images/aaa.jpg)".into()),
+                source: FullTextSource::UserUpload,
+                file_hash: None,
+                file_size: None,
+                uploaded_at: None,
+                extract_status: Some(ExtractStatus::Done),
+                text_format: Some(BibTextFormat::Markdown),
+                extracted_by: Some("mineru".into()),
+                extract_error: None,
+            })
+            .await
+            .unwrap();
+        let storage = shared.file_storage.as_ref().unwrap();
+        let path =
+            vfs_virtual_path(&extracted_object_path(article_id, BibTextFormat::Markdown)).unwrap();
+        assert!(storage.content_length(&path).await.is_err());
+
+        backfill_extracted_objects(&shared).await;
+        let bytes = read_full(storage, &path).await.unwrap();
+        assert_eq!(bytes, b"# Title\n\nlegacy body ![](images/aaa.jpg)");
+
+        // Idempotent: a second sweep leaves the object untouched.
+        backfill_extracted_objects(&shared).await;
+        let bytes = read_full(storage, &path).await.unwrap();
+        assert_eq!(bytes, b"# Title\n\nlegacy body ![](images/aaa.jpg)");
     }
 
     #[tokio::test]

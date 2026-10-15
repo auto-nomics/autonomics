@@ -331,6 +331,32 @@ impl BibBase {
         Ok(pending)
     }
 
+    /// List `done` rows that carry extracted text, for the startup
+    /// backfill that materializes their canonical `extracted/` VFS
+    /// objects. Returns `(article_id, text, format)` — rows with NULL
+    /// text or an unparseable format are skipped (nothing to write).
+    pub async fn list_extracted_for_backfill(&self) -> Result<Vec<(String, String, TextFormat)>> {
+        let conn = self.conn();
+        let mut rows = conn
+            .query(
+                "SELECT article_id, text_content, text_format FROM fulltexts \
+                 WHERE extract_status = 'done' AND text_content IS NOT NULL",
+                turso::params![],
+            )
+            .await?;
+        let mut done = Vec::new();
+        while let Some(row) = rows.next().await? {
+            let format = match opt_string(row.get_value(2)?) {
+                Some(raw) => TextFormat::from_str(&raw),
+                None => continue,
+            };
+            if let Some(text) = opt_string(row.get_value(1)?) {
+                done.push((row.get::<String>(0)?, text, format));
+            }
+        }
+        Ok(done)
+    }
+
     /// Retrieve the full-text record for an article, if one exists.
     pub async fn get_fulltext(&self, article_id: &str) -> Result<Option<FullText>> {
         let conn = self.conn();

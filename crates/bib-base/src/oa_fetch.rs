@@ -19,7 +19,7 @@
 
 use bib_types::{ExtractStatus, FileFormat, FullText, FullTextSource, IdKind, TextFormat};
 
-use crate::stored_files::{stored_fulltext, vfs_virtual_path};
+use crate::stored_files::{stored_extracted_text, vfs_virtual_path};
 use chrono::Utc;
 use europepmc::EuropePmcClient;
 use europepmc::types::{ResultType, SearchRequest};
@@ -89,12 +89,14 @@ pub async fn try_fetch_fulltext_with(
 /// Fetch an OA full text and **store it as a real VFS object**.
 ///
 /// The canonical fetch path: runs the [`try_fetch_fulltext_with`] chain,
-/// then writes the text to the content-addressed location
-/// `vfs:///literature/{article_id}/{sha256}-oa-{pmc}.txt` through the
-/// shared storage and returns the row pointing at it (hash + size
-/// recorded; text kept inline for the FTS index). Returns `None` when the
-/// article has no OA full text; a storage write failure downgrades to a
-/// warning and `None` — same best-effort contract as the fetch itself.
+/// then writes the text to the canonical extracted-text location
+/// `vfs:///literature/{article_id}/extracted/fulltext.txt` (for OA
+/// articles the fetched text is both the original and the extracted
+/// product, so there is exactly one object) and returns the row pointing
+/// at it (hash + size recorded; text kept inline for the FTS index).
+/// Returns `None` when the article has no OA full text; a storage write
+/// failure downgrades to a warning and `None` — same best-effort
+/// contract as the fetch itself.
 pub async fn fetch_fulltext_stored(
     client: &EuropePmcClient,
     storage: &OpendalFileStorage,
@@ -103,12 +105,7 @@ pub async fn fetch_fulltext_stored(
     let mut fulltext = try_fetch_fulltext_with(client, article).await?;
     let text = fulltext.text_content.clone().unwrap_or_default();
 
-    let name = fulltext
-        .file_path
-        .strip_prefix("europepmc:")
-        .map(|pmc| format!("oa-{pmc}.txt"))
-        .unwrap_or_else(|| "oa-fulltext.txt".to_string());
-    let stored = stored_fulltext(&article.id, &name, text.as_bytes());
+    let stored = stored_extracted_text(&article.id, TextFormat::Plain, text.as_bytes());
     let virtual_path = vfs_virtual_path(&stored.path)?;
 
     let byte_len = text.len();

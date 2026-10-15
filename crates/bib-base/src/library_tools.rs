@@ -18,7 +18,7 @@
 //! | `bib_add_to_collection`| Add one or more articles to a collection + roles.       |
 //! | `bib_list_collection`  | List collections or articles within one.                |
 //! | `bib_search_library`   | LIKE search across local library (multi-query).         |
-//! | `bib_get_article`      | Batch metadata plus bounded full-text pages.             |
+//! | `bib_get_article`      | Batch metadata plus full-text file references.          |
 //! | `bib_request_fulltext` | Mark an article as needing full-text upload.            |
 //! | `bib_add_note`         | Append a note / highlight / comment to an article.       |
 //! | `bib_export`           | Render citation formats and write them to the agent VFS. |
@@ -517,7 +517,7 @@ impl BibSearchLibraryTool {
 }
 
 // ===========================================================================
-// bib_get_article — full metadata + full text from local library (batch)
+// bib_get_article — full metadata + full-text file refs from local library (batch)
 // ===========================================================================
 
 /// Result of fetching a single article within a batch. Never errors at the
@@ -547,16 +547,31 @@ struct GetArticleResult {
     has_fulltext: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     fulltext_source: Option<String>,
+    /// The agent-readable full-text object: the canonical extracted text
+    /// (`vfs:///literature/{id}/extracted/fulltext.{md|txt}`) for
+    /// extracted rows with binary originals, or the stored file itself
+    /// when it is already readable text. Read with the `vfs` tool.
     #[serde(skip_serializing_if = "Option::is_none")]
-    fulltext: Option<String>,
+    fulltext_path: Option<String>,
+    /// The uploaded original (`pdf`/`html`/`txt`) the extraction came
+    /// from. Same object as `fulltext_path` when there is no separate
+    /// extraction.
     #[serde(skip_serializing_if = "Option::is_none")]
-    fulltext_offset: Option<usize>,
+    fulltext_original_path: Option<String>,
+    /// `pdf` / `html` / `txt` — the stored object's file format.
     #[serde(skip_serializing_if = "Option::is_none")]
-    fulltext_limit: Option<usize>,
+    fulltext_format: Option<String>,
+    /// `sha256:{hex}` content hash when the object is content-addressed.
     #[serde(skip_serializing_if = "Option::is_none")]
-    fulltext_total_chars: Option<usize>,
+    fulltext_hash: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    fulltext_next_offset: Option<usize>,
+    fulltext_size: Option<i64>,
+    /// Extraction lifecycle: `pending` / `running` / `done` / `failed`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fulltext_extract_status: Option<String>,
+    /// `plain` / `markdown` — the extraction's text format when done.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fulltext_text_format: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     annotations: Vec<serde_json::Value>,
     n_annotations: usize,
@@ -587,11 +602,13 @@ impl GetArticleResult {
             pub_types: Vec::new(),
             has_fulltext: false,
             fulltext_source: None,
-            fulltext: None,
-            fulltext_offset: None,
-            fulltext_limit: None,
-            fulltext_total_chars: None,
-            fulltext_next_offset: None,
+            fulltext_path: None,
+            fulltext_original_path: None,
+            fulltext_format: None,
+            fulltext_hash: None,
+            fulltext_size: None,
+            fulltext_extract_status: None,
+            fulltext_text_format: None,
             annotations: Vec::new(),
             n_annotations: 0,
             error: Some(msg.into()),
@@ -602,18 +619,20 @@ impl GetArticleResult {
 #[tool(
     name = "bib_get_article",
     description = "Retrieve one or more articles from the local library, including metadata \
-                  (title, authors, abstract, journal, identifiers), stored full text \
-                  if available, and all user annotations (notes/highlights/comments). \
+                  (title, authors, abstract, journal, identifiers) and a full-text **file \
+                  reference** (VFS path, format, sha256, extraction status) when one is \
+                  stored. \
                   \
                   Pass a list of article IDs — each is fetched concurrently from the \
                   local database. Articles must have been saved via a `bib_save` DAG \
                   node first; missing IDs are returned with `found: false` rather \
-                  than failing the \
-                  whole call. \
+                  than failing the whole call. \
                   \
-                  Full-text content is omitted by default to keep responses and agent \
-                  context bounded. Set `include_fulltext=true` to receive one bounded \
-                  page; use `offset` and `next_offset` to read additional pages. \
+                  Full text is returned as the `fulltext_path` VFS URI, not inline \
+                  text — read it with the `vfs` tool (`read`/`cat`/`grep` with \
+                  offset+limit paging). Check `fulltext_extract_status` before \
+                  reading: `pending`/`running` means extraction is still in flight, \
+                  `failed` means no text could be extracted from the file. \
                   \
                   **Examples**: \
                   • article_ids=[\"a1\"] — fetch a single article \
@@ -622,12 +641,6 @@ impl GetArticleResult {
 pub struct BibGetArticleInput {
     #[desc = "One or more article IDs (from a `bib_save` DAG node or `bib_search_library` results)"]
     pub article_ids: Vec<String>,
-    #[desc = "If true and full text is available, include one bounded full-text page. Default: false"]
-    pub include_fulltext: Option<bool>,
-    #[desc = "Character offset for the requested full-text page. Default: 0"]
-    pub offset: Option<usize>,
-    #[desc = "Maximum characters per result when include_fulltext=true. Default: 50000; max: 250000"]
-    pub limit: Option<usize>,
 }
 
 pub struct BibGetArticleTool {
@@ -645,17 +658,13 @@ impl ToolFunction for BibGetArticleTool {
             });
         }
 
-        let include_ft = input.include_fulltext.unwrap_or(false);
-        let offset = input.offset.unwrap_or(0);
-        let limit = input.limit.unwrap_or(50_000).clamp(1, 250_000);
-
         // Fetch each article concurrently. The local DB is fast, but batching
         // still collapses N tool-call round-trips into one and lets the reads
         // overlap on the connection pool.
         let futures: Vec<_> = input
             .article_ids
             .iter()
-            .map(|id| self.get_one(id.trim(), include_ft, offset, limit))
+            .map(|id| self.get_one(id.trim()))
             .collect();
         let results = futures::future::join_all(futures).await;
 
@@ -679,16 +688,10 @@ impl ToolFunction for BibGetArticleTool {
 }
 
 impl BibGetArticleTool {
-    /// Fetch a single article + its full text + annotations. Never errors —
-    /// failures are captured in `GetArticleResult::error` so one bad ID
-    /// doesn't abort the batch.
-    async fn get_one(
-        &self,
-        article_id: &str,
-        include_ft: bool,
-        offset: usize,
-        limit: usize,
-    ) -> GetArticleResult {
+    /// Fetch a single article + its full-text file reference + annotations.
+    /// Never errors — failures are captured in `GetArticleResult::error` so
+    /// one bad ID doesn't abort the batch.
+    async fn get_one(&self, article_id: &str) -> GetArticleResult {
         let article = match self.bib.get_article(article_id).await {
             Ok(Some(a)) => a,
             Ok(None) => {
@@ -704,32 +707,55 @@ impl BibGetArticleTool {
             Err(e) => return GetArticleResult::err(article_id, false, e.to_string()),
         };
 
-        // `has_fulltext` must reflect the true DB state regardless of whether
-        // the caller asked for the content. Previously it was derived from
-        // `fulltext.is_some()`, so `include_fulltext=false` falsely reported
-        // `has_fulltext:false` for articles that did have a full text.
-        let fulltext_page = if include_ft {
-            match self.bib.get_fulltext_page(article_id, offset, limit).await {
-                Ok(page) => page,
-                Err(e) => return GetArticleResult::err(article_id, false, e.to_string()),
-            }
-        } else {
-            None
+        // The full-text row is the pointer: VFS path (or a legacy synthetic
+        // pointer), format, hash, size, and the extraction lifecycle. The
+        // inline `text_content` stays in the DB (FTS index food) — the agent
+        // reads the file through the `vfs` tool instead.
+        let fulltext = match self.bib.get_fulltext(article_id).await {
+            Ok(ft) => ft,
+            Err(e) => return GetArticleResult::err(article_id, false, e.to_string()),
         };
-        let has_fulltext = if include_ft {
-            fulltext_page.is_some()
-        } else {
-            match self.bib.has_fulltext(article_id).await {
-                Ok(found) => found,
-                Err(e) => return GetArticleResult::err(article_id, false, e.to_string()),
+        let has_fulltext = fulltext.is_some();
+        let fulltext_source = fulltext.as_ref().map(|ft| ft.source.as_str().to_owned());
+        let fulltext_original_path = fulltext.as_ref().map(|ft| ft.file_path.clone());
+        // Route `fulltext_path` at what the agent can actually read: for
+        // extracted rows with binary originals (pdf/html) that is the
+        // canonical extracted-text object; txt originals are readable as
+        // stored, so they are their own entry point. The path is derived
+        // by convention (`stored_files::extracted_object_path`) — legacy
+        // `done` rows get theirs materialized by the startup backfill.
+        let fulltext_path = fulltext.as_ref().map(|ft| {
+            let extracted = ft.extract_status == Some(bib_types::ExtractStatus::Done)
+                && ft.text_format.is_some()
+                && matches!(
+                    ft.file_format,
+                    bib_types::FileFormat::Pdf | bib_types::FileFormat::Html
+                );
+            if extracted {
+                crate::stored_files::extracted_object_path(
+                    &ft.article_id,
+                    ft.text_format.unwrap_or(bib_types::TextFormat::Plain),
+                )
+            } else {
+                ft.file_path.clone()
             }
-        };
-        let fulltext_source = fulltext_page
+        });
+        let fulltext_format = fulltext
             .as_ref()
-            .map(|page| page.fulltext.source.as_str().to_owned());
-        let fulltext_total_chars = fulltext_page.as_ref().map(|page| page.total_chars);
-        let fulltext_next_offset = fulltext_page.as_ref().and_then(|page| page.next_offset);
-        let fulltext = fulltext_page.and_then(|page| page.fulltext.text_content);
+            .map(|ft| ft.file_format.as_str().to_owned());
+        let fulltext_hash = fulltext
+            .as_ref()
+            .and_then(|ft| ft.file_hash.clone())
+            .map(|hash| format!("sha256:{hash}"));
+        let fulltext_size = fulltext.as_ref().and_then(|ft| ft.file_size);
+        let fulltext_extract_status = fulltext
+            .as_ref()
+            .and_then(|ft| ft.extract_status)
+            .map(|s| s.as_str().to_owned());
+        let fulltext_text_format = fulltext
+            .as_ref()
+            .and_then(|ft| ft.text_format)
+            .map(|f| f.as_str().to_owned());
 
         // Annotations (notes/highlights/comments) — without this the write
         // path (bib_add_note) is a data black hole: annotations are persisted
@@ -769,11 +795,13 @@ impl BibGetArticleTool {
             pub_types: article.pub_types.clone(),
             has_fulltext,
             fulltext_source,
-            fulltext,
-            fulltext_offset: if include_ft { Some(offset) } else { None },
-            fulltext_limit: if include_ft { Some(limit) } else { None },
-            fulltext_total_chars,
-            fulltext_next_offset,
+            fulltext_path,
+            fulltext_original_path,
+            fulltext_format,
+            fulltext_hash,
+            fulltext_size,
+            fulltext_extract_status,
+            fulltext_text_format,
             annotations: annotations
                 .iter()
                 .map(|a| {
@@ -1255,9 +1283,10 @@ const MAX_TOOL_FIGURE_BYTES: usize = 10 * 1024 * 1024;
     description = "Read one figure image from an article's markdown full text and return it \
                   as an image block, for use with vision-capable models. \
                   \
-                  Figure names appear inside the markdown full text (see it via \
-                  bib_get_article with include_fulltext=true) as `images/<name>.jpg` \
-                  references — pass either the bare name or the `images/`-prefixed \
+                  Figure names appear inside the article's markdown full-text \
+                  file (see its `fulltext_path` from `bib_get_article`, then read \
+                  it with the `vfs` tool) as `images/<name>.jpg` references — \
+                  pass either the bare name or the `images/`-prefixed \
                   form copied verbatim from the markdown. \
                   \
                   Only markdown extractions (MinerU layout-aware) carry figures; \
@@ -1347,7 +1376,7 @@ impl ToolFunction for BibReadFigureTool {
                 ToolError::ExecutionFailed {
                     source: format!(
                         "figure '{name}' not found — copy the exact name from the markdown's \
-                         images/ references (bib_get_article include_fulltext=true)"
+                         images/ references (read the fulltext_path file via the vfs tool)"
                     )
                     .into(),
                 }
