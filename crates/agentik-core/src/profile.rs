@@ -176,6 +176,7 @@ impl AgentProfileConfig {
             runtime: AgentRuntimeOverrides {
                 use_memory: None,
                 generate_memory: None,
+                reasoning_effort: None,
             },
         }
     }
@@ -235,6 +236,8 @@ impl AgentProfileConfig {
     pub fn apply_runtime_overrides(&mut self, overrides: AgentRuntimeOverrides) {
         self.runtime.use_memory = overrides.use_memory.or(self.runtime.use_memory);
         self.runtime.generate_memory = overrides.generate_memory.or(self.runtime.generate_memory);
+        self.runtime.reasoning_effort =
+            overrides.reasoning_effort.or(self.runtime.reasoning_effort);
     }
 
     pub fn to_json(&self) -> serde_json::Value {
@@ -254,6 +257,7 @@ mod tests {
             runtime: AgentRuntimeOverrides {
                 use_memory: Some(false),
                 generate_memory: Some(true),
+                reasoning_effort: None,
             },
         };
         let restored = AgentProfileConfig::from_json(&config.to_json());
@@ -348,6 +352,7 @@ mod tests {
         config.apply_runtime_overrides(AgentRuntimeOverrides {
             use_memory: Some(false),
             generate_memory: None,
+            reasoning_effort: None,
         });
         assert_eq!(config.runtime.use_memory, Some(false));
         assert_eq!(config.runtime.generate_memory, Some(false));

@@ -84,6 +84,7 @@ pub fn mock_model_info() -> ModelInfo {
         supports_streaming: true,
         supports_thinking: false,
         thinking_enabled: false,
+        reasoning_effort: None,
         max_reasoning_effort: None,
         thinking_required: false,
         thinking_budget: None,
@@ -241,11 +242,15 @@ pub async fn start_mock_gateway_with_model(model: Model) -> TestGateway {
     let sessions = SessionCache::new();
     let shutdown = CancellationToken::new();
 
-    let models = Arc::new(crate::model_store::ModelStore::open(&config.app_db_path).unwrap());
+    let storage =
+        Arc::new(runtime::model_bootstrap::SqliteModelStorage::open(&config.app_db_path).unwrap());
+    let (model_events, model_event_rx) = tokio::sync::mpsc::unbounded_channel();
+    let models = runtime::model_actor::start(storage, model_events);
+    crate::hub::spawn_model_event_bridge(model_event_rx, hub.clone());
     // Report the injected mock through the same channel a real daemon
     // uses (`active_model` in the settings table), so `/state` consumers
     // (e.g. the headless runner's run.started.model) see it.
-    let _ = models.put_setting("active_model", "mock:mock-model");
+    let _ = models.put_setting("active_model", "mock:mock-model").await;
     // Same install-later pattern as the daemon: the bound address exists
     // only after `start()` (tests bind an ephemeral port).
     let addr_slot: Arc<ArcSwapOption<String>> = Arc::new(ArcSwapOption::default());

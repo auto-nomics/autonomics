@@ -2962,6 +2962,7 @@ mod tests {
             runtime: AgentRuntimeOverrides {
                 use_memory: Some(false),
                 generate_memory: Some(true),
+                reasoning_effort: None,
             },
         };
 

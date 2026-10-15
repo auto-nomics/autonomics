@@ -284,8 +284,11 @@ impl HostControl {
     }
 
     /// The agent's current model as a provider-precise `provider:model`
-    /// spec, plus its context length.
-    pub async fn agent_model_info(&self, name: &str) -> Option<(String, u64)> {
+    /// spec, its context length, and the effective reasoning effort.
+    pub async fn agent_model_info(
+        &self,
+        name: &str,
+    ) -> Option<(String, u64, Option<agentik_types::ReasoningEffort>)> {
         self.ask(|tx| HostCommand::GetAgentModel {
             name: name.into(),
             reply_tx: tx,
@@ -584,10 +587,11 @@ pub enum HostCommand {
         reply_tx: oneshot::Sender<Result<AgentRuntimeConfig, String>>,
     },
 
-    /// Query model info (name + context length) for a named agent.
+    /// Query model info (name + context length + effective reasoning
+    /// effort) for a named agent.
     GetAgentModel {
         name: String,
-        reply_tx: oneshot::Sender<Option<(String, u64)>>,
+        reply_tx: oneshot::Sender<Option<(String, u64, Option<agentik_types::ReasoningEffort>)>>,
     },
 }
 

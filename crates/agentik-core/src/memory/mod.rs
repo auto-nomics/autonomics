@@ -35,6 +35,10 @@ pub struct MemoryConfig {
     pub use_memory: bool,
     /// Run startup extraction and consolidation for root-level agents.
     pub generate_memory: bool,
+    /// Per-agent reasoning-effort override carried on the same
+    /// hot-swappable cell (not a memory feature; the backend is simply
+    /// the agent's runtime-config holder).
+    pub reasoning_effort: Option<agentik_types::ReasoningEffort>,
     /// Maximum number of most-recent idle sessions considered per startup.
     pub max_source_sessions: usize,
     /// Inputs older than this are ignored.
@@ -55,6 +59,7 @@ impl MemoryConfig {
         Self {
             use_memory: true,
             generate_memory: true,
+            reasoning_effort: None,
             max_source_sessions: 20,
             max_age_days: 90,
             min_idle_hours: 12,

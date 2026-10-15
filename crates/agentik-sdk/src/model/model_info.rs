@@ -34,6 +34,13 @@ pub struct ModelInfo {
     /// presets should set this when the provider documents a lower maximum.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_reasoning_effort: Option<agentik_types::ReasoningEffort>,
+    /// Per-requester reasoning-effort override, layered on top of the
+    /// model's defaults at call time (not part of the catalogue — the
+    /// per-agent setting is stamped onto a cloned `ModelInfo` before the
+    /// request). When set, it wins over the effort derived from
+    /// `max_reasoning_effort` / `thinking_required` in the request layer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<agentik_types::ReasoningEffort>,
     /// Whether the provider requires extended thinking for this model.
     ///
     /// Some models (notably GLM-5.3) reject `thinking.type: "disabled"`. When
@@ -63,6 +70,7 @@ impl Default for ModelInfo {
             supports_thinking: false,
             thinking_enabled: false,
             max_reasoning_effort: None,
+            reasoning_effort: None,
             thinking_required: false,
             thinking_budget: None,
             input_token_price: 0.0,
@@ -84,6 +92,7 @@ impl std::fmt::Debug for ModelInfo {
             .field("supports_thinking", &self.supports_thinking)
             .field("thinking_enabled", &self.thinking_enabled)
             .field("max_reasoning_effort", &self.max_reasoning_effort)
+            .field("reasoning_effort", &self.reasoning_effort)
             .field("thinking_required", &self.thinking_required)
             .field("thinking_budget", &self.thinking_budget)
             .field("input_token_price", &self.input_token_price)
@@ -110,6 +119,7 @@ impl PartialEq for ModelInfo {
             && self.supports_thinking == other.supports_thinking
             && self.thinking_enabled == other.thinking_enabled
             && self.max_reasoning_effort == other.max_reasoning_effort
+            && self.reasoning_effort == other.reasoning_effort
             && self.thinking_required == other.thinking_required
             && self.thinking_budget == other.thinking_budget
             && self.input_token_price == other.input_token_price
@@ -147,6 +157,7 @@ pub struct ModelInfoBuilder {
     supports_thinking: bool,
     thinking_enabled: bool,
     max_reasoning_effort: Option<agentik_types::ReasoningEffort>,
+    reasoning_effort: Option<agentik_types::ReasoningEffort>,
     thinking_required: bool,
     thinking_budget: Option<u32>,
     input_token_price: f64,
@@ -166,6 +177,7 @@ impl ModelInfoBuilder {
             supports_thinking: false,
             thinking_enabled: false,
             max_reasoning_effort: None,
+            reasoning_effort: None,
             thinking_required: false,
             thinking_budget: None,
             input_token_price: 0.0,
@@ -239,6 +251,7 @@ impl ModelInfoBuilder {
             supports_thinking: self.supports_thinking,
             thinking_enabled: self.thinking_enabled,
             max_reasoning_effort: self.max_reasoning_effort,
+            reasoning_effort: self.reasoning_effort,
             thinking_required: self.thinking_required,
             thinking_budget: self.thinking_budget,
             input_token_price: self.input_token_price,

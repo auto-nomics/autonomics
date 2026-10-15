@@ -103,6 +103,35 @@ pub enum ReasoningEffort {
     Ultra,
 }
 
+impl ReasoningEffort {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Minimal => "minimal",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::Xhigh => "xhigh",
+            Self::Max => "max",
+            Self::Ultra => "ultra",
+        }
+    }
+
+    /// Every variant, weakest → strongest — pickers and cyclers iterate
+    /// this order.
+    pub const ALL: [Self; 8] = [
+        Self::None,
+        Self::Minimal,
+        Self::Low,
+        Self::Medium,
+        Self::High,
+        Self::Xhigh,
+        Self::Max,
+        Self::Ultra,
+    ];
+}
+
 impl ReasoningConfig {
     #[must_use]
     pub fn from_budget(budget_tokens: u32) -> Self {

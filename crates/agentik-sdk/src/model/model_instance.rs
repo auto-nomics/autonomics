@@ -147,6 +147,17 @@ impl Model {
         self.model_info.vision_ability = enabled;
         self
     }
+
+    /// Stamp a per-requester reasoning-effort override onto this model
+    /// (consumes and returns a rebuilt `Self` — cheap: the client stack
+    /// is Arc-shared, only `model_info` clones). The request layer
+    /// prefers this over the model-derived effort. No effect on models
+    /// without thinking support.
+    #[must_use]
+    pub fn with_reasoning_effort(mut self, effort: agentik_types::ReasoningEffort) -> Self {
+        self.model_info.reasoning_effort = Some(effort);
+        self
+    }
     pub fn set_context_window(mut self, window: u64) -> Self {
         self.model_info.context_length = window;
         self

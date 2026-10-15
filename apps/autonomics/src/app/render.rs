@@ -97,9 +97,13 @@ impl App {
         let model_info = active_agent_name
             .and_then(|name| self.agent_model_cache.get(&name).cloned())
             .or_else(|| self.state.active_model_display.clone());
-        let (model_name, context_window) = match model_info {
-            Some((name, ctx)) => (Some(name), Some(ctx)),
-            None => (None, None),
+        let (model_name, context_window, reasoning_effort) = match model_info {
+            Some(display) => (
+                Some(display.spec),
+                Some(display.context_length),
+                display.reasoning_effort,
+            ),
+            None => (None, None, None),
         };
 
         // Collect tab data before mutably borrowing tab state.
@@ -131,6 +135,7 @@ impl App {
         let workspace = AgentWorkspace {
             active_model: model_name.as_deref(),
             context_window,
+            reasoning_effort: reasoning_effort.as_deref(),
             sessions: &session_summaries,
             display: &display,
         };

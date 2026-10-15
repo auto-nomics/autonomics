@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use agentik_core::{AgentRuntimeConfig, AgentRuntimeOverrides};
 use agentik_types::SessionInfo;
 use runtime::control::{AgentInfo, AgentStatus};
+use runtime::model_actor::{DisplaySettings as DisplaySettingsData, ModelCatalogData};
 use runtime::model_bootstrap::{ModelRow, ProviderRow};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -136,6 +137,16 @@ pub struct DisplaySettings {
     pub collapse_tool_results: bool,
 }
 
+impl From<DisplaySettingsData> for DisplaySettings {
+    fn from(data: DisplaySettingsData) -> Self {
+        Self {
+            collapse_thinking: data.collapse_thinking,
+            collapse_tool_calls: data.collapse_tool_calls,
+            collapse_tool_results: data.collapse_tool_results,
+        }
+    }
+}
+
 /// Model catalogue + credentials view over the daemon-owned app DB.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ModelCatalog {
@@ -147,6 +158,20 @@ pub struct ModelCatalog {
     pub active_model: Option<String>,
     /// Health of the openai ChatGPT subscription token, when present.
     pub openai_token: Option<OpenaiTokenState>,
+}
+
+impl From<ModelCatalogData> for ModelCatalog {
+    fn from(data: ModelCatalogData) -> Self {
+        Self {
+            providers: data.providers,
+            models: data.models,
+            active_model: data.active_model,
+            openai_token: data.openai_token.map(|t| OpenaiTokenState {
+                present: t.present,
+                expired: t.expired,
+            }),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, utoipa::ToSchema)]
@@ -208,6 +233,11 @@ pub struct AgentModelInfoView {
     /// The agent's current model as a `provider:model` spec.
     pub model: String,
     pub context_length: u64,
+    /// The reasoning effort this agent's next request would send
+    /// (`low | medium | high | …`), absent when the model has no
+    /// thinking support.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
 }
 
 /// Effective per-agent runtime settings plus the persisted override layer.

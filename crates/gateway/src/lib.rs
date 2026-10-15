@@ -10,15 +10,12 @@
 //! - [`daemon`]: `autonomics serve` bootstrap + graceful shutdown;
 //! - [`client`]: the Rust frontend SDK (REST + SSE pump);
 //! - [`manager`]: probe / stop for frontends (they never spawn the daemon);
-//! - [`model_store`]: the daemon-owned app DB (model catalogue,
-//!   credentials, ChatGPT OAuth).
 
 pub mod client;
 pub mod daemon;
 pub mod driver;
 pub mod hub;
 pub mod manager;
-pub mod model_store;
 pub mod proto;
 pub mod server;
 

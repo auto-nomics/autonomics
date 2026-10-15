@@ -8,7 +8,6 @@
 //! concurrently, so the file is opened in multiprocess-WAL mode.
 
 pub mod error;
-pub mod migration;
 pub mod repo;
 pub mod types;
 
@@ -81,14 +80,9 @@ impl Storage {
         Self::new(":memory:").await
     }
 
-    /// Share an already-open Turso connection and initialize the KMS schema.
-    ///
-    /// Production code opens a dedicated `knowledge.db` via [`Storage::new`];
-    /// this constructor serves tests and the legacy-migration seeding path
-    /// that needs the KMS schema on a caller-supplied connection.
-    pub async fn from_shared_connection(
-        conn: Arc<Mutex<turso::Connection>>,
-    ) -> Result<Self, String> {
+    /// Initialize the KMS schema on an already-open Turso connection.
+    /// Internal: [`Storage::new`] finishes opening the database file here.
+    async fn from_shared_connection(conn: Arc<Mutex<turso::Connection>>) -> Result<Self, String> {
         let storage = Self { conn };
         storage.init_schema().await.map_err(|e| e.to_string())?;
         Ok(storage)

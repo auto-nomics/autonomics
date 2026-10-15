@@ -363,9 +363,9 @@ impl Session {
         // A compact command may be queued while a turn is active. Restore
         // that lifecycle afterward so an in-flight stream keeps driving the UI.
         let lifecycle_before_compact = *self.lifecycle.status();
-        let model = match self.shared.model.load_full() {
-            Some(m) => m,
-            None => {
+        let model = match self.effective_model() {
+            Ok(m) => m,
+            Err(_) => {
                 tracing::warn!("manual compact requested but no model is configured");
                 self.shared.send_event(AgentEvent::Error(
                     "No model configured for compaction".into(),

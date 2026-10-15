@@ -610,15 +610,33 @@ impl Session {
         }
     }
 
-    async fn request(&mut self) -> Result<Message> {
-        let span = span!(Level::TRACE, "API Request");
-        let _enter = span.enter();
-
+    /// The agent's current model with the per-agent runtime settings
+    /// layered on: when a reasoning-effort override is configured, a
+    /// stamped clone is returned so the request carries the agent's
+    /// chosen effort (next request picks it up — the hot-reload
+    /// semantics of the runtime-config cell).
+    pub(super) fn effective_model(&self) -> Result<Arc<agentik_sdk::model::Model>> {
         let model = self
             .shared
             .model
             .load_full()
             .ok_or_else(|| AgentError::MissingConfig("no active model configured".into()))?;
+        let effort = self
+            .shared
+            .memory
+            .as_ref()
+            .and_then(|memory| memory.runtime_config().reasoning_effort);
+        Ok(match effort {
+            Some(effort) => Arc::new(model.as_ref().clone().with_reasoning_effort(effort)),
+            None => model,
+        })
+    }
+
+    async fn request(&mut self) -> Result<Message> {
+        let span = span!(Level::TRACE, "API Request");
+        let _enter = span.enter();
+
+        let model = self.effective_model()?;
 
         let conversation_msgs = self.render_context()?;
         if self

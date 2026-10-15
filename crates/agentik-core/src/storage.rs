@@ -203,6 +203,11 @@ pub struct AgentRuntimeOverrides {
     /// Run persistent-memory extraction and consolidation for this agent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generate_memory: Option<bool>,
+    /// Per-agent reasoning-effort override. `None` inherits the model's
+    /// own default (derived from its `max_reasoning_effort` / required-
+    /// thinking shape). Applied at request time, so changes hot-reload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<agentik_types::ReasoningEffort>,
 }
 
 /// Fully resolved per-agent settings.
@@ -210,6 +215,7 @@ pub struct AgentRuntimeOverrides {
 pub struct AgentRuntimeConfig {
     pub use_memory: bool,
     pub generate_memory: bool,
+    pub reasoning_effort: Option<agentik_types::ReasoningEffort>,
 }
 
 impl AgentRuntimeConfig {
@@ -218,6 +224,7 @@ impl AgentRuntimeConfig {
         Self {
             use_memory,
             generate_memory,
+            reasoning_effort: None,
         }
     }
 }

@@ -1,19 +1,42 @@
-//! Model bootstrap — resolve the active [`Model`] from the app database.
+//! Model bootstrap — persistence and resolution for the app database
+//! (`app.db`: `providers` / `models` / `settings`).
 //!
-//! Owns the `providers` / `models` / `settings` tables end to end (schema
-//! DDL, row mappings, resolution logic) so every entry point — the TUI,
-//! the headless runner, future adapters — shares one source of truth for
-//! "which model does this installation run". The TUI's model-config
-//! widgets keep only UI glue (catalog rendering, persistence prompts) and
-//! delegate resolution here.
+//! This module is the single source of truth for "which model does this
+//! installation run" and for the schema of the three app tables. It is
+//! split into three layers:
+//!
+//! 1. **Free functions over [`rusqlite::Connection`]** — the SQL and row
+//!    mappings. Synchronous; the storage impl below is their only
+//!    production caller, tests call them directly.
+//! 2. **[`ModelStorage`]** — the async storage abstraction the daemon's
+//!    model actor depends on. Swapping the engine (e.g. to a remote
+//!    backend) means adding an impl, not touching consumers.
+//! 3. **Resolution** — [`resolve_from_parts`] builds a [`Model`] from
+//!    storage-independent parts (credentials + optional catalogue row),
+//!    so both the sync helper and remote callers share one construction
+//!    path. Model metadata comes from the SDK's built-in catalogue,
+//!    falling back to the `models` table for entries imported from a
+//!    remote catalogue.
+//!
+//! The SQLite impl holds the connection behind a mutex rather than
+//! assuming a single caller — but production wiring (the gateway's model
+//! actor) serializes all access on one task anyway, so the lock is
+//! uncontended and the sync-inside-async work is bounded to small
+//! point queries.
 
-use agentik_sdk::model::{Model, ProviderConfig, ProviderType};
+use std::sync::Mutex;
+
+use agentik_sdk::model::{Model, ModelInfo, ProviderConfig, ProviderType};
+use async_trait::async_trait;
 use rusqlite::Connection;
 use uuid::Uuid;
 
 // ─────────────────────────────────────────────────────────────────────
 // Schema
 // ─────────────────────────────────────────────────────────────────────
+
+/// The row name of the ChatGPT subscription provider.
+pub const OPENAI_PROVIDER_ROW: &str = "openai";
 
 /// Create the `providers` / `models` / `settings` tables if they don't
 /// exist yet, and run the light column migrations for pre-existing
@@ -206,6 +229,311 @@ fn row_to_model(row: &rusqlite::Row<'_>) -> rusqlite::Result<ModelRow> {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// Free SQL helpers (single-writer style, over `&Connection`)
+// ─────────────────────────────────────────────────────────────────────
+
+/// Provider credentials as needed to build a [`Model`].
+#[derive(Debug, Clone)]
+pub struct ProviderAuth {
+    pub api_key: String,
+    pub base_url: String,
+}
+
+/// Look up a provider's credentials by row name.
+fn provider_auth(conn: &Connection, name: &str) -> Option<ProviderAuth> {
+    conn.query_row(
+        "SELECT api_key, base_url FROM providers WHERE name = ?1",
+        [name],
+        |row| {
+            Ok(ProviderAuth {
+                api_key: row.get(0)?,
+                base_url: row.get(1)?,
+            })
+        },
+    )
+    .ok()
+}
+
+/// Insert or update a provider row (credentials + base URL). The stored
+/// `auth_method` is derived from the provider type's default — the column
+/// is not user-editable.
+pub fn save_provider(conn: &Connection, params: &SaveProviderParams) -> rusqlite::Result<()> {
+    let auth_method = agentik_sdk::provider::registry::default_auth_method(&ProviderType::from(
+        params.provider_type.as_str(),
+    ))
+    .storage_tag()
+    .to_string();
+    let existing: Option<i64> = conn
+        .query_row(
+            "SELECT id FROM providers WHERE name = ?1",
+            [&params.name],
+            |row| row.get(0),
+        )
+        .ok();
+    let result = if let Some(id) = existing {
+        conn.execute(
+            "UPDATE providers SET api_key = ?1, base_url = ?2, auth_method = ?3 WHERE id = ?4",
+            rusqlite::params![params.api_key, params.base_url, auth_method, id],
+        )
+    } else {
+        conn.execute(
+            "INSERT INTO providers (name, provider_type, base_url, api_key, auth_method)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                params.name,
+                params.provider_type,
+                params.base_url,
+                params.api_key,
+                auth_method
+            ],
+        )
+    };
+    result.map(|_| ())
+}
+
+/// New-provider parameters (mirrors the HTTP `SaveProviderRequest` without
+/// tying this module to the wire type).
+#[derive(Debug, Clone)]
+pub struct SaveProviderParams {
+    pub name: String,
+    pub provider_type: String,
+    pub base_url: String,
+    pub api_key: String,
+}
+
+/// Read the ChatGPT token blob JSON stored in a provider row's `api_key`.
+pub fn chatgpt_blob_json(conn: &Connection, provider: &str) -> Option<String> {
+    conn.query_row(
+        "SELECT api_key FROM providers WHERE name = ?1",
+        [provider],
+        |row| row.get::<_, String>(0),
+    )
+    .ok()
+}
+
+/// Persist a ChatGPT token blob JSON to the openai provider row.
+pub fn save_chatgpt_blob_json(conn: &Connection, blob_json: &str) -> rusqlite::Result<()> {
+    let base_url = agentik_sdk::provider::registry::default_base_url(&ProviderType::Openai)
+        .unwrap_or_default()
+        .to_string();
+    let existing: Option<i64> = conn
+        .query_row(
+            "SELECT id FROM providers WHERE name = ?1",
+            [OPENAI_PROVIDER_ROW],
+            |row| row.get(0),
+        )
+        .ok();
+    let result = if let Some(id) = existing {
+        conn.execute(
+            "UPDATE providers SET api_key = ?1, base_url = ?2, auth_method = 'chatgpt' WHERE id = ?3",
+            rusqlite::params![blob_json, base_url, id],
+        )
+    } else {
+        conn.execute(
+            "INSERT INTO providers (name, provider_type, base_url, api_key, auth_method)
+             VALUES ('openai', 'openai', ?1, ?2, 'chatgpt')",
+            rusqlite::params![base_url, blob_json],
+        )
+    };
+    result.map(|_| ())
+}
+
+/// Replace a provider's model rows with a freshly fetched catalogue —
+/// atomically, in one transaction (a mid-loop failure must not leave the
+/// provider's catalogue half-deleted).
+pub fn replace_provider_models(
+    conn: &mut Connection,
+    provider_name: &str,
+    models: &[ModelInfo],
+) -> rusqlite::Result<usize> {
+    let tx = conn.transaction()?;
+    let provider_id: i64 = tx.query_row(
+        "SELECT id FROM providers WHERE name = ?1",
+        [provider_name],
+        |r| r.get(0),
+    )?;
+    tx.execute("DELETE FROM models WHERE provider_id = ?1", [provider_id])?;
+    for m in models {
+        tx.execute(
+            "INSERT OR REPLACE INTO models (model_name, provider_id, context_length,
+             max_output_tokens, vision_ability, supports_function_calling, supports_streaming,
+             supports_thinking, thinking_enabled, input_token_price, output_token_price)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+            rusqlite::params![
+                m.model_name,
+                provider_id,
+                m.context_length as i64,
+                m.max_output_tokens as i64,
+                m.vision_ability as i64,
+                m.supports_function_calling as i64,
+                m.supports_streaming as i64,
+                m.supports_thinking as i64,
+                m.thinking_enabled as i64,
+                m.input_token_price,
+                m.output_token_price,
+            ],
+        )?;
+    }
+    tx.commit()?;
+    Ok(models.len())
+}
+
+/// The `active_model` setting's raw `"provider_name:model_name"` spec,
+/// when one is configured.
+pub fn active_model_spec(conn: &Connection) -> Option<String> {
+    get_setting(conn, "active_model")
+}
+
+/// Read one `settings` row. Missing key → `None`; a real DB error also
+/// degrades to `None` (settings are best-effort display state).
+pub fn get_setting(conn: &Connection, key: &str) -> Option<String> {
+    conn.query_row("SELECT value FROM settings WHERE key = ?1", [key], |row| {
+        row.get::<_, String>(0)
+    })
+    .ok()
+}
+
+/// Write one `settings` row.
+pub fn put_setting(conn: &Connection, key: &str, value: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO settings (key, value) VALUES (?1, ?2)",
+        rusqlite::params![key, value],
+    )
+    .map(|_| ())
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Storage abstraction
+// ─────────────────────────────────────────────────────────────────────
+
+/// Errors surfaced by a [`ModelStorage`] backend.
+#[derive(Debug, thiserror::Error)]
+pub enum ModelStorageError {
+    #[error("database error: {0}")]
+    Db(#[from] rusqlite::Error),
+    #[error("{0}")]
+    Message(String),
+}
+
+pub type StorageResult<T> = std::result::Result<T, ModelStorageError>;
+
+/// Async storage facade over the app database — the seam the daemon's
+/// model actor depends on. Methods map one-to-one onto the free SQL
+/// helpers above; the default SQLite impl wraps a mutex-guarded
+/// connection.
+#[async_trait]
+pub trait ModelStorage: Send + Sync {
+    async fn providers(&self) -> StorageResult<Vec<ProviderRow>>;
+    async fn models(&self) -> StorageResult<Vec<ModelRow>>;
+    async fn find_model(
+        &self,
+        provider_name: &str,
+        model_name: &str,
+    ) -> StorageResult<Option<ModelRow>>;
+    async fn provider_auth(&self, name: &str) -> StorageResult<Option<ProviderAuth>>;
+    async fn active_model_spec(&self) -> StorageResult<Option<String>>;
+    async fn set_active_model(&self, spec: &str) -> StorageResult<()>;
+    async fn save_provider(&self, params: &SaveProviderParams) -> StorageResult<()>;
+    async fn replace_provider_models(
+        &self,
+        provider_name: &str,
+        models: &[ModelInfo],
+    ) -> StorageResult<usize>;
+    async fn chatgpt_blob_json(&self) -> StorageResult<Option<String>>;
+    async fn save_chatgpt_blob_json(&self, blob_json: &str) -> StorageResult<()>;
+    async fn get_setting(&self, key: &str) -> StorageResult<Option<String>>;
+    async fn put_setting(&self, key: &str, value: &str) -> StorageResult<()>;
+}
+
+/// The default [`ModelStorage`]: a local SQLite file (rusqlite), opened
+/// with foreign keys on and the schema ensured. The daemon must hold the
+/// instance lock before opening it.
+pub struct SqliteModelStorage {
+    conn: Mutex<Connection>,
+}
+
+impl SqliteModelStorage {
+    pub fn open(path: &std::path::Path) -> StorageResult<Self> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                ModelStorageError::Message(format!("create {}: {e}", parent.display()))
+            })?;
+        }
+        let conn = Connection::open(path)?;
+        conn.pragma_update(None, "foreign_keys", "ON")?;
+        ensure_app_schema(&conn)?;
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
+    }
+
+    fn with_conn<T>(&self, f: impl FnOnce(&Connection) -> rusqlite::Result<T>) -> StorageResult<T> {
+        let conn = self.conn.lock().expect("model store mutex poisoned");
+        f(&conn).map_err(ModelStorageError::Db)
+    }
+}
+
+#[async_trait]
+impl ModelStorage for SqliteModelStorage {
+    async fn providers(&self) -> StorageResult<Vec<ProviderRow>> {
+        self.with_conn(ProviderRow::all)
+    }
+
+    async fn models(&self) -> StorageResult<Vec<ModelRow>> {
+        self.with_conn(ModelRow::all)
+    }
+
+    async fn find_model(
+        &self,
+        provider_name: &str,
+        model_name: &str,
+    ) -> StorageResult<Option<ModelRow>> {
+        self.with_conn(|conn| Ok(ModelRow::find(conn, provider_name, model_name)))
+    }
+
+    async fn provider_auth(&self, name: &str) -> StorageResult<Option<ProviderAuth>> {
+        self.with_conn(|conn| Ok(provider_auth(conn, name)))
+    }
+
+    async fn active_model_spec(&self) -> StorageResult<Option<String>> {
+        self.with_conn(|conn| Ok(active_model_spec(conn)))
+    }
+
+    async fn set_active_model(&self, spec: &str) -> StorageResult<()> {
+        self.with_conn(|conn| put_setting(conn, "active_model", spec))
+    }
+
+    async fn save_provider(&self, params: &SaveProviderParams) -> StorageResult<()> {
+        self.with_conn(|conn| save_provider(conn, params))
+    }
+
+    async fn replace_provider_models(
+        &self,
+        provider_name: &str,
+        models: &[ModelInfo],
+    ) -> StorageResult<usize> {
+        let mut conn = self.conn.lock().expect("model store mutex poisoned");
+        replace_provider_models(&mut conn, provider_name, models).map_err(ModelStorageError::Db)
+    }
+
+    async fn chatgpt_blob_json(&self) -> StorageResult<Option<String>> {
+        self.with_conn(|conn| Ok(chatgpt_blob_json(conn, OPENAI_PROVIDER_ROW)))
+    }
+
+    async fn save_chatgpt_blob_json(&self, blob_json: &str) -> StorageResult<()> {
+        self.with_conn(|conn| save_chatgpt_blob_json(conn, blob_json))
+    }
+
+    async fn get_setting(&self, key: &str) -> StorageResult<Option<String>> {
+        self.with_conn(|conn| Ok(get_setting(conn, key)))
+    }
+
+    async fn put_setting(&self, key: &str, value: &str) -> StorageResult<()> {
+        self.with_conn(|conn| put_setting(conn, key, value))
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // Resolution
 // ─────────────────────────────────────────────────────────────────────
 
@@ -221,71 +549,58 @@ pub fn resolve_active_model(conn: &Connection) -> Option<Model> {
     resolve_model_spec(conn, &active)
 }
 
-/// The `active_model` setting's raw `"provider_name:model_name"` spec,
-/// when one is configured.
-pub fn active_model_spec(conn: &Connection) -> Option<String> {
-    conn.query_row(
-        "SELECT value FROM settings WHERE key = 'active_model'",
-        [],
-        |row| row.get(0),
-    )
-    .ok()
-}
-
 /// Build a [`Model`] from a `"provider_name:model_name"` spec, using
 /// provider credentials from the `providers` table.
 ///
-/// Model metadata comes from the SDK's built-in catalogue, falling back
-/// to the `models` table for entries imported from a remote catalogue —
-/// so custom providers whose models only exist in the DB also resolve.
-/// Returns `None` if the spec is malformed, the provider is not
-/// configured (or has an empty API key), or the model is unknown.
+/// Delegates to [`resolve_from_parts`]; returns `None` if the spec is
+/// malformed, the provider is not configured (or has an empty API key),
+/// or the model is unknown.
 pub fn resolve_model_spec(conn: &Connection, spec: &str) -> Option<Model> {
-    use agentik_sdk::provider::registry;
-
     // Parse "provider_name:model_name"
     let (provider_name, model_name) = spec.split_once(':')?;
+    let auth = provider_auth(conn, provider_name)?;
+    let db_model = ModelRow::find(conn, provider_name, model_name);
+    resolve_from_parts(provider_name, model_name, &auth, db_model)
+}
 
-    // Look up provider credentials + selected base_url from the DB.
-    let (api_key, db_base_url): (String, String) = conn
-        .query_row(
-            "SELECT api_key, base_url FROM providers WHERE name = ?1",
-            [provider_name],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .ok()?;
+/// Storage-independent model construction: preset catalogue first, DB
+/// row fallback (so custom providers whose models only exist in the DB
+/// also resolve), then build the provider config + client stack.
+///
+/// Returns `None` for an empty API key or an unknown model.
+pub fn resolve_from_parts(
+    provider_name: &str,
+    model_name: &str,
+    auth: &ProviderAuth,
+    db_model: Option<ModelRow>,
+) -> Option<Model> {
+    use agentik_sdk::provider::registry;
 
-    if api_key.is_empty() {
+    if auth.api_key.is_empty() {
         return None;
     }
 
-    // Look up model info from the built-in catalog, falling back to the
-    // local `models` table for entries imported from a remote catalogue.
-    // `unwrap_or_default` (rather than `?`) so Custom providers whose
-    // models only exist in the DB also resolve.
     let provider_type = ProviderType::from(provider_name);
-    let base_url = if db_base_url.is_empty() {
+    let base_url = if auth.base_url.is_empty() {
         registry::default_base_url(&provider_type)
             .unwrap_or("")
             .to_string()
     } else {
-        db_base_url
+        auth.base_url.clone()
     };
     let auth_method = registry::default_auth_method(&provider_type);
     let preset_models = registry::preset_models(&provider_type).unwrap_or_default();
     let mut model_info = preset_models
         .into_iter()
         .find(|m| m.model_name == model_name)
-        .or_else(|| {
-            ModelRow::find(conn, provider_name, model_name).map(|row| row.to_model_info())
-        })?;
+        .or_else(|| db_model.map(|row| row.to_model_info()))?;
 
     let provider_config = ProviderConfig {
         id: Uuid::nil(),
         name: provider_name.to_string(),
         provider_type,
         base_url,
-        api_key,
+        api_key: auth.api_key.clone(),
         auth_method,
     };
     model_info.provider_id = provider_config.id;
@@ -402,5 +717,92 @@ mod tests {
             .into_iter()
             .map(|m| m.model_name)
             .collect()
+    }
+
+    // ── SqliteModelStorage round-trips ──────────────────────────────
+
+    #[tokio::test]
+    async fn storage_round_trips_provider_settings_and_catalogue() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = SqliteModelStorage::open(&dir.path().join("app.db")).unwrap();
+
+        storage
+            .save_provider(&SaveProviderParams {
+                name: "Custom".into(),
+                provider_type: "Custom".into(),
+                base_url: "http://localhost:9".into(),
+                api_key: "test-key".into(),
+            })
+            .await
+            .unwrap();
+
+        let auth = storage.provider_auth("Custom").await.unwrap().unwrap();
+        assert_eq!(auth.api_key, "test-key");
+        assert_eq!(auth.base_url, "http://localhost:9");
+        assert!(storage.provider_auth("missing").await.unwrap().is_none());
+
+        storage
+            .put_setting("active_model", "Custom:db-only-model")
+            .await
+            .unwrap();
+        assert_eq!(
+            storage.active_model_spec().await.unwrap().as_deref(),
+            Some("Custom:db-only-model")
+        );
+        assert_eq!(
+            storage
+                .get_setting("active_model")
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("Custom:db-only-model")
+        );
+        assert_eq!(storage.get_setting("missing").await.unwrap(), None);
+
+        let n = storage
+            .replace_provider_models(
+                "Custom",
+                &[agentik_sdk::model::ModelInfo {
+                    model_name: "db-only-model".into(),
+                    context_length: 12345,
+                    ..agentik_sdk::model::ModelInfo::default()
+                }],
+            )
+            .await
+            .unwrap();
+        assert_eq!(n, 1);
+        let row = storage
+            .find_model("Custom", "db-only-model")
+            .await
+            .unwrap()
+            .expect("imported row visible");
+        assert_eq!(row.context_length, 12345);
+        assert_eq!(storage.models().await.unwrap().len(), 1);
+        assert_eq!(storage.providers().await.unwrap().len(), 1);
+
+        storage
+            .save_chatgpt_blob_json("{\"access_token\":\"t\"}")
+            .await
+            .unwrap();
+        assert_eq!(
+            storage.chatgpt_blob_json().await.unwrap().as_deref(),
+            Some("{\"access_token\":\"t\"}")
+        );
+        storage
+            .set_active_model("Custom:db-only-model")
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn replace_provider_models_is_atomic_on_unknown_provider() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = SqliteModelStorage::open(&dir.path().join("app.db")).unwrap();
+        assert!(
+            storage
+                .replace_provider_models("ghost", &[agentik_sdk::model::ModelInfo::default()])
+                .await
+                .is_err()
+        );
     }
 }

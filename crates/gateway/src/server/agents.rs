@@ -53,13 +53,13 @@ pub(crate) async fn spawn_agent(
     // Model override: unresolvable specs degrade to the daemon default,
     // matching the TUI's spawn behavior today.
     let model_override = match req.model_spec.as_deref() {
-        Some(spec) => {
-            let models = state.models.clone();
-            Some(
-                tokio::task::block_in_place(|| models.resolve(spec))
-                    .map_err(GatewayError::Message)?,
-            )
-        }
+        Some(spec) => Some(
+            state
+                .models
+                .resolve(spec)
+                .await
+                .map_err(GatewayError::Message)?,
+        ),
         None => {
             // The host's model slot can be installed-but-empty (daemon
             // started with no active model configured). Rejecting here
@@ -159,10 +159,11 @@ pub(crate) async fn get_agent_model(
     let info = state.control.agent_model_info(&name).await.ok_or_else(|| {
         GatewayError::Status(StatusCode::NOT_FOUND, format!("agent `{name}` not found"))
     })?;
-    let (model, context_length) = info;
+    let (model, context_length, reasoning_effort) = info;
     Ok(Json(AgentModelInfoView {
         model,
         context_length,
+        reasoning_effort: reasoning_effort.map(|e| e.as_str().to_string()),
     }))
 }
 
@@ -174,11 +175,13 @@ pub(crate) async fn set_agent_model(
     Path(name): Path<String>,
     Json(req): Json<SetAgentModelRequest>,
 ) -> GatewayResult<StatusCode> {
-    let models = state.models.clone();
-    let hub = state.hub.clone();
-    let model =
-        tokio::task::block_in_place(|| models.resolve_with_refresh_callback(&req.spec, &hub))
-            .map_err(|e| GatewayError::Message(e.to_string()))?;
+    // The resolved model carries the token-rotation callback; the actor
+    // persists refreshed tokens when it fires.
+    let model = state
+        .models
+        .resolve(&req.spec)
+        .await
+        .map_err(GatewayError::Message)?;
     state.control.set_agent_model(&name, model);
 
     // Persist preferred_model in the agent record (best-effort).

@@ -67,7 +67,7 @@ pub struct App {
     /// path. Render must never issue HTTP — entries are prefetched on
     /// demand here and filled asynchronously via
     /// [`AppEvent::ModelInfoLoaded`].
-    agent_model_cache: HashMap<String, (String, u64)>,
+    agent_model_cache: HashMap<String, crate::state::ModelDisplay>,
     /// Agents whose model info fetch is in flight (prevents per-frame
     /// request storms while a fetch is pending).
     model_info_pending: HashSet<String>,
@@ -132,7 +132,13 @@ impl App {
                 .models
                 .iter()
                 .find(|m| m.provider_name == provider && m.model_name == name)
-                .map(|m| (spec.to_string(), m.context_length))
+                .map(|m| crate::state::ModelDisplay {
+                    spec: spec.to_string(),
+                    context_length: m.context_length,
+                    // The catalogue rows don't carry effort; the agent
+                    // cache fills it once an agent is active.
+                    reasoning_effort: None,
+                })
         });
 
         // Display settings from the daemon-owned settings table.

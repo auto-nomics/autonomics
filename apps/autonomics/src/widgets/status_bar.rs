@@ -27,6 +27,9 @@ pub struct StatusBar<'a> {
     /// The active model's context window size, when known.
     pub context_window: Option<u64>,
     pub model_name: Option<&'a str>,
+    /// The reasoning effort the active agent's next request would send
+    /// (rendered next to the model name, e.g. `model glm-5.3 ⋅ high`).
+    pub reasoning_effort: Option<&'a str>,
     /// Live compaction state — consulted only while status is `Compacting`.
     pub compact: Option<&'a CompactState>,
     /// Render tick, drives the compacting spinner.
@@ -140,21 +143,27 @@ impl Widget for StatusBar<'_> {
 
         Paragraph::new(line).render(area, buf);
 
-        // ── Model name (right-aligned) ──
+        // ── Model name + reasoning effort (right-aligned) ──
         if let Some(name) = self.model_name {
             let label = "model ";
-            let label_w = label.width();
-            let name_w = name.width();
-            let total_w = label_w + name_w;
+            let effort_seg = self.reasoning_effort.map(|effort| format!(" ⋅ {effort}"));
+            let effort_str = effort_seg.as_deref().unwrap_or("");
+            let total_w = label.width() + name.width() + effort_str.width();
             if total_w < area.width as usize {
                 let x = area.x + area.width - total_w as u16;
                 let y = area.y;
                 buf.set_string(x, y, label, Style::default().fg(Color::DarkGray));
                 buf.set_string(
-                    x + label_w as u16,
+                    x + label.width() as u16,
                     y,
                     name,
                     Style::default().fg(Color::Gray),
+                );
+                buf.set_string(
+                    x + (label.width() + name.width()) as u16,
+                    y,
+                    effort_str,
+                    Style::default().fg(Color::Cyan),
                 );
             }
         }

@@ -1,14 +1,11 @@
 //! Model provider and active-model handlers.
 
-use std::sync::Arc;
-
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 
 use super::error::{GatewayError, GatewayResult};
 use super::state::GatewayState;
-use crate::hub::EventKind;
 use crate::proto::*;
 
 // ── model config ─────────────────────────────────────────────────────
@@ -17,10 +14,12 @@ use crate::proto::*;
 pub(crate) async fn get_model_config(
     State(state): State<GatewayState>,
 ) -> GatewayResult<Json<ModelCatalog>> {
-    let models = state.models.clone();
-    let catalog = tokio::task::block_in_place(|| models.catalog())
+    let catalog = state
+        .models
+        .catalog()
+        .await
         .map_err(|e| GatewayError::Status(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok(Json(catalog))
+    Ok(Json(catalog.into()))
 }
 
 #[utoipa::path(put, path = "/api/v1/model-config/provider", tag = "model-config", request_body = SaveProviderRequest, responses((status = 204, description = "Provider saved"), (status = 500, description = "Provider save failed")))]
@@ -28,8 +27,16 @@ pub(crate) async fn put_provider(
     State(state): State<GatewayState>,
     Json(req): Json<SaveProviderRequest>,
 ) -> GatewayResult<StatusCode> {
-    let models = state.models.clone();
-    tokio::task::block_in_place(|| models.save_provider(&req))
+    let params = runtime::model_bootstrap::SaveProviderParams {
+        name: req.name,
+        provider_type: req.provider_type,
+        base_url: req.base_url,
+        api_key: req.api_key,
+    };
+    state
+        .models
+        .save_provider(&params)
+        .await
         .map_err(|e| GatewayError::Status(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -39,12 +46,13 @@ pub(crate) async fn put_active_model(
     State(state): State<GatewayState>,
     Json(req): Json<SetActiveModelRequest>,
 ) -> GatewayResult<StatusCode> {
-    let models = state.models.clone();
-    let hub = state.hub.clone();
-    let spec = req.spec.clone();
-    let model = tokio::task::block_in_place(|| models.set_active_model(&spec, &hub))
-        .map_err(|e| GatewayError::Message(e.to_string()))?;
-    state.model_slot.store(Some(Arc::new(model)));
+    // Resolve + persist + slot swap happen atomically inside the actor;
+    // the handler only forwards the spec.
+    state
+        .models
+        .set_active_model(&req.spec)
+        .await
+        .map_err(GatewayError::Message)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -52,10 +60,11 @@ pub(crate) async fn put_active_model(
 pub(crate) async fn chatgpt_login(
     State(state): State<GatewayState>,
 ) -> GatewayResult<Json<ChatgptLoginStart>> {
-    let models = state.models.clone();
-    let hub = state.hub.clone();
-    let url = tokio::task::block_in_place(|| models.start_chatgpt_login(hub.clone()))
-        .map_err(|e| GatewayError::Message(e.to_string()))?;
+    let url = state
+        .models
+        .start_chatgpt_login()
+        .await
+        .map_err(GatewayError::Message)?;
     Ok(Json(ChatgptLoginStart { url }))
 }
 
@@ -63,9 +72,11 @@ pub(crate) async fn chatgpt_login(
 pub(crate) async fn chatgpt_refresh(
     State(state): State<GatewayState>,
 ) -> GatewayResult<Json<ChatgptRefreshResponse>> {
-    let models = state.models.clone();
-    let hub = state.hub.clone();
-    let refreshed = models.refresh_chatgpt_now(hub).await?;
+    let refreshed = state
+        .models
+        .refresh_chatgpt_now()
+        .await
+        .map_err(GatewayError::Message)?;
     Ok(Json(ChatgptRefreshResponse { refreshed }))
 }
 
@@ -89,45 +100,8 @@ pub(crate) async fn fetch_catalog(
         req.base_url
     };
 
-    let models = state.models.clone();
-    let hub = state.hub.clone();
-    let provider_name = name.clone();
-    tokio::spawn(async move {
-        let result = if matches!(provider_type, agentik_sdk::model::ProviderType::Openai) {
-            match models.chatgpt_blob() {
-                Some(blob) => {
-                    agentik_sdk::provider::openai::OpenaiProvider::fetch_remote_catalog(
-                        &url,
-                        &blob.access_token,
-                        &blob.account_id,
-                    )
-                    .await
-                }
-                None => Err("openai model catalogue requires a ChatGPT login".to_string()),
-            }
-        } else {
-            agentik_sdk::provider::openrouter::OpenrouterProvider::fetch_remote_catalog(&url).await
-        };
-        let notice = match result {
-            Ok(models_info) => {
-                let count = models.persist_remote_models(&provider_name, &models_info);
-                match count {
-                    Ok(count) => GatewayNotice::CatalogFetched {
-                        provider: provider_name.clone(),
-                        result: Ok(count),
-                    },
-                    Err(e) => GatewayNotice::CatalogFetched {
-                        provider: provider_name.clone(),
-                        result: Err(e.to_string()),
-                    },
-                }
-            }
-            Err(e) => GatewayNotice::CatalogFetched {
-                provider: provider_name.clone(),
-                result: Err(e),
-            },
-        };
-        hub.publish(EventKind::Notice(notice));
-    });
+    // The worker spawns the fetch and reports completion as a
+    // `CatalogFetched` notice.
+    let _ = state.models.fetch_remote_catalog(name, url);
     StatusCode::ACCEPTED
 }

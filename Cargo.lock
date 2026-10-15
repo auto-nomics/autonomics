@@ -4779,7 +4779,6 @@ dependencies = [
  "plugin-rsi",
  "reqwest",
  "runtime",
- "rusqlite",
  "serde",
  "serde_json",
  "skills",

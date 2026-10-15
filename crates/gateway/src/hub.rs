@@ -169,6 +169,37 @@ pub fn lag_to_sse(lag: LagFrame) -> axum::response::sse::Event {
         .data(serde_json::to_string(&lag).unwrap_or_else(|_| "{}".into()))
 }
 
+/// Bridge the model worker's outbound events onto the hub as
+/// `GatewayNotice` frames — spawn once at daemon start, feeding it the
+/// receiver half of the channel handed to
+/// [`runtime::model_actor::start`].
+pub fn spawn_model_event_bridge(
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<runtime::model_actor::ModelEvent>,
+    hub: EventHub,
+) {
+    tokio::spawn(async move {
+        while let Some(event) = rx.recv().await {
+            let notice = match event {
+                runtime::model_actor::ModelEvent::ModelChanged { spec, reason } => {
+                    GatewayNotice::ModelChanged { spec, reason }
+                }
+                runtime::model_actor::ModelEvent::ChatgptLogin { result } => {
+                    GatewayNotice::ChatgptLogin {
+                        result: result.map(|success| crate::proto::ChatgptLoginInfo {
+                            email: success.email,
+                            plan_type: success.plan_type,
+                        }),
+                    }
+                }
+                runtime::model_actor::ModelEvent::CatalogFetched { provider, result } => {
+                    GatewayNotice::CatalogFetched { provider, result }
+                }
+            };
+            hub.publish(EventKind::Notice(notice));
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

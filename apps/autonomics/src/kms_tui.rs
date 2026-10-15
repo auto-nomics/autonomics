@@ -10,7 +10,6 @@ use std::collections::{HashMap, HashSet};
 use std::io::{self, Stdout, Write, stdout};
 use std::sync::Arc;
 
-use agentik_core::TursoAgentStorage;
 use kms::{Diagnostic, Entity, Index, KmsService, Knowledge, Severity, TargetType};
 use ratatui::{
     Frame,
@@ -115,27 +114,8 @@ pub struct KmsTui {
 }
 
 impl KmsTui {
-    pub async fn new(
-        kms_db: &std::path::Path,
-        legacy_agent_db: &std::path::Path,
-    ) -> Result<Self, String> {
+    pub async fn new(kms_db: &std::path::Path) -> Result<Self, String> {
         let kms_storage = kms::Storage::new(&kms_db.to_string_lossy()).await?;
-        // Migrate legacy KMS rows out of agent.db once — mirroring the
-        // daemon's startup path. This must run BEFORE `from_storage` (which
-        // seeds a root index row) and a failure is fatal for the same
-        // reason: continuing would risk a silently split knowledge base.
-        // The exists() check keeps a fresh install from creating a stray
-        // agent.db here.
-        if legacy_agent_db.exists() {
-            let storage = TursoAgentStorage::open(legacy_agent_db)
-                .await
-                .map_err(|error| error.to_string())?;
-            kms::storage::migration::migrate_from_legacy_agent_db(
-                &kms_storage,
-                storage.shared_connection(),
-            )
-            .await?;
-        }
         let service = Arc::new(KmsService::from_storage(kms_storage).await?);
         let mut app = Self {
             service,
@@ -706,7 +686,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn opens_dedicated_knowledge_db_and_migrates_legacy_rows() {
+    async fn opens_dedicated_knowledge_db_with_existing_rows() {
         let dir = std::env::temp_dir().join(format!(
             "autonomics-kms-tui-{}-{}",
             std::process::id(),
@@ -714,34 +694,30 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
 
-        // Seed a legacy agent.db the way the old runtime did: KMS schema
-        // on the agent storage's own connection.
-        let agent_db = dir.join("agent.db");
-        let store = TursoAgentStorage::open(&agent_db).await.unwrap();
-        let legacy = KmsService::from_storage(
-            kms::Storage::from_shared_connection(store.shared_connection())
+        // Seed the dedicated knowledge.db through the service API, then
+        // reopen it through the TUI.
+        let knowledge_db = dir.join("knowledge.db");
+        let seed = KmsService::from_storage(
+            kms::Storage::new(&knowledge_db.to_string_lossy())
                 .await
                 .unwrap(),
         )
         .await
         .unwrap();
-        legacy
-            .create_entity(
-                vec![kms::Nomenclature {
-                    id: Uuid::new_v4(),
-                    lang: kms::Language::ZH,
-                    full: "共享库实体".to_string(),
-                    abbr: None,
-                }],
-                "Entity stored in the legacy agent.db",
-            )
-            .await
-            .unwrap();
-        drop(legacy);
-        drop(store);
+        seed.create_entity(
+            vec![kms::Nomenclature {
+                id: Uuid::new_v4(),
+                lang: kms::Language::ZH,
+                full: "知识库实体".to_string(),
+                abbr: None,
+            }],
+            "Entity stored in the knowledge.db",
+        )
+        .await
+        .unwrap();
+        drop(seed);
 
-        let knowledge_db = dir.join("knowledge.db");
-        let app = KmsTui::new(&knowledge_db, &agent_db).await.unwrap();
+        let app = KmsTui::new(&knowledge_db).await.unwrap();
 
         assert_eq!(app.visible.len(), 1);
         assert!(app.status.contains("1 node"));

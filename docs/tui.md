@@ -87,13 +87,11 @@ one-shot prompts to the same daemon. Full protocol and design:
 ## KMS TUI
 
 Launch the dedicated knowledge-tree browser using the runtime's default
-`knowledge.db` (`AUTONOMICS_KMS_DB` or `~/.autonomics/knowledge.db`). Legacy
-KMS rows are migrated out of `agent.db` once on open; `--agent-db` points at
-that legacy source:
+`knowledge.db` (`AUTONOMICS_KMS_DB` or `~/.autonomics/knowledge.db`):
 
 ```bash
 autonomics kms
-autonomics kms --db /path/to/knowledge.db --agent-db /path/to/agent.db
+autonomics kms --db /path/to/knowledge.db
 ```
 
 Layout:

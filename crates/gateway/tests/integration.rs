@@ -140,6 +140,7 @@ async fn spawn_chat_turn_and_shutdown_over_the_wire() {
             agentik_core::AgentRuntimeOverrides {
                 use_memory: Some(true),
                 generate_memory: Some(false),
+                reasoning_effort: None,
             },
         )
         .await
