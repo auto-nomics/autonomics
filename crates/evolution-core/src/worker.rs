@@ -1,13 +1,23 @@
 use std::sync::Arc;
 
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
-use crate::{ObservationHub, handle::EvolutionHandle};
+use crate::error::Result;
+use crate::{Observation, ObservationInput};
+use crate::{ObservationHub, cluster::ClusterReport, handle::EvolutionHandle};
 
 /// Commands the evolution worker consumes from its control channel.
 pub enum EvolutionCommand {
     /// Run one incremental clustering pass over the observation pool.
-    Clustering,
+    /// The reply carries the pass outcome; dropping the receiver
+    /// turns the trigger into fire-and-forget.
+    Clustering {
+        reply: oneshot::Sender<Result<ClusterReport>>,
+    },
+    RecordObservation {
+        observation: ObservationInput,
+        reply: oneshot::Sender<Result<Observation>>,
+    },
 }
 
 /// Spawn the worker and return its control handle. Must be called
@@ -41,7 +51,28 @@ impl EvolutionWorker {
     async fn run(mut self) {
         while let Some(command) = self.rx.recv().await {
             match command {
-                EvolutionCommand::Clustering => self.run_clustering().await,
+                EvolutionCommand::Clustering { reply } => {
+                    let outcome = self.run_clustering().await;
+                    // The log is the record when nobody awaits the
+                    // reply (fire-and-forget triggers drop the
+                    // receiver); the reply serves the caller that does.
+                    match &outcome {
+                        Ok(report) => tracing::info!(
+                            assigned = report.assigned,
+                            surfaced = report.surfaced.len(),
+                            merged = report.merged,
+                            "clustering pass finished"
+                        ),
+                        Err(error) => tracing::warn!(%error, "clustering pass failed"),
+                    }
+                    // A send error only means the receiver was
+                    // dropped — fire-and-forget, nothing to report to.
+                    let _ = reply.send(outcome);
+                }
+                EvolutionCommand::RecordObservation { observation, reply } => {
+                    let observation_result = self.observation_hub.record(observation).await;
+                    let _ = reply.send(observation_result);
+                }
             }
         }
         tracing::debug!("evolution worker exiting: control channel closed");
@@ -50,22 +81,12 @@ impl EvolutionWorker {
     /// One incremental clustering pass under the current embedder
     /// signature. A failure is logged, never fatal — the loop
     /// survives and the next trigger retries.
-    async fn run_clustering(&self) {
+    async fn run_clustering(&self) -> Result<ClusterReport> {
         let signature = self.observation_hub.embedding_signature();
-        match self
-            .observation_hub
+        self.observation_hub
             .clusterer()
             .execute_cluster(&signature)
             .await
-        {
-            Ok(report) => tracing::info!(
-                assigned = report.assigned,
-                surfaced = report.surfaced.len(),
-                merged = report.merged,
-                "clustering pass finished"
-            ),
-            Err(error) => tracing::warn!(%error, "clustering pass failed"),
-        }
     }
 }
 

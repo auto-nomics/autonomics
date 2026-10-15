@@ -10,7 +10,6 @@ use std::{
 };
 
 use evolution_core::observation::ObservationInput;
-use evolution_core::routing::observation_route;
 
 use crate::{
     EnvironmentCatalog, EnvironmentRegistry, Error, LocalActivationOutcome, ObservationAudience,
@@ -48,7 +47,6 @@ pub struct RsiInfra {
     /// hub — upstream of both plugins and skills. Plugin RSI never
     /// touches the skill manager for evidence.
     observations: Arc<evolution_core::ObservationHub>,
-    routes: ObservationRouteStore,
     environments: EnvironmentRegistry,
     publisher: SharedPluginPublisher,
     pull_request_publisher: SharedPullRequestPublisher,
@@ -97,22 +95,15 @@ impl RsiInfra {
             author_name,
             author_email,
         ));
-        let routes = ObservationRouteStore::open(state_dir);
         Ok(Self {
             store: Arc::clone(&store),
             requests: RequestStore::open(state_dir),
             observations,
-            routes,
             environments,
             publisher,
             pull_request_publisher,
             registry: Arc::new(RwLock::new(None)),
         })
-    }
-
-    /// Return every durable routing decision for shared observations.
-    pub fn observation_routes(&self) -> Vec<ObservationRoute> {
-        self.routes.list()
     }
 
     pub fn store(&self) -> Arc<PluginStore> {
@@ -183,78 +174,6 @@ impl RsiInfra {
         let observation = self.record_observation(input).await?;
         self.create_plugin_request_from_observation(&observation.id, intent, Some(plugin_name))
             .await
-    }
-
-    /// Record shared evidence, classify it, and create plugin demand when owned.
-    pub async fn record_and_route_observation(
-        &self,
-        input: ObservationInput,
-        plugin_name: Option<&str>,
-        intent: Option<RequestIntent>,
-    ) -> Result<ObservationRouting> {
-        let observation = self.record_observation(input).await?;
-        self.route_existing_observation(&observation.id, plugin_name, intent)
-            .await
-    }
-
-    /// Route an observation that already exists in the shared store.
-    pub async fn route_existing_observation(
-        &self,
-        observation_id: &str,
-        plugin_name: Option<&str>,
-        intent: Option<RequestIntent>,
-    ) -> Result<ObservationRouting> {
-        let observation = self
-            .observations
-            .storage()
-            .list()
-            .await
-            .into_iter()
-            .find(|observation| observation.id == observation_id)
-            .ok_or_else(|| {
-                Error::InvalidRequest(format!("unknown observation {observation_id:?}"))
-            })?;
-        let plugin_owner = if plugin_name.is_some() {
-            None
-        } else {
-            observation
-                .node_kind
-                .as_deref()
-                .map(|kind| self.store.owner_of_node_kind(kind))
-                .transpose()?
-                .flatten()
-        };
-        let (_, route) = observation_route(&observation, plugin_name, plugin_owner.as_deref());
-        let route = self.routes.record(route)?;
-        let mut request = None;
-        let mut route = route;
-        if matches!(
-            route.audience,
-            ObservationAudience::Plugin | ObservationAudience::Both
-        ) {
-            let target = route.plugin_name.as_deref().ok_or_else(|| {
-                Error::Validation("plugin route is missing its target plugin".into())
-            })?;
-            let promoted = observation_request(
-                &self.requests,
-                self.observations.storage().as_ref(),
-                &route.observation_id,
-                intent.unwrap_or_else(|| default_request_intent(observation.kind)),
-                Some(target),
-            )
-            .await?;
-            self.routes.consume(&route.id, &promoted.request.id)?;
-            route.request_id = Some(promoted.request.id.clone());
-            route.status = ObservationRouteStatus::Consumed;
-            request = Some(promoted);
-        }
-
-        Ok(ObservationRouting {
-            observation,
-            decision_reason: route.reason.clone(),
-            route,
-            request,
-        })
     }
 
     pub fn configure_registry(&self, control: Arc<dyn PluginRegistryControl>) {
@@ -574,19 +493,6 @@ impl RsiInfra {
     }
 }
 
-/// The result of routing one shared observation.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ObservationRouting {
-    /// The canonical observation retained in the shared hub.
-    pub observation: evolution_core::Observation,
-    /// Why the router selected the audience.
-    pub decision_reason: String,
-    /// The durable route record.
-    pub route: ObservationRoute,
-    /// Plugin demand, present only for plugin/both routes.
-    pub request: Option<ObservationRequest>,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -694,46 +600,6 @@ mod tests {
                 .await
                 .iter()
                 .any(|observation| observation.id == feedback.observation.id)
-        );
-        let routing = infra
-            .record_and_route_observation(
-                ObservationInput {
-                    kind: ObservationKind::Failure,
-                    source: SkillObservationSource::Eval,
-                    summary: "adapter rejects malformed input".into(),
-                    body: "The adapter should fail with a useful validation error.".into(),
-                    node_kind: Some("demo_adapter".into()),
-                    error: Some("malformed input".into()),
-                },
-                Some("demo-plugin"),
-                Some(RequestIntent::FixNode),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(routing.route.audience, ObservationAudience::Plugin);
-        assert_eq!(
-            routing.route.request_id,
-            Some(routing.request.as_ref().unwrap().request.id.clone())
-        );
-        assert_eq!(
-            infra.observation_routes().len(),
-            1,
-            "routing must be idempotent across shared observations"
-        );
-        assert!(state.path().join("feedback/routes").is_dir());
-        let persisted = infra
-            .observation_routes()
-            .into_iter()
-            .find(|route| route.id == routing.route.id)
-            .unwrap();
-        assert_eq!(persisted.status, ObservationRouteStatus::Consumed);
-        assert_eq!(
-            persisted.request_id,
-            routing
-                .request
-                .as_ref()
-                .map(|feedback| feedback.request.id.clone())
         );
     }
 }

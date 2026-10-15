@@ -142,9 +142,13 @@ pub struct SharedInfra {
     /// downstream owns it; both resolve the same instance.
     pub observations: Arc<evolution_core::ObservationHub>,
     /// Control handle for the clustering worker spawned over the
-    /// observation hub. Cloning shares the same worker; dropping the
-    /// last handle stops it after its current pass.
-    pub evolution_handle: evolution_core::handle::EvolutionHandle,
+    /// observation hub. `Arc` so multiple subsystems (tools, gateway
+    /// handlers, future mutation paths) can hold the same handle and
+    /// cheaply clone it without taking `&SharedInfra` borrows. The
+    /// inner handle's `mpsc::Sender` already shares via Arc, so this
+    /// is a thin extra layer that mostly standardizes sharing across
+    /// the host's other `Arc`-backed subsystems.
+    pub evolution_handle: Arc<evolution_core::handle::EvolutionHandle>,
     /// Central skill manager (tiered registry + generation counter +
     /// change broadcast + usage telemetry). Initialized as the
     /// process-wide singleton so every mutation path — agent tools,
@@ -158,10 +162,9 @@ pub struct SharedInfra {
     /// The unified skill control handle, when the service is
     /// enabled. `None` means the loop is disabled at the daemon
     /// level — every gateway mutation request then returns HTTP
-    /// 503 (the dashboard, the agent `skill_evolve` tool, and the
-    /// observation-recording tools all funnel through this handle;
-    /// with the service off they record without the nudge and the
-    /// on-demand paths still run cycles directly).
+    /// 503 (the dashboard and the agent skill tools all funnel
+    /// through this handle; the on-demand paths still run cycles
+    /// directly).
     pub skill_evolution: Option<skills::SkillControlHandle>,
     /// The tokio runtime handle (for spawning agent tasks).
     pub runtime_handle: tokio::runtime::Handle,
@@ -260,7 +263,7 @@ impl SharedInfra {
 
         // One clustering worker over the shared hub. Triggers land on
         // a buffered channel, so callers never block on a slow pass.
-        let evolution_handle = evolution_core::worker::start(Arc::clone(&observations));
+        let evolution_handle = Arc::new(evolution_core::worker::start(Arc::clone(&observations)));
         tracing::info!("SharedInfra::open: clustering worker started");
 
         let skill_evolution = start_skill_evolution(config, &skills);
@@ -459,8 +462,7 @@ impl SharedInfra {
 
         tools.extend(vfs::vbash_registrations(file_storage.clone()));
         tools.push(crate::evolution_tools::evo_observe_registration(
-            (*self.rsi).clone(),
-            self.skill_evolution.clone(),
+            Arc::clone(&self.evolution_handle),
         ));
         tools.extend(skills::skill_registrations(
             self.skills.clone(),

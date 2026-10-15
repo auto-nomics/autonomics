@@ -33,7 +33,6 @@ use super::storage::{ObservationStorage, TursoObservationStorage, load_embedding
 use crate::cluster::ClusterProcessor;
 use crate::error::Result;
 use crate::observation::{Observation, ObservationInput};
-use crate::routing::ObservationRouteStore;
 
 /// The shared handle for observation evidence and its embeddings.
 #[derive(Clone)]
@@ -76,13 +75,6 @@ impl ObservationHub {
 
     pub fn clusterer(&self) -> &ClusterProcessor {
         &self.clusterer
-    }
-
-    /// The route ledger under this hub's state dir. Routing decisions
-    /// are still file-backed; see the storage module for the database
-    /// migration of observation records.
-    pub fn routes(&self) -> ObservationRouteStore {
-        ObservationRouteStore::open(&self.state_dir)
     }
 
     /// The signature of the embedder new observations are vectorized

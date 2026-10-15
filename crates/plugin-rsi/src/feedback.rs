@@ -1,8 +1,6 @@
 //! Plugin-specific mapping from shared evolution evidence to plugin demand.
 
-use evolution_core::observation::{
-    Observation, ObservationInput, ObservationKind, ObservationSource,
-};
+use evolution_core::observation::{Observation, ObservationInput, ObservationSource};
 
 use crate::{Error, RequestIntent, RequestRecord, RequestSource, RequestStatus, Result};
 
@@ -52,11 +50,4 @@ pub(crate) async fn observation_request(
         observation,
         request,
     })
-}
-
-pub(crate) fn default_request_intent(kind: ObservationKind) -> RequestIntent {
-    match kind {
-        ObservationKind::Failure => RequestIntent::FixNode,
-        ObservationKind::Recipe | ObservationKind::Caveat => RequestIntent::OptimizeNode,
-    }
 }

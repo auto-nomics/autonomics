@@ -133,6 +133,33 @@ impl ClusterProcessor {
         Self { storage }
     }
 
+    async fn get_pending_observations(
+        &self,
+        signature: &str,
+        assigned_ids: &HashSet<String>,
+    ) -> Result<Vec<(Observation, Vec<f32>)>> {
+        // Candidates: anchored observations with a vector under the
+        // current signature that no persisted cluster holds yet.
+        // `list()` is ordered by id, so assignment order — and
+        // therefore cluster ids — stay stable across replays.
+        let mut pending = Vec::new();
+        for observation in self.storage.list().await {
+            // Skip observations that already have been clustered
+            if partition_key(&observation).is_none() || assigned_ids.contains(&observation.id) {
+                continue;
+            }
+            let Some(vector) = self
+                .storage
+                .load_embedding(&observation.id, signature)
+                .await?
+            else {
+                continue;
+            };
+            pending.push((observation, vector));
+        }
+        Ok(pending)
+    }
+
     /// One incremental pass under `signature` (the current
     /// embedder's identity, from the hub). Clusters persisted under
     /// a different signature are discarded and rebuilt from the
@@ -149,27 +176,11 @@ impl ClusterProcessor {
             .flat_map(|c| c.members.iter().cloned())
             .collect();
 
-        // Candidates: anchored observations with a vector under the
-        // current signature that no persisted cluster holds yet.
-        // `list()` is ordered by id, so assignment order — and
-        // therefore cluster ids — stay stable across replays.
-        let mut pending = Vec::new();
-        for observation in self.storage.list().await {
-            if partition_key(&observation).is_none() || assigned_ids.contains(&observation.id) {
-                continue;
-            }
-            let Some(vector) = self
-                .storage
-                .load_embedding(&observation.id, signature)
-                .await?
-            else {
-                continue;
-            };
-            pending.push((observation, vector));
-        }
-
         let mut dirty: HashSet<String> = HashSet::new();
         let mut assigned = 0;
+        let pending = self
+            .get_pending_observations(signature, &assigned_ids)
+            .await?;
         for (observation, vector) in pending {
             assigned += 1;
             // Anchored by the eligibility filter above; if that

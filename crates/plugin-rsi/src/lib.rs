@@ -50,10 +50,6 @@ pub use env_store::{
 pub use env_validate::{EnvironmentValidationReport, validate_environment};
 pub use environments::EnvironmentRegistry;
 pub use error::{Error, Result};
-pub use evolution_core::{
-    ObservationAudience, ObservationRoute, ObservationRouteStatus, ObservationRouteStore,
-    RouteDecision,
-};
 pub use feedback::ObservationRequest;
 pub use github::{
     GhPublisher, GhPublisherConfig, GhStatus, MergeOutcome, PluginPublisher,

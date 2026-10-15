@@ -29,3 +29,10 @@ pub(crate) async fn list_observations(
             .collect(),
     )
 }
+
+pub(crate) async fn clustering(State(state): State<GatewayState>) -> Json<Vec<ObservationView>> {
+    let evo_handle = &state.infra.evolution_handle;
+    evo_handle.trigger_clustering();
+    todo!()
+}
+>>>>>>> 936c336 (refactor: remove observation router)
