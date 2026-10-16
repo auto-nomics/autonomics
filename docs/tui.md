@@ -80,7 +80,7 @@ autonomics serve stop     # graceful shutdown (stops agents)
 
 The daemon must already be running — the TUI never spawns one (bare
 `autonomics` prints a guide, `autonomics prepare` provisions plugins,
-the embedding model, and images first); `autonomics run` submits
+verifies the embedding configuration, and images first); `autonomics run` submits
 one-shot prompts to the same daemon. Full protocol and design:
 `docs/design/gateway-architecture.md`.
 

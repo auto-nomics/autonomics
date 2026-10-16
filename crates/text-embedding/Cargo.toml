@@ -6,21 +6,20 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+async-trait.workspace = true
 sha2 = "0.10"
 thiserror.workspace = true
-ort.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-tokenizers.workspace = true
-hf-hub.workspace = true
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 
 [[example]]
-name = "onnx_probe"
+name = "ollama_probe"
 
 [dev-dependencies]
 mockall.workspace = true
 tempfile = "3"
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread"] }
 
 [lints]
 workspace = true

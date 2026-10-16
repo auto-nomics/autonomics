@@ -306,6 +306,46 @@ pub struct FetchCatalogRequest {
     pub base_url: String,
 }
 
+/// Ollama embedding configuration exposed by `/embedding-config`.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct EmbeddingConfigView {
+    pub enabled: bool,
+    pub base_url: String,
+    pub model: String,
+    pub batch_size: usize,
+    pub timeout_secs: u64,
+}
+
+impl From<text_embedding::EmbeddingConfig> for EmbeddingConfigView {
+    fn from(config: text_embedding::EmbeddingConfig) -> Self {
+        Self {
+            enabled: config.enabled,
+            base_url: config.base_url,
+            model: config.model,
+            batch_size: config.batch_size,
+            timeout_secs: config.timeout_secs,
+        }
+    }
+}
+
+impl From<EmbeddingConfigView> for text_embedding::EmbeddingConfig {
+    fn from(view: EmbeddingConfigView) -> Self {
+        Self {
+            enabled: view.enabled,
+            base_url: view.base_url,
+            model: view.model,
+            batch_size: view.batch_size,
+            timeout_secs: view.timeout_secs,
+        }
+    }
+}
+
+/// `PUT /api/v1/embedding-config` body.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SaveEmbeddingConfigRequest {
+    pub config: EmbeddingConfigView,
+}
+
 /// `POST /api/v1/model-config/chatgpt/login` response.
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ChatgptLoginStart {

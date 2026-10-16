@@ -2,6 +2,8 @@
 
 use std::collections::BTreeMap;
 
+use async_trait::async_trait;
+
 use crate::input::EmbeddingInput;
 use crate::output::EmbeddingOutput;
 use crate::provider::TextEmbedder;
@@ -37,12 +39,13 @@ impl VectorMapTextEmbedder {
     }
 }
 
+#[async_trait]
 impl TextEmbedder for VectorMapTextEmbedder {
     fn signature(&self) -> String {
         self.model_signature.clone()
     }
 
-    fn embed(&self, input: &EmbeddingInput) -> Result<EmbeddingOutput> {
+    async fn embed(&self, input: &EmbeddingInput) -> Result<EmbeddingOutput> {
         self.vectors
             .get(&input.id)
             .cloned()
@@ -52,7 +55,10 @@ impl TextEmbedder for VectorMapTextEmbedder {
             })
     }
 
-    fn batch_embed(&self, inputs: &[EmbeddingInput]) -> Result<BTreeMap<String, EmbeddingOutput>> {
+    async fn batch_embed(
+        &self,
+        inputs: &[EmbeddingInput],
+    ) -> Result<BTreeMap<String, EmbeddingOutput>> {
         self.vectors
             .iter()
             .filter(|(id, _)| inputs.iter().any(|input| &input.id == *id))
@@ -80,41 +86,49 @@ mod tests {
         )
     }
 
-    #[test]
-    fn vector_map_only_returns_requested_ids() {
+    #[tokio::test]
+    async fn vector_map_only_returns_requested_ids() {
         let out = embedder()
             .batch_embed(&[EmbeddingInput::new("b", "text is ignored")])
+            .await
             .unwrap();
         assert_eq!(out.len(), 1);
         assert_eq!(out["b"].vector, vec![0.0, 1.0]);
         assert_eq!(embedder().vectors().len(), 2);
     }
 
-    #[test]
-    fn vector_map_returns_nothing_for_unknown_ids() {
+    #[tokio::test]
+    async fn vector_map_returns_nothing_for_unknown_ids() {
         let out = embedder()
             .batch_embed(&[EmbeddingInput::new("missing", "text")])
+            .await
             .unwrap();
         assert!(out.is_empty());
     }
 
-    #[test]
-    fn single_lookup_is_strict_on_unknown_ids() {
+    #[tokio::test]
+    async fn single_lookup_is_strict_on_unknown_ids() {
         assert!(matches!(
-            embedder().embed(&EmbeddingInput::new("missing", "text")),
+            embedder()
+                .embed(&EmbeddingInput::new("missing", "text"))
+                .await,
             Err(Error::MissingVector { id }) if id == "missing"
         ));
     }
 
     /// The signature named at construction rides on every result —
     /// the wrapper's whole job is stamping provenance.
-    #[test]
-    fn every_output_carries_the_constructor_signature() {
+    #[tokio::test]
+    async fn every_output_carries_the_constructor_signature() {
         let embedder = embedder();
-        let single = embedder.embed(&EmbeddingInput::new("a", "text")).unwrap();
+        let single = embedder
+            .embed(&EmbeddingInput::new("a", "text"))
+            .await
+            .unwrap();
         assert_eq!(single.model_signature, "precomputed-v1");
         let batch = embedder
             .batch_embed(&[EmbeddingInput::new("a", "x"), EmbeddingInput::new("b", "y")])
+            .await
             .unwrap();
         assert!(
             batch

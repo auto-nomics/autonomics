@@ -27,7 +27,7 @@ Autonomics is not a general-purpose chat application, a notebook replacement bui
 
 ![System architecture: thin frontends, gateway daemon, researcher and developer agents, capability registry, self-improvement substrate, execution plane, shared data plane, research protocol](docs/diagrams/architecture.png)
 
-Thin frontends talk to one resident daemon. `autonomics serve` owns the `RuntimeHost` as the single writer of all state: it restores the persisted agent layout at boot, serves REST + SSE on `127.0.0.1:8765` (bearer-token guarded, with `Last-Event-ID` replay), and keeps agents running when frontends exit. The daemon is started explicitly (`autonomics serve`, after `autonomics prepare` provisions plugins, the embedding model, and images); the TUI and `autonomics run` connect to it and never spawn it — bare `autonomics` prints a getting-started guide.
+Thin frontends talk to one resident daemon. `autonomics serve` owns the `RuntimeHost` as the single writer of all state: it restores the persisted agent layout at boot, serves REST + SSE on `127.0.0.1:8765` (bearer-token guarded, with `Last-Event-ID` replay), and keeps agents running when frontends exit. The daemon is started explicitly (`autonomics serve`, after `autonomics prepare` provisions plugins, verifies the embedding endpoint configuration, and images); the TUI and `autonomics run` connect to it and never spawn it — bare `autonomics` prints a getting-started guide.
 
 ```text
 Ratatui TUI (thin client)     ──REST/SSE──▶  gateway daemon (`autonomics serve`)
@@ -152,8 +152,8 @@ loaded at daemon startup by the plugin preflight — see
 [Container Plugin Authoring](docs/plugins/README.md) for the format and
 workflow; use the [migration workflow](docs/plugin-node-migration.md) when
 replacing an existing hardcoded wrapper. Panel data bundles are provisioned by
-`autonomics prepare`, which also syncs plugin checkouts, installs the
-local embedding model, and pre-pulls every pinned container image; the
+`autonomics prepare`, which also syncs plugin checkouts, verifies the
+Ollama embedding configuration, and pre-pulls every pinned container image; the
 startup gate checks presence locally only (bounded, offline-safe), so
 daemon readiness never waits on the network — a fatal gap aborts the
 start with a pointer at `autonomics prepare` (panel bundles stay

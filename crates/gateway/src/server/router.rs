@@ -99,6 +99,10 @@ pub fn api_router(state: GatewayState) -> Router {
             "/model-config/providers/{name}/catalog",
             post(model_config::fetch_catalog),
         )
+        .route(
+            "/embedding-config",
+            get(model_config::get_embedding_config).put(model_config::put_embedding_config),
+        )
         // ── settings ──
         .route(
             "/settings",

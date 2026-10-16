@@ -102,6 +102,12 @@ pub(crate) enum AppEvent {
         provider_name: String,
         result: std::result::Result<(), String>,
     },
+    EmbeddingConfigLoaded {
+        result: std::result::Result<gateway::proto::EmbeddingConfigView, String>,
+    },
+    EmbeddingConfigSaved {
+        result: std::result::Result<gateway::proto::EmbeddingConfigView, String>,
+    },
     /// Per-agent runtime configuration arrived from the daemon.
     AgentConfigLoaded {
         agent: String,

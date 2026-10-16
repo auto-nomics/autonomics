@@ -39,14 +39,6 @@ impl Gap {
             detail: detail.into(),
         }
     }
-
-    fn inconsistent(subject: impl Into<String>, detail: impl Into<String>) -> Self {
-        Self {
-            subject: subject.into(),
-            kind: GapKind::Inconsistent,
-            detail: detail.into(),
-        }
-    }
 }
 
 /// The outcome of one readiness category.
@@ -236,39 +228,18 @@ async fn check_plugins(config: &gateway::RuntimeConfig) -> Category {
 /// The embedding model: marker + file-set verification against the
 /// configured (or default) directory.
 async fn check_model(config: &gateway::RuntimeConfig) -> Category {
-    if !config.enable_local_embedding {
+    if !config.embedding.enabled {
         return Category::Skipped(
-            "local embedding disabled — BM25 over the corpus serves the hub".into(),
+            "Ollama embedding disabled — BM25 over the corpus serves the hub".into(),
         );
     }
-    let dir: PathBuf = match config.embedding_model_dir.clone() {
-        Some(dir) => dir,
-        None => match text_embedding::default_model_dir() {
-            Ok(dir) => dir,
-            Err(error) => return Category::Failed(error.to_string()),
-        },
-    };
-    match text_embedding::verify_install(&dir) {
-        text_embedding::ModelVerification::Verified => {
-            Category::Ok(format!("verified at {}", dir.display()))
-        }
-        text_embedding::ModelVerification::CompleteWithoutMarker => Category::Ok(format!(
-            "complete at {} (no completion marker — prepare will stamp one)",
-            dir.display()
-        )),
-        text_embedding::ModelVerification::Missing(files) => Category::Gap(
-            files
-                .into_iter()
-                .map(|file| Gap::missing(format!("model file '{file}'"), "not installed"))
-                .collect(),
-        ),
-        text_embedding::ModelVerification::Inconsistent(problems) => Category::Gap(
-            problems
-                .into_iter()
-                .map(|problem| Gap::inconsistent("model", problem))
-                .collect(),
-        ),
+    if config.embedding.base_url.trim().is_empty() || config.embedding.model.trim().is_empty() {
+        return Category::Failed("Ollama base URL and model must not be empty".into());
     }
+    Category::Ok(format!(
+        "configured — {} @ {}",
+        config.embedding.model, config.embedding.base_url
+    ))
 }
 
 /// Enumerate every digest-pinned image reference the daemon can need
