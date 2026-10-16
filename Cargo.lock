@@ -5672,6 +5672,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "htan"
+version = "0.1.0"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "async-trait",
+ "dag-core",
+ "datafusion",
+ "reqwest",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+]
+
+[[package]]
 name = "html5ever"
 version = "0.39.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7987,6 +8004,7 @@ dependencies = [
  "hca",
  "hdf5",
  "hdf5-sys",
+ "htan",
  "hubmap",
  "interpro",
  "kegg",

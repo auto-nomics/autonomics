@@ -89,6 +89,10 @@ pub use hca::nodes::{
     HcaProjectSpec, HcaProjectsNode, HcaProjectsNodeFactory, HcaProjectsSpec, HcaSamplesNode,
     HcaSamplesNodeFactory, HcaSamplesSpec,
 };
+pub use htan::nodes::{
+    HtanAtlasesNode, HtanAtlasesNodeFactory, HtanAtlasesSpec, HtanDatasetsNode,
+    HtanDatasetsNodeFactory, HtanDatasetsSpec, HtanFilesNode, HtanFilesNodeFactory, HtanFilesSpec,
+};
 pub use hubmap::nodes::{
     HubmapDatasetNode, HubmapDatasetNodeFactory, HubmapDatasetSpec, HubmapFilesNode,
     HubmapFilesNodeFactory, HubmapFilesSpec, HubmapGlobusNode, HubmapGlobusNodeFactory,
@@ -289,6 +293,9 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(TischDatasetsNodeFactory));
         registry.register(Box::new(TischCellTypesNodeFactory));
         registry.register(Box::new(TischAssetsNodeFactory));
+        registry.register(Box::new(HtanAtlasesNodeFactory));
+        registry.register(Box::new(HtanDatasetsNodeFactory));
+        registry.register(Box::new(HtanFilesNodeFactory));
         registry.register(Box::new(LiteratureFetchNodeFactory {}));
         registry.register(Box::new(BibSaveNodeFactory {}));
         registry.register(Box::new(LiteratureFulltextNodeFactory {}));
@@ -526,6 +533,27 @@ mod tests {
             assert!(
                 registry.list_nodes().iter().any(|node| node.kind == kind),
                 "missing TISCH query node: {kind}"
+            );
+        }
+    }
+
+    #[test]
+    fn plugin_registers_htan_query_source_nodes() {
+        let ctx = dag_core::registry::NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        );
+        let mut registry = NodeRegistry::new(ctx);
+        registry.register_plugin(&Plugin::new());
+        let expected = [
+            "source_htan_atlases",
+            "source_htan_datasets",
+            "source_htan_files",
+        ];
+        for kind in expected {
+            assert!(
+                registry.list_nodes().iter().any(|node| node.kind == kind),
+                "missing HTAN query node: {kind}"
             );
         }
     }
