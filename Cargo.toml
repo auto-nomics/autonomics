@@ -27,6 +27,7 @@ members = [
   "crates/eutils",
   "crates/cellxgene",
   "crates/hca",
+  "crates/hcl",
   "crates/scea",
   "crates/scp",
   "crates/hubmap",

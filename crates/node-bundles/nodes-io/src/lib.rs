@@ -89,6 +89,10 @@ pub use hca::nodes::{
     HcaProjectSpec, HcaProjectsNode, HcaProjectsNodeFactory, HcaProjectsSpec, HcaSamplesNode,
     HcaSamplesNodeFactory, HcaSamplesSpec,
 };
+pub use hcl::nodes::{
+    HclFilesNode, HclFilesNodeFactory, HclFilesSpec, HclReleaseNode, HclReleaseNodeFactory,
+    HclReleaseSpec, HclVersionsNode, HclVersionsNodeFactory, HclVersionsSpec,
+};
 pub use htan::nodes::{
     HtanAtlasesNode, HtanAtlasesNodeFactory, HtanAtlasesSpec, HtanDatasetsNode,
     HtanDatasetsNodeFactory, HtanDatasetsSpec, HtanFilesNode, HtanFilesNodeFactory, HtanFilesSpec,
@@ -283,6 +287,9 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(HcaProjectNodeFactory));
         registry.register(Box::new(HcaFilesNodeFactory));
         registry.register(Box::new(HcaSamplesNodeFactory));
+        registry.register(Box::new(HclVersionsNodeFactory));
+        registry.register(Box::new(HclReleaseNodeFactory));
+        registry.register(Box::new(HclFilesNodeFactory));
         registry.register(Box::new(SceaExperimentsNodeFactory));
         registry.register(Box::new(SceaExperimentNodeFactory));
         registry.register(Box::new(SceaMarkersNodeFactory));
@@ -566,6 +573,27 @@ mod tests {
             assert!(
                 registry.list_nodes().iter().any(|node| node.kind == kind),
                 "missing HTAN query node: {kind}"
+            );
+        }
+    }
+
+    #[test]
+    fn plugin_registers_hcl_query_source_nodes() {
+        let ctx = dag_core::registry::NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        );
+        let mut registry = NodeRegistry::new(ctx);
+        registry.register_plugin(&Plugin::new());
+        let expected = [
+            "source_hcl_versions",
+            "source_hcl_release",
+            "source_hcl_files",
+        ];
+        for kind in expected {
+            assert!(
+                registry.list_nodes().iter().any(|node| node.kind == kind),
+                "missing HCL query node: {kind}"
             );
         }
     }
