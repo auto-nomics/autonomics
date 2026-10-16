@@ -37,11 +37,7 @@ impl ToolFunction for ScreenshotTool {
     type Input = ScreenshotInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        let tab = self
-            .session
-            .tab(input.tab_index)
-            .await
-            ?;
+        let tab = self.session.tab(input.tab_index).await?;
         let bytes = tab.screenshot().await?;
         use base64::Engine;
         let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);

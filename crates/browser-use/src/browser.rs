@@ -483,7 +483,10 @@ impl BrowserSession {
         let tabs = browser.tabs().await?;
         tabs.into_iter()
             .nth(idx)
-            .ok_or_else(|| Error::TabIndexOutOfRange { index: idx, total: 0 })
+            .ok_or_else(|| Error::TabIndexOutOfRange {
+                index: idx,
+                total: 0,
+            })
     }
 
     /// Open a new tab and make it the active one. Returns the new tab's index.
@@ -669,8 +672,7 @@ mod tests {
             .run(crate::tools::list_tabs::ListTabsInput {})
             .await
             .unwrap();
-        let tabs_json: serde_json::Value =
-            serde_json::from_str(&r.text_content()).unwrap();
+        let tabs_json: serde_json::Value = serde_json::from_str(&r.text_content()).unwrap();
         // CDP can briefly report a stale target before the handler catches
         // up; assert the count is at least what we asked for rather than
         // an exact value.

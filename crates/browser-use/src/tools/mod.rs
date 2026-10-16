@@ -11,8 +11,8 @@ use std::sync::Arc;
 
 use agentik_core::tools::ToolRegistration;
 
-use crate::error::Error;
 use crate::BrowserSession;
+use crate::error::Error;
 
 pub mod click;
 pub mod close_tab;

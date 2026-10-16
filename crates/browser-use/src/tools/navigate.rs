@@ -38,11 +38,7 @@ impl ToolFunction for NavigateTool {
     type Input = NavigateInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        let tab = self
-            .session
-            .tab(input.tab_index)
-            .await
-            ?;
+        let tab = self.session.tab(input.tab_index).await?;
         tab.goto(&input.url).await?;
         let landed = tab.url().await?;
         Ok(ToolResult::success(landed.unwrap_or_default()))

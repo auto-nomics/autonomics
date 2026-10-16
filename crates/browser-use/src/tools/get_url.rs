@@ -35,11 +35,7 @@ impl ToolFunction for GetUrlTool {
     type Input = GetUrlInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        let tab = self
-            .session
-            .tab(input.tab_index)
-            .await
-            ?;
+        let tab = self.session.tab(input.tab_index).await?;
         let url = tab.url().await?;
         Ok(ToolResult::success(url.unwrap_or_default()))
     }

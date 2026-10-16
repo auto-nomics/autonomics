@@ -47,8 +47,7 @@ impl ToolFunction for ClickTool {
         let tab = self.session.tab(input.tab_index).await?;
         let timeout = input.timeout_ms.map(std::time::Duration::from_millis);
         tab.wait_for_selector(&input.selector, timeout)
-            .await
-            ?
+            .await?
             .click()
             .await
             .map_err(Error::from)?;

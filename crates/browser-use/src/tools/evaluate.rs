@@ -42,11 +42,7 @@ impl ToolFunction for EvaluateTool {
     type Input = EvaluateInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        let tab = self
-            .session
-            .tab(input.tab_index)
-            .await
-            ?;
+        let tab = self.session.tab(input.tab_index).await?;
         let value: Value = tab.evaluate(&input.expression).await?;
         Ok(ToolResult::success_json(value))
     }

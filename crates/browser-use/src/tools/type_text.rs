@@ -45,18 +45,9 @@ impl ToolFunction for TypeTextTool {
     type Input = TypeTextInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        let tab = self
-            .session
-            .tab(input.tab_index)
-            .await
-            ?;
-        let timeout = input
-            .timeout_ms
-            .map(std::time::Duration::from_millis);
-        let element = tab
-            .wait_for_selector(&input.selector, timeout)
-            .await
-            ?;
+        let tab = self.session.tab(input.tab_index).await?;
+        let timeout = input.timeout_ms.map(std::time::Duration::from_millis);
+        let element = tab.wait_for_selector(&input.selector, timeout).await?;
         element.click().await.map_err(Error::from)?;
         element.type_str(&input.text).await.map_err(Error::from)?;
         Ok(ToolResult::success(format!(

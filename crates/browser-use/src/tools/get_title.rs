@@ -35,11 +35,7 @@ impl ToolFunction for GetTitleTool {
     type Input = GetTitleInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        let tab = self
-            .session
-            .tab(input.tab_index)
-            .await
-            ?;
+        let tab = self.session.tab(input.tab_index).await?;
         let title = tab.title().await?;
         Ok(ToolResult::success(title.unwrap_or_default()))
     }

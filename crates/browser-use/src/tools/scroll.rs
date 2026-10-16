@@ -41,12 +41,11 @@ impl ToolFunction for ScrollTool {
     type Input = ScrollInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        let tab = self
-            .session
-            .tab(input.tab_index)
-            .await
-            ?;
+        let tab = self.session.tab(input.tab_index).await?;
         tab.scroll_by(input.x, input.y).await?;
-        Ok(ToolResult::success(format!("scrolled by ({}, {})", input.x, input.y)))
+        Ok(ToolResult::success(format!(
+            "scrolled by ({}, {})",
+            input.x, input.y
+        )))
     }
 }

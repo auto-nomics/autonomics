@@ -44,16 +44,9 @@ impl ToolFunction for WaitForSelectorTool {
     type Input = WaitForSelectorInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        let tab = self
-            .session
-            .tab(input.tab_index)
-            .await
-            ?;
+        let tab = self.session.tab(input.tab_index).await?;
         let timeout = input.timeout_ms.map(Duration::from_millis);
-        let element = tab
-            .wait_for_selector(&input.selector, timeout)
-            .await
-            ?;
+        let element = tab.wait_for_selector(&input.selector, timeout).await?;
         let html = element.outer_html().await.map_err(Error::from)?;
         Ok(ToolResult::success(html.unwrap_or_default()))
     }

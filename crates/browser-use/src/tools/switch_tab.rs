@@ -35,10 +35,10 @@ impl ToolFunction for SwitchTabTool {
     type Input = SwitchTabInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        self.session
-            .switch_tab(input.tab_index)
-            .await
-            ?;
-        Ok(ToolResult::success(format!("active tab = {}", input.tab_index)))
+        self.session.switch_tab(input.tab_index).await?;
+        Ok(ToolResult::success(format!(
+            "active tab = {}",
+            input.tab_index
+        )))
     }
 }

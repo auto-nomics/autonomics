@@ -37,11 +37,7 @@ impl ToolFunction for ExtractTextTool {
     type Input = ExtractTextInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        let tab = self
-            .session
-            .tab(input.tab_index)
-            .await
-            ?;
+        let tab = self.session.tab(input.tab_index).await?;
         let text = tab.text().await?;
         Ok(ToolResult::success(text))
     }

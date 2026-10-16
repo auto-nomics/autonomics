@@ -36,11 +36,7 @@ impl ToolFunction for ExtractHtmlTool {
     type Input = ExtractHtmlInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        let tab = self
-            .session
-            .tab(input.tab_index)
-            .await
-            ?;
+        let tab = self.session.tab(input.tab_index).await?;
         let html = tab.html().await?;
         Ok(ToolResult::success(html))
     }
