@@ -30,8 +30,10 @@ const VFS_OUTPUT_MARGIN: usize = 256;
         All operations execute in pure Rust — no system shell is spawned. \
         Supported ops: read, cat, ls, cp, mv, rm, mkdir, stat, touch, \
         write, edit, patch, head, tail, wc, grep, glob, tree, mount_list. \
-        Paths may be covered by VFS mounts (see mount_list). Read-only \
-        mounts reject writes. \
+        read detects image files (png, jpg, jpeg, gif, webp) and returns \
+        them as image content blocks, so images are directly visible to \
+        the model. Paths may be covered by VFS mounts (see mount_list). \
+        Read-only mounts reject writes. \
         Unsupported (will error): chmod, chown, ln, pipes, redirects."
 )]
 pub struct VfsBashInput {
