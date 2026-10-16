@@ -25,6 +25,7 @@ members = [
   "apps/autonomics",
   "crates/opengwas",
   "crates/eutils",
+  "crates/cellxgene",
   "crates/chembl",
   "crates/opentargets",
   "crates/runtime",

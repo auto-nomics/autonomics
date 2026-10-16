@@ -49,6 +49,12 @@ pub use bib_base::nodes::literature_search::{
 pub use bib_base::nodes::s2_recommendations::{
     S2RecommendationsNode, S2RecommendationsNodeFactory, S2RecommendationsSpec,
 };
+pub use cellxgene::nodes::{
+    CellxgeneAssetsNode, CellxgeneAssetsNodeFactory, CellxgeneAssetsSpec, CellxgeneCollectionNode,
+    CellxgeneCollectionNodeFactory, CellxgeneCollectionSpec, CellxgeneCollectionsNode,
+    CellxgeneCollectionsNodeFactory, CellxgeneCollectionsSpec, CellxgeneDatasetsNode,
+    CellxgeneDatasetsNodeFactory, CellxgeneDatasetsSpec,
+};
 pub use clinicaltrials::nodes::study::{ClinicalTrialsStudyNode, ClinicalTrialsStudyNodeFactory};
 pub use crossref::nodes::works::{CrossrefWorksNode, CrossrefWorksNodeFactory};
 pub use enrichr_sdk::nodes::Plugin as EnrichrPlugin;
@@ -228,6 +234,10 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(GeoELinkNodeFactory));
         registry.register(Box::new(GeoEGQueryNodeFactory));
         registry.register(Box::new(GeoESpellNodeFactory));
+        registry.register(Box::new(CellxgeneCollectionsNodeFactory));
+        registry.register(Box::new(CellxgeneCollectionNodeFactory));
+        registry.register(Box::new(CellxgeneDatasetsNodeFactory));
+        registry.register(Box::new(CellxgeneAssetsNodeFactory));
         registry.register(Box::new(LiteratureFetchNodeFactory {}));
         registry.register(Box::new(BibSaveNodeFactory {}));
         registry.register(Box::new(LiteratureFulltextNodeFactory {}));
@@ -314,6 +324,28 @@ mod tests {
             assert!(
                 registry.list_nodes().iter().any(|node| node.kind == kind),
                 "missing GEO query node: {kind}"
+            );
+        }
+    }
+
+    #[test]
+    fn plugin_registers_cellxgene_query_source_nodes() {
+        let ctx = dag_core::registry::NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        );
+        let mut registry = NodeRegistry::new(ctx);
+        registry.register_plugin(&Plugin::new());
+        let expected = [
+            "source_cellxgene_collections",
+            "source_cellxgene_collection",
+            "source_cellxgene_datasets",
+            "source_cellxgene_assets",
+        ];
+        for kind in expected {
+            assert!(
+                registry.list_nodes().iter().any(|node| node.kind == kind),
+                "missing CELLxGENE query node: {kind}"
             );
         }
     }

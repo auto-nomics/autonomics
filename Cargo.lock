@@ -1758,6 +1758,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "cellxgene"
+version = "0.1.0"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "async-trait",
+ "dag-core",
+ "datafusion",
+ "reqwest",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+]
+
+[[package]]
 name = "census"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7845,6 +7862,7 @@ dependencies = [
  "biofusion",
  "bzip2",
  "calamine",
+ "cellxgene",
  "chembl",
  "clinicaltrials",
  "container-runtime",

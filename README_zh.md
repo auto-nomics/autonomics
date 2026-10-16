@@ -135,7 +135,7 @@ Autonomics 沿三条受监督的回路自我改进，共享同一个安全模型
 | 机器学习与深度学习 | `ml`, `dl` | 预处理、特征工程、聚类、监督模型、集成、异常检测、降维；基于 Burn 的 MLP、DeepSurv、DeepHit、RNN、Transformer 与自编码器工作流。广义随机森林以容器化 `grf` 插件家族发布（官方 R grf）。 |
 | 统计遗传学 | `evalue`, `lcmm` | 孟德尔随机化、E 值分析、潜类别混合模型及相关移植。 |
 | 断点回归 | `rdrobust`, `rdpower`, `rdmulti`, `rddensity`, `rdlocrand` | 局部多项式 RD 估计、效能与样本量计算、多断点设计、操纵检验、局部随机化推断。 |
-| 科研数据客户端 | `eutils`, `opengwas`, `gwascatalog-sdk`, `opentargets`, `chembl`, `uniprot`, `string-sdk`, `enrichr-sdk`, `kegg`, `reactome`, `ensembl`, `rcsb`, `alphafold`, `interpro`, `pubchem`, `protocolio`, `clinicaltrials`, `nhanes` | PubMed/Entrez、OpenGWAS、GWAS Catalog、Open Targets、ChEMBL、UniProt、STRING、Enrichr、KEGG、Reactome、Ensembl、RCSB、AlphaFold、InterPro、PubChem、protocols.io、ClinicalTrials.gov 与 NHANES 的 SDK、智能体工具及部分 DAG source 节点。 |
+| 科研数据客户端 | `eutils`, `cellxgene`, `opengwas`, `gwascatalog-sdk`, `opentargets`, `chembl`, `uniprot`, `string-sdk`, `enrichr-sdk`, `kegg`, `reactome`, `ensembl`, `rcsb`, `alphafold`, `interpro`, `pubchem`, `protocolio`, `clinicaltrials`, `nhanes` | PubMed/Entrez/GEO、CZ CELLxGENE Discover、OpenGWAS、GWAS Catalog、Open Targets、ChEMBL、UniProt、STRING、Enrichr、KEGG、Reactome、Ensembl、RCSB、AlphaFold、InterPro、PubChem、protocols.io、ClinicalTrials.gov 与 NHANES 的 SDK、智能体工具及部分 DAG source 节点。 |
 | 文献、写作与知识 | `arxiv`, `biorxiv`, `openalex`, `crossref`, `embase`, `europepmc`, `semantic-scholar`, `bib-types`, `bib-base`, `writing-types`, `writing-base`, `kms`, `kms-tools` | 统一文献检索与全文管理、DAG 边上的证据通道、内容寻址文档、BibTeX/RIS/Markdown/CSL 导出、LaTeX AST 操作、引文解析、编译与知识树工具。 |
 | 接口 | `apps/autonomics`, `gateway`, `headless`, `api-server`, `ascii-dag-core` | 常驻 gateway 守护进程、流式终端对话与 DAG 视图、无头 CLI 执行、文献库 CLI/API/前端、TUI DAG 渲染器。 |
 
