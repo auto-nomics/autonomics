@@ -27,6 +27,7 @@ members = [
   "crates/eutils",
   "crates/cellxgene",
   "crates/hca",
+  "crates/scea",
   "crates/chembl",
   "crates/opentargets",
   "crates/runtime",

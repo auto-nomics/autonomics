@@ -7915,6 +7915,7 @@ dependencies = [
  "reactome",
  "reqwest",
  "sas_xport",
+ "scea",
  "schemars",
  "semantic-scholar",
  "serde",
@@ -11112,6 +11113,23 @@ checksum = "6ec8f430d471d4e960f674350712ab5988ae38e417f0ccff74a27eff4e6946cd"
 dependencies = [
  "encoding_rs",
  "ibm_hfp",
+]
+
+[[package]]
+name = "scea"
+version = "0.1.0"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "async-trait",
+ "dag-core",
+ "datafusion",
+ "reqwest",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
 ]
 
 [[package]]

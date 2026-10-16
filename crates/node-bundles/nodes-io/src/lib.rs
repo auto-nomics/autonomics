@@ -110,6 +110,11 @@ pub use reactome::nodes::participants::{
     ReactomeParticipantsNode, ReactomeParticipantsNodeFactory,
 };
 pub use reactome::nodes::pathways::{ReactomePathwaysNode, ReactomePathwaysNodeFactory};
+pub use scea::nodes::{
+    SceaExperimentNode, SceaExperimentNodeFactory, SceaExperimentSpec, SceaExperimentsNode,
+    SceaExperimentsNodeFactory, SceaExperimentsSpec, SceaMarkersNode, SceaMarkersNodeFactory,
+    SceaMarkersSpec,
+};
 pub use script_nodes::builtin_script_images;
 pub use string_sdk::nodes::{Plugin as StringPlugin, StringIdMapNode, StringIdMapNodeFactory};
 pub use string_sdk::nodes::{
@@ -247,6 +252,9 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(HcaProjectNodeFactory));
         registry.register(Box::new(HcaFilesNodeFactory));
         registry.register(Box::new(HcaSamplesNodeFactory));
+        registry.register(Box::new(SceaExperimentsNodeFactory));
+        registry.register(Box::new(SceaExperimentNodeFactory));
+        registry.register(Box::new(SceaMarkersNodeFactory));
         registry.register(Box::new(LiteratureFetchNodeFactory {}));
         registry.register(Box::new(BibSaveNodeFactory {}));
         registry.register(Box::new(LiteratureFulltextNodeFactory {}));
@@ -377,6 +385,27 @@ mod tests {
             assert!(
                 registry.list_nodes().iter().any(|node| node.kind == kind),
                 "missing HCA query node: {kind}"
+            );
+        }
+    }
+
+    #[test]
+    fn plugin_registers_scea_query_source_nodes() {
+        let ctx = dag_core::registry::NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        );
+        let mut registry = NodeRegistry::new(ctx);
+        registry.register_plugin(&Plugin::new());
+        let expected = [
+            "source_scea_experiments",
+            "source_scea_experiment",
+            "source_scea_markers",
+        ];
+        for kind in expected {
+            assert!(
+                registry.list_nodes().iter().any(|node| node.kind == kind),
+                "missing SCEA query node: {kind}"
             );
         }
     }
