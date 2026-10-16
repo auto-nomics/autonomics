@@ -26,6 +26,7 @@ members = [
   "crates/opengwas",
   "crates/eutils",
   "crates/cellxgene",
+  "crates/hca",
   "crates/chembl",
   "crates/opentargets",
   "crates/runtime",

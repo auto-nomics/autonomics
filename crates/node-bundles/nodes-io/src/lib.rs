@@ -84,6 +84,11 @@ pub use gwascatalog_sdk::nodes::summary_associations::{
     SummaryAssociationsNode, SummaryAssociationsNodeFactory,
 };
 pub use gwascatalog_sdk::nodes::unpublished::{UnpublishedNode, UnpublishedNodeFactory};
+pub use hca::nodes::{
+    HcaFilesNode, HcaFilesNodeFactory, HcaFilesSpec, HcaProjectNode, HcaProjectNodeFactory,
+    HcaProjectSpec, HcaProjectsNode, HcaProjectsNodeFactory, HcaProjectsSpec, HcaSamplesNode,
+    HcaSamplesNodeFactory, HcaSamplesSpec,
+};
 pub use interpro::nodes::entry::{InterProEntryNode, InterProEntryNodeFactory};
 pub use nhanes::nodes::download::{NhanesDownloadNode, NhanesDownloadNodeFactory};
 pub use nhanes::nodes::files::{NhanesFilesNode, NhanesFilesNodeFactory};
@@ -238,6 +243,10 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(CellxgeneCollectionNodeFactory));
         registry.register(Box::new(CellxgeneDatasetsNodeFactory));
         registry.register(Box::new(CellxgeneAssetsNodeFactory));
+        registry.register(Box::new(HcaProjectsNodeFactory));
+        registry.register(Box::new(HcaProjectNodeFactory));
+        registry.register(Box::new(HcaFilesNodeFactory));
+        registry.register(Box::new(HcaSamplesNodeFactory));
         registry.register(Box::new(LiteratureFetchNodeFactory {}));
         registry.register(Box::new(BibSaveNodeFactory {}));
         registry.register(Box::new(LiteratureFulltextNodeFactory {}));
@@ -346,6 +355,28 @@ mod tests {
             assert!(
                 registry.list_nodes().iter().any(|node| node.kind == kind),
                 "missing CELLxGENE query node: {kind}"
+            );
+        }
+    }
+
+    #[test]
+    fn plugin_registers_hca_query_source_nodes() {
+        let ctx = dag_core::registry::NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        );
+        let mut registry = NodeRegistry::new(ctx);
+        registry.register_plugin(&Plugin::new());
+        let expected = [
+            "source_hca_projects",
+            "source_hca_project",
+            "source_hca_files",
+            "source_hca_samples",
+        ];
+        for kind in expected {
+            assert!(
+                registry.list_nodes().iter().any(|node| node.kind == kind),
+                "missing HCA query node: {kind}"
             );
         }
     }

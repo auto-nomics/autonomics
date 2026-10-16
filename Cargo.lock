@@ -5406,6 +5406,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "hca"
+version = "0.1.0"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "async-trait",
+ "dag-core",
+ "datafusion",
+ "reqwest",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+]
+
+[[package]]
 name = "hdf5"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7879,6 +7896,7 @@ dependencies = [
  "futures",
  "glob",
  "gwascatalog-sdk",
+ "hca",
  "hdf5",
  "hdf5-sys",
  "interpro",

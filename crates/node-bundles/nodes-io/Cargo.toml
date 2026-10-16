@@ -20,6 +20,7 @@ bib-base = { path = "../../bib-base" }
 bib-types = { path = "../../bib-types" }
 eutils = { path = "../../eutils" }
 cellxgene = { path = "../../cellxgene" }
+hca = { path = "../../hca" }
 nhanes = { path = "../../nhanes" }
 uniprot = { path = "../../uniprot" }
 reactome = { path = "../../reactome" }

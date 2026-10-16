@@ -2,7 +2,7 @@
 
 本文是单细胞外部数据源的统一接入路线图。目标是为每个数据库补齐四层能力：调研文档、Rust SDK、非下载查询 DAG 节点、可选的数据/文件下载节点。查询节点输出 DataFrame；矩阵、FASTQ、H5AD、AnnData 等大文件统一走 VFS/FileSet 下载路径，不与查询 API 混在同一节点。
 
-当前总控清单共 28 项：GEO 与 CELLxGENE 已完成查询接入，Enrichr 复用现有能力，其余 25 项按五个批次推进。
+当前总控清单共 28 项：GEO、CELLxGENE 与 HCA 已完成查询接入，Enrichr 复用现有能力，其余 24 项按五个批次推进。
 
 ## 接入状态
 
@@ -22,7 +22,7 @@
 |---|---|---|---|---|---|
 | `geo` | NCBI GEO / GEO DataSets | 归档 + 研究/样本/文件元数据 | 已接入 | E-utilities `gds`；GSE/GDS/GSM/GPL accession；PubMed/SRA/BioProject 关联 | `source_geo_einfo/esearch/esummary/elink/egquery/espell` 已注册 |
 | `cellxgene` | CZ CELLxGENE Discover / Census | 图谱、H5AD、细胞类型标注 | 查询层已接入 | Discover `collections/index`、`collections/{id}`、`datasets/index`、`datasets/{id}/assets`；Census Python/TileDB 查询待后续扩展 | `source_cellxgene_collections/collection/datasets/assets` 已注册；`download_cellxgene_h5ad` 待实现 |
-| `hca` | Human Cell Atlas Data Portal | 人类细胞图谱项目与文件 | 待接入 | projects、samples、matrices、contributed-analyses、manifest 下载 | `source_hca_projects/files/matrices`，`download_hca_matrix` |
+| `hca` | Human Cell Atlas Data Portal / Azul | 人类细胞图谱项目、样本与文件索引 | 查询层已接入 | Azul `/index/projects`、`/index/projects/{id}`、`/index/files`、`/index/samples`；catalog 可用 `HCA_CATALOG` 指定 | `source_hca_projects/project/files/samples` 已注册；`download_hca_matrix` 待实现 |
 | `scea` | EBI Single Cell Expression Atlas | 已处理表达矩阵与实验元数据 | 待接入 | Expression Atlas experiment/metadata API；baseline cell type 标注 | `source_scea_experiments/metadata/markers`，`download_scea_matrix` |
 | `scp` | Broad Single Cell Portal | 研究门户与矩阵/元数据 | 待接入 | 研究、文件、metadata 下载；部分能力可能只有 web/文件接口 | `source_scp_studies/files`，`download_scp_study` |
 | `hubmap` | HuBMAP | 人体图谱、空间与单细胞数据 | 待接入 | HuBMAP Search/Entity/Portal API；donor/sample/dataset 元数据 | `source_hubmap_search/dataset/files`，`download_hubmap_dataset` |
