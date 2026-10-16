@@ -14,10 +14,7 @@ use crate::storage::OpendalFileStorage;
 /// root `/` by [`OpendalFileStorage::normalize_path`], which is never a
 /// valid target for per-file operations — attempting a write or delete on
 /// it can destroy or corrupt the root directory.
-pub(crate) fn require_path<'a>(
-    path: Option<&'a str>,
-    op_name: &str,
-) -> Result<&'a str, ToolError> {
+pub(crate) fn require_path<'a>(path: Option<&'a str>, op_name: &str) -> Result<&'a str, ToolError> {
     path.filter(|p| !p.trim().is_empty())
         .ok_or_else(|| ToolError::ValidationFailed {
             message: format!("missing or empty 'path' for {op_name}"),

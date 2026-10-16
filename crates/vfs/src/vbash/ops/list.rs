@@ -5,8 +5,8 @@ use agentik_sdk::types::ToolResult as AgentToolResult;
 use futures::StreamExt;
 
 use super::common::{
-    collect_followed_entries, entry_is_readable, followed_entry_metadata, local_backend_root,
-    require_path, tree_path_cmp, FollowedEntry,
+    FollowedEntry, collect_followed_entries, entry_is_readable, followed_entry_metadata,
+    local_backend_root, require_path, tree_path_cmp,
 };
 use crate::storage::OpendalFileStorage;
 

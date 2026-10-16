@@ -17,8 +17,8 @@ mod list;
 mod read;
 mod write;
 
-pub use file::{op_cp, op_mkdir, op_mv, op_rm};
 pub(crate) use common::is_binary;
+pub use file::{op_cp, op_mkdir, op_mv, op_rm};
 pub use list::{op_ls, op_mount_list, op_stat, op_tree, op_wc};
 pub use read::{op_cat, op_head, op_read, op_tail};
 pub use write::{op_edit, op_patch, op_touch, op_write};
