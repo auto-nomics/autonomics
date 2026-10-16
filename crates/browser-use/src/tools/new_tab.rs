@@ -17,7 +17,7 @@ use crate::tools::tool_err;
                   index."
 )]
 pub struct NewTabInput {
-    /// Optional URL to navigate the new tab to. Bare hostnames get `https://` prepended.
+    #[desc = "Optional URL to navigate the new tab to. Bare hostnames get `https://` prepended."]
     pub url: Option<String>,
 }
 

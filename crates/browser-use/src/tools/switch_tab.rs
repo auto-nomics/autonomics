@@ -16,7 +16,7 @@ use crate::tools::tool_err;
                   is out of range."
 )]
 pub struct SwitchTabInput {
-    /// Zero-based index of the tab to activate.
+    #[desc = "Zero-based index of the tab to activate."]
     pub tab_index: usize,
 }
 

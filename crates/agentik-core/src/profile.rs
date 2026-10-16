@@ -1,10 +1,11 @@
 //! Hardcoded agent kinds and the per-agent persisted configuration.
 //!
-//! Agents come in exactly two kinds — [`AgentKind::Researcher`] and
-//! [`AgentKind::Developer`] — whose identity, prompts, and tool
-//! capabilities are fixed in code. Per-agent state that outlives a spawn
-//! (model preference, runtime overrides) lives in
-//! [`AgentProfileConfig`], persisted in the `agents.config_json` column.
+//! Agents come in exactly three kinds — [`AgentKind::Researcher`],
+//! [`AgentKind::Developer`], and [`AgentKind::Browser`] — whose
+//! identity, prompts, and tool capabilities are fixed in code.
+//! Per-agent state that outlives a spawn (model preference, runtime
+//! overrides) lives in [`AgentProfileConfig`], persisted in the
+//! `agents.config_json` column.
 
 use std::fmt;
 use std::str::FromStr;
@@ -26,17 +27,24 @@ pub enum AgentKind {
     #[default]
     Researcher,
     Developer,
+    /// Headless web-browsing specialist. Each `Browser` agent gets a
+    /// private [`browser_use::BrowserSession`] at spawn time; the session
+    /// is closed when the agent's runtime handle drops. The agent sees
+    /// only the `browser_*` tool group — no DAG / bib / writing tools
+    /// unless the host explicitly adds them.
+    Browser,
 }
 
 impl AgentKind {
     /// Every kind, in picker/display order.
-    pub const ALL: [Self; 2] = [Self::Researcher, Self::Developer];
+    pub const ALL: [Self; 3] = [Self::Researcher, Self::Developer, Self::Browser];
 
-    /// Wire/stable name: `"researcher"` or `"developer"`.
+    /// Wire/stable name: `"researcher"`, `"developer"`, or `"browser"`.
     pub const fn name(self) -> &'static str {
         match self {
             Self::Researcher => "researcher",
             Self::Developer => "developer",
+            Self::Browser => "browser",
         }
     }
 
@@ -45,6 +53,7 @@ impl AgentKind {
         match name {
             "researcher" => Some(Self::Researcher),
             "developer" => Some(Self::Developer),
+            "browser" => Some(Self::Browser),
             _ => None,
         }
     }
@@ -52,6 +61,7 @@ impl AgentKind {
     /// Map a legacy hierarchical profile path onto a kind.
     ///
     /// `developer` and its descendants are [`AgentKind::Developer`];
+    /// `browser` and its descendants are [`AgentKind::Browser`];
     /// everything else — `researcher`, `researcher/<specialist>`, the
     /// legacy `default`, and unknown paths — is
     /// [`AgentKind::Researcher`]. This mirrors the role enforcement the
@@ -59,6 +69,8 @@ impl AgentKind {
     pub fn from_legacy_profile_path(path: &str) -> Self {
         if path == "developer" || path.starts_with("developer/") {
             Self::Developer
+        } else if path == "browser" || path.starts_with("browser/") {
+            Self::Browser
         } else {
             Self::Researcher
         }
@@ -68,6 +80,7 @@ impl AgentKind {
         match self {
             Self::Researcher => "Full-featured biomedical research assistant.",
             Self::Developer => "Node and plugin developer for the DAG ecosystem.",
+            Self::Browser => "Web-browsing specialist with a private browser session.",
         }
     }
 
@@ -79,11 +92,18 @@ impl AgentKind {
             Self::Developer => {
                 "You are a DAG node and plugin developer. You build, validate, install, and uninstall plugins through the host-owned plugin lifecycle; you do not perform open-ended research analysis in plugin debug containers."
             }
+            Self::Browser => {
+                "You are a headless web-browsing specialist. You operate a private browser session to navigate, extract, and interact with the web on behalf of a caller. Every action is mediated through the `browser_*` tool group; you do not perform direct DOM mutation, networking, or filesystem access outside the browser sandbox."
+            }
         }
     }
 
     const fn is_researcher(self) -> bool {
         matches!(self, Self::Researcher)
+    }
+
+    const fn is_browser(self) -> bool {
+        matches!(self, Self::Browser)
     }
 
     // ── Tool capability flags ────────────────────────────────
@@ -124,14 +144,23 @@ impl AgentKind {
         self.is_researcher()
     }
 
-    /// Enable `/plugins/dev/<plugin>` development tools.
+    /// Enable `/plugins/dev/<plugin>` development tools. Whitelisted to
+    /// the developer kind — every other kind (including browser) sees
+    /// no plugin-development tools, since constructing a debug container
+    /// in the middle of a browsing task is not what those agents are for.
     pub const fn enable_plugin_rsi(self) -> bool {
-        !self.is_researcher()
+        matches!(self, Self::Developer)
     }
 
     /// Expose DAG history tools. Enabled for every kind.
     pub const fn enable_dag_history(self) -> bool {
         true
+    }
+
+    /// Enable the `browser_*` tool group backed by a per-agent
+    /// [`browser_use::BrowserSession`].
+    pub const fn enable_browser(self) -> bool {
+        self.is_browser()
     }
 }
 
@@ -145,8 +174,9 @@ impl FromStr for AgentKind {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::from_name(s)
-            .ok_or_else(|| format!("unknown agent kind `{s}`; expected researcher or developer"))
+        Self::from_name(s).ok_or_else(|| {
+            format!("unknown agent kind `{s}`; expected researcher, developer, or browser")
+        })
     }
 }
 
@@ -313,10 +343,19 @@ mod tests {
                 "{path}"
             );
         }
+        let browser = ["browser", "browser/scraper"];
+        for path in browser {
+            assert_eq!(
+                AgentKind::from_legacy_profile_path(path),
+                AgentKind::Browser,
+                "{path}"
+            );
+        }
         let researcher = [
             "researcher",
             "researcher/genomics",
             "developer-x",
+            "browser-x",
             "default",
             "literature",
             "",
@@ -368,13 +407,14 @@ mod tests {
             AgentKind::from_name("developer"),
             Some(AgentKind::Developer)
         );
+        assert_eq!(AgentKind::from_name("browser"), Some(AgentKind::Browser));
         for rejected in ["Researcher", "researcher/genomics", "", "default"] {
             assert_eq!(AgentKind::from_name(rejected), None, "{rejected}");
         }
         let err = "wizard".parse::<AgentKind>().unwrap_err();
         assert_eq!(
             err,
-            "unknown agent kind `wizard`; expected researcher or developer"
+            "unknown agent kind `wizard`; expected researcher, developer, or browser"
         );
     }
 
@@ -392,6 +432,7 @@ mod tests {
         assert!(researcher.enable_kegg());
         assert!(researcher.enable_dag_history());
         assert!(!researcher.enable_plugin_rsi());
+        assert!(!researcher.enable_browser());
 
         let developer = AgentKind::Developer;
         assert!(!developer.enable_bibliography());
@@ -405,11 +446,26 @@ mod tests {
         assert!(!developer.enable_kegg());
         assert!(developer.enable_dag_history());
         assert!(developer.enable_plugin_rsi());
+        assert!(!developer.enable_browser());
+
+        let browser = AgentKind::Browser;
+        assert!(!browser.enable_bibliography());
+        assert!(!browser.enable_writing());
+        assert!(!browser.enable_opengwas());
+        assert!(!browser.enable_opentargets());
+        assert!(!browser.enable_gwascatalog());
+        assert!(!browser.enable_chembl());
+        assert!(!browser.enable_rcsb());
+        assert!(!browser.enable_string());
+        assert!(!browser.enable_kegg());
+        assert!(browser.enable_dag_history());
+        assert!(!browser.enable_plugin_rsi());
+        assert!(browser.enable_browser());
     }
 
     #[test]
-    fn all_lists_both_kinds_with_matching_names() {
-        assert_eq!(AgentKind::ALL.len(), 2);
+    fn all_lists_every_kind_with_matching_names() {
+        assert_eq!(AgentKind::ALL.len(), 3);
         for kind in AgentKind::ALL {
             assert_eq!(AgentKind::from_name(kind.name()), Some(kind));
             assert_eq!(kind.to_string(), kind.name());

@@ -564,6 +564,19 @@ pub struct RuntimeConfig {
     #[serde(default = "default_true")]
     /// Whether to enable KEGG tools.
     pub enable_kegg: bool,
+
+    /// Whether browser-kind agents should run their Chromium process with
+    /// `--no-sandbox` (needed inside most containers). Has no effect on
+    /// non-browser agents.
+    #[serde(default)]
+    pub browser_no_sandbox: bool,
+
+    /// Whether browser-kind agents run headed (visible window) or headless.
+    /// Defaults to `true`; pass `false` to `RuntimeConfig::builder` for
+    /// local debugging sessions.
+    #[serde(default = "default_true")]
+    pub browser_headless: bool,
+
     /// Inject persistent memory and expose memory read/search tools.
     #[serde(default = "default_true")]
     pub use_memory: bool,
@@ -750,6 +763,8 @@ impl RuntimeConfig {
             enable_rcsb: resolve_flag(base, |b| b.enable_rcsb, true),
             enable_string: resolve_flag(base, |b| b.enable_string, true),
             enable_kegg: resolve_flag(base, |b| b.enable_kegg, true),
+            browser_no_sandbox: resolve_flag(base, |b| b.browser_no_sandbox, false),
+            browser_headless: resolve_flag(base, |b| b.browser_headless, true),
             use_memory: resolve_env_flag(base.and_then(|b| b.use_memory), ENV_USE_MEMORY)
                 .unwrap_or(true),
             generate_memory: resolve_env_flag(
@@ -1067,6 +1082,50 @@ and validation evidence. If the Researcher's requirement or acceptance data is\n
 ambiguous, ask for the specific missing information rather than inventing a\n\
 scientific assumption.";
 
+const PROMPT_BROWSER: &str = "\n\
+### Web Browsing\n\
+You operate a private Chromium-backed browser session that the host assigned\n\
+to you for the lifetime of this agent. The session is closed automatically when\n\
+your run ends; you do not need to clean it up.\n\
+\n\
+Tool groups, in order of preference:\n\
+- `browser_navigate(url[, tab_index])` — go to a URL on a tab. Bare hostnames\n\
+  are upgraded to `https://`.\n\
+- `browser_extract_text([tab_index])` / `browser_extract_html([tab_index])`\n\
+  — pull the rendered page back into the conversation. Cheap, exact, but no\n\
+  layout. Use these as the default \"what's on the page?\" probe.\n\
+- `browser_screenshot([tab_index])` — when layout, styling, or visual content\n\
+  matters (charts, image grids, canvas, anything position-sensitive). The model\n\
+  must support vision for this to be useful; otherwise the bytes are noise.\n\
+- `browser_evaluate(expression[, tab_index])` — run JavaScript in the page and\n\
+  get the JSON-serialized return value. Prefer this over dumping the whole DOM\n\
+  when you need a narrow slice (e.g. `Array.from(document.querySelectorAll('h2'))\n\
+  .map(e => e.innerText)`).\n\
+- `browser_click(selector[, tab_index, timeout_ms])` /\n\
+  `browser_type_text(selector, text[, tab_index, timeout_ms])` /\n\
+  `browser_wait_for_selector(selector[, tab_index, timeout_ms])` — interact\n\
+  with elements by CSS selector.\n\
+- `browser_get_url` / `browser_get_title` — light state queries.\n\
+- `browser_scroll(x, y[, tab_index])` — scroll the viewport.\n\
+- `browser_new_tab([url])` / `browser_close_tab([tab_index])` /\n\
+  `browser_switch_tab(tab_index)` / `browser_list_tabs` — manage multiple\n\
+  tabs. The most recently opened tab becomes active automatically.\n\
+\n\
+`tab_index` is zero-based; omit it to target the active tab. After every\n\
+click, type, scroll, or navigate you MUST call `browser_extract_text` or\n\
+`browser_screenshot` yourself to see the new state — action tools never\n\
+auto-report page content.";
+
+const PROMPT_BROWSER_HANDOFF: &str = "\n\
+### Collaboration Boundary\n\
+You do not have direct filesystem, network, or shell access — everything goes\n\
+through the browser session. If a task needs both browser access and some\n\
+other capability, return a structured handoff to the calling agent describing\n\
+exactly which pages you visited, what you extracted, and what remains to be\n\
+done; do not invent capabilities you were not given. End each task with a\n\
+concise summary: starting URL(s), final URL(s), the data you extracted, and\n\
+any failures or assumptions you made along the way.";
+
 const PROMPT_SQL_CONVENTIONS: &str = "\n\
 ### SQL Conventions\n\
 All SQL in this system runs on Apache DataFusion. The following rules apply to \
@@ -1119,6 +1178,9 @@ pub trait PromptCapabilities {
     fn enable_kegg(&self) -> bool;
     fn enable_dag_history(&self) -> bool;
     fn enable_plugin_rsi(&self) -> bool {
+        false
+    }
+    fn enable_browser(&self) -> bool {
         false
     }
 }
@@ -1175,8 +1237,16 @@ pub fn build_system_prompt<C: PromptCapabilities>(caps: &C) -> String {
     if caps.enable_plugin_rsi() {
         s.push_str(PROMPT_PLUGIN_RSI);
         s.push_str(PROMPT_DEVELOPER_HANDOFF);
-    } else {
+    } else if !caps.enable_browser() {
+        // Browser agents participate in neither collaboration: they get
+        // their own handoff section below instead of the
+        // researcher/developer material.
         s.push_str(PROMPT_RESEARCHER_DEVELOPMENT_HANDOFF);
+    }
+
+    if caps.enable_browser() {
+        s.push_str(PROMPT_BROWSER);
+        s.push_str(PROMPT_BROWSER_HANDOFF);
     }
 
     s.push_str(PROMPT_SQL_CONVENTIONS);
@@ -1223,6 +1293,9 @@ pub fn default_system_prompt() -> String {
         fn enable_plugin_rsi(&self) -> bool {
             true
         }
+        fn enable_browser(&self) -> bool {
+            true
+        }
     }
     build_system_prompt(&AllEnabled)
 }
@@ -1255,6 +1328,10 @@ impl PromptCapabilities for RuntimeConfig {
     fn enable_dag_history(&self) -> bool {
         self.enable_dag_history
     }
+    // `enable_browser` is keyed on the agent *kind*, not the global
+    // runtime config — the `AgentKind` impl of this trait is what
+    // actually drives the system-prompt section. Returning `false` here
+    // keeps the default-prompt path aligned with the legacy behavior.
 }
 
 impl RuntimeConfig {
@@ -1272,6 +1349,7 @@ impl RuntimeConfig {
              dag_history_db: {}, bib_db: {}, app_db: {}, kms_db: {}, \
              dag_history: {}, bib: {}, opengwas: {}, \
              opentargets: {}, gwascatalog: {}, chembl: {}, rcsb: {}, string: {}, kegg: {}, \
+             browser_headless: {}, browser_no_sandbox: {}, \
              rsi_publisher: {} }}",
             self.name,
             self.data_dir.display(),
@@ -1289,6 +1367,8 @@ impl RuntimeConfig {
             self.enable_rcsb,
             self.enable_string,
             self.enable_kegg,
+            self.browser_headless,
+            self.browser_no_sandbox,
             self.plugin_rsi.publisher.enabled,
         )
     }
@@ -1331,6 +1411,8 @@ pub struct RuntimeConfigBuilder {
     pub(crate) enable_string: Option<bool>,
     #[serde(default)]
     pub(crate) enable_kegg: Option<bool>,
+    pub(crate) browser_no_sandbox: Option<bool>,
+    pub(crate) browser_headless: Option<bool>,
     pub(crate) use_memory: Option<bool>,
     pub(crate) generate_memory: Option<bool>,
     pub(crate) enable_kms: Option<bool>,
@@ -1482,6 +1564,21 @@ impl RuntimeConfigBuilder {
     /// Enable or disable KEGG tools.
     pub fn enable_kegg(mut self, enabled: bool) -> Self {
         self.enable_kegg = Some(enabled);
+        self
+    }
+
+    /// Pass `--no-sandbox` to the Chromium process that browser-kind
+    /// agents spawn. Has no effect on other agent kinds.
+    pub fn browser_no_sandbox(mut self, enabled: bool) -> Self {
+        self.browser_no_sandbox = Some(enabled);
+        self
+    }
+
+    /// Run browser-kind agents with a visible window (default off). Use
+    /// for local debugging only; server / daemon agents should stay
+    /// headless.
+    pub fn browser_headless(mut self, headless: bool) -> Self {
+        self.browser_headless = Some(headless);
         self
     }
 
@@ -1784,6 +1881,28 @@ mod tests {
         assert!(developer_prompt.contains("full `plugin/node` address"));
         assert!(developer_prompt.contains("validation evidence"));
         assert!(!developer_prompt.contains("Researcher / Developer Collaboration"));
+        // Neither researcher nor developer should advertise the browser
+        // tool group — only the Browser kind should.
+        assert!(!researcher_prompt.contains("Web Browsing"));
+        assert!(!developer_prompt.contains("Web Browsing"));
+    }
+
+    #[test]
+    fn system_prompt_advertises_browser_for_browser_kind_only() {
+        use agentik_core::AgentKind;
+
+        let browser_prompt = build_system_prompt(&AgentKind::Browser);
+        assert!(browser_prompt.contains("Web Browsing"));
+        assert!(browser_prompt.contains("browser_navigate"));
+        assert!(browser_prompt.contains("browser_screenshot"));
+        assert!(browser_prompt.contains("browser_evaluate"));
+        assert!(browser_prompt.contains("Collaboration Boundary"));
+        // Browser agents are not researchers and not plugin developers;
+        // those sections must be absent so the prompt doesn't waste
+        // context advertising tools they don't have.
+        assert!(!browser_prompt.contains("Literature & Evidence"));
+        assert!(!browser_prompt.contains("Plugin Self-Improvement"));
+        assert!(!browser_prompt.contains("Researcher / Developer Collaboration"));
     }
 
     #[test]

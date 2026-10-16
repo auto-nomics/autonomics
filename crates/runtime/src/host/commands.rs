@@ -925,6 +925,14 @@ pub(super) fn capability_from_kind(
         expertise.push("container-plugin-lifecycle".into());
         expertise.push("plugin-validation".into());
     }
+    if kind.enable_browser() {
+        tags.push("browser".into());
+        tags.push("web".into());
+        tags.push("web-browsing".into());
+        expertise.push("web-navigation".into());
+        expertise.push("web-extraction".into());
+        expertise.push("web-interaction".into());
+    }
 
     crate::control::AgentInfo {
         name: name.into(),
@@ -1361,6 +1369,106 @@ mod communication_policy_tests {
         assert_eq!(restored.runtime.use_memory, Some(false));
 
         host.shutdown_all_agents_and_wait().await;
+    }
+
+    /// A browser-kind agent gets a private Chromium session allocated at
+    /// spawn time. The session's strong `Arc` lives in the agent's tool
+    /// list, the host pool keeps only a `Weak`, and the session dies with
+    /// the agent — spawning a browser child and shutting it down must not
+    /// leak the browser process or the pool entry.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn browser_agent_session_lifecycle() {
+        fn automation_chromium_count() -> usize {
+            std::process::Command::new("pgrep")
+                .args(["-f", "enable-automation"])
+                .output()
+                .map(|o| {
+                    String::from_utf8_lossy(&o.stdout)
+                        .lines()
+                        .filter(|l| !l.trim().is_empty())
+                        .count()
+                })
+                .unwrap_or(0)
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut host = RuntimeHost::open(&config(&dir)).await.unwrap();
+        let path = agentik_types::AgentPath::try_from("/root/browser").unwrap();
+        let profile = AgentProfileConfig::new(AgentKind::Browser);
+        let handle = host
+            .spawn_agent(
+                &path,
+                &profile,
+                Arc::new(ArcSwapOption::from_pointee(None)),
+                None,
+            )
+            .await
+            .unwrap();
+        // Register with the relay so Shutdown actually reaches the agent
+        // task (and its tool list) during shutdown_all_agents_and_wait.
+        let info = capability_from_kind(handle.path.name(), handle.path.as_str(), profile.kind);
+        host.register_agent(handle, info);
+
+        // Tool assembly registered the browser tool group; the second
+        // assembly call must reuse the live session from the pool rather
+        // than launching a second Chromium.
+        let tools = host
+            .infra()
+            .tools_from_profile(&path, AgentKind::Browser)
+            .await
+            .unwrap();
+        let names: Vec<String> = tools.iter().map(|t| t.definition.name.clone()).collect();
+        for expected in [
+            "browser_navigate",
+            "browser_click",
+            "browser_type_text",
+            "browser_screenshot",
+            "browser_evaluate",
+            "browser_list_tabs",
+        ] {
+            assert!(
+                names.iter().any(|n| n == expected),
+                "missing tool `{expected}`"
+            );
+        }
+        // This local tool list holds its own strong Arcs — drop it so the
+        // agent's tool list is the only remaining owner before shutdown.
+        drop(tools);
+
+        // The pool entry is alive while the agent runs.
+        assert!(
+            host.infra()
+                .browsers
+                .lock()
+                .await
+                .session_alive("/root/browser"),
+            "pool should hold a live session while the agent runs"
+        );
+        assert!(
+            automation_chromium_count() > 0,
+            "expected a chromium process for the browser agent"
+        );
+
+        host.shutdown_all_agents_and_wait().await;
+
+        // The agent task has joined; its tool list (the strong Arc owner)
+        // is dropped, so the pool entry dangles and the process is killed.
+        tokio::time::timeout(std::time::Duration::from_secs(15), async {
+            loop {
+                let alive = host
+                    .infra()
+                    .browsers
+                    .lock()
+                    .await
+                    .session_alive("/root/browser");
+                if !alive {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("session Arc should drop after the agent shuts down");
     }
 
     fn set_status(host: &mut RuntimeHost, path: &str, status: crate::control::AgentStatus) {

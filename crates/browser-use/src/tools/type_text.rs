@@ -18,14 +18,14 @@ use crate::tools::tool_err;
                   use `browser_press_key` instead."
 )]
 pub struct TypeTextInput {
-    /// CSS selector of the input element.
+    #[desc = "CSS selector of the input element."]
     pub selector: String,
-    /// Text to type. Each character is sent as a separate key event.
+    #[desc = "Text to type. Each character is sent as a separate key event."]
     pub text: String,
-    /// Zero-based tab index; defaults to the active tab.
+    #[desc = "Zero-based tab index; defaults to the active tab."]
     #[default = 0]
     pub tab_index: Option<usize>,
-    /// Maximum time to wait for the selector to appear, in milliseconds.
+    #[desc = "Maximum time to wait for the selector to appear, in milliseconds."]
     #[default = 10000]
     pub timeout_ms: Option<u64>,
 }

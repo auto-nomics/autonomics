@@ -10822,6 +10822,7 @@ dependencies = [
  "arc-swap",
  "async-trait",
  "bib-base",
+ "browser-use",
  "chembl",
  "chrono",
  "container-plugin",

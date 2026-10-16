@@ -15,7 +15,7 @@ use crate::tools::tool_err;
                   yet (e.g. it is still loading or on `about:blank`)."
 )]
 pub struct GetTitleInput {
-    /// Zero-based tab index; defaults to the active tab.
+    #[desc = "Zero-based tab index; defaults to the active tab."]
     #[default = 0]
     pub tab_index: Option<usize>,
 }

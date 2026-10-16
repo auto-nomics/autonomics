@@ -19,12 +19,12 @@ use crate::tools::tool_err;
                   synchronize on client-rendered content before extracting."
 )]
 pub struct WaitForSelectorInput {
-    /// CSS selector to wait for.
+    #[desc = "CSS selector to wait for."]
     pub selector: String,
-    /// Zero-based tab index; defaults to the active tab.
+    #[desc = "Zero-based tab index; defaults to the active tab."]
     #[default = 0]
     pub tab_index: Option<usize>,
-    /// Maximum wait time in milliseconds.
+    #[desc = "Maximum wait time in milliseconds."]
     #[default = 10000]
     pub timeout_ms: Option<u64>,
 }

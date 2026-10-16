@@ -66,3 +66,33 @@ pub fn registrations(session: Arc<BrowserSession>) -> Vec<ToolRegistration> {
         ToolRegistration::from(list_tabs::ListTabsTool::new(session)),
     ]
 }
+
+#[cfg(test)]
+mod tests {
+    use agentik_sdk::types::ToolInput;
+    use serde_json::Value;
+
+    /// Field descriptions must land in the generated JSON Schema — the
+    /// `#[desc]` attributes are the only channel the `#[tool]` macro reads
+    /// (doc comments are stripped before schemars derives).
+    #[test]
+    fn field_descriptions_reach_the_schema() {
+        let def = super::navigate::NavigateInput::definition();
+        let props = &def.input_schema.properties;
+
+        let url_desc = props["url"]["description"].as_str().unwrap_or_default();
+        assert!(
+            url_desc.contains("https://"),
+            "url description missing: {url_desc}"
+        );
+
+        let tab_desc = props["tab_index"]["description"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(
+            tab_desc.contains("Zero-based"),
+            "tab_index description missing: {tab_desc}"
+        );
+        assert_eq!(props["tab_index"]["default"], serde_json::json!(0));
+    }
+}
