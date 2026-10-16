@@ -131,6 +131,11 @@ pub use string_sdk::nodes::{
     StringEnrichmentNode, StringEnrichmentNodeFactory, StringNetworkNode, StringNetworkNodeFactory,
 };
 pub use string_sdk::nodes::{StringPpiEnrichmentNode, StringPpiEnrichmentNodeFactory};
+pub use tabula_sapiens::nodes::{
+    TabulaSapiensFilesNode, TabulaSapiensFilesNodeFactory, TabulaSapiensFilesSpec,
+    TabulaSapiensReleaseNode, TabulaSapiensReleaseNodeFactory, TabulaSapiensReleaseSpec,
+    TabulaSapiensVersionsNode, TabulaSapiensVersionsNodeFactory, TabulaSapiensVersionsSpec,
+};
 pub use uniprot::nodes::idmap::{UniprotIdmapNode, UniprotIdmapNodeFactory};
 pub use uniprot::nodes::search::{UniprotSearchNode, UniprotSearchNodeFactory};
 pub use uniprot::nodes::stream::{UniprotStreamNode, UniprotStreamNodeFactory};
@@ -273,6 +278,9 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(HubmapDatasetNodeFactory));
         registry.register(Box::new(HubmapFilesNodeFactory));
         registry.register(Box::new(HubmapGlobusNodeFactory));
+        registry.register(Box::new(TabulaSapiensVersionsNodeFactory));
+        registry.register(Box::new(TabulaSapiensReleaseNodeFactory));
+        registry.register(Box::new(TabulaSapiensFilesNodeFactory));
         registry.register(Box::new(LiteratureFetchNodeFactory {}));
         registry.register(Box::new(BibSaveNodeFactory {}));
         registry.register(Box::new(LiteratureFulltextNodeFactory {}));
@@ -468,6 +476,27 @@ mod tests {
             assert!(
                 registry.list_nodes().iter().any(|node| node.kind == kind),
                 "missing HuBMAP query node: {kind}"
+            );
+        }
+    }
+
+    #[test]
+    fn plugin_registers_tabula_sapiens_query_source_nodes() {
+        let ctx = dag_core::registry::NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        );
+        let mut registry = NodeRegistry::new(ctx);
+        registry.register_plugin(&Plugin::new());
+        let expected = [
+            "source_tabula_sapiens_versions",
+            "source_tabula_sapiens_release",
+            "source_tabula_sapiens_files",
+        ];
+        for kind in expected {
+            assert!(
+                registry.list_nodes().iter().any(|node| node.kind == kind),
+                "missing Tabula Sapiens query node: {kind}"
             );
         }
     }

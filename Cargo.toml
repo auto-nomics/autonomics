@@ -30,6 +30,7 @@ members = [
   "crates/scea",
   "crates/scp",
   "crates/hubmap",
+  "crates/tabula-sapiens",
   "crates/chembl",
   "crates/opentargets",
   "crates/runtime",
