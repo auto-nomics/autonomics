@@ -13,6 +13,16 @@ use crate::catalog_tools::CatalogState;
 use crate::config::RuntimeConfig;
 use crate::error::{Error, Result};
 
+/// Agent-visible mount for files downloaded by browser agents.
+pub(super) const BROWSER_DOWNLOAD_VFS_PATH: &str = "/browser-downloads";
+
+pub(super) fn browser_download_root(config: &RuntimeConfig) -> std::path::PathBuf {
+    config
+        .browser_download_dir
+        .clone()
+        .unwrap_or_else(|| config.state_dir.join("browser-downloads"))
+}
+
 /// Build the bibliography VFS without opening agent or writing-system storage.
 ///
 /// CLI commands use this to ensure they follow exactly the same
@@ -39,6 +49,7 @@ pub(super) fn build_vfs(config: &RuntimeConfig) -> Result<MountedObjectStore> {
     ensure_plugin_mounts(&mut manifest, config, &plugin_layout)?;
     ensure_workspace_mount(&mut manifest, &PodmanConfig::from_env().workspace_root);
     ensure_environment_dev_mount(&mut manifest, config)?;
+    ensure_browser_download_mount(&mut manifest, config)?;
     MountedObjectStore::from_manifest(&manifest).map_err(|e| Error::Other(e.to_string()))
 }
 
@@ -55,6 +66,7 @@ pub(super) async fn build_vfs_with_catalog(
     ensure_plugin_mounts(&mut manifest, config, &plugin_layout)?;
     ensure_workspace_mount(&mut manifest, &PodmanConfig::from_env().workspace_root);
     ensure_environment_dev_mount(&mut manifest, config)?;
+    ensure_browser_download_mount(&mut manifest, config)?;
 
     let mut catalog_registry = dag_core::BundleRegistry::new();
     let mut catalog = None;
@@ -315,7 +327,10 @@ fn load_or_create_vfs_manifest(config: &RuntimeConfig) -> Result<VfsManifestStat
             let catalog_source = extract_catalog_section(&source);
             let mut manifest = VfsManifest::from_toml(&source)
                 .map_err(|e| Error::Other(format!("invalid {}: {e}", manifest_path.display())))?;
-            if ensure_literature_mount(&mut manifest, config) {
+            let literature_changed = ensure_literature_mount(&mut manifest, config);
+            let browser_downloads_changed = ensure_browser_download_mount(&mut manifest, config)?;
+            let changed = literature_changed || browser_downloads_changed;
+            if changed {
                 write_vfs_manifest(&manifest_path, &manifest, catalog_source.as_deref())?;
             }
             Ok(VfsManifestState {
@@ -417,6 +432,18 @@ fn default_vfs_manifest(config: &RuntimeConfig) -> VfsManifest {
         read_only: false,
         permissions: Default::default(),
     });
+    let browser_download_root = browser_download_root(config);
+    backend.push(BackendDefinition {
+        id: "browser-downloads".into(),
+        config: vfs::BackendConfig::local(browser_download_root.to_string_lossy().to_string()),
+    });
+    mount.push(MountDefinition {
+        path: BROWSER_DOWNLOAD_VFS_PATH.into(),
+        backend: "browser-downloads".into(),
+        source: "/".into(),
+        read_only: false,
+        permissions: Default::default(),
+    });
 
     if let (Ok(bucket), Ok(ak), Ok(sk)) = (
         std::env::var("OSS_BUCKET"),
@@ -478,6 +505,88 @@ fn ensure_literature_mount(manifest: &mut VfsManifest, config: &RuntimeConfig) -
         permissions: Default::default(),
     });
     true
+}
+
+/// Keep browser downloads mounted even for manifests created before this
+/// capability existed. A custom configured root retargets the existing mount.
+fn ensure_browser_download_mount(
+    manifest: &mut VfsManifest,
+    config: &RuntimeConfig,
+) -> Result<bool> {
+    let root = browser_download_root(config);
+    let root_text = root.to_string_lossy().to_string();
+    let Some(mount_index) = manifest
+        .mount
+        .iter()
+        .position(|mount| mount.path == BROWSER_DOWNLOAD_VFS_PATH)
+    else {
+        let mut backend_id = "browser-downloads".to_owned();
+        while manifest
+            .backend
+            .iter()
+            .any(|backend| backend.id == backend_id)
+        {
+            backend_id.push('_');
+        }
+        manifest.backend.push(BackendDefinition {
+            id: backend_id.clone(),
+            config: vfs::BackendConfig::local(root_text),
+        });
+        manifest.mount.push(MountDefinition {
+            path: BROWSER_DOWNLOAD_VFS_PATH.into(),
+            backend: backend_id,
+            source: "/".into(),
+            read_only: false,
+            permissions: Default::default(),
+        });
+        return Ok(true);
+    };
+
+    let existing_backend_id = manifest.mount[mount_index].backend.clone();
+    let Some(backend_index) = manifest
+        .backend
+        .iter()
+        .position(|backend| backend.id == existing_backend_id)
+    else {
+        return Err(Error::Other(
+            "the `/browser-downloads` VFS mount has no backend".into(),
+        ));
+    };
+    let backend_root = match &manifest.backend[backend_index].config {
+        vfs::BackendConfig::Local { root } => Some(root.clone()),
+        _ => None,
+    };
+    if backend_root.as_deref() == Some(root_text.as_str())
+        && manifest.mount[mount_index].source == "/"
+    {
+        return Ok(false);
+    }
+
+    let shared_backend = manifest
+        .mount
+        .iter()
+        .enumerate()
+        .any(|(index, mount)| index != mount_index && mount.backend == existing_backend_id);
+    if shared_backend {
+        let mut backend_id = "browser-downloads".to_owned();
+        while manifest
+            .backend
+            .iter()
+            .any(|backend| backend.id == backend_id)
+        {
+            backend_id.push('_');
+        }
+        manifest.backend.push(BackendDefinition {
+            id: backend_id.clone(),
+            config: vfs::BackendConfig::local(root_text),
+        });
+        manifest.mount[mount_index].backend = backend_id;
+    } else {
+        manifest.backend[backend_index].config = vfs::BackendConfig::local(root_text);
+    }
+    manifest.mount[mount_index].source = "/".into();
+    manifest.mount[mount_index].read_only = false;
+    Ok(true)
 }
 
 /// Ensure the container workspace tree is reachable through the VFS at its
@@ -547,6 +656,47 @@ mod vfs_tests {
         assert_eq!(
             manifest.mount[0].source,
             config.data_dir.to_string_lossy().to_string()
+        );
+    }
+
+    #[tokio::test]
+    async fn browser_downloads_mount_into_vfs() {
+        let state = tempfile::tempdir().unwrap();
+        let data = tempfile::tempdir().unwrap();
+        let mut config = RuntimeConfig::default();
+        config.data_dir = data.path().to_path_buf();
+        config.state_dir = state.path().to_path_buf();
+        let root = browser_download_root(&config);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("result.csv"), b"a,b\n1,2\n").unwrap();
+        let legacy_manifest =
+            VfsManifest::local_root(config.data_dir.to_string_lossy().to_string());
+        std::fs::create_dir_all(&config.state_dir).unwrap();
+        std::fs::write(
+            config.state_dir.join("vfs.toml"),
+            toml::to_string_pretty(&legacy_manifest).unwrap(),
+        )
+        .unwrap();
+
+        let store = Arc::new(build_vfs(&config).unwrap());
+        let storage = vfs::OpendalFileStorage::with_mounts(&config.data_dir, store);
+        let path = "/browser-downloads/result.csv";
+        let bytes = storage
+            .resolve(path)
+            .read(&storage.resolve_path(path))
+            .await
+            .unwrap();
+
+        assert_eq!(bytes.to_vec(), b"a,b\n1,2\n");
+        let manifest = VfsManifest::from_toml(
+            &std::fs::read_to_string(config.state_dir.join("vfs.toml")).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            manifest
+                .mount
+                .iter()
+                .any(|mount| mount.path == "/browser-downloads")
         );
     }
 
@@ -691,6 +841,49 @@ mod literature_mount_tests {
                 permissions: Default::default(),
             }],
         }
+    }
+
+    #[test]
+    fn browser_download_mount_adds_or_retargets_dedicated_backend() {
+        let state = tempfile::tempdir().unwrap();
+        let custom = tempfile::tempdir().unwrap();
+        let mut config = RuntimeConfig::default();
+        config.state_dir = state.path().to_path_buf();
+        config.browser_download_dir = Some(custom.path().to_path_buf());
+
+        let mut manifest = base_manifest();
+        assert!(ensure_browser_download_mount(&mut manifest, &config).unwrap());
+        let mount = manifest
+            .mount
+            .iter()
+            .find(|mount| mount.path == BROWSER_DOWNLOAD_VFS_PATH)
+            .unwrap();
+        assert_eq!(mount.source, "/");
+        assert!(!mount.read_only);
+        assert_eq!(mount.backend, "browser-downloads");
+        let backend = manifest
+            .backend
+            .iter()
+            .find(|backend| backend.id == "browser-downloads")
+            .unwrap();
+        assert_eq!(
+            backend.config,
+            vfs::BackendConfig::local(custom.path().to_string_lossy().to_string())
+        );
+
+        assert!(!ensure_browser_download_mount(&mut manifest, &config).unwrap());
+        let moved = tempfile::tempdir().unwrap();
+        config.browser_download_dir = Some(moved.path().to_path_buf());
+        assert!(ensure_browser_download_mount(&mut manifest, &config).unwrap());
+        assert_eq!(
+            manifest
+                .backend
+                .iter()
+                .find(|backend| backend.id == "browser-downloads")
+                .unwrap()
+                .config,
+            vfs::BackendConfig::local(moved.path().to_string_lossy().to_string())
+        );
     }
 
     #[test]

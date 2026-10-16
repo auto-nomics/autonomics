@@ -27,7 +27,9 @@ use super::bundles::build_bundle_registry;
 use super::gc::{
     spawn_container_gc, spawn_dag_task_gc, spawn_environment_distiller, spawn_plugin_distiller,
 };
-use super::vfs_setup::{agent_vfs_principal, build_vfs_with_catalog};
+use super::vfs_setup::{
+    BROWSER_DOWNLOAD_VFS_PATH, agent_vfs_principal, browser_download_root, build_vfs_with_catalog,
+};
 
 /// Cache of per-agent [`BrowserSession`]s.
 ///
@@ -530,6 +532,8 @@ impl SharedInfra {
         let mut browser_options = BrowserOptions::default();
         browser_options.headless = config.browser_headless;
         browser_options.no_sandbox = config.browser_no_sandbox;
+        browser_options.download_dir = Some(browser_download_root(config));
+        browser_options.download_vfs_path = Some(BROWSER_DOWNLOAD_VFS_PATH.to_string());
 
         Ok(Self {
             engine_manager,

@@ -97,6 +97,9 @@ pub const ENV_DATA_DIR: &str = "AUTONOMICS_DATA_DIR";
 /// Env var overriding the internal-state directory.
 pub const ENV_STATE_DIR: &str = "AUTONOMICS_STATE_DIR";
 
+/// Env var overriding the browser download directory.
+pub const ENV_BROWSER_DOWNLOAD_DIR: &str = "AUTONOMICS_BROWSER_DOWNLOAD_DIR";
+
 /// Env var overriding the bibliography DB path.
 pub const ENV_BIB_DB: &str = "AUTONOMICS_BIB_DB";
 
@@ -577,6 +580,13 @@ pub struct RuntimeConfig {
     #[serde(default = "default_true")]
     pub browser_headless: bool,
 
+    /// Directory used by browser-kind agents for Chromium downloads.
+    ///
+    /// `None` resolves to `<state_dir>/browser-downloads`; the directory is
+    /// mounted in the agent VFS at `/browser-downloads`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser_download_dir: Option<PathBuf>,
+
     /// Inject persistent memory and expose memory read/search tools.
     #[serde(default = "default_true")]
     pub use_memory: bool,
@@ -705,6 +715,9 @@ impl RuntimeConfig {
             .and_then(|b| b.kms_db_path.clone())
             .or_else(|| env_path(ENV_KMS_DB))
             .unwrap_or_else(|| state_dir.join(DEFAULT_KMS_DB));
+        let browser_download_dir = base
+            .and_then(|b| b.browser_download_dir.clone())
+            .or_else(|| env_path(ENV_BROWSER_DOWNLOAD_DIR));
         let name = base
             .and_then(|b| b.name.clone())
             .unwrap_or_else(|| "default".to_string());
@@ -765,6 +778,7 @@ impl RuntimeConfig {
             enable_kegg: resolve_flag(base, |b| b.enable_kegg, true),
             browser_no_sandbox: resolve_flag(base, |b| b.browser_no_sandbox, false),
             browser_headless: resolve_flag(base, |b| b.browser_headless, true),
+            browser_download_dir,
             use_memory: resolve_env_flag(base.and_then(|b| b.use_memory), ENV_USE_MEMORY)
                 .unwrap_or(true),
             generate_memory: resolve_env_flag(
@@ -1106,6 +1120,10 @@ Tool groups, in order of preference:\n\
   `browser_wait_for_selector(selector[, tab_index, timeout_ms])` — interact\n\
   with elements by CSS selector.\n\
 - `browser_get_url` / `browser_get_title` — light state queries.\n\
+- `browser_download(url[, tab_index, timeout_ms])` — download a URL and wait\n\
+  for completion. Completed files are visible in `/browser-downloads`.\n\
+- `browser_wait_for_download([timeout_ms])` — call this after clicking a\n\
+  download link or submitting a form that starts a download.\n\
 - `browser_scroll(x, y[, tab_index])` — scroll the viewport.\n\
 - `browser_new_tab([url])` / `browser_close_tab([tab_index])` /\n\
   `browser_switch_tab(tab_index)` / `browser_list_tabs` — manage multiple\n\
@@ -1114,17 +1132,19 @@ Tool groups, in order of preference:\n\
 `tab_index` is zero-based; omit it to target the active tab. After every\n\
 click, type, scroll, or navigate you MUST call `browser_extract_text` or\n\
 `browser_screenshot` yourself to see the new state — action tools never\n\
-auto-report page content.";
+auto-report page content. A click that starts a download should be followed by\n\
+`browser_wait_for_download`; then report the returned `/browser-downloads/...`\n\
+path.";
 
 const PROMPT_BROWSER_HANDOFF: &str = "\n\
 ### Collaboration Boundary\n\
-You do not have direct filesystem, network, or shell access — everything goes\n\
-through the browser session. If a task needs both browser access and some\n\
-other capability, return a structured handoff to the calling agent describing\n\
-exactly which pages you visited, what you extracted, and what remains to be\n\
-done; do not invent capabilities you were not given. End each task with a\n\
-concise summary: starting URL(s), final URL(s), the data you extracted, and\n\
-any failures or assumptions you made along the way.";
+You do not have direct host filesystem or network access. Browser actions and\n\
+the mounted `/browser-downloads` namespace are the supported interfaces. If a\n\
+task needs another capability, return a structured handoff to the calling agent\n\
+describing exactly which pages you visited, what you extracted, what files you\n\
+downloaded, and what remains to be done; do not invent capabilities you were\n\
+not given. End each task with a concise summary: starting URL(s), final URL(s),\n\
+the data you extracted, downloaded VFS paths, and any failures or assumptions.";
 
 const PROMPT_SQL_CONVENTIONS: &str = "\n\
 ### SQL Conventions\n\
@@ -1350,6 +1370,7 @@ impl RuntimeConfig {
              dag_history: {}, bib: {}, opengwas: {}, \
              opentargets: {}, gwascatalog: {}, chembl: {}, rcsb: {}, string: {}, kegg: {}, \
              browser_headless: {}, browser_no_sandbox: {}, \
+             browser_download_dir: {}, \
              rsi_publisher: {} }}",
             self.name,
             self.data_dir.display(),
@@ -1369,6 +1390,10 @@ impl RuntimeConfig {
             self.enable_kegg,
             self.browser_headless,
             self.browser_no_sandbox,
+            self.browser_download_dir
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "<state_dir>/browser-downloads".to_string()),
             self.plugin_rsi.publisher.enabled,
         )
     }
@@ -1413,6 +1438,7 @@ pub struct RuntimeConfigBuilder {
     pub(crate) enable_kegg: Option<bool>,
     pub(crate) browser_no_sandbox: Option<bool>,
     pub(crate) browser_headless: Option<bool>,
+    pub(crate) browser_download_dir: Option<PathBuf>,
     pub(crate) use_memory: Option<bool>,
     pub(crate) generate_memory: Option<bool>,
     pub(crate) enable_kms: Option<bool>,
@@ -1582,6 +1608,12 @@ impl RuntimeConfigBuilder {
         self
     }
 
+    /// Use a custom Chromium download directory.
+    pub fn browser_download_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.browser_download_dir = Some(dir.into());
+        self
+    }
+
     /// Enable or disable memory read/injection.
     pub fn use_memory(mut self, enabled: bool) -> Self {
         self.use_memory = Some(enabled);
@@ -1724,6 +1756,7 @@ mod tests {
         assert_eq!(cfg.bib_db_path, expected_state_dir.join(DEFAULT_BIB_DB));
         assert_eq!(cfg.app_db_path, expected_state_dir.join(DEFAULT_APP_DB));
         assert_eq!(cfg.kms_db_path, expected_state_dir.join(DEFAULT_KMS_DB));
+        assert_eq!(cfg.browser_download_dir, None);
         assert!(cfg.enable_dag_history);
         assert!(cfg.enable_bibliography);
         assert!(cfg.enable_opengwas);
@@ -1760,6 +1793,7 @@ mod tests {
             .bib_db_path("/tmp/custom-bib.db")
             .app_db_path("/tmp/custom-app.db")
             .kms_db_path("/tmp/custom-kms.db")
+            .browser_download_dir("/tmp/browser-downloads")
             .opengwas_token("secret-token")
             .agent_identity("Custom agent")
             .system_prompt(Some("Custom prompt".to_string()))
@@ -1778,6 +1812,10 @@ mod tests {
         assert_eq!(cfg.bib_db_path, PathBuf::from("/tmp/custom-bib.db"));
         assert_eq!(cfg.app_db_path, PathBuf::from("/tmp/custom-app.db"));
         assert_eq!(cfg.kms_db_path, PathBuf::from("/tmp/custom-kms.db"));
+        assert_eq!(
+            cfg.browser_download_dir,
+            Some(PathBuf::from("/tmp/browser-downloads"))
+        );
         assert_eq!(cfg.opengwas_token.as_deref(), Some("secret-token"));
         assert_eq!(cfg.agent_identity, "Custom agent");
         assert_eq!(cfg.system_prompt.as_deref(), Some("Custom prompt"));
@@ -1896,6 +1934,9 @@ mod tests {
         assert!(browser_prompt.contains("browser_navigate"));
         assert!(browser_prompt.contains("browser_screenshot"));
         assert!(browser_prompt.contains("browser_evaluate"));
+        assert!(browser_prompt.contains("browser_download"));
+        assert!(browser_prompt.contains("browser_wait_for_download"));
+        assert!(browser_prompt.contains("/browser-downloads"));
         assert!(browser_prompt.contains("Collaboration Boundary"));
         // Browser agents are not researchers and not plugin developers;
         // those sections must be absent so the prompt doesn't waste

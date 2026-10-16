@@ -32,6 +32,10 @@ pub enum Error {
     #[error("invalid url `{0}`")]
     InvalidUrl(String),
 
+    /// Downloads were requested without a configured download directory.
+    #[error("browser downloads are disabled; no download directory is configured")]
+    DownloadsDisabled,
+
     /// A local file operation failed (e.g. writing a screenshot).
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
