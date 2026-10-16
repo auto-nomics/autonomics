@@ -12,9 +12,7 @@ use std::sync::Arc;
 use agentik_core::tools::truncation::{DEFAULT_MAX_CHARS, TruncationConfig, truncate_tool_output};
 use agentik_core::tools::{ToolError, ToolFunction, ToolRegistration};
 use agentik_proc::tool;
-use agentik_sdk::types::{
-    ToolImageSource, ToolResult as AgentToolResult, ToolResultBlock, ToolResultContent,
-};
+use agentik_sdk::types::{ToolResult as AgentToolResult, ToolResultBlock, ToolResultContent};
 use async_trait::async_trait;
 
 use crate::storage::OpendalFileStorage;
@@ -191,13 +189,14 @@ impl ToolFunction for VfsBashTool {
 
 // ────────────────────────── registration ──────────────────────────
 
-/// Apply the system-wide character budget to every VFS operation.
+/// Apply the system-wide character budget to textual VFS output.
 ///
 /// JSON that already fits is returned unchanged. Oversized JSON is represented
 /// as a valid JSON object containing a truncated rendering of the original
-/// payload, keeping the outer tool result structured while guaranteeing that
-/// the serialized response stays within `DEFAULT_MAX_CHARS`. Oversized image
-/// blocks are omitted with an explicit marker rather than sent as base64.
+/// payload, keeping the outer tool result structured within the character
+/// budget. Image blocks are opaque binary payloads rather than text, so they
+/// are preserved verbatim and left to the session image-delivery layer for
+/// provider-specific limits.
 fn bound_vfs_output(mut result: AgentToolResult) -> AgentToolResult {
     let config = output_config();
     match &mut result.content {
@@ -212,29 +211,24 @@ fn bound_vfs_output(mut result: AgentToolResult) -> AgentToolResult {
             }
         }
         ToolResultContent::Blocks(blocks) => {
-            if blocks.len() == 1
-                && matches!(blocks[0], ToolResultBlock::Image { .. })
-                && image_data_chars(&blocks[0]) > DEFAULT_MAX_CHARS - VFS_OUTPUT_MARGIN
-            {
-                let chars = image_data_chars(&blocks[0]);
-                let omitted = format!(
-                    "[image omitted: base64 expansion was {chars} characters; \
-                     limit is {DEFAULT_MAX_CHARS}]"
-                );
-                result.content = ToolResultContent::Text(omitted);
-            } else {
-                let joined = blocks
-                    .iter()
-                    .map(|block| match block {
-                        ToolResultBlock::Text { text } => text.as_str(),
-                        ToolResultBlock::Image { .. } => "[image omitted]",
-                    })
-                    .collect::<Vec<_>>()
-                    .join("");
-                let bounded = truncate_tool_output(&joined, &config);
-                blocks.clear();
+            let joined = blocks
+                .iter()
+                .filter_map(|block| match block {
+                    ToolResultBlock::Text { text } => Some(text.as_str()),
+                    ToolResultBlock::Image { .. } => None,
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            let bounded = truncate_tool_output(&joined, &config);
+            let images = blocks
+                .drain(..)
+                .filter(|block| matches!(block, ToolResultBlock::Image { .. }))
+                .collect::<Vec<_>>();
+
+            if !bounded.content.is_empty() {
                 blocks.push(ToolResultBlock::text(bounded.content));
             }
+            blocks.extend(images);
         }
     }
     result
@@ -268,14 +262,6 @@ fn truncated_json_payload(serialized: &str, config: &TruncationConfig) -> serde_
         }
     }
     payload
-}
-
-fn image_data_chars(block: &ToolResultBlock) -> usize {
-    let ToolResultBlock::Image { source } = block else {
-        return 0;
-    };
-    let ToolImageSource::Base64 { data, .. } = source;
-    data.chars().count()
 }
 
 fn bound_tool_error(error: &ToolError) -> ToolError {
@@ -470,7 +456,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn oversized_image_is_omitted_instead_of_expanding_context() {
+    async fn image_payload_bypasses_text_character_budget() {
         let tool = make_tool();
         let mut write = input("write");
         write.path = Some("/large.png".into());
@@ -481,13 +467,11 @@ mod tests {
         read.path = Some("/large.png".into());
         let result = tool.run(read).await.unwrap();
 
-        match result.content {
-            ToolResultContent::Text(text) => {
-                assert!(text.contains("[image omitted: base64 expansion was"));
-                assert!(text.contains("limit is 50000]"));
-            }
-            other => panic!("expected bounded text content, got: {other:?}"),
-        }
+        let ToolResultContent::Blocks(blocks) = result.content else {
+            panic!("expected image content blocks");
+        };
+        assert_eq!(blocks.len(), 1);
+        assert!(matches!(blocks[0], ToolResultBlock::Image { .. }));
     }
 
     #[test]

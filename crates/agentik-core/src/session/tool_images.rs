@@ -1,10 +1,10 @@
 //! Re-attaching images returned by tools.
 //!
 //! Tool results are remembered as text-only `ContentBlock::ToolResult`
-//! messages, which drops any image blocks the tool produced. For vision
-//! models (or when `AGENTIK_TOOL_IMAGES=always`) the images are re-attached
-//! as companion user messages placed right after the tool result — the one
-//! place every wire protocol accepts images.
+//! messages, where image blocks become explicit placeholders. For vision
+//! models (or when `AGENTIK_TOOL_IMAGES=always`) the images are re-attached as
+//! companion user messages placed right after the tool result — the one place
+//! every wire protocol accepts images.
 
 use std::sync::OnceLock;
 
@@ -21,8 +21,8 @@ use super::Session;
 /// Maximum images carried into one companion message per tool result.
 const TOOL_IMAGE_MAX_COUNT: usize = 4;
 /// Maximum base64 characters per image in a companion message. Larger
-/// images are dropped with a warning — a truncated base64 payload would
-/// be invalid input for every provider, so skipping is the only safe cut.
+/// images are replaced with a warning — a truncated base64 payload would be
+/// invalid input for every provider, so skipping is the only safe cut.
 const TOOL_IMAGE_MAX_BASE64_CHARS: usize = 6 * 1024 * 1024;
 
 /// Parsed form of the `AGENTIK_TOOL_IMAGES` env var.
@@ -64,11 +64,10 @@ fn tool_images_enabled(vision: bool) -> bool {
 
 /// Build the companion user message carrying a tool result's image blocks.
 ///
-/// Tool results are remembered as `ContentBlock::ToolResult`, whose content
-/// is plain text — image blocks returned by tools such as `bib_read_figure`
-/// are silently dropped by `text_content()`. This companion re-attaches them
-/// where every wire protocol accepts images: a user message right after the
-/// tool result. Returns `None` when the result carries no usable images.
+/// A successful companion contains provider image blocks and explanatory text.
+/// When every image exceeds a delivery limit, the companion is text-only so
+/// the model still learns why no image is available. Returns `None` only when
+/// the result contained no images at all.
 fn tool_result_image_companion(tr: &ToolResult, tool_name: &str) -> Option<Message> {
     let ToolResultContent::Blocks(blocks) = &tr.content else {
         return None;
@@ -80,12 +79,12 @@ fn tool_result_image_companion(tr: &ToolResult, tool_name: &str) -> Option<Messa
             continue;
         };
         let ToolImageSource::Base64 { media_type, data } = source;
-        if data.len() > TOOL_IMAGE_MAX_BASE64_CHARS {
+        if data.chars().count() > TOOL_IMAGE_MAX_BASE64_CHARS {
             skipped += 1;
             tracing::warn!(
                 tool = tool_name,
                 media_type = media_type.as_str(),
-                chars = data.len(),
+                chars = data.chars().count(),
                 "skipping oversize tool-result image"
             );
             continue;
@@ -106,15 +105,22 @@ fn tool_result_image_companion(tr: &ToolResult, tool_name: &str) -> Option<Messa
             },
         });
     }
-    if images.is_empty() {
+    if images.is_empty() && skipped == 0 {
         return None;
     }
     let short_id: String = tr.tool_use_id.chars().take(8).collect();
-    let mut note = format!(
-        "[tool-result-images] {tool_name} (call {short_id}…) returned {} image(s), attached \
-         below. They are the figures the tool produced; analyze them directly.",
-        images.len()
-    );
+    let mut note = if images.is_empty() {
+        format!(
+            "[tool-result-images] {tool_name} (call {short_id}…) returned {skipped} image(s), \
+             all skipped because of the per-call image limits."
+        )
+    } else {
+        format!(
+            "[tool-result-images] {tool_name} (call {short_id}…) returned {} image(s), attached \
+             below. They are the figures the tool produced; analyze them directly.",
+            images.len()
+        )
+    };
     if skipped > 0 {
         note.push_str(&format!(
             " {skipped} image(s) were skipped (per-call limit {TOOL_IMAGE_MAX_COUNT} or over \
@@ -266,7 +272,18 @@ mod tests {
             ]),
             is_error: None,
         };
-        assert!(tool_result_image_companion(&oversize, "t").is_none());
+        let companion = tool_result_image_companion(&oversize, "t").unwrap();
+        assert!(companion.content.iter().all(|c| !c.is_image()));
+        assert!(companion.text().join("").contains("all skipped"));
+
+        let text_only = ToolResult {
+            tool_use_id: "call_none".into(),
+            content: ToolResultContent::Blocks(vec![agentik_types::tools::ToolResultBlock::text(
+                "only text",
+            )]),
+            is_error: None,
+        };
+        assert!(tool_result_image_companion(&text_only, "t").is_none());
     }
 
     #[test]

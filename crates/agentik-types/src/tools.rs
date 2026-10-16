@@ -551,7 +551,11 @@ impl ToolResult {
         }
     }
 
-    /// Extract text content, joining multiple text segments. Non-text (images) are skipped.
+    /// Extract text content, joining multiple text segments.
+    ///
+    /// Image blocks cannot be represented in the text-only tool-result wire
+    /// shape, so each one is represented by an explicit placeholder. The agent
+    /// session may subsequently re-attach the original image for vision models.
     #[must_use]
     pub fn text_content(&self) -> String {
         match &self.content {
@@ -561,7 +565,7 @@ impl ToolResult {
                 .iter()
                 .filter_map(|b| match b {
                     ToolResultBlock::Text { text } => Some(text.as_str()),
-                    ToolResultBlock::Image { .. } => None,
+                    ToolResultBlock::Image { .. } => Some("[image omitted]"),
                 })
                 .collect::<Vec<_>>()
                 .join(""),
