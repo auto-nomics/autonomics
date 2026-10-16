@@ -52,7 +52,9 @@ async fn build_source_sink(toolset: &Toolset, id: &str, output: &str) {
 
 #[tokio::test]
 async fn agent_controls_channel_operators_with_dag_shell() {
-    let history = data_engine::dag::DagHistory::open_in_memory().await.unwrap();
+    let history = data_engine::dag::DagHistory::open_in_memory()
+        .await
+        .unwrap();
     let engine = DataEngine::builder().build().with_history(history);
     let (client, _handle) = spawn_with_engine(engine);
     let tools = data_engine_tools::registrations(Arc::new(client));
@@ -96,7 +98,9 @@ async fn agent_controls_channel_operators_with_dag_shell() {
     // After the slim-index refactor, `run_dag` no longer carries the
     // physical node list. Pull it from the persisted report via the
     // `full` view of the most recent run.
-    let run_id = report["run_id"].as_str().expect("run_dag must surface run_id");
+    let run_id = report["run_id"]
+        .as_str()
+        .expect("run_dag must surface run_id");
     let results = toolset
         .execute(
             &[build_tooluse(

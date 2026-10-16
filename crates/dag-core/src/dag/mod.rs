@@ -29,12 +29,12 @@ pub use channel::{ChannelBranch, ChannelNode, ChannelOperator};
 pub use error::{DagError, NodeError};
 pub use execution::{
     DagTaskGcPolicy, DagTaskGcReport, DagTaskWatermarkReport, LocalDirectoryArtifactStore,
-    LocalTaskExecutor,
-    ProcessTaskOutput, ProcessTaskSpec, ProcessTaskTransport, RemoteTaskExecutor,
-    TaskArtifactStore, TaskAttemptReceipt, TaskDispatch, TaskExecution, TaskExecutor,
-    TaskInputBinding, TaskInputSource, TaskLease, TaskOutputBinding, TaskResources, TaskSpec,
-    TaskSubmission, TaskTransport, dag_task_gc_age, dag_task_gc_interval, dag_task_gc_max_bytes,
-    dag_tasks_root, local_task_executor, sweep_dag_tasks, sweep_dag_tasks_watermark,
+    LocalTaskExecutor, ProcessTaskOutput, ProcessTaskSpec, ProcessTaskTransport,
+    RemoteTaskExecutor, TaskArtifactStore, TaskAttemptReceipt, TaskDispatch, TaskExecution,
+    TaskExecutor, TaskInputBinding, TaskInputSource, TaskLease, TaskOutputBinding, TaskResources,
+    TaskSpec, TaskSubmission, TaskTransport, dag_task_gc_age, dag_task_gc_interval,
+    dag_task_gc_max_bytes, dag_tasks_root, local_task_executor, sweep_dag_tasks,
+    sweep_dag_tasks_watermark,
 };
 pub use export::{ExportFile, ExportFormat, ExportSummary, SkippedFile};
 pub use graph::{DAG, DynamicNodeBuilder};

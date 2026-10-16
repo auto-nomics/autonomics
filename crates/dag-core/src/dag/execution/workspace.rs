@@ -119,8 +119,8 @@ impl LocalTaskWorkspace {
         let mut written_estimate = 0u64;
         let mut truncated = false;
         for batch in &batches {
-            written_estimate = written_estimate
-                .saturating_add(batch.get_array_memory_size() as u64);
+            written_estimate =
+                written_estimate.saturating_add(batch.get_array_memory_size() as u64);
             if let Some(cap) = cap
                 && written_estimate >= cap
             {

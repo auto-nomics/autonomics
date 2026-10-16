@@ -237,7 +237,14 @@ impl ToolFunction for DagRunsLogTool {
         let view = RunDetailView::parse(input.view.as_deref())?;
         let filter = NodeFilter::parse(&input)?;
 
-        if view == RunDetailView::NodeDetail && input.node_id.as_deref().map(str::trim).filter(|id| !id.is_empty()).is_none() {
+        if view == RunDetailView::NodeDetail
+            && input
+                .node_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .is_none()
+        {
             return Err(ToolError::ValidationFailed {
                 message: "view=node_detail requires node_id".into(),
             });
@@ -268,10 +275,7 @@ impl ToolFunction for DagRunsLogTool {
             && let Some(run) = runs.first()
         {
             return Ok(ToolResult::success_json(run_detail_json(
-                run,
-                view,
-                &input,
-                &filter,
+                run, view, &input, &filter,
             )?));
         }
 
@@ -351,13 +355,7 @@ const NODE_FIELDS_DEFAULT: &[&str] = &[
 /// Default field projection for `view="diagnostic"`. Slightly leaner than
 /// `NODE_FIELDS_DEFAULT` — only the failure-triage columns, no timings or
 /// sink paths, since the caller is here to read error text.
-const DIAGNOSTIC_FIELDS: &[&str] = &[
-    "id",
-    "status",
-    "logical_node",
-    "item_key",
-    "error",
-];
+const DIAGNOSTIC_FIELDS: &[&str] = &["id", "status", "logical_node", "item_key", "error"];
 
 /// Build the per-view payload for a single run.
 fn run_detail_json(
@@ -380,11 +378,9 @@ fn run_detail_json(
 
     let mut out = match effective_view {
         RunDetailView::Summary => run_summary_view(run, report_value.as_ref()),
-        RunDetailView::Nodes => run_nodes_view(
-            report_value.as_ref(),
-            filter,
-            input.fields.as_deref(),
-        )?,
+        RunDetailView::Nodes => {
+            run_nodes_view(report_value.as_ref(), filter, input.fields.as_deref())?
+        }
         RunDetailView::NodeDetail => {
             let node_id = input
                 .node_id
@@ -400,12 +396,8 @@ fn run_detail_json(
         RunDetailView::Ports => run_ports_view(report_value.as_ref()),
         RunDetailView::Inputs => run_single_field_view(report_value.as_ref(), "inputs"),
         RunDetailView::Schema => run_schema_view(report_value.as_ref()),
-        RunDetailView::Diagnostic => {
-            run_diagnostic_view(report_value.as_ref())?
-        }
-        RunDetailView::Full => {
-            run_full_view(run, report_value.as_ref())
-        }
+        RunDetailView::Diagnostic => run_diagnostic_view(report_value.as_ref())?,
+        RunDetailView::Full => run_full_view(run, report_value.as_ref()),
     };
 
     // Always include the run record identity so the caller can correlate
@@ -413,8 +405,17 @@ fn run_detail_json(
     if let Some(obj) = out.as_object_mut() {
         obj.insert("run_id".into(), Value::String(run.id.clone()));
         obj.insert("ref_name".into(), Value::String(run.ref_name.clone()));
-        obj.insert("snapshot_id".into(), run.snapshot_id.clone().map(Value::String).unwrap_or(Value::Null));
-        obj.insert("view".into(), Value::String(view_label(effective_view).into()));
+        obj.insert(
+            "snapshot_id".into(),
+            run.snapshot_id
+                .clone()
+                .map(Value::String)
+                .unwrap_or(Value::Null),
+        );
+        obj.insert(
+            "view".into(),
+            Value::String(view_label(effective_view).into()),
+        );
     }
     Ok(out)
 }
@@ -535,9 +536,15 @@ fn project_node(node: &Value, fields: &[&str]) -> Value {
 }
 
 fn clamp_error_message_in_place(obj: &mut Value) {
-    let Some(err) = obj.get_mut("error") else { return };
-    let Some(err_obj) = err.as_object_mut() else { return };
-    let Some(message) = err_obj.get("message").and_then(Value::as_str) else { return };
+    let Some(err) = obj.get_mut("error") else {
+        return;
+    };
+    let Some(err_obj) = err.as_object_mut() else {
+        return;
+    };
+    let Some(message) = err_obj.get("message").and_then(Value::as_str) else {
+        return;
+    };
     err_obj.insert(
         "message".into(),
         Value::String(truncate_chars(message, NODE_ERROR_MESSAGE_PREVIEW_CHARS)),
@@ -578,10 +585,7 @@ fn run_single_field_view(report: Option<&Value>, field: &str) -> serde_json::Val
         .iter()
         .filter_map(|node| {
             let id = node.get("id").and_then(Value::as_str)?;
-            let value = node
-                .get(field)
-                .cloned()
-                .unwrap_or(Value::Null);
+            let value = node.get(field).cloned().unwrap_or(Value::Null);
             Some(serde_json::json!({"id": id, field: value}))
         })
         .collect();
@@ -667,7 +671,13 @@ fn run_diagnostic_view(report: Option<&Value>) -> Result<serde_json::Value, Tool
     // can grep for a specific group without scanning the whole list.
     let mut groups: std::collections::BTreeMap<
         String,
-        (Vec<String>, Vec<Value>, Option<&str>, Option<&str>, Option<&str>),
+        (
+            Vec<String>,
+            Vec<Value>,
+            Option<&str>,
+            Option<&str>,
+            Option<&str>,
+        ),
     > = std::collections::BTreeMap::new();
     // (item_keys, nodes, wave_of_first, scatter_axis_of_first, logical_node_type)
     for node in nodes {
@@ -894,12 +904,21 @@ mod tests {
             fields: None,
         };
         let filter = NodeFilter::parse(&input).unwrap();
-        let detail = run_detail_json(&run, RunDetailView::parse(input.view.as_deref()).unwrap(), &input, &filter).unwrap();
+        let detail = run_detail_json(
+            &run,
+            RunDetailView::parse(input.view.as_deref()).unwrap(),
+            &input,
+            &filter,
+        )
+        .unwrap();
         assert_eq!(detail["run_id"], "run-1");
         assert_eq!(detail["view"], "summary");
         assert_eq!(detail["ok"], true);
         assert!(detail.get("logical_nodes").is_some());
-        assert!(detail.get("nodes").is_none(), "summary must not include per-node[]");
+        assert!(
+            detail.get("nodes").is_none(),
+            "summary must not include per-node[]"
+        );
     }
 
     #[test]
@@ -917,14 +936,35 @@ mod tests {
             fields: None,
         };
         let filter = NodeFilter::parse(&input).unwrap();
-        let detail = run_detail_json(&run, RunDetailView::parse(input.view.as_deref()).unwrap(), &input, &filter).unwrap();
+        let detail = run_detail_json(
+            &run,
+            RunDetailView::parse(input.view.as_deref()).unwrap(),
+            &input,
+            &filter,
+        )
+        .unwrap();
         let node = &detail["nodes"][0];
-        for key in ["id", "status", "logical_node", "item_key", "port_assignments", "file_path", "artifact_path", "elapsed_ms"] {
-            assert!(node.get(key).is_some(), "default projection must include {key}");
+        for key in [
+            "id",
+            "status",
+            "logical_node",
+            "item_key",
+            "port_assignments",
+            "file_path",
+            "artifact_path",
+            "elapsed_ms",
+        ] {
+            assert!(
+                node.get(key).is_some(),
+                "default projection must include {key}"
+            );
         }
         // Drill-down-only fields are excluded by the default projection.
         for key in ["execution", "inputs", "output_schema", "fingerprint"] {
-            assert!(node.get(key).is_none(), "default projection must omit {key}");
+            assert!(
+                node.get(key).is_none(),
+                "default projection must omit {key}"
+            );
         }
     }
 
@@ -943,7 +983,13 @@ mod tests {
             fields: Some("id,status".into()),
         };
         let filter = NodeFilter::parse(&input).unwrap();
-        let detail = run_detail_json(&run, RunDetailView::parse(input.view.as_deref()).unwrap(), &input, &filter).unwrap();
+        let detail = run_detail_json(
+            &run,
+            RunDetailView::parse(input.view.as_deref()).unwrap(),
+            &input,
+            &filter,
+        )
+        .unwrap();
         assert_eq!(detail["total"], 1);
         let node = &detail["nodes"][0];
         assert_eq!(node.as_object().unwrap().len(), 2);
@@ -982,7 +1028,15 @@ mod tests {
             fields: None,
         };
         let filter = NodeFilter::parse(&input).unwrap();
-        assert!(run_detail_json(&run, RunDetailView::parse(input.view.as_deref()).unwrap(), &input, &filter).is_err());
+        assert!(
+            run_detail_json(
+                &run,
+                RunDetailView::parse(input.view.as_deref()).unwrap(),
+                &input,
+                &filter
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -1000,7 +1054,13 @@ mod tests {
             fields: None,
         };
         let filter = NodeFilter::parse(&input).unwrap();
-        let detail = run_detail_json(&run, RunDetailView::parse(input.view.as_deref()).unwrap(), &input, &filter).unwrap();
+        let detail = run_detail_json(
+            &run,
+            RunDetailView::parse(input.view.as_deref()).unwrap(),
+            &input,
+            &filter,
+        )
+        .unwrap();
         assert_eq!(detail["id"], "sink");
         assert!(detail.get("execution").is_some());
         assert!(detail.get("inputs").is_some());
@@ -1021,7 +1081,13 @@ mod tests {
             fields: None,
         };
         let filter = NodeFilter::parse(&input).unwrap();
-        let detail = run_detail_json(&run, RunDetailView::parse(input.view.as_deref()).unwrap(), &input, &filter).unwrap();
+        let detail = run_detail_json(
+            &run,
+            RunDetailView::parse(input.view.as_deref()).unwrap(),
+            &input,
+            &filter,
+        )
+        .unwrap();
         assert_eq!(detail["field"], "execution");
         assert_eq!(detail["total"], 1);
         assert!(detail["nodes"][0].get("execution").is_some());
@@ -1043,7 +1109,13 @@ mod tests {
             fields: None,
         };
         let filter = NodeFilter::parse(&input).unwrap();
-        let detail = run_detail_json(&run, RunDetailView::parse(input.view.as_deref()).unwrap(), &input, &filter).unwrap();
+        let detail = run_detail_json(
+            &run,
+            RunDetailView::parse(input.view.as_deref()).unwrap(),
+            &input,
+            &filter,
+        )
+        .unwrap();
         assert_eq!(detail["total"], 1);
         assert_eq!(detail["ports"][0]["port"], 0);
         assert_eq!(detail["ports"][0]["path"], "out.csv");
@@ -1078,7 +1150,13 @@ mod tests {
             fields: None,
         };
         let filter = NodeFilter::parse(&input).unwrap();
-        let detail = run_detail_json(&run, RunDetailView::parse(input.view.as_deref()).unwrap(), &input, &filter).unwrap();
+        let detail = run_detail_json(
+            &run,
+            RunDetailView::parse(input.view.as_deref()).unwrap(),
+            &input,
+            &filter,
+        )
+        .unwrap();
         let groups = detail["groups"].as_array().unwrap();
         assert_eq!(groups.len(), 2);
         // BTreeMap groups are sorted lexicographically: "other" before
@@ -1116,7 +1194,13 @@ mod tests {
             fields: None,
         };
         let filter = NodeFilter::parse(&input).unwrap();
-        let detail = run_detail_json(&run, RunDetailView::parse(input.view.as_deref()).unwrap(), &input, &filter).unwrap();
+        let detail = run_detail_json(
+            &run,
+            RunDetailView::parse(input.view.as_deref()).unwrap(),
+            &input,
+            &filter,
+        )
+        .unwrap();
         let message = detail["groups"][0]["nodes"][0]["error"]["message"]
             .as_str()
             .unwrap();
@@ -1151,7 +1235,13 @@ mod tests {
             fields: None,
         };
         let filter = NodeFilter::parse(&input).unwrap();
-        let detail = run_detail_json(&run, RunDetailView::parse(input.view.as_deref()).unwrap(), &input, &filter).unwrap();
+        let detail = run_detail_json(
+            &run,
+            RunDetailView::parse(input.view.as_deref()).unwrap(),
+            &input,
+            &filter,
+        )
+        .unwrap();
         let node = &detail["nodes"][0];
         assert!(node.get("execution").is_some());
         assert!(node.get("inputs").is_some());
@@ -1197,7 +1287,13 @@ mod tests {
             fields: None,
         };
         let filter = NodeFilter::parse(&input).unwrap();
-        let detail = run_detail_json(&run, RunDetailView::parse(input.view.as_deref()).unwrap(), &input, &filter).unwrap();
+        let detail = run_detail_json(
+            &run,
+            RunDetailView::parse(input.view.as_deref()).unwrap(),
+            &input,
+            &filter,
+        )
+        .unwrap();
         assert_eq!(detail["total"], 0);
         assert_eq!(detail["nodes"].as_array().unwrap().len(), 0);
     }

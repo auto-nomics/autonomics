@@ -115,19 +115,20 @@ pub struct DagTaskWatermarkReport {
 /// owns every receipt it wrote, so pid liveness cannot exempt them forever) —
 /// until the tree is back at 75% of the ceiling. Pending `.gc-` leftovers
 /// count toward the total and are cleared first.
-pub async fn sweep_dag_tasks_watermark(root: &Path, max_bytes: Option<u64>) -> DagTaskWatermarkReport {
+pub async fn sweep_dag_tasks_watermark(
+    root: &Path,
+    max_bytes: Option<u64>,
+) -> DagTaskWatermarkReport {
     let (root, max_bytes) = (root.to_path_buf(), max_bytes);
-    tokio::task::spawn_blocking(move || {
-        sweep_dag_tasks_watermark_blocking(&root, max_bytes)
-    })
-    .await
-    .unwrap_or_else(|join_error| {
-        let mut report = DagTaskWatermarkReport::default();
-        report
-            .errors
-            .push(format!("dag task watermark sweep task failed: {join_error}"));
-        report
-    })
+    tokio::task::spawn_blocking(move || sweep_dag_tasks_watermark_blocking(&root, max_bytes))
+        .await
+        .unwrap_or_else(|join_error| {
+            let mut report = DagTaskWatermarkReport::default();
+            report.errors.push(format!(
+                "dag task watermark sweep task failed: {join_error}"
+            ));
+            report
+        })
 }
 
 fn sweep_dag_tasks_watermark_blocking(
@@ -204,9 +205,7 @@ fn sweep_dag_tasks_watermark_blocking(
     }
 
     // Dead-owner first, then oldest-first within each class.
-    candidates.sort_by(|a, b| {
-        a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1))
-    });
+    candidates.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
     report.total_bytes_before = total;
     for (_, _, path, _) in candidates {
         if total <= target {
@@ -251,7 +250,9 @@ pub fn dag_task_gc_interval() -> Option<Duration> {
 pub fn dag_task_gc_max_bytes() -> Option<u64> {
     std::env::var_os(DAG_TASKS_GC_MAX_BYTES_ENV)
         .and_then(|value| value.to_string_lossy().trim().parse::<u64>().ok())
-        .map_or(Some(DEFAULT_GC_MAX_BYTES), |bytes| (bytes > 0).then_some(bytes))
+        .map_or(Some(DEFAULT_GC_MAX_BYTES), |bytes| {
+            (bytes > 0).then_some(bytes)
+        })
 }
 
 fn parse_env_secs(raw: Option<&std::ffi::OsStr>, default: u64) -> Duration {
@@ -611,19 +612,18 @@ mod tests {
     async fn watermark_reclaims_oldest_dead_first_down_to_target() {
         let root = tempfile::tempdir().unwrap();
         let unit = 8192;
-        let oldest =
-            make_sized_receipt(root.path(), 4_000_000, Duration::from_secs(900), unit);
-        let middle =
-            make_sized_receipt(root.path(), 4_000_001, Duration::from_secs(600), unit);
-        let newest =
-            make_sized_receipt(root.path(), 4_000_002, Duration::from_secs(300), unit);
+        let oldest = make_sized_receipt(root.path(), 4_000_000, Duration::from_secs(900), unit);
+        let middle = make_sized_receipt(root.path(), 4_000_001, Duration::from_secs(600), unit);
+        let newest = make_sized_receipt(root.path(), 4_000_002, Duration::from_secs(300), unit);
 
         // Ceiling of three units (target 2.25): the ~3.01 units on disk push
         // past it, so exactly the oldest receipt goes.
-        let report =
-            sweep_dag_tasks_watermark(root.path(), Some(unit as u64 * 3)).await;
+        let report = sweep_dag_tasks_watermark(root.path(), Some(unit as u64 * 3)).await;
         assert_eq!(report.scanned, 3);
-        assert_eq!(report.removed, 1, "only enough receipts to reach the target");
+        assert_eq!(
+            report.removed, 1,
+            "only enough receipts to reach the target"
+        );
         assert!(!oldest.exists(), "the oldest receipt is reclaimed first");
         assert!(middle.exists());
         assert!(newest.exists());
@@ -635,16 +635,16 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let unit = 4096;
         let live = std::process::id();
-        let live_young =
-            make_sized_receipt(root.path(), live, Duration::from_secs(300), unit);
+        let live_young = make_sized_receipt(root.path(), live, Duration::from_secs(300), unit);
         // Older than the 6h grace: eligible even though its owner is alive.
-        let live_old =
-            make_sized_receipt(root.path(), live, Duration::from_secs(7 * 3600), unit);
+        let live_old = make_sized_receipt(root.path(), live, Duration::from_secs(7 * 3600), unit);
 
-        let report =
-            sweep_dag_tasks_watermark(root.path(), Some(unit as u64)).await;
+        let report = sweep_dag_tasks_watermark(root.path(), Some(unit as u64)).await;
         assert_eq!(report.removed, 1);
-        assert!(live_young.exists(), "in-flight workspaces are never touched");
+        assert!(
+            live_young.exists(),
+            "in-flight workspaces are never touched"
+        );
         assert!(!live_old.exists(), "grace-expired live-owner receipts go");
         assert_eq!(report.retained_live_recent, 1);
     }
