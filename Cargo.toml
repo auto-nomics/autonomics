@@ -43,7 +43,6 @@ members = [
   "crates/apply-patch",
 
 
-
   "stat_crates/statkit",
   "stat_crates/epi",
   "stat_crates/hypothesize",
@@ -91,7 +90,7 @@ members = [
   "crates/evolution-core",
   "crates/skills",
   "crates/plugin-rsi",
-  "crates/text-embedding",
+  "crates/text-embedding", "crates/browser-use",
 ]
 resolver = "3"
 
@@ -165,6 +164,7 @@ hf-hub = "1.0.0"
 
 mockall = "0.15.0"
 
+chromiumoxide = "0.9.1"
 # Suppress unused-warnings for the public-API workspace.dependencies that
 # the umbrella doesn't directly import. Keep this list as a hint for
 # future members; do not delete entries just because a single member
