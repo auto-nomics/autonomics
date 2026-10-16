@@ -136,6 +136,11 @@ pub use tabula_sapiens::nodes::{
     TabulaSapiensReleaseNode, TabulaSapiensReleaseNodeFactory, TabulaSapiensReleaseSpec,
     TabulaSapiensVersionsNode, TabulaSapiensVersionsNodeFactory, TabulaSapiensVersionsSpec,
 };
+pub use tisch::nodes::{
+    TischAssetsNode, TischAssetsNodeFactory, TischAssetsSpec, TischCellTypesNode,
+    TischCellTypesNodeFactory, TischCellTypesSpec, TischDatasetsNode, TischDatasetsNodeFactory,
+    TischDatasetsSpec,
+};
 pub use uniprot::nodes::idmap::{UniprotIdmapNode, UniprotIdmapNodeFactory};
 pub use uniprot::nodes::search::{UniprotSearchNode, UniprotSearchNodeFactory};
 pub use uniprot::nodes::stream::{UniprotStreamNode, UniprotStreamNodeFactory};
@@ -281,6 +286,9 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(TabulaSapiensVersionsNodeFactory));
         registry.register(Box::new(TabulaSapiensReleaseNodeFactory));
         registry.register(Box::new(TabulaSapiensFilesNodeFactory));
+        registry.register(Box::new(TischDatasetsNodeFactory));
+        registry.register(Box::new(TischCellTypesNodeFactory));
+        registry.register(Box::new(TischAssetsNodeFactory));
         registry.register(Box::new(LiteratureFetchNodeFactory {}));
         registry.register(Box::new(BibSaveNodeFactory {}));
         registry.register(Box::new(LiteratureFulltextNodeFactory {}));
@@ -497,6 +505,27 @@ mod tests {
             assert!(
                 registry.list_nodes().iter().any(|node| node.kind == kind),
                 "missing Tabula Sapiens query node: {kind}"
+            );
+        }
+    }
+
+    #[test]
+    fn plugin_registers_tisch_query_source_nodes() {
+        let ctx = dag_core::registry::NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        );
+        let mut registry = NodeRegistry::new(ctx);
+        registry.register_plugin(&Plugin::new());
+        let expected = [
+            "source_tisch_datasets",
+            "source_tisch_cell_types",
+            "source_tisch_assets",
+        ];
+        for kind in expected {
+            assert!(
+                registry.list_nodes().iter().any(|node| node.kind == kind),
+                "missing TISCH query node: {kind}"
             );
         }
     }

@@ -2,7 +2,7 @@
 
 本文是单细胞外部数据源的统一接入路线图。目标是为每个数据库补齐四层能力：调研文档、Rust SDK、非下载查询 DAG 节点、可选的数据/文件下载节点。查询节点输出 DataFrame；矩阵、FASTQ、H5AD、AnnData 等大文件统一走 VFS/FileSet 下载路径，不与查询 API 混在同一节点。
 
-当前总控清单共 28 项：GEO、CELLxGENE、HCA、SCEA、SCP、HuBMAP 与 Tabula Sapiens 已完成查询接入，Enrichr 复用现有能力，其余 20 项按后续批次推进。第一批参考图谱主通道已全部完成。
+当前总控清单共 28 项：GEO、CELLxGENE、HCA、SCEA、SCP、HuBMAP、Tabula Sapiens 与 TISCH 已完成查询接入，Enrichr 复用现有能力，其余 19 项按后续批次推进。第一批参考图谱主通道已全部完成，第二批疾病专题已启动。
 
 ## 接入状态
 
@@ -34,7 +34,7 @@
 
 | ID | 数据库 | 层次 | 状态 | 接入重点 | 预期节点 |
 |---|---|---|---|---|---|
-| `tisch` | TISCH | 肿瘤微环境 scRNA-seq/scATAC-seq | 待接入 | 研究、癌种、细胞类型、marker 与表达矩阵索引 | `source_tisch_datasets/cell_types/markers`，`download_tisch_expression` |
+| `tisch` | TISCH2 | 肿瘤微环境 scRNA-seq/scATAC-seq | 降级接入 | 当前部署无 JSON API：结构化解析官方 Dataset HTML（190 个数据集）与 Documentation 细胞类型表；旧 AJAX 端点已静态化 | `source_tisch_datasets/cell_types/assets` 已注册；dataset 归档与 marker 查询受官方部署限制，待官方接口恢复 |
 | `htan` | Human Tumor Atlas Network | 肿瘤单细胞与空间图谱 | 待接入 | HTAN Portal/API、Atlas、dataset、file manifest | `source_htan_atlases/datasets/files`，`download_htan_file` |
 | `kpmp` | Kidney Precision Medicine Project | 肾脏疾病与参考图谱 | 待接入 | sample、assay、single-cell reference、spatial 数据 | `source_kpmp_samples/datasets`，`download_kpmp_reference` |
 | `hcl` | Human Cell Landscape | 人体多组织单细胞景观 | 待接入 | 版本化矩阵与细胞类型参考；注意项目数据可能托管于 Zenodo/科学技术数据库 | `source_hcl_versions/references`，`download_hcl_reference` |
