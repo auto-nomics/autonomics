@@ -23,6 +23,7 @@ cellxgene = { path = "../../cellxgene" }
 hca = { path = "../../hca" }
 scea = { path = "../../scea" }
 scp = { path = "../../scp" }
+hubmap = { path = "../../hubmap" }
 nhanes = { path = "../../nhanes" }
 uniprot = { path = "../../uniprot" }
 reactome = { path = "../../reactome" }

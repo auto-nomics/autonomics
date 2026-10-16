@@ -29,6 +29,7 @@ members = [
   "crates/hca",
   "crates/scea",
   "crates/scp",
+  "crates/hubmap",
   "crates/chembl",
   "crates/opentargets",
   "crates/runtime",

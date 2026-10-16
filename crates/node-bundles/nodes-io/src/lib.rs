@@ -89,6 +89,11 @@ pub use hca::nodes::{
     HcaProjectSpec, HcaProjectsNode, HcaProjectsNodeFactory, HcaProjectsSpec, HcaSamplesNode,
     HcaSamplesNodeFactory, HcaSamplesSpec,
 };
+pub use hubmap::nodes::{
+    HubmapDatasetNode, HubmapDatasetNodeFactory, HubmapDatasetSpec, HubmapFilesNode,
+    HubmapFilesNodeFactory, HubmapFilesSpec, HubmapGlobusNode, HubmapGlobusNodeFactory,
+    HubmapGlobusSpec, HubmapSearchNode, HubmapSearchNodeFactory, HubmapSearchSpec,
+};
 pub use interpro::nodes::entry::{InterProEntryNode, InterProEntryNodeFactory};
 pub use nhanes::nodes::download::{NhanesDownloadNode, NhanesDownloadNodeFactory};
 pub use nhanes::nodes::files::{NhanesFilesNode, NhanesFilesNodeFactory};
@@ -264,6 +269,10 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(ScpSearchNodeFactory));
         registry.register(Box::new(ScpStudyNodeFactory));
         registry.register(Box::new(ScpFilesNodeFactory));
+        registry.register(Box::new(HubmapSearchNodeFactory));
+        registry.register(Box::new(HubmapDatasetNodeFactory));
+        registry.register(Box::new(HubmapFilesNodeFactory));
+        registry.register(Box::new(HubmapGlobusNodeFactory));
         registry.register(Box::new(LiteratureFetchNodeFactory {}));
         registry.register(Box::new(BibSaveNodeFactory {}));
         registry.register(Box::new(LiteratureFulltextNodeFactory {}));
@@ -437,6 +446,28 @@ mod tests {
             assert!(
                 registry.list_nodes().iter().any(|node| node.kind == kind),
                 "missing Single Cell Portal query node: {kind}"
+            );
+        }
+    }
+
+    #[test]
+    fn plugin_registers_hubmap_query_source_nodes() {
+        let ctx = dag_core::registry::NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        );
+        let mut registry = NodeRegistry::new(ctx);
+        registry.register_plugin(&Plugin::new());
+        let expected = [
+            "source_hubmap_search",
+            "source_hubmap_dataset",
+            "source_hubmap_files",
+            "source_hubmap_globus",
+        ];
+        for kind in expected {
+            assert!(
+                registry.list_nodes().iter().any(|node| node.kind == kind),
+                "missing HuBMAP query node: {kind}"
             );
         }
     }
