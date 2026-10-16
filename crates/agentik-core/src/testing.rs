@@ -19,6 +19,7 @@ pub fn dummy_model_info(name: &str) -> ModelInfo {
         thinking_budget: None,
         input_token_price: 1.0,
         output_token_price: 2.0,
+        custom: false,
     }
 }
 

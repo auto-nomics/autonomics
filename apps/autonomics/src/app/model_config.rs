@@ -146,6 +146,13 @@ impl App {
             } => {
                 self.fetch_remote_model_catalog(&provider_name, &base_url);
             }
+            ConfigCommand::SaveModel {
+                provider_name,
+                original_model_name,
+                draft,
+            } => {
+                self.save_model_config(&provider_name, original_model_name, draft);
+            }
             ConfigCommand::StartChatgptLogin { provider_name } => {
                 self.start_chatgpt_login(&provider_name);
             }
@@ -218,6 +225,39 @@ impl App {
                 .await
                 .map_err(|e| e.to_string());
             tx.send(crate::app_event::AppEvent::ProviderSaved {
+                provider_name,
+                result,
+            });
+        });
+    }
+
+    /// Add or update a custom model row (daemon-side).
+    fn save_model_config(
+        &self,
+        provider_name: &str,
+        original_model_name: Option<String>,
+        draft: crate::widgets::model_config_widget::ModelDraft,
+    ) {
+        let request = gateway::proto::SaveModelRequest {
+            provider_name: provider_name.to_string(),
+            original_model_name,
+            model_name: draft.model_name,
+            context_length: draft.context_length,
+            max_output_tokens: draft.max_output_tokens,
+            vision_ability: draft.vision_ability,
+            supports_function_calling: draft.supports_function_calling,
+            supports_streaming: draft.supports_streaming,
+            supports_thinking: draft.supports_thinking,
+            thinking_enabled: draft.thinking_enabled,
+            input_token_price: draft.input_token_price,
+            output_token_price: draft.output_token_price,
+        };
+        let client = self.client.clone();
+        let provider_name = provider_name.to_string();
+        let tx = self.app_event_tx.clone();
+        self.spawn_client_task("save_model", move || async move {
+            let result = client.save_model(&request).await.map_err(|e| e.to_string());
+            tx.send(crate::app_event::AppEvent::ModelSaved {
                 provider_name,
                 result,
             });

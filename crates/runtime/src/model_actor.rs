@@ -31,6 +31,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use agentik_sdk::model::{Model, ModelInfo, ProviderType};
+use agentik_sdk::provider::ollama::OllamaProvider;
 use agentik_sdk::provider::openai::OpenaiProvider;
 use agentik_sdk::provider::openai::oauth::{self, TokenBlob};
 use agentik_sdk::provider::openrouter::OpenrouterProvider;
@@ -38,7 +39,8 @@ use arc_swap::ArcSwapOption;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::model_bootstrap::{
-    ModelStorage, ModelStorageError, SaveProviderParams, StorageResult, resolve_from_parts,
+    ModelStorage, ModelStorageError, SaveModelParams, SaveProviderParams, StorageResult,
+    resolve_from_parts,
 };
 
 // ─────────────────────────────────────────────────────────────────────
@@ -143,6 +145,10 @@ enum ModelCommand {
     },
     SaveProvider {
         params: SaveProviderParams,
+        reply: oneshot::Sender<StorageResult<()>>,
+    },
+    SaveModel {
+        params: SaveModelParams,
         reply: oneshot::Sender<StorageResult<()>>,
     },
     PutSetting {
@@ -276,6 +282,17 @@ impl ModelHandle {
     /// Insert or update a provider row (credentials + base URL).
     pub async fn save_provider(&self, params: &SaveProviderParams) -> StorageResult<()> {
         self.call(|reply| ModelCommand::SaveProvider {
+            params: params.clone(),
+            reply,
+        })
+        .await
+        .ok_or_else(|| ModelStorageError::Message(WORKER_GONE.to_string()))?
+    }
+
+    /// Insert or update a custom model row. Built-in SDK presets are never
+    /// accepted here: edits must address an existing storage row.
+    pub async fn save_model(&self, params: &SaveModelParams) -> StorageResult<()> {
+        self.call(|reply| ModelCommand::SaveModel {
             params: params.clone(),
             reply,
         })
@@ -437,6 +454,9 @@ impl ModelWorker {
             }
             ModelCommand::SaveProvider { params, reply } => {
                 let _ = reply.send(self.storage.save_provider(&params).await);
+            }
+            ModelCommand::SaveModel { params, reply } => {
+                let _ = reply.send(self.storage.save_model(&params).await);
             }
             ModelCommand::PutSetting { key, value, reply } => {
                 let _ = reply.send(self.storage.put_setting(&key, &value).await);
@@ -775,6 +795,17 @@ impl ModelWorker {
         } else {
             None
         };
+        let ollama_key = if matches!(provider_type, ProviderType::Ollama) {
+            self.storage
+                .provider_auth(&provider)
+                .await
+                .ok()
+                .flatten()
+                .map(|auth| auth.api_key)
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let result = if matches!(provider_type, ProviderType::Openai) {
@@ -789,6 +820,8 @@ impl ModelWorker {
                     }
                     None => Err("openai model catalogue requires a ChatGPT login".to_string()),
                 }
+            } else if matches!(provider_type, ProviderType::Ollama) {
+                OllamaProvider::fetch_remote_catalog_with_auth(&base_url, &ollama_key).await
             } else {
                 OpenrouterProvider::fetch_remote_catalog(&base_url).await
             };

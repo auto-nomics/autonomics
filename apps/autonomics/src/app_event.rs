@@ -102,6 +102,11 @@ pub(crate) enum AppEvent {
         provider_name: String,
         result: std::result::Result<(), String>,
     },
+    /// A custom model add/edit finished (PUT /model-config/model).
+    ModelSaved {
+        provider_name: String,
+        result: std::result::Result<(), String>,
+    },
     EmbeddingConfigLoaded {
         result: std::result::Result<gateway::proto::EmbeddingConfigView, String>,
     },

@@ -1,8 +1,9 @@
 //! HTTP streaming client for Server-Sent Events (SSE) processing.
 //!
-//! This module handles the HTTP layer for streaming responses from the Anthropic API,
-//! parsing SSE events and converting them into MessageStreamEvent objects.
+//! This module handles the HTTP layer for streaming responses, parsing SSE
+//! or newline-delimited JSON and converting them into MessageStreamEvent objects.
 
+use bytes::Bytes;
 use futures::{Stream, StreamExt, TryStreamExt};
 use pin_project::pin_project;
 use reqwest::Response;
@@ -12,9 +13,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context, Poll};
 
 use crate::types::{AnthropicError, MessageStreamEvent, Result};
-use crate::wire::{AnthropicWire, StreamState, WireProtocol};
+use crate::wire::{AnthropicWire, StreamState, StreamTransport, WireProtocol};
 
-/// Configuration for SSE streaming requests.
+/// Configuration for streaming requests.
 #[derive(Debug, Clone)]
 pub struct StreamConfig {
     /// Buffer size for the event channel
@@ -51,7 +52,7 @@ impl Default for StreamConfig {
 /// converting raw SSE data into structured MessageStreamEvent objects.
 #[pin_project]
 pub struct HttpStreamClient {
-    /// The underlying SSE event stream
+    /// The underlying protocol event stream
     #[pin]
     event_stream: Pin<Box<dyn Stream<Item = Result<MessageStreamEvent>> + Send>>,
 
@@ -169,6 +170,15 @@ impl HttpStreamClient {
         // self-describing).
         let mut state = StreamState::default();
 
+        if wire.stream_transport() == StreamTransport::NewlineDelimitedJson {
+            return Ok(Box::pin(newline_delimited_json_stream(
+                byte_stream,
+                wire,
+                parsed_events,
+            ))
+                as Pin<Box<dyn Stream<Item = Result<MessageStreamEvent>> + Send>>);
+        }
+
         let sse_stream = byte_stream
             .eventsource()
             .flat_map(move |result| {
@@ -227,7 +237,10 @@ impl HttpStreamClient {
                 futures::stream::iter(events)
             });
 
-        Ok(sse_stream)
+        Ok(Box::pin(sse_stream)
+            as Pin<
+                Box<dyn Stream<Item = Result<MessageStreamEvent>> + Send>,
+            >)
     }
 
     /// Get the request ID from the response headers.
@@ -269,7 +282,7 @@ impl Stream for HttpStreamClient {
                 tracing::trace!(
                     event = ?event,
                     is_stop,
-                    "HttpStreamClient: received SSE event"
+                    "HttpStreamClient: received stream event"
                 );
                 if is_stop {
                     *this.ended = true;
@@ -291,6 +304,100 @@ impl Stream for HttpStreamClient {
             }
             Poll::Pending => Poll::Pending,
         }
+    }
+}
+
+fn newline_delimited_json_stream(
+    byte_stream: impl Stream<Item = std::result::Result<Bytes, reqwest::Error>> + Send + 'static,
+    wire: Arc<dyn WireProtocol>,
+    parsed_events: Arc<AtomicU64>,
+) -> impl Stream<Item = Result<MessageStreamEvent>> + Send {
+    let source = Box::pin(byte_stream);
+    let buffer = Vec::new();
+    let state = StreamState::default();
+    let finished = false;
+
+    futures::stream::unfold(
+        (source, buffer, state, finished, wire, parsed_events),
+        |(mut source, mut buffer, mut state, mut finished, wire, parsed_events)| async move {
+            loop {
+                while let Some(position) = buffer.iter().position(|byte| *byte == b'\n') {
+                    let line: Vec<u8> = buffer.drain(..=position).collect();
+                    let line = String::from_utf8_lossy(&line).trim().to_string();
+                    if line.is_empty() {
+                        continue;
+                    }
+                    parsed_events.fetch_add(1, Ordering::Relaxed);
+                    let events = adapt_ndjson_event(&wire, &line, &mut state);
+                    return Some((
+                        events,
+                        (source, buffer, state, finished, wire, parsed_events),
+                    ));
+                }
+
+                if finished {
+                    return None;
+                }
+
+                match source.next().await {
+                    Some(Ok(chunk)) => buffer.extend_from_slice(&chunk),
+                    Some(Err(e)) => {
+                        return Some((
+                            vec![Err(AnthropicError::StreamError(format!(
+                                "NDJSON stream error: {e}"
+                            )))],
+                            (source, buffer, state, finished, wire, parsed_events),
+                        ));
+                    }
+                    None => {
+                        finished = true;
+                        if buffer.is_empty() {
+                            return None;
+                        }
+                        let line = String::from_utf8_lossy(&buffer).trim().to_string();
+                        buffer.clear();
+                        if line.is_empty() {
+                            continue;
+                        }
+                        parsed_events.fetch_add(1, Ordering::Relaxed);
+                        let events = adapt_ndjson_event(&wire, &line, &mut state);
+                        return Some((
+                            events,
+                            (source, buffer, state, finished, wire, parsed_events),
+                        ));
+                    }
+                }
+            }
+        },
+    )
+    .flat_map(futures::stream::iter)
+}
+
+fn adapt_ndjson_event(
+    wire: &Arc<dyn WireProtocol>,
+    line: &str,
+    state: &mut StreamState,
+) -> Vec<Result<MessageStreamEvent>> {
+    let result = wire.adapt_sse_event("", line, state);
+    let mut out: Vec<Result<MessageStreamEvent>> = state
+        .deferred_events
+        .drain(..)
+        .chain(state.pending_events.drain(..))
+        .map(Ok)
+        .collect();
+    match result {
+        Ok(Some(event @ MessageStreamEvent::MessageStart { .. })) => {
+            let mut events = vec![Ok(event)];
+            events.extend(out);
+            events
+        }
+        Ok(main) => {
+            if let Some(event) = main {
+                out.push(Ok(event));
+            }
+            out
+        }
+        Err(e) => vec![Err(e)],
     }
 }
 
@@ -397,9 +504,15 @@ impl StreamRequestBuilder {
         );
 
         let mut headers = self.headers;
+        let (accept, transport) =
+            if self.wire.stream_transport() == StreamTransport::NewlineDelimitedJson {
+                ("application/x-ndjson", "ndjson")
+            } else {
+                ("text/event-stream", "sse")
+            };
         headers.insert(
             reqwest::header::ACCEPT,
-            reqwest::header::HeaderValue::from_static("text/event-stream"),
+            reqwest::header::HeaderValue::from_static(accept),
         );
         headers.insert(
             reqwest::header::CACHE_CONTROL,
@@ -417,7 +530,8 @@ impl StreamRequestBuilder {
 
         tracing::info!(
             url = %url,
-            accept = "text/event-stream",
+            accept,
+            transport,
             accept_encoding = "identity",
             disable_request_timeout = self.disable_request_timeout,
             "post_stream: issuing HTTP request"
@@ -529,5 +643,43 @@ mod tests {
         } else {
             panic!("Expected MessageStart event");
         }
+    }
+
+    #[tokio::test]
+    async fn ndjson_stream_parses_chunk_split_lines() {
+        use crate::wire::OllamaChatWire;
+
+        let source = futures::stream::iter([
+            Ok(Bytes::from(
+                r#"{"model":"llama3.2","message":{"content":"he"#,
+            )),
+            Ok(Bytes::from(
+                "llo\"},\"done\":true,\"prompt_eval_count\":2,\"eval_count\":1}\n".to_string(),
+            )),
+        ]);
+        let events: Vec<_> = newline_delimited_json_stream(
+            source,
+            Arc::new(OllamaChatWire),
+            Arc::new(AtomicU64::new(0)),
+        )
+        .collect()
+        .await;
+
+        assert_eq!(events.len(), 6);
+        assert!(matches!(
+            events[0],
+            Ok(MessageStreamEvent::MessageStart { .. })
+        ));
+        assert!(matches!(
+            events[2],
+            Ok(MessageStreamEvent::ContentBlockDelta {
+                delta: crate::types::ContentBlockDelta::TextDelta { ref text },
+                ..
+            }) if text == "hello"
+        ));
+        assert!(matches!(
+            events.last(),
+            Some(Ok(MessageStreamEvent::MessageStop))
+        ));
     }
 }

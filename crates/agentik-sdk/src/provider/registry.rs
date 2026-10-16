@@ -6,9 +6,9 @@ use crate::http::auth::AuthMethod;
 use crate::model::{ModelInfo, ProviderType};
 use crate::provider::{
     ProviderPreset, bailian::BailianProvider, deepseek::DeepseekProvider, mimo::MimoProvider,
-    minimax::MinimaxProvider, moonshot::MoonshotProvider, openai::OpenaiProvider,
-    openrouter::OpenrouterProvider, sensenova::SensenovaProvider, stepfun::StepfunProvider,
-    zai::ZaiProvider,
+    minimax::MinimaxProvider, moonshot::MoonshotProvider, ollama::OllamaProvider,
+    openai::OpenaiProvider, openrouter::OpenrouterProvider, sensenova::SensenovaProvider,
+    stepfun::StepfunProvider, zai::ZaiProvider,
 };
 use crate::wire::WireProtocolKind;
 
@@ -22,6 +22,7 @@ pub fn preset_models(provider_type: &ProviderType) -> Option<Vec<ModelInfo>> {
         ProviderType::Mimo => Some(MimoProvider::preset_models()),
         ProviderType::Minimax => Some(MinimaxProvider::preset_models()),
         ProviderType::Moonshot => Some(MoonshotProvider::preset_models()),
+        ProviderType::Ollama => Some(OllamaProvider::preset_models()),
         ProviderType::Openai => Some(OpenaiProvider::preset_models()),
         ProviderType::Openrouter => Some(OpenrouterProvider::preset_models()),
         ProviderType::Sensenova => Some(SensenovaProvider::preset_models()),
@@ -40,6 +41,7 @@ pub fn default_base_url(provider_type: &ProviderType) -> Option<&'static str> {
         ProviderType::Mimo => Some(MimoProvider::default_base_url()),
         ProviderType::Minimax => Some(MinimaxProvider::default_base_url()),
         ProviderType::Moonshot => Some(MoonshotProvider::default_base_url()),
+        ProviderType::Ollama => Some(OllamaProvider::default_base_url()),
         ProviderType::Openai => Some(OpenaiProvider::default_base_url()),
         ProviderType::Openrouter => Some(OpenrouterProvider::default_base_url()),
         ProviderType::Sensenova => Some(SensenovaProvider::default_base_url()),
@@ -58,6 +60,7 @@ pub fn known_base_urls(provider_type: &ProviderType) -> Vec<&'static str> {
         ProviderType::Mimo => MimoProvider::known_base_urls(),
         ProviderType::Minimax => MinimaxProvider::known_base_urls(),
         ProviderType::Moonshot => MoonshotProvider::known_base_urls(),
+        ProviderType::Ollama => OllamaProvider::known_base_urls(),
         ProviderType::Openai => OpenaiProvider::known_base_urls(),
         ProviderType::Openrouter => OpenrouterProvider::known_base_urls(),
         ProviderType::Sensenova => SensenovaProvider::known_base_urls(),
@@ -76,6 +79,7 @@ pub fn default_auth_method(provider_type: &ProviderType) -> AuthMethod {
         ProviderType::Mimo => MimoProvider::default_auth_method(),
         ProviderType::Minimax => MinimaxProvider::default_auth_method(),
         ProviderType::Moonshot => MoonshotProvider::default_auth_method(),
+        ProviderType::Ollama => OllamaProvider::default_auth_method(),
         ProviderType::Openai => OpenaiProvider::default_auth_method(),
         ProviderType::Openrouter => OpenrouterProvider::default_auth_method(),
         ProviderType::Sensenova => SensenovaProvider::default_auth_method(),
@@ -99,6 +103,7 @@ pub fn wire_protocol(provider_type: &ProviderType) -> WireProtocolKind {
         ProviderType::Mimo => MimoProvider::wire_protocol(),
         ProviderType::Minimax => MinimaxProvider::wire_protocol(),
         ProviderType::Moonshot => MoonshotProvider::wire_protocol(),
+        ProviderType::Ollama => OllamaProvider::wire_protocol(),
         ProviderType::Openai => OpenaiProvider::wire_protocol(),
         ProviderType::Openrouter => OpenrouterProvider::wire_protocol(),
         ProviderType::Sensenova => SensenovaProvider::wire_protocol(),
@@ -114,6 +119,7 @@ pub fn wire_protocol(provider_type: &ProviderType) -> WireProtocolKind {
 pub fn supports_remote_catalog(provider_type: &ProviderType) -> bool {
     match provider_type {
         ProviderType::Openrouter => OpenrouterProvider::supports_remote_catalog(),
+        ProviderType::Ollama => OllamaProvider::supports_remote_catalog(),
         ProviderType::Openai => OpenaiProvider::supports_remote_catalog(),
         _ => false,
     }
@@ -127,6 +133,7 @@ pub fn known_provider_types() -> Vec<&'static str> {
         "mimo",
         "minimax",
         "moonshot",
+        "ollama",
         "openai",
         "openrouter",
         "sensenova",

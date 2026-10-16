@@ -11,6 +11,7 @@ use crate::http::auth::AuthMethod;
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderType {
+    Ollama,
     Deepseek,
     Mimo,
     Minimax,
@@ -31,6 +32,7 @@ impl ProviderType {
     pub fn as_str(&self) -> &str {
         match self {
             ProviderType::Deepseek => "deepseek",
+            ProviderType::Ollama => "ollama",
             ProviderType::Mimo => "mimo",
             ProviderType::Minimax => "minimax",
             ProviderType::Moonshot => "moonshot",
@@ -55,6 +57,7 @@ impl From<&str> for ProviderType {
     fn from(s: &str) -> Self {
         match s.trim().to_lowercase().as_str() {
             "deepseek" => ProviderType::Deepseek,
+            "ollama" => ProviderType::Ollama,
             "mimo" => ProviderType::Mimo,
             "minimax" => ProviderType::Minimax,
             "moonshot" => ProviderType::Moonshot,

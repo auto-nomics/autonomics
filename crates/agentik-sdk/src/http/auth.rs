@@ -6,6 +6,8 @@ use std::sync::Arc;
 /// Authentication method for different API gateways
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AuthMethod {
+    /// No authentication, used by local endpoints such as Ollama.
+    None,
     /// Standard Anthropic API authentication with x-api-key header
     #[default]
     Anthropic,
@@ -25,6 +27,7 @@ impl AuthMethod {
     pub fn storage_tag(&self) -> &'static str {
         match self {
             AuthMethod::Anthropic => "Anthropic",
+            AuthMethod::None => "None",
             AuthMethod::Bearer => "Bearer",
             AuthMethod::Chatgpt { .. } => "chatgpt",
         }
@@ -36,6 +39,7 @@ impl TryFrom<String> for AuthMethod {
 
     fn try_from(value: String) -> std::result::Result<Self, Self::Error> {
         match value.to_lowercase().as_str() {
+            "none" | "unauthenticated" => Ok(AuthMethod::None),
             "anthropic" => Ok(AuthMethod::Anthropic),
             "bearer" => Ok(AuthMethod::Bearer),
             "chatgpt" => Ok(AuthMethod::Chatgpt {
@@ -96,6 +100,17 @@ impl AuthHandler {
     /// Add authentication headers to the request
     pub fn add_auth_headers(&self, headers: &mut HeaderMap) -> Result<()> {
         match &self.auth_method {
+            AuthMethod::None => {
+                if !self.api_key.is_empty() {
+                    let bearer_token = format!("Bearer {}", self.api_key);
+                    let auth_header = HeaderValue::from_str(&bearer_token).map_err(|_| {
+                        AnthropicError::Configuration {
+                            message: "Invalid API key format for Bearer token".to_string(),
+                        }
+                    })?;
+                    headers.insert("authorization", auth_header);
+                }
+            }
             AuthMethod::Anthropic => {
                 let api_key_header = HeaderValue::from_str(&self.api_key).map_err(|_| {
                     AnthropicError::Configuration {
@@ -173,6 +188,24 @@ mod tests {
     }
 
     #[test]
+    fn unauthenticated_local_endpoint_sends_no_auth_headers() {
+        let auth = AuthHandler::with_method(String::new(), AuthMethod::None);
+        let mut headers = HeaderMap::new();
+        auth.add_auth_headers(&mut headers).unwrap();
+        assert!(headers.get("authorization").is_none());
+        assert!(headers.get("x-api-key").is_none());
+        assert!(headers.get("anthropic-version").is_none());
+    }
+
+    #[test]
+    fn unauthenticated_method_treats_key_as_optional_bearer() {
+        let auth = AuthHandler::with_method("proxy-key".to_string(), AuthMethod::None);
+        let mut headers = HeaderMap::new();
+        auth.add_auth_headers(&mut headers).unwrap();
+        assert_eq!(get(&headers, "authorization"), Some("Bearer proxy-key"));
+    }
+
+    #[test]
     fn chatgpt_placeholder_account_omits_header() {
         let auth = AuthHandler::with_method(
             "tok".to_string(),
@@ -202,7 +235,7 @@ mod tests {
 
     #[test]
     fn storage_tag_roundtrip() {
-        for method in [AuthMethod::Anthropic, AuthMethod::Bearer] {
+        for method in [AuthMethod::None, AuthMethod::Anthropic, AuthMethod::Bearer] {
             let tag = method.storage_tag();
             assert_eq!(AuthMethod::try_from(tag.to_string()).unwrap(), method);
         }

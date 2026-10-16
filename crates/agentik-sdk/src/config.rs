@@ -85,7 +85,7 @@ impl ClientConfig {
 
     /// Validate the configuration
     pub fn validate(&self) -> Result<()> {
-        if self.api_key.is_empty() {
+        if self.api_key.is_empty() && self.auth_method != AuthMethod::None {
             return Err(AnthropicError::Configuration {
                 message: "API key cannot be empty".to_string(),
             });

@@ -41,6 +41,43 @@ pub(crate) async fn put_provider(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[utoipa::path(put, path = "/api/v1/model-config/model", tag = "model-config", request_body = SaveModelRequest, responses((status = 204, description = "Custom model saved"), (status = 400, description = "Invalid model configuration"), (status = 500, description = "Model save failed")))]
+pub(crate) async fn put_model(
+    State(state): State<GatewayState>,
+    Json(req): Json<SaveModelRequest>,
+) -> GatewayResult<StatusCode> {
+    let provider_name = req.provider_name.clone();
+    let params = runtime::model_bootstrap::SaveModelParams {
+        provider_name,
+        original_model_name: req.original_model_name,
+        model: runtime::model_bootstrap::ModelRow {
+            provider_name: req.provider_name,
+            model_name: req.model_name,
+            context_length: req.context_length,
+            max_output_tokens: req.max_output_tokens,
+            vision_ability: req.vision_ability,
+            supports_function_calling: req.supports_function_calling,
+            supports_streaming: req.supports_streaming,
+            supports_thinking: req.supports_thinking,
+            thinking_enabled: req.thinking_enabled,
+            input_token_price: req.input_token_price,
+            output_token_price: req.output_token_price,
+            custom: true,
+        },
+    };
+    state
+        .models
+        .save_model(&params)
+        .await
+        .map_err(|e| match e {
+            runtime::model_bootstrap::ModelStorageError::Message(message) => {
+                GatewayError::Message(message)
+            }
+            error => GatewayError::Status(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+        })?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 #[utoipa::path(put, path = "/api/v1/model-config/active-model", tag = "model-config", request_body = SetActiveModelRequest, responses((status = 204, description = "Active model set"), (status = 400, description = "Model could not be resolved")))]
 pub(crate) async fn put_active_model(
     State(state): State<GatewayState>,

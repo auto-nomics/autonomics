@@ -83,6 +83,7 @@ pub fn api_router(state: GatewayState) -> Router {
         // ── model config ──
         .route("/model-config", get(model_config::get_model_config))
         .route("/model-config/provider", put(model_config::put_provider))
+        .route("/model-config/model", put(model_config::put_model))
         .route(
             "/model-config/active-model",
             put(model_config::put_active_model),
