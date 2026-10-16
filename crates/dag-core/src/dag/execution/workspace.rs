@@ -22,6 +22,20 @@ pub(super) struct LocalTaskWorkspace {
     manifest: FileRef,
 }
 
+/// Ceiling for one materialized evidence artifact (bytes); `0` disables the
+/// cap. Evidence files are never read back as data, so truncation at the cap
+/// loses nothing the engine needs — a sidecar marks the file as truncated.
+const DAG_EVIDENCE_MAX_BYTES_ENV: &str = "AUTONOMICS_DAG_EVIDENCE_MAX_BYTES";
+const DEFAULT_EVIDENCE_MAX_BYTES: u64 = 1 << 30;
+
+fn evidence_max_bytes() -> Option<u64> {
+    std::env::var_os(DAG_EVIDENCE_MAX_BYTES_ENV)
+        .and_then(|value| value.to_string_lossy().trim().parse::<u64>().ok())
+        .map_or(Some(DEFAULT_EVIDENCE_MAX_BYTES), |bytes| {
+            (bytes > 0).then_some(bytes)
+        })
+}
+
 impl LocalTaskWorkspace {
     pub(super) fn create(
         root: &std::path::Path,
@@ -83,6 +97,7 @@ impl LocalTaskWorkspace {
         path: &std::path::Path,
         dataframe: &datafusion::prelude::DataFrame,
     ) -> Result<FileRef, DagError> {
+        let cap = evidence_max_bytes();
         let schema = dataframe.schema();
         let batches = dataframe.clone().collect().await.map_err(|error| {
             DagError::Schedule(format!("cannot materialize DataFrame output: {error}"))
@@ -99,7 +114,19 @@ impl LocalTaskWorkspace {
                 path.display()
             ))
         })?;
+        // Estimated bytes written so far; IPC framing overhead is ignored,
+        // which is fine for a cap that exists to stop runaway evidence.
+        let mut written_estimate = 0u64;
+        let mut truncated = false;
         for batch in &batches {
+            written_estimate =
+                written_estimate.saturating_add(batch.get_array_memory_size() as u64);
+            if let Some(cap) = cap
+                && written_estimate >= cap
+            {
+                truncated = true;
+                break;
+            }
             writer.write(batch).map_err(|error| {
                 DagError::Schedule(format!(
                     "cannot write Arrow IPC artifact `{}`: {error}",
@@ -113,6 +140,22 @@ impl LocalTaskWorkspace {
                 path.display()
             ))
         })?;
+        if truncated {
+            warn!(
+                artifact = %path.display(),
+                estimate_bytes = written_estimate,
+                "materialized evidence artifact hit the size cap and was truncated"
+            );
+            let marker = serde_json::json!({
+                "truncated": true,
+                "bytes_estimate": written_estimate,
+            });
+            let marker_path = path.with_extension("arrow.truncated.json");
+            let _ = std::fs::write(
+                &marker_path,
+                serde_json::to_vec_pretty(&marker).unwrap_or_default(),
+            );
+        }
         FileRef::local(path, Some("arrow".into()))
     }
 

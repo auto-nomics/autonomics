@@ -1121,6 +1121,7 @@ impl DAG {
             ok,
             warnings,
             snapshot_id: None,
+            run_id: None,
             resource,
             nodes: node_reports,
             logical_nodes: logical_run_summaries,

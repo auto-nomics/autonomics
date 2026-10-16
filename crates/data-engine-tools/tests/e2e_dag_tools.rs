@@ -52,7 +52,10 @@ async fn build_source_sink(toolset: &Toolset, id: &str, output: &str) {
 
 #[tokio::test]
 async fn agent_controls_channel_operators_with_dag_shell() {
-    let engine = DataEngine::builder().build();
+    let history = data_engine::dag::DagHistory::open_in_memory()
+        .await
+        .unwrap();
+    let engine = DataEngine::builder().build().with_history(history);
     let (client, _handle) = spawn_with_engine(engine);
     let tools = data_engine_tools::registrations(Arc::new(client));
     let mut registry = agentik_core::tools::ToolRegistry::new();
@@ -92,7 +95,26 @@ async fn agent_controls_channel_operators_with_dag_shell() {
     check_ok(&results[0], "run_dag");
     let report = result_json(&results[0]);
     assert_eq!(report["ok"], json!(true));
-    let physical_ids = report["nodes"]
+    // After the slim-index refactor, `run_dag` no longer carries the
+    // physical node list. Pull it from the persisted report via the
+    // `full` view of the most recent run.
+    let run_id = report["run_id"]
+        .as_str()
+        .expect("run_dag must surface run_id");
+    let results = toolset
+        .execute(
+            &[build_tooluse(
+                "channel-runs",
+                "dag_runs_log",
+                json!({"run_id": run_id, "view": "full"}),
+            )],
+            None,
+        )
+        .await
+        .unwrap();
+    check_ok(&results[0], "dag_runs_log full");
+    let detail = result_json(&results[0]);
+    let physical_ids = detail["nodes"]
         .as_array()
         .unwrap()
         .iter()
@@ -862,13 +884,16 @@ async fn test_dag_runs_log_records_execution_audit_trail() {
     check_ok(&results[0], "dag_runs_log");
 
     // The detail view decodes the per-node report, including the input
-    // bindings the scheduler captured for the sql node.
+    // bindings the scheduler captured for the sql node. After the slim
+    // index refactor `dag_runs_log(run_id=...)` defaults to
+    // `view=summary`; opt back into the legacy per-node payload with
+    // `view=full` for the input-binding assertion.
     let results = toolset
         .execute(
             &[build_tooluse(
                 "l2",
                 "dag_runs_log",
-                json!({"run_id": runs[0].id}),
+                json!({"run_id": runs[0].id, "view": "full"}),
             )],
             None,
         )
